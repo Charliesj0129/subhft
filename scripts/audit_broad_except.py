@@ -244,6 +244,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", metavar="GROUP", help="print one line per handler of GROUP (or 'all')")
     parser.add_argument("--shape", choices=SHAPES, help="with --list: only handlers of this shape")
     args = parser.parse_args(argv)
+    if args.shape and not args.list:
+        parser.error("--shape needs --list")
 
     root = Path(args.root)
     if not root.is_dir():

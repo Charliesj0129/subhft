@@ -282,6 +282,14 @@ def test_list_filters_by_group_and_by_shape(tree, capsys):
     assert lines[1].endswith("continue")
 
 
+def test_shape_without_list_is_refused_instead_of_ignored(tree, capsys):
+    with pytest.raises(SystemExit) as exc:
+        audit.main(["--root", str(tree), "--shape", "silent"])
+
+    assert exc.value.code == 2
+    assert "--shape needs --list" in capsys.readouterr().err
+
+
 def test_list_all_includes_every_group(tree, capsys):
     assert audit.main(["--root", str(tree), "--list", "all"]) == 0
 
