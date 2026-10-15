@@ -15,7 +15,7 @@ other strategy is a red line.
 | # | Gate | Command | Pass |
 |---|---|---|---|
 | 1 | Code quality | `make check` | format, lint, typecheck, discipline, dependency-boundary, hygiene all green |
-| 2 | Tests and coverage | `make coverage` | >= 70% line; hot-path files >= 90% (`make coverage-html`) |
+| 2 | Tests and coverage | `make coverage`; CI also runs `make coverage-domain` | >= 70% line, and each domain floor in `scripts/check_coverage_domains.py`; the 90% hot-path target is not enforced, read `make coverage-html` for hot-path files |
 | 3 | Test hygiene | `make test-assertion-check`, `test-name-check`, `test-quality-pattern-check` | clean |
 | 4 | Architecture | `make arch-gate`, `make dependency-boundary` | no forbidden imports |
 | 5 | Security | `make security-audit`; no secrets in the diff; no new `type: ignore` without a reason | clean |
