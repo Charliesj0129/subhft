@@ -1,55 +1,49 @@
 ---
 name: symbols-sync
-description: Use when updating the symbol universe, regenerating config/symbols.yaml from broker contracts, validating symbol metadata, or diagnosing HFT_SYMBOLS override behavior.
+description: "Regenerate and validate the symbol universe (symbols.list to symbols.yaml), including the post-contract-roll rebuild and HFT_SYMBOLS. Use after a contract roll, when listings change, or when subscriptions skip expired codes. Not for broker session debugging."
 ---
 
-# Symbol Universe Sync
+# Symbols sync
 
-Use this skill for the generated symbol pipeline, not for broker-session debugging.
+`config/symbols.yaml` is operator-regenerated and Do-NOT-Edit by hand;
+pool-mode engines never rebuild it at runtime (an in-process rewrite once
+corrupted the per-connection partitions). Rebuild it offline after each roll.
 
-## Canonical Flow
-
-Treat the symbol flow like this:
-
-```text
-config/symbols.list -> make sync-symbols -> config/symbols.yaml -> runtime filtering via HFT_SYMBOLS
+```
+config/symbols.list --(hft config build / sync)--> config/symbols.yaml --> runtime filter HFT_SYMBOLS
 ```
 
-Edit `config/symbols.list`, regenerate `config/symbols.yaml`, then validate the resolved config.
-
-## Workflow
+## Procedure
 
 ```bash
-make sync-symbols
-uv run hft config preview
+make rebuild-symbols-yaml          # regenerate from the current contracts cache (after a roll)
+uv run hft config preview          # expanded universe
 uv run hft config validate
+git diff config/symbols.yaml       # month codes (E6->F6->G6) and TXO strikes should evolve; stocks stay stable
 ```
 
-Load the correct broker credentials before syncing, because the generator depends on broker contract metadata.
+Load the right broker credentials first (the generator uses broker contract
+metadata; never print them). `uv run hft config sync --loop <id>` builds a loop's
+universe (default subscription cap 8 with `--loop`). Commit the regenerated file
+and restart the engine only with the user's approval (production restarts follow
+`41-deployment.md`). Full runbook: `docs/runbooks/SymbolsYamlRegeneration.md`.
 
-## What To Verify
+Contract rolls happen around the third Wednesday (TXF/MXF/TMF/EXF). A pool-mode
+universe that does not roll is a known open risk; check
+`.agent/memory/current-risks.md`.
 
-Verify these after regeneration:
+## Verify after regeneration
 
-- each symbol exists on the selected broker
-- `scale` remains `10000`
-- exchange, lot size, and tick size look correct
-- the runtime can subscribe to the generated universe
+Each symbol exists on the selected broker; `scale` stays 10000; exchange, lot
+size, and tick size look right; the runtime can subscribe to the universe.
+Stale hand-edited metadata means regenerate, not patch.
 
-## HFT_SYMBOLS Override
+## HFT_SYMBOLS
 
-Use `HFT_SYMBOLS` to filter the generated universe for narrow test runs:
+`export HFT_SYMBOLS="2330,TX00"` filters the generated universe for narrow runs.
+It is a runtime filter, not a substitute for syncing contract metadata. If a
+subset override is ignored, export it in the current environment.
 
-```bash
-export HFT_SYMBOLS="2330,TX00"
-```
+## Done when
 
-Treat `HFT_SYMBOLS` as a runtime filter, not a replacement for syncing the underlying contract metadata.
-
-## Failure Patterns
-
-| Symptom | Action |
-| --- | --- |
-| symbol lookup fails during sync | inspect symbol format and broker availability |
-| generated metadata looks hand-edited or stale | regenerate instead of patching `config/symbols.yaml` manually |
-| runtime ignores the subset override | export `HFT_SYMBOLS` in the current shell or environment |
+`validate` passes, the diff is reviewed, and `symbols.yaml` was not edited by hand.
