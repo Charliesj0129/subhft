@@ -30,7 +30,7 @@ from src.hft_platform.backtest.ch_data_source import (
     validate_events,
 )
 
-from . import quality
+from . import official, quality
 
 CH_PRICE_SCALE = 1_000_000.0
 DEDUP_WINDOW_NS = 500_000
@@ -538,6 +538,12 @@ def _build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate", help="Validate exported L2/tick dataset")
     validate.add_argument("--path", required=True)
 
+    official_cmd = sub.add_parser(
+        "official",
+        help="Fetch and parse official TAIFEX/TWSE reference data (rate-limited; stops on any block)",
+    )
+    official.add_arguments(official_cmd)
+
     audit = sub.add_parser("quality", help="Audit raw ClickHouse market-data quality (advisory)")
     audit.add_argument("--date-from", required=True)
     audit.add_argument("--date-to", required=True)
@@ -597,6 +603,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "validate":
         print(json.dumps(validate_dataset(Path(args.path)), indent=2, sort_keys=True))
         return 0
+    if args.command == "official":
+        return official.run_cli(args)
     if args.command == "quality":
         password = args.password if args.password is not None else _dotenv_value("CLICKHOUSE_PASSWORD")
         client = _get_client(args.host, args.port, args.user, password)
