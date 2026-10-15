@@ -16,6 +16,8 @@ _ALIASES: dict[str, str] = {
     "sim_p95_v2026-03-01": "shioaji_sim_p95_v2026-03-01",
     "sim_p95_v2026-03-04": "shioaji_sim_p95_v2026-03-04",
     "fubon_p95_v2026-03-12": "fubon_estimated_p95_v2026-03-12",
+    # r52's manifest names the 2026-04-24 measurement without its broker prefix; same 395/59 ms numbers.
+    "v2026-04-24_measured": "r47_maker_shioaji_p95_v2026-04-24_measured",
 }
 
 _REQUIRED_FIELDS = (
