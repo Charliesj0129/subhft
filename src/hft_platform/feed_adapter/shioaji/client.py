@@ -1046,8 +1046,16 @@ class ShioajiClient:
             if old_api is not None:
                 try:
                     old_api.logout()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 - best effort, the old handle is discarded either way
+                    # The broker allows 5 sessions with no spare: if this one was not released the new login
+                    # below can be refused (451) and nothing else would say why (N24).
+                    logger.warning(
+                        "shioaji_logout_failed_on_recreate",
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
+                    if self.metrics is not None and hasattr(self.metrics, "shioaji_logout_failed_total"):
+                        self.metrics.shioaji_logout_failed_total.labels(context="recreate_api").inc()
             is_sim = self.mode == "simulation"
             self.api = _sj.Shioaji(simulation=is_sim)
             self.logged_in = False

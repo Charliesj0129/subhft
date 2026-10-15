@@ -296,6 +296,7 @@ class MetricsRegistry:
                 _pn("shioaji_login_slot_timeouts_total"),
                 _pn("feed_session_conflict_total"),
                 _pn("feed_session_lease_ops_total"),
+                _pn("shioaji_logout_failed_total"),
                 _pn("feed_first_quote_total"),
                 _pn("shioaji_login_fail_total"),
                 _pn("shioaji_crash_signature_total"),
@@ -1554,6 +1555,11 @@ class MetricsRegistry:
             _pn("feed_session_lease_ops_total"),
             "Redis feed session lease operation outcomes",
             ["op", "result"],  # op: preflight|refresh|stale_cleanup|teardown
+        )
+        self.shioaji_logout_failed_total = Counter(
+            _pn("shioaji_logout_failed_total"),
+            "Shioaji logout() calls that raised while a session was being discarded (it may not have been released)",
+            ["context"],  # context: recreate_api
         )
         self.feed_first_quote_total = Counter(
             _pn("feed_first_quote_total"),
