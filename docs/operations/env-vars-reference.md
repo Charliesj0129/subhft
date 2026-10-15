@@ -382,6 +382,11 @@ Shadow deployment note:
 | `HFT_TELEGRAM_ENABLED` | `0` | `1` = 啟用 Telegram bot 推播（事故 / 平倉 / HALT） | 生產環境設 `1` |
 | `HFT_TELEGRAM_BOT_TOKEN` | — | BotFather 取得的 token | 使用 secret manager；勿硬編 |
 | `HFT_TELEGRAM_CHAT_ID` | — | 接收訊息的 chat id（可由 `getUpdates` 查得） | 群組 chat id 為負數 |
+| `HFT_REPORT_SYMBOLS` | `TXFR1` | bot 日報與 `/report` 的商品清單（逗號分隔；`bot/app.py:93`） | compose 的 `hft-bot` 以相同預設傳入 |
+| `HFT_REPORT_ENABLED` | `0` | 只管 CLI（`python -m hft_platform.reports`）：非 `1` 時，沒有 `--dry-run`／`--debug` 就不執行（`pipeline.py:300`） | bot 的 `/report` 與排程推播不讀它 |
+| `HFT_LLM_ENABLED` | `0` | `1` = 把日報 dossier 送到 OpenRouter（`pipeline.py:178`）；其他值不送任何資料 | 外送內容清單見 `docs/modules/reports.md` 的「LLM egress」 |
+| `HFT_LLM_API_KEY` | — | OpenRouter 金鑰（`llm_client.py:52`）；缺少時每次 LLM 呼叫都 raise，報告退回規則版 | 敏感；使用 secret manager |
+| `HFT_LLM_MODEL` | 空字串 | OpenRouter 模型 id（`pipeline.py:183`、`llm_reasoner.py:210`） | — |
 
 ---
 

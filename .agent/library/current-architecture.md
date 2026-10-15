@@ -2,25 +2,22 @@
 
 Date: 2026-03-14
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
-Companion target document: `.agent/library/target-architecture.md`.
-Companion C4 diagrams: `.agent/library/c4-model-current.md`.
-Companion research execution plan: `.agent/library/research_pipeline_execution_plan.md`.
-Companion Rust boundary note: `.agent/library/rust_pyo3.md`.
+Companion documents that exist only in the author's working tree and are not in the repo: `target-architecture.md`, `c4-model-current.md`, `research_pipeline_execution_plan.md`, `rust_pyo3.md` (all under `.agent/library/`).
 Companion feature unification spec (implemented, production backlog open): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
-Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
+The cluster backlog (`cluster-evolution-backlog.md`) this baseline once pointed to no longer exists anywhere.
 
 ## 1. Architecture Slices (As-Built)
 
 1. Runtime trading system (live/sim)
 
-- Entrypoint: `hft run sim|live` in `src/hft_platform/cli.py`.
+- Entrypoint: `hft run sim|live` in `src/hft_platform/cli/_run.py` (the `cli.py` module became the `src/hft_platform/cli/` package).
 - Runtime assembly: `HFTSystem` + `SystemBootstrapper` in `src/hft_platform/services/system.py` and `src/hft_platform/services/bootstrap.py`.
 - Core loop: market data -> strategy -> risk -> order -> execution -> recorder.
 
 2. Research and alpha governance system
 
-- Entrypoints: `hft alpha *` commands in `src/hft_platform/cli.py`.
-- Research packages: `research/registry`, `research/backtest`, `research/combinatorial`, `research/rl`.
+- Entrypoints: `hft alpha *` commands in `src/hft_platform/cli/_alpha.py`.
+- Research packages: `research/registry`, `research/backtest`, `research/combinatorial`. (The former RL package, research/rl, existed when this baseline was written and has since been removed.)
 - Promotion/governance runtime: `src/hft_platform/alpha/*` (validation, experiments, pool, promotion, canary, audit).
 
 3. Shared acceleration and infra
@@ -33,7 +30,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 
 1. Control plane
 
-- `src/hft_platform/cli.py` resolves settings and launches runtime.
+- `src/hft_platform/cli/` (`_run.py`) resolves settings and launches runtime.
 - `src/hft_platform/config/loader.py` merges base/env/settings/env vars/CLI overrides.
 - `src/hft_platform/services/bootstrap.py` creates bounded queues and service graph.
 
@@ -123,7 +120,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 - `hft alpha validate` calls `src/hft_platform/alpha/validation.py`.
 - Gate A: manifest/data-field/complexity checks.
 - Gate B: per-alpha pytest execution.
-- Gate C: standardized research backtest (`research/backtest/hbt_runner.py`) + scorecard write (`research/registry/scorecard.py`) + experiment logging (`src/hft_platform/alpha/experiments.py`).
+- Gate C: standardized research backtest (`research/backtest/`; `hbt_runner.py` no longer exists, the runners in that package are e.g. `engine.py` and `hft_native_runner.py`) + scorecard write (`research/registry/scorecard.py`) + experiment logging (`src/hft_platform/alpha/experiments.py`).
 
 3. Pool and search
 
@@ -145,7 +142,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 6. Experiment and RL integration
 
 - `hft alpha experiments list|compare|best` reads `research/experiments/runs/*/meta.json`.
-- RL bridge in `research/rl/lifecycle.py` logs RL runs and can promote latest run via Gate D-E (`hft alpha rl-promote`).
+- RL bridge (historical): the former research/rl/lifecycle.py logged RL runs and promoted the latest run via Gate D-E. The module has been removed, so `hft alpha rl-promote` (`cli/_alpha.py::cmd_alpha_rl_promote`) fails on import.
 
 ## 4A. Research/Runtime Feature Unification (Implemented, Production Backlog Open)
 
@@ -174,7 +171,7 @@ Remaining production backlog:
 
 | Domain                   | Current functionality                                                                                           | Key files                                                                                                              |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `cli`                    | runtime, backtest, alpha, symbols and diagnostics commands                                                      | `src/hft_platform/cli.py`                                                                                              |
+| `cli`                    | runtime, backtest, alpha, symbols and diagnostics commands                                                      | `src/hft_platform/cli/`                                                                                              |
 | `config`                 | layered settings and symbol DSL/sync                                                                            | `src/hft_platform/config/loader.py`, `src/hft_platform/config/symbols.py`                                              |
 | `services`               | runtime assembly and supervision                                                                                | `src/hft_platform/services/bootstrap.py`, `src/hft_platform/services/system.py`                                        |
 | `feed_adapter`           | broker integration, normalization, LOB, subscription lifecycle                                                  | `src/hft_platform/feed_adapter/shioaji_client.py`, `normalizer.py`, `lob_engine.py`                                    |
@@ -191,7 +188,7 @@ Remaining production backlog:
 | `research.registry`      | alpha schema/protocol, discovery, scorecards                                                                    | `research/registry/*.py`                                                                                               |
 | `research.backtest`      | standardized research backtest and metrics                                                                      | `research/backtest/*.py`                                                                                               |
 | `research.combinatorial` | expression language + alpha search engine                                                                       | `research/combinatorial/*.py`                                                                                          |
-| `research.rl`            | RL alpha adapter and lifecycle integration                                                                      | `research/rl/*.py`                                                                                                     |
+| `research.rl`            | removed; was the RL alpha adapter and lifecycle integration                                                     | (removed)                                                                                                              |
 | `backtest`               | runtime backtest runner/adapter/reporting with real-equity-first extraction                                     | `src/hft_platform/backtest/*.py`                                                                                       |
 
 ## 6. Rust Boundary (Current)
@@ -285,9 +282,7 @@ Remaining production backlog:
 ## 10. Cluster Evolution (Vector 2 and 3)
 
 Status: CE-M2 and CE-M3 core modules implemented (2026-02-21). Hardening backlog open.
-Detailed milestone/issue backlog: `.agent/library/cluster-evolution-backlog.md`.
-C4 diagrams: `.agent/library/c4-model-current.md`.
-Design review artifacts: `.agent/library/design-review-artifacts.md`.
+Detailed milestone/issue backlog, C4 diagrams and design review artifacts: not in the repo (`cluster-evolution-backlog.md` and `design-review-artifacts.md` no longer exist; `c4-model-current.md` is local only).
 
 ### Vector 2 - Dedicated Order/Risk Gateway (CE-M2) — Core Implemented
 
