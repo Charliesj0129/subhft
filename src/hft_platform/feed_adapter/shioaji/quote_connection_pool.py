@@ -89,6 +89,8 @@ UNIVERSE_ROLL_RESULTS = (
 #: ``symbols.list`` against the contract cache and validated; ``last_good`` =
 #: the last such universe, kept on disk; ``canonical`` = ``symbols.yaml``.
 UNIVERSE_SOURCES = ("list", "last_good", "canonical")
+# 1 / 0 / -1 per subscribed TXO expiry: does the chain span the futures price +/- 500 points (F3).
+_METRIC_ATM_COVERAGE = None
 
 
 def _ensure_metrics() -> None:
@@ -96,6 +98,7 @@ def _ensure_metrics() -> None:
     global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
     global _METRIC_PUBLISHED, _METRIC_PUBLISH_ERRORS, _METRIC_UNIVERSE_ROLL
     global _METRIC_UNIVERSE_SOURCE, _METRIC_UNIVERSE_LAST_VALID
+    global _METRIC_ATM_COVERAGE
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     if Counter is not None:
@@ -152,6 +155,12 @@ def _ensure_metrics() -> None:
     _METRIC_UNIVERSE_LAST_VALID = Gauge(
         "hft_quote_pool_universe_last_valid_timestamp_seconds",
         "Unix time of the last universe rebuild that passed validate_universe (0 = none yet)",
+    )
+    _METRIC_ATM_COVERAGE = Gauge(
+        "option_chain_atm_coverage",
+        "Whether the subscribed TXO chain of an expiry spans the futures price +/- 500 points: "
+        "1 covered, 0 not covered, -1 unknown (no underlying price to judge by)",
+        ["expiry"],
     )
 
 
@@ -301,6 +310,7 @@ class QuoteConnectionPool:
         "_all_symbols",
         "_login_interval_s",
         "_options_expiry",
+        "_chain_coverage_last",
         "_options_refresh_running",
         "_refresh_lock",
         "_refresh_thread",
@@ -339,6 +349,7 @@ class QuoteConnectionPool:
         self._config = shioaji_cfg
         self._login_interval_s = float(os.getenv("HFT_QUOTE_LOGIN_INTERVAL_S", "2"))
         self._options_expiry: str | None = None
+        self._chain_coverage_last: dict[str, int] = {}  # expiry -> last published gauge value
         self._options_refresh_running: bool = False
         self._refresh_lock: threading.Lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
@@ -1494,6 +1505,60 @@ class QuoteConnectionPool:
             return candidate
         return DEFAULT_LIST_PATH
 
+    def report_option_chain_coverage(self) -> list[Any]:
+        """Publish ``option_chain_atm_coverage{expiry}`` for the TXO chain this pool is subscribed to (F3).
+
+        1 = the expiry's strikes reach both F-500 and F+500, 0 = they do not, -1 = no underlying price to judge by.
+        A chain that stops below the money cannot give an implied volatility; the research audit found that on most
+        recorded days, a night later. This says so when the subscription is made. Reads the contract cache the hourly
+        refresh already writes (no SDK call), so it is safe on the refresh thread. Returns the per-expiry coverage.
+        """
+        from hft_platform.config._symbols_expansion import pick_underlying_price
+        from hft_platform.config.option_chain_coverage import chain_coverage
+
+        index = self._contract_index()
+        codes = [str(sym.get("code") or "") for sym in self._all_symbols]
+        chain_rows = [
+            row for code in codes if (row := index.by_code.get(code)) and str(row.get("root") or "").upper() == "TXO"
+        ]
+        reference, source = pick_underlying_price("TXO", chain_rows, index)
+        coverage = chain_coverage(codes, index.by_code, reference)
+        self._publish_chain_coverage(coverage, source)
+        return coverage
+
+    def _publish_chain_coverage(self, coverage: list[Any], reference_source: str) -> None:
+        _ensure_metrics()
+        current = {item.expiry: item.gauge_value for item in coverage}
+        gauge = _METRIC_ATM_COVERAGE
+        if gauge is not None:
+            for expiry, value in current.items():
+                gauge.labels(expiry=expiry).set(value)
+            for expiry in self._chain_coverage_last.keys() - current.keys():
+                try:
+                    gauge.remove(expiry)  # an expiry that rolled off must not keep reporting its last value
+                except KeyError:
+                    pass
+        if current == self._chain_coverage_last:
+            return
+        self._chain_coverage_last = current
+        detail = [
+            {
+                "expiry": item.expiry,
+                "contracts": item.contracts,
+                "min_strike": item.min_strike,
+                "max_strike": item.max_strike,
+                "gauge": item.gauge_value,
+            }
+            for item in coverage
+        ]
+        reference = coverage[0].reference if coverage else None
+        if any(value == 0 for value in current.values()):
+            logger.warning(
+                "option_chain_atm_coverage_missing", reference=reference, source=reference_source, expiries=detail
+            )
+        else:
+            logger.info("option_chain_atm_coverage", reference=reference, source=reference_source, expiries=detail)
+
     def _contract_index(self) -> Any:
         """Build a ``ContractIndex`` from the broker contract cache on disk.
 
@@ -2076,6 +2141,13 @@ class QuoteConnectionPool:
         except Exception as exc:  # noqa: BLE001
             logger.debug("operation_fallback", error=str(exc))
 
+    def _report_chain_coverage_safely(self) -> None:
+        """The coverage gauge is a diagnostic: its failure must not end the refresh thread."""
+        try:
+            self.report_option_chain_coverage()
+        except Exception as exc:
+            logger.warning("option_chain_coverage_failed", error=str(exc))
+
     def start_options_refresh_thread(
         self,
         cb: Callable[..., Any] | None = None,
@@ -2105,6 +2177,7 @@ class QuoteConnectionPool:
                 self.refresh_options_symbols()
             except Exception as exc:
                 logger.warning("options_refresh_initial_failed", error=str(exc))
+            self._report_chain_coverage_safely()
 
             next_check = time.monotonic() + interval_s
             while not self._refresh_stop_event.is_set():
@@ -2117,6 +2190,7 @@ class QuoteConnectionPool:
                         self.refresh_options_symbols()
                     except Exception as exc:
                         logger.warning("options_refresh_failed", error=str(exc))
+                    self._report_chain_coverage_safely()
                     next_check = time.monotonic() + interval_s
 
         t = threading.Thread(target=_loop, name="options-expiry-refresh", daemon=True)
