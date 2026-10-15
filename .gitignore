@@ -239,6 +239,7 @@ notebooks/.ipynb_checkpoints
 # Agent prompts (local only) — but rules/ is tracked so auto-loaded rules work across machines
 /.agent/*
 !/.agent/rules/
+!/.agent/evals/
 !/.agent/skills/
 !/.agent/skills/00-index.md
 !/.agent/skills/*/
