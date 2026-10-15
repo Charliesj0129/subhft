@@ -49,7 +49,7 @@ Before writing one line of an alpha, internalise these rules — Gate D and CI w
 
 | Rule | Source | Notes |
 |------|--------|-------|
-| 5 Core Laws (Allocator / Cache / Async / Precision / Boundary) | `.agent/rules/01-core-laws.md` | Hot-path code in alpha modules must obey Laws 1–4. Use scaled int for any value that crosses into `risk/order/execution`. |
+| 5 Core Laws (Allocator / Cache / Async / Precision / Boundary) | `AGENTS.md` (Laws) | Hot-path code in alpha modules must obey Laws 1–4. Use scaled int for any value that crosses into `risk/order/execution`. |
 | HFT-P004 — no `: float` on money fields in `contracts/order/execution/risk` | `scripts/check_discipline.py` (AST rule) | Enforced by `make discipline-hft`. `float` is permitted in `src/hft_platform/alpha/` and `research/` per Architecture Governance §11. |
 | Latency realism | `docs/architecture/latency-baseline-shioaji-sim-vs-system.md` | Use ≥ P95 for promotion, P99 for stress. System latency is ~tens of µs; broker RTT is ~tens of ms. Never assume sub-broker-RTT. |
 | Per-method backtest reliability | memory `backtest_method_reliability.md` | All historical PnL claims must specify the backtest method. 14× pessimistic to 577× optimistic biases observed. |
@@ -339,7 +339,7 @@ A minimal expression language for declaring screener formulas: parser, compiler,
 
 ## 15. Cross-references
 
-- **Constitution:** `CLAUDE.md`, `.agent/rules/01-core-laws.md`.
+- **Constitution:** `AGENTS.md`.
 - **Stabilization charter:** `docs/loop_v1_stabilization_charter.md`, `docs/loop_v1_stabilization_log.md`.
 - **Deep-dive runbooks:** `docs/runbooks/replay-parity-gate.md`, `docs/runbooks/loop_v1_migration_l7.md`, `docs/runbooks/research-feature-promotion.md`, `docs/runbooks/forced_promotion.md`.
 - **Reviewer skill (read-only):** `.agent/skills/validation-gate/`.

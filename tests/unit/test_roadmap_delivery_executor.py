@@ -170,7 +170,7 @@ def test_main_generates_wsg_wsh_artifacts(tmp_path: Path) -> None:
 
     hotpath = json.loads((ws_g_dir / "latest_hotpath_matrix.json").read_text(encoding="utf-8"))
     assert hotpath["schema_version"] == "1.0"
-    assert hotpath["skills"] == ["hft-strategy-dev", "rust_feature_engineering", "performance-profiling"]
+    assert hotpath["skills"] == ["hft-strategy", "hft-rust", "hft-latency-profiling"]
     assert hotpath["agent_roles"] == ["explorer", "worker", "default"]
     assert hotpath["rows"]
     assert "row_id" in hotpath["rows"][0]

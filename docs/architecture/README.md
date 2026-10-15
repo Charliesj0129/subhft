@@ -10,7 +10,7 @@ kept aligned with `.agent` architecture/rules documents.
 - `.agent/library/c4-model-current.md` <-> `docs/architecture/c4-model-current.md`
 - `.agent/library/cluster-evolution-backlog.md` <-> `docs/architecture/cluster-evolution-backlog.md`
 - `.agent/library/design-review-artifacts.md` <-> `docs/architecture/design-review-artifacts.md`
-- `.agent/rules/25-architecture-governance.md` <-> `docs/architecture/architecture-governance-rules.md`
+- `AGENTS.md` (Laws and architecture invariants) <-> `docs/architecture/architecture-governance-rules.md`
 
 ## Extended Library Mirror
 

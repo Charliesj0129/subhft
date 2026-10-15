@@ -67,7 +67,7 @@
 ### 1.4 熱路徑 Rust 化擴編（P0）
 - 狀態：規劃中（已有 `rust_core` 基礎，尚未覆蓋更多 execution hotpath）
 - 追蹤文件：`docs/architecture/rust_pyo3.md`, `docs/architecture/rust_pyo3_typed_ring_migration.md`
-- 技能：`hft-strategy-dev`、`rust_feature_engineering`、`performance-profiling`
+- 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`
 - RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall
 - Agent 角色：`explorer`（profiling/baseline，輸出 `hotpath_matrix`）→ `worker`（Rust cutover/CI，輸出 `cutover_patch+ci_report`）→ `default`（整合驗收，輸出 `gate_summary`）
 - KPI：

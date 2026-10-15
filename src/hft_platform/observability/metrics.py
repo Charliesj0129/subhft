@@ -175,6 +175,7 @@ class MetricsRegistry:
                 _pn("order_session_warmup_total"),
                 _pn("order_local_reject_total"),
                 _pn("place_order_late_result_total"),
+                _pn("phantom_bound_total"),
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
                 _pn("live_order_ttl_releases_total"),
@@ -774,6 +775,13 @@ class MetricsRegistry:
             "place_order answers that arrived after the wrapper timeout "
             "(kind=trade: broker result; error: SDK raised; cancelled_before_send: guard stopped the call)",
             ["kind"],
+        )
+        self.phantom_bound_total = Counter(
+            _pn("phantom_bound_total"),
+            "What was done with a timed-out place_order once its answer arrived "
+            "(cancel_sent / cancel_timeout / cancel_failed / cancel_inflight / skipped_filled / skipped_gone / "
+            "released_not_sent / kept_for_ttl)",
+            ["outcome"],
         )
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),
