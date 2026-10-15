@@ -151,6 +151,7 @@ class MetricsRegistry:
                 _pn("track_gate_intents_filtered_total"),
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
+                _pn("kill_switch_active"),
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_toxicity_score"),
                 _pn("stormguard_escalations_total"),
@@ -631,6 +632,10 @@ class MetricsRegistry:
         self.risk_reject_total = Counter(_pn("risk_reject_total"), "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
+        )
+        self.kill_switch_active = Gauge(
+            _pn("kill_switch_active"),
+            "1 while the kill-switch hold is set (latch file present, or a startup-recovery halt pinned it), else 0",
         )
         self.stormguard_transitions_total = Counter(
             _pn("stormguard_transitions_total"),
