@@ -164,6 +164,7 @@ class MetricsRegistry:
                 _pn("halt_callback_no_loop_total"),
                 _pn("halt_callback_schedule_failed_total"),
                 _pn("halt_callback_dispatched_total"),
+                _pn("background_task_failed_total"),
                 _pn("order_actions_total"),
                 _pn("order_reject_total"),
                 _pn("order_contract_code_resolution_total"),
@@ -669,6 +670,11 @@ class MetricsRegistry:
             _pn("halt_callback_dispatched_total"),
             "HALT notification callbacks successfully dispatched to the engine loop",
             ["path"],  # "threadsafe" (cross-thread) or "direct" (same-loop)
+        )
+        self.background_task_failed_total = Counter(
+            _pn("background_task_failed_total"),
+            "Fire-and-forget background tasks (core.background_tasks.spawn_retained) that ended with an exception",
+            ["name"],
         )
         self.autonomy_mode = Gauge(
             _pn("autonomy_mode"),
