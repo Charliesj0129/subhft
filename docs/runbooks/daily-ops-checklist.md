@@ -73,13 +73,13 @@
 - [ ] **Circuit breakers**: Check Grafana dashboard for any triggered circuit breakers.
 - [ ] **Feed rate**:
   ```bash
-  curl -s http://localhost:9090/metrics | grep hft_feed_ticks_total
-  # Should be incrementing steadily during market hours
+  curl -s http://localhost:9090/metrics | grep feed_events_total
+  # Should be incrementing steadily during market hours (label type=tick|bidask)
   ```
 - [ ] **StormGuard state**:
   ```bash
-  curl -s http://localhost:9090/metrics | grep hft_storm_guard_state
-  # Must be: state="NORMAL"
+  curl -s http://localhost:9090/metrics | grep stormguard_mode
+  # Must be: stormguard_mode{strategy="system"} 0.0   (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)
   ```
 - [ ] **Error rate**: Check structlog for ERROR/CRITICAL entries.
   ```bash

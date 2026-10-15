@@ -175,5 +175,5 @@ Response Code: 200 | Event Code: 16 | Info: APISUB/V1/SYS/CONTRACT | Event: Subs
 ## 相關文件
 
 - 環境變數完整參考：`docs/operations/env-vars-reference.md`
-- Feed Gap runbook：`docs/runbooks.md` Section 1
+- Feed Gap runbook：`docs/runbooks/quick-reference.md` Section 1
 - Shioaji 解耦計畫：`docs/architecture/shioaji-client-resilience-decoupling-plan.md`

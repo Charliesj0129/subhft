@@ -380,8 +380,8 @@ ssh $HOST "docker logs hft-engine --since 10m 2>&1 | grep running_code_identity"
 # sanity check that the whole tree was walked, not a truncated mount.
 ```
 
-`hft_build_info{code_sha}` carries the same value, so
-`count by (code_sha) (hft_build_info) > 1` catches two engines running
+`build_info{code_sha}` carries the same value, so
+`count by (code_sha) (build_info) > 1` catches two engines running
 different source from the same image.
 
 **9. D10 append the ledger line.**

@@ -23,12 +23,15 @@ The canary monitor (`hft_platform.alpha.canary.CanaryMonitor`) evaluates these t
 
 ## Metrics to Watch
 
-| Metric | Alert Threshold | Source |
+These are `live_metrics` keys handed to `CanaryMonitor.evaluate` (`alpha/canary.py:118-120`), not Prometheus series. `canary_scheduler.py:178-190` fills them from ClickHouse or from stored values.
+
+| `live_metrics` key | Rolls back when | Source |
 |---|---|---|
-| `hft_live_slippage_bps` | > `max_live_slippage_bps` | Prometheus |
-| `hft_alpha_drawdown_contribution` | > `max_live_drawdown_contribution` | Prometheus |
-| `hft_execution_error_rate` | > `max_execution_error_rate` | Prometheus |
-| `hft_canary_weight` | 0 (post-rollback) | Prometheus |
+| `slippage_bps` | > `max_live_slippage_bps` | canary scheduler |
+| `drawdown_contribution` | > `max_live_drawdown_contribution` | canary scheduler |
+| `execution_error_rate` | > `max_execution_error_rate` | canary scheduler |
+
+`canary_weight` is a field of the promotion YAML (`alpha/promotion.py:292`); after a rollback it is 0 there. The action taken is counted in `alpha_canary_actions_total{alpha_id,action}` (`action` = `hold` / `escalated` / `rolled_back` / `graduated`).
 
 ## Automatic Rollback Flow
 

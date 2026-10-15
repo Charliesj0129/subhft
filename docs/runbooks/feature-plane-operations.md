@@ -132,7 +132,7 @@ docker compose logs hft-engine | rg "feature_set_version|FEATURE_SET_VERSION"
 
 **原因**: Feed Gap → Feature Engine 無法取得完整 LOB 快照。
 
-**處置**: 優先處理 Feed Gap（`docs/runbooks.md` Section 1），特徵缺口為衍生症狀。
+**處置**: 優先處理 Feed Gap（`docs/runbooks/quick-reference.md` Section 1），特徵缺口為衍生症狀。
 
 ---
 

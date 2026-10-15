@@ -44,7 +44,7 @@ Autonomy alert severity mapping:
 ```
 StormGuard enters HALT state
 |
-+-- Verify via metrics: hft_storm_guard_state == HALT
++-- Verify via metrics: stormguard_mode{strategy="system"} == 3 (HALT)
 |
 +-- Are new orders blocked?
 |   +-- YES (expected) --> proceed

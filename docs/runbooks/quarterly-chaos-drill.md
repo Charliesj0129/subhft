@@ -7,7 +7,7 @@ Validate system resilience quarterly before production confidence decays. Chaos 
 ## Pre-Drill Checklist
 
 - [ ] Confirm system is in sim mode (`HFT_MODE=sim`) — never run drills against live trading
-- [ ] Back up ClickHouse data (`./scripts/clickhouse_backup.sh` or `./scripts/daily-backup.sh`)
+- [ ] Back up ClickHouse data (`./scripts/clickhouse_backup.sh`)
 - [ ] Notify team of drill window (post in ops channel with expected duration ~30 min)
 - [ ] Verify all services running: `docker compose ps` — all should show `Up (healthy)`
 - [ ] Record baseline metrics: snapshot Prometheus dashboards or run `curl localhost:9090/metrics > /tmp/pre-drill-metrics.txt`
