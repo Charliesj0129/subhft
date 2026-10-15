@@ -122,7 +122,7 @@ Migrations: `src/hft_platform/migrations/clickhouse/20260612_001_create_research
 and `..._002_create_research_experiment_results.sql` — new `research` database (`audit` is for
 governance/compliance records; experiment telemetry does not belong there).
 
-Tests: `tests/unit/research/candidate_loop/` (behavior-named per `.agent/rules/50-testing.md`).
+Tests: `tests/unit/research/candidate_loop/` (behavior-named per `tests/AGENTS.md`).
 
 Dependency change: add `pyarrow` to the research/dev dependency group (currently dev-only) for
 Parquet writes.
@@ -159,7 +159,7 @@ Fable 5 reads failure_summary + prompts/v1 → next_generation_prompts/ + resear
 All event timing uses `local_ts` (availability time), never `exch_ts`, for label alignment.
 Per `.agent/rules/70-research-data.md`: npz price scale is ×1,000,000 from the CH export;
 panels convert to float points once at build time (offline research float math is allowed per
-`.agent/rules/25-architecture-governance.md`).
+`AGENTS.md`).
 
 ## 6. Candidate JSON Schema
 

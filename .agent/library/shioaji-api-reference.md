@@ -4,7 +4,7 @@ Date: 2026-03-12
 Status: Active reference
 Scope: Complete SDK reference for the `shioaji` Python package (永豐金證券 API). Used by `feed_adapter/shioaji/` modules.
 Companion docs: `.agent/library/current-architecture.md`, `.agent/library/multi-broker-architecture.md`, `.agent/library/shioaji-client-resilience-decoupling-plan.md`.
-Companion skill: `.agent/skills/shioaji-contracts/SKILL.md`.
+Companion skill: `.agent/skills/broker-integration/SKILL.md`.
 
 ---
 
@@ -600,7 +600,7 @@ price: float = tick.close  # REJECT per Precision Law
 
 ## 14. Common Failure Modes
 
-For deep diagnosis of reconnect, session refresh, and watchdog failures see `.agent/skills/shioaji-contracts/SKILL.md`.
+For deep diagnosis of reconnect, session refresh, and watchdog failures see `.agent/skills/broker-integration/SKILL.md` and `docs/runbooks/shioaji-contract-refresh-operations.md`.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|

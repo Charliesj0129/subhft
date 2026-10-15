@@ -13,12 +13,12 @@ STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 
-WS_G_SKILLS: tuple[str, ...] = ("hft-strategy-dev", "rust_feature_engineering", "performance-profiling")
+WS_G_SKILLS: tuple[str, ...] = ("hft-strategy", "hft-rust", "hft-latency-profiling")
 WS_H_SKILLS: tuple[str, ...] = ("hft-alpha-research", "validation-gate", "clickhouse-io")
-WS_A_SKILLS: tuple[str, ...] = ("troubleshoot-metrics", "runtime-debug")
-WS_B_SKILLS: tuple[str, ...] = ("clickhouse-io", "performance-profiling")
-WS_C_SKILLS: tuple[str, ...] = ("validation-gate", "troubleshoot-metrics")
-WS_F_SKILLS: tuple[str, ...] = ("deployment-patterns", "runtime-debug")
+WS_A_SKILLS: tuple[str, ...] = ("runtime-diagnostics", "hft-ops")
+WS_B_SKILLS: tuple[str, ...] = ("clickhouse-io", "hft-latency-profiling")
+WS_C_SKILLS: tuple[str, ...] = ("validation-gate", "runtime-diagnostics")
+WS_F_SKILLS: tuple[str, ...] = ("hft-ops", "runtime-diagnostics")
 AGENT_ROLES: tuple[str, ...] = ("explorer", "worker", "default")
 
 HOTPATH_MODULES: tuple[dict[str, str], ...] = (

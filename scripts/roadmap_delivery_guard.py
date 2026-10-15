@@ -16,7 +16,7 @@ STATUS_FAIL = "fail"
 REQUIRED_FIELDS: tuple[str, ...] = ("技能", "RACI", "Agent 角色", "KPI", "風險與緩解", "依賴", "Gate 證據")
 TODO_TO_WS: dict[str, str] = {"1.4": "WS-G", "2.4": "WS-H"}
 EXPECTED_SKILLS: dict[str, set[str]] = {
-    "WS-G": {"hft-strategy-dev", "rust_feature_engineering", "performance-profiling"},
+    "WS-G": {"hft-strategy", "hft-rust", "hft-latency-profiling"},
     "WS-H": {"hft-alpha-research", "validation-gate", "clickhouse-io"},
 }
 ROLE_DICTIONARY: set[str] = {
