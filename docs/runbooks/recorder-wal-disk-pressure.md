@@ -9,7 +9,8 @@ This runbook covers the scenario where the WAL disk guard circuit breaker activa
 | Variable | Default | Purpose |
 |---|---|---|
 | `HFT_WAL_DISK_MIN_MB` | `500` | Minimum free MB before guard activates |
-| `HFT_WAL_DISK_PRESSURE_POLICY` | `drop` | `drop` = drop records; `warn` = log warning only |
+| `HFT_WAL_DISK_PRESSURE_POLICY` | `halt` | Below `HFT_WAL_DISK_MIN_MB` the circuit breaker drops the batch and logs a warning. Only `raise` raises; `halt`, `drop`, `warn` and any other value all drop (`recorder/wal.py:52`, `:97-117`). `halt` does not stop the engine. |
+| `HFT_WAL_FIRST_POLICY_<TABLE>` | `write` | `wal_first` mode only: at CRITICAL pressure `write` keeps writing, `drop` and `halt` both drop the rows; at HALT pressure every table drops (`recorder/wal_first.py:36-65`) |
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` routes all writes through WAL first |
 | `HFT_WAL_LOADER_CONCURRENCY` | `4` | Threads for parallel WAL replay |
 
