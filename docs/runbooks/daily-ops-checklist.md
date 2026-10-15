@@ -28,14 +28,15 @@
 
 ### Broker Connectivity
 
-- [ ] **API credentials valid**:
-  ```bash
-  uv run hft admin check-credentials
-  ```
+- [ ] **API credentials valid**: no standalone command exists (there is no `hft admin` command group). The
+  engine's own login at startup exercises the credentials; check the engine log for the login result. Do not
+  log in from a shell to test: the broker cap is 5 sessions.
 - [ ] **Market calendar**: Confirm today is a trading day (check TWSE calendar for holidays).
-- [ ] **Contract updates**: Verify futures contract expiry dates are current.
+- [ ] **Contract updates**: Verify the contract cache is fresh. The command reads the cache file
+  (default `config/contracts.json`, written by `hft config sync`); it does not log in, and it reports cache age,
+  not futures expiry dates.
   ```bash
-  uv run hft admin check-contracts
+  uv run hft config contracts-status
   ```
 
 ### Configuration
@@ -100,10 +101,10 @@
 
 ### Reconciliation
 
-- [ ] **Position reconciliation**:
+- [ ] **Position reconciliation**: the engine reconciles itself (`ReconciliationService`); there is no command.
   ```bash
-  uv run hft admin reconcile --verbose
-  # Must show zero discrepancies
+  curl -s http://localhost:9090/metrics | grep -E 'reconciliation_(discrepancy_count|consecutive_failures)'
+  # Both must be 0
   ```
 - [ ] **Fill reconciliation**: Compare internal fill count vs broker-reported fills.
 - [ ] **Autonomy state**:

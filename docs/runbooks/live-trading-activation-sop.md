@@ -20,8 +20,23 @@ export HFT_ORDER_NO_CA=0
 export CA_CERT_PATH=./certs/Sinopac.pfx
 export CA_PASSWORD=<your_password>
 
-uv run hft run real
+uv run hft run live
 ```
+
+`hft run` takes `sim`, `live` or `replay`; `real` is not a mode. With `HFT_MODE=real` and no argument, `hft run`
+resolves to `live`.
+
+Three different switches are in play:
+
+| Switch | Read by | Meaning |
+|---|---|---|
+| `hft run <mode>` | `cli/_run.py` | run mode in settings: `sim`, `live`, `replay`. Defaults from `HFT_MODE` (`real` becomes `live`) |
+| `HFT_MODE` | `feed_adapter/shioaji/_config.py` | Shioaji login flavour: `sim` is the simulation login (CA off); anything else is the real login (unless a `simulation` setting overrides it) |
+| `HFT_ORDER_MODE` | `services/bootstrap.py` | order handling: `sim`, `live` or `disabled` (aliases such as `real` map to `live`). `live` requires `HFT_MODE=real` (or `live`). **`sim` does not stop orders from being dispatched; only `disabled` does** (AGENTS.md, red lines) |
+
+Stage A below sets `HFT_ORDER_MODE=sim`. Do not read that as "no orders can leave": run it only when the
+strategy set cannot place orders, or set `HFT_ORDER_MODE=disabled` if you only need the CA activation log.
+(Whether CA activation still logs under `disabled` is NOT VERIFIED.)
 
 **Pass:** Log shows `ca_activated=true`
 **Fail:** Check cert path, password, person_id. Verify cert not expired.

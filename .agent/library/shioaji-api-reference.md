@@ -608,7 +608,7 @@ For deep diagnosis of reconnect, session refresh, and watchdog failures see `.ag
 | `CertificateError` | CA cert not found | `HFT_SHIOAJI_SKIP_CERT=1` or provide cert |
 | `QuoteSchemaError` | Schema mismatch | `HFT_QUOTE_VERSION=auto` |
 | Stale quotes | Network disruption | Auto-reconnect; check watchdog logs |
-| Empty contracts | API timeout | Re-run `make sync-symbols` |
+| Empty contracts | API timeout | Re-run `uv run hft config sync` (logs in to the broker, rewrites the contract cache and the symbols file). `make rebuild-symbols-yaml` only rebuilds `config/symbols.yaml` from the cached contracts |
 | `patch.object` fails on `SessionRuntime` | `__slots__` prevents instance dict | Use `patch.object(SessionRuntime, 'method')` not instance patching |
 | Rate limit 429 | Too many requests | Respect limits in Section 11; check `rate_limiter.py` |
 | Login timeout | Network / Shioaji server issues | Retry with exponential backoff; `session_runtime.py` handles this |
