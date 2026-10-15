@@ -550,8 +550,8 @@ ch-query-guard-suite: ## Run baseline guarded ClickHouse query suite for periodi
 		--user "$${CH_USER:-default}" \
 		--timeout-s "$${CH_QUERY_TIMEOUT_S:-60}"
 
-env-vars-guard: ## Verify runbook HFT_* vars are documented in env-vars reference
-	$(PY) scripts/env_var_reference_guard.py --project-root . --output-dir outputs/env_var_guard
+env-vars-guard: ## Verify runbook HFT_* vars are documented in env-vars reference; also REPORTS code<->reference drift (STRICT_DIRECTIONS=1 fails on it)
+	$(PY) scripts/env_var_reference_guard.py --project-root . --output-dir outputs/env_var_guard $(if $(filter 1,$(STRICT_DIRECTIONS)),--strict-directions,)
 
 feature-canary-report: ## Evaluate feature shadow/canary guardrails from Prometheus and emit report
 	$(PY) scripts/feature_canary_guard.py --prom-url "$${PROM_URL:-http://localhost:9091}" --window "$${WINDOW:-1h}" --output-dir outputs/feature_canary $(if $(filter 1,$(ALLOW_WARN)),--allow-warn-exit-zero,)
