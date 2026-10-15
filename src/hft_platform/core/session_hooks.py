@@ -26,6 +26,23 @@ HookCallback = Callable[[], Any | Awaitable[Any]]
 _DEFAULT_POLL_INTERVAL_S = 30.0
 _DEFAULT_HOOK_TIMEOUT_S = 30.0
 
+_tz_fallback_warned = False
+
+
+def _warn_timezone_fallback_once(tz_name: str, exc: Exception) -> None:
+    """``_detect_phase`` runs every poll; an invalid ``HFT_TS_TZ`` is reported once per process, not every 30 s."""
+    global _tz_fallback_warned
+    if _tz_fallback_warned:
+        return
+    _tz_fallback_warned = True
+    logger.warning(
+        "session_hooks_timezone_invalid",
+        requested_tz=tz_name,
+        effective_tz="UTC+08:00",
+        timebase_tz=str(timebase.TZINFO),
+        error=str(exc),
+    )
+
 
 class SessionPhase(Enum):
     """Current market session phase."""
@@ -121,8 +138,9 @@ class SessionHookManager:
 
             tz_name = os.getenv("HFT_TS_TZ", "Asia/Taipei")
             tz: dt.tzinfo = ZoneInfo(tz_name)
-        except Exception:
+        except Exception as exc:
             tz = dt.timezone(dt.timedelta(hours=8))
+            _warn_timezone_fallback_once(os.getenv("HFT_TS_TZ", "Asia/Taipei"), exc)
 
         now = dt.datetime.now(tz)
 
