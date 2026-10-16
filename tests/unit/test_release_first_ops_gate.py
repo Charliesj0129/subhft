@@ -259,19 +259,19 @@ def _run_main_with_reports(monkeypatch, tmp_path: Path, *, bad_step: str | None,
 
 @pytest.mark.parametrize("bad_step", list(_REPORTS))
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "read_as"),
     [
-        {"result": {"overall": "fail"}},
-        {"result": {"overall": "warn"}},
-        {"result": {"recommendation": "go"}},
-        {"overall": "ready"},
-        "not json at all",
-        None,
+        ({"result": {"overall": "fail"}}, "fail"),
+        ({"result": {"overall": "warn"}}, "warn"),
+        ({"result": {"recommendation": "go"}}, None),
+        ({"overall": "ready"}, "ready"),
+        ("not json at all", None),
+        (None, None),
     ],
     ids=["fail", "warn", "no-overall", "other-word", "unreadable", "missing"],
 )
 def test_step_that_exits_zero_but_does_not_report_pass_fails_the_gate(
-    monkeypatch, tmp_path: Path, bad_step: str, payload
+    monkeypatch, tmp_path: Path, bad_step: str, payload, read_as
 ) -> None:
     rc, report = _run_main_with_reports(monkeypatch, tmp_path, bad_step=bad_step, payload=payload)
 
@@ -282,6 +282,10 @@ def test_step_that_exits_zero_but_does_not_report_pass_fails_the_gate(
     assert last["returncode"] == 98
     assert last["report_violation"] is True
     assert "step report is not pass" in last["stderr"]
+    # The reason names what the gate read and where it looked, in the row's stderr and in its tail.
+    assert f"overall={read_as!r}" in last["stderr"]
+    assert f"report={last['report_path'] or '(no report found)'}" in last["stderr"]
+    assert last["stderr_tail"] == last["stderr"]
     markdown = (tmp_path / "outputs" / "release_first_ops" / "latest.md").read_text(encoding="utf-8")
     assert "report_not_pass" in markdown
 
@@ -318,7 +322,8 @@ def test_step_commands_use_one_interpreter_and_have_no_second_attempt(tmp_path: 
         assert "||" not in command, command
         assert "2>/dev/null" not in command, command
         assert command.startswith(shlex.quote(sys.executable)), command  # no .venv in tmp_path: the running interpreter
-        assert command.count("python3") == 0, command
+        # The running interpreter's own path may be called python3 (a bare ``python3 -m pytest``): look at the rest.
+        assert command[len(shlex.quote(sys.executable)) :].count("python3") == 0, command
 
 
 def test_project_venv_is_the_interpreter_when_it_exists(tmp_path: Path) -> None:
@@ -332,6 +337,23 @@ def test_project_venv_is_the_interpreter_when_it_exists(tmp_path: Path) -> None:
     commands = [s["command"] for s in mod._build_steps(args) if s["command"] != "__check_alpha_audit__"]
 
     assert all(command.startswith(shlex.quote(str(venv_python))) for command in commands)
+
+
+def test_interpreter_path_with_a_space_stays_one_shell_word(tmp_path: Path) -> None:
+    """The commands run through a shell: a project directory with a space in its name must not split the
+    interpreter path into two words."""
+    mod = _load_module()
+    root = tmp_path / "my project"
+    venv_python = root / ".venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.write_text("#!/bin/sh\n")
+    venv_python.chmod(0o755)
+    args = mod._build_parser().parse_args(["--project-root", str(root), *_ARGV])
+
+    commands = [s["command"] for s in mod._build_steps(args) if s["command"] != "__check_alpha_audit__"]
+
+    assert len(commands) == 8
+    assert [shlex.split(command)[0] for command in commands] == [str(venv_python)] * 8
 
 
 def test_failing_step_is_not_rerun_and_keeps_its_own_stderr(monkeypatch, tmp_path: Path) -> None:
