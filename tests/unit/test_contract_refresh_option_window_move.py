@@ -10,6 +10,7 @@ ATM strikes were never subscribed and the old ones were never released, while th
 from __future__ import annotations
 
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.feed_adapter.shioaji import contracts_runtime
 from hft_platform.feed_adapter.shioaji._infra import reset_login_slot_for_tests
 from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
@@ -44,7 +46,9 @@ def _codes(symbols: list[dict]) -> set[str]:
 
 
 def _broker_contracts():
-    futures = [SimpleNamespace(code="TXFB7", symbol="TXF202702", category="TXF", delivery_date=EXPIRY, reference=18500.0)]
+    futures = [
+        SimpleNamespace(code="TXFB7", symbol="TXF202702", category="TXF", delivery_date=EXPIRY, reference=18500.0)
+    ]
     options = [
         SimpleNamespace(
             code=f"TXO{strike}{right}7",
@@ -63,6 +67,11 @@ def _broker_contracts():
 def _refresh_once(client: ShioajiClient, rebuilt: list[dict]) -> None:
     with patch("hft_platform.config.symbols.build_symbols", return_value=MagicMock(symbols=rebuilt, errors=[])):
         client._contracts_runtime.refresh_contracts_and_symbols()
+
+
+@pytest.fixture(autouse=True)
+def _no_settle_wait(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S", "0")
 
 
 @pytest.fixture
@@ -152,3 +161,139 @@ def test_moved_window_over_the_subscription_limit_is_reported_not_raised(live_cl
     live_client._contract_refresh_lock.release()
     assert live_client.subscribed_count == len(live_client.subscribed_codes)
     assert old_codes - live_client.subscribed_codes  # the dropped strikes were released first
+
+
+def test_failed_new_subscriptions_are_queued_for_retry(live_client: ShioajiClient):
+    new_window = _window((18500, 19000, 19500))
+    added = _codes(new_window) - _codes(live_client.symbols)
+    with (
+        patch.object(live_client, "_subscribe_symbol", return_value=False),
+        patch.object(live_client, "_unsubscribe_symbol"),
+        patch.object(live_client, "_start_sub_retry_thread") as start_retry,
+    ):
+        _refresh_once(live_client, new_window)
+
+    assert {s["code"] for s in live_client._failed_sub_symbols} == added
+    assert not (added & live_client.subscribed_codes)
+    start_retry.assert_called_once_with(live_client.tick_callback)
+
+
+def test_a_failed_subscription_is_recovered_by_the_retry_thread_on_a_later_round(live_client: ShioajiClient):
+    """Across rounds: the first refresh cannot subscribe; a second refresh sees no difference; the retry still lands."""
+    new_window = _window((18500, 19000, 19500))
+    added = _codes(new_window) - _codes(live_client.symbols)
+    gate = threading.Event()
+    recovered = threading.Event()
+    seen: set[str] = set()
+
+    def subscribe(sym, _cb):
+        if threading.current_thread() is threading.main_thread():
+            return False  # the refresh rounds run on this thread, and the broker refuses them
+        gate.wait(timeout=5.0)  # the retry thread is held until the test has run both rounds
+        seen.add(sym["code"])
+        if added <= seen:
+            recovered.set()
+        return True
+
+    live_client._contract_retry_s = 0.01
+    live_client._callbacks_registered = True
+    live_client._event_callback_registered = True
+    with (
+        patch.object(live_client, "_subscribe_symbol", side_effect=subscribe),
+        patch.object(live_client, "_unsubscribe_symbol"),
+    ):
+        _refresh_once(live_client, new_window)
+        _refresh_once(live_client, new_window)  # same window again: the contract-code diff is empty
+        assert not (added & live_client.subscribed_codes)
+
+        gate.set()
+        assert recovered.wait(timeout=5.0), "the retry thread never resubscribed the new strikes"
+        live_client._sub_retry_running = False
+
+    assert added <= live_client.subscribed_codes
+
+
+def test_moved_window_waits_for_the_broker_to_free_topics_before_subscribing(
+    live_client: ShioajiClient, monkeypatch: pytest.MonkeyPatch
+):
+    """Solace frees topic slots asynchronously; subscribing at once overshoots the cap (see _resubscribe_all)."""
+    monkeypatch.setenv("HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S", "0.05")
+    stamps: dict[str, list[float]] = {"unsubscribe": [], "subscribe": []}
+
+    def unsubscribe(_sym):
+        stamps["unsubscribe"].append(time.monotonic())
+
+    def subscribe(_sym, _cb):
+        stamps["subscribe"].append(time.monotonic())
+        return True
+
+    with (
+        patch.object(live_client, "_subscribe_symbol", side_effect=subscribe),
+        patch.object(live_client, "_unsubscribe_symbol", side_effect=unsubscribe),
+    ):
+        _refresh_once(live_client, _window((18500, 19000, 19500)))
+
+    assert stamps["unsubscribe"] and stamps["subscribe"]
+    assert min(stamps["subscribe"]) - max(stamps["unsubscribe"]) >= 0.045  # lower bound only: sleep never returns early
+
+
+def test_subscription_changes_run_under_the_resubscribe_lock(live_client: ShioajiClient):
+    held_during: list[bool] = []
+
+    def subscribe(_sym, _cb):
+        held_during.append(live_client._resubscribe_lock.locked())
+        return True
+
+    def unsubscribe(_sym):
+        held_during.append(live_client._resubscribe_lock.locked())
+
+    with (
+        patch.object(live_client, "_subscribe_symbol", side_effect=subscribe),
+        patch.object(live_client, "_unsubscribe_symbol", side_effect=unsubscribe),
+    ):
+        _refresh_once(live_client, _window((18500, 19000, 19500)))
+
+    assert held_during and all(held_during)
+    assert not live_client._resubscribe_lock.locked()  # released afterwards
+
+
+def test_a_resubscribe_in_flight_defers_the_move_to_the_retry_queue(
+    live_client: ShioajiClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(contracts_runtime, "SYNC_LOCK_WAIT_S", 0.05)
+    new_window = _window((18500, 19000, 19500))
+    added = _codes(new_window) - _codes(live_client.symbols)
+    assert live_client._resubscribe_lock.acquire(blocking=False)  # what _resubscribe_all holds while it runs
+    try:
+        with (
+            patch.object(live_client, "_subscribe_symbol", return_value=True) as subscribe,
+            patch.object(live_client, "_unsubscribe_symbol") as unsubscribe,
+            patch.object(live_client, "_start_sub_retry_thread") as start_retry,
+        ):
+            _refresh_once(live_client, new_window)
+    finally:
+        live_client._resubscribe_lock.release()
+
+    assert subscribe.call_count == 0  # no racing the other caller
+    assert unsubscribe.call_count == 0
+    assert {s["code"] for s in live_client._failed_sub_symbols} == added
+    start_retry.assert_called_once()
+
+
+def test_one_failed_unsubscribe_does_not_strand_the_rest_of_the_move(live_client: ShioajiClient):
+    new_window = _window((18500, 19000, 19500))
+    calls: list[str] = []
+
+    def unsubscribe(sym):
+        calls.append(sym["code"])
+        if len(calls) == 1:
+            raise RuntimeError("broker rejected the unsubscribe")
+
+    with (
+        patch.object(live_client, "_subscribe_symbol", return_value=True),
+        patch.object(live_client, "_unsubscribe_symbol", side_effect=unsubscribe),
+    ):
+        _refresh_once(live_client, new_window)
+
+    assert len(calls) == 2  # both dropped 18000 legs were attempted
+    assert live_client.subscribed_codes == _codes(new_window)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import threading
 import time
 from collections.abc import Sequence
@@ -23,6 +24,9 @@ from hft_platform.feed_adapter.shioaji._infra import (
 from hft_platform.feed_adapter.shioaji.family_populator import _root_from_code
 
 logger = get_logger("feed_adapter.contracts_runtime")
+
+# How long the subscription sync waits for a resubscribe already in flight (``_resubscribe_all`` holds the lock).
+SYNC_LOCK_WAIT_S = 30.0
 
 try:
     import shioaji as sj
@@ -812,16 +816,12 @@ class ContractsRuntime:
         return {str(s["code"]): s for s in symbols if isinstance(s, dict) and s.get("code")}
 
     def reload_symbols(self) -> None:
-        old_map = self._symbols_by_code()
+        old_map: dict[str, dict[str, Any]] = {}
+        for sym in self._client.symbols:
+            code = sym.get("code")
+            if code:
+                old_map[str(code)] = sym
         self._client._load_config()
-        self.sync_subscriptions_to_symbols(old_map)
-
-    def sync_subscriptions_to_symbols(self, old_map: dict[str, dict[str, Any]]) -> None:
-        """Unsubscribe what ``old_map`` had and ``client.symbols`` no longer has, subscribe what is new.
-
-        ``old_map`` must be taken BEFORE ``_load_config`` replaces ``client.symbols``: afterwards the old list
-        is gone, and a diff of the broker's contract codes cannot tell that the selected symbols moved.
-        """
         self._client.code_exchange_map = {
             s["code"]: s["exchange"] for s in self._client.symbols if s.get("code") and s.get("exchange")
         }
@@ -845,20 +845,96 @@ class ContractsRuntime:
         for code in removed:
             self._client._unsubscribe_symbol(old_map[code])
             self._client.subscribed_codes.discard(code)
-        # The slots just freed count: a window that moves at the cap swaps strikes one for one.
-        self._client.subscribed_count = len(self._client.subscribed_codes)
         for code in added:
             if self._client.subscribed_count >= self._client.MAX_SUBSCRIPTIONS:
                 raise ValueError("Subscription limit reached during reload")
             sym = new_map[code]
             if self._client._subscribe_symbol(sym, self._client.tick_callback):
                 self._client.subscribed_codes.add(code)
-                self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client._refresh_quote_routes()
         # Rebuild alias map after symbol reload
         self._client.alias_to_actual.clear()
         self.resolve_symbol_aliases()
+
+    def sync_subscriptions_to_symbols(self, old_map: dict[str, dict[str, Any]]) -> None:
+        """Move the live subscriptions from ``old_map`` to ``client.symbols`` after a refresh rebuilt the list.
+
+        ``old_map`` must be taken BEFORE ``_load_config`` replaces ``client.symbols``: afterwards the old list is
+        gone, and a diff of the broker's contract codes cannot tell that the selected symbols moved. This follows
+        ``_resubscribe_all``'s rules rather than ``reload_symbols``' (which the pool's roll path uses unchanged):
+        it takes ``_resubscribe_lock``; it waits ``HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S`` after unsubscribing,
+        because the broker frees topic slots asynchronously and an immediate subscribe overshoots the cap; and a
+        subscribe that fails goes to the same retry queue ``subscribe_basket`` uses, since nothing else would
+        retry it (``client.symbols`` already holds the new list, so the next refresh sees no difference).
+        """
+        c = self._client
+        c.code_exchange_map = {s["code"]: s["exchange"] for s in c.symbols if s.get("code") and s.get("exchange")}
+        new_map = self._symbols_by_code()
+        removed = sorted(set(old_map) - set(new_map))
+        added = sorted(set(new_map) - set(old_map))
+
+        lock = getattr(c, "_resubscribe_lock", None)
+        held = lock is None or lock.acquire(timeout=SYNC_LOCK_WAIT_S)
+        failed: list[dict[str, Any]] = []
+        over_limit: list[str] = []
+        try:
+            if not held:
+                # A resubscribe is mid-flight. Racing it would double-subscribe; queue the new symbols instead and
+                # say so, because the old ones stay subscribed until the next login.
+                failed = [new_map[code] for code in added]
+                logger.error(
+                    "contract_refresh_subscription_sync_lock_busy",
+                    wait_s=SYNC_LOCK_WAIT_S,
+                    queued=len(failed),
+                    stale_subscriptions=len(removed),
+                    severity="critical",
+                )
+            else:
+                for code in removed:
+                    if code in c.subscribed_codes:
+                        try:
+                            c._unsubscribe_symbol(old_map[code])
+                        except Exception as exc:  # noqa: BLE001 - one bad unsubscribe must not strand the rest
+                            logger.warning("contract_refresh_unsubscribe_failed", code=code, error=str(exc))
+                    c.subscribed_codes.discard(code)
+                c.subscribed_count = len(c.subscribed_codes)
+                settle_s = float(os.getenv("HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S", "0.2"))
+                if removed and added and settle_s > 0:
+                    time.sleep(settle_s)
+                for code in added:
+                    if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                        over_limit.append(code)
+                        continue
+                    if c._subscribe_symbol(new_map[code], c.tick_callback):
+                        c.subscribed_codes.add(code)
+                        c.subscribed_count = len(c.subscribed_codes)
+                    else:
+                        failed.append(new_map[code])
+                c._refresh_quote_routes()
+                # Rebuild alias map after symbol reload
+                c.alias_to_actual.clear()
+                self.resolve_symbol_aliases()
+        finally:
+            if held and lock is not None:
+                lock.release()
+
+        if over_limit:
+            logger.error(
+                "contract_refresh_subscription_limit_reached",
+                limit=int(c.MAX_SUBSCRIPTIONS),
+                dropped=len(over_limit),
+                dropped_sample=over_limit[:10],
+                severity="critical",
+            )
+        if failed:
+            c._failed_sub_symbols.extend(failed)
+            logger.warning(
+                "Failed subscriptions queued for retry",
+                count=len(failed),
+                codes=[s.get("code") for s in failed[:10]],
+            )
+            c._start_sub_retry_thread(c.tick_callback)
 
     def is_contract_cache_stale(self) -> bool:
         import datetime
