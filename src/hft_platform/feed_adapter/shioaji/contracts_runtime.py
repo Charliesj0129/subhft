@@ -547,6 +547,13 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
     return actual if actual else config_code
 
 
+def _without_reference(row: dict[str, Any]) -> dict[str, Any]:
+    """The contract row as the symbol rebuild sees it: only futures carry ``reference``, so only they are copied."""
+    if "reference" not in row:
+        return row
+    return {k: v for k, v in row.items() if k != "reference"}
+
+
 class ContractsRuntime:
     """Contracts cache/preflight/refresh runtime."""
 
@@ -807,10 +814,6 @@ class ContractsRuntime:
             logger.warning("Unsubscribable symbols detected", count=len(invalid), symbols=invalid[:10])
         return invalid
 
-    def _symbols_by_code(self) -> dict[str, dict[str, Any]]:
-        symbols = getattr(self._client, "symbols", None) or []
-        return {str(s["code"]): s for s in symbols if isinstance(s, dict) and s.get("code")}
-
     def reload_symbols(self) -> None:
         old_map: dict[str, dict[str, Any]] = {}
         for sym in self._client.symbols:
@@ -977,8 +980,6 @@ class ContractsRuntime:
         rebuild_error: str | None = None
         codes_before: set[str] = set()
         contracts_before: list[dict[str, Any]] = []
-        # The symbols this facade subscribes to now; ``_load_config`` below overwrites ``client.symbols``.
-        symbols_before = list(getattr(self._client, "symbols", None) or [])
         _t_phase = time.monotonic()
         try:
             cache_path = Path(self._client._contract_cache_path)
@@ -1216,8 +1217,13 @@ class ContractsRuntime:
 
             _t_build = time.monotonic()
             # Same "still trading" as the universe roll (core/front_month.py).
+            # The cache above keeps the futures ``reference`` for the connection pool's options roll and the operator
+            # CLI, which move subscriptions on purpose. This rebuild does not: nothing here follows a re-centred
+            # option window with a resubscribe (the ``diff`` policy reads the contract-code delta, and
+            # ``_resubscribe_all`` only unsubscribes symbols still in ``client.symbols``), so centring on a moving
+            # reference would leave ``client.symbols`` naming strikes the broker is not serving.
             contract_index = ContractIndex(
-                contracts=raw_contracts,
+                contracts=[_without_reference(c) for c in raw_contracts],
                 as_of=taifex_delivery_cutoff(timebase.now_ns()),
             )
             list_path = Path(Path(self._client.config_path).parent / "symbols.list")
@@ -1258,7 +1264,6 @@ class ContractsRuntime:
         try:
             self._client._load_config()
             logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self._client.symbols))
-            self._hold_window_unless_contracts_changed(symbols_before)
         except Exception as exc:
             # Q3-fix (2026-04-27): contract-refresh reload-failure used to be
             # invisible. ``_load_config`` itself now bumps the metric Counter;
@@ -1341,35 +1346,6 @@ class ContractsRuntime:
                 self.write_refresh_status(result="error", error=rebuild_error)
             else:
                 self.write_refresh_status(result="ok")
-
-    def _hold_window_unless_contracts_changed(self, symbols_before: list[dict[str, Any]]) -> None:
-        """Keep the symbol list in force when the refresh only re-centred the option window.
-
-        The rebuilt list is centred on the futures ``reference`` the hourly cache now carries, so it can differ
-        from the list in force without any contract being listed or delisted. Nothing in this refresh would move
-        the live subscriptions to it: the resubscribe policy reads the contract-code delta, and
-        ``_resubscribe_all`` unsubscribes only symbols that are still in ``client.symbols``. Adopting the list
-        would leave ``client.symbols`` naming strikes that are not subscribed and the old strikes subscribed but
-        unnamed. So the list in force is kept; the symbol file already holds the new window, which the next login
-        or start subscribes. When the contract set DID change, the rebuilt list is adopted exactly as it always
-        was. Never raises.
-        """
-        client = self._client
-        diff = client._contract_refresh_last_diff or {}
-        if int(diff.get("added_count") or 0) or int(diff.get("removed_count") or 0):
-            return
-        before = {str(s["code"]) for s in symbols_before if isinstance(s, dict) and s.get("code")}
-        after = set(self._symbols_by_code())
-        if not before or before == after:
-            return
-        client.symbols = symbols_before
-        logger.info(
-            "contract_refresh_window_move_held",
-            added_count=len(after - before),
-            removed_count=len(before - after),
-            added_sample=sorted(after - before)[:10],
-            removed_sample=sorted(before - after)[:10],
-        )
 
     def _reuse_shared_rebuild(self, shared: _SharedRebuild) -> None:
         """Complete this facade's refresh cycle from a sibling facade's rebuild.
