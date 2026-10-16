@@ -1,7 +1,7 @@
 import sys
-import time
 
 from hft_platform.observability.metrics import MetricsRegistry
+from tests.waiting import wait_until
 
 
 def test_system_poller_starts_and_stops(monkeypatch):
@@ -53,7 +53,10 @@ def test_system_poller_updates_gauges(monkeypatch):
 
     poller = SystemPoller(metrics, interval_s=0.1)
     poller.start()
-    time.sleep(0.3)
+    wait_until(
+        lambda: metrics.system_cpu_usage._value.get() > 0 and metrics.system_memory_usage._value.get() > 0,
+        message="the poller never set the cpu and memory gauges",
+    )
     poller.stop()
     poller._thread.join(timeout=3.0)
 
@@ -82,8 +85,8 @@ def test_system_poller_handles_no_psutil(monkeypatch):
 
     poller = SystemPoller(metrics, interval_s=0.1)
     poller.start()
-    time.sleep(0.3)
     # Thread should have exited due to ImportError
+    poller._thread.join(timeout=3.0)
     assert not poller._thread.is_alive()
 
 

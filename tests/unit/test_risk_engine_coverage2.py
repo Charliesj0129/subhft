@@ -42,6 +42,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator
+from tests.waiting import await_until
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -417,7 +418,10 @@ async def test_run_order_queue_full_consecutive_triggers_halt(risk_config):
         q_in.put_nowait(_make_intent(intent_id=i))
 
     task = asyncio.create_task(eng.run())
-    await asyncio.sleep(0.2)
+    await await_until(
+        lambda: eng.storm_guard.state in (StormGuardState.STORM, StormGuardState.HALT),
+        message="the full order queue never pushed the storm guard to STORM or HALT",
+    )
     eng.running = False
     task.cancel()
     try:
