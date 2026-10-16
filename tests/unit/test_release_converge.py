@@ -321,17 +321,42 @@ def test_allow_delete_wal_lets_the_cleanup_remove_it(monkeypatch, tmp_path: Path
     assert "allowed" in guard[0]["stdout"]
 
 
-def test_allow_delete_wal_does_not_unlock_the_data_directory(tmp_path: Path) -> None:
+def _guard_returncodes(payload: dict) -> dict[str, int]:
+    return {
+        str(row["step"]).split(":", 1)[1]: int(row["returncode"])
+        for row in payload["cleanup_steps"]
+        if str(row.get("step", "")).startswith("guard_untracked_state:")
+    }
+
+
+def test_allow_delete_wal_does_not_unlock_the_data_directory(monkeypatch, tmp_path: Path) -> None:
     mod = _load_module()
+    _skip_repo_tooling(monkeypatch, mod)  # so that only the guard can be the reason the run stops
     root = _project_with_wal(tmp_path)
     (root / "data").mkdir()
     (root / "data" / "ticks.parquet").write_text("rows\n", encoding="utf-8")
 
-    rc, _ = _run(mod, root, "--clean-wal", "--clean-data", "--allow-delete-wal")
+    rc, payload = _run(mod, root, "--clean-wal", "--clean-data", "--allow-delete-wal")
 
     assert rc == 2
+    assert _guard_returncodes(payload) == {".wal": 0, "data": 3}
     assert (root / "data" / "ticks.parquet").exists()
     assert (root / ".wal" / "segment-000001.wal").exists()  # the whole cleanup stops, not only the data step
+
+
+def test_allow_delete_data_does_not_unlock_the_wal_directory(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_module()
+    _skip_repo_tooling(monkeypatch, mod)
+    root = _project_with_wal(tmp_path)
+    (root / "data").mkdir()
+    (root / "data" / "ticks.parquet").write_text("rows\n", encoding="utf-8")
+
+    rc, payload = _run(mod, root, "--clean-wal", "--clean-data", "--allow-delete-data")
+
+    assert rc == 2
+    assert _guard_returncodes(payload) == {".wal": 3, "data": 0}
+    assert (root / ".wal" / "segment-000001.wal").exists()
+    assert (root / "data" / "ticks.parquet").exists()  # the whole cleanup stops, not only the wal step
 
 
 def test_clean_data_is_blocked_until_allow_delete_data(monkeypatch, tmp_path: Path) -> None:
