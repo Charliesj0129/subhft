@@ -64,6 +64,9 @@ def test_the_job_that_keeps_the_token_really_pushes_and_may_write() -> None:
         permissions = job.get("permissions") or doc.get("permissions") or {}
         assert permissions.get("contents") == "write", (path.name, job_id)
         assert any("git push" in str(step.get("run", "")) for step in job["steps"]), (path.name, job_id)
+        # Without the persisted token the push fails, and the job only warns about it: the baseline would go stale.
+        for step in _checkouts(job):
+            assert (step.get("with") or {}).get("persist-credentials") is not False, (path.name, job_id)
     assert found == PUSHING_JOBS
 
 
