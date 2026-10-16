@@ -7,6 +7,7 @@ that make the job worth having (the upgrade really happens and survives, it is a
 
 from __future__ import annotations
 
+import shlex
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from packaging.requirements import Requirement
 ROOT = Path(__file__).resolve().parents[2]
 JOB_ID = "prod-dependency-versions"
 PACKAGES = {"pandas": "3.0.0", "clickhouse-connect": "1.5.0"}  # the majors the live engine ran on 2026-10-03
+LOCK_VERSIONS = {"pandas": "2.3.3", "clickhouse-connect": "0.10.0"}  # what uv.lock pins today
 
 
 def _workflow() -> dict[str, Any]:
@@ -56,12 +58,32 @@ def test_the_job_does_not_wait_for_other_jobs() -> None:
     assert not _job().get("needs")
 
 
-def test_both_packages_are_upgraded_by_name_not_pinned_by_hand() -> None:
-    run = next(run for i, run in _runs(_job()) if i == _upgrade_index(_job()))
+def _upgrade_requirements(job: dict[str, Any]) -> dict[str, Requirement]:
+    run = next(run for i, run in _runs(job) if i == _upgrade_index(job))
+    tokens = shlex.split(run)
+    specs = [tokens[i + 1] for i, token in enumerate(tokens) if token == "--upgrade-package"]
+    return {requirement.name: requirement for requirement in map(Requirement, specs)}
 
-    for package in PACKAGES:
-        assert f"--upgrade-package {package}" in run
-    assert "==" not in run  # tracks the pyproject ranges instead of a second place to edit
+
+def test_both_packages_are_upgraded_through_a_range_that_excludes_the_lock_version() -> None:
+    """A bare name left pandas at 2.3.3 in a trial: uv only moves it when the requirement asks for the new major."""
+    requirements = _upgrade_requirements(_job())
+
+    assert set(requirements) == set(PACKAGES)
+    for package, requirement in requirements.items():
+        assert not requirement.specifier.contains(LOCK_VERSIONS[package]), f"{requirement} would not move the package"
+        assert requirement.specifier.contains(PACKAGES[package]), f"{requirement} excludes the production version"
+        assert "==" not in str(requirement.specifier)  # a range, not a second place to edit a version by hand
+
+
+def test_the_upgrade_floor_is_the_major_the_job_asserts() -> None:
+    job = _job()
+    check = next(run for _, run in _runs(job) if "importlib.metadata" in run)
+
+    for package, requirement in _upgrade_requirements(job).items():
+        major = int(PACKAGES[package].split(".")[0])
+        assert f'"{package}": {major}' in check
+        assert not requirement.specifier.contains(f"{major - 1}.99.99"), f"{requirement} allows the previous major"
 
 
 def test_every_command_after_the_upgrade_skips_the_resync_that_would_undo_it() -> None:
