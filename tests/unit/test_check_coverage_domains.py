@@ -78,14 +78,29 @@ def test_gate_ignores_float_noise_in_the_line_rate(
     assert "FAIL" not in capsys.readouterr().out
 
 
-def test_gate_fails_a_package_just_below_its_floor(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("package", list(MINIMUM_FLOORS))
+def test_gate_fails_any_package_a_hundredth_of_a_point_below_its_floor(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], package: str
+) -> None:
     mod = _load_module()
     rates = dict(mod.PACKAGE_FLOORS)
-    rates["risk"] = mod.PACKAGE_FLOORS["risk"] - 0.5
+    rates[package] = mod.PACKAGE_FLOORS[package] - 0.01
     report = _coverage_xml(tmp_path / "coverage.xml", rates)
 
     assert mod.main(report) == 1
-    assert "risk" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "FAILED: 1 package(s) below floor" in err
+    assert f"  {package}: " in err
+
+
+def test_gate_fails_a_package_whose_line_rate_is_missing(tmp_path: Path) -> None:
+    mod = _load_module()
+    report = tmp_path / "coverage.xml"
+    report.write_text(
+        '<?xml version="1.0"?><coverage><packages><package name="risk"/></packages></coverage>', encoding="utf-8"
+    )
+
+    assert mod.main(report) == 1
 
 
 @pytest.mark.parametrize("content", [None, "<coverage><packages>"])
