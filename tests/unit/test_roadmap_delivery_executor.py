@@ -426,3 +426,69 @@ def test_main_writes_null_for_unmeasured_hotpath_inputs(tmp_path: Path) -> None:
 
     summary = json.loads((tmp_path / "outputs/roadmap_execution/summary/latest.json").read_text(encoding="utf-8"))
     assert summary["ws_g"]["status"] == "warn"
+
+
+# --- the arithmetic the change kept --------------------------------------------------------------
+
+
+def test_priority_bands_start_at_45_and_65() -> None:
+    mod = _load_module()
+
+    assert [mod._priority_for(score) for score in (0, 44, 45, 64, 65, 200)] == ["P2", "P2", "P1", "P1", "P0", "P0"]
+
+
+def test_each_measured_input_adds_its_points_from_its_threshold(tmp_path: Path) -> None:
+    """The strategy_runner row starts at 55 (layer weight 30, no Rust marker 25). A speedup below 1.0 adds 20, a
+    hotspot share of at least 10 adds 10, a latency of at least 20 us adds 8; the value on the line counts."""
+    mod = _load_module()
+    _seed_hotpath_files(tmp_path)
+
+    def score(*, speedup=None, hotspot=None, p95=None) -> int:
+        pairs = (
+            {}
+            if speedup is None
+            else {"normalize_bidask": {"python_mean_s": 1.0, "rust_mean_s": 1.0, "rust_speedup_vs_python": speedup}}
+        )
+        hotspots = {} if hotspot is None else {"src/hft_platform/strategy/runner.py:handle_event": hotspot}
+        perf = {} if p95 is None else {"strategy_noop_metrics_on_us_per_event": p95}
+        rows, _, _ = mod._hotpath_rows(tmp_path, pairs, hotspots, perf, {})
+        return _row_for(rows, "strategy_runner")["priority_score"]
+
+    assert score() == 55
+    assert [score(speedup=value) - 55 for value in (0.99, 1.0, 2.0)] == [20, 0, 0]
+    assert [score(hotspot=value) - 55 for value in (10.0, 9.99)] == [10, 0]
+    assert [score(p95=value) - 55 for value in (20.0, 19.99)] == [8, 0]
+
+
+def test_module_hotspot_pct_is_the_largest_share_of_its_frames() -> None:
+    mod = _load_module()
+    frames = {
+        "src/hft_platform/strategy/runner.py:a": 3.0,
+        "src/hft_platform/strategy/runner.py:b": 12.0,
+        "src/hft_platform/strategy/runner.py:c": 5.0,
+        "src/hft_platform/risk/engine.py:d": 40.0,
+    }
+
+    assert mod._module_hotspot_pct("strategy_runner", frames) == 12.0
+
+
+def test_cutover_backlog_shows_an_upper_bound_only_for_rows_that_have_one() -> None:
+    mod = _load_module()
+    unbounded = {
+        "backlog_id": "WSG-001",
+        "module": "a",
+        "layer": "x",
+        "priority": "P2",
+        "priority_max": "P0",
+        "owner": "o",
+        "eta_days": 21,
+    }
+    measured = {**unbounded, "backlog_id": "WSG-002", "module": "b", "priority": "P1", "priority_max": "P1"}
+
+    text = mod._render_cutover_backlog({"items": [unbounded, measured]})
+
+    rows = {line.split("`")[1]: line for line in text.splitlines() if line.startswith("| `WSG-")}
+    assert "`P2 (up to P0)`" in rows["WSG-001"]
+    assert "(up to" not in rows["WSG-002"]
+    assert "some inputs were not measured" in text
+    assert "some inputs were not measured" not in mod._render_cutover_backlog({"items": [measured]})
