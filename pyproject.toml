@@ -114,7 +114,7 @@ omit = [
 [tool.coverage.report]
 # fail_under is enforced via --cov-fail-under=70 in addopts so that --no-cov
 # and -p no:cov invocations (e.g. tests/research explicit runs) skip the gate.
-# Roadmap: 70 (Phase 2, current) → 80 (Phase 3). See .agent/rules/50-testing.md
+# Roadmap: 70 (Phase 2, current) → 80 (Phase 3). See AGENTS.md (Commands)
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
@@ -160,11 +160,9 @@ known-first-party = ["hft_platform", "research"]
 "tests/unit/alpha/test_audit_cli_init.py" = ["I001"]
 "tests/unit/alpha/test_audit_cli_verify_spec.py" = ["I001"]
 "scripts/**/*.py" = ["E501", "E402"]
-"src/hft_platform/research/**/*.py" = ["E501", "E402", "F841", "E722"]
 "src/hft_platform/feed_adapter/shioaji_client.py" = ["E501"]
 "src/hft_platform/observability/metrics.py" = ["F401"]
 "src/hft_platform/config/wizard.py" = ["E501"]
-"src/hft_platform/cli.py" = ["F841", "F401", "E501", "C901"]
 "src/hft_platform/backtest/reporting.py" = ["E501"]
 # C901 existing violations (max-complexity=15) — tracked for future cleanup
 "src/hft_platform/alpha/_gate_a.py" = ["C901"]
@@ -215,8 +213,6 @@ known-first-party = ["hft_platform", "research"]
 "src/hft_platform/alpha/pool.py" = ["B"]
 "src/hft_platform/backtest/runner.py" = ["B"]
 "src/hft_platform/execution/reconciliation.py" = ["B"]
-"src/hft_platform/feature/kernel.py" = ["B"]
-"src/hft_platform/feed_adapter/subscription_state.py" = ["B"]
 "src/hft_platform/risk/fast_gate.py" = ["B"]
 "src/hft_platform/strategy/base.py" = ["B"]
 
