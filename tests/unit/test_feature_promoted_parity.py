@@ -87,6 +87,8 @@ def test_python_rust_promoted_parity_within_tolerance(frames, feature_set) -> No
         feature_set=feature_set,
     )
     report.raise_if_failed()
+    assert report.ok
+    assert report.n_frames > 0
 
 
 def test_reset_rewarm_parity(frames) -> None:
