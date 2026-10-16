@@ -807,13 +807,21 @@ class ContractsRuntime:
             logger.warning("Unsubscribable symbols detected", count=len(invalid), symbols=invalid[:10])
         return invalid
 
+    def _symbols_by_code(self) -> dict[str, dict[str, Any]]:
+        symbols = getattr(self._client, "symbols", None) or []
+        return {str(s["code"]): s for s in symbols if isinstance(s, dict) and s.get("code")}
+
     def reload_symbols(self) -> None:
-        old_map: dict[str, dict[str, Any]] = {}
-        for sym in self._client.symbols:
-            code = sym.get("code")
-            if code:
-                old_map[str(code)] = sym
+        old_map = self._symbols_by_code()
         self._client._load_config()
+        self.sync_subscriptions_to_symbols(old_map)
+
+    def sync_subscriptions_to_symbols(self, old_map: dict[str, dict[str, Any]]) -> None:
+        """Unsubscribe what ``old_map`` had and ``client.symbols`` no longer has, subscribe what is new.
+
+        ``old_map`` must be taken BEFORE ``_load_config`` replaces ``client.symbols``: afterwards the old list
+        is gone, and a diff of the broker's contract codes cannot tell that the selected symbols moved.
+        """
         self._client.code_exchange_map = {
             s["code"]: s["exchange"] for s in self._client.symbols if s.get("code") and s.get("exchange")
         }
@@ -837,12 +845,15 @@ class ContractsRuntime:
         for code in removed:
             self._client._unsubscribe_symbol(old_map[code])
             self._client.subscribed_codes.discard(code)
+        # The slots just freed count: a window that moves at the cap swaps strikes one for one.
+        self._client.subscribed_count = len(self._client.subscribed_codes)
         for code in added:
             if self._client.subscribed_count >= self._client.MAX_SUBSCRIPTIONS:
                 raise ValueError("Subscription limit reached during reload")
             sym = new_map[code]
             if self._client._subscribe_symbol(sym, self._client.tick_callback):
                 self._client.subscribed_codes.add(code)
+                self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client._refresh_quote_routes()
         # Rebuild alias map after symbol reload
@@ -973,6 +984,8 @@ class ContractsRuntime:
         rebuild_error: str | None = None
         codes_before: set[str] = set()
         contracts_before: list[dict[str, Any]] = []
+        # The symbols this facade subscribes to now; ``_load_config`` below overwrites ``client.symbols``.
+        symbols_before = self._symbols_by_code()
         _t_phase = time.monotonic()
         try:
             cache_path = Path(self._client._contract_cache_path)
@@ -1252,6 +1265,7 @@ class ContractsRuntime:
         try:
             self._client._load_config()
             logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self._client.symbols))
+            self._follow_moved_symbols(symbols_before)
         except Exception as exc:
             # Q3-fix (2026-04-27): contract-refresh reload-failure used to be
             # invisible. ``_load_config`` itself now bumps the metric Counter;
@@ -1334,6 +1348,36 @@ class ContractsRuntime:
                 self.write_refresh_status(result="error", error=rebuild_error)
             else:
                 self.write_refresh_status(result="ok")
+
+    def _follow_moved_symbols(self, symbols_before: dict[str, dict[str, Any]]) -> None:
+        """Move the live subscriptions when the rebuilt symbol list differs from the one in force before it.
+
+        The contract-code delta cannot see this: the futures ``reference`` that centres the TXO strike window
+        re-bases without any contract being listed or delisted, so the window moves while the broker's code set
+        stays put. ``none`` keeps its meaning (the refresh never touches subscriptions). Never raises: a failed
+        sync is logged critical and the next login's full subscribe still repairs it.
+        """
+        client = self._client
+        if client._contract_refresh_resubscribe_policy == "none":
+            return
+        if not (client.logged_in and client.api and client.tick_callback):
+            return
+        after = self._symbols_by_code()
+        if set(symbols_before) == set(after):
+            return
+        added = sorted(set(after) - set(symbols_before))
+        removed = sorted(set(symbols_before) - set(after))
+        logger.info("contract_refresh_symbols_moved", added_count=len(added), removed_count=len(removed))
+        try:
+            self.sync_subscriptions_to_symbols(symbols_before)
+        except Exception as exc:  # noqa: BLE001 - the refresh must still finish and release its lock
+            logger.error(
+                "contract_refresh_subscription_sync_failed",
+                error=str(exc),
+                added=added[:10],
+                removed=removed[:10],
+                severity="critical",
+            )
 
     def _reuse_shared_rebuild(self, shared: _SharedRebuild) -> None:
         """Complete this facade's refresh cycle from a sibling facade's rebuild.
