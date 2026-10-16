@@ -38,6 +38,8 @@ from structlog.testing import capture_logs
 
 from hft_platform.reports.models import ComposedReport, MessagePart
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 _TZ = ZoneInfo("Asia/Taipei")
 
 

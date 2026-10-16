@@ -23,6 +23,8 @@ from hft_platform.feed_adapter.shioaji.contracts_runtime import (
     assert_not_expired,
 )
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

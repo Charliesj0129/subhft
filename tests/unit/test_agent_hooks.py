@@ -10,7 +10,11 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
+
+import pytest
 
 HOOKS = Path(__file__).resolve().parents[2] / ".claude" / "hooks"
 
@@ -30,6 +34,28 @@ def run_hook(script: str, event: dict, cwd: Path, env: dict | None = None) -> su
 # --- scope_guard -------------------------------------------------------------
 
 MARKER = {"id": "d1", "allowed": ["src/foo/*.py", "tests/unit/test_foo.py"], "orchestrator_bypass": True}
+
+SCRATCHPAD_PREFIX = "/tmp/claude-"  # scope_guard lets every path under it through, window or not
+
+
+@pytest.fixture()
+def project_root(tmp_path: Path) -> Iterator[Path]:
+    """A project root that is not inside the scope guard's scratchpad exemption.
+
+    ``tmp_path`` lives under ``TMPDIR``. A session started with ``TMPDIR=/tmp/claude-...`` (the harness's own
+    scratch area) puts it inside the exemption, where the guard allows every absolute path: the "blocks" test
+    then fails and the "allows" test passes for the wrong reason. Absolute-path tests build their paths from
+    this root instead, so the result does not depend on where the test run was started.
+    """
+    if not str(tmp_path).startswith(SCRATCHPAD_PREFIX):
+        yield tmp_path
+        return
+    for base in ("/var/tmp", "/dev/shm", str(Path.home())):
+        if os.path.isdir(base) and os.access(base, os.W_OK) and not base.startswith(SCRATCHPAD_PREFIX):
+            with tempfile.TemporaryDirectory(prefix="hft-hook-root-", dir=base) as root:
+                yield Path(root)
+            return
+    pytest.fail(f"no writable directory outside {SCRATCHPAD_PREFIX}* for an absolute-path hook test")
 
 
 def _setup_delegation(tmp_path: Path) -> None:
@@ -167,25 +193,25 @@ def test_scope_guard_exact_file_pattern_does_not_grant_prefix_siblings(tmp_path)
         assert r.returncode == 2, f"prefix sibling allowed: {target}"
 
 
-def test_scope_guard_blocks_absolute_path_outside_allowlist(tmp_path):
+def test_scope_guard_blocks_absolute_path_outside_allowlist(project_root):
     # Reviewer F8: the harness sends ABSOLUTE paths; relpath branch must still block
-    _setup_delegation(tmp_path)
+    _setup_delegation(project_root)
     ev = {
         "agent_type": "hft-executor",
         "tool_name": "Edit",
-        "tool_input": {"file_path": str(tmp_path / "docs/other.md")},
+        "tool_input": {"file_path": str(project_root / "docs/other.md")},
     }
-    assert run_hook("scope_guard.py", ev, tmp_path).returncode == 2
+    assert run_hook("scope_guard.py", ev, project_root).returncode == 2
 
 
-def test_scope_guard_allows_absolute_path_inside_allowlist(tmp_path):
-    _setup_delegation(tmp_path)
+def test_scope_guard_allows_absolute_path_inside_allowlist(project_root):
+    _setup_delegation(project_root)
     ev = {
         "agent_type": "hft-executor",
         "tool_name": "Edit",
-        "tool_input": {"file_path": str(tmp_path / "src/foo/bar.py")},
+        "tool_input": {"file_path": str(project_root / "src/foo/bar.py")},
     }
-    assert run_hook("scope_guard.py", ev, tmp_path).returncode == 0
+    assert run_hook("scope_guard.py", ev, project_root).returncode == 0
 
 
 # --- discipline_feedback -----------------------------------------------------

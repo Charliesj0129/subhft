@@ -38,6 +38,8 @@ from hft_platform.alpha.cluster import (
     cluster_alphas,
 )
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 # ---------------------------------------------------------------------------
 # Helpers — synthetic matrix payloads (mirror ``pool.compute_pool_matrix``).
 # ---------------------------------------------------------------------------

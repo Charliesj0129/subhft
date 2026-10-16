@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
 import structlog
 
 from hft_platform.contracts.family_resolver import ContractFamilyResolver
@@ -13,6 +14,8 @@ from hft_platform.feed_adapter.shioaji.family_populator import (
     _parse_delivery_to_date,
     populate_resolver_from_shioaji,
 )
+
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
 
 
 def _mock_contract(code: str, *, delivery_month: str | None = None, delivery_date: str | None = None):

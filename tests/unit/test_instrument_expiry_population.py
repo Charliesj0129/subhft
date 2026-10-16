@@ -37,6 +37,8 @@ import pytest
 
 from hft_platform.core.instrument_registry import InstrumentType
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 
 def _meta(entries: dict[str, dict]):
     """A SymbolMetadata loaded from a throwaway symbols.yaml.

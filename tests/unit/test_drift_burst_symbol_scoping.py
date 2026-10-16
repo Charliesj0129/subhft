@@ -21,6 +21,8 @@ import structlog.testing
 from hft_platform.risk.drift_burst_detector import DriftBurstDetector
 from hft_platform.services.system import HFTSystem
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 
 def _book(mid_x2: int, spread: int = 100, imbalance: float = 0.0) -> SimpleNamespace:
     return SimpleNamespace(mid_price_x2=mid_x2, spread=spread, imbalance=imbalance)

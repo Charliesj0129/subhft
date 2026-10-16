@@ -32,6 +32,8 @@ import yaml
 from hft_platform.feed_adapter.shioaji._infra import reset_login_slot_for_tests
 from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 
 @pytest.fixture(autouse=True)
 def _clean_login_slot():
