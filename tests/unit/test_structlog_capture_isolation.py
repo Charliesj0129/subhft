@@ -12,6 +12,7 @@ user from forgetting it.
 from __future__ import annotations
 
 import ast
+import importlib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -75,6 +76,35 @@ def test_the_fixture_sweeps_the_loggers_cached_before_the_test_started(request: 
         request.getfixturevalue("uncached_structlog_loggers")
 
         assert "bind" not in vars(family_populator.logger)
+
+
+SWEPT_PACKAGES = (
+    "hft_platform.order.adapter",
+    "hft_platform.risk.engine",
+    "hft_platform.recorder.batcher",
+    "hft_platform.feed_adapter.shioaji.family_populator",
+)
+
+
+def test_the_fixture_sweeps_the_module_loggers_of_every_package_not_only_one(uncached_structlog_loggers) -> None:
+    modules = [importlib.import_module(name) for name in SWEPT_PACKAGES]
+    config = structlog.get_config()
+    original_processors, original_flag = config["processors"], config["cache_logger_on_first_use"]
+    structlog.configure(cache_logger_on_first_use=True)
+    try:
+        for module in modules:
+            module.logger.info("freeze the processors")
+        structlog.configure(processors=[*original_processors])
+        assert all("bind" in vars(module.logger) for module in modules)
+
+        swept = uncached_structlog_loggers()
+
+        assert swept >= len(modules)
+        assert [m.__name__ for m in modules if "bind" in vars(m.logger)] == []
+    finally:
+        structlog.configure(processors=original_processors, cache_logger_on_first_use=original_flag)
+        for module in modules:
+            vars(module.logger).pop("bind", None)
 
 
 def test_the_fixture_reports_how_many_cached_loggers_it_cleared(uncached_structlog_loggers) -> None:
@@ -147,10 +177,16 @@ def test_the_guard_flags_a_file_that_forgets_and_accepts_one_that_opts_in(tmp_pa
         encoding="utf-8",
     )
     (tmp_path / "unrelated.py").write_text("def test_x():\n    assert True\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "deep.py").write_text(
+        "from structlog.testing import capture_logs\n\n\ndef test_x():\n    with capture_logs():\n        pass\n",
+        encoding="utf-8",
+    )
 
     assert _capture_logs_users_without_opt_in(tmp_path, skip=set()) == [
         "alias_only.py",
         "attribute_only.py",
         "forgets.py",
         "star_import.py",
+        "sub/deep.py",
     ]

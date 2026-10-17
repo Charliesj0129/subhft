@@ -5,6 +5,7 @@ harness invokes them. Probe verdict 2026-07-14: subagent tool calls carry
 `agent_type` in the hook input; main-session calls do not.
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -38,15 +39,9 @@ MARKER = {"id": "d1", "allowed": ["src/foo/*.py", "tests/unit/test_foo.py"], "or
 SCRATCHPAD_PREFIX = "/tmp/claude-"  # scope_guard lets every path under it through, window or not
 
 
-@pytest.fixture()
-def project_root(tmp_path: Path) -> Iterator[Path]:
-    """A project root that is not inside the scope guard's scratchpad exemption.
-
-    ``tmp_path`` lives under ``TMPDIR``. A session started with ``TMPDIR=/tmp/claude-...`` (the harness's own
-    scratch area) puts it inside the exemption, where the guard allows every absolute path: the "blocks" test
-    then fails and the "allows" test passes for the wrong reason. Absolute-path tests build their paths from
-    this root instead, so the result does not depend on where the test run was started.
-    """
+@contextlib.contextmanager
+def _root_outside_scratchpad(tmp_path: Path) -> Iterator[Path]:
+    """``tmp_path`` itself, or, if that lies inside the scope guard's scratchpad exemption, a directory outside it."""
     if not str(tmp_path).startswith(SCRATCHPAD_PREFIX):
         yield tmp_path
         return
@@ -56,6 +51,42 @@ def project_root(tmp_path: Path) -> Iterator[Path]:
                 yield Path(root)
             return
     pytest.fail(f"no writable directory outside {SCRATCHPAD_PREFIX}* for an absolute-path hook test")
+
+
+@pytest.fixture()
+def project_root(tmp_path: Path) -> Iterator[Path]:
+    """A project root that is not inside the scope guard's scratchpad exemption.
+
+    ``tmp_path`` lives under ``TMPDIR``. A session started with ``TMPDIR=/tmp/claude-...`` (the harness's own
+    scratch area) puts it inside the exemption, where the guard allows every absolute path: the "blocks" test
+    then fails and the "allows" test passes for the wrong reason. Absolute-path tests build their paths from
+    this root instead, so the result does not depend on where the test run was started.
+    """
+    with _root_outside_scratchpad(tmp_path) as root:
+        yield root
+
+
+def test_the_scratchpad_prefix_is_the_one_the_scope_guard_exempts() -> None:
+    assert f'startswith("{SCRATCHPAD_PREFIX}")' in (HOOKS / "scope_guard.py").read_text(encoding="utf-8")
+
+
+def test_project_root_keeps_a_tmp_path_that_is_outside_the_scratchpad() -> None:
+    outside = Path("/var/tmp/pytest-of-someone/pytest-0/test_x0")
+
+    with _root_outside_scratchpad(outside) as root:
+        assert root == outside
+
+
+def test_project_root_moves_a_tmp_path_inside_the_scratchpad_out_of_it() -> None:
+    """Whatever TMPDIR the run was started with: the path need not exist, only lie under the exempt prefix."""
+    inside = Path(f"{SCRATCHPAD_PREFIX}1000/pytest-of-someone/pytest-0/test_x0")
+
+    with _root_outside_scratchpad(inside) as root:
+        assert not str(root).startswith(SCRATCHPAD_PREFIX)
+        assert root.is_dir() and os.access(root, os.W_OK)
+        made = root
+
+    assert not made.exists()  # and it does not leave directories behind
 
 
 def _setup_delegation(tmp_path: Path) -> None:

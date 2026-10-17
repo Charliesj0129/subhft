@@ -10,6 +10,7 @@ CANCEL has to reach dispatch during a HALT) in the full run only.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -30,6 +31,18 @@ def _unit_conftest() -> ModuleType:
 
 def test_the_scrub_covers_the_shadow_mode_switch() -> None:
     assert "HFT_ORDER_SHADOW_MODE" in _unit_conftest().OPERATOR_ENV_VARS
+
+
+def test_the_scrub_still_covers_the_variables_it_scrubbed_before_the_shadow_switch_was_added() -> None:
+    assert {
+        "HFT_MODE",
+        "HFT_ENV",
+        "HFT_QUOTE_CONNECTIONS",
+        "HFT_LOOP_ID",
+        "HFT_LOOP",
+        "HFT_ORDER_MODE",
+        "HFT_LIVE_CONFIRM",
+    } <= set(_unit_conftest().OPERATOR_ENV_VARS)
 
 
 def test_the_scrub_removes_every_operator_variable_it_lists() -> None:
@@ -53,3 +66,21 @@ def test_a_test_that_sets_the_shadow_switch_itself_still_gets_shadow_mode(monkey
     monkeypatch.setenv("HFT_ORDER_SHADOW_MODE", "1")
 
     assert ShadowOrderSink().enabled is True
+
+
+def test_a_unit_test_run_with_the_shadow_switch_exported_still_builds_a_sink_that_is_not_in_shadow_mode() -> None:
+    """The autouse fixture, end to end: the variable is exported to a fresh pytest, as ``make`` exports ``.env``."""
+    node = f"{Path(__file__)}::test_a_shadow_sink_built_in_a_unit_test_is_not_in_shadow_mode"
+    env = {**os.environ, "HFT_ORDER_SHADOW_MODE": "1"}
+
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", node, "-q", "--no-cov", "-p", "no:cacheprovider"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=25,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
