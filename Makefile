@@ -718,7 +718,7 @@ research-data-quality: ## Audit raw ClickHouse market-data quality (advisory; wr
 
 research-official-fetch: ## Fetch/parse official TAIFEX/TWSE reference data (rate-limited, stops on any block)
 	@if [ -z "$(ACTION)" ]; then \
-		echo "Usage: make research-official-fetch ACTION=probe|fetch|parse|verify|reconcile [ARGS='--dataset fut_ticks --date-from 2026-09-01 --date-to 2026-10-05']"; \
+		echo "Usage: make research-official-fetch ACTION=probe|fetch|parse|verify|reconcile|check [ARGS='--dataset fut_ticks --date-from 2026-09-01 --date-to 2026-10-05']"; \
 		exit 2; \
 	fi
 	$(PY) -m research data-pipeline official $(ACTION) $(ARGS)
