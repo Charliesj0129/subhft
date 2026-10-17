@@ -25,7 +25,7 @@
 - Event-loop metrics (three, and they are not interchangeable):
   - `event_loop_probe_lag_ms` (Histogram): overshoot of an idle probe task that only sleeps
     (`HFT_LOOP_PROBE_INTERVAL_S`, default 0.1 s). This is the real loop congestion: time the loop was
-    unavailable to any callback, hot path included. `EventLoopLagHigh` and StormGuard's loop-lag input read it.
+    unavailable to any callback, hot path included. `EventLoopLagHigh` reads the histogram. StormGuard's loop-lag input is the probe's peak since the previous supervisor tick (`_stormguard_latency_us`); for a tick in which the probe recorded no sample it falls back to `event_loop_lag_ms`.
   - `supervisor_tick_duration_ms` (Histogram): wall time of one supervisor tick body, excluding its 1 Hz sleep.
     The body contains `await`s, so this is elapsed time, not time the loop was blocked.
   - `event_loop_lag_ms` (Gauge): the supervisor's whole tick period minus its 1 s sleep, so it is congestion

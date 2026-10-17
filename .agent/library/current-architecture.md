@@ -4,7 +4,7 @@ Date: 2026-03-14
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
 Companion documents that exist only in the author's working tree and are not in the repo: `target-architecture.md`, `c4-model-current.md`, `research_pipeline_execution_plan.md`, `rust_pyo3.md` (all under `.agent/library/`).
 Companion feature unification spec (implemented, production backlog open): `docs/architecture/feature-engine-lob-research-unification-spec.md`.
-The cluster backlog (`cluster-evolution-backlog.md`) this baseline once pointed to no longer exists anywhere.
+The cluster backlog (`cluster-evolution-backlog.md`) this baseline once pointed to is in neither the repo, its history nor the author's working tree.
 
 ## 1. Architecture Slices (As-Built)
 
@@ -282,7 +282,7 @@ Remaining production backlog:
 ## 10. Cluster Evolution (Vector 2 and 3)
 
 Status: CE-M2 and CE-M3 core modules implemented (2026-02-21). Hardening backlog open.
-Detailed milestone/issue backlog, C4 diagrams and design review artifacts: not in the repo (`cluster-evolution-backlog.md` and `design-review-artifacts.md` no longer exist; `c4-model-current.md` is local only).
+Detailed milestone/issue backlog, C4 diagrams and design review artifacts: not in the repo (`cluster-evolution-backlog.md` and `design-review-artifacts.md` are in neither the repo, its history nor the author's working tree; `c4-model-current.md` is local only).
 
 ### Vector 2 - Dedicated Order/Risk Gateway (CE-M2) — Core Implemented
 

@@ -126,13 +126,13 @@ Scheduled by `bot/scheduler.py`: day 13:50 CST, night 05:05 CST.
 ## LLM egress: what leaves the host
 
 With `HFT_LLM_ENABLED=1` (default `0`), the hybrid path sends text to a third party,
-`https://openrouter.ai/api/v1` (the only base URL in the code; `llm_client.py:21`). With it unset or `0`,
+`https://openrouter.ai/api/v1` (the only LLM endpoint in the code; `llm_client.py:21`). With it unset or `0`,
 nothing is sent: `build_hybrid_report_async` returns the rule-based report before any client is built.
 
 | Trigger | What is sent | Source |
 |---------|--------------|--------|
 | `/report` in the bot, and the scheduled day/night push (`bot/scheduler.py`) | The dossier as JSON: `symbol`, `session`, `date`, an `evidence` map of market-derived values, and the first 3 narrative lines | `llm_reasoner.py::_build_prompt`, `llm_dossier.py::build_llm_dossier` |
-| `/ask <question>` after a hybrid `/report` | The question text as typed, the same dossier, and the model's earlier decision | `llm_reasoner.py::_build_followup_prompt`, `bot/handlers.py::cmd_ask` |
+| `/ask <question>` after a hybrid `/report` | The question text as typed, the dossier's `evidence` map (not its narrative lines or its symbol, session and date), and the model's earlier decision | `llm_reasoner.py::_build_followup_prompt`, `bot/handlers.py::cmd_ask` |
 
 The `evidence` map holds session flow (`flow.session_ud`, `flow.session_net_flow`, `flow.eod_drift`, strongest buy and
 sell bars), `chips.net_ratio` and the buy and sell zones, the cross-day trend direction, failed-breakout count, session
