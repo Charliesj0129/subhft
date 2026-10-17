@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.util
 import json
 import shutil
@@ -334,6 +335,28 @@ def test_doc_roots_are_scanned_recursively(tmp_path: Path):
     found = mod.run_checks(root, ["docs/runbooks"], parser=_parser(), include_alerts=False)
 
     assert [(f.category, f.file) for f in found] == [("path", "docs/runbooks/sub/deeper/n.md")]
+
+
+def test_the_cli_tree_includes_dev_only_commands_whatever_the_start_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # `hft alpha pipeline` is registered only when `research` is importable, which depends on sys.path. The checker
+    # must see the tree a developer has, not the one the shell happened to start it from.
+    root = _repo(tmp_path)
+    (root / "research").mkdir()
+    (root / "research" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "research" / "pipeline.py").write_text("", encoding="utf-8")
+    (root / "docs" / "runbooks" / "p.md").write_text("`hft alpha pipeline triage`\n", encoding="utf-8")
+    # pytest puts the real checkout on sys.path (pyproject `pythonpath`), so drop every entry that could supply
+    # a `research` package, leaving only the temporary root as the one place the checker can find it.
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if not (Path(p or ".") / "research").is_dir()])
+    for name in [n for n in sys.modules if n == "research" or n.startswith("research.")]:
+        monkeypatch.delitem(sys.modules, name)
+    importlib.invalidate_caches()
+
+    found = mod.run_checks(root, ["docs/runbooks"], include_alerts=False)
+
+    assert [f for f in found if f.category == "cli_command"] == []
 
 
 def test_report_mode_exits_zero_and_strict_mode_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):

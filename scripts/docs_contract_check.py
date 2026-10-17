@@ -466,6 +466,11 @@ def run_checks(
     include_alerts: bool = True,
 ) -> list[Finding]:
     if parser is None:
+        # The parser registers the dev-only commands (`hft alpha pipeline ...`) only when `research` is importable, which
+        # depends on how this script was started. Put the checkout on the path (last, so nothing is shadowed) so the
+        # command tree is the one a developer has.
+        if str(root) not in sys.path:
+            sys.path.append(str(root))
         from hft_platform.cli._parser import build_parser
 
         parser = build_parser()
