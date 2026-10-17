@@ -120,10 +120,19 @@ If discrepancies exist, record them before proceeding.
 1. Read the engine's reconciliation state (see "Reconciliation Diff" above):
    `reconciliation_discrepancy_count` and `reconciliation_consecutive_failures`.
 2. Identify mismatched symbols and quantities from the `Position discrepancies detected` log lines.
-3. No command applies corrections by hand. The engine adopts the broker position itself for drift it classes
-   as correctable (`auto_correct_drift: adopting broker position`, counted in
-   `reconciliation_auto_corrected_total`).
-4. Wait one cycle and confirm `reconciliation_discrepancy_count` is back to 0.
+3. No command applies corrections by hand. The engine adopts the broker position itself
+   (`auto_correct_drift: adopting broker position`, counted in `reconciliation_auto_corrected_total`), but
+   only when all of these hold (`HFT_RECON_AUTO_CORRECT_ENABLED`, default on):
+   - the reconciliation HALT for this drift is already active, and the critical drift has been seen on
+     `HFT_RECON_AUTO_CORRECT_AFTER` consecutive checks (default 5);
+   - the gap is one of two shapes: local flat while the broker holds a position, or local holds a position
+     while the broker is flat;
+   - the quantity is within `HFT_RECON_AUTO_CORRECT_FUTURES_MAX_QTY` (default 2) for futures or
+     `HFT_RECON_AUTO_CORRECT_STOCK_MAX_QTY` (default 10) for stocks.
+   A sign mismatch or a larger gap is never auto-corrected (the code says it "requires manual
+   intervention") and no command exists for it: do not resume, and file an incident.
+4. Wait for the auto-correct window (5 checks, about 25 s at the default interval) and confirm
+   `reconciliation_discrepancy_count` is back to 0.
 
 ---
 
