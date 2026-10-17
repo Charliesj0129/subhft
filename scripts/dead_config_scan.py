@@ -20,6 +20,7 @@ common enough to be spelled somewhere unrelated, and a rule file loaded by a Pro
 one the compose files start. ``config/monitoring/`` (other than rule files), ``config/agent_system/`` and
 ``config/symbols.examples/`` are not checked for unreferenced files: dashboards and provisioning are
 mounted as directories, agent prompts are not platform runtime, and the examples are copied by hand.
+Markdown files under ``config/`` are documentation and are not checked either.
 """
 
 from __future__ import annotations
@@ -41,13 +42,26 @@ CATEGORIES = ("dead_config_key", "unreferenced_config_file", "rule_file_not_load
 ENV_YAML_GLOB = "config/env/*/*.yaml"
 SRC_RELPATH = Path("src/hft_platform")
 UNREFERENCED_EXCLUDED_PREFIXES = ("config/monitoring/", "config/agent_system/", "config/symbols.examples/")
+UNREFERENCED_EXCLUDED_SUFFIXES = (".md",)  # documentation is read by people, not loaded
 READER_ROOTS = ("src", "scripts", "research", "tests", ".github", "config")
 READER_FILES = ("Makefile", "Dockerfile", "pyproject.toml")
 CODE_PREFIXES = ("src/", "scripts/", "research/", "tests/")
 READER_SUFFIXES = {".py", ".sh", ".yml", ".yaml", ".toml", ".json", ".env", ".sql", ".tpl", ".rs", ""}
 PROMETHEUS_YML = "config/monitoring/prometheus.yml"
 RULE_DIRS = ("config/monitoring/alerts", "config/monitoring/recording_rules")
-PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9_./{}*$()-]*\.(?:ya?ml|json|env|list|sql|sh|tpl|toml)\b")
+TOKEN_EXTENSIONS = ("ya?ml", "json", "env", "list", "sql", "sh", "tpl", "toml")
+
+
+def path_token_re(config_files: Iterable[str] = ()) -> re.Pattern[str]:
+    """Path-like tokens that end in a config extension: the fixed set plus every suffix a tracked config file has
+    (``clickhouse_memory.xml`` is mounted by compose; without ``xml`` here nothing could ever name it)."""
+    extra = {Path(f).suffix.lstrip(".") for f in config_files}
+    extra = {re.escape(e) for e in extra if re.fullmatch(r"[A-Za-z0-9]+", e)}
+    exts = "|".join([*TOKEN_EXTENSIONS, *sorted(extra)])
+    return re.compile(r"[A-Za-z0-9_./{}*$()-]*\.(?:" + exts + r")\b")
+
+
+PATH_TOKEN_RE = path_token_re()
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +197,7 @@ def _is_code(rel: str) -> bool:
 Tokens = tuple[dict[str, set[str]], dict[str, set[str]], dict[str, set[str]]]
 
 
-def _path_tokens(texts: dict[str, str]) -> Tokens:
+def _path_tokens(texts: dict[str, str], pattern: re.Pattern[str] = PATH_TOKEN_RE) -> Tokens:
     """Return ``(slash, bare, wild)``: path-like tokens found in the reader files, each with the files naming it.
 
     ``slash`` tokens (``env/prod/main.yaml``, ``/etc/prometheus/alerts/rules.yaml``) count from any reader.
@@ -196,7 +210,7 @@ def _path_tokens(texts: dict[str, str]) -> Tokens:
     wild: dict[str, set[str]] = {}
     for rel, text in texts.items():
         code = _is_code(rel)
-        for m in PATH_TOKEN_RE.finditer(text):
+        for m in pattern.finditer(text):
             tok = re.sub(r"\{[^}]*\}|\$\([^)]*\)|\$\{[^}]*\}|\$[A-Za-z_]+", "*", m.group(0)).lstrip("./").lstrip("/")
             if not tok:
                 continue
@@ -213,11 +227,15 @@ def _path_tokens(texts: dict[str, str]) -> Tokens:
 
 def find_unreferenced_files(root: Path) -> list[Finding]:
     all_config = _tracked_config_files(root)
-    files = [f for f in all_config if not f.startswith(UNREFERENCED_EXCLUDED_PREFIXES)]
+    files = [
+        f
+        for f in all_config
+        if not f.startswith(UNREFERENCED_EXCLUDED_PREFIXES) and not f.endswith(UNREFERENCED_EXCLUDED_SUFFIXES)
+    ]
     base_counts: dict[str, int] = {}
     for f in all_config:
         base_counts[Path(f).name] = base_counts.get(Path(f).name, 0) + 1
-    tokens = _path_tokens(_reader_texts(root))
+    tokens = _path_tokens(_reader_texts(root), path_token_re(all_config))
     return [
         Finding("unreferenced_config_file", rel, 1, "no source, script, build, deploy or config file names it")
         for rel in files

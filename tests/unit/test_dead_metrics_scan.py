@@ -259,6 +259,22 @@ def test_strict_mode_exits_zero_on_a_clean_tree(tmp_path):
     assert mod.main(["--root", str(tmp_path), "--output-dir", str(tmp_path / "r"), "--strict"]) == 0
 
 
+def test_strict_mode_does_not_fail_on_metrics_that_are_only_reached_dynamically(tmp_path):
+    _write(tmp_path, "src/hft_platform/observability/metrics.py", METRICS_PY)
+    _write(
+        tmp_path,
+        "src/hft_platform/service.py",
+        "def run(m):\n    m.used.inc(); m.dead.inc(); m.dead_alerted.inc(); m.dead_latency.observe(1)\n"
+        "    m.stringy.set(1)\n    getattr(m, 'dyn').set(1)\n",
+    )
+    out = tmp_path / "r"
+
+    assert mod.main(["--root", str(tmp_path), "--output-dir", str(out), "--strict"]) == 0
+
+    summary = json.loads((out / "dead_metrics_report.json").read_text(encoding="utf-8"))["summary"]
+    assert summary["dynamic_only_metric"] == 1 and summary["unreferenced_metric"] == 0
+
+
 def test_the_real_registry_parses_and_defines_many_metrics():
     findings, summary = mod.evaluate(Path(__file__).resolve().parents[2])
 

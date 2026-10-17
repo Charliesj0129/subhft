@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Report metrics that are defined in the registry but never used, and the alerts that depend on them.
 
-Report mode by default (exit 0, findings listed). ``--strict`` exits 1 when anything is found.
+Report mode by default (exit 0, findings listed). ``--strict`` exits 1 when anything but the informational
+``dynamic_only_metric`` rows is found.
 
 A metric is *defined* by ``self.<attr> = Counter|Gauge|Histogram|...(_pn("<name>"), ...)`` in
 ``observability/metrics.py``. It is *used* when ``<attr>`` appears as an attribute anywhere else in
@@ -35,6 +36,7 @@ from typing import Any, Iterable
 import yaml
 
 CATEGORIES = ("unreferenced_metric", "dynamic_only_metric", "alert_on_unreferenced_metric")
+INFORMATIONAL = ("dynamic_only_metric",)  # listed for a reader to confirm; never fails --strict
 METRIC_KINDS = {"Counter", "Gauge", "Histogram", "Summary", "Info", "Enum"}
 DYNAMIC_ACCESSORS = {"getattr", "hasattr", "setattr"}
 METRICS_RELPATH = Path("src/hft_platform/observability/metrics.py")
@@ -273,7 +275,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output-dir", type=Path, default=None, help="default: <root>/outputs/dead_scan")
-    parser.add_argument("--strict", action="store_true", help="exit 1 when any finding is reported")
+    parser.add_argument(
+        "--strict", action="store_true", help="exit 1 when any finding but a dynamic_only_metric is reported"
+    )
     parser.add_argument(
         "--show-dynamic",
         action="store_true",
@@ -302,7 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         for f in rows:
             print(f"  {f.file}:{f.line}: {f.detail}")
     print(f"dead_metrics_scan: {summary}  report={_rel(report, root)}")
-    return 1 if args.strict and findings else 0
+    actionable = [f for f in findings if f.category not in INFORMATIONAL]
+    return 1 if args.strict and actionable else 0
 
 
 if __name__ == "__main__":

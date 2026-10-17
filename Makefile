@@ -570,7 +570,7 @@ incident-timeline: ## Render incident timeline artifact from decision trace JSON
 dead-config-scan: ## Report config keys nothing reads, config files nothing loads, Prometheus rule files that never run; STRICT=1 fails on any
 	$(PY) scripts/dead_config_scan.py --root . --output-dir outputs/dead_scan $(if $(filter 1,$(STRICT)),--strict,)
 
-dead-metrics-scan: ## Report registry metrics nothing updates and the alerts that depend on them; STRICT=1 fails on any
+dead-metrics-scan: ## Report registry metrics nothing updates and the alerts that depend on them; STRICT=1 fails on any but the informational dynamic-only rows
 	$(PY) scripts/dead_metrics_scan.py --root . --output-dir outputs/dead_scan $(if $(filter 1,$(STRICT)),--strict,)
 
 history-repair: ## Repair fragmented historical parquet exports and resample to complete OHLCV

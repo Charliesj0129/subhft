@@ -174,6 +174,37 @@ def test_a_file_that_names_itself_is_not_its_own_reader(files_tree):
     assert "config/selfish.yaml" in {f.file for f in findings}
 
 
+def test_a_file_with_an_extension_outside_the_fixed_list_is_matched_when_compose_mounts_it(files_tree):
+    _write(files_tree, "config/ch_memory.xml")
+    _write(files_tree, "config/ch_orphan.xml")
+    _write(
+        files_tree,
+        "docker-compose.yml",
+        "services:\n  ch:\n    volumes:\n      - ./config/ch_memory.xml:/etc/clickhouse-server/config.d/memory.xml\n",
+    )
+
+    findings = mod.find_unreferenced_files(files_tree)
+
+    assert {f.file for f in findings if f.file.endswith(".xml")} == {"config/ch_orphan.xml"}
+
+
+def test_markdown_files_under_config_are_documentation_not_unreferenced_config(files_tree):
+    _write(files_tree, "config/NOTES.md")
+
+    findings = mod.find_unreferenced_files(files_tree)
+
+    assert "config/NOTES.md" not in {f.file for f in findings}
+    assert "config/orphan.yaml" in {f.file for f in findings}
+
+
+def test_the_path_token_pattern_adds_the_suffixes_of_the_tracked_files():
+    pattern = mod.path_token_re(["config/a.xml", "config/b.conf", "config/README", "config/c.we-ird"])
+
+    assert pattern.findall("mount ./config/a.xml and config/b.conf") == ["./config/a.xml", "config/b.conf"]
+    assert pattern.findall("config/x.yaml") == ["config/x.yaml"]
+    assert pattern.findall("config/x.md") == []
+
+
 def test_a_glob_with_a_single_literal_segment_in_code_loads_nothing_in_particular(files_tree):
     _write(files_tree, "src/hft_platform/broad.py", 'ALL = glob("**/*.yaml")\nMORE = glob("config/*.yaml")\n')
 
