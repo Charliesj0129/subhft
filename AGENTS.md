@@ -85,14 +85,18 @@ only a checkout where it is installed (`ls "$(git rev-parse --git-path hooks)"`)
 CI always runs.
 
 Coverage gates: global 70% (`--cov-fail-under=70` in `pyproject.toml`,
-`make coverage-branch-gate`) plus per-package floors for risk, order, execution,
-gateway, recorder and alpha (`scripts/check_coverage_domains.py`,
-`make coverage-domain`; the floors sit below the long-term targets and ratchet
-up). New code >= 80% and hot path >= 90% are goals: no changed-lines check
+`make coverage-branch-gate`) plus a floor per package
+(`scripts/check_coverage_domains.py`, `make coverage-domain`): risk, order,
+execution, gateway, recorder and alpha have their own, every other package
+defaults to 70%, and a few lower-tier packages have lower pinned anchors. The
+floors sit below the long-term targets and are raised by hand as coverage
+grows. New code >= 80% and hot path >= 90% are goals: no changed-lines check
 enforces them.
 Pytest runs with `--timeout=30` (`pyproject.toml`); CI's `make test-unit-ci`
 overrides it to `--timeout=10`, so a test that takes 10-30 s passes locally and
-is cut off in CI. `make help` lists everything else.
+is cut off in CI. `make ci` runs `make coverage` (30 s, no per-package floors);
+for CI parity run `make test-unit-ci && make coverage-domain`. `make help` lists
+everything else.
 
 ## Laws (hot path)
 

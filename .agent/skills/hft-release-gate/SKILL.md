@@ -15,7 +15,7 @@ other strategy is a red line.
 | # | Gate | Command | Pass |
 |---|---|---|---|
 | 1 | Code quality | `make check` | format, lint, typecheck, discipline, dependency-boundary, hygiene all green |
-| 2 | Tests and coverage | `make coverage`; CI also runs `make coverage-domain` | >= 70% line, and each domain floor in `scripts/check_coverage_domains.py`; the 90% hot-path target is not enforced, read `make coverage-html` for hot-path files |
+| 2 | Tests and coverage | `make test-unit-ci && make coverage-domain` (what CI runs; `make coverage` alone checks only the 70% line) | >= 70% line, and each package floor in `scripts/check_coverage_domains.py` (`coverage-domain` reads the `coverage.xml` that `test-unit-ci` writes); the 90% hot-path target is not enforced, read `make coverage-html` for hot-path files |
 | 3 | Test hygiene | `make test-assertion-check`, `test-name-check`, `test-quality-pattern-check` | clean |
 | 4 | Architecture | `make arch-gate`, `make dependency-boundary` | no forbidden imports |
 | 5 | Security | `make security-audit`; no secrets in the diff; no new `type: ignore` without a reason | clean |
@@ -23,7 +23,7 @@ other strategy is a red line.
 | 7 | Latency | `make hotpath-profile`, `make benchmark-compare` | no stage regresses > 20% |
 | 8 | Drift | `make deploy-drift-snapshot` before, `make deploy-drift-check` after | no unexplained diff |
 
-One-shot for the automated part: `make ci && make pre-market-check && make hotpath-profile`.
+One-shot for the automated part: `make check && make format-check && make test-unit-ci && make coverage-domain && make arch-gate && make security-audit && make pre-market-check && make hotpath-profile && make benchmark-compare`. `make ci` alone is not this: it skips `discipline`, `agent-docs-check`, `coverage-domain`, `arch-gate`, `security-audit` and `benchmark-compare`.
 
 Also check CI on `main` is green including scheduled runs, not only the PR
 (`gh run list`): a green merge proves nothing about a scheduled run.

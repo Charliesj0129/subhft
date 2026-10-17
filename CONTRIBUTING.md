@@ -59,8 +59,8 @@ test(risk): add StormGuard state transition tests
 
 ### Testing Requirements
 
-- New code must have >= 80% line coverage
-- Hot-path code (`normalizer`, `lob_engine`, `risk`) must have >= 90% coverage
+- New code should have >= 80% line coverage (a goal: the enforced gates are the 70% global floor and the per-package floors in `scripts/check_coverage_domains.py`)
+- Hot-path code (`normalizer`, `lob_engine`, `risk`) should have >= 90% coverage (a goal, not enforced)
 - Test naming: `test_<behavior>_<scenario>` (e.g., `test_rejects_order_when_halt`)
 - Every test must contain at least one `assert`
 
