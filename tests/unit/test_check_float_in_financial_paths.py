@@ -150,7 +150,7 @@ def test_an_inline_marker_with_a_reason_passes(tmp_path: Path, capsys: pytest.Ca
     assert "inline-marker=1" in out
 
 
-@pytest.mark.parametrize("comment", ["# precision-ok", "# precision-ok:", "# precision-ok:   "])
+@pytest.mark.parametrize("comment", ["# precision-ok", "# precision-ok:", "# precision-ok:   ", "# precision-ok seconds"])
 def test_a_marker_without_a_reason_is_reported_as_needing_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], comment: str
 ) -> None:
@@ -171,6 +171,49 @@ def test_a_look_alike_comment_does_not_exempt(tmp_path: Path, capsys: pytest.Cap
 
     assert code == 1
     assert "order/a.py:1" in err
+
+
+@pytest.mark.parametrize("separator", [" ", " ", "\x85", "\x0b", "\x0c", "\x1c"])
+def test_a_line_separator_inside_a_string_does_not_move_a_marker_to_the_line_above(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], separator: str
+) -> None:
+    """``str.splitlines()`` breaks on these characters and the tokenizer does not: the lines after one were numbered
+    one too high, so the unmarked float on line 3 took the ``# precision-ok`` comment of line 4 and passed."""
+    body = f'DOC = "a{separator}b"\nx = 1\nprice: float = 0.0\nttl: float = 1.0  # precision-ok: seconds\n'
+    root = _tree(tmp_path, {"order/a.py": body})
+
+    code, _, err = _run(root, _exemptions(tmp_path, []), capsys)
+
+    assert code == 1
+    assert "order/a.py:3: price: float = 0.0" in err
+    assert "a.py:4" not in err
+
+
+@pytest.mark.parametrize("newline", ["\r\n", "\r"])
+def test_windows_and_old_mac_line_endings_keep_the_line_numbers_and_markers(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], newline: str
+) -> None:
+    lines = ["x = 1", "price: float = 0.0", "ttl: float = 1.0  # precision-ok: seconds", ""]
+    root = _tree(tmp_path)
+    (root / PKG / "order" / "a.py").write_bytes(newline.join(lines).encode("utf-8"))
+
+    code, _, err = _run(root, _exemptions(tmp_path, []), capsys)
+
+    assert code == 1
+    assert "order/a.py:2: price: float = 0.0" in err
+    assert "a.py:3" not in err
+
+
+def test_a_byte_order_mark_does_not_change_what_the_first_line_matches(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _tree(tmp_path)
+    (root / PKG / "order" / "a.py").write_bytes(b"\xef\xbb\xbfttl: float = 5.0  # seconds\n")
+
+    code, out, _ = _run(root, _exemptions(tmp_path, [_entry("order/a.py", "ttl: float = 5.0")]), capsys)
+
+    assert code == 0
+    assert "not-money=1" in out
 
 
 def test_a_marker_inside_a_string_literal_is_not_a_marker(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -265,6 +308,8 @@ def test_an_exemption_count_matching_the_lines_passes(tmp_path: Path, capsys: py
         ({"reason": ""}, "reason must not be empty"),
         ({"reason": "   "}, "reason must not be empty"),
         ({"count": 0}, "count must be a positive integer"),
+        ({"count": True}, "count must be a positive integer"),
+        ({"count": "2"}, "count must be a positive integer"),
     ],
 )
 def test_a_malformed_exemption_entry_is_rejected(
@@ -286,6 +331,18 @@ def test_a_tracked_violation_with_an_owner_passes(tmp_path: Path, capsys: pytest
 
     assert code == 0
     assert "known-violation=1" in out
+
+
+def test_an_exemption_entry_that_is_not_a_mapping_is_rejected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _tree(tmp_path, {"order/a.py": "ttl: float = 5.0\n"})
+    entries = ["ttl: float = 5.0", _entry("order/a.py", "ttl: float = 5.0")]
+
+    code, _, err = _run(root, _exemptions(tmp_path, entries), capsys)
+
+    assert code == 1
+    assert "entry 1: not a mapping" in err
 
 
 def test_the_same_line_listed_twice_is_rejected(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

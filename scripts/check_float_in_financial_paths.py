@@ -59,11 +59,11 @@ def _comments(path: Path) -> dict[int, tuple[int, str]]:
     """Line number -> (column, text) of the comment on that line, from the tokenizer (strings are not comments)."""
     found: dict[int, tuple[int, str]] = {}
     try:
-        with path.open("rb") as fh:
-            for tok in tokenize.tokenize(fh.readline):
+        with tokenize.open(path) as fh:  # text mode: same newline handling and BOM stripping as scan() below
+            for tok in tokenize.generate_tokens(fh.readline):
                 if tok.type == tokenize.COMMENT:
                     found[tok.start[0]] = (tok.start[1], tok.string)
-    except (OSError, tokenize.TokenError, SyntaxError) as exc:
+    except (OSError, UnicodeDecodeError, tokenize.TokenError, SyntaxError) as exc:
         raise InputError(f"cannot tokenize {path}: {exc}") from exc
     return found
 
@@ -82,7 +82,10 @@ def scan(root: Path, targets: tuple[str, ...] = SCAN) -> list[Hit]:
             rel = file.relative_to(root).as_posix()
             comments = _comments(file)
             try:
-                lines = file.read_text(encoding="utf-8").splitlines()
+                # Not str.splitlines(): it also breaks on \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029, which the
+                # tokenizer does not, so every later line would be numbered differently from the comments above.
+                with file.open(encoding="utf-8-sig", newline=None) as fh:
+                    lines = fh.read().split("\n")
             except (OSError, UnicodeDecodeError) as exc:
                 raise InputError(f"cannot read {rel}: {exc}") from exc
             for number, line in enumerate(lines, 1):
