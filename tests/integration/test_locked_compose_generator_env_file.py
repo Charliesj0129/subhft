@@ -67,3 +67,4 @@ def test_generator_resolution_keeps_env_file_values_out_of_its_output(
     assert _VALUE not in output
     assert _KEY not in output
     assert "dummy.env" in output  # the entry is still there, as a path to a file the deploy host provides
+    assert "read_only: true" in output  # the overlay was merged too, as in the real two-file command
