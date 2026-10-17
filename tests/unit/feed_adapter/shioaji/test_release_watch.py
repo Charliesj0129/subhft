@@ -213,16 +213,30 @@ def test_the_day_defaults_to_the_real_date_when_today_is_not_given(tmp_path: Any
     assert seen == {"today": None}  # None: build_report asks the clock itself
 
 
-def test_a_malformed_today_is_refused_by_the_parser(tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
+@pytest.mark.parametrize("text", ["15/10/2026", "2026-10-29T12:00:00", "2026-13-01", "2026-10", "tomorrow", ""])
+def test_a_malformed_today_is_refused_by_the_parser(tmp_path: Any, monkeypatch: Any, capsys: Any, text: str) -> None:
     from scripts.shioaji_api_diff import cli
 
     argv = _watch_inputs(tmp_path, monkeypatch, captured={"1.5.7"})
 
     with pytest.raises(SystemExit) as raised:
-        cli.main([*argv, "--today", "15/10/2026"])
+        cli.main([*argv, "--today", text])
 
     assert raised.value.code == 2
     assert "not an ISO date" in capsys.readouterr().err
+
+
+def test_without_strict_the_exit_code_stays_zero_while_the_report_still_names_the_release(
+    tmp_path: Any, monkeypatch: Any, capsys: Any
+) -> None:
+    from scripts.shioaji_api_diff import cli
+
+    argv = [a for a in _watch_inputs(tmp_path, monkeypatch, captured=set()) if a != "--strict"]
+
+    rc = cli.main([*argv, "--today", "2026-10-15"])
+
+    assert rc == 0
+    assert "1.5.7" in capsys.readouterr().out
 
 
 def test_watch_never_calls_the_network_when_given_a_releases_file(tmp_path: Any, monkeypatch: Any) -> None:
