@@ -1,3 +1,9 @@
+# Loaded by config/monitoring/prometheus.yml. All three alerts read hft_replay_match_pct, which exists only if
+# scripts/ops/daily_replay_diff.py writes its textfile where node-exporter reads it. docker-compose.yml points
+# node-exporter at /var/lib/node-exporter/textfile (hyphen); the script's default --prom-file / HFT_REPLAY_PROM_FILE is
+# /var/lib/node_exporter/textfile_collector/hft_replay_match.prom (underscore, a different directory), so the daily job
+# has to be told the compose path or these alerts have no series and stay silent. ReplayParityDailyJobStale cannot
+# notice that either: it measures the age of a series that is absent. Not verified on the host.
 groups:
 - name: HFT_Loop_v1_Replay_Parity
   rules:

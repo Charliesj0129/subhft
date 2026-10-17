@@ -1,20 +1,17 @@
-# WARNING: NOTHING LOADS THIS FILE.
+# Loaded by config/monitoring/prometheus.yml (rule_files). This file used to be config/monitoring/recording_rules/slo.yaml,
+# which nothing loaded and the prometheus container never mounted, so every rule below had never been evaluated --
+# including slo:e2e_order_latency:p95_ms_rate5m -- and the two alerts that read slo:feed_availability and
+# slo:order_success (rules.yaml) had no input. It now sits in config/monitoring/alerts, the one directory the container
+# mounts (a directory mount: a Prometheus reload picks it up, no container recreation, and docker-compose.yml, which
+# tests/integration/test_prod_compose_parity.py compares with the locked production compose, is untouched).
 #
-# Production Prometheus (config/monitoring/prometheus.yml) has exactly one
-# rule_files entry, /etc/prometheus/alerts/rules.yaml, and its container mounts
-# only config/monitoring/alerts. Verified on THESHOW 2026-09-09: the running
-# Prometheus reports a single rule group, HFT_Critical, with 93 rules. Nothing
-# else in this repo -- no compose file, no Makefile target, no scrape config --
-# references this path either.
+# slo:feed_availability:ratio_rate5m is 0 whenever no feed event arrived in 5 minutes and
+# slo:order_success:ratio_rate5m is 0 when no order action or reject did (0 / clamp_min(0, 0.001)): both are the
+# normal state outside a session or for an idle strategy, which is why the two alerts are gated (see rules_test.yaml).
+# A new alert on these series needs the same gate.
 #
-# So every rule below has never been evaluated, including
-# slo:e2e_order_latency:p95_ms_rate5m, which reads like a live SLO and is not
-# one. Same family as a metric that is exported but never scraped: it looks
-# green because it is absent, not because it is healthy.
-#
-# Add new recording rules to config/monitoring/alerts/rules.yaml instead. To
-# revive this file, add it to rule_files AND mount its directory into the
-# Prometheus container -- both, or it stays dead.
+# tests/unit/test_prometheus_rule_files_loaded.py fails when this file stops being listed in prometheus.yml, or when an
+# alert reads a recorded series that no loaded file defines.
 
 groups:
 - name: slo_recording

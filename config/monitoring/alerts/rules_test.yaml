@@ -1,10 +1,9 @@
 # promtool unit tests for the trading-liveness rules added 2026-08-08.
 #
 # Run:  docker run --rm --entrypoint promtool \
-#         -v "$PWD/config/monitoring:/m:ro" prom/prometheus:v2.51.0 \
-#         test rules /m/alerts/rules_test.yaml
-# (mount config/monitoring, not alerts/: the SLO tests also load ../recording_rules/slo.yaml. v2.51.0 is the version
-# docker-compose.yml runs.)
+#         -v "$PWD/config/monitoring/alerts:/rules:ro" prom/prometheus:v2.51.0 \
+#         test rules /rules/rules_test.yaml
+# (v2.51.0 is the version docker-compose.yml runs.)
 #
 # These fixtures encode the actual production state that 83 armed alert rules
 # failed to describe: R47 bound to an expired expiry, deciding "flat" on every
@@ -14,7 +13,7 @@
 
 rule_files:
   - rules.yaml
-  - ../recording_rules/slo.yaml
+  - slo_recording_rules.yaml
 
 evaluation_interval: 1m
 
@@ -665,8 +664,8 @@ tests:
         alertname: BackupStale
         exp_alerts: []
 
-  # ── SLO alerts (read series recorded by recording_rules/slo.yaml) ──────────
-  # slo.yaml records slo:feed_availability:ratio_rate5m as 0 whenever no feed event arrived in 5 minutes, and
+  # ── SLO alerts (read series recorded by slo_recording_rules.yaml) ──────────
+  # slo_recording_rules.yaml records slo:feed_availability:ratio_rate5m as 0 whenever no feed event arrived in 5 minutes, and
   # slo:order_success:ratio_rate5m as 0 when there were no order actions or rejects (0 / clamp_min(0, 0.001)).
   # Both are the normal state outside a session and with an idle strategy, so the alerts must not read a quiet
   # system as a failing one.

@@ -553,7 +553,7 @@ def test_slo_feed_alert_is_gated_on_the_trading_session():
     """slo:feed_availability:ratio_rate5m is 0 whenever no feed event arrived in 5 minutes, which is every night.
 
     Without the session gate the alert would fire for 5 minutes after each session end the moment
-    ``recording_rules/slo.yaml`` is loaded (``rules_test.yaml`` proves the behavior with promtool).
+    ``slo_recording_rules.yaml`` is loaded (``rules_test.yaml`` proves the behavior with promtool).
     """
     expr = _load_alerts_by_name()["SLOFeedAvailabilityBurnRateHigh"]["expr"]
     assert "market_trading_hours_active == 1" in expr, expr
@@ -566,4 +566,3 @@ def test_slo_order_success_alert_needs_order_activity():
     """
     expr = _load_alerts_by_name()["SLOOrderSuccessRateLow"]["expr"]
     assert "order_actions_total" in expr and "order_reject_total" in expr, expr
-

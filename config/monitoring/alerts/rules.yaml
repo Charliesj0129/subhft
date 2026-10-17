@@ -1035,7 +1035,7 @@ groups:
     annotations:
         summary: Orphaned fills detected
         runbook_url: docs/runbooks/OrphanedFillDetected.md
-  # Both SLO alerts read series recorded by config/monitoring/recording_rules/slo.yaml. That file records 0 for
+  # Both SLO alerts read series recorded by slo_recording_rules.yaml (next to this file). That file records 0 for
   # "no feed event in 5 minutes" and for "no order action or reject in 5 minutes", which is the normal state outside
   # a session and for an idle strategy, so each alert is gated on there being something to measure.
   - alert: SLOFeedAvailabilityBurnRateHigh
@@ -1493,12 +1493,12 @@ groups:
 # ---------------------------------------------------------------------------
 # Broker order-path round-trip recording rules (added 2026-09-09).
 #
-# These live in this file, alongside the alerts, because this is the only rule
-# file production Prometheus loads: prometheus.yml has a single entry,
-# /etc/prometheus/alerts/rules.yaml, and only config/monitoring/alerts is
-# mounted into the container. config/monitoring/recording_rules/slo.yaml is
-# referenced by nothing in the repo and has never been evaluated -- do not add
-# rules there expecting them to run.
+# These live in this file, alongside the alerts, because on 2026-09-09 this was
+# the only rule file production Prometheus loaded: prometheus.yml had a single
+# entry, /etc/prometheus/alerts/rules.yaml. prometheus.yml now also lists
+# replay_parity_alert.yml and slo_recording_rules.yaml (the latter was
+# config/monitoring/recording_rules/slo.yaml, which no container mounted), all
+# in the one directory the container mounts.
 #
 # Why the order path needs recorded series at all: every hot-path stage had
 # one and the broker call had none, so the only durable signal above
