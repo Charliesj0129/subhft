@@ -1,8 +1,10 @@
 # promtool unit tests for the trading-liveness rules added 2026-08-08.
 #
 # Run:  docker run --rm --entrypoint promtool \
-#         -v "$PWD/config/monitoring/alerts:/rules:ro" prom/prometheus:latest \
-#         test rules /rules/rules_test.yaml
+#         -v "$PWD/config/monitoring:/m:ro" prom/prometheus:v2.51.0 \
+#         test rules /m/alerts/rules_test.yaml
+# (mount config/monitoring, not alerts/: the SLO tests also load ../recording_rules/slo.yaml. v2.51.0 is the version
+# docker-compose.yml runs.)
 #
 # These fixtures encode the actual production state that 83 armed alert rules
 # failed to describe: R47 bound to an expired expiry, deciding "flat" on every
@@ -12,6 +14,7 @@
 
 rule_files:
   - rules.yaml
+  - ../recording_rules/slo.yaml
 
 evaluation_interval: 1m
 
@@ -660,4 +663,95 @@ tests:
               description: "hft_backup.prom is missing from the node-exporter textfile directory; BackupFailed/BackupStale cannot fire. Check that the cron user can write HFT_BACKUP_TEXTFILE_DIR."
       - eval_time: 85h
         alertname: BackupStale
+        exp_alerts: []
+
+  # ── SLO alerts (read series recorded by recording_rules/slo.yaml) ──────────
+  # slo.yaml records slo:feed_availability:ratio_rate5m as 0 whenever no feed event arrived in 5 minutes, and
+  # slo:order_success:ratio_rate5m as 0 when there were no order actions or rejects (0 / clamp_min(0, 0.001)).
+  # Both are the normal state outside a session and with an idle strategy, so the alerts must not read a quiet
+  # system as a failing one.
+  - interval: 1m
+    name: feed SLO burn is quiet outside the session
+    input_series:
+      - series: 'feed_events_total{type="tick"}'
+        values: "100+0x40"
+      - series: "market_trading_hours_active"
+        values: "0+0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SLOFeedAvailabilityBurnRateHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: feed SLO burn fires when the feed is silent during the session
+    input_series:
+      - series: 'feed_events_total{type="tick"}'
+        values: "100+0x40"
+      - series: "market_trading_hours_active"
+        values: "1+0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SLOFeedAvailabilityBurnRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Feed availability SLO burn rate high
+
+  - interval: 1m
+    name: feed SLO burn is quiet while the feed is flowing
+    input_series:
+      - series: 'feed_events_total{type="tick"}'
+        values: "0+10x40"
+      - series: "market_trading_hours_active"
+        values: "1+0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SLOFeedAvailabilityBurnRateHigh
+        exp_alerts: []
+
+  - interval: 1m
+    name: order success SLO is quiet while no orders are sent
+    input_series:
+      - series: 'order_actions_total{type="new"}'
+        values: "5+0x40"
+      - series: "order_reject_total"
+        values: "0+0x40"
+      - series: "market_trading_hours_active"
+        values: "1+0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+
+  - interval: 1m
+    name: order success SLO fires when half the orders are rejected
+    input_series:
+      - series: 'order_actions_total{type="new"}'
+        values: "0+1x40"
+      - series: "order_reject_total"
+        values: "0+1x40"
+      - series: "market_trading_hours_active"
+        values: "1+0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order success rate below SLO
+
+  - interval: 1m
+    name: order success SLO is quiet when orders are sent and none rejected
+    input_series:
+      - series: 'order_actions_total{type="new"}'
+        values: "0+2x40"
+      - series: "order_reject_total"
+        values: "0+0x40"
+      - series: "market_trading_hours_active"
+        values: "1+0x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SLOOrderSuccessRateLow
         exp_alerts: []

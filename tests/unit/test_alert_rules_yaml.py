@@ -547,3 +547,23 @@ def test_feed_time_skew_hold_covers_its_own_lookback_window() -> None:
         f"FeedTimeSkewCritical holds for {rule['for']} but looks back "
         f"{window.group(0)}; the range vector still spans the session boundary"
     )
+
+
+def test_slo_feed_alert_is_gated_on_the_trading_session():
+    """slo:feed_availability:ratio_rate5m is 0 whenever no feed event arrived in 5 minutes, which is every night.
+
+    Without the session gate the alert would fire for 5 minutes after each session end the moment
+    ``recording_rules/slo.yaml`` is loaded (``rules_test.yaml`` proves the behavior with promtool).
+    """
+    expr = _load_alerts_by_name()["SLOFeedAvailabilityBurnRateHigh"]["expr"]
+    assert "market_trading_hours_active == 1" in expr, expr
+
+
+def test_slo_order_success_alert_needs_order_activity():
+    """slo:order_success:ratio_rate5m is 0 / clamp_min(0, 0.001) = 0 when no order or reject was seen.
+
+    An idle strategy is not a failing one: the alert must require traffic in the same window.
+    """
+    expr = _load_alerts_by_name()["SLOOrderSuccessRateLow"]["expr"]
+    assert "order_actions_total" in expr and "order_reject_total" in expr, expr
+
