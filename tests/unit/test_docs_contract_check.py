@@ -78,6 +78,14 @@ def test_an_unknown_flag_on_a_known_command_is_reported():
     assert "--force" in found[0].detail and "hft risk halt" in found[0].detail
 
 
+def test_an_unambiguous_abbreviation_of_a_long_flag_is_accepted_and_a_stranger_is_not():
+    accepted = mod.check_cli(_spans("`hft risk halt --rea x --dry`\n"), _parser(), "d.md")
+    rejected = mod.check_cli(_spans("`hft risk halt --zzz`\n"), _parser(), "d.md")
+
+    assert accepted == []
+    assert _cats(rejected) == ["cli_flag"]
+
+
 def test_a_flag_value_is_not_read_as_a_subcommand():
     text = "`hft --help`\n`hft risk halt --reason resume`\n`hft --config prod risk resume`"
 
@@ -111,6 +119,12 @@ def test_a_make_target_without_a_rule_is_reported_and_variables_are_skipped():
 
     assert [f.detail for f in found] == ["`make release-readiness-check` has no rule in the Makefile"]
     assert found[0].line == 3
+
+
+def test_a_variable_assignment_before_the_target_does_not_hide_a_missing_target():
+    found = mod.check_make(_spans("`make FILE=x.py ghost-target`\n"), {"check"}, "d.md")
+
+    assert [f.detail for f in found] == ["`make ghost-target` has no rule in the Makefile"]
 
 
 # ── metrics ──
@@ -268,6 +282,20 @@ def test_alert_runbook_urls_and_expression_metrics_are_checked(tmp_path: Path):
     assert any("ghost_metric" in f.detail for f in found)
 
 
+def test_alert_test_fixtures_and_alertmanager_config_are_not_read_as_alert_rules(tmp_path: Path):
+    root = _repo(tmp_path)
+    rule = "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: ghost_metric > 0\n"
+    alerts = root / "config" / "monitoring" / "alerts"
+    (alerts / "rules_test.yaml").write_text(rule, encoding="utf-8")
+    (alerts / "alertmanager.prod.yml").write_text(rule, encoding="utf-8")
+
+    assert mod.check_alert_files(root, set()) == []
+
+    (alerts / "rules.yaml").write_text(rule, encoding="utf-8")
+
+    assert _cats(mod.check_alert_files(root, set())) == ["alert_metric"]
+
+
 def test_promql_names_skip_functions_labels_numbers_and_keywords():
     names = mod._promql_metric_names(
         'sum by (job, instance) (rate(a_total{x="y"}[5m])) / on(job) group_left b > bool 0.5 offset 5m and c'
@@ -295,6 +323,17 @@ def test_run_checks_reports_every_category_once(tmp_path: Path):
 
     assert sorted(_cats(found)) == ["cli_command", "make_target", "metric", "path", "path"]
     assert mod.summarize(found)["path"] == 2
+
+
+def test_doc_roots_are_scanned_recursively(tmp_path: Path):
+    root = _repo(tmp_path)
+    nested = root / "docs" / "runbooks" / "sub" / "deeper"
+    nested.mkdir(parents=True)
+    (nested / "n.md").write_text("`scripts/gone.sh`\n", encoding="utf-8")
+
+    found = mod.run_checks(root, ["docs/runbooks"], parser=_parser(), include_alerts=False)
+
+    assert [(f.category, f.file) for f in found] == [("path", "docs/runbooks/sub/deeper/n.md")]
 
 
 def test_report_mode_exits_zero_and_strict_mode_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
