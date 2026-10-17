@@ -18,12 +18,12 @@ from any of them.
 |---|---|---|---|
 | `parse_error` | the YAML at the client's `config_path` could not be read or parsed | raises; the previous `symbols` stay in memory | `symbol_config_parse_error` (fields `path`, `error`) |
 | `other` | any other exception while reading it | raises; the previous `symbols` stay | `symbol_config_load_other_error` |
-| `exceeds_limit` | universe is larger than `MAX_SUBSCRIPTIONS_PER_CLIENT` (default 600, set by `HFT_MAX_SUBSCRIPTIONS`) | **default: truncates to the ceiling and continues**; raises `ValueError` only when `HFT_STRICT_SUBSCRIPTION_LIMIT=1` or `HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS=0` | `symbol_list_exceeds_limit_truncated` (warning) or `symbol_list_exceeds_limit` (error, strict) |
+| `exceeds_limit` | universe is larger than `MAX_SUBSCRIPTIONS_PER_CLIENT` (default 600, set by `HFT_MAX_SUBSCRIPTIONS`) | **default: truncates to the ceiling and continues**; raises `ValueError` only when `HFT_STRICT_SUBSCRIPTION_LIMIT=1` or `HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS` is anything but `1` | `symbol_list_exceeds_limit_truncated` (warning) or `symbol_list_exceeds_limit` (error, strict) |
 | `exceeds_pool_capacity` | universe is within the ceiling but larger than 120 x `HFT_QUOTE_CONNECTIONS` (code default 1 connection) | loads the full list; the subscribe step still truncates per connection | `symbol_list_exceeds_pool_capacity` (error) |
 
-`exceeds_limit` counts in the truncating case too, so this alert can fire while the load itself succeeded and the
-tail of the universe is silently not subscribed. Subscribe-time truncation is counted separately in
-`feed_subscription_truncate_total`.
+`exceeds_limit` counts in the truncating case too, so this alert can fire while the load itself succeeded: the
+symbols past the ceiling are dropped from the universe (the `..._truncated` warning above) and never reach the
+subscribe step. Subscribe-time truncation is counted separately in `feed_subscription_truncate_total`.
 
 A Telegram notice (`notify_symbol_reload_failed`) goes out from the market-data service and the contract refresh when
 the reload raised.

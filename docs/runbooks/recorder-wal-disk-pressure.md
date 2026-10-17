@@ -16,10 +16,10 @@ This runbook covers the scenario where the WAL disk guard circuit breaker activa
 
 ## Metrics
 
-Exported metric names carry no `hft_` prefix: `HFT_METRICS_PREFIX` is empty by default and the compose stack does not set it, so `grep hft_...` on `/metrics` finds nothing. `wal_*` series are read with `job="wal-loader"` (the engine job serves constant-0 copies; see `config/monitoring/prometheus.yml`).
+The names below are exported without an `hft_` prefix (`HFT_METRICS_PREFIX` is empty by default and the compose stack does not set it), so a `grep hft_wal_...` finds nothing; a few other metrics carry `hft_` in their own name (`hft_quote_conn_*`, `hft_backup_*`). `wal_backlog_files` is read with `job="wal-loader"` (the engine job serves a constant-0 copy; see `config/monitoring/prometheus.yml`). Engine-side gauges such as `wal_disk_available_mb` are read with `job="hft-engine"`: the `wal-loader` scrape job keeps every `wal_*` name, so a query without a job matcher can return the loader's series instead.
 
 - `wal_backlog_files` — WAL files pending replay (`job="wal-loader"`)
-- `wal_disk_available_mb` — free disk space on the WAL volume (engine job)
+- `wal_disk_available_mb{job="hft-engine"}` — free disk space on the WAL volume
 - `wal_disk_circuit_breaker_active{writer}` — 1 while the disk circuit breaker is dropping batches
 - `queue_depth{queue="recorder"}` — in-memory recorder queue depth
 - `recorder_wal_skipped_rows_total{writer,table,reason}` — rows skipped under the disk-pressure policy
@@ -29,7 +29,7 @@ There is no cumulative WAL write-error counter on this base. `recorder_failures_
 ## Symptoms
 
 - Log: `wal_disk_pressure_drop` events appearing repeatedly
-- Prometheus: `wal_disk_available_mb` drops below `HFT_WAL_DISK_MIN_MB`, or `wal_disk_circuit_breaker_active` is 1
+- Prometheus: `wal_disk_available_mb{job="hft-engine"}` drops below `HFT_WAL_DISK_MIN_MB`, or `wal_disk_circuit_breaker_active` is 1
 - Prometheus: `wal_backlog_files{job="wal-loader"}` growing without drain
 - `hft recorder status` shows `ACTIVE` guard status
 
@@ -67,7 +67,7 @@ There is no cumulative WAL write-error counter on this base. `recorder_failures_
 ## Prevention
 
 - Provision disk with ≥10× the expected daily WAL volume.
-- Set up Prometheus alert on `wal_disk_available_mb < HFT_WAL_DISK_MIN_MB * 2`.
+- Set up Prometheus alert on `wal_disk_available_mb{job="hft-engine"} < HFT_WAL_DISK_MIN_MB * 2` (keep the job matcher: without it the `wal-loader` job's series is matched too).
 - Use the `high_throughput` profile only on hosts with NVMe RAID and ≥500 GB free.
 - Schedule regular ClickHouse compaction and old-data archival.
 

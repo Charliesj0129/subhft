@@ -315,7 +315,7 @@ Shadow deployment note:
 
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
-| `HFT_METRICS_PREFIX` | 空字串 | 加在每個 metric 名稱前面（`observability/metrics.py:8`、`:77`）。預設為空、compose 也沒設，所以匯出的名稱**沒有** `hft_` 前綴；runbook 與告警規則用的都是無前綴名稱 | 不要設，除非同時改寫所有告警規則與 dashboard |
+| `HFT_METRICS_PREFIX` | 空字串 | 加在每個 metric 名稱前面（`observability/metrics.py:8`、`:77`）。預設為空、compose 也沒設，所以匯出的名稱**沒有** `hft_` 前綴；少數指標的名稱本身就以 `hft_` 開頭（例如 `hft_quote_conn_*`、`hft_backup_*`），與此變數無關 | 不要設，除非同時改寫所有告警規則與 dashboard |
 | `HFT_EXPOSURE_MAX_SYMBOLS` | `10000` | ExposureStore 最大標的數（記憶體基數上限） | 標的少時可縮小至 1000 |
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL-only 寫入路徑（CE-M3） | 生產環境建議 `wal_first` |
 | `HFT_TS_TZ` | `Asia/Taipei` | 時區假設（無時區時間戳解析）。值無效時 `core/timebase.py` 記 warning 並退回 UTC（`core/timebase.py:43–49`），而 `core/market_calendar.py:60–69` 與 `core/session_hooks.py:118–124` 讀同一個變數，無效時退回的是固定 UTC+8 | 跨區部署務必顯式設定；值寫錯會讓兩邊對交易日的判斷不同 |

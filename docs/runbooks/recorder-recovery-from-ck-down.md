@@ -16,7 +16,7 @@ This runbook covers recovering tick and fill data persistence when ClickHouse be
 
 ## Metrics
 
-Exported metric names carry no `hft_` prefix: `HFT_METRICS_PREFIX` is empty by default and the compose stack does not set it, so `grep hft_...` on `/metrics` finds nothing. `wal_*` series are read with `job="wal-loader"` (the engine job serves constant-0 copies; see `config/monitoring/prometheus.yml`).
+The names below are exported without an `hft_` prefix (`HFT_METRICS_PREFIX` is empty by default and the compose stack does not set it), so a `grep hft_wal_...` finds nothing; a few other metrics carry `hft_` in their own name (`hft_quote_conn_*`, `hft_backup_*`). `wal_backlog_files` is read with `job="wal-loader"` (the engine job serves a constant-0 copy; see `config/monitoring/prometheus.yml`).
 
 - `wal_backlog_files` — WAL files pending replay (`job="wal-loader"`)
 - `queue_depth{queue="recorder"}` — in-memory queue depth

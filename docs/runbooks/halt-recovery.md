@@ -105,7 +105,7 @@ If discrepancies exist, record them before proceeding.
 1. Check feed health:
    ```bash
    curl -s http://localhost:9090/metrics | grep feed_last_event_ts
-   # unix seconds of the last event per source; age = now - value
+   # unix seconds of the last event per source (sampled every few events); age = now - value
    ```
 2. If feed is restored and age < threshold:
    - Clear halt via admin command (see below).
