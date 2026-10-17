@@ -7,6 +7,7 @@ that make the job worth having (the upgrade really happens and survives, it is a
 
 from __future__ import annotations
 
+import importlib.metadata
 import shlex
 import tomllib
 from pathlib import Path
@@ -110,13 +111,63 @@ def test_the_job_asserts_the_production_majors_before_testing() -> None:
     assert '"pandas": 3' in check_run and '"clickhouse-connect": 1' in check_run
 
 
-def test_the_unit_suite_runs_with_the_same_selection_flags_as_the_test_job() -> None:
-    job = _job()
-    run = next(run for i, run in _runs(job) if "pytest" in run)
+def _pytest_arguments(command: str) -> list[str]:
+    tokens = shlex.split(command)
+    return [token for token in tokens[tokens.index("pytest") + 1 :] if not token.startswith("--cov")]
 
-    assert "tests/unit" in run
-    assert "--timeout=10" in run
-    assert "-p no:hypothesis" in run and "-p no:faulthandler" in run
+
+def _test_job_recipe() -> str:
+    """The command ``test`` runs in CI: the ``test-unit-ci`` Makefile recipe."""
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("test-unit-ci:"))
+    recipe = [line.strip() for line in lines[start + 1 :] if line.startswith("\t")]
+    return next(line for line in recipe if "pytest" in line)
+
+
+def test_the_unit_suite_runs_the_whole_tree_with_the_arguments_of_the_test_job() -> None:
+    """Same selection, sharding and timeout as ``make test-unit-ci``, minus its coverage options.
+
+    A narrower path (``tests/unit/order``) or a dropped ``-n auto`` would still pass a substring check while testing
+    less, or timing out the job, so the argument lists are compared whole.
+    """
+    run = next(run for i, run in _runs(_job()) if "pytest" in run)
+
+    assert _pytest_arguments(run) == _pytest_arguments(_test_job_recipe())
+    assert "tests/unit" in _pytest_arguments(run)
+
+
+def _version_check_script() -> str:
+    run = next(run for _, run in _runs(_job()) if "importlib.metadata" in run)
+    return run.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]  # the YAML block scalar is already dedented
+
+
+def _run_version_check(monkeypatch: pytest.MonkeyPatch, installed: dict[str, str]) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", installed.__getitem__)
+    exec(compile(_version_check_script(), "<ci step>", "exec"), {})  # the repo's own CI step text, not input
+
+
+def test_the_version_check_accepts_the_production_majors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run_version_check(monkeypatch, {"pandas": "3.0.3", "clickhouse-connect": "1.5.0"})  # raises if it rejects them
+
+    assert "3.0.3" in capsys.readouterr().out  # the step also logs what it found, for the run page
+
+
+@pytest.mark.parametrize(
+    ("installed", "named"),
+    [
+        ({"pandas": "2.3.3", "clickhouse-connect": "1.5.0"}, "pandas"),
+        ({"pandas": "3.0.3", "clickhouse-connect": "0.10.0"}, "clickhouse-connect"),
+        ({"pandas": "2.3.3", "clickhouse-connect": "0.10.0"}, "pandas"),
+    ],
+)
+def test_the_version_check_fails_when_either_package_is_still_on_the_lock_major(
+    monkeypatch: pytest.MonkeyPatch, installed: dict[str, str], named: str
+) -> None:
+    """The check is what stops a no-op upgrade from turning the job green for the wrong reason."""
+    with pytest.raises(AssertionError, match=named):
+        _run_version_check(monkeypatch, installed)
 
 
 def test_the_job_builds_the_rust_extension_so_failures_are_only_version_effects() -> None:
