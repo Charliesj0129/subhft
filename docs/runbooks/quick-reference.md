@@ -274,9 +274,10 @@ df -h $(docker inspect wal-loader --format '{{range .HostConfig.Binds}}{{.}} {{e
 df -h .wal
 ```
 2. 快速釋空：`make wal-archive-cleanup`（清理 archive 舊檔）。
-3. 調整 `HFT_ARCHIVE_RETENTION_DAYS`（縮短至 7）並重啟 wal-loader：
+3. 調整 `HFT_ARCHIVE_RETENTION_DAYS`（縮短至 7）：寫入 `.env` 後重建 wal-loader。環境變數在容器建立時固定，`restart` 不會重讀 `.env`，命令前綴 `VAR=7` 也進不了容器（compose 的環境來源是 `env_file: .env`）；生產主機走 Class C（`docs/runbooks/deployment.md`）：
 ```bash
-HFT_ARCHIVE_RETENTION_DAYS=7 docker compose restart wal-loader
+# .env: HFT_ARCHIVE_RETENTION_DAYS=7
+docker compose up -d wal-loader
 ```
 4. 調整警告閾值以提早告警：
    - `HFT_WAL_SIZE_WARNING_MB`（預設 100 MB）

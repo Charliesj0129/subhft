@@ -58,10 +58,10 @@ w = DataWriter()
 w.connect()
 "
 
-# Option B: re-bounce the engine (D6a: stop, wait 60 s, start; never `restart`). apply_schema() runs at startup.
-docker compose stop hft-engine
-sleep 60    # D6a: let the broker release its 5 sessions; never `docker compose restart` the engine
-docker compose start hft-engine
+# Option B: restart the wal-loader, not the engine. It calls apply_schema() when it first connects
+# (recorder/loader.py run() -> recorder/_loader_ch.py connect) and holds no broker session, so D6a
+# does not apply.
+docker compose restart wal-loader
 ```
 
 Both paths run **both** L7 migrations atomically because they are listed sequentially in the migration directory and `apply_schema` rolls forward in filename order.
