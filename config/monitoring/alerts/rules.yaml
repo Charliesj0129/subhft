@@ -763,6 +763,37 @@ groups:
         summary: "Root filesystem < 20% free"
         description: "Host {{ $labels.instance }} root partition approaching capacity (< 20% free)."
 
+  # The two disk alerts above read node-exporter series. When the target is down or the series are missing, the
+  # comparison has no input and the alerts read as healthy, so these two say that the input itself is gone.
+  - alert: NodeExporterTargetDown
+    expr: up{job="node"} == 0
+    for: 5m
+    labels:
+        severity: warning
+    annotations:
+        summary: "node-exporter target is down"
+        description: "Prometheus cannot scrape {{ $labels.instance }} (job node), so HostDiskSpaceCritical and HostDiskSpaceWarn have no input."
+
+  - alert: HostDiskMetricsAbsent
+    expr: absent(node_filesystem_avail_bytes{mountpoint="/"})
+    for: 15m
+    labels:
+        severity: warning
+    annotations:
+        summary: "No root filesystem metrics from node-exporter"
+        description: "node_filesystem_avail_bytes{mountpoint=\"/\"} has no series, so HostDiskSpaceCritical and HostDiskSpaceWarn cannot fire."
+
+  # B10 exports kill_switch_active from StormGuard.set_kill_switch_hold, which the supervisor calls every tick.
+  - alert: KillSwitchActive
+    expr: kill_switch_active{job="hft-engine"} == 1
+    for: 1m
+    labels:
+        severity: warning
+    annotations:
+        summary: "Kill switch is active"
+        description: "kill_switch_active is 1 on {{ $labels.instance }}: the kill-switch latch file is present or a startup-recovery halt pinned the hold. The engine is in HALT and sends no new orders."
+        runbook_url: "docs/operations/incident-response-protocol.md"
+
   - alert: ClickHouseSystemLogSizeCritical
     expr: |
       sum by (table) (

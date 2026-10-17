@@ -566,3 +566,33 @@ def test_slo_order_success_alert_needs_order_activity():
     """
     expr = _load_alerts_by_name()["SLOOrderSuccessRateLow"]["expr"]
     assert "order_actions_total" in expr and "order_reject_total" in expr, expr
+
+
+ROOT = RULES_PATH.parents[3]
+
+
+def test_kill_switch_alert_reads_the_gauge_the_engine_exports():
+    """The incident protocol verifies a kill with this gauge; the alert must read the engine's series, not any job's."""
+    rule = _load_alerts_by_name()["KillSwitchActive"]
+    assert 'kill_switch_active{job="hft-engine"}' in rule["expr"], rule["expr"]
+    metrics_source = (ROOT / "src" / "hft_platform" / "observability" / "metrics.py").read_text()
+    # The name also sits in the registry's name list; the alert needs the Gauge itself.
+    assert re.search(r'Gauge\(\s*_pn\("kill_switch_active"\)', metrics_source), "the engine defines no such gauge"
+    assert (ROOT / rule["annotations"]["runbook_url"]).is_file(), rule["annotations"]["runbook_url"]
+
+
+def test_node_exporter_target_down_alert_reads_a_job_prometheus_scrapes():
+    rule = _load_alerts_by_name()["NodeExporterTargetDown"]
+    with PROMETHEUS_PATH.open() as f:
+        jobs = {job["job_name"] for job in yaml.safe_load(f)["scrape_configs"]}
+    assert 'up{job="node"}' in rule["expr"], rule["expr"]
+    assert "node" in jobs, f"no scrape job named node: {sorted(jobs)}"
+
+
+def test_host_disk_alerts_have_an_absence_alert_on_the_same_series():
+    """Both disk alerts compare node-exporter series; with no series the comparison is empty and they read healthy."""
+    alerts = _load_alerts_by_name()
+    series = 'node_filesystem_avail_bytes{mountpoint="/"}'
+    for name in ("HostDiskSpaceCritical", "HostDiskSpaceWarn"):
+        assert series in alerts[name]["expr"], name
+    assert alerts["HostDiskMetricsAbsent"]["expr"] == f"absent({series})", alerts["HostDiskMetricsAbsent"]["expr"]
