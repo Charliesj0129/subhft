@@ -147,7 +147,7 @@
   ```bash
   # Archived WAL files are auto-cleaned after HFT_ARCHIVE_RETENTION_DAYS (default 14)
   # Verify no stale files:
-  find .wal/ -name "*.wal" -mtime +14 | head -5
+  find .wal/ -name "*.jsonl" -mtime +14 | head -5
   ```
 - [ ] **Log rotation**: Verify Docker log rotation is active.
 - [ ] **Stop services** (if not running overnight):

@@ -165,14 +165,16 @@ Base YAML (config/base/main.yaml)
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
 | `HFT_WAL_DISK_MIN_MB` | `500` | WAL 可用磁碟低於此值時觸發壓力保護 | 緊急排障可暫降至 100 |
-| `HFT_WAL_DISK_PRESSURE_POLICY` | `halt` | 可用磁碟低於 `HFT_WAL_DISK_MIN_MB` 時，`WALWriter` 與 `WALBatchWriter` 的斷路器丟棄該批 rows，記 warning 與 `recorder_wal_skipped_rows_total{reason="disk_full"}`。**只有 `raise` 會拋 `RuntimeError`；`halt`、`drop`、`warn` 與其他任何值行為相同，都是丟列**（`recorder/wal.py:52`、`:97–117`、`:284`、`:339–360`） | `warn` 並不是「只告警」，一樣丟列；`halt` 不會停止引擎。`hft recorder status` 顯示的預設是 `drop`（`cli/_ops.py:282`），和引擎的 `halt` 不同 |
-| `HFT_WAL_FIRST_POLICY_<TABLE>` | `write` | 只在 `HFT_RECORDER_MODE=wal_first` 有效（`DiskPressureMonitor` 只在該模式建立，`recorder/worker.py:889–898`）。壓力達 CRITICAL（`HFT_WAL_CRITICAL_MB`）時依 table 設定：`write` 照常寫入；`drop` 與 `halt` 都是丟棄該批 rows。壓力達 HALT 等級時所有 table 一律丟棄，不看此設定。值不合法視為 `write`（`recorder/disk_monitor.py:99–105`、`recorder/wal_first.py:36–65`）。`<TABLE>` 是 table 名稱的大寫 | 丟棄的 rows 會記 `data_loss` 事件，使 recorder 健康度進入 `DATA_LOSS`（`recorder/worker.py:932–937`） |
+| `HFT_WAL_DISK_PRESSURE_POLICY` | `halt` | 可用磁碟低於 `HFT_WAL_DISK_MIN_MB` 時，`WALWriter` 與 `WALBatchWriter` 的斷路器丟棄該批 rows，記 warning 與 `recorder_wal_skipped_rows_total{reason="disk_full"}`。**只有 `raise` 會拋 `RuntimeError`；`halt`、`drop`、`warn` 與其他任何值行為相同，都是丟列**（`recorder/wal.py:52`、`:97–117`、`:284`、`:339–360`） | `warn` 並不是「只告警」，一樣丟列；`halt` 這個值本身不會觸發 HALT。但這是 ClickHouse 寫入失敗後的 WAL 後備路徑：丟列時 `WALWriter.write`／`WALBatchWriter.add` 回傳 `False`，`recorder/writer.py` 記 `Data loss: both ClickHouse and WAL failed` 與 `data_loss` 事件並拋 `WriterDoubleFaultError`（`recorder/writer.py:723–731`、`:882–890`），後果見下方「`data_loss` 的後果」。`hft recorder status` 顯示的預設是 `drop`（`cli/_ops.py:282`），和引擎的 `halt` 不同 |
+| `HFT_WAL_FIRST_POLICY_<TABLE>` | `write` | 只在 `HFT_RECORDER_MODE=wal_first` 有效（`DiskPressureMonitor` 只在該模式建立，`recorder/worker.py:889–898`）。壓力達 CRITICAL（`HFT_WAL_CRITICAL_MB`）時依 table 設定：`write` 照常寫入；`drop` 與 `halt` 都是丟棄該批 rows。壓力達 HALT 等級時所有 table 一律丟棄，不看此設定。值不合法視為 `write`（`recorder/disk_monitor.py:99–105`、`recorder/wal_first.py:36–65`）。`<TABLE>` 是 table 名稱的大寫 | 丟棄的 rows 會記 `data_loss` 事件，使 recorder 健康度進入 `DATA_LOSS`（`recorder/worker.py:932–937`），後果見下方「`data_loss` 的後果」 |
 | `HFT_WAL_WARN_MB` | `100` | `DiskPressureMonitor` WARN 閾值：`.wal/` 根目錄（maxdepth 1）總量（MB） | — |
 | `HFT_WAL_CRITICAL_MB` | `300` | 同上，CRITICAL 閾值 | — |
 | `HFT_WAL_HALT_MB` | `500` | 同上，HALT 閾值。**達到即開始丟棄 rows**，並 latch `recorder_data_loss` → PLATFORM_REDUCE_ONLY（非自動復原） | 除非確知磁碟更大，否則不要調高來「消除告警」——那等於拿掉資料保護 |
 
-> `DiskPressureMonitor` 的 HALT 等級目前沒有任何 hook 消費者（`register_hook` 在 src 內沒有呼叫點，
-> `recorder/disk_monitor.py:94`）。所以名為 HALT 的等級不會停止引擎，只會讓 `WALFirstWriter` 丟列。
+> `DiskPressureMonitor` 的 HALT 等級本身沒有任何 hook 消費者（`register_hook` 在 src 內沒有呼叫點，
+> `recorder/disk_monitor.py:94`），所以這個等級自己不呼叫 `StormGuard`，只會讓 `WALFirstWriter` 丟列。
+>
+> **`data_loss` 的後果**：`WALFirstWriter` 丟列（`recorder/worker.py:932–937`）與上表 `HFT_WAL_DISK_PRESSURE_POLICY` 的 WAL 後備丟列（`recorder/writer.py:723–731`、`:882–890`）都會記 `data_loss` 事件；時間窗內有此事件，recorder 狀態即為 `DATA_LOSS`（`recorder/health.py:102–120`）。`PlatformDegradeInputs` 隨後回報 `recorder_data_loss`（開機寬限期內除外，`ops/platform_inputs.py:203–208`）；supervisor 對每個原因呼叫 `enter_reduce_only_async`（`services/system.py:1524–1525`），`autonomy_monitor` 在平台尚未 reduce-only 時另外呼叫 `StormGuard.trigger_halt("recorder_data_loss")`（`ops/autonomy_monitor.py:277–293`）。這個原因不在 `_AUTO_RECOVERABLE_REASONS`（`ops/platform_degrade.py:26–45`），需人工 re-arm。所以丟列不會停止引擎行程，但會讓平台進入 PLATFORM_REDUCE_ONLY，並可能進入 HALT。
 
 > **不要和 §6.4 的 `HFT_WAL_SIZE_WARNING_MB` / `HFT_WAL_SIZE_CRITICAL_MB` 搞混。**
 > 名稱幾乎一樣，消費者卻不同：`HFT_WAL_SIZE_*` 由 wal-loader（`recorder/loader.py`）
@@ -248,7 +250,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_FEATURE_SHADOW_ABS_TOL` | `0` | parity 絕對容忍誤差 | Rust/Python 漂移調查時調整 |
 | `HFT_FEATURE_METRICS_SAMPLE_EVERY` | `policy-dependent` | feature metrics 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_FEATURE_LATENCY_SAMPLE_EVERY` | `policy-dependent` | feature latency 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
-| `HFT_EVENT_MODE` | `event` | `event` = normalizer 每個 tick 建立 `MetaData` 事件物件；`tuple` 或 `raw` = 回傳 tuple，跳過 dataclass 配置。pytest 下強制為 `event`（`feed_adapter/normalizer.py:29–32`，tick 分支 `:982–1000`；compose `docker-compose.yml:34`） | 預設 `event` 在熱路徑上每 tick 配置一個物件；要改預設得先量測配置與延遲 |
+| `HFT_EVENT_MODE` | `event` | `event` = normalizer 每個 tick 建立 `MetaData` 事件物件；`tuple` 或 `raw` = 回傳 tuple，跳過 dataclass 配置；**同時也跳過** `timebase.now_ns()` 本機時間戳、`seq`、`_validate_and_sync_timestamp` 與 `_record_latency_metrics`，tuple 只帶交易所時間戳（`:936–938`、`:982–995`、`:1092–1107`、`:1419–1436`、`:1501–1502`）。pytest 下強制為 `event`（`feed_adapter/normalizer.py:29–32`，tick 分支 `:982–1000`；compose `docker-compose.yml:34`） | 預設 `event` 在熱路徑上每 tick 配置一個物件；要改預設得先量測配置與延遲 |
 | `HFT_BUS_RUST` | 見用途 | 同一檔案讀兩次，**未設時預設不同**：(1) `_USE_RUST_BUS` 預設為真，搭配 `HFT_RUST_ACCEL`（預設 `1`）且 Rust ring 可用時，事件匯流排使用 Rust ring（`engine/event_bus.py:20`、`:315`）；(2) `_BUS_MODE` 只在 `HFT_BUS_MODE` 未設且 `HFT_BUS_RUST == "1"` 才解析成 `rust_pyobj`，否則是 `python`（`:26–30`） | 要確認生效的匯流排，不能只看這個變數 |
 | `HFT_BUS_MODE` | 空（由上列解析為 `python`） | 明確指定匯流排模式；只有 `rust_typed` 會改變實作（換成 `FastTypedRingBuffer`），載入失敗時退回 `python` 並記 warning（`engine/event_bus.py:28–60`、`:331`） | — |
 | `HFT_ORDER_MODE` | `sim` | 下單模式：`sim` / `live` / `disabled`；`disabled` 為純行情且不建立下單 session | `live` 仍受 `HFT_MODE` 與 `HFT_LIVE_CONFIRM` 雙重鎖保護 |
@@ -298,14 +300,16 @@ Shadow deployment note:
 
 ### 8.2 自動 HALT 門檻
 
-下列四個門檻決定連續幾次佇列或匯流排壓力事件之後，由 `trigger_storm` 升級為 `StormGuard.trigger_halt`：
+下列門檻決定佇列或匯流排的壓力事件累積到什麼程度時呼叫 `StormGuard.trigger_halt`。佇列滿與 raw 丟棄在未達門檻時先呼叫 `trigger_storm`；事件匯流排沒有 storm 這一步，達到門檻就直接 HALT：
 
 | 變數 | 預設值 | 用途 | 位置 |
 |---|---|---|---|
 | `HFT_QUEUE_FULL_HALT_THRESHOLD` | `3` | 連續有 intent 因風控佇列滿被丟棄的事件數（逐事件計，不是逐 intent）；未達門檻 `trigger_storm("risk_queue_full")`，達到即 `trigger_halt("risk_queue_full_persistent")` | `strategy/runner.py:436`、`:1671–1679` |
 | `HFT_ORDER_QUEUE_FULL_HALT_THRESHOLD` | `3` | 風控送往下單佇列連續滿的次數；達到即 `trigger_halt("order_queue_full_persistent")` | `risk/engine.py:245`、`:557–561` |
-| `HFT_BUS_OVERFLOW_HALT_THRESHOLD` | `3` | 單一消費者在事件匯流排累計的 overflow 次數；達到即 `trigger_halt` | `engine/event_bus.py:355`、`:684` |
-| `HFT_RAW_DROP_HALT_THRESHOLD` | `200` | raw 佇列連續丟棄的筆數；達到即 `trigger_halt("raw_queue_sustained_drops…")`；較低的 `HFT_RAW_DROP_DEGRADE_THRESHOLD`（預設 `50`）先 `trigger_storm`，並對 FeatureEngine `mark_gap_all()` | `services/market_data.py:541–542`、`:1907–1934` |
+| `HFT_BUS_OVERFLOW_HALT_THRESHOLD` | `3` | 單一消費者連續的 overflow 次數（該消費者有一次沒有溢位的讀取就歸零，`:728–732`）；達到即 `trigger_halt` | `engine/event_bus.py:355`、`:684` |
+| `HFT_BUS_OVERFLOW_RATE_THRESHOLD` | `10` | 整條匯流排（所有消費者合計）在 `HFT_BUS_OVERFLOW_WINDOW_S` 秒內的 overflow 次數；達到即 `trigger_halt("EventBus overflow rate: …")`，不看上一列的連續計數，所以間斷的 overflow 也會累積到 HALT | `engine/event_bus.py:360`、`:369–385`；compose `docker-compose.yml:98` |
+| `HFT_BUS_OVERFLOW_WINDOW_S` | `60` | 上一列的滑動窗口（秒） | `engine/event_bus.py:359`；compose `docker-compose.yml:99` |
+| `HFT_RAW_DROP_HALT_THRESHOLD` | `200` | raw 佇列連續丟棄的筆數；達到即 `trigger_halt("raw_queue_sustained_drops…")`；較低的 `HFT_RAW_DROP_DEGRADE_THRESHOLD`（預設 `50`）先 `trigger_storm`，並對 FeatureEngine `mark_gap_all()`；另有滑動窗口 `HFT_RAW_DROP_WINDOW_THRESHOLD`（預設 `60`）與 `HFT_RAW_DROP_WINDOW_S`（預設 `5.0`），只 `trigger_storm`，不會 HALT | `services/market_data.py:541–542`、`:547–548`、`:1907–1934` |
 
 調低任何一個，StormGuard 會更早進入 HALT。HALT 阻擋新單；撤單、`FORCE_FLAT` 與減倉單仍允許（`gateway/policy.py:138–148`）。
 
@@ -317,7 +321,7 @@ Shadow deployment note:
 |---|---|---|---|
 | `HFT_EXPOSURE_MAX_SYMBOLS` | `10000` | ExposureStore 最大標的數（記憶體基數上限） | 標的少時可縮小至 1000 |
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` = WAL-only 寫入路徑（CE-M3） | 生產環境建議 `wal_first` |
-| `HFT_TS_TZ` | `Asia/Taipei` | 時區假設（無時區時間戳解析）。值無效時 `core/timebase.py` 記 warning 並退回 UTC（`core/timebase.py:43–49`），而 `core/market_calendar.py:60–69` 與 `core/session_hooks.py:118–124` 讀同一個變數，無效時退回的是固定 UTC+8 | 跨區部署務必顯式設定；值寫錯會讓兩邊對交易日的判斷不同 |
+| `HFT_TS_TZ` | `Asia/Taipei` | 時區假設（無時區時間戳解析）。值無效時 `core/timebase.py` 記 warning 並退回 UTC（`core/timebase.py:43–49`），而 `core/market_calendar.py:60–70` 與 `core/session_hooks.py:119–125` 讀同一個變數，無效時退回的是固定 UTC+8 | 跨區部署務必顯式設定；值寫錯會讓兩邊對交易日的判斷不同 |
 | `HFT_TS_ASSUME_TZ` | — | `HFT_TS_TZ` 的別名：只有 `core/timebase.py:44` 在 `HFT_TS_TZ` 未設時讀它，日曆與 session hooks 不讀 | 設時區請用 `HFT_TS_TZ` |
 | `HFT_RECONNECT_TZ` | `Asia/Taipei` | reconnect 時段判斷時區 | 與 `HFT_TS_TZ` 保持一致 |
 | `HFT_RECONNECT_DAYS` | `mon,tue,wed,thu,fri` | 自動重連啟用日（逗號分隔星期縮寫） | 週末 / 假日設空字串停用 |

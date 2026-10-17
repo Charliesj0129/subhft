@@ -9,7 +9,7 @@ This runbook covers recovering tick and fill data persistence when ClickHouse be
 | Variable | Default | Purpose |
 |---|---|---|
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` buffers all writes to WAL before CK |
-| `HFT_WAL_BATCH_MAX_ROWS` | `5000` | Rows per WAL replay batch (`recorder/wal.py:260`) |
+| `HFT_WAL_BATCH_MAX_ROWS` | `5000` | Buffered rows at which `WALBatchWriter` flushes to a WAL file (write side, not replay; `recorder/wal.py:260`, `:421`, `:447`). `hft recorder status` shows `500` (`cli/_ops.py:280`) |
 | `HFT_WAL_LOADER_CONCURRENCY` | `4` | Parallel WAL replay threads |
 | `HFT_WAL_DEDUP_ENABLED` | `1` | SHA256 dedup guard during replay; `0` disables it (`recorder/loader.py:135`) |
 | `HFT_WAL_STRICT_ORDER` | `1` | Enforce timestamp ordering on replay; `0` disables it (`recorder/loader.py:138`) |
