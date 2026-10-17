@@ -40,7 +40,9 @@ def _only(handlers: list):
 
 @pytest.mark.parametrize("body", ["pass", "...", "continue", "break", "return", "return None"])
 def test_a_single_silent_statement_in_a_broad_handler_is_silent(tmp_path, body):
-    src = f"def f(xs):\n    for x in xs:\n        try:\n            g(x)\n        except Exception:\n            {body}\n"
+    src = (
+        f"def f(xs):\n    for x in xs:\n        try:\n            g(x)\n        except Exception:\n            {body}\n"
+    )
     handler = _only(_scan_source(tmp_path, src))
     assert handler.shape == "silent"
     assert handler.body == body
@@ -116,6 +118,15 @@ def test_nested_try_blocks_are_each_reported_once(tmp_path):
         ("raise", "reraises"),
         ("raise RuntimeError('x') from None", "reraises"),
         ("cleanup()", "other"),
+        # every level the document counts as "a log line", and a re-raise that logs first is still a re-raise
+        ("logger.info('x')", "logs"),
+        ("logger.warn('x')", "logs"),
+        ("logger.critical('x')", "logs"),
+        ("logger.exception('x')", "logs"),
+        ("logger.warning('x')\n        raise", "reraises"),
+        # the receiver decides: a mixin logger is ``self``, anything else with a log-sounding method is not a log
+        ("self.warning('x')", "logs"),
+        ("result.error('x')", "other"),
     ],
 )
 def test_a_handler_that_does_something_is_classified_by_what_it_does(tmp_path, handler_body, shape):
@@ -131,6 +142,7 @@ def test_a_handler_that_does_something_is_classified_by_what_it_does(tmp_path, h
     [
         ("self.metrics.orders_total.labels(side='buy').inc()", "metrics-guard"),
         ("gauge.set(1)", "metrics-guard"),
+        ("self._metrics.get('x').inc()", "metrics-guard"),
         ("conn.close()", "cleanup"),
         ("task.cancel()", "cleanup"),
         ("return int(value)", "parse"),
@@ -200,6 +212,27 @@ def test_test_files_pycache_and_unparseable_files_are_skipped_without_stopping_t
     assert [(h.file, h.line) for h in found] == [("order/keep.py", 4)]
 
 
+def test_handlers_come_back_ordered_by_file_then_line(tmp_path):
+    """A nested ``try`` is visited outer first, and ``a.py`` has its later line before ``b.py``'s earlier one."""
+    nested = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            g()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    (tmp_path / "order").mkdir()
+    (tmp_path / "order" / "b.py").write_text("def f():\n    try:\n        g()\n    except Exception:\n        pass\n")
+    (tmp_path / "order" / "a.py").write_text(nested)
+
+    found = audit.scan(tmp_path)
+
+    assert [(h.file, h.line) for h in found] == [("order/a.py", 5), ("order/a.py", 7), ("order/b.py", 4)]
+
+
 def test_scanning_never_modifies_the_tree(tmp_path):
     src = "def f():\n    try:\n        g()\n    except Exception:\n        pass\n"
     (tmp_path / "order").mkdir()
@@ -263,6 +296,71 @@ def test_the_markdown_report_has_a_row_per_group_and_a_total(tree, capsys):
     assert "| money |" in out
     assert "| services |" in out
     assert "| **all** |" in out
+
+
+def _markdown_rows(out: str) -> dict[str, dict[str, str]]:
+    """The report's table as {group: {column: cell}}; the separator row is dropped."""
+    rows = [[cell.strip() for cell in line.strip("|").split("|")] for line in out.splitlines() if line.startswith("|")]
+    header, body = rows[0], rows[2:]
+    return {row[0]: dict(zip(header[1:], row[1:], strict=True)) for row in body}
+
+
+def test_the_markdown_numbers_per_group_and_in_total_are_the_ones_the_handlers_add_up_to(tree, capsys):
+    assert audit.main(["--root", str(tree)]) == 0
+
+    table = _markdown_rows(capsys.readouterr().out)
+
+    assert table["money"]["total"] == "2"
+    assert table["money"]["silent"] == "2"
+    assert table["money"]["silent, no comment"] == "2"
+    assert table["services"]["total"] == "1"
+    assert table["services"]["logs"] == "1"
+    assert table["services"]["silent, no comment"] == "0"
+    assert table["**all**"]["total"] == "3"
+    assert table["**all**"]["silent"] == "2"
+    assert table["**all**"]["logs"] == "1"
+    assert table["**all**"]["silent, no comment"] == "2"
+
+
+@pytest.fixture()
+def mixed_tree(tmp_path):
+    """Money and services each hold a silent and a logging handler, so neither filter can stand in for the other."""
+    sources = {
+        "order/a.py": "def f():\n    try:\n        conn.close()\n    except Exception:  # why\n        pass\n",
+        "order/d.py": "def f():\n    try:\n        g()\n    except Exception:\n        logger.warning('x')\n",
+        "services/e.py": "def f():\n    try:\n        g()\n    except Exception:\n        pass\n",
+        "services/h.py": "def f():\n    try:\n        g()\n    except Exception:\n        logger.warning('x')\n",
+    }
+    for rel, source in sources.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+    return tmp_path
+
+
+def _listed(capsys) -> list[list[str]]:
+    return [line.split() for line in capsys.readouterr().out.strip().splitlines()]
+
+
+def test_list_by_group_alone_and_by_group_and_shape(mixed_tree, capsys):
+    assert audit.main(["--root", str(mixed_tree), "--list", "money"]) == 0
+    assert [fields[0] for fields in _listed(capsys)] == ["order/a.py:4", "order/d.py:4"]
+
+    assert audit.main(["--root", str(mixed_tree), "--list", "money", "--shape", "silent"]) == 0
+    assert [fields[0] for fields in _listed(capsys)] == ["order/a.py:4"]
+
+    assert audit.main(["--root", str(mixed_tree), "--list", "services", "--shape", "silent"]) == 0
+    assert [fields[0] for fields in _listed(capsys)] == ["services/e.py:4"]
+
+
+def test_a_list_line_carries_caught_shape_comment_try_kind_and_body(mixed_tree, capsys):
+    assert audit.main(["--root", str(mixed_tree), "--list", "all"]) == 0
+
+    lines = {fields[0]: fields[1:] for fields in _listed(capsys)}
+
+    assert lines["order/a.py:4"] == ["Exception", "silent", "commented", "cleanup", "pass"]
+    assert lines["services/e.py:4"] == ["Exception", "silent", "NO-COMMENT", "other", "pass"]
+    assert lines["order/d.py:4"][:3] == ["Exception", "logs", "NO-COMMENT"]
 
 
 def test_the_json_report_is_parseable_and_carries_every_handler(tree, capsys):
