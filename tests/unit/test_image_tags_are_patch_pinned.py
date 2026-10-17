@@ -45,18 +45,33 @@ def is_pinned(reference: str) -> bool:
     return PATCH_TAG.fullmatch(name_and_tag.split(":", 1)[1]) is not None
 
 
-def dockerfile_images() -> list[str]:
-    """The image of every ``FROM`` line (``--platform`` flags and ``AS`` aliases removed).
+HEREDOC_START = re.compile(r"(?<!<)<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")  # not a here-string (<<<)
 
-    Upper case only: this Dockerfile writes its instructions in upper case, and the Python it embeds in ``RUN``
-    heredocs starts lines with a lower-case ``from pathlib import ...``.
+
+def images_in(dockerfile_text: str) -> list[str]:
+    """The image of every ``FROM`` instruction (``--platform`` flags and ``AS`` aliases removed).
+
+    Instructions are case-insensitive, so ``from`` counts. The lines of a ``RUN`` heredoc do not: this Dockerfile
+    embeds Python whose lines start with ``from pathlib import ...``, so lines between ``<<'PY'`` and ``PY`` are
+    skipped.
     """
     images = []
-    for line in DOCKERFILE.read_text(encoding="utf-8").splitlines():
+    heredoc_end = None
+    for line in dockerfile_text.splitlines():
+        if heredoc_end is not None:
+            if line.strip() == heredoc_end:
+                heredoc_end = None
+            continue
         words = line.split()
-        if words and words[0] == "FROM":
+        if words and words[0].upper() == "FROM":
             images.append(next(word for word in words[1:] if not word.startswith("--")))
+        elif (heredoc := HEREDOC_START.search(line)) is not None and not line.lstrip().startswith("#"):
+            heredoc_end = heredoc.group(1)
     return images
+
+
+def dockerfile_images() -> list[str]:
+    return images_in(DOCKERFILE.read_text(encoding="utf-8"))
 
 
 def compose_images() -> list[str]:
@@ -75,6 +90,29 @@ def test_the_scan_finds_what_it_is_meant_to_check():
 @pytest.mark.parametrize("reference", dockerfile_images())
 def test_dockerfile_base_image_names_a_patch_version(reference):
     assert is_pinned(reference), f"Dockerfile FROM {reference}: name a major.minor.patch tag or a digest"
+
+
+def test_images_in_reads_instructions_in_any_case_and_skips_heredoc_lines():
+    text = (
+        "FROM python:3.12.15-slim-bookworm as builder\n"
+        "RUN python - <<'PY'\n"
+        "from pathlib import Path\n"
+        "PY\n"
+        "from --platform=linux/amd64 alpine:3.20.1 AS extra\n"
+        "# RUN cat <<EOF  (a comment: no heredoc starts here)\n"
+        "RUN cat <<< word\n"
+        "FROM redis:7.4.11\n"
+    )
+
+    assert images_in(text) == ["python:3.12.15-slim-bookworm", "alpine:3.20.1", "redis:7.4.11"]
+
+
+def test_dockerfile_stages_name_the_same_interpreter():
+    """The comment above the Dockerfile's first ``FROM`` says the stages are bumped together: what the builder
+    stage installs is copied into the runtime stage, so one patch bump must not reach only one of them."""
+    interpreters = {image for image in dockerfile_images() if image.startswith("python:")}
+
+    assert len(interpreters) == 1, f"the Dockerfile's python stages name different images: {sorted(interpreters)}"
 
 
 @pytest.mark.parametrize("reference", sorted(set(compose_images()) - {ENGINE_IMAGE}))
