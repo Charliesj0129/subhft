@@ -53,13 +53,17 @@ single legs. That is what the data supports:
 
 Most of the 281 products are stock and other non-index futures that quote fractional prices, so
 a whole-point rule over every product would fail on legitimate data. A spread row carries a
-price *difference*, which is legitimately negative. Option premiums can be fractional too, so
-`--dataset opt_ticks` gets the summary reconciliation only. **No `opt_ticks` day is parsed on
-this machine, so that path is covered by synthetic fixtures and has not been run on real
-option data.**
+price *difference*, which is legitimately negative.
 
-Run against the 19 days the gate reports `failed: false` with only the `negative_spread_price`
-information rows above.
+Option premiums are fractional too: on the two local option days (2026-10-01 and 2026-10-05,
+931,078 rows; parsed into a scratch root, because the data root holds no parsed `opt_ticks`),
+116,224 rows (12.5%) have a non-integer premium. The same two days have no price at or below
+zero, no contract count at or below zero and no null price. Two days is thin evidence for a
+premium or contract gate, so `--dataset opt_ticks` gets the summary reconciliation only; on
+those two days it reports no finding.
+
+Run against the 19 futures days the gate reports `failed: false` with only the
+`negative_spread_price` information rows above.
 
 ## 2. Why official ticks must not be deduplicated
 
@@ -73,6 +77,11 @@ cannot be told apart from two real trades.
                                            contracts, auction, spread
                      4,750,268  (35.24%)  same key plus near_price, far_price, session
 ```
+
+Option ticks repeat even more: 55.81% (519,629 of 931,078 rows) on the two option days, on
+(product, strike, expiry, right, second, price, contracts, auction). The file format has the same
+limits (no trade id, no side, one-second resolution), but no option day has been reconciled
+against an official report, so whether those repeats are all real trades is not established.
 
 A repeat can be several fills in the same second at the same price and size, and the one day
 and product checked against official volume says that is what they are: on 2026-10-05, TX front
@@ -97,7 +106,8 @@ problem with its own handling; it says nothing about those rows.
 
 ## 3. Not covered
 
-- Real option ticks (see above), and any day outside the 19 local ones.
+- Option ticks beyond the two local days (2026-10-01, 2026-10-05), and any futures day outside the
+  19 local ones. The option days were checked in a scratch root, not in the data root.
 - Scheduling: nothing runs `check` automatically; running it after each `parse` is an operator
   step. Wiring its result into the daily report or metrics is a separate decision.
 - The reconcile check against the official volume is one day (2026-10-05, TX). The snapshot used
