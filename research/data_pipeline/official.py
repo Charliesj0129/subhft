@@ -954,13 +954,24 @@ def summarize_ticks(rows: Iterable[Mapping[str, Any]], trading_day: str) -> list
 # ---------------------------------------------------------------------------
 
 OPENAPI_BASE = "https://openapi.taifex.com.tw/v1"
-# Endpoints that serve only the latest trading day: history is whatever we snapshot daily.
+# Endpoints that serve only the latest trading day: history is whatever we snapshot daily. None of
+# the 135 paths in the published swagger takes a parameter, so there is no way to ask for a date.
+# Each name costs one request per run at the OpenAPI spacing; docs/research/official-openapi-endpoints.md
+# says what each one carries and which candidates were left out. Snapshots without a parser in
+# ``_OPENAPI_PARSERS`` are stored byte-for-byte and skipped by ``parse``.
 OPENAPI_SNAPSHOTS: tuple[str, ...] = (
     "DailyMarketReportFut",
     "DailyMarketReportOpt",
     "MarketDataOfMajorInstitutionalTradersDetailsOfFuturesContractsBytheDate",
     "MarketDataOfMajorInstitutionalTradersDetailsOfOptionsContractsBytheDate",
     "PutCallRatio",
+    "OpenInterestOfLargeTradersFutures",
+    "OpenInterestOfLargeTradersOptions",
+    "DailyOptionsDelta",
+    "FinalSettlementPrice",
+    "DailyVolumeReportOnCalendarSpreadOrders",
+    "BlockTrade",
+    "PositionLimitNonEquity",
 )
 TWSE_STOCK_DAY_URL = "https://www.twse.com.tw/rwd/en/afterTrading/STOCK_DAY?date={ym}01&stockNo={stock}&response=json"
 
