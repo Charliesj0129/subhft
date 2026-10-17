@@ -73,8 +73,33 @@ def test_strategy_noop_still_dispatches_when_the_run_outlasts_the_default_stale_
 
 def test_strategy_noop_refuses_to_report_a_run_whose_events_were_dropped_as_stale(gate) -> None:
     with _runner_clock_ahead(TEN_HOURS_NS):
-        with pytest.raises(RuntimeError, match="did not measure dispatch"):
+        with pytest.raises(RuntimeError, match=r"0/200 events reached the strategy, 200 dropped as stale"):
             gate.bench_strategy_noop(200)
+
+
+def test_strategy_noop_refuses_to_report_a_run_where_only_some_events_reached_the_strategy(gate) -> None:
+    """Not every missing dispatch is a stale drop (a symbol filter, a disabled strategy): half is not a measurement."""
+    calls = {"n": 0}
+    real = gate._NoopStrategy.on_tick
+
+    def every_other_event(self, event):
+        calls["n"] += 1
+        if calls["n"] % 2:
+            real(self, event)
+
+    with patch.object(gate._NoopStrategy, "on_tick", every_other_event):
+        with pytest.raises(RuntimeError, match=r"100/200 events reached the strategy, 0 dropped as stale"):
+            gate.bench_strategy_noop(200)
+
+
+def test_strategy_noop_reports_microseconds_per_event(gate) -> None:
+    """The ceiling is in microseconds per event: 0.5 s over 100 events is 5000 us, whatever the machine."""
+    clock = iter([0.0, 0.5])
+    with patch.object(gate, "time", SimpleNamespace(perf_counter=lambda: next(clock))):
+        us_per_event, dispatched, _ = gate._strategy_noop_run(100)
+
+    assert dispatched == 100
+    assert us_per_event == pytest.approx(5000.0)
 
 
 # --- the parity reference is compared by feature name -----------------------------------------------------------------
@@ -94,6 +119,18 @@ def test_feature_parity_counts_a_reference_value_that_is_wrong(gate) -> None:
 
     with patch.object(gate, "_feature_ref_values", wrong):
         assert gate.bench_feature_engine_parity_mismatch_rate(50) == 1.0
+
+
+def test_feature_parity_counts_an_event_the_engine_produced_no_update_for(gate) -> None:
+    class _SilentEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def process_lob_update(self, evt, stats, local_ts_ns: int):
+            return None
+
+    with patch.object(gate, "FeatureEngine", _SilentEngine):
+        assert gate.bench_feature_engine_parity_mismatch_rate(20) == 1.0
 
 
 def test_feature_values_by_id_ignores_extra_features_and_reports_a_missing_one(gate) -> None:
@@ -122,6 +159,18 @@ def test_no_rate_ceiling_allows_total_mismatch() -> None:
         assert ceiling < 1.0, f"{key}={ceiling} permits every event to disagree"
 
 
+def test_parity_mismatch_ceilings_are_zero() -> None:
+    """Both parity drills replay a seeded sequence, so a disagreement with the reference is a bug, not noise."""
+    baselines = json.loads(BASELINES.read_text(encoding="utf-8"))
+    parity = {key: value for key, value in baselines.items() if key.endswith("parity_mismatch_rate_max")}
+
+    assert sorted(parity) == [
+        "feature_engine_parity_mismatch_rate_max",
+        "feature_engine_python_vs_rust_parity_mismatch_rate_max",
+    ]
+    assert set(parity.values()) == {0.0}
+
+
 # --- the Rust drills refuse to run without Rust, and compare what both kernels compute ---------------------------------
 
 
@@ -140,6 +189,25 @@ def test_rust_drills_refuse_to_report_when_the_rust_kernel_is_not_loaded(gate, n
     with patch.object(gate, "FeatureEngine", _PythonOnlyEngine):
         with pytest.raises(RuntimeError, match="Rust feature kernel is not loaded"):
             getattr(gate, name)(10)
+
+
+def test_rust_latency_drill_builds_a_rust_engine(gate) -> None:
+    built: list[str] = []
+
+    class _RustEngine:
+        def __init__(self, *args, kernel_backend: str = "python", **kwargs) -> None:
+            built.append(kernel_backend)
+
+        def kernel_backend(self) -> str:
+            return "rust"
+
+        def process_lob_update(self, evt, stats, local_ts_ns: int):
+            return None
+
+    with patch.object(gate, "FeatureEngine", _RustEngine):
+        assert gate.bench_feature_engine_lob_update_rust(50) >= 0.0
+
+    assert built == ["rust"]
 
 
 def _two_kernel_engines(gate, rust_first_value: int = 0):
@@ -219,6 +287,28 @@ def test_every_metric_the_gate_reports_has_a_ceiling_to_fail_against(gate, tmp_p
 
     assert payload["results"], "the gate reported no metrics"
     assert sorted(key for key in payload["results"] if f"{key}_max" not in baselines) == []
+
+
+_ALL_FLAGS = ("--include-feature-rust", "--include-recorder-io", "--include-risk-heavy")
+
+
+def test_every_metric_the_gate_reports_fails_when_it_degrades_far_past_its_ceiling(gate, tmp_path: Path) -> None:
+    """A ceiling in the baselines is not enough: the metric also has to be compared against it in ``main()``."""
+    huge = {name: (lambda *a, **k: 1e9) for name in dir(gate) if name.startswith("bench_")}
+    payload = _run_gate_payload(gate, tmp_path, huge, *_ALL_FLAGS)
+    failed = {failure.split("=", 1)[0] for failure in payload["failures"]}
+
+    assert payload["results"], "the gate reported no metrics"
+    assert sorted(set(payload["results"]) - failed) == []
+
+
+def test_every_ceiling_in_the_baselines_belongs_to_a_metric_the_gate_reports(gate, tmp_path: Path) -> None:
+    """The other direction: a ceiling whose metric is no longer reported is dead, and looks like protection."""
+    payload = _run_gate_payload(gate, tmp_path, {}, *_ALL_FLAGS)
+    baselines = json.loads(BASELINES.read_text(encoding="utf-8"))
+    ceilings = {key[: -len("_max")] for key in baselines if key.endswith("_max")}
+
+    assert sorted(ceilings - set(payload["results"])) == []
 
 
 def test_gate_fails_when_the_parity_mismatch_rate_degrades(gate, tmp_path: Path) -> None:
