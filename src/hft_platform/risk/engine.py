@@ -20,6 +20,7 @@ from hft_platform.contracts.strategy import (
     typed_intent_side,
 )
 from hft_platform.core import timebase
+from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.core.pricing import PriceScaleProvider
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry, cap_reject_reason
@@ -1235,8 +1236,10 @@ class RiskEngine:
                         try:
                             if running is target_loop:
                                 # Same-thread fast path
-                                asyncio.create_task(dispatcher.notify_daily_loss(total_pnl, limit))
-                                asyncio.create_task(dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"))
+                                spawn_retained(dispatcher.notify_daily_loss(total_pnl, limit), name="notify_daily_loss")
+                                spawn_retained(
+                                    dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"), name="notify_halt_daily_loss"
+                                )
                             else:
                                 # Cross-thread (validate may be invoked from a
                                 # broker/recorder worker thread). Use the
