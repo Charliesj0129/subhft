@@ -9,6 +9,7 @@ without a word, and could disagree with ``timebase`` about which day it is.
 from __future__ import annotations
 
 import datetime as dt
+import threading
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
@@ -205,3 +206,46 @@ def test_session_hooks_say_nothing_for_a_valid_timezone(monkeypatch):
     hooks._detect_phase()
 
     assert _logged(logger, "warning") == []
+
+
+def test_the_once_flag_is_checked_and_set_while_holding_a_lock(monkeypatch):
+    """A second thread must wait for the first to finish the check-and-set, so it cannot also pass the check."""
+    logger = MagicMock()
+    monkeypatch.setattr(session_hooks, "logger", logger)
+    entered = threading.Event()
+
+    def poll() -> None:
+        entered.set()
+        session_hooks._warn_timezone_fallback_once("Asia/Taipai", ValueError("unknown zone"))
+
+    worker = threading.Thread(target=poll)
+    with session_hooks._tz_fallback_lock:
+        worker.start()
+        assert entered.wait(timeout=5)
+        worker.join(timeout=0.05)  # bounded wait for a thread that must be blocked on the lock
+        assert worker.is_alive()
+        assert session_hooks._tz_fallback_warned is False
+        assert _logged(logger, "warning") == []
+
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert _logged(logger, "warning") == ["session_hooks_timezone_invalid"]
+
+
+def test_concurrent_polls_report_an_invalid_timezone_once(monkeypatch):
+    logger = MagicMock()
+    monkeypatch.setattr(session_hooks, "logger", logger)
+    start = threading.Barrier(8)
+
+    def poll() -> None:
+        start.wait(timeout=5)
+        session_hooks._warn_timezone_fallback_once("Asia/Taipai", ValueError("unknown zone"))
+
+    workers = [threading.Thread(target=poll) for _ in range(8)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=5)
+
+    assert not any(worker.is_alive() for worker in workers)
+    assert _logged(logger, "warning") == ["session_hooks_timezone_invalid"]
