@@ -2085,6 +2085,12 @@ class HFTSystem:
                 # A startup recovery halt is the one case that does not: see
                 # ``_on_startup_recovery_halt``.
                 self.storm_guard.set_kill_switch_hold(False)
+            else:
+                # Startup recovery pin: the hold is already True for the process
+                # lifetime and the file may be gone. Re-assert it so the exported
+                # gauge is rewritten every tick; a first write that failed would
+                # otherwise leave it at 0 while the hold is still set.
+                self.storm_guard.set_kill_switch_hold(True)
 
             # R11-C4: Telegram /stop emergency halt via Redis key.
             # P2-e (2026-04-27): the file-based kill-switch above (lines

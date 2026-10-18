@@ -125,10 +125,32 @@ async def test_a_startup_recovery_halt_keeps_the_gauge_up_when_the_file_goes_awa
     assert _gauge() == 1
 
 
+@pytest.mark.asyncio
+async def test_a_recovery_halt_rewrites_a_gauge_whose_first_write_failed_once_the_file_is_gone(tmp_path, monkeypatch):
+    """The hold survives a failed gauge write; the supervisor must keep rewriting the gauge while the pin stands."""
+    monkeypatch.setenv(kill_switch.PATH_ENV, str(tmp_path / "kill_switch"))  # no latch file
+    guard = StormGuard()
+    healthy = guard.metrics
+    broken = MagicMock()
+    broken.kill_switch_active.set.side_effect = RuntimeError("registry gone")
+    guard.metrics = broken
+    guard.set_kill_switch_hold(True)  # _on_startup_recovery_halt: hold set, gauge write fails
+    guard.metrics = healthy
+    healthy.kill_switch_active.set(0)  # what the scrape shows: the write never landed
+    system = _tick_system(guard, ticks=1)
+    system._recovery_halted = True
+
+    await _run_supervise(system, monkeypatch, tmp_path)
+
+    assert guard.kill_switch_hold is True
+    assert _gauge() == 1
+
+
 def test_the_boot_path_sets_the_hold_through_the_same_setter():
     """Boot reads the latch before ``_supervise`` runs; it must reach the gauge through ``set_kill_switch_hold``."""
     import inspect
 
     source = inspect.getsource(HFTSystem)
 
-    assert source.count("set_kill_switch_hold(True)") >= 3  # boot latch, recovery halt, supervise tick
+    # boot latch, recovery halt, supervise tick (file present), supervise tick (recovery pin)
+    assert source.count("set_kill_switch_hold(True)") >= 4
