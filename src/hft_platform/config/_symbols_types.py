@@ -199,9 +199,9 @@ class ContractIndex:
     by_code: dict[str, dict[str, Any]] = field(default_factory=dict)
     futures_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     options_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    # Operator builds set this so an option window with no underlying price is an error instead of a
-    # median-strike guess. Runtime rebuilds (universe roll, contract refresh) leave it off: an error there
-    # would refuse the roll, so they keep the warning.
+    # Operator builds and QuoteConnectionPool._contract_index set this so an option window with no underlying
+    # price is an error instead of a median-strike guess (the universe roll then keeps the running universe).
+    # contracts_runtime's rebuild leaves it off: it writes partial symbols even on errors.
     require_underlying: bool = False
     # The earliest delivery date still trading (``taifex_delivery_cutoff``).
     # Runtime rebuilds set it so ``@front`` and ``validate_universe`` use one

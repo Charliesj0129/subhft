@@ -292,6 +292,35 @@ class TestRefusals:
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
         assert _universe_codes(pool) == {"TMFJ6"}
 
+    def test_option_window_without_an_underlying_price_keeps_the_running_universe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No TXF reference in the cache: the roll must not centre the TXO window on a median-strike guess."""
+        options = [
+            {
+                "code": f"TXO{strike}{right}J6",
+                "symbol": f"TXO{strike}{right}J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": right,
+                "strike": str(strike),
+            }
+            for strike in (19000, 20000, 21000)
+            for right in ("C", "P")
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST + "OPT@TXO@front@ATM exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
+        assert _universe_codes(pool) == {"TMFI6", "TMFJ6"}
+
     def test_unreadable_contract_cache_keeps_the_running_universe(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

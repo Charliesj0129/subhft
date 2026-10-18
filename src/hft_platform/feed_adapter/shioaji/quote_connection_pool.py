@@ -1517,7 +1517,8 @@ class QuoteConnectionPool:
         from hft_platform.config.option_chain_coverage import chain_coverage
 
         index = self._contract_index()
-        codes = [str(sym.get("code") or "") for sym in self._all_symbols]
+        # What the broker accepted, not what was configured: a failed subscribe leaves the chain short.
+        codes = sorted(self.subscribed_codes)
         chain_rows = [
             row for code in codes if (row := index.by_code.get(code)) and str(row.get("root") or "").upper() == "TXO"
         ]
@@ -1574,7 +1575,11 @@ class QuoteConnectionPool:
         with open(cache_path) as fh:
             data = json.load(fh)
         contracts = data.get("contracts", []) if isinstance(data, dict) else []
-        return ContractIndex(contracts=list(contracts))
+        index = ContractIndex(contracts=list(contracts))
+        # A rebuild with no underlying price must fail (the roll then keeps the running universe) rather than
+        # centre the option window on a median-strike guess.
+        index.require_underlying = True
+        return index
 
     @staticmethod
     def _delivery_lookup(index: Any) -> Callable[[str], dt.date | None]:

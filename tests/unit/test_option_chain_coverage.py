@@ -8,6 +8,7 @@ publishes it as ``option_chain_atm_coverage{expiry}``.
 from __future__ import annotations
 
 import unittest.mock as mock
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -206,7 +207,12 @@ def _clean_gauge():
         gauge.clear()
 
 
-def _report(pool: QuoteConnectionPool, index: ContractIndex) -> list[ExpiryCoverage]:
+def _report(
+    pool: QuoteConnectionPool, index: ContractIndex, *, subscribed: set[str] | None = None
+) -> list[ExpiryCoverage]:
+    """Report with a facade that holds ``subscribed`` (default: everything the pool is configured with)."""
+    held = {str(sym["code"]) for sym in pool._all_symbols} if subscribed is None else subscribed
+    pool._clients = [SimpleNamespace(subscribed_codes=held)]
     with mock.patch.object(type(pool), "_contract_index", return_value=index):
         return pool.report_option_chain_coverage()
 
@@ -392,3 +398,15 @@ def test_a_failing_refresh_still_reports_coverage(tmp_path):
         _run_refresh_loop(pool, [True])
 
     assert report.call_count == 1
+
+
+def test_a_strike_the_broker_refused_is_not_counted_as_covered(tmp_path):
+    """Configured up to 21000 but the subscribe stopped at the future (20000): the chain does not reach F+500."""
+    configured = [19500, 20000, 20500, 21000]
+    pool = _make_pool(tmp_path, configured)
+    held = {pool._all_symbols[0]["code"]} | {_option(strike)["code"] for strike in configured if strike <= 20000}
+
+    [result] = _report(pool, _index(configured), subscribed=held)
+
+    assert (result.max_strike, result.covered) == (20000.0, False)
+    assert _gauge_values() == {_EXPIRY_ISO: 0.0}
