@@ -79,6 +79,37 @@ Pass criteria for the roll (capture the baseline before it):
 - `FeedSubscriptionPermanentlyFailed` (`config/monitoring/alerts/rules.yaml`) is
   not firing for the settled codes.
 
+### A strategy still holds the expiring month at 13:30
+
+The universe roll moves the feed. It does not close or re-price a position. After
+13:30 on the delivery day the settled contract has no live quotes. Its mark is
+either missing, so the mark-to-market snapshot is incomplete
+(`mtm_unpriced_positions` above 0) and `DailyLossLimitValidator` releases a
+latched daily stop only on a complete snapshot (`risk/validators.py`,
+`update_unrealized(complete=True)`), or it is the last quote, so the old
+unrealized loss keeps being counted. Which of the two applies to a running
+engine was not observed. Either way a HALT held by that stop does not clear
+while the engine keeps running.
+
+What a restart does depends on when it happens (`execution/startup_recon.py`,
+`_recover_dual`):
+
+| Restart | Position in the checkpoint | Effect |
+|---|---|---|
+| Before 13:30 on the delivery day | Restored as recorded (`preserved_not_comparable` under `HFT_ORDER_MODE=sim`) | Nothing is released; the same loss is counted again at the first priced tick |
+| After 13:30 on the delivery day | Dropped (`expired_contract_position_settled`, `dropped_settled`) | Realized PnL is kept; the settlement mark is not booked, because the platform has no settlement price |
+
+So when the engine is in HALT with an expiring-month position, schedule at most
+one stop, wait 60 s, start (D6a) after 13:30, as its own batch under D1-D10,
+rather than a restart before it. Check afterwards that `startup_recon_positions_loaded`
+no longer counts the settled contract and that the log has
+`expired_contract_position_settled`. Whether a position is held is read from the
+checkpoint (`.state/position_checkpoint.json` in the engine container) or from
+`position_age_seconds`; do not infer it from the HALT alone.
+
+Not verified on a delivery day: this was read from the code and from the
+2026-09-16 TMFI6 case recorded in the comment in `_recover_dual`.
+
 If there is no `rolled` result by 08:30, or the running code predates
 `b33c632a`, fall back to Procedure below. Deploying is a per-batch decision for
 the operator.
