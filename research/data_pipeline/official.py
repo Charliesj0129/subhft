@@ -42,6 +42,8 @@ from urllib import robotparser
 from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
+from research.data_pipeline import official_checks
+
 DEFAULT_ROOT = Path("research/data/official")
 MANIFEST_NAME = "manifest.jsonl"
 DEFAULT_MAX_REQUESTS = 200
@@ -1194,11 +1196,16 @@ FETCH_DATASETS = (
 
 
 def add_arguments(parser: Any) -> None:
-    parser.add_argument("action", choices=("probe", "fetch", "parse", "verify", "reconcile"))
+    parser.add_argument("action", choices=("probe", "fetch", "parse", "verify", "reconcile", "check"))
     parser.add_argument("--root", default=str(DEFAULT_ROOT))
     parser.add_argument("--max-requests", type=int, default=DEFAULT_MAX_REQUESTS)
-    parser.add_argument("--dataset", choices=FETCH_DATASETS, help="fetch / parse: which dataset")
-    parser.add_argument("--day", help="reconcile: trading day, YYYY-MM-DD")
+    parser.add_argument("--dataset", choices=FETCH_DATASETS, help="fetch / parse / check: which dataset")
+    parser.add_argument("--day", help="reconcile / check: trading day, YYYY-MM-DD (check: default is every parsed day)")
+    parser.add_argument(
+        "--products",
+        default=",".join(official_checks.INDEX_FUTURES),
+        help="check fut_ticks: comma-separated products held to whole-point positive single-leg prices",
+    )
     parser.add_argument("--contract", default="TX", help="reconcile: futures contract code")
     parser.add_argument("--official-file", help="reconcile: a stored DailyMarketReportFut JSON for --day")
     parser.add_argument("--date-from", help="fetch: first date, YYYY-MM-DD")
@@ -1264,11 +1271,19 @@ def _run_reconcile(root: Path, args: Any) -> dict[str, Any]:
     }
 
 
+def _run_check(root: Path, args: Any) -> dict[str, Any]:
+    """Offline integrity gates over the parsed tick files; see ``official_checks``."""
+    if args.dataset not in official_checks.CHECKED_DATASETS:
+        raise ValueError(f"check needs --dataset, one of {', '.join(official_checks.CHECKED_DATASETS)}")
+    products = [item.strip() for item in args.products.split(",") if item.strip()]
+    return official_checks.check_dataset(root, args.dataset, day=args.day, products=products)
+
+
 def run_cli(args: Any) -> int:
     """Entry point for ``python -m research data-pipeline official <action>``.
 
-    Exit codes: 0 done, 1 failed, 2 bad arguments, 3 BLOCKED (a human must decide what
-    happens next), 4 request cap reached (resumable).
+    Exit codes: 0 done, 1 failed (``check``: a gate failed), 2 bad arguments, 3 BLOCKED (a human
+    must decide what happens next), 4 request cap reached (resumable).
     """
     root = Path(args.root)
     fetcher = Fetcher(root, max_requests=args.max_requests)
@@ -1290,6 +1305,10 @@ def run_cli(args: Any) -> int:
             )
         elif args.action == "reconcile":
             print(json.dumps(_run_reconcile(root, args), indent=2, sort_keys=True))
+        elif args.action == "check":
+            report = _run_check(root, args)
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 1 if report["failed"] else 0
         elif args.action == "fetch":
             results = _run_fetch(fetcher, args)
             fetched = sum(1 for item in results if item is not None and not item.from_cache)
