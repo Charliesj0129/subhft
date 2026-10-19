@@ -11,15 +11,15 @@ edit it there, not here.
 | subagent_type | Use for | Model | Tools |
 |---|---|---|---|
 | hft-executor | one handoff packet, Tier 1/2 | sonnet | edit + bash |
-| hft-reviewer | independent review of one named diff | inherit | read-only |
+| hft-reviewer | independent review of one named diff | inherit | no edit tools; Bash writes barred by prompt only |
 | hft-test-writer | tests under `tests/` | sonnet | edit + bash |
 | hft-docs | mechanical docs and path verification | haiku | edit + bash |
 
 ## Hooks (`.claude/hooks/`, registered in `.claude/settings.json`)
 
-- `scope_guard` — during a delegation window, writes outside the packet allowlist are denied.
+- `scope_guard` — during a delegation window, Edit/Write/NotebookEdit outside the packet allowlist are denied (Bash redirections are not covered).
 - `git_guard` — subagents' non-read-only git is denied.
-- `codex_review_gate` — `git push` / `gh pr create|merge` of `src/`, `rust_core/`, or `config/` changes needs a Codex review attestation.
+- `codex_review_gate` — `git push` / `gh pr create|merge` of `src/`, `rust_core/`, or `config/` changes needs a Codex review attestation. It sees only Bash calls made inside a Claude Code session; a push typed in a terminal is gated only if the git pre-push hook is installed in that checkout (`make install-git-hooks`, which installs `scripts/git-hooks/pre-push`).
 - `discipline_feedback` — advisory `check_discipline` on the edited platform file.
 - `commit_audit` — advisory: HEAD vs the declared allowlist marker.
 
