@@ -112,9 +112,9 @@ docker cp hft-engine:/app/shioaji.log ./outputs/container_rescue_$(date +%Y%m%d)
   mv outputs/production_rollout/autonomy/runtime_state.json \
      outputs/production_rollout/autonomy/runtime_state.json.stale-$(date +%Y%m%d)
 
-# 3a. Preferred — deploy the code fix by restart. src/ IS bind-mounted, so the
-#     running code is the host working tree, not the baked image: no rebuild, and
-#     a restart preserves the writable layer.
+# 3a. Preferred — deploy the code fix by stop -> wait 60 s -> start (D6a, never
+#     `restart`). src/ IS bind-mounted, so the running code is the host working
+#     tree, not the baked image: no rebuild, and stop/start preserves the writable layer.
 #     Retire the bloated manifest while the loader is DOWN — a running loader
 #     rewrites the whole in-memory set on its next save, so moving the files
 #     under it achieves nothing.
@@ -122,7 +122,9 @@ docker compose stop wal-loader
 mkdir -p ~/wal_manifest_archive_$(date +%Y%m%d)
 mv .wal/manifest.txt .wal/manifest.txt.bak ~/wal_manifest_archive_$(date +%Y%m%d)/ 2>/dev/null
 docker compose exec hft-engine hft ops rearm-platform    # clear the persisted latch FIRST
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a: let the broker release its 5 sessions; never `docker compose restart` the engine
+docker compose start hft-engine
 docker compose start wal-loader
 
 # 3b. Only if the env var (HFT_WAL_MANIFEST_PATH) or a compose change must apply:

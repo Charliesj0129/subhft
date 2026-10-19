@@ -18,8 +18,10 @@ Contract refresh 負責在背景定期更新交易合約快取（`config/contrac
 # 檢查當前快取狀態
 docker compose logs hft-engine | rg "contract_refresh|contract_diff"
 
-# 完整重啟（含合約重新載入）
-docker compose restart hft-engine
+# 完整重啟（含合約重新載入）：stop → 等 60 秒 → start（D6a）
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 
 ---
@@ -74,7 +76,9 @@ curl -fsS http://localhost:9090/metrics | rg "contract_refresh"
 2. 確認 `contract_refresh_total[result=ok]` 最後一次成功時間。
 3. 若 session 有效但 refresh 持續失敗 → 重啟 hft-engine：
 ```bash
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 4. 系統在 refresh 失敗期間會繼續使用舊快取運作，非緊急情況可等待下一個 refresh 週期。
 
@@ -98,7 +102,9 @@ docker compose restart hft-engine
 
 **處置**:
 ```bash
-docker compose restart hft-engine
+docker compose stop hft-engine
+sleep 60    # D6a：等券商釋放 5 個 session；引擎不可用 `docker compose restart`
+docker compose start hft-engine
 ```
 
 ---

@@ -63,9 +63,9 @@ ssh charl@100.91.176.126 'cd /home/charl/subhft && \
   mkdir -p ~/deploy_backup_$(date -u +%Y%m%d)/symbols && \
   cp -p config/symbols.yaml ~/deploy_backup_$(date -u +%Y%m%d)/symbols/'
 
-# 3. Copy and restart (D6 — `restart`, never `up -d`):
+# 3. Copy, then stop -> wait 60 s -> start (D6/D6a — never `up -d`, never `restart`):
 scp config/symbols.yaml charl@100.91.176.126:/home/charl/subhft/config/symbols.yaml
-ssh charl@100.91.176.126 'cd /home/charl/subhft && docker compose restart hft-engine'
+ssh charl@100.91.176.126 'cd /home/charl/subhft && docker compose stop hft-engine && sleep 60 && docker compose start hft-engine'
 ```
 
 ## Verification

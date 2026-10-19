@@ -110,15 +110,10 @@ ssh charl@100.91.176.126 "
 
 Warning: this shadows the whole engine, including R47, because shadow mode is global.
 
-```bash
-ssh charl@100.91.176.126 "
-  cd /home/charl/subhft &&
-  export HFT_ORDER_SHADOW_MODE=1 &&
-  export HFT_ORDER_MODE=sim &&
-  export HFT_GATEWAY_ENABLED=0 &&
-  docker compose restart hft-engine
-"
-```
+Set these in the remote `.env` (`HFT_ORDER_SHADOW_MODE=1`, `HFT_ORDER_MODE=sim`, `HFT_GATEWAY_ENABLED=0`) and apply
+them as a Class C change under `.agent/rules/41-deployment.md`. Exporting them in an ssh shell and running
+`docker compose restart` does not work: the container's environment is fixed when it is created, and `restart` is
+refused for the engine anyway (D6a). `HFT_ORDER_MODE=sim` alone does not stop dispatch; here the shadow flag is what intercepts orders.
 
 Then manually enable only the C33 strategy in `config/base/strategies.yaml` on the remote host and keep TXF-conflicting strategies disabled.
 
@@ -164,7 +159,9 @@ Restart:
 ```bash
 ssh charl@100.91.176.126 "
   cd /home/charl/subhft &&
-  docker compose restart hft-engine &&
+  docker compose stop hft-engine &&
+  sleep 60 &&
+  docker compose start hft-engine &&
   docker compose logs --tail=100 hft-engine
 "
 ```

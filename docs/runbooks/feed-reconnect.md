@@ -66,8 +66,11 @@ docker compose logs -f hft-engine | grep -E "reconnect|Reconnecting|subscribe_ba
 ### Manual reconnect (if automatic fails)
 
 ```bash
-# Restart the engine container (preserves WAL, triggers fresh login)
-docker compose restart hft-engine
+# Stop, wait 60 s, start the engine container (D6a; preserves WAL, triggers fresh login).
+# Never `docker compose restart` the engine: it races the broker's session release.
+docker compose stop hft-engine
+sleep 60    # D6a: let the broker release its 5 sessions; never `docker compose restart` the engine
+docker compose start hft-engine
 
 # If login keeps failing, check credentials
 docker exec hft-engine env | grep SHIOAJI_
@@ -210,8 +213,8 @@ docker compose logs hft-engine --since 1h | grep -E 'quote_pool_metrics_publish_
 No configuration rollback needed. If reconnect parameters were changed:
 
 ```bash
-# Revert .env changes and restart
-docker compose restart hft-engine
+# Revert the .env changes, then apply them as a Class C change (.agent/rules/41-deployment.md).
+# `restart` and stop/start do NOT re-read .env: the environment is fixed when the container is created.
 ```
 
 ## Post-Incident

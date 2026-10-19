@@ -93,9 +93,9 @@ curl -fsS http://localhost:9090/metrics | head
 ```bash
 SYMBOLS_CONFIG=config/symbols.yaml
 ```
-並重啟：
+並重建容器（環境變數在容器建立時固定，`restart` 不會重讀 `.env`；這是本機/開發流程，生產主機見 `docs/runbooks/deployment.md`）：
 ```bash
-docker compose restart hft-engine
+docker compose up -d hft-engine
 ```
 
 ## 5. Live 模式（顯式啟用）
