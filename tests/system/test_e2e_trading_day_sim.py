@@ -390,7 +390,9 @@ class TestFeeAccumulationFullDay:
         fills = [
             _make_fill(order_id="O1", side=Side.BUY, price=_price(100), qty=10, fee=150, tax=0),
             _make_fill(order_id="O2", side=Side.BUY, price=_price(101), qty=5, fee=75, tax=0),
-            _make_fill(order_id="O3", side=Side.SELL, price=_price(105), qty=15, fee=675, tax=450),  # fee is all-in: 225 charge + 450 tax
+            _make_fill(
+                order_id="O3", side=Side.SELL, price=_price(105), qty=15, fee=675, tax=450
+            ),  # fee is all-in: 225 charge + 450 tax
         ]
         for fill in fills:
             expected_total_fees += fill.fee

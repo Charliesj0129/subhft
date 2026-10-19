@@ -95,9 +95,7 @@ def test_python_and_rust_stores_report_the_same_fees() -> None:
 
 
 @pytest.mark.parametrize("backend", ["python", "rust"])
-def test_a_normalized_fill_reaches_the_position_with_the_calculators_total(
-    backend: str, tmp_path, monkeypatch
-) -> None:
+def test_a_normalized_fill_reaches_the_position_with_the_calculators_total(backend: str, tmp_path, monkeypatch) -> None:
     """The producer side of the contract: ``fee`` is the calculator's total, ``tax`` its tax part."""
     symbols = tmp_path / "symbols.yaml"
     symbols.write_text("symbols:\n  - code: 'TXFL5'\n    exchange: 'TAIFEX'\n    price_scale: 10000\n")
