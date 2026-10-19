@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
 # Build stage
-FROM python:3.12-slim-bookworm as builder
+# Both stages name the same interpreter patch (tests/unit/test_image_tags_are_patch_pinned.py); bump them together.
+FROM python:3.12.15-slim-bookworm as builder
 
 WORKDIR /app
 
@@ -71,7 +72,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     CARGO_NET_OFFLINE=true maturin build --release --manifest-path rust_core/Cargo.toml -o /tmp/wheels
 
 # Runtime stage
-FROM python:3.12-slim-bookworm
+FROM python:3.12.15-slim-bookworm
 
 WORKDIR /app
 

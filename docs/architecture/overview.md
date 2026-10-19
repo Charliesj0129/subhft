@@ -40,7 +40,7 @@ Companion documents:
 | -------------- | ----------------------------------- | -------------- | ------------------------ |
 | `hft-engine`   | `python -m hft_platform.main`       | 9090 (metrics) | Core trading runtime     |
 | `clickhouse`   | `clickhouse-server:25.12.3`         | 8123, 9000     | Time-series storage      |
-| `redis`        | `redis:7`                           | 6379           | Optional cache / pub-sub |
+| `redis`        | `redis:7.4.11`                      | 6379           | Optional cache / pub-sub |
 | `wal-loader`   | `hft_platform.recorder.loader`      | —              | WAL → ClickHouse replay  |
 | `hft-monitor`  | `scripts/monitor_runtime_health.py` | —              | Runtime health checks    |
 | `prometheus`   | `prom/prometheus:v2.51.0`           | 9091           | Metrics collection       |

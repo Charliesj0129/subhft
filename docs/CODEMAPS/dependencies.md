@@ -8,7 +8,7 @@
 |---------|-------|------|---------|
 | hft-engine | hft-platform:latest | 9090 | Main trading runtime (Prometheus /metrics) |
 | clickhouse | clickhouse-server:25.12.3 | 8123, 9000 | Primary persistence (market_data, orders, trades, fills) |
-| redis | redis:7.4 | 6379 | Session lease, live monitor cache |
+| redis | redis:7.4.11 | 6379 | Session lease, live monitor cache |
 | wal-loader | hft-platform:latest | - | WAL replay to ClickHouse |
 | prometheus | prom/prometheus:v2.51.0 | 9091 | Metrics scraper |
 | alertmanager | prom/alertmanager:v0.27.0 | 9093 | Alert routing |
