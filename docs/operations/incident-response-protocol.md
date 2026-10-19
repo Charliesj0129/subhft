@@ -77,7 +77,8 @@ Reconciliation drift detected
 |   +-- Position sync error --> force reconciliation from broker account query
 |
 +-- Remediation
-|   +-- Run manual reconciliation: hft reconcile --force --symbol <SYM>
+|   +-- Read the engine's reconciliation (no manual command): reconciliation_discrepancy_count,
+|   |   log "Position discrepancies detected"
 |   +-- If broker position differs: broker is source of truth, adjust internal state
 |   +-- Log all adjustments with full audit trail
 |   +-- When clean: clear manual lock with `hft ops rearm-platform`

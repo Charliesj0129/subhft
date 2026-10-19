@@ -14,17 +14,35 @@ For the current `TMFD6` cascade-bounce rollout, use `docs/runbooks/tmfd6-cbs-sup
 
 ```bash
 export HFT_MODE=real
-export HFT_ORDER_MODE=sim
+export HFT_ORDER_MODE=sim   # does NOT stop order dispatch (see below)
 export SHIOAJI_ACTIVATE_CA=1
 export HFT_ORDER_NO_CA=0
 export CA_CERT_PATH=./certs/Sinopac.pfx
 export CA_PASSWORD=<your_password>
 
-uv run hft run real
+uv run hft run live
 ```
 
-**Pass:** Log shows `ca_activated=true`
-**Fail:** Check cert path, password, person_id. Verify cert not expired.
+`hft run` takes `sim`, `live` or `replay`; `real` is not a mode. With `HFT_MODE=real` and no argument, `hft run`
+resolves to `live`.
+
+Three different switches are in play:
+
+| Switch | Read by | Meaning |
+|---|---|---|
+| `hft run <mode>` | `cli/_run.py` | run mode in settings: `sim`, `live`, `replay`. Defaults from `HFT_MODE` (`real` becomes `live`) |
+| `HFT_MODE` | `feed_adapter/shioaji/_config.py` | Shioaji login flavour: `sim` is the simulation login (CA off); anything else is the real login (unless a `simulation` setting overrides it). **Unset, the readers disagree:** `cli/_run.py` and `services/bootstrap.py` default to `sim`, `_config.py` defaults to the real login. Always set it explicitly |
+| `HFT_ORDER_MODE` | `services/bootstrap.py` | order handling: `sim`, `live` or `disabled` (aliases such as `real` map to `live`). `live` requires `HFT_MODE=real` (or `live`). **`sim` does not stop orders from being dispatched; only `disabled` does** (AGENTS.md, red lines) |
+
+Stage A below sets `HFT_ORDER_MODE=sim`. Do not read that as "no orders can leave": run it only when the
+strategy set cannot place orders. If you only need the CA check, set `HFT_ORDER_MODE=disabled` for Stage A
+and put it back to `sim` for Stage B, which needs orders. By code reading (not run), the CA check does not
+depend on it: CA activation is part of the login sequence (`feed_adapter/shioaji/session_runtime.py`), gated
+by `SHIOAJI_ACTIVATE_CA` and by `HFT_MODE` not being `sim`, and `session_runtime.py`, `_config.py` and
+`client.py` do not read `HFT_ORDER_MODE`.
+
+**Pass:** Log shows `CA activated`
+**Fail:** The log shows `CA activation failed` or `CA activation requested but missing ...`. Check cert path, password, person_id. Verify cert not expired.
 
 ## Stage B: Local Sim Order Flow
 
@@ -39,10 +57,10 @@ Same config as A. Enable a strategy that generates OrderIntents.
 # Ensure .env has CA vars set (SHIOAJI_ACTIVATE_CA=1, HFT_ORDER_NO_CA=0)
 # Ensure certs/Sinopac.pfx exists
 docker compose up -d hft-engine
-docker compose logs -f hft-engine | grep -i "ca_activated\|order_mode"
+docker compose logs -f hft-engine | grep -i "ca activat\|order_mode"
 ```
 
-**Pass:** `ca_activated=true` in logs, sim orders flowing
+**Pass:** `CA activated` in logs, sim orders flowing
 **Fail:** Check docker-compose env passthrough, cert volume mount
 
 ## Stage D: First Live Trade (DAY SESSION ONLY)
@@ -61,8 +79,8 @@ docker compose logs -f hft-engine | grep -i "ca_activated\|order_mode"
 docker compose up -d hft-engine
 
 # Verify safety guard passed and CA activated:
-docker compose logs hft-engine | grep -E "LIVE ORDER MODE|ca_activated"
-# Expected: "LIVE ORDER MODE ACTIVE" + "ca_activated=true"
+docker compose logs hft-engine | grep -E "LIVE ORDER MODE|CA activat"
+# Expected: "LIVE ORDER MODE ACTIVE" + "CA activated"
 ```
 
 **Monitoring:** `make monitor-remote` must be active

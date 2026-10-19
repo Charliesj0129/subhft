@@ -69,19 +69,22 @@ ORDER BY symbol;
 
 ### Broker Positions
 
-```bash
-# Shioaji
-uv run hft admin positions --broker shioaji
-
-# Fubon
-uv run hft admin positions --broker fubon
-```
+No CLI queries broker positions (there is no `hft admin` command group). Read them in the broker's own UI or
+API console. Do not open a second Shioaji session from a shell: the broker cap is 5 sessions.
 
 ### Reconciliation Diff
 
+Reconciliation is done by the engine, not by a command. `ReconciliationService`
+(`src/hft_platform/execution/reconciliation.py`) syncs positions from the broker at startup and then every
+`HFT_RECON_CHECK_INTERVAL` seconds (default 5). Read its result from the engine:
+
 ```bash
-uv run hft admin reconcile --verbose
+curl -s http://localhost:9090/metrics | grep -E 'reconciliation_(discrepancy_count|consecutive_failures|last_success_ts|auto_corrected_total)'
 ```
+
+The metric names carry the `HFT_METRICS_PREFIX` prefix when one is set. The engine log names the symbols:
+`Position discrepancies detected`, `auto_correct_drift: adopting broker position`,
+`Runtime reconciliation failed`.
 
 If discrepancies exist, record them before proceeding.
 
@@ -107,20 +110,29 @@ If discrepancies exist, record them before proceeding.
    curl -s http://localhost:9090/metrics | grep hft_feed_last_tick_age_seconds
    ```
 2. If feed is restored and age < threshold:
-   - Clear halt via admin command (see below).
+   - Clear the halt following Manual Recovery below.
 3. If feed remains stale:
    - Do NOT resume. Investigate broker connectivity.
    - Check broker API status page.
 
 ### Reconciliation Failure
 
-1. Run full reconciliation:
-   ```bash
-   uv run hft admin reconcile --full
-   ```
-2. Identify mismatched symbols and quantities.
-3. Apply corrections manually or via admin tool.
-4. Re-run reconciliation to confirm zero diff.
+1. Read the engine's reconciliation state (see "Reconciliation Diff" above):
+   `reconciliation_discrepancy_count` and `reconciliation_consecutive_failures`.
+2. Identify mismatched symbols and quantities from the `Position discrepancies detected` log lines.
+3. No command applies corrections by hand. The engine adopts the broker position itself
+   (`auto_correct_drift: adopting broker position`, counted in `reconciliation_auto_corrected_total`), but
+   only when all of these hold (`HFT_RECON_AUTO_CORRECT_ENABLED`, default on):
+   - the reconciliation HALT for this drift is already active, and the critical drift has been seen on
+     `HFT_RECON_AUTO_CORRECT_AFTER` consecutive checks (default 5);
+   - the gap is one of two shapes: local flat while the broker holds a position, or local holds a position
+     while the broker is flat;
+   - the quantity is within `HFT_RECON_AUTO_CORRECT_FUTURES_MAX_QTY` (default 2) for futures or
+     `HFT_RECON_AUTO_CORRECT_STOCK_MAX_QTY` (default 10) for stocks.
+   A sign mismatch or a larger gap is never auto-corrected (the code says it "requires manual
+   intervention") and no command exists for it: do not resume, and file an incident.
+4. Wait for the auto-correct window (5 checks, about 25 s at the default interval) and confirm
+   `reconciliation_discrepancy_count` is back to 0.
 
 ---
 
@@ -139,11 +151,10 @@ export HFT_HALT_AUTO_FLATTEN=0
 
 ### Step 2: Reconcile Positions
 
-```bash
-uv run hft admin reconcile --apply-corrections
-```
-
-Review each correction before confirming.
+No command applies corrections by hand; the engine reconciles itself (see "Reconciliation Diff"). Confirm
+`reconciliation_discrepancy_count` and `reconciliation_consecutive_failures` are both 0 before continuing.
+If the broker and the engine still disagree after a cycle, the broker is the source of truth: do not resume,
+and file an incident.
 
 ### Step 3: Restart in Sim Mode
 
