@@ -94,7 +94,7 @@ make ch-query-guard-suite
 ```
 
 延伸 Runbook：
-- [docs/runbooks/ch-mv-pressure-tuning.md](runbooks/ch-mv-pressure-tuning.md) — tuning parameters and INC-CHMV-20260303-01 incident record (Code 241 retries: 27 → 0–1 per 5m).
+- [docs/runbooks/ch-mv-pressure-tuning.md](ch-mv-pressure-tuning.md) — tuning parameters and INC-CHMV-20260303-01 incident record (Code 241 retries: 27 → 0–1 per 5m).
 - 附錄：`Appendix A: Incident Record (2026-03-03)`
 
 可調旋鈕（快速緩解）：

@@ -182,8 +182,8 @@ ssh charl@100.91.176.126 "
 Also inspect:
 
 - `docker compose logs --tail=200 hft-engine`
-- `hft_strategy_position_current{strategy_id="R47_MAKER_TMF"}`
-- `hft_strategy_position_current{strategy_id="C33_TXFD6_SOLO_MAKER"}`
+- `position_pnl_realized{strategy="R47_MAKER_TMF"}` and `position_pnl_realized{strategy="C33_TXFD6_SOLO_MAKER"}`
+  (there is no per-strategy net-position gauge; `position_drift_qty` reports drift against the broker)
 
 ## Bottom Line
 

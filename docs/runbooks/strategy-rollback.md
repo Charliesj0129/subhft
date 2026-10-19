@@ -23,12 +23,17 @@ The canary monitor (`hft_platform.alpha.canary.CanaryMonitor`) evaluates these t
 
 ## Metrics to Watch
 
-| Metric | Alert Threshold | Source |
+These are `live_metrics` keys handed to `CanaryMonitor.evaluate` (`alpha/canary.py:118-120`), not Prometheus series. `canary_scheduler.py:178-190` fills them from ClickHouse or from stored values.
+
+| `live_metrics` key | Rolls back when | Source |
 |---|---|---|
-| `hft_live_slippage_bps` | > `max_live_slippage_bps` | Prometheus |
-| `hft_alpha_drawdown_contribution` | > `max_live_drawdown_contribution` | Prometheus |
-| `hft_execution_error_rate` | > `max_execution_error_rate` | Prometheus |
-| `hft_canary_weight` | 0 (post-rollback) | Prometheus |
+| `slippage_bps` | > `rollback.trigger.live_slippage_bps_gt` (else `guardrails.max_live_slippage_bps`, default 3.0) | canary scheduler |
+| `drawdown_contribution` | > `rollback.trigger.live_drawdown_contribution_gt` (else `guardrails.max_live_drawdown_contribution`, default 0.02) | canary scheduler |
+| `execution_error_rate` | > `rollback.trigger.execution_error_rate_gt` (else `guardrails.max_execution_error_rate`, default 0.01) | canary scheduler |
+
+Missing data rolls back. When ClickHouse returns nothing and the promotion YAML has no `live_metrics` block, `_build_metrics` supplies worst-case values (slippage 999, drawdown 1.0, error rate 1.0), so the next evaluation rolls the canary back (`canary_scheduler.py:42-44`, `:248-267`).
+
+The weight itself is the `weight` key of the promotion YAML (`alpha/promotion.py:1100`); a rollback writes `weight: 0.0` and `enabled: false` there (`CanaryMonitor.apply_decision`, `alpha/canary.py:203-205`). `canary_weight` appears only in the one-time `promotion_decision.json` written at promotion (`alpha/promotion.py:292`, `:297`) and is not updated by a rollback. The action taken is counted in `alpha_canary_actions_total{alpha_id,action}` (`action` = `hold` / `escalated` / `rolled_back` / `graduated`).
 
 ## Automatic Rollback Flow
 

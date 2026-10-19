@@ -20,9 +20,9 @@ Recovery is explicit. Do not assume the runtime will return to `NORMAL` on its o
 ### Check StormGuard State Metric
 
 ```bash
-curl -s http://localhost:9090/metrics | grep hft_storm_guard_state
-# Expected output when halted:
-#   hft_storm_guard_state{state="HALT"} 1
+curl -s http://localhost:9090/metrics | grep stormguard_mode
+# Expected output when halted (0=NORMAL, 1=WARM, 2=STORM, 3=HALT):
+#   stormguard_mode{strategy="system"} 3.0
 ```
 
 ### Check Guardrail Log in ClickHouse
@@ -104,7 +104,8 @@ If discrepancies exist, record them before proceeding.
 
 1. Check feed health:
    ```bash
-   curl -s http://localhost:9090/metrics | grep hft_feed_last_tick_age_seconds
+   curl -s http://localhost:9090/metrics | grep feed_last_event_ts
+   # unix seconds of the last event per source (sampled every few events); age = now - value
    ```
 2. If feed is restored and age < threshold:
    - Clear halt via admin command (see below).

@@ -16,16 +16,21 @@ This runbook covers the scenario where the WAL disk guard circuit breaker activa
 
 ## Metrics
 
-- `hft_wal_files_pending` — current WAL backlog file count
-- `hft_wal_disk_free_mb` — free disk space on WAL volume
-- `hft_recorder_queue_depth` — in-memory recorder queue depth
-- `hft_wal_write_errors_total` — cumulative write errors
+The names below are exported without an `hft_` prefix (`HFT_METRICS_PREFIX` is empty by default and the compose stack does not set it), so a `grep hft_wal_...` finds nothing; a few other metrics carry `hft_` in their own name (`hft_quote_conn_*`, `hft_backup_*`). `wal_backlog_files` is read with `job="wal-loader"` (the engine job serves a constant-0 copy; see `config/monitoring/prometheus.yml`). Engine-side gauges such as `wal_disk_available_mb` are read with `job="hft-engine"`: the `wal-loader` scrape job keeps every `wal_*` name, so a query without a job matcher can return the loader's series instead.
+
+- `wal_backlog_files` — WAL files pending replay (`job="wal-loader"`)
+- `wal_disk_available_mb{job="hft-engine"}` — free disk space on the WAL volume
+- `wal_disk_circuit_breaker_active{writer}` — 1 while the disk circuit breaker is dropping batches
+- `queue_depth{queue="recorder"}` — in-memory recorder queue depth
+- `recorder_wal_skipped_rows_total{writer,table,reason}` — rows skipped under the disk-pressure policy
+
+There is no cumulative WAL write-error counter on this base. `recorder_failures_total` counts WAL-first writes that returned failure (`recorder/worker.py:941`), so read it as a data-loss signal, not as a disk-write error rate.
 
 ## Symptoms
 
 - Log: `wal_disk_pressure_drop` events appearing repeatedly
-- Prometheus: `hft_wal_disk_free_mb` drops below `HFT_WAL_DISK_MIN_MB`
-- Prometheus: `hft_wal_files_pending` growing without drain
+- Prometheus: `wal_disk_available_mb{job="hft-engine"}` drops below `HFT_WAL_DISK_MIN_MB`, or `wal_disk_circuit_breaker_active` is 1
+- Prometheus: `wal_backlog_files{job="wal-loader"}` growing without drain
 - `hft recorder status` shows `ACTIVE` guard status
 
 ## Immediate Response
@@ -54,7 +59,7 @@ This runbook covers the scenario where the WAL disk guard circuit breaker activa
 ## Recovery Procedure
 
 1. Ensure ClickHouse is healthy: `make recorder-status` shows `ok`.
-2. Allow WAL loader to drain backlog — watch `hft_wal_files_pending` fall to 0.
+2. Allow WAL loader to drain backlog — watch `wal_backlog_files{job="wal-loader"}` fall to 0.
 3. Expand disk volume or archive old data to restore headroom.
 4. Reset `HFT_WAL_DISK_MIN_MB` to the standard value for your profile.
 5. Verify no data gaps in ClickHouse tick tables.
@@ -62,7 +67,7 @@ This runbook covers the scenario where the WAL disk guard circuit breaker activa
 ## Prevention
 
 - Provision disk with ≥10× the expected daily WAL volume.
-- Set up Prometheus alert on `hft_wal_disk_free_mb < HFT_WAL_DISK_MIN_MB * 2`.
+- Set up Prometheus alert on `wal_disk_available_mb{job="hft-engine"} < HFT_WAL_DISK_MIN_MB * 2` (keep the job matcher: without it the `wal-loader` job's series is matched too).
 - Use the `high_throughput` profile only on hosts with NVMe RAID and ≥500 GB free.
 - Schedule regular ClickHouse compaction and old-data archival.
 

@@ -18,3 +18,4 @@
 | RecorderFailure | [RecorderFailure.md](RecorderFailure.md) |
 | OrphanedFillDetected | [OrphanedFillDetected.md](OrphanedFillDetected.md) |
 | TelegramAlertTriage | [TelegramAlertTriage.md](TelegramAlertTriage.md) |
+| SymbolConfigReloadFailed | [SymbolConfigReloadFailed.md](SymbolConfigReloadFailed.md) |

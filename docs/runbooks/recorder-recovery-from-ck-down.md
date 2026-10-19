@@ -16,17 +16,21 @@ This runbook covers recovering tick and fill data persistence when ClickHouse be
 
 ## Metrics
 
-- `hft_wal_files_pending` — WAL backlog file count
-- `hft_clickhouse_write_errors_total` — cumulative CK write errors
-- `hft_recorder_queue_depth` — in-memory queue depth
-- `hft_clickhouse_write_latency_ms` — CK write latency histogram
+The names below are exported without an `hft_` prefix (`HFT_METRICS_PREFIX` is empty by default and the compose stack does not set it), so a `grep hft_wal_...` finds nothing; a few other metrics carry `hft_` in their own name (`hft_quote_conn_*`, `hft_backup_*`). `wal_backlog_files` is read with `job="wal-loader"` (the engine job serves a constant-0 copy; see `config/monitoring/prometheus.yml`).
+
+- `wal_backlog_files` — WAL files pending replay (`job="wal-loader"`)
+- `queue_depth{queue="recorder"}` — in-memory queue depth
+- `recorder_ch_insert_latency_ms{table}` — CK insert latency histogram
+- `clickhouse_pool_timeout_total` — CK pool acquire timeouts
+
+There is no cumulative ClickHouse write-error counter on this base. `recorder_failures_total` counts WAL-first writes that returned failure (`recorder/worker.py:941`), not CK insert errors.
 
 ## Symptoms
 
 - Log: `clickhouse_write_failed` or `recorder_queue_degraded` events
-- Prometheus: `hft_clickhouse_write_errors_total` rising rapidly
+- Prometheus: `recorder_ch_insert_latency_ms` climbing, or `clickhouse_pool_timeout_total` rising
 - `hft recorder status` shows ClickHouse `unreachable`
-- `hft_wal_files_pending` accumulating
+- `wal_backlog_files{job="wal-loader"}` accumulating
 
 ## Immediate Response
 
@@ -62,7 +66,7 @@ This runbook covers recovering tick and fill data persistence when ClickHouse be
    ```bash
    watch -n5 make recorder-status
    ```
-   `hft_wal_files_pending` should trend to 0.
+   `wal_backlog_files{job="wal-loader"}` should trend to 0.
 
 3. **Confirm the dedup guard is on** if the same events may be replayed twice (e.g., after a restart). It is on by default; only an explicit `HFT_WAL_DEDUP_ENABLED=0` in the `wal-loader` container turns it off:
    ```bash
