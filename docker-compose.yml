@@ -339,6 +339,38 @@ services:
       - HFT_MONITOR_FEED_GAP_WARN_S=${HFT_MONITOR_FEED_GAP_WARN_S:-5}
       - HFT_MONITOR_WAL_RATE_WARN=${HFT_MONITOR_WAL_RATE_WARN:-1}
       - HFT_MONITOR_INGEST_RATE_MIN=${HFT_MONITOR_INGEST_RATE_MIN:-1}
+      # Least privilege (2026-10-03 audit): `env_file: .env` in the shared anchor hands
+      # every container the whole .env. This service never talks to the broker, so the
+      # broker identity is overridden to empty here (environment wins over env_file).
+      # Nothing it imports reads these (grep: only feed_adapter/shioaji, cli/_run,
+      # config/loader.has_credentials and ops scripts do).
+      - SHIOAJI_API_KEY=
+      - SHIOAJI_SECRET_KEY=
+      - SHIOAJI_PERSON_ID=
+      - SHIOAJI_ACCOUNT=
+      - CA_PASSWORD=
+      - CA_CERT_PATH=
+    # Least privilege: runs as non-root hftuser and needs no Linux capability.
+    # `no-new-privileges` is deliberately NOT set here: docker-compose.production.yml already
+    # sets it for this service, and compose concatenates list keys when the two files are
+    # merged, then rejects the duplicate item ("security_opt items at 0 and 1 are equal").
+    cap_drop:
+      - ALL
+    # The code is mounted read-only: this service has no reason to rewrite what the
+    # engine imports (the engine mounts the same ./src, so a writable mount here would
+    # let a compromise of this process plant code that runs in the engine on its next restart).
+    volumes:
+      - ./.wal:/app/.wal
+      - ./.state:/app/.state
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - ./scripts:/app/scripts:ro
+      - ./src:/app/src:ro
+      # Same two mounts as the shared anchor: the P1 forensics sink (a crash dump must land
+      # on the host, not in the container layer) and the heartbeat directory, kept so this
+      # service stays property-for-property equal to docker-compose.prod.locked.yml.
+      - ./.cores:/var/cores
+      - ./.hft-runtime:/var/run/hft
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -488,6 +520,38 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set in .env}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - TZ=Asia/Taipei
+      # Least privilege (2026-10-03 audit): `env_file: .env` in the shared anchor hands
+      # every container the whole .env. This service never talks to the broker, so the
+      # broker identity is overridden to empty here (environment wins over env_file).
+      # Nothing it imports reads these (grep: only feed_adapter/shioaji, cli/_run,
+      # config/loader.has_credentials and ops scripts do).
+      - SHIOAJI_API_KEY=
+      - SHIOAJI_SECRET_KEY=
+      - SHIOAJI_PERSON_ID=
+      - SHIOAJI_ACCOUNT=
+      - CA_PASSWORD=
+      - CA_CERT_PATH=
+    # Least privilege: runs as non-root hftuser, needs no Linux capability, and must not
+    # be able to gain one through a setuid binary.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # The code is mounted read-only: this service has no reason to rewrite what the
+    # engine imports (the engine mounts the same ./src, so a writable mount here would
+    # let a compromise of this process plant code that runs in the engine on its next restart).
+    volumes:
+      - ./.wal:/app/.wal
+      - ./.state:/app/.state
+      - ./data:/app/data
+      - ./config:/app/config:ro
+      - ./scripts:/app/scripts:ro
+      - ./src:/app/src:ro
+      # Same two mounts as the shared anchor: the P1 forensics sink (a crash dump must land
+      # on the host, not in the container layer) and the heartbeat directory, kept so this
+      # service stays property-for-property equal to docker-compose.prod.locked.yml.
+      - ./.cores:/var/cores
+      - ./.hft-runtime:/var/run/hft
     depends_on:
       clickhouse:
         condition: service_healthy
