@@ -18,7 +18,7 @@ uv run hft run live
 
 說明：
 - 多數情況不影響 sim 或行情訂閱。
-- 若你的帳務流程需要指定 account，請在 `.env` 補上 `SHIOAJI_ACCOUNT`。
+- `SHIOAJI_ACCOUNT` 只用來命名 session lock 檔（`.wal/.locks/shioaji_session_<label>.lock`），程式不拿它做帳務；要設就填一個不敏感的名稱，不要填真實帳號（會原樣出現在檔名與 log 裡）。
 
 ## 3) 無行情 / LOB 空白
 ```bash

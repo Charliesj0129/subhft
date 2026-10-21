@@ -6,7 +6,6 @@ External consumers should prefer ``ShioajiClientFacade`` from
 """
 
 import os
-import re
 import sys
 import threading
 import time
@@ -22,6 +21,7 @@ from hft_platform.core import timebase
 from hft_platform.core.rate_limiter import RateLimiter
 from hft_platform.feed_adapter.shioaji import router as _router
 from hft_platform.feed_adapter.shioaji._compat import resolve_quote_api
+from hft_platform.feed_adapter.shioaji._config import session_lock_id
 from hft_platform.feed_adapter.shioaji._infra import (
     InflightGuard as _InflightGuard,
 )
@@ -603,10 +603,7 @@ class ShioajiClient:
             os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "diff").strip().lower() or "diff"
         )
         self._session_lock_enabled = _as_bool(os.getenv("HFT_SHIOAJI_SESSION_LOCK_ENABLED", "1"))
-        lock_id_raw = (
-            os.getenv("SHIOAJI_ACCOUNT") or os.getenv("SHIOAJI_PERSON_ID") or os.getenv("SHIOAJI_API_KEY") or "default"
-        )
-        lock_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(lock_id_raw).strip())[:64] or "default"
+        lock_id = session_lock_id()
         lock_dir = os.getenv("HFT_SHIOAJI_SESSION_LOCK_DIR", ".wal/.locks")
         _lock_suffix = self.shioaji_config.get("session_lock_suffix", "")
         self._session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}{_lock_suffix}.lock")
