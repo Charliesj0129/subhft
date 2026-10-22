@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import hmac
 import json
+import os
+import secrets
 import shlex
 import socket
 import subprocess
@@ -37,6 +40,11 @@ DEFAULT_INCLUDE_PATHS = [
 DEFAULT_ENV_PREFIXES = ["HFT_", "CLICKHOUSE_", "REDIS_", "SHIOAJI_", "SYMBOLS_"]
 DEFAULT_RUNTIME_SERVICES = ["hft-engine", "wal-loader", "hft-monitor", "prometheus", "clickhouse", "redis"]
 
+# Runtime env VALUES are never persisted. Each variable is stored as a keyed digest, so a snapshot can say
+# WHICH variable changed (names are kept) but not what it holds. The key lives next to the outputs, mode 0600.
+DIGEST_KEY_FILENAME = ".digest_key"
+DIGEST_HEX_CHARS = 16
+
 
 def _now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).astimezone().isoformat()
@@ -63,6 +71,74 @@ def _sha256_file(path: Path) -> str:
                 break
             h.update(chunk)
     return h.hexdigest()
+
+
+def _ensure_private_dir(path: Path) -> None:
+    """Create ``path`` (and missing parents) owner-only. A directory that already exists is left as it is."""
+    if path.is_dir():
+        return
+    parent = path.parent
+    if parent != path and not parent.exists():
+        _ensure_private_dir(parent)
+    path.mkdir(mode=0o700, exist_ok=True)
+    path.chmod(0o700)
+
+
+def _write_private_text(path: Path, text: str, *, mode: int = 0o600) -> None:
+    """Write ``text`` with owner-only permissions regardless of the umask."""
+    _ensure_private_dir(path.parent)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(text)
+    finally:
+        if fd != -1:
+            os.close(fd)
+
+
+def load_digest_key(output_dir: Path) -> tuple[bytes, str]:
+    """Return ``(key, key_id)``; create ``<output_dir>/.digest_key`` (32 random bytes, hex, 0600) on first use."""
+    key_path = output_dir / DIGEST_KEY_FILENAME
+    _ensure_private_dir(output_dir)
+    try:
+        fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w", encoding="ascii") as handle:
+            handle.write(secrets.token_hex(32) + "\n")
+    raw = key_path.read_text(encoding="ascii").strip()
+    try:
+        key = bytes.fromhex(raw)
+    except ValueError:
+        key = b""
+    if len(key) != 32:
+        raise RuntimeError(f"digest key {key_path} is not 32 bytes of hex; remove it and take a new baseline")
+    return key, _sha256_bytes(key)[:8]
+
+
+def _env_digest(key: bytes, name: str, value: str) -> str:
+    return hmac.new(key, f"{name}\0{value}".encode("utf-8"), hashlib.sha256).hexdigest()[:DIGEST_HEX_CHARS]
+
+
+def _redact_runtime_env(runtime_env: dict[str, Any], key: bytes, key_id: str) -> dict[str, Any]:
+    """Replace each service's plaintext ``env`` with per-variable keyed digests. Names are kept, values dropped."""
+    redacted: dict[str, Any] = {}
+    for service, entry in runtime_env.items():
+        if not isinstance(entry, dict):
+            redacted[service] = entry
+            continue
+        env = entry.get("env")
+        env_map = env if isinstance(env, dict) else {}
+        digests = {str(name): _env_digest(key, str(name), str(value)) for name, value in sorted(env_map.items())}
+        clean = {k: v for k, v in entry.items() if k not in ("env", "env_sha256")}
+        clean["env_digests"] = digests
+        clean["digest_key_id"] = key_id
+        clean["env_sha256"] = _sha256_text("\n".join(f"{name}={digest}" for name, digest in digests.items()))
+        redacted[service] = clean
+    return redacted
 
 
 def _run_cmd(argv: list[str], cwd: Path | None = None, timeout_s: int = 20) -> CmdResult:
@@ -259,9 +335,13 @@ def _build_snapshot(
     prefixes: list[str],
     services: list[str],
     label: str | None = None,
+    *,
+    digest_key: tuple[bytes, str],
 ) -> dict[str, Any]:
     files, missing = _collect_included_files(project_root, includes)
     entries = _file_entries(project_root, files)
+    compose = _compose_snapshot(project_root, prefixes, services)
+    compose["runtime_env"] = _redact_runtime_env(compose.get("runtime_env") or {}, *digest_key)
 
     return {
         "generated_at": _now_iso(),
@@ -278,13 +358,12 @@ def _build_snapshot(
             "combined_sha256": _combined_hash(entries),
             "entries": entries,
         },
-        "compose": _compose_snapshot(project_root, prefixes, services),
+        "compose": compose,
     }
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    _write_private_text(path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def _combine_status(current: str, incoming: str) -> str:
@@ -407,14 +486,44 @@ def _compare_snapshots(
         bsvc = bruntime.get(svc)
         csvc = cruntime.get(svc)
         if not isinstance(bsvc, dict) or not isinstance(csvc, dict):
-            runtime_diff[svc] = {"baseline": bsvc, "current": csvc, "reason": "service_missing"}
+            # Presence and image only: a legacy baseline entry carries plaintext env values, so never copy it.
+            runtime_diff[svc] = {
+                "baseline_present": isinstance(bsvc, dict),
+                "current_present": isinstance(csvc, dict),
+                "baseline_image": bsvc.get("image") if isinstance(bsvc, dict) else None,
+                "current_image": csvc.get("image") if isinstance(csvc, dict) else None,
+                "reason": "service_missing",
+            }
+            continue
+        if isinstance(bsvc.get("env"), dict):
+            runtime_diff[svc] = {
+                "reason": "legacy_plaintext_baseline",
+                "message": (
+                    "baseline predates env digests and holds plaintext env values; take a new baseline "
+                    "and remove the old file yourself"
+                ),
+            }
+            continue
+        if str(bsvc.get("digest_key_id") or "") != str(csvc.get("digest_key_id") or ""):
+            runtime_diff[svc] = {
+                "baseline_digest_key_id": bsvc.get("digest_key_id"),
+                "current_digest_key_id": csvc.get("digest_key_id"),
+                "reason": "digest_key_differs",
+            }
             continue
         if str(bsvc.get("env_sha256") or "") != str(csvc.get("env_sha256") or ""):
-            runtime_diff[svc] = {
+            entry: dict[str, Any] = {
                 "baseline_env_sha256": bsvc.get("env_sha256"),
                 "current_env_sha256": csvc.get("env_sha256"),
                 "reason": "env_diff",
             }
+            bdig = bsvc.get("env_digests")
+            cdig = csvc.get("env_digests")
+            if isinstance(bdig, dict) and isinstance(cdig, dict):
+                entry["changed"] = sorted(k for k in bdig.keys() & cdig.keys() if bdig[k] != cdig[k])
+                entry["added"] = sorted(cdig.keys() - bdig.keys())
+                entry["removed"] = sorted(bdig.keys() - cdig.keys())
+            runtime_diff[svc] = entry
             continue
         if str(bsvc.get("image") or "") != str(csvc.get("image") or ""):
             runtime_diff[svc] = {
@@ -471,13 +580,16 @@ def _write_check_markdown(report: dict[str, Any], path: Path) -> None:
     else:
         lines.append("No runtime service env/image drift detected.")
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _write_private_text(path, "\n".join(lines) + "\n")
 
 
 def _create_backup_archive(project_root: Path, files: list[Path], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(out_path, "w:gz") as tar:
+    """Archive the included files. ``.env`` is included on purpose (a rollback must restore it), so the archive
+    is owner-only like every other output."""
+    _ensure_private_dir(out_path.parent)
+    fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "wb") as raw, tarfile.open(fileobj=raw, mode="w:gz") as tar:
         for p in files:
             arc = p.relative_to(project_root).as_posix()
             tar.add(p, arcname=arc, recursive=False)
@@ -502,8 +614,7 @@ tar -xzf "${{BACKUP_TAR}}" -C "${{PROJECT_ROOT}}"
 echo "[rollback] file restore complete"
 echo "[rollback] optional git rollback: git checkout <rollback-tag-or-branch>"
 """
-    path.write_text(script, encoding="utf-8")
-    path.chmod(0o755)
+    _write_private_text(path, script, mode=0o700)
 
 
 def _write_pre_sync_template(path: Path, change_id: str, rollback_tag: str, rollback_branch: str) -> None:
@@ -531,7 +642,15 @@ def _write_pre_sync_template(path: Path, change_id: str, rollback_tag: str, roll
 2. Optional git rollback: `git checkout {rollback_tag}`
 3. Re-run validation checklist
 """
-    path.write_text(content, encoding="utf-8")
+    _write_private_text(path, content)
+
+
+def _digest_key_or_exit(output_dir: Path) -> tuple[bytes, str]:
+    try:
+        return load_digest_key(output_dir)
+    except RuntimeError as exc:
+        print(f"[drift] {exc}")
+        raise SystemExit(2) from exc
 
 
 def _run_snapshot(args: argparse.Namespace) -> int:
@@ -541,7 +660,9 @@ def _run_snapshot(args: argparse.Namespace) -> int:
     prefixes = args.env_prefix if args.env_prefix else list(DEFAULT_ENV_PREFIXES)
     services = args.service if args.service else list(DEFAULT_RUNTIME_SERVICES)
 
-    snapshot = _build_snapshot(project_root, includes, prefixes, services, label=args.label)
+    snapshot = _build_snapshot(
+        project_root, includes, prefixes, services, label=args.label, digest_key=_digest_key_or_exit(output_dir)
+    )
     filename = f"snapshot_{_stamp()}"
     if args.label:
         filename += f"_{args.label}"
@@ -567,7 +688,9 @@ def _run_check(args: argparse.Namespace) -> int:
     prefixes = args.env_prefix if args.env_prefix else list(DEFAULT_ENV_PREFIXES)
     services = args.service if args.service else list(DEFAULT_RUNTIME_SERVICES)
 
-    current = _build_snapshot(project_root, includes, prefixes, services, label="current_check")
+    current = _build_snapshot(
+        project_root, includes, prefixes, services, label="current_check", digest_key=_digest_key_or_exit(output_dir)
+    )
     report = _compare_snapshots(
         baseline,
         current,
@@ -622,9 +745,16 @@ def _run_prepare(args: argparse.Namespace) -> int:
     services = args.service if args.service else list(DEFAULT_RUNTIME_SERVICES)
 
     artifact_dir = output_dir / "pre_sync" / f"{change_id}_{stamp}"
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_private_dir(artifact_dir)
 
-    snapshot = _build_snapshot(project_root, includes, prefixes, services, label=f"pre_sync_{change_id}")
+    snapshot = _build_snapshot(
+        project_root,
+        includes,
+        prefixes,
+        services,
+        label=f"pre_sync_{change_id}",
+        digest_key=_digest_key_or_exit(output_dir),
+    )
     snapshot_path = artifact_dir / "pre_sync_snapshot.json"
     _write_json(snapshot_path, snapshot)
 
