@@ -12,6 +12,7 @@ import asyncio
 import datetime as dt
 import math
 import os
+import threading
 import time
 from collections.abc import Callable
 from typing import Any, cast
@@ -222,6 +223,11 @@ def _obs_policy() -> str:
 # FeedState imported from ._md_ingestion
 
 
+# The broker-thread callback logs an error per failed message; under a burst of malformed packets that is one
+# line per message. Counters already count every drop, so the log is summarised instead (N80).
+_CALLBACK_LOG_INTERVAL_S = 10.0
+
+
 class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     def __init__(
         self,
@@ -395,6 +401,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             if _mr and hasattr(_mr, "md_callback_drop_total")
             else None
         )
+        self._cb_log_lock = threading.Lock()  # the callback runs on broker threads
+        self._cb_log_last: dict[str, float] = {}  # event -> monotonic time of its last error log
+        self._cb_log_suppressed: dict[str, int] = {}  # event -> errors skipped since that log
         self._feature_update_metric_children: dict[tuple[str, str], Any] = {}
         self._feature_quality_flag_metric_children: dict[str, Any] = {}
         self._feature_latency_metric_child: Any = None
@@ -1373,13 +1382,29 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             else:
                 if self._cb_drop_loop_missing:
                     self._cb_drop_loop_missing.inc()
-                logger.error("Callback loop missing")
+                self._log_callback_error("Callback loop missing")
 
         except Exception as e:
             if self._cb_drop_callback_error:
                 self._cb_drop_callback_error.inc()
             self._record_shioaji_crash_signature(str(e), context="md_callback")
-            logger.error("shioaji_callback_error", error=str(e))
+            self._log_callback_error("shioaji_callback_error", error=str(e))
+
+    def _log_callback_error(self, event: str, **fields: Any) -> None:
+        """``logger.error`` from the broker-thread callback, at most once per interval per event (N80).
+
+        Every dropped message is already counted (``md_callback_drop_total``) and crash-signature
+        matched, so the log only has to say that it is happening and how much it skipped.
+        """
+        now = time.monotonic()
+        with self._cb_log_lock:
+            last = self._cb_log_last.get(event)
+            if last is not None and now - last < _CALLBACK_LOG_INTERVAL_S:
+                self._cb_log_suppressed[event] = self._cb_log_suppressed.get(event, 0) + 1
+                return
+            self._cb_log_last[event] = now
+            suppressed = self._cb_log_suppressed.pop(event, 0)
+        logger.error(event, suppressed_since_last=suppressed, **fields)
 
     # -- monitor loop -------------------------------------------------------
 
