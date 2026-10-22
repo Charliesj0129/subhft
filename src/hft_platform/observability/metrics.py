@@ -161,6 +161,8 @@ class MetricsRegistry:
                 _pn("stormguard_halt_exempt_bypass_total"),
                 _pn("stormguard_drawdown_flat_release_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
+                _pn("loss_exit_orders_total"),
+                _pn("loss_exit_unpriced_total"),
                 # H2: HALT notification-callback dispatch observability
                 _pn("halt_callback_no_loop_total"),
                 _pn("halt_callback_schedule_failed_total"),
@@ -660,6 +662,20 @@ class MetricsRegistry:
         self.halt_drain_safety_intent_lost_total = Counter(
             _pn("halt_drain_safety_intent_lost_total"),
             "Safety intents (CANCEL/FORCE_FLAT) lost during HALT drain re-queue",
+        )
+        # Platform loss/expiry exit (risk/loss_exit.py). Declared here, not at
+        # module level in loss_exit.py: _init_collectors unregisters every custom
+        # collector, so a module-level Counter imported before this registry is
+        # built still counts but is never exported (THESHOW 2026-10-22).
+        self.loss_exit_orders_total = Counter(
+            _pn("loss_exit_orders_total"),
+            "FORCE_FLAT intents emitted by the platform loss/expiry exit, by trigger",
+            ["trigger"],
+        )
+        self.loss_exit_unpriced_total = Counter(
+            _pn("loss_exit_unpriced_total"),
+            "Exit triggers that could not be priced (no two-sided book), by trigger",
+            ["trigger"],
         )
         # H2 (2026-04-25): observability for cross-thread HALT notification dispatch.
         # Production evidence: 8 days of HALT events with no Telegram delivery because
