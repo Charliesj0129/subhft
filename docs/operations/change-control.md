@@ -46,6 +46,13 @@ make deploy-drift-check BASELINE=outputs/deploy_guard/snapshots/<baseline>.json
 - `change_template.md`
 - `manifest.json`
 
+輸出（`outputs/deploy_guard`）的內容與權限：
+- 快照只存每個環境變數的**名稱**與金鑰雜湊（HMAC-SHA256 截 16 hex），不存值；drift 報告只列出「變更／新增／移除」的變數名稱。
+  金鑰在 `outputs/deploy_guard/.digest_key`（0600，第一次執行時產生）。刪掉或換掉它之後，舊基準會以 `digest_key_differs` 判 FAIL，需重拍基準。
+- 本次變更之前拍的基準含明文環境變數值，會以 `legacy_plaintext_baseline` 判 FAIL（報告不會回顯值）。請重拍基準，並自行處理舊檔
+  （腳本不刪除任何既有檔案）。
+- 所有輸出為擁有者專用（檔案 0600、目錄 0700）。`backup_<change_id>.tar.gz` **仍包含 `.env`**（rollback 需要還原它），所以不可外送。
+
 ## WS-D Release Channel（2026-03-05）
 
 部署要從 canary 提升到 stable 前，執行：

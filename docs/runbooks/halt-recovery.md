@@ -136,10 +136,13 @@ If discrepancies exist, record them before proceeding.
 
 ### Step 1: Disable Auto-Flatten
 
-Prevent the system from automatically closing positions during recovery.
+Make sure the system does not automatically close positions during recovery. HALT auto-flatten is
+**off by default**: the engine reads `HFT_HALT_AUTO_FLATTEN` (`src/hft_platform/risk/halt_flattener.py`)
+and only `1`, `true`, `yes` or `on` enable it. Check that the engine environment does not set it to one
+of those; leave it unset or `0`.
 
 ```bash
-export HFT_AUTO_FLATTEN_DISABLED=1
+export HFT_HALT_AUTO_FLATTEN=0
 ```
 
 ### Step 2: Reconcile Positions
@@ -166,7 +169,7 @@ Verify:
 
 ```bash
 export HFT_MODE=live
-export HFT_AUTO_FLATTEN_DISABLED=0
+# Leave HFT_HALT_AUTO_FLATTEN as set in Step 1 unless you deliberately want HALT auto-flatten on.
 docker compose restart hft-engine
 ```
 
