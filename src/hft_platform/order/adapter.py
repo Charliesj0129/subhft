@@ -3481,9 +3481,21 @@ class OrderAdapter:
         return int(getattr(trade, "qty", 0) or 0)
 
     def _platform_net_position_for_symbol(self, symbol: str) -> int:
+        """The platform's whole net holding in *symbol*, recovered lots included.
+
+        A position carried across a restart sits in the store's recovery map
+        until its first fill. Reading ``positions`` alone made a FORCE_FLAT for
+        such a lot a no-op ("already flat"), so nothing could close it.
+        ``PositionStore.net_qty_for_symbol`` with no strategy filter sums both.
+        """
         position_store = getattr(self, "position_store", None)
         if position_store is None:
             return 0
+        net_qty_for_symbol = getattr(position_store, "net_qty_for_symbol", None)
+        if callable(net_qty_for_symbol):
+            total = net_qty_for_symbol(symbol)
+            if isinstance(total, int):
+                return total
         positions = getattr(position_store, "positions", {})
         net_qty = 0
         for pos in positions.values():
