@@ -10,22 +10,50 @@ from hft_platform.core import timebase
 logger = get_logger("platform_inputs")
 
 
+# The last calendar failure that was logged at WARNING: the supervisor reads the calendar every tick, so a
+# persistent fault is reported when it first appears or changes, and counted every time.
+_calendar_fault_seen: str | None = None
+
+
 def _seconds_since_session_open() -> float | None:
     """Seconds since the running TAIFEX session opened, or None when shut.
 
-    Fail-closed: a calendar that cannot answer reports "shut", so a feed-gap
-    reading it cannot vouch for never latches reduce-only. Leaving the platform
-    trading normally on an unreadable calendar is the safe direction here --
-    every other reduce-only reason (queues, RSS, Redis, WAL, recorder) is
-    unaffected and still fires.
+    A calendar that cannot answer reports None ("shut"), so the two feed-gap reduce-only reasons that read it
+    (``feed_gap`` and a pending reconnect) never latch on a calendar they cannot vouch for. This fails OPEN for
+    those two reasons -- trading continues on an unreadable calendar -- while every other reduce-only reason
+    (queues, RSS, Redis, WAL, recorder) is unaffected and still fires. Whether that is the right direction is
+    open (N142); what it must not be is invisible, so each failure is counted and a new one is logged at WARNING.
     """
+    global _calendar_fault_seen
     try:
         from hft_platform.core.market_calendar import get_calendar
 
-        return get_calendar().seconds_since_futures_session_open()
+        value = get_calendar().seconds_since_futures_session_open()
     except Exception as exc:  # noqa: BLE001 — a calendar failure must not crash the supervisor
-        logger.debug("platform_inputs_calendar_unavailable", error=str(exc))
+        _note_calendar_unavailable(exc)
         return None
+    _calendar_fault_seen = None
+    return value
+
+
+def _note_calendar_unavailable(exc: Exception) -> None:
+    global _calendar_fault_seen
+    try:
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        MetricsRegistry.get().platform_inputs_calendar_unavailable_total.inc()
+    except Exception as metrics_exc:  # noqa: BLE001 — the counter must not hide the original failure
+        logger.debug("platform_inputs_calendar_counter_failed", error=str(metrics_exc))
+    fault = f"{type(exc).__name__}: {exc}"
+    if fault == _calendar_fault_seen:
+        logger.debug("platform_inputs_calendar_unavailable", error=fault)
+        return
+    _calendar_fault_seen = fault
+    logger.warning(
+        "platform_inputs_calendar_unavailable",
+        error=fault,
+        consequence="feed-gap reduce-only reasons read the market as shut until the calendar answers again",
+    )
 
 
 def _metric_sample_value(metric: Any, sample_name: str, labels: dict[str, str] | None = None) -> float | None:
