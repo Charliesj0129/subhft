@@ -22,7 +22,8 @@ def sim_api():
     if not _API_KEY or not _SECRET_KEY:
         pytest.skip(_SKIP_REASON)
     api = sj.Shioaji(simulation=True)
-    api.login(api_key=_API_KEY, secret_key=_SECRET_KEY, contracts_timeout=60000)
+    api.login(api_key=_API_KEY, secret_key=_SECRET_KEY)
+    api.fetch_contracts(contracts_timeout=60000)
     yield api
     try:
         api.logout()

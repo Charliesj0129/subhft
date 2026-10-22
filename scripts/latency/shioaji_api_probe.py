@@ -134,7 +134,8 @@ def main() -> None:
     if not api_key or not secret:
         raise SystemExit("Missing SHIOAJI_API_KEY/SHIOAJI_SECRET_KEY in environment")
 
-    api.login(api_key=api_key, secret_key=secret, contracts_timeout=60000)
+    api.login(api_key=api_key, secret_key=secret)
+    api.fetch_contracts(contracts_timeout=60000)
 
     if not simulation:
         ca_path = os.getenv("SHIOAJI_CA_PATH")
@@ -147,7 +148,8 @@ def main() -> None:
         order_mode = args.mode
     order_sim = order_mode == "sim"
     order_api = sj.Shioaji(simulation=order_sim)
-    order_api.login(api_key=api_key, secret_key=secret, contracts_timeout=60000)
+    order_api.login(api_key=api_key, secret_key=secret)
+    order_api.fetch_contracts(contracts_timeout=60000)
     if order_mode == "real" and args.order_ca:
         ca_path = os.getenv("SHIOAJI_CA_PATH")
         ca_pass = os.getenv("SHIOAJI_CA_PASSWORD")

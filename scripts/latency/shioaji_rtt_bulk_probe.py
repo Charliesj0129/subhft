@@ -333,7 +333,8 @@ def main() -> int:
     if not api_key or not secret:
         raise SystemExit("Missing SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY in env.")
 
-    api.login(api_key=api_key, secret_key=secret, contracts_timeout=60000)
+    api.login(api_key=api_key, secret_key=secret)
+    api.fetch_contracts(contracts_timeout=60000)
 
     if not simulation:
         ca_path = os.getenv("SHIOAJI_CA_PATH")

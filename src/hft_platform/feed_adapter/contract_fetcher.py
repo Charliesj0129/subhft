@@ -30,7 +30,8 @@ def _login_shioaji() -> Any:
     if not api_key or not secret_key:
         raise RuntimeError("SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY env vars required")
     api = sj.Shioaji(simulation=True)
-    api.login(api_key=api_key, secret_key=secret_key, contracts_timeout=60000)
+    api.login(api_key=api_key, secret_key=secret_key)
+    api.fetch_contracts(contracts_timeout=60000)
     return api
 
 
