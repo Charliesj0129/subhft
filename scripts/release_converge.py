@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -525,6 +526,66 @@ def _guard_no_tracked_path_rows(
     return rows, blocked
 
 
+# Cleanup steps that delete a directory version control does not hold: once removed it cannot be recovered
+# (``.wal/`` is the ClickHouse-failure fallback and holds the dlq/ and corrupt/ evidence). The tracked-path guard
+# cannot see these because both directories are ignored, so they need their own opt-in flag.
+UNTRACKED_STATE_STEPS: tuple[tuple[str, str, str], ...] = (
+    ("clean_wal", ".wal", "--allow-delete-wal"),
+    ("clean_data", "data", "--allow-delete-data"),
+)
+
+
+def _sample_files(directory: Path, limit: int = 10) -> list[str]:
+    found: list[str] = []
+    for current, _dirs, files in os.walk(directory):
+        for name in sorted(files):
+            found.append((Path(current) / name).relative_to(directory).as_posix())
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def _guard_untracked_state_rows(
+    *,
+    root: Path,
+    cleanup_plan: list[dict[str, Any]],
+    allowed: dict[str, bool],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Block ``rm -rf .wal`` / ``rm -rf data`` while they hold files, unless the matching ``--allow-delete-*`` is set."""
+    planned = {str(item.get("step", "")) for item in cleanup_plan}
+    rows: list[dict[str, Any]] = []
+    blocked: set[str] = set()
+    for step, target, flag in UNTRACKED_STATE_STEPS:
+        if step not in planned:
+            continue
+        sample = _sample_files(root / target) if (root / target).is_dir() else []
+        row: dict[str, Any] = {
+            "step": f"guard_untracked_state:{target}",
+            "command": f"guard-untracked-state {target}",
+            "duration_s": 0.0,
+            "stderr": "",
+            "target": target,
+            "guard": True,
+        }
+        if not sample:
+            row["returncode"] = 0
+            row["stdout"] = f"ok: {target} is absent or holds no files"
+        elif allowed.get(step, False):
+            row["returncode"] = 0
+            row["stdout"] = f"allowed by {flag}: {target} will be deleted ({len(sample)}+ files, first: {sample[0]})"
+        else:
+            blocked.add(target)
+            row["returncode"] = 3
+            row["stderr"] = (
+                f"{target}/ holds files that version control does not keep and cannot restore; pass {flag} to delete it"
+            )
+            row["stdout"] = "\n".join(sample)
+        row["stdout_tail"] = row["stdout"]
+        row["stderr_tail"] = row["stderr"]
+        rows.append(row)
+    return rows, blocked
+
+
 def _gate_steps(*, gate_profile: str) -> list[tuple[str, str]]:
     steps: list[tuple[str, str]] = [
         ("roadmap_delivery_check", "make roadmap-delivery-check ALLOW_WARN=1"),
@@ -662,6 +723,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--clean-wal", action="store_true", help="High-risk cleanup: remove .wal/ directory")
     p.add_argument("--clean-data", action="store_true", help="High-risk cleanup: remove data/ directory")
     p.add_argument(
+        "--allow-delete-wal",
+        action="store_true",
+        help="Permit the cleanup to delete .wal/ when it holds files (otherwise the cleanup is blocked)",
+    )
+    p.add_argument(
+        "--allow-delete-data",
+        action="store_true",
+        help="Permit the cleanup to delete data/ when it holds files (otherwise the cleanup is blocked)",
+    )
+    p.add_argument(
         "--seed-minimal-sample",
         action="store_true",
         help="Seed minimal research smoke dataset under research/data/processed/smoke/",
@@ -735,8 +806,15 @@ def main(argv: list[str] | None = None) -> int:
             tracked=tracked,
             is_git_repo=is_git_repo,
         )
+        state_rows, state_blocked = _guard_untracked_state_rows(
+            root=root,
+            cleanup_plan=cleanup_plan,
+            allowed={"clean_wal": bool(args.allow_delete_wal), "clean_data": bool(args.allow_delete_data)},
+        )
+        blocked_targets |= state_blocked
         cleanup_rows.extend(guard_rows)
-        guard_failed = any(int(row.get("returncode", 1)) != 0 for row in guard_rows)
+        cleanup_rows.extend(state_rows)
+        guard_failed = any(int(row.get("returncode", 1)) != 0 for row in [*guard_rows, *state_rows])
         guard_block_cleanup = guard_failed and not bool(args.continue_on_error)
 
         for item in cleanup_plan:
@@ -745,10 +823,15 @@ def main(argv: list[str] | None = None) -> int:
             destructive = bool(item.get("destructive", True))
             step_targets = _unique_paths(list(item.get("targets", [])))
             blocked = any(target in blocked_targets for target in step_targets)
+            guard_name = (
+                "guard_untracked_state"
+                if any(target in state_blocked for target in step_targets)
+                else "guard_no_tracked_path"
+            )
 
             if guard_block_cleanup:
                 if blocked:
-                    stderr = f"blocked by guard_no_tracked_path: {','.join(step_targets)}"
+                    stderr = f"blocked by {guard_name}: {','.join(step_targets)}"
                     row = {
                         "step": step,
                         "command": cmd,
@@ -774,7 +857,7 @@ def main(argv: list[str] | None = None) -> int:
                         "skipped": True,
                     }
             elif blocked:
-                stderr = f"blocked by guard_no_tracked_path: {','.join(step_targets)}"
+                stderr = f"blocked by {guard_name}: {','.join(step_targets)}"
                 row = {
                     "step": step,
                     "command": cmd,

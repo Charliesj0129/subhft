@@ -709,7 +709,7 @@ class ContractsRuntime:
                 sj.constant.Exchange.TAIFEX if exchange in {"FUT", "FUTURES", "TAIFEX"} else sj.constant.Exchange.TSE
             )
             sec_type = (
-                sj.constant.SecurityType.Future
+                sj.constant.SecurityType.Futures
                 if exchange in {"FUT", "FUTURES", "TAIFEX"}
                 else sj.constant.SecurityType.Stock
             )
