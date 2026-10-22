@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.feed_adapter.shioaji._compat import iter_contract_category
 from hft_platform.feed_adapter.shioaji._infra import (
     acquire_login_slot,
@@ -708,7 +709,7 @@ class ContractsRuntime:
                 sj.constant.Exchange.TAIFEX if exchange in {"FUT", "FUTURES", "TAIFEX"} else sj.constant.Exchange.TSE
             )
             sec_type = (
-                sj.constant.SecurityType.Future
+                sj.constant.SecurityType.Futures
                 if exchange in {"FUT", "FUTURES", "TAIFEX"}
                 else sj.constant.SecurityType.Stock
             )
@@ -1201,8 +1202,7 @@ class ContractsRuntime:
                     # (contract_refresh_worker); schedule onto the running
                     # loop if available, otherwise drop after logging.
                     try:
-                        loop = _asyncio.get_running_loop()
-                        loop.create_task(coro)
+                        spawn_retained(coro, name="notify_symbol_reload_failed")
                     except RuntimeError:
                         try:
                             _asyncio.run(coro)

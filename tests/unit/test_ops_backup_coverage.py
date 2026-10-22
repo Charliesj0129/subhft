@@ -142,9 +142,9 @@ def test_run_daily_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
     monkeypatch.setattr(BackupManager, "_check_disk_registered", lambda self: None)
     monkeypatch.setattr(BackupManager, "_abort_stale_backups", lambda self: None)
+    monkeypatch.setattr(BackupManager, "_make_room", lambda self: None)
     monkeypatch.setattr(BackupManager, "_execute_backup", lambda self, name: None)
     monkeypatch.setattr(BackupManager, "_verify_backup", lambda self, name: None)
-    monkeypatch.setattr(BackupManager, "_cleanup_old_backups", lambda self: None)
     monkeypatch.setattr(BackupManager, "_run_archive_hook", lambda self, name: None)
     monkeypatch.setattr(BackupManager, "_report_success", lambda self, name, dur: None)
 

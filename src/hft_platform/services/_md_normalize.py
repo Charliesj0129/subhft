@@ -2,6 +2,10 @@
 
 Extracted from market_data.py to reduce module size.
 Pure functions — no MarketDataService dependency.
+
+The broker callback itself is ``MarketDataService._on_shioaji_event``. A copy of it lived here
+(``on_shioaji_event``) that production never called and that had drifted from the real one (N81);
+it was removed so a green test cannot be testing code that does not run.
 """
 
 from __future__ import annotations
@@ -144,88 +148,6 @@ def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[objec
                 return exchange, msg
 
     return exchange, None
-
-
-def on_shioaji_event(svc: Any, *args: Any, **kwargs: Any) -> None:
-    """Unified callback for Shioaji events.
-
-    *svc* is the ``MarketDataService`` instance.
-    Signature can vary: ``(exchange, msg)`` or ``(topic, msg, ...)``.
-    """
-    try:
-        if not svc._raw_first_seen:
-            svc._raw_first_seen = True
-            logger.info(
-                "First quote callback",
-                args_types=[type(a).__name__ for a in args],
-                kwargs_keys=list(kwargs.keys()),
-            )
-        if svc.log_raw:
-            logger.debug("Callback hit", args_len=len(args))
-
-        exchange, msg = _try_fast_extract_callback_payload(*args, **kwargs)
-        parse_result = "fast" if msg is not None else "fallback"
-
-        if msg is None:
-            # Generic fallback for signature drift across Shioaji versions.
-            if exchange is None and "exchange" in kwargs:
-                exchange = kwargs["exchange"]
-            for arg in args:
-                candidate = _unwrap_md(arg)
-                looks_like = _looks_like_md(candidate)
-                if exchange is None and not looks_like and (hasattr(arg, "name") or isinstance(arg, str)):
-                    exchange = arg
-                if looks_like:
-                    msg = candidate
-            if msg is None:
-                if len(args) >= 2:
-                    msg = _unwrap_md(args[-1])
-                elif len(args) == 1:
-                    msg = _unwrap_md(args[0])
-            if msg is not None:
-                msg = _unwrap_md(msg)
-            parse_result = "fallback" if msg is not None else "miss"
-
-        if svc.metrics_registry:
-            svc._md_callback_parse_counter += 1
-            if svc._md_callback_parse_counter % svc._md_callback_parse_metrics_every == 0:
-                try:
-                    if hasattr(svc.metrics_registry, "market_data_callback_parse_total"):
-                        child = svc._md_callback_parse_metric_children.get(parse_result)
-                        if child is None:
-                            child = svc.metrics_registry.market_data_callback_parse_total.labels(result=parse_result)
-                            svc._md_callback_parse_metric_children[parse_result] = child
-                        child.inc()
-                except Exception as exc:
-                    logger.debug("operation_fallback", error=str(exc))
-                    pass
-
-        if not svc.log_raw and msg is not None and not svc._raw_first_parsed:
-            svc._raw_first_parsed = True
-            logger.info(
-                "Quote callback parsed",
-                msg_type=type(msg).__name__,
-                msg_code=getattr(msg, "code", None),
-                exchange=str(exchange) if exchange is not None else None,
-                msg_fields=_summarize_md(msg),
-            )
-
-        # Enqueue as tuple (exchange, msg) to match consumer
-        if hasattr(svc, "loop"):
-            if msg is not None:
-                svc.loop.call_soon_threadsafe(svc._enqueue_raw, exchange, msg)
-            else:
-                if svc.log_raw:
-                    logger.warning(
-                        "Could not parse msg from callback args",
-                        args_types=[type(a).__name__ for a in args],
-                    )
-        else:
-            logger.error("Callback loop missing")
-
-    except Exception as e:
-        _record_shioaji_crash_signature(svc, str(e), context="md_callback")
-        logger.error(f"Error in Shioaji callback: {e}")
 
 
 def _record_shioaji_crash_signature(svc: Any, text: str | None, *, context: str) -> None:

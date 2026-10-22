@@ -1543,6 +1543,11 @@ class StormGuard:
         with self._state_lock:
             old = self._kill_switch_hold
             self._kill_switch_hold = hold
+        # Exported on every call (the supervisor calls this each tick), so the gauge cannot drift from the hold.
+        try:
+            self.metrics.kill_switch_active.set(1 if hold else 0)
+        except Exception as exc:  # noqa: BLE001 - metrics must never break the halt path
+            logger.warning("kill_switch_gauge_failed", error=str(exc))
         if old != hold:
             logger.warning(
                 "stormguard_kill_switch_hold_changed",

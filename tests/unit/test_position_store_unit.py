@@ -204,9 +204,9 @@ class TestPositionFlip:
 class TestFeeAccumulation:
     def test_fees_accumulate(self) -> None:
         pos = Position("a", "s", "2330")
-        pos.update(_make_fill(fee=100, tax=50))
-        pos.update(_make_fill(fee=200, tax=75))
-        assert pos.fees_scaled == 425  # 100+50+200+75
+        pos.update(_make_fill(fee=150, tax=50))  # fee is all-in: it already contains the tax
+        pos.update(_make_fill(fee=275, tax=75))
+        assert pos.fees_scaled == 425  # 150+275
 
 
 # ---------------------------------------------------------------------------
