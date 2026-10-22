@@ -199,6 +199,10 @@ jobs:
       - name: Enforce TODO/ROADMAP delivery governance
         run: make roadmap-delivery-check
 
+      - name: Dead config and dead metrics reports (report mode, never fails the build)
+        run: make dead-config-scan dead-metrics-scan
+        continue-on-error: true
+
       - name: Upload roadmap delivery artifact
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4

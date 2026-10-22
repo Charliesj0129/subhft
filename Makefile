@@ -570,6 +570,13 @@ incident-timeline: ## Render incident timeline artifact from decision trace JSON
 	fi
 	PYTHONPATH=src $(PY) scripts/render_incident_timeline.py "$(TRACE_FILE)" $(if $(TRACE_ID),--trace-id "$(TRACE_ID)",) --format "$${FORMAT:-md}" --out "$${OUT:-outputs/incidents/timeline.$${FORMAT:-md}}"
 
+.PHONY: dead-config-scan dead-metrics-scan
+dead-config-scan: ## Report config keys nothing reads, config files nothing loads, Prometheus rule files that never run; STRICT=1 fails on any
+	$(PY) scripts/dead_config_scan.py --root . --output-dir outputs/dead_scan $(if $(filter 1,$(STRICT)),--strict,)
+
+dead-metrics-scan: ## Report registry metrics nothing updates and the alerts that depend on them; STRICT=1 fails on any but the informational dynamic-only rows
+	$(PY) scripts/dead_metrics_scan.py --root . --output-dir outputs/dead_scan $(if $(filter 1,$(STRICT)),--strict,)
+
 history-repair: ## Repair fragmented historical parquet exports and resample to complete OHLCV
 	@if [ -z "$(INPUTS)" ] || [ -z "$(OUT)" ]; then \
 		echo "Usage: make history-repair INPUTS='data/a.parquet data/b.parquet.part' OUT=outputs/history/repaired.parquet [ARGS='--target-ms 1000 --report-out outputs/history/repaired_report.json']"; \
