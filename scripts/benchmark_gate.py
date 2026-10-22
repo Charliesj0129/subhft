@@ -16,6 +16,13 @@ benchmarks regress together — with per-path regressions that is runner noise
 far more often than code). Relative detection needs >=2 benchmarks; with a
 single benchmark only the catastrophic threshold applies.
 
+Each benchmark is compared by its median round, not its mean. A shared
+runner injects stray slow rounds that move the mean and leave the median
+alone. Measured on six 2026-10 CI runs of unchanged benchmarked code (30
+cross-run pairs, 10% threshold): the mean false-failed 23 of 30 pairs and the
+median 5 of 30, and the median also caught more injected +20% regressions
+(157 vs 140 of 180). Results without a median fall back to the mean.
+
 Usage:
     python scripts/benchmark_gate.py \
         --baseline tests/benchmark/.benchmark_baseline.json \
@@ -33,18 +40,19 @@ from statistics import median
 
 REGRESSION_THRESHOLD = 0.10  # 10% default, on runner-speed-normalized change
 CATASTROPHIC_THRESHOLD = 2.0  # +200% raw change fails even if uniform across benchmarks
+STAT = "median"  # per-benchmark statistic compared; see the module docstring
 
 
-def load_benchmarks(path: Path) -> dict[str, float]:
-    """Load benchmark JSON and return {name: mean_time} mapping."""
+def load_benchmarks(path: Path, stat: str = STAT) -> dict[str, float]:
+    """Load benchmark JSON and return {name: time} using ``stat``, else the mean."""
     data = json.loads(path.read_text())
     results: dict[str, float] = {}
     for bench in data.get("benchmarks", []):
         name = bench.get("name", bench.get("fullname", "unknown"))
         stats = bench.get("stats", {})
-        mean = stats.get("mean")
-        if mean is not None:
-            results[name] = mean
+        value = stats.get(stat, stats.get("mean"))
+        if value is not None:
+            results[name] = value
     return results
 
 
@@ -97,6 +105,12 @@ def main(argv: list[str] | None = None) -> int:
         default=CATASTROPHIC_THRESHOLD,
         help=f"Raw-change threshold that fails even runner-wide slowdowns (default: {CATASTROPHIC_THRESHOLD})",
     )
+    parser.add_argument(
+        "--stat",
+        choices=("median", "mean", "min"),
+        default=STAT,
+        help=f"Per-benchmark statistic to compare (default: {STAT})",
+    )
     args = parser.parse_args(argv)
 
     if not args.baseline.exists():
@@ -107,8 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[Darwin Gate] Current results not found: {args.current} — skipping regression check")
         return 0
 
-    baseline = load_benchmarks(args.baseline)
-    current = load_benchmarks(args.current)
+    baseline = load_benchmarks(args.baseline, args.stat)
+    current = load_benchmarks(args.current, args.stat)
 
     if not baseline:
         print("[Darwin Gate] No benchmarks in baseline — skipping regression check")
@@ -122,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Summary
     matched = sum(1 for name in baseline if name in current)
-    print(f"[Darwin Gate] Compared {matched} benchmarks (threshold: {args.threshold:.0%})")
+    print(f"[Darwin Gate] Compared {matched} benchmarks by {args.stat} (threshold: {args.threshold:.0%})")
     print(f"[Darwin Gate] Runner speed factor vs baseline: {speed_factor:.2f}x (normalized out)")
 
     if regressions:
