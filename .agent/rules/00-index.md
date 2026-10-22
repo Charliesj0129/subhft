@@ -1,23 +1,16 @@
 # Agent Rules Index
 
-Read only the file needed for the task. These rules are compact guardrails; canonical details live in source, `docs/architecture/`, runbooks, and task skills.
+Open a file only when its situation arises. Project rules (laws, red lines,
+done criteria, reporting) are in the root `AGENTS.md`; these files hold
+detail that would bloat it.
 
-| File | Scope |
+| File | Open when |
 | --- | --- |
-| `01-core-laws.md` | HFT allocator/cache/async/precision/boundary laws |
-| `05-project-structure.md` | Layout and session hooks |
-| `10-hft-performance.md` | Hot-path performance checklist |
-| `15-security.md` | Secrets, logs, network, Docker |
-| `20-data-flow.md` | Runtime/recording flow invariants |
-| `25-architecture-governance.md` | Boundaries, queues, durability, alpha, exposure |
-| `26-multi-broker-governance.md` | Broker protocol, isolation, latency, credentials |
-| `30-git.md` | Commit and git hygiene |
-| `40-ops.md` | Docker, services, live config changes |
-| `41-deployment.md` | Production deploy laws D1–D10, deploy classes, verification floor |
-| `50-testing.md` | Coverage, naming, HFT test focus |
-| `55-enforcement.md` | Pre-commit, discipline, CI gates |
-| `60-agent-workflow-governance.md` | Git-state safety and multi-agent coordination |
-| `65-unattended-autonomy.md` | Unattended routines: read-only default, whitelist escalation, runner contract |
-| `70-research-data.md` | ClickHouse research data and export contract |
+| `30-git.md` | committing, branching, or staging |
+| `41-deployment.md` | any action on the production host (deploy laws D1-D10, deploy classes, verification floor) |
+| `60-agent-workflow-governance.md` | parallel agents, worktrees, or editing governing docs |
+| `65-unattended-autonomy.md` | working on scheduled/headless routines |
+| `70-research-data.md` | querying ClickHouse research data, book depth, export contract |
 
-Related: `.agent/memory/`, `.agent/skills/00-index.md`, `docs/MODULES_REFERENCE.md`, `docs/architecture/`, `docs/runbooks/alpha-development-workflow.md`.
+Related: `.agent/memory/`, `docs/MODULES_REFERENCE.md`, `docs/architecture/`,
+`docs/runbooks/alpha-development-workflow.md`.
