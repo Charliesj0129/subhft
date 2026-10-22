@@ -1335,12 +1335,14 @@ def test_on_shioaji_event_with_loop_enqueues():
 
 def test_on_shioaji_event_exception_is_handled():
     svc, *_ = _make_service()
-    # Make try_fast_extract_callback_payload raise
-    with patch(
-        "hft_platform.services._md_ingestion.try_fast_extract_callback_payload", side_effect=RuntimeError("oops")
-    ):
+    assert svc._cb_drop_callback_error is not None
+    before = svc._cb_drop_callback_error._value.get()
+    # Patch the name ``market_data`` calls, not the attribute of the module it was imported from: a patch on
+    # ``_md_ingestion`` leaves this module's binding alone, never raises, and the old assertions passed anyway.
+    with patch("hft_platform.services.market_data.try_fast_extract_callback_payload", side_effect=RuntimeError("oops")):
         # Should not raise
         svc._on_shioaji_event({"code": "2330"})
+    assert svc._cb_drop_callback_error._value.get() == before + 1
     assert svc.raw_queue.qsize() == 0
 
 

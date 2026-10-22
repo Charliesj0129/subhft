@@ -23,7 +23,7 @@
 - **GOTCHA**: `_on_shioaji_event` runs in a **broker thread**, not the event loop. Must use `loop.call_soon_threadsafe()` to enqueue.
 - **P0-2 Optimization**: Per-symbol tick timestamp is updated inline (CPython dict assignment is GIL-atomic) instead of creating an asyncio task per tick.
 - **Crash Detector Injection**: `crash_detector: Callable` is an optional `__init__` dependency. Shioaji injects `detect_crash_signature`; non-Shioaji brokers may leave it unset.
-- **Renamed Broker Hooks**: Multi-broker support renamed `_on_shioaji_event`→`_on_broker_event` and `_record_shioaji_crash_signature`→`_record_broker_crash_signature`. Metric name is now `broker_crash_signature_total`.
+- **Hook names are Shioaji-specific**: `MarketDataService._on_shioaji_event`, `_record_shioaji_crash_signature` and the metric `shioaji_crash_signature_total` are the current names. An earlier note here claimed a rename to `_on_broker_event` / `broker_crash_signature_total`; neither exists in `src/` or `tests/`.
 
 ## recorder/worker.py (296 lines)
 
@@ -49,9 +49,9 @@
 
 ## order/adapter.py (598 lines)
 
-- **Dead Letter Queue (DLQ)**: Failed orders go to `_dead_letters` list. Use CLI `hft dlq` to inspect.
+- **Dead Letter Queue (DLQ)**: Failed orders go to `DeadLetterQueue` (`order/deadletter.py`): a bounded in-memory buffer that overflows to JSON-lines files under `HFT_DLQ_DIR` (default `.dlq`). There is no `hft dlq` command; inspect the files.
 - **Circuit Breaker**: Separate from strategy circuit breaker. Opens after N consecutive broker API failures.
-- **Rate Limiter**: Sliding window per broker session. `HFT_ORDER_RATE_LIMIT` env var.
+- **Rate Limiter**: two sliding windows (deques of timestamps), neither per broker session. A global `RateLimiter(soft_cap=180, hard_cap=250, window_s=10)` on the adapter, overridden by `load_config` from the order YAML's `rate_limits` (`shioaji_soft_cap`, `shioaji_hard_cap`, `window_seconds`); a `PerSymbolRateLimiter` (`core/rate_limiter.py`) read from `HFT_PER_SYMBOL_RATE_SOFT` / `_HARD` / `_WINDOW` (30 / 50 / 10 s). `HFT_ORDER_RATE_LIMIT` does not exist.
 - **Broker ID Registration**: `_broker_id_map` tracks ordno↔intent_id mapping for execution router lookup.
 - **GOTCHA**: `HFT_ORDER_MODE=sim` makes adapter return fake fills instead of calling broker API. Always check mode before debugging "orders not going through".
 

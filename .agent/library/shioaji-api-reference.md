@@ -3,7 +3,7 @@
 Date: 2026-03-12
 Status: Active reference
 Scope: Complete SDK reference for the `shioaji` Python package (永豐金證券 API). Used by `feed_adapter/shioaji/` modules.
-Companion docs: `.agent/library/current-architecture.md`, `.agent/library/multi-broker-architecture.md`, `.agent/library/shioaji-client-resilience-decoupling-plan.md`.
+Companion docs: `.agent/library/current-architecture.md`, `.agent/library/multi-broker-architecture.md`; `shioaji-client-resilience-decoupling-plan.md` (local only, not in the repo).
 Companion skill: `.agent/skills/broker-integration/SKILL.md`.
 
 ---
