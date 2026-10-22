@@ -149,18 +149,24 @@ class MarkToMarketCalculator:
 
         The symbol list is built only when something is actually unpriced, so
         the healthy path allocates nothing beyond the existing result dict.
+
+        The book includes positions recovered at startup that have not traded
+        since (``PositionStore.snapshot_open_positions``). One recovered with an
+        unknown cost basis (``avg_price_scaled < 0``) has no PnL to report, so it
+        counts as unpriced: the snapshot is then incomplete and cannot release a
+        daily stop, rather than reading the position as worth nothing.
         """
         result: dict[str, int] = {}
         unpriced = 0
         unpriced_symbols: list[str] = []
-        snapshot = self._position_store.snapshot_positions()
+        snapshot = self._position_store.snapshot_open_positions()
         with self._lock:
             for key, pos in snapshot.items():
                 if pos.net_qty == 0:
                     result[key] = 0
                     continue
 
-                mid = self._mid_price_fn(pos.symbol)
+                mid = self._mid_price_fn(pos.symbol) if pos.avg_price_scaled >= 0 else None
                 if mid is None:
                     unpriced += 1
                     if pos.symbol not in unpriced_symbols:
