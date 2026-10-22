@@ -130,8 +130,20 @@ class PlatformDegradeController:
 
     def _enter_reduce_only_locally(self, reason: str) -> tuple[AutonomyTransition, Callable[[], None] | None]:
         """Apply the transition in memory; return it plus its pending write."""
+        # A manual reason that arrives while an auto-recoverable one already
+        # holds reduce-only is a new transition, not a repeat: it must be
+        # persisted, or the latch lives in memory only and a restart boots NORMAL.
+        # The likely path is recorder DEGRADED (``clickhouse_unhealthy``, auto)
+        # escalating to DATA_LOSS (``recorder_data_loss``, manual).
+        escalates_to_manual = (
+            self.reduce_only_active
+            and self.last_transition is not None
+            and not self.last_transition.manual_rearm_required
+            and reason not in _AUTO_RECOVERABLE_REASONS
+            and reason not in self._active_reasons
+        )
         self._active_reasons.add(reason)
-        if self.reduce_only_active and self.last_transition is not None:
+        if self.reduce_only_active and self.last_transition is not None and not escalates_to_manual:
             # Rate-limit repeated log to break RSS→log→heap feedback loop
             now_ns = time.monotonic_ns()
             last_ns = self._reason_last_log_ns.get(reason, 0)

@@ -572,6 +572,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         feature_metrics_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         feature_latency_default = 16 if policy == "minimal" else (4 if policy == "balanced" else 1)
         self._md_metrics_sample_every = env_int("HFT_MD_METRICS_SAMPLE_EVERY", md_metrics_default)
+        # ``asyncio.Queue.get()`` does not suspend while the queue is non-empty,
+        # so without this the consumer drains a whole burst in one loop step.
+        # Measured on THESHOW 2026-10-21 (day session): event_loop_probe_lag_ms
+        # p99 40-80 ms, 1,747 probe overshoots >25 ms/hour, per-minute count
+        # correlated 0.90 with tick volume; execution reports waited behind it
+        # (execution_router_lag_ns p99 46-77 ms, ExecutionLagHigh x40).
+        self._md_yield_every = env_int("HFT_MD_YIELD_EVERY", 8)
+        self._md_burst_run = 0
         self._md_latency_sample_every = env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
         self._md_callback_parse_metrics_every = env_int("HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default)
         self._feature_metrics_sample_every = env_int("HFT_FEATURE_METRICS_SAMPLE_EVERY", feature_metrics_default)
@@ -866,6 +874,14 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
 
                 self._process_raw(raw)
                 self.raw_queue.task_done()
+                if self.raw_queue.empty():
+                    # The next get() suspends on its own.
+                    self._md_burst_run = 0
+                else:
+                    self._md_burst_run += 1
+                    if self._md_burst_run >= self._md_yield_every:
+                        self._md_burst_run = 0
+                        await asyncio.sleep(0)
         except asyncio.CancelledError:
             pass
         except Exception as e:

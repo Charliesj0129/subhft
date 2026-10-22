@@ -92,14 +92,18 @@ class ManualRearmGate:
             if not try_force_clear_shared_controller(reason="manual_rearm_gate"):
                 # Different process from the live engine (typical Docker
                 # path: `docker compose exec` runs a fresh interpreter).
-                # The persisted flag will be honoured on the next engine
-                # restart via PlatformDegradeController state restore.
+                # The live engine's supervisor reads ``rearm_requested_at``
+                # (stamped by clear_platform_flag) on its next tick and
+                # force-clears there (HFTSystem._platform_rearm_is_due). A
+                # restart is NOT needed -- and it re-arms everything else that
+                # does not survive one. THESHOW 2026-10-22: cleared 08:09:07Z,
+                # three minutes before an unneeded stop/start.
                 logger.warning(
                     "manual_rearm_ipc_unreachable",
                     state_path=str(self.state_path),
                     note=(
-                        "Persisted to runtime_state.json but live controller "
-                        "not in this process. Restart hft-engine to apply."
+                        "Persisted to runtime_state.json; the live engine applies it on its next "
+                        "supervisor tick (log: platform_reduce_only_force_cleared). Do not restart."
                     ),
                 )
         except Exception as exc:
