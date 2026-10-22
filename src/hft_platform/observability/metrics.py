@@ -321,6 +321,7 @@ class MetricsRegistry:
                 _pn("strategy_quarantine_undurable"),
                 _pn("strategy_quarantine_persist_failed_total"),
                 _pn("platform_reduce_only_active"),
+                _pn("platform_inputs_calendar_unavailable_total"),
                 _pn("manual_rearm_required"),
                 # WU-04/WU-18 Reconciliation resilience metrics
                 _pn("reconciliation_sync_total"),
@@ -704,6 +705,10 @@ class MetricsRegistry:
             _pn("strategy_quarantine_persist_failed_total"),
             "Strategy quarantine durable writes that failed outright",
             ["strategy"],
+        )
+        self.platform_inputs_calendar_unavailable_total = Counter(
+            _pn("platform_inputs_calendar_unavailable_total"),
+            "Supervisor reads of the session calendar that raised (the feed-gap reduce-only reasons then read 'shut')",
         )
         self.platform_reduce_only_active = Gauge(
             _pn("platform_reduce_only_active"),
