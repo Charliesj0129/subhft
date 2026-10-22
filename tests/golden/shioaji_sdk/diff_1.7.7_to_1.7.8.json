@@ -1,0 +1,87 @@
+{
+  "changes": [
+    {
+      "after": "BATS",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "Exchange",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "Exchange.BATS",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "NASDAQ",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "Exchange",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "Exchange.NASDAQ",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "NYSE",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "Exchange",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "Exchange.NYSE",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": "TXSE",
+      "before": null,
+      "classification": "ADDITIVE",
+      "enum": "Exchange",
+      "kind": "enum_member_added",
+      "platform_used": false,
+      "qualname": "Exchange.TXSE",
+      "remediation": "",
+      "section": "enum",
+      "shimmable": false
+    },
+    {
+      "after": [
+        "ClassificationSource",
+        "DividendFrequency",
+        "ExchangeMic",
+        "FundCategory",
+        "IndustryL1",
+        "IndustryL2",
+        "InstrumentType",
+        "OrderOutcomeUnknownError",
+        "UsStockInfo"
+      ],
+      "before": [],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji._core.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 4,
+    "behavioral": 0,
+    "benign": 0,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 1
+  },
+  "from": "1.7.7",
+  "from_sha256": "936de3fcee6692aaa8dfbdc3404adf79b67d0d68dff970f09a3c13dc8faf9172",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.8",
+  "to_sha256": "d435fc8d8da45c66a8e5cb8217ec9114c2203a7dcb1d38e7465385021b9b4f5d",
+  "verdict": "SAFE"
+}
