@@ -51,7 +51,9 @@ def test_a_threshold_of_zero_rejects_one_advisory_test_without_an_assertion(tmp_
 
 def test_a_threshold_of_one_accepts_one_and_rejects_two(tmp_path: Path) -> None:
     one = _run(tmp_path, {"unit/test_b.py": WITHOUT_ASSERT}, "--max-advisory", "1")
-    two = _run(tmp_path, {"unit/test_c.py": WITHOUT_ASSERT.replace("forgets_to_check", "forgets_again")}, "--max-advisory", "1")
+    two = _run(
+        tmp_path, {"unit/test_c.py": WITHOUT_ASSERT.replace("forgets_to_check", "forgets_again")}, "--max-advisory", "1"
+    )
 
     assert one.returncode == 0, one.stdout
     assert two.returncode == 1, two.stdout
