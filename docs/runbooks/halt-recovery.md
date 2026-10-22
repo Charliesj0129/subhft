@@ -94,6 +94,14 @@ If discrepancies exist, record them before proceeding.
 1. Confirm realized + unrealized PnL from both internal and broker sources.
 2. If PnL breach is genuine:
    - Do NOT resume trading.
+   - The platform exit (`risk/loss_exit.py`) sends a FORCE_FLAT for every open
+     position every `loss_exit.retry_interval_s` while the stop is latched.
+     Check `loss_exit_orders_total` and `loss_exit_unpriced_total` (no fresh
+     two-sided book: nothing is sent) and the `loss_exit_emit` log lines.
+     To stop it, set `loss_exit.enabled: false` in
+     `config/env/prod/strategy_limits.yaml` and send the engine SIGHUP
+     (`docker compose kill -s HUP hft-engine`), which reloads the risk config;
+     the switch is read on every tick.
    - Flatten remaining positions manually via broker UI if needed.
    - File incident report.
 3. If PnL breach is spurious (e.g., stale price, missed fill):
