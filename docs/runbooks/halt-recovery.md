@@ -185,6 +185,10 @@ hft ops rearm-platform
 hft ops rearm-strategy --strategy-id <strategy_id>
 ```
 
+The platform re-arm takes effect in the running engine on its next supervisor
+tick (log `platform_reduce_only_force_cleared`); no restart is needed, and a
+restart would re-arm everything that does not survive one.
+
 If the platform remains in `HALT`, keep trading disabled and continue incident handling.
 
 ---
