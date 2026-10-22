@@ -2,7 +2,7 @@
 
 Date: 2026-03-11
 Status: Design specification (not yet implemented)
-Companion docs: `.agent/library/current-architecture.md`, `.agent/library/target-architecture.md`, `.agent/library/shioaji-client-resilience-decoupling-plan.md`.
+Companion docs: `.agent/library/current-architecture.md`; `target-architecture.md` and `shioaji-client-resilience-decoupling-plan.md` (local only, not in the repo).
 Prerequisite: D2 (Shioaji adapter decomposition) should be completed first.
 
 ## 1. Overview

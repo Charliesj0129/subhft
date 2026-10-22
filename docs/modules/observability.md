@@ -36,7 +36,7 @@ metrics.update_system_metrics()  # CPU + memory gauges
 | Execution | `fills_total`, `duplicate_fill_total`, `e2e_order_latency_ns` |
 | Recording | `recorder_batches_flushed_total`, `recorder_ch_insert_latency_ms` |
 | Reconciliation | `reconciliation_sync_total`, `position_drift_qty` |
-| Pipeline | `pipeline_health_state`, `queue_depth`, `event_loop_lag_ms` |
+| Pipeline | `pipeline_health_state`, `queue_depth`, `event_loop_probe_lag_ms`, `supervisor_tick_duration_ms`, `event_loop_lag_ms` (composite of the other two; not pure loop lag, see `docs/operations/observability.md` §2) |
 | System | `system_cpu_usage`, `system_memory_usage` |
 
 ## HealthServer

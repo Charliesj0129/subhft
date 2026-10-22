@@ -40,12 +40,18 @@ make release-converge CLEAN_RUST=1
 ### 4) MVP 發行收斂（激進，含 tracked 瘦身 + full gate）
 
 ```bash
-make release-converge-mvp
-# 或：
-make release-converge-mvp CLEAN_RUST=1
+make release-converge-mvp                 # 預設是 dry-run：不刪任何東西，只產出報告
+make release-converge-mvp CONFIRM=yes     # 真的執行
+make release-converge-mvp CONFIRM=yes CLEAN_RUST=1
 ```
 
-此模式會使用 `cleanup_profile=mvp_release`，預設行為：
+> **警示：不可逆。** 真的執行（`CONFIRM=yes`）會 `rm -rf .wal data outputs reports .state`，並對 `research/` 底下被忽略的檔案做 `git clean -fdX`。
+> `.wal/` 與 `data/` 被 `.gitignore` 忽略，版本控制沒有它們的副本；`.wal/` 是 ClickHouse 寫入失敗時的耐久後備，
+> `dlq/`、`corrupt/` 內是失敗證據。這兩個目錄只要還有檔案，清理就會被攔下（整個清理都不會執行），
+> 必須另外加 `ALLOW_DELETE_WAL=1`、`ALLOW_DELETE_DATA=1` 才會放行。
+> 只想清掉過期的 WAL 封存檔，請用 `make wal-archive-cleanup`（有確認提示，只刪 `.wal/archive` 內超過 `WAL_KEEP_DAYS` 的 `*.wal`）。
+
+此模式會使用 `cleanup_profile=mvp_release`，真的執行時的行為：
 - 清理高風險目錄（如 `.wal/`、`data/`、`outputs/`、`reports/`、`.state/`）
 - 對 `research/knowledge/reports/root_reports/` 做 tracked 瘦身（保留最小白名單）
 - 重建 `research/` 骨架並補種最小 smoke 樣本：
@@ -93,7 +99,7 @@ HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-promote CHANGE_ID=CHG-YYYYMMDD-
 ## 注意事項
 
 - `release-converge`（safe/extended）預設不刪 tracked source。
-- `release-converge-mvp` 會刪除部分 tracked 歷史報告（依白名單保留），執行前應確認備份策略。
+- `release-converge-mvp` 預設是 dry-run；`CONFIRM=yes` 時會刪除部分 tracked 歷史報告（依白名單保留），並可能刪除 `.wal/`、`data/`（需要 `ALLOW_DELETE_WAL=1`、`ALLOW_DELETE_DATA=1`），執行前應確認備份策略。
 - `release-first-ops-gate` 不負責生成 pre-sync 產物；執行前仍需先跑 `make deploy-pre-sync-template CHANGE_ID=...`。
 - `release-first-ops-gate` 會要求 `HFT_ALPHA_AUDIT_ENABLED=1`；若未設置，直接阻擋。
 - `root_reports` 最小保留白名單：

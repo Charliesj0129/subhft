@@ -151,6 +151,7 @@ class MetricsRegistry:
                 _pn("track_gate_intents_filtered_total"),
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
+                _pn("kill_switch_active"),
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_toxicity_score"),
                 _pn("stormguard_escalations_total"),
@@ -297,6 +298,7 @@ class MetricsRegistry:
                 _pn("shioaji_login_slot_timeouts_total"),
                 _pn("feed_session_conflict_total"),
                 _pn("feed_session_lease_ops_total"),
+                _pn("shioaji_logout_failed_total"),
                 _pn("feed_first_quote_total"),
                 _pn("shioaji_login_fail_total"),
                 _pn("shioaji_crash_signature_total"),
@@ -321,6 +323,7 @@ class MetricsRegistry:
                 _pn("strategy_quarantine_undurable"),
                 _pn("strategy_quarantine_persist_failed_total"),
                 _pn("platform_reduce_only_active"),
+                _pn("platform_inputs_calendar_unavailable_total"),
                 _pn("manual_rearm_required"),
                 # WU-04/WU-18 Reconciliation resilience metrics
                 _pn("reconciliation_sync_total"),
@@ -633,6 +636,10 @@ class MetricsRegistry:
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
         )
+        self.kill_switch_active = Gauge(
+            _pn("kill_switch_active"),
+            "1 while the kill-switch hold is set (latch file present, or a startup-recovery halt pinned it), else 0",
+        )
         self.stormguard_transitions_total = Counter(
             _pn("stormguard_transitions_total"),
             "StormGuard state transitions",
@@ -704,6 +711,10 @@ class MetricsRegistry:
             _pn("strategy_quarantine_persist_failed_total"),
             "Strategy quarantine durable writes that failed outright",
             ["strategy"],
+        )
+        self.platform_inputs_calendar_unavailable_total = Counter(
+            _pn("platform_inputs_calendar_unavailable_total"),
+            "Supervisor reads of the session calendar that raised (the feed-gap reduce-only reasons then read 'shut')",
         )
         self.platform_reduce_only_active = Gauge(
             _pn("platform_reduce_only_active"),
@@ -1560,6 +1571,11 @@ class MetricsRegistry:
             _pn("feed_session_lease_ops_total"),
             "Redis feed session lease operation outcomes",
             ["op", "result"],  # op: preflight|refresh|stale_cleanup|teardown
+        )
+        self.shioaji_logout_failed_total = Counter(
+            _pn("shioaji_logout_failed_total"),
+            "Shioaji logout() calls that raised while a session was being discarded (it may not have been released)",
+            ["context"],  # context: recreate_api
         )
         self.feed_first_quote_total = Counter(
             _pn("feed_first_quote_total"),

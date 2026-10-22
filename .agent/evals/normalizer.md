@@ -1,7 +1,7 @@
 # Eval: Feed Normalizer
 
 **Component**: `src/hft_platform/feed_adapter/normalizer.py`
-**Rust Fast Path**: `rust_core/src/normalize.rs`
+**Rust Fast Path**: `rust_core/src/fast_lob/normalize_tick.rs`, `rust_core/src/fast_lob/normalize_bidask.rs`
 
 ## Capability
 

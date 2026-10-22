@@ -137,8 +137,11 @@ docker compose up -d wal-loader
 
 檢查：
 ```bash
-curl -fsS http://localhost:9090/metrics | rg "queue_depth|event_loop_lag_ms"
+curl -fsS http://localhost:9090/metrics | rg "queue_depth|event_loop_probe_lag_ms|supervisor_tick_duration_ms"
 ```
+
+Loop congestion is `event_loop_probe_lag_ms` (Histogram: read `_sum`/`_count` or `_bucket`). `event_loop_lag_ms`
+also contains the supervisor's own tick body, so a rise there alone is not a congested loop.
 
 處置：
 - 調整 queue 容量（`HFT_*_QUEUE_SIZE`）。

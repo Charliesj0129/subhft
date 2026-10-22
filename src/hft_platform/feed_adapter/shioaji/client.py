@@ -1028,6 +1028,27 @@ class ShioajiClient:
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
         self._refresh_quote_routes()
 
+    def _note_logout_failed_on_recreate(self, exc: BaseException) -> None:
+        """Say that the old handle's logout failed (N24). Never raises: ``recreate_api`` must still build the new API.
+
+        The broker allows 5 sessions with no spare: if the old one was not released the new login can be refused
+        (451) and nothing else would say why. The error text goes through ``scrub_broker_error``, because an SDK
+        error can echo the person id or key that was sent.
+        """
+        try:
+            logger.warning(
+                "shioaji_logout_failed_on_recreate",
+                error_type=type(exc).__name__,
+                error=scrub_broker_error(str(exc)),
+            )
+        except Exception:  # noqa: BLE001 - a failing report must not abort the recreate
+            pass
+        try:
+            if self.metrics is not None and hasattr(self.metrics, "shioaji_logout_failed_total"):
+                self.metrics.shioaji_logout_failed_total.labels(context="recreate_api").inc()
+        except Exception:  # noqa: BLE001
+            pass
+
     def recreate_api(self) -> bool:
         """Destroy and recreate the sj.Shioaji() instance for hard reconnect.
 
@@ -1043,8 +1064,8 @@ class ShioajiClient:
             if old_api is not None:
                 try:
                     old_api.logout()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001 - best effort, the old handle is discarded either way
+                    self._note_logout_failed_on_recreate(exc)
             is_sim = self.mode == "simulation"
             self.api = _sj.Shioaji(simulation=is_sim)
             self.logged_in = False

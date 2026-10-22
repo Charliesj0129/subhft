@@ -131,14 +131,14 @@ class TestPositionInvariants:
     @given(data=balanced_fill_sequences())
     @settings(max_examples=200, deadline=None)
     def test_fees_accumulate_correctly(self, data: list[tuple[Side, int, int]]):
-        """Fees must equal the sum of all fill fees and taxes regardless of order."""
+        """Fees must equal the sum of the fills' all-in fees (each already contains its tax) regardless of order."""
         pos = Position(account_id="ACC", strategy_id="strat-1", symbol="2330")
         expected_fees = 0
         for seq, (side, qty, price) in enumerate(data):
-            fee = seq * 10  # deterministic fee per fill
             tax = seq * 5
+            fee = seq * 10 + tax  # deterministic all-in fee per fill: charge + tax
             fill = _make_fill(side, qty, price, seq, fee=fee, tax=tax)
-            expected_fees += fee + tax
+            expected_fees += fee
             pos.update(fill)
 
         assert pos.fees_scaled == expected_fees
