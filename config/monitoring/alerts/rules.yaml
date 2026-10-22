@@ -1048,6 +1048,18 @@ groups:
         summary: The daily ClickHouse backup cron has not run for >3.5 days
         description: "Last run finished {{ $value | humanizeTimestamp }}. Check the host crontab (30 14 * * 1-5)."
 
+  # The three rules above have zero series, and so read as healthy, until the
+  # script has written hft_backup.prom once (e.g. the textfile directory is not
+  # writable by the cron user). The `for` spans a weekend plus a day.
+  - alert: BackupMetricsAbsent
+    expr: absent(hft_backup_cron_last_run_timestamp_seconds{job="node"})
+    for: 84h
+    labels:
+        severity: warning
+    annotations:
+        summary: No backup outcome has been exported for 3.5 days
+        description: "hft_backup.prom is missing from the node-exporter textfile directory; BackupFailed/BackupStale cannot fire. Check that the cron user can write HFT_BACKUP_TEXTFILE_DIR."
+
   # ── Fill Loss (M-07) ─────────────────────────────────────────
   - alert: FillEvictionDetected
     expr: rate(exec_overflow_evicted_total[5m]) > 0
