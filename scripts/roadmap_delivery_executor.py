@@ -13,12 +13,12 @@ STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 
-WS_G_SKILLS: tuple[str, ...] = ("hft-strategy-dev", "rust_feature_engineering", "performance-profiling")
+WS_G_SKILLS: tuple[str, ...] = ("hft-strategy", "hft-rust", "hft-latency-profiling")
 WS_H_SKILLS: tuple[str, ...] = ("hft-alpha-research", "validation-gate", "clickhouse-io")
-WS_A_SKILLS: tuple[str, ...] = ("troubleshoot-metrics", "runtime-debug")
-WS_B_SKILLS: tuple[str, ...] = ("clickhouse-io", "performance-profiling")
-WS_C_SKILLS: tuple[str, ...] = ("validation-gate", "troubleshoot-metrics")
-WS_F_SKILLS: tuple[str, ...] = ("deployment-patterns", "runtime-debug")
+WS_A_SKILLS: tuple[str, ...] = ("runtime-diagnostics", "hft-ops")
+WS_B_SKILLS: tuple[str, ...] = ("clickhouse-io", "hft-latency-profiling")
+WS_C_SKILLS: tuple[str, ...] = ("validation-gate", "runtime-diagnostics")
+WS_F_SKILLS: tuple[str, ...] = ("hft-ops", "runtime-diagnostics")
 AGENT_ROLES: tuple[str, ...] = ("explorer", "worker", "default")
 
 HOTPATH_MODULES: tuple[dict[str, str], ...] = (
@@ -66,6 +66,14 @@ HOTPATH_PRIORITY_WEIGHT: dict[str, int] = {
     "order": 25,
     "execution": 25,
     "feed_adapter": 15,
+}
+
+# Points a measured input adds to a row's priority score. An input that was not measured adds nothing, but its
+# points are what the row could still gain, so they bound the score from above (priority_score_max).
+HOTPATH_MEASURED_POINTS: dict[str, int] = {
+    "rust_speedup_vs_python": 20,
+    "cpu_hotspot_pct": 10,
+    "p95_us": 8,
 }
 
 PIPELINE_STAGES: tuple[tuple[str, str], ...] = (
@@ -275,7 +283,7 @@ def _task_for_ws(tasks: list[dict[str, str]], ws: str) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _parse_benchmark_pairs(benchmark_path: Path) -> dict[str, dict[str, float]]:
+def _parse_benchmark_pairs(benchmark_path: Path) -> dict[str, dict[str, float | None]]:
     payload = _load_json(benchmark_path)
     rows = payload.get("benchmarks", []) if isinstance(payload, dict) else []
     py: dict[str, float] = {}
@@ -297,7 +305,7 @@ def _parse_benchmark_pairs(benchmark_path: Path) -> dict[str, dict[str, float]]:
             key = name.removeprefix("test_bench_rust_")
             rs[key] = float(mean_s)
 
-    out: dict[str, dict[str, float]] = {}
+    out: dict[str, dict[str, float | None]] = {}
     for key in sorted(set(py) | set(rs)):
         p = py.get(key)
         r = rs.get(key)
@@ -305,9 +313,9 @@ def _parse_benchmark_pairs(benchmark_path: Path) -> dict[str, dict[str, float]]:
             continue
         speedup = (p / r) if (p is not None and r is not None and r > 0) else None
         out[key] = {
-            "python_mean_s": float(p) if p is not None else 0.0,
-            "rust_mean_s": float(r) if r is not None else 0.0,
-            "rust_speedup_vs_python": float(speedup) if speedup is not None else 0.0,
+            "python_mean_s": float(p) if p is not None else None,
+            "rust_mean_s": float(r) if r is not None else None,
+            "rust_speedup_vs_python": float(speedup) if speedup is not None else None,
         }
     return out
 
@@ -332,13 +340,17 @@ def _load_hotspot_index(pyspy_path: Path) -> dict[str, float]:
     return out
 
 
-def _module_hotspot_pct(module_name: str, hotspots: dict[str, float]) -> float:
+def _module_hotspot_pct(module_name: str, hotspots: dict[str, float]) -> float | None:
+    """Largest sampled share of a frame in this module, or None when no frame of it was measured.
+
+    The triage keeps only the top-N frames, so a module missing from it was not measured: that is not 0 %.
+    """
     hint = HOTSPOT_PATH_HINT.get(module_name, "")
     if not hint:
-        return 0.0
-    best = 0.0
+        return None
+    best: float | None = None
     for frame, pct in hotspots.items():
-        if hint in frame and pct > best:
+        if hint in frame and (best is None or pct > best):
             best = pct
     return best
 
@@ -369,7 +381,7 @@ def _load_stage_probe_means(stage_probe_path: Path) -> dict[str, float]:
     return out
 
 
-def _module_latency_us(module_name: str, perf_results: dict[str, float], stage_probe: dict[str, float]) -> float:
+def _module_latency_us(module_name: str, perf_results: dict[str, float], stage_probe: dict[str, float]) -> float | None:
     keys = MODULE_LATENCY_KEYS.get(module_name, ())
     values: list[float] = []
     for key in keys:
@@ -378,13 +390,21 @@ def _module_latency_us(module_name: str, perf_results: dict[str, float], stage_p
         if key in perf_results:
             values.append(perf_results[key])
     if not values:
-        return 0.0
+        return None
     return max(values)
+
+
+def _priority_for(score: int) -> str:
+    if score >= 65:
+        return "P0"
+    if score >= 45:
+        return "P1"
+    return "P2"
 
 
 def _hotpath_rows(
     project_root: Path,
-    benchmark_pairs: dict[str, dict[str, float]],
+    benchmark_pairs: dict[str, dict[str, float | None]],
     hotspots: dict[str, float],
     perf_results: dict[str, float],
     stage_probe: dict[str, float],
@@ -397,6 +417,10 @@ def _hotpath_rows(
         data_quality_flags.append("benchmark_pairs_empty")
     if not hotspots:
         data_quality_flags.append("pyspy_hotspots_empty")
+    if not perf_results:
+        data_quality_flags.append("perf_snapshot_empty")
+    if not stage_probe:
+        data_quality_flags.append("stage_probe_empty")
 
     for item in HOTPATH_MODULES:
         rel_path = item["path"]
@@ -416,27 +440,37 @@ def _hotpath_rows(
 
         bench_key = item["benchmark_key"]
         bench = benchmark_pairs.get(bench_key, {})
-        rust_speedup = float(bench.get("rust_speedup_vs_python", 0.0))
+        rust_speedup = bench.get("rust_speedup_vs_python")
         cpu_hotspot_pct = _module_hotspot_pct(item["module"], hotspots)
         p95_us = _module_latency_us(item["module"], perf_results, stage_probe)
+
+        # An input that was not measured is unknown, never 0: it adds no points, but it is listed and its
+        # points are kept apart as the most the row could still gain.
+        unknown_inputs = sorted(
+            name
+            for name, value in (
+                ("rust_speedup_vs_python", rust_speedup),
+                ("cpu_hotspot_pct", cpu_hotspot_pct),
+                ("p95_us", p95_us),
+            )
+            if value is None
+        )
 
         score = HOTPATH_PRIORITY_WEIGHT.get(layer, 10)
         if not has_rust_marker:
             score += 25
-        if rust_speedup > 0 and rust_speedup < 1.0:
-            score += 20
+        if rust_speedup is not None and 0 < rust_speedup < 1.0:
+            score += HOTPATH_MEASURED_POINTS["rust_speedup_vs_python"]
         if alloc_marker_count >= 8:
             score += 10
-        if cpu_hotspot_pct >= 10.0:
-            score += 10
-        if p95_us >= 20.0:
-            score += 8
+        if cpu_hotspot_pct is not None and cpu_hotspot_pct >= 10.0:
+            score += HOTPATH_MEASURED_POINTS["cpu_hotspot_pct"]
+        if p95_us is not None and p95_us >= 20.0:
+            score += HOTPATH_MEASURED_POINTS["p95_us"]
+        score_max = score + sum(HOTPATH_MEASURED_POINTS[name] for name in unknown_inputs)
 
-        priority = "P2"
-        if score >= 65:
-            priority = "P0"
-        elif score >= 45:
-            priority = "P1"
+        priority = _priority_for(score)
+        priority_max = _priority_for(score_max)
 
         if not exists:
             warnings.append(f"missing_module:{rel_path}")
@@ -463,13 +497,17 @@ def _hotpath_rows(
                 "benchmark": bench,
                 "cpu_hotspot_pct": cpu_hotspot_pct,
                 "p95_us": p95_us,
+                "unknown_inputs": unknown_inputs,
                 "priority_score": score,
+                "priority_score_max": score_max,
                 "priority": priority,
+                "priority_max": priority_max,
                 "evidence_refs": evidence_refs,
             }
         )
 
-    rows.sort(key=lambda r: int(r["priority_score"]), reverse=True)
+    # Equal measured scores: the row with more still unmeasured goes first, so a gap never ranks a row lower.
+    rows.sort(key=lambda r: (int(r["priority_score"]), int(r["priority_score_max"])), reverse=True)
     return rows, warnings, data_quality_flags
 
 
@@ -493,6 +531,8 @@ def _build_cutover_backlog(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "module": module,
                 "layer": layer,
                 "priority": priority,
+                "priority_max": str(row.get("priority_max") or priority),
+                "unknown_inputs": list(row.get("unknown_inputs") or []),
                 "current_state": "python_hotpath",
                 "target_state": "rust_kernel",
                 "proposed_boundary": "typed_frame_zero_copy",
@@ -538,9 +578,18 @@ def _render_cutover_backlog(cutover_payload: dict[str, Any]) -> str:
     lines.append("| backlog_id | module | layer | priority | owner | eta_days |")
     lines.append("|---|---|---|---|---|---:|")
     for row in items:
+        priority = f"{row.get('priority')}"
+        if row.get("priority_max") != row.get("priority"):
+            priority += f" (up to {row.get('priority_max')})"
         lines.append(
             f"| `{row.get('backlog_id')}` | `{row.get('module')}` | `{row.get('layer')}` | "
-            f"`{row.get('priority')}` | `{row.get('owner')}` | {row.get('eta_days')} |"
+            f"`{priority}` | `{row.get('owner')}` | {row.get('eta_days')} |"
+        )
+    if any(row.get("priority_max") != row.get("priority") for row in items):
+        lines.append("")
+        lines.append(
+            "`P2 (up to P0)`: some inputs were not measured; the second value is the priority "
+            "if every unmeasured input had scored."
         )
     lines.append("")
     lines.append("## First Batch Recommendation")
@@ -1110,7 +1159,7 @@ def _build_ws_b_mv_baseline_report(
     *,
     tasks: list[dict[str, str]],
     metrics_defined: set[str],
-    benchmark_pairs: dict[str, dict[str, float]],
+    benchmark_pairs: dict[str, dict[str, float | None]],
 ) -> tuple[dict[str, Any], str]:
     task = _task_for_ws(tasks, "WS-B")
     metric_rows = [{"metric": metric, "defined_in_metrics_py": metric in metrics_defined} for metric in WS_B_METRICS]

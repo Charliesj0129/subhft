@@ -23,7 +23,7 @@
 - **GOTCHA**: `_on_shioaji_event` runs in a **broker thread**, not the event loop. Must use `loop.call_soon_threadsafe()` to enqueue.
 - **P0-2 Optimization**: Per-symbol tick timestamp is updated inline (CPython dict assignment is GIL-atomic) instead of creating an asyncio task per tick.
 - **Crash Detector Injection**: `crash_detector: Callable` is an optional `__init__` dependency. Shioaji injects `detect_crash_signature`; non-Shioaji brokers may leave it unset.
-- **Renamed Broker Hooks**: Multi-broker support renamed `_on_shioaji_event`→`_on_broker_event` and `_record_shioaji_crash_signature`→`_record_broker_crash_signature`. Metric name is now `broker_crash_signature_total`.
+- **Hook names are Shioaji-specific**: `MarketDataService._on_shioaji_event`, `_record_shioaji_crash_signature` and the metric `shioaji_crash_signature_total` are the current names. An earlier note here claimed a rename to `_on_broker_event` / `broker_crash_signature_total`; neither exists in `src/` or `tests/`.
 
 ## recorder/worker.py (296 lines)
 
@@ -49,9 +49,9 @@
 
 ## order/adapter.py (598 lines)
 
-- **Dead Letter Queue (DLQ)**: Failed orders go to `_dead_letters` list. Use CLI `hft dlq` to inspect.
+- **Dead Letter Queue (DLQ)**: Failed orders go to `DeadLetterQueue` (`order/deadletter.py`): a bounded in-memory buffer that overflows to JSON-lines files under `HFT_DLQ_DIR` (default `.dlq`). There is no `hft dlq` command; inspect the files.
 - **Circuit Breaker**: Separate from strategy circuit breaker. Opens after N consecutive broker API failures.
-- **Rate Limiter**: Sliding window per broker session. `HFT_ORDER_RATE_LIMIT` env var.
+- **Rate Limiter**: two sliding windows (deques of timestamps), neither per broker session. A global `RateLimiter(soft_cap=180, hard_cap=250, window_s=10)` on the adapter, overridden by `load_config` from the order YAML's `rate_limits` (`shioaji_soft_cap`, `shioaji_hard_cap`, `window_seconds`); a `PerSymbolRateLimiter` (`core/rate_limiter.py`) read from `HFT_PER_SYMBOL_RATE_SOFT` / `_HARD` / `_WINDOW` (30 / 50 / 10 s). `HFT_ORDER_RATE_LIMIT` does not exist.
 - **Broker ID Registration**: `_broker_id_map` tracks ordno↔intent_id mapping for execution router lookup.
 - **GOTCHA**: `HFT_ORDER_MODE=sim` makes adapter return fake fills instead of calling broker API. Always check mode before debugging "orders not going through".
 
@@ -61,6 +61,8 @@
 - **SymbolMetadata**: Loaded from `config/symbols.yaml`. Contains `price_scale`, `tick_size`, `tags[]` per symbol. Supports hot-reload via `reload_if_changed()`.
 - **GOTCHA**: Normalizer caches `price_scale` lookups. If symbols.yaml changes, `SymbolMetadata.reload_if_changed()` must be called (market_data_service handles this).
 - **One-sided LOB**: Snapshots can arrive with only bid or only ask side populated. Guard each side independently instead of assuming a full book.
+- **Book depth is 0-5, never guaranteed 5**: `scale_book_seq_inner` (`rust_core/src/fast_lob/scale.rs`) keeps only levels with `price > 0`, so the emitted array length is the exchange's priced-level count, not a fixed L5. Measured 2026-09-13: options average 2.98 bid levels (24.9% full L5); futures 4.92 (96.3%); equities 4.98 (99.0%). Consumers must filter on `length(bids_price)`. See `.agent/rules/70-research-data.md`.
+- **GOTCHA - Rust/Python disagree on empty levels**: the Rust kernel drops `price <= 0` levels; the Python fallback at `normalizer.py:1351` (`zip(bp, bv)`) does **not**. If `rust_fallback_total{type="bidask"}` ever increments, book arrays silently become length 5 padded with price-0 levels — changing the meaning of `length(bids_price)` for every downstream consumer and feeding zero-priced levels into the LOB. Verified 2026-09-13: 0 of 121,469,696 recorded BidAsk rows contain an interior zero price, so the fallback has not fired on recorded data.
 - **NormalizerFieldMap**: Broker-specific field names live in a frozen dataclass. Keep `_is_default_map=True` for Shioaji to preserve Rust fast paths.
 
 ## feed_adapter/shioaji_client.py

@@ -379,28 +379,38 @@ class ExecutionRouter:
             return
         order_section = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
         status_section = d.get("status", {}) if isinstance(d.get("status"), dict) else {}
-        # Gather every candidate broker ID from the payload
+        # Gather every candidate broker ID from the payload. ``ordno`` never repeats;
+        # ``seqno`` / ``id`` are recycled by the broker, so they are kept apart.
         _id_fields = ("id", "seqno", "seq_no", "ordno", "ord_no", "order_id")
-        ids: set[str] = set()
+        strong_names = set(self.normalizer.field_map.order_id_keys())
+        strong_ids: list[str] = []
+        weak_ids: list[str] = []
         for src in (d, order_section, status_section):
             for key in _id_fields:
                 val = src.get(key) if isinstance(src, dict) else getattr(src, key, None)
-                if val:
-                    ids.add(str(val))
-        ids.discard("")
-        if not ids:
+                if val and str(val) not in strong_ids and str(val) not in weak_ids:
+                    (strong_ids if key in strong_names else weak_ids).append(str(val))
+        if not strong_ids and not weak_ids:
             return
-        # Find order_key from any already-registered ID
+        # Find order_key from any already-registered ID. Before 2026-10-06 any id
+        # counted: an ack whose recycled seqno matched an order that had ended 11 h
+        # earlier was bound to THAT order (``R47_MAKER_TMF:6145``, 09:35), R47 then
+        # tracked and tried to cancel a key that no longer existed, and the order
+        # filled. A recycled id now claims an order only while it is live.
         order_key = None
         resolver = self.normalizer.order_id_resolver
-        for candidate in ids:
+        for candidate in (*strong_ids, *weak_ids):
             mapped = resolver.order_id_map.get(candidate)
             if mapped:
-                order_key = resolver.normalize_order_key(mapped)
-                break
+                resolved = resolver.normalize_order_key(mapped)
+                if resolved and (candidate in strong_ids or resolver.key_is_live(resolved)):
+                    order_key = resolved
+                    break
         if not order_key:
             return
-        # Register all extracted IDs under the same order_key.
+        # Register all extracted IDs under the same order_key. A recycled id still
+        # bound to an order that has ended is repointed; one bound to a live order
+        # is left alone.
         # P0-E1: acquire the resolver's lock (injected by bootstrap, shared
         # with OrderAdapter._order_id_map_lock) so this backfill writer is
         # mutually exclusive with broker-thread readers in ``_on_exec``.
@@ -410,8 +420,15 @@ class ExecutionRouter:
         changed = False
         newly_mapped: list[str] = []
         with resolver.lock:
-            for broker_id in ids:
-                if broker_id not in resolver.order_id_map:
+            for broker_id in (*strong_ids, *weak_ids):
+                current = resolver.order_id_map.get(broker_id)
+                stale = (
+                    current is not None
+                    and broker_id in weak_ids
+                    and resolver.normalize_order_key(current) != order_key
+                    and not resolver.key_is_live(resolver.normalize_order_key(current))
+                )
+                if current is None or stale:
                     resolver.order_id_map[broker_id] = order_key
                     logger.debug(
                         "order_id_map_set",

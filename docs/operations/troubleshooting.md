@@ -18,7 +18,7 @@ uv run hft run live
 
 說明：
 - 多數情況不影響 sim 或行情訂閱。
-- 若你的帳務流程需要指定 account，請在 `.env` 補上 `SHIOAJI_ACCOUNT`。
+- `SHIOAJI_ACCOUNT` 只用來命名 session lock 檔（`.wal/.locks/shioaji_session_<label>.lock`），程式不拿它做帳務；要設就填一個不敏感的名稱，不要填真實帳號（會原樣出現在檔名與 log 裡）。
 
 ## 3) 無行情 / LOB 空白
 ```bash
@@ -75,8 +75,11 @@ curl -fsS http://localhost:9090/metrics | head
 ## 9) 延遲異常升高
 ```bash
 uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
-curl -fsS http://localhost:9090/metrics | rg "event_loop_lag_ms|queue_depth"
+curl -fsS http://localhost:9090/metrics | rg "event_loop_probe_lag_ms|supervisor_tick_duration_ms|queue_depth"
 ```
+
+`event_loop_probe_lag_ms` is the loop-congestion signal; `supervisor_tick_duration_ms` is the supervisor's own
+tick body. Both are Histograms (`_bucket`/`_sum`/`_count`). `event_loop_lag_ms` is their composite, not loop lag.
 
 ## 10) 測試不穩定
 ```bash

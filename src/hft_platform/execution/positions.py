@@ -38,6 +38,7 @@ if _RUST_POSITIONS:
         _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
 
 
+_PNL_SCALE: int = 10_000  # scaled int x10000 per NTD
 _MIN_PEAK_SCALED: int = int(os.getenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "100000000"))
 
 
@@ -105,8 +106,9 @@ class Position:
         is_buy = fill.side == Side.BUY
         signed_fill_qty = fill_qty if is_buy else -fill_qty
 
-        # Accumulate fees (already scaled)
-        self.fees_scaled += fill.fee + fill.tax
+        # Accumulate fees (already scaled). ``fill.fee`` is the all-in charge (commission + tax, see
+        # FeeBreakdown.total); ``fill.tax`` is only its tax part, so adding both counted the tax twice.
+        self.fees_scaled += fill.fee
 
         # Check if closing: signs are different
         current_sign = 1 if self.net_qty > 0 else -1 if self.net_qty < 0 else 0
@@ -251,6 +253,21 @@ class PositionStore:
         # This is the 1 Hz supervisor read, off the fill hot path.
         self._publish_drawdown_gauge(drawdown)
         return drawdown
+
+    def get_drawdown_ntd(self) -> float:
+        """Realised PnL given back from today's high-watermark, in NTD (>= 0).
+
+        The fraction ``get_drawdown_pct`` returns divides by the high-watermark
+        itself, so the same loss reads as a different drawdown depending on how
+        much was won first: on THESHOW 2026-10-05 a 4,620 NTD give-back read as
+        1.61% and set StormGuard to STORM, while an account that opens the day
+        losing never arms the gate at all (peak below ``_MIN_PEAK_SCALED``).
+        An absolute amount has neither problem and needs no cold-start guard.
+        """
+        with self._fill_lock:
+            self._roll_peak_equity_if_new_day_locked()
+            given_back = self._peak_equity_scaled - self._total_realized_pnl_scaled
+        return max(given_back, 0) / _PNL_SCALE
 
     def _publish_drawdown_gauge(self, drawdown: float) -> None:
         """Export the drawdown the risk path just read. Never raises."""
@@ -619,13 +636,15 @@ class PositionStore:
         if key not in self.positions and len(self.positions) >= self._positions_max_size:
             self._evict_flat_positions()
         multiplier = self.metadata.contract_multiplier(fill.symbol)
+        # The kernel accumulates ``fee + tax``. ``fill.fee`` already contains ``fill.tax`` (FeeBreakdown.total),
+        # so hand the kernel the whole charge as ``fee`` and 0 as ``tax``; passing both counted the tax twice.
         net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = tracker.update(
             key,
             int(fill.side),
             fill.qty,
             fill.price,
             fill.fee,
-            fill.tax,
+            0,
             fill.match_ts_ns,
             multiplier,
         )

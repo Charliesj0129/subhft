@@ -7,7 +7,7 @@ Status: Implementation in progress (protocols defined; Fubon adapter scaffolded)
 Companion docs:
 - `.agent/library/multi-broker-architecture.md` — design specification
 - `.agent/library/current-architecture.md` — full platform architecture baseline
-- `.agent/library/shioaji-client-resilience-decoupling-plan.md` — Shioaji decomposition plan
+- `shioaji-client-resilience-decoupling-plan.md` — Shioaji decomposition plan (local only, not in the repo)
 - `docs/architecture/current-architecture.md` — canonical architecture doc
 
 ---
@@ -178,7 +178,7 @@ If `HFT_BROKER` is not registered, `get_broker_factory()` raises immediately (fa
 8. Add optional dependency to `pyproject.toml`
 9. Write unit tests with mocked SDK
 10. Measure and record latency profile in `config/research/latency_profiles.yaml`
-11. Update the Protocol Conformance table in this file and reference it from `.agent/rules/25-architecture-governance.md` Rule 9
+11. Update the Protocol Conformance table in this file and reference it from the `broker-integration` skill
 12. Add config file at `config/base/brokers/{broker}.yaml`
 
 ## Invariants (from Architecture Governance Rule 9)

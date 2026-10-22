@@ -113,14 +113,14 @@ class TestPnlConservation:
 
 class TestFeeAccumulation:
     def test_fees_sum_over_fills(self):
-        """Total fees = sum(fee + tax) across all fills."""
+        """Total fees = sum(fee) across all fills; ``fee`` is the all-in charge and already contains ``tax``."""
         store = _make_position_store()
-        store.on_fill(_make_fill(side=Side.BUY, qty=1, fee=100, tax=50, ts=1))
-        store.on_fill(_make_fill(side=Side.SELL, qty=1, fee=200, tax=80, ts=2))
+        store.on_fill(_make_fill(side=Side.BUY, qty=1, fee=150, tax=50, ts=1))
+        store.on_fill(_make_fill(side=Side.SELL, qty=1, fee=280, tax=80, ts=2))
 
         key = "acc1:test_strat:2330"
         pos = store.positions[key]
-        assert pos.fees_scaled == (100 + 50) + (200 + 80)  # 430
+        assert pos.fees_scaled == 150 + 280  # 430; the tax is inside each fee, not on top
 
 
 # ---------------------------------------------------------------------------
