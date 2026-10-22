@@ -1381,7 +1381,7 @@ class HFTSystem:
                 total_pnl = self.position_store.total_pnl
                 peak_equity = self.position_store._peak_equity_scaled
                 drawdown_pct = self.position_store.get_drawdown_pct()
-                positions_snap = dict(self.position_store.positions)
+                positions_snap = self.position_store.snapshot_open_positions()
                 for pos in positions_snap.values():
                     row = {
                         "snapshot_ts": now_ns,

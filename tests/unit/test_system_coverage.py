@@ -496,7 +496,7 @@ async def test_pnl_snapshot_exporter_one_iteration(monkeypatch):
     sys_obj.position_store.total_pnl = 1000
     sys_obj.position_store._peak_equity_scaled = 999000
     sys_obj.position_store.get_drawdown_pct.return_value = 0.5
-    sys_obj.position_store.positions = {"2330": pos}
+    sys_obj.position_store.snapshot_open_positions.return_value = {"2330": pos}
     sys_obj.recorder_queue = asyncio.Queue(maxsize=100)
 
     monkeypatch.setenv("HFT_PNL_SNAPSHOT_INTERVAL_S", "0.01")
@@ -541,7 +541,7 @@ async def test_pnl_snapshot_exporter_queue_full_silent(monkeypatch):
     sys_obj.position_store.total_pnl = 0
     sys_obj.position_store._peak_equity_scaled = 0
     sys_obj.position_store.get_drawdown_pct.return_value = 0.0
-    sys_obj.position_store.positions = {"2330": pos}
+    sys_obj.position_store.snapshot_open_positions.return_value = {"2330": pos}
 
     monkeypatch.setenv("HFT_PNL_SNAPSHOT_INTERVAL_S", "0.01")
     call_count = 0

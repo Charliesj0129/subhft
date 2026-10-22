@@ -50,6 +50,37 @@ _TZ_TPE = ZoneInfo("Asia/Taipei")
 DEFAULT_POSITION_CHECKPOINT_PATH = ".state/position_checkpoint.json"
 
 
+def checkpoint_identity(*, broker_id: str, account_id: str, order_mode: str) -> Dict[str, str]:
+    """Who a checkpoint belongs to: broker, account and order venue.
+
+    The checkpoint lives at one fixed path that sim and live share, so a sim
+    run's positions and PnL aggregates used to restore into a live store with
+    nothing to tell them apart. The venue is ``live`` or ``paper``: ``sim`` and
+    ``disabled`` both place nothing on the real account, so switching between
+    them keeps the book. The account is stored as a digest so the file and the
+    mismatch log never carry the account number.
+    """
+    mode = (order_mode or "").strip().lower()
+    venue = "live" if mode in ("live", "real") else "paper"
+    account_digest = hashlib.sha256(str(account_id or "").encode("utf-8")).hexdigest()[:16]
+    return {"broker": str(broker_id or "").lower(), "account": account_digest, "venue": venue}
+
+
+def checkpoint_identity_mismatch(data: Dict[str, Any], expected: Optional[Dict[str, str]]) -> list[str]:
+    """Identity fields on which *data* differs from *expected*; empty when it may be restored.
+
+    A checkpoint written before identities existed has no ``identity`` and is
+    accepted once: the next write stamps it. No *expected* identity means the
+    caller cannot vouch for one, which also accepts.
+    """
+    if not expected:
+        return []
+    stored = data.get("identity")
+    if not isinstance(stored, dict):
+        return []
+    return sorted(k for k, v in expected.items() if stored.get(k) != v)
+
+
 def _taifex_trading_date() -> str:
     """Return TAIFEX trading date (YYYYMMDD).
 
@@ -70,6 +101,7 @@ class PositionCheckpointWriter:
         "_path",
         "_interval_s",
         "_trading_date_provider",
+        "identity",
         "running",
     )
 
@@ -87,6 +119,9 @@ class PositionCheckpointWriter:
         )
         self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_CHECKPOINT_INTERVAL_S", "60"))  # type: ignore[arg-type]
         self._trading_date_provider: Callable[[], str] = trading_date_provider or _taifex_trading_date
+        #: ``checkpoint_identity()`` of the running engine, set by bootstrap once
+        #: the account is known. Written into every checkpoint when set.
+        self.identity: Optional[Dict[str, str]] = None
         self.running = False
 
     # ------------------------------------------------------------------
@@ -181,6 +216,8 @@ class PositionCheckpointWriter:
             "total_realized_pnl_scaled": self._store._total_realized_pnl_scaled,
             "positions": positions_payload,
         }
+        if self.identity:
+            body_obj["identity"] = dict(self.identity)
         body_bytes = _dumps(body_obj)
         sha = hashlib.sha256(body_bytes).hexdigest()
 

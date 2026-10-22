@@ -246,7 +246,9 @@ def _on_exec(self, topic, data):
 
 ### Key Mechanisms
 
-- **Fill deduplication**: Bounded `OrderedDict` (10K entries), synthetic dedup key: `"{symbol}|{order_id}|{side}|{price}|{qty}|{match_ts_ns}"`
+- **Fill deduplication**: Bounded `OrderedDict` (10K entries), synthetic dedup key: `"{symbol}|{order_id}|{side}|{price}|{qty}|{match_ts_ns}"`. A key is registered only after `PositionStore.on_fill` has applied the fill, so an orphan routed to the DLQ, or a fill whose apply raised, can still be applied by the DLQ retry or a broker replay
+- **Daily-loss feed**: `RiskEngine.notify_fill_pnl` receives the realized-PnL change net of `fill.fee` (the all-in charge, tax included); an opening fill sends its fee as a loss
+- **Recovered lots**: a fill takes a parked recovery lot only for a key with no live position, and never one recorded under another strategy. Risk, MtM, loss exit, reconciliation, the flattener, the PnL snapshot exporter and the daily report read positions plus recovery (`snapshot_open_positions` / `snapshot_positions_with_recovery`)
 - **Orphaned fills**: strategy_id="UNKNOWN" → `OrphanedFillDLQ`, retry every 100 events
 - **Position update**: Atomic under `_fill_lock` (threading.Lock) for Rust/Python dual-tracker
 - **TCA enrichment**: `cmd_tca_map[order_id]` → `decision_price` + `arrival_price` stamped on FillEvent
