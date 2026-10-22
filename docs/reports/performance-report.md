@@ -31,7 +31,7 @@ uv run python scripts/latency/e2e_clickhouse_report.py --window-min 10
 - `reports/e2e_latency.summary.json`
 
 ## 4. 指標解讀重點
-- `event_loop_lag_ms` 是否長時間升高
+- `event_loop_probe_lag_ms`（迴圈壅塞）是否長時間升高；`event_loop_lag_ms` 還含 supervisor 自身的工作量，不要單看它
 - `queue_depth` 是否持續堆積
 - `shioaji_api_latency_ms` 的 p95/p99 是否偏移
 - recorder 是否出現大量 `Insert failed` 或回退 WAL

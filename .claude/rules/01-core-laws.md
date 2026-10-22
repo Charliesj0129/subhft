@@ -1,1 +1,0 @@
-/home/charlie/hft_platform/.agent/rules/01-core-laws.md

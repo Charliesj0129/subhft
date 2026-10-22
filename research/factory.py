@@ -88,6 +88,8 @@ ALLOWED_ROOT_FILES: set[str] = {
     "__init__.py",
     "__main__.py",
     "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
     "factory.py",
     "pipeline.py",
     "SOP.md",
