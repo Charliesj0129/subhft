@@ -3,7 +3,10 @@
 > **Package**: `src/hft_platform/gateway/`
 > **Runtime Plane**: Decision/Execution boundary
 > **Hot-Path**: 7-step dispatch pipeline
-> **Default**: Disabled (`HFT_GATEWAY_ENABLED=0`)
+> **Default**: Disabled (`HFT_GATEWAY_ENABLED=0`). `docker-compose.yml` and the locked
+> compose pin it to `0` (not a `${...:-}` default) until every order type passes one
+> enforcement gate: with the gateway on, `risk_queue` has no consumer, so the loss exit
+> never reaches the broker, and reduce-only and rate limits in `OrderAdapter.execute()` are skipped.
 
 ## Overview
 

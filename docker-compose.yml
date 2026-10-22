@@ -56,7 +56,11 @@ x-hft-common: &hft-common
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
     - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
     - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
-    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    # Pinned off, not a default: with the gateway on, RiskEngine.run() stops consuming
+    # risk_queue, so the loss exit and the HALT re-queue write to a queue nobody reads,
+    # and reduce-only/circuit breaker/rate limits (OrderAdapter.execute only) are bypassed.
+    # Re-enable only after the single order gate (risk redesign B2) lands.
+    - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
     - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
