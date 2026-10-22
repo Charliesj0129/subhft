@@ -105,11 +105,11 @@ class TestPositionUpdate:
         from hft_platform.execution.positions import Position
 
         pos = Position(account_id="ACC1", strategy_id="STRAT1", symbol="2330")
-        fill1 = _make_fill(side=Side.BUY, qty=1, price=100_0000, fee=20, tax=10)
+        fill1 = _make_fill(side=Side.BUY, qty=1, price=100_0000, fee=30, tax=10)  # fee is all-in
         pos.update(fill1)
         assert pos.fees_scaled == 30
 
-        fill2 = _make_fill(side=Side.SELL, qty=1, price=100_0000, fee=20, tax=15)
+        fill2 = _make_fill(side=Side.SELL, qty=1, price=100_0000, fee=35, tax=15)
         pos.update(fill2)
         assert pos.fees_scaled == 65
 

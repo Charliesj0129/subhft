@@ -42,6 +42,33 @@ def _get_xcals():
     return _xcals if _xcals else None
 
 
+_DEFAULT_SESSION_CACHE_SIZE = 32
+
+
+def _session_cache_size_from_env() -> int:
+    """``HFT_CALENDAR_CACHE_SIZE`` as a non-negative int; anything else is reported and replaced by the default.
+
+    An empty value (``HFT_CALENDAR_CACHE_SIZE=`` in an env file) used to raise ``ValueError`` from the
+    constructor, which the supervisor's calendar read swallowed -- the feed-gap reduce-only reasons then read
+    the market as shut with only a DEBUG line to show for it (N142).
+    """
+    raw = os.getenv("HFT_CALENDAR_CACHE_SIZE")
+    if raw is None:
+        return _DEFAULT_SESSION_CACHE_SIZE
+    try:
+        size = int(raw.strip())
+        if size < 0:
+            raise ValueError("negative")
+    except ValueError:
+        logger.warning(
+            "market_calendar_cache_size_invalid",
+            value=raw,
+            default=_DEFAULT_SESSION_CACHE_SIZE,
+        )
+        return _DEFAULT_SESSION_CACHE_SIZE
+    return size
+
+
 class MarketCalendar:
     """Taiwan market calendar wrapper using exchange_calendars.
 
@@ -59,15 +86,21 @@ class MarketCalendar:
         self._cal = None
         self._tz_name = os.getenv("HFT_TS_TZ", "Asia/Taipei")
         self._tz: dt.tzinfo
-        self._session_cache_size = int(os.getenv("HFT_CALENDAR_CACHE_SIZE", "32"))
+        self._session_cache_size = _session_cache_size_from_env()
 
         try:
             from zoneinfo import ZoneInfo
 
             self._tz = ZoneInfo(self._tz_name)
         except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
             self._tz = dt.timezone(dt.timedelta(hours=8))  # Fallback to UTC+8
+            logger.warning(
+                "market_calendar_timezone_invalid",
+                requested_tz=self._tz_name,
+                effective_tz=str(self._tz),
+                error=str(exc),
+            )
+        self._warn_if_timezone_disagrees_with_timebase()
 
         xcals = _get_xcals()
         if xcals:
@@ -77,6 +110,7 @@ class MarketCalendar:
                     "Market calendar initialized",
                     exchange=exchange,
                     tz=self._tz_name,
+                    effective_tz=str(self._tz),
                 )
             except Exception as exc:
                 logger.error(
@@ -89,6 +123,30 @@ class MarketCalendar:
 
         # Create instance-bound cached method
         self._get_session_times_cached = lru_cache(maxsize=self._session_cache_size)(self._get_session_times_uncached)
+
+    def _warn_if_timezone_disagrees_with_timebase(self) -> bool:
+        """Report a calendar whose offset differs from ``timebase.TZINFO``; return True when it does.
+
+        Both read ``HFT_TS_TZ`` but fall back differently when it is invalid (timebase: UTC, this calendar:
+        UTC+8), and ``taifex_delivery_cutoff`` reads timebase while the session checks read this calendar --
+        so the same instant could be judged on two different days. This only reports it; which value is
+        right is decided where the fallback lives (N141).
+        """
+        now = dt.datetime.now(dt.timezone.utc)
+        mine = now.astimezone(self._tz).utcoffset()
+        theirs = now.astimezone(timebase.TZINFO).utcoffset()
+        if mine == theirs:
+            return False
+        logger.warning(
+            "market_calendar_timezone_disagrees_with_timebase",
+            calendar_tz=str(self._tz),
+            calendar_offset=str(mine),
+            timebase_tz=str(timebase.TZINFO),
+            timebase_offset=str(theirs),
+            requested_tz=self._tz_name,
+            consequence="session checks and the delivery-day cutoff can disagree on the trading day",
+        )
+        return True
 
     @property
     def available(self) -> bool:
@@ -441,13 +499,17 @@ class MarketCalendar:
         return (next_day - date).days
 
     def is_holiday_period(self, min_consecutive_days: int = 3) -> bool:
-        """Check if we're in or approaching a holiday period.
+        """Whether today is a non-trading day in a closure of at least ``min_consecutive_days``.
+
+        True only when today is NOT a trading day and the next trading day is at least
+        ``min_consecutive_days`` away. On a trading day it is False even when a long holiday follows, so it does
+        not mean "approaching". Nothing in ``src/`` calls it (N143).
 
         Args:
-            min_consecutive_days: Minimum days for a period to be considered a holiday
+            min_consecutive_days: Minimum days until the next trading day
 
         Returns:
-            True if in a holiday period of at least min_consecutive_days
+            True if today is inside such a closure
         """
         today = dt.datetime.now(self._tz).date()
         return self.days_until_trading(today) >= min_consecutive_days
