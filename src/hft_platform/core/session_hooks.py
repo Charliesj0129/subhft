@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+import threading
 from enum import Enum
 from typing import Any, Awaitable, Callable
 
@@ -25,6 +26,28 @@ HookCallback = Callable[[], Any | Awaitable[Any]]
 
 _DEFAULT_POLL_INTERVAL_S = 30.0
 _DEFAULT_HOOK_TIMEOUT_S = 30.0
+
+_tz_fallback_warned = False
+_tz_fallback_lock = threading.Lock()
+
+
+def _warn_timezone_fallback_once(tz_name: str, exc: Exception) -> None:
+    """``_detect_phase`` runs every poll; an invalid ``HFT_TS_TZ`` is reported once per process, not every 30 s.
+
+    The check and the set are one step under a lock, so two threads polling at once cannot both pass the check.
+    """
+    global _tz_fallback_warned
+    with _tz_fallback_lock:
+        if _tz_fallback_warned:
+            return
+        _tz_fallback_warned = True
+    logger.warning(
+        "session_hooks_timezone_invalid",
+        requested_tz=tz_name,
+        effective_tz="UTC+08:00",
+        timebase_tz=str(timebase.TZINFO),
+        error=str(exc),
+    )
 
 
 class SessionPhase(Enum):
@@ -121,8 +144,9 @@ class SessionHookManager:
 
             tz_name = os.getenv("HFT_TS_TZ", "Asia/Taipei")
             tz: dt.tzinfo = ZoneInfo(tz_name)
-        except Exception:
+        except Exception as exc:
             tz = dt.timezone(dt.timedelta(hours=8))
+            _warn_timezone_fallback_once(os.getenv("HFT_TS_TZ", "Asia/Taipei"), exc)
 
         now = dt.datetime.now(tz)
 

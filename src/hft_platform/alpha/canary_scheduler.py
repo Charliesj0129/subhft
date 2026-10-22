@@ -31,6 +31,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.alpha.canary import CanaryMonitor, CanaryStatus
+from hft_platform.core.background_tasks import spawn_retained
 
 logger = get_logger("alpha.canary_scheduler")
 
@@ -212,12 +213,13 @@ class CanaryAutoScheduler:
                     # Notify on rollback or graduation
                     if status.state in ("rolled_back", "graduated") and self._notification_dispatcher is not None:
                         try:
-                            asyncio.create_task(
+                            spawn_retained(
                                 self._notification_dispatcher.notify_canary_action(
                                     alpha_id=str(alpha_id),
                                     action=status.state,
                                     reason=status.reason,
-                                )
+                                ),
+                                name="notify_canary_action",
                             )
                         except Exception as _notify_exc:  # noqa: BLE001
                             logger.warning(

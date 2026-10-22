@@ -31,42 +31,118 @@ hourly so `_get_contract` lookups stay fresh.
 The trade-off: operators must regenerate the canonical YAML offline after
 contract listings shift.
 
+## Update 2026-09-20: the pool now rolls its own universe
+
+`QuoteConnectionPool.roll_universe` (commit `b33c632a`) rebuilds the universe
+from `symbols.list` plus the contract cache and adopts it without a restart.
+`run_universe_roll_clock` calls it every 600 s. It still never writes
+`config/symbols.yaml` (the 2026-05-23 guard stands): it rewrites the
+per-connection shards and a runtime snapshot (`HFT_SYMBOLS_RUNTIME_SNAPSHOT`).
+
+Two consequences:
+
+- Whether this works on the host depends on the running code containing
+  `b33c632a`. Check that first (see the checklist). Hash both sides with the
+  same function (`sha1sum` of `git show main:<path>` against `sha1sum` on the
+  host); `git hash-object` is not comparable with `sha1sum`.
+- The canonical `config/symbols.yaml` is not updated by the roll. Regenerate it
+  (Procedure below) so the file in the repo and on the host keeps matching the
+  broker's listing.
+
+## Contract roll checklist (monthly delivery, third Wednesday)
+
+A monthly future stops trading at 13:30 on its delivery date
+(`core/market_calendar.py:taifex_delivery_cutoff`). The roll compares delivery
+dates with that cutoff, but the symbol builder filters by the exchange *date*.
+So on the delivery day, after 13:30, the rebuilt universe still holds the
+expiring contract and `validate_universe` refuses it. The first adoptable window
+is after the 05:00 night close on the next day. The sequence below is pinned by
+`TestOctoberExpiryTimeline` in `tests/unit/test_pool_universe_roll.py`.
+
+Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
+
+| When | Expected behaviour | Where to see it |
+|---|---|---|
+| Delivery day, before 13:30 | Nothing changes; the expiring contract still trades | `hft_quote_pool_universe_roll_total{result="no_change"}` or `deferred_session` |
+| 13:30 | R47 rebinds TMF/R1 to the next month (separate 60 s family clock, `ShioajiFamilyPopulator`; `tests/unit/test_contract_family_roll.py`) | Check the bound code is the new month. The gauge `strategy_bound_live_symbols` read 1 for a dead contract on 2026-09-16, so it is not enough alone |
+| 13:30 to midnight | Universe roll is **refused** whenever a check runs outside a session. This is expected, not a fault | `result="refused"` and the `universe_roll_refused` log; `deferred_session` while a session is open |
+| Midnight to 05:00 | Night session is open; the roll stays deferred | `result="deferred_session"` (the log line is debug level) |
+| After 05:00, until the pre-open lead of the 08:45 session (default 15 min, `HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S`) | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
+
+Pass criteria for the roll (capture the baseline before it):
+
+- `hft_quote_pool_universe_roll_total{result="rolled"}` rises by 1; no `build_errors`,
+  `unplaceable` or `no_contracts` results (those are not expected, investigate).
+- `hft_quote_conn_subscribed_count` summed over connections is close to
+  `symbols` in the `universe_rolled` line. Codes the broker refuses are queued
+  for retry, so a small gap is explained by `_failed_sub_symbols`, not by a failed roll.
+- `FeedSubscriptionPermanentlyFailed` (`config/monitoring/alerts/rules.yaml`) is
+  not firing for the settled codes.
+
+### A strategy still holds the expiring month at 13:30
+
+The universe roll moves the feed. It does not close or re-price a position. After
+13:30 on the delivery day the settled contract has no live quotes. Its mark is
+either missing, so the mark-to-market snapshot is incomplete
+(`mtm_unpriced_positions` above 0) and `DailyLossLimitValidator` releases a
+latched daily stop only on a complete snapshot (`risk/validators.py`,
+`update_unrealized(complete=True)`), or it is the last quote, so the old
+unrealized loss keeps being counted. Which of the two applies to a running
+engine was not observed. Either way a HALT held by that stop does not clear
+while the engine keeps running.
+
+What a restart does depends on when it happens (`execution/startup_recon.py`,
+`_recover_dual`):
+
+| Restart | Position in the checkpoint | Effect |
+|---|---|---|
+| Before 13:30 on the delivery day | Restored as recorded (`preserved_not_comparable` under `HFT_ORDER_MODE=sim`) | Nothing is released; the same loss is counted again at the first priced tick |
+| After 13:30 on the delivery day | Dropped (`expired_contract_position_settled`, `dropped_settled`) | Realized PnL is kept; the settlement mark is not booked, because the platform has no settlement price |
+
+So when the engine is in HALT with an expiring-month position, schedule at most
+one stop, wait 60 s, start (D6a) after 13:30, as its own batch under D1-D10,
+rather than a restart before it. Check afterwards that `startup_recon_positions_loaded`
+no longer counts the settled contract and that the log has
+`expired_contract_position_settled`. Whether a position is held is read from the
+checkpoint (`.state/position_checkpoint.json` in the engine container) or from
+`position_age_seconds`; do not infer it from the HALT alone.
+
+Not verified on a delivery day: this was read from the code and from the
+2026-09-16 TMFI6 case recorded in the comment in `_recover_dual`.
+
+If there is no `rolled` result by 08:30, or the running code predates
+`b33c632a`, fall back to Procedure below. Deploying is a per-batch decision for
+the operator.
+
 ## Procedure
 
-```bash
-# Always work against a fresh broker contract cache. If the engine is
-# running it has already refreshed config/contracts.json hourly; otherwise
-# run the engine briefly or call the broker explicitly.
+Run the regeneration locally, on a branch. Never on the deploy host.
 
+```bash
+# Needs a fresh broker contract cache (config/contracts.json). A running
+# engine refreshes it hourly; otherwise run the engine briefly.
 make rebuild-symbols-yaml
 
-# Review the diff before committing — month codes (E6→F6→G6…) and TXO
-# strike ranges should evolve, stock list should be stable.
+# Review the diff: month codes (E6 -> F6 -> G6 ...) and TXO strike ranges
+# should evolve, the stock list should be stable.
 git diff config/symbols.yaml
-
-# Commit + restart the live engine to pick up the new partition.
-git add config/symbols.yaml
-git commit -m "chore(symbols): regenerate config/symbols.yaml after contract roll"
-git push
-
-# On the deploy host: DO NOT `git pull`.
-# The host worktree is permanently divergent and its config/symbols.yaml is
-# operator-canonical — a pull silently reverts it. This is a Class A deploy;
-# follow docs/runbooks/deployment.md (Deploy Laws D3/D4/D6).
-
-# 1. D3 — see what the host copy actually contains before overwriting it:
-scp charl@100.91.176.126:/home/charl/subhft/config/symbols.yaml /tmp/host_symbols.yaml
-diff -u /tmp/host_symbols.yaml config/symbols.yaml     # review EVERY line that differs
-
-# 2. D4 — back it up on the host:
-ssh charl@100.91.176.126 'cd /home/charl/subhft && \
-  mkdir -p ~/deploy_backup_$(date -u +%Y%m%d)/symbols && \
-  cp -p config/symbols.yaml ~/deploy_backup_$(date -u +%Y%m%d)/symbols/'
-
-# 3. Copy and restart (D6 — `restart`, never `up -d`):
-scp config/symbols.yaml charl@100.91.176.126:/home/charl/subhft/config/symbols.yaml
-ssh charl@100.91.176.126 'cd /home/charl/subhft && docker compose restart hft-engine'
 ```
+
+`config/symbols.yaml` is a Do-NOT-Edit path: commit it on a feature branch and
+let the operator decide on push and merge.
+
+Deploying the file is a Class A deploy and follows
+`.agent/rules/41-deployment.md` (D1-D10) and `docs/runbooks/deployment.md`.
+In short:
+
+1. D1: the operator authorises this batch explicitly.
+2. D3: diff the host file against `git show <LAST_DEPLOYED_SHA>:config/symbols.yaml`,
+   never against the local file; a non-empty result is a live edit to keep.
+3. D4: back up the host file to `~/deploy_backup_<UTC-date>/<batch>/` with `MD5SUMS.txt`.
+4. D5, D6a: `stop`, wait 60 s, `start`. Never `up -d`, never
+   `docker compose restart` for the engine.
+5. D9: name the pass criteria and capture their baseline before stopping.
+6. D10: append the batch to `~/deploy_ledger.tsv`.
 
 ## Verification
 
