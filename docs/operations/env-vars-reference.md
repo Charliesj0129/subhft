@@ -263,6 +263,7 @@ Shadow deployment note:
 | `HFT_PLATFORM_AUTO_RECOVERY_ENABLED` | `1` | `1` = feed 相關 reduce-only 觸發清除後自動恢復 | 保守環境可設 `0` 維持純手動 |
 | `HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S` | `60` | 所有觸發條件清除後等待秒數，確認穩定才恢復 | 過短可能造成 flapping |
 | `HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S` | `60` | 開機後此秒數內暫不 latch `recorder_data_loss`（2026-06-18 boot-latch 事故：開機瞬態 DATA_LOSS 誤觸永久 reduce-only/HALT） | `0` = 停用（回到立即 latch）；真實 data loss 超過窗口仍會 latch |
+| `HFT_MANUAL_LATCH_DIR` | `.state/manual_latches` | 需人工解除的 latch（`daily_loss`、`reconciliation_mismatch`）各存成一個 JSON 檔，另有 `audit.jsonl`；見 `docs/runbooks/halt-recovery.md` | 必須指向重啟後仍保留的路徑，否則 latch 會隨容器消失 |
 | `HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S` | `600` | Active-symbol-aware feed-gap 觸發 `feed_reconnect_unhealthy` 的秒數門檻；2026-04 由 120s 提升為 600s，配合 800 標的訂閱宇宙與 illiquid 期權容忍度 | 視訂閱集流動性調整；過低易在 night session 誤觸發 |
 
 重點：
