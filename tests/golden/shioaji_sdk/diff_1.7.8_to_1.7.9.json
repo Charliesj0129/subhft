@@ -1,0 +1,113 @@
+{
+  "changes": [
+    {
+      "after": {
+        "annotation": null,
+        "default": null,
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "time_in_force"
+      },
+      "before": null,
+      "classification": "ADDITIVE",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "Order",
+      "param": "time_in_force",
+      "platform_used": false,
+      "qualname": "Shioaji.Order(time_in_force)",
+      "remediation": "",
+      "required": false,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "ComboOrder",
+      "platform_used": false,
+      "qualname": "ComboOrder.time_in_force",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "FuturesOrder",
+      "platform_used": false,
+      "qualname": "FuturesOrder.time_in_force",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "Order",
+      "platform_used": false,
+      "qualname": "Order.time_in_force",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": null,
+      "classification": "ADDITIVE",
+      "kind": "field_added",
+      "model": "StockOrder",
+      "platform_used": false,
+      "qualname": "StockOrder.time_in_force",
+      "remediation": "",
+      "section": "model",
+      "shimmable": false
+    },
+    {
+      "after": [
+        "TimeInForce"
+      ],
+      "before": [],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji._core.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    },
+    {
+      "after": null,
+      "before": "<empty>",
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_default_changed",
+      "method": "Order",
+      "param": "order_type",
+      "platform_used": false,
+      "qualname": "Shioaji.Order(order_type)",
+      "remediation": "(no specific remediation pointer)",
+      "section": "method",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 5,
+    "behavioral": 0,
+    "benign": 1,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 1
+  },
+  "from": "1.7.8",
+  "from_sha256": "d435fc8d8da45c66a8e5cb8217ec9114c2203a7dcb1d38e7465385021b9b4f5d",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.9",
+  "to_sha256": "19a8fbf1ce1bb2952a524c28915bc93474dab82f2eec5e60006e439363d34dd0",
+  "verdict": "SAFE"
+}

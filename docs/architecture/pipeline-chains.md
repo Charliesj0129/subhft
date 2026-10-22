@@ -413,7 +413,14 @@ latency_us >= 5_000 (5ms)                             → WARM
 | `GatewayPolicy.gate()` | `storm_guard.state >= HALT` | Block NEW/AMEND; allow CANCEL + halt-exempt |
 | `OrderAdapter.execute()` | `cmd.storm_guard_state == HALT` | Block unless safety-exempt |
 | `HaltCanceller` | On HALT callback | Auto-cancel all live orders (batches of 20, 5ms delay) |
-| `HaltFlattener` | On HALT callback (if enabled) | Auto-flatten all positions with FORCE_FLAT |
+| `HaltFlattener` | Not constructed anywhere (`risk/halt_flattener.py`) | None |
+| `LossExitController` | `HFTSystem._run_loss_exit()`, supervisor tick (1 Hz) | FORCE_FLAT (IOC, marketable limit) into `risk_queue` while the daily-loss stop is latched with a position open, a position's since-entry loss reaches `intraday_pnl.position_loss_limit_ntd`, or the contract is past `expiry_guard.cutoff` on its delivery date |
+
+The daily-loss total is realized today plus unrealized measured from the day's
+opening mark (`DailyLossLimitValidator.daily_unrealized()`), so a lot carried
+overnight does not bring earlier days' losses into the new day; the
+per-position limit above bounds those. `ExpiringContractValidator` refuses
+openers on a monthly future from `expiry_guard.cutoff` on its delivery date.
 
 ### Autonomy Degradation Cascade
 

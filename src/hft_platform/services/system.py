@@ -26,7 +26,10 @@ from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk import kill_switch
+from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
+from hft_platform.risk.loss_exit import LossExitController, OpenPosition
 from hft_platform.risk.storm_guard import StormGuardState
+from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
 from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
 from hft_platform.services.loop_watchdog import LoopStallWatchdog
@@ -137,6 +140,74 @@ class HFTSystem:
     _mtm_repeat_ticks: int = DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS
 
     # -- Typed helpers to replace hasattr probes ----------------------------------
+
+    # A book older than this is not a price to close a position at: outside
+    # trading hours an IOC is rejected, and repeated rejects trip the breaker.
+    _LOSS_EXIT_MAX_BOOK_AGE_NS: int = 30 * 1_000_000_000
+
+    def _run_loss_exit(self) -> None:
+        """Submit the FORCE_FLAT intents ``LossExitController`` says are due.
+
+        Inputs come from the validators that own the policy: the daily-loss
+        validator's latched stop and per-position loss limit, and the expiry
+        validator's cutoff. ``loss_exit.enabled: false`` in the risk config
+        turns the exit off at the next SIGHUP reload, without a restart.
+        """
+        controller = getattr(self, "_loss_exit", None)
+        risk_engine = getattr(self, "risk_engine", None)
+        if controller is None or risk_engine is None:
+            return
+        if not bool(((getattr(risk_engine, "config", None) or {}).get("loss_exit", {}) or {}).get("enabled", True)):
+            return
+        lob = getattr(self.md_service, "lob", None)
+        if lob is None:
+            return
+        daily = expiry = None
+        for v in risk_engine.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                daily = v
+            elif isinstance(v, ExpiringContractValidator):
+                expiry = v
+        now_ns = timebase.now_ns()
+        max_age_ns = self._LOSS_EXIT_MAX_BOOK_AGE_NS
+
+        def _l1(symbol: str) -> tuple[int, int] | None:
+            top = lob.get_l1_scaled(symbol)
+            if top is None or now_ns - int(top[0]) > max_age_ns:
+                return None
+            return int(top[1]), int(top[2])
+
+        positions = [
+            OpenPosition(p.strategy_id, p.symbol, int(p.net_qty), int(p.avg_price_scaled))
+            for p in self.position_store.snapshot_positions().values()
+            if p.net_qty
+        ]
+        # Called with no positions too: that is what clears the retry
+        # bookkeeping of symbols that have since closed.
+        meta = self.position_store.metadata
+        intents = controller.plan(
+            now_ns=now_ns,
+            positions=positions,
+            daily_halt=bool(daily is not None and daily.halt_triggered),
+            position_loss_limit_scaled=daily.position_loss_limit_scaled if daily is not None else 0,
+            expiry_enabled=bool(expiry is not None and expiry.enabled),
+            expiry_cutoff_minute=expiry.cutoff_minute if expiry is not None else DEFAULT_EXPIRY_CUTOFF_MINUTE,
+            l1=_l1,
+            multiplier=meta.contract_multiplier,
+            tick_size=meta.tick_size_scaled,
+        )
+        submit = getattr(self.risk_queue, "submit_nowait", None) or self.risk_queue.put_nowait
+        for intent in intents:
+            try:
+                submit(intent)
+            except Exception as e:
+                logger.error(
+                    "loss_exit_submit_failed",
+                    symbol=intent.symbol,
+                    strategy_id=intent.strategy_id,
+                    reason=intent.reason,
+                    error=str(e),
+                )
 
     @staticmethod
     def _get_max_feed_gap_s(md_service: Any) -> float:
@@ -537,6 +608,11 @@ class HFTSystem:
                 )
         except Exception as exc:
             logger.warning("MTM calculator init failed", error=str(exc))
+        _exit_cfg = (getattr(self.risk_engine, "config", None) or {}).get("loss_exit", {}) or {}
+        self._loss_exit = LossExitController(
+            protection_ticks=int(_exit_cfg.get("protection_ticks", 5)),
+            retry_interval_s=float(_exit_cfg.get("retry_interval_s", 10.0)),
+        )
 
         self.tasks: Dict[str, asyncio.Task[Any]] = {}
         self._recorder_drop_on_full = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1").lower() not in {
@@ -2003,6 +2079,13 @@ class HFTSystem:
                 self.risk_engine.roll_daily_loss_boundary()
             except Exception as e:
                 logger.warning("daily loss boundary roll failed", error=str(e))
+
+            # 2b. Close positions a latched stop, a per-position loss limit or
+            # an expiring contract would otherwise leave frozen (risk/loss_exit.py).
+            try:
+                self._run_loss_exit()
+            except Exception as e:
+                logger.error("loss exit failed", error=str(e), exc_info=True)
 
             # 3. Latency input for StormGuard.
             latency_us = self._stormguard_latency_us(lag_s)

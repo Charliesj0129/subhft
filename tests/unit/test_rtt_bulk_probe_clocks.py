@@ -45,6 +45,9 @@ class _FakeApi:
     def login(self, **_kwargs) -> None:
         return None
 
+    def fetch_contracts(self, **_kwargs) -> None:
+        return None
+
 
 class _FakeTime:
     """Only ``monotonic`` and ``sleep``: a call to ``time.time()`` raises AttributeError."""
