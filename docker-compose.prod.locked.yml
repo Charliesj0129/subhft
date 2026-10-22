@@ -3,9 +3,9 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-10-03T06:18:19Z (UTC)
-# Git SHA:          3e11fd95
-# Base digest:      b203fa5e5f88411c  (docker-compose.yml)
+# Generated:        2026-10-22T16:35:39Z (UTC)
+# Git SHA:          532adbb1
+# Base digest:      382f939b85274a07  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
 #
@@ -857,7 +857,7 @@ services:
       - CMD-SHELL
       - REDISCLI_AUTH=${REDIS_PASSWORD} redis-cli ping | grep PONG
       timeout: 5s
-    image: redis:7.4
+    image: redis:7.4.11
     logging:
       driver: json-file
       options:
