@@ -106,8 +106,9 @@ class Position:
         is_buy = fill.side == Side.BUY
         signed_fill_qty = fill_qty if is_buy else -fill_qty
 
-        # Accumulate fees (already scaled)
-        self.fees_scaled += fill.fee + fill.tax
+        # Accumulate fees (already scaled). ``fill.fee`` is the all-in charge (commission + tax, see
+        # FeeBreakdown.total); ``fill.tax`` is only its tax part, so adding both counted the tax twice.
+        self.fees_scaled += fill.fee
 
         # Check if closing: signs are different
         current_sign = 1 if self.net_qty > 0 else -1 if self.net_qty < 0 else 0
@@ -635,13 +636,15 @@ class PositionStore:
         if key not in self.positions and len(self.positions) >= self._positions_max_size:
             self._evict_flat_positions()
         multiplier = self.metadata.contract_multiplier(fill.symbol)
+        # The kernel accumulates ``fee + tax``. ``fill.fee`` already contains ``fill.tax`` (FeeBreakdown.total),
+        # so hand the kernel the whole charge as ``fee`` and 0 as ``tax``; passing both counted the tax twice.
         net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = tracker.update(
             key,
             int(fill.side),
             fill.qty,
             fill.price,
             fill.fee,
-            fill.tax,
+            0,
             fill.match_ts_ns,
             multiplier,
         )
