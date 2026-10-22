@@ -247,8 +247,8 @@ def test_watch_never_calls_the_network_when_given_a_releases_file(tmp_path: Any,
         raise AssertionError("fetch_releases must not be called with --releases-json")
 
     releases = tmp_path / "releases.json"
-    releases.write_text(json.dumps(_payload("1.5.6")), encoding="utf-8")
-    monkeypatch.setattr(watch, "read_pin", lambda *a, **k: "1.5.6")
+    pin = watch.read_pin()
+    releases.write_text(json.dumps(_payload(pin)), encoding="utf-8")
     monkeypatch.setattr(watch, "fetch_releases", _explode)
 
     assert cli.main(["watch", "--releases-json", str(releases)]) == 0

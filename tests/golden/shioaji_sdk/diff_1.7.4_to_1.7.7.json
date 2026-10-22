@@ -1,0 +1,75 @@
+{
+  "changes": [
+    {
+      "after": [
+        "DealsView",
+        "TradeCacheHealth",
+        "TradeCacheHealthReason",
+        "TradeCacheHealthReasonCode",
+        "TradeCacheHealthState"
+      ],
+      "before": [],
+      "classification": "INFORMATIONAL",
+      "kind": "compiled_attrs_changed",
+      "platform_used": false,
+      "qualname": "shioaji._core.module_attrs",
+      "remediation": "",
+      "section": "compiled",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_OR_KEYWORD",
+        "name": "account"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "trade_cache_health",
+      "param": "account",
+      "platform_used": false,
+      "qualname": "Shioaji.trade_cache_health(account)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    },
+    {
+      "after": {
+        "annotation": null,
+        "default": "<empty>",
+        "kind": "POSITIONAL_ONLY",
+        "name": "self"
+      },
+      "before": null,
+      "classification": "BENIGN",
+      "cls": "Shioaji",
+      "kind": "param_added",
+      "method": "trade_cache_health",
+      "param": "self",
+      "platform_used": false,
+      "qualname": "Shioaji.trade_cache_health(self)",
+      "remediation": "(no specific remediation pointer)",
+      "required": true,
+      "section": "method",
+      "shimmable": false
+    }
+  ],
+  "counts": {
+    "additive": 0,
+    "behavioral": 0,
+    "benign": 2,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 1
+  },
+  "from": "1.7.4",
+  "from_sha256": "ec59e631dcaa11b35c9ce48c1f12da1fdda7bfd12c662a7e7b1938462821a599",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.7",
+  "to_sha256": "936de3fcee6692aaa8dfbdc3404adf79b67d0d68dff970f09a3c13dc8faf9172",
+  "verdict": "SAFE"
+}

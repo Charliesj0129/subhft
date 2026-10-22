@@ -464,11 +464,17 @@ deploy into a Class A one.
 Some steps are order-dependent in ways that are not obvious and have each cost
 a wasted restart.
 
-**Re-arm before restart.** `hft ops rearm-platform` invoked via
-`docker compose exec` runs in a *separate* process and cannot reach the live
-controller — it logs `manual_rearm_ipc_unreachable` and only persists `false`
-to the state file. The running engine never sees it. So re-arm must come
-**before** the restart that picks it up, or you need a second restart.
+**A re-arm needs no restart.** `hft ops rearm-platform` invoked via
+`docker compose exec` runs in a *separate* process, so it logs
+`manual_rearm_ipc_unreachable` — but it also stamps `rearm_requested_at` in
+`runtime_state.json`, and the running engine's supervisor reads that on its
+next tick and force-clears (`HFTSystem._platform_rearm_is_due`; log
+`platform_reduce_only_force_cleared`, then `platform_reduce_only_exited`).
+Verified on THESHOW 2026-10-22: cleared at 08:09:07Z, three minutes before a
+stop/start that was therefore unnecessary. Confirm with those two log lines
+and `manual_rearm_required{scope="platform"} 0`; do not restart for a re-arm.
+If a batch needs a restart anyway, re-arm first so the boot does not
+re-latch from the persisted flag.
 
 **A non-auto-recoverable latch survives restarts.** `recorder_data_loss` is
 deliberately non-auto-recoverable, and `_restore_manual_rearm_state` re-latches
@@ -548,7 +554,7 @@ procedure and verifies health restoration.
 | `/app/outputs` empty after deploy | `up -d` was used instead of `restart` | rescue from backup if one was taken; D6 exists to prevent this |
 | Operator's live edit disappeared | file copied wholesale without a D3 diff | restore from `~/deploy_backup_*`, re-apply your hunks onto the host copy |
 | Prometheus reload 200 but alert missing | rule file parsed, rule unhealthy | check `api/v1/rules` health, not just the HTTP code |
-| `manual_rearm_required` still 1 after re-arm | `exec` ran in a separate process | re-arm **before** the restart; see Ordering constraints |
+| `manual_rearm_required` still 1 after re-arm | the reason is still firing and was re-applied, or the tick has not run | wait one supervisor tick; look for `platform_reduce_only_force_cleared`; fix the cause; see Ordering constraints |
 | Reduce-only re-latches on every boot | non-auto-recoverable `recorder_data_loss` | fix the underlying cause first, then re-arm, then restart |
 | Broker `code: 451` after restart | concurrent logins across quote facades | login slot should serialize them; check `shioaji_login_slot_timeouts_total` and `docs/runbooks/feed-reconnect.md` |
 | `grep -c 451` returns non-zero but no error | substring match in timestamps/values | use `code: ?451\|Too Many Connections` |

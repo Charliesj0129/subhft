@@ -13,7 +13,8 @@ into the normal risk queue for any position that meets one of three triggers:
 ``position_loss``
     The position's loss since entry reached ``position_loss_limit_ntd``. The daily
     limit now judges only the day's change (``DailyLossLimitValidator.daily_unrealized``),
-    so this is what bounds a loss carried across days.
+    so this is what bounds a loss carried across days. Skipped for a symbol
+    holding a lot recovered with no entry price, whose loss is unknown.
 ``expiry``
     It is the contract's delivery date and past the cutoff (``risk/expiry.py``);
     ``ExpiringContractValidator`` stops new lots in it from the same moment.
@@ -41,28 +42,21 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from prometheus_client import Counter
 from structlog import get_logger
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE, expiry_window_ns
 
 logger = get_logger("risk.loss_exit")
 
-loss_exit_orders_total = Counter(
-    "loss_exit_orders_total",
-    "FORCE_FLAT intents emitted by the platform loss/expiry exit, by trigger",
-    ["trigger"],
-)
-loss_exit_unpriced_total = Counter(
-    "loss_exit_unpriced_total",
-    "Exit triggers that could not be priced (no two-sided book), by trigger",
-    ["trigger"],
-)
-
 TRIGGER_DAILY_LOSS_HALT = "daily_loss_halt"
 TRIGGER_POSITION_LOSS = "position_loss"
 TRIGGER_EXPIRY = "expiry"
+
+# Books an exit for a position that names no strategy (a legacy recovery entry).
+# Its fill seeds the recovered lot under this id and closes it.
+UNATTRIBUTED_STRATEGY_ID = "__loss_exit__"
 
 # Intent ids for platform exits start here so their order keys
 # (``strategy_id:intent_id``) cannot collide with a strategy's own counter,
@@ -129,20 +123,25 @@ class LossExitController:
         ``l1(symbol)`` gives ``(best_bid, best_ask)`` scaled, or None.
         ``position_loss_limit_scaled`` of 0 disables that trigger.
         """
-        # symbol -> [net_qty, signed qty x entry, {strategy_id: net_qty}]
+        # symbol -> [net_qty, signed qty x entry, {strategy_id: net_qty}, basis_known]
         by_symbol: dict[str, list] = {}
         for pos in positions:
             if pos.net_qty == 0:
                 continue
-            acc = by_symbol.setdefault(pos.symbol, [0, 0, {}])
+            acc = by_symbol.setdefault(pos.symbol, [0, 0, {}, True])
             acc[0] += pos.net_qty
             acc[1] += pos.net_qty * pos.avg_price_scaled
+            # A lot recovered from the broker alone has no entry price (-1); the
+            # symbol's loss since entry is then unknown, not zero.
+            if pos.avg_price_scaled < 0:
+                acc[3] = False
             holders = acc[2]
-            holders[pos.strategy_id] = holders.get(pos.strategy_id, 0) + pos.net_qty
+            sid = pos.strategy_id or UNATTRIBUTED_STRATEGY_ID
+            holders[sid] = holders.get(sid, 0) + pos.net_qty
 
         intents: list[OrderIntent] = []
         due: set[str] = set()
-        for symbol, (net_qty, signed_cost, holders) in by_symbol.items():
+        for symbol, (net_qty, signed_cost, holders, basis_known) in by_symbol.items():
             if net_qty == 0:
                 continue
             strategy_id = max(holders, key=lambda sid: abs(holders[sid]))
@@ -155,7 +154,7 @@ class LossExitController:
                 avg_price_scaled=signed_cost // net_qty,
                 now_ns=now_ns,
                 daily_halt=daily_halt,
-                position_loss_limit_scaled=position_loss_limit_scaled,
+                position_loss_limit_scaled=position_loss_limit_scaled if basis_known else 0,
                 expiry_enabled=expiry_enabled,
                 expiry_cutoff_minute=expiry_cutoff_minute,
                 mid=(bid + ask) // 2 if priced else 0,
@@ -169,14 +168,14 @@ class LossExitController:
             if last is not None and now_ns - last < self._retry_interval_ns:
                 continue
             if not priced:
-                loss_exit_unpriced_total.labels(trigger=trigger).inc()
+                MetricsRegistry.get().loss_exit_unpriced_total.labels(trigger=trigger).inc()
                 logger.warning("loss_exit_unpriced", strategy_id=strategy_id, symbol=symbol, trigger=trigger)
                 continue
             if sum(1 for q in holders.values() if q != 0) > 1:
                 logger.warning("loss_exit_shared_symbol", symbol=symbol, holders=dict(holders), booked_to=strategy_id)
             intents.append(self._build(strategy_id, symbol, net_qty, bid, ask, tick_size(symbol), trigger, now_ns))
             self._last_submit_ns[key] = now_ns
-            loss_exit_orders_total.labels(trigger=trigger).inc()
+            MetricsRegistry.get().loss_exit_orders_total.labels(trigger=trigger).inc()
         # A position that no longer triggers (closed, or recovered) starts fresh next time.
         for key in [k for k in self._last_submit_ns if k not in due]:
             del self._last_submit_ns[key]
