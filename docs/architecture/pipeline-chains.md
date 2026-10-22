@@ -67,15 +67,15 @@ _on_shioaji_event()  ───────┼──→ call_soon_threadsafe(_enq
 
 | # | Function | File | Data In → Out | Mechanism | Latency |
 |---|----------|------|---------------|-----------|---------|
-| 1 | `_on_shioaji_event()` | `services/market_data.py:929` | Raw dict/obj → (exchange, msg) | Broker thread callback | **Blocking** (must be <1μs) |
-| 2 | `call_soon_threadsafe()` | `services/market_data.py:992` | (exchange, msg) | **Thread boundary** | Async transition |
-| 3 | `_enqueue_raw()` | `services/market_data.py:1425` | → `raw_queue` | `asyncio.Queue.put_nowait()` | Non-blocking O(1) |
-| 4 | `run()` main loop | `services/market_data.py:641` | `raw_queue.get()` | Async dequeue | Event-loop wait |
-| 5a | `normalize_tick()` | `feed_adapter/normalizer.py:596` | Raw → `TickEvent` (price x10000) | Inline, Rust optional | Sync <10μs |
-| 5b | `normalize_bidask()` | `feed_adapter/normalizer.py:727` | Raw → `BidAskEvent` (np.int64) | Inline, Rust optional | Sync <10μs |
-| 6 | `LOBEngine.process_event()` | `feed_adapter/lob_engine.py:594` | BidAsk/Tick → `LOBStatsEvent` | In-memory book | Sync <5μs |
-| 7 | `FeatureEngine.process_lob_stats()` | `feature/engine.py:425` | LOBStats → `FeatureUpdateEvent` (27 features) | Inline, Rust kernel optional | Sync <20μs |
-| 8 | `RingBufferBus.publish_nowait()` | `engine/event_bus.py:572` | Event → ring buffer cursor | Lock-free single-writer | Sync O(1) <1μs |
+| 1 | `_on_shioaji_event()` | `services/market_data.py` | Raw dict/obj → (exchange, msg) | Broker thread callback | **Blocking** (must be <1μs) |
+| 2 | `call_soon_threadsafe()` (inside `_on_shioaji_event`) | `services/market_data.py` | (exchange, msg) | **Thread boundary** | Async transition |
+| 3 | `_enqueue_raw()` | `services/market_data.py` | → `raw_queue` | `asyncio.Queue.put_nowait()` | Non-blocking O(1) |
+| 4 | `MarketDataService.run()` main loop | `services/market_data.py` | `raw_queue.get()` | Async dequeue | Event-loop wait |
+| 5a | `normalize_tick()` | `feed_adapter/normalizer.py` | Raw → `TickEvent` (price x10000) | Inline, Rust optional | Sync <10μs |
+| 5b | `normalize_bidask()` | `feed_adapter/normalizer.py` | Raw → `BidAskEvent` (np.int64) | Inline, Rust optional | Sync <10μs |
+| 6 | `LOBEngine.process_event()` | `feed_adapter/lob_engine.py` | BidAsk/Tick → `LOBStatsEvent` | In-memory book | Sync <5μs |
+| 7 | `FeatureEngine.process_lob_stats()` | `feature/engine.py` | LOBStats → `FeatureUpdateEvent` (27 features) | Inline, Rust kernel optional | Sync <20μs |
+| 8 | `RingBufferBus.publish_nowait()` | `engine/event_bus.py` | Event → ring buffer cursor | Lock-free single-writer | Sync O(1) <1μs |
 
 ### Thread Boundaries
 
@@ -395,15 +395,15 @@ latency_us >= 5_000 (5ms)                             → WARM
 
 ### Who Calls StormGuard?
 
-| Caller | File:Line | Method | Trigger |
+| Caller | File | Method | Trigger |
 |--------|-----------|--------|---------|
-| `HFTSystem._supervisor_tick()` | `services/system.py:530` | `update(drawdown_bps, latency_us, feed_gap_s)` | Periodic ~0.1s supervision loop |
-| `HFTSystem._supervisor_tick()` | `services/system.py:546` | `update_with_lob(mid, spread, imbalance, ts)` | DriftBurstDetector toxicity |
+| `HFTSystem._supervise()` | `services/system.py` | `update(drawdown_bps, latency_us, feed_gap_s)` | Supervision loop, 1 s tick |
+| `HFTSystem._supervise()` | `services/system.py` | `update_with_lob(mid, spread, imbalance, ts)` | DriftBurstDetector toxicity |
 | `MarketDataService` | `services/market_data.py` | `report_feature_failure()` / `report_norm_failure()` | FeatureEngine or Normalizer errors |
 | `RingBufferBus` | `engine/event_bus.py` | `trigger_halt("bus_overflow_cascade")` | Sustained bus overflow |
 | `ReconciliationService` | `execution/reconciliation.py` | `trigger_halt("reconciliation_critical")` | Critical position mismatch |
 | `DailyLossLimitValidator` | `risk/validators.py` | `trigger_halt("daily_loss_hard")` | Hard loss limit breached |
-| `HFTSystem._safe_enqueue_exec()` | `services/system.py:953` | `trigger_halt("exec_queue_overflow_repeated")` | 3+ consecutive exec queue overflows |
+| `HFTSystem._safe_enqueue_exec()` | `services/system.py` | `trigger_halt("exec_queue_overflow_repeated")` | 3+ consecutive exec queue overflows |
 
 ### HALT Effects
 
@@ -413,7 +413,14 @@ latency_us >= 5_000 (5ms)                             → WARM
 | `GatewayPolicy.gate()` | `storm_guard.state >= HALT` | Block NEW/AMEND; allow CANCEL + halt-exempt |
 | `OrderAdapter.execute()` | `cmd.storm_guard_state == HALT` | Block unless safety-exempt |
 | `HaltCanceller` | On HALT callback | Auto-cancel all live orders (batches of 20, 5ms delay) |
-| `HaltFlattener` | On HALT callback (if enabled) | Auto-flatten all positions with FORCE_FLAT |
+| `HaltFlattener` | Not constructed anywhere (`risk/halt_flattener.py`) | None |
+| `LossExitController` | `HFTSystem._run_loss_exit()`, supervisor tick (1 Hz) | FORCE_FLAT (IOC, marketable limit) into `risk_queue` while the daily-loss stop is latched with a position open, a position's since-entry loss reaches `intraday_pnl.position_loss_limit_ntd`, or the contract is past `expiry_guard.cutoff` on its delivery date |
+
+The daily-loss total is realized today plus unrealized measured from the day's
+opening mark (`DailyLossLimitValidator.daily_unrealized()`), so a lot carried
+overnight does not bring earlier days' losses into the new day; the
+per-position limit above bounds those. `ExpiringContractValidator` refuses
+openers on a monthly future from `expiry_guard.cutoff` on its delivery date.
 
 ### Autonomy Degradation Cascade
 

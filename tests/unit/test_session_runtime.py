@@ -1020,3 +1020,50 @@ def test_holiday_refresh_still_happens_across_a_long_break():
     mock_refresh = _run_preventive(client, calendar)
 
     assert mock_refresh.call_count == 1
+
+
+class _Sdk179Api:
+    """The shioaji 1.7.x login/fetch_contracts signatures, strictly.
+
+    1.7.0 removed ``fetch_contract``, ``contracts_timeout`` and ``contracts_cb``
+    from ``login()``; passing any of them raises ``TypeError`` on the real SDK.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def login(self, api_key, secret_key, subscribe_trade=True, receive_window=30000, force_refresh=False):
+        self.calls.append(("login", {"subscribe_trade": subscribe_trade}))
+        return []
+
+    def fetch_contracts(self, contract_download=False, contracts_timeout=30000, contracts_cb=None):
+        self.calls.append(("fetch_contracts", {"contract_download": contract_download, "timeout": contracts_timeout}))
+
+
+def _run_login_inline(client):
+    def _inline(_op, fn, _timeout):
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 - mirrors _safe_call_with_timeout's contract
+            return False, None, exc, False
+        return True, None, None, False
+
+    client._safe_call_with_timeout.side_effect = _inline
+    return SessionRuntime(client).login_with_retry(api_key="k", secret_key="s")
+
+
+def test_login_on_the_1_7_sdk_loads_contracts_through_fetch_contracts():
+    client = _login_client(contracts_timeout=10000)
+    client.api = _Sdk179Api()
+
+    assert _run_login_inline(client) is True
+    assert [name for name, _ in client.api.calls][:2] == ["login", "fetch_contracts"]
+    assert client.api.calls[1][1] == {"contract_download": False, "timeout": 10000}
+
+
+def test_login_on_the_1_7_sdk_skips_fetch_contracts_for_a_quote_only_connection():
+    client = _login_client(fetch_contract=False, contracts_timeout=10000)
+    client.api = _Sdk179Api()
+
+    assert _run_login_inline(client) is True
+    assert [name for name, _ in client.api.calls] == ["login"]

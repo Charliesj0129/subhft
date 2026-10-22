@@ -27,7 +27,7 @@
 
 ## MVP 發行補充
 
-- `make release-converge-mvp` 會使用 `mvp_release + full gate`。
+- `make release-converge-mvp` 會使用 `mvp_release + full gate`；預設是 dry-run，`CONFIRM=yes` 才真的刪除（`.wal/`、`data/` 另需 `ALLOW_DELETE_WAL=1`、`ALLOW_DELETE_DATA=1`）。
 - `HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-gate CHANGE_ID=...` 會聚合 `release_converge --skip-clean --skip-gate`、strict roadmap delivery、`release_channel_guard gate`、`reliability_review_pack`。
 - `research/data` 只保留最小 smoke 樣本：
   - `research/data/processed/smoke/smoke_v1.npy`
