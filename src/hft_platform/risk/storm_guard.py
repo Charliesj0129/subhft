@@ -35,7 +35,7 @@ def _hold_block_log_interval_s() -> float:
     if not raw:
         return DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S
     try:
-        value = float(raw)
+        interval_s = float(raw)
     except ValueError:
         logger.warning(
             "stormguard_hold_log_interval_invalid",
@@ -43,7 +43,7 @@ def _hold_block_log_interval_s() -> float:
             using=DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S,
         )
         return DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S
-    return max(0.0, value)
+    return max(0.0, interval_s)
 
 
 @dataclass(slots=True)
