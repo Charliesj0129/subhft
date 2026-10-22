@@ -436,6 +436,10 @@ exemptions:
     code: "def check(self, *, spread_pts: float) -> bool:"
     kind: not-money
     reason: "spread threshold in index points compared with a feature value; no order price or accounting value is derived from it"
+  - file: src/hft_platform/risk/loss_exit.py
+    code: "def __init__(self, *, protection_ticks: int = 5, retry_interval_s: float = 10.0) -> None:"
+    kind: not-money
+    reason: "retry interval in seconds for the loss-exit order; not an amount"
   - file: src/hft_platform/risk/position_sync.py
     code: "self.last_sync_ts: float = 0.0"
     kind: not-money
