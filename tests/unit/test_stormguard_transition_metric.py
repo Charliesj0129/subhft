@@ -24,7 +24,7 @@ class TestStormGuardTransitionMetric:
         """NORMAL → WARM triggers an escalation counter increment."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(drawdown_bps=-60)  # NORMAL → WARM
+        sg.update(order_rtt_us=1_500_000)  # NORMAL → WARM
 
         mock_metrics.stormguard_transitions_total.labels.assert_called_with(direction="escalation")
         mock_metrics.stormguard_transitions_total.labels().inc.assert_called()
@@ -38,7 +38,7 @@ class TestStormGuardTransitionMetric:
         # Reset call tracking so we only watch the recovery transition
         mock_metrics.reset_mock()
 
-        sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)  # HALT → NORMAL
+        sg.update(latency_us=0, feed_gap_s=0.0)  # HALT → NORMAL
 
         calls = mock_metrics.stormguard_transitions_total.labels.call_args_list
         directions = [c.kwargs.get("direction") or (c.args[0] if c.args else None) for c in calls]
@@ -48,9 +48,9 @@ class TestStormGuardTransitionMetric:
         """Each escalation step (NORMAL→WARM, WARM→STORM, STORM→HALT) is counted."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(drawdown_bps=-60)  # NORMAL → WARM
-        sg.update(drawdown_bps=-110)  # WARM → STORM
-        sg.update(drawdown_bps=-210)  # STORM → HALT
+        sg.update(order_rtt_us=1_500_000)  # NORMAL → WARM
+        sg.update(order_rtt_us=2_500_000)  # WARM → STORM
+        sg.trigger_halt("test halt")  # STORM → HALT
 
         calls = mock_metrics.stormguard_transitions_total.labels.call_args_list
         directions = [c.kwargs.get("direction", c.args[0] if c.args else None) for c in calls]
@@ -60,7 +60,7 @@ class TestStormGuardTransitionMetric:
         """Staying in NORMAL state does not increment the counter."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)  # stays NORMAL
+        sg.update(latency_us=0, feed_gap_s=0.0)  # stays NORMAL
 
         mock_metrics.stormguard_transitions_total.labels.assert_not_called()
 
@@ -68,7 +68,7 @@ class TestStormGuardTransitionMetric:
         """Verify direction label is exactly 'escalation' on escalation."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(drawdown_bps=-60)
+        sg.update(order_rtt_us=1_500_000)
 
         call_kwargs = mock_metrics.stormguard_transitions_total.labels.call_args
         assert call_kwargs is not None
@@ -81,7 +81,7 @@ class TestStormGuardTransitionMetric:
         sg.trigger_halt("test")
         mock_metrics.reset_mock()
 
-        sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        sg.update(latency_us=0, feed_gap_s=0.0)
 
         calls = mock_metrics.stormguard_transitions_total.labels.call_args_list
         directions = [c.kwargs.get("direction", c.args[0] if c.args else None) for c in calls]
@@ -93,6 +93,6 @@ class TestStormGuardTransitionMetric:
         mock_metrics.stormguard_transitions_total.labels.return_value.inc.side_effect = RuntimeError("boom")
 
         # Should not raise; StormGuard state must change correctly
-        new_state = sg.update(drawdown_bps=-60)
+        new_state = sg.update(order_rtt_us=1_500_000)
         assert new_state == StormGuardState.WARM
         assert sg.state == StormGuardState.WARM

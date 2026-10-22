@@ -783,14 +783,6 @@ class TestIterSupervisedServicesRecorderBridge:
 # ===========================================================================
 
 
-class TestGetDrawdownPctEdge:
-    def test_returns_zero_when_base_capital_is_zero(self):
-        ps = SimpleNamespace(total_pnl=-100_000)
-        settings = {"base_capital": 0}
-        result = HFTSystem._get_drawdown_pct(ps, settings)
-        assert result == 0.0
-
-
 # ===========================================================================
 # _sync_drain_recorder — no recorder (line 426-427)
 # ===========================================================================

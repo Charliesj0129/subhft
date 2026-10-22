@@ -299,18 +299,18 @@ class TestStormGuardConcurrency:
             guard = StormGuard()
             errors = []
 
-            def updater(drawdown_bps):
+            def updater(order_rtt_us):
                 try:
                     for _ in range(50):
-                        guard.update(drawdown_bps=drawdown_bps)
+                        guard.update(order_rtt_us=order_rtt_us)
                 except Exception as exc:
                     errors.append(exc)
 
             threads = [
-                threading.Thread(target=updater, args=(-300,)),  # Try HALT
-                threading.Thread(target=updater, args=(-50,)),  # Try WARM
+                threading.Thread(target=updater, args=(9_000_000,)),  # Try STORM (far past)
+                threading.Thread(target=updater, args=(1_500_000,)),  # Try WARM
                 threading.Thread(target=updater, args=(0,)),  # Try NORMAL
-                threading.Thread(target=updater, args=(-150,)),  # Try STORM
+                threading.Thread(target=updater, args=(2_500_000,)),  # Try STORM
             ]
             for t in threads:
                 t.start()

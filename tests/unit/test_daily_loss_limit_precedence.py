@@ -87,9 +87,8 @@ def test_prod_config_documents_the_cap_that_actually_binds():
         "global_defaults.max_daily_loss keeps the fallback a true upper bound"
     )
     assert intraday["soft_limit_ntd"] < intraday["hard_limit_ntd"]
-    assert 0.0 < intraday["drawdown_recovery_pct"] < intraday["peak_drawdown_pct"], (
-        "release must sit inside the halt threshold, or the pair has no hysteresis"
-    )
+    for removed in ("peak_drawdown_pct", "drawdown_recovery_pct", "peak_drawdown_min_peak_ntd"):
+        assert removed not in intraday, f"{removed} is read by nothing since the peak rule was removed"
 
 
 def test_prod_annotation_file_agrees_with_the_loaded_file():

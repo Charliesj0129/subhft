@@ -95,7 +95,7 @@ def test_the_reason_names_which_input_escalated() -> None:
     engine or at the broker."""
     guard = _guard(order_rtt_warm_us=200_000, order_rtt_storm_us=500_000)
 
-    _state, reason = guard._evaluate_target_state(drawdown_bps=0, latency_us=0, feed_gap_s=0.0, order_rtt_us=600_000)
+    _state, reason = guard._evaluate_target_state(latency_us=0, feed_gap_s=0.0, order_rtt_us=600_000)
 
     assert "rtt" in reason.lower()
 
@@ -275,4 +275,4 @@ def test_the_existing_call_signature_still_works() -> None:
     shape. Adding an input must not break any of them."""
     guard = _guard(latency_warm_us=5_000, latency_storm_us=20_000)
 
-    assert guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0) is StormGuardState.NORMAL
+    assert guard.update(latency_us=0, feed_gap_s=0.0) is StormGuardState.NORMAL

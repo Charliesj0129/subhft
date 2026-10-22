@@ -1,7 +1,6 @@
 import asyncio
 import collections
 import gc
-import math
 import os
 import time
 from collections.abc import Mapping
@@ -38,7 +37,6 @@ from hft_platform.services.loop_watchdog import LoopStallWatchdog
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
-_DEFAULT_DRAWDOWN_REFERENCE_NTD = 200_000  # warm/storm/halt = 1,000 / 2,000 / 4,000 NTD
 
 
 def _payload_field(payload: Any, key: str) -> Any:
@@ -214,8 +212,7 @@ class HFTSystem:
         """Supervise-tick half of the durable latches. Disk IO runs in threads.
 
         1. A daily stop latched on the hard limit becomes a manual latch file,
-           once per stop. PEAK_DRAWDOWN is not one of the four manual reasons
-           and keeps its own release.
+           once per stop.
         2. The validator state is persisted when it changed.
         3. The latch files present set the hold. A failed read keeps the last
            known set: an IO error is not an operator's release.
@@ -346,94 +343,6 @@ class HFTSystem:
         if fn is None:
             return {}
         return fn()
-
-    @staticmethod
-    def _drawdown_reference_ntd(settings: Dict[str, Any]) -> int:
-        """NTD that StormGuard's drawdown ladder is measured against; 0 = legacy ratio.
-
-        StormGuard reads ``warm/storm/halt_drawdown_bps`` (-50/-100/-200). Over this
-        reference they become fixed NTD give-backs: 200_000 gives 1,000 / 2,000 /
-        4,000 NTD, below the 5,000 NTD daily hard limit. The ratio they used to be
-        measured as divided by the day's peak realised PnL, so a small win made a
-        small loss look like a large drawdown (see ``PositionStore.get_drawdown_ntd``).
-        """
-        raw = settings.get("drawdown_reference_ntd", _DEFAULT_DRAWDOWN_REFERENCE_NTD)
-        try:
-            ref = int(raw)
-        except (TypeError, ValueError):
-            return _DEFAULT_DRAWDOWN_REFERENCE_NTD
-        return ref if ref > 0 else 0
-
-    @staticmethod
-    def _get_drawdown_pct(position_store: Any, settings: Dict[str, Any]) -> float:
-        """Derive drawdown percentage from position store, or 0.0 if unavailable."""
-        reference = HFTSystem._drawdown_reference_ntd(settings)
-        ntd_fn = getattr(position_store, "get_drawdown_ntd", None)
-        if reference > 0 and ntd_fn is not None:
-            return float(ntd_fn()) / reference
-        dd_fn = getattr(position_store, "get_drawdown_pct", None)
-        if dd_fn is not None:
-            return float(dd_fn())
-        total_pnl = getattr(position_store, "total_pnl", None)
-        if total_pnl is not None and total_pnl < 0:
-            base_capital = settings.get("base_capital", 10_000_000)
-            return total_pnl / base_capital if base_capital > 0 else 0.0
-        return 0.0
-
-    @staticmethod
-    def _combine_drawdown_with_mtm(
-        realized_drawdown_pct: float,
-        unrealized_scaled: int,
-        base_capital: int,
-        price_scale: int = 10_000,
-    ) -> float:
-        """Combine realized drawdown with unrealized MtM loss.
-
-        Bug 11 (2026-04-17): unrealized is scaled int (x10000, from MtMCalculator),
-        base_capital is raw NTD from settings. Dividing directly inflated phantom
-        drawdown by 10,000x — a 2 pt move on 1 Mini TAIEX contract produced
-        -200bps HALT. Fix: descale unrealized to raw NTD before dividing.
-
-        Args:
-            realized_drawdown_pct: positive fraction (0.0-1.0) from PositionStore.
-            unrealized_scaled: scaled int (x price_scale); only losses matter.
-            base_capital: raw NTD portfolio capital.
-            price_scale: scaling factor for unrealized_scaled.
-
-        Returns:
-            Adjusted drawdown_pct (positive fraction).
-        """
-        if base_capital <= 0 or price_scale <= 0:
-            return realized_drawdown_pct
-        # Bug 11/17: guard against NaN/inf unrealized (e.g. from unexpected float
-        # arithmetic upstream). Division of NaN/inf inflates drawdown_pct to NaN/inf,
-        # and the downstream ``-int(drawdown_pct * 10_000)`` raises ValueError which
-        # the broad ``supervise()`` exception handler silently swallows, skipping
-        # the StormGuard update for that cycle.
-        try:
-            if math.isnan(unrealized_scaled) or math.isinf(unrealized_scaled):
-                logger.warning(
-                    "combine_drawdown_nonfinite_unrealized",
-                    unrealized_scaled=unrealized_scaled,
-                )
-                return realized_drawdown_pct
-        except TypeError:
-            # unrealized_scaled is not a number (shouldn't happen); fall through.
-            return realized_drawdown_pct
-        if unrealized_scaled >= 0:
-            return realized_drawdown_pct
-        unrealized_ntd = unrealized_scaled / price_scale
-        result = realized_drawdown_pct - unrealized_ntd / base_capital
-        if math.isnan(result) or math.isinf(result):
-            logger.warning(
-                "combine_drawdown_nonfinite_result",
-                realized_drawdown_pct=realized_drawdown_pct,
-                unrealized_scaled=unrealized_scaled,
-                base_capital=base_capital,
-                price_scale=price_scale,
-            )
-            return realized_drawdown_pct
-        return result
 
     def _log_mtm_completeness(self, mtm: Any) -> None:
         """Say whether the book could be priced -- on the edge, with names.
@@ -691,7 +600,7 @@ class HFTSystem:
         self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
         # ``None`` means "not currently halted". Deliberately not 0.0: a float
         # sentinel inside the range of the clock it stores is how the STORM
-        # entry stamp broke (see tests/unit/test_storm_drawdown_flat_release.py).
+        # entry stamp once broke a drawdown release that no longer exists.
         self._halt_episode_start_mono: float | None = None
         self._halt_checkpoint_written: bool = False  # write checkpoint once on HALT entry
         # Set when startup position recovery could not establish position truth.
@@ -802,7 +711,7 @@ class HFTSystem:
                 _boot_ks_reason = "kill_switch_file_present"
             self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_boot_ks_reason}")
             # trigger_halt alone is not a latch: update() derives its target
-            # from drawdown/latency/feed-gap, so a quiet market de-escalates
+            # from latency/feed-gap health, so a quiet market de-escalates
             # HALT once the cooldown elapses. The hold is what makes it stick.
             self.storm_guard.set_kill_switch_hold(True)
             logger.critical(
@@ -1629,7 +1538,7 @@ class HFTSystem:
             self.storm_guard._storm_entry_ts = 0.0
             self.storm_guard._de_escalate_count = self.storm_guard._de_escalate_threshold
             # Force de-escalation on next update cycle
-            self.storm_guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+            self.storm_guard.update(latency_us=0, feed_gap_s=0.0)
             results["storm_guard"] = f"reset from {old_state} to {self.storm_guard.state.name}"
             logger.info("graceful_reset: storm_guard reset", old=old_state, new=self.storm_guard.state.name)
         else:
@@ -2171,38 +2080,27 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard feed_gap computation failed", error=str(e))
 
-            # 2. Get drawdown from position store (realized + unrealized)
-            drawdown_pct = 0.0
-            try:
-                drawdown_pct = self._get_drawdown_pct(self.position_store, self.settings)
-                if self._mtm_calculator is not None:
-                    try:
-                        # snapshot() rather than total_unrealized_pnl(): the
-                        # bare total reports 0 both for a flat book and for a
-                        # book where nothing could be priced, and the daily
-                        # stop is allowed to lift only on the former.
-                        mtm = self._mtm_calculator.snapshot()
-                        unrealized = mtm.total_scaled
-                        drawdown_pct = self._combine_drawdown_with_mtm(
-                            realized_drawdown_pct=drawdown_pct,
-                            unrealized_scaled=int(unrealized),
-                            base_capital=self._drawdown_reference_ntd(self.settings)
-                            or int(self.settings.get("base_capital", 10_000_000)),
-                        )
-                        self._log_mtm_completeness(mtm)
-                        self.risk_engine.update_unrealized_pnl(int(unrealized), complete=mtm.complete)
-                    except Exception as e:
-                        # Was a bare ``pass``. A mark-to-market that fails every
-                        # tick also starves the daily-loss reset, and silence
-                        # made that indistinguishable from a healthy engine.
-                        logger.warning("StormGuard mark-to-market update failed", error=str(e))
-            except Exception as e:
-                logger.warning("StormGuard drawdown computation failed", error=str(e))
+            # 2. Mark-to-market into the daily-loss validator. PnL goes there
+            # and only there: StormGuard reads platform health, and the day's
+            # net change is the one definition of a loss (B4a, 2026-10-23).
+            if self._mtm_calculator is not None:
+                try:
+                    # snapshot() rather than total_unrealized_pnl(): the bare
+                    # total reports 0 both for a flat book and for a book where
+                    # nothing could be priced, and the daily stop is allowed to
+                    # lift only on the former.
+                    mtm = self._mtm_calculator.snapshot()
+                    self._log_mtm_completeness(mtm)
+                    self.risk_engine.update_unrealized_pnl(int(mtm.total_scaled), complete=mtm.complete)
+                except Exception as e:
+                    # Was a bare ``pass``. A mark-to-market that fails every
+                    # tick also starves the daily-loss reset, and silence made
+                    # that indistinguishable from a healthy engine.
+                    logger.warning("daily-loss mark-to-market update failed", error=str(e))
 
             # The daily-loss reset boundary ticks regardless of the block above:
-            # it is what releases a latched daily-loss HALT, and both the
-            # drawdown read and the MtM read can fail for reasons that have
-            # nothing to do with the calendar.
+            # it is what releases a latched daily-loss HALT, and the MtM read
+            # can fail for reasons that have nothing to do with the calendar.
             try:
                 self.risk_engine.roll_daily_loss_boundary()
             except Exception as e:
@@ -2247,9 +2145,7 @@ class HFTSystem:
 
             # 4. ALWAYS call StormGuard.update() with whatever data we have.
             try:
-                drawdown_bps = -int(drawdown_pct * 10_000)
                 self.storm_guard.update(
-                    drawdown_bps=drawdown_bps,
                     latency_us=latency_us,
                     feed_gap_s=feed_gap_s,
                 )

@@ -185,14 +185,12 @@ class TestDailyLossStateRoundTrip:
         before = _validator()
         before.record_pnl("R47", -90_000_000)
         _latch_daily(before)
-        before._peak_pnl_scaled = 37_600_000
 
         after = _validator()
         assert after.restore_state(before.export_state()) is True
         assert after.halt_triggered is True
         assert after.halt_reason == "DAILY_LOSS_LIMIT"
         assert after.export_state()["accumulated"] == {"R47": -90_000_000}
-        assert after.export_state()["peak_pnl_scaled"] == 37_600_000
 
     def test_state_from_another_trading_day_is_ignored(self) -> None:
         before = _validator()
@@ -204,19 +202,27 @@ class TestDailyLossStateRoundTrip:
         assert after.restore_state(state) is False
         assert after.export_state()["accumulated"] == {}
 
-    def test_hard_limit_breach_under_a_profit_lock_becomes_a_daily_loss_stop(self) -> None:
-        v = _validator()
-        _latch_daily(v, "PEAK_DRAWDOWN")
-        v.record_pnl("R47", -150_000_000)
-        v.update_unrealized(0, complete=True)
-        assert v.halt_triggered is True
-        assert v.halt_reason == "DAILY_LOSS_LIMIT"
-
-    def test_profit_lock_keeps_its_reason_inside_the_hard_limit(self) -> None:
-        v = _validator()
-        _latch_daily(v, "PEAK_DRAWDOWN")
-        v.update_unrealized(-10_000_000, complete=False)
-        assert v.halt_reason == "PEAK_DRAWDOWN"
+    def test_a_persisted_peak_drawdown_latch_restores_released(self) -> None:
+        """A state written before B4a may carry the removed PEAK_DRAWDOWN latch
+        and the two peak fields. Nothing could ever lift that latch again, so it
+        restores released; the day's realized loss still comes back."""
+        before = _validator()
+        before.record_pnl("R47", -9_000_000)
+        state = before.export_state()
+        state.update(
+            halt_triggered=True,
+            halt_reason="PEAK_DRAWDOWN",
+            halt_release_pending=True,
+            peak_drawdown_halt_ts_ns=1,
+            peak_pnl_scaled=37_600_000,
+        )
+        after = _validator()
+        assert after.restore_state(state) is True
+        assert after.halt_triggered is False
+        assert after.halt_reason == ""
+        assert after.export_state()["accumulated"] == {"R47": -9_000_000}
+        assert after.export_state()["halt_release_pending"] is False
+        assert "peak_pnl_scaled" not in after.export_state()
 
     def test_malformed_state_raises_and_changes_nothing(self) -> None:
         state = _validator().export_state()

@@ -417,7 +417,7 @@ class TestStormGuardFaultInjection:
             assert guard.state == StormGuardState.HALT
 
             # Recover: safe values with zero cooldown
-            guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+            guard.update(latency_us=0, feed_gap_s=0.0)
             assert guard.state == StormGuardState.NORMAL
 
 

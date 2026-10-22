@@ -112,7 +112,8 @@ class TestStormGuardStateReason:
             guard = StormGuard()
         guard.metrics = metrics
 
-        guard.update(drawdown_bps=-233)
+        guard.trigger_halt("DAILY_LOSS_LIMIT_EXCEEDED")
+        guard.update()  # a clean health tick must not blank the HALT's reason
 
         assert guard.state is StormGuardState.HALT
-        assert guard.state_reason == "Drawdown -233bps"
+        assert guard.state_reason == "DAILY_LOSS_LIMIT_EXCEEDED"

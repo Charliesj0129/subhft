@@ -183,7 +183,7 @@ def test_drift_burst_warm_entry_arms_warm_cooldown():
     # Pre-fix this would have de-escalated immediately because _warm_entry_ts
     # was never set; post-fix the cooldown holds WARM.
     detector.set(score=0.0)
-    sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    sg.update(latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.WARM, (
         "WARM must hold while _warm_cooldown_s has not elapsed even when entry was via drift-burst"
     )
@@ -233,7 +233,7 @@ def test_toxicity_below_exit_lets_warm_deescalate_after_cooldown():
 
     # Fast-forward past warm cooldown.
     sg._warm_entry_ts = sg._warm_entry_ts - 31.0
-    sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    sg.update(latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.NORMAL
 
 
@@ -260,7 +260,7 @@ def test_halt_cooldown_path_unchanged():
     """Pre-existing HALT cooldown semantics unaffected by P4 fix."""
     sg = _make_sg(warm_cooldown_s=999.0, storm_cooldown_s=999.0, de_n=1)
     sg._halt_cooldown_s = 30.0
-    sg.update(drawdown_bps=-200)
+    sg.trigger_halt("test halt")
     assert sg.state == StormGuardState.HALT
     sg.update()
     assert sg.state == StormGuardState.HALT

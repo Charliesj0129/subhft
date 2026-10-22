@@ -8,7 +8,7 @@ Three defects, one chain, all reachable only once fills started recording again:
    threshold was therefore enforced at 1/point_value of its configured size:
    in production a ``hard_limit_ntd: 5000`` halted at 670 NTD of realized loss
    and ``soft_limit_ntd: 500`` fired at 50 NTD.
-2. ``StormGuard.update()`` recomputes its target state from drawdown, latency
+2. ``StormGuard.update()`` recomputes its target state from latency
    and feed gap only, so it cannot see a latched daily-loss stop. A clean tick
    de-escalated HALT and the still-latched validator flag re-halted it: 26
    escalations / 25 de-escalations in 27 minutes.
@@ -75,11 +75,8 @@ def _make_validator(point_value: int = 10, **overrides: object) -> DailyLossLimi
         "scope": "global",
         "soft_limit_ntd": 500,
         "hard_limit_ntd": 5000,
-        "peak_drawdown_pct": 0.40,
         "soft_recovery_ntd": 300,
-        "drawdown_recovery_pct": 0.20,
         "soft_limit_cooldown_s": 60,
-        "peak_drawdown_min_peak_ntd": 3500,
         "price_scale": 10000,
         "point_value": point_value,
     }
@@ -146,7 +143,6 @@ class TestDailyLossThresholdScale:
         assert tmf._hard_limit_threshold_scaled == txf._hard_limit_threshold_scaled == _ntd(5000)
         assert tmf._soft_limit_threshold_scaled == txf._soft_limit_threshold_scaled == _ntd(500)
         assert tmf._soft_recovery_threshold_scaled == txf._soft_recovery_threshold_scaled == _ntd(300)
-        assert tmf._peak_drawdown_min_peak_scaled == txf._peak_drawdown_min_peak_scaled == _ntd(3500)
 
     def test_unrealized_hard_limit_uses_the_same_ntd_scale(self):
         v = _make_validator()
@@ -218,8 +214,8 @@ class TestProducerConsumerUnitAgreement:
 
 
 def _clean_tick(sg: StormGuard) -> StormGuardState:
-    """A tick with nothing wrong in the market: no drawdown, no lag, no gap."""
-    return sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    """A tick with nothing wrong in the market: no lag, no gap."""
+    return sg.update(latency_us=0, feed_gap_s=0.0)
 
 
 class TestDailyLossHoldBlocksDeEscalation:

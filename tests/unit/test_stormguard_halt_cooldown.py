@@ -13,11 +13,11 @@ class TestStormGuardHaltCooldown:
         """HALT must not step down on the very first clear eval."""
         guard = StormGuard(thresholds=RiskThresholds())
         # Enter HALT
-        guard.update(drawdown_bps=-200)
+        guard.trigger_halt("test halt")
         assert guard.state == StormGuardState.HALT
 
         # Immediately signal all-clear — should NOT recover due to cooldown
-        result = guard.update(drawdown_bps=0)
+        result = guard.update()
         assert result == StormGuardState.HALT, "HALT must not immediately de-escalate"
 
     def test_halt_recovers_after_cooldown_and_consecutive_clears(self):
@@ -27,7 +27,7 @@ class TestStormGuardHaltCooldown:
         guard._de_escalate_threshold = 3
 
         # Enter HALT
-        guard.update(drawdown_bps=-200)
+        guard.trigger_halt("test halt")
         assert guard.state == StormGuardState.HALT
 
         # Simulate time passing beyond cooldown (D3: now uses time.monotonic)
@@ -35,20 +35,20 @@ class TestStormGuardHaltCooldown:
 
         # Clear evals before cooldown — should stay HALT
         with patch("time.monotonic", return_value=102.0):  # only 2s, cooldown is 5s
-            guard.update(drawdown_bps=0)
+            guard.update()
         assert guard.state == StormGuardState.HALT
 
         # After cooldown, need N consecutive clears
         with patch("time.monotonic", return_value=106.0):  # 6s > 5s cooldown
-            guard.update(drawdown_bps=0)  # 1st clear
+            guard.update()  # 1st clear
         assert guard.state == StormGuardState.HALT
 
         with patch("time.monotonic", return_value=106.0):
-            guard.update(drawdown_bps=0)  # 2nd clear
+            guard.update()  # 2nd clear
         assert guard.state == StormGuardState.HALT
 
         with patch("time.monotonic", return_value=106.0):
-            guard.update(drawdown_bps=0)  # 3rd clear — should recover
+            guard.update()  # 3rd clear — should recover
         assert guard.state == StormGuardState.NORMAL
 
     def test_halt_cooldown_configurable_via_env(self):
@@ -60,7 +60,7 @@ class TestStormGuardHaltCooldown:
     def test_cancels_still_allowed_during_halt(self):
         """Verify that cancel orders pass through during HALT (safety invariant)."""
         guard = StormGuard(thresholds=RiskThresholds())
-        guard.update(drawdown_bps=-200)
+        guard.trigger_halt("test halt")
         assert guard.state == StormGuardState.HALT
         # is_safe() returns False during HALT — risk engine allows cancels separately
         assert not guard.is_safe()

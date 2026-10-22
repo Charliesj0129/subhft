@@ -31,7 +31,7 @@ def test_reconciliation_hold_blocks_halt_recovery(guard):
 
     # Multiple update() calls with healthy metrics should NOT de-escalate
     for _ in range(10):
-        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        guard.update(latency_us=0, feed_gap_s=0.0)
 
     assert guard.state == StormGuardState.HALT
     assert guard.reconciliation_hold is True
@@ -43,14 +43,14 @@ def test_reconciliation_hold_release_allows_recovery(guard):
     guard.set_reconciliation_hold(True)
 
     # Still held
-    guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    guard.update(latency_us=0, feed_gap_s=0.0)
     assert guard.state == StormGuardState.HALT
 
     # Release hold
     guard.set_reconciliation_hold(False)
 
     # Now de-escalation should work
-    state = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    state = guard.update(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
 
 
@@ -60,7 +60,7 @@ def test_reconciliation_hold_does_not_affect_non_halt(guard):
     guard.set_reconciliation_hold(True)
 
     # STORM should still be able to de-escalate (hold is HALT-specific)
-    state = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    state = guard.update(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
 
 
@@ -74,7 +74,7 @@ def test_normal_halt_recovery_without_hold(guard):
     guard.trigger_halt("some other reason")
     assert guard.state == StormGuardState.HALT
 
-    state = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    state = guard.update(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
 
 
