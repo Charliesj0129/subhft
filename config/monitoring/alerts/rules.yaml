@@ -1027,24 +1027,51 @@ groups:
         description: "Loki has been unreachable for >2 minutes. Log search unavailable."
 
   # ── Backup Health ─────────────────────────────────────────────
-  # `hft_backup_last_success_ts > 0` gate (2026-04-25): the cron-driven backup
-  # runs as a one-shot `docker compose exec hft-engine python -c ...` subprocess.
-  # Its MetricsRegistry.get() returns a fresh registry in that subprocess and
-  # is not the engine's scrape target, so the gauge never leaves 0 even though
-  # backups have succeeded daily (see /tmp/hft_backup.log on prod). Without the
-  # gate, `0 < time() - 172800` is always true and BackupStale fires forever.
-  # TODO(ops): structural fix — either Pushgateway, node_exporter textfile
-  # collector, or have the engine stat $BACKUP_DIR mtime periodically and
-  # update the gauge. Until then this gate disables the alert; monitor backup
-  # health via /tmp/hft_backup.log tailing.
+  # The backup runs as a one-shot `docker compose exec hft-engine python -c ...`,
+  # so the engine's hft_backup_last_success_ts never left 0 and BackupStale was
+  # gated off with `> 0` (2026-04-25); the backup then failed 2026-10-13..21
+  # unseen and the disk filled. scripts/clickhouse_backup.sh now writes each
+  # run's outcome to node-exporter's textfile collector (job="node").
+  # The cron runs Mon-Fri, so Fri -> Mon is a normal 72 h gap: the staleness
+  # windows are 3.5 days (302400 s). A single failed run is BackupFailed.
+  - alert: BackupFailed
+    expr: hft_backup_cron_last_exit_code{job="node"} != 0
+    for: 0m
+    labels:
+        severity: critical
+    annotations:
+        summary: "The last ClickHouse backup run failed (exit {{ $value }})"
+        description: "scripts/clickhouse_backup.sh exited non-zero. Read /tmp/hft_backup.log on the host and check free space on /."
+
   - alert: BackupStale
-    expr: hft_backup_last_success_ts < (time() - 172800) and hft_backup_last_success_ts > 0
+    expr: hft_backup_cron_last_success_timestamp_seconds{job="node"} < (time() - 302400)
     for: 1h
     labels:
         severity: critical
     annotations:
-        summary: ClickHouse backup is stale (>2 days since last success)
-        description: "Last successful backup was {{ $value | humanizeTimestamp }}. Check cron and backup disk."
+        summary: ClickHouse backup is stale (>3.5 days since last success)
+        description: "Last successful backup was {{ $value | humanizeTimestamp }} (0 = none known). Check cron and backup disk."
+
+  - alert: BackupNotRunning
+    expr: hft_backup_cron_last_run_timestamp_seconds{job="node"} < (time() - 302400)
+    for: 1h
+    labels:
+        severity: critical
+    annotations:
+        summary: The daily ClickHouse backup cron has not run for >3.5 days
+        description: "Last run finished {{ $value | humanizeTimestamp }}. Check the host crontab (30 14 * * 1-5)."
+
+  # The three rules above have zero series, and so read as healthy, until the
+  # script has written hft_backup.prom once (e.g. the textfile directory is not
+  # writable by the cron user). The `for` spans a weekend plus a day.
+  - alert: BackupMetricsAbsent
+    expr: absent(hft_backup_cron_last_run_timestamp_seconds{job="node"})
+    for: 84h
+    labels:
+        severity: warning
+    annotations:
+        summary: No backup outcome has been exported for 3.5 days
+        description: "hft_backup.prom is missing from the node-exporter textfile directory; BackupFailed/BackupStale cannot fire. Check that the cron user can write HFT_BACKUP_TEXTFILE_DIR."
 
   # ── Fill Loss (M-07) ─────────────────────────────────────────
   - alert: FillEvictionDetected

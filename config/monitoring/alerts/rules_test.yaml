@@ -586,3 +586,78 @@ tests:
       - eval_time: 20m
         alertname: ScrapeTargetDown
         exp_alerts: []
+
+  # ── Backup health (scripts/clickhouse_backup.sh textfile, job="node") ──
+  # Positive control: one failed run pages at once.
+  - interval: 1m
+    name: backup failed fires on the first non-zero exit
+    input_series:
+      - series: 'hft_backup_cron_last_exit_code{job="node", instance="172.18.0.1:9100"}'
+        values: "0+0x10 1+0x10"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BackupFailed
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: BackupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: node
+              instance: 172.18.0.1:9100
+            exp_annotations:
+              summary: "The last ClickHouse backup run failed (exit 1)"
+              description: "scripts/clickhouse_backup.sh exited non-zero. Read /tmp/hft_backup.log on the host and check free space on /."
+
+  # A Fri -> Mon gap (72 h + run time) is quiet; 3.5 days + the 1 h `for` fires.
+  # Success frozen at t=0: stale once time() > 302400 s (5040 min), firing from 5100 min.
+  - interval: 1m
+    name: backup stale is quiet over a weekend and fires after 3.5 days
+    input_series:
+      - series: 'hft_backup_cron_last_success_timestamp_seconds{job="node", instance="172.18.0.1:9100"}'
+        values: "0+0x5200"
+      - series: 'hft_backup_cron_last_run_timestamp_seconds{job="node", instance="172.18.0.1:9100"}'
+        values: "0+60x5200"
+    alert_rule_test:
+      - eval_time: 4330m
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 5080m
+        alertname: BackupStale
+        exp_alerts: []
+      - eval_time: 5110m
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: node
+              instance: 172.18.0.1:9100
+            exp_annotations:
+              summary: ClickHouse backup is stale (>3.5 days since last success)
+              description: "Last successful backup was 1970-01-01 00:00:00 +0000 UTC (0 = none known). Check cron and backup disk."
+      - eval_time: 5110m
+        alertname: BackupNotRunning
+        exp_alerts: []
+
+  # Zero series must not read as healthy: no textfile for 84 h warns.
+  - interval: 1h
+    name: backup metrics absent warns after 84 h without a textfile
+    input_series:
+      - series: 'up{job="node", instance="172.18.0.1:9100"}'
+        values: "1+0x100"
+    alert_rule_test:
+      - eval_time: 83h
+        alertname: BackupMetricsAbsent
+        exp_alerts: []
+      - eval_time: 85h
+        alertname: BackupMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: node
+            exp_annotations:
+              summary: No backup outcome has been exported for 3.5 days
+              description: "hft_backup.prom is missing from the node-exporter textfile directory; BackupFailed/BackupStale cannot fire. Check that the cron user can write HFT_BACKUP_TEXTFILE_DIR."
+      - eval_time: 85h
+        alertname: BackupStale
+        exp_alerts: []
