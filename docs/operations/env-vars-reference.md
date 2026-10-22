@@ -184,6 +184,8 @@ Base YAML (config/base/main.yaml)
 | `HFT_API_QUEUE_MAX` | `1024` | 下單 API 佇列上限 | 佇列爆滿時排查風控/下單耗時 |
 | `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `diff` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 預設 `diff` 確保 rollover 日自動轉訂新月合約；遇 broker 回傳異常合約清單（runbook Mode 2）時臨時改 `none` |
 | `HFT_QUOTE_CONNECTIONS` | `1` | Quote 連線池的 facade 數量；符號宇宙依此切分成各自的 shard | 生產（THESHOW）為 `4`。每個 facade 有自己的 session-refresh 執行緒與 watchdog，所以此值同時決定下列 §7.1 各旋鈕要序列化幾個登入 |
+| `HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S` | `900` | facade 重連的開盤前提前量（秒）。已登出的 facade 在「盤中，或 `lead` 秒後即開盤」時才允許復原（`QuoteConnectionPool.reconnect_allowed`）；預設值對應 08:45 開盤前的 08:30 | 行事曆無法回答時一律放行（fail-open）。換月日的合約換月（universe roll）也在這個窗口前後被採用，見 [SymbolsYamlRegeneration](../runbooks/SymbolsYamlRegeneration.md) |
+| `HFT_SYMBOLS_RUNTIME_SNAPSHOT` | `data/live_with_options.yaml` | 連線池 universe roll 寫出的執行期快照路徑（輸出檔）。從不寫入 `config/symbols.yaml`；若與輸入檔相同，會改用預設路徑或 `<輸入檔名>.runtime.yaml` 旁檔，兩者都撞名才拋 `RuntimeError` | 只有要把快照放到別處時才設；不要指向 `SYMBOLS_CONFIG` 所指的輸入檔 |
 
 ### 7.1 Session Refresh / 重新登入（Shioaji）
 
