@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.gateway import ExecutionGateway
@@ -1461,7 +1462,12 @@ class SystemBootstrapper:
                             track=track_name,
                         )
                         return
-                    loop.create_task(strategy_runner.dispatch_session_end_force_flat(track_name))
+                    spawn_retained(
+                        strategy_runner.dispatch_session_end_force_flat(track_name),
+                        name="force_flat_dispatch",
+                        loop=loop,
+                        track=track_name,
+                    )
 
                 session_governor.register_phase_callback(_force_flat_phase_callback)
                 logger.info(
@@ -1772,7 +1778,7 @@ def _make_halt_notification_callback(storm_guard: Any, dispatcher: Any) -> Calla
         try:
             coro = dispatcher.notify_halt("StormGuard HALT triggered")
             if path == "direct":
-                loop.create_task(coro)
+                spawn_retained(coro, name="notify_halt", loop=loop)
             else:
                 # run_coroutine_threadsafe takes a coroutine and schedules it on
                 # the target loop; the returned Future is intentionally not

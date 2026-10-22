@@ -517,8 +517,14 @@ class TestTheDailyResetIsReachableWhileHalted:
 
         assert engine.storm_guard.daily_loss_hold is False
 
-    def test_a_fresh_pnl_still_over_the_limit_re_latches_instead_of_releasing(self):
-        """Releasing on evidence means the evidence gets to say no."""
+    def test_a_carried_loss_alone_does_not_re_latch_the_new_day(self):
+        """The new day is judged on what it did, not on what the open book lost before it.
+
+        This used to re-latch: the snapshot is the position's loss since entry,
+        and on THESHOW one TMFJ6 long re-latched the stop at every 05:00 reset
+        from 10/16 to its settlement. A carried loss past the limit is now the
+        per-position exit's job (``risk/loss_exit.py``), not the daily stop's.
+        """
         v = _validator_at(_BEFORE_BOUNDARY)
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.record_pnl("R47", _ntd(-5460))
@@ -528,12 +534,28 @@ class TestTheDailyResetIsReachableWhileHalted:
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             v.roll_daily_boundary()
             assert v.halt_triggered is True
-            # New day, empty accumulator, but the open book is already past the
-            # hard limit on its own.
+            # New day, empty accumulator; the open book carries -6,000 from before.
             v.update_unrealized(_ntd(-6000), complete=True)
 
+            assert v.halt_triggered is False
+            assert v._halt_release_pending is False
+            assert v.daily_unrealized() == 0
+
+    def test_a_fresh_pnl_that_lost_the_limit_today_re_latches(self):
+        """Releasing on evidence means the evidence gets to say no -- about today's loss."""
+        v = _validator_at(_BEFORE_BOUNDARY)
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
+            v.record_pnl("R47", _ntd(-5460))
+            v.check(_make_intent())
+
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
+            v.roll_daily_boundary()
+            v.update_unrealized(_ntd(-6000), complete=True)  # the day's opening mark
+            assert v.halt_triggered is False
+            v.update_unrealized(_ntd(-11_000), complete=True)  # 5,000 more lost today
+
         assert v.halt_triggered is True
-        assert v._halt_release_pending is False
+        assert v.daily_unrealized() == _ntd(-5000)
 
     def test_a_backward_clock_across_the_boundary_does_not_clear_the_stop(self):
         """``now_ns()`` is the wall clock, so it can go backwards.

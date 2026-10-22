@@ -513,3 +513,102 @@ def test_bootstrap_wires_the_roll_clock_and_metadata_listener() -> None:
     assert "pool.roll_universe(live=False)" in source
     assert "set_universe_listener(symbol_metadata.apply_runtime_overlay)" in source
     assert "deferred_tasks.append(md_client.run_universe_roll_clock())" in source
+
+
+def _taipei_ns(month: int, day: int, hour: int, minute: int = 0, second: int = 0) -> int:
+    """Epoch ns of an exchange-local (UTC+8) wall-clock time in 2026."""
+    local = dt.datetime(2026, month, day, hour, minute, second, tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    return int(local.timestamp() * 1e9)
+
+
+DECEMBER = "2026/12/16"
+OCTOBER_CONTRACTS = [
+    _future("TMFJ6", "TMF", OCTOBER),
+    _future("TMFK6", "TMF", NOVEMBER),
+    _future("TMFL6", "TMF", DECEMBER),
+]
+
+
+class TestOctoberExpiryTimeline:
+    """2026-10-21 (third Wednesday) is TMFJ6's delivery date.
+
+    The universe cannot roll on the delivery day itself: from 13:30 the builder
+    (which filters by *date*) still keeps TMFJ6 while the delivery cutoff says it
+    has settled, so ``validate_universe`` refuses. After Taipei midnight the
+    night session keeps the roll deferred, and the first adoptable window is
+    after the 05:00 close on 10/22. ``reconnect_allowed`` reads the real clock, so
+    the session-open deferral is pinned by ``test_roll_is_deferred_while_a_session_is_open``.
+    """
+
+    @staticmethod
+    def _october_pool(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, today: dt.date, universe: list[str]
+    ) -> QuoteConnectionPool:
+        return _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=universe,
+            contracts=OCTOBER_CONTRACTS,
+            list_body=TMF_LIST,
+            today=today,
+        )
+
+    @staticmethod
+    def _record_results(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        results: list[str] = []
+        monkeypatch.setattr(QuoteConnectionPool, "_bump_universe_roll_metric", staticmethod(results.append))
+        return results
+
+    @pytest.mark.parametrize(
+        "now_ns",
+        [
+            pytest.param(_taipei_ns(10, 21, 13, 30), id="final_session_close"),
+            pytest.param(_taipei_ns(10, 21, 14, 0), id="afternoon"),
+            pytest.param(_taipei_ns(10, 21, 23, 59, 59), id="last_second_before_midnight"),
+        ],
+    )
+    def test_roll_on_delivery_day_after_the_final_session_close_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, now_ns: int
+    ) -> None:
+        results = self._record_results(monkeypatch)
+        pool = self._october_pool(tmp_path, monkeypatch, today=dt.date(2026, 10, 21), universe=["TMFJ6", "TMFK6"])
+
+        assert pool.roll_universe(live=False, now_ns=now_ns) is False
+
+        assert results == ["refused"]
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+
+    def test_roll_one_second_before_the_final_session_close_is_not_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """TMFJ6 still trades until 13:30:00, so the unchanged universe is simply a no-op."""
+        results = self._record_results(monkeypatch)
+        pool = self._october_pool(tmp_path, monkeypatch, today=dt.date(2026, 10, 21), universe=["TMFJ6", "TMFK6"])
+
+        assert pool.roll_universe(live=False, now_ns=_taipei_ns(10, 21, 13, 29, 59)) is False
+
+        assert "refused" not in results
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+
+    def test_roll_the_morning_after_delivery_day_is_adopted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        results = self._record_results(monkeypatch)
+        pool = self._october_pool(tmp_path, monkeypatch, today=dt.date(2026, 10, 22), universe=["TMFJ6", "TMFK6"])
+
+        assert pool.roll_universe(live=False, now_ns=_taipei_ns(10, 22, 6, 0)) is True
+
+        assert "refused" not in results
+        assert _universe_codes(pool) == {"TMFK6", "TMFL6"}
+
+    def test_roll_after_delivery_day_retires_the_settled_code_from_a_live_pool(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = self._october_pool(tmp_path, monkeypatch, today=dt.date(2026, 10, 22), universe=["TMFJ6", "TMFK6"])
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: False)
+
+        assert pool.roll_universe(now_ns=_taipei_ns(10, 22, 6, 0)) is True
+
+        assert [code for client in clients for code in client.unsubscribed] == ["TMFJ6"]
+        assert [code for client in clients for code in client.subscribed] == ["TMFL6"]
