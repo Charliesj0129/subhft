@@ -705,6 +705,63 @@ class TestOptionsRefreshGuards:
             assert pool.refresh_options_symbols() is True
         assert pool._options_expiry == "2030/04/17"
 
+    def _strike_range_options(self) -> list[dict]:
+        """Strikes 20000..21000 step 100; every option 'reference' is a ~150 premium, not the index."""
+        opts = []
+        for strike in range(20000, 21100, 100):
+            for right in ("C", "P"):
+                opts.append(
+                    {
+                        "code": f"TXO{strike}{right}",
+                        "right": right,
+                        "strike": str(strike),
+                        "delivery_date": "2030/04/17",
+                        "reference": "150",
+                    }
+                )
+        return opts
+
+    def _refresh_with_strike_range(self, tmp_path, monkeypatch, index):
+        from hft_platform.config._symbols_types import ContractIndex  # noqa: F401  (type of `index`)
+
+        pool = self._make_pool(tmp_path, num_conns=2)
+        pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
+        pool._clients = [mock.MagicMock() for _ in range(2)]
+        for client in pool._clients:
+            client.logged_in = False
+        out_path = str(tmp_path / "live_with_options.yaml")
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
+        monkeypatch.setenv("HFT_OPTIONS_STRIKE_RANGE", "1")
+        with (
+            mock.patch.object(type(pool), "_load_options_from_cache", return_value=self._strike_range_options()),
+            mock.patch.object(type(pool), "_contract_index", return_value=index),
+        ):
+            result = pool.refresh_options_symbols()
+        return pool, result, out_path
+
+    def test_strike_window_is_centred_on_the_underlying_future_not_option_premiums(self, tmp_path, monkeypatch):
+        from hft_platform.config._symbols_types import ContractIndex
+
+        future = {"code": "TXFB0", "type": "future", "root": "TXF", "delivery_date": "2030/03/20", "reference": 20800.0}
+        pool, result, out_path = self._refresh_with_strike_range(
+            tmp_path, monkeypatch, ContractIndex(contracts=[future])
+        )
+
+        assert result is True
+        with open(out_path) as f:
+            codes = [s["code"] for s in yaml.safe_load(f)["symbols"] if s["code"].startswith("TXO")]
+        strikes = {int(code[3:8]) for code in codes}
+        assert strikes == {20700, 20800, 20900}
+
+    def test_strike_window_without_an_underlying_price_keeps_the_current_chain(self, tmp_path, monkeypatch):
+        from hft_platform.config._symbols_types import ContractIndex
+
+        pool, result, out_path = self._refresh_with_strike_range(tmp_path, monkeypatch, ContractIndex(contracts=[]))
+
+        assert result is False
+        assert pool._options_expiry != "2030/04/17"
+        assert not os.path.exists(out_path)
+
 
 class TestSubscriptionLimitConstant:
     """Verify _MAX_SUBSCRIPTIONS_PER_CONN reflects real Shioaji SDK topic limit."""

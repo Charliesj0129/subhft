@@ -4,7 +4,7 @@
 -include .env
 export
 
-.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check install-git-hooks
+.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard docs-contract-check feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check install-git-hooks
 
 PY ?= uv run python
 
@@ -483,8 +483,9 @@ release-converge-clean: ## Deep clean caches/artifacts then run release gates (r
 
 release-converge: release-converge-clean ## Alias: converge repository to release-ready state
 
-release-converge-mvp: ## Aggressive MVP release convergence (full gate + minimal research sample + tracked report slimming)
-	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,)
+release-converge-mvp: ## Aggressive MVP release convergence (full gate + minimal research sample + tracked report slimming). DRY RUN unless CONFIRM=yes; deleting a non-empty .wal/ or data/ also needs ALLOW_DELETE_WAL=1 / ALLOW_DELETE_DATA=1
+	@echo "release-converge-mvp: $(if $(filter yes,$(CONFIRM)),DELETING (CONFIRM=yes),DRY RUN - nothing is deleted; add CONFIRM=yes to run it for real)"
+	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,) $(if $(filter yes,$(CONFIRM)),,--dry-run) $(if $(filter 1,$(ALLOW_DELETE_WAL)),--allow-delete-wal,) $(if $(filter 1,$(ALLOW_DELETE_DATA)),--allow-delete-data,)
 
 release-first-ops-gate: ## First operational release gate (no cleanup; fail-closed)
 	@if [ -z "$(CHANGE_ID)" ]; then \
@@ -557,6 +558,9 @@ ch-query-guard-suite: ## Run baseline guarded ClickHouse query suite for periodi
 env-vars-guard: ## Verify runbook HFT_* vars are documented in env-vars reference
 	$(PY) scripts/env_var_reference_guard.py --project-root . --output-dir outputs/env_var_guard
 
+docs-contract-check: ## Report doc claims the code/config do not back (hft commands, make targets, metrics, paths); STRICT=1 fails on any
+	$(PY) scripts/docs_contract_check.py --root . --output-dir outputs/docs_contract $(if $(filter 1,$(STRICT)),--strict,)
+
 feature-canary-report: ## Evaluate feature shadow/canary guardrails from Prometheus and emit report
 	$(PY) scripts/feature_canary_guard.py --prom-url "$${PROM_URL:-http://localhost:9091}" --window "$${WINDOW:-1h}" --output-dir outputs/feature_canary $(if $(filter 1,$(ALLOW_WARN)),--allow-warn-exit-zero,)
 
@@ -569,6 +573,13 @@ incident-timeline: ## Render incident timeline artifact from decision trace JSON
 		exit 2; \
 	fi
 	PYTHONPATH=src $(PY) scripts/render_incident_timeline.py "$(TRACE_FILE)" $(if $(TRACE_ID),--trace-id "$(TRACE_ID)",) --format "$${FORMAT:-md}" --out "$${OUT:-outputs/incidents/timeline.$${FORMAT:-md}}"
+
+.PHONY: dead-config-scan dead-metrics-scan
+dead-config-scan: ## Report config keys nothing reads, config files nothing loads, Prometheus rule files that never run; STRICT=1 fails on any
+	$(PY) scripts/dead_config_scan.py --root . --output-dir outputs/dead_scan $(if $(filter 1,$(STRICT)),--strict,)
+
+dead-metrics-scan: ## Report registry metrics nothing updates and the alerts that depend on them; STRICT=1 fails on any but the informational dynamic-only rows
+	$(PY) scripts/dead_metrics_scan.py --root . --output-dir outputs/dead_scan $(if $(filter 1,$(STRICT)),--strict,)
 
 history-repair: ## Repair fragmented historical parquet exports and resample to complete OHLCV
 	@if [ -z "$(INPUTS)" ] || [ -z "$(OUT)" ]; then \

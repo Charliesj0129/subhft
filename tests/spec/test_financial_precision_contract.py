@@ -247,7 +247,7 @@ class TestEdgeCases:
         store = _make_position_store()
         total_fees = 0
         for i in range(50):
-            fill = _make_fill(side=Side.BUY, qty=1, price=1_000_000, fee=100, tax=50, ts=i + 1)
+            fill = _make_fill(side=Side.BUY, qty=1, price=1_000_000, fee=150, tax=50, ts=i + 1)  # fee is all-in
             store.on_fill(fill)
             total_fees += 150
 

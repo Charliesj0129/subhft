@@ -22,13 +22,23 @@
 ## 2) Pipeline / Queue
 - `queue_depth{queue=...}`
 - `bus_overflow_total`
-- `event_loop_lag_ms`
+- Event-loop metrics (three, and they are not interchangeable):
+  - `event_loop_probe_lag_ms` (Histogram): overshoot of an idle probe task that only sleeps
+    (`HFT_LOOP_PROBE_INTERVAL_S`, default 0.1 s). This is the real loop congestion: time the loop was
+    unavailable to any callback, hot path included. `EventLoopLagHigh` reads the histogram. StormGuard's loop-lag input is the probe's peak since the previous supervisor tick (`_stormguard_latency_us`); for a tick in which the probe recorded no sample it falls back to `event_loop_lag_ms`.
+  - `supervisor_tick_duration_ms` (Histogram): wall time of one supervisor tick body, excluding its 1 Hz sleep.
+    The body contains `await`s, so this is elapsed time, not time the loop was blocked.
+  - `event_loop_lag_ms` (Gauge): the supervisor's whole tick period minus its 1 s sleep, so it is congestion
+    **plus** the tick body, roughly the sum of the other two. Despite the name it is not loop lag; the name is
+    kept because a dashboard (`pipeline-health.json`) still plots it. Do not alert or tune on it.
+  - The two Histograms expose `_bucket`, `_sum` and `_count` only; a query for the bare name returns nothing.
 
 ## 3) Strategy / Risk
 - `strategy_latency_ns`
 - `strategy_intents_total{strategy=...}`
 - `risk_reject_total{reason=...,strategy=...}`
 - `stormguard_mode{strategy=...}`
+- `kill_switch_active` (1 while the kill-switch hold is set: latch file present, or a startup-recovery halt pinned it)
 - `gateway_reject_total{reason=...}` when `HFT_GATEWAY_ENABLED=1`
 - `platform_reduce_only_active`
 - `manual_rearm_required{scope=...}`
@@ -63,7 +73,8 @@
 - `increase(recorder_failures_total[5m]) > 0`
 - Insert failed ratio（24h）：`failed_after_retry|failed_no_client / total > 0.005`（持續 15m）
 - Insert retry ratio（24h）：`success_after_retry|failed_after_retry / total > 0.05`（持續 15m）
-- `event_loop_lag_ms` 長時間超標
+- `EventLoopLagHigh`：`event_loop_probe_lag_ms` 的 p99 在 5 分鐘內超過 100 ms，持續 2 分鐘（僅盤中）。
+  不要改看 `event_loop_lag_ms`，它含 supervisor 自己的工作量。
 
 ## 8) 最小健康檢查流程
 ```bash

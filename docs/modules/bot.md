@@ -32,7 +32,7 @@ This module is the **user-facing interface** — it composes commands on top of 
 | `/flow` | `[symbol]` | Flow summary: U/D ratio, net flow, strongest buy/sell bars, segment breakdown |
 | `/status` | — | Bot health: uptime, last report timestamps, ClickHouse connectivity |
 
-Arguments default: symbol = first in `HFT_REPORT_SYMBOLS` (default `TXFD6`); session = auto-detected by current hour (day if 07:00-15:00 CST).
+Arguments default: symbol = first in `HFT_REPORT_SYMBOLS` (default `TXFR1`, `bot/app.py:93`); session = auto-detected by current hour (day if 07:00-15:00 CST).
 
 ## Scheduled Push
 
@@ -75,7 +75,7 @@ hft-bot:
   environment:
     - HFT_TELEGRAM_BOT_TOKEN=${HFT_TELEGRAM_BOT_TOKEN}
     - HFT_TELEGRAM_CHAT_ID=${HFT_TELEGRAM_CHAT_ID}
-    - HFT_REPORT_SYMBOLS=TXFD6
+    - HFT_REPORT_SYMBOLS=${HFT_REPORT_SYMBOLS:-TXFR1}
   depends_on: [clickhouse]
   deploy:
     resources:
@@ -90,4 +90,4 @@ Also starts a background `/healthz` HTTP server for container liveness probes.
 |----------|---------|---------|
 | `HFT_TELEGRAM_BOT_TOKEN` | — | Bot API token (from BotFather) |
 | `HFT_TELEGRAM_CHAT_ID` | — | Owner chat ID for access control |
-| `HFT_REPORT_SYMBOLS` | `TXFD6` | Comma-separated symbol list |
+| `HFT_REPORT_SYMBOLS` | `TXFR1` | Comma-separated symbol list |

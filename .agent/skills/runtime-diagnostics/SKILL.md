@@ -26,7 +26,9 @@ for the standard sweeps.
 
 - **Registry-wide metrics lie both ways.** A metric that was never set reads as a
   confident `0`. Confirm the producer exists and has run before trusting `0`.
-- `event_loop_lag_ms` is not literally loop lag; use the loop-lag metric.
+- `event_loop_lag_ms` is not literally loop lag (it is congestion plus the supervisor's own tick body); read
+  `event_loop_probe_lag_ms` for the loop and `supervisor_tick_duration_ms` for the tick body. Both are
+  Histograms: query `_bucket`, `_sum` or `_count`.
 - "No data" means a break only while the session is open; degraded clusters and
   detectors firing at every close are session edges, not incidents.
 - A gauge exported is not always the one gated (the drawdown gauge read 0.0
