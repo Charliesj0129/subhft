@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.feed_adapter.shioaji._compat import resolve_quote_enum, to_plain_payload
 from hft_platform.feed_adapter.shioaji.contracts_runtime import derive_callback_code
 
@@ -504,8 +505,7 @@ class SubscriptionManager:
                 conn_id=str(getattr(c, "conn_id", "unknown")),
             )
             try:
-                loop = _asyncio.get_running_loop()
-                loop.create_task(coro)
+                spawn_retained(coro, name="notify_subscription_truncated")
             except RuntimeError:
                 # subscribe_basket usually runs on the asyncio loop, but SDK
                 # callbacks (event_13/event_4) and worker threads do not.
