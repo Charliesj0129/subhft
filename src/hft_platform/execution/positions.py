@@ -38,6 +38,7 @@ if _RUST_POSITIONS:
         _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
 
 
+_PNL_SCALE: int = 10_000  # scaled int x10000 per NTD
 _MIN_PEAK_SCALED: int = int(os.getenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "100000000"))
 
 
@@ -251,6 +252,21 @@ class PositionStore:
         # This is the 1 Hz supervisor read, off the fill hot path.
         self._publish_drawdown_gauge(drawdown)
         return drawdown
+
+    def get_drawdown_ntd(self) -> float:
+        """Realised PnL given back from today's high-watermark, in NTD (>= 0).
+
+        The fraction ``get_drawdown_pct`` returns divides by the high-watermark
+        itself, so the same loss reads as a different drawdown depending on how
+        much was won first: on THESHOW 2026-10-05 a 4,620 NTD give-back read as
+        1.61% and set StormGuard to STORM, while an account that opens the day
+        losing never arms the gate at all (peak below ``_MIN_PEAK_SCALED``).
+        An absolute amount has neither problem and needs no cold-start guard.
+        """
+        with self._fill_lock:
+            self._roll_peak_equity_if_new_day_locked()
+            given_back = self._peak_equity_scaled - self._total_realized_pnl_scaled
+        return max(given_back, 0) / _PNL_SCALE
 
     def _publish_drawdown_gauge(self, drawdown: float) -> None:
         """Export the drawdown the risk path just read. Never raises."""
