@@ -150,7 +150,9 @@ def test_an_inline_marker_with_a_reason_passes(tmp_path: Path, capsys: pytest.Ca
     assert "inline-marker=1" in out
 
 
-@pytest.mark.parametrize("comment", ["# precision-ok", "# precision-ok:", "# precision-ok:   ", "# precision-ok seconds"])
+@pytest.mark.parametrize(
+    "comment", ["# precision-ok", "# precision-ok:", "# precision-ok:   ", "# precision-ok seconds"]
+)
 def test_a_marker_without_a_reason_is_reported_as_needing_one(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], comment: str
 ) -> None:
