@@ -74,14 +74,10 @@ intraday_pnl:
   # 2026-04-20: User-requested daily loss cap 5,000 NTD; PEAK_DRAWDOWN
   # only protects days with peak ≥ 3,500 NTD (40% retracement → trigger).
   #
-  # PEAK_DRAWDOWN sets halt_triggered → StormGuard HALT, which STOPS NEW
-  # ORDERS. It does NOT close the book. The original design called for
-  # autonomy_monitor.flatten_all() to flatten at market, and this comment
-  # asserted that it did, but AutonomyMonitor is only constructed when
-  # HFT_AUTONOMY_MONITOR_ENABLED=1 and that is unset on THESHOW — flatten_all
-  # has never run there. Enabling it means enabling autonomous market orders
-  # and is a separate, deliberately watched change. Until then this stop
-  # freezes the book; it does not flatten it.
+  # PEAK_DRAWDOWN and the hard limit set halt_triggered -> StormGuard HALT,
+  # which stops new orders. From the loss_exit block below, a latched stop
+  # with a position open is also closed (FORCE_FLAT); before it the stop froze
+  # the book (THESHOW 10/15-10/21: one TMFJ6 lot held to settlement).
   #
   # Recovery: drawdown_recovery_pct is the release threshold (halt at
   # peak_drawdown_pct, release at drawdown_recovery_pct — the gap is
@@ -94,3 +90,25 @@ intraday_pnl:
   drawdown_recovery_pct: 0.20
   soft_limit_cooldown_s: 60
   peak_drawdown_min_peak_ntd: 3500
+  # Since-entry loss on one position, across days, at which risk/loss_exit.py
+  # closes it. The daily limits above judge only the day's change (a lot
+  # carried overnight is measured from that day's opening mark), so this is
+  # what bounds a loss carried across days. Defaults to hard_limit_ntd.
+  position_loss_limit_ntd: 5000
+
+# On a monthly future's delivery date, from `cutoff` (Taipei), intents that
+# would open or add to it are rejected and loss_exit closes what is left, so
+# no position reaches the exchange's 13:30 final settlement.
+expiry_guard:
+  enabled: true
+  cutoff: "13:00"
+
+# Platform exit (risk/loss_exit.py): FORCE_FLAT, IOC, `protection_ticks`
+# through the best opposite price, retried every `retry_interval_s` while the
+# trigger holds. Triggers: the daily-loss stop latched with a position open,
+# position_loss_limit_ntd reached, expiry_guard cutoff passed. `enabled: false`
+# turns it off at the next SIGHUP risk-config reload.
+loss_exit:
+  enabled: true
+  protection_ticks: 5
+  retry_interval_s: 10

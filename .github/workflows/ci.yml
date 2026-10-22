@@ -192,8 +192,16 @@ jobs:
       - name: Guard env vars reference coverage
         run: make env-vars-guard
 
+      - name: Docs contract report (report mode, never fails the build)
+        run: make docs-contract-check
+        continue-on-error: true
+
       - name: Enforce TODO/ROADMAP delivery governance
         run: make roadmap-delivery-check
+
+      - name: Dead config and dead metrics reports (report mode, never fails the build)
+        run: make dead-config-scan dead-metrics-scan
+        continue-on-error: true
 
       - name: Upload roadmap delivery artifact
         if: always()

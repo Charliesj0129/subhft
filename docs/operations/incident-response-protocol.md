@@ -144,7 +144,7 @@ Kill switch activated (manual or automated)
 +-- ALL open orders: cancel requested
 |
 +-- Verify kill state
-|   +-- Metrics: hft_kill_switch_active == 1
+|   +-- Metrics: kill_switch_active == 1 (HFT_METRICS_PREFIX, if set, is prepended)
 |   +-- Logs: confirm no orders accepted after activation
 |
 +-- Cancel verification

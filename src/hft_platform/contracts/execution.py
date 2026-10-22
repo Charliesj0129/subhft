@@ -48,8 +48,8 @@ class FillEvent:
     side: Side
     qty: int
     price: int  # Fixed-point (x10000)
-    fee: int  # Fixed-point (x10000)
-    tax: int  # Fixed-point (x10000)
+    fee: int  # Fixed-point (x10000) NTD; ALL-IN charge = commission + tax (FeeBreakdown.total)
+    tax: int  # Fixed-point (x10000) NTD; the tax part, ALREADY INCLUDED in fee: informational, never add to fee
     ingest_ts_ns: int
     match_ts_ns: int
 

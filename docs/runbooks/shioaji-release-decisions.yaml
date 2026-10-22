@@ -28,89 +28,13 @@
 #   uv run python -m scripts.shioaji_api_diff diff --from 1.5.6 --to <version> \
 #     > tests/golden/shioaji_sdk/diff_1.5.6_to_<version>.json
 
-pin: "1.5.6"
+pin: "1.7.9"
 
-decisions:
-  - version: "1.5.7"
-    verdict: DEFER
-    decided_on: 2026-08-27
-    revisit_after: 2026-10-13
-    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.5.7.json
-    rationale: >
-      API-identical to the pin: the captured surface diff is empty in every
-      section. That is precisely why the diff cannot clear it -- 1.5.x is a
-      compiled Rust core, so a fix release changes behaviour without moving a
-      single Python symbol, and this tool can only see symbols. What is missing
-      is not evidence but a decision: whether to spend an HFT_MODE=sim soak on
-      it. Deferred until that call is made; the soak is the operator's to
-      authorise, not something a surface capture can substitute for.
-      Renewed 2026-09-29 by the owner for two weeks (was 2026-09-26); still
-      no soak authorised.
-
-  - version: "1.7.0"
-    verdict: BLOCKED
-    decided_on: 2026-08-27
-    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.0.json
-    blocking_symbols:
-      - SecurityType.Future
-      - Shioaji.login(contracts_timeout)
-      - Shioaji.login(fetch_contract)
-    rationale: >
-      The release that introduces the whole 1.7.x break. Three symbols the
-      platform uses by name change: the SecurityType.Future enum member is
-      renamed to Futures, and login() drops both contracts_timeout and
-      fetch_contract. All three are shimmable in feed_adapter/shioaji/, but
-      none of that adapter work exists yet, and the platform is under a
-      stabilization freeze.
-
-  - version: "1.7.1"
-    verdict: BLOCKED
-    decided_on: 2026-08-27
-    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.1.json
-    blocking_symbols:
-      - SecurityType.Future
-      - Shioaji.login(contracts_timeout)
-      - Shioaji.login(fetch_contract)
-    rationale: >
-      Carries 1.7.0's three breaks forward unchanged. Its own hop from 1.7.0 is
-      SAFE and largely additive, which is exactly why the verdict has to rest on
-      the diff from the pin rather than on the release-to-release one.
-
-  - version: "1.7.2"
-    verdict: BLOCKED
-    decided_on: 2026-08-27
-    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.2.json
-    blocking_symbols:
-      - SecurityType.Future
-      - Shioaji.login(contracts_timeout)
-      - Shioaji.login(fetch_contract)
-    rationale: >
-      Same three breaks inherited from 1.7.0; nothing in this release removes or
-      restores any of them.
-
-  - version: "1.7.3"
-    verdict: BLOCKED
-    decided_on: 2026-08-27
-    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.3.json
-    blocking_symbols:
-      - SecurityType.Future
-      - Shioaji.login(contracts_timeout)
-      - Shioaji.login(fetch_contract)
-    rationale: >
-      Same three breaks. The combo-order and shortable-info features SinoPac
-      announced here are additive and would be genuinely useful, but they arrive
-      behind the 1.7.0 adapter work and cannot be taken separately.
-
-  - version: "1.7.4"
-    verdict: BLOCKED
-    decided_on: 2026-08-27
-    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.4.json
-    blocking_symbols:
-      - SecurityType.Future
-      - Shioaji.login(contracts_timeout)
-      - Shioaji.login(fetch_contract)
-    rationale: >
-      Head of the 1.7.x line as of this snapshot, and still the same three
-      breaks -- 31 additions and 55 benign changes accumulate on top of them.
-      When the adapter work is scheduled, this is the version to target: taking
-      1.7.0 first buys nothing, because the shim needed is identical.
+# 2026-10-22: pin moved 1.5.6 -> 1.7.9 at the owner's request. 1.5.6 had been
+# deleted from PyPI, so the lock could no longer be re-resolved and the image
+# could not be rebuilt. The three platform breaks the 1.5.6-pinned ledger
+# recorded for every 1.7.x release (SecurityType.Future -> Futures; login()
+# lost contracts_timeout and fetch_contract) are remediated in the adapter;
+# git history holds the superseded 1.5.6-relative entries. No release newer
+# than 1.7.9 exists yet.
+decisions: []

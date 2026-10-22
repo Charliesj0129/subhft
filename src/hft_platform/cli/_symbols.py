@@ -92,6 +92,9 @@ def cmd_symbols_build(args: argparse.Namespace) -> None:
     )
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
+    if contract_index is not None:
+        # An operator build must not guess where the option window goes; see ContractIndex.require_underlying.
+        contract_index.require_underlying = True
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 
@@ -116,6 +119,9 @@ def cmd_symbols_preview(args: argparse.Namespace) -> None:
     from hft_platform.config.symbols import build_symbols, load_contract_cache, preview_lines, validate_symbols
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
+    if contract_index is not None:
+        # An operator build must not guess where the option window goes; see ContractIndex.require_underlying.
+        contract_index.require_underlying = True
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
 

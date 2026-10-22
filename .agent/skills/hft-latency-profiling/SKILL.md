@@ -22,7 +22,8 @@ make benchmark              # regression benchmarks; make benchmark-compare agai
 ```
 
 Check which path is active before comparing (fused normalizer, feature backend
-flags in `hft-market-data`); `event_loop_lag_ms` is not literally loop lag.
+flags in `hft-market-data`); `event_loop_lag_ms` is not literally loop lag (it adds the supervisor's tick body); use
+`event_loop_probe_lag_ms`.
 
 ## Tools
 
