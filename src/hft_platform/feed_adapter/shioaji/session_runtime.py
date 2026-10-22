@@ -256,14 +256,22 @@ class SessionRuntime:
             deferred_reason: str | None = None
 
             def _do_login(fetch_contract: bool) -> None:
+                # shioaji 1.7.0 removed ``fetch_contract``/``contracts_timeout``/
+                # ``contracts_cb`` from ``login()``; contract loading is now the
+                # caller's explicit ``fetch_contracts`` call. Both stay inside one
+                # guarded call so a failed contract load still takes the
+                # no-contract fallback below exactly as the 1.5 login did.
                 c.api.login(
                     api_key=key,
                     secret_key=secret,
-                    contracts_timeout=c.contracts_timeout,
-                    contracts_cb=contracts_cb,
-                    fetch_contract=fetch_contract,
                     subscribe_trade=c.subscribe_trade,
                 )
+                if fetch_contract:
+                    c.api.fetch_contracts(
+                        contract_download=False,
+                        contracts_timeout=c.contracts_timeout,
+                        contracts_cb=contracts_cb,
+                    )
 
             for attempt in range(1, attempts_total + 1):
                 attempts_made = attempt
