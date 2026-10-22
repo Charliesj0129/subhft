@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # Quarterly Chaos Drill — runs all 5 chaos playbooks with timing and report.
 #
-# Usage: ./scripts/run-chaos-drill.sh
-# Output: Console report + log file at /tmp/chaos-drill-YYYYMMDD.log
+# Usage: ./scripts/run-chaos-drill.sh   (from any directory)
+# Output: Console report + log file at <repo>/outputs/drills/chaos-drill-YYYYMMDD.log.
+#         outputs/ is untracked local storage, not /tmp, so the sign-off evidence outlives a host clean-up.
+#         A second run on the same day appends to the same log; a failed run's record is never replaced.
 set -euo pipefail
 
-DATE=$(date +%Y%m%d)
-LOG="/tmp/chaos-drill-${DATE}.log"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
 
-echo "=== Quarterly Chaos Drill ===" | tee "$LOG"
+DATE=$(date +%Y%m%d)
+LOG_DIR="${REPO_ROOT}/outputs/drills"
+mkdir -p "$LOG_DIR"
+LOG="${LOG_DIR}/chaos-drill-${DATE}.log"
+
+echo "=== Quarterly Chaos Drill ===" | tee -a "$LOG"
 echo "Date: $(date -Iseconds)" | tee -a "$LOG"
 echo "Operator: $(whoami)" | tee -a "$LOG"
 echo "" | tee -a "$LOG"

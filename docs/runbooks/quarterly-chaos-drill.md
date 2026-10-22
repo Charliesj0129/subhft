@@ -22,7 +22,7 @@ Run the full drill suite with a single command:
 ./scripts/run-chaos-drill.sh
 ```
 
-Output is printed to console and saved to `/tmp/chaos-drill-YYYYMMDD.log`.
+Output is printed to console and saved to `outputs/drills/chaos-drill-YYYYMMDD.log` in the repository root (run the script from any directory). `outputs/` is untracked local storage, so attach or copy the log into the sign-off record. A second run on the same day appends to the same file.
 
 ### Manual Mode
 
@@ -77,7 +77,7 @@ uv run pytest tests/chaos/test_playbook_disk_full.py -v --no-cov
 
 - [ ] Verify all services recovered: `docker compose ps` — all healthy
 - [ ] Check metrics for anomalies: compare Prometheus dashboards against pre-drill baseline
-- [ ] Review drill log: `cat /tmp/chaos-drill-YYYYMMDD.log`
+- [ ] Review drill log: `cat outputs/drills/chaos-drill-YYYYMMDD.log`
 - [ ] Update sign-off table below
 
 ## Sign-Off Table
@@ -93,7 +93,7 @@ If any playbook fails:
 1. Do not proceed with production deployment until the failure is resolved.
 2. Open a GitHub issue with:
    - Title: `chaos-drill: <playbook_name> FAIL on YYYY-MM-DD`
-   - Body: attach the full drill log (`/tmp/chaos-drill-YYYYMMDD.log`)
+   - Body: attach the full drill log (`outputs/drills/chaos-drill-YYYYMMDD.log`)
    - Label: `ops`, `resilience`
 3. Assign to the on-call engineer for root cause analysis.
 4. Re-run the failed playbook after the fix to confirm resolution.
