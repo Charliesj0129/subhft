@@ -1,18 +1,17 @@
+"""Python hot-path micro-benchmarks compared by the Darwin gate.
+
+The Rust (rust_core) counterparts were removed from this suite on
+2026-10-23: Rust work is paused (AGENTS.md), and the ~10 us PyO3-bound
+``position_update`` case scaled with runner hardware differently from its
+peers, so the gate's shared runner-speed factor flagged it as a +14-18%
+regression on every slow runner, including PRs that changed no code.
+Rust kernel correctness stays covered by the parity tests.
+"""
+
 import numpy as np
 import pytest
 
 pytest.importorskip("pytest_benchmark")
-
-
-def _load_rust_core():
-    try:
-        from hft_platform import rust_core as rc  # type: ignore
-    except Exception:
-        try:
-            import rust_core as rc  # type: ignore
-        except Exception:
-            return None
-    return rc
 
 
 SCALE = 100
@@ -21,18 +20,6 @@ BID_PRICES = [100.0 - 0.5 * i for i in range(LEVELS)]
 BID_VOLS = [10 + i for i in range(LEVELS)]
 ASK_PRICES = [100.5 + 0.5 * i for i in range(LEVELS)]
 ASK_VOLS = [11 + i for i in range(LEVELS)]
-_BID_PRICES_NP = np.asarray(BID_PRICES, dtype=np.float64)
-_BID_VOLS_NP = np.asarray(BID_VOLS, dtype=np.int64)
-_ASK_PRICES_NP = np.asarray(ASK_PRICES, dtype=np.float64)
-_ASK_VOLS_NP = np.asarray(ASK_VOLS, dtype=np.int64)
-PAYLOAD = {
-    "code": "2330",
-    "ts": 1700000000,
-    "bid_price": BID_PRICES,
-    "bid_volume": BID_VOLS,
-    "ask_price": ASK_PRICES,
-    "ask_volume": ASK_VOLS,
-}
 
 
 def python_scale_book_pair_stats():
@@ -49,13 +36,6 @@ def python_scale_book_pair_stats():
     total_top = int(bids_arr[0, 1] + asks_arr[0, 1])
     imbalance = ((int(bids_arr[0, 1]) - int(asks_arr[0, 1])) / total_top) if total_top else 0.0
     return bids_arr, asks_arr, (best_bid, best_ask, bid_depth, ask_depth, mid, spread, imbalance)
-
-
-def rust_scale_book_pair_stats(rc):
-    fn = getattr(rc, "scale_book_pair_stats_np", None)
-    if fn is None:
-        return rc.scale_book_pair_stats(BID_PRICES, BID_VOLS, ASK_PRICES, ASK_VOLS, SCALE)
-    return fn(_BID_PRICES_NP, _BID_VOLS_NP, _ASK_PRICES_NP, _ASK_VOLS_NP, SCALE)
 
 
 def python_normalize_bidask():
@@ -88,47 +68,17 @@ def python_normalize_bidask():
     )
 
 
-def rust_normalize_bidask(rc):
-    fn = getattr(rc, "normalize_bidask_tuple_np", None)
-    if fn is None:
-        return rc.normalize_bidask_tuple(PAYLOAD, PAYLOAD["code"], SCALE)
-    return fn(
-        PAYLOAD["code"],
-        PAYLOAD["ts"],
-        _BID_PRICES_NP,
-        _BID_VOLS_NP,
-        _ASK_PRICES_NP,
-        _ASK_VOLS_NP,
-        SCALE,
-    )
-
-
 def test_bench_python_scale_book_pair_stats(benchmark):  # noqa: no-assert
     benchmark(python_scale_book_pair_stats)
-
-
-def test_bench_rust_scale_book_pair_stats(benchmark):  # noqa: no-assert
-    rc = _load_rust_core()
-    if rc is None:
-        pytest.skip("rust_core not available")
-    benchmark(lambda: rust_scale_book_pair_stats(rc))
 
 
 def test_bench_python_normalize_bidask(benchmark):  # noqa: no-assert
     benchmark(python_normalize_bidask)
 
 
-def test_bench_rust_normalize_bidask(benchmark):  # noqa: no-assert
-    rc = _load_rust_core()
-    if rc is None:
-        pytest.skip("rust_core not available")
-    benchmark(lambda: rust_normalize_bidask(rc))
-
-
 # ---------------------------------------------------------------------------
 # Position tracker benchmarks
 # ---------------------------------------------------------------------------
-_POS_KEY = "ACC:STRAT:2330"
 _POS_FILLS = [
     (0, 10, 100000, 5, 0),  # BUY 10 @ 100000
     (0, 5, 100200, 3, 0),  # BUY 5 @ 100200
@@ -172,18 +122,5 @@ def _python_position_update():
     return net, avg, pnl, fees
 
 
-def _rust_position_update(tracker):
-    for side, qty, price, fee, tax in _POS_FILLS:
-        tracker.update(_POS_KEY, side, qty, price, fee, tax, 0)
-
-
 def test_bench_python_position_update(benchmark):  # noqa: no-assert
     benchmark(_python_position_update)
-
-
-def test_bench_rust_position_update(benchmark):  # noqa: no-assert
-    rc = _load_rust_core()
-    if rc is None or not hasattr(rc, "RustPositionTracker"):
-        pytest.skip("rust_core.RustPositionTracker not available")
-    tracker = rc.RustPositionTracker()
-    benchmark(lambda: _rust_position_update(tracker))
