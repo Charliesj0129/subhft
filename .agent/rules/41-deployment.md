@@ -67,7 +67,8 @@ Plus change-specific checks. Report exact commands run and name what was not run
 
 ## Ordering
 
-`hft ops rearm-platform` via `docker compose exec` runs in a separate process
-and cannot reach the live controller — re-arm **before** the restart. When a
+`hft ops rearm-platform` via `docker compose exec` needs **no restart**: the
+live engine applies it on its next supervisor tick (`platform_reduce_only_force_cleared`;
+verified 2026-10-22). If a batch restarts anyway, re-arm first. When a
 batch has both rules and code, reload Prometheus first (reversible), restart
 the engine second (not).

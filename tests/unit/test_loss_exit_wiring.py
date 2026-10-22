@@ -60,7 +60,7 @@ def _system(*, halted: bool, enabled: bool = True, book_age_s: float = 0.5, queu
         account_id="acc", strategy_id="R47_MAKER_TMF", symbol="TMFJ6", net_qty=1, avg_price_scaled=47_426 * SCALE
     )
     sys.position_store = SimpleNamespace(
-        snapshot_positions=lambda: {"acc:R47_MAKER_TMF:TMFJ6": pos},
+        snapshot_open_positions=lambda: {"acc:R47_MAKER_TMF:TMFJ6": pos},
         metadata=SimpleNamespace(contract_multiplier=lambda _s: 10, tick_size_scaled=lambda _s: SCALE),
     )
     sys.risk_queue = queue or _Queue()

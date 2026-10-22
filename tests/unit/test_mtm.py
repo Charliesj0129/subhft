@@ -22,6 +22,8 @@ def _make_store_with_positions(positions: dict[str, Position]) -> PositionStore:
     # Wave 3 (2026-04-25): MtM.calculate now calls snapshot_positions()
     # which acquires _fill_lock; provide it for __new__-built stores.
     store._fill_lock = threading.Lock()
+    # MtM reads snapshot_open_positions(), which also walks recovered lots.
+    store._recovery_positions = {}
     return store
 
 

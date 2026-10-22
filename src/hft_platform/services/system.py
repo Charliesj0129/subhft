@@ -179,7 +179,10 @@ class HFTSystem:
 
         positions = [
             OpenPosition(p.strategy_id, p.symbol, int(p.net_qty), int(p.avg_price_scaled))
-            for p in self.position_store.snapshot_positions().values()
+            # Includes lots recovered at startup that have not traded since: a
+            # carried lot in a month the strategy rolled away from would
+            # otherwise be invisible to every trigger.
+            for p in self.position_store.snapshot_open_positions().values()
             if p.net_qty
         ]
         # Called with no positions too: that is what clears the retry
