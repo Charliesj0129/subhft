@@ -33,7 +33,7 @@ ENUM_MEMBERS: dict[str, set[str]] = {
     "QuoteVersion": {"v0", "v1"},                     # reconnect_orchestrator.py:296-298
     "OrderState": {"StockDeal", "FuturesDeal"},       # subscription_manager.py:437 (+downstream)
     "Exchange": {"TSE", "TAIFEX"},                    # contracts_runtime.py:438
-    "SecurityType": {"Stock", "Future"},              # contracts_runtime.py:441-443
+    "SecurityType": {"Stock", "Futures"},             # contracts_runtime.py:_build_synthetic_contract
 }
 
 # Enums resolved wholesale via ``getattr(sdk.constant, "<Name>", None)`` — the
@@ -72,8 +72,9 @@ METHOD_PARAMS: dict[str, set[str]] = {
     "update_order": {"trade", "price", "qty", "timeout", "cb"},  # order_gateway.py:376-398
     "subscribe": {"quote_type", "version"},           # subscription_manager.py:245-249
     "unsubscribe": {"quote_type", "version"},         # subscription_manager.py:280-284
-    "login": {"api_key", "secret_key", "contracts_timeout", "fetch_contract",
-              "subscribe_trade"},                      # session_runtime.py:140-147
+    "login": {"api_key", "secret_key", "subscribe_trade"},  # session_runtime.py:_do_login
+    # 1.7.0 moved contract loading out of login(); _do_login and _ensure_contracts call it.
+    "fetch_contracts": {"contract_download", "contracts_timeout", "contracts_cb"},
 }
 
 # --------------------------------------------------------------------------- #

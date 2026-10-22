@@ -86,3 +86,34 @@ def test_main_skips_when_baseline_absent(tmp_path: Path, capsys):
 
     assert main(["--baseline", str(tmp_path / "missing.json"), "--current", str(current)]) == 0
     assert "skipping" in capsys.readouterr().out
+
+
+def _stats_json(path: Path, stats: dict[str, dict[str, float]]) -> Path:
+    payload = {"benchmarks": [{"name": name, "stats": s} for name, s in stats.items()]}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_main_outlier_rounds_inflating_only_the_mean_pass(tmp_path: Path, capsys):
+    # A shared runner's stray slow rounds move the mean, not the median: the
+    # same code measured twice (2026-10 PR runs: mean false-failed 23 of 30
+    # cross-run pairs at 10%, median 5 of 30).
+    base = {n: {"mean": m, "median": m, "min": m * 0.9} for n, m in {"a": 16e-6, "b": 17e-6, "c": 11e-6}.items()}
+    noisy = {n: dict(s) for n, s in base.items()}
+    noisy["c"]["mean"] = base["c"]["mean"] * 1.6
+    baseline = _stats_json(tmp_path / "base.json", base)
+    current = _stats_json(tmp_path / "cur.json", noisy)
+
+    assert main(["--baseline", str(baseline), "--current", str(current)]) == 0
+    assert "PASSED" in capsys.readouterr().out
+
+
+def test_main_median_regression_still_fails(tmp_path: Path, capsys):
+    base = {n: {"mean": m, "median": m} for n, m in {"a": 16e-6, "b": 17e-6, "c": 11e-6}.items()}
+    slower = {n: dict(s) for n, s in base.items()}
+    slower["c"] = {"mean": base["c"]["mean"] * 1.3, "median": base["c"]["median"] * 1.3}
+    baseline = _stats_json(tmp_path / "base.json", base)
+    current = _stats_json(tmp_path / "cur.json", slower)
+
+    assert main(["--baseline", str(baseline), "--current", str(current)]) == 1
+    assert "c" in capsys.readouterr().out
