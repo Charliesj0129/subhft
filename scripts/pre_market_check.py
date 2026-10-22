@@ -113,7 +113,7 @@ def check_broker_connectivity() -> tuple[bool, str]:
     api_obj = None
     try:
         api_obj = sj.Shioaji()
-        api_obj.login(api_key=api_key, secret_key=secret_key, fetch_contract=False)
+        api_obj.login(api_key=api_key, secret_key=secret_key)
 
         if ca_path and ca_passwd and person_id:
             try:
