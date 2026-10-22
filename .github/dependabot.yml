@@ -81,3 +81,82 @@ updates:
         update-types:
           - "version-update:semver-minor"
           - "version-update:semver-major"
+
+  # --- Added with the reproducible image build -------------------------------
+  # The deployed Python set is derived from uv.lock at image build time
+  # (`uv export --locked`), so the `pip` entry above, which already opens
+  # uv.lock PRs, is the one place Python runtime versions move.
+  #
+  # maturin and uv run only inside the image build. Hash-pinned in their own
+  # directory.
+  - package-ecosystem: pip
+    directory: /docker/build
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+    labels:
+      - dependencies
+      - python
+      - freeze-allowed
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # Base-image digest + tag in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+    labels:
+      - dependencies
+      - docker
+      - freeze-allowed
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # Third-party images in the compose files (prometheus, loki, redis, ...).
+  # Major bumps are ignored: they change on-disk formats and config schemas.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+    labels:
+      - dependencies
+      - docker
+      - freeze-allowed
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
+  # Rust crates (Cargo.lock at the repo root).
+  # pyo3 and numpy are the Python<->Rust FFI boundary of the hot path: a 0.x
+  # minor bump there is a breaking change and needs its own benchmarked PR, so
+  # only patch releases are proposed here. Security advisories against them
+  # still arrive as Dependabot security PRs, which this list does not suppress.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    labels:
+      - dependencies
+      - rust
+      - freeze-allowed
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+      - dependency-name: "pyo3"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "numpy"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"

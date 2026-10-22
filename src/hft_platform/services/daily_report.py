@@ -13,6 +13,8 @@ from typing import Any
 
 import structlog
 
+from hft_platform.core.background_tasks import spawn_retained
+
 logger = structlog.get_logger("services.daily_report")
 
 _PLATFORM_PRICE_SCALE = 10_000
@@ -73,7 +75,7 @@ class DailyReportService:
         try:
             if loop is None:
                 loop = asyncio.get_running_loop()
-            loop.create_task(self.on_session_closed(track))
+            spawn_retained(self.on_session_closed(track), name="daily_report_session_closed", loop=loop, track=track)
         except RuntimeError:
             # No running loop — run synchronously (e.g. in tests)
             _loop = asyncio.new_event_loop()

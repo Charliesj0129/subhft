@@ -183,23 +183,30 @@ def test_feature_plane_latency_threshold_above_measured_p99():
     assert "> 5e5" in expr or "> 500000" in expr, f"Expected threshold >= 500us. Current expression: {expr!r}"
 
 
-def test_backup_stale_gates_on_nonzero_timestamp():
-    """BackupStale must gate on `hft_backup_last_success_ts > 0`.
+def test_backup_alerts_read_the_cron_textfile_not_the_engine_gauge():
+    """The backup alerts must read what scripts/clickhouse_backup.sh exports, not the engine gauge.
 
-    Same bug class as AlphaSignalSilent: the backup cron runs as a one-shot
-    `docker compose exec hft-engine python -c ...` subprocess whose MetricsRegistry
-    is separate from the engine's scrape target. The gauge therefore never leaves
-    0, and `0 < time() - 172800` is always true — the alert fires forever despite
-    backups succeeding daily. Until the metric pipeline is fixed (Pushgateway,
-    textfile collector, or engine-side file mtime polling), the gate prevents
-    the false positive.
+    The backup runs as a one-shot `docker compose exec hft-engine python -c ...`
+    subprocess whose MetricsRegistry is not the engine's scrape target, so
+    `hft_backup_last_success_ts` never leaves 0. A rule over it either fires
+    forever or, gated with `> 0` (2026-04-25 to 2026-10-22), never: the backup
+    then failed 2026-10-13..21 unseen. The host script writes its outcome to the
+    node-exporter textfile collector instead.
     """
     alerts = _load_alerts_by_name()
-    assert "BackupStale" in alerts
-    expr = alerts["BackupStale"]["expr"]
-    assert "hft_backup_last_success_ts > 0" in expr, (
-        f"BackupStale must gate on a non-zero gauge. Current expression: {expr!r}"
-    )
+    for name in ("BackupFailed", "BackupStale", "BackupNotRunning"):
+        assert name in alerts, f"{name} alert missing from rules.yaml"
+        expr = alerts[name]["expr"]
+        assert "hft_backup_cron_" in expr and 'job="node"' in expr, f"{name}: {expr!r}"
+        assert "hft_backup_last_success_ts" not in expr, f"{name} reads the dead engine gauge: {expr!r}"
+
+
+def test_backup_staleness_windows_cover_the_weekend_gap():
+    """The cron runs Mon-Fri, so a Fri -> Mon gap of 72 h is normal and must not fire."""
+    alerts = _load_alerts_by_name()
+    for name in ("BackupStale", "BackupNotRunning"):
+        window = int(re.search(r"time\(\) - (\d+)", alerts[name]["expr"]).group(1))
+        assert window > 72 * 3600, f"{name} window {window}s fires every weekend"
 
 
 def test_execution_gateway_heartbeat_stale_gates_on_nonzero_timestamp():

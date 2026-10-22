@@ -193,3 +193,77 @@ class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
         # Verify the reason mentions "window" (not "consecutive")
         call_args = storm_guard.trigger_storm.call_args
         self.assertIn("window", str(call_args).lower())
+
+
+class TestMarketDataConsumerYields(unittest.IsolatedAsyncioTestCase):
+    """A queued burst must not hold the event loop for its whole length.
+
+    ``asyncio.Queue.get()`` returns without suspending while the queue is
+    non-empty, so a consumer that only awaits ``get()`` drains a burst in one
+    loop step. On THESHOW that blocked execution reports for 25-50 ms during the
+    day session (ExecutionLagHigh, 2026-10-21).
+    """
+
+    async def asyncSetUp(self):
+        self._old_symbols_config = os.environ.get("SYMBOLS_CONFIG")
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        cfg_path = Path(self._tmp_dir.name) / "symbols.yaml"
+        cfg_path.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
+        os.environ["SYMBOLS_CONFIG"] = str(cfg_path)
+        self.raw_queue = asyncio.Queue()
+        client = MagicMock()
+        client.login.return_value = True
+        self.service = MarketDataService(MagicMock(spec=RingBufferBus), self.raw_queue, client)
+
+    async def asyncTearDown(self):
+        if self._old_symbols_config is None:
+            os.environ.pop("SYMBOLS_CONFIG", None)
+        else:
+            os.environ["SYMBOLS_CONFIG"] = self._old_symbols_config
+        self._tmp_dir.cleanup()
+
+    async def _drain_burst(self, n: int) -> list[int]:
+        """Process ``n`` queued messages; return the other task's step count seen by each."""
+        other_steps = 0
+        seen: list[int] = []
+        drained = asyncio.Event()
+
+        def _process(_raw):
+            seen.append(other_steps)
+            if len(seen) == n:
+                drained.set()
+
+        async def _other_task():
+            nonlocal other_steps
+            while not drained.is_set():
+                other_steps += 1
+                await asyncio.sleep(0)
+
+        for i in range(n):
+            self.raw_queue.put_nowait({"code": "2330", "close": 100.0 + i, "volume": 1})
+        with (
+            patch.object(self.service, "_process_raw", side_effect=_process),
+            patch.object(self.service, "_connect_sequence", AsyncMock()),
+        ):
+            other = asyncio.create_task(_other_task())
+            task = asyncio.create_task(self.service.run())
+            await asyncio.wait_for(drained.wait(), timeout=5)
+            self.service.running = False
+            task.cancel()
+            other.cancel()
+            await asyncio.gather(task, other, return_exceptions=True)
+        return seen
+
+    async def test_consumer_yields_within_a_queued_burst(self):
+        seen = await self._drain_burst(64)
+        longest_run = max(seen.count(v) for v in set(seen))
+        self.assertEqual(len(seen), 64)
+        # Default HFT_MD_YIELD_EVERY=8: the other task runs at least once per 8 messages.
+        self.assertLessEqual(longest_run, 8)
+
+    async def test_consumer_yield_every_is_bounded_below_by_one(self):
+        with patch.dict(os.environ, {"HFT_MD_YIELD_EVERY": "0"}):
+            client = MagicMock()
+            client.login.return_value = True
+            svc = MarketDataService(MagicMock(spec=RingBufferBus), asyncio.Queue(), client)
+        self.assertEqual(svc._md_yield_every, 1)

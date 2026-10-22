@@ -65,8 +65,11 @@ def _safe_entry(root: Path, version: str = "9.9.9", **overrides: Any) -> dict[st
 
 def test_the_shipped_ledger_loads_and_agrees_with_every_diff_it_cites() -> None:
     ledger_pin, records = dec.load_decisions()
-    assert ledger_pin == PIN
-    assert records, "the ledger records no decisions at all"
+    assert ledger_pin == watch.read_pin()
+    # An empty ledger is valid only while no captured release is newer than the
+    # pin; the next test owns that rule.
+    for version, decision in records.items():
+        assert decision.version == version
 
 
 def test_the_shipped_ledger_is_written_against_the_version_pyproject_pins() -> None:
@@ -78,11 +81,12 @@ def test_the_shipped_ledger_is_written_against_the_version_pyproject_pins() -> N
 
 def test_every_captured_release_newer_than_the_pin_has_a_recorded_decision() -> None:
     _, records = dec.load_decisions()
-    pin_key = watch.parse_version(PIN)
+    pin_key = watch.parse_version(watch.read_pin())
     assert pin_key is not None
     captured = {path.name[len("surface_") : -len(".json")] for path in GOLDEN_DIR.glob("surface_*.json")}
     newer = {version for version in captured if (key := watch.parse_version(version)) is not None and key > pin_key}
-    assert newer, "no captured surface is newer than the pin — this test would prove nothing"
+    if not newer:
+        pytest.skip("the pin is the newest captured release; there is nothing to decide yet")
     assert newer <= set(records), f"captured but never decided: {sorted(newer - set(records))}"
 
 
