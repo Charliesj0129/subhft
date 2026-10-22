@@ -190,3 +190,25 @@ intraday_pnl:
   drawdown_recovery_pct: 0.20
   soft_limit_cooldown_s: 60
   peak_drawdown_min_peak_ntd: 3500
+  # Since-entry loss on one position, across days, at which risk/loss_exit.py
+  # closes it. The daily limits above judge only the day's change (a lot
+  # carried overnight is measured from that day's opening mark), so this is
+  # what bounds a loss carried across days. Defaults to hard_limit_ntd.
+  position_loss_limit_ntd: 5000
+
+# On a monthly future's delivery date, from `cutoff` (Taipei), intents that
+# would open or add to it are rejected and loss_exit closes what is left, so
+# no position reaches the exchange's 13:30 final settlement.
+expiry_guard:
+  enabled: true
+  cutoff: "13:00"
+
+# Platform exit (risk/loss_exit.py): FORCE_FLAT, IOC, `protection_ticks`
+# through the best opposite price, retried every `retry_interval_s` while the
+# trigger holds. Triggers: the daily-loss stop latched with a position open,
+# position_loss_limit_ntd reached, expiry_guard cutoff passed. `enabled: false`
+# turns it off at the next SIGHUP risk-config reload.
+loss_exit:
+  enabled: true
+  protection_ticks: 5
+  retry_interval_s: 10
