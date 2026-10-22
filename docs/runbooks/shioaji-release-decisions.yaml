@@ -34,7 +34,7 @@ decisions:
   - version: "1.5.7"
     verdict: DEFER
     decided_on: 2026-08-27
-    revisit_after: 2026-09-26
+    revisit_after: 2026-10-28
     evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.5.7.json
     rationale: >
       API-identical to the pin: the captured surface diff is empty in every
@@ -44,6 +44,11 @@ decisions:
       is not evidence but a decision: whether to spend an HFT_MODE=sim soak on
       it. Deferred until that call is made; the soak is the operator's to
       authorise, not something a surface capture can substitute for.
+      Renewed 2026-09-29 by the owner for two weeks (was 2026-09-26); still
+      no soak authorised.
+      Renewed 2026-10-14 for two weeks (was 2026-10-13); still no soak
+      authorised. Chosen to fall a week after the 2026-10-21 contract roll and
+      before the 2026-11-18 one.
 
   - version: "1.7.0"
     verdict: BLOCKED
@@ -112,3 +117,31 @@ decisions:
       breaks -- 31 additions and 55 benign changes accumulate on top of them.
       When the adapter work is scheduled, this is the version to target: taking
       1.7.0 first buys nothing, because the shim needed is identical.
+
+  - version: "1.7.7"
+    verdict: BLOCKED
+    decided_on: 2026-10-14
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.7.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      Same three breaks inherited from 1.7.0, nothing removes or restores any of
+      them. Against 1.7.4 the pin-to-candidate diff has the same 31 additions
+      and 3 platform breaks and 2 more benign changes (57 against 55). When the
+      adapter work is scheduled, target the head of the line, not this release.
+
+  - version: "1.7.8"
+    verdict: BLOCKED
+    decided_on: 2026-10-14
+    evidence: tests/golden/shioaji_sdk/diff_1.5.6_to_1.7.8.json
+    blocking_symbols:
+      - SecurityType.Future
+      - Shioaji.login(contracts_timeout)
+      - Shioaji.login(fetch_contract)
+    rationale: >
+      Head of the 1.7.x line as of this snapshot and still the same three
+      breaks: 35 additions (four more than 1.7.4) and 57 benign changes pile up
+      on top of them. If the 1.7.x adapter work is scheduled, this is the version
+      to target.

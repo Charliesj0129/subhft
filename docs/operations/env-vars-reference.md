@@ -184,6 +184,8 @@ Base YAML (config/base/main.yaml)
 | `HFT_API_QUEUE_MAX` | `1024` | 下單 API 佇列上限 | 佇列爆滿時排查風控/下單耗時 |
 | `HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY` | `diff` | contract refresh 後重訂閱策略：`none`/`diff`/`all` | 預設 `diff` 確保 rollover 日自動轉訂新月合約；遇 broker 回傳異常合約清單（runbook Mode 2）時臨時改 `none` |
 | `HFT_QUOTE_CONNECTIONS` | `1` | Quote 連線池的 facade 數量；符號宇宙依此切分成各自的 shard | 生產（THESHOW）為 `4`。每個 facade 有自己的 session-refresh 執行緒與 watchdog，所以此值同時決定下列 §7.1 各旋鈕要序列化幾個登入 |
+| `HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S` | `900` | facade 重連的開盤前提前量（秒）。已登出的 facade 在「盤中，或 `lead` 秒後即開盤」時才允許復原（`QuoteConnectionPool.reconnect_allowed`）；預設值對應 08:45 開盤前的 08:30 | 行事曆無法回答時一律放行（fail-open）。換月日的合約換月（universe roll）也在這個窗口前後被採用，見 [SymbolsYamlRegeneration](../runbooks/SymbolsYamlRegeneration.md) |
+| `HFT_SYMBOLS_RUNTIME_SNAPSHOT` | `data/live_with_options.yaml` | 連線池 universe roll 寫出的執行期快照路徑（輸出檔）。從不寫入 `config/symbols.yaml`；若與輸入檔相同，會改用預設路徑或 `<輸入檔名>.runtime.yaml` 旁檔，兩者都撞名才拋 `RuntimeError` | 只有要把快照放到別處時才設；不要指向 `SYMBOLS_CONFIG` 所指的輸入檔 |
 
 ### 7.1 Session Refresh / 重新登入（Shioaji）
 
@@ -370,7 +372,7 @@ Shadow deployment note:
 | 變數 | 預設值 | 用途 | 調整建議 |
 |---|---|---|---|
 | `HFT_BACKUP_ENABLED` | `0` | `1` = 啟用每日自動備份（`backup` service） | 生產環境設 `1` |
-| `HFT_BACKUP_RETAIN_DAYS` | `30` | 每日備份保留天數 | 磁碟不足時縮短至 7-14 |
+| `HFT_BACKUP_RETAIN_DAYS` | `7` | 每日備份保留天數 | 磁碟不足時縮短至 7-14 |
 | `CH_BACKUP_PATH` | `./backups/clickhouse` | 備份 host volume 路徑 | 跨磁碟備份請指向獨立磁區 |
 
 ---
@@ -382,6 +384,11 @@ Shadow deployment note:
 | `HFT_TELEGRAM_ENABLED` | `0` | `1` = 啟用 Telegram bot 推播（事故 / 平倉 / HALT） | 生產環境設 `1` |
 | `HFT_TELEGRAM_BOT_TOKEN` | — | BotFather 取得的 token | 使用 secret manager；勿硬編 |
 | `HFT_TELEGRAM_CHAT_ID` | — | 接收訊息的 chat id（可由 `getUpdates` 查得） | 群組 chat id 為負數 |
+| `HFT_REPORT_SYMBOLS` | `TXFR1` | bot 日報與 `/report` 的商品清單（逗號分隔；`bot/app.py:93`） | compose 的 `hft-bot` 以相同預設傳入 |
+| `HFT_REPORT_ENABLED` | `0` | 只管 CLI（`python -m hft_platform.reports`）：非 `1` 時，沒有 `--dry-run`／`--debug` 就不執行（`pipeline.py:300`） | bot 的 `/report` 與排程推播不讀它 |
+| `HFT_LLM_ENABLED` | `0` | `1` = 把日報 dossier 送到 OpenRouter（`pipeline.py:178`）；其他值不送任何資料 | 外送內容清單見 `docs/modules/reports.md` 的「LLM egress」 |
+| `HFT_LLM_API_KEY` | — | OpenRouter 金鑰（`llm_client.py:52`）；缺少時每次 LLM 呼叫都 raise，報告退回規則版 | 敏感；使用 secret manager |
+| `HFT_LLM_MODEL` | 空字串 | OpenRouter 模型 id（`pipeline.py:183`、`llm_reasoner.py:210`） | — |
 
 ---
 

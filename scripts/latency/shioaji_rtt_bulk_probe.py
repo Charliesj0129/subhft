@@ -61,7 +61,7 @@ import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -376,7 +376,7 @@ def main() -> int:
     cancel_errors = 0
     fills_aborted = 0
 
-    start = time.time()
+    start = time.monotonic()
     for i in range(args.iters):
         side = sides[i % len(sides)]
         place_us, submitted_ack_us, cancel_us, trade = _probe_one_cycle(
@@ -399,7 +399,7 @@ def main() -> int:
         else:
             cancel_samples.append(cancel_us)
         time.sleep(args.sleep)
-    elapsed_s = time.time() - start
+    elapsed_s = time.monotonic() - start
 
     place_stats = _summarize("place_order", place_samples, place_errors)
     submitted_ack_stats = _summarize("submitted_ack", submitted_ack_samples, submitted_ack_errors)
@@ -417,7 +417,7 @@ def main() -> int:
             "sleep_between_cycles_s": args.sleep,
             "elapsed_s": round(elapsed_s, 2),
             "fills_aborted": fills_aborted,
-            "ts_utc": datetime.utcnow().isoformat() + "Z",
+            "ts_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         },
         "place_order": asdict(place_stats),
         "submitted_ack": asdict(submitted_ack_stats),

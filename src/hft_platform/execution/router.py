@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Optional, Union
 from structlog import get_logger
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
+from hft_platform.contracts.execution import OrderStatus
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.engine.event_bus import RingBufferBus
@@ -21,6 +22,9 @@ from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.wal import WALWriter
 
 logger = get_logger("execution.router")
+
+# FILLED, CANCELLED and FAILED are the terminal statuses (IntEnum order).
+_FIRST_TERMINAL_STATUS = int(OrderStatus.FILLED)
 
 
 def _synthesize_dedup_key(fill: Any) -> str:
@@ -146,6 +150,60 @@ class ExecutionRouter:
         # Phantom order resolver: injected from OrderAdapter post-init.
         # Returns strategy_id for fills matching phantom order candidates.
         self._phantom_resolver: Optional[Callable[[Any], Optional[str]]] = None
+        # Fill tracker: injected from OrderAdapter post-init. Shioaji's order
+        # topic carries no fill quantity, so the router is the only place that
+        # sees both the deal (fills) and the order status (cancel/reject).
+        self._fill_tracker: Optional[Any] = None
+
+    def set_fill_tracker(self, tracker: Any) -> None:
+        """Inject the object that finishes orders on fills.
+
+        Needs ``async on_order_fill(order_key, qty) -> bool`` and
+        ``filled_qty_for(order_key) -> int`` (``OrderAdapter`` provides both).
+        """
+        self._fill_tracker = tracker
+
+    def _apply_fill_ledger(self, order_event: Any) -> None:
+        """Give an order status event the filled quantity the broker did not send.
+
+        Without this ``remaining_qty`` equals the order quantity on every cancel
+        or reject that follows a fill, and the strategy releases the pending slot
+        a second time. Only ever raises ``filled_qty``: a broker that does send
+        fills is left alone.
+        """
+        tracker = self._fill_tracker
+        key = getattr(order_event, "client_order_id", "")
+        if tracker is None or not key:
+            return
+        cum = tracker.filled_qty_for(key)
+        if cum > order_event.filled_qty:
+            order_event.filled_qty = cum
+            order_event.remaining_qty = max(0, order_event.submitted_qty - cum)
+
+    def _release_slot_once(self, order_event: Any) -> None:
+        """Make a repeat terminal status release nothing.
+
+        The strategy gives its pending slot back by ``remaining_qty`` on every
+        CANCELLED / FAILED. An order that already ended -- cancelled, filled,
+        given up by the TTL sweep -- and then gets another terminal (the broker
+        rejecting a cancel retry) would free the slot a second time, which by then
+        may belong to a newer quote. The tracker answers once per event, before
+        it records this one, so the first terminal is never touched: a live
+        FAILED for insufficient margin still releases. Status is left alone so
+        the strategy still clears its cancel-in-flight bookkeeping.
+        """
+        tracker = self._fill_tracker
+        key = getattr(order_event, "client_order_id", "")
+        if tracker is None or not key or int(order_event.status) < _FIRST_TERMINAL_STATUS:
+            return
+        note = getattr(tracker, "note_terminal", None)
+        if not callable(note) or note(key) is not True:
+            return
+        order_event.remaining_qty = 0
+        try:
+            self.metrics.order_repeat_terminal_total.labels(status=OrderStatus(order_event.status).name).inc()
+        except Exception:  # noqa: BLE001 — a metric must never break the fill path
+            pass
 
     def set_risk_engine(self, risk_engine: object) -> None:
         """Set or replace the risk engine reference (late-bind from bootstrap)."""
@@ -321,28 +379,38 @@ class ExecutionRouter:
             return
         order_section = d.get("order", {}) if isinstance(d.get("order"), dict) else {}
         status_section = d.get("status", {}) if isinstance(d.get("status"), dict) else {}
-        # Gather every candidate broker ID from the payload
+        # Gather every candidate broker ID from the payload. ``ordno`` never repeats;
+        # ``seqno`` / ``id`` are recycled by the broker, so they are kept apart.
         _id_fields = ("id", "seqno", "seq_no", "ordno", "ord_no", "order_id")
-        ids: set[str] = set()
+        strong_names = set(self.normalizer.field_map.order_id_keys())
+        strong_ids: list[str] = []
+        weak_ids: list[str] = []
         for src in (d, order_section, status_section):
             for key in _id_fields:
                 val = src.get(key) if isinstance(src, dict) else getattr(src, key, None)
-                if val:
-                    ids.add(str(val))
-        ids.discard("")
-        if not ids:
+                if val and str(val) not in strong_ids and str(val) not in weak_ids:
+                    (strong_ids if key in strong_names else weak_ids).append(str(val))
+        if not strong_ids and not weak_ids:
             return
-        # Find order_key from any already-registered ID
+        # Find order_key from any already-registered ID. Before 2026-10-06 any id
+        # counted: an ack whose recycled seqno matched an order that had ended 11 h
+        # earlier was bound to THAT order (``R47_MAKER_TMF:6145``, 09:35), R47 then
+        # tracked and tried to cancel a key that no longer existed, and the order
+        # filled. A recycled id now claims an order only while it is live.
         order_key = None
         resolver = self.normalizer.order_id_resolver
-        for candidate in ids:
+        for candidate in (*strong_ids, *weak_ids):
             mapped = resolver.order_id_map.get(candidate)
             if mapped:
-                order_key = resolver.normalize_order_key(mapped)
-                break
+                resolved = resolver.normalize_order_key(mapped)
+                if resolved and (candidate in strong_ids or resolver.key_is_live(resolved)):
+                    order_key = resolved
+                    break
         if not order_key:
             return
-        # Register all extracted IDs under the same order_key.
+        # Register all extracted IDs under the same order_key. A recycled id still
+        # bound to an order that has ended is repointed; one bound to a live order
+        # is left alone.
         # P0-E1: acquire the resolver's lock (injected by bootstrap, shared
         # with OrderAdapter._order_id_map_lock) so this backfill writer is
         # mutually exclusive with broker-thread readers in ``_on_exec``.
@@ -352,8 +420,15 @@ class ExecutionRouter:
         changed = False
         newly_mapped: list[str] = []
         with resolver.lock:
-            for broker_id in ids:
-                if broker_id not in resolver.order_id_map:
+            for broker_id in (*strong_ids, *weak_ids):
+                current = resolver.order_id_map.get(broker_id)
+                stale = (
+                    current is not None
+                    and broker_id in weak_ids
+                    and resolver.normalize_order_key(current) != order_key
+                    and not resolver.key_is_live(resolver.normalize_order_key(current))
+                )
+                if current is None or stale:
                     resolver.order_id_map[broker_id] = order_key
                     logger.debug(
                         "order_id_map_set",
@@ -410,6 +485,8 @@ class ExecutionRouter:
                     self._backfill_order_id_map(raw)
                     order_event = self.normalizer.normalize_order(raw)
                     if order_event:
+                        self._apply_fill_ledger(order_event)
+                        self._release_slot_once(order_event)
                         self._publish_nowait(order_event)
 
                         # Direct order recording safety net: bypass RingBufferBus
@@ -613,6 +690,14 @@ class ExecutionRouter:
                                     self.metrics.recorder_exec_drops_total.labels(topic="fills").inc()
                                     logger.warning("recorder_queue_full", topic="fills", event_type="fill")
                                     self._wal_fallback_write(_topic, _payload)
+
+                        # After TCA enrichment and recording, which read the per-order
+                        # maps this call clears. Must never break the execution path.
+                        if _order_key is not None and self._fill_tracker is not None:
+                            try:
+                                await self._fill_tracker.on_order_fill(_order_key, int(fill_event.qty))
+                            except Exception as _ft_exc:  # noqa: BLE001
+                                logger.warning("fill_tracker_error", error=str(_ft_exc), order_key=_order_key)
 
                 # Periodically retry orphaned fills from DLQ
                 self._events_since_dlq_retry += 1

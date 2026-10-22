@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.execution.gateway import ExecutionGateway
@@ -1108,6 +1109,8 @@ class SystemBootstrapper:
         # shared order_id_map dict. Without this, router backfill and
         # adapter writes would be serialised by different locks.
         exec_service.normalizer.order_id_resolver.lock = order_adapter._order_id_map_lock
+        # A recycled broker id (seqno / id) may only claim an order that is still live.
+        exec_service.normalizer.order_id_resolver.is_live = order_adapter.is_order_live
         risk_engine = RiskEngine(
             risk_path,
             risk_queue,
@@ -1122,6 +1125,8 @@ class SystemBootstrapper:
         # When a fill arrives with UNKNOWN strategy_id, the router checks phantom
         # order candidates (dispatch-failed orders that may have reached broker).
         exec_service.set_phantom_resolver(order_adapter.resolve_phantom_fill)
+        # Fills finish orders: Shioaji's order topic carries no fill quantity.
+        exec_service.set_fill_tracker(order_adapter)
         # ``symbol_source=md_client`` is load-bearing, not tidiness: the
         # platform symbol universe is read from ``subscribed_codes`` /
         # ``alias_to_actual``, which are QUOTE-side attributes. Handed only the
@@ -1457,7 +1462,12 @@ class SystemBootstrapper:
                             track=track_name,
                         )
                         return
-                    loop.create_task(strategy_runner.dispatch_session_end_force_flat(track_name))
+                    spawn_retained(
+                        strategy_runner.dispatch_session_end_force_flat(track_name),
+                        name="force_flat_dispatch",
+                        loop=loop,
+                        track=track_name,
+                    )
 
                 session_governor.register_phase_callback(_force_flat_phase_callback)
                 logger.info(
@@ -1768,7 +1778,7 @@ def _make_halt_notification_callback(storm_guard: Any, dispatcher: Any) -> Calla
         try:
             coro = dispatcher.notify_halt("StormGuard HALT triggered")
             if path == "direct":
-                loop.create_task(coro)
+                spawn_retained(coro, name="notify_halt", loop=loop)
             else:
                 # run_coroutine_threadsafe takes a coroutine and schedules it on
                 # the target loop; the returned Future is intentionally not

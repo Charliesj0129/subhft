@@ -102,6 +102,6 @@ success = manager.run_daily()  # disk check → backup → verify → cleanup
 | `HFT_MARGIN_WARN_RATIO` | `0.80` | Margin warning threshold |
 | `HFT_MARGIN_CRITICAL_RATIO` | `0.90` | Margin critical threshold |
 | `HFT_BACKUP_ENABLED` | `0` | Enable daily backup |
-| `HFT_BACKUP_RETAIN_DAYS` | `30` | Backup retention days |
+| `HFT_BACKUP_RETAIN_DAYS` | `7` | Backup retention days |
 | `HFT_PLATFORM_AUTO_RECOVERY_ENABLED` | `1` | Enable auto-recovery from reduce-only |
 | `HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S` | `60` | Auto-recovery cooldown |

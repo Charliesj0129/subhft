@@ -106,14 +106,14 @@ def test_the_reason_names_which_input_escalated() -> None:
 
 
 @pytest.mark.unit
-def test_the_order_rtt_input_ships_armed_at_the_measured_thresholds() -> None:
+def test_the_order_rtt_input_ships_armed_at_the_operator_set_thresholds() -> None:
     """Armed 2026-08-24 from the n=300 direct live probe
     (``r47_maker_shioaji_p95_v2026-04-24_measured``): place_order wall-time
     P50=27.4, P95=92.7, P99=185.4 ms. The input shipped unarmed only while
     those numbers had not been connected to this breaker; a zero was the honest
     answer then and would be a dead branch now."""
-    assert RiskThresholds().order_rtt_warm_us == 500_000
-    assert RiskThresholds().order_rtt_storm_us == 1_000_000
+    assert RiskThresholds().order_rtt_warm_us == 1_500_000
+    assert RiskThresholds().order_rtt_storm_us == 2_500_000
 
 
 @pytest.mark.unit
@@ -128,12 +128,21 @@ def test_the_measured_healthy_distribution_sits_below_the_warm_threshold() -> No
 
 
 @pytest.mark.unit
-def test_a_full_second_at_the_broker_stops_new_quotes() -> None:
+def test_two_and_a_half_seconds_at_the_broker_stops_new_quotes() -> None:
     """STORM is reduce-only for NEW/AMEND. That is the whole cost of arming
     this input, and it must be reachable."""
     guard = StormGuard()
 
-    assert guard.update(order_rtt_us=1_000_000) is StormGuardState.STORM
+    assert guard.update(order_rtt_us=2_500_000) is StormGuardState.STORM
+
+
+@pytest.mark.unit
+def test_a_slow_tail_between_the_old_and_new_thresholds_no_longer_escalates() -> None:
+    """1.0-1.4 s calls were the ~100/day false escalations of 2026-09/10."""
+    guard = StormGuard()
+
+    assert guard.update(order_rtt_us=1_400_000) is StormGuardState.NORMAL
+    assert guard.update(order_rtt_us=1_500_000) is StormGuardState.WARM
 
 
 @pytest.mark.unit

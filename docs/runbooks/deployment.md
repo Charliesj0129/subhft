@@ -172,6 +172,17 @@ docker cp hft-engine:/app/outputs ./outputs_container_$(date -u +%Y%m%dT%H%M%SZ)
 find ./outputs_container_* -type f | wc -l      # must match the pre-copy count
 ```
 
+The container's stdout log goes with it. Recreating the engine deletes the
+json-file log (up to 10 x 100 MB), and Loki does not hold it: promtail's
+`docker` job filters on the compose project label `hft_platform`, the host's
+project is `subhft`, so hft-engine is never shipped. The 2026-10-03 recreate
+destroyed the HALT evidence from 2026-09-29 this way. Save it first:
+
+```bash
+docker logs hft-engine > ~/engine_stdout_$(date -u +%Y%m%dT%H%M%SZ).log 2>&1
+wc -l ~/engine_stdout_*.log | tail -1           # non-empty, before the recreate
+```
+
 Verify preservation around every Class A deploy — count before and after must
 be identical:
 
@@ -432,7 +443,7 @@ docker exec hft-engine env | grep '^HFT_'
 
 Sequence:
 
-1. Rescue the writable layer (D6) and verify the file count.
+1. Rescue the writable layer (D6) and the engine's stdout log, and verify the file count.
 2. Back up `.env` / `docker-compose.yml` to `~/deploy_backup_<date>/` (both
    carry live production edits — D2/D3 apply with full force).
 3. Apply the edit **by append or targeted `sed`**, never by copying the local

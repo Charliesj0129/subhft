@@ -1,0 +1,33 @@
+name: Feature or refactor request
+description: Propose a change to the platform, tooling or docs
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard, slow, risky or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The change you would make and the files or modules it touches.
+    validations:
+      required: true
+  - type: checkboxes
+    id: risk
+    attributes:
+      label: Touches a protected surface?
+      description: These need explicit owner review (see CLAUDE.md, "Do NOT Edit Casually").
+      options:
+        - label: contracts/, events.py, core/pricing.py or core/timebase.py
+        - label: Broker adapters or pinned versions (shioaji, prometheus_client)
+        - label: ClickHouse migrations, goldens, or frozen research profiles
+        - label: Live registry, docker-compose production files, or CI enforcement config
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

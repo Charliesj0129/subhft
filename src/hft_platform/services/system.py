@@ -8,7 +8,15 @@ from typing import Any, Dict, Optional
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType
+from hft_platform.contracts.strategy import (
+    IntentType,
+    RiskFeedback,
+    Side,
+    typed_intent_id,
+    typed_intent_side,
+    typed_intent_strategy_id,
+    typed_intent_symbol,
+)
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
@@ -18,13 +26,17 @@ from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk import kill_switch
+from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
+from hft_platform.risk.loss_exit import LossExitController, OpenPosition
 from hft_platform.risk.storm_guard import StormGuardState
+from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
 from hft_platform.services.heartbeat import DEFAULT_HEARTBEAT_PATH, heartbeat_writable, write_heartbeat
 from hft_platform.services.loop_watchdog import LoopStallWatchdog
 from hft_platform.utils.logging import configure_logging
 
 logger = get_logger("system")
+_DEFAULT_DRAWDOWN_REFERENCE_NTD = 200_000  # warm/storm/halt = 1,000 / 2,000 / 4,000 NTD
 
 
 def _payload_field(payload: Any, key: str) -> Any:
@@ -129,6 +141,74 @@ class HFTSystem:
 
     # -- Typed helpers to replace hasattr probes ----------------------------------
 
+    # A book older than this is not a price to close a position at: outside
+    # trading hours an IOC is rejected, and repeated rejects trip the breaker.
+    _LOSS_EXIT_MAX_BOOK_AGE_NS: int = 30 * 1_000_000_000
+
+    def _run_loss_exit(self) -> None:
+        """Submit the FORCE_FLAT intents ``LossExitController`` says are due.
+
+        Inputs come from the validators that own the policy: the daily-loss
+        validator's latched stop and per-position loss limit, and the expiry
+        validator's cutoff. ``loss_exit.enabled: false`` in the risk config
+        turns the exit off at the next SIGHUP reload, without a restart.
+        """
+        controller = getattr(self, "_loss_exit", None)
+        risk_engine = getattr(self, "risk_engine", None)
+        if controller is None or risk_engine is None:
+            return
+        if not bool(((getattr(risk_engine, "config", None) or {}).get("loss_exit", {}) or {}).get("enabled", True)):
+            return
+        lob = getattr(self.md_service, "lob", None)
+        if lob is None:
+            return
+        daily = expiry = None
+        for v in risk_engine.validators:
+            if isinstance(v, DailyLossLimitValidator):
+                daily = v
+            elif isinstance(v, ExpiringContractValidator):
+                expiry = v
+        now_ns = timebase.now_ns()
+        max_age_ns = self._LOSS_EXIT_MAX_BOOK_AGE_NS
+
+        def _l1(symbol: str) -> tuple[int, int] | None:
+            top = lob.get_l1_scaled(symbol)
+            if top is None or now_ns - int(top[0]) > max_age_ns:
+                return None
+            return int(top[1]), int(top[2])
+
+        positions = [
+            OpenPosition(p.strategy_id, p.symbol, int(p.net_qty), int(p.avg_price_scaled))
+            for p in self.position_store.snapshot_positions().values()
+            if p.net_qty
+        ]
+        # Called with no positions too: that is what clears the retry
+        # bookkeeping of symbols that have since closed.
+        meta = self.position_store.metadata
+        intents = controller.plan(
+            now_ns=now_ns,
+            positions=positions,
+            daily_halt=bool(daily is not None and daily.halt_triggered),
+            position_loss_limit_scaled=daily.position_loss_limit_scaled if daily is not None else 0,
+            expiry_enabled=bool(expiry is not None and expiry.enabled),
+            expiry_cutoff_minute=expiry.cutoff_minute if expiry is not None else DEFAULT_EXPIRY_CUTOFF_MINUTE,
+            l1=_l1,
+            multiplier=meta.contract_multiplier,
+            tick_size=meta.tick_size_scaled,
+        )
+        submit = getattr(self.risk_queue, "submit_nowait", None) or self.risk_queue.put_nowait
+        for intent in intents:
+            try:
+                submit(intent)
+            except Exception as e:
+                logger.error(
+                    "loss_exit_submit_failed",
+                    symbol=intent.symbol,
+                    strategy_id=intent.strategy_id,
+                    reason=intent.reason,
+                    error=str(e),
+                )
+
     @staticmethod
     def _get_max_feed_gap_s(md_service: Any) -> float:
         """Return max feed gap from market data service, or 0.0 if unavailable."""
@@ -157,8 +237,29 @@ class HFTSystem:
         return fn()
 
     @staticmethod
+    def _drawdown_reference_ntd(settings: Dict[str, Any]) -> int:
+        """NTD that StormGuard's drawdown ladder is measured against; 0 = legacy ratio.
+
+        StormGuard reads ``warm/storm/halt_drawdown_bps`` (-50/-100/-200). Over this
+        reference they become fixed NTD give-backs: 200_000 gives 1,000 / 2,000 /
+        4,000 NTD, below the 5,000 NTD daily hard limit. The ratio they used to be
+        measured as divided by the day's peak realised PnL, so a small win made a
+        small loss look like a large drawdown (see ``PositionStore.get_drawdown_ntd``).
+        """
+        raw = settings.get("drawdown_reference_ntd", _DEFAULT_DRAWDOWN_REFERENCE_NTD)
+        try:
+            ref = int(raw)
+        except (TypeError, ValueError):
+            return _DEFAULT_DRAWDOWN_REFERENCE_NTD
+        return ref if ref > 0 else 0
+
+    @staticmethod
     def _get_drawdown_pct(position_store: Any, settings: Dict[str, Any]) -> float:
         """Derive drawdown percentage from position store, or 0.0 if unavailable."""
+        reference = HFTSystem._drawdown_reference_ntd(settings)
+        ntd_fn = getattr(position_store, "get_drawdown_ntd", None)
+        if reference > 0 and ntd_fn is not None:
+            return float(ntd_fn()) / reference
         dd_fn = getattr(position_store, "get_drawdown_pct", None)
         if dd_fn is not None:
             return float(dd_fn())
@@ -507,6 +608,11 @@ class HFTSystem:
                 )
         except Exception as exc:
             logger.warning("MTM calculator init failed", error=str(exc))
+        _exit_cfg = (getattr(self.risk_engine, "config", None) or {}).get("loss_exit", {}) or {}
+        self._loss_exit = LossExitController(
+            protection_ticks=int(_exit_cfg.get("protection_ticks", 5)),
+            retry_interval_s=float(_exit_cfg.get("retry_interval_s", 10.0)),
+        )
 
         self.tasks: Dict[str, asyncio.Task[Any]] = {}
         self._recorder_drop_on_full = os.getenv("HFT_RECORDER_DROP_ON_FULL", "1").lower() not in {
@@ -923,6 +1029,43 @@ class HFTSystem:
         # nothing. Resolving a recovery halt is: fix the checkpoint, clear the
         # latch, restart.
         self.storm_guard.set_kill_switch_hold(True)
+
+    def _release_halt_drained(self, item: object, reason: str = "HALT_DRAINED") -> None:
+        """Tell the owning strategy that a drained intent/command was dropped.
+
+        The HALT drains discard work without telling anyone. A strategy that
+        counted the item as in flight (R47's ``_pending_sell``) then holds the
+        slot forever: 2026-09-29 two drained reduce-only SELLs left
+        ``pending_sell=2`` and ``can_sell`` False for 79 h, until a restart.
+        ``side`` is mandatory in the feedback; without it ``on_risk_feedback``
+        refuses to release (Bug 9).
+        """
+        queue = getattr(self.strategy_runner, "_rejection_queue", None)
+        if queue is None:
+            return
+        # OrderCommand / IntentEnvelope wrap the intent; a typed envelope wraps
+        # the typed tuple as ``payload``.
+        intent = getattr(item, "intent", None)
+        if intent is None:
+            intent = getattr(item, "payload", item)
+        side = typed_intent_side(intent)
+        strategy_id = typed_intent_strategy_id(intent)
+        if side is None or not strategy_id:
+            logger.warning("halt_drain_feedback_unaddressable", reason=reason, item_type=type(item).__name__)
+            return
+        try:
+            queue.put_nowait(
+                RiskFeedback(
+                    intent_id=typed_intent_id(intent),
+                    strategy_id=strategy_id,
+                    symbol=typed_intent_symbol(intent),
+                    reason_code=reason,
+                    timestamp_ns=timebase.now_ns(),
+                    side=Side(side),
+                )
+            )
+        except (asyncio.QueueFull, ValueError):
+            logger.warning("halt_drain_feedback_dropped", strategy_id=strategy_id, reason=reason)
 
     def _halt_status_log_kind(self, now_mono: float, interval_s: float = 60.0) -> str:
         """Decide what this HALT tick should log: ``entry``, ``heartbeat`` or ``""``.
@@ -1915,7 +2058,8 @@ class HFTSystem:
                         drawdown_pct = self._combine_drawdown_with_mtm(
                             realized_drawdown_pct=drawdown_pct,
                             unrealized_scaled=int(unrealized),
-                            base_capital=int(self.settings.get("base_capital", 10_000_000)),
+                            base_capital=self._drawdown_reference_ntd(self.settings)
+                            or int(self.settings.get("base_capital", 10_000_000)),
                         )
                         self._log_mtm_completeness(mtm)
                         self.risk_engine.update_unrealized_pnl(int(unrealized), complete=mtm.complete)
@@ -1935,6 +2079,13 @@ class HFTSystem:
                 self.risk_engine.roll_daily_loss_boundary()
             except Exception as e:
                 logger.warning("daily loss boundary roll failed", error=str(e))
+
+            # 2b. Close positions a latched stop, a per-position loss limit or
+            # an expiring contract would otherwise leave frozen (risk/loss_exit.py).
+            try:
+                self._run_loss_exit()
+            except Exception as e:
+                logger.error("loss exit failed", error=str(e), exc_info=True)
 
             # 3. Latency input for StormGuard.
             latency_us = self._stormguard_latency_us(lag_s)
@@ -2040,6 +2191,12 @@ class HFTSystem:
                 # A startup recovery halt is the one case that does not: see
                 # ``_on_startup_recovery_halt``.
                 self.storm_guard.set_kill_switch_hold(False)
+            else:
+                # Startup recovery pin: the hold is already True for the process
+                # lifetime and the file may be gone. Re-assert it so the exported
+                # gauge is rewritten every tick; a first write that failed would
+                # otherwise leave it at 0 while the hold is still set.
+                self.storm_guard.set_kill_switch_hold(True)
 
             # R11-C4: Telegram /stop emergency halt via Redis key.
             # P2-e (2026-04-27): the file-based kill-switch above (lines
@@ -2237,6 +2394,7 @@ class HFTSystem:
                             _requeue.append(item)
                         else:
                             risk_drained += 1
+                            self._release_halt_drained(item)
                     except asyncio.QueueEmpty:
                         break
                 for item in _requeue:
@@ -2270,6 +2428,7 @@ class HFTSystem:
                             _ic_requeue.append(envelope)
                         else:
                             _ic_drained += 1
+                            self._release_halt_drained(envelope)
                     # Re-inject safety envelopes via the internal queue (envelope already wrapped)
                     for envelope in _ic_requeue:
                         try:
@@ -2300,6 +2459,7 @@ class HFTSystem:
                             _cmd_requeue.append(cmd)
                         else:
                             drained_count += 1
+                            self._release_halt_drained(cmd)
                     except asyncio.QueueEmpty:
                         break
                 # Safety cmds dispatched directly — execute() handles running=False
@@ -2864,13 +3024,21 @@ class HFTSystem:
                 _code = _payload_field(_contract, "code")
 
             _resolved = None
-            _ids = [str(v) for v in _id_candidates if v]
+            # ordno never repeats; the other ids are recycled by the broker and
+            # count only while their order is live (see OrderIdResolver.is_live).
+            _strong_ids = [
+                str(v)
+                for src in (_payload, _order)
+                for v in (_payload_field(src, "ordno"), _payload_field(src, "ord_no"))
+                if v
+            ]
+            _ids = _strong_ids + [str(v) for v in _id_candidates if v and str(v) not in _strong_ids]
             resolver = getattr(self.order_adapter, "order_id_resolver", None)
             # No candidates means nothing to look up. This runs on the broker
             # callback thread, so an empty-list resolver call is pure overhead
             # on every callback that carries no ids.
             if resolver is not None and _ids:
-                _resolved = resolver.resolve_strategy_id_from_candidates(_ids)
+                _resolved = resolver.resolve_strategy_id_from_candidates(_ids, strong=len(_strong_ids))
                 if _resolved == "UNKNOWN":
                     _resolved = None
             if _resolved is None and _action:

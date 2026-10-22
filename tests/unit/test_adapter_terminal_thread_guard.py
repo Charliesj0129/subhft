@@ -26,6 +26,9 @@ def _make_adapter() -> OrderAdapter:
     adapter._recently_terminal_orders = collections.OrderedDict()
     adapter._recently_terminal_max = 64
     adapter._recently_terminal_ttl_s = 60.0
+    adapter._finished_orders = collections.OrderedDict()
+    adapter._finished_max = 64
+    adapter._finished_ttl_s = 900.0
     adapter._cancel_inflight_targets = collections.OrderedDict()
     adapter._cancel_inflight_max = 64
     adapter._cancel_inflight_ttl_s = 30.0

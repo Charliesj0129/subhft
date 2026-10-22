@@ -23,6 +23,16 @@ logger = get_logger("ops.backup")
 _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 _BACKUP_NAME_RE = re.compile(r"^daily_(\d{8})$")
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
+# system.backups.name is the full destination expression: Disk('backup_local', 'daily_YYYYMMDD/')
+_DISK_NAME_RE = re.compile(r"'(daily_\d{8})/'\)$")
+
+# A backup is a full copy of the hft database. It now takes longer than any
+# sane HTTP read timeout (559 s on 2026-10-20), so it runs ASYNC and is polled.
+_DEFAULT_BACKUP_TIMEOUT_S = 3600.0
+_DEFAULT_POLL_INTERVAL_S = 5.0
+# Free space that must remain after the backup: far above the WAL's own
+# disk-full breaker (HFT_WAL_DISK_MIN_MB, 500 MB) so a backup never trips it.
+_DEFAULT_MIN_FREE_AFTER_BYTES = 10 * 1024**3
 
 
 class BackupError(Exception):
@@ -57,6 +67,9 @@ class BackupManager:
         "_backup_dir",
         "_notifier",
         "_metrics",
+        "_backup_timeout_s",
+        "_poll_interval_s",
+        "_min_free_after_bytes",
     )
 
     def __init__(
@@ -68,6 +81,9 @@ class BackupManager:
         ch_port: int | None = None,
         ch_user: str | None = None,
         ch_password: str | None = None,
+        backup_timeout_s: float = _DEFAULT_BACKUP_TIMEOUT_S,
+        poll_interval_s: float = _DEFAULT_POLL_INTERVAL_S,
+        min_free_after_bytes: int = _DEFAULT_MIN_FREE_AFTER_BYTES,
     ) -> None:
         _cfg = get_ch_config()
         self._ch_host = ch_host or _cfg["host"]
@@ -75,10 +91,13 @@ class BackupManager:
         self._ch_port = ch_port or int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
         self._ch_user = ch_user or _cfg["username"]
         self._ch_password = ch_password if ch_password is not None else _cfg["password"]
-        self._retain_days = retain_days if retain_days is not None else int(os.getenv("HFT_BACKUP_RETAIN_DAYS", "30"))
+        self._retain_days = retain_days if retain_days is not None else int(os.getenv("HFT_BACKUP_RETAIN_DAYS", "7"))
         self._backup_dir = backup_dir
         self._notifier = notifier
         self._metrics: Any = None
+        self._backup_timeout_s = backup_timeout_s
+        self._poll_interval_s = poll_interval_s
+        self._min_free_after_bytes = min_free_after_bytes
 
     def _client(self) -> Any:
         assert self._ch_host is not None  # guaranteed by __init__
@@ -108,14 +127,17 @@ class BackupManager:
         try:
             self._check_disk_registered()
             self._abort_stale_backups()
+            # Retention runs before the backup, not after it: when it ran after,
+            # every failed or timed-out backup also skipped retention, and the
+            # backups that piled up filled the disk (THESHOW, 2026-10-21).
+            self._make_room()
             self._execute_backup(backup_name)
             self._verify_backup(backup_name)
-            self._cleanup_old_backups()
             self._run_archive_hook(backup_name)
             duration_s = time.monotonic() - start
             self._report_success(backup_name, duration_s)
             return True
-        except BackupError as exc:
+        except Exception as exc:  # noqa: BLE001 - any failure (a client timeout too) is reported, never propagated unseen
             duration_s = time.monotonic() - start
             self._report_failure(backup_name, exc, duration_s)
             return False
@@ -147,9 +169,72 @@ class BackupManager:
         if not _BACKUP_NAME_RE.match(backup_name):
             raise ValueError(f"Invalid backup_name: {backup_name!r}")
         client = self._client()
-        sql = f"BACKUP DATABASE hft TO Disk('backup_local', '{backup_name}/')"
+        sql = f"BACKUP DATABASE hft TO Disk('backup_local', '{backup_name}/') ASYNC"
         logger.info("Executing backup", backup_name=backup_name, sql=sql)
         client.command(sql)
+        # ASYNC returns at once; the backup's own row in system.backups is the
+        # progress signal. _abort_stale_backups guaranteed no other backup was
+        # running, so the newest row for this name is the one just started.
+        disk_name = f"Disk('backup_local', '{backup_name}/')"
+        deadline = time.monotonic() + self._backup_timeout_s
+        while True:
+            rows = client.query(
+                "SELECT status, error FROM system.backups WHERE name = {name:String} ORDER BY start_time DESC LIMIT 1",
+                parameters={"name": disk_name},
+            ).result_rows
+            status = rows[0][0] if rows else "UNKNOWN"
+            if status != "CREATING_BACKUP":
+                return
+            if time.monotonic() >= deadline:
+                raise BackupError(
+                    f"Backup '{backup_name}' still CREATING_BACKUP after {self._backup_timeout_s:.0f}s; "
+                    "the next run's stale-backup check will refuse to start until it ends"
+                )
+            time.sleep(self._poll_interval_s)
+
+    def _backup_history(self) -> dict[str, set[str]]:
+        """Return {backup dir name: every status system.backups recorded for it}."""
+        rows = self._client().query("SELECT name, status FROM system.backups").result_rows
+        history: dict[str, set[str]] = {}
+        for disk_name, status in rows:
+            match = _DISK_NAME_RE.search(str(disk_name))
+            if match:
+                history.setdefault(match.group(1), set()).add(str(status))
+        return history
+
+    def _make_room(self) -> None:
+        """Prune by age, drop failed debris, then refuse to start without room.
+
+        The newest backup ClickHouse reports as BACKUP_CREATED is never pruned,
+        so a run of failures cannot age the last good backup away.
+        """
+        history = self._backup_history()
+        complete = sorted(name for name, statuses in history.items() if "BACKUP_CREATED" in statuses)
+        self._cleanup_old_backups(keep=frozenset(complete[-1:]))
+
+        backup_root = Path(self._backup_dir)
+        for name, statuses in sorted(history.items()):
+            # A name that ever reached BACKUP_CREATED holds a good backup even if
+            # a later rerun under the same name failed (BACKUP_ALREADY_EXISTS).
+            if "BACKUP_FAILED" in statuses and "BACKUP_CREATED" not in statuses:
+                debris = backup_root / name
+                if debris.is_dir():
+                    logger.warning("Removing failed backup debris", name=name)
+                    shutil.rmtree(debris)
+
+        rows = (
+            self._client()
+            .query("SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'hft'")
+            .result_rows
+        )
+        needed = int(rows[0][0] or 0) + self._min_free_after_bytes if rows else self._min_free_after_bytes
+        free = shutil.disk_usage(self._backup_dir).free
+        if free < needed:
+            raise BackupError(
+                f"Not enough free space for a backup: need {needed / 1024**3:.1f} GiB "
+                f"(database + {self._min_free_after_bytes / 1024**3:.0f} GiB reserve), "
+                f"free {free / 1024**3:.1f} GiB"
+            )
 
     def _verify_backup(self, backup_name: str) -> None:
         """Verify backup completed successfully."""
@@ -164,7 +249,8 @@ class BackupManager:
             raise BackupError(f"No backup entry found in system.backups for '{backup_name}'")
         status, error = rows[0]
         if status != "BACKUP_CREATED":
-            raise BackupError(f"Backup '{backup_name}' status is '{status}': {error}")
+            # The first line names the ClickHouse error; the rest is a server stack trace.
+            raise BackupError(f"Backup '{backup_name}' status is '{status}': {str(error).split(chr(10), 1)[0]}")
 
         # system.backups status is the authoritative success signal from
         # ClickHouse itself. The filesystem size check below is best-effort
@@ -180,8 +266,8 @@ class BackupManager:
         except OSError:
             logger.info("Backup verified via system.backups (filesystem check skipped)", backup_name=backup_name)
 
-    def _cleanup_old_backups(self) -> None:
-        """Remove backups older than retain_days based on directory name parsing."""
+    def _cleanup_old_backups(self, keep: frozenset[str] = frozenset()) -> None:
+        """Remove backups older than retain_days based on directory name parsing; never those in ``keep``."""
         backup_root = Path(self._backup_dir)
         if not backup_root.exists():
             return
@@ -199,7 +285,7 @@ class BackupManager:
             except ValueError:
                 continue
             age_days = (now - backup_date).days
-            if age_days > self._retain_days:
+            if age_days > self._retain_days and entry.name not in keep:
                 logger.info("Removing old backup", name=entry.name, age_days=age_days)
                 shutil.rmtree(entry)
                 removed += 1

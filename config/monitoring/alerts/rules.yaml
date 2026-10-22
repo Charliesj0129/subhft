@@ -11,6 +11,19 @@ groups:
       summary: "HFT Engine scrape target is down"
       description: "hft-engine:9090 has been unreachable for >30s. The trading process may have crashed."
 
+  # Every other target. A rule over an unscraped target has zero series and reads
+  # as healthy: node-exporter was unscrapable from 2026-07 to 2026-10-22, so
+  # HostDiskSpace* could not fire when the disk filled on 2026-10-21.
+  # hft-engine and loki keep their own rules (HFTEngineDown, LokiDown).
+  - alert: ScrapeTargetDown
+    expr: up{job!~"hft-engine|loki"} == 0
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Scrape target {{ $labels.job }} is down"
+      description: "{{ $labels.instance }} (job {{ $labels.job }}) has been unscrapable for >10m; every alert on its metrics is silently empty until it is back."
+
   # Feed Health
   - alert: FeedGapCritical
     expr: rate(feed_events_total[30s]) == 0 and market_trading_hours_active == 1
@@ -1014,24 +1027,51 @@ groups:
         description: "Loki has been unreachable for >2 minutes. Log search unavailable."
 
   # ── Backup Health ─────────────────────────────────────────────
-  # `hft_backup_last_success_ts > 0` gate (2026-04-25): the cron-driven backup
-  # runs as a one-shot `docker compose exec hft-engine python -c ...` subprocess.
-  # Its MetricsRegistry.get() returns a fresh registry in that subprocess and
-  # is not the engine's scrape target, so the gauge never leaves 0 even though
-  # backups have succeeded daily (see /tmp/hft_backup.log on prod). Without the
-  # gate, `0 < time() - 172800` is always true and BackupStale fires forever.
-  # TODO(ops): structural fix — either Pushgateway, node_exporter textfile
-  # collector, or have the engine stat $BACKUP_DIR mtime periodically and
-  # update the gauge. Until then this gate disables the alert; monitor backup
-  # health via /tmp/hft_backup.log tailing.
+  # The backup runs as a one-shot `docker compose exec hft-engine python -c ...`,
+  # so the engine's hft_backup_last_success_ts never left 0 and BackupStale was
+  # gated off with `> 0` (2026-04-25); the backup then failed 2026-10-13..21
+  # unseen and the disk filled. scripts/clickhouse_backup.sh now writes each
+  # run's outcome to node-exporter's textfile collector (job="node").
+  # The cron runs Mon-Fri, so Fri -> Mon is a normal 72 h gap: the staleness
+  # windows are 3.5 days (302400 s). A single failed run is BackupFailed.
+  - alert: BackupFailed
+    expr: hft_backup_cron_last_exit_code{job="node"} != 0
+    for: 0m
+    labels:
+        severity: critical
+    annotations:
+        summary: "The last ClickHouse backup run failed (exit {{ $value }})"
+        description: "scripts/clickhouse_backup.sh exited non-zero. Read /tmp/hft_backup.log on the host and check free space on /."
+
   - alert: BackupStale
-    expr: hft_backup_last_success_ts < (time() - 172800) and hft_backup_last_success_ts > 0
+    expr: hft_backup_cron_last_success_timestamp_seconds{job="node"} < (time() - 302400)
     for: 1h
     labels:
         severity: critical
     annotations:
-        summary: ClickHouse backup is stale (>2 days since last success)
-        description: "Last successful backup was {{ $value | humanizeTimestamp }}. Check cron and backup disk."
+        summary: ClickHouse backup is stale (>3.5 days since last success)
+        description: "Last successful backup was {{ $value | humanizeTimestamp }} (0 = none known). Check cron and backup disk."
+
+  - alert: BackupNotRunning
+    expr: hft_backup_cron_last_run_timestamp_seconds{job="node"} < (time() - 302400)
+    for: 1h
+    labels:
+        severity: critical
+    annotations:
+        summary: The daily ClickHouse backup cron has not run for >3.5 days
+        description: "Last run finished {{ $value | humanizeTimestamp }}. Check the host crontab (30 14 * * 1-5)."
+
+  # The three rules above have zero series, and so read as healthy, until the
+  # script has written hft_backup.prom once (e.g. the textfile directory is not
+  # writable by the cron user). The `for` spans a weekend plus a day.
+  - alert: BackupMetricsAbsent
+    expr: absent(hft_backup_cron_last_run_timestamp_seconds{job="node"})
+    for: 84h
+    labels:
+        severity: warning
+    annotations:
+        summary: No backup outcome has been exported for 3.5 days
+        description: "hft_backup.prom is missing from the node-exporter textfile directory; BackupFailed/BackupStale cannot fire. Check that the cron user can write HFT_BACKUP_TEXTFILE_DIR."
 
   # ── Fill Loss (M-07) ─────────────────────────────────────────
   - alert: FillEvictionDetected
@@ -1142,6 +1182,77 @@ groups:
         replaced an intent-output rule that could not see any of them.
         Backtested over the 14 days to 2026-09-10: 3 firings, all genuine,
         covering the 09-01/09-02 outage the old rule missed entirely.
+      runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
+  # StrategyNotProcessingEvents proves the strategy is being handed events.
+  # It cannot see a strategy that is handed events and quotes nothing because
+  # its own state is wedged: 2026-09-29 R47 held pos=1 with pending_sell=2 for
+  # 79 h (the HALT drain dropped two SELLs without releasing them), events
+  # kept flowing, intents stopped, and the only alert was the in-engine
+  # telegram monitor, which fires 4 times and goes quiet.
+  - alert: StrategyHoldsPositionButEmitsNoIntents
+    expr: |
+      (position_age_seconds > 1800)
+      and on(strategy) (sum by (strategy) (increase(strategy_intents_total[30m])) == 0)
+      and on() market_trading_hours_active == 1
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.strategy }} holds {{ $labels.symbol }} but has emitted no intent for 30m of open session"
+      description: >-
+        An open position older than 30 minutes while the strategy produced
+        zero order intents for 30 minutes. A strategy that wants out of a
+        position keeps quoting, so silence means it cannot: wedged pending
+        counters (r47 `_pending_sell` held by dropped orders), a latched
+        reduce-only gate, or a quarantine. Check `r47_stats` pending_sell
+        and `strategy_pending_qty`; a restart clears frozen pending. Backtested
+        over the 14 days to 2026-10-03 against host Prometheus: the 2026-09-29
+        episode (continuous, in every open session after) plus 3 runs on
+        2026-09-21 that were not individually investigated.
+      runbook_url: "docs/runbooks/alpha-development-workflow.md"
+
+  # StrategyHoldsPositionButEmitsNoIntents needs an open position, so it cannot
+  # see a FLAT strategy whose pending counter is wedged. R47 stops quoting a
+  # side once `pending` for it is non-zero (`can_sell = pos - pending_sell >
+  # -max_pos`), and a leak on the entry side leaves no position to age.
+  #
+  # The cheap discriminator is the strategy's own bookkeeping disagreeing with
+  # itself: `strategy_pending_qty` says quantity is working at the broker,
+  # `strategy_inflight_oids` says it tracks no order for that side. A cancel in
+  # flight can produce that for seconds (the oid is dropped from the in-flight
+  # set when the cancel is sent, the pending is released at the terminal
+  # event) and the order adapter's 300 s sweep bounds the worst legitimate
+  # case, so 15 minutes of it is a leak, not a race.
+  #
+  # `strategy_inflight_oids` carries {strategy, side} only, so the join is on
+  # those two labels and pending is summed over symbol first.
+  - alert: StrategyPendingWithNoInflightOrder
+    expr: |
+      (
+        (sum by (strategy, side) (strategy_pending_qty) > 0)
+        and on(strategy, side) (strategy_inflight_oids == 0)
+      )
+      and on() market_trading_hours_active == 1
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "{{ $labels.strategy }} counts {{ $labels.side }} quantity as working at the broker but tracks no order for it (15m of open session)"
+      description: >-
+        The strategy's pending quantity for this side has been above zero for
+        15 minutes while its in-flight order set for the same side is empty.
+        Nothing is left to complete, cancel or time out, so the pending count
+        will not come down on its own and the strategy will not quote that side
+        again. Known producers: a drained or dropped order that never sent a
+        release (HALT drain, 2026-09-29), and a terminal event that carried the
+        wrong remaining quantity. Check `r47_stats` pending_buy/pending_sell
+        against the order adapter's live orders; a strategy restart clears it.
+        Backtested over the 28 days of host Prometheus history
+        (2026-09-05 to 2026-10-03): two runs reached 15 minutes, both genuine
+        (2026-09-07 R47 held pending_sell=2 on TMFI6 with no in-flight order
+        and no intent from 01:15Z to 14:00Z; 2026-09-29 to 2026-10-02 the HALT
+        drain leak); the longest other run was 14 minutes.
       runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
   # The breaker recovers by itself after HFT_STRATEGY_TIMEOUT_RECOVER_S (60s
@@ -1363,7 +1474,7 @@ groups:
 # noise.
 #
 # Deliberately no alert rule here. An alert needs a threshold, and the
-# order_rtt thresholds (500 ms WARM / 1000 ms STORM, RiskThresholds in
+# order_rtt thresholds (1500 ms WARM / 2500 ms STORM since 2026-10-03; were 500/1000, RiskThresholds in
 # src/hft_platform/risk/storm_guard.py) are a live-impacting policy decision
 # these recordings exist to inform, not to pre-empt.
 # ---------------------------------------------------------------------------
