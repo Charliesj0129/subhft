@@ -118,7 +118,7 @@ class TestPosition:
 
     def test_update_accumulates_fees(self):
         pos = Position("acc", "s1", "2330")
-        fill = _make_fill(fee=500, tax=200)
+        fill = _make_fill(fee=700, tax=200)  # fee is all-in: it already contains the tax
         pos.update(fill)
         assert pos.fees_scaled == 700
 

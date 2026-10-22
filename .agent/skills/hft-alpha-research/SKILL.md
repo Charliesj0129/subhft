@@ -1,129 +1,78 @@
 ---
 name: hft-alpha-research
-description: Use when creating or evolving research alphas, scaffolding governed research artifacts, preparing datasets for Gate A-C, or working inside the paper-to-promotion research factory workflow.
+description: "Run the governed alpha research factory: scaffold, datasets with metadata sidecars, Gates A-C, optimization, paper-trade records. Use when creating or evolving an alpha under research/alphas or preparing data. Not for gate interpretation (validation-gate) or live strategy code (hft-strategy)."
 ---
 
-# HFT Alpha Research
+# Alpha research
 
-Use this skill to author and maintain research artifacts. Use `research/SOP.md` as the top-level lane and keep this skill focused on alpha-specific source layout, dataset preparation, and factory entrypoints.
+Process handbook: `research/README.md`; lifecycle and gate contract:
+`docs/runbooks/alpha-development-workflow.md`; project rules for this tree:
+`research/AGENTS.md`. Research artifacts never enable live trading.
 
-## Start Here
+## Pipeline
 
-Create or update an alpha in this order:
-
-1. Scaffold or inspect `research/alphas/<alpha_id>/`.
-2. Confirm the manifest fields and test layout exist.
-3. Prepare or validate governed datasets under `research/data/`.
-4. Run Gate A-C through the factory or CLI.
-5. Send promotion and paper-trade work to `validation-gate` and `paper-trader`.
-
-## Canonical Paths
-
-| Purpose | Path |
-| --- | --- |
-| Alpha source | `research/alphas/<alpha_id>/` |
-| Registry and schemas | `research/registry/` |
-| Research backtest runtime | `research/backtest/` |
-| Validation and promotion runtime | `src/hft_platform/alpha/` |
-| Latency profiles | `config/research/latency_profiles.yaml` |
-| Synthetic data tools | `research/tools/` |
-
-## Scaffold and Validate
-
-Scaffold a new alpha:
-
-```bash
-uv run python -m research scaffold <alpha_id>
+```
+paper -> prototype -> data -> backtest (latency + cost) -> statistical validity -> param optimization -> paper trade -> live (Rust)
 ```
 
-Run the governed validation lane:
+Single entrance: `make research ALPHA=<id> OWNER=<you> DATA='<path.npy>'`
+(`--validation-profile vm_ul6` for the strict profile). Preflight steps it runs:
+init, converge-tools, clean, audit, index.
+
+## Commands
 
 ```bash
-uv run hft alpha validate <alpha_id>
+uv run python -m research scaffold <alpha_id>          # canonical layout under research/alphas/<id>/
+make research-paper-prototype PAPER_REF=<ref> ARGS='--alpha-id <id> --complexity O1'
+uv run hft alpha validate <alpha_id>                   # governed lane, Gates A-C
+uv run python -m research.factory run-gate-c <alpha_id> --data <file.npy> --latency-profile <profile>
+uv run python -m research.factory optimize
+make research-stamp-data-meta DATA_PATH=<file.npy>     # sidecar
+make research-validate-data-meta DATA_PATH=<file.npy>
+make research-gen-synth-lob OUT=research/data/processed/<id>/<file>.npy ARGS='--version v2 --rng-seed 42'
+make research-record-paper ALPHA=<id> ARGS='--trading-day YYYY-MM-DD ...'
+make research-check-paper-governance ALPHA=<id> ARGS='--strict --out outputs/paper_governance_<id>.json'
 ```
 
-Run the factory lane directly when you need explicit data and latency inputs:
+Run from the repository root (not from `research/`). Debug triage output is not
+promotable (`HFT_RESEARCH_ALLOW_TRIAGE=1`, `make research-triage`).
 
-```bash
-uv run python -m research.factory run-gate-c \
-  <alpha_id> \
-  --data research/data/processed/<alpha_id>/<file>.npy \
-  --latency-profile <profile>
-```
+## Rules
 
-Treat `run_gate_b()` as a project-root operation. Pass the repository root, not the `research/` directory.
+1. Datasets live under `research/data/{raw,interim,processed}`; every `.npy`/`.npz`
+   has a `.meta.json` sidecar; preserve `local_ts`; use versioned latency profiles.
+2. `paper_refs` in the manifest map to `paper_index.json`; Gate A strict mode
+   enforces it, plus sidecar validity, allowed roots, and a `complexity` field.
+3. Generated artifacts go to `research/experiments/` or `outputs/`, never into
+   `research/alphas/<id>/` (source and manifest only). Binary artifacts stay out of source dirs.
+4. Verdicts (KILL / NEEDS-MORE-DAYS / RESCUED / INCONCLUSIVE / PROMOTED) are faithful:
+   never relax pre-registered floors or gates in committed artifacts. Commit the
+   candidate's new evidence under `research/experiments/validations/` (append-only,
+   new files only) with an `alpha:` commit when the verdict is reached, so it exists
+   somewhere other than one disk; stage only your files (`git-safety`).
+5. Float is allowed in research for offline metrics; nothing here reaches live accounting.
+   Manifest `skills_used` is validated against `VALID_SKILLS` in `contracts/alpha.py`
+   (Do-NOT-Edit), which still lists the retired skill names; use those tokens, not directory names.
+6. Check the local data corpus before choosing dates:
+   `docs/operations/local-clickhouse-market-data-corpus.md`; depth, scale, and
+   duplicate-delivery traps: `.agent/rules/70-research-data.md`.
 
-## Dataset Rules
-
-Apply these before treating any scorecard as promotion-ready:
-
-- Keep datasets inside the governed research roots.
-- Stamp metadata with `python -m research stamp-data-meta <dataset.npy>`.
-- Validate metadata with `python -m research validate-data-meta <dataset.npy>`.
-- Preserve `local_ts` for latency-aware backtests.
-- Use versioned latency profiles from `config/research/latency_profiles.yaml`.
-
-Use the synthetic lane when you need reproducible TWSE-style data:
-
-```bash
-make research-gen-synth-lob OUT=research/data/processed/<alpha_id>/<file>.npy ARGS='--version v2 --rng-seed 42'
-```
-
-## Boundaries
-
-Keep these responsibilities separated:
-
-- Use `hft-backtest-engine` for latency realism and adapter behavior.
-- Use `validation-gate` for pass/fail interpretation and promotion blockers.
-- Use `hft-strategy-dev` only after the logic moves toward live strategy integration.
-- Use `hft-architect` when the alpha requires new runtime modules, feature contracts, or Rust migration.
-
-## Common Failure Modes
+## Common failures
 
 | Symptom | Action |
-| --- | --- |
-| Gate A rejects dataset provenance | regenerate or validate sidecar metadata |
-| Gate B cannot find tests | inspect alpha-specific test path and run from repo root |
-| Gate C Sharpe collapses to zero | inspect latency application and `local_ts` cadence with `hft-backtest-engine` |
-| Gate D blocks on feature set version | align the manifest with the live feature registry version |
+|---|---|
+| Gate A rejects provenance | regenerate or validate the sidecar |
+| Gate B cannot find tests | check the alpha's test path; run from the repo root |
+| Gate C Sharpe collapses to zero | inspect latency application and `local_ts` cadence (`hft-backtest`) |
+| Gate D blocks on feature-set version | align manifest with the live feature registry version |
 
-## Paper-to-Prototype Bridge
+## Done when
 
-Scaffold an alpha directly from a paper reference:
+The alpha has a valid manifest and sidecars, Gates A-C ran with a declared
+latency profile and cost profile, outputs sit under `research/experiments/`, and
+the verdict and its evidence are recorded as they came out.
 
-```bash
-make research-paper-prototype PAPER_REF=<ref> ARGS='--alpha-id <id> --complexity O1'
-```
+## References
 
-This scaffolds `research/alphas/<alpha_id>/` and writes a reverse mapping into `paper_index.json` so Gate A can trace the alpha back to its source paper.
-
-## Gate A Strict Mode
-
-Strict Gate A (enabled by UL6 validation profile) enforces:
-
-- `manifest.paper_refs` must exist and map to entries in `paper_index.json`
-- Dataset metadata sidecars validated (all required keys + row count consistency)
-- Dataset paths must be under allowed roots (`research/data/`)
-- `complexity` field required in manifest
-
-## Alpha Package Structure
-
-```
-research/alphas/<alpha_id>/
-├── __init__.py
-├── signal.py          # Alpha signal implementation
-├── manifest.yaml      # Alpha metadata (paper_refs, complexity, features)
-├── README.md          # Hypothesis, formula, validation status
-├── CHANGELOG.md       # Version history (optional)
-└── tests/
-    └── test_signal.py # Alpha-specific tests
-```
-
-## Cross-References
-
-| Related Skill | When to Use |
-| --- | --- |
-| research-factory | Full end-to-end pipeline orchestration |
-| research-data-governance | Dataset preparation and metadata sidecar management |
-| validation-gate | Gate A-E pass/fail interpretation and promotion blockers |
-| hft-backtest-engine | Backtest adapter configuration and latency realism |
+- `references/factory.md` — read for the stage table, gate mapping, artifact layout, paper-trade governance, and batch commands.
+- `references/data-governance.md` — read when preparing or validating datasets, sidecars, or synthetic data.

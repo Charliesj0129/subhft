@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 import structlog
 import yaml
 
+from hft_platform.core.background_tasks import spawn_retained
+
 logger = structlog.get_logger("ops.session_governor")
 
 # ---------------------------------------------------------------------------
@@ -390,14 +392,16 @@ class SessionGovernor:
             # Send notification if dispatcher available
             if self._notification_dispatcher is not None:
                 try:
-                    asyncio.ensure_future(
+                    spawn_retained(
                         self._notification_dispatcher.notify_flatten_result(
                             scope=track_name,
                             fully_closed=0,
                             partially_closed=0,
                             failed=1,
                             failed_symbols=[f"flatten_exception: {type(exc).__name__}"],
-                        )
+                        ),
+                        name="notify_flatten_failed",
+                        track=track_name,
                     )
                 except Exception as _notify_exc:  # noqa: BLE001
                     logger.warning("session_flatten_notify_failed", error=str(_notify_exc))

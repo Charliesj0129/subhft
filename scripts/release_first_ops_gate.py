@@ -5,7 +5,9 @@ import argparse
 import datetime as dt
 import json
 import os
+import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -14,12 +16,15 @@ STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 
+# Exit code of a step that exited 0 but whose own report does not say "pass" (the tracked-change boundary uses 97).
+RC_REPORT_NOT_PASS = 98
+
 SKILLS_USED: tuple[str, ...] = (
     "search-first",
-    "hft-strategy-dev",
+    "hft-strategy",
     "hft-alpha-research",
     "validation-gate",
-    "troubleshoot-metrics",
+    "runtime-diagnostics",
     "doc-updater",
 )
 
@@ -193,75 +198,68 @@ def _extract_overall(report_path: Path | None) -> str | None:
     return None
 
 
-def _release_converge_command(*, tree_depth: int, output_dir: str) -> str:
+def _python_for(root: Path) -> str:
+    """The one interpreter every step runs under (shell-quoted): the project's own venv when it has one, else the
+    interpreter running this gate (``make`` starts it with ``uv run python``).
+
+    A step is run once. It used to be run again under ``python3`` when the first attempt failed, with the first
+    attempt's stderr thrown away, so the report showed the second attempt's error (or its pass) instead of the
+    failure that made the gate stop.
+    """
+    venv_python = root / ".venv" / "bin" / "python"
+    return shlex.quote(str(venv_python if venv_python.exists() else sys.executable))
+
+
+def _release_converge_command(*, py: str, tree_depth: int, output_dir: str) -> str:
     return (
-        "(.venv/bin/python scripts/release_converge.py "
+        f"{py} scripts/release_converge.py "
         f"--project-root . --output-dir {output_dir} --tree-depth {tree_depth} "
-        "--skip-clean --skip-gate "
-        "2>/dev/null || "
-        "python3 scripts/release_converge.py "
-        f"--project-root . --output-dir {output_dir} --tree-depth {tree_depth} "
-        "--skip-clean --skip-gate)"
+        "--skip-clean --skip-gate"
     )
 
 
-def _roadmap_execute_command(*, output_dir: str) -> str:
+def _roadmap_execute_command(*, py: str, output_dir: str) -> str:
     return (
-        "(.venv/bin/python scripts/roadmap_delivery_executor.py "
+        f"{py} scripts/roadmap_delivery_executor.py "
         "--project-root . --todo docs/TODO.md --roadmap ROADMAP.md "
         "--benchmark benchmark.json --paper-index research/knowledge/paper_index.json "
-        f"--output-dir {output_dir} 2>/dev/null || "
-        "python3 scripts/roadmap_delivery_executor.py "
-        "--project-root . --todo docs/TODO.md --roadmap ROADMAP.md "
-        "--benchmark benchmark.json --paper-index research/knowledge/paper_index.json "
-        f"--output-dir {output_dir})"
+        f"--output-dir {output_dir}"
     )
 
 
-def _roadmap_guard_command(*, execution_dir: str, output_dir: str, max_artifact_age_hours: float) -> str:
+def _roadmap_guard_command(*, py: str, execution_dir: str, output_dir: str, max_artifact_age_hours: float) -> str:
     return (
-        "(.venv/bin/python scripts/roadmap_delivery_guard.py "
+        f"{py} scripts/roadmap_delivery_guard.py "
         "--todo docs/TODO.md --roadmap ROADMAP.md "
         f"--execution-dir {execution_dir} --max-artifact-age-hours {max_artifact_age_hours} "
-        f"--output-dir {output_dir} 2>/dev/null || "
-        "python3 scripts/roadmap_delivery_guard.py "
-        "--todo docs/TODO.md --roadmap ROADMAP.md "
-        f"--execution-dir {execution_dir} --max-artifact-age-hours {max_artifact_age_hours} "
-        f"--output-dir {output_dir})"
+        f"--output-dir {output_dir}"
     )
 
 
-def _release_unit_tests_command() -> str:
+def _release_unit_tests_command(*, py: str) -> str:
     return (
-        "(.venv/bin/python -m pytest --no-cov "
+        f"{py} -m pytest --no-cov "
         "tests/unit/test_release_converge.py "
         "tests/unit/test_release_channel_guard.py "
         "tests/unit/test_roadmap_delivery_guard.py "
         "tests/unit/test_roadmap_delivery_executor.py "
         "tests/unit/test_reliability_review_pack.py "
         "tests/unit/test_release_first_ops_gate.py "
-        "-q 2>/dev/null || "
-        "python3 -m pytest --no-cov "
-        "tests/unit/test_release_converge.py "
-        "tests/unit/test_release_channel_guard.py "
-        "tests/unit/test_roadmap_delivery_guard.py "
-        "tests/unit/test_roadmap_delivery_executor.py "
-        "tests/unit/test_reliability_review_pack.py "
-        "tests/unit/test_release_first_ops_gate.py "
-        "-q)"
+        "-q"
     )
 
 
-def _ruff_command() -> str:
-    return "(.venv/bin/python -m ruff check src scripts tests 2>/dev/null || python3 -m ruff check src scripts tests)"
+def _ruff_command(*, py: str) -> str:
+    return f"{py} -m ruff check src scripts tests"
 
 
-def _typecheck_command() -> str:
-    return "(.venv/bin/python -m mypy src scripts 2>/dev/null || python3 -m mypy src scripts)"
+def _typecheck_command(*, py: str) -> str:
+    return f"{py} -m mypy src scripts"
 
 
 def _release_channel_gate_command(
     *,
+    py: str,
     output_dir: str,
     soak_dir: str,
     change_id: str,
@@ -269,19 +267,16 @@ def _release_channel_gate_command(
     max_report_age_hours: float,
 ) -> str:
     return (
-        "(.venv/bin/python scripts/release_channel_guard.py gate "
+        f"{py} scripts/release_channel_guard.py gate "
         f"--project-root . --output-dir {output_dir} --soak-dir {soak_dir} "
         f"--change-id {change_id} --min-trading-days {min_trading_days} "
-        f"--max-report-age-hours {max_report_age_hours} 2>/dev/null || "
-        "python3 scripts/release_channel_guard.py gate "
-        f"--project-root . --output-dir {output_dir} --soak-dir {soak_dir} "
-        f"--change-id {change_id} --min-trading-days {min_trading_days} "
-        f"--max-report-age-hours {max_report_age_hours})"
+        f"--max-report-age-hours {max_report_age_hours}"
     )
 
 
 def _reliability_pack_command(
     *,
+    py: str,
     month: str,
     project_root: str,
     soak_dir: str,
@@ -301,7 +296,7 @@ def _reliability_pack_command(
 ) -> str:
     disk_args = " ".join(f"--disk-path {item}" for item in disk_paths)
     return (
-        "(.venv/bin/python scripts/reliability_review_pack.py "
+        f"{py} scripts/reliability_review_pack.py "
         f"--project-root {project_root} --soak-dir {soak_dir} --deploy-dir {deploy_dir} "
         f"--query-guard-dir {query_guard_dir} --feature-canary-dir {feature_canary_dir} "
         f"--callback-latency-dir {callback_latency_dir} --output-dir {output_dir} --month {month} "
@@ -310,21 +305,12 @@ def _reliability_pack_command(
         f"--min-query-guard-runs {min_query_guard_runs} "
         f"--min-query-guard-suite-runs {min_query_guard_suite_runs} "
         f"--min-feature-canary-runs {min_feature_canary_runs} "
-        f"--min-callback-latency-runs {min_callback_latency_runs} 2>/dev/null || "
-        "python3 scripts/reliability_review_pack.py "
-        f"--project-root {project_root} --soak-dir {soak_dir} --deploy-dir {deploy_dir} "
-        f"--query-guard-dir {query_guard_dir} --feature-canary-dir {feature_canary_dir} "
-        f"--callback-latency-dir {callback_latency_dir} --output-dir {output_dir} --month {month} "
-        f"{disk_args} --min-disk-free-gb {min_disk_free_gb} "
-        f"--backlog-p95-budget {backlog_p95_budget} --backlog-p99-budget {backlog_p99_budget} "
-        f"--min-query-guard-runs {min_query_guard_runs} "
-        f"--min-query-guard-suite-runs {min_query_guard_suite_runs} "
-        f"--min-feature-canary-runs {min_feature_canary_runs} "
-        f"--min-callback-latency-runs {min_callback_latency_runs})"
+        f"--min-callback-latency-runs {min_callback_latency_runs}"
     )
 
 
 def _build_steps(args: argparse.Namespace) -> list[dict[str, Any]]:
+    py = _python_for(Path(args.project_root).resolve())
     release_converge_dir = str(Path(args.release_converge_dir))
     roadmap_execution_dir = str(Path(args.roadmap_execution_dir))
     roadmap_guard_dir = str(Path(args.roadmap_guard_dir))
@@ -345,47 +331,51 @@ def _build_steps(args: argparse.Namespace) -> list[dict[str, Any]]:
         },
         {
             "step": "release_converge_no_clean",
-            "command": _release_converge_command(tree_depth=int(args.tree_depth), output_dir=release_converge_dir),
+            "command": _release_converge_command(
+                py=py, tree_depth=int(args.tree_depth), output_dir=release_converge_dir
+            ),
             "allowed_tracked_change_prefixes": [],
             "report_path": Path(release_converge_dir) / "latest.json",
         },
         {
             "step": "roadmap_delivery_execute_strict",
-            "command": _roadmap_execute_command(output_dir=roadmap_execution_dir),
+            "command": _roadmap_execute_command(py=py, output_dir=roadmap_execution_dir),
             "allowed_tracked_change_prefixes": [],
             "report_path": Path(roadmap_execution_dir) / "summary" / "latest.json",
         },
         {
-                "step": "roadmap_delivery_guard_strict",
-                "command": _roadmap_guard_command(
-                    execution_dir=roadmap_execution_dir,
-                    output_dir=roadmap_guard_dir,
-                    max_artifact_age_hours=float(args.max_report_age_hours),
-                ),
+            "step": "roadmap_delivery_guard_strict",
+            "command": _roadmap_guard_command(
+                py=py,
+                execution_dir=roadmap_execution_dir,
+                output_dir=roadmap_guard_dir,
+                max_artifact_age_hours=float(args.max_report_age_hours),
+            ),
             "allowed_tracked_change_prefixes": [],
             "report_path": Path(roadmap_guard_dir) / "latest.json",
         },
         {
             "step": "release_operational_unit_tests",
-            "command": _release_unit_tests_command(),
+            "command": _release_unit_tests_command(py=py),
             "allowed_tracked_change_prefixes": [],
             "report_path": None,
         },
         {
             "step": "release_operational_ruff",
-            "command": _ruff_command(),
+            "command": _ruff_command(py=py),
             "allowed_tracked_change_prefixes": [],
             "report_path": None,
         },
         {
             "step": "release_operational_typecheck",
-            "command": _typecheck_command(),
+            "command": _typecheck_command(py=py),
             "allowed_tracked_change_prefixes": [],
             "report_path": None,
         },
         {
             "step": "release_channel_gate",
             "command": _release_channel_gate_command(
+                py=py,
                 output_dir=deploy_dir,
                 soak_dir=soak_dir,
                 change_id=str(args.change_id),
@@ -398,6 +388,7 @@ def _build_steps(args: argparse.Namespace) -> list[dict[str, Any]]:
         {
             "step": "reliability_monthly_pack",
             "command": _reliability_pack_command(
+                py=py,
                 month=str(args.month),
                 project_root=".",
                 soak_dir=soak_dir,
@@ -434,6 +425,11 @@ def _resolve_report_path(root: Path, step: dict[str, Any]) -> Path | None:
     return None
 
 
+def _step_expects_report(step: dict[str, Any]) -> bool:
+    """Whether the step writes a report whose ``overall`` the gate must read (the others are judged by exit code)."""
+    return bool(step.get("report_path")) or bool(step.get("report_path_glob"))
+
+
 def _build_markdown(report: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# First Operational Release Gate")
@@ -457,6 +453,8 @@ def _build_markdown(report: dict[str, Any]) -> str:
         notes: list[str] = []
         if row.get("boundary_violation"):
             notes.append("tracked_change_boundary")
+        if row.get("report_violation"):
+            notes.append("report_not_pass")
         if row.get("skipped"):
             notes.append("skipped")
         unexpected = row.get("unexpected_tracked_changes")
@@ -578,6 +576,19 @@ def main(argv: list[str] | None = None) -> int:
         report_path = _resolve_report_path(root, step)
         row["report_path"] = str(report_path) if report_path else ""
         row["report_overall"] = _extract_overall(report_path)
+        # Exit 0 is not enough for a step that writes a report: a missing, unreadable or non-pass report fails
+        # the gate. (A step that already failed keeps its own exit code and stderr.)
+        if int(row.get("returncode", 1)) == 0 and _step_expects_report(step) and row["report_overall"] != STATUS_PASS:
+            row["returncode"] = RC_REPORT_NOT_PASS
+            stderr = str(row.get("stderr", ""))
+            found = row["report_path"] or "(no report found)"
+            row["stderr"] = (
+                stderr + f"\nstep report is not pass: overall={row['report_overall']!r} report={found}"
+            ).strip()
+            row["stderr_tail"] = row["stderr"]
+            row["report_violation"] = True
+        else:
+            row["report_violation"] = False
         rows.append(row)
 
         if int(row.get("returncode", 1)) != 0:
