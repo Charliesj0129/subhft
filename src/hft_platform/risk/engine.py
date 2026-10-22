@@ -199,12 +199,16 @@ class RiskEngine:
         # was enforced by nobody. Per-symbol limits exist precisely to be
         # TIGHTER than the per-strategy default, so losing them silently
         # defeats their purpose.
+        # PriceBandValidator too: Rust is handed one coarse cap, the largest of
+        # the global and product caps, so a per-root or per-symbol price cap
+        # (``max_price_cap_root_TMF``) was enforced by nobody under Rust.
         self._rust_uncovered_validators: list[RiskValidator] = [
             v
             for v in self.validators
             if isinstance(
                 v,
                 (
+                    PriceBandValidator,
                     PositionLimitValidator,
                     DailyLossLimitValidator,
                     PerSymbolNotionalValidator,
@@ -262,6 +266,28 @@ class RiskEngine:
                 self._greeks_validator = GreeksLimitValidator(self.config, greeks_provider)
             except ImportError:
                 logger.warning("greeks_limit_validator_unavailable")
+
+    def _fast_path_exempt(self, intent: Any) -> bool:
+        """True for an intent FastGate and the Rust validator must not judge.
+
+        CANCEL, FORCE_FLAT, and any order that strictly shrinks the strategy's
+        net position in the symbol: the exits the Python validators exempt.
+        """
+        intent_type = int(getattr(intent, "intent_type", IntentType.NEW))
+        if intent_type in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
+            return True
+        qty = int(getattr(intent, "qty", 0) or 0)
+        symbol = str(getattr(intent, "symbol", "") or "")
+        if qty <= 0 or not symbol:
+            return False
+        try:
+            net = self._current_strategy_symbol_net_position(symbol, str(getattr(intent, "strategy_id", "")))
+        except Exception:  # noqa: BLE001 — unknown position: not provably reducing
+            return False
+        if net == 0:
+            return False
+        signed = qty if int(getattr(intent, "side", 0)) == int(Side.BUY) else -qty
+        return abs(net + signed) < abs(net)
 
     def _current_strategy_symbol_net_position(self, symbol: str, strategy_id: str) -> int:
         provider = self._position_provider
@@ -853,7 +879,14 @@ class RiskEngine:
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
             return self._reject(intent, "FLOAT_PRICE")
 
-        if self._fast_gate is not None:
+        # The fast paths have no exit exemptions of their own. FastGate's
+        # shared-memory kill flag refused FORCE_FLAT, and the Rust validator
+        # refused a cover the Python validators let through as a reduction, so
+        # an exit goes the Python way, where those exemptions live.
+        fast_path_exempt = (self._fast_gate is not None or self._rust_validator is not None) and (
+            self._fast_path_exempt(intent)
+        )
+        if self._fast_gate is not None and not fast_path_exempt:
             try:
                 if int(getattr(intent, "intent_type", IntentType.NEW)) != int(IntentType.CANCEL):
                     ok, code = self._fast_gate.check(int(getattr(intent, "price", 0)), int(getattr(intent, "qty", 0)))
@@ -874,7 +907,7 @@ class RiskEngine:
 
         # 2. Hard Validators — Rust fast path or Python fallback
         rv = self._rust_validator
-        if rv is not None:
+        if rv is not None and not fast_path_exempt:
             try:
                 v0 = self._validator0
                 _get_mid = getattr(v0, "_get_mid_price", None) if v0 is not None else None

@@ -120,8 +120,8 @@ Microstructure toxicity scoring based on Christensen, Oomen, Reno (2022):
 | `HFT_STORMGUARD_STORM_COOLDOWN_S` | `30` | STORM recovery cooldown |
 | `HFT_STORMGUARD_DE_ESCALATE_N` | `5` | Consecutive clears before de-escalation |
 | `HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES` | — | Comma-separated exempt strategy IDs |
-| `HFT_RISK_FAST_GATE` | `0` | Enable Numba FastGate |
-| `HFT_RISK_RUST_VALIDATOR` | `0` | Enable Rust validator FFI |
+| `HFT_RISK_FAST_GATE` | `0` | Enable Numba FastGate (skipped for CANCEL, FORCE_FLAT and position-reducing orders) |
+| `HFT_RISK_RUST_VALIDATOR` | `0` | Enable Rust validator FFI (same exemptions; a Rust approval still runs the Python price band, position, daily-loss, per-symbol notional and expiry validators) |
 | `HFT_RISK_DLQ_TTL_S` | `30` | Risk DLQ entry TTL |
 
 ## Rust FFI

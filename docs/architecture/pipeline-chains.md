@@ -128,14 +128,18 @@ strategy.handle_event() → List[OrderIntent]
   │    4. Risk → 5. Command → 6. Dispatch          ││
   │    7. Commit                                   ││
   │    ↓                                           ││
-  │  order_queue.put_nowait(cmd)                   ││
-  └────────────────────────────────────────────────┘│
-                                                    │
-  OrderAdapter.run()  ←─────────────────────────────┘
-    ↓ (10-step pipeline: HALT check, dedup, rate limit,
-    │   CB, degrade, shadow intercept, client validate)
+  │  await OrderAdapter.execute(cmd)  ─────────┐   ││
+  └────────────────────────────────────────────┼───┘│
+                                               │    │
+  OrderAdapter.run() → execute(cmd) ←──────────┴────┘
+    ↓ the single order gate (B2): order mode, HALT, dedup,
+    │   rate limits, CBs, platform reduce-only, shadow,
+    │   client validate; returns False on a refusal
+    ↓
+  _api_queue → _api_worker
     ↓
   _dispatch_to_api() → broker.place_order()
+    (re-checks HFT_ORDER_MODE: the HALT drain calls it directly)
 ```
 
 ### Hop-by-Hop Detail
@@ -149,8 +153,8 @@ strategy.handle_event() → List[OrderIntent]
 | 4a | `RiskEngine.evaluate()` | `risk/engine.py` | OrderIntent → `RiskDecision` | Sync validator chain |
 | 4b | `GatewayService._process_envelope()` | `gateway/service.py` | Envelope → 7-step pipeline | Dedup→Policy→Exposure→Risk→Cmd→Dispatch→Commit |
 | 5 | `RiskEngine.create_command()` | `risk/engine.py` | OrderIntent → `OrderCommand` | Attach deadline_ns, storm_guard_state |
-| 6 | `order_queue.put_nowait()` | — | OrderCommand | `asyncio.Queue` |
-| 7 | `OrderAdapter.execute()` | `order/adapter.py` | OrderCommand → broker API call | 10-step validation pipeline |
+| 6 | `order_queue.put_nowait()` | — | OrderCommand | `asyncio.Queue` (no gateway; the gateway awaits `execute()` directly) |
+| 7 | `OrderAdapter.execute()` | `order/adapter.py` | OrderCommand → `_api_queue`, or False | The single order gate on both paths |
 | 8 | `_dispatch_to_api()` | `order/adapter.py` | → `broker.place_order()` | Thread pool via `asyncio.to_thread()` |
 
 ### Strategy Dispatch Details
