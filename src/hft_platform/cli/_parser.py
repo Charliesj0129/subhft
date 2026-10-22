@@ -8,6 +8,7 @@ from importlib.util import find_spec
 from pathlib import Path
 
 from hft_platform.cli_args.research_pipeline import add_common_research_pipeline_args
+from hft_platform.risk import manual_latches
 
 from ._alpha import (
     cmd_alpha_ab_compare,
@@ -65,7 +66,7 @@ from ._ops import (
     cmd_recorder_status,
     cmd_strat_test,
 )
-from ._risk import cmd_risk_halt, cmd_risk_resume, cmd_risk_status
+from ._risk import cmd_risk_halt, cmd_risk_latches, cmd_risk_rearm, cmd_risk_resume, cmd_risk_status
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
     cmd_resolve_symbols,
@@ -425,6 +426,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     risk_status_cmd = risk_sub.add_parser("status", help="Check kill switch status")
     risk_status_cmd.set_defaults(func=cmd_risk_status)
+
+    risk_latches = risk_sub.add_parser("latches", help="List durable manual latches (daily loss, reconciliation)")
+    risk_latches.set_defaults(func=cmd_risk_latches)
+
+    risk_rearm = risk_sub.add_parser("rearm", help="Release one durable manual latch (audited)")
+    risk_rearm.add_argument("latch", choices=sorted(manual_latches.LATCH_NAMES))
+    risk_rearm.add_argument("--reason", required=True, help="Why it is safe to resume")
+    risk_rearm.set_defaults(func=cmd_risk_rearm)
 
     # ── Health Preflight ───────────────────────────────────────────────
     health = sub.add_parser("health", help="Health check utilities")

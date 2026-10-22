@@ -290,6 +290,10 @@ class TestStartupFillBackfill:
             # order path when orders are enabled.
             _order_session_watchdog=MagicMock(return_value=asyncio.sleep(0)),
             _supervise=MagicMock(return_value=asyncio.sleep(0)),
+            # run() restores the daily-loss state and applies the durable
+            # manual latches before anything can dispatch.
+            _restore_daily_loss_state=lambda: None,
+            _apply_manual_latches=lambda _latches: None,
             stop_async=MagicMock(return_value=asyncio.sleep(0)),
             evidence_writer=MagicMock(record_transition=MagicMock()),
             order_client=MagicMock(login=MagicMock(), set_execution_callbacks=MagicMock()),
