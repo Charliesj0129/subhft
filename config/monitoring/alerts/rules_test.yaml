@@ -549,3 +549,40 @@ tests:
       - eval_time: 30m
         alertname: StrategyPendingWithNoInflightOrder
         exp_alerts: []
+
+  # ── ScrapeTargetDown ───────────────────────────────────────────
+  # Positive control: the node-exporter outage that hid the 2026-10-21 disk-full.
+  - interval: 1m
+    name: scrape target down fires for a dead node target after 10m
+    input_series:
+      - series: 'up{job="node", instance="node-exporter:9100"}'
+        values: "0+0x30"
+      - series: 'up{job="clickhouse", instance="clickhouse:9363"}'
+        values: "1+0x30"
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: ScrapeTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: node
+              instance: node-exporter:9100
+            exp_annotations:
+              summary: "Scrape target node is down"
+              description: "node-exporter:9100 (job node) has been unscrapable for >10m; every alert on its metrics is silently empty until it is back."
+
+  # hft-engine and loki have their own rules; ScrapeTargetDown must not double-page.
+  - interval: 1m
+    name: scrape target down leaves hft-engine and loki to their own rules
+    input_series:
+      - series: 'up{job="hft-engine", instance="hft-engine:9090"}'
+        values: "0+0x30"
+      - series: 'up{job="loki", instance="loki:3100"}'
+        values: "0+0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ScrapeTargetDown
+        exp_alerts: []
