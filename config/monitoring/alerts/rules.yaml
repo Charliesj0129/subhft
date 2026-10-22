@@ -11,6 +11,19 @@ groups:
       summary: "HFT Engine scrape target is down"
       description: "hft-engine:9090 has been unreachable for >30s. The trading process may have crashed."
 
+  # Every other target. A rule over an unscraped target has zero series and reads
+  # as healthy: node-exporter was unscrapable from 2026-07 to 2026-10-22, so
+  # HostDiskSpace* could not fire when the disk filled on 2026-10-21.
+  # hft-engine and loki keep their own rules (HFTEngineDown, LokiDown).
+  - alert: ScrapeTargetDown
+    expr: up{job!~"hft-engine|loki"} == 0
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Scrape target {{ $labels.job }} is down"
+      description: "{{ $labels.instance }} (job {{ $labels.job }}) has been unscrapable for >10m; every alert on its metrics is silently empty until it is back."
+
   # Feed Health
   - alert: FeedGapCritical
     expr: rate(feed_events_total[30s]) == 0 and market_trading_hours_active == 1
