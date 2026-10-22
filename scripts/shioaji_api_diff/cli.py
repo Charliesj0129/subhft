@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,13 @@ def _load_surface(version: str) -> dict[str, Any]:
     if not path.exists():
         raise SystemExit(f"missing surface snapshot: {path} (run `orchestrate` first)")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _iso_date(text: str) -> date:
+    try:
+        return date.fromisoformat(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not an ISO date (YYYY-MM-DD): {text!r}") from exc
 
 
 def _write(path: Path, text: str) -> None:
@@ -82,7 +90,8 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     Exits non-zero under ``--strict`` when any release still needs attention:
     no captured surface, no recorded decision, or a deferral that has come due.
     A scheduled job uses that as its failure condition. ``--releases-json``
-    reads a saved PyPI payload instead of the network.
+    reads a saved PyPI payload instead of the network; ``--today`` fixes the
+    day deferrals are judged against (default: the real date).
     """
     pin = watch_mod.read_pin()
     ledger_pin, decisions = decisions_mod.load_decisions(args.ledger)
@@ -101,7 +110,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     else:
         versions = watch_mod.fetch_releases()
     releases = watch_mod.newer_releases(pin, versions, decisions)
-    doc = watch_mod.build_report(pin, releases)
+    doc = watch_mod.build_report(pin, releases, today=args.today)
     sys.stdout.write(report.canonical_json(doc) if args.json else watch_mod.render_text(doc))
     return 1 if doc["counts"]["needs_action"] and args.strict else 0
 
@@ -169,6 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_watch.add_argument(
         "--ledger", default=None, help="decision ledger path (default docs/runbooks/shioaji-release-decisions.yaml)"
+    )
+    p_watch.add_argument(
+        "--today",
+        type=_iso_date,
+        default=None,
+        help="judge deferrals as of this day (YYYY-MM-DD) instead of the real date",
     )
     p_watch.add_argument(
         "--strict",
