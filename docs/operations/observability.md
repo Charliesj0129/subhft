@@ -32,6 +32,10 @@
     **plus** the tick body, roughly the sum of the other two. Despite the name it is not loop lag; the name is
     kept because a dashboard (`pipeline-health.json`) still plots it. Do not alert or tune on it.
   - The two Histograms expose `_bucket`, `_sum` and `_count` only; a query for the bare name returns nothing.
+  - `execution_router_lag_ns` (`ExecutionLagHigh`) is time from an execution report's broker-thread stamp to the
+    router dequeuing it, so it rises with loop congestion, not with broker latency. The market-data consumer
+    yields to the loop every `HFT_MD_YIELD_EVERY` consecutive queued ticks (default 8); without that yield a tick
+    burst was drained in one loop step and blocked execution reports for 25-50 ms (THESHOW day session, 2026-10-21).
 
 ## 3) Strategy / Risk
 - `strategy_latency_ns`
