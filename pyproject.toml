@@ -10,7 +10,7 @@ dependencies = [
     "structlog>=25.1,<27",
     "msgspec>=0.20,<1",
     "hftbacktest>=2.4,<3",
-    "shioaji[speed]==1.5.6",  # PINNED: surface + offline harness verified 2026-07-13
+    "shioaji[speed]==1.7.9",  # PINNED: 1.7.9 surface diffed 2026-10-22 (1.5.6 was deleted from PyPI)
     "prometheus_client>=0.23,<0.25",  # PINNED: 0.25.0 causes MutexValue._lock corruption (TypeError on /metrics)
     "psutil>=7.1,<8",
     "PyYAML>=6.0,<7",
@@ -59,7 +59,7 @@ research = [
 ]
 
 [project.optional-dependencies]
-shioaji-broker = ["shioaji[speed]==1.5.6"]  # Shioaji (SinoPac) broker SDK
+shioaji-broker = ["shioaji[speed]==1.7.9"]  # Shioaji (SinoPac) broker SDK
 fubon = ["fubon-neo>=2.2.7"]  # Fubon broker SDK (not on PyPI; install from Fubon's index)
 monitor = ["rich>=13.0"]  # Signal monitor TUI (rich.live + rich.table)
 bot = ["python-telegram-bot[job-queue]>=21.0"]  # Telegram Bot interactive service
@@ -257,6 +257,14 @@ module = [
 disallow_untyped_defs = true
 
 [tool.uv]
+# The lock resolves Python 3.12 and 3.13 only. Production runs 3.12, and the
+# lock must carry the versions production actually runs (pandas 3, hftbacktest
+# 2.4.4). On Python >= 3.14 those two cannot coexist: hftbacktest 2.4.4 needs
+# numpy < 2.3 while pandas 3.0.3 needs numpy >= 2.3.3 there, so a universal
+# lock over >= 3.12 is unsatisfiable without holding pandas back to 2.x, which
+# would silently downgrade production on the next image rebuild.
+environments = ["python_full_version >= '3.12' and python_full_version < '3.14'"]
+
 # Broker SDKs are mutually exclusive extras.
 conflicts = [
     [{ extra = "shioaji-broker" }, { extra = "fubon" }],
