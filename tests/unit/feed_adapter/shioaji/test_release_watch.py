@@ -8,10 +8,12 @@ what counts as newer, what counts as adoptable, and what counts as unassessed.
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 import pytest
 
+from scripts.shioaji_api_diff import decisions as dec
 from scripts.shioaji_api_diff import watch
 
 
@@ -141,15 +143,35 @@ def test_no_newer_release_reports_that_plainly(monkeypatch: Any) -> None:
 # --------------------------------------------------------------------------- #
 # The CLI contract a scheduled job depends on
 # --------------------------------------------------------------------------- #
+# The ledger and the day are inputs of ``watch``. These tests state both, so they read neither the shipped
+# ledger (whose deferrals expire) nor the clock: a test of the CLI contract must not turn red because a date passed.
+_DEFERRED_UNTIL = date(2026, 10, 28)
+
+
+def _watch_inputs(tmp_path: Any, monkeypatch: Any, *, captured: set[str]) -> list[str]:
+    """Pin 1.5.6, PyPI listing 1.5.7, and a ledger that defers 1.5.7 until ``_DEFERRED_UNTIL``."""
+    releases = tmp_path / "releases.json"
+    releases.write_text(json.dumps(_payload("1.5.6", "1.5.7")), encoding="utf-8")
+    deferral = dec.Decision(
+        version="1.5.7",
+        verdict=dec.DEFER,
+        decided_on=date(2026, 10, 14),
+        rationale="test fixture",
+        evidence="diff_1.5.6_to_1.5.7.json",
+        revisit_after=_DEFERRED_UNTIL,
+    )
+    monkeypatch.setattr(watch, "read_pin", lambda *a, **k: "1.5.6")
+    monkeypatch.setattr(watch, "_captured_versions", lambda: captured)
+    monkeypatch.setattr(dec, "load_decisions", lambda *a, **k: ("1.5.6", {"1.5.7": deferral}))
+    return ["watch", "--strict", "--releases-json", str(releases)]
+
+
 def test_strict_mode_exits_nonzero_when_a_release_is_unassessed(tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
     from scripts.shioaji_api_diff import cli
 
-    releases = tmp_path / "releases.json"
-    releases.write_text(json.dumps(_payload("1.5.6", "1.5.7")), encoding="utf-8")
-    monkeypatch.setattr(watch, "read_pin", lambda *a, **k: "1.5.6")
-    monkeypatch.setattr(watch, "_captured_versions", set)
+    argv = _watch_inputs(tmp_path, monkeypatch, captured=set())
 
-    rc = cli.main(["watch", "--strict", "--releases-json", str(releases)])
+    rc = cli.main([*argv, "--today", "2026-10-15"])
 
     assert rc == 1
     assert "1.5.7" in capsys.readouterr().out
@@ -158,12 +180,63 @@ def test_strict_mode_exits_nonzero_when_a_release_is_unassessed(tmp_path: Any, m
 def test_strict_mode_exits_zero_once_every_release_is_assessed(tmp_path: Any, monkeypatch: Any) -> None:
     from scripts.shioaji_api_diff import cli
 
-    releases = tmp_path / "releases.json"
-    releases.write_text(json.dumps(_payload("1.5.6", "1.5.7")), encoding="utf-8")
-    monkeypatch.setattr(watch, "read_pin", lambda *a, **k: "1.5.6")
-    monkeypatch.setattr(watch, "_captured_versions", lambda: {"1.5.7"})
+    argv = _watch_inputs(tmp_path, monkeypatch, captured={"1.5.7"})
 
-    assert cli.main(["watch", "--strict", "--releases-json", str(releases)]) == 0
+    assert cli.main([*argv, "--today", "2026-10-15"]) == 0
+
+
+def test_strict_mode_exits_nonzero_once_a_deferral_has_come_due(tmp_path: Any, monkeypatch: Any, capsys: Any) -> None:
+    from scripts.shioaji_api_diff import cli
+
+    argv = _watch_inputs(tmp_path, monkeypatch, captured={"1.5.7"})
+
+    assert cli.main([*argv, "--today", _DEFERRED_UNTIL.isoformat()]) == 0  # the last day still counts
+    assert cli.main([*argv, "--today", "2026-10-29"]) == 1
+    assert "EXPIRED" in capsys.readouterr().out
+
+
+def test_the_day_defaults_to_the_real_date_when_today_is_not_given(tmp_path: Any, monkeypatch: Any) -> None:
+    from scripts.shioaji_api_diff import cli
+
+    argv = _watch_inputs(tmp_path, monkeypatch, captured={"1.5.7"})
+    seen: dict[str, Any] = {}
+    real = watch.build_report
+
+    def _spy(pin: str, releases: Any, *, today: Any = None) -> Any:
+        seen["today"] = today
+        return real(pin, releases, today=today)
+
+    monkeypatch.setattr(watch, "build_report", _spy)
+
+    cli.main(argv)
+
+    assert seen == {"today": None}  # None: build_report asks the clock itself
+
+
+@pytest.mark.parametrize("text", ["15/10/2026", "2026-10-29T12:00:00", "2026-13-01", "2026-10", "tomorrow", ""])
+def test_a_malformed_today_is_refused_by_the_parser(tmp_path: Any, monkeypatch: Any, capsys: Any, text: str) -> None:
+    from scripts.shioaji_api_diff import cli
+
+    argv = _watch_inputs(tmp_path, monkeypatch, captured={"1.5.7"})
+
+    with pytest.raises(SystemExit) as raised:
+        cli.main([*argv, "--today", text])
+
+    assert raised.value.code == 2
+    assert "not an ISO date" in capsys.readouterr().err
+
+
+def test_without_strict_the_exit_code_stays_zero_while_the_report_still_names_the_release(
+    tmp_path: Any, monkeypatch: Any, capsys: Any
+) -> None:
+    from scripts.shioaji_api_diff import cli
+
+    argv = [a for a in _watch_inputs(tmp_path, monkeypatch, captured=set()) if a != "--strict"]
+
+    rc = cli.main([*argv, "--today", "2026-10-15"])
+
+    assert rc == 0
+    assert "1.5.7" in capsys.readouterr().out
 
 
 def test_watch_never_calls_the_network_when_given_a_releases_file(tmp_path: Any, monkeypatch: Any) -> None:
@@ -174,8 +247,8 @@ def test_watch_never_calls_the_network_when_given_a_releases_file(tmp_path: Any,
         raise AssertionError("fetch_releases must not be called with --releases-json")
 
     releases = tmp_path / "releases.json"
-    releases.write_text(json.dumps(_payload("1.5.6")), encoding="utf-8")
-    monkeypatch.setattr(watch, "read_pin", lambda *a, **k: "1.5.6")
+    pin = watch.read_pin()
+    releases.write_text(json.dumps(_payload(pin)), encoding="utf-8")
     monkeypatch.setattr(watch, "fetch_releases", _explode)
 
     assert cli.main(["watch", "--releases-json", str(releases)]) == 0

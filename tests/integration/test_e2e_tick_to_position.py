@@ -108,7 +108,7 @@ class TestBuyThenSellPnL:
             side=Side.SELL,
             qty=1,
             price=6_100_000,
-            fee=1_425,
+            fee=1_425 + 9_000,  # fee is all-in: it already contains the tax
             tax=9_000,
             fill_id="F002",
             order_id="ORD002",

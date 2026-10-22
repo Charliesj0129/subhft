@@ -42,6 +42,8 @@ class PyPosition:
         is_buy = side == 0
         signed_fill_qty = qty if is_buy else -qty
 
+        # Kernel contract: ``fee`` and ``tax`` are additive. PositionStore passes the all-in fee as ``fee`` and
+        # 0 as ``tax`` (FillEvent.fee already contains its tax), see test_positions_fee_counts_tax_once.py.
         self.fees_scaled += fee + tax
 
         current_sign = 1 if self.net_qty > 0 else (-1 if self.net_qty < 0 else 0)
