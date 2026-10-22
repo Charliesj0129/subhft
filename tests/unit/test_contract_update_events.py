@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 import structlog.testing
 
 from hft_platform.feed_adapter.shioaji.contracts_runtime import (
@@ -26,6 +27,8 @@ from hft_platform.feed_adapter.shioaji.contracts_runtime import (
     ContractsRuntime,
     _classify_contract_event_field,
 )
+
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
 
 
 class _Api:

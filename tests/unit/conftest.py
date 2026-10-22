@@ -28,6 +28,24 @@ def _disable_clickhouse_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", "0")
 
 
+OPERATOR_ENV_VARS = (
+    "HFT_MODE",
+    "HFT_ENV",
+    "HFT_QUOTE_CONNECTIONS",
+    "HFT_LOOP_ID",
+    "HFT_LOOP",
+    "HFT_ORDER_MODE",
+    "HFT_LIVE_CONFIRM",
+    "HFT_ORDER_SHADOW_MODE",
+)
+
+
+def scrub_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove every operator-environment variable a unit test must not inherit (see ``_scrub_operator_env``)."""
+    for var in OPERATOR_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.fixture(autouse=True)
 def _scrub_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strip developer .env / shell pollution before each unit test.
@@ -40,21 +58,18 @@ def _scrub_operator_env(monkeypatch: pytest.MonkeyPatch) -> None:
       * loads :class:`HftConfig` via the L1 strict validator (rejects
         ``mode='real'``);
       * exercises the single-conn broker facade path (multi-conn pool
-        replaces the facade, breaking ``call_count`` assertions).
+        replaces the facade, breaking ``call_count`` assertions);
+      * builds an ``OrderAdapter``: its ``ShadowOrderSink`` reads
+        ``HFT_ORDER_SHADOW_MODE`` at construction, so an inherited ``=1`` (a
+        shell export, or an operator ``.env`` under ``make``) turned every
+        pre-dispatch rejection into ``shadow_intercepted``
+        (``test_predispatch_rejection_releases_pending_slot.py`` fails that way
+        whenever the variable is exported, and passes without it).
 
     Tests that need these vars must set them explicitly via their own
     ``monkeypatch.setenv`` — the autouse fixture only clears the *defaults*.
     """
-    for var in (
-        "HFT_MODE",
-        "HFT_ENV",
-        "HFT_QUOTE_CONNECTIONS",
-        "HFT_LOOP_ID",
-        "HFT_LOOP",
-        "HFT_ORDER_MODE",
-        "HFT_LIVE_CONFIRM",
-    ):
-        monkeypatch.delenv(var, raising=False)
+    scrub_operator_env(monkeypatch)
 
 
 @pytest.fixture()
@@ -118,6 +133,43 @@ def module_log_sink(monkeypatch: pytest.MonkeyPatch):
         return entries
 
     return _bind
+
+
+@pytest.fixture()
+def uncached_structlog_loggers():
+    """Let ``structlog.testing.capture_logs`` see the module-level loggers, whatever ran before the test.
+
+    ``configure_logging`` installs a new processor list on every call and turns on ``cache_logger_on_first_use``, so
+    a module-level logger that was used once keeps the list that was current then. ``capture_logs`` edits the
+    *current* list in place and never reaches the old one: after the integration suite (or any unit test that builds
+    a real ``HFTSystem``) a capture records nothing, while the event still goes to stdout. That depends on file
+    order, so the test passes alone and fails in the full run.
+
+    The fixture drops that cache from every ``hft_platform`` module-level logger before the test. Opt a file in with
+    ``pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")``; ``module_log_sink`` is the alternative
+    that replaces one module's logger outright. The fixture returns the sweep, which reports how many loggers it
+    cleared, for a test that has to cache a logger itself.
+
+    Loggers kept on instances or classes (``self._log = get_logger()``) are not module attributes and are not
+    swept; an object built after the sweep binds its logger afresh.
+    """
+    import sys
+
+    from structlog._config import BoundLoggerLazyProxy
+
+    def _sweep() -> int:
+        swept = 0
+        for name, module in list(sys.modules.items()):
+            if name != "hft_platform" and not name.startswith("hft_platform."):
+                continue
+            for value in list(vars(module).values()):
+                if isinstance(value, BoundLoggerLazyProxy) and "bind" in vars(value):
+                    del vars(value)["bind"]
+                    swept += 1
+        return swept
+
+    _sweep()
+    return _sweep
 
 
 @pytest.fixture()

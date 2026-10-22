@@ -9,7 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hft_platform.config.symbols import write_contract_cache, write_symbols_yaml
+
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
 
 
 def test_write_contract_cache_atomic(tmp_path: Path):

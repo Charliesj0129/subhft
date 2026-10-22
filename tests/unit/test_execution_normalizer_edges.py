@@ -6,6 +6,8 @@ import pytest
 from hft_platform.contracts.execution import OrderStatus, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 
 def _symbols_cfg(tmp_path):
     cfg = tmp_path / "symbols.yaml"

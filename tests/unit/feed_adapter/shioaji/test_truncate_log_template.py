@@ -10,9 +10,12 @@ requested universe).
 
 from __future__ import annotations
 
+import pytest
 from structlog.testing import capture_logs
 
 from hft_platform.feed_adapter.shioaji.subscription_manager import _log_truncate_event
+
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
 
 
 class _StubClient:

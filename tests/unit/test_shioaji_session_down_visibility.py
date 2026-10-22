@@ -19,10 +19,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
 import structlog
 
 from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
+
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
 
 
 def _registrar(api: object | None) -> SimpleNamespace:

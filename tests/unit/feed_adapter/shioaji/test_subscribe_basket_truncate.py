@@ -41,6 +41,8 @@ from hft_platform.feed_adapter.shioaji.subscription_manager import SubscriptionM
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.metrics import MetricsRegistry
 
+pytestmark = pytest.mark.usefixtures("uncached_structlog_loggers")
+
 
 def _counter_value(metric, **labels) -> float:
     return metric.labels(**labels)._value.get()
