@@ -19,8 +19,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest import mock
 
-import structlog
-
+import hft_platform.feed_adapter.shioaji.client as client_module
+import hft_platform.feed_adapter.shioaji.quote_runtime as quote_runtime_module
 from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 from hft_platform.feed_adapter.shioaji.quote_runtime import QuoteRuntime
 
@@ -44,13 +44,13 @@ class TestSessionDownCallbackRegistration:
         assert ok is True
         api.set_session_down_callback.assert_called_once_with(client._session_down_callback_fn)
 
-    def test_registration_reports_false_when_the_sdk_lacks_the_setter(self) -> None:
+    def test_registration_reports_false_when_the_sdk_lacks_the_setter(self, module_log_sink) -> None:
         # A future SDK could drop it. Degrade to a warning; never raise.
         api = SimpleNamespace()
         client = _registrar(api)
+        logs = module_log_sink(client_module)
 
-        with structlog.testing.capture_logs() as logs:
-            ok = ShioajiClient._register_session_down_callback(client)
+        ok = ShioajiClient._register_session_down_callback(client)
 
         assert ok is False
         assert any(entry["log_level"] == "warning" for entry in logs)
@@ -74,11 +74,11 @@ class TestSessionDownIsVisible:
     def _runtime(metrics: object | None) -> SimpleNamespace:
         return SimpleNamespace(_client=SimpleNamespace(metrics=metrics))
 
-    def test_session_down_logs_at_error_level(self) -> None:
+    def test_session_down_logs_at_error_level(self, module_log_sink) -> None:
         runtime = self._runtime(None)
+        logs = module_log_sink(quote_runtime_module)
 
-        with structlog.testing.capture_logs() as logs:
-            QuoteRuntime.on_session_down(runtime)
+        QuoteRuntime.on_session_down(runtime)
 
         # Error level is the whole point: the outage was invisible precisely
         # because every SDK-adjacent event was logged at info.
@@ -92,14 +92,14 @@ class TestSessionDownIsVisible:
 
         metrics.shioaji_session_down_total.inc.assert_called_once_with()
 
-    def test_session_down_never_raises_into_the_sdk(self) -> None:
+    def test_session_down_never_raises_into_the_sdk(self, module_log_sink) -> None:
         # Runs on a broker thread inside a C caller: an escape is a crash.
         metrics = mock.MagicMock()
         metrics.shioaji_session_down_total.inc.side_effect = RuntimeError("registry gone")
         runtime = self._runtime(metrics)
+        logs = module_log_sink(quote_runtime_module)
 
-        with structlog.testing.capture_logs() as logs:
-            QuoteRuntime.on_session_down(runtime)  # must not raise
+        QuoteRuntime.on_session_down(runtime)  # must not raise
 
         # Reaching the counter proves the raise came from inside the handler
         # and was swallowed there, rather than the handler never running.
