@@ -49,6 +49,7 @@ def _store(*positions: Position) -> PositionStore:
     store = PositionStore.__new__(PositionStore)
     store.positions = {f"{p.account_id}:{p.strategy_id}:{p.symbol}": p for p in positions}
     store._fill_lock = threading.Lock()
+    store._recovery_positions = {}  # snapshot_open_positions() walks recovered lots too
     return store
 
 
