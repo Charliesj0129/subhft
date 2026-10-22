@@ -30,6 +30,9 @@ from hft_platform.order.shadow_writer import ShadowOrderWriter
 logger = get_logger("order_adapter")
 
 _PENDING_SENTINEL = object()
+# TTL-expired phantoms remembered so a very late fill can still be claimed.
+_EXPIRED_PHANTOM_MAX = 64
+_EXPIRED_PHANTOM_RETENTION_S = 4 * 3600.0
 _TERMINAL_BEFORE_REGISTERED = object()
 _GUARD_TIMEOUT = object()
 # ``_call_api`` result for a ``cancel_order`` whose wrapper timed out. Distinct from
@@ -1116,6 +1119,20 @@ class OrderAdapter:
             self._phantom_records = records
         return records
 
+    def _get_expired_phantoms(self) -> collections.deque[tuple[float, str, str, int]]:
+        """Phantoms whose TTL ran out, newest last: ``(expired_at, key, symbol, side)``.
+
+        An order whose ``place_order`` answer never came back stays live at the broker
+        and can fill long after the TTL (THESHOW 2026-10-08: ordno of phantom 3767, TTL
+        03:20Z, fill 04:36Z). Keeping the expiry lets that fill be claimed by its
+        strategy instead of surfacing as UNKNOWN with the position invisible.
+        """
+        ledger = getattr(self, "_expired_phantom_ledger", None)
+        if ledger is None:
+            ledger = collections.deque(maxlen=_EXPIRED_PHANTOM_MAX)
+            self._expired_phantom_ledger = ledger
+        return ledger
+
     def _get_phantom_legacy_keys(self) -> dict[str, tuple[float, str]]:
         """M4: lazy accessor for the backwards-compat ``_phantom_order_keys``
         view. Same auto-init rationale as ``_get_phantom_records``.
@@ -1328,6 +1345,7 @@ class OrderAdapter:
                         kept.append(record)
                         continue
                     expired.append((pkey, record.intent))
+                    self._get_expired_phantoms().append((now_mono, pkey, record.symbol, int(record.intent.side)))
                 if kept:
                     records_dict[pkey] = kept
                     last = kept[-1]
@@ -1450,6 +1468,17 @@ class OrderAdapter:
             return True
         text = str(exc).lower()
         return "timeout" in text or "timed out" in text
+
+    def _has_unbound_phantom(self, strategy_id: str, symbol: str) -> bool:
+        """True while a timed-out place_order of this strategy and symbol awaits its Trade."""
+        with self._phantom_lock:
+            self._phantom_materialize_legacy()
+            for pkey, records in self._get_phantom_records().items():
+                if not pkey.startswith(f"{strategy_id}:"):
+                    continue
+                if any(r.symbol == symbol for r in records):
+                    return True
+        return False
 
     def _count_phantom_bound(self, outcome: str) -> None:
         try:
@@ -1690,7 +1719,7 @@ class OrderAdapter:
         # helpers).
         with self._phantom_lock:
             self._phantom_materialize_legacy()
-        if not self._get_phantom_records():
+        if not self._get_phantom_records() and not self._get_expired_phantoms():
             return None
         symbol = getattr(fill_event, "symbol", "")
         side = getattr(fill_event, "side", None)
@@ -1769,6 +1798,29 @@ class OrderAdapter:
                     side=side_name,
                     phantom_key=pkey,
                     strategy_id=strategy_id,
+                )
+                return strategy_id
+            # Last resort: a phantom whose TTL ran out with no answer from the SDK.
+            # Oldest first, same symbol and side, within the retention window.
+            ledger = self._get_expired_phantoms()
+            for entry in tuple(ledger):
+                expired_at, pkey, esymbol, eside = entry
+                if (now_mono - expired_at) > _EXPIRED_PHANTOM_RETENTION_S:
+                    ledger.remove(entry)
+                    continue
+                if esymbol != symbol or eside != int(side):
+                    continue
+                ledger.remove(entry)
+                strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
+                self._note_phantom_fill(pkey, fill_event)
+                self._count_phantom_bound("fill_claimed_after_expiry")
+                logger.warning(
+                    "phantom_fill_resolved_via_expired_phantom",
+                    symbol=symbol,
+                    side=side_name,
+                    phantom_key=pkey,
+                    strategy_id=strategy_id,
+                    expired_s=round(now_mono - expired_at, 1),
                 )
                 return strategy_id
         return None
@@ -4026,6 +4078,19 @@ class OrderAdapter:
                                 "cmd_id": int(cmd.cmd_id),
                             }
                         )
+                        return True
+                    if self._has_unbound_phantom(intent.strategy_id, intent.symbol):
+                        # The strategy named the order by the broker's ack id, which
+                        # reached it before the timed-out place_order's Trade did
+                        # (R47 10/8 04:21:43, 20 ms ahead). That Trade is bound and
+                        # cancelled on arrival, so this cancel is already covered.
+                        logger.info(
+                            "cancel_deferred_to_phantom_bind",
+                            target=target_key,
+                            strategy_id=intent.strategy_id,
+                            cmd_id=int(cmd.cmd_id),
+                        )
+                        self._count_phantom_bound("cancel_target_deferred")
                         return True
                     logger.warning("Cancel target not found", target=target_key)
                     self.metrics.order_reject_total.inc()
