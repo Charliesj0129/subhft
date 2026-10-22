@@ -216,14 +216,14 @@ class TestRecoveryMergePythonPath:
             price_scaled=110 * SCALE,
             account_id="acc1",
             strategy_id="strat_a",
-            fee=100,
+            fee=150,  # all-in: already contains the 50 tax
             tax=50,
         )
         store.on_fill(fill)
 
         pos = store.positions["acc1:strat_a:2330"]
         # Recovery fees + fill fees
-        assert pos.fees_scaled == 2000 + 100 + 50
+        assert pos.fees_scaled == 2000 + 150
 
     def test_no_merge_when_no_recovery(self):
         """Normal fill without recovery data works as before (opens new position)."""
@@ -422,13 +422,13 @@ class TestRecoveryMergeRustPath:
             price_scaled=110 * SCALE,
             account_id="acc1",
             strategy_id="strat_a",
-            fee=200,
+            fee=300,  # all-in: already contains the 100 tax
             tax=100,
         )
         store.on_fill(fill)
 
         pos = store.positions["acc1:strat_a:2330"]
-        assert pos.fees_scaled == 3000 + 200 + 100
+        assert pos.fees_scaled == 3000 + 300
 
     def test_rust_path_second_fill_still_has_offset(self):
         """Rust path: offset persists across multiple fills for the same key."""
