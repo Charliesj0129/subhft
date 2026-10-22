@@ -72,7 +72,9 @@ def test_the_job_that_keeps_the_token_really_pushes_and_may_write() -> None:
 
 def test_every_job_has_explicit_permissions() -> None:
     implicit = [
-        f"{path.name}:{job_id}" for path, doc, job_id, job in _jobs() if "permissions" not in doc and "permissions" not in job
+        f"{path.name}:{job_id}"
+        for path, doc, job_id, job in _jobs()
+        if "permissions" not in doc and "permissions" not in job
     ]
     assert implicit == []
 
