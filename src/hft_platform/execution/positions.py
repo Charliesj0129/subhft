@@ -822,6 +822,41 @@ class PositionStore:
         with self._fill_lock:
             return {k: dataclasses.replace(v) for k, v in self.positions.items()}
 
+    def snapshot_open_positions(self) -> dict[str, Position]:
+        """Every position the platform holds, including recovered ones not yet traded.
+
+        After a restart, startup recovery parks each carried position in
+        ``_recovery_positions`` until the first fill for that key seeds it into
+        ``positions``. ``snapshot_positions()`` leaves those out, so anything that
+        values or exits the book from it cannot see a lot carried across a
+        restart -- and never will if the strategy no longer trades that symbol,
+        as after a contract roll. Risk, mark-to-market and the loss exit read
+        this view instead.
+
+        Recovered entries are keyed ``recovery:<their key>`` so they can never
+        overwrite a live position. A recovered ``avg_price_scaled`` of -1 is the
+        "unknown cost basis" sentinel (``startup_recon``) and is passed through:
+        callers must not value it.
+        """
+        with self._fill_lock:
+            out = {k: dataclasses.replace(v) for k, v in self.positions.items()}
+            for rkey, rdata in self._recovery_positions.items():
+                if not isinstance(rdata, dict):
+                    continue
+                net_qty = int(rdata.get("net_qty", 0) or 0)
+                if net_qty == 0:
+                    continue
+                out[f"recovery:{rkey}"] = Position(
+                    account_id=str(rdata.get("account_id", "")),
+                    strategy_id=str(rdata.get("strategy_id", "") or ""),
+                    symbol=str(rdata.get("symbol", rkey.rsplit(":", 1)[-1])),
+                    net_qty=net_qty,
+                    avg_price_scaled=int(rdata.get("avg_price_scaled", 0) or 0),
+                    realized_pnl_scaled=int(rdata.get("realized_pnl_scaled", 0) or 0),
+                    fees_scaled=int(rdata.get("fees_scaled", 0) or 0),
+                )
+            return out
+
     def _forget_keys(self, keys: Iterable[str]) -> None:
         """Drop *keys* from every store that outlives ``self.positions``.
 
