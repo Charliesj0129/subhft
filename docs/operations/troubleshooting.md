@@ -75,8 +75,11 @@ curl -fsS http://localhost:9090/metrics | head
 ## 9) 延遲異常升高
 ```bash
 uv run python scripts/latency/shioaji_api_probe.py --mode sim --iters 30
-curl -fsS http://localhost:9090/metrics | rg "event_loop_lag_ms|queue_depth"
+curl -fsS http://localhost:9090/metrics | rg "event_loop_probe_lag_ms|supervisor_tick_duration_ms|queue_depth"
 ```
+
+`event_loop_probe_lag_ms` is the loop-congestion signal; `supervisor_tick_duration_ms` is the supervisor's own
+tick body. Both are Histograms (`_bucket`/`_sum`/`_count`). `event_loop_lag_ms` is their composite, not loop lag.
 
 ## 10) 測試不穩定
 ```bash

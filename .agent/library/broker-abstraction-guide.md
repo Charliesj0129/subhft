@@ -7,7 +7,7 @@ Status: Implementation in progress (protocols defined; Fubon adapter scaffolded)
 Companion docs:
 - `.agent/library/multi-broker-architecture.md` — design specification
 - `.agent/library/current-architecture.md` — full platform architecture baseline
-- `.agent/library/shioaji-client-resilience-decoupling-plan.md` — Shioaji decomposition plan
+- `shioaji-client-resilience-decoupling-plan.md` — Shioaji decomposition plan (local only, not in the repo)
 - `docs/architecture/current-architecture.md` — canonical architecture doc
 
 ---

@@ -27,6 +27,7 @@ from hft_platform.observability.metrics import MetricsRegistry, cap_reject_reaso
 from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
+    ExpiringContractValidator,
     MaxNotionalValidator,
     PerSymbolNotionalValidator,
     PositionLimitValidator,
@@ -187,6 +188,7 @@ class RiskEngine:
                 position_provider=_pos_provider,
             ),
             DailyLossLimitValidator(self.config, price_scale_provider, position_provider=_pos_provider),
+            ExpiringContractValidator(self.config, price_scale_provider, position_provider=_pos_provider),
         ]
         # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
         # PerSymbolNotionalValidator belongs here too. It is a sibling of
@@ -200,7 +202,15 @@ class RiskEngine:
         self._rust_uncovered_validators: list[RiskValidator] = [
             v
             for v in self.validators
-            if isinstance(v, (PositionLimitValidator, DailyLossLimitValidator, PerSymbolNotionalValidator))
+            if isinstance(
+                v,
+                (
+                    PositionLimitValidator,
+                    DailyLossLimitValidator,
+                    PerSymbolNotionalValidator,
+                    ExpiringContractValidator,
+                ),
+            )
         ]
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
@@ -1198,6 +1208,7 @@ class RiskEngine:
                     "DailyLossLimit HALT triggered — escalating StormGuard to HALT",
                     accumulated_loss=v._accumulated_loss,
                     unrealized_pnl=v._unrealized_pnl,
+                    daily_unrealized=v.daily_unrealized(),
                 )
                 self.storm_guard.trigger_halt("DAILY_LOSS_LIMIT_EXCEEDED")
 
@@ -1222,7 +1233,7 @@ class RiskEngine:
                         running = None
                     target_loop = sg_loop if sg_loop is not None and not sg_loop.is_closed() else running
                     if target_loop is not None:
-                        total_pnl = sum(v._accumulated_loss.values()) + v._unrealized_pnl
+                        total_pnl = sum(v._accumulated_loss.values()) + v.daily_unrealized()
                         # Mirror the validator's own selection. Both halt
                         # decision paths in DailyLossLimitValidator pick
                         # ``_hard_limit_threshold_scaled`` when the intraday_pnl
