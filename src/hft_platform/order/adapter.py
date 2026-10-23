@@ -30,6 +30,10 @@ from hft_platform.order.shadow_writer import ShadowOrderWriter
 logger = get_logger("order_adapter")
 
 _PENDING_SENTINEL = object()
+# ``HFT_ORDER_MODE`` values that may send through a real broker session.
+# ``real`` is bootstrap's alias for ``live``; listed so an unnormalized value
+# is not mistaken for sim.
+_ORDER_MODES_LIVE = frozenset({"live", "real"})
 # TTL-expired phantoms remembered so a very late fill can still be claimed.
 _EXPIRED_PHANTOM_MAX = 64
 _EXPIRED_PHANTOM_RETENTION_S = 4 * 3600.0
@@ -169,6 +173,7 @@ class OrderAdapter:
         "_finished_orders",
         "_finished_max",
         "_finished_ttl_s",
+        "_order_mode",
         "_live_orders_lock",
         "rate_limiter",
         "circuit_breaker",
@@ -256,6 +261,11 @@ class OrderAdapter:
         self.config_path = config_path
         self.order_queue = order_queue
         self.client = broker_client
+        # Read once: ``services.bootstrap.resolve_order_mode`` has already
+        # validated the variable and written the canonical value back to the
+        # environment before any adapter is built. Enforced per order in
+        # ``_order_mode_refusal``.
+        self._order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
         self._broker_codec = broker_codec
         # Map broker order IDs -> order_key ("strategy_id:intent_id")
         # P0-E1: protected by a threading.RLock (not asyncio.Lock) because
@@ -3059,8 +3069,26 @@ class OrderAdapter:
                     remaining.append((sid, oid, ts))
             self._deferred_terminals = remaining
 
-    async def execute(self, cmd: OrderCommand) -> None:
+    async def execute(self, cmd: OrderCommand) -> bool:
+        """The single pre-dispatch gate every order path goes through.
+
+        ``RiskEngine`` (via ``run``), ``GatewayService`` and the HALT drain all
+        hand commands here; nothing else may put a command on ``_api_queue``.
+        Returns True when the command was accepted for dispatch, False when a
+        guard refused it. A refusal has already been booked and, for a NEW,
+        fed back to the strategy, so callers only release their own state.
+        """
         intent = cmd.intent
+
+        order_mode_reason = self._order_mode_refusal(intent)
+        if order_mode_reason:
+            await self._reject_before_dispatch(
+                intent,
+                RejectionReason.ORDER_MODE,
+                f"HFT_ORDER_MODE={getattr(self, '_order_mode', 'sim')} forbids this order",
+                order_mode_reason,
+            )
+            return False
 
         # StormGuard HALT check — both stamped and live state (closes TOCTOU gap)
         _is_halt = cmd.storm_guard_state == StormGuardState.HALT
@@ -3085,7 +3113,7 @@ class OrderAdapter:
                 "dispatch_halt_reject",
                 halt_exempt_blocked=self._is_strategy_halt_exempt(intent.strategy_id),
             )
-            return
+            return False
 
         # Safety-critical intents (CANCEL/FORCE_FLAT) bypass rate limiters and
         # circuit breakers — they must never be blocked during HALT evacuation.
@@ -3109,7 +3137,7 @@ class OrderAdapter:
                     "Duplicate idempotency_key",
                     "duplicate_idempotency_key",
                 )
-                return
+                return False
 
         # R2-01: Track whether we reserved a dedup slot so we can release it on
         # unexpected exception (prevents orphaned slots blocking re-submission).
@@ -3129,7 +3157,7 @@ class OrderAdapter:
                         "Per-symbol hard rate limit",
                         "per_symbol_rate_limit",
                     )
-                    return
+                    return False
 
             # Per-strategy circuit breaker check (WU-09)
             if not _safety_exempt and self.strategy_cb_mgr.is_open(intent.strategy_id):
@@ -3139,7 +3167,7 @@ class OrderAdapter:
                     "Per-strategy circuit breaker open",
                     "strategy_circuit_breaker_open",
                 )
-                return
+                return False
 
             # Circuit Breaker Check
             if not _safety_exempt and self.circuit_breaker.is_open():
@@ -3150,7 +3178,7 @@ class OrderAdapter:
                     "Circuit breaker open",
                     "circuit_breaker_open",
                 )
-                return
+                return False
 
             if not _safety_exempt and not self.check_rate_limit():
                 # Rate limit exceeded
@@ -3160,7 +3188,7 @@ class OrderAdapter:
                     "Rate limit exceeded",
                     "rate_limit_exceeded",
                 )
-                return
+                return False
 
             if not self._platform_degrade_allows(intent):
                 self.metrics.order_reject_total.inc()
@@ -3171,7 +3199,7 @@ class OrderAdapter:
                     "Platform is in reduce-only mode",
                     "platform_reduce_only",
                 )
-                return
+                return False
             self._reserve_platform_reduce_only_close(intent)
 
             # Shadow mode intercept (WU-10)
@@ -3179,7 +3207,7 @@ class OrderAdapter:
                 self.shadow_sink.intercept(intent)
                 self.per_symbol_rate_limiter.record(intent.symbol)
                 self._send_dispatch_rejection(intent, "shadow_intercepted", phantom_pending=False)
-                return
+                return False
 
             if not self._validate_client(intent):
                 self.metrics.order_reject_total.inc()
@@ -3192,7 +3220,7 @@ class OrderAdapter:
                     "Client validation failed",
                     "client_validation_failed",
                 )
-                return
+                return False
 
             if not self.running:
                 if cmd.created_ns:
@@ -3203,10 +3231,11 @@ class OrderAdapter:
                         self._dedup_commit(intent.idempotency_key, True, "OK", cmd.cmd_id)
                 except Exception:
                     self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
-                return
-            await self._enqueue_api(cmd)
+                    return False
+                return ok
             # Dedup remains in 'reserved' state until _api_worker resolves it
             # (commit on dispatch success, release on failure/skip).
+            return await self._enqueue_api(cmd)
         except Exception:
             if _dedup_key:
                 self._dedup_commit(_dedup_key, False, "internal_error", 0)
@@ -3383,6 +3412,35 @@ class OrderAdapter:
             halt_exempt_blocked=halt_exempt_blocked,
         )
 
+    def _order_mode_refusal(self, intent: OrderIntent) -> str:
+        """Return a reason code when ``HFT_ORDER_MODE`` forbids sending *intent*.
+
+        Until this check existed the mode only chose which client bootstrap
+        built: ``disabled`` swapped in a no-op client, ``sim`` put the order
+        client on Shioaji's simulation server. Nothing on the order path read
+        it, so a client wired by any other route (a test harness, a future
+        broker, a facade built outside ``_build_broker_clients``) sent whatever
+        it was given. Enforced here, the mode means the same thing on every
+        path: ``disabled`` sends nothing but cancels, and a ``sim`` engine
+        refuses to place, amend or flatten through a client that reports a
+        real session. A client that reports no mode is not refused: only the
+        Shioaji client reports one today.
+
+        CANCEL always passes: a cancel only ever removes exposure.
+        """
+        if intent.intent_type == IntentType.CANCEL:
+            return ""
+        order_mode = getattr(self, "_order_mode", "sim")
+        if order_mode == "disabled":
+            return "order_mode_disabled"
+        if order_mode not in _ORDER_MODES_LIVE and self._client_session_mode() == "real":
+            return "order_mode_sim_on_real_session"
+        return ""
+
+    def _client_session_mode(self) -> str:
+        mode = getattr(getattr(self, "client", None), "mode", None)
+        return mode if isinstance(mode, str) else ""
+
     def _validate_client(self, intent: OrderIntent) -> bool:
         if intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT):
             return hasattr(self.client, "place_order") and hasattr(self.client, "get_exchange")
@@ -3554,6 +3612,17 @@ class OrderAdapter:
 
     async def _dispatch_to_api(self, cmd: OrderCommand) -> bool:
         intent = cmd.intent
+        # Re-checked at the broker boundary: the HALT drain dispatches queued
+        # safety commands straight here, past ``execute``.
+        order_mode_reason = self._order_mode_refusal(intent)
+        if order_mode_reason:
+            await self._reject_before_dispatch(
+                intent,
+                RejectionReason.ORDER_MODE,
+                f"HFT_ORDER_MODE={getattr(self, '_order_mode', 'sim')} forbids this order",
+                order_mode_reason,
+            )
+            return False
         cancel_target_key = ""
         self._emit_trace(
             "order_dispatch_start", intent, {"cmd_id": int(cmd.cmd_id), "intent_type": int(intent.intent_type)}

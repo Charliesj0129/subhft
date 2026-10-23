@@ -1,94 +1,164 @@
 # config/research/cost_profiles.yaml
 # Per-instrument cost model for standardized backtest engine.
 # Values in POINTS per side (not NTD).
-# Source: TAIFEX fee schedule + broker commission (retail, no rebates).
+#
+# Index-futures transaction tax is 0.002% of notional on the BUYER AND the SELLER
+# (rate in force since 2019-01-01), i.e. price x 0.00002 points per side, the same
+# number of points for TXF, MXF and TMF. It is modelled at a 50,000-point reference
+# (1.00 pt per side), above the current ~48.5k, so the default errs towards cost
+# (0.97 pt at 48.5k, 0.45 pt at 22.5k). A fixed point count overstates the tax in
+# low-index periods, which is the conservative direction for a cost gate.
+#
+# Commission is broker-specific and ASSUMED (not checked with the broker). The default
+# profile takes the HIGH end of the range (NTD/side incl. exchange fee: TXF 30-100,
+# MXF 15-50, TMF 8-20); `<ROOT>_mid` and `<ROOT>_low` are sensitivity variants only and
+# must never be used to pass a gate that the default fails.
+#
+# Per side, default:  TXF 0.5 + 1.0 = 1.5 pt,  MXF 1.0 + 1.0 = 2.0 pt,  TMF 2.0 + 1.0 = 3.0 pt.
+# Before 2026-10-06 this file charged TXF 1.5 (tax modelled as sell-only, averaged) and
+# TMF 2.0 (tax 0.7 pt, commission 1.3 pt); the TMF figure understated cost by 1.0 pt per side.
+#
+# Lookup: an exact key wins; otherwise a contract-month code such as TMFJ6 falls back to
+# its root key (TXF / MXF / TMF). See research/backtest/cost_models.py.
+# Source: memory/feedback_taifex_fee_structure.md (corrected 2026-10-06).
 
-TMFD6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+TXF:
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
+  point_value_nwd: 200
+  scale: 1000000
+
+TXF_mid:
+  commission_pts_per_side: 0.325
+  tax_pts_per_side: 1.0
+  point_value_nwd: 200
+  scale: 1000000
+
+TXF_low:
+  commission_pts_per_side: 0.15
+  tax_pts_per_side: 1.0
+  point_value_nwd: 200
+  scale: 1000000
+
+MXF:
+  commission_pts_per_side: 1.0
+  tax_pts_per_side: 1.0
+  point_value_nwd: 50
+  scale: 1000000
+
+MXF_mid:
+  commission_pts_per_side: 0.65
+  tax_pts_per_side: 1.0
+  point_value_nwd: 50
+  scale: 1000000
+
+MXF_low:
+  commission_pts_per_side: 0.3
+  tax_pts_per_side: 1.0
+  point_value_nwd: 50
+  scale: 1000000
+
+TMF:
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000
 
-# TXF retail cost CORRECTED 2026-04-18 per user confirmation.
-# Total RT ~3 pt (~600 NTD): ~120 NTD commission RT (0.3 pt/side x 2)
-# + ~480 NTD tax sell-side only (modeled symmetric as 1.2 pt/side average → 2.4 pt RT).
-# Source: memory/feedback_taifex_fee_structure.md
+TMF_mid:
+  commission_pts_per_side: 1.4
+  tax_pts_per_side: 1.0
+  point_value_nwd: 10
+  scale: 1000000
+
+TMF_low:
+  commission_pts_per_side: 0.8
+  tax_pts_per_side: 1.0
+  point_value_nwd: 10
+  scale: 1000000
+
+# Contract-month keys already referenced by manifests and tests. Contract month changes the
+# instrument identity, not the economics, so each carries its root's default.
+
+TMFD6:
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
+  point_value_nwd: 10
+  scale: 1000000
+
 TXFD6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
 TXFB6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
 TXFC6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
 TXFE6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
 TXFF6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
-# Contract month changes the instrument identity, not the frozen TXF economics.
 TXFG6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
 TXFH6:
-  commission_pts_per_side: 0.3
-  tax_pts_per_side: 1.2
+  commission_pts_per_side: 0.5
+  tax_pts_per_side: 1.0
   point_value_nwd: 200
   scale: 1000000
 
 TMFB6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000
 
 TMFC6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000
 
-# Contract month changes the instrument identity, not the frozen TMF economics.
 TMFE6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000
 
 TMFF6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000
 
 TMFG6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000
 
 TMFH6:
-  commission_pts_per_side: 1.3
-  tax_pts_per_side: 0.7
+  commission_pts_per_side: 2.0
+  tax_pts_per_side: 1.0
   point_value_nwd: 10
   scale: 1000000

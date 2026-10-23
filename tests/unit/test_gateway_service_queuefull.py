@@ -7,7 +7,7 @@ Covers two bugs fixed in gateway/service.py:
 
 import asyncio
 from contextlib import suppress
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,6 +25,19 @@ from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureKey, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
+
+
+def _queue_gate(api_queue):
+    """Stand-in for ``OrderAdapter.execute``: enqueue, False when the queue is full."""
+
+    async def _execute(cmd):
+        try:
+            api_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    return AsyncMock(side_effect=_execute)
 
 
 def _make_intent(
@@ -79,6 +92,7 @@ def _make_service(
 
     order_adapter = MagicMock()
     order_adapter._api_queue = api_queue
+    order_adapter.execute = _queue_gate(api_queue)
     order_adapter._supports_typed_command_ingress = False
 
     storm_guard = MagicMock()
@@ -152,7 +166,7 @@ async def test_queuefull_does_not_release_exposure_for_cancel():
 
 @pytest.mark.asyncio
 async def test_queuefull_commits_dedup_as_rejected():
-    """C2: Dedup entry must be committed approved=False with reason ORDER_QUEUE_FULL on QueueFull."""
+    """C2: Dedup entry must be committed approved=False with reason ORDER_GATE_REJECT on QueueFull."""
     dedup = IdempotencyStore(persist_enabled=False)
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, _ = _make_service(channel=ch, queue_full=True, dedup_store=dedup)
@@ -163,7 +177,7 @@ async def test_queuefull_commits_dedup_as_rejected():
     rec = dedup.check_or_reserve("k_dedup_full")
     assert rec is not None, "Dedup record must exist after QueueFull rejection"
     assert rec.approved is False, f"Expected approved=False, got {rec.approved}"
-    assert rec.reason_code == "ORDER_QUEUE_FULL", f"Expected ORDER_QUEUE_FULL, got {rec.reason_code}"
+    assert rec.reason_code == "ORDER_GATE_REJECT", f"Expected ORDER_GATE_REJECT, got {rec.reason_code}"
 
 
 @pytest.mark.asyncio

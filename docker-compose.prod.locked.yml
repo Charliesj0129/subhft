@@ -3,9 +3,9 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-10-03T11:35:35Z (UTC)
-# Git SHA:          02d35df4
-# Base digest:      1713fbbf8bdca4ea  (docker-compose.yml)
+# Generated:        2026-10-23T17:20:59Z (UTC)
+# Git SHA:          6d02fb7b
+# Base digest:      6e4474cd185ce2fe  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
 #
@@ -208,7 +208,7 @@ services:
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
     - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
     - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
-    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
     - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
@@ -456,7 +456,7 @@ services:
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
     - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
     - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
-    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
     - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
@@ -777,7 +777,7 @@ services:
       - CMD-SHELL
       - wget --no-verbose --tries=1 --spider http://localhost:9090/-/healthy || exit 1
       timeout: 10s
-    image: prom/prometheus:v2.51.0
+    image: prom/prometheus:v2.55.1
     logging:
       driver: json-file
       options:
@@ -963,7 +963,7 @@ services:
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
     - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
     - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
-    - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+    - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
     - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
@@ -1120,7 +1120,7 @@ x-hft-common:
   - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
   - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
   - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
-  - HFT_GATEWAY_ENABLED=${HFT_GATEWAY_ENABLED:-1}
+  - HFT_GATEWAY_ENABLED=0
   - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
   - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
   - HFT_MONITOR_REDIS_HOST=${HFT_MONITOR_REDIS_HOST:-redis}
