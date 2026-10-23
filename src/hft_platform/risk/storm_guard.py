@@ -206,8 +206,11 @@ class StormGuard:
         # HALT, so ``_target_state_reason`` never names one; this does.
         "_halt_reason",
         # ``stormguard_halt_reason`` label currently set to 1, so leaving HALT
-        # can clear exactly that one. Touched only by _emit_pending_transition.
+        # can clear exactly that one. Touched only by _emit_pending_transition,
+        # under _halt_label_lock: trigger_halt runs on any thread, and two
+        # interleaved HALT emits could each leave their label at 1.
         "_halt_reason_label",
+        "_halt_label_lock",
     )
 
     def __init__(
@@ -297,6 +300,7 @@ class StormGuard:
         self._order_rtt_peak_us: int = 0
         self._halt_reason: str = ""
         self._halt_reason_label: str = ""
+        self._halt_label_lock = threading.Lock()
         #: Reason string for the state ``_evaluate_target_state`` last computed,
         #: refreshed every ``update()`` rather than only on a transition. The
         #: transition log records why STORM was *entered*; a gate needs to know
@@ -1010,12 +1014,13 @@ class StormGuard:
             if StormGuardState.HALT in (new_state_int, old_state_int):
                 try:
                     gauge = self.metrics.stormguard_halt_reason
-                    if self._halt_reason_label:
-                        gauge.labels(reason=self._halt_reason_label).set(0)
-                        self._halt_reason_label = ""
-                    if new_state_int == StormGuardState.HALT:
-                        self._halt_reason_label = halt_reason_label(entry["reason"])
-                        gauge.labels(reason=self._halt_reason_label).set(1)
+                    with self._halt_label_lock:
+                        if self._halt_reason_label:
+                            gauge.labels(reason=self._halt_reason_label).set(0)
+                            self._halt_reason_label = ""
+                        if new_state_int == StormGuardState.HALT:
+                            self._halt_reason_label = halt_reason_label(entry["reason"])
+                            gauge.labels(reason=self._halt_reason_label).set(1)
                 except Exception as exc:
                     logger.warning("stormguard_metric_update_failed", metric="halt_reason", error=str(exc))
 

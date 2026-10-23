@@ -156,3 +156,7 @@ Microstructure toxicity scoring based on Christensen, Oomen, Reno (2022):
 Optional `RustRiskValidator`, `RustStormGuardValidator`, `RustCircuitBreaker` via `hft_platform.rust_core`.
 Error codes: 0=OK, 1=PRICE_ZERO_OR_NEG, 2=PRICE_EXCEEDS_CAP, 3=PRICE_OUTSIDE_BAND, 4=MAX_NOTIONAL.
 Fallback to Python implementations if unavailable.
+`RiskEngine` gives the Rust validator an unbounded notional limit, so code 4
+never fires: the kernel has no point value and no reduce exemption, and it
+returns before the Python validators run. Both notional caps are always
+enforced in Python.

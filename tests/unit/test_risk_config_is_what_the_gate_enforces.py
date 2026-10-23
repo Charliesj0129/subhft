@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -109,6 +110,47 @@ class TestNotionalCapIsNtd:
             assert v.check(_intent("2330", points=100_001))[0] is False
 
 
+class TestRustDoesNotJudgeNotional:
+    """HFT_RISK_RUST_VALIDATOR=1: the kernel has no reduce exemption and returns first."""
+
+    @pytest.fixture
+    def rust_engine(self, monkeypatch: pytest.MonkeyPatch):
+        from hft_platform.risk.engine import _load_rust_risk_validator
+
+        if _load_rust_risk_validator() is None:
+            pytest.skip("rust_core RustRiskValidator not built")
+        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "1")
+
+        def build(position: int) -> RiskEngine:
+            provider = SymbolMetadataPriceScaleProvider(_Metadata())
+            with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
+                sg = StormGuard()
+            engine = RiskEngine(
+                str(_PROD_LIMITS),
+                asyncio.Queue(),
+                asyncio.Queue(),
+                provider,
+                storm_guard=sg,
+                position_provider=lambda symbol, strategy_id: position,
+            )
+            assert engine._rust_validator is not None
+            return engine
+
+        return build
+
+    def test_an_over_cap_position_can_still_be_closed(self, rust_engine) -> None:
+        """23 TMF at 45,000 = 10,350,000 NTD. Rust used to reject it as MAX_NOTIONAL."""
+        engine = rust_engine(position=23)
+        decision = engine.evaluate(_intent("TMFK6", side=Side.SELL, qty=23))
+        assert decision.approved is True, decision.reason_code
+
+    def test_an_opening_txf_lot_is_still_rejected_by_python(self, rust_engine) -> None:
+        engine = rust_engine(position=0)
+        decision = engine.evaluate(_intent("TXFK6"))
+        assert decision.approved is False
+        assert "NOTIONAL_EXCEEDED" in decision.reason_code
+
+
 def _load_dead_config_scan():
     path = _REPO / "scripts" / "dead_config_scan.py"
     spec = importlib.util.spec_from_file_location("dead_config_scan_b5", path)
@@ -195,6 +237,52 @@ class TestHaltReasonLabel:
 
         assert self._value(gauge, "raw_queue_sustained_drops") == 0
         assert self._value(gauge, "DAILY_LOSS_LIMIT_EXCEEDED") == 1
+
+    def test_interleaved_halts_leave_no_label_set_after_release(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """trigger_halt runs on any thread; two HALT emits must not interleave.
+
+        Thread A pauses inside its ``labels(CAUSE_A)`` call, before ``set(1)``.
+        Thread B then moves HALT -> STORM -> HALT(CAUSE_B). Unserialized, B
+        finishes, A resumes and sets CAUSE_A to 1 after B cleared it, and the
+        release below clears only CAUSE_B.
+        """
+        sg, gauge = self._guard()
+        real_labels = gauge.labels
+        a_inside = threading.Event()
+        release_a = threading.Event()
+
+        def labels(**kw):
+            if kw.get("reason") == "CAUSE_A" and not a_inside.is_set():
+                a_inside.set()
+                release_a.wait(timeout=5)
+            return real_labels(**kw)
+
+        monkeypatch.setattr(gauge, "labels", labels)
+
+        def second_halt() -> None:
+            with sg._state_lock:
+                sg._transition(StormGuardState.STORM, "test")
+            sg._emit_pending_transition()
+            sg.trigger_halt("CAUSE_B")
+
+        a = threading.Thread(target=sg.trigger_halt, args=("CAUSE_A",))
+        a.start()
+        assert a_inside.wait(timeout=5)
+        b = threading.Thread(target=second_halt)
+        b.start()
+        # Without the lock B completes here; with it B waits on A. 50 ms bounds
+        # the window B gets to finish before A is let go.
+        b.join(timeout=0.05)
+        release_a.set()
+        a.join(timeout=5)
+        b.join(timeout=5)
+        assert not a.is_alive() and not b.is_alive()
+
+        with sg._state_lock:
+            sg._transition(StormGuardState.NORMAL, "test release")
+        sg._emit_pending_transition()
+        assert self._value(gauge, "CAUSE_A") == 0
+        assert self._value(gauge, "CAUSE_B") == 0
 
     def test_detail_after_the_colon_is_not_a_label(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(storm_guard_mod, "_halt_reason_labels_seen", set())

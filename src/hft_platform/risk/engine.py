@@ -38,6 +38,9 @@ from hft_platform.risk.validators import (
 
 logger = get_logger("risk_engine")
 
+# i64::MAX: the RustRiskValidator notional limit that never rejects.
+_RUST_NOTIONAL_UNBOUNDED = (1 << 63) - 1
+
 _KNOWN_ERROR_TYPES = frozenset(
     {
         "ValueError",
@@ -419,7 +422,6 @@ class RiskEngine:
             max_price_cap_raw = max(all_caps)
             tick_size_raw = float(defaults.get("tick_size", 0.01))  # precision-config
             band_ticks = int(defaults.get("price_band_ticks", 20))
-            max_notional_raw = defaults.get("max_notional", 10_000_000)
             # Use default scale factor (10000) for the validator
             scale = 10_000
             if price_scale_provider is not None:
@@ -432,15 +434,15 @@ class RiskEngine:
                     logger.warning("Failed to resolve price scale from provider, using default 10000", error=str(exc))
             max_price_cap_scaled = int(max_price_cap_raw * scale)
             tick_size_scaled = int(tick_size_raw * scale)
-            max_notional_scaled = int(max_notional_raw * scale)
-            rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, max_notional_scaled)
+            # Notional is judged by the Python validators only (they are in
+            # _rust_uncovered_validators). The kernel has no point value and no
+            # reduce/FORCE_FLAT exemption, and it returns before Python runs,
+            # so a real cap here would refuse the exit of an over-cap position.
+            rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, _RUST_NOTIONAL_UNBOUNDED)
             # Populate per-strategy configs
             for strat_id, strat_cfg in self.config.get("strategies", {}).items():
                 if "price_band_ticks" in strat_cfg:
                     rv.set_band_ticks(strat_id, int(strat_cfg["price_band_ticks"]))
-                if "max_notional" in strat_cfg:
-                    # Per-strategy notional needs symbol info; use default symbol scale
-                    rv.set_max_notional(strat_id, "*", int(strat_cfg["max_notional"]) * scale)
             logger.info("RustRiskValidator enabled", max_price_cap_scaled=max_price_cap_scaled)
             return rv
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
