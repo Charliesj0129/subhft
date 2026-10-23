@@ -2,18 +2,23 @@
 """Experiment Artifact GC — Unit 10.
 
 Scans research/experiments/runs/ and research/experiments/validations/
-and deletes entries older than --keep-days, while preserving the latest
---keep-latest entries per alpha.
+and, for entries older than --keep-days (outside the latest --keep-latest
+per alpha), deletes the bulky array payloads (``*.npy``, ``*.npz``).
+
+Dry-run is the default; nothing is deleted without ``--apply``. Run
+metadata -- ``meta.json``, ``scorecard.json``, ``run_manifest.json``,
+``trials.jsonl``, ``split_access.jsonl``, reports -- is never deleted: it is
+the trial record that the deflated Sharpe ratio and BH-FDR count, and a
+deleted failed trial makes the surviving ones look better than they are.
 
 Usage:
-    uv run python scripts/experiment_gc.py [--dry-run] [--keep-days N] [--keep-latest N]
+    uv run python scripts/experiment_gc.py [--apply] [--keep-days N] [--keep-latest N]
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import re
-import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,15 +43,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNS_ROOT = REPO_ROOT / "research" / "experiments" / "runs"
 VALIDATIONS_ROOT = REPO_ROOT / "research" / "experiments" / "validations"
 
+# Only these are reclaimable. Everything else in a run directory is metadata
+# (trial evidence) and stays, so a GC'd run still counts as a trial.
+PAYLOAD_SUFFIXES = frozenset({".npy", ".npz"})
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _dir_size_bytes(path: Path) -> int:
-    """Return total size in bytes of all files under *path*."""
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+def _payload_files(path: Path) -> list[Path]:
+    """Return the reclaimable array payloads under *path* (never metadata)."""
+    return sorted(f for f in path.rglob("*") if f.is_file() and f.suffix in PAYLOAD_SUFFIXES)
 
 
 def _parse_dir_timestamp(directory: Path) -> datetime | None:
@@ -164,7 +173,7 @@ def _select_deletions(
     cutoff: datetime,
     keep_latest: int,
 ) -> list[Path]:
-    """Return list of directories to delete.
+    """Return list of directories whose payloads may be deleted.
 
     Rules (applied per alpha):
     1. Always preserve the latest *keep_latest* entries — never delete them.
@@ -254,20 +263,23 @@ def run_gc(
     bytes_freed = 0
 
     for path in to_delete:
-        size = _dir_size_bytes(path)
+        payloads = _payload_files(path)
+        size = sum(f.stat().st_size for f in payloads)
         if dry_run:
-            log.info("DRY-RUN would delete", extra={"path": str(path), "size_bytes": size})
-        else:
+            log.info("DRY-RUN would delete payloads", extra={"path": str(path), "size_bytes": size})
+            continue
+        for f in payloads:
             try:
-                shutil.rmtree(path)
-                log.info("deleted", extra={"path": str(path), "size_bytes": size})
-                dirs_deleted += 1
-                bytes_freed += size
+                f_size = f.stat().st_size
+                f.unlink()
+                bytes_freed += f_size
             except OSError as exc:
-                log.error("failed to delete", extra={"path": str(path), "error": str(exc)})
+                log.error("failed to delete", extra={"path": str(f), "error": str(exc)})
+        log.info("deleted payloads", extra={"path": str(path), "size_bytes": size})
+        dirs_deleted += 1
 
     if dry_run:
-        dry_bytes = sum(_dir_size_bytes(p) for p in to_delete)
+        dry_bytes = sum(f.stat().st_size for p in to_delete for f in _payload_files(p))
         log.info(
             "DRY-RUN summary",
             extra={
@@ -303,7 +315,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--keep-days",
         type=int,
         default=90,
-        help="Delete entries older than this many days.",
+        help="Delete payloads of entries older than this many days.",
     )
     parser.add_argument(
         "--keep-latest",
@@ -312,10 +324,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Always preserve at least this many recent entries per alpha.",
     )
     parser.add_argument(
+        "--apply",
+        action="store_true",
+        default=False,
+        help="Actually delete payloads. Without it the run is a dry-run.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=False,
-        help="Print what would be deleted without actually deleting.",
+        help="Print what would be deleted (the default; kept for compatibility).",
     )
     parser.add_argument(
         "--runs-root",
@@ -353,10 +371,14 @@ def main(argv: list[str] | None = None) -> int:
         log.error("--keep-latest must be at least 1")
         return 2
 
+    if args.apply and args.dry_run:
+        log.error("--apply and --dry-run are mutually exclusive")
+        return 2
+
     run_gc(
         keep_days=args.keep_days,
         keep_latest=args.keep_latest,
-        dry_run=args.dry_run,
+        dry_run=not args.apply,
         runs_root=args.runs_root,
         validations_root=args.validations_root,
     )

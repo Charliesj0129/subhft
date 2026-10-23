@@ -409,23 +409,17 @@ def _cleanup_steps(
         )
 
     if cleanup_profile == CLEANUP_PROFILE_MVP_RELEASE:
-        steps.extend(
-            [
-                {
-                    "step": "mvp_research_gitclean",
-                    "command": "git clean -fdX research/data research/knowledge research/experiments research/logs research/results",
-                    "destructive": True,
-                    "targets": [],
-                    "risk": "high",
-                },
-                {
-                    "step": "mvp_research_init",
-                    "command": "(.venv/bin/python -m research.factory init 2>/dev/null || python3 -m research.factory init)",
-                    "destructive": True,
-                    "targets": [],
-                    "risk": "medium",
-                },
-            ]
+        # No ``git clean -fdX`` over research/: the ignored files there are the
+        # only copy of experiment runs, kill ledgers, trial records and the
+        # research datasets, and a release must not delete research evidence.
+        steps.append(
+            {
+                "step": "mvp_research_init",
+                "command": "(.venv/bin/python -m research.factory init 2>/dev/null || python3 -m research.factory init)",
+                "destructive": True,
+                "targets": [],
+                "risk": "medium",
+            }
         )
         if seed_minimal_sample:
             steps.append(

@@ -37,7 +37,8 @@ tables `audit.alpha_*` in ClickHouse.
 Batch and maintenance (via `make help` / `uv run hft alpha ...`):
 `research-batch-correlation`, `research-paper-trade-batch`, `research-promote-batch`,
 `research-hypothesis-ingest`, `research-hypothesis-top`, `research-auto-scaffold`,
-`experiment-gc` (artifacts > 90 days, keeps latest 3).
+`experiment-gc` (dry-run by default; `APPLY=1` deletes `*.npy`/`*.npz` payloads > 90 days,
+keeps latest 3; run metadata is never deleted).
 
 Related references: `docs/runbooks/alpha-factory.md`,
 `docs/runbooks/alpha-lifecycle-state.md`, `docs/runbooks/replay-parity-gate.md`,
