@@ -16,6 +16,35 @@ logger = get_logger("risk.storm_guard")
 
 __all__ = ["StormGuard", "StormGuardState", "RiskThresholds"]
 
+#: Seconds between repeats of a ``stormguard_deescalation_blocked_*`` line
+#: while the hold that causes it stays on. The block is re-tested on every
+#: ``update()``, so without a floor a single latched daily-loss stop wrote
+#: 65,367 identical lines in one day on the production host (2026-08-27) and 144,400 over
+#: five days -- 20% of every warning the engine emitted that month.
+DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S = 300.0
+
+
+def _hold_block_log_interval_s() -> float:
+    """Read ``HFT_STORMGUARD_HOLD_LOG_INTERVAL_S``; ``<= 0`` means edges only.
+
+    "Edges only" still reports every latch and every release: the hold's own
+    ``set_*_hold`` transition logs both, and this interval governs only the
+    repeat while it is held.
+    """
+    raw = os.getenv("HFT_STORMGUARD_HOLD_LOG_INTERVAL_S", "").strip()
+    if not raw:
+        return DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S
+    try:
+        interval_s = float(raw)
+    except ValueError:
+        logger.warning(
+            "stormguard_hold_log_interval_invalid",
+            value=raw,
+            using=DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S,
+        )
+        return DEFAULT_HOLD_BLOCK_LOG_INTERVAL_S
+    return max(0.0, interval_s)
+
 
 @dataclass(slots=True)
 class RiskThresholds:
@@ -155,6 +184,15 @@ class StormGuard:
         # ``update()`` sees drawdown/latency/feed-gap, and "an operator or a
         # startup safety gate refused this process" is not among them.
         "_kill_switch_hold",
+        # Rate-limit state for the three "de-escalation blocked" lines below.
+        # Each hold is a LATCH: it holds for as long as its cause holds, and
+        # update() re-tests it on every tick, so narrating the block on every
+        # tick turns one operator-relevant fact into tens of thousands of
+        # identical lines. Maps hold kind -> (last log monotonic, suppressed
+        # since). Cleared whenever the hold itself changes, so a flapping hold
+        # is never hidden by the rate limit.
+        "_hold_block_log",
+        "_hold_block_log_interval_s",
         # P0-I4: engine loop reference bound via ``bind_loop()`` by HFTSystem.run().
         # Used by ``_fire_halt_callback`` to dispatch coroutine halt callbacks from
         # non-asyncio threads (e.g. bootstrap lease-refresh daemon).
@@ -248,6 +286,8 @@ class StormGuard:
         self._reconciliation_hold: bool = False
         self._daily_loss_hold: bool = False
         self._kill_switch_hold: bool = False
+        self._hold_block_log: dict[str, tuple[float, int]] = {}
+        self._hold_block_log_interval_s: float = _hold_block_log_interval_s()
         # P0-I4: engine loop reference; bound by HFTSystem.run() via ``bind_loop``.
         # When ``None``, ``_fire_halt_callback`` falls back to a best-effort
         # ``asyncio.get_running_loop()`` lookup (safe on the loop thread itself).
