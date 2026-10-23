@@ -299,10 +299,17 @@ global_defaults:
 
         order_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
-        # Build a fake order adapter that has _api_queue
+        # Build a fake order adapter whose order gate (execute) accepts every
+        # command onto _api_queue, as the real adapter does once its guards pass
         fake_adapter = MagicMock()
         fake_adapter._api_queue = order_queue
         fake_adapter._supports_typed_command_ingress = False
+
+        async def _execute(cmd):
+            order_queue.put_nowait(cmd)
+            return True
+
+        fake_adapter.execute = _execute
 
         channel = LocalIntentChannel(maxsize=64)
         dedup = IdempotencyStore()
