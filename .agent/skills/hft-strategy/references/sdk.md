@@ -48,7 +48,9 @@ quoted bid/ask per symbol.
 Registry entry (`config/live/strategies.yaml`): `id`, `module`, `class`,
 `enabled`, `symbols`, `params`, `budget_us`, `required_feature_set_id`,
 `required_feature_ids`. Limits (`config/base/strategy_limits.yaml`): per-strategy
-`max_position_lots`, `max_order_qty`; global `intraday_pnl` soft/hard limits.
+`max_position_lots` (also bounds order size); global `max_notional` in plain NTD
+and `intraday_pnl` soft/hard limits. The engine logs what is in force as
+`risk_thresholds_effective` at boot.
 Read the files; numbers here would go stale.
 
 ## Common failures

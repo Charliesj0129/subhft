@@ -151,6 +151,7 @@ class MetricsRegistry:
                 _pn("track_gate_intents_filtered_total"),
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
+                _pn("stormguard_halt_reason"),
                 _pn("kill_switch_active"),
                 _pn("manual_latch_active"),
                 _pn("stormguard_transitions_total"),
@@ -637,6 +638,15 @@ class MetricsRegistry:
         self.risk_reject_total = Counter(_pn("risk_reject_total"), "Risk rejections", ["reason", "strategy"])
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
+        )
+        # stormguard_mode says HALT; this says what for. 1 on the label of the
+        # trigger_halt reason that entered the HALT, 0 once it is left. The label
+        # is the reason up to its first ':' (storm_guard.halt_reason_label), so
+        # free-text detail never becomes cardinality.
+        self.stormguard_halt_reason = Gauge(
+            _pn("stormguard_halt_reason"),
+            "1 while StormGuard is in a HALT entered for this reason, else 0",
+            ["reason"],
         )
         self.kill_switch_active = Gauge(
             _pn("kill_switch_active"),

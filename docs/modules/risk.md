@@ -36,12 +36,29 @@ command = engine.create_command(intent)  # Returns OrderCommand
 | Validator | Check | Rejection Reason |
 |-----------|-------|-----------------|
 | `PriceBandValidator` | Price within band from reference | `PRICE_BAND` |
-| `MaxNotionalValidator` | Order notional < limit | `MAX_NOTIONAL` |
-| `PositionLimitValidator` | Position within per-symbol limit | `POSITION_LIMIT` |
+| `MaxNotionalValidator` | `price * qty * point value` <= `max_notional` (plain NTD); reducing orders exempt | `MAX_NOTIONAL_EXCEEDED` |
+| `PerSymbolNotionalValidator` | Same, against `per_symbol_max_notional` or a `symbol_limits` override | `PER_SYMBOL_NOTIONAL_EXCEEDED` |
+| `PositionLimitValidator` | Resulting position within `max_position_lots` (this also bounds order size) | `POSITION_LIMIT` |
 | `DailyLossValidator` | Daily realized PnL > loss limit | `DAILY_LOSS` |
 | `GreeksLimitValidator` | Delta/gamma/vega within limits | `GREEKS_LIMIT` |
 
 All validators return `(approved: bool, reason: str)`. Chain short-circuits on first rejection.
+
+The point value comes from `SymbolMetadata.contract_multiplier` (TMF 10, MXF 50,
+TXF 200); a symbol it does not know counts as 1. Prod caps both notional limits
+at 1,000,000 NTD: one TMF lot passes, one TXF lot does not.
+
+### What is in force, and what was refused
+
+- At boot and after every SIGHUP reload the engine logs one
+  `risk_thresholds_effective` line: notional caps, position lots, price caps,
+  daily-loss limits in NTD, `loss_exit`, `expiry_guard` and StormGuard's
+  thresholds after env overrides. Read it instead of the YAML.
+- Every RiskEngine decision goes to `audit.risk_log`. OrderAdapter's own
+  pre-dispatch refusals (platform reduce-only, circuit breaker, rate limit,
+  HALT, idempotency) go there too, with `reason_code` prefixed `ADAPTER_`.
+- Each engine start writes an `old_state = 'BOOT'` row to `audit.guardrail_log`
+  before any latch is restored, so a restart shows up in the transition history.
 
 ### Hot-Reload
 
@@ -139,3 +156,7 @@ Microstructure toxicity scoring based on Christensen, Oomen, Reno (2022):
 Optional `RustRiskValidator`, `RustStormGuardValidator`, `RustCircuitBreaker` via `hft_platform.rust_core`.
 Error codes: 0=OK, 1=PRICE_ZERO_OR_NEG, 2=PRICE_EXCEEDS_CAP, 3=PRICE_OUTSIDE_BAND, 4=MAX_NOTIONAL.
 Fallback to Python implementations if unavailable.
+`RiskEngine` gives the Rust validator an unbounded notional limit, so code 4
+never fires: the kernel has no point value and no reduce exemption, and it
+returns before the Python validators run. Both notional caps are always
+enforced in Python.

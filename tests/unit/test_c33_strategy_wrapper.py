@@ -193,7 +193,6 @@ def test_strategy_limits_c33_max_pos_matches_strategy() -> None:
     cfg = _load_strategy_limits()
     c33 = cfg["strategies"]["C33_TXFD6_SOLO_MAKER"]
     assert c33["max_position_lots"] == 1  # mirrors strategy max_pos
-    assert c33["max_order_qty"] == 1
 
 
 def test_strategy_limits_global_max_position_lots_exception_rollout() -> None:

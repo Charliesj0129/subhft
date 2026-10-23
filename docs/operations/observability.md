@@ -42,7 +42,9 @@
 - `strategy_intents_total{strategy=...}`
 - `risk_reject_total{reason=...,strategy=...}`
 - `stormguard_mode{strategy=...}`
-- `kill_switch_active` (1 while the kill-switch hold is set: latch file present, or a startup-recovery halt pinned it)
+- `stormguard_halt_reason{reason=...}` (1 on the cause the current HALT was entered for: the `trigger_halt` reason up to its first `:`; 0 once HALT is left)
+- `kill_switch_active` (1 while the kill-switch hold is set: latch file present, or a startup-recovery halt pinned it); alert `KillSwitchActive`
+- `manual_latch_active{latch=...}` (1 while a durable manual latch file is present); alert `ManualLatchActive`
 - `gateway_reject_total{reason=...}` when `HFT_GATEWAY_ENABLED=1`
 - `platform_reduce_only_active`
 - `manual_rearm_required{scope=...}`

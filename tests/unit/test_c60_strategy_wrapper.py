@@ -201,7 +201,6 @@ def test_strategy_limits_c60_max_pos_matches_strategy() -> None:
     cfg = _load_strategy_limits()
     c60 = cfg["strategies"]["C60_TMFD6_SOLO_MAKER"]
     assert c60["max_position_lots"] == 2  # mirrors strategy max_pos canonical
-    assert c60["max_order_qty"] == 1
 
 
 def test_strategy_limits_c60_daily_loss_hard_stop() -> None:

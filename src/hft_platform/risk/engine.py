@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import dataclasses
 import importlib
 import os
 import threading
@@ -36,6 +37,9 @@ from hft_platform.risk.validators import (
 )
 
 logger = get_logger("risk_engine")
+
+# i64::MAX: the RustRiskValidator notional limit that never rejects.
+_RUST_NOTIONAL_UNBOUNDED = (1 << 63) - 1
 
 _KNOWN_ERROR_TYPES = frozenset(
     {
@@ -212,10 +216,14 @@ class RiskEngine:
                     PositionLimitValidator,
                     DailyLossLimitValidator,
                     PerSymbolNotionalValidator,
+                    MaxNotionalValidator,
                     ExpiringContractValidator,
                 ),
             )
         ]
+        # MaxNotionalValidator is in that list too: the Rust kernel compares
+        # price * qty with no point value (Rust is paused, so it is not taught
+        # one), which made a TXF lot look 200x smaller than it is.
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
@@ -266,6 +274,65 @@ class RiskEngine:
                 self._greeks_validator = GreeksLimitValidator(self.config, greeks_provider)
             except ImportError:
                 logger.warning("greeks_limit_validator_unavailable")
+        self.log_effective_thresholds("boot")
+
+    # Per-strategy keys a validator reads; anything else under ``strategies``
+    # belongs to the strategy itself, not to the gate.
+    _STRATEGY_RISK_KEYS: tuple[str, ...] = ("max_position_lots", "max_position", "max_notional", "symbol_limits")
+
+    def effective_thresholds(self) -> dict[str, Any]:
+        """Every limit the gate enforces right now, in operator units.
+
+        Read back from the validators and StormGuard after their own defaults
+        and env overrides are applied, not from the YAML: a missing key shows up
+        as the default the code fell back to. Thresholds used to come from
+        code defaults, env and YAML with nothing saying which won, which is how
+        an order-RTT breaker ran on stale numbers and a loop-lag default sat
+        1000x away from compose.
+        """
+        out: dict[str, Any] = {"config_path": str(self.config_path)}
+        for v in self.validators:
+            if isinstance(v, MaxNotionalValidator):
+                out["max_notional_ntd"] = v._default_max_notional_raw
+            elif isinstance(v, PerSymbolNotionalValidator):
+                out["per_symbol_max_notional_ntd"] = v._default_per_symbol_max_notional_raw
+            elif isinstance(v, PositionLimitValidator):
+                out["max_position_lots"] = v._default_max_position_lots
+            elif isinstance(v, PriceBandValidator):
+                out["price_caps"] = {k: val for k, val in v.defaults.items() if str(k).startswith("max_price_cap")}
+            elif isinstance(v, DailyLossLimitValidator):
+                # 1 NTD == price_scale accumulator units (see DailyLossLimitValidator).
+                scale = int((v.config.get("intraday_pnl") or {}).get("price_scale", 10_000)) or 10_000
+                out["daily_loss"] = {
+                    "intraday_pnl_enabled": v._intraday_pnl_enabled,
+                    "soft_limit_ntd": v._soft_limit_threshold_scaled // scale,
+                    "hard_limit_ntd": v._hard_limit_threshold_scaled // scale,
+                    "soft_recovery_ntd": v._soft_recovery_threshold_scaled // scale,
+                    "soft_limit_cooldown_s": v._soft_limit_cooldown_ns // 1_000_000_000,
+                    "position_loss_limit_ntd": v._position_loss_limit_scaled // scale,
+                    "fallback_max_daily_loss_ntd": v._default_max_daily_loss // scale,
+                }
+        strategies = self.config.get("strategies", {}) or {}
+        out["strategies"] = {
+            str(sid): {k: cfg[k] for k in self._STRATEGY_RISK_KEYS if k in cfg}
+            for sid, cfg in strategies.items()
+            if isinstance(cfg, dict) and any(k in cfg for k in self._STRATEGY_RISK_KEYS)
+        }
+        for block in ("loss_exit", "expiry_guard"):
+            out[block] = self.config.get(block)
+        thresholds = getattr(self.storm_guard, "thresholds", None)
+        if thresholds is not None and dataclasses.is_dataclass(thresholds):
+            out["stormguard"] = dataclasses.asdict(thresholds)
+        out["rust_validator"] = self._rust_validator is not None
+        out["fast_gate"] = self._fast_gate is not None
+        return out
+
+    def log_effective_thresholds(self, trigger: str) -> None:
+        """One ``risk_thresholds_effective`` line at boot and on every reload."""
+        try:
+            logger.info("risk_thresholds_effective", trigger=trigger, **self.effective_thresholds())
+        except Exception as exc:  # noqa: BLE001 - a report must never break engine init
+            logger.warning("risk_thresholds_effective_failed", trigger=trigger, error=str(exc))
 
     def _fast_path_exempt(self, intent: Any) -> bool:
         """True for an intent FastGate and the Rust validator must not judge.
@@ -381,7 +448,6 @@ class RiskEngine:
             max_price_cap_raw = max(all_caps)
             tick_size_raw = float(defaults.get("tick_size", 0.01))  # precision-config
             band_ticks = int(defaults.get("price_band_ticks", 20))
-            max_notional_raw = defaults.get("max_notional", 10_000_000)
             # Use default scale factor (10000) for the validator
             scale = 10_000
             if price_scale_provider is not None:
@@ -394,15 +460,15 @@ class RiskEngine:
                     logger.warning("Failed to resolve price scale from provider, using default 10000", error=str(exc))
             max_price_cap_scaled = int(max_price_cap_raw * scale)
             tick_size_scaled = int(tick_size_raw * scale)
-            max_notional_scaled = int(max_notional_raw * scale)
-            rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, max_notional_scaled)
+            # Notional is judged by the Python validators only (they are in
+            # _rust_uncovered_validators). The kernel has no point value and no
+            # reduce/FORCE_FLAT exemption, and it returns before Python runs,
+            # so a real cap here would refuse the exit of an over-cap position.
+            rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, _RUST_NOTIONAL_UNBOUNDED)
             # Populate per-strategy configs
             for strat_id, strat_cfg in self.config.get("strategies", {}).items():
                 if "price_band_ticks" in strat_cfg:
                     rv.set_band_ticks(strat_id, int(strat_cfg["price_band_ticks"]))
-                if "max_notional" in strat_cfg:
-                    # Per-strategy notional needs symbol info; use default symbol scale
-                    rv.set_max_notional(strat_id, "*", int(strat_cfg["max_notional"]) * scale)
             logger.info("RustRiskValidator enabled", max_price_cap_scaled=max_price_cap_scaled)
             return rv
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
@@ -433,6 +499,7 @@ class RiskEngine:
             # Reload StormGuard thresholds
             if hasattr(self.storm_guard, "reload_thresholds"):
                 self.storm_guard.reload_thresholds(new_config)
+            self.log_effective_thresholds("sighup")
 
             logger.info(
                 "Risk config reloaded via SIGHUP",

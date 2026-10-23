@@ -88,7 +88,7 @@ If that exception is intentionally taken, the minimum conservative controls are:
 - `C33_TXFD6_SOLO_MAKER.params.max_pos = 1`
 - `C33_TXFD6_SOLO_MAKER` risk limit `max_position_lots = 1`
 - `global_defaults.max_position_lots = 2`
-- keep `max_order_qty = 1` for both strategies
+- order size needs no separate key: `max_position_lots = 1` rejects any opening order that would exceed one lot (`max_order_qty` was read by nothing and was removed 2026-10-23)
 
 ## Manual Commands
 
@@ -152,11 +152,9 @@ global_defaults:
 strategies:
   R47_MAKER_TMF:
     max_position_lots: 1
-    max_order_qty: 1
 
   C33_TXFD6_SOLO_MAKER:
     max_position_lots: 1
-    max_order_qty: 1
 ```
 
 Restart:
