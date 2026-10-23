@@ -71,7 +71,6 @@ def _tick_system(guard: StormGuard, ticks: int) -> MagicMock:
     system = MagicMock()
     system.storm_guard = guard
     system._recovery_halted = False
-    system._redis_client = None
     system._loop_watchdog = None
     type(system).running = PropertyMock(side_effect=[True] * ticks + [False])
     return system

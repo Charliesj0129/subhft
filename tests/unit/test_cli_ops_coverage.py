@@ -351,13 +351,24 @@ from hft_platform.cli._ops import cmd_ops_rearm_platform  # noqa: E402
 
 
 class TestCmdOpsRearmPlatform:
-    def test_rearm_platform_success(self, capsys):
+    def test_rearm_platform_passes_token_reason_and_actor(self, capsys):
         gate = MagicMock()
         with patch("hft_platform.cli._ops.ManualRearmGate", return_value=gate):
-            cmd_ops_rearm_platform(_ns(state_path=None))
-        gate.rearm_platform.assert_called_once()
+            cmd_ops_rearm_platform(_ns(state_path=None, token="abc", reason="disk freed"))
+        kwargs = gate.rearm_platform.call_args.kwargs
+        assert (kwargs["token"], kwargs["reason"]) == ("abc", "disk freed")
+        assert kwargs["actor"].startswith("cli:")
         out = capsys.readouterr().out
-        assert "re-armed" in out
+        assert "re-arm requested" in out.lower()
+
+    def test_rearm_platform_refused_exits_1(self, capsys):
+        gate = MagicMock()
+        gate.rearm_platform.side_effect = ValueError("token 'x' does not match")
+        with patch("hft_platform.cli._ops.ManualRearmGate", return_value=gate):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_ops_rearm_platform(_ns(state_path=None, token="x", reason="r"))
+        assert exc_info.value.code == 1
+        assert "does not match" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -372,11 +383,13 @@ class TestCmdOpsAutonomyStatus:
     def test_prints_snapshot_json(self, capsys):
         gate = MagicMock()
         gate.snapshot.return_value = {"platform": {"manual_rearm_required": False}, "strategies": {}}
+        gate.platform_token.return_value = "tok123"
         with patch("hft_platform.cli._ops.ManualRearmGate", return_value=gate):
             cmd_ops_autonomy_status(_ns(state_path=None))
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "platform" in data
+        assert data["platform_token"] == "tok123"
 
 
 # ---------------------------------------------------------------------------
@@ -436,18 +449,31 @@ from hft_platform.cli._ops import cmd_ops_flatten  # noqa: E402
 
 
 class TestCmdOpsFlatten:
-    def test_flatten_completed_prints_result(self, capsys):
+    def test_flatten_all_closed_prints_result_and_exits_0(self, capsys):
         req = MagicMock()
         req.status = FlattenStatus.COMPLETED
         req.fully_closed = 2
-        req.partially_closed = 1
+        req.partially_closed = 0
         req.failed = 0
         req.failed_symbols = []
         with patch("hft_platform.cli._ops._flatten_via_gate", return_value=req):
             cmd_ops_flatten(_ns(scope="all", scope_id=None, deadline=120))
         out = capsys.readouterr().out
-        assert "completed" in out.lower()
+        assert "finished" in out.lower()
         assert "fully_closed=2" in out
+
+    def test_flatten_partially_closed_exits_1(self, capsys):
+        req = MagicMock()
+        req.status = FlattenStatus.COMPLETED
+        req.fully_closed = 1
+        req.partially_closed = 1
+        req.failed = 0
+        req.failed_symbols = ["TMFK6"]
+        with patch("hft_platform.cli._ops._flatten_via_gate", return_value=req):
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_ops_flatten(_ns(scope="all", scope_id=None, deadline=120))
+        assert exc_info.value.code == 1
+        assert "Still open: TMFK6" in capsys.readouterr().out
 
     def test_flatten_completed_with_failed_symbols(self, capsys):
         req = MagicMock()
@@ -457,7 +483,9 @@ class TestCmdOpsFlatten:
         req.failed = 1
         req.failed_symbols = ["TXFD6"]
         with patch("hft_platform.cli._ops._flatten_via_gate", return_value=req):
-            cmd_ops_flatten(_ns(scope="all", scope_id=None, deadline=120))
+            with pytest.raises(SystemExit) as exc_info:
+                cmd_ops_flatten(_ns(scope="all", scope_id=None, deadline=120))
+        assert exc_info.value.code == 1
         out = capsys.readouterr().out
         assert "TXFD6" in out
 
@@ -467,7 +495,7 @@ class TestCmdOpsFlatten:
                 cmd_ops_flatten(_ns(scope="all", scope_id=None, deadline=120))
         assert exc_info.value.code == 1
         out = capsys.readouterr().out
-        assert "timed out" in out.lower()
+        assert "no result from the engine" in out.lower()
 
     def test_flatten_failed_exits_1(self, capsys):
         req = MagicMock()

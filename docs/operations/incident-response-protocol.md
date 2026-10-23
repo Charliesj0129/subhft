@@ -80,7 +80,7 @@ Reconciliation drift detected
 |   +-- Run manual reconciliation: hft reconcile --force --symbol <SYM>
 |   +-- If broker position differs: broker is source of truth, adjust internal state
 |   +-- Log all adjustments with full audit trail
-|   +-- When clean: clear manual lock with `hft ops rearm-platform`
+|   +-- When clean: clear manual lock with `hft ops rearm-platform --token <platform_token> --reason ...` (token from `hft ops autonomy-status`)
 ```
 
 ### 3. ClickHouse Down

@@ -15,7 +15,7 @@ Wired into the trading pipeline at bootstrap — receives callbacks from RiskEng
 | File | Key Exports | Purpose |
 |------|-------------|---------|
 | `dispatcher.py` | `NotificationDispatcher` | Routes platform events to channels. 18+ `notify_*` methods, each maps to one template. Sets `critical` flag per event type |
-| `telegram.py` | `TelegramSender`, `TelegramCommandPoller` | Telegram Bot API client: rate limiting, critical retry (3x exponential backoff), message chunking (>4096 chars), session management |
+| `telegram.py` | `TelegramSender` | Telegram Bot API client: rate limiting, critical retry (3x exponential backoff), message chunking (>4096 chars), session management |
 | `webhook.py` | `WebhookSender` | Generic webhook sender for fallback (Discord, LINE, Slack) |
 | `alertmanager_bridge.py` | `AlertmanagerBridge` | Raw asyncio HTTP server — receives Alertmanager webhook POSTs, forwards to Telegram. Port 8081 (configurable) |
 | `templates.py` | `render_halt()`, `render_daily_report()`, ... | 23+ HTML-safe message rendering functions. All use `html.escape()` |
@@ -61,17 +61,20 @@ TelegramSender(bot_token, chat_id, enabled=True)
 - **Chunking**: Messages >4096 chars auto-split on newline boundaries.
 - **Session**: `aiohttp.ClientSession` with 10s total timeout, auto-reconnection.
 
-## TelegramCommandPoller
+## Telegram `/stop`
 
-Polls Telegram `getUpdates` for interactive commands (separate from `bot/` module — this runs inside the trading engine container):
+Served by the bot service (`hft-bot`, `src/hft_platform/bot/handlers.py::cmd_stop`),
+owner chat only. It writes the engine's kill switch, the same latch as
+`hft risk halt`, into the `.state` directory the bot shares with the engine; the
+engine reads it on its next supervise tick and HALTs (new orders blocked,
+cancels allowed, no flatten). The reply names the file and the token that
+`hft risk resume --token ... --reason ...` needs. The bot cannot see engine
+state, so it does not claim the HALT took effect: confirm with
+`hft risk status` or `stormguard_mode == 3`.
 
-| Command | Action |
-|---------|--------|
-| `/stop` | Sets `hft:emergency_halt` flag in Redis → triggers HALT |
-| `/status` | Replies "Status: running" |
-
-- Chat ID whitelist validation
-- Session reuse across poll cycles
+The earlier `TelegramCommandPoller` set a Redis key the engine never read (no
+code constructed the poller or assigned the engine's Redis client); it was
+removed in B6.
 
 ## Alertmanager Bridge
 

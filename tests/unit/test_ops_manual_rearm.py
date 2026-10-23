@@ -294,7 +294,7 @@ class TestRearmPlatform:
             },
         )
         gate = ManualRearmGate(state_path=path)
-        gate.rearm_platform()
+        gate.rearm_platform(token=gate.platform_token(), reason="reviewed", actor="test")
         reloaded = json.loads(path.read_text(encoding="utf-8"))
         assert reloaded["platform"]["manual_rearm_required"] is False
         assert reloaded["platform"]["reason"] is None
@@ -311,7 +311,7 @@ class TestRearmPlatform:
         monkeypatch.setattr("hft_platform.ops.manual_rearm.timebase.now_s", lambda: 123.5)
 
         gate = ManualRearmGate(state_path=path)
-        gate.rearm_platform()
+        gate.rearm_platform(token=gate.platform_token(), reason="reviewed", actor="test")
 
         reloaded = json.loads(path.read_text(encoding="utf-8"))
         assert reloaded["platform"]["manual_rearm_required"] is False
@@ -329,14 +329,48 @@ class TestRearmPlatform:
         )
         gate = ManualRearmGate(state_path=path)
         # Should not raise — idempotent
-        gate.rearm_platform()
+        gate.rearm_platform(token=gate.platform_token(), reason="reviewed", actor="test")
         reloaded = json.loads(path.read_text(encoding="utf-8"))
         assert reloaded["platform"]["manual_rearm_required"] is False
+
+    def test_rearm_platform_with_a_stale_token_is_refused_and_writes_nothing(self, tmp_path: Path) -> None:
+        path = tmp_path / "state.json"
+        _write_state(path, {"platform": {"manual_rearm_required": True, "reason": "storm"}, "strategies": {}})
+        gate = ManualRearmGate(state_path=path)
+        with pytest.raises(ValueError, match="does not match"):
+            gate.rearm_platform(token="stale", reason="reviewed", actor="test")
+        assert json.loads(path.read_text(encoding="utf-8"))["platform"]["manual_rearm_required"] is True
+        assert not (tmp_path / "rearm_audit.jsonl").exists()
+
+    def test_rearm_platform_without_a_reason_is_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "state.json"
+        _write_state(path, {"platform": {"manual_rearm_required": True, "reason": "storm"}, "strategies": {}})
+        gate = ManualRearmGate(state_path=path)
+        with pytest.raises(ValueError, match="reason"):
+            gate.rearm_platform(token=gate.platform_token(), reason=" ", actor="test")
+        assert json.loads(path.read_text(encoding="utf-8"))["platform"]["manual_rearm_required"] is True
+
+    def test_rearm_platform_audits_what_it_cleared(self, tmp_path: Path) -> None:
+        path = tmp_path / "state.json"
+        _write_state(path, {"platform": {"manual_rearm_required": True, "reason": "data_loss"}, "strategies": {}})
+        gate = ManualRearmGate(state_path=path)
+        gate.rearm_platform(token=gate.platform_token(), reason="WAL replayed", actor="cli:op")
+        entry = json.loads((tmp_path / "rearm_audit.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        assert (entry["event"], entry["actor"], entry["reason"]) == ("platform_rearm", "cli:op", "WAL replayed")
+        assert entry["removed"] == {"manual_rearm_required": True, "reason": "data_loss"}
+
+    def test_platform_token_changes_when_the_latch_reason_changes(self, tmp_path: Path) -> None:
+        path = tmp_path / "state.json"
+        _write_state(path, {"platform": {"manual_rearm_required": True, "reason": "storm"}, "strategies": {}})
+        gate = ManualRearmGate(state_path=path)
+        before = gate.platform_token()
+        _write_state(path, {"platform": {"manual_rearm_required": True, "reason": "data_loss"}, "strategies": {}})
+        assert gate.platform_token() != before
 
     def test_rearm_platform_creates_file_when_missing(self, tmp_path: Path) -> None:
         path = tmp_path / "state.json"
         gate = ManualRearmGate(state_path=path)
-        gate.rearm_platform()
+        gate.rearm_platform(token=gate.platform_token(), reason="reviewed", actor="test")
         assert path.exists()
 
 

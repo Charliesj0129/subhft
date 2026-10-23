@@ -121,7 +121,8 @@ docker cp hft-engine:/app/shioaji.log ./outputs/container_rescue_$(date +%Y%m%d)
 docker compose stop wal-loader
 mkdir -p ~/wal_manifest_archive_$(date +%Y%m%d)
 mv .wal/manifest.txt .wal/manifest.txt.bak ~/wal_manifest_archive_$(date +%Y%m%d)/ 2>/dev/null
-docker compose exec hft-engine hft ops rearm-platform    # clear the persisted latch FIRST
+docker compose exec hft-engine hft ops autonomy-status  # read platform_token
+docker compose exec hft-engine hft ops rearm-platform --token <platform_token> --reason "<why>"  # clear the persisted latch FIRST
 docker compose restart hft-engine
 docker compose start wal-loader
 
@@ -132,7 +133,7 @@ docker compose up -d hft-engine wal-loader
 
 # 4. Confirm; only if the latch survived, clear it explicitly and restart once.
 docker compose exec hft-engine hft ops autonomy-status
-docker compose exec hft-engine hft ops rearm-platform   # only if still latched
+docker compose exec hft-engine hft ops rearm-platform --token <platform_token> --reason "<why>"  # only if still latched
 ```
 
 Why re-arm must come **before** the restart: `docker compose exec` starts a *new*

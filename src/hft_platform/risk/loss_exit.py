@@ -18,6 +18,9 @@ into the normal risk queue for any position that meets one of three triggers:
 ``expiry``
     It is the contract's delivery date and past the cutoff (``risk/expiry.py``);
     ``ExpiringContractValidator`` stops new lots in it from the same moment.
+``operator_flatten``
+    An operator asked for it (``hft ops flatten``); the supervisor names the
+    symbols until they are flat or the request's deadline passes.
 
 Orders are marketable limits, never price 0: ``protection_ticks`` through the
 opposite best price. A position with no two-sided book is left alone and
@@ -53,6 +56,7 @@ logger = get_logger("risk.loss_exit")
 TRIGGER_DAILY_LOSS_HALT = "daily_loss_halt"
 TRIGGER_POSITION_LOSS = "position_loss"
 TRIGGER_EXPIRY = "expiry"
+TRIGGER_OPERATOR = "operator_flatten"
 
 # Books an exit for a position that names no strategy (a legacy recovery entry).
 # Its fill seeds the recovered lot under this id and closes it.
@@ -117,11 +121,13 @@ class LossExitController:
         multiplier: Callable[[str], int],
         tick_size: Callable[[str], int],
         expiry_cutoff_minute: int = DEFAULT_EXPIRY_CUTOFF_MINUTE,
+        operator_symbols: frozenset[str] = frozenset(),
     ) -> list[OrderIntent]:
         """Return the exit intents due now.
 
         ``l1(symbol)`` gives ``(best_bid, best_ask)`` scaled, or None.
         ``position_loss_limit_scaled`` of 0 disables that trigger.
+        ``operator_symbols`` are closed because an operator asked.
         """
         # symbol -> [net_qty, signed qty x entry, {strategy_id: net_qty}, basis_known]
         by_symbol: dict[str, list] = {}
@@ -159,6 +165,7 @@ class LossExitController:
                 expiry_cutoff_minute=expiry_cutoff_minute,
                 mid=(bid + ask) // 2 if priced else 0,
                 multiplier=multiplier,
+                operator=symbol in operator_symbols,
             )
             if trigger is None:
                 continue
@@ -194,9 +201,12 @@ class LossExitController:
         expiry_cutoff_minute: int,
         mid: int,
         multiplier: Callable[[str], int],
+        operator: bool = False,
     ) -> str | None:
         if daily_halt:
             return TRIGGER_DAILY_LOSS_HALT
+        if operator:
+            return TRIGGER_OPERATOR
         if expiry_enabled and self._expiry_passed(symbol, now_ns, expiry_cutoff_minute):
             return TRIGGER_EXPIRY
         if position_loss_limit_scaled > 0 and mid > 0:

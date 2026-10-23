@@ -159,6 +159,7 @@ def create_app() -> Any:
         cmd_report_rule,
         cmd_start,
         cmd_status,
+        cmd_stop,
     )
     from hft_platform.bot.scheduler import schedule_jobs
 
@@ -176,6 +177,7 @@ def create_app() -> Any:
     app.add_handler(CommandHandler("flow", cmd_flow))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("pos", cmd_pos))
+    app.add_handler(CommandHandler("stop", cmd_stop))
 
     # P1-c: register error handler so httpx.ConnectError etc. are caught,
     # logged via structlog (with secret scrubber), and counted in metrics

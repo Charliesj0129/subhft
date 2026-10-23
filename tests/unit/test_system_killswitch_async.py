@@ -24,38 +24,24 @@ def test_read_kill_switch_reason_helper_exists():
     assert callable(system._read_kill_switch_reason)
 
 
-def test_supervise_checks_kill_switch_file_independently_of_redis() -> None:
-    """P2-e (2026-04-27): the file-based kill switch must run on every
-    supervise tick regardless of Redis state. Verify by source inspection
-    that the file check appears BEFORE the Redis-keyed check, so a Redis
-    outage cannot skip the file path.
+def test_supervise_reads_the_kill_switch_file_and_no_redis_key() -> None:
+    """The kill-switch file is the one remote stop ``_supervise`` reads.
 
-    The anchor was ``"HFT_KILL_SWITCH_PATH"`` until the path and record shape
-    were consolidated into ``hft_platform.risk.kill_switch``; ``_supervise``
-    now calls ``kill_switch.kill_switch_path()`` instead of reading the env
-    var inline. The invariant this test pins is the ORDERING, not the
-    spelling, so the anchor moves with the code. The env var itself is
-    asserted separately below so the rename cannot quietly drop it.
+    It used to also read an ``hft:emergency_halt`` Redis key through a client
+    nothing assigned, so the read never ran and Telegram ``/stop`` halted
+    nothing. ``/stop`` now writes the same file (``bot/handlers.py::cmd_stop``);
+    a second, Redis-keyed channel must not come back.
     """
     from hft_platform.risk import kill_switch
     from hft_platform.services.system import HFTSystem
 
     source = inspect.getsource(HFTSystem._supervise)
 
-    # File check
-    file_idx = source.find("kill_switch_path")
-    # Redis-keyed check
-    redis_idx = source.find("hft:emergency_halt")
-
-    assert file_idx != -1, "kill-switch file check missing from _supervise"
-    assert redis_idx != -1, "Redis emergency-halt check missing from _supervise"
-    assert file_idx < redis_idx, (
-        "file-based kill switch must be checked BEFORE the Redis-keyed halt "
-        "(otherwise a Redis outage could mask a kill-switch file)"
-    )
-    # The operator override the old anchor used to cover, now owned by the
-    # shared module: losing it would make the path unoverridable in a
-    # container where .runtime/ is not the durable location.
+    assert "kill_switch_path" in source, "kill-switch file check missing from _supervise"
+    assert "hft:emergency_halt" not in source
+    assert "_redis_client" not in source
+    # The operator override, owned by the shared module: losing it would make
+    # the path unoverridable in a container where .state/ is not mounted.
     assert kill_switch.PATH_ENV == "HFT_KILL_SWITCH_PATH"
 
 
