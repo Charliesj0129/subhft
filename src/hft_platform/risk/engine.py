@@ -200,23 +200,23 @@ class RiskEngine:
         # was enforced by nobody. Per-symbol limits exist precisely to be
         # TIGHTER than the per-strategy default, so losing them silently
         # defeats their purpose.
-        # MaxNotionalValidator too: the Rust kernel compares price * qty with no
-        # point value (Rust is paused, so it is not taught one), which made a
-        # TXF lot look 200x smaller than it is.
         self._rust_uncovered_validators: list[RiskValidator] = [
             v
             for v in self.validators
             if isinstance(
                 v,
                 (
-                    MaxNotionalValidator,
                     PositionLimitValidator,
                     DailyLossLimitValidator,
                     PerSymbolNotionalValidator,
+                    MaxNotionalValidator,
                     ExpiringContractValidator,
                 ),
             )
         ]
+        # MaxNotionalValidator is in that list too: the Rust kernel compares
+        # price * qty with no point value (Rust is paused, so it is not taught
+        # one), which made a TXF lot look 200x smaller than it is.
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
