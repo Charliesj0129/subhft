@@ -101,15 +101,15 @@ def test_an_iso_option_expiry_still_parses() -> None:
 
 
 @pytest.mark.unit
-def test_an_unparseable_expiry_is_logged_rather_than_silently_dropped() -> None:
+def test_an_unparseable_expiry_is_logged_rather_than_silently_dropped(module_log_sink) -> None:
     """The bug hid for months because the discard left no trace. An expiry that
     cannot be parsed must leave a record, and must not take the profile with
     it."""
-    from structlog.testing import capture_logs
+    import hft_platform.feed_adapter.normalizer as normalizer_module
 
     entry = dict(_TXO_JUNE, expiry="not-a-date")
-    with capture_logs() as logs:
-        profile = _meta({"TXO30400R6": entry}).registry.get("TXO30400R6")
+    logs = module_log_sink(normalizer_module)
+    profile = _meta({"TXO30400R6": entry}).registry.get("TXO30400R6")
 
     assert profile.expiry is None
     assert any(entry_.get("event") == "instrument_expiry_unparseable" for entry_ in logs)
