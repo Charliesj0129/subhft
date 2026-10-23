@@ -1,7 +1,7 @@
 """Parametrized test matrix: StormGuard state × IntentType.
 
 Covers all 12 combinations (4 states × 3 intent types) to verify that
-the StormGuardFSM.validate() method enforces the correct allow/reject
+StormGuard.validate() enforces the correct allow/reject
 policy per state.
 
 Expected behavior (from source):
@@ -22,19 +22,11 @@ from hft_platform.contracts.strategy import (
     Side,
     StormGuardState,
 )
-from hft_platform.risk.validators import StormGuardFSM
+from hft_platform.risk.storm_guard import StormGuard
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_DEFAULT_CONFIG: dict = {
-    "storm_guard": {
-        "warm_threshold": -200_000,
-        "storm_threshold": -500_000,
-        "halt_threshold": -1_000_000,
-    },
-}
 
 
 def _make_intent(intent_type: IntentType) -> OrderIntent:
@@ -50,12 +42,12 @@ def _make_intent(intent_type: IntentType) -> OrderIntent:
     )
 
 
-def _make_fsm(state: StormGuardState) -> StormGuardFSM:
-    """Create a StormGuardFSM and force it into *state*."""
+def _make_fsm(state: StormGuardState) -> StormGuard:
+    """Create a StormGuard and force it into *state*."""
     with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_registry_cls:
         mock_metrics = MagicMock()
         mock_registry_cls.get.return_value = mock_metrics
-        fsm = StormGuardFSM(_DEFAULT_CONFIG)
+        fsm = StormGuard()
 
     fsm.state = state
     return fsm

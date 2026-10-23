@@ -65,10 +65,20 @@ NORMAL → WARM → STORM → HALT
 | HALT | Block all new orders, trigger cancellation |
 
 ### Triggers
-- Feed gap > `HFT_STORMGUARD_FEED_GAP_HALT_S` (30s) → HALT
-- Daily loss limit → HALT
-- Bus overflow cascade → HALT
-- Reconciliation critical mismatch → HALT
+
+StormGuard grades platform health and reads no PnL (since 2026-10-23, B4a).
+`update()` takes loop lag, order RTT and feed gap; together with component
+failures and a crossed book they reach STORM at most. DriftBurst toxicity
+reaches WARM (CAUTION) at most.
+
+HALT comes only from `trigger_halt()`:
+- Daily loss hard limit (`DailyLossLimitValidator`, via `RiskEngine`)
+- Kill switch, durable manual latches, session-lease loss
+- Bus overflow cascade
+- Reconciliation critical mismatch
+
+Money is judged in one place: `DailyLossLimitValidator`, on the trading day's
+net change.
 
 ### Halt-Exempt Strategies
 - Configured per-strategy in risk config
@@ -97,7 +107,6 @@ Stateful validator tracking cumulative realized PnL per strategy + platform-wide
 - **Intraday watermark** (opt-in via `intraday_pnl` config):
   - `soft_limit_ntd`: Soft block with cooldown recovery
   - `hard_limit_ntd`: Triggers HALT
-  - `peak_drawdown_pct`: % drawdown from intraday peak
   - Cooldown-guarded recovery via `soft_recovery_ntd` and `soft_limit_cooldown_s`
 
 ## DriftBurstDetector
@@ -108,7 +117,8 @@ Microstructure toxicity scoring based on Christensen, Oomen, Reno (2022):
 - BPV: bipower variation (jump-robust volatility estimate)
 - Sigmoid toxicity score: `toxicity = 2 / (1 + exp(-|T| / threshold)) - 1`
 - Pre-allocated arrays (Allocator Law compliant)
-- Integrated with StormGuard via `update_with_lob()`
+- Integrated with StormGuard via `update_with_lob()`; capped at WARM (CAUTION),
+  so it never blocks an order on its own
 
 ## Configuration
 

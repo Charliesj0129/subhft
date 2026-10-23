@@ -15,7 +15,6 @@ import time
 from unittest.mock import MagicMock, patch
 
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
-from hft_platform.risk.validators import StormGuardFSM
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,28 +35,6 @@ def _make_storm_guard(cooldown_s: float = 30.0, de_n: int = 5) -> StormGuard:
     sg.metrics.stormguard_mode = MagicMock()
     sg.metrics.stormguard_mode.labels.return_value = MagicMock()
     return sg
-
-
-def _make_fsm(cooldown_s: float = 30.0, de_n: int = 5) -> StormGuardFSM:
-    config = {
-        "storm_guard": {
-            "warm_threshold": -200_000,
-            "storm_threshold": -500_000,
-            "halt_threshold": -1_000_000,
-        }
-    }
-    with patch.dict(
-        os.environ,
-        {
-            "HFT_STORMGUARD_STORM_COOLDOWN_S": str(cooldown_s),
-            "HFT_STORMGUARD_DE_ESCALATE_N": str(de_n),
-        },
-    ):
-        fsm = StormGuardFSM(config)
-    fsm._guard.metrics = MagicMock()
-    fsm._guard.metrics.stormguard_mode = MagicMock()
-    fsm._guard.metrics.stormguard_mode.labels.return_value = MagicMock()
-    return fsm
 
 
 # ---------------------------------------------------------------------------
@@ -151,49 +128,3 @@ def test_trigger_halt_bypasses_hysteresis():
     sg = _make_storm_guard(cooldown_s=9999.0, de_n=999)
     sg.trigger_halt("manual override")
     assert sg.state == StormGuardState.HALT
-
-
-# ---------------------------------------------------------------------------
-# StormGuardFSM test (validators.py)
-# ---------------------------------------------------------------------------
-
-
-def test_stormguard_fsm_hysteresis():
-    """FSM: PnL recovery must persist N consecutive updates before de-escalating."""
-    fsm = _make_fsm(cooldown_s=0.0, de_n=4)
-
-    # Escalate to STORM
-    fsm.update_pnl(-600_000)
-    assert fsm.state == StormGuardState.STORM
-
-    # 3 recovery updates (PnL back to normal) — should still be STORM
-    for i in range(3):
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM, f"Should still be STORM after {i + 1} recovery evals"
-
-    # 4th recovery update — should transition
-    fsm.update_pnl(0)
-    assert fsm.state == StormGuardState.NORMAL
-
-
-def test_stormguard_fsm_halt_requires_cooldown_and_clears():
-    """FSM: HALT de-escalation requires halt_cooldown elapsed + N consecutive clears."""
-    fsm = _make_fsm(cooldown_s=9999.0, de_n=2)
-    fsm._guard._halt_cooldown_s = 10.0
-
-    # Escalate to HALT via PnL
-    fsm.update_pnl(-1_100_000)
-    assert fsm.state == StormGuardState.HALT
-
-    # Single recovery update: should NOT step down (cooldown not elapsed)
-    fsm.update_pnl(0)
-    assert fsm.state == StormGuardState.HALT, "HALT must not de-escalate before cooldown"
-
-    # Simulate time past halt cooldown
-    import time
-
-    fsm._guard._halt_entry_ts = time.monotonic() - 11.0
-    fsm.update_pnl(0)  # 1st clear after cooldown
-    assert fsm.state == StormGuardState.HALT
-    fsm.update_pnl(0)  # 2nd clear — meets de_n=2
-    assert fsm.state == StormGuardState.NORMAL

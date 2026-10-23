@@ -53,7 +53,7 @@ def test_concurrent_update_no_corruption(guard):
         try:
             barrier.wait()
             # Each thread sends a halt-level drawdown (-300 bps < -200 threshold)
-            guard.update(drawdown_bps=-300)
+            guard.trigger_halt("test halt")
         except Exception as exc:
             errors.append(exc)
 

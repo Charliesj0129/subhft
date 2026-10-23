@@ -31,7 +31,7 @@ SystemBootstrapper.build()
 | engine/ | 1 | 710 | RingBufferBus | Lock-free event routing |
 | feature/ | 9 | 2,355 | FeatureEngine, FeatureRegistry, BurstDetector | 27 LOB-derived features (v3) |
 | strategy/ | 4 | 1,368 | StrategyRunner, BaseStrategy, StrategyContext | Strategy SDK + dispatch |
-| risk/ | 8 | 2,357 | RiskEngine, StormGuardFSM | Risk validation + HALT FSM |
+| risk/ | 8 | 2,357 | RiskEngine, StormGuard | Risk validation + HALT FSM |
 | order/ | 6 | 1,643 | OrderAdapter, CircuitBreaker | Broker dispatch + rate limits |
 | execution/ | 15 | 2,735 | ExecutionRouter, PositionStore, ExecutionOptimizer, ImbalanceTimer, RegimeClassifier | Fill routing, position O(1), smart execution, regime detection |
 

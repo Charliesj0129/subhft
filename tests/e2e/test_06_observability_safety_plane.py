@@ -213,7 +213,7 @@ class TestIntegration:
             sg = StormGuard(thresholds=thresholds)
 
         # Trigger large feed gap — well above threshold
-        result_state = sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=10.0)
+        result_state = sg.update(latency_us=0, feed_gap_s=10.0)
 
         assert result_state >= StormGuardState.STORM
 

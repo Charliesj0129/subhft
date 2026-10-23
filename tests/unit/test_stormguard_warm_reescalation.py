@@ -85,7 +85,7 @@ def test_warm_reescalation_suppressed_within_cooldown():
     assert sg.state == StormGuardState.WARM
 
     # 2. De-escalate to NORMAL via update() with clean inputs (1 clear since de_n=1)
-    sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    sg.update(latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.NORMAL
     assert sg._warm_deescalation_ts > 0
 
@@ -101,7 +101,7 @@ def test_warm_reescalation_allowed_after_cooldown():
 
     det.set(score=0.55)
     sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")
-    sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    sg.update(latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.NORMAL
 
     import time
@@ -113,19 +113,19 @@ def test_warm_reescalation_allowed_after_cooldown():
     assert state == StormGuardState.WARM
 
 
-def test_storm_escalation_bypasses_warm_cooldown():
-    """A higher-severity target (STORM/HALT) must not be suppressed by WARM cooldown."""
+def test_storm_band_toxicity_stays_suppressed_by_warm_cooldown():
+    """DriftBurst is capped at WARM (B4a), so a STORM-band score is a WARM target
+    and the WARM re-escalation cooldown applies to it like any other."""
     sg, det = _make_sg(cooldown_s=0.0, de_n=1, warm_cd=300.0)
 
     det.set(score=0.55)
     sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")
-    sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+    sg.update(latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.NORMAL
 
-    # Toxicity jumps to STORM range — must NOT be suppressed by WARM cooldown
     det.set(score=0.85)
     state = sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")
-    assert state == StormGuardState.STORM
+    assert state == StormGuardState.NORMAL
 
 
 def test_symbol_forwarded_to_log():

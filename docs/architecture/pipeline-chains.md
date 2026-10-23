@@ -361,11 +361,11 @@ DiskPressureMonitor levels:
                     │            StormGuard FSM                │
                     │                                         │
   feed_gap ────────→│  NORMAL ──→ WARM ──→ STORM ──→ HALT    │
-  drawdown_bps ───→│    ↑                              │     │
+  order_rtt_us ───→│    ↑                              │     │
   latency_us ─────→│    └──── manual rearm ←───────────┘     │
   component fail ─→│         (cooldown + N consecutive clears)│
   bus overflow ───→│                                         │
-  DriftBurst ─────→│  Escalation: instant (safety-first)     │
+  DriftBurst ─────→│  Escalation: instant (WARM at most)     │
                     │  De-escalation: cooldown + hysteresis   │
                     └─────────────────────────────────────────┘
 ```
@@ -373,18 +373,21 @@ DiskPressureMonitor levels:
 ### Threshold Evaluation (Priority Order)
 
 ```python
-# HALT triggers (highest priority)
-drawdown_bps <= -200 (-2.0%)                          → HALT
+# HALT: never from update(). Only trigger_halt() -- daily-loss hard limit,
+# kill switch, manual latches, reconciliation, bus overflow, lease loss.
+# StormGuard reads no PnL (B4a, 2026-10-23); DailyLossLimitValidator is the
+# one loss definition (the trading day's net change).
 
 # STORM triggers
-drawdown_bps <= -100 (-1.0%)                          → STORM
 latency_us >= 20_000 (20ms)                           → STORM
+order_rtt_us >= 2_500_000 (2.5s)                      → STORM
 feed_gap_s >= 1.0 (when session_active)               → STORM
 feature_failure_active OR norm_failure_active          → STORM
 
 # WARM triggers
-drawdown_bps <= -50 (-0.5%)                           → WARM
 latency_us >= 5_000 (5ms)                             → WARM
+order_rtt_us >= 1_500_000 (1.5s)                      → WARM
+DriftBurst toxicity > 0.5 (update_with_lob)           → WARM (never higher)
 ```
 
 ### De-escalation Rules
@@ -397,7 +400,7 @@ latency_us >= 5_000 (5ms)                             → WARM
 
 | Caller | File | Method | Trigger |
 |--------|-----------|--------|---------|
-| `HFTSystem._supervise()` | `services/system.py` | `update(drawdown_bps, latency_us, feed_gap_s)` | Supervision loop, 1 s tick |
+| `HFTSystem._supervise()` | `services/system.py` | `update(latency_us=, feed_gap_s=)` (order RTT drained from `observe_order_rtt_us`) | Supervision loop, 1 s tick; MtM goes to `RiskEngine.update_unrealized_pnl`, not StormGuard |
 | `HFTSystem._supervise()` | `services/system.py` | `update_with_lob(mid, spread, imbalance, ts)` | DriftBurstDetector toxicity |
 | `MarketDataService` | `services/market_data.py` | `report_feature_failure()` / `report_norm_failure()` | FeatureEngine or Normalizer errors |
 | `RingBufferBus` | `engine/event_bus.py` | `trigger_halt("bus_overflow_cascade")` | Sustained bus overflow |

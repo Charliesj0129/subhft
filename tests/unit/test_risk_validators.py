@@ -1,5 +1,5 @@
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
-from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidator, StormGuardFSM
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
+from hft_platform.risk.validators import MaxNotionalValidator, PriceBandValidator
 
 
 def _intent(price: int, qty: int, intent_type=IntentType.NEW):
@@ -108,30 +108,6 @@ def test_price_band_default_cap():
     ok, reason = validator.check(_intent(5_001 * 10000, 1))
     assert not ok
     assert "PRICE_EXCEEDS_CAP" in reason
-
-
-def test_storm_guard_fsm_transitions():
-    cfg = {"storm_guard": {"warm_threshold": -10, "storm_threshold": -20, "halt_threshold": -30}}
-    fsm = StormGuardFSM(cfg)
-
-    fsm.update_pnl(-5)
-    assert fsm.state == StormGuardState.NORMAL
-
-    fsm.update_pnl(-15)
-    assert fsm.state == StormGuardState.WARM
-
-    fsm.update_pnl(-25)
-    assert fsm.state == StormGuardState.STORM
-
-    fsm.update_pnl(-35)
-    assert fsm.state == StormGuardState.HALT
-
-    ok, _ = fsm.validate(_intent(10000, 1, intent_type=IntentType.CANCEL))
-    assert ok
-
-    ok, reason = fsm.validate(_intent(10000, 1, intent_type=IntentType.NEW))
-    assert not ok
-    assert reason == "STORMGUARD_HALT"
 
 
 def test_price_band_respects_symbol_scale(tmp_path, monkeypatch):

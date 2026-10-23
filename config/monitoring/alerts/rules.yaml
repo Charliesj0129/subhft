@@ -985,7 +985,7 @@ groups:
         severity: critical
     annotations:
         summary: "Portfolio drawdown > 10%"
-        description: "Portfolio drawdown exceeded 10%. StormGuard should be in HALT."
+        description: "Portfolio drawdown exceeded 10%. StormGuard reads no PnL, so this does not halt; the daily-loss hard limit is the only loss stop."
 
   # Redis health monitoring removed 2026-04-24 — engine does not probe Redis
   # (no `redis` Python module in engine container; only the separate monitor
