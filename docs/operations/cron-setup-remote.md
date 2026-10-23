@@ -94,6 +94,8 @@ Then paste the entries below (adjust paths as needed for your deployment root).
 # --- Research Data 4-Tier Rotation ---
 # Archives raw/ dirs older than 90 days, purges old archives, cleans synthetic/, prunes runs/.
 # Emits hft_research_data_bytes + hft_research_runs_bytes to Prometheus textfile.
+# WARNING: this deletes (no --dry-run). Tiers 1, 2 and 4 judge by directory mtime and Tiers 2 and 4 never check
+# alpha status. See "Known divergences" in docs/operations/data-retention-policy.md and preview with --dry-run first.
 0 4 * * 0 cd /home/charl/subhft && ./scripts/research_data_rotate.sh >> /tmp/research_data_rotate.log 2>&1
 
 # --- SMART Disk Health → Prometheus Textfile ---
