@@ -159,6 +159,9 @@ class HFTSystem:
     # symbol -> platform net qty when it was claimed, and when it gives up.
     _operator_flatten_initial: Mapping[str, int] = MappingProxyType({})
     _operator_flatten_deadline_ns: int = 0
+    # ``initiated_ns`` of the claimed request: its id, so a newer request
+    # written meanwhile is not overwritten with this one's result.
+    _operator_flatten_request_id: int = 0
     _flatten_gate: FlattenGate | None = None
 
     def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
@@ -402,6 +405,7 @@ class HFTSystem:
             return
         self._operator_flatten_initial = MappingProxyType(net)
         self._operator_flatten_deadline_ns = timebase.now_ns() + max(1, int(req.deadline_s)) * 1_000_000_000
+        self._operator_flatten_request_id = req.initiated_ns
 
     async def _finish_operator_flatten_if_due(self, gate: FlattenGate) -> None:
         initial = self._operator_flatten_initial
@@ -411,9 +415,15 @@ class HFTSystem:
             return
         partial = sorted(sym for sym, qty in remaining.items() if abs(qty) < abs(initial[sym]))
         failed = sorted(sym for sym in remaining if sym not in partial)
-        await asyncio.to_thread(
-            gate.complete, len(initial) - len(remaining), len(partial), len(failed), sorted(remaining)
-        )
+        current = await asyncio.to_thread(gate.read_request)
+        if current is not None and current.initiated_ns == self._operator_flatten_request_id:
+            await asyncio.to_thread(
+                gate.complete, len(initial) - len(remaining), len(partial), len(failed), sorted(remaining)
+            )
+        else:
+            # A new request replaced this one in the file; it is claimed next
+            # tick. This one's outcome is in the log line below only.
+            logger.warning("operator_flatten_superseded", request_id=self._operator_flatten_request_id)
         log = logger.error if remaining else logger.warning
         log(
             "operator_flatten_finished",
@@ -424,6 +434,7 @@ class HFTSystem:
         )
         self._operator_flatten_initial = MappingProxyType({})
         self._operator_flatten_deadline_ns = 0
+        self._operator_flatten_request_id = 0
 
     @staticmethod
     def _get_max_feed_gap_s(md_service: Any) -> float:

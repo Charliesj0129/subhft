@@ -260,6 +260,22 @@ class TestOperatorFlatten:
         assert (req.fully_closed, req.partially_closed, req.failed) == (0, 1, 1)
         assert req.failed_symbols == ["TMFK6", "TMFL6"]
 
+    def test_a_newer_request_is_not_overwritten_with_the_older_result(self, gate):
+        positions = {"a": _pos("R47_MAKER_TMF", "TMFK6", 1)}
+        system = _system(gate, positions)
+        gate.submit(scope="all", deadline_s=60)
+        _tick(system)
+
+        with mock.patch("hft_platform.ops.flatten_gate.time.monotonic_ns", return_value=123):
+            gate.submit(scope="strategy", scope_id="R47_MAKER_TMF", deadline_s=60)
+        positions.clear()
+        _tick(system)  # the first request finishes; the file holds the second
+
+        req = gate.read_request()
+        assert (req.status, req.scope, req.initiated_ns) == (FlattenStatus.PENDING, "strategy", 123)
+        _tick(system)
+        assert gate.read_request().status == FlattenStatus.COMPLETED
+
     def test_the_cli_exits_non_zero_when_the_engine_reports_a_symbol_open(self, gate, capsys):
         gate.submit(scope="all", deadline_s=5)
         gate.claim()
