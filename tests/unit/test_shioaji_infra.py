@@ -553,7 +553,13 @@ class TestLoginSlot:
 
     def test_release_without_hold_does_not_raise(self) -> None:
         reset_login_slot_for_tests()
-        release_login_slot()  # must not raise even though nothing was acquired
+        assert release_login_slot() is None  # nothing was acquired; must not raise
+        # the slot is neither stuck nor doubled: one acquire succeeds, a second times out
+        assert acquire_login_slot(min_gap_s=0.0, timeout_s=0.05) is True
+        try:
+            assert acquire_login_slot(min_gap_s=0.0, timeout_s=0.05) is False
+        finally:
+            release_login_slot()
 
     def test_missing_metric_attribute_does_not_break_timeout_path(self) -> None:
         reset_login_slot_for_tests()
