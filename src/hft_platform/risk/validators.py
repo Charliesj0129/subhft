@@ -30,6 +30,10 @@ class RiskValidator:
         self.lob = lob
         self._position_provider = position_provider
         self._shared_scale_cache: Dict[str, int] = {}
+        # Point value per symbol (TMF 10, MXF 50, TXF 200), read from the same
+        # SymbolMetadata that prices it. Not cached: the runtime universe overlay
+        # can add a symbol after boot, and the lookup is one dict get.
+        self._multiplier_fn: Any = getattr(getattr(provider, "metadata", None), "contract_multiplier", None)
 
     def _derive_from_defaults(self) -> None:
         """Re-derive every config-dependent scalar from ``self.defaults``/``self.config``.
@@ -76,6 +80,17 @@ class RiskValidator:
             value = int(self.price_codec.scale_factor(symbol))
             cache[symbol] = value
         return value or 1
+
+    def _contract_multiplier(self, symbol: str) -> int:
+        """NTD per price point for *symbol*; 1 when no metadata knows it (stocks, tests)."""
+        fn = self._multiplier_fn
+        if fn is None:
+            return 1
+        try:
+            value = int(fn(symbol))
+        except (TypeError, ValueError):
+            return 1
+        return value if value > 0 else 1
 
     def _current_position(self, symbol: str, strategy_id: str) -> int:
         """Resolve net position via ``position_provider`` if present.
@@ -288,6 +303,15 @@ class PriceBandValidator(RiskValidator):
 
 
 class MaxNotionalValidator(RiskValidator):
+    """Reject an order whose notional exceeds ``max_notional`` NTD.
+
+    ``max_notional`` is plain NTD. Notional is ``price * qty * point value``:
+    one TMF lot at 45,000 points is 450,000 NTD, one TXF lot 9,000,000. Until
+    2026-10-23 the point value was left out and the prod YAML held the value
+    already multiplied by 10,000, which the check multiplied again -- a cap of
+    10^13 that no order could reach.
+    """
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._max_notional_scaled_cache: Dict[tuple[str, str], int] = {}
@@ -314,7 +338,7 @@ class MaxNotionalValidator(RiskValidator):
             max_notional_scaled = int(max_notional_raw * scale)
             self._max_notional_scaled_cache[cache_key] = max_notional_scaled
 
-        notional_scaled = intent.price * intent.qty
+        notional_scaled = intent.price * intent.qty * self._contract_multiplier(intent.symbol)
         if notional_scaled > max_notional_scaled:
             return False, f"MAX_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}"
 
@@ -1076,7 +1100,9 @@ class ExpiringContractValidator(RiskValidator):
 
 
 class PerSymbolNotionalValidator(RiskValidator):
-    """Reject orders where per-symbol notional (price * qty / scale) exceeds the configured limit.
+    """Reject orders whose notional (price * qty * point value, in NTD) exceeds the per-symbol limit.
+
+    Limits are plain NTD, like ``MaxNotionalValidator``'s.
 
     Config resolution order:
       1. strategies.<id>.symbol_limits.<symbol>.max_notional
@@ -1136,10 +1162,9 @@ class PerSymbolNotionalValidator(RiskValidator):
 
             self._per_symbol_notional_cache[cache_key] = max_notional_scaled
 
-        # notional = price * qty (both in scaled-int space).
-        # To compare against a raw-currency limit that was also pre-scaled,
-        # the comparison is direct: price_scaled * qty vs max_notional_raw * scale.
-        notional_scaled = intent.price * intent.qty
+        # NTD * scale on both sides: price_scaled * qty * point value vs
+        # max_notional_ntd * scale.
+        notional_scaled = intent.price * intent.qty * self._contract_multiplier(intent.symbol)
         if notional_scaled > max_notional_scaled:
             return False, (f"PER_SYMBOL_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}")
 

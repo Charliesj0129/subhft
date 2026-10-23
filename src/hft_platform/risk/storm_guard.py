@@ -14,7 +14,29 @@ from hft_platform.risk.drift_burst_detector import DriftBurstDetector
 
 logger = get_logger("risk.storm_guard")
 
-__all__ = ["StormGuard", "StormGuardState", "RiskThresholds"]
+__all__ = ["StormGuard", "StormGuardState", "RiskThresholds", "halt_reason_label"]
+
+# Distinct ``stormguard_halt_reason`` labels a process may create. trigger_halt
+# reasons come from ~20 call sites; anything past the cap is "other".
+_HALT_REASON_LABEL_CAP = 32
+_HALT_REASON_LABEL_MAX_LEN = 48
+_halt_reason_labels_seen: set[str] = set()
+
+
+def halt_reason_label(reason: str) -> str:
+    """Bounded metric label for a trigger_halt reason.
+
+    The text before the first ':' names the cause ("KILL_SWITCH_FILE",
+    "raw_queue_sustained_drops"); what follows is per-incident detail (counts,
+    file contents) that would make every HALT a new series.
+    """
+    label = str(reason).split(":", 1)[0].strip()[:_HALT_REASON_LABEL_MAX_LEN] or "unspecified"
+    if label in _halt_reason_labels_seen:
+        return label
+    if len(_halt_reason_labels_seen) >= _HALT_REASON_LABEL_CAP:
+        return "other"
+    _halt_reason_labels_seen.add(label)
+    return label
 
 
 @dataclass(slots=True)
@@ -183,6 +205,9 @@ class StormGuard:
         # Why the current HALT was entered. ``update()`` can no longer compute
         # HALT, so ``_target_state_reason`` never names one; this does.
         "_halt_reason",
+        # ``stormguard_halt_reason`` label currently set to 1, so leaving HALT
+        # can clear exactly that one. Touched only by _emit_pending_transition.
+        "_halt_reason_label",
     )
 
     def __init__(
@@ -271,6 +296,7 @@ class StormGuard:
         self._next_ticket_id: int = 0
         self._order_rtt_peak_us: int = 0
         self._halt_reason: str = ""
+        self._halt_reason_label: str = ""
         #: Reason string for the state ``_evaluate_target_state`` last computed,
         #: refreshed every ``update()`` rather than only on a transition. The
         #: transition log records why STORM was *entered*; a gate needs to know
@@ -980,6 +1006,18 @@ class StormGuard:
                 self.metrics.stormguard_mode.labels(strategy="system").set(new_state_int)
             except Exception as exc:
                 logger.warning("stormguard_metric_update_failed", metric="mode", error=str(exc))
+
+            if StormGuardState.HALT in (new_state_int, old_state_int):
+                try:
+                    gauge = self.metrics.stormguard_halt_reason
+                    if self._halt_reason_label:
+                        gauge.labels(reason=self._halt_reason_label).set(0)
+                        self._halt_reason_label = ""
+                    if new_state_int == StormGuardState.HALT:
+                        self._halt_reason_label = halt_reason_label(entry["reason"])
+                        gauge.labels(reason=self._halt_reason_label).set(1)
+                except Exception as exc:
+                    logger.warning("stormguard_metric_update_failed", metric="halt_reason", error=str(exc))
 
             try:
                 self.metrics.stormguard_transitions_total.labels(direction=direction).inc()

@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import dataclasses
 import importlib
 import os
 import threading
@@ -199,12 +200,16 @@ class RiskEngine:
         # was enforced by nobody. Per-symbol limits exist precisely to be
         # TIGHTER than the per-strategy default, so losing them silently
         # defeats their purpose.
+        # MaxNotionalValidator too: the Rust kernel compares price * qty with no
+        # point value (Rust is paused, so it is not taught one), which made a
+        # TXF lot look 200x smaller than it is.
         self._rust_uncovered_validators: list[RiskValidator] = [
             v
             for v in self.validators
             if isinstance(
                 v,
                 (
+                    MaxNotionalValidator,
                     PositionLimitValidator,
                     DailyLossLimitValidator,
                     PerSymbolNotionalValidator,
@@ -262,6 +267,65 @@ class RiskEngine:
                 self._greeks_validator = GreeksLimitValidator(self.config, greeks_provider)
             except ImportError:
                 logger.warning("greeks_limit_validator_unavailable")
+        self.log_effective_thresholds("boot")
+
+    # Per-strategy keys a validator reads; anything else under ``strategies``
+    # belongs to the strategy itself, not to the gate.
+    _STRATEGY_RISK_KEYS: tuple[str, ...] = ("max_position_lots", "max_position", "max_notional", "symbol_limits")
+
+    def effective_thresholds(self) -> dict[str, Any]:
+        """Every limit the gate enforces right now, in operator units.
+
+        Read back from the validators and StormGuard after their own defaults
+        and env overrides are applied, not from the YAML: a missing key shows up
+        as the default the code fell back to. Thresholds used to come from
+        code defaults, env and YAML with nothing saying which won, which is how
+        an order-RTT breaker ran on stale numbers and a loop-lag default sat
+        1000x away from compose.
+        """
+        out: dict[str, Any] = {"config_path": str(self.config_path)}
+        for v in self.validators:
+            if isinstance(v, MaxNotionalValidator):
+                out["max_notional_ntd"] = v._default_max_notional_raw
+            elif isinstance(v, PerSymbolNotionalValidator):
+                out["per_symbol_max_notional_ntd"] = v._default_per_symbol_max_notional_raw
+            elif isinstance(v, PositionLimitValidator):
+                out["max_position_lots"] = v._default_max_position_lots
+            elif isinstance(v, PriceBandValidator):
+                out["price_caps"] = {k: val for k, val in v.defaults.items() if str(k).startswith("max_price_cap")}
+            elif isinstance(v, DailyLossLimitValidator):
+                # 1 NTD == price_scale accumulator units (see DailyLossLimitValidator).
+                scale = int((v.config.get("intraday_pnl") or {}).get("price_scale", 10_000)) or 10_000
+                out["daily_loss"] = {
+                    "intraday_pnl_enabled": v._intraday_pnl_enabled,
+                    "soft_limit_ntd": v._soft_limit_threshold_scaled // scale,
+                    "hard_limit_ntd": v._hard_limit_threshold_scaled // scale,
+                    "soft_recovery_ntd": v._soft_recovery_threshold_scaled // scale,
+                    "soft_limit_cooldown_s": v._soft_limit_cooldown_ns // 1_000_000_000,
+                    "position_loss_limit_ntd": v._position_loss_limit_scaled // scale,
+                    "fallback_max_daily_loss_ntd": v._default_max_daily_loss // scale,
+                }
+        strategies = self.config.get("strategies", {}) or {}
+        out["strategies"] = {
+            str(sid): {k: cfg[k] for k in self._STRATEGY_RISK_KEYS if k in cfg}
+            for sid, cfg in strategies.items()
+            if isinstance(cfg, dict) and any(k in cfg for k in self._STRATEGY_RISK_KEYS)
+        }
+        for block in ("loss_exit", "expiry_guard"):
+            out[block] = self.config.get(block)
+        thresholds = getattr(self.storm_guard, "thresholds", None)
+        if thresholds is not None and dataclasses.is_dataclass(thresholds):
+            out["stormguard"] = dataclasses.asdict(thresholds)
+        out["rust_validator"] = self._rust_validator is not None
+        out["fast_gate"] = self._fast_gate is not None
+        return out
+
+    def log_effective_thresholds(self, trigger: str) -> None:
+        """One ``risk_thresholds_effective`` line at boot and on every reload."""
+        try:
+            logger.info("risk_thresholds_effective", trigger=trigger, **self.effective_thresholds())
+        except Exception as exc:  # noqa: BLE001 - a report must never break engine init
+            logger.warning("risk_thresholds_effective_failed", trigger=trigger, error=str(exc))
 
     def _current_strategy_symbol_net_position(self, symbol: str, strategy_id: str) -> int:
         provider = self._position_provider
@@ -407,6 +471,7 @@ class RiskEngine:
             # Reload StormGuard thresholds
             if hasattr(self.storm_guard, "reload_thresholds"):
                 self.storm_guard.reload_thresholds(new_config)
+            self.log_effective_thresholds("sighup")
 
             logger.info(
                 "Risk config reloaded via SIGHUP",

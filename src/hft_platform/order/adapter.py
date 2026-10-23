@@ -3334,12 +3334,17 @@ class OrderAdapter:
         error_message: str,
         halt_exempt_blocked: bool = False,
     ) -> None:
-        """Book a pre-dispatch refusal: dedup commit, counter, structured log.
+        """Book a pre-dispatch refusal: dedup commit, counter, audit row, structured log.
 
         The dedup commit is the half that used to live inside ``_add_to_dlq``
         and is the reason this cannot simply be deleted -- an idempotency key
         reserved at submit stays reserved until something resolves it, and a
         refused intent must resolve it as *not approved*.
+
+        The audit row puts these refusals in ``audit.risk_log`` beside
+        RiskEngine's, prefixed ``ADAPTER_`` to tell the two gates apart. On
+        2026-10-21 about 965 platform reduce-only refusals existed only in logs,
+        which were gone before anyone asked how long the platform had refused.
         """
         self._dedup_commit(intent.idempotency_key, False, error_message, 0)
         reason_label = reason.value if isinstance(reason, RejectionReason) else str(reason)
@@ -3347,6 +3352,22 @@ class OrderAdapter:
             self.metrics.order_local_reject_total.labels(reason=reason_label).inc()
         except Exception:  # noqa: BLE001 — a metric must never block the order path
             pass
+        audit = self._audit_writer
+        if audit is not None:
+            try:
+                audit.log_risk_decision(
+                    {
+                        "strategy_id": str(intent.strategy_id),
+                        "symbol": str(intent.symbol),
+                        "intent_type": int(intent.intent_type),
+                        "price": int(intent.price),
+                        "qty": int(intent.qty),
+                        "approved": False,
+                        "reason_code": f"ADAPTER_{reason_label.upper()}",
+                    }
+                )
+            except Exception:  # noqa: BLE001 — audit must never block or crash the order path
+                pass
         logger.warning(
             "order_rejected_before_dispatch",
             intent_id=getattr(intent, "intent_id", 0),

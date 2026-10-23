@@ -160,6 +160,26 @@ class HFTSystem:
                 return v
         return None
 
+    @staticmethod
+    def _audit_engine_start(storm_guard: Any) -> None:
+        """Write one ``old_state="BOOT"`` row to ``audit.guardrail_log``.
+
+        A restart resets StormGuard to NORMAL without a transition, so the
+        table read as if a HALT before a restart lasted until the next row:
+        state durations across a boot were overstated, and a restart that
+        re-armed trading left no trace. Written before the kill-switch and latch
+        restores below, so their HALT rows sort after it.
+        """
+        try:
+            from hft_platform.recorder.audit import get_audit_writer
+
+            state = getattr(getattr(storm_guard, "state", None), "name", "UNKNOWN")
+            get_audit_writer().log_guardrail_transition(
+                {"old_state": "BOOT", "new_state": state, "reason": "engine_start"}
+            )
+        except Exception as exc:  # noqa: BLE001 - an audit row must never block boot
+            logger.warning("audit_engine_start_failed", error=str(exc))
+
     def _restore_daily_loss_state(self) -> None:
         """Load today's daily-loss state at boot, before anything can dispatch.
 
@@ -676,6 +696,7 @@ class HFTSystem:
         sg = getattr(self, "storm_guard", None)
         if sg is not None and hasattr(sg, "bind_loop"):
             sg.bind_loop(self.loop)
+        self._audit_engine_start(sg)
 
         # Schedule coroutines that build() collected while outside the engine loop.
         # P0-I1: build() runs in __init__ without a running loop, so it cannot call
