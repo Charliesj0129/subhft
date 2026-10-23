@@ -92,6 +92,7 @@ Classifies LOB microstate using FeatureEngine v2+ features:
 - Graduated response: critical mismatch → HALT, minor → auto-correct
 - Fallback chain: dual → broker_only → checkpoint_only → empty (HALT)
 - Restores portfolio aggregates (the `portfolio_drawdown_pct` gauge; StormGuard reads no PnL)
+- Refuses a checkpoint whose `identity` (broker, account digest, `live`/`paper` venue) differs from the running engine: nothing from it is restored, the file is moved aside as `<path>.foreign.<ns>`, and `startup_warnings_total{component="checkpoint_identity"}` increments. A checkpoint with no `identity` (written before it existed) is restored once and stamped by the next write
 
 ### EOD Reconciliation
 - Once-per-day at configurable UTC hour (default 05:00 = TWSE 13:00)
@@ -107,3 +108,4 @@ path = writer.write_checkpoint()  # Atomic temp+rename+fsync
 - SHA-256 integrity hash
 - Includes portfolio aggregates (peak_equity, total_rpnl)
 - Fees included for complete recovery
+- `identity` = `checkpoint_identity(broker_id, account_id, order_mode)`, set by bootstrap; the account is stored as a SHA-256 prefix, never the number

@@ -679,7 +679,7 @@ class TestPnlSnapshotExporter:
         sys_obj.position_store.total_pnl = 1000
         sys_obj.position_store._peak_equity_scaled = 2000
         sys_obj.position_store.get_drawdown_pct.return_value = 0.01
-        sys_obj.position_store.positions = {"TXFD6": pos}
+        sys_obj.position_store.snapshot_open_positions.return_value = {"TXFD6": pos}
 
         # Run one iteration then stop
         iteration = 0
@@ -721,7 +721,7 @@ class TestPnlSnapshotExporter:
         sys_obj.position_store.total_pnl = 1000
         sys_obj.position_store._peak_equity_scaled = 2000
         sys_obj.position_store.get_drawdown_pct.return_value = 0.01
-        sys_obj.position_store.positions = {"TXFD6": pos}
+        sys_obj.position_store.snapshot_open_positions.return_value = {"TXFD6": pos}
 
         iteration = 0
         original_sleep = asyncio.sleep

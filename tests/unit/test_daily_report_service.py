@@ -47,7 +47,7 @@ class _FakePosition:
 
 
 class FakePositionStore:
-    """Returns canned positions via snapshot_positions() + total_pnl."""
+    """Returns canned positions via snapshot_open_positions() + total_pnl."""
 
     __slots__ = ("_positions", "_total_pnl")
 
@@ -59,7 +59,7 @@ class FakePositionStore:
         self._positions = {k: _FakePosition(v) for k, v in (positions or {}).items()}
         self._total_pnl = total_pnl
 
-    def snapshot_positions(self) -> dict[str, Any]:
+    def snapshot_open_positions(self) -> dict[str, Any]:
         return dict(self._positions)
 
     @property

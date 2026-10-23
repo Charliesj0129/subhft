@@ -569,37 +569,46 @@ class PositionStore:
             self._fill_generation += 1
             # Merge recovery position on first fill for this key.
             # Priority: account:strategy:symbol → account:symbol → suffix search.
-            recovery = self._recovery_positions.pop(
-                f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}",
-                None,
-            )
-            if recovery is None:
-                recovery = self._recovery_positions.pop(
-                    f"{fill.account_id}:{fill.symbol}",
-                    None,
-                )
-            # Fallback: recovery may have been stored with a different account_id
-            # domain (e.g., broker_id "shioaji" vs actual account "F123456").
-            # Search by symbol suffix when exact key misses.
-            if recovery is None and self._recovery_positions:
-                suffix = f":{fill.symbol}"
-                for k in list(self._recovery_positions):
-                    if k.endswith(suffix):
-                        recovery = self._recovery_positions.pop(k)
-                        logger.info(
-                            "recovery_position_matched_by_symbol",
-                            recovery_key=k,
-                            fill_account=fill.account_id,
-                            symbol=fill.symbol,
-                        )
-                        break
-            if recovery is not None and key not in self.positions:
+            # Only a key with no live position takes one: seeding never runs on
+            # an existing position, so popping for it dropped the recovered lot.
+            recovery = None
+            if key not in self.positions:
+                recovery = self._pop_recovery_for(fill)
+            if recovery is not None:
                 self._seed_from_recovery(key, fill, recovery)
 
             if self._rust_tracker is not None:
                 return self._on_fill_rust(fill, key)
 
             return self._on_fill_python(fill, key)
+
+    def _pop_recovery_for(self, fill: FillEvent) -> Dict[str, Any] | None:
+        """Take the recovered lot that belongs to *fill*'s strategy, if any. Caller holds ``_fill_lock``."""
+        recovery = self._recovery_positions.pop(f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", None)
+        if recovery is None:
+            recovery = self._recovery_positions.pop(f"{fill.account_id}:{fill.symbol}", None)
+        if recovery is not None or not self._recovery_positions:
+            return recovery
+        # Fallback: recovery may have been stored with a different account_id
+        # domain (e.g., broker_id "shioaji" vs actual account "F123456").
+        # Search by symbol suffix when exact key misses -- but never take a lot
+        # recorded under ANOTHER strategy: that strategy's quantity would move
+        # to this one and vanish from its own book.
+        suffix = f":{fill.symbol}"
+        for k, rdata in self._recovery_positions.items():
+            if not k.endswith(suffix):
+                continue
+            owner = str(rdata.get("strategy_id", "") or "") if isinstance(rdata, dict) else ""
+            if owner and owner != fill.strategy_id:
+                continue
+            logger.info(
+                "recovery_position_matched_by_symbol",
+                recovery_key=k,
+                fill_account=fill.account_id,
+                symbol=fill.symbol,
+            )
+            return self._recovery_positions.pop(k)
+        return None
 
     async def on_fill_async(self, fill: FillEvent) -> PositionDelta:
         """Async-friendly version that runs fill processing in a thread pool.
