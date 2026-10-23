@@ -56,13 +56,13 @@ is profile-controlled.
 
 ```bash
 # Strict (promotion-grade)
-uv run python -m hft_platform.alpha promote \
-  --alpha-id r47_maker \
+uv run hft alpha promote \
+  --alpha-id r47_maker --owner <owner> \
   --profile vm_ul6_strict
 
 # Loose (research / exploration)
-uv run python -m hft_platform.alpha promote \
-  --alpha-id r47_maker \
+uv run hft alpha promote \
+  --alpha-id r47_maker --owner <owner> \
   --profile vm_ul6
 ```
 

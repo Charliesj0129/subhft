@@ -892,57 +892,6 @@ class TestCmdAlphaPromote:
 
 
 # ---------------------------------------------------------------------------
-# cmd_alpha_rl_promote — import failure / success
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_rl_promote  # noqa: E402
-
-
-class TestCmdAlphaRlPromote:
-    def _make_args(self):
-        return _ns(
-            alpha_id="rl_alpha",
-            owner="dev",
-            base_dir="research/rl",
-            project_root=".",
-            shadow_sessions=5,
-            min_shadow_sessions=3,
-            drift_alerts=0,
-            execution_reject_rate=0.01,
-        )
-
-    def test_import_failure_exits(self):
-        with patch.dict("sys.modules", {"research.rl.lifecycle": None}):
-            with pytest.raises(SystemExit) as exc_info:
-                cmd_alpha_rl_promote(self._make_args())
-        assert exc_info.value.code == 1
-
-    def test_approved_result(self, capsys):
-        fake_result = MagicMock()
-        fake_result.approved = True
-        fake_result.to_dict.return_value = {"approved": True}
-        fake_mod = MagicMock()
-        fake_mod.promote_latest_rl_run = MagicMock(return_value=fake_result)
-        with patch.dict("sys.modules", {"research.rl.lifecycle": fake_mod}):
-            cmd_alpha_rl_promote(self._make_args())
-        out = capsys.readouterr().out
-        data = json.loads(out)
-        assert data["approved"] is True
-
-    def test_rejected_exits_2(self, capsys):
-        fake_result = MagicMock()
-        fake_result.approved = False
-        fake_result.to_dict.return_value = {"approved": False}
-        fake_mod = MagicMock()
-        fake_mod.promote_latest_rl_run = MagicMock(return_value=fake_result)
-        with patch.dict("sys.modules", {"research.rl.lifecycle": fake_mod}):
-            with pytest.raises(SystemExit) as exc_info:
-                cmd_alpha_rl_promote(self._make_args())
-        assert exc_info.value.code == 2
-
-
-# ---------------------------------------------------------------------------
 # cmd_alpha_canary_auto_evaluate — import failure / success
 # ---------------------------------------------------------------------------
 

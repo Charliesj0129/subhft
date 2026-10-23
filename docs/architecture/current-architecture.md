@@ -159,7 +159,7 @@ Companion cluster backlog: `.agent/library/cluster-evolution-backlog.md`.
 6. Experiment and RL integration
 
 - `hft alpha experiments list|compare|best` reads `research/experiments/runs/*/meta.json`.
-- RL bridge in `research/rl/lifecycle.py` logs RL runs and can promote latest run via Gate D-E (`hft alpha rl-promote`).
+- RL bridge (historical): `research/rl/lifecycle.py` and its `rl-promote` subcommand have been removed.
 
 ## 4A. Research/Runtime Feature Unification (Implemented, Production Backlog Open)
 

@@ -337,18 +337,20 @@ def _build_payload(tick: dict) -> dict:
 ### 3.6 `__main__.py` — 入口
 
 ```bash
-# 啟動 (預設用 watchlist.yaml)
-uv run python -m research.monitor
+# 啟動（實作已移到 src/hft_platform/monitor/，入口是 `hft monitor`）
+uv run hft monitor
 
 # 指定設定檔
-uv run python -m research.monitor --config path/to/custom.yaml
+uv run hft monitor --watchlist path/to/watchlist.yaml --symbols config/symbols.yaml
 
-# 離線回放模式
-uv run python -m research.monitor --replay research/data/raw/txfc6/ --speed 10x
+# 指定資料來源（auto = SHM+CH 混合）
+uv run hft monitor --data-source ch
 
-# 只看期貨
-uv run python -m research.monitor --category futures
+# 經 SSH tunnel 連遠端 ClickHouse
+make monitor-remote
 ```
+
+原設計中的 `--config`、`--replay`、`--category` 沒有實作。
 
 ## 4. 擴展設計
 
@@ -431,7 +433,7 @@ monitor = [
 
 ### Phase 1 MVP 驗收標準
 
-- [ ] `uv run python -m research.monitor` 一行啟動
+- [ ] `uv run hft monitor` 一行啟動
 - [ ] 顯示 6 個追蹤標的的即時價格和 3 個 alpha 信號
 - [ ] 暖機 500 tick 後信號穩定（無冷啟動偏差）
 - [ ] 鍵盤操作: 選擇標的、展開詳情、暫停/恢復

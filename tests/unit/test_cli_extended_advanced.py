@@ -261,51 +261,6 @@ def test_cmd_alpha_promote(monkeypatch, capsys, tmp_path):
     assert "promotion_config_path" in capsys.readouterr().out
 
 
-def test_cmd_alpha_rl_promote(monkeypatch, capsys, tmp_path):
-    calls = {}
-
-    class _Result:
-        approved = True
-
-        @staticmethod
-        def to_dict():
-            return {
-                "alpha_id": "rl_ofi",
-                "approved": True,
-                "promotion_config_path": "config/strategy_promotions/x/rl_ofi.yaml",
-            }
-
-    def _promote_latest_rl_run(**kwargs):
-        calls["kwargs"] = kwargs
-        return _Result()
-
-    monkeypatch.setitem(
-        sys.modules,
-        "research.rl.lifecycle",
-        types.SimpleNamespace(promote_latest_rl_run=_promote_latest_rl_run),
-    )
-
-    out_file = tmp_path / "rl_promote.json"
-    args = Namespace(
-        alpha_id="rl_ofi",
-        owner="charlie",
-        base_dir="research/experiments",
-        project_root=".",
-        shadow_sessions=4,
-        min_shadow_sessions=1,
-        drift_alerts=0,
-        execution_reject_rate=0.0,
-        force=False,
-        out=str(out_file),
-    )
-    cli.cmd_alpha_rl_promote(args)
-    assert calls["kwargs"]["alpha_id"] == "rl_ofi"
-    assert calls["kwargs"]["owner"] == "charlie"
-    payload = json.loads(out_file.read_text())
-    assert payload["approved"] is True
-    assert "rl_ofi" in capsys.readouterr().out
-
-
 def test_cmd_alpha_pool(monkeypatch, capsys, tmp_path):
     def _compute_pool_matrix(base_dir):
         assert base_dir == "research/experiments"

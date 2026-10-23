@@ -34,7 +34,6 @@ from ._alpha import (
     cmd_alpha_pool,
     cmd_alpha_promote,
     cmd_alpha_promote_batch,
-    cmd_alpha_rl_promote,
     cmd_alpha_scaffold,
     cmd_alpha_screen,
     cmd_alpha_search,
@@ -955,26 +954,6 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     alpha_promote.set_defaults(func=cmd_alpha_promote)
-
-    alpha_rl_promote = alpha_sub.add_parser(
-        "rl-promote",
-        help="Promote latest RL run using the same Gate D-E pipeline",
-    )
-    alpha_rl_promote.add_argument("--alpha-id", required=True, help="RL alpha id")
-    alpha_rl_promote.add_argument("--owner", required=True, help="Promotion owner")
-    alpha_rl_promote.add_argument("--base-dir", default="research/experiments", help="RL experiment base dir")
-    alpha_rl_promote.add_argument("--project-root", default=".", help="Project root for promotion config output")
-    alpha_rl_promote.add_argument("--shadow-sessions", type=int, default=0, help="Observed shadow sessions")
-    alpha_rl_promote.add_argument(
-        "--min-shadow-sessions", type=int, default=5, help="Required shadow sessions for Gate E"
-    )
-    alpha_rl_promote.add_argument("--drift-alerts", type=int, default=0, help="Drift alerts count")
-    alpha_rl_promote.add_argument("--execution-reject-rate", type=float, default=0.0, help="Observed reject rate")
-    alpha_rl_promote.add_argument(
-        "--force", action="store_true", help="Force-write promotion config even if gates fail"
-    )
-    alpha_rl_promote.add_argument("--out", help="Optional summary JSON output path")
-    alpha_rl_promote.set_defaults(func=cmd_alpha_rl_promote)
 
     alpha_pool = alpha_sub.add_parser("pool", help="Show alpha pool correlation matrix from latest experiment runs")
     alpha_pool.add_argument(
