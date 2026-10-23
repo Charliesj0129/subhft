@@ -263,6 +263,7 @@ Shadow deployment note:
 | `HFT_PLATFORM_AUTO_RECOVERY_ENABLED` | `1` | `1` = feed 相關 reduce-only 觸發清除後自動恢復 | 保守環境可設 `0` 維持純手動 |
 | `HFT_PLATFORM_AUTO_RECOVERY_COOLDOWN_S` | `60` | 所有觸發條件清除後等待秒數，確認穩定才恢復 | 過短可能造成 flapping |
 | `HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S` | `60` | 開機後此秒數內暫不 latch `recorder_data_loss`（2026-06-18 boot-latch 事故：開機瞬態 DATA_LOSS 誤觸永久 reduce-only/HALT） | `0` = 停用（回到立即 latch）；真實 data loss 超過窗口仍會 latch |
+| `HFT_MANUAL_LATCH_DIR` | `.state/manual_latches` | 需人工解除的 latch（`daily_loss`、`reconciliation_mismatch`）各存成一個 JSON 檔，另有 `audit.jsonl`；見 `docs/runbooks/halt-recovery.md` | 必須指向重啟後仍保留的路徑，否則 latch 會隨容器消失 |
 | `HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S` | `600` | Active-symbol-aware feed-gap 觸發 `feed_reconnect_unhealthy` 的秒數門檻；2026-04 由 120s 提升為 600s，配合 800 標的訂閱宇宙與 illiquid 期權容忍度 | 視訂閱集流動性調整；過低易在 night session 誤觸發 |
 
 重點：
@@ -333,7 +334,7 @@ Shadow deployment note:
 |---|---|---|---|
 | `HFT_ENGINE_IMAGE` | `hft-engine:latest` | Docker image for hft-engine（含 tag/SHA） | 部署時指定已知穩定版本 |
 | `HFT_GIT_SHA` | `unknown` | 建置時由 `Dockerfile` 烘進 image 的 commit SHA；標示的是**image**，不是實際執行的原始碼（production 的 `src/` 是 bind mount）。用於 `hft_build_info` metric、config snapshot 與部署驗證 | 由建置流程設定，不要手動覆寫；要確認實際跑的程式碼請看 `code_identity` 的 `running_code_sha` |
-| `HFT_AUTO_FLATTEN_DISABLED` | `0` | `1` = 禁用 HALT 自動平倉（手動介入模式） | 事故排查時暫時設為 `1` |
+| `HFT_HALT_AUTO_FLATTEN` | `0` | `1`／`true`／`yes`／`on` = 啟用 HALT 自動平倉；預設關閉（`risk/halt_flattener.py`） | 事故排查時確認未啟用；程式不讀 `HFT_AUTO_FLATTEN_DISABLED` |
 | `HFT_LIVE_CONFIRM` | `0` | `1` = 確認 live 模式啟動（防止誤操作） | 生產環境設 `1` |
 | `HFT_SESSION_GOVERNOR_ENABLED` | `0` | `1` = 啟用 session governor 自動管理 | 多帳號場景使用 |
 

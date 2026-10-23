@@ -28,4 +28,9 @@ regexes = [
     '''eyJhbGciOiJIUzI1NiJ9''',                   # bare JWT header {"alg":"HS256"} — scrubber test vector, no payload/signature
     '''abcdef1234567890abcdef1234567890''',       # docs/runbooks/alerting-setup.md example integration key
     '''depth_imbalance_ema8_ppm''',               # feature-key identifier in deleted research/alphas/lob_shape/impl.py (history-only hit)
+    # Sentinel env values in tests/unit/test_deploy_drift_guard_no_plaintext.py: the test asserts
+    # these exact strings never reach the guard's outputs. Reviewed 2026-10-22.
+    '''sj-key-ZX81QPLMsentinel''',
+    '''ch-pw-7Qm2sentinel-A''',
+    '''ch-pw-7Qm2sentinel-B''',
 ]

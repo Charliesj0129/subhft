@@ -136,10 +136,13 @@ If discrepancies exist, record them before proceeding.
 
 ### Step 1: Disable Auto-Flatten
 
-Prevent the system from automatically closing positions during recovery.
+Make sure the system does not automatically close positions during recovery. HALT auto-flatten is
+**off by default**: the engine reads `HFT_HALT_AUTO_FLATTEN` (`src/hft_platform/risk/halt_flattener.py`)
+and only `1`, `true`, `yes` or `on` enable it. Check that the engine environment does not set it to one
+of those; leave it unset or `0`.
 
 ```bash
-export HFT_AUTO_FLATTEN_DISABLED=1
+export HFT_HALT_AUTO_FLATTEN=0
 ```
 
 ### Step 2: Reconcile Positions
@@ -150,27 +153,34 @@ uv run hft admin reconcile --apply-corrections
 
 Review each correction before confirming.
 
-### Step 3: Restart in Sim Mode
+### Step 3: A restart is not a release
+
+Do not restart the engine to clear a HALT. The four manual-release stops
+(data loss, reconciliation mismatch, operator kill switch, daily loss limit)
+are files on disk and survive a restart by design; everything else recovers on
+its own. Any restart that is still needed follows
+`.agent/rules/41-deployment.md` (stop, wait 60 s, start; never
+`docker compose restart`).
+
+### Step 4: Release the durable manual latches
 
 ```bash
-export HFT_MODE=sim
-docker compose restart hft-engine
+hft risk status                      # kill switch + manual latches
+hft risk rearm daily_loss --reason "<why it is safe>"
+hft risk rearm reconciliation_mismatch --reason "<why it is safe>"
+hft risk resume                      # operator kill switch
 ```
 
-Verify:
-- StormGuard state returns to NORMAL
-- Metrics are flowing
-- No error logs
+Latches live in `.state/manual_latches/` (`HFT_MANUAL_LATCH_DIR`); each
+release appends a line to `.state/manual_latches/audit.jsonl`. The engine reads
+the directory on every supervise tick, so a release takes effect without a
+restart: HALT then de-escalates through the normal StormGuard cooldown. Watch
+`manual_latch_active{latch=...}` go to 0.
 
-### Step 4: Resume Live (if appropriate)
-
-```bash
-export HFT_MODE=live
-export HFT_AUTO_FLATTEN_DISABLED=0
-docker compose restart hft-engine
-```
-
-Monitor for 5 minutes before walking away.
+`daily_loss` holds HALT until both the operator has released it and the
+05:00 Taipei roll has cleared the day's stop; releasing it the same day does
+not resume trading. While it is present, `loss_exit` keeps closing open
+positions.
 
 ### Step 5: Clear Manual Re-Arm Lock
 

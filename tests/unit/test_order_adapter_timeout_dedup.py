@@ -279,32 +279,46 @@ async def test_place_order_transient_non_timeout_still_retries(tmp_config):
 
 @pytest.mark.asyncio
 async def test_cancellation_guard_prevents_late_broker_call(tmp_config):
-    """The guarded wrapper checks the cancelled flag before calling broker fn."""
+    """The guarded wrapper checks the cancelled flag before calling broker fn.
+
+    The worker thread is held until the waiter has timed out, so the guard
+    runs strictly after the timeout path set the flag. The previous version
+    let the thread start at once and raced a 0.3 s sleep against a 0.15 s
+    one, so it never reached the guard and failed on slow CI runners.
+    """
     adapter = _make_adapter(tmp_config)
     adapter._api_timeout_s = 0.05
     adapter._api_guard_timeout_s = 5.0
 
     broker_actually_called = threading.Event()
+    release_worker = threading.Event()
+    guard_finished = threading.Event()
+    run_blocking_call = adapter._run_blocking_call
 
-    def slow_place(**kwargs: Any) -> dict[str, str]:
-        # Simulate a delay that exceeds timeout. The thread pool will
-        # schedule _guarded_call; if the Event is set before the thread
-        # actually starts, the broker fn should never run.
-        time.sleep(0.3)
+    async def _start_after_timeout(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        def _held(*f_args: Any, **f_kwargs: Any) -> Any:
+            release_worker.wait(5.0)
+            try:
+                return fn(*f_args, **f_kwargs)
+            finally:
+                guard_finished.set()
+
+        return await run_blocking_call(_held, *args, **kwargs)
+
+    adapter._run_blocking_call = _start_after_timeout
+
+    def place(**kwargs: Any) -> dict[str, str]:
         broker_actually_called.set()
         return {"seq_no": "A1", "ord_no": "B2"}
 
     result = await adapter._call_api(
         "place_order",
-        slow_place,
+        place,
         intent=_make_intent(),
         max_retries=0,
     )
+    release_worker.set()
 
     assert result is None
-    # Wait briefly for the thread to finish — the guard should prevent the
-    # broker call if the thread starts after cancellation was set.
-    time.sleep(0.15)
-    # The guarded wrapper sets cancelled before the 300ms sleep completes,
-    # so the broker function should NOT have been called.
+    assert guard_finished.wait(5.0), "worker never ran the guarded call"
     assert not broker_actually_called.is_set(), "Cancellation guard failed: broker was called despite cancel flag"

@@ -15,6 +15,7 @@ from hft_platform.core.symbol_classifier import is_futures_symbol
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
+from hft_platform.risk import manual_latches
 from hft_platform.risk.storm_guard import StormGuard
 
 logger = get_logger("reconciliation")
@@ -1212,3 +1213,14 @@ class ReconciliationService:
         # HALT cannot auto-recover via StormGuard.update() while drift persists.
         self.storm_guard.set_reconciliation_hold(True)
         self.storm_guard.trigger_halt(reason)
+
+        # A mismatch is one of the four manual-release reasons (2026-10-23).
+        # The in-memory hold above clears when the drift resolves or the
+        # process restarts; the latch file holds HALT until an operator runs
+        # ``hft risk rearm reconciliation_mismatch``.
+        try:
+            await asyncio.to_thread(
+                manual_latches.activate, manual_latches.RECONCILIATION_MISMATCH, reason, actor="engine"
+            )
+        except Exception as exc:  # noqa: BLE001 - the in-memory HALT above already stands
+            logger.error("reconciliation_latch_write_failed", error=str(exc))
