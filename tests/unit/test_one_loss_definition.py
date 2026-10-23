@@ -98,6 +98,12 @@ class TestTheDailyLossValidatorHasNoPeakRule:
         assert after.halt_triggered is False
         assert after.halt_reason == ""
 
+    def test_export_keeps_the_legacy_peak_keys_for_a_same_day_rollback(self) -> None:
+        """B1's restore_state rejects a document without them and zeroes the day's loss."""
+        state = _prod_like_validator().export_state()
+        assert state["peak_drawdown_halt_ts_ns"] == 0
+        assert state["peak_pnl_scaled"] == 0
+
 
 class TestStormGuardReadsNoPnl:
     def test_update_has_no_drawdown_input(self) -> None:

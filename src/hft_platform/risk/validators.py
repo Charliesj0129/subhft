@@ -708,6 +708,12 @@ class DailyLossLimitValidator(RiskValidator):
             "soft_limit_cooldown_until_ns": self._soft_limit_cooldown_until_ns,
             "unrealized_day_open": self._unrealized_day_open,
             "day_open_known": self._day_open_known,
+            # Read by nothing here. The pre-B4a restore_state requires both as
+            # ints and drops the whole document without them, so a same-day
+            # rollback would start the day's realized loss from zero. Remove
+            # once no deployable build predates B4a.
+            "peak_drawdown_halt_ts_ns": 0,
+            "peak_pnl_scaled": 0,
         }
 
     def restore_state(self, state: Dict[str, Any]) -> bool:

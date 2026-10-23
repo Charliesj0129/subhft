@@ -222,7 +222,7 @@ class TestDailyLossStateRoundTrip:
         assert after.halt_reason == ""
         assert after.export_state()["accumulated"] == {"R47": -9_000_000}
         assert after.export_state()["halt_release_pending"] is False
-        assert "peak_pnl_scaled" not in after.export_state()
+        assert after.export_state()["peak_pnl_scaled"] == 0  # legacy key only, never the restored peak
 
     def test_malformed_state_raises_and_changes_nothing(self) -> None:
         state = _validator().export_state()

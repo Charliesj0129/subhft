@@ -91,7 +91,7 @@ Classifies LOB microstate using FeatureEngine v2+ features:
 - Dual-source merge: checkpoint + broker
 - Graduated response: critical mismatch → HALT, minor → auto-correct
 - Fallback chain: dual → broker_only → checkpoint_only → empty (HALT)
-- Restores portfolio aggregates for StormGuard drawdown continuity
+- Restores portfolio aggregates (the `portfolio_drawdown_pct` gauge; StormGuard reads no PnL)
 
 ### EOD Reconciliation
 - Once-per-day at configurable UTC hour (default 05:00 = TWSE 13:00)

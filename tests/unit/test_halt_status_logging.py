@@ -117,3 +117,17 @@ class TestStormGuardStateReason:
 
         assert guard.state is StormGuardState.HALT
         assert guard.state_reason == "DAILY_LOSS_LIMIT_EXCEEDED"
+
+    def test_the_reason_names_a_hold_that_arrived_after_entry(self) -> None:
+        """The daily stop tripping inside a queue-drop HALT never re-calls trigger_halt."""
+        metrics = MagicMock()
+        with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=metrics):
+            guard = StormGuard()
+        guard.metrics = metrics
+
+        guard.trigger_halt("raw_queue_sustained_drops")
+        guard.set_daily_loss_hold(True)
+        guard.update()
+
+        assert guard.state is StormGuardState.HALT
+        assert guard.state_reason == "raw_queue_sustained_drops (held by daily_loss)"

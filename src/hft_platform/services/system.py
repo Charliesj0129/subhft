@@ -180,7 +180,7 @@ class HFTSystem:
                 "daily_loss_state_unreadable_at_boot",
                 path=str(daily_loss_state.state_path()),
                 error=str(exc),
-                consequence="today's realized loss and peak start from zero",
+                consequence="today's realized loss starts from zero",
             )
             return
         if restored:

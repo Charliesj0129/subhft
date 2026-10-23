@@ -344,13 +344,12 @@ class TestRiskRejectionFlow:
 
 
 class TestStormGuardHaltMidSession:
-    """Test 6: Drawdown triggers HALT -> orders blocked -> cancels allowed -> recovery."""
+    """Test 6: trigger_halt -> orders blocked -> cancels allowed -> recovery."""
 
     async def test_halt_blocks_new_allows_cancel_then_recovers(self, tmp_path, monkeypatch):
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
 
-        # Trigger HALT via drawdown (drawdown_bps <= halt_drawdown_bps=-200)
-        engine.storm_guard.trigger_halt("test halt")  # Below halt threshold (-200 bps)
+        engine.storm_guard.trigger_halt("test halt")
         assert engine.storm_guard.state == StormGuardState.HALT
 
         # NEW order should be rejected

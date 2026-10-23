@@ -1440,10 +1440,28 @@ class StormGuard:
         for. Reads the live value, which is the one the gate acts on: on
         2026-09-08 a HALT logged for four hours as ``Drawdown -233bps`` while
         the exported drawdown gauge read something else entirely.
+
+        In HALT the entry reason alone can mislead: a HALT entered for one cause
+        can later be held by another (the daily hard limit tripping during a
+        queue-drop HALT never calls ``trigger_halt`` again), so the active holds
+        are named too.
         """
-        if self.state == StormGuardState.HALT and self._halt_reason:
-            return self._halt_reason
-        return self._target_state_reason
+        if self.state != StormGuardState.HALT:
+            return self._target_state_reason
+        holds = [
+            name
+            for name, held in (
+                ("kill_switch", self._kill_switch_hold),
+                ("manual_latch", self._manual_latch_hold),
+                ("reconciliation", self._reconciliation_hold),
+                ("daily_loss", self._daily_loss_hold),
+            )
+            if held
+        ]
+        reason = self._halt_reason or self._target_state_reason
+        if holds:
+            return f"{reason} (held by {'+'.join(holds)})"
+        return reason
 
     def set_daily_loss_hold(self, hold: bool) -> None:
         """Set or clear the daily-loss hold on HALT de-escalation.
