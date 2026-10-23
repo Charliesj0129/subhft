@@ -9,10 +9,10 @@ This runbook covers recovering tick and fill data persistence when ClickHouse be
 | Variable | Default | Purpose |
 |---|---|---|
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` buffers all writes to WAL before CK |
-| `HFT_WAL_BATCH_MAX_ROWS` | `500` | Rows per WAL replay batch |
+| `HFT_WAL_BATCH_MAX_ROWS` | `5000` | Buffered rows at which `WALBatchWriter` flushes to a WAL file (write side, not replay; `recorder/wal.py:260`, `:421`, `:447`). `hft recorder status` shows `500` (`cli/_ops.py:280`) |
 | `HFT_WAL_LOADER_CONCURRENCY` | `4` | Parallel WAL replay threads |
-| `HFT_WAL_DEDUP_ENABLED` | `0` | `1` = SHA256 dedup guard during replay |
-| `HFT_WAL_STRICT_ORDER` | `0` | `1` = enforce timestamp ordering on replay |
+| `HFT_WAL_DEDUP_ENABLED` | `1` | SHA256 dedup guard during replay; `0` disables it (`recorder/loader.py:135`) |
+| `HFT_WAL_STRICT_ORDER` | `1` | Enforce timestamp ordering on replay; `0` disables it (`recorder/loader.py:138`) |
 
 ## Metrics
 
@@ -64,10 +64,11 @@ This runbook covers recovering tick and fill data persistence when ClickHouse be
    ```
    `hft_wal_files_pending` should trend to 0.
 
-3. **Enable dedup guard** if the same events may be replayed twice (e.g., after a restart):
+3. **Confirm the dedup guard is on** if the same events may be replayed twice (e.g., after a restart). It is on by default; only an explicit `HFT_WAL_DEDUP_ENABLED=0` in the `wal-loader` container turns it off:
    ```bash
-   export HFT_WAL_DEDUP_ENABLED=1
+   docker exec wal-loader printenv HFT_WAL_DEDUP_ENABLED   # no output = unset = enabled
    ```
+   A shell `export` does not reach a running container; changing it means editing `.env` and recreating `wal-loader` (see `.agent/rules/41-deployment.md`).
 
 4. **Verify data integrity:**
    ```bash
