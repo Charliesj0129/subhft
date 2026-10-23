@@ -152,6 +152,7 @@ class MetricsRegistry:
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
                 _pn("kill_switch_active"),
+                _pn("manual_latch_active"),
                 _pn("stormguard_transitions_total"),
                 _pn("stormguard_toxicity_score"),
                 _pn("stormguard_escalations_total"),
@@ -641,6 +642,11 @@ class MetricsRegistry:
         self.kill_switch_active = Gauge(
             _pn("kill_switch_active"),
             "1 while the kill-switch hold is set (latch file present, or a startup-recovery halt pinned it), else 0",
+        )
+        self.manual_latch_active = Gauge(
+            _pn("manual_latch_active"),
+            "1 while the durable manual latch file is present (risk/manual_latches.py), else 0",
+            ["latch"],
         )
         self.stormguard_transitions_total = Counter(
             _pn("stormguard_transitions_total"),

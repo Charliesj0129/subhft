@@ -24,7 +24,7 @@ def kill_switch_dir(tmp_path, monkeypatch):
 class TestGetKillSwitchPath:
     def test_default_path(self, monkeypatch):
         monkeypatch.delenv("HFT_KILL_SWITCH_PATH", raising=False)
-        assert _get_kill_switch_path() == ".runtime/kill_switch"
+        assert _get_kill_switch_path() == ".state/kill_switch"
 
     def test_env_override(self, monkeypatch):
         monkeypatch.setenv("HFT_KILL_SWITCH_PATH", "/custom/path")
