@@ -492,9 +492,12 @@ def test_evaluate_rust_validator_with_lob_mid_price(engine):
     engine.validators[0]._get_mid_price = lambda symbol: 5_000_000
 
     decision = engine.evaluate(_intent())
-    assert decision.approved
     call_args = mock_rv.check.call_args[0]
     assert call_args[5] == 5_000_000  # mid_price passed in
+    # A Rust approval no longer ends the check: the Python price band runs
+    # after it and refuses a price 80% below that mid.
+    assert not decision.approved
+    assert decision.reason_code.startswith("PRICE_OUTSIDE_BAND")
 
 
 # ── typed_frame_view / create_command ─────────────────────────────────────

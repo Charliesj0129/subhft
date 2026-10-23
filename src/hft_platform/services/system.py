@@ -304,7 +304,12 @@ class HFTSystem:
             multiplier=meta.contract_multiplier,
             tick_size=meta.tick_size_scaled,
         )
-        submit = getattr(self.risk_queue, "submit_nowait", None) or self.risk_queue.put_nowait
+        # With the gateway on, RiskEngine.run() is never started and nothing
+        # reads risk_queue: the exits must enter where the gateway listens.
+        intent_channel = getattr(self, "intent_channel", None)
+        gateway_on = getattr(self, "gateway_service", None) is not None and intent_channel is not None
+        exit_queue: Any = intent_channel if gateway_on else self.risk_queue
+        submit = getattr(exit_queue, "submit_nowait", None) or exit_queue.put_nowait
         for intent in intents:
             try:
                 submit(intent)

@@ -93,6 +93,19 @@ def test_a_stale_book_is_not_a_price():
     assert sys.risk_queue.items == []
 
 
+def test_with_the_gateway_on_the_exit_enters_the_intent_channel():
+    """RiskEngine.run() is not started in gateway mode, so risk_queue has no reader."""
+    channel = _Queue()
+    sys = _system(halted=True)
+    sys.gateway_service = object()
+    sys.intent_channel = channel
+    _run(sys)
+
+    assert sys.risk_queue.items == []
+    [intent] = channel.items
+    assert (intent.intent_type, intent.symbol) == (IntentType.FORCE_FLAT, "TMFJ6")
+
+
 def test_a_full_queue_is_reported_and_does_not_raise():
     sys = _system(halted=True, queue=_Queue(fail=True))
     _run(sys)  # must not raise into the supervisor loop

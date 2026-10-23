@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import suppress
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -20,6 +20,19 @@ from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
+
+
+def _queue_gate(api_queue):
+    """Stand-in for ``OrderAdapter.execute``: enqueue, False when the queue is full."""
+
+    async def _execute(cmd):
+        try:
+            api_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    return AsyncMock(side_effect=_execute)
 
 
 def _make_intent(
@@ -56,6 +69,7 @@ def _make_service(channel=None, approve=True, queue_full=False, exposure_store=N
             api_queue.put_nowait(MagicMock())
     order_adapter = MagicMock()
     order_adapter._api_queue = api_queue
+    order_adapter.execute = _queue_gate(api_queue)
 
     storm_guard = MagicMock()
     storm_guard.state = StormGuardState.NORMAL
@@ -182,8 +196,8 @@ async def test_service_halt_policy_blocks_new():
 
 
 @pytest.mark.asyncio
-async def test_order_queue_full_rejects_and_commits_dedup():
-    """D1: When api_queue is full, intent is rejected and dedup records ORDER_QUEUE_FULL."""
+async def test_order_gate_refusal_rejects_and_commits_dedup():
+    """D1: When the order gate refuses (here: a full api_queue), dedup records ORDER_GATE_REJECT."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, api_queue = _make_service(channel=ch, queue_full=True)
 
@@ -201,7 +215,7 @@ async def test_order_queue_full_rejects_and_commits_dedup():
     rec = svc._dedup.check_or_reserve("k_full")
     assert rec is not None
     assert rec.approved is False
-    assert rec.reason_code == "ORDER_QUEUE_FULL"
+    assert rec.reason_code == "ORDER_GATE_REJECT"
 
 
 @pytest.mark.asyncio
@@ -292,7 +306,9 @@ async def test_service_typed_intent_path_uses_typed_risk_methods():
 
 
 @pytest.mark.asyncio
-async def test_service_typed_intent_path_uses_typed_adapter_submit_when_available():
+async def test_service_typed_intent_path_goes_through_order_gate():
+    """A typed intent is materialized and handed to ``execute``; the typed
+    command ingress straight onto ``_api_queue`` skipped every adapter guard."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, api_queue = _make_service(channel=ch, approve=True)
     svc._order_adapter.submit_typed_command_nowait = MagicMock()
@@ -337,9 +353,11 @@ async def test_service_typed_intent_path_uses_typed_adapter_submit_when_availabl
     with suppress(asyncio.CancelledError):
         await task
 
-    assert api_queue.qsize() == 0
-    svc._order_adapter.submit_typed_command_nowait.assert_called_once()
-    svc._risk_engine.create_typed_command_frame_from_typed_frame.assert_called_once()
+    svc._order_adapter.submit_typed_command_nowait.assert_not_called()
+    svc._risk_engine.create_typed_command_frame_from_typed_frame.assert_not_called()
+    svc._risk_engine.create_command_from_typed_frame.assert_called_once()
+    svc._order_adapter.execute.assert_awaited_once()
+    assert svc._dispatched == 1
 
 
 # ── P1-A: set_halt / set_normal delegation ───────────────────────────────────
@@ -486,6 +504,7 @@ def _make_service_with_rejection_sink(channel=None, approve=True, queue_full=Fal
             api_queue.put_nowait(MagicMock())
     order_adapter = MagicMock()
     order_adapter._api_queue = api_queue
+    order_adapter.execute = _queue_gate(api_queue)
 
     storm_guard = MagicMock()
     storm_guard.state = StormGuardState.NORMAL
@@ -556,10 +575,9 @@ async def test_policy_rejection_sends_feedback():
 
 
 @pytest.mark.asyncio
-async def test_queue_full_rejection_sends_feedback():
-    """ORDER_QUEUE_FULL rejection must enqueue a RiskFeedback."""
-    from hft_platform.contracts.strategy import RiskFeedback
-
+async def test_order_gate_refusal_sends_no_gateway_feedback():
+    """The order gate feeds a refusal back itself; the gateway adding a second
+    RiskFeedback would release the strategy's pending slot twice."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, _, rejection_sink = _make_service_with_rejection_sink(channel=ch, queue_full=True)
 
@@ -571,10 +589,8 @@ async def test_queue_full_rejection_sends_feedback():
     with suppress(asyncio.CancelledError):
         await task
 
-    assert rejection_sink.qsize() == 1
-    fb = rejection_sink.get_nowait()
-    assert isinstance(fb, RiskFeedback)
-    assert fb.reason_code == "ORDER_QUEUE_FULL"
+    assert svc._rejected == 1
+    assert rejection_sink.qsize() == 0
 
 
 @pytest.mark.asyncio

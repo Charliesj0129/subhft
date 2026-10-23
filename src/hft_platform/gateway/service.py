@@ -10,7 +10,7 @@ Architecture (D2):
     3. exposure.check_and_update(key, intent)   → reject if overshoot
     4. risk_engine.evaluate(intent)             → synchronous
     5. risk_engine.create_command(intent)       → synchronous
-    6. order_adapter._api_queue.put_nowait(cmd)
+    6. await order_adapter.execute(cmd)         → the order gate; False = refused
     7. dedup.commit(key, approved, reason, cmd_id) [after dispatch outcome]
 - Latency histogram CE2-07 wraps steps 1-7.
 """
@@ -488,89 +488,60 @@ class GatewayService:
 
         # Step 5: Create command
         if decision.approved:
-            cmd = None
-            typed_cmd_frame = None
-            typed_submit = getattr(self._order_adapter, "submit_typed_command_nowait", None)
-            typed_adapter_supported = getattr(self._order_adapter, "_supports_typed_command_ingress", False) is True
-            if (
-                typed_frame is not None
-                and typed_adapter_supported
-                and callable(typed_submit)
-                and hasattr(self._risk_engine, "create_typed_command_frame_from_typed_frame")
-            ):
-                typed_cmd_frame = self._risk_engine.create_typed_command_frame_from_typed_frame(typed_frame)
-                cmd_id_for_commit = int(typed_cmd_frame[1]) if len(typed_cmd_frame) > 1 else 0
+            if typed_frame is not None and hasattr(self._risk_engine, "create_command_from_typed_frame"):
+                # Materialize only after passing policy/exposure/risk checks.
+                cmd = self._risk_engine.create_command_from_typed_frame(typed_frame, intent_view=intent)
             else:
-                if typed_frame is not None and hasattr(self._risk_engine, "create_command_from_typed_frame"):
-                    # Materialize only after passing policy/exposure/risk checks.
-                    cmd = self._risk_engine.create_command_from_typed_frame(typed_frame, intent_view=intent)
-                else:
-                    cmd = self._risk_engine.create_command(decision.intent)
-                cmd_id_for_commit = int(cmd.cmd_id)
-            # Step 6: Dispatch to order adapter (dedup committed AFTER outcome is known)
-            # Bug #6: use put() with short timeout instead of put_nowait() to
-            # tolerate transient _api_queue fullness (gives _api_worker ~10ms to drain).
-            _dispatch_ok = False
+                cmd = self._risk_engine.create_command(decision.intent)
+            # Step 6: Hand the command to the order gate (``OrderAdapter.execute``).
+            # It used to go straight onto ``_api_queue``, which skipped every
+            # guard ``execute`` runs -- platform reduce-only, the circuit
+            # breakers, the rate limits, the order-mode check -- so with the
+            # gateway on those controls existed on one path only.
             try:
-                if typed_cmd_frame is not None and callable(typed_submit):
-                    typed_submit(typed_cmd_frame)
-                    _dispatch_ok = True
-                else:
-                    try:
-                        self._order_adapter._api_queue.put_nowait(cmd)
-                        _dispatch_ok = True
-                    except asyncio.QueueFull:
-                        await asyncio.wait_for(
-                            self._order_adapter._api_queue.put(cmd),
-                            timeout=0.01,
-                        )
-                        _dispatch_ok = True
-                self._dispatched += 1
-            except (asyncio.QueueFull, asyncio.TimeoutError):
-                self._rejected += 1
-                # Commit dedup as rejected — must happen after the failed dispatch attempt
-                if is_typed_view and hasattr(self._dedup, "commit_typed"):
-                    self._dedup.commit_typed(key, False, "ORDER_QUEUE_FULL", 0)
-                else:
-                    self._dedup.commit(key, False, "ORDER_QUEUE_FULL", 0)
-                self._emit_reject("ORDER_QUEUE_FULL")
-                self._emit_trace(
-                    "gateway_reject",
-                    getattr(intent, "trace_id", ""),
-                    {"reason": "ORDER_QUEUE_FULL", "stage": "dispatch", "ack_token": envelope.ack_token},
-                )
-                logger.warning("Order queue full — intent dropped", ack_token=envelope.ack_token)
-                self._send_rejection_feedback(intent, "ORDER_QUEUE_FULL")
-                # Release exposure reserved in step 3 (mirrors the risk-rejection path)
-                if intent_type_value != int(IntentType.CANCEL):
-                    if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
-                        self._exposure.release_exposure_typed(
-                            exp_key,
-                            intent_type=intent_type_value,
-                            price=int(intent.price),
-                            qty=int(intent.qty),
-                            order_key=_order_key,
-                            target_order_key=_target_order_key,
-                        )
+                accepted = await self._order_adapter.execute(cmd)
+            except Exception:
+                self._release_exposure(is_typed_view, intent_type_value, exp_key, intent, _order_key, _target_order_key)
+                if key:
+                    if is_typed_view and hasattr(self._dedup, "release_typed"):
+                        self._dedup.release_typed(key)
                     else:
-                        self._exposure.release_exposure(exp_key, intent, order_key=_order_key)
-            else:
+                        self._dedup.release(key)
+                raise
+            if accepted:
+                self._dispatched += 1
                 # Exposure is held post-dispatch until fill/cancel/TTL expiry.
                 # Per-order tracking + periodic expire_stale_orders() prevents leaks.
                 # Commit dedup as approved only after successful dispatch
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
-                    self._dedup.commit_typed(key, True, "OK", cmd_id_for_commit)
+                    self._dedup.commit_typed(key, True, "OK", int(cmd.cmd_id))
                 else:
-                    self._dedup.commit(key, True, "OK", cmd_id_for_commit)
+                    self._dedup.commit(key, True, "OK", int(cmd.cmd_id))
                 self._emit_trace(
                     "gateway_dispatch",
                     getattr(intent, "trace_id", ""),
                     {
                         "ack_token": envelope.ack_token,
-                        "typed": bool(typed_cmd_frame is not None),
-                        "cmd_id": int(cmd_id_for_commit),
+                        "typed": bool(typed_frame is not None),
+                        "cmd_id": int(cmd.cmd_id),
                     },
                 )
+            else:
+                # The gate refused it and has already booked the refusal and,
+                # for a NEW, fed it back to the strategy; feeding back again
+                # here would release the strategy's pending slot twice.
+                self._rejected += 1
+                if is_typed_view and hasattr(self._dedup, "commit_typed"):
+                    self._dedup.commit_typed(key, False, "ORDER_GATE_REJECT", 0)
+                else:
+                    self._dedup.commit(key, False, "ORDER_GATE_REJECT", 0)
+                self._emit_reject("ORDER_GATE_REJECT")
+                self._emit_trace(
+                    "gateway_reject",
+                    getattr(intent, "trace_id", ""),
+                    {"reason": "ORDER_GATE_REJECT", "stage": "order_gate", "ack_token": envelope.ack_token},
+                )
+                self._release_exposure(is_typed_view, intent_type_value, exp_key, intent, _order_key, _target_order_key)
         else:
             self._rejected += 1
             if is_typed_view and hasattr(self._dedup, "commit_typed"):
@@ -607,6 +578,30 @@ class GatewayService:
         self._update_channel_depth_metric()
 
     # ── Rejection feedback ──────────────────────────────────────────────
+
+    def _release_exposure(
+        self,
+        is_typed_view: bool,
+        intent_type_value: int,
+        exp_key: ExposureKey,
+        intent: Any,
+        order_key: str,
+        target_order_key: str,
+    ) -> None:
+        """Release the exposure step 3 reserved for an intent that was not dispatched."""
+        if intent_type_value == int(IntentType.CANCEL):
+            return
+        if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
+            self._exposure.release_exposure_typed(
+                exp_key,
+                intent_type=intent_type_value,
+                price=int(intent.price),
+                qty=int(intent.qty),
+                order_key=order_key,
+                target_order_key=target_order_key,
+            )
+        else:
+            self._exposure.release_exposure(exp_key, intent, order_key=order_key)
 
     def _send_rejection_feedback(self, intent: Any, reason_code: str) -> None:
         """Send RiskFeedback to strategy via shared rejection queue.
