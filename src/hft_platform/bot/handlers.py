@@ -117,7 +117,8 @@ async def cmd_start(update: Any, context: Any) -> None:
         "/ask <問題> — 追問最近一次 manual hybrid 報告\n"
         "/levels [symbol] — 支撐壓力位\n"
         "/flow [symbol] — 流向摘要\n"
-        "/status — Bot 運行狀態\n\n"
+        "/status — Bot 運行狀態\n"
+        "/stop [原因] — 緊急停單（寫入 kill switch，等同 hft risk halt）\n\n"
         "symbol 可省略，預設使用第一個設定商品"
     )
     await update.message.reply_text(text)
@@ -344,6 +345,36 @@ async def cmd_flow(update: Any, context: Any) -> None:
             lines.append(f"  {seg.name}: {side_icon} UD={seg.ud_ratio:.2f} vol={seg.volume:,}")
 
     await update.message.reply_text("\n".join(lines))
+
+
+@owner_only
+async def cmd_stop(update: Any, context: Any) -> None:
+    """Handle /stop [reason]: write the engine's kill switch, the latch ``hft risk halt`` writes.
+
+    The bot runs in its own container and shares ``.state`` with the engine,
+    which reads the latch every supervise tick. The reply says what was written
+    and what the engine will do with it; this process cannot see the engine's
+    state, so it does not claim the HALT took effect.
+    """
+    from hft_platform.risk import kill_switch
+
+    reason = " ".join(context.args or []).strip() or "telegram_stop"
+    try:
+        path = await asyncio.to_thread(kill_switch.activate, f"TELEGRAM: {reason}", actor="telegram")
+        token = await asyncio.to_thread(kill_switch.current_token)
+    except Exception as exc:  # noqa: BLE001 - the operator must hear that the stop did not land
+        _log.error("bot.stop_kill_switch_write_failed", error=str(exc), error_type=type(exc).__name__)
+        await update.message.reply_text(
+            f"❌ /stop 失敗：kill switch 沒有寫入（{type(exc).__name__}）。\n請在主機上執行 hft risk halt --reason ..."
+        )
+        return
+    _log.warning("bot.stop_kill_switch_written", path=path, reason=reason)
+    await update.message.reply_text(
+        f"🛑 Kill switch 已寫入 {path}\n"
+        "Engine 在下一個 supervise tick（約 1 秒）讀到後進入 HALT：停止新單，撤單仍可送出。這不會平倉。\n"
+        "確認：hft risk status，或 stormguard_mode == 3\n"
+        f"解除：hft risk resume --token {token} --reason ..."
+    )
 
 
 @owner_only

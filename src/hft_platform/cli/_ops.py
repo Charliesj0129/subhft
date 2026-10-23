@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -16,7 +17,7 @@ import structlog
 from hft_platform.config.loader import load_settings, resolve_active_strategy
 from hft_platform.ops import quarantine_requests
 from hft_platform.ops.flatten_gate import FlattenGate, FlattenRequest, FlattenStatus
-from hft_platform.ops.manual_rearm import ManualRearmGate
+from hft_platform.ops.manual_rearm import REARM_AUDIT_FILE, ManualRearmGate
 
 logger = structlog.get_logger(__name__)
 
@@ -409,13 +410,24 @@ def cmd_ops_quarantine_strategy(args: argparse.Namespace) -> None:
 
 def cmd_ops_rearm_platform(args: argparse.Namespace) -> None:
     gate = _manual_rearm_gate(args)
-    gate.rearm_platform()
-    print("Platform re-armed.")
+    try:
+        gate.rearm_platform(token=args.token, reason=args.reason, actor=f"cli:{getpass.getuser()}")
+    except ValueError as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    # A request, not an outcome: the engine clears reduce-only on its next
+    # supervisor tick (log: platform_reduce_only_force_cleared).
+    print(
+        f"Platform re-arm requested (audit: {gate.state_path.parent / REARM_AUDIT_FILE}). "
+        "The engine applies it on its next supervisor tick; confirm with platform_reduce_only == 0."
+    )
 
 
 def cmd_ops_autonomy_status(args: argparse.Namespace) -> None:
     gate = _manual_rearm_gate(args)
-    print(json.dumps(gate.snapshot(), indent=2, ensure_ascii=False))
+    snapshot = gate.snapshot()
+    snapshot["platform_token"] = gate.platform_token()
+    print(json.dumps(snapshot, indent=2, ensure_ascii=False))
 
 
 def _flatten_via_gate(
@@ -453,27 +465,45 @@ def _flatten_via_gate(
 
 
 def cmd_ops_flatten(args: argparse.Namespace) -> None:
-    """Emergency position flattening via file-based IPC."""
+    """Emergency position flattening via file-based IPC.
+
+    The engine's supervisor claims the request and closes each symbol with the
+    platform exit (FORCE_FLAT, IOC, marketable limit), retrying until the
+    position store shows it flat or the deadline passes. The result is read
+    from positions, not from orders sent; anything left open exits non-zero.
+    """
     scope = getattr(args, "scope", "all")
     scope_id = getattr(args, "scope_id", None)
     deadline = getattr(args, "deadline", 120)
 
+    if scope == "strategy" and not scope_id:
+        print("--scope strategy needs --scope-id", file=sys.stderr)
+        sys.exit(2)
+    if scope == "strategy":
+        print(
+            f"Note: closes every symbol {scope_id} holds, for the platform's whole net position in it "
+            "(a FORCE_FLAT is not per-strategy)."
+        )
+
     logger.info("ops_flatten_start", scope=scope, scope_id=scope_id, deadline=deadline)
 
-    result = _flatten_via_gate(scope=scope, scope_id=scope_id, deadline=deadline)
+    # Wait past the engine's own deadline so its verdict, not ours, is reported.
+    result = _flatten_via_gate(scope=scope, scope_id=scope_id, deadline=deadline, poll_timeout_s=deadline + 30.0)
 
     if result is None:
-        print("Flatten request timed out. Check if the HFT engine is running.")
+        print("No result from the engine: it did not claim or finish the request. Check that it is running.")
         sys.exit(1)
 
     if result.status == FlattenStatus.COMPLETED:
         print(
-            f"Flatten completed: fully_closed={result.fully_closed} "
+            f"Flatten finished: fully_closed={result.fully_closed} "
             f"partially_closed={result.partially_closed} "
             f"failed={result.failed}"
         )
         if result.failed_symbols:
-            print(f"Failed symbols: {', '.join(result.failed_symbols)}")
+            print(f"Still open: {', '.join(result.failed_symbols)}")
+        if result.failed_symbols or result.failed or result.partially_closed:
+            sys.exit(1)
     elif result.status == FlattenStatus.FAILED:
         print(f"Flatten failed: {result.error}")
         sys.exit(1)

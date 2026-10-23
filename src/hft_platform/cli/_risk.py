@@ -1,6 +1,7 @@
 """Risk management CLI commands."""
 
 import getpass
+import sys
 
 from structlog import get_logger
 
@@ -20,11 +21,22 @@ def cmd_risk_halt(args):
     print(f"Reason: {args.reason}")
 
 
+def _actor() -> str:
+    return f"cli:{getpass.getuser()}"
+
+
 def cmd_risk_resume(args):
+    """Release the kill switch. Must quote the token ``hft risk status`` printed."""
     path = kill_switch.active_path() or _get_kill_switch_path()
     # No explicit path: a latch left at the legacy location is removed too.
-    if kill_switch.deactivate():
+    try:
+        released = kill_switch.release(token=args.token, reason=args.reason, actor=_actor())
+    except ValueError as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    if released:
         print(f"Kill switch DEACTIVATED (removed {path})")
+        print("The engine applies it on its next supervise tick; HALT then de-escalates through its cooldown.")
     else:
         print(f"No kill switch file found at {path}")
 
@@ -41,6 +53,7 @@ def cmd_risk_status(args):
             print(f"Time:   {data.get('timestamp_ns', 0)}")
         except Exception:
             print("Status: ACTIVE (file corrupt)")
+        print(f"Token:  {kill_switch.current_token()}  (hft risk resume --token ... --reason ...)")
     else:
         print("Status: INACTIVE")
     _print_latches()
@@ -51,9 +64,10 @@ def _print_latches() -> None:
     if not latches:
         print("Manual latches: none")
         return
+    tokens = manual_latches.tokens()
     print(f"Manual latches ({manual_latches.latch_dir()}):")
     for name, reason in sorted(latches.items()):
-        print(f"  {name}: {reason}")
+        print(f"  {name}: {reason}  token={tokens.get(name, '?')}")
 
 
 def cmd_risk_latches(args):
@@ -62,8 +76,12 @@ def cmd_risk_latches(args):
 
 def cmd_risk_rearm(args):
     """Release one durable manual latch. The engine sees it on its next supervise tick."""
-    actor = f"cli:{getpass.getuser()}"
-    if manual_latches.release(args.latch, reason=args.reason, actor=actor):
+    try:
+        released = manual_latches.release(args.latch, token=args.token, reason=args.reason, actor=_actor())
+    except ValueError as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    if released:
         print(f"Manual latch {args.latch} RELEASED (audit: {manual_latches.latch_dir() / manual_latches.AUDIT_FILE})")
         print("The engine applies it on its next supervise tick; no restart is needed.")
     else:

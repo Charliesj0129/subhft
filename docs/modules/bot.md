@@ -31,6 +31,7 @@ This module is the **user-facing interface** — it composes commands on top of 
 | `/levels` | `[symbol]` | Support/resistance levels from 5-day lookback (via `LevelReasoner`) |
 | `/flow` | `[symbol]` | Flow summary: U/D ratio, net flow, strongest buy/sell bars, segment breakdown |
 | `/status` | — | Bot health: uptime, last report timestamps, ClickHouse connectivity |
+| `/stop` | `[reason]` | Writes the engine's kill switch (`.state/kill_switch`, same latch as `hft risk halt`); the engine HALTs on its next supervise tick. Replies with the release token; does not claim the HALT took effect |
 
 Arguments default: symbol = first in `HFT_REPORT_SYMBOLS` (default `TXFR1`, `bot/app.py:93`); session = auto-detected by current hour (day if 07:00-15:00 CST).
 

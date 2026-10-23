@@ -7,13 +7,14 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
-from hft_platform.ops import rearm_requests
+from hft_platform.ops import rearm_requests, release_audit
 from hft_platform.ops.platform_degrade_registry import try_force_clear_shared_controller
 from hft_platform.ops.runtime_state_store import locked_state, read_state_strict
 
 logger = get_logger("manual_rearm")
 
 DEFAULT_RUNTIME_STATE_PATH = Path("outputs/production_rollout/autonomy/runtime_state.json")
+REARM_AUDIT_FILE = "rearm_audit.jsonl"
 
 
 class ManualRearmGate:
@@ -71,8 +72,27 @@ class ManualRearmGate:
         )
         return request_id
 
-    def rearm_platform(self) -> None:
+    def platform_token(self) -> str:
+        """Token a platform re-arm must quote: it names the latch as last read.
+
+        Derived from the flag and its reason only, so the engine's own
+        bookkeeping fields do not change it under the operator.
+        """
+        platform_state = self._platform_section(self._load_state())
+        return release_audit.token_for(
+            {
+                "manual_rearm_required": bool(platform_state.get("manual_rearm_required")),
+                "reason": platform_state.get("reason"),
+            }
+        )
+
+    def rearm_platform(self, *, token: str, reason: str, actor: str) -> None:
         """Persist the manual-rearm flag AND clear the live controller.
+
+        Refused (ValueError, nothing written) unless ``token`` is the current
+        :meth:`platform_token` and a reason is given. The release is appended
+        to ``rearm_audit.jsonl`` beside the state file before anything is
+        cleared.
 
         Prior to this fix the rearm wrote a JSON flag that the
         :class:`~hft_platform.ops.platform_degrade.PlatformDegradeController`
@@ -84,6 +104,15 @@ class ManualRearmGate:
         persisted flag.  The persistence step is unconditional so a
         cold-start process picks up the rearmed state.
         """
+        release_audit.check_release(current_token=self.platform_token(), given_token=token, reason=reason)
+        platform_state = dict(self._platform_section(self._load_state()))
+        release_audit.append(
+            self.state_path.parent / REARM_AUDIT_FILE,
+            event="platform_rearm",
+            actor=actor,
+            reason=reason,
+            removed=platform_state,
+        )
         self.clear_platform_flag()
 
         # Best-effort: bridge the live controller through its process-local

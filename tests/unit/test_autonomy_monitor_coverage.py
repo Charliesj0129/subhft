@@ -12,7 +12,6 @@ from hft_platform.contracts.strategy import StormGuardState
 from hft_platform.ops.autonomy_monitor import (
     AutonomyMonitor,
     MonitorDecision,
-    _handle_flatten_request,
 )
 
 
@@ -115,34 +114,6 @@ class TestMonitorLoop:
         ):
             await monitor.run()
         assert call_count >= 2
-
-    @pytest.mark.asyncio
-    async def test_monitor_loop_calls_flatten_gate_handler(self) -> None:
-        """When flatten_gate and flattener are set, _handle_flatten_request is called (line 173)."""
-        flatten_gate = MagicMock()
-        flatten_gate.claim.return_value = None
-        flattener = AsyncMock()
-        monitor = _make_monitor(
-            flatten_gate=flatten_gate,
-            position_flattener=flattener,
-            interval_s=0.01,
-        )
-
-        iterations = 0
-
-        def counting_evaluate(self_inner):
-            nonlocal iterations
-            iterations += 1
-            if iterations >= 2:
-                monitor._running = False
-            return []
-
-        with (
-            patch.object(AutonomyMonitor, "_evaluate", counting_evaluate),
-            patch("hft_platform.ops.autonomy_monitor.asyncio.sleep", new=AsyncMock()),
-        ):
-            await monitor.run()
-        assert flatten_gate.claim.call_count >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -487,82 +458,6 @@ class TestHeartbeat:
             await monitor._maybe_heartbeat()
         call_kwargs = notifier.notify_heartbeat.call_args.kwargs
         assert call_kwargs["feed_status"] == "disconnected"
-
-
-# ---------------------------------------------------------------------------
-# _handle_flatten_request (module-level helper)
-# ---------------------------------------------------------------------------
-
-
-class TestHandleFlattenRequest:
-    @pytest.mark.asyncio
-    async def test_no_pending_request_returns_early(self) -> None:
-        """claim() returns None => no flattening (line 491)."""
-        gate = MagicMock()
-        gate.claim.return_value = None
-        flattener = AsyncMock()
-        await _handle_flatten_request(gate, flattener)
-        flattener.flatten_all.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_flatten_all_on_scope_all(self) -> None:
-        """scope='all' calls flatten_all and completes gate (lines 499-507)."""
-        gate = MagicMock()
-        gate.claim.return_value = SimpleNamespace(scope="all", scope_id=None)
-        flattener = AsyncMock()
-        flattener.flatten_all.return_value = SimpleNamespace(
-            fully_closed=3, partially_closed=0, failed=0, failed_symbols=[]
-        )
-        await _handle_flatten_request(gate, flattener)
-        flattener.flatten_all.assert_awaited_once()
-        gate.complete.assert_called_once_with(fully_closed=3, partially_closed=0, failed=0, failed_symbols=[])
-
-    @pytest.mark.asyncio
-    async def test_flatten_track_scope(self) -> None:
-        """scope='track' with scope_id calls flatten_track (lines 495-496)."""
-        gate = MagicMock()
-        gate.claim.return_value = SimpleNamespace(scope="track", scope_id="track_A")
-        flattener = AsyncMock()
-        flattener.flatten_track.return_value = SimpleNamespace(
-            fully_closed=1, partially_closed=0, failed=0, failed_symbols=[]
-        )
-        await _handle_flatten_request(gate, flattener)
-        flattener.flatten_track.assert_awaited_once_with("track_A", [])
-
-    @pytest.mark.asyncio
-    async def test_flatten_strategy_scope(self) -> None:
-        """scope='strategy' with scope_id calls flatten_strategy (lines 497-498)."""
-        gate = MagicMock()
-        gate.claim.return_value = SimpleNamespace(scope="strategy", scope_id="strat_1")
-        flattener = AsyncMock()
-        flattener.flatten_strategy.return_value = SimpleNamespace(
-            fully_closed=2, partially_closed=0, failed=0, failed_symbols=[]
-        )
-        await _handle_flatten_request(gate, flattener)
-        flattener.flatten_strategy.assert_awaited_once_with("strat_1")
-
-    @pytest.mark.asyncio
-    async def test_flatten_request_exception_calls_fail(self) -> None:
-        """Exception in flatten operation calls gate.fail (lines 514-516)."""
-        gate = MagicMock()
-        gate.claim.return_value = SimpleNamespace(scope="all", scope_id=None)
-        flattener = AsyncMock()
-        flattener.flatten_all.side_effect = RuntimeError("flatten exploded")
-        await _handle_flatten_request(gate, flattener)
-        gate.fail.assert_called_once()
-        assert "flatten exploded" in gate.fail.call_args[0][0]
-
-    @pytest.mark.asyncio
-    async def test_flatten_track_without_scope_id_falls_to_all(self) -> None:
-        """scope='track' but scope_id=None falls through to flatten_all."""
-        gate = MagicMock()
-        gate.claim.return_value = SimpleNamespace(scope="track", scope_id=None)
-        flattener = AsyncMock()
-        flattener.flatten_all.return_value = SimpleNamespace(
-            fully_closed=1, partially_closed=0, failed=0, failed_symbols=[]
-        )
-        await _handle_flatten_request(gate, flattener)
-        flattener.flatten_all.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

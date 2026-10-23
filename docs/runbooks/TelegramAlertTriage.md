@@ -90,7 +90,8 @@ Use this path for `PlatformReduceOnlyActive` or `ManualRearmRequired`.
 5. Rearm only after the reason is clear and a human has accepted the state:
 
    ```bash
-   uv run hft ops rearm-platform
+   uv run hft ops autonomy-status   # prints platform_token
+   uv run hft ops rearm-platform --token <platform_token> --reason "<why it is safe>"
    ```
 
 6. Confirm the live engine consumed the rearm request:
