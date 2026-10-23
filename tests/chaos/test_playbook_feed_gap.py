@@ -54,22 +54,16 @@ class TestPlaybookFeedGap:
 
         assert state == StormGuardState.STORM
 
-    def test_prolonged_feed_gap_escalates_to_halt(self) -> None:
-        """Large drawdown combined with feed gap escalates to HALT."""
-        guard = StormGuard(
-            thresholds=RiskThresholds(
-                feed_gap_storm_s=1.0,
-                halt_drawdown_bps=-200,
-            )
-        )
+    def test_prolonged_feed_gap_stays_storm(self) -> None:
+        """A feed gap, however long, is STORM: new risk waits, the book is not stopped.
+        HALT comes only from trigger_halt (daily loss, kill switch, reconciliation)."""
+        guard = StormGuard(thresholds=RiskThresholds(feed_gap_storm_s=1.0))
 
-        # Feed gap triggers STORM
         guard.update(feed_gap_s=35.0)
         assert guard.state == StormGuardState.STORM
 
-        # Drawdown breaches HALT threshold
-        state = guard.update(drawdown_bps=-250)
-        assert state == StormGuardState.HALT
+        state = guard.update(feed_gap_s=3600.0)
+        assert state == StormGuardState.STORM
 
     def test_halt_blocks_new_orders(self) -> None:
         """HALT state blocks new order intents via is_safe()."""
@@ -107,6 +101,6 @@ class TestPlaybookFeedGap:
         _advance_time(1.0)
 
         # Clear conditions
-        state = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        state = guard.update(latency_us=0, feed_gap_s=0.0)
         assert state == StormGuardState.NORMAL
         assert guard.is_safe()

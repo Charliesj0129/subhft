@@ -77,18 +77,18 @@ class TestRiskConfigReload:
 
         guard = StormGuard(
             thresholds=RiskThresholds(
-                warm_drawdown_bps=-50,
-                halt_drawdown_bps=-200,
+                latency_warm_us=5_000,
+                latency_storm_us=20_000,
             )
         )
 
         new_config = {
             "risk": {
-                "warm_drawdown_bps": -100,
-                "halt_drawdown_bps": -500,
+                "latency_warm_us": 7_000,
+                "latency_storm_us": 30_000,
             }
         }
         guard.reload_thresholds(new_config)
 
-        assert guard.thresholds.warm_drawdown_bps == -100
-        assert guard.thresholds.halt_drawdown_bps == -500
+        assert guard.thresholds.latency_warm_us == 7_000
+        assert guard.thresholds.latency_storm_us == 30_000

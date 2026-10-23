@@ -237,7 +237,7 @@ class DailyReportService:
     def _get_position_status(self) -> str:
         """Return 'flat' or 'N open' based on current positions."""
         try:
-            positions = self._position_store.snapshot_positions()
+            positions = self._position_store.snapshot_open_positions()
             non_zero = {k: pos for k, pos in positions.items() if pos.net_qty != 0}
             if not non_zero:
                 return "flat"

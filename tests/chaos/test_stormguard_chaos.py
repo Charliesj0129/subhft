@@ -120,9 +120,9 @@ class TestStormGuardChaos:
     # 4. Rapid state oscillation ---------------------------------------------
     def test_rapid_state_oscillation(self):
         """Oscillate NORMAL/WARM 1000 times without crash."""
-        guard = StormGuard(thresholds=RiskThresholds(warm_drawdown_bps=-50))
+        guard = StormGuard(thresholds=RiskThresholds())
         for _ in range(1000):
-            guard.update(drawdown_bps=-60)  # -> WARM
+            guard.update(order_rtt_us=1_500_000)  # -> WARM
             # WARM -> NORMAL requires de-escalation threshold; force via transition
             guard._transition(StormGuardState.NORMAL, "reset")
         # Should be NORMAL after last manual transition
@@ -150,7 +150,7 @@ class TestStormGuardChaos:
         for t in threads:
             t.start()
         # Trigger recovery then signal readers
-        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        guard.update(latency_us=0, feed_gap_s=0.0)
         go_event.set()
         for t in threads:
             t.join(timeout=10)
@@ -218,11 +218,11 @@ class TestStormGuardChaos:
     # 8. De-escalation under concurrent load ---------------------------------
     def test_deescalation_under_load(self):
         """Concurrent clear evaluations eventually de-escalate from STORM."""
-        guard = StormGuard(thresholds=RiskThresholds(storm_drawdown_bps=-100))
+        guard = StormGuard(thresholds=RiskThresholds())
         guard._storm_cooldown_s = 0.0  # disable cooldown for test speed
         guard._de_escalate_threshold = 3
         # Escalate to STORM
-        guard.update(drawdown_bps=-150)
+        guard.update(order_rtt_us=2_500_000)
         assert guard.state == StormGuardState.STORM
 
         _advance_time(1.0)  # ensure cooldown passes
@@ -234,7 +234,7 @@ class TestStormGuardChaos:
         def _clear_eval():
             barrier.wait(timeout=5)
             for _ in range(10):
-                st = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+                st = guard.update(latency_us=0, feed_gap_s=0.0)
                 with lock:
                     results.append(st)
 
@@ -255,38 +255,38 @@ class TestStormGuardChaos:
 
         def _updater():
             while not stop.is_set():
-                guard.update(drawdown_bps=-60, latency_us=100)
+                guard.update(order_rtt_us=1_500_000, latency_us=100)
 
         t = threading.Thread(target=_updater)
         t.start()
         # Change thresholds mid-flight
-        guard.reload_thresholds({"risk": {"warm_drawdown_bps": -10, "halt_drawdown_bps": -50}})
+        guard.reload_thresholds({"risk": {"order_rtt_warm_us": 1_000, "order_rtt_storm_us": 1_000_000}})
         time.sleep(0.05)
         stop.set()
         t.join(timeout=10)
 
-        # -60 bps is now >= halt threshold of -50 -> should be HALT
-        guard.update(drawdown_bps=-60)
-        assert guard.state == StormGuardState.HALT
+        # 1.5 s is now past the reloaded 1 s STORM threshold
+        guard.update(order_rtt_us=1_500_000)
+        assert guard.state == StormGuardState.STORM
 
     # 10. Storm cooldown timing (mock time) ----------------------------------
     def test_storm_cooldown_timing(self):
         """STORM does not de-escalate before cooldown period elapses."""
-        guard = StormGuard(thresholds=RiskThresholds(storm_drawdown_bps=-100))
+        guard = StormGuard(thresholds=RiskThresholds())
         guard._storm_cooldown_s = 30.0
         guard._de_escalate_threshold = 1
 
-        guard.update(drawdown_bps=-150)
+        guard.update(order_rtt_us=2_500_000)
         assert guard.state == StormGuardState.STORM
 
         # Before cooldown: clear eval should NOT de-escalate
         for _ in range(10):
-            guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+            guard.update(latency_us=0, feed_gap_s=0.0)
         assert guard.state == StormGuardState.STORM
 
         # Advance time past cooldown
         _advance_time(31.0)
-        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        guard.update(latency_us=0, feed_gap_s=0.0)
         assert guard.state == StormGuardState.NORMAL
 
     # 11. Feed gap triggers STORM (not HALT) ---------------------------------
@@ -296,42 +296,37 @@ class TestStormGuardChaos:
         state = guard.update(feed_gap_s=1.5)
         assert state == StormGuardState.STORM
 
-    # 12. Drawdown cascade WARM -> STORM -> HALT -----------------------------
-    def test_drawdown_cascade(self):
-        """Increasing drawdown escalates through all states."""
-        guard = StormGuard(
-            thresholds=RiskThresholds(
-                warm_drawdown_bps=-50,
-                storm_drawdown_bps=-100,
-                halt_drawdown_bps=-200,
-            )
-        )
-        s1 = guard.update(drawdown_bps=-60)
+    # 12. Escalation cascade WARM -> STORM -> HALT ---------------------------
+    def test_escalation_cascade(self):
+        """Worsening health escalates to STORM; HALT needs trigger_halt."""
+        guard = StormGuard(thresholds=RiskThresholds())
+        s1 = guard.update(order_rtt_us=1_500_000)
         assert s1 == StormGuardState.WARM
 
-        s2 = guard.update(drawdown_bps=-150)
+        s2 = guard.update(order_rtt_us=2_500_000)
         assert s2 == StormGuardState.STORM
 
-        s3 = guard.update(drawdown_bps=-250)
-        assert s3 == StormGuardState.HALT
+        guard.trigger_halt("test halt")
+        assert guard.state == StormGuardState.HALT
 
-    # 13. Concurrent drawdown updates ----------------------------------------
-    def test_concurrent_drawdown_updates(self):
-        """Multiple threads update drawdown; state must be a valid StormGuardState."""
+    # 13. Concurrent health updates ------------------------------------------
+    def test_concurrent_health_updates(self):
+        """Multiple threads update order RTT; state must be a valid StormGuardState."""
         guard = StormGuard()
         barrier = threading.Barrier(10)
         final_states: list[StormGuardState] = []
         lock = threading.Lock()
 
-        def _update(dd: int):
+        def _update(rtt_us: int):
             barrier.wait(timeout=5)
             for _ in range(50):
-                s = guard.update(drawdown_bps=dd)
+                s = guard.update(order_rtt_us=rtt_us)
                 with lock:
                     final_states.append(s)
 
         threads = [
-            threading.Thread(target=_update, args=(dd,)) for dd in [-10, -60, -110, -210, 0, -60, -110, -210, 0, -10]
+            threading.Thread(target=_update, args=(rtt,))
+            for rtt in [0, 1_500_000, 2_500_000, 9_000_000, 0, 1_500_000, 2_500_000, 9_000_000, 0, 100]
         ]
         for t in threads:
             t.start()
@@ -340,7 +335,9 @@ class TestStormGuardChaos:
 
         # All observed states must be valid
         valid = set(StormGuardState)
+        assert len(final_states) == 500  # every update returned; none raised
         assert all(s in valid for s in final_states)
+        assert StormGuardState.HALT not in final_states
 
     # 14. State metric consistency -------------------------------------------
     def test_state_metric_consistency(self):
@@ -377,7 +374,7 @@ class TestStormGuardChaos:
             assert not guard.is_safe()
             observed_halt = True
 
-            guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+            guard.update(latency_us=0, feed_gap_s=0.0)
             assert guard.state == StormGuardState.NORMAL
             assert guard.is_safe()
             observed_normal_after_halt = True

@@ -69,10 +69,13 @@ class PositionFlattener:
         if hasattr(store, "get_open_positions"):
             raw_positions = store.get_open_positions()
             return {symbol: int(qty) for symbol, qty in raw_positions.items() if int(qty) != 0}
-        # Fallback: iterate positions dict
-        if hasattr(store, "positions"):
+        # Fallback: iterate the store's positions, including lots carried
+        # across a restart that no fill has merged yet.
+        open_view = getattr(store, "snapshot_open_positions", None)
+        if callable(open_view) or hasattr(store, "positions"):
             positions: dict[str, int] = {}
-            for pos in store.positions.values():
+            source = open_view() if callable(open_view) else store.positions
+            for pos in source.values():
                 symbol = getattr(pos, "symbol", "")
                 net_qty = int(getattr(pos, "net_qty", pos) or 0)
                 if symbol and net_qty != 0:

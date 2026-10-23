@@ -128,14 +128,18 @@ strategy.handle_event() → List[OrderIntent]
   │    4. Risk → 5. Command → 6. Dispatch          ││
   │    7. Commit                                   ││
   │    ↓                                           ││
-  │  order_queue.put_nowait(cmd)                   ││
-  └────────────────────────────────────────────────┘│
-                                                    │
-  OrderAdapter.run()  ←─────────────────────────────┘
-    ↓ (10-step pipeline: HALT check, dedup, rate limit,
-    │   CB, degrade, shadow intercept, client validate)
+  │  await OrderAdapter.execute(cmd)  ─────────┐   ││
+  └────────────────────────────────────────────┼───┘│
+                                               │    │
+  OrderAdapter.run() → execute(cmd) ←──────────┴────┘
+    ↓ the single order gate (B2): order mode, HALT, dedup,
+    │   rate limits, CBs, platform reduce-only, shadow,
+    │   client validate; returns False on a refusal
+    ↓
+  _api_queue → _api_worker
     ↓
   _dispatch_to_api() → broker.place_order()
+    (re-checks HFT_ORDER_MODE: the HALT drain calls it directly)
 ```
 
 ### Hop-by-Hop Detail
@@ -149,8 +153,8 @@ strategy.handle_event() → List[OrderIntent]
 | 4a | `RiskEngine.evaluate()` | `risk/engine.py` | OrderIntent → `RiskDecision` | Sync validator chain |
 | 4b | `GatewayService._process_envelope()` | `gateway/service.py` | Envelope → 7-step pipeline | Dedup→Policy→Exposure→Risk→Cmd→Dispatch→Commit |
 | 5 | `RiskEngine.create_command()` | `risk/engine.py` | OrderIntent → `OrderCommand` | Attach deadline_ns, storm_guard_state |
-| 6 | `order_queue.put_nowait()` | — | OrderCommand | `asyncio.Queue` |
-| 7 | `OrderAdapter.execute()` | `order/adapter.py` | OrderCommand → broker API call | 10-step validation pipeline |
+| 6 | `order_queue.put_nowait()` | — | OrderCommand | `asyncio.Queue` (no gateway; the gateway awaits `execute()` directly) |
+| 7 | `OrderAdapter.execute()` | `order/adapter.py` | OrderCommand → `_api_queue`, or False | The single order gate on both paths |
 | 8 | `_dispatch_to_api()` | `order/adapter.py` | → `broker.place_order()` | Thread pool via `asyncio.to_thread()` |
 
 ### Strategy Dispatch Details
@@ -246,7 +250,9 @@ def _on_exec(self, topic, data):
 
 ### Key Mechanisms
 
-- **Fill deduplication**: Bounded `OrderedDict` (10K entries), synthetic dedup key: `"{symbol}|{order_id}|{side}|{price}|{qty}|{match_ts_ns}"`
+- **Fill deduplication**: Bounded `OrderedDict` (10K entries), synthetic dedup key: `"{symbol}|{order_id}|{side}|{price}|{qty}|{match_ts_ns}"`. A key is registered only after `PositionStore.on_fill` has applied the fill, so an orphan routed to the DLQ, or a fill whose apply raised, can still be applied by the DLQ retry or a broker replay
+- **Daily-loss feed**: `RiskEngine.notify_fill_pnl` receives the realized-PnL change net of `fill.fee` (the all-in charge, tax included); an opening fill sends its fee as a loss
+- **Recovered lots**: a fill takes a parked recovery lot only for a key with no live position, and never one recorded under another strategy. Risk, MtM, loss exit, reconciliation, the flattener, the PnL snapshot exporter and the daily report read positions plus recovery (`snapshot_open_positions` / `snapshot_positions_with_recovery`)
 - **Orphaned fills**: strategy_id="UNKNOWN" → `OrphanedFillDLQ`, retry every 100 events
 - **Position update**: Atomic under `_fill_lock` (threading.Lock) for Rust/Python dual-tracker
 - **TCA enrichment**: `cmd_tca_map[order_id]` → `decision_price` + `arrival_price` stamped on FillEvent
@@ -361,11 +367,11 @@ DiskPressureMonitor levels:
                     │            StormGuard FSM                │
                     │                                         │
   feed_gap ────────→│  NORMAL ──→ WARM ──→ STORM ──→ HALT    │
-  drawdown_bps ───→│    ↑                              │     │
+  order_rtt_us ───→│    ↑                              │     │
   latency_us ─────→│    └──── manual rearm ←───────────┘     │
   component fail ─→│         (cooldown + N consecutive clears)│
   bus overflow ───→│                                         │
-  DriftBurst ─────→│  Escalation: instant (safety-first)     │
+  DriftBurst ─────→│  Escalation: instant (WARM at most)     │
                     │  De-escalation: cooldown + hysteresis   │
                     └─────────────────────────────────────────┘
 ```
@@ -373,18 +379,21 @@ DiskPressureMonitor levels:
 ### Threshold Evaluation (Priority Order)
 
 ```python
-# HALT triggers (highest priority)
-drawdown_bps <= -200 (-2.0%)                          → HALT
+# HALT: never from update(). Only trigger_halt() -- daily-loss hard limit,
+# kill switch, manual latches, reconciliation, bus overflow, lease loss.
+# StormGuard reads no PnL (B4a, 2026-10-23); DailyLossLimitValidator is the
+# one loss definition (the trading day's net change).
 
 # STORM triggers
-drawdown_bps <= -100 (-1.0%)                          → STORM
 latency_us >= 20_000 (20ms)                           → STORM
+order_rtt_us >= 2_500_000 (2.5s)                      → STORM
 feed_gap_s >= 1.0 (when session_active)               → STORM
 feature_failure_active OR norm_failure_active          → STORM
 
 # WARM triggers
-drawdown_bps <= -50 (-0.5%)                           → WARM
 latency_us >= 5_000 (5ms)                             → WARM
+order_rtt_us >= 1_500_000 (1.5s)                      → WARM
+DriftBurst toxicity > 0.5 (update_with_lob)           → WARM (never higher)
 ```
 
 ### De-escalation Rules
@@ -397,7 +406,7 @@ latency_us >= 5_000 (5ms)                             → WARM
 
 | Caller | File | Method | Trigger |
 |--------|-----------|--------|---------|
-| `HFTSystem._supervise()` | `services/system.py` | `update(drawdown_bps, latency_us, feed_gap_s)` | Supervision loop, 1 s tick |
+| `HFTSystem._supervise()` | `services/system.py` | `update(latency_us=, feed_gap_s=)` (order RTT drained from `observe_order_rtt_us`) | Supervision loop, 1 s tick; MtM goes to `RiskEngine.update_unrealized_pnl`, not StormGuard |
 | `HFTSystem._supervise()` | `services/system.py` | `update_with_lob(mid, spread, imbalance, ts)` | DriftBurstDetector toxicity |
 | `MarketDataService` | `services/market_data.py` | `report_feature_failure()` / `report_norm_failure()` | FeatureEngine or Normalizer errors |
 | `RingBufferBus` | `engine/event_bus.py` | `trigger_halt("bus_overflow_cascade")` | Sustained bus overflow |

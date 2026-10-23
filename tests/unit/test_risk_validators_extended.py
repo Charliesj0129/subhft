@@ -7,14 +7,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.core.pricing import FixedPriceScaleProvider
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     MaxNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
-    StormGuardFSM,
 )
 
 SCALE = 10_000  # default price scale factor
@@ -307,122 +306,6 @@ class TestPositionLimitValidator:
         v = PositionLimitValidator(_cfg(), price_scale_provider=_provider())
         ok, _ = v.check(_intent(qty=1000))
         assert ok is True
-
-
-# ---------------------------------------------------------------------------
-# StormGuardFSM (validators module)
-# ---------------------------------------------------------------------------
-
-
-class TestStormGuardFSM:
-    def _fsm(self, **overrides: Any) -> StormGuardFSM:
-        cfg: dict = {
-            "storm_guard": {
-                "warm_threshold": -200_000,
-                "storm_threshold": -500_000,
-                "halt_threshold": -1_000_000,
-            }
-        }
-        cfg["storm_guard"].update(overrides)
-        return StormGuardFSM(cfg)
-
-    def test_initial_state_normal(self) -> None:
-        fsm = self._fsm()
-        assert fsm.state == StormGuardState.NORMAL
-
-    @pytest.mark.parametrize(
-        "pnl, expected_state",
-        [
-            (0, StormGuardState.NORMAL),
-            (-100_000, StormGuardState.NORMAL),
-            (-200_000, StormGuardState.WARM),
-            (-200_001, StormGuardState.WARM),
-            (-500_000, StormGuardState.STORM),
-            (-500_001, StormGuardState.STORM),
-            (-1_000_000, StormGuardState.HALT),
-            (-1_500_000, StormGuardState.HALT),
-        ],
-        ids=[
-            "zero_normal",
-            "slight_loss_normal",
-            "warm_boundary",
-            "warm_past",
-            "storm_boundary",
-            "storm_past",
-            "halt_boundary",
-            "halt_past",
-        ],
-    )
-    def test_escalation_from_normal(self, pnl: int, expected_state: StormGuardState) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(pnl)
-        assert fsm.state == expected_state
-
-    def test_escalation_chain_normal_to_halt(self) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(-200_000)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
-
-    def test_validate_halt_blocks_new(self) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(-1_000_000)
-        ok, reason = fsm.validate(_intent())
-        assert ok is False
-        assert reason == "STORMGUARD_HALT"
-
-    def test_validate_halt_allows_cancel(self) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(-1_000_000)
-        ok, _ = fsm.validate(_intent(intent_type=IntentType.CANCEL))
-        assert ok is True
-
-    def test_validate_storm_blocks_new(self) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(-500_000)
-        ok, reason = fsm.validate(_intent())
-        assert ok is False
-        assert "STORMGUARD_STORM_BLOCKED" in reason
-
-    def test_validate_storm_blocks_amend(self) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(-500_000)
-        ok, reason = fsm.validate(_intent(intent_type=IntentType.AMEND))
-        assert ok is False
-        assert "STORMGUARD_STORM_BLOCKED" in reason
-
-    def test_validate_warm_allows_new(self) -> None:
-        fsm = self._fsm()
-        fsm.update_pnl(-200_000)
-        ok, _ = fsm.validate(_intent())
-        assert ok is True
-
-    def test_validate_normal_allows_all(self) -> None:
-        fsm = self._fsm()
-        ok, _ = fsm.validate(_intent())
-        assert ok is True
-
-    def test_hysteresis_prevents_immediate_de_escalation(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """De-escalation from STORM requires cooldown + N consecutive clears."""
-        monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "0")
-        monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "3")
-        fsm = self._fsm()
-        fsm._guard._storm_cooldown_s = 0.0
-        fsm._guard._de_escalate_threshold = 3
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-
-        # First two clears: still STORM (need 3 consecutive)
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.STORM
-        # Third clear: de-escalate
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.NORMAL
 
 
 # ---------------------------------------------------------------------------

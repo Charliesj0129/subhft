@@ -108,6 +108,14 @@ def _build_service(channel, api_queue, storm_guard=None):
     order_adapter = MagicMock()
     order_adapter._api_queue = api_queue
 
+    # The gateway dispatches through the order gate, OrderAdapter.execute; an
+    # accepted command lands on the adapter's API queue, as in the real adapter.
+    async def execute(cmd):
+        api_queue.put_nowait(cmd)
+        return True
+
+    order_adapter.execute = execute
+
     if storm_guard is None:
         storm_guard = MagicMock()
         storm_guard.state = StormGuardState.NORMAL

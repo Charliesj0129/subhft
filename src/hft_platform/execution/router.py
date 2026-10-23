@@ -27,6 +27,18 @@ logger = get_logger("execution.router")
 _FIRST_TERMINAL_STATUS = int(OrderStatus.FILLED)
 
 
+def _net_pnl_delta(gross_realized_delta: int, fill: Any) -> int:
+    """Realized PnL change a fill causes, net of what the fill cost.
+
+    ``Position.realized_pnl_scaled`` is gross: fees accumulate separately in
+    ``fees_scaled``. The daily-loss stop judges money, so it is fed the delta
+    minus ``fill.fee`` (the all-in charge, x10000 NTD, tax included). An
+    opening fill realizes nothing yet still costs its fee.
+    """
+    fee = getattr(fill, "fee", 0)
+    return gross_realized_delta - (fee if isinstance(fee, int) else 0)
+
+
 def _synthesize_dedup_key(fill: Any) -> str:
     """Synthesize a dedup key from fill fields when fill_id is empty.
 
@@ -546,7 +558,12 @@ class ExecutionRouter:
                                 symbol=fill_event.symbol,
                             )
                             continue
-                        self._register_fill_dedup_key(_dedup_key)
+                        # The key is registered only once the fill has reached the
+                        # position store (below). Registering here, before the
+                        # UNKNOWN branch, left an orphan's own key in the window, so
+                        # _retry_orphaned_fills later dropped the resolved fill as a
+                        # duplicate; and a fill whose apply raised was marked seen
+                        # without ever being applied, so a replay could not fix it.
                         self.metrics.fills_total.inc()
                         if fill_event.strategy_id == "UNKNOWN":
                             # Attempt phantom order reconciliation before DLQ.
@@ -660,9 +677,10 @@ class ExecutionRouter:
                             delta = await self.position_store.on_fill_async(fill_event)
                         else:
                             delta = self.position_store.on_fill(fill_event)
+                        self._register_fill_dedup_key(_dedup_key)
 
                         if self._risk_engine is not None:
-                            pnl_delta = delta.realized_pnl - _pre_realized
+                            pnl_delta = _net_pnl_delta(delta.realized_pnl - _pre_realized, fill_event)
                             if pnl_delta != 0:
                                 notify = getattr(self._risk_engine, "notify_fill_pnl", None)
                                 if callable(notify):
@@ -810,7 +828,6 @@ class ExecutionRouter:
                                 continue
                         _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
                         if _dedup_key not in self._seen_fill_ids:
-                            self._register_fill_dedup_key(_dedup_key)
                             # TCA enrichment for shutdown drain fills
                             _drain_order_key = self._order_id_map.get(fill_event.order_id)
                             if _drain_order_key is not None:
@@ -840,6 +857,7 @@ class ExecutionRouter:
                                         if _pre_pos_sd is not None:
                                             _pre_realized_sd = _pre_pos_sd.realized_pnl_scaled
                                 delta = self.position_store.on_fill(fill_event)
+                                self._register_fill_dedup_key(_dedup_key)
                                 drained += 1
                                 # Persist fill via recorder queue (mapped) or WAL fallback
                                 if self._recorder_queue is not None and self._symbol_metadata is not None:
@@ -858,7 +876,7 @@ class ExecutionRouter:
                                     self._wal_fallback_write("fills", fill_event)
                                 # Notify risk engine of PnL delta using PositionDelta
                                 if self._risk_engine is not None:
-                                    pnl_delta_sd = delta.realized_pnl - _pre_realized_sd
+                                    pnl_delta_sd = _net_pnl_delta(delta.realized_pnl - _pre_realized_sd, fill_event)
                                     if pnl_delta_sd != 0:
                                         notify = getattr(self._risk_engine, "notify_fill_pnl", None)
                                         if callable(notify):
@@ -952,9 +970,9 @@ class ExecutionRouter:
             if _dedup_key in self._seen_fill_ids:
                 skipped_dedup += 1
                 continue
-            self._register_fill_dedup_key(_dedup_key)
             if hasattr(self.position_store, "on_fill"):
                 self.position_store.on_fill(fill)
+            self._register_fill_dedup_key(_dedup_key)
             applied += 1
 
         logger.info(
@@ -1009,7 +1027,6 @@ class ExecutionRouter:
                         symbol=fill.symbol,
                     )
                     continue
-                self._register_fill_dedup_key(_dedup_key)
                 # TCA enrichment for DLQ-resolved fills (M4)
                 _order_key = self._resolve_order_key_for_fill(fill)
                 if _order_key is not None:
@@ -1045,8 +1062,9 @@ class ExecutionRouter:
                     delta = self.position_store.on_fill(fill)
                 else:
                     continue
+                self._register_fill_dedup_key(_dedup_key)
                 if self._risk_engine is not None and delta is not None:
-                    pnl_delta_dlq = delta.realized_pnl - _pre_realized_dlq
+                    pnl_delta_dlq = _net_pnl_delta(delta.realized_pnl - _pre_realized_dlq, fill)
                     if pnl_delta_dlq != 0:
                         notify = getattr(self._risk_engine, "notify_fill_pnl", None)
                         if callable(notify):

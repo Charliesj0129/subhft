@@ -498,7 +498,7 @@ groups:
         severity: critical
     annotations:
         summary: "StormGuard HALT Triggered"
-        description: "Strategy {{ $labels.strategy }} hit HALT threshold."
+        description: "New orders are blocked. Entered for: {{ with query \"stormguard_halt_reason == 1\" }}{{ . | first | label \"reason\" }}{{ else }}unknown (stormguard_halt_reason not exported){{ end }}. `hft risk status` lists the latches holding it."
         runbook_url: "docs/runbooks/StormGuardHalt.md"
 
   - alert: StormGuardHaltStuck
@@ -510,6 +510,29 @@ groups:
         summary: "StormGuard stuck in HALT for >5 minutes"
         description: "StormGuard has been in HALT state for over 5 minutes. Manual intervention may be required."
         runbook_url: "docs/runbooks/StormGuardHalt.md"
+
+  # The durable stops that only an operator can release (risk/kill_switch.py,
+  # risk/manual_latches.py). Each holds HALT across restarts; StormGuardHalt
+  # says trading stopped, these say which hand has to let go.
+  - alert: KillSwitchActive
+    expr: kill_switch_active == 1
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Operator kill switch is set"
+        description: "HALT is held by the kill switch until `hft risk resume`."
+        runbook_url: "docs/runbooks/halt-recovery.md"
+
+  - alert: ManualLatchActive
+    expr: manual_latch_active == 1
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Durable manual latch {{ $labels.latch }} is set"
+        description: "HALT is held until `hft risk rearm {{ $labels.latch }} --reason ...`; a restart does not release it."
+        runbook_url: "docs/runbooks/halt-recovery.md"
 
   - alert: HighRejectRate
     expr: rate(order_reject_total[1m]) / (rate(order_actions_total[1m]) + 1) > 0.1
@@ -985,7 +1008,7 @@ groups:
         severity: critical
     annotations:
         summary: "Portfolio drawdown > 10%"
-        description: "Portfolio drawdown exceeded 10%. StormGuard should be in HALT."
+        description: "Portfolio drawdown exceeded 10%. StormGuard reads no PnL, so this does not halt; the daily-loss hard limit is the only loss stop."
 
   # Redis health monitoring removed 2026-04-24 — engine does not probe Redis
   # (no `redis` Python module in engine container; only the separate monitor

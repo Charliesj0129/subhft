@@ -151,6 +151,7 @@ class MetricsRegistry:
                 _pn("track_gate_intents_filtered_total"),
                 _pn("risk_reject_total"),
                 _pn("stormguard_mode"),
+                _pn("stormguard_halt_reason"),
                 _pn("kill_switch_active"),
                 _pn("manual_latch_active"),
                 _pn("stormguard_transitions_total"),
@@ -160,7 +161,6 @@ class MetricsRegistry:
                 _pn("stormguard_latency_input_max_us"),
                 _pn("drift_burst_detected_total"),
                 _pn("stormguard_halt_exempt_bypass_total"),
-                _pn("stormguard_drawdown_flat_release_total"),
                 _pn("halt_drain_safety_intent_lost_total"),
                 _pn("loss_exit_orders_total"),
                 _pn("loss_exit_unpriced_total"),
@@ -639,6 +639,15 @@ class MetricsRegistry:
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
         )
+        # stormguard_mode says HALT; this says what for. 1 on the label of the
+        # trigger_halt reason that entered the HALT, 0 once it is left. The label
+        # is the reason up to its first ':' (storm_guard.halt_reason_label), so
+        # free-text detail never becomes cardinality.
+        self.stormguard_halt_reason = Gauge(
+            _pn("stormguard_halt_reason"),
+            "1 while StormGuard is in a HALT entered for this reason, else 0",
+            ["reason"],
+        )
         self.kill_switch_active = Gauge(
             _pn("kill_switch_active"),
             "1 while the kill-switch hold is set (latch file present, or a startup-recovery halt pinned it), else 0",
@@ -656,14 +665,6 @@ class MetricsRegistry:
         self.stormguard_halt_exempt_bypass_total = Counter(
             _pn("stormguard_halt_exempt_bypass_total"),
             "StormGuard halt-exempt bypass events (strategy allowed through HALT)",
-        )
-        # A risk gate letting an order through must be countable, or the only
-        # record that the drawdown STORM stopped blocking is the absence of a
-        # rejection -- and an absence is what hid the 8.5 h stall in the first
-        # place.
-        self.stormguard_drawdown_flat_release_total = Counter(
-            _pn("stormguard_drawdown_flat_release_total"),
-            "Intents allowed through a drawdown-driven STORM because the strategy was flat",
         )
         self.halt_drain_safety_intent_lost_total = Counter(
             _pn("halt_drain_safety_intent_lost_total"),

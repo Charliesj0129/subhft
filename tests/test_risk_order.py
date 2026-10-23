@@ -5,10 +5,10 @@ import time
 import pytest
 import yaml
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.order.adapter import OrderAdapter, OrderCommand
 from hft_platform.risk.engine import RiskEngine
-from hft_platform.risk.validators import PriceBandValidator, StormGuardFSM
+from hft_platform.risk.validators import PriceBandValidator
 
 # Mock Config
 MOCK_CONFIG = {
@@ -39,24 +39,6 @@ async def test_risk_validators():
     ok, reason = validator.check(intent)
     assert not ok
     assert "PRICE_ZERO" in reason
-
-
-@pytest.mark.asyncio
-async def test_storm_guard_transition():
-    fsm = StormGuardFSM(MOCK_CONFIG)
-    assert fsm.state == StormGuardState.NORMAL
-
-    # Simulate Drawdown
-    fsm.update_pnl(-50)
-    assert fsm.state == StormGuardState.NORMAL
-
-    fsm.update_pnl(-150)  # Below -100 halt
-    assert fsm.state == StormGuardState.HALT
-
-    intent = OrderIntent(2, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, 1000, 1, timestamp_ns=0)
-    ok, reason = fsm.validate(intent)
-    assert not ok
-    assert "HALT" in reason
 
 
 @pytest.mark.asyncio

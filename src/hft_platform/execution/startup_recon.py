@@ -114,6 +114,9 @@ class StartupPositionVerifier:
         # Set when a valid checkpoint is read; ``_write_to_store`` uses it to
         # bank the realized PnL no restored position ends up carrying.
         self._ckpt_total_rpnl: int | None = None
+        #: ``checkpoint_identity()`` of the running engine, set by bootstrap.
+        #: A checkpoint stamped with a different identity is not restored.
+        self.identity: Dict[str, str] | None = None
 
         if blocking is not None:
             self.blocking = blocking
@@ -159,9 +162,14 @@ class StartupPositionVerifier:
 
             # 3. Optionally merge checkpoint data (for symbols not in local store)
             if self.checkpoint_path:
-                from hft_platform.execution.checkpoint import PositionCheckpointWriter  # noqa: PLC0415
+                from hft_platform.execution.checkpoint import (
+                    PositionCheckpointWriter,  # noqa: PLC0415
+                    checkpoint_identity_mismatch,  # noqa: PLC0415
+                )
 
                 ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
+                if ckpt_data is not None and checkpoint_identity_mismatch(ckpt_data, self.identity):
+                    ckpt_data = None
                 if ckpt_data is not None:
                     ckpt_positions = ckpt_data.get("positions", {})
                     # Aggregate symbol-level qty from per-strategy checkpoint entries
@@ -244,7 +252,7 @@ class StartupPositionVerifier:
     def _build_local_map(self) -> Dict[str, int]:
         """Build {symbol: qty} map from PositionStore."""
         local_map: Dict[str, int] = {}
-        for _key, pos in self.store.snapshot_positions().items():
+        for _key, pos in self.store.snapshot_open_positions().items():
             symbol = pos.symbol
             local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
         return local_map
@@ -285,6 +293,8 @@ class StartupPositionVerifier:
 
         if self.checkpoint_path:
             ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
+            if ckpt_data is not None and self._refuse_foreign_checkpoint(ckpt_data):
+                ckpt_data = None
             if ckpt_data is not None:
                 ckpt_td = ckpt_data.get("trading_date")
                 if self._ckpt_date_within_tolerance(ckpt_td, trading_date):
@@ -353,6 +363,40 @@ class StartupPositionVerifier:
 
         self._rebank_unaccounted_realized_pnl()
         return result
+
+    def _refuse_foreign_checkpoint(self, ckpt_data: Dict[str, Any]) -> bool:
+        """True when the checkpoint belongs to another broker, account or venue.
+
+        Its positions and PnL aggregates are then not restored: recovery falls
+        back to the broker snapshot, as when there is no checkpoint. The file is
+        renamed aside rather than left for the next periodic write to overwrite,
+        so the other engine's state can still be inspected.
+        """
+        from hft_platform.execution.checkpoint import checkpoint_identity_mismatch  # noqa: PLC0415
+
+        mismatched = checkpoint_identity_mismatch(ckpt_data, self.identity)
+        if not mismatched:
+            if self.identity and not isinstance(ckpt_data.get("identity"), dict):
+                logger.warning("position_recovery: checkpoint has no identity (legacy), restoring once")
+            return False
+        aside = f"{self.checkpoint_path}.foreign.{timebase.now_ns()}"
+        try:
+            os.replace(self.checkpoint_path, aside)
+        except OSError as exc:
+            aside = ""
+            logger.warning("position_recovery: foreign checkpoint not moved aside", error=str(exc))
+        logger.error(
+            "position_recovery: checkpoint identity mismatch, not restored",
+            mismatched_fields=mismatched,
+            moved_to=aside,
+        )
+        try:
+            from hft_platform.observability.metrics import MetricsRegistry  # noqa: PLC0415
+
+            MetricsRegistry.get().startup_warnings_total.labels(component="checkpoint_identity").inc()
+        except Exception as exc:  # noqa: BLE001 - metrics must never block recovery
+            logger.debug("checkpoint_identity_metric_failed", error=str(exc))
+        return True
 
     @staticmethod
     def _ckpt_date_within_tolerance(

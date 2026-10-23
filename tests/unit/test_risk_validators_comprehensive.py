@@ -4,13 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import (
     DailyLossLimitValidator,
     PerSymbolNotionalValidator,
     PositionLimitValidator,
     PriceBandValidator,
-    StormGuardFSM,
 )
 
 _DEFAULT_CONFIG = {
@@ -224,54 +223,3 @@ class TestPositionLimitValidator:
         ok, reason = v.check(make_intent(qty=6))
         assert ok is False
         assert "POSITION_LIMIT_EXCEEDED" in reason
-
-
-class TestStormGuardFSM:
-    _SG_CONFIG = {
-        "storm_guard": {
-            "warm_threshold": -200_000,
-            "storm_threshold": -500_000,
-            "halt_threshold": -1_000_000,
-        },
-    }
-
-    def _make_fsm(self):
-        return StormGuardFSM(self._SG_CONFIG)
-
-    def test_escalation_sequence(self):
-        fsm = self._make_fsm()
-        assert fsm.state == StormGuardState.NORMAL
-        fsm.update_pnl(-200_000)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(-500_000)
-        assert fsm.state == StormGuardState.STORM
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
-
-    def test_halt_allows_cancel_blocks_new(self):
-        fsm = self._make_fsm()
-        fsm.update_pnl(-1_000_000)
-        assert fsm.state == StormGuardState.HALT
-        ok, reason = fsm.validate(make_intent(intent_type=IntentType.CANCEL))
-        assert ok is True
-        assert reason == "OK"
-        ok, reason = fsm.validate(make_intent(intent_type=IntentType.NEW))
-        assert ok is False
-        assert reason == "STORMGUARD_HALT"
-
-    def test_de_escalation_requires_consecutive_clears(self):
-        fsm = self._make_fsm()
-        fsm._guard._de_escalate_threshold = 3
-        # P4 (2026-04-28): WARM now has its own cooldown (default 30s).
-        # This test verifies the consecutive-clears threshold logic in
-        # isolation, so disable the WARM cooldown here. Cooldown enforcement
-        # is exercised by tests/unit/test_stormguard_warm_cooldown.py.
-        fsm._guard._warm_cooldown_s = 0.0
-        fsm.update_pnl(-200_000)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.WARM
-        fsm.update_pnl(0)
-        assert fsm.state == StormGuardState.NORMAL

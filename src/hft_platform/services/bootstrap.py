@@ -1676,6 +1676,19 @@ class SystemBootstrapper:
                 feature_engine=feature_engine,
             )
 
+        # The checkpoint says whose book it is; recovery refuses one that is not
+        # this engine's (another account, broker, or the paper/live venue).
+        account_id = getattr(order_client, "get_default_account_id", lambda: broker_id)()
+        from hft_platform.execution.checkpoint import checkpoint_identity
+
+        _ckpt_identity = checkpoint_identity(
+            broker_id=broker_id,
+            account_id=account_id or broker_id,
+            order_mode=os.getenv("HFT_ORDER_MODE", ""),
+        )
+        checkpoint_writer.identity = _ckpt_identity
+        startup_verifier.identity = _ckpt_identity
+
         return ServiceRegistry(
             settings=self.settings,
             bus=bus,
@@ -1690,7 +1703,7 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
             broker_id=broker_id,
-            account_id=getattr(order_client, "get_default_account_id", lambda: broker_id)(),
+            account_id=account_id,
             md_client=md_client,
             order_client=order_client,
             client=order_client,

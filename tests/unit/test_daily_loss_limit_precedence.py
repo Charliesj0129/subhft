@@ -1,7 +1,7 @@
 """Which configured number is the operative daily loss cap.
 
-Three values in the production config have claimed to be "the daily loss
-limit": ``config/env/prod/risk.yaml`` (annotation only, loaded by nothing),
+Three values in the production config claimed to be "the daily loss
+limit": ``config/env/prod/risk.yaml`` (loaded by nothing; removed 2026-10-23),
 ``global_defaults.max_daily_loss`` in ``strategy_limits.yaml``, and
 ``intraday_pnl.hard_limit_ntd``. Only the last one stops trading, because
 ``DailyLossLimitValidator`` selects ``_hard_limit_threshold_scaled if
@@ -87,18 +87,12 @@ def test_prod_config_documents_the_cap_that_actually_binds():
         "global_defaults.max_daily_loss keeps the fallback a true upper bound"
     )
     assert intraday["soft_limit_ntd"] < intraday["hard_limit_ntd"]
-    assert 0.0 < intraday["drawdown_recovery_pct"] < intraday["peak_drawdown_pct"], (
-        "release must sit inside the halt threshold, or the pair has no hysteresis"
-    )
+    for removed in ("peak_drawdown_pct", "drawdown_recovery_pct", "peak_drawdown_min_peak_ntd"):
+        assert removed not in intraday, f"{removed} is read by nothing since the peak rule was removed"
 
 
-def test_prod_annotation_file_agrees_with_the_loaded_file():
-    """risk.yaml is documentation; it must not state a different cap.
-
-    It is loaded by nothing, so a stale number here is invisible at runtime and
-    misleads whoever reads it looking for the limit.
-    """
-    risk = yaml.safe_load(_PROD_RISK.read_text(encoding="utf-8"))
-    limits = yaml.safe_load(_PROD_LIMITS.read_text(encoding="utf-8"))
-
-    assert risk["risk"]["max_daily_loss"] == limits["global_defaults"]["max_daily_loss"]
+def test_prod_has_no_unloaded_risk_annotation_file():
+    """config/env/prod/risk.yaml was loaded by nothing and disagreed with the
+    loaded limits (10,000 NTD daily, 6,000/10,000 StormGuard, 2 orders/s). It
+    was removed 2026-10-23; strategy_limits.yaml is the only risk file."""
+    assert not _PROD_RISK.exists()

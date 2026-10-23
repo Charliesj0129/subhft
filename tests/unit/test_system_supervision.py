@@ -450,22 +450,6 @@ class TestFeedGapStormGuard:
             sg.update(latency_us=25_000)
             assert sg.state == StormGuardState.STORM
 
-    def test_drawdown_triggers_halt(self):
-        """Extreme drawdown triggers HALT state."""
-        from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
-
-        with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_metrics_cls:
-            mock_metrics = MagicMock()
-            mock_metrics.stormguard_mode.labels.return_value = MagicMock()
-            mock_metrics_cls.get.return_value = mock_metrics
-            sg = StormGuard(thresholds=RiskThresholds(halt_drawdown_bps=-200))
-
-        with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_metrics_cls:
-            mock_metrics_cls.get.return_value = mock_metrics
-            result = sg.update(drawdown_bps=-300)
-
-        assert result == StormGuardState.HALT
-
     def test_per_symbol_feed_gaps_empty_when_no_method(self):
         """Returns empty dict when md_service lacks get_feed_gaps_by_symbol."""
         md = SimpleNamespace()
@@ -528,27 +512,6 @@ class TestLoopLagMonitoring:
 # ---------------------------------------------------------------------------
 # Drawdown helper
 # ---------------------------------------------------------------------------
-
-
-class TestDrawdownHelper:
-    """_get_drawdown_pct extraction from position store."""
-
-    def test_returns_zero_when_no_method(self):
-        ps = SimpleNamespace()
-        assert HFTSystem._get_drawdown_pct(ps, {}) == 0.0
-
-    def test_uses_get_drawdown_pct_method(self):
-        ps = SimpleNamespace(get_drawdown_pct=lambda: -0.015)
-        assert HFTSystem._get_drawdown_pct(ps, {}) == -0.015
-
-    def test_falls_back_to_total_pnl(self):
-        ps = SimpleNamespace(total_pnl=-50000)
-        result = HFTSystem._get_drawdown_pct(ps, {"base_capital": 1_000_000})
-        assert abs(result - (-0.05)) < 1e-9
-
-    def test_zero_base_capital_returns_zero(self):
-        ps = SimpleNamespace(total_pnl=-50000)
-        assert HFTSystem._get_drawdown_pct(ps, {"base_capital": 0}) == 0.0
 
 
 # ---------------------------------------------------------------------------

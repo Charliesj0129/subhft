@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -35,6 +35,19 @@ from hft_platform.gateway.service import (
 )
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _queue_gate(api_queue):
+    """Stand-in for ``OrderAdapter.execute``: enqueue, False when the queue is full."""
+
+    async def _execute(cmd):
+        try:
+            api_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    return AsyncMock(side_effect=_execute)
 
 
 def _make_intent(
@@ -98,6 +111,7 @@ def _build_service(
 
     order_adapter = MagicMock()
     order_adapter._api_queue = api_q
+    order_adapter.execute = _queue_gate(api_q)
     order_adapter._supports_typed_command_ingress = False
 
     storm_guard = MagicMock()

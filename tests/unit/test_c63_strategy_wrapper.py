@@ -208,7 +208,6 @@ def test_strategy_limits_c63_max_pos_3() -> None:
     cfg = _load_limits()
     c63 = cfg["strategies"]["C63_TXFD6_TIGHT_SPREAD_MAKER"]
     assert c63["max_position_lots"] == 3
-    assert c63["max_order_qty"] == 1
 
 
 def test_strategy_limits_c63_daily_loss_hard_stop_20k() -> None:

@@ -1,14 +1,15 @@
 
-# Strategy Limits and Risk Params
-global_limits:
-  max_position_notional: 500000000   # 50K NTD x10000
-  max_order_size: 1                  # Max 1 lot per order
-  max_daily_loss: 50000000           # 5,000 NTD x10000
+# Strategy Limits and Risk Params. Production overrides this file with
+# config/env/prod/strategy_limits.yaml. max_position_lots also bounds order
+# size: an opening order that would take the position past it is rejected.
 
-# global_defaults is the key read by risk validators at runtime
 global_defaults:
-  max_notional: 500000000            # 50K NTD x10000
-  per_symbol_max_notional: 5000000000 # Single symbol = full capital for futures
+  # Plain NTD; notional = price * qty * point value (TMF 10, MXF 50, TXF 200).
+  # 10,000,000 admits one TXF lot (~9,000,000 at 45,000 points) for the TXF
+  # strategies below; prod sets 1,000,000. Orders that reduce a position are
+  # exempt.
+  max_notional: 10000000             # 10,000,000 NTD per order
+  per_symbol_max_notional: 10000000  # 10,000,000 NTD per order, per symbol
   max_position_lots: 1               # Emergency rollback: single-lot live cap across the engine
   max_daily_loss: 50000000           # 5,000 NTD x10000 (triggers rejection)
   max_price_cap: 5000.0              # Stocks: max 5,000 NTD per share
@@ -29,30 +30,22 @@ global_defaults:
 strategies:
   MM_ALPHA_V1:
     max_position_lots: 1             # Max 1 lot per symbol
-    max_order_qty: 1                 # 1 lot per order (conservative)
   OPPORTUNISTIC_MM_TXF:
     max_position_lots: 5             # Max 5 lots (Challenger recommendation)
-    max_order_qty: 1                 # 1 lot per order
   OPPORTUNISTIC_MM_TMF:
     max_position_lots: 1             # Conservative: 1 lot only (L1 depth = 1 contract)
-    max_order_qty: 1                 # 1 lot per order
   CBS_TMF:
     max_position_lots: 1             # Conservative single lot
-    max_order_qty: 1                 # 1 lot per order
   MOMENTUM_BOUNCE_TMF:
     max_position_lots: 1             # Conservative single lot (shadow mode)
-    max_order_qty: 1                 # 1 lot per order
   R47_MAKER_TXF:
     max_position_lots: 1             # Hard cap = strategy max_pos (RC-1 incident 2026-04-15)
-    max_order_qty: 1                 # 1 lot per quote side
   R47_MAKER_TMF:
     max_position_lots: 1             # Emergency rollback to strategy max_pos parity
-    max_order_qty: 1                 # 1 lot per quote side
   C14_TXF_FRONTMONTH_MAKER:
     # Shadow-only defaults. Post-PROMOTE R6 2026-04-17.
     # Live-transition requires user approval + 10+ shadow days (see SHADOW_DEPLOY.md).
     max_position_lots: 3                   # Strategy max_pos parity
-    max_order_qty: 1                       # 1 lot per quote side
     daily_loss_hard_stop_ntd: 200000       # 2/3 of pessimistic OOS NTD/day — flat + disable on hit
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry from quoting)
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
@@ -60,7 +53,6 @@ strategies:
     # Shadow-only defaults. T4 scaffold R10 2026-04-17 (TMF analog of C14).
     # SWITCH semantics: REPLACES deployed R47_MAKER_TMF; must NOT run simultaneously.
     max_position_lots: 3                   # Strategy max_pos parity
-    max_order_qty: 1                       # 1 lot per quote side
     daily_loss_hard_stop_ntd: 10000        # 1/20 of C14 (TMF 10 NTD/pt vs TXF 200 NTD/pt leverage)
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
@@ -69,7 +61,6 @@ strategies:
     # Vol-amplification modulator on C14. max_pos={3,4} state-switched.
     # daily_loss hard stop scaled 4/3 vs C14 to accommodate amplified state exposure.
     max_position_lots: 4                   # matches max_pos_amplified
-    max_order_qty: 1                       # 1 lot per quote side
     daily_loss_hard_stop_ntd: 267000       # 4/3 × C14's 200K (matches amplified-vs-baseline capacity)
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
@@ -77,7 +68,6 @@ strategies:
     # Exception live rollout 2026-04-18 on explicit user instruction.
     # Recommended research operating point remains mp=3/q=5, but live is hard-capped to 1 lot.
     max_position_lots: 1                   # Conservative live cap, matches strategy max_pos
-    max_order_qty: 1                       # 1 lot per quote side
     daily_loss_hard_stop_ntd: 150000       # ~2× worst observed OOS daily loss (-43,600 × ~3.4 safety)
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry)
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
@@ -96,7 +86,6 @@ strategies:
     # TMF point value 10 NTD/pt -> 2 lots × 10 = 20 NTD/pt exposure (trivial
     # vs TXFD6 200 NTD/pt for reference scale).
     max_position_lots: 2                   # Canonical mp=2 per DA T6
-    max_order_qty: 1                       # 1 lot per quote side
     daily_loss_hard_stop_ntd: 15000        # ~3× worst observed fresh-sim day loss
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry)
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
@@ -137,7 +126,6 @@ strategies:
     # with C33_TXFD6_SOLO_MAKER. HARD COST GATE at retail RT = 2.5 pt.
     # TXF point value 200 NTD/pt -> 3 lots * 200 = 600 NTD/pt exposure.
     max_position_lots: 3                   # Canonical mp=3 per DA T6 R2-SUPP
-    max_order_qty: 1                       # 1 lot per quote side
     daily_loss_hard_stop_ntd: 20000        # ~tight guard; cost-fragile strategy
     max_inventory_holding_seconds: 3600    # 1-hour inventory cap (no overnight carry)
     storm_guard_tier: B                    # Cancel allowed during STORM, quoting suppressed
@@ -178,18 +166,15 @@ strategies:
 
 intraday_pnl:
   scope: global
-  # 2026-04-20: User-requested daily loss cap 5,000 NTD; PEAK_DRAWDOWN only
-  # protects days with peak ≥ 3,500 NTD (40% retracement triggers force-flat).
+  # 2026-04-20: User-requested daily loss cap 5,000 NTD. A loss is the
+  # trading day's net change; the 40%-of-peak rule was removed 2026-10-23.
   # Values intentionally mirror config/env/prod/strategy_limits.yaml as a
   # belt-and-suspenders default in case HFT_ENV is unset/typoed (loader.py
   # logs a warning in that case — Bug #33 investigated 2026-04-21).
   soft_limit_ntd: 500
   hard_limit_ntd: 5000
-  peak_drawdown_pct: 0.40
   soft_recovery_ntd: 300
-  drawdown_recovery_pct: 0.20
   soft_limit_cooldown_s: 60
-  peak_drawdown_min_peak_ntd: 3500
   # Since-entry loss on one position, across days, at which risk/loss_exit.py
   # closes it. The daily limits above judge only the day's change (a lot
   # carried overnight is measured from that day's opening mark), so this is

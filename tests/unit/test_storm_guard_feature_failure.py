@@ -76,7 +76,7 @@ class TestReportFeatureRecovery:
         # update() with clear inputs de-escalates via hysteresis
         guard._storm_cooldown_s = 0.0
         guard._de_escalate_threshold = 1
-        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+        guard.update(latency_us=0, feed_gap_s=0)
         assert guard.state == StormGuardState.NORMAL
 
     def test_noop_when_no_feature_failure_active(self, guard):
@@ -140,7 +140,7 @@ class TestReportFeatureRecovery:
         assert guard.state == StormGuardState.STORM
 
         # drawdown_bps=-60 is in the WARM range (-50 threshold), latency clean
-        result = guard.update(drawdown_bps=-60, latency_us=0, feed_gap_s=0.0)
+        result = guard.update(order_rtt_us=1_500_000, latency_us=0, feed_gap_s=0.0)
         # Must remain STORM — feature failure is still active
         assert result == StormGuardState.STORM
         assert guard.state == StormGuardState.STORM
@@ -154,7 +154,7 @@ class TestReportFeatureRecovery:
         assert guard.state == StormGuardState.STORM
 
         # All inputs at zero — would normally return NORMAL
-        result = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        result = guard.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.STORM
         assert guard.state == StormGuardState.STORM
 
@@ -169,7 +169,7 @@ class TestReportFeatureRecovery:
         assert guard._feature_failure_active is False
 
         # Now drawdown_bps=-60 is WARM range — should de-escalate to WARM
-        result = guard.update(drawdown_bps=-60, latency_us=0, feed_gap_s=0.0)
+        result = guard.update(order_rtt_us=1_500_000, latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.WARM
         assert guard.state == StormGuardState.WARM
 
@@ -292,5 +292,5 @@ class TestMarketDataServiceFeatureEscalation:
         # update() with clear inputs de-escalates via hysteresis
         guard._storm_cooldown_s = 0.0
         guard._de_escalate_threshold = 1
-        guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+        guard.update(latency_us=0, feed_gap_s=0)
         assert guard.state == StormGuardState.NORMAL

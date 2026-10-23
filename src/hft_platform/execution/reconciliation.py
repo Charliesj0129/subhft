@@ -464,11 +464,7 @@ class ReconciliationService:
             # preventing "dictionary changed size during iteration" from concurrent fills.
             local_map: Dict[str, int] = {}
             per_strategy_map: Dict[str, Dict[str, int]] = {}  # strategy_id -> {symbol: qty}
-            snapshot = (
-                self.store.snapshot_positions()
-                if hasattr(self.store, "snapshot_positions")
-                else dict(self.store.positions)
-            )
+            snapshot, recovery = self._local_snapshot()
             fill_gen_after = getattr(self.store, "fill_generation", None)
 
             # A partial broker snapshot is untrustworthy for the same reason.
@@ -500,7 +496,6 @@ class ReconciliationService:
             }
             live_account_symbols = {(acct, symbol) for acct, _strat, symbol in live_keys if acct and symbol}
 
-            recovery = getattr(self.store, "_recovery_positions", None)
             if recovery:
                 for rkey, rdata in recovery.items():
                     if not isinstance(rdata, dict):
@@ -1083,6 +1078,29 @@ class ReconciliationService:
                 continue
         return result
 
+    def _local_snapshot(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        """Live positions and parked recovery lots, read under ONE ``_fill_lock``.
+
+        Reading ``_recovery_positions`` after a separate ``snapshot_positions()``
+        could miss a lot from both: the first fill for its key moves it from
+        recovery into positions between the two reads, and the drift check then
+        counts it as absent locally.
+        """
+        both = getattr(self.store, "snapshot_positions_with_recovery", None)
+        if callable(both):
+            result = both()
+            if isinstance(result, tuple) and len(result) == 2:
+                positions, recovery = result
+                if isinstance(positions, dict) and isinstance(recovery, dict):
+                    return positions, recovery
+        snapshot = (
+            self.store.snapshot_positions()
+            if hasattr(self.store, "snapshot_positions")
+            else dict(getattr(self.store, "positions", {}))
+        )
+        recovery_raw = getattr(self.store, "_recovery_positions", None)
+        return snapshot, dict(recovery_raw) if isinstance(recovery_raw, dict) else {}
+
     def _resolve_clear_strategy_scope(self, symbol: str, expected_local_qty: int) -> str | None:
         """Return a ``strategy_id`` to scope ``clear_symbol_positions`` to.
 
@@ -1094,11 +1112,7 @@ class ReconciliationService:
         """
         manual_qty = 0
         other_qty = 0
-        snapshot = (
-            self.store.snapshot_positions()
-            if hasattr(self.store, "snapshot_positions")
-            else dict(getattr(self.store, "positions", {}))
-        )
+        snapshot, recovery = self._local_snapshot()
         for pos in snapshot.values():
             if getattr(pos, "symbol", None) != symbol:
                 continue
@@ -1109,7 +1123,7 @@ class ReconciliationService:
                 manual_qty += qty
             else:
                 other_qty += qty
-        for rdata in (getattr(self.store, "_recovery_positions", {}) or {}).values():
+        for rdata in recovery.values():
             if not isinstance(rdata, dict) or rdata.get("symbol") != symbol:
                 continue
             qty = int(rdata.get("net_qty", 0) or 0)

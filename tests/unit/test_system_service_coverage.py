@@ -679,7 +679,7 @@ class TestPnlSnapshotExporter:
         sys_obj.position_store.total_pnl = 1000
         sys_obj.position_store._peak_equity_scaled = 2000
         sys_obj.position_store.get_drawdown_pct.return_value = 0.01
-        sys_obj.position_store.positions = {"TXFD6": pos}
+        sys_obj.position_store.snapshot_open_positions.return_value = {"TXFD6": pos}
 
         # Run one iteration then stop
         iteration = 0
@@ -721,7 +721,7 @@ class TestPnlSnapshotExporter:
         sys_obj.position_store.total_pnl = 1000
         sys_obj.position_store._peak_equity_scaled = 2000
         sys_obj.position_store.get_drawdown_pct.return_value = 0.01
-        sys_obj.position_store.positions = {"TXFD6": pos}
+        sys_obj.position_store.snapshot_open_positions.return_value = {"TXFD6": pos}
 
         iteration = 0
         original_sleep = asyncio.sleep
@@ -776,19 +776,6 @@ class TestIterSupervisedServicesRecorderBridge:
         services = sys_obj._iter_supervised_services()
         names = [s[0] for s in services]
         assert "autonomy_monitor" in names
-
-
-# ===========================================================================
-# _get_drawdown_pct — base_capital=0 edge case
-# ===========================================================================
-
-
-class TestGetDrawdownPctEdge:
-    def test_returns_zero_when_base_capital_is_zero(self):
-        ps = SimpleNamespace(total_pnl=-100_000)
-        settings = {"base_capital": 0}
-        result = HFTSystem._get_drawdown_pct(ps, settings)
-        assert result == 0.0
 
 
 # ===========================================================================

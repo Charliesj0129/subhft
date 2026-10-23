@@ -208,7 +208,7 @@ class PositionStore:
         # Offsets to add to Rust-returned rpnl/fees (keyed by position key "acc:strat:sym")
         self._recovery_rpnl_offsets: Dict[str, int] = {}
         self._recovery_fees_offsets: Dict[str, int] = {}
-        # Portfolio-level tracking for StormGuard drawdown
+        # Portfolio-level tracking (exported drawdown gauge, checkpoint aggregates)
         self._peak_equity_scaled: int = 0  # High watermark of total realized PnL
         #: TAIFEX trading date the high-watermark above belongs to. Empty
         #: until the first drawdown read, so ``StartupReconciler`` -- which
@@ -253,21 +253,6 @@ class PositionStore:
         # This is the 1 Hz supervisor read, off the fill hot path.
         self._publish_drawdown_gauge(drawdown)
         return drawdown
-
-    def get_drawdown_ntd(self) -> float:
-        """Realised PnL given back from today's high-watermark, in NTD (>= 0).
-
-        The fraction ``get_drawdown_pct`` returns divides by the high-watermark
-        itself, so the same loss reads as a different drawdown depending on how
-        much was won first: on THESHOW 2026-10-05 a 4,620 NTD give-back read as
-        1.61% and set StormGuard to STORM, while an account that opens the day
-        losing never arms the gate at all (peak below ``_MIN_PEAK_SCALED``).
-        An absolute amount has neither problem and needs no cold-start guard.
-        """
-        with self._fill_lock:
-            self._roll_peak_equity_if_new_day_locked()
-            given_back = self._peak_equity_scaled - self._total_realized_pnl_scaled
-        return max(given_back, 0) / _PNL_SCALE
 
     def _publish_drawdown_gauge(self, drawdown: float) -> None:
         """Export the drawdown the risk path just read. Never raises."""
@@ -385,7 +370,7 @@ class PositionStore:
         full-recompute branch, which sums positions + recovery + this bank. Any
         realized PnL none of those three carries vanishes at that moment, while
         the peak keeps it, and the gap is reported as drawdown that never
-        happened -- to ``get_drawdown_pct``, which is StormGuard's input.
+        happened -- to ``get_drawdown_pct``, the exported drawdown gauge.
 
         ``_evicted_realized_pnl_scaled`` is already the term for realized PnL
         whose position is gone (the cardinality cap and ``clear_symbol_positions``
@@ -396,7 +381,7 @@ class PositionStore:
         reinstates positions carrying *more* realized PnL than the checkpoint
         recorded, the bank goes negative and the total is still exactly the
         checkpoint's. Clamping would trade that exactness for a nicer-looking
-        field, and the total is the number StormGuard acts on.
+        field, and the total is the number the checkpoint and the gauge report.
 
         Returns the banked amount.
         """
@@ -584,37 +569,46 @@ class PositionStore:
             self._fill_generation += 1
             # Merge recovery position on first fill for this key.
             # Priority: account:strategy:symbol → account:symbol → suffix search.
-            recovery = self._recovery_positions.pop(
-                f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}",
-                None,
-            )
-            if recovery is None:
-                recovery = self._recovery_positions.pop(
-                    f"{fill.account_id}:{fill.symbol}",
-                    None,
-                )
-            # Fallback: recovery may have been stored with a different account_id
-            # domain (e.g., broker_id "shioaji" vs actual account "F123456").
-            # Search by symbol suffix when exact key misses.
-            if recovery is None and self._recovery_positions:
-                suffix = f":{fill.symbol}"
-                for k in list(self._recovery_positions):
-                    if k.endswith(suffix):
-                        recovery = self._recovery_positions.pop(k)
-                        logger.info(
-                            "recovery_position_matched_by_symbol",
-                            recovery_key=k,
-                            fill_account=fill.account_id,
-                            symbol=fill.symbol,
-                        )
-                        break
-            if recovery is not None and key not in self.positions:
+            # Only a key with no live position takes one: seeding never runs on
+            # an existing position, so popping for it dropped the recovered lot.
+            recovery = None
+            if key not in self.positions:
+                recovery = self._pop_recovery_for(fill)
+            if recovery is not None:
                 self._seed_from_recovery(key, fill, recovery)
 
             if self._rust_tracker is not None:
                 return self._on_fill_rust(fill, key)
 
             return self._on_fill_python(fill, key)
+
+    def _pop_recovery_for(self, fill: FillEvent) -> Dict[str, Any] | None:
+        """Take the recovered lot that belongs to *fill*'s strategy, if any. Caller holds ``_fill_lock``."""
+        recovery = self._recovery_positions.pop(f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", None)
+        if recovery is None:
+            recovery = self._recovery_positions.pop(f"{fill.account_id}:{fill.symbol}", None)
+        if recovery is not None or not self._recovery_positions:
+            return recovery
+        # Fallback: recovery may have been stored with a different account_id
+        # domain (e.g., broker_id "shioaji" vs actual account "F123456").
+        # Search by symbol suffix when exact key misses -- but never take a lot
+        # recorded under ANOTHER strategy: that strategy's quantity would move
+        # to this one and vanish from its own book.
+        suffix = f":{fill.symbol}"
+        for k, rdata in self._recovery_positions.items():
+            if not k.endswith(suffix):
+                continue
+            owner = str(rdata.get("strategy_id", "") or "") if isinstance(rdata, dict) else ""
+            if owner and owner != fill.strategy_id:
+                continue
+            logger.info(
+                "recovery_position_matched_by_symbol",
+                recovery_key=k,
+                fill_account=fill.account_id,
+                symbol=fill.symbol,
+            )
+            return self._recovery_positions.pop(k)
+        return None
 
     async def on_fill_async(self, fill: FillEvent) -> PositionDelta:
         """Async-friendly version that runs fill processing in a thread pool.

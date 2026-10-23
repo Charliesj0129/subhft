@@ -14,14 +14,41 @@ from hft_platform.risk.drift_burst_detector import DriftBurstDetector
 
 logger = get_logger("risk.storm_guard")
 
-__all__ = ["StormGuard", "StormGuardState", "RiskThresholds"]
+__all__ = ["StormGuard", "StormGuardState", "RiskThresholds", "halt_reason_label"]
+
+# Distinct ``stormguard_halt_reason`` labels a process may create. trigger_halt
+# reasons come from ~20 call sites; anything past the cap is "other".
+_HALT_REASON_LABEL_CAP = 32
+_HALT_REASON_LABEL_MAX_LEN = 48
+_halt_reason_labels_seen: set[str] = set()
+
+
+def halt_reason_label(reason: str) -> str:
+    """Bounded metric label for a trigger_halt reason.
+
+    The text before the first ':' names the cause ("KILL_SWITCH_FILE",
+    "raw_queue_sustained_drops"); what follows is per-incident detail (counts,
+    file contents) that would make every HALT a new series.
+    """
+    label = str(reason).split(":", 1)[0].strip()[:_HALT_REASON_LABEL_MAX_LEN] or "unspecified"
+    if label in _halt_reason_labels_seen:
+        return label
+    if len(_halt_reason_labels_seen) >= _HALT_REASON_LABEL_CAP:
+        return "other"
+    _halt_reason_labels_seen.add(label)
+    return label
 
 
 @dataclass(slots=True)
 class RiskThresholds:
-    warm_drawdown_bps: int = -50  # -0.5% = -50 bps
-    storm_drawdown_bps: int = -100  # -1.0% = -100 bps
-    halt_drawdown_bps: int = -200  # -2.0% = -200 bps
+    # No PnL input. StormGuard grades platform health -- loop lag, order RTT,
+    # feed gap, component failure, book toxicity -- and nothing else. Money is
+    # judged in one place, ``DailyLossLimitValidator``, as the trading day's net
+    # change. The drawdown ladder that used to sit here (-50/-100/-200 bps of a
+    # 200,000 NTD reference, i.e. 1,000/2,000/4,000 NTD given back from the
+    # day's realised peak) was a second definition of the same loss: it put
+    # R47 in STORM on 2026-10-22 16:03Z while the day was 1,270 NTD up, and
+    # its HALT rung sat below the 15,000 NTD daily limit the operator set.
 
     # Event-loop congestion. The supervisor is the only producer. It used to
     # pass ``lag_s * 1e6`` -- its own tick period minus the sleep, which is loop
@@ -89,11 +116,6 @@ class RiskThresholds:
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
-    # Seconds a drawdown-driven STORM must hold before a *flat* strategy may
-    # open again. 0 disables the release entirely, restoring the pre-2026-09-08
-    # behaviour. See ``_drawdown_flat_release_due`` for why this exists at all.
-    drawdown_flat_release_after_s: float = 300.0
-
 
 class StormGuard:
     """
@@ -147,12 +169,12 @@ class StormGuard:
         "_warm_reescalation_cooldown_s",
         "_reconciliation_hold",
         # Blocks HALT de-escalation while the daily loss limit is latched.
-        # ``update()`` derives its target state from drawdown/latency/feed-gap
+        # ``update()`` derives its target state from latency/feed-gap health
         # only, so "we stopped for the day" is a reason it cannot see.
         "_daily_loss_hold",
         # Blocks HALT de-escalation while the emergency kill-switch latch is
         # the reason for the halt. Same shape, same reason as the two above:
-        # ``update()`` sees drawdown/latency/feed-gap, and "an operator or a
+        # ``update()`` sees latency/feed-gap health, and "an operator or a
         # startup safety gate refused this process" is not among them.
         "_kill_switch_hold",
         # Blocks HALT de-escalation while any durable manual latch
@@ -180,6 +202,15 @@ class StormGuard:
         # ``observe_order_rtt_us`` for why it is not evaluated where it is
         # measured.
         "_order_rtt_peak_us",
+        # Why the current HALT was entered. ``update()`` can no longer compute
+        # HALT, so ``_target_state_reason`` never names one; this does.
+        "_halt_reason",
+        # ``stormguard_halt_reason`` label currently set to 1, so leaving HALT
+        # can clear exactly that one. Touched only by _emit_pending_transition,
+        # under _halt_label_lock: trigger_halt runs on any thread, and two
+        # interleaved HALT emits could each leave their label at 1.
+        "_halt_reason_label",
+        "_halt_label_lock",
     )
 
     def __init__(
@@ -267,6 +298,9 @@ class StormGuard:
         self._inflight_dispatch_tickets: dict[int, dict[str, Any]] = {}
         self._next_ticket_id: int = 0
         self._order_rtt_peak_us: int = 0
+        self._halt_reason: str = ""
+        self._halt_reason_label: str = ""
+        self._halt_label_lock = threading.Lock()
         #: Reason string for the state ``_evaluate_target_state`` last computed,
         #: refreshed every ``update()`` rather than only on a transition. The
         #: transition log records why STORM was *entered*; a gate needs to know
@@ -303,9 +337,6 @@ class StormGuard:
         with self._state_lock:
             risk_cfg = config.get("risk", config.get("global_defaults", {}))
             for key in (
-                "warm_drawdown_bps",
-                "storm_drawdown_bps",
-                "halt_drawdown_bps",
                 "latency_warm_us",
                 "latency_storm_us",
                 "order_rtt_warm_us",
@@ -313,8 +344,6 @@ class StormGuard:
             ):
                 if key in risk_cfg:
                     setattr(self.thresholds, key, int(risk_cfg[key]))
-            if "drawdown_flat_release_after_s" in risk_cfg:
-                self.thresholds.drawdown_flat_release_after_s = float(risk_cfg["drawdown_flat_release_after_s"])
             if "feed_gap_storm_s" in risk_cfg:
                 self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
             self._apply_env_overrides()
@@ -343,13 +372,6 @@ class StormGuard:
                     var="HFT_STORMGUARD_FEED_GAP_STORM_S",
                     value=feed_gap_storm,
                 )
-
-        flat_release = os.getenv("HFT_STORMGUARD_DRAWDOWN_FLAT_RELEASE_S")
-        if flat_release:
-            try:
-                self.thresholds.drawdown_flat_release_after_s = float(flat_release)  # precision-time
-            except ValueError:
-                logger.warning("Invalid HFT_STORMGUARD_DRAWDOWN_FLAT_RELEASE_S", value=flat_release)
 
         latency_storm = os.getenv("HFT_STORMGUARD_LATENCY_STORM_US")
         if latency_storm:
@@ -508,22 +530,21 @@ class StormGuard:
 
     def _evaluate_target_state(
         self,
-        drawdown_bps: int,
         latency_us: int,
         feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
         order_rtt_us: int = 0,
     ) -> tuple[StormGuardState, str]:
-        """Determine target state from inputs. Priority: HALT > STORM > WARM > NORMAL.
+        """Determine target state from health inputs. Priority: STORM > WARM > NORMAL.
+
+        Never HALT: no health input is evidence that the book must stop, only
+        that new risk should wait. HALT comes from ``trigger_halt`` (daily loss,
+        kill switch, reconciliation, session lease), each with its own hold.
 
         ``latency_us`` is event-loop lag; ``order_rtt_us`` is broker round-trip.
         They are two quantities two orders of magnitude apart and each has its
         own threshold pair — one number cannot serve both.
         """
         t = self.thresholds
-        if drawdown_bps <= t.halt_drawdown_bps:
-            return StormGuardState.HALT, f"Drawdown {drawdown_bps}bps"
-        if drawdown_bps <= t.storm_drawdown_bps:
-            return StormGuardState.STORM, f"Drawdown {drawdown_bps}bps"
         if latency_us >= t.latency_storm_us:
             return StormGuardState.STORM, f"Latency {latency_us}us"
         # 0 = unarmed, and must stay unarmed: a bare `>=` would escalate on
@@ -532,9 +553,9 @@ class StormGuard:
             return StormGuardState.STORM, f"Order RTT {order_rtt_us}us"
         if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
-        # Component failure holds STORM regardless of drawdown/latency WARM thresholds.
+        # Component failure holds STORM regardless of the latency WARM thresholds.
         # Must be checked before WARM returns so that STORM persists even when
-        # drawdown/latency are in the WARM range (not STORM range).
+        # latency is in the WARM range (not STORM range).
         norm_fail = self._norm_failure_active
         feat_fail = self._feature_failure_active
         if norm_fail or feat_fail:
@@ -543,8 +564,6 @@ class StormGuard:
             if norm_fail:
                 return StormGuardState.STORM, "Normalizer failure active"
             return StormGuardState.STORM, "FeatureEngine failure active"
-        if drawdown_bps <= t.warm_drawdown_bps:
-            return StormGuardState.WARM, "Drawdown Warning"
         if latency_us >= t.latency_warm_us:
             return StormGuardState.WARM, "Latency Warning"
         if t.order_rtt_warm_us > 0 and order_rtt_us >= t.order_rtt_warm_us:
@@ -553,7 +572,7 @@ class StormGuard:
 
     def update(
         self,
-        drawdown_bps: int = 0,
+        *,
         latency_us: int = 0,
         feed_gap_s: float = 0.0,  # precision-ok
         order_rtt_us: int = 0,
@@ -562,7 +581,6 @@ class StormGuard:
         Evaluate inputs and transition state.
 
         Args:
-            drawdown_bps: Drawdown in basis points (1 bps = 0.01% = 0.0001).
             latency_us: Event-loop lag in microseconds (platform health).
             feed_gap_s: Feed gap in seconds.
             order_rtt_us: Broker order round-trip in microseconds (trading-path
@@ -578,7 +596,7 @@ class StormGuard:
             order_rtt_us = peak_rtt_us
         self._observe_latency_input("loop_lag", latency_us)
         self._observe_latency_input("order_rtt", order_rtt_us)
-        new_state, reason = self._evaluate_target_state(drawdown_bps, latency_us, feed_gap_s, order_rtt_us)
+        new_state, reason = self._evaluate_target_state(latency_us, feed_gap_s, order_rtt_us)
         self._target_state_reason = reason
 
         # Transition Logic (with hysteresis protection for de-escalation)
@@ -635,7 +653,7 @@ class StormGuard:
                     return current_state
                 # Daily-loss hold: the same shape as the reconciliation hold,
                 # for the same reason. ``_evaluate_target_state`` sees only
-                # drawdown/latency/feed-gap, so once the daily loss limit
+                # latency/feed-gap health, so once the daily loss limit
                 # latches, a market-clean tick computes NORMAL and de-escalates
                 # -- and ``RiskEngine._check_daily_loss_halt`` immediately
                 # re-halts from the still-latched validator flag. Observed in
@@ -842,15 +860,16 @@ class StormGuard:
         # toxicity remains elevated. Production 2026-04-28 flap saw scores
         # of 0.503/0.509/0.514 hovering just above 0.5 — the band rules out
         # the oscillation.
+        #
+        # Capped at WARM (CAUTION), 2026-10-23. Toxicity is a research signal
+        # about the book, not evidence about the platform or the account; it
+        # used to reach STORM above 0.8 and HALT above 0.9 on its own, which let
+        # a market statistic stop the maker. WARM blocks nothing in
+        # ``_validate_locked``: it is visible on the mode gauge and the audit
+        # log, and strategies may read it.
         target: StormGuardState | None
         reason = ""
-        if result.burst_detected and result.toxicity_score > 0.9:
-            target = StormGuardState.HALT
-            reason = f"DriftBurst HALT: toxicity={result.toxicity_score:.3f}"
-        elif result.toxicity_score > 0.8:
-            target = StormGuardState.STORM
-            reason = f"DriftBurst STORM: toxicity={result.toxicity_score:.3f}"
-        elif result.toxicity_score > self._warm_toxicity_entry:
+        if result.toxicity_score > self._warm_toxicity_entry:
             target = StormGuardState.WARM
             reason = f"DriftBurst WARM: toxicity={result.toxicity_score:.3f}"
         elif self.state == StormGuardState.WARM and result.toxicity_score > self._warm_toxicity_exit:
@@ -881,7 +900,7 @@ class StormGuard:
                 return current_state
             # WARM re-escalation cooldown: suppress if we recently de-escalated
             # from WARM. Prevents 58/58 flip-flop when toxicity oscillates near
-            # the 0.5 boundary. Higher states (STORM/HALT) bypass this guard.
+            # the 0.5 boundary.
             if (
                 target == StormGuardState.WARM
                 and self.state < StormGuardState.WARM
@@ -893,14 +912,9 @@ class StormGuard:
                 self._de_escalate_count = 0
                 # P4 (2026-04-28): mirror update()'s WARM-entry timestamp so
                 # WARM cooldown is enforced regardless of which entry path
-                # (drawdown/latency/feed-gap via update() vs. drift-burst
+                # (latency/feed-gap via update() vs. drift-burst
                 # toxicity via update_with_lob()) raised the alarm.
-                if target >= StormGuardState.WARM and self.state < StormGuardState.WARM:
-                    self._warm_entry_ts = now
-                if target >= StormGuardState.STORM and self.state < StormGuardState.STORM:
-                    self._storm_entry_ts = now
-                if target == StormGuardState.HALT:
-                    self._halt_entry_ts = now
+                self._warm_entry_ts = now
                 _, fire_callback = self._transition(target, reason)
                 logger.info(
                     "StormGuard drift_burst escalation",
@@ -996,6 +1010,19 @@ class StormGuard:
                 self.metrics.stormguard_mode.labels(strategy="system").set(new_state_int)
             except Exception as exc:
                 logger.warning("stormguard_metric_update_failed", metric="mode", error=str(exc))
+
+            if StormGuardState.HALT in (new_state_int, old_state_int):
+                try:
+                    gauge = self.metrics.stormguard_halt_reason
+                    with self._halt_label_lock:
+                        if self._halt_reason_label:
+                            gauge.labels(reason=self._halt_reason_label).set(0)
+                            self._halt_reason_label = ""
+                        if new_state_int == StormGuardState.HALT:
+                            self._halt_reason_label = halt_reason_label(entry["reason"])
+                            gauge.labels(reason=self._halt_reason_label).set(1)
+                except Exception as exc:
+                    logger.warning("stormguard_metric_update_failed", metric="halt_reason", error=str(exc))
 
             try:
                 self.metrics.stormguard_transitions_total.labels(direction=direction).inc()
@@ -1123,6 +1150,7 @@ class StormGuard:
             self._halt_entry_ts = now
             self._de_escalate_count = 0
             _, fire_callback = self._transition(StormGuardState.HALT, reason)
+            self._halt_reason = reason
             # H1: notify in-flight dispatches of the transition.
             for ticket in self._inflight_dispatch_tickets.values():
                 ticket["halted"] = True
@@ -1165,12 +1193,6 @@ class StormGuard:
             if intent.intent_type in (IntentType.NEW, IntentType.AMEND):
                 if self._intent_reduces_position(intent):
                     return True, "STORM_REDUCE_ONLY"
-                if self._drawdown_flat_release_due(intent):
-                    try:
-                        self.metrics.stormguard_drawdown_flat_release_total.inc()
-                    except Exception:  # noqa: BLE001 - never break the gate on metrics
-                        pass
-                    return True, "STORM_DRAWDOWN_FLAT_RELEASE"
                 if intent.strategy_id in self._halt_exempt_strategies:
                     logger.warning(
                         "stormguard_storm_exempt_bypass",
@@ -1273,65 +1295,6 @@ class StormGuard:
         signed = int(intent.qty if intent.side == Side.BUY else -intent.qty)
         return abs(current + signed) < abs(current)
 
-    def _drawdown_flat_release_due(self, intent: OrderIntent) -> bool:
-        """True when a *flat* strategy may open again under a drawdown STORM.
-
-        A drawdown STORM is the one STORM cause that can outlive its own
-        evidence. The drawdown is measured against a high-watermark of realised
-        PnL, so the only input that can lower it is a fill -- and STORM permits
-        nothing but ``_intent_reduces_position``, which a flat strategy can
-        never satisfy. The gate therefore freezes the number it is reading:
-
-            drawdown >= storm_drawdown_bps -> STORM
-                -> flat, so no intent reduces -> all blocked
-                -> no fills -> realised PnL frozen -> drawdown frozen
-                -> X  no exit
-
-        Observed on THESHOW 2026-09-08: STORM held for 8 h 29 min with
-        ``portfolio_drawdown_pct`` reporting one value to four decimal places
-        the entire time, across 2,346 ``STORMGUARD_STORM_BLOCKED`` rejections.
-        A restart would not have cleared it -- the watermark is checkpointed.
-
-        ``DailyLossLimitValidator._evaluate_soft_limit`` already carries this
-        release for the same deadlock in the soft-limit gate (Bug #39): flat
-        plus cooldown re-opens, and the reduce-only rule takes over the moment
-        the strategy is exposed again. Same shape here.
-
-        What the release does *not* give up:
-
-        * **Only a drawdown STORM.** A feed-gap, latency, order-RTT or
-          component-failure STORM says the platform is unhealthy, and opening
-          new risk into that stays blocked. ``_target_state_reason`` is the
-          live reason, refreshed each ``update()``, not the one STORM was
-          entered on.
-        * **Only while strictly flat.** Exposure is bounded to whatever one
-          order opens; every adding order is blocked again immediately, because
-          the strategy is no longer flat.
-        * **Only after a cooldown**, so a transient drawdown still stops
-          trading for ``drawdown_flat_release_after_s``.
-        * **HALT is untouched.** ``halt_drawdown_bps`` still hard-stops.
-        * **Fail-closed** on a missing or raising position provider: without a
-          position it cannot be proven flat, so it stays blocked.
-        """
-        after_s = self.thresholds.drawdown_flat_release_after_s
-        if after_s <= 0:
-            return False
-        if not self._target_state_reason.startswith("Drawdown"):
-            return False
-        entered = self._storm_entry_ts
-        if entered <= 0.0 or (time.monotonic() - entered) < after_s:
-            return False
-        # Two provider reads on this path (``_intent_reduces_position`` took the
-        # first) -- it is the rejection path, and one implementation of "what is
-        # the position" is worth more than the saved dict lookup.
-        provider = self._position_provider
-        if provider is None:
-            return False
-        try:
-            return int(provider(intent.symbol, intent.strategy_id) or 0) == 0
-        except Exception:  # noqa: BLE001 - cannot prove flat, so stay blocked
-            return False
-
     def set_session_active(self, active: bool) -> None:
         """Inform StormGuard whether any trading session is currently open.
 
@@ -1375,7 +1338,7 @@ class StormGuard:
         """Clear feature-failure flag after FeatureEngine recovers.
 
         Does NOT transition state directly — the next ``update()`` cycle will
-        re-evaluate all conditions (latency, drawdown, feed gap) and
+        re-evaluate all conditions (latency, order RTT, feed gap) and
         de-escalate only if ALL reasons have cleared.  This prevents the bug
         where feature recovery incorrectly de-escalates STORM caused by
         multiple concurrent conditions.
@@ -1398,7 +1361,7 @@ class StormGuard:
                 return
             self._feature_failure_active = False
             # Don't transition — let update() handle de-escalation so that
-            # other active STORM conditions (latency, drawdown) are respected.
+            # other active STORM conditions (latency, feed gap) are respected.
         logger.info("feature_engine_recovered_flag_cleared")
 
     def report_norm_failure(self, count: int) -> None:
@@ -1520,8 +1483,28 @@ class StormGuard:
         for. Reads the live value, which is the one the gate acts on: on
         2026-09-08 a HALT logged for four hours as ``Drawdown -233bps`` while
         the exported drawdown gauge read something else entirely.
+
+        In HALT the entry reason alone can mislead: a HALT entered for one cause
+        can later be held by another (the daily hard limit tripping during a
+        queue-drop HALT never calls ``trigger_halt`` again), so the active holds
+        are named too.
         """
-        return self._target_state_reason
+        if self.state != StormGuardState.HALT:
+            return self._target_state_reason
+        holds = [
+            name
+            for name, held in (
+                ("kill_switch", self._kill_switch_hold),
+                ("manual_latch", self._manual_latch_hold),
+                ("reconciliation", self._reconciliation_hold),
+                ("daily_loss", self._daily_loss_hold),
+            )
+            if held
+        ]
+        reason = self._halt_reason or self._target_state_reason
+        if holds:
+            return f"{reason} (held by {'+'.join(holds)})"
+        return reason
 
     def set_daily_loss_hold(self, hold: bool) -> None:
         """Set or clear the daily-loss hold on HALT de-escalation.

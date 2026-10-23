@@ -40,7 +40,7 @@ class TestTriggerStorm:
         assert self.guard.state == StormGuardState.STORM
 
     def test_trigger_storm_from_warm(self):
-        self.guard.update(drawdown_bps=-60)  # -> WARM
+        self.guard.update(order_rtt_us=1_500_000)  # -> WARM
         assert self.guard.state == StormGuardState.WARM
         self.guard.trigger_storm("queue_backpressure")
         assert self.guard.state == StormGuardState.STORM

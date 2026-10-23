@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -47,6 +47,19 @@ from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService, _get_trace_sampler
 
 # ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _queue_gate(api_queue):
+    """Stand-in for ``OrderAdapter.execute``: enqueue, False when the queue is full."""
+
+    async def _execute(cmd):
+        try:
+            api_queue.put_nowait(cmd)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    return AsyncMock(side_effect=_execute)
 
 
 def _make_intent(
@@ -116,6 +129,7 @@ def _build_service(
 
     order_adapter = MagicMock()
     order_adapter._api_queue = api_q
+    order_adapter.execute = _queue_gate(api_q)
     order_adapter._supports_typed_command_ingress = False
 
     storm_guard = MagicMock()
@@ -535,8 +549,8 @@ async def test_risk_rejection_skips_exposure_release_for_cancel():
 
 
 @pytest.mark.asyncio
-async def test_queue_full_releases_exposure():
-    """ORDER_QUEUE_FULL rejection releases exposure reservation."""
+async def test_order_gate_refusal_commits_dedup_without_gateway_feedback():
+    """An order-gate refusal commits dedup as rejected; the gate, not the gateway, sends feedback."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     rejection_sink = asyncio.Queue(maxsize=64)
     svc, api_q = _build_service(channel=ch, approve=True, queue_full=True, rejection_sink=rejection_sink)
@@ -549,9 +563,8 @@ async def test_queue_full_releases_exposure():
     rec = svc._dedup.check_or_reserve("qfull-exp-key")
     assert rec is not None
     assert rec.approved is False
-    assert rec.reason_code == "ORDER_QUEUE_FULL"
-    # Feedback sent
-    assert rejection_sink.qsize() == 1
+    assert rec.reason_code == "ORDER_GATE_REJECT"
+    assert rejection_sink.qsize() == 0
 
 
 # ── _on_channel_ttl_expired (lines 645-659) ──────────────────────────────

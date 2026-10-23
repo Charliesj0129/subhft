@@ -62,6 +62,15 @@ class ShioajiClientFacade:
         self._client.api = value
 
     @property
+    def mode(self) -> str:
+        """``"simulation"`` or ``"real"``: which Shioaji server this client logs in to.
+
+        Read by ``OrderAdapter._order_mode_refusal`` so a sim engine refuses to
+        send through a real session.
+        """
+        return str(getattr(self._client, "mode", ""))
+
+    @property
     def logged_in(self) -> bool:
         return bool(self._client.logged_in)
 

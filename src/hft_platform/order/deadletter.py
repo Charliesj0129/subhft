@@ -54,6 +54,7 @@ class RejectionReason(str, Enum):
     AMEND_TARGET_NOT_FOUND = "amend_target_not_found"
     AMEND_TARGET_PENDING = "amend_target_pending"
     AMEND_TARGET_TERMINAL = "amend_target_terminal"
+    ORDER_MODE = "order_mode"
     UNKNOWN = "unknown"
 
 
