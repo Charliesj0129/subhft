@@ -108,14 +108,14 @@ class TestStormGuardValidateHaltExempt:
         """Exempt strategies also bypass STORM NEW blocking."""
         halt_exempt_guard._halt_cooldown_s = 0.0
         halt_exempt_guard._de_escalate_threshold = 1
-        halt_exempt_guard.update(drawdown_bps=-110)  # STORM level
+        halt_exempt_guard.update(order_rtt_us=2_500_000)  # STORM level
         intent = _make_intent(strategy_id="spike_fader")
         allowed, reason = halt_exempt_guard.validate(intent)
         assert allowed is True
 
     def test_non_exempt_new_blocked_in_storm(self, mock_metrics):
         guard = StormGuard(halt_exempt_strategies=frozenset({"spike_fader"}))
-        guard.update(drawdown_bps=-110)
+        guard.update(order_rtt_us=2_500_000)
         assert guard.state == StormGuardState.STORM
         intent = _make_intent(strategy_id="other_strat", intent_type=IntentType.NEW)
         allowed, reason = guard.validate(intent)

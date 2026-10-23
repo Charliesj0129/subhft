@@ -22,7 +22,7 @@ class TestStormGuard(unittest.TestCase):
 
     def test_transition_to_warm(self):
         # Drawdown -60 bps (< -50 bps) -> WARM
-        state = self.guard.update(drawdown_bps=-60)
+        state = self.guard.update(order_rtt_us=1_500_000)
         self.assertEqual(state, StormGuardState.WARM)
         self.assertEqual(self.guard.state, StormGuardState.WARM)
 
@@ -37,9 +37,9 @@ class TestStormGuard(unittest.TestCase):
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_priority(self):
-        # Halt condition AND Storm condition -> Should be HALT
-        state = self.guard.update(drawdown_bps=-1000, latency_us=20000)
-        self.assertEqual(state, StormGuardState.HALT)
+        # STORM and WARM conditions together -> STORM; no health input reaches HALT
+        state = self.guard.update(latency_us=20000, order_rtt_us=1_500_000)
+        self.assertEqual(state, StormGuardState.STORM)
 
     def test_manual_halt(self):
         self.guard.trigger_halt("Manual")
@@ -52,7 +52,7 @@ class TestStormGuard(unittest.TestCase):
         self.guard._halt_cooldown_s = 0.0
         self.guard._de_escalate_threshold = 1
         # Update with safe values
-        state = self.guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+        state = self.guard.update(latency_us=0, feed_gap_s=0)
         self.assertEqual(state, StormGuardState.NORMAL)
         self.assertTrue(self.guard.is_safe())
 
@@ -74,34 +74,29 @@ def guard():
 def test_reload_thresholds_updates_risk_sub_dict(guard):
     config = {
         "risk": {
-            "warm_drawdown_bps": -30,
-            "storm_drawdown_bps": -80,
-            "halt_drawdown_bps": -150,
             "latency_warm_us": 3000,
             "latency_storm_us": 10000,
             "feed_gap_storm_s": 2.5,
         }
     }
     guard.reload_thresholds(config)
-    assert guard.thresholds.warm_drawdown_bps == -30
-    assert guard.thresholds.storm_drawdown_bps == -80
-    assert guard.thresholds.halt_drawdown_bps == -150
     assert guard.thresholds.latency_warm_us == 3000
     assert guard.thresholds.latency_storm_us == 10000
     assert guard.thresholds.feed_gap_storm_s == 2.5
 
 
 def test_reload_thresholds_falls_back_to_global_defaults_key(guard):
-    config = {"global_defaults": {"warm_drawdown_bps": -25}}
+    config = {"global_defaults": {"latency_warm_us": 2500}}
     guard.reload_thresholds(config)
-    assert guard.thresholds.warm_drawdown_bps == -25
+    assert guard.thresholds.latency_warm_us == 2500
 
 
 def test_reload_thresholds_ignores_unknown_keys(guard):
     """reload_thresholds with no matching keys leaves thresholds unchanged."""
-    original_warm = guard.thresholds.warm_drawdown_bps
-    guard.reload_thresholds({"risk": {"unknown_key": 999}})
-    assert guard.thresholds.warm_drawdown_bps == original_warm
+    original_warm = guard.thresholds.latency_warm_us
+    guard.reload_thresholds({"risk": {"unknown_key": 999, "halt_drawdown_bps": -1}})
+    assert guard.thresholds.latency_warm_us == original_warm
+    assert not hasattr(guard.thresholds, "halt_drawdown_bps")
 
 
 # ── _apply_env_overrides ────────────────────────────────────────────────────
@@ -187,7 +182,7 @@ def test_apply_env_override_latency_warm_invalid(monkeypatch):
 
 def test_evaluate_target_state_storm_drawdown_path(guard):
     """Drawdown between storm and halt threshold triggers STORM, not HALT."""
-    state = guard.update(drawdown_bps=-110)  # storm=-100, halt=-200
+    state = guard.update(order_rtt_us=2_500_000)  # storm=-100, halt=-200
     assert state == StormGuardState.STORM
 
 
@@ -382,23 +377,26 @@ def test_update_with_lob_warm_toxicity_escalates_to_warm():
     assert result == StormGuardState.WARM
 
 
-def test_update_with_lob_storm_toxicity_escalates_to_storm():
-    g = _guard_with_detector(toxicity=0.85)
+@pytest.mark.parametrize(
+    "toxicity, burst",
+    [(0.85, False), (0.95, False), (0.95, True), (1.0, True)],
+    ids=["storm_band", "high_no_burst", "high_with_burst", "max_with_burst"],
+)
+def test_drift_burst_is_capped_at_warm(toxicity: float, burst: bool):
+    """DriftBurst is a CAUTION signal (B4a): it used to reach STORM above 0.8
+    and HALT above 0.9 with a burst, stopping the maker on a market statistic."""
+    g = _guard_with_detector(toxicity=toxicity, burst=burst)
     result = g.update_with_lob(mid_price_x2=1000000, spread_scaled=100)
-    assert result == StormGuardState.STORM
+    assert result == StormGuardState.WARM
+    assert g.is_safe() is True
 
 
-def test_update_with_lob_halt_requires_burst_and_high_toxicity():
-    g = _guard_with_detector(toxicity=0.95, burst=True)
-    result = g.update_with_lob(mid_price_x2=1000000, spread_scaled=100)
-    assert result == StormGuardState.HALT
-
-
-def test_update_with_lob_high_toxicity_no_burst_escalates_to_storm():
-    """toxicity > 0.9 without burst_detected → STORM, not HALT."""
-    g = _guard_with_detector(toxicity=0.95, burst=False)
-    result = g.update_with_lob(mid_price_x2=1000000, spread_scaled=100)
-    assert result == StormGuardState.STORM
+def test_drift_burst_never_raises_the_halt_callback():
+    cb = MagicMock()
+    g = _guard_with_detector(toxicity=0.99, burst=True)
+    g._on_halt_callback = cb
+    g.update_with_lob(mid_price_x2=1000000, spread_scaled=100)
+    cb.assert_not_called()
 
 
 def test_update_with_lob_crossed_book_escalates_to_storm():
@@ -650,7 +648,7 @@ def test_feature_recovery_clears_flag_only(guard):
     # Now update() with clear inputs de-escalates via hysteresis
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
-    guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+    guard.update(latency_us=0, feed_gap_s=0)
     assert guard.state == StormGuardState.NORMAL
 
 
@@ -660,7 +658,7 @@ def test_feature_recovery_clears_flag_only(guard):
 def test_feature_failure_prevents_normal_deescalation(guard):
     """_evaluate_target_state returns STORM when _feature_failure_active is True."""
     guard._feature_failure_active = True
-    state, reason = guard._evaluate_target_state(0, 0, 0.0)
+    state, reason = guard._evaluate_target_state(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.STORM
     assert reason == "FeatureEngine failure active"
 
@@ -669,18 +667,17 @@ def test_feature_failure_cleared_allows_normal(guard):
     """_evaluate_target_state returns NORMAL once _feature_failure_active is cleared."""
     guard._feature_failure_active = True
     guard._feature_failure_active = False
-    state, reason = guard._evaluate_target_state(0, 0, 0.0)
+    state, reason = guard._evaluate_target_state(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
     assert reason == ""
 
 
-def test_feature_failure_does_not_override_halt(guard):
-    """HALT priority is preserved over _feature_failure_active (HALT > STORM)."""
+def test_feature_failure_does_not_lift_a_halt(guard):
+    """A HALT set by trigger_halt is not lowered by a component-failure STORM target."""
+    guard.trigger_halt("test halt")
     guard._feature_failure_active = True
-    # halt_drawdown_bps default is -500; use a value that triggers HALT
-    halt_drawdown = guard.thresholds.halt_drawdown_bps - 1
-    state, _ = guard._evaluate_target_state(halt_drawdown, 0, 0.0)
-    assert state == StormGuardState.HALT
+    guard.update()
+    assert guard.state == StormGuardState.HALT
 
 
 # ── Feed gap re-escalation cooldown ──────────────────────────────────────────
@@ -789,5 +786,5 @@ def test_drawdown_escalation_not_suppressed_by_latency_cooldown(guard):
     assert guard.state == StormGuardState.NORMAL
 
     # Drawdown-triggered STORM should NOT be suppressed
-    state = guard.update(drawdown_bps=-150)
+    state = guard.update(order_rtt_us=2_500_000)
     assert state == StormGuardState.STORM

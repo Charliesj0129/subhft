@@ -140,7 +140,7 @@ class TestReducesPositionPredicate:
 
 
 # ---------------------------------------------------------------------------
-# 2. DailyLossLimitValidator — PEAK_DRAWDOWN, SOFT_LIMIT, DAILY_LOSS_LIMIT
+# 2. DailyLossLimitValidator — SOFT_LIMIT, DAILY_LOSS_LIMIT
 # ---------------------------------------------------------------------------
 def _ntd(amount_ntd: int) -> int:
     """NTD -> PnL accumulator units (see test_intraday_pnl_watermark._ntd)."""
@@ -154,11 +154,8 @@ class TestDailyLossLimitCoverBypass:
             "intraday_pnl": {
                 "soft_limit_ntd": 500,
                 "hard_limit_ntd": 8000,
-                "peak_drawdown_pct": 0.40,
                 "soft_recovery_ntd": 300,
-                "drawdown_recovery_pct": 0.20,
                 "soft_limit_cooldown_s": 60,
-                "peak_drawdown_min_peak_ntd": 200,
                 "price_scale": 10000,
                 "point_value": 10,
             },
@@ -166,19 +163,19 @@ class TestDailyLossLimitCoverBypass:
         positions = {("TMFE6", "R47"): position}
         return DailyLossLimitValidator(cfg, None, position_provider=_position_provider(positions))
 
-    def test_peak_drawdown_blocks_opener_still(self):
-        """Sanity: opener SHOULD still be blocked by PEAK_DRAWDOWN."""
+    def test_loss_gate_blocks_opener_still(self):
+        """Sanity: an opener is still blocked once the day is past the soft limit."""
         v = self._make_validator(position=0)
         v.record_pnl("R47", _ntd(280))  # +280 NTD gain establishes peak
         v.update_unrealized(_ntd(0))
         v.check(_make_intent(side=Side.BUY, qty=1))  # update peak via check
         v.update_unrealized(_ntd(-2120))  # -2120 NTD unrealized => drawdown huge
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
-        assert not ok, "Opener must still be blocked — drawdown protection required"
-        assert "PEAK_DRAWDOWN" in reason
+        assert not ok, "Opener must still be blocked — loss protection required"
+        assert "SOFT_LIMIT" in reason
 
-    def test_peak_drawdown_allows_cover_when_short(self):
-        """Bug 21: cover order for short position must bypass PEAK_DRAWDOWN."""
+    def test_loss_gate_allows_cover_when_short(self):
+        """Bug 21: cover order for short position must bypass the loss gate."""
         v = self._make_validator(position=-1)  # R47 is short 1 lot
         v.record_pnl("R47", _ntd(280))
         v.update_unrealized(_ntd(0))
@@ -187,10 +184,10 @@ class TestDailyLossLimitCoverBypass:
 
         # Cover BUY must be allowed
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
-        assert ok, f"Cover order must bypass PEAK_DRAWDOWN, got: {reason}"
+        assert ok, f"Cover order must bypass the loss gate, got: {reason}"
         assert reason in ("OK", "REDUCE_ONLY_BYPASS")
 
-    def test_peak_drawdown_allows_cover_when_long(self):
+    def test_loss_gate_allows_cover_when_long(self):
         """Long position in drawdown must be allowed to close."""
         v = self._make_validator(position=+1)
         v.record_pnl("R47", _ntd(280))
@@ -199,9 +196,9 @@ class TestDailyLossLimitCoverBypass:
         v.update_unrealized(_ntd(-2120))
 
         ok, reason = v.check(_make_intent(side=Side.SELL, qty=1))
-        assert ok, f"Long exit must bypass PEAK_DRAWDOWN, got: {reason}"
+        assert ok, f"Long exit must bypass the loss gate, got: {reason}"
 
-    def test_peak_drawdown_blocks_overshoot_flip(self):
+    def test_loss_gate_blocks_overshoot_flip(self):
         """Short -1, BUY 2 (flip to +1): same magnitude, NOT reducing → still blocked."""
         v = self._make_validator(position=-1)
         v.record_pnl("R47", _ntd(280))

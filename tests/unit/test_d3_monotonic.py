@@ -17,7 +17,7 @@ class TestStormGuardMonotonic:
         with patch("time.monotonic", return_value=1000.0):
             sg.state = StormGuardState.NORMAL
             sg._de_escalate_count = 0
-            sg.update(drawdown_bps=sg.thresholds.storm_drawdown_bps - 1)
+            sg.update(order_rtt_us=sg.thresholds.order_rtt_storm_us)
 
         assert sg._storm_entry_ts == 1000.0, f"Expected monotonic value 1000.0, got {sg._storm_entry_ts}"
 
@@ -35,11 +35,11 @@ class TestStormGuardMonotonic:
         assert sg._halt_entry_ts == 100.0
 
         with patch("time.monotonic", return_value=105.0):
-            sg.update(drawdown_bps=0)
+            sg.update()
         assert sg.state == StormGuardState.HALT
 
         with patch("time.monotonic", return_value=111.0):
-            sg.update(drawdown_bps=0)
+            sg.update()
         assert sg.state != StormGuardState.HALT
 
     def test_last_state_change_uses_monotonic(self):
@@ -49,7 +49,7 @@ class TestStormGuardMonotonic:
         sg.metrics = MagicMock()
 
         with patch("time.monotonic", return_value=42.0):
-            sg.update(drawdown_bps=sg.thresholds.warm_drawdown_bps - 1)
+            sg.update(order_rtt_us=sg.thresholds.order_rtt_warm_us)
 
         assert sg.last_state_change == 42.0
 

@@ -91,7 +91,7 @@ Classifies LOB microstate using FeatureEngine v2+ features:
 - Dual-source merge: checkpoint + broker
 - Graduated response: critical mismatch → HALT, minor → auto-correct
 - Fallback chain: dual → broker_only → checkpoint_only → empty (HALT)
-- Restores portfolio aggregates for StormGuard drawdown continuity
+- Restores portfolio aggregates (the `portfolio_drawdown_pct` gauge; StormGuard reads no PnL)
 - Refuses a checkpoint whose `identity` (broker, account digest, `live`/`paper` venue) differs from the running engine: nothing from it is restored, the file is moved aside as `<path>.foreign.<ns>`, and `startup_warnings_total{component="checkpoint_identity"}` increments. A checkpoint with no `identity` (written before it existed) is restored once and stamped by the next write
 
 ### EOD Reconciliation

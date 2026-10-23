@@ -602,9 +602,8 @@ class TestSuperviseHaltGateway:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.gateway_service.set_halt.assert_called()
 
@@ -633,9 +632,8 @@ class TestSuperviseHaltGateway:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # Checkpoint written exactly once despite multiple HALT iterations
         sys_obj.checkpoint_writer.write_checkpoint.assert_called_once()
@@ -667,10 +665,9 @@ class TestSuperviseHaltGateway:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    # Should not raise
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                # Should not raise
+                                await sys_obj._supervise()
 
         assert sys_obj._halt_checkpoint_written is True
 
@@ -713,9 +710,8 @@ class TestSuperviseHaltRiskQueueDrain:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # CANCEL intent should be re-queued, NEW intent drained
         assert sys_obj.risk_queue.qsize() == 1
@@ -752,9 +748,8 @@ class TestSuperviseHaltRiskQueueDrain:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # Halt-exempt intent should be preserved
         assert sys_obj.risk_queue.qsize() == 1
@@ -801,9 +796,8 @@ class TestSuperviseHaltOrderQueueDrain:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.order_adapter.execute.assert_called_with(cancel_cmd)
 
@@ -840,9 +834,8 @@ class TestSuperviseHaltOrderQueueDrain:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # Order queue should be empty (NEW drained)
         assert sys_obj.order_queue.empty()
@@ -903,9 +896,8 @@ class TestSuperviseHaltIntentChannelDrain:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # CANCEL envelope re-queued
         assert ic._queue.qsize() == 1
@@ -940,9 +932,8 @@ class TestSuperviseNonHaltRecovery:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.gateway_service.set_normal.assert_called()
         assert sys_obj._halt_checkpoint_written is False
@@ -984,9 +975,8 @@ class TestSuperviseKillSwitch:
                     with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                         with patch.object(sys_obj, "_update_platform_degrade_state"):
                             with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                    with patch("hft_platform.services.system.write_heartbeat"):
-                                        await sys_obj._supervise()
+                                with patch("hft_platform.services.system.write_heartbeat"):
+                                    await sys_obj._supervise()
 
         sys_obj.storm_guard.trigger_halt.assert_called()
         call_arg = sys_obj.storm_guard.trigger_halt.call_args[0][0]
@@ -1021,9 +1011,8 @@ class TestSuperviseKillSwitch:
                     with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                         with patch.object(sys_obj, "_update_platform_degrade_state"):
                             with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                    with patch("hft_platform.services.system.write_heartbeat"):
-                                        await sys_obj._supervise()
+                                with patch("hft_platform.services.system.write_heartbeat"):
+                                    await sys_obj._supervise()
 
         sys_obj.storm_guard.trigger_halt.assert_called()
         call_arg = sys_obj.storm_guard.trigger_halt.call_args[0][0]
@@ -1079,9 +1068,8 @@ class TestSuperviseServiceHealth:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=services):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.storm_guard.trigger_halt.assert_called()
 
@@ -1131,9 +1119,8 @@ class TestSuperviseServiceHealth:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=services):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # No halt triggered for cancelled task
         sys_obj.storm_guard.trigger_halt.assert_not_called()
@@ -1175,9 +1162,8 @@ class TestSuperviseServiceHealth:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=services):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # No new halt triggered for this expected stop
         # (trigger_halt is NOT called for order task done in HALT)
@@ -1233,9 +1219,8 @@ class TestSuperviseImmediateFailDetection:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=services):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # Extra penalty: attempts should be 2 (1 from immediate_fail + 1 from restart)
         assert sys_obj._task_restart_attempts.get("md", 0) >= 2
@@ -1256,10 +1241,10 @@ class TestSuperviseImmediateFailDetection:
 
 
 class TestSuperviseStormGuardUpdate:
-    """Cover StormGuard update with drawdown, feed gap, latency."""
+    """Cover StormGuard update with feed gap and latency; PnL goes elsewhere."""
 
     @pytest.mark.asyncio
-    async def test_stormguard_receives_drawdown_and_feed_gap(self):
+    async def test_stormguard_receives_health_inputs_and_no_pnl(self):
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
@@ -1281,23 +1266,19 @@ class TestSuperviseStormGuardUpdate:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=2.5):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.05):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.storm_guard.update.assert_called()
         call_kwargs = sys_obj.storm_guard.update.call_args[1]
         assert call_kwargs["feed_gap_s"] == 2.5
-        assert call_kwargs["drawdown_bps"] == -500  # -int(0.05 * 10000)
+        assert "drawdown_bps" not in call_kwargs
 
     @pytest.mark.asyncio
-    async def test_mtm_unrealized_loss_increases_drawdown(self):
+    async def test_mtm_unrealized_loss_feeds_the_daily_loss_validator_not_stormguard(self):
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
-        # reference 0 = the legacy ratio over base_capital; the absolute-NTD default is
-        # covered in test_drawdown_gate_uses_absolute_ntd.py
-        sys_obj.settings = {"base_capital": 10_000_000, "drawdown_reference_ntd": 0}
 
         mtm_calc = MagicMock()
         # 500K NTD unrealized loss, scaled int (x10000) — Bug 11 fix descales before dividing.
@@ -1323,15 +1304,12 @@ class TestSuperviseStormGuardUpdate:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.02):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
+        sys_obj.risk_engine.update_unrealized_pnl.assert_called_with(-500_000 * 10_000, complete=True)
         sys_obj.storm_guard.update.assert_called()
-        call_kwargs = sys_obj.storm_guard.update.call_args[1]
-        # Bug 11: descale unrealized (-5e9 scaled → -500K NTD) then divide by
-        # base_capital (10M NTD) → 0.05 contribution. Total = 0.02 + 0.05 = 0.07.
-        assert call_kwargs["drawdown_bps"] == -700
+        assert "drawdown_bps" not in sys_obj.storm_guard.update.call_args[1]
 
 
 class TestSuperviseLobDriftBurst:
@@ -1369,9 +1347,8 @@ class TestSuperviseLobDriftBurst:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.storm_guard.update_with_lob.assert_called()
 
@@ -1413,9 +1390,8 @@ class TestSuperviseSessionGovernor:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.storm_guard.set_session_active.assert_called()
 
@@ -1452,9 +1428,8 @@ class TestSupervisePeriodicTasks:
                     with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                         with patch.object(sys_obj, "_update_platform_degrade_state"):
                             with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                    with patch("hft_platform.services.system.write_heartbeat") as mock_hb:
-                                        await sys_obj._supervise()
+                                with patch("hft_platform.services.system.write_heartbeat") as mock_hb:
+                                    await sys_obj._supervise()
 
         assert mock_hb.call_count >= 1
 
@@ -1484,9 +1459,8 @@ class TestSupervisePeriodicTasks:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         fe.evict_stale_symbols.assert_called()
 
@@ -1514,9 +1488,8 @@ class TestSupervisePeriodicTasks:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.order_adapter.sweep_stale_live_orders.assert_called()
 
@@ -1555,10 +1528,9 @@ class TestSuperviseFeedGapMetrics:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch.object(sys_obj, "_get_feed_gaps_by_symbol", return_value={"2330": 1.5}):
-                                    with patch("hft_platform.services.system.write_heartbeat"):
-                                        await sys_obj._supervise()
+                            with patch.object(sys_obj, "_get_feed_gaps_by_symbol", return_value={"2330": 1.5}):
+                                with patch("hft_platform.services.system.write_heartbeat"):
+                                    await sys_obj._supervise()
 
         mock_gauge.labels.assert_called()
 
@@ -1586,9 +1558,8 @@ class TestSuperviseFeedGapMetrics:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.md_client.update_metrics.assert_called()
 
@@ -1629,9 +1600,8 @@ class TestSuperviseFacadeHealth:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         mock_client.check_facade_health.assert_called()
 
@@ -1673,9 +1643,8 @@ class TestSuperviseFacadeHealth:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         mock_client.check_facade_health.assert_called()
 
@@ -1721,9 +1690,8 @@ class TestSuperviseQueueLogging:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # Verify intent_channel.qsize() was called for metrics
         ic.qsize.assert_called()
@@ -1779,9 +1747,8 @@ class TestSuperviseDeescalationRestart:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=services):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # Service re-enabled and restarted
         assert sys_obj.order_adapter.running is True
@@ -1831,9 +1798,8 @@ class TestSuperviseRedisHalt:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.storm_guard.trigger_halt.assert_called_with("TELEGRAM_EMERGENCY_HALT")
 
@@ -1865,7 +1831,7 @@ class TestGracefulResetStormGuard:
         results = await sys_obj.graceful_reset(reason="test_reset")
 
         assert "reset from STORM" in results["storm_guard"]
-        sys_obj.storm_guard.update.assert_called_once_with(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        sys_obj.storm_guard.update.assert_called_once_with(latency_us=0, feed_gap_s=0.0)
 
     @pytest.mark.asyncio
     async def test_dlq_drain_exception_handled(self):
@@ -2085,18 +2051,19 @@ class TestSuperviseExceptionIsolation:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", side_effect=RuntimeError("feed error")):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # StormGuard.update() still called despite feed_gap exception
         sys_obj.storm_guard.update.assert_called()
 
     @pytest.mark.asyncio
-    async def test_drawdown_exception_does_not_block_stormguard_update(self):
+    async def test_mtm_exception_does_not_block_stormguard_update(self):
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
+        sys_obj._mtm_calculator = MagicMock()
+        sys_obj._mtm_calculator.snapshot.side_effect = RuntimeError("mtm boom")
 
         mock_metrics = MagicMock()
         mock_metrics.cap_symbol = MagicMock(return_value="X")
@@ -2115,9 +2082,8 @@ class TestSuperviseExceptionIsolation:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", side_effect=RuntimeError("dd error")):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         sys_obj.storm_guard.update.assert_called()
 
@@ -2145,10 +2111,9 @@ class TestSuperviseExceptionIsolation:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    # Should not raise
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                # Should not raise
+                                await sys_obj._supervise()
 
         assert sys_obj.running is False
 
@@ -2188,9 +2153,8 @@ class TestSuperviseHaltDrainAndCancel:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         # drain_and_cancel was called as a task
         # Verify order_adapter.running was set False
@@ -2221,10 +2185,9 @@ class TestSuperviseHaltDrainAndCancel:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    # Should not raise
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                # Should not raise
+                                await sys_obj._supervise()
 
         assert sys_obj.running is False
 
@@ -2274,9 +2237,8 @@ class TestSuperviseHeartbeatMetrics:
                 with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                with patch("hft_platform.services.system.write_heartbeat"):
-                                    await sys_obj._supervise()
+                            with patch("hft_platform.services.system.write_heartbeat"):
+                                await sys_obj._supervise()
 
         mock_metrics.execution_router_heartbeat_ts.set.assert_called()
         mock_metrics.execution_gateway_heartbeat_ts.set.assert_called()
@@ -2521,9 +2483,8 @@ class TestLoopLagAttribution:
                     with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                         with patch.object(sys_obj, "_update_platform_degrade_state", side_effect=_body_work):
                             with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                    with patch("hft_platform.services.system.write_heartbeat"):
-                                        await sys_obj._supervise()
+                                with patch("hft_platform.services.system.write_heartbeat"):
+                                    await sys_obj._supervise()
 
         lag_values = [call.args[0] for call in mock_metrics.event_loop_lag_ms.set.call_args_list]
         tick_values = [call.args[0] for call in mock_metrics.supervisor_tick_duration_ms.observe.call_args_list]
@@ -2630,9 +2591,8 @@ class TestPeriodicGen2GC:
                     with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
                         with patch.object(sys_obj, "_update_platform_degrade_state"):
                             with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                                with patch.object(sys_obj, "_get_drawdown_pct", return_value=0.0):
-                                    with patch("hft_platform.services.system.write_heartbeat"):
-                                        await sys_obj._supervise()
+                                with patch("hft_platform.services.system.write_heartbeat"):
+                                    await sys_obj._supervise()
         return collected
 
     @pytest.mark.asyncio

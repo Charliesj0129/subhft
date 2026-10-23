@@ -53,11 +53,8 @@ class IntraDayPnlConfig(msgspec.Struct, frozen=True):
 
     soft_limit_ntd: int = 500
     hard_limit_ntd: int = 1000
-    peak_drawdown_pct: float = 0.40
     soft_recovery_ntd: int = 300
-    drawdown_recovery_pct: float = 0.20
     soft_limit_cooldown_s: int = 60
-    peak_drawdown_min_peak_ntd: int = 200
 
 
 class HftConfig(msgspec.Struct, frozen=True):

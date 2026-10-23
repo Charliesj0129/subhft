@@ -36,10 +36,7 @@ def _validator(ts_ns: int, **intraday: object) -> DailyLossLimitValidator:
         "soft_limit_ntd": 500,
         "hard_limit_ntd": 5000,
         "soft_recovery_ntd": 300,
-        "peak_drawdown_pct": 0.40,
-        "drawdown_recovery_pct": 0.20,
         "soft_limit_cooldown_s": 60,
-        "peak_drawdown_min_peak_ntd": 3500,
         "price_scale": 10000,
     }
     cfg.update(intraday)

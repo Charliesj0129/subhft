@@ -5,8 +5,6 @@ These are pure static methods that do not require instantiating HFTSystem.
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from hft_platform.services.system import HFTSystem
 
 # ---------------------------------------------------------------------------
@@ -41,34 +39,6 @@ class TestGetMaxFeedGapS:
 # ---------------------------------------------------------------------------
 # _get_drawdown_pct
 # ---------------------------------------------------------------------------
-
-
-class TestGetDrawdownPct:
-    def test_has_get_drawdown_pct(self) -> None:
-        store = MagicMock(spec=["get_drawdown_pct"])  # a store without the absolute-NTD reader
-        store.get_drawdown_pct.return_value = -0.05
-        assert HFTSystem._get_drawdown_pct(store, {}) == -0.05
-
-    def test_negative_total_pnl_computes_from_capital(self) -> None:
-        store = MagicMock(spec=["total_pnl"])
-        store.total_pnl = -500_000
-        settings = {"base_capital": 10_000_000}
-        assert HFTSystem._get_drawdown_pct(store, settings) == pytest.approx(-0.05)
-
-    def test_positive_total_pnl_returns_zero(self) -> None:
-        store = MagicMock(spec=["total_pnl"])
-        store.total_pnl = 100_000
-        assert HFTSystem._get_drawdown_pct(store, {}) == 0.0
-
-    def test_zero_base_capital_returns_zero(self) -> None:
-        store = MagicMock(spec=["total_pnl"])
-        store.total_pnl = -500_000
-        settings = {"base_capital": 0}
-        assert HFTSystem._get_drawdown_pct(store, settings) == 0.0
-
-    def test_none_total_pnl_returns_zero(self) -> None:
-        store = MagicMock(spec=[])
-        assert HFTSystem._get_drawdown_pct(store, {}) == 0.0
 
 
 # ---------------------------------------------------------------------------

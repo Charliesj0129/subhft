@@ -185,36 +185,6 @@ def test_get_feed_gaps_by_symbol_with_fn():
     assert result["TSMC"] == 2.0
 
 
-def test_get_drawdown_pct_no_fn():
-    from hft_platform.services.system import HFTSystem
-
-    ps = SimpleNamespace()
-    assert HFTSystem._get_drawdown_pct(ps, {}) == 0.0
-
-
-def test_get_drawdown_pct_with_fn():
-    from hft_platform.services.system import HFTSystem
-
-    ps = SimpleNamespace(get_drawdown_pct=lambda: 0.05)
-    assert HFTSystem._get_drawdown_pct(ps, {}) == 0.05
-
-
-def test_get_drawdown_pct_from_total_pnl():
-    from hft_platform.services.system import HFTSystem
-
-    ps = SimpleNamespace(total_pnl=-100_000)
-    settings = {"base_capital": 1_000_000}
-    result = HFTSystem._get_drawdown_pct(ps, settings)
-    assert result == pytest.approx(-0.1)
-
-
-def test_get_drawdown_pct_positive_pnl():
-    from hft_platform.services.system import HFTSystem
-
-    ps = SimpleNamespace(total_pnl=50_000)
-    assert HFTSystem._get_drawdown_pct(ps, {}) == 0.0
-
-
 def test_set_service_running_has_attr():
     from hft_platform.services.system import HFTSystem
 

@@ -1163,7 +1163,7 @@ class RiskEngine:
     def _sync_daily_loss_hold(self) -> None:
         """Mirror ``DailyLossLimitValidator.halt_triggered`` onto StormGuard.
 
-        StormGuard recomputes its target state from drawdown, latency and feed
+        StormGuard recomputes its target state from latency, order RTT and feed
         gap alone, so it cannot see that trading stopped for the day. Without a
         hold, a market-clean tick de-escalates HALT to NORMAL and the still
         latched validator flag re-halts it on the next check -- a ~65 s square

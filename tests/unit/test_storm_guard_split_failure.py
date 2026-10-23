@@ -42,7 +42,7 @@ class TestSplitFailureFlags:
         assert sg._norm_failure_active
 
         # update() should keep STORM due to norm failure
-        result = sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        result = sg.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.STORM
 
     def test_feature_failure_active_norm_recovery_stays_storm(self, sg: StormGuard) -> None:
@@ -61,7 +61,7 @@ class TestSplitFailureFlags:
         assert not sg._norm_failure_active
         assert sg._feature_failure_active
 
-        result = sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        result = sg.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.STORM
 
     def test_both_active_both_recover_clears_storm(self, sg: StormGuard) -> None:
@@ -84,7 +84,7 @@ class TestSplitFailureFlags:
         assert not sg._feature_failure_active
 
         # With no other STORM conditions, update should de-escalate
-        result = sg.update(drawdown_bps=0, latency_us=0, feed_gap_s=0.0)
+        result = sg.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.NORMAL
 
     def test_norm_failure_alone_escalates_to_storm(self, sg: StormGuard) -> None:
@@ -122,20 +122,20 @@ class TestSplitFailureFlags:
     def test_evaluate_target_state_reason_norm_only(self, sg: StormGuard) -> None:
         """Reason string should say 'Normalizer failure active' when only norm fails."""
         sg._norm_failure_active = True
-        _, reason = sg._evaluate_target_state(0, 0, 0.0)
+        _, reason = sg._evaluate_target_state(latency_us=0, feed_gap_s=0.0)
         assert "Normalizer" in reason
 
     def test_evaluate_target_state_reason_feature_only(self, sg: StormGuard) -> None:
         """Reason string should say 'FeatureEngine failure active' when only feature fails."""
         sg._feature_failure_active = True
-        _, reason = sg._evaluate_target_state(0, 0, 0.0)
+        _, reason = sg._evaluate_target_state(latency_us=0, feed_gap_s=0.0)
         assert "FeatureEngine" in reason
 
     def test_evaluate_target_state_reason_both(self, sg: StormGuard) -> None:
         """Reason string should mention both when both fail."""
         sg._norm_failure_active = True
         sg._feature_failure_active = True
-        state, reason = sg._evaluate_target_state(0, 0, 0.0)
+        state, reason = sg._evaluate_target_state(latency_us=0, feed_gap_s=0.0)
         assert state == StormGuardState.STORM
         assert "norm" in reason and "feature" in reason
 

@@ -1,7 +1,7 @@
 """Integration tests for StormGuard end-to-end flow.
 
 Tests the full StormGuard lifecycle including:
-- State transitions based on drawdown/latency/feed_gap
+- State transitions based on latency/order RTT/feed_gap
 - Integration with system supervisor
 - Metrics updates
 """
@@ -31,33 +31,13 @@ class TestStormGuardStateMachine(unittest.TestCase):
         self.assertEqual(guard.state, StormGuardState.NORMAL)
         self.assertTrue(guard.is_safe())
 
-    def test_drawdown_triggers_warm(self):
-        """Drawdown below warm threshold triggers WARM state."""
+    def test_pnl_is_not_a_stormguard_input(self):
+        """StormGuard grades platform health only; the day's loss is judged by
+        DailyLossLimitValidator (B4a). A drawdown argument is refused."""
         guard = StormGuard()
-        thresholds = guard.thresholds
-
-        # Just below warm threshold (-50 bps)
-        state = guard.update(drawdown_bps=thresholds.warm_drawdown_bps - 10)
-        self.assertEqual(state, StormGuardState.WARM)
-
-    def test_drawdown_triggers_storm(self):
-        """Drawdown below storm threshold triggers STORM state."""
-        guard = StormGuard()
-        thresholds = guard.thresholds
-
-        # Just below storm threshold (-100 bps)
-        state = guard.update(drawdown_bps=thresholds.storm_drawdown_bps - 10)
-        self.assertEqual(state, StormGuardState.STORM)
-
-    def test_drawdown_triggers_halt(self):
-        """Drawdown below halt threshold triggers HALT state."""
-        guard = StormGuard()
-        thresholds = guard.thresholds
-
-        # Just below halt threshold (-200 bps)
-        state = guard.update(drawdown_bps=thresholds.halt_drawdown_bps - 10)
-        self.assertEqual(state, StormGuardState.HALT)
-        self.assertFalse(guard.is_safe())
+        with self.assertRaises(TypeError):
+            guard.update(drawdown_bps=-300)
+        self.assertEqual(guard.state, StormGuardState.NORMAL)
 
     def test_latency_triggers_warm(self):
         """High latency triggers WARM state."""
@@ -87,11 +67,9 @@ class TestStormGuardStateMachine(unittest.TestCase):
         """HALT condition takes priority over STORM."""
         guard = StormGuard()
 
-        # Both HALT (drawdown) and STORM (latency) conditions
-        state = guard.update(
-            drawdown_bps=-300,  # HALT
-            latency_us=25000,  # STORM
-        )
+        # HALT (trigger_halt) then a STORM (latency) condition
+        guard.trigger_halt("test halt")
+        state = guard.update(latency_us=25000)
         self.assertEqual(state, StormGuardState.HALT)
 
     def test_recovery_from_halt(self):
@@ -101,11 +79,11 @@ class TestStormGuardStateMachine(unittest.TestCase):
         guard._de_escalate_threshold = 1
 
         # Trigger HALT
-        guard.update(drawdown_bps=-300)
+        guard.trigger_halt("test halt")
         self.assertEqual(guard.state, StormGuardState.HALT)
 
         # Recover with safe values
-        state = guard.update(drawdown_bps=0, latency_us=0, feed_gap_s=0)
+        state = guard.update(latency_us=0, feed_gap_s=0)
         self.assertEqual(state, StormGuardState.NORMAL)
         self.assertTrue(guard.is_safe())
 
@@ -121,7 +99,7 @@ class TestStormGuardStateMachine(unittest.TestCase):
         """Metrics are updated on state transitions."""
         guard = StormGuard()
 
-        guard.update(drawdown_bps=-300)  # HALT
+        guard.trigger_halt("test halt")  # HALT
 
         # Verify metric was updated
         self.mock_metrics.return_value.stormguard_mode.labels.assert_called()
@@ -139,19 +117,6 @@ class TestStormGuardWithCustomThresholds(unittest.TestCase):
 
     def tearDown(self):
         self.metrics_patcher.stop()
-
-    def test_custom_drawdown_thresholds(self):
-        """Custom drawdown thresholds are respected."""
-        custom = RiskThresholds(
-            warm_drawdown_bps=-10,  # -0.1% = -10 bps
-            storm_drawdown_bps=-20,  # -0.2% = -20 bps
-            halt_drawdown_bps=-30,  # -0.3% = -30 bps
-        )
-        guard = StormGuard(thresholds=custom)
-
-        # -15 bps should trigger WARM with custom thresholds
-        state = guard.update(drawdown_bps=-15)
-        self.assertEqual(state, StormGuardState.WARM)
 
     def test_custom_latency_thresholds(self):
         """Custom latency thresholds are respected."""
@@ -210,7 +175,7 @@ class TestStormGuardSystemIntegration(unittest.TestCase):
         initial_time = guard.last_state_change
 
         # Wait a tiny bit and trigger transition
-        guard.update(drawdown_bps=-300)
+        guard.trigger_halt("test halt")
 
         self.assertGreaterEqual(guard.last_state_change, initial_time)
 
@@ -236,8 +201,8 @@ class TestStormGuardConcurrency(unittest.TestCase):
 
         # Rapidly cycle through states
         for _ in range(100):
-            guard.update(drawdown_bps=-300)  # HALT
-            guard.update(drawdown_bps=0)  # NORMAL
+            guard.trigger_halt("test halt")  # HALT
+            guard.update()  # NORMAL
 
         # Should end up in NORMAL
         self.assertEqual(guard.state, StormGuardState.NORMAL)
@@ -248,7 +213,7 @@ class TestStormGuardConcurrency(unittest.TestCase):
 
         # Multiple conditions at once
         state = guard.update(
-            drawdown_bps=-70,  # WARM level
+            order_rtt_us=1_500_000,  # WARM level
             latency_us=10000,  # WARM level
             feed_gap_s=0.5,  # Below feed gap threshold
         )

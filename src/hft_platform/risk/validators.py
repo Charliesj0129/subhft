@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 from structlog import get_logger
 
-from hft_platform.contracts.strategy import IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, PriceScaleProvider, SymbolMetadataPriceScaleProvider
 from hft_platform.risk.expiry import expiry_window_ns, parse_cutoff_minute
@@ -113,7 +113,7 @@ class RiskValidator:
     def reduces_position(self, intent: OrderIntent) -> bool:
         """Return True iff ``intent`` strictly reduces |net_position|.
 
-        Bug 21 (2026-04-17): Safety gates like PEAK_DRAWDOWN, SOFT_LIMIT,
+        Bug 21 (2026-04-17): Safety gates like SOFT_LIMIT,
         DAILY_LOSS_LIMIT, MAX_NOTIONAL were blocking cover orders, preventing
         strategies from exiting adverse positions. The predicate here allows
         validators to distinguish cover orders from openers and bypass safety
@@ -398,11 +398,14 @@ class DailyLossLimitValidator(RiskValidator):
     Intraday watermark extensions (opt-in via config ``intraday_pnl`` section):
     - Soft limit: rejects new orders (not CANCEL/FORCE_FLAT) when loss exceeds
       ``soft_limit_ntd``, with cooldown-guarded recovery.
-    - Peak drawdown: rejects new orders when PnL has fallen more than
-      ``peak_drawdown_pct`` from the intraday peak, provided the peak exceeded
-      ``peak_drawdown_min_peak_ntd``.
     - Hard limit: triggers HALT when loss exceeds ``hard_limit_ntd`` (overrides
       ``max_daily_loss`` when intraday_pnl is configured).
+
+    A loss is the trading day's net change -- realized since the 05:00 roll
+    plus today's share of unrealized -- and nothing else. The give-back-from-peak
+    rule (``peak_drawdown_pct``, 40%) was removed 2026-10-23: it judged a
+    retracement inside a winning day as a stop, and on 2026-10-22 16:03Z it
+    halted R47 with the day 1,270 NTD up.
     """
 
     __slots__ = (
@@ -414,21 +417,16 @@ class DailyLossLimitValidator(RiskValidator):
         "_halt_release_pending",
         # Intraday watermark state
         "_intraday_pnl_enabled",
-        "_peak_pnl_scaled",
         "soft_limit_active",
         "_soft_limit_cooldown_until_ns",
         "_soft_limit_threshold_scaled",
         "_soft_recovery_threshold_scaled",
-        "_peak_drawdown_pct",
-        "_drawdown_recovery_pct",
         "_soft_limit_cooldown_ns",
-        "_peak_drawdown_min_peak_scaled",
         "_hard_limit_threshold_scaled",
         "_unrealized_stale",
         "_last_consistent_total_pnl",
         "_last_consistent_ts_ns",
         "_halt_reason",
-        "_peak_drawdown_halt_ts_ns",
         "_unrealized_day_open",
         "_day_open_known",
         "_unrealized_complete",
@@ -467,7 +465,6 @@ class DailyLossLimitValidator(RiskValidator):
         self._derive_from_defaults()
 
         # Runtime watermark state
-        self._peak_pnl_scaled: int = 0
         self.soft_limit_active: bool = False
         self._soft_limit_cooldown_until_ns: int = 0
 
@@ -477,14 +474,15 @@ class DailyLossLimitValidator(RiskValidator):
         # a naive sum counts it twice. THESHOW 2026-09-11T00:45:41Z: a book that
         # only ever rose, +795 -> +1045 -> +2320, recorded a peak of +4270 and
         # halted for 20 h on a 45.7% "drawdown" that was exactly the stale mark.
+        # (That gate, the peak watermark, is gone; the soft and hard limits
+        # still read this total.)
         self._unrealized_stale: bool = False
         self._last_consistent_total_pnl: int = 0
         self._last_consistent_ts_ns: int = 0
 
-        # Which branch latched the stop. Only PEAK_DRAWDOWN is releasable; the
-        # hard daily-loss limit keeps its designed sticky semantics.
+        # Which branch latched the stop: ``DAILY_LOSS_LIMIT`` or "". Kept as a
+        # field so the persisted state and the manual latch can name it.
         self._halt_reason: str = ""
-        self._peak_drawdown_halt_ts_ns: int = 0
 
         # The daily limit judges what the book did TODAY. ``_unrealized_pnl``
         # is each position's PnL since entry, so a lot carried overnight
@@ -506,7 +504,7 @@ class DailyLossLimitValidator(RiskValidator):
 
     def _derive_from_defaults(self) -> None:
         """Thresholds only. Runtime state (accumulated loss, latched HALT,
-        cooldown deadline, peak watermark) is untouched, so a SIGHUP reload
+        cooldown deadline) is untouched, so a SIGHUP reload
         cannot clear a live halt or reset the drawdown watermark."""
         # Stored as a positive threshold; loss is compared as abs value
         self._default_max_daily_loss: int = int(self.defaults.get("max_daily_loss", 500_000_000))
@@ -541,12 +539,7 @@ class DailyLossLimitValidator(RiskValidator):
             self._soft_limit_threshold_scaled: int = int(ipnl_cfg.get("soft_limit_ntd", 500) * ntd_to_scaled)
             self._hard_limit_threshold_scaled: int = int(ipnl_cfg.get("hard_limit_ntd", 1000) * ntd_to_scaled)
             self._soft_recovery_threshold_scaled: int = int(ipnl_cfg.get("soft_recovery_ntd", 300) * ntd_to_scaled)
-            self._peak_drawdown_pct: float = float(ipnl_cfg.get("peak_drawdown_pct", 0.40))
-            self._drawdown_recovery_pct: float = float(ipnl_cfg.get("drawdown_recovery_pct", 0.20))
             self._soft_limit_cooldown_ns: int = int(ipnl_cfg.get("soft_limit_cooldown_s", 60) * 1_000_000_000)
-            self._peak_drawdown_min_peak_scaled: int = int(
-                ipnl_cfg.get("peak_drawdown_min_peak_ntd", 200) * ntd_to_scaled
-            )
             # Loss on one position since its entry, across days, at which the
             # platform closes it (``risk/loss_exit.py``). The daily limit no
             # longer sees a carried lot's earlier losses, so this is what bounds
@@ -559,10 +552,7 @@ class DailyLossLimitValidator(RiskValidator):
             self._soft_limit_threshold_scaled = 0
             self._hard_limit_threshold_scaled = 0
             self._soft_recovery_threshold_scaled = 0
-            self._peak_drawdown_pct = 0.0
-            self._drawdown_recovery_pct = 0.0
             self._soft_limit_cooldown_ns = 0
-            self._peak_drawdown_min_peak_scaled = 0
             self._position_loss_limit_scaled = 0
 
     @staticmethod
@@ -606,8 +596,7 @@ class DailyLossLimitValidator(RiskValidator):
             # A new trading day: its opening figure is the next complete
             # snapshot, which ``update_unrealized`` records.
             self._day_open_known = False
-            # Reset watermark state on daily boundary
-            self._peak_pnl_scaled = 0
+            # Reset soft-limit state on daily boundary
             self.soft_limit_active = False
             self._soft_limit_cooldown_until_ns = 0
             if release_halt:
@@ -615,7 +604,6 @@ class DailyLossLimitValidator(RiskValidator):
                 self.halt_triggered = False
                 self._halt_release_pending = False
                 self._halt_reason = ""
-                self._peak_drawdown_halt_ts_ns = 0
             else:
                 # Calendar rolled, but this caller brought no complete PnL to
                 # justify reopening.
@@ -663,10 +651,7 @@ class DailyLossLimitValidator(RiskValidator):
         self.halt_triggered = False
         self._halt_release_pending = False
         self._halt_reason = ""
-        self._peak_drawdown_halt_ts_ns = 0
         self._current_reset_boundary_ns = self._current_boundary_ns()
-        # Reset watermark state
-        self._peak_pnl_scaled = 0
         self.soft_limit_active = False
         self._soft_limit_cooldown_until_ns = 0
         self._unrealized_stale = False
@@ -702,14 +687,14 @@ class DailyLossLimitValidator(RiskValidator):
 
     @property
     def halt_reason(self) -> str:
-        """Which branch latched the stop: ``DAILY_LOSS_LIMIT``, ``PEAK_DRAWDOWN`` or ``""``."""
+        """Which branch latched the stop: ``DAILY_LOSS_LIMIT`` or ``""``."""
         return self._halt_reason
 
     def export_state(self) -> Dict[str, Any]:
         """The day's runtime state, for ``risk/daily_loss_state.py`` to persist.
 
         Everything a restart used to throw away: the realized accumulators, the
-        latch and its reason, the peak watermark, the soft-limit state and the
+        latch and its reason, the soft-limit state and the
         day's opening mark. Unrealized PnL is left out on purpose -- the first
         mark-to-market tick after boot recomputes it from the restored book.
         """
@@ -719,12 +704,16 @@ class DailyLossLimitValidator(RiskValidator):
             "halt_triggered": self.halt_triggered,
             "halt_reason": self._halt_reason,
             "halt_release_pending": self._halt_release_pending,
-            "peak_drawdown_halt_ts_ns": self._peak_drawdown_halt_ts_ns,
-            "peak_pnl_scaled": self._peak_pnl_scaled,
             "soft_limit_active": self.soft_limit_active,
             "soft_limit_cooldown_until_ns": self._soft_limit_cooldown_until_ns,
             "unrealized_day_open": self._unrealized_day_open,
             "day_open_known": self._day_open_known,
+            # Read by nothing here. The pre-B4a restore_state requires both as
+            # ints and drops the whole document without them, so a same-day
+            # rollback would start the day's realized loss from zero. Remove
+            # once no deployable build predates B4a.
+            "peak_drawdown_halt_ts_ns": 0,
+            "peak_pnl_scaled": 0,
         }
 
     def restore_state(self, state: Dict[str, Any]) -> bool:
@@ -734,8 +723,13 @@ class DailyLossLimitValidator(RiskValidator):
         trading day: the day roll would have cleared it anyway, and a daily
         stop that must outlive the roll is a manual latch on disk, not this.
         Raises ``ValueError`` on a malformed document, also changing nothing.
+
+        A document written before the peak-drawdown rule was removed may carry
+        ``halt_reason: PEAK_DRAWDOWN`` and the two peak fields. The fields are
+        ignored, and that latch is restored as released: the rule that set it
+        no longer exists, so nothing could ever lift it again.
         """
-        ints = ("boundary_ns", "peak_drawdown_halt_ts_ns", "peak_pnl_scaled", "soft_limit_cooldown_until_ns")
+        ints = ("boundary_ns", "soft_limit_cooldown_until_ns")
         bools = ("halt_triggered", "halt_release_pending", "soft_limit_active", "day_open_known")
         for key in (*ints, "unrealized_day_open"):
             if type(state.get(key)) is not int:
@@ -753,13 +747,16 @@ class DailyLossLimitValidator(RiskValidator):
             raise ValueError(f"daily loss state field 'halt_reason' is {reason!r}")
         if state["boundary_ns"] != self._current_boundary_ns():
             return False
+        halt_triggered = state["halt_triggered"]
+        if reason == "PEAK_DRAWDOWN":
+            logger.warning("daily_loss_state_peak_drawdown_latch_dropped", halt_triggered=halt_triggered)
+            halt_triggered = False
+            reason = ""
         self._current_reset_boundary_ns = state["boundary_ns"]
         self._accumulated_loss = dict(accumulated)
-        self.halt_triggered = state["halt_triggered"]
+        self.halt_triggered = halt_triggered
         self._halt_reason = reason
-        self._halt_release_pending = state["halt_release_pending"]
-        self._peak_drawdown_halt_ts_ns = state["peak_drawdown_halt_ts_ns"]
-        self._peak_pnl_scaled = state["peak_pnl_scaled"]
+        self._halt_release_pending = state["halt_release_pending"] and halt_triggered
         self.soft_limit_active = state["soft_limit_active"]
         self._soft_limit_cooldown_until_ns = state["soft_limit_cooldown_until_ns"]
         self._unrealized_day_open = state["unrealized_day_open"]
@@ -767,11 +764,6 @@ class DailyLossLimitValidator(RiskValidator):
         self._last_consistent_total_pnl = sum(self._accumulated_loss.values())
         self._last_consistent_ts_ns = timebase.now_ns()
         return True
-
-    def _update_peak(self, total_pnl: int) -> None:
-        """Update the intraday peak PnL if current total exceeds the recorded peak."""
-        if total_pnl > self._peak_pnl_scaled:
-            self._peak_pnl_scaled = total_pnl
 
     def update_unrealized(self, unrealized_scaled: int, *, complete: bool = False) -> None:
         """Update the platform-wide unrealized PnL used in loss calculations.
@@ -821,64 +813,12 @@ class DailyLossLimitValidator(RiskValidator):
             self._halt_release_pending = False
             self.halt_triggered = False
             self._halt_reason = ""
-            self._peak_drawdown_halt_ts_ns = 0
             logger.info(
                 "DailyLossLimitValidator: daily stop released on complete PnL snapshot",
                 unrealized_pnl=unrealized_scaled,
             )
-        if complete:
-            self._maybe_release_peak_drawdown()
-        # A PEAK_DRAWDOWN stop is still judged against the hard limit: the hard
-        # limit is a manual-release stop and the profit lock is not, so a loss
-        # that crosses it while the profit lock holds must change the reason,
-        # or the day's worst loss is released by the next recovery or roll.
-        if not self.halt_triggered or self._halt_reason == "PEAK_DRAWDOWN":
+        if not self.halt_triggered:
             self._evaluate_halt_from_unrealized()
-
-    def _maybe_release_peak_drawdown(self) -> None:
-        """Release a PEAK_DRAWDOWN stop once PnL climbs back toward the peak.
-
-        ``drawdown_recovery_pct`` has been carried in ``config/base`` and
-        ``config/env/prod`` strategy limits and in ``config/schema.py`` since the
-        watermark went in, and nothing read it. The only exit from a
-        peak-drawdown stop was therefore the 21:00 UTC calendar roll -- on
-        2026-09-11 that was 20 h of no trading for a retracement that lasted
-        seconds.
-
-        Halting at ``peak_drawdown_pct`` and releasing at
-        ``drawdown_recovery_pct`` leaves a hysteresis band, which is why the two
-        were configured as different numbers. The cooldown is the same
-        ``soft_limit_cooldown_s`` the soft limit already uses, and it is what
-        keeps the pair from becoming a square wave.
-
-        Only ``update_unrealized(complete=True)`` reaches here, for two separate
-        reasons. ``check()`` cannot: ``RiskEngine.evaluate()`` runs the
-        StormGuard gate first and returns before the validator loop, so while
-        HALT is latched no intent ever arrives -- the trap that made the
-        2026-08-26 stop permanent. And a partial valuation may latch a stop but
-        never lift one, the rule the rest of this class already follows.
-        """
-        if not self.halt_triggered or self._halt_reason != "PEAK_DRAWDOWN":
-            return
-        if self._drawdown_recovery_pct <= 0.0 or self._peak_pnl_scaled <= 0:
-            return
-        if timebase.now_ns() - self._peak_drawdown_halt_ts_ns < self._soft_limit_cooldown_ns:
-            return
-        total_pnl = sum(self._accumulated_loss.values()) + self.daily_unrealized()
-        drawdown = self._peak_pnl_scaled - total_pnl
-        recovery_limit = int(self._drawdown_recovery_pct * self._peak_pnl_scaled)
-        if drawdown > recovery_limit:
-            return
-        logger.info(
-            "DailyLossLimitValidator: peak drawdown recovered",
-            peak_pnl_scaled=self._peak_pnl_scaled,
-            total_pnl=total_pnl,
-            drawdown=drawdown,
-            recovery_limit=recovery_limit,
-        )
-        self.halt_triggered = False
-        self._halt_reason = ""
-        self._peak_drawdown_halt_ts_ns = 0
 
     def _evaluate_halt_from_unrealized(self) -> None:
         """Check total (realized + unrealized) against hard limit without an intent.
@@ -979,47 +919,12 @@ class DailyLossLimitValidator(RiskValidator):
             return True, "SOFT_LIMIT_FLAT_COOLDOWN_BYPASS"
         return False, (f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}")
 
-    def _evaluate_peak_drawdown(self, total_pnl: int) -> Tuple[bool, str] | None:
-        """Peak-drawdown rejection branch (P3-c2 extraction).
-
-        Returns ``(False, reason)`` when drawdown exceeds the limit (also sets
-        ``halt_triggered`` so the supervisor can escalate StormGuard); ``None``
-        otherwise.
-        """
-        if not self._intraday_pnl_enabled:
-            return None
-        if self._peak_pnl_scaled < self._peak_drawdown_min_peak_scaled:
-            return None
-        drawdown = self._peak_pnl_scaled - total_pnl
-        drawdown_limit = int(self._peak_drawdown_pct * self._peak_pnl_scaled)
-        if drawdown <= drawdown_limit:
-            return None
-        # Why: PEAK_DRAWDOWN escalates to StormGuard HALT, which stops new
-        # orders (per user 2026-04-20 -- lock in profits on retracement).
-        # FORCE_FLAT and reduce-position intents bypass this gate earlier, so a
-        # manual flatten still goes through.
-        #
-        # The validator does not close the book itself. ``risk/loss_exit.py``
-        # does, from the supervisor tick, while ``halt_triggered`` stands and a
-        # position is open (``loss_exit.enabled`` in the risk config).
-        self.halt_triggered = True
-        self._halt_reason = "PEAK_DRAWDOWN"
-        self._peak_drawdown_halt_ts_ns = timebase.now_ns()
-        logger.warning(
-            "DailyLossLimitValidator: peak drawdown exceeded",
-            peak_pnl_scaled=self._peak_pnl_scaled,
-            total_pnl=total_pnl,
-            drawdown=drawdown,
-            drawdown_limit=drawdown_limit,
-        )
-        return False, f"PEAK_DRAWDOWN: drawdown={drawdown} > limit={drawdown_limit}"
-
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
         # a. Bypass CANCEL and FORCE_FLAT for all checks
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True, "OK"
 
-        # Bug 21 (2026-04-17): cover orders must bypass SOFT_LIMIT / PEAK_DRAWDOWN
+        # Bug 21 (2026-04-17): cover orders must bypass SOFT_LIMIT
         # / DAILY_LOSS_LIMIT so a strategy stuck in adverse PnL can always reduce
         # risk. Without this R47 deadlocked short -1 TMFE6 while drawdown grew
         # from -120 NTD to -2680 NTD (realized on manual cover).
@@ -1048,9 +953,7 @@ class DailyLossLimitValidator(RiskValidator):
         # ``update_unrealized`` refreshes the mark on the 1 Hz supervisor tick.
         # In the window between them the closing fill's PnL sits in both halves,
         # so the sum counts it twice -- upward after a winning close, downward
-        # after a losing one. The peak is a latch, so an inflated sample sticks
-        # permanently and the correction that follows reads as a retracement
-        # that never happened. Gate on the last total whose halves were sampled
+        # after a losing one. Gate on the last total whose halves were sampled
         # together: at most one tick old, on a series only sampled once a tick.
         #
         # Bounded by ``_STALE_GRACE_NS``. The substitution is only ever right
@@ -1067,9 +970,6 @@ class DailyLossLimitValidator(RiskValidator):
         ):
             total_pnl = self._last_consistent_total_pnl
 
-        # d. Update peak — always, even when total_pnl >= 0
-        self._update_peak(total_pnl)
-
         # e. Hard halt is sticky — no recovery (only when intraday watermark is enabled;
         #    when disabled the original per-strategy evaluation runs each check)
         if self.halt_triggered and self._intraday_pnl_enabled:
@@ -1079,12 +979,6 @@ class DailyLossLimitValidator(RiskValidator):
         soft_decision = self._evaluate_soft_limit(intent, total_pnl)
         if soft_decision is not None:
             return soft_decision
-
-        # g. Peak drawdown check — before total_pnl >= 0 guard to handle
-        # positive-peak scenarios (extracted helper).
-        peak_decision = self._evaluate_peak_drawdown(total_pnl)
-        if peak_decision is not None:
-            return peak_decision
 
         # h. Net gain or breakeven — no further loss checks needed
         if total_pnl >= 0:
@@ -1254,47 +1148,3 @@ class PerSymbolNotionalValidator(RiskValidator):
     def clear_cache(self) -> None:
         """Clear the per-symbol notional cache (used by config hot-reload)."""
         self._per_symbol_notional_cache.clear()
-
-
-class StormGuardFSM:
-    """DEPRECATED: Compatibility shim for tests only. Use StormGuard directly.
-
-    This shim wraps StormGuard with a config-dict constructor for backward
-    compatibility with existing tests. It creates a standalone instance —
-    do NOT use in production code (use the shared StormGuard from bootstrap).
-    """
-
-    def __init__(self, config: Dict[str, Any]):
-        from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
-
-        self.config = config
-        sg_cfg = config.get("storm_guard", {})
-        warm = sg_cfg.get("warm_threshold", -200_000)
-        storm = sg_cfg.get("storm_threshold", -500_000)
-        halt = sg_cfg.get("halt_threshold", -1_000_000)
-        thresholds = RiskThresholds(
-            warm_drawdown_bps=warm,
-            storm_drawdown_bps=storm,
-            halt_drawdown_bps=halt,
-        )
-        self._guard = StormGuard(thresholds=thresholds)
-
-    @property
-    def state(self) -> StormGuardState:
-        return self._guard.state
-
-    @state.setter
-    def state(self, value: int | StormGuardState) -> None:
-        self._guard.state = StormGuardState(int(value))
-
-    def update_pnl(self, pnl: int) -> None:
-        self._guard.update(drawdown_bps=pnl)
-
-    def trigger_halt(self, reason: str) -> None:
-        self._guard.trigger_halt(reason)
-
-    def validate(self, intent: OrderIntent) -> Tuple[bool, str]:
-        return self._guard.validate(intent)
-
-    def reload_thresholds(self, config: dict) -> None:
-        self._guard.reload_thresholds(config)

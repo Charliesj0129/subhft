@@ -53,13 +53,7 @@ global_defaults:
   #   DAILY_LOSS_LIMIT  sticky. The validator flag clears at the
   #                     daily_pnl_reset_hour roll, but the manual latch file it
   #                     writes holds HALT until `hft risk rearm daily_loss`.
-  #   PEAK_DRAWDOWN     auto-releases once PnL recovers to within
-  #                     drawdown_recovery_pct of the peak, after
-  #                     soft_limit_cooldown_s. See intraday_pnl below.
-  # Wiring this key to gate the PEAK_DRAWDOWN release is a live option; at
-  # `true` it would disable that release, so it needs a deliberate decision
-  # rather than a silent default. Same defect class as drawdown_recovery_pct,
-  # which sat here unread until PR #505.
+  # (PEAK_DRAWDOWN, the auto-releasing reason, was removed 2026-10-23.)
   halt_requires_manual_recovery: true
 
 # Per-strategy limits (conservative first-launch values)
@@ -73,29 +67,23 @@ strategies:
 
 intraday_pnl:
   scope: global
-  # 2026-04-20: User-requested daily loss cap 5,000 NTD; PEAK_DRAWDOWN
-  # only protects days with peak ≥ 3,500 NTD (40% retracement → trigger).
+  # A loss is the trading day's net change (realized since 05:00 plus today's
+  # share of unrealized). 2026-10-23: the 40%-of-peak rule (peak_drawdown_pct)
+  # is removed -- it halted R47 on 10/22 with the day 1,270 NTD up -- and
+  # StormGuard no longer reads PnL at all, so this block is the only loss stop.
   #
-  # PEAK_DRAWDOWN and the hard limit set halt_triggered -> StormGuard HALT,
-  # which stops new orders. From the loss_exit block below, a latched stop
-  # with a position open is also closed (FORCE_FLAT); before it the stop froze
-  # the book (THESHOW 10/15-10/21: one TMFJ6 lot held to settlement).
-  #
-  # Recovery: drawdown_recovery_pct is the release threshold (halt at
-  # peak_drawdown_pct, release at drawdown_recovery_pct — the gap is
-  # deliberate hysteresis), gated by soft_limit_cooldown_s. Wired in PR #505;
-  # before that it was read nowhere and the only exit was the daily roll.
+  # The hard limit sets halt_triggered -> StormGuard HALT, which stops new
+  # orders. From the loss_exit block below, a latched stop with a position
+  # open is also closed (FORCE_FLAT); before it the stop froze the book
+  # (THESHOW 10/15-10/21: one TMFJ6 lot held to settlement).
   soft_limit_ntd: 500
   # 2026-10-23: real-money limits set by the user -- daily 15,000 NTD, one
   # position 5,000 NTD (position_loss_limit_ntd below). A hard-limit stop
   # writes a durable manual latch (risk/manual_latches.py): it survives the
   # 05:00 roll and a restart, and `hft risk rearm daily_loss` releases it.
   hard_limit_ntd: 15000
-  peak_drawdown_pct: 0.40
   soft_recovery_ntd: 300
-  drawdown_recovery_pct: 0.20
   soft_limit_cooldown_s: 60
-  peak_drawdown_min_peak_ntd: 3500
   # Since-entry loss on one position, across days, at which risk/loss_exit.py
   # closes it. The daily limits above judge only the day's change (a lot
   # carried overnight is measured from that day's opening mark), so this is

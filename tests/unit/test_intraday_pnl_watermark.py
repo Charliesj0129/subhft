@@ -45,11 +45,8 @@ def _make_validator(config=None):
     intraday_pnl = {
         "soft_limit_ntd": 500,
         "hard_limit_ntd": 1000,
-        "peak_drawdown_pct": 0.40,
         "soft_recovery_ntd": 300,
-        "drawdown_recovery_pct": 0.20,
         "soft_limit_cooldown_s": 60,
-        "peak_drawdown_min_peak_ntd": 200,
         "price_scale": 10000,
         "point_value": 10,
     }
@@ -167,45 +164,41 @@ class TestSoftLimit:
         assert "SOFT_LIMIT" in reason
 
 
-class TestPeakDrawdown:
-    def test_peak_drawdown_ignored_when_peak_below_minimum(self):
-        v = _make_validator()
-        v.record_pnl("TEST", _ntd(100))  # +100 NTD
-        v.check(_make_intent())  # updates peak
-        v.record_pnl("TEST", _ntd(-150))  # total = -50 NTD
-        ok, _ = v.check(_make_intent())
-        assert ok is True  # peak < 200 NTD minimum
+class TestNoPeakRule:
+    """The 40%-of-peak rule is gone (2026-10-23). A loss is the day's net change.
 
-    def test_peak_drawdown_triggers_when_peak_above_minimum(self):
-        v = _make_validator()
-        v.record_pnl("TEST", _ntd(300))  # +300 NTD
-        v.check(_make_intent())  # peak = +300 NTD
-        v.record_pnl("TEST", _ntd(-150))  # total = +150 NTD, drawdown = 150 > 120 (40% of 300)
-        ok, reason = v.check(_make_intent())
-        assert ok is False
-        assert "PEAK_DRAWDOWN" in reason
+    On 2026-10-22 16:03Z the rule halted R47 with the day 1,270 NTD up: a peak
+    of 3,760 and a 2,490 give-back crossed 40% of the peak.
+    """
 
-    def test_peak_drawdown_allows_when_drawdown_small(self):
+    def test_a_retracement_inside_a_winning_day_is_not_a_stop(self):
         v = _make_validator()
-        v.record_pnl("TEST", _ntd(300))
-        v.check(_make_intent())
-        v.record_pnl("TEST", _ntd(-50))  # drawdown = 50 NTD < 120 NTD
+        v.record_pnl("TEST", _ntd(3760))
         ok, _ = v.check(_make_intent())
         assert ok is True
-
-    def test_peak_drawdown_sets_halt_triggered_for_force_flatten(self):
-        """PEAK_DRAWDOWN MUST set halt_triggered so risk/engine.py escalates
-        StormGuard to HALT, which triggers autonomy_monitor.flatten_all() —
-        closes all positions at market per user 'lock-in profits when peak
-        retracement breached' policy (2026-04-20)."""
-        v = _make_validator()
-        v.record_pnl("TEST", _ntd(300))  # peak = +300 NTD
-        v.check(_make_intent())
-        v.record_pnl("TEST", _ntd(-150))  # drawdown = 150 > 120 (40% of 300)
+        v.record_pnl("TEST", _ntd(-2490))  # +1,270 on the day; 66% given back
         ok, reason = v.check(_make_intent())
+        assert ok is True, reason
+        assert v.halt_triggered is False
+        assert v.halt_reason == ""
+
+    def test_a_retracement_with_unrealized_marks_is_not_a_stop(self):
+        v = _make_validator()
+        v.update_unrealized(0, complete=True)  # flat at the day's open
+        v.update_unrealized(_ntd(3760), complete=True)  # open lot marked +3,760
+        v.update_unrealized(_ntd(1270), complete=True)  # same lot gives back 2,490
+        assert v.halt_triggered is False
+        ok, reason = v.check(_make_intent())
+        assert ok is True, reason
+
+    def test_a_net_loss_past_the_hard_limit_still_halts_after_a_winning_start(self):
+        v = _make_validator()
+        v.record_pnl("TEST", _ntd(3000))
+        v.check(_make_intent())
+        v.record_pnl("TEST", _ntd(-4050))  # -1,050 on the day, hard limit 1,000
+        ok, _ = v.check(_make_intent())
         assert ok is False
-        assert "PEAK_DRAWDOWN" in reason
-        assert v.halt_triggered is True
+        assert v.halt_reason == "DAILY_LOSS_LIMIT"
 
 
 class TestHardLimit:
@@ -234,7 +227,6 @@ class TestReset:
         assert v.soft_limit_active is True
         v._force_reset()
         assert v.soft_limit_active is False
-        assert v._peak_pnl_scaled == 0
 
 
 def _make_wide_soft_limit_validator():
@@ -244,11 +236,8 @@ def _make_wide_soft_limit_validator():
             "intraday_pnl": {
                 "soft_limit_ntd": 5000,
                 "hard_limit_ntd": 1000,
-                "peak_drawdown_pct": 0.40,
                 "soft_recovery_ntd": 300,
-                "drawdown_recovery_pct": 0.20,
                 "soft_limit_cooldown_s": 60,
-                "peak_drawdown_min_peak_ntd": 200,
                 "price_scale": 10000,
                 "point_value": 10,
             }
@@ -267,31 +256,6 @@ class TestStaleUnrealizedDoubleCount:
     on a reported 45.7% drawdown. The reported drawdown, 1950, was exactly the
     stale unrealized value.
     """
-
-    def test_peak_ignores_stale_unrealized_after_realizing_fill(self):
-        v = _make_validator()
-        # Open position marked at +1950 NTD, consistent sample.
-        v.update_unrealized(_ntd(1950))
-        ok, _ = v.check(_make_intent())
-        assert ok is True
-        assert v._peak_pnl_scaled == _ntd(1950)
-
-        # The closing fill books +2320 realized. The mark has NOT been
-        # refreshed yet, so _unrealized_pnl still carries +1950 for a position
-        # that no longer exists.
-        v.record_pnl("TEST", _ntd(2320))
-        ok, _ = v.check(_make_intent())
-        assert ok is True
-        # The peak must not absorb the double count.
-        assert v._peak_pnl_scaled == _ntd(1950)
-
-        # MtM catches up: flat, so unrealized is zero and the true total is
-        # +2320 -- a new high, not a drawdown.
-        v.update_unrealized(0)
-        ok, reason = v.check(_make_intent())
-        assert ok is True, reason
-        assert v.halt_triggered is False
-        assert v._peak_pnl_scaled == _ntd(2320)
 
     def test_hard_limit_not_tripped_by_double_counted_loss(self):
         # Same staleness, opposite sign: the hard limit must measure the real
@@ -343,47 +307,7 @@ class TestStaleUnrealizedDoubleCount:
         assert v._last_consistent_total_pnl == 0
 
 
-class TestPeakDrawdownRecovery:
-    """``drawdown_recovery_pct`` is configured in prod and base YAML and was
-    read nowhere. A peak-drawdown halt latched until the 21:00 UTC daily reset.
-    """
-
-    def _halted(self):
-        v = _make_validator()
-        v.record_pnl("TEST", _ntd(300))
-        v.check(_make_intent())  # peak = +300 NTD
-        v.record_pnl("TEST", _ntd(-150))  # drawdown 150 > 120 (40% of 300)
-        ok, reason = v.check(_make_intent())
-        assert ok is False
-        assert "PEAK_DRAWDOWN" in reason
-        assert v.halt_triggered is True
-        assert v._halt_reason == "PEAK_DRAWDOWN"
-        return v
-
-    def test_peak_drawdown_releases_after_recovery(self):
-        v = self._halted()
-        v.record_pnl("TEST", _ntd(100))  # total = +250, drawdown 50 <= 60 (20%)
-        v._peak_drawdown_halt_ts_ns = 0  # force cooldown expired
-        v.update_unrealized(0, complete=True)
-        assert v.halt_triggered is False
-        assert v._halt_reason == ""
-        ok, reason = v.check(_make_intent())
-        assert ok is True, reason
-
-    def test_peak_drawdown_release_requires_cooldown(self):
-        v = self._halted()
-        v.record_pnl("TEST", _ntd(100))  # recovered, but cooldown still running
-        v.update_unrealized(0, complete=True)
-        assert v.halt_triggered is True
-        assert v._halt_reason == "PEAK_DRAWDOWN"
-
-    def test_peak_drawdown_release_requires_recovery(self):
-        v = self._halted()
-        v.record_pnl("TEST", _ntd(20))  # total = +170, drawdown 130 > 60
-        v._peak_drawdown_halt_ts_ns = 0
-        v.update_unrealized(0, complete=True)
-        assert v.halt_triggered is True
-
+class TestHardLimitRelease:
     def test_hard_limit_halt_does_not_release_on_recovery(self):
         # The hard daily-loss halt keeps its designed sticky semantics.
         v = _make_validator()
@@ -392,14 +316,5 @@ class TestPeakDrawdownRecovery:
         assert v.halt_triggered is True
         assert v._halt_reason == "DAILY_LOSS_LIMIT"
         v.record_pnl("TEST", _ntd(1050))  # back to flat PnL
-        v._peak_drawdown_halt_ts_ns = 0
         v.update_unrealized(0, complete=True)
-        assert v.halt_triggered is True
-
-    def test_peak_drawdown_release_requires_complete_snapshot(self):
-        # A partial valuation may latch a stop but never lift one.
-        v = self._halted()
-        v.record_pnl("TEST", _ntd(100))
-        v._peak_drawdown_halt_ts_ns = 0
-        v.update_unrealized(0, complete=False)
         assert v.halt_triggered is True
