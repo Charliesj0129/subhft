@@ -85,6 +85,30 @@ class TestResolveHftbtPath:
         result = _resolve_hftbt_path(str(hbt))
         assert result == str(hbt)
 
+    def test_per_day_inputs_in_one_dir_do_not_share_a_sibling(self, tmp_path):
+        """A bare hftbt.npz beside per-day files is not every day's data."""
+        (tmp_path / "hftbt.npz").touch()
+        day1 = tmp_path / "TMFD6_2026-04-14.npy"
+        day1.touch()
+        assert _resolve_hftbt_path(str(day1)) is None
+
+    def test_returns_own_converted_file_for_named_input(self, tmp_path):
+        day1 = tmp_path / "TMFD6_2026-04-14.npy"
+        day1.touch()
+        own = tmp_path / "TMFD6_2026-04-14.hftbt.npz"
+        own.touch()
+        assert _resolve_hftbt_path(str(day1)) == str(own)
+
+    def test_stale_converted_file_is_not_returned(self, tmp_path):
+        import os
+
+        hbt = tmp_path / "hftbt.npz"
+        hbt.touch()
+        research = tmp_path / "research.npy"
+        research.touch()
+        os.utime(hbt, (1_000_000, 1_000_000))
+        assert _resolve_hftbt_path(str(research)) is None
+
 
 # ---------------------------------------------------------------------------
 # has_hftbt_data
@@ -242,16 +266,15 @@ class TestHftNativeRunnerImportError:
 # HftNativeRunner — empty data path returns zero result
 # ---------------------------------------------------------------------------
 class TestHftNativeRunnerEmpty:
-    def test_returns_zero_result_when_no_hftbt_data(self, tmp_path):
-        """When no hftbt.npz found, runner returns a zero-valued BacktestResult."""
+    def test_returns_zero_result_when_no_data_paths(self):
+        """With no data paths at all, runner returns a zero-valued BacktestResult."""
         from research.backtest.hft_native_runner import HftNativeRunner
 
         alpha = MagicMock()
         alpha.manifest.alpha_id = "test"
-        config = BacktestConfig(data_paths=[str(tmp_path / "research.npy")])
+        config = BacktestConfig(data_paths=[])
         runner = HftNativeRunner(alpha, config)
 
-        # Patch to simulate hftbacktest available but no hftbt.npz found
         with (
             patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
             patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
@@ -261,6 +284,22 @@ class TestHftNativeRunnerEmpty:
         assert result.sharpe_is == pytest.approx(0.0)
         assert result.sharpe_oos == pytest.approx(0.0)
         assert result.run_id != ""  # has a UUID
+
+    def test_run_raises_when_a_data_path_is_missing(self, tmp_path):
+        """A missing input fails the run instead of becoming a zero result a gate would judge."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        config = BacktestConfig(data_paths=[str(tmp_path / "research.npy")])
+        runner = HftNativeRunner(alpha, config)
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+        ):
+            with pytest.raises(FileNotFoundError):
+                runner.run()
 
     def test_has_hftbt_data_false_when_no_sibling(self, tmp_path):
         paths = [str(tmp_path / "research.npy")]
@@ -350,6 +389,23 @@ class TestEnsureHftbtNpz:
                 assert Path(out).name == "hftbt.npz"
             except ImportError:
                 pytest.skip("hftbacktest not installed")
+
+    def test_each_input_converts_to_its_own_output(self, tmp_path):
+        """Two per-day inputs in one directory yield two distinct files with their own events."""
+        day1 = str(tmp_path / "TMFD6_2026-04-14.npy")
+        day2 = str(tmp_path / "TMFD6_2026-04-15.npy")
+        _make_research_npy(day1, n=10)
+        _make_research_npy(day2, n=20)
+        with patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True):
+            try:
+                out1 = ensure_hftbt_npz(day1)
+                out2 = ensure_hftbt_npz(day2)
+            except ImportError:
+                pytest.skip("hftbacktest not installed")
+        assert out1 != out2
+        assert Path(out1).name == "TMFD6_2026-04-14.hftbt.npz"
+        assert len(np.load(out1, allow_pickle=False)["data"]) == 3 * 10
+        assert len(np.load(out2, allow_pickle=False)["data"]) == 3 * 20
 
     def test_converts_standard_dtype(self, tmp_path):
         """Converts research.npy to hftbt.npz containing event_dtype array."""
@@ -482,7 +538,7 @@ class TestBrokerRTTInjection:
         alpha = MagicMock()
         alpha.manifest.alpha_id = "test"
         config = BacktestConfig(
-            data_paths=[str(tmp_path / "research.npy")],
+            data_paths=[],
             submit_ack_latency_ms=36.0,
             modify_ack_latency_ms=43.0,
             cancel_ack_latency_ms=47.0,

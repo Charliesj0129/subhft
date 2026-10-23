@@ -171,30 +171,51 @@ def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
     return is_path, oos_path
 
 
+_LEGACY_RESEARCH_NAMES = frozenset({"research.npy", "research.npz"})
+
+
+def _hftbt_output_path(data_path: str) -> Path:
+    """The one converted file that belongs to ``data_path``.
+
+    The legacy layout keeps a single ``research.npy`` per directory next to a
+    bare ``hftbt.npz``; that pairing is one-to-one and is kept. Any other input
+    gets ``<stem>.hftbt.npz``: a shared ``hftbt.npz`` would hand every per-day
+    file in a directory the events of whichever day was converted first.
+    """
+    p = Path(data_path)
+    if p.name in _LEGACY_RESEARCH_NAMES:
+        return p.parent / "hftbt.npz"
+    return p.parent / f"{p.stem}.hftbt.npz"
+
+
 def _resolve_hftbt_path(data_path: str) -> str | None:
-    """Given a data path (possibly research.npy), find the sibling hftbt.npz.
+    """Given a data path (possibly research.npy), find its converted hftbt.npz.
 
     Checks:
       1. data_path itself if its name ends with ``hftbt.npz`` (covers
          both the legacy bare ``hftbt.npz`` and per-day snapshot AOS
          files like ``TMFD6_2026-04-14_l2.hftbt.npz``).
-      2. parent_dir/hftbt.npz
-    Returns None if not found.
+      2. the input's own output (``_hftbt_output_path``), unless it is older
+         than the input it was converted from.
+    Returns None if not found or stale.
     """
     p = Path(data_path)
     if p.name.endswith("hftbt.npz") and p.exists():
         return str(p)
-    sibling = p.parent / "hftbt.npz"
-    if sibling.exists():
-        return str(sibling)
-    return None
+    out = _hftbt_output_path(data_path)
+    if not out.exists():
+        return None
+    if p.exists() and out.stat().st_mtime < p.stat().st_mtime:
+        return None
+    return str(out)
 
 
 def ensure_hftbt_npz(data_path: str) -> str:
     """Auto-convert research.npy → hftbt.npz if not already present.
 
-    Idempotent: if a sibling hftbt.npz already exists, returns its path immediately
-    without requiring hftbacktest to be installed.
+    Idempotent: if this input's converted file already exists and is not older
+    than the input, returns its path immediately without requiring hftbacktest.
+    Each input has its own output (``_hftbt_output_path``).
 
     Raises ImportError if hftbacktest is not installed and conversion is needed.
     Raises ValueError if data has no recognisable price fields or all rows are zero.
@@ -288,7 +309,7 @@ def ensure_hftbt_npz(data_path: str) -> str:
             w += 1
 
     event_arr = np.array(events[:w], dtype=_evt_dtype)
-    out_path = Path(data_path).parent / "hftbt.npz"
+    out_path = _hftbt_output_path(data_path)
     np.savez_compressed(str(out_path), data=event_arr)
     return str(out_path)
 
@@ -664,14 +685,10 @@ def _empty_walk_forward_result(wf: WalkForwardConfig) -> WalkForwardResult:
 def _collect_hbt_data(data_paths: list[str]) -> np.ndarray | None:
     """Resolve hftbt.npz paths, load and concatenate into a single array.
 
-    Returns None if no valid data paths are found.
+    Returns None if ``data_paths`` is empty. A missing input raises: silently
+    dropping a day shrinks the sample the gates then count as complete.
     """
-    hbt_paths: list[str] = []
-    for p in data_paths:
-        try:
-            hbt_paths.append(ensure_hftbt_npz(p))
-        except (FileNotFoundError, OSError):
-            pass
+    hbt_paths = [ensure_hftbt_npz(p) for p in data_paths]
 
     if not hbt_paths:
         return None
@@ -743,10 +760,9 @@ class HftNativeRunner:
         tmp_paths: list[str] = []
         try:
             for data_path in self.config.data_paths:
-                try:
-                    hbt_path = ensure_hftbt_npz(data_path)
-                except (FileNotFoundError, OSError):
-                    continue  # file missing, skip
+                # A missing input raises rather than being skipped: a dropped
+                # day would shrink the sample the gates count as complete.
+                hbt_path = ensure_hftbt_npz(data_path)
 
                 # Codex finding 5: alphas declaring lob_shared_v2/v3 need
                 # L2-L5 depth coverage; otherwise deep_depth_momentum_x1000
@@ -1155,7 +1171,7 @@ class HftNativeRunner:
 # Public helper for Gate C
 # ---------------------------------------------------------------------------
 def has_hftbt_data(data_paths: list[str]) -> bool:
-    """Return True if at least one path has a sibling hftbt.npz."""
+    """Return True if at least one path has a current converted hftbt.npz."""
     return any(_resolve_hftbt_path(p) is not None for p in data_paths)
 
 

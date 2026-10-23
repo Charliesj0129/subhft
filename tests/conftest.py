@@ -253,6 +253,44 @@ def _isolate_execution_state_paths(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_alpha_audit_sinks(tmp_path, monkeypatch):
+    """Keep alpha governance ledgers out of the checkout.
+
+    Three append-only research ledgers default to CWD-relative paths:
+    ``audit._FALLBACK_DIR`` (``research/experiments/.audit_fallback``, written
+    whenever audit is enabled and ClickHouse is unreachable),
+    ``kill_ledger`` (``research/alphas/_kill_ledger.jsonl``) and
+    ``sub_gate_audit`` (``research/audit/sub_gate_runs.jsonl``). One run of the
+    alpha unit tests on a clean checkout wrote 28 rows into them, including a
+    Gate D KILL for ``ofi_mc`` in the kill ledger -- a fixture verdict that the
+    gate history then reads as real evidence.
+
+    ``audit._FALLBACK_DIR`` is resolved at import time, so the env var alone is
+    not enough; the module attribute is patched too. ``audit._ENABLED`` and the
+    two dedupe caches are module state that would otherwise carry one test's
+    opt-in or seen-ids into the next. A test that needs a specific path still
+    sets its own, which wins over this fixture.
+    """
+    from hft_platform.alpha import audit as _audit
+    from hft_platform.alpha import kill_ledger as _kill_ledger
+    from hft_platform.alpha import sub_gate_audit as _sub_gate_audit
+
+    base = tmp_path / "alpha_audit"
+    monkeypatch.setenv("HFT_ALPHA_AUDIT_FALLBACK_DIR", str(base / "audit_fallback"))
+    monkeypatch.setattr(_audit, "_FALLBACK_DIR", base / "audit_fallback")
+    monkeypatch.setattr(_audit, "_ENABLED", None)
+    monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(base / "kill_ledger.jsonl"))
+    monkeypatch.setenv("HFT_SUB_GATE_AUDIT_PATH", str(base / "sub_gate_runs.jsonl"))
+    _kill_ledger._reset_cache_for_tests()
+    _sub_gate_audit._reset_cache_for_tests()
+    try:
+        yield
+    finally:
+        _kill_ledger._reset_cache_for_tests()
+        _sub_gate_audit._reset_cache_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_wal_and_state_dirs(tmp_path, monkeypatch):
     """Keep the WAL and state *directories* out of the checkout too.
 
