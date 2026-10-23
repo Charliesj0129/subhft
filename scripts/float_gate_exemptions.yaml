@@ -1,0 +1,619 @@
+# Float gate exemptions (scripts/check_float_in_financial_paths.py).
+#
+# The gate flags `: float` annotations and `float(` calls in order/, risk/, execution/ and
+# feed_adapter/normalizer.py (Law 4: prices and accounting values are scaled int x10000). A line passes
+# only if it is listed here (file + exact code text, comments ignored, `count` lines at most) or carries
+# `# precision-ok: <reason>` with a non-empty reason. An entry that matches nothing fails the gate, so
+# this file cannot go stale silently; a new float line fails until someone writes down why it is fine.
+#
+# kind:
+#   not-money            duration, timestamp, dimensionless score; no currency unit
+#   offline-only         code no live path imports
+#   boundary-conversion  a float from the broker or a config file is converted to an integer right here
+#   known-violation      a float price-derived value is kept; tracked_by names where it is to be removed
+# boundary-conversion and known-violation need tracked_by.
+
+exemptions:
+  - file: src/hft_platform/execution/checkpoint.py
+    code: "self._interval_s = float(interval_s if interval_s is not None else os.getenv(\"HFT_CHECKPOINT_INTERVAL_S\", \"60\"))"
+    kind: not-money
+    reason: "checkpoint interval in seconds"
+  - file: src/hft_platform/execution/normalizer.py
+    code: "fv = float(value)"
+    kind: not-money
+    reason: "timestamp magnitude detection (seconds / ms / us / ns); float keeps about 256 ns of resolution at 1.7e18 ns, not an amount"
+  - file: src/hft_platform/execution/positions.py
+    code: "def _publish_drawdown_gauge(self, drawdown: float) -> None:"
+    kind: not-money
+    reason: "drawdown fraction published to a gauge; no accounting value is derived from it"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "_DEFAULT_CHECK_INTERVAL_S = float(os.environ.get(\"HFT_RECON_CHECK_INTERVAL\", \"5\"))"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "_DEFAULT_BACKOFF_BASE = float(os.environ.get(\"HFT_RECON_BACKOFF_BASE\", \"2\"))"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "_DEFAULT_BACKOFF_MAX = float(os.environ.get(\"HFT_RECON_BACKOFF_MAX\", \"60\"))"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "base: float,"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "max_delay: float,"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "jitter: float,"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "self.check_interval_s: float = recon_cfg.get("
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "self.backoff_base: float = recon_cfg.get("
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "self.backoff_max: float = recon_cfg.get("
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "self.sync_log_heartbeat_s: float = float("
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "self._last_sync_log_ts: float = 0.0"
+    kind: not-money
+    reason: "timestamp in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "self.last_heartbeat: float = timebase.now_s()"
+    kind: not-money
+    reason: "timestamp in seconds"
+  - file: src/hft_platform/execution/reconciliation.py
+    code: "def _record_sync_duration(self, duration_s: float) -> None:"
+    kind: not-money
+    reason: "reconciliation poll interval, backoff or jitter in seconds"
+  - file: src/hft_platform/execution/router.py
+    code: "self._fill_dedup_persist_interval_s: float = float(os.environ.get(\"HFT_FILL_DEDUP_PERSIST_INTERVAL_S\", \"1.0\"))"
+    kind: not-money
+    reason: "interval or timeout in seconds"
+  - file: src/hft_platform/execution/router.py
+    code: "self._fill_dedup_last_persist_seconds: float = float(\"-inf\")"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/execution/router.py
+    code: "def _schedule_trailing_fill_dedup_persist(self, now_seconds: float) -> None:"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/execution/router.py
+    code: "async def stop(self, drain_timeout_s: float = 2.0) -> int:"
+    kind: not-money
+    reason: "interval or timeout in seconds"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "_TS_MAX_LAG_NS = int(float(os.getenv(\"HFT_TS_MAX_LAG_S\", \"5\")) * 1e9)"
+    kind: not-money
+    reason: "seconds from the environment turned into integer nanoseconds once, at import"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "_TS_MAX_FUTURE_NS = int(float(os.getenv(\"HFT_TS_MAX_FUTURE_S\", \"5\")) * 1e9)"
+    kind: not-money
+    reason: "seconds from the environment turned into integer nanoseconds once, at import"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "_TS_SKEW_LOG_COOLDOWN_NS = int(float(os.getenv(\"HFT_TS_SKEW_LOG_COOLDOWN_S\", \"60\")) * 1e9)"
+    kind: not-money
+    reason: "seconds from the environment turned into integer nanoseconds once, at import"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "self._mtime: float | None = None"
+    kind: not-money
+    reason: "file modification time"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "scale = int(round(1 / float(tick_size)))"
+    kind: boundary-conversion
+    reason: "tick size from instrument metadata parsed as float, then turned into an integer scale or tick count with round()"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "val = float(raw)"
+    kind: boundary-conversion
+    reason: "tick size from instrument metadata parsed as float, then turned into an integer scale or tick count with round()"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "strike_scaled = int(round(float(raw_strike) * self.price_scale(code)))"
+    kind: boundary-conversion
+    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "tick_size = float(raw_tick)"
+    count: 2
+    kind: boundary-conversion
+    reason: "tick size from instrument metadata parsed as float, then turned into an integer scale or tick count with round()"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "tick_size = 1.0 / float(scale)"
+    count: 2
+    kind: boundary-conversion
+    reason: "tick size from instrument metadata parsed as float, then turned into an integer scale or tick count with round()"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "price = int(round(float(close_val) * scale))"
+    kind: boundary-conversion
+    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "timb = float(top_imbalance)"
+    kind: not-money
+    reason: "dimensionless book imbalance"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "compat_stats = BookStats(bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)"
+    kind: known-violation
+    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "float(ss),"
+    kind: known-violation
+    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "float(mid_price),"
+    count: 3
+    kind: known-violation
+    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "float(spread),"
+    count: 3
+    kind: known-violation
+    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "float(imbalance),"
+    count: 3
+    kind: not-money
+    reason: "dimensionless book imbalance"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "bid_prices_np[i] = float(bp[i])"
+    kind: boundary-conversion
+    reason: "broker prices copied into float64 buffers that the numpy/Rust kernel scales to integers"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "ask_prices_np[i] = float(ap[i])"
+    kind: boundary-conversion
+    reason: "broker prices copied into float64 buffers that the numpy/Rust kernel scales to integers"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "bids_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv)]"
+    kind: boundary-conversion
+    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "asks_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av)]"
+    kind: boundary-conversion
+    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "bids.append([int(round(float(buy_price) * scale)), int(buy_volume or 0)])"
+    kind: boundary-conversion
+    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "asks.append([int(round(float(sell_price) * scale)), int(sell_volume or 0)])"
+    kind: boundary-conversion
+    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/order/adapter.py
+    code: "at: float"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "confirm_s: float | None = None"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "monotonic_ts: float"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._order_id_map_persist_interval_s: float = float(os.getenv(\"HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S\", \"1.0\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._order_id_map_last_persist_s: float = float(\"-inf\")"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._order_id_map_ttl_ns: int = int(float(os.getenv(\"HFT_ORDER_ID_MAP_TTL_S\", \"86400\")) * 1_000_000_000)"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._fill_ledger_ttl_s: float = float(os.getenv(\"HFT_FILL_LEDGER_TTL_S\", \"900\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._finished_ttl_s: float = self._fill_ledger_ttl_s"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._live_orders_ttl_s: float = float(os.getenv(\"HFT_LIVE_ORDERS_TTL_S\", \"300\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._live_orders_last_sweep_s: float = float(\"-inf\")"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._recently_terminal_ttl_s: float = float(os.getenv(\"HFT_RECENT_TERMINAL_TTL_S\", \"60\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._cancel_inflight_ttl_s: float = float(os.getenv(\"HFT_CANCEL_INFLIGHT_TTL_S\", \"30\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._cancel_confirm_s: float = float(os.getenv(\"HFT_CANCEL_CONFIRM_S\", \"60\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._cancel_timeout_confirm_s: float = float(os.getenv(\"HFT_CANCEL_TIMEOUT_CONFIRM_S\", \"10\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._cancel_check_interval_s: float = 5.0"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._cancel_check_last_s: float = float(\"-inf\")"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._api_timeout_s = float(os.getenv(\"HFT_API_TIMEOUT_S\", \"3.0\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._api_guard_timeout_s = float(os.getenv(\"HFT_API_GUARD_TIMEOUT_S\", \"0.005\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._api_coalesce_window_s = float(os.getenv(\"HFT_API_COALESCE_WINDOW_S\", \"0.005\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._phantom_recovery_ttl_s: float = float(os.getenv(\"HFT_PHANTOM_RECOVERY_TTL_S\", \"300\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._pending_fill_ttl_s: float = float(os.getenv(\"HFT_PENDING_FILL_TTL_S\", \"7200\"))"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "def _evict_stale_phantom_records(self, max_age_s: float = 3600.0) -> int:"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "monotonic_ts=float(ts),"
+    kind: not-money
+    reason: "monotonic timestamp in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def release_stale_phantom_pendings(self, ttl_s: float | None = None) -> int:"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "def _schedule_trailing_persist(self, now_seconds: float) -> None:"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/adapter.py
+    code: "confirm_s: float | None = None,"
+    kind: not-money
+    reason: "TTL, timeout, interval or window in seconds (environment or constant), not an amount"
+  - file: src/hft_platform/order/circuit_breaker.py
+    code: "def open_until(self, value: float) -> None:"
+    kind: not-money
+    reason: "monotonic deadline in seconds"
+  - file: src/hft_platform/order/explanation.py
+    code: "inserted_monotonic_ts: float"
+    kind: not-money
+    reason: "TTL or monotonic timestamp in seconds"
+  - file: src/hft_platform/order/explanation.py
+    code: "ttl_s: float = 300.0,"
+    kind: not-money
+    reason: "TTL or monotonic timestamp in seconds"
+  - file: src/hft_platform/order/explanation.py
+    code: "self._ttl_s = float(ttl_s)"
+    kind: not-money
+    reason: "TTL or monotonic timestamp in seconds"
+  - file: src/hft_platform/order/explanation.py
+    code: "self._last_sweep_monotonic_ts: float = 0.0"
+    kind: not-money
+    reason: "TTL or monotonic timestamp in seconds"
+  - file: src/hft_platform/order/explanation.py
+    code: "def sweep_stale(self, *, now_monotonic_ts: float | None = None, now_ns: int | None = None) -> int:"
+    kind: not-money
+    reason: "TTL or monotonic timestamp in seconds"
+  - file: src/hft_platform/order/explanation.py
+    code: "now_monotonic_ts = time.monotonic() if now_monotonic_ts is None else float(now_monotonic_ts)"
+    kind: not-money
+    reason: "TTL or monotonic timestamp in seconds"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "_EPS: float = 1e-15"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "_DEFAULT_BURST_THRESHOLD: float = 3.0"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "_DEFAULT_MIN_BPV: float = 1e-10"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "_MU1_INV_SQ: float = math.pi / 2.0"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "magnitude: float"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "t_statistic: float"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "toxicity_score: float"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "burst_threshold: float = _DEFAULT_BURST_THRESHOLD,"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "min_bpv: float = _DEFAULT_MIN_BPV,"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "self._burst_threshold: float = burst_threshold"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "self._min_bpv: float = max(0.0, min_bpv)"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "self._t_statistic: float = 0.0"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "self._toxicity_score: float = 0.0"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "self._drift_sum: float = 0.0"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "imbalance: float = 0.0,"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/drift_burst_detector.py
+    code: "imbalance: float,"
+    kind: not-money
+    reason: "statistic, threshold or score of the drift-burst test on returns: dimensionless, no currency unit"
+  - file: src/hft_platform/risk/engine.py
+    code: "self._dlq_ttl_ns: int = int(float(os.getenv(\"HFT_RISK_DLQ_TTL_S\", \"30\")) * 1_000_000_000)"
+    kind: not-money
+    reason: "duration in seconds, converted to integer nanoseconds"
+  - file: src/hft_platform/risk/engine.py
+    code: "max_price_cap = float(defaults.get(\"max_price_cap\", 5000.0))"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/engine.py
+    code: "all_caps.append(float(val))"
+    count: 2
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/engine.py
+    code: "max_price_cap_raw = float(defaults.get(\"max_price_cap\", 5000.0))"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/engine.py
+    code: "tick_size_raw = float(defaults.get(\"tick_size\", 0.01))"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/liquidity_gate.py
+    code: "def __init__(self, *, max_spread_pts: float = 5.0) -> None:"
+    kind: not-money
+    reason: "spread threshold in index points compared with a feature value; no order price or accounting value is derived from it"
+  - file: src/hft_platform/risk/liquidity_gate.py
+    code: "def check(self, *, spread_pts: float) -> bool:"
+    kind: not-money
+    reason: "spread threshold in index points compared with a feature value; no order price or accounting value is derived from it"
+  - file: src/hft_platform/risk/loss_exit.py
+    code: "def __init__(self, *, protection_ticks: int = 5, retry_interval_s: float = 10.0) -> None:"
+    kind: not-money
+    reason: "retry interval in seconds for the loss-exit order; not an amount"
+  - file: src/hft_platform/risk/position_sync.py
+    code: "self.last_sync_ts: float = 0.0"
+    kind: not-money
+    reason: "timestamp in seconds"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "feed_gap_storm_s: float = 1.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "drawdown_flat_release_after_s: float = 300.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._storm_entry_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._storm_cooldown_s: float = float(os.getenv(\"HFT_STORMGUARD_STORM_COOLDOWN_S\", \"30\"))"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._halt_cooldown_s: float = float(os.getenv(\"HFT_STORMGUARD_HALT_COOLDOWN_S\", \"60\"))"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._halt_entry_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._warm_entry_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._warm_cooldown_s: float = float(os.getenv(\"HFT_STORMGUARD_WARM_COOLDOWN_S\", \"30\"))"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._warm_toxicity_entry: float = float(os.getenv(\"HFT_STORMGUARD_WARM_TOXICITY_ENTRY\", \"0.5\"))"
+    kind: not-money
+    reason: "dimensionless score or book imbalance"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._warm_toxicity_exit: float = float(os.getenv(\"HFT_STORMGUARD_WARM_TOXICITY_EXIT\", \"0.4\"))"
+    kind: not-money
+    reason: "dimensionless score or book imbalance"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._feature_failure_storm_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._norm_failure_storm_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._feed_gap_deescalation_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._feed_gap_reescalation_cooldown_s: float = float("
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._latency_deescalation_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._latency_reescalation_cooldown_s: float = float("
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._warm_deescalation_ts: float = 0.0"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self._warm_reescalation_cooldown_s: float = float("
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self.thresholds.drawdown_flat_release_after_s = float(risk_cfg[\"drawdown_flat_release_after_s\"])"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self.thresholds.feed_gap_storm_s = float(risk_cfg[\"feed_gap_storm_s\"])"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self.thresholds.feed_gap_storm_s = float(feed_gap_storm)"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "self.thresholds.drawdown_flat_release_after_s = float(flat_release)"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "stall_kill_seconds = float(os.getenv(\"HFT_LOOP_STALL_KILL_S\", \"60\"))"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "feed_gap_s: float,"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "feed_gap_s: float = 0.0,"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "imbalance: float = 0.0,"
+    kind: not-money
+    reason: "dimensionless score or book imbalance"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "_FEATURE_RECOVERY_HOLD_S: float = float(os.getenv(\"HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S\", \"5\"))"
+    kind: not-money
+    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
+  - file: src/hft_platform/risk/stress_test.py
+    code: "underlying_shift_pct: float"
+    count: 2
+    kind: offline-only
+    reason: "offline scenario code (what-if sweeps on synthetic inputs); only tests import it and HFT-P004 exempts the file"
+  - file: src/hft_platform/risk/stress_test.py
+    code: "vol_shift_abs: float"
+    count: 2
+    kind: offline-only
+    reason: "offline scenario code (what-if sweeps on synthetic inputs); only tests import it and HFT-P004 exempts the file"
+  - file: src/hft_platform/risk/stress_test.py
+    code: "pnl_ntd: float"
+    kind: offline-only
+    reason: "offline scenario code (what-if sweeps on synthetic inputs); only tests import it and HFT-P004 exempts the file"
+  - file: src/hft_platform/risk/stress_test.py
+    code: "underlying_price: float,"
+    count: 2
+    kind: offline-only
+    reason: "offline scenario code (what-if sweeps on synthetic inputs); only tests import it and HFT-P004 exempts the file"
+  - file: src/hft_platform/risk/stress_test.py
+    code: "multiplier: float,"
+    count: 2
+    kind: offline-only
+    reason: "offline scenario code (what-if sweeps on synthetic inputs); only tests import it and HFT-P004 exempts the file"
+  - file: src/hft_platform/risk/stress_test.py
+    code: "risk_free_rate: float = 0.01,"
+    kind: offline-only
+    reason: "offline scenario code (what-if sweeps on synthetic inputs); only tests import it and HFT-P004 exempts the file"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._max_price_cap_raw = float(self.defaults.get(\"max_price_cap\", 5000.0))"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._tick_size_raw = float(self.defaults.get(\"tick_size\", 0.01))"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._product_caps_raw[ptype] = float(val)"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._root_caps_raw[key[len(_root_prefix) :]] = float(val)"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._mid_price_max_age_ns = int(float(self.defaults.get(\"mid_price_max_age_s\", 10)) * 1_000_000_000)"
+    kind: not-money
+    reason: "duration in seconds, converted to integer nanoseconds"
+  - file: src/hft_platform/risk/validators.py
+    code: "return float(sym_cap)"
+    kind: boundary-conversion
+    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
+    tracked_by: "T18-F1"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._peak_drawdown_pct: float = float(ipnl_cfg.get(\"peak_drawdown_pct\", 0.40))"
+    kind: not-money
+    reason: "drawdown fraction of peak equity, not an amount"
+  - file: src/hft_platform/risk/validators.py
+    code: "self._drawdown_recovery_pct: float = float(ipnl_cfg.get(\"drawdown_recovery_pct\", 0.20))"
+    kind: not-money
+    reason: "drawdown fraction of peak equity, not an amount"
