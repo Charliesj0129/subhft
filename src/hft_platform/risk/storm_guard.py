@@ -155,6 +155,11 @@ class StormGuard:
         # ``update()`` sees drawdown/latency/feed-gap, and "an operator or a
         # startup safety gate refused this process" is not among them.
         "_kill_switch_hold",
+        # Blocks HALT de-escalation while any durable manual latch
+        # (``risk/manual_latches.py``) is present on disk. Same shape again;
+        # the difference from the holds above is who may clear it: only the
+        # operator, by removing the latch file. A restart cannot.
+        "_manual_latch_hold",
         # P0-I4: engine loop reference bound via ``bind_loop()`` by HFTSystem.run().
         # Used by ``_fire_halt_callback`` to dispatch coroutine halt callbacks from
         # non-asyncio threads (e.g. bootstrap lease-refresh daemon).
@@ -248,6 +253,7 @@ class StormGuard:
         self._reconciliation_hold: bool = False
         self._daily_loss_hold: bool = False
         self._kill_switch_hold: bool = False
+        self._manual_latch_hold: bool = False
         # P0-I4: engine loop reference; bound by HFTSystem.run() via ``bind_loop``.
         # When ``None``, ``_fire_halt_callback`` falls back to a best-effort
         # ``asyncio.get_running_loop()`` lookup (safe on the loop thread itself).
@@ -660,6 +666,18 @@ class StormGuard:
                     self._de_escalate_count = 0
                     logger.warning(
                         "stormguard_deescalation_blocked_kill_switch_hold",
+                        current_state=self.state.name,
+                        target_state=new_state.name,
+                    )
+                    current_state = self.state
+                    return current_state
+                # Manual-latch hold: a durable latch (daily loss,
+                # reconciliation mismatch) is on disk. Only the operator
+                # removes it, so only the operator ends this HALT.
+                if self.state == StormGuardState.HALT and self._manual_latch_hold:
+                    self._de_escalate_count = 0
+                    logger.warning(
+                        "stormguard_deescalation_blocked_manual_latch_hold",
                         current_state=self.state.name,
                         target_state=new_state.name,
                     )
@@ -1559,3 +1577,26 @@ class StormGuard:
     def kill_switch_hold(self) -> bool:
         """Whether the kill-switch hold is active (read-only)."""
         return self._kill_switch_hold
+
+    def set_manual_latch_hold(self, hold: bool) -> None:
+        """Set or clear the manual-latch hold on HALT de-escalation.
+
+        ``HFTSystem`` sets this every supervise tick from the presence of the
+        files under ``manual_latches.latch_dir()``. Removing them
+        (``hft risk rearm``) releases the hold and HALT de-escalates through the
+        normal cooldown. Thread-safe.
+        """
+        with self._state_lock:
+            old = self._manual_latch_hold
+            self._manual_latch_hold = hold
+        if old != hold:
+            logger.warning(
+                "stormguard_manual_latch_hold_changed",
+                hold=hold,
+                current_state=self.state.name,
+            )
+
+    @property
+    def manual_latch_hold(self) -> bool:
+        """Whether the manual-latch hold is active (read-only)."""
+        return self._manual_latch_hold

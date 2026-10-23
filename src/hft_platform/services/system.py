@@ -4,6 +4,8 @@ import gc
 import math
 import os
 import time
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Dict, Optional
 
 from structlog import get_logger
@@ -25,7 +27,7 @@ from hft_platform.ops import quarantine_requests, rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
-from hft_platform.risk import kill_switch
+from hft_platform.risk import daily_loss_state, kill_switch, manual_latches
 from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
 from hft_platform.risk.loss_exit import LossExitController, OpenPosition
 from hft_platform.risk.storm_guard import StormGuardState
@@ -145,6 +147,108 @@ class HFTSystem:
     # trading hours an IOC is rejected, and repeated rejects trip the breaker.
     _LOSS_EXIT_MAX_BOOK_AGE_NS: int = 30 * 1_000_000_000
 
+    # Durable manual latches present at the last supervise tick (name -> reason).
+    # Replaced, never mutated, so the class-level default is never shared state.
+    _manual_latches_active: Mapping[str, str] = MappingProxyType({})
+    # The daily-loss manual latch was written for the stop now latched.
+    _daily_loss_latch_published: bool = False
+    # Last document written to daily_loss_state; None before the first write.
+    _daily_loss_state_written: dict[str, Any] | None = None
+
+    def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
+        risk_engine = getattr(self, "risk_engine", None)
+        for v in getattr(risk_engine, "validators", None) or ():
+            if isinstance(v, DailyLossLimitValidator):
+                return v
+        return None
+
+    def _restore_daily_loss_state(self) -> None:
+        """Load today's daily-loss state at boot, before anything can dispatch.
+
+        A document from another trading day is ignored (the roll would have
+        cleared it). An unreadable one is logged and ignored: the stops that
+        must survive a restart are the manual latch files, read next.
+        """
+        validator = self._daily_loss_validator()
+        if validator is None:
+            return
+        try:
+            document = daily_loss_state.load()
+            if document is None:
+                return
+            restored = validator.restore_state(document["validator"])
+        except Exception as exc:  # noqa: BLE001 - boot continues; the latch files carry the stops
+            logger.critical(
+                "daily_loss_state_unreadable_at_boot",
+                path=str(daily_loss_state.state_path()),
+                error=str(exc),
+                consequence="today's realized loss and peak start from zero",
+            )
+            return
+        if restored:
+            self._daily_loss_latch_published = bool(document.get("latch_published", False))
+            logger.warning(
+                "daily_loss_state_restored",
+                halt_triggered=validator.halt_triggered,
+                halt_reason=validator.halt_reason,
+                accumulated=validator.export_state()["accumulated"],
+            )
+        else:
+            logger.info("daily_loss_state_from_previous_day_ignored")
+
+    def _apply_manual_latches(self, latches: Mapping[str, str]) -> None:
+        """Hold HALT while any manual latch file is present; release when none is."""
+        self._manual_latches_active = MappingProxyType(dict(latches))
+        if latches and self.storm_guard.state != StormGuardState.HALT:
+            summary = ", ".join(f"{name}={reason}" for name, reason in sorted(latches.items()))
+            self.storm_guard.trigger_halt(f"MANUAL_LATCH: {summary}")
+            logger.critical("Manual latch present - HALT", latches=dict(latches))
+        self.storm_guard.set_manual_latch_hold(bool(latches))
+        metrics = getattr(self.storm_guard, "metrics", None)
+        gauge = getattr(metrics, "manual_latch_active", None)
+        if gauge is not None:
+            for name in manual_latches.LATCH_NAMES:
+                gauge.labels(latch=name).set(1 if name in latches else 0)
+
+    async def _sync_manual_latches(self) -> None:
+        """Supervise-tick half of the durable latches. Disk IO runs in threads.
+
+        1. A daily stop latched on the hard limit becomes a manual latch file,
+           once per stop. PEAK_DRAWDOWN is not one of the four manual reasons
+           and keeps its own release.
+        2. The validator state is persisted when it changed.
+        3. The latch files present set the hold. A failed read keeps the last
+           known set: an IO error is not an operator's release.
+        """
+        validator = self._daily_loss_validator()
+        if validator is not None:
+            if not validator.halt_triggered:
+                self._daily_loss_latch_published = False
+            elif validator.halt_reason == "DAILY_LOSS_LIMIT" and not self._daily_loss_latch_published:
+                try:
+                    await asyncio.to_thread(
+                        manual_latches.activate,
+                        manual_latches.DAILY_LOSS,
+                        "DAILY_LOSS_LIMIT",
+                        actor="engine",
+                    )
+                    self._daily_loss_latch_published = True
+                except Exception as exc:  # noqa: BLE001 - retried next tick; the in-memory hold stands
+                    logger.error("daily_loss_latch_write_failed", error=str(exc))
+            document = {"validator": validator.export_state(), "latch_published": self._daily_loss_latch_published}
+            if document != self._daily_loss_state_written:
+                try:
+                    await asyncio.to_thread(daily_loss_state.save, document)
+                    self._daily_loss_state_written = document
+                except Exception as exc:  # noqa: BLE001 - retried next tick
+                    logger.error("daily_loss_state_write_failed", error=str(exc))
+        try:
+            latches = await asyncio.to_thread(manual_latches.active)
+        except Exception as exc:  # noqa: BLE001 - keep the last known set
+            logger.error("manual_latch_read_failed", error=str(exc))
+            latches = dict(self._manual_latches_active)
+        self._apply_manual_latches(latches)
+
     def _run_loss_exit(self) -> None:
         """Submit the FORCE_FLAT intents ``LossExitController`` says are due.
 
@@ -191,7 +295,11 @@ class HFTSystem:
         intents = controller.plan(
             now_ns=now_ns,
             positions=positions,
-            daily_halt=bool(daily is not None and daily.halt_triggered),
+            # The manual latch outlives the validator's own flag (it survives
+            # the day roll and a restart); while it holds HALT, the exit must
+            # keep working or the stop freezes the book it was meant to close.
+            daily_halt=bool(daily is not None and daily.halt_triggered)
+            or manual_latches.DAILY_LOSS in self._manual_latches_active,
             position_loss_limit_scaled=daily.position_loss_limit_scaled if daily is not None else 0,
             expiry_enabled=bool(expiry is not None and expiry.enabled),
             expiry_cutoff_minute=expiry.cutoff_minute if expiry is not None else DEFAULT_EXPIRY_CUTOFF_MINUTE,
@@ -703,6 +811,23 @@ class HFTSystem:
                 reason=_boot_ks_reason,
                 consequence="feeds and recorder start; no new orders; cancels still allowed",
             )
+
+        # Same reasoning for the daily-loss state and the durable manual
+        # latches: both must be in force before anything can dispatch, and a
+        # restart must not be what releases them.
+        self._restore_daily_loss_state()
+        try:
+            _boot_latches = manual_latches.active()
+        except Exception as exc:  # noqa: BLE001 - an unreadable latch dir is not a release
+            logger.critical("manual_latch_dir_unreadable_at_boot", error=str(exc))
+            _boot_latches = {"unreadable": str(exc)}
+        if _boot_latches:
+            logger.critical(
+                "Manual latch present at startup - booting into HALT",
+                latches=_boot_latches,
+                release="hft risk rearm <latch> --reason ...",
+            )
+        self._apply_manual_latches(_boot_latches)
         _gc_disabled = False
 
         import signal
@@ -2083,6 +2208,12 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("daily loss boundary roll failed", error=str(e))
 
+            # 2a. Durable manual latches and the persisted daily-loss state.
+            try:
+                await self._sync_manual_latches()
+            except Exception as e:
+                logger.error("manual latch sync failed", error=str(e), exc_info=True)
+
             # 2b. Close positions a latched stop, a per-position loss limit or
             # an expiring contract would otherwise leave frozen (risk/loss_exit.py).
             try:
@@ -2174,10 +2305,10 @@ class HFTSystem:
                     logger.warning("pool_metrics_update_failed", error=str(e))
 
             # Kill-switch file check (async to avoid blocking event loop)
-            kill_switch_path = kill_switch.kill_switch_path()
+            # active_path also checks the pre-.state legacy location.
             loop = asyncio.get_running_loop()
-            ks_exists = await loop.run_in_executor(None, os.path.exists, kill_switch_path)
-            if ks_exists:
+            kill_switch_path = await loop.run_in_executor(None, kill_switch.active_path)
+            if kill_switch_path is not None:
                 if self.storm_guard.state != StormGuardState.HALT:
                     try:
                         _ks_reason = await loop.run_in_executor(None, _read_kill_switch_reason, kill_switch_path)

@@ -187,6 +187,11 @@ def _atomic_write(path: Path, state: dict[str, Any]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Public form of ``_atomic_write`` for other single-writer latch files."""
+    _atomic_write(path, payload)
+
+
 def _errnos(*names: str) -> frozenset[int]:
     return frozenset(v for v in (getattr(errno, n, None) for n in names) if v is not None)
 

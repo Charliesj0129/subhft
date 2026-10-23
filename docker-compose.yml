@@ -404,7 +404,7 @@ services:
         max-file: "3"
 
   prometheus:
-    image: prom/prometheus:v2.51.0
+    image: prom/prometheus:v2.55.1
     container_name: prometheus
     ports:
       - "127.0.0.1:9091:9090"

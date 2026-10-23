@@ -250,6 +250,11 @@ def _isolate_execution_state_paths(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(base / "position_checkpoint.json"))
     monkeypatch.setenv("HFT_ORDER_ID_MAP_PERSIST_PATH", str(base / "order_id_map.jsonl"))
     monkeypatch.setenv("HFT_GATEWAY_LEADER_LEASE_PATH", str(base / "gateway_leader.lock"))
+    # The durable stops: a latch left in the checkout would halt every later
+    # test that runs a supervise tick or a boot.
+    monkeypatch.setenv("HFT_KILL_SWITCH_PATH", str(base / "kill_switch"))
+    monkeypatch.setenv("HFT_MANUAL_LATCH_DIR", str(base / "manual_latches"))
+    monkeypatch.setenv("HFT_DAILY_LOSS_STATE_PATH", str(base / "daily_loss_state.json"))
 
 
 @pytest.fixture(autouse=True)

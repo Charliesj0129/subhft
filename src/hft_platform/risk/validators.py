@@ -700,6 +700,74 @@ class DailyLossLimitValidator(RiskValidator):
     def day_open_known(self) -> bool:
         return self._day_open_known
 
+    @property
+    def halt_reason(self) -> str:
+        """Which branch latched the stop: ``DAILY_LOSS_LIMIT``, ``PEAK_DRAWDOWN`` or ``""``."""
+        return self._halt_reason
+
+    def export_state(self) -> Dict[str, Any]:
+        """The day's runtime state, for ``risk/daily_loss_state.py`` to persist.
+
+        Everything a restart used to throw away: the realized accumulators, the
+        latch and its reason, the peak watermark, the soft-limit state and the
+        day's opening mark. Unrealized PnL is left out on purpose -- the first
+        mark-to-market tick after boot recomputes it from the restored book.
+        """
+        return {
+            "boundary_ns": self._current_reset_boundary_ns,
+            "accumulated": dict(self._accumulated_loss),
+            "halt_triggered": self.halt_triggered,
+            "halt_reason": self._halt_reason,
+            "halt_release_pending": self._halt_release_pending,
+            "peak_drawdown_halt_ts_ns": self._peak_drawdown_halt_ts_ns,
+            "peak_pnl_scaled": self._peak_pnl_scaled,
+            "soft_limit_active": self.soft_limit_active,
+            "soft_limit_cooldown_until_ns": self._soft_limit_cooldown_until_ns,
+            "unrealized_day_open": self._unrealized_day_open,
+            "day_open_known": self._day_open_known,
+        }
+
+    def restore_state(self, state: Dict[str, Any]) -> bool:
+        """Load a state written by :meth:`export_state` in this trading day.
+
+        Returns False, changing nothing, when the state belongs to another
+        trading day: the day roll would have cleared it anyway, and a daily
+        stop that must outlive the roll is a manual latch on disk, not this.
+        Raises ``ValueError`` on a malformed document, also changing nothing.
+        """
+        ints = ("boundary_ns", "peak_drawdown_halt_ts_ns", "peak_pnl_scaled", "soft_limit_cooldown_until_ns")
+        bools = ("halt_triggered", "halt_release_pending", "soft_limit_active", "day_open_known")
+        for key in (*ints, "unrealized_day_open"):
+            if type(state.get(key)) is not int:
+                raise ValueError(f"daily loss state field {key!r} is not an int")
+        for key in bools:
+            if type(state.get(key)) is not bool:
+                raise ValueError(f"daily loss state field {key!r} is not a bool")
+        accumulated = state.get("accumulated")
+        if not isinstance(accumulated, dict) or not all(
+            isinstance(k, str) and type(v) is int for k, v in accumulated.items()
+        ):
+            raise ValueError("daily loss state field 'accumulated' is not a map of str to int")
+        reason = state.get("halt_reason")
+        if reason not in ("", "DAILY_LOSS_LIMIT", "PEAK_DRAWDOWN"):
+            raise ValueError(f"daily loss state field 'halt_reason' is {reason!r}")
+        if state["boundary_ns"] != self._current_boundary_ns():
+            return False
+        self._current_reset_boundary_ns = state["boundary_ns"]
+        self._accumulated_loss = dict(accumulated)
+        self.halt_triggered = state["halt_triggered"]
+        self._halt_reason = reason
+        self._halt_release_pending = state["halt_release_pending"]
+        self._peak_drawdown_halt_ts_ns = state["peak_drawdown_halt_ts_ns"]
+        self._peak_pnl_scaled = state["peak_pnl_scaled"]
+        self.soft_limit_active = state["soft_limit_active"]
+        self._soft_limit_cooldown_until_ns = state["soft_limit_cooldown_until_ns"]
+        self._unrealized_day_open = state["unrealized_day_open"]
+        self._day_open_known = state["day_open_known"]
+        self._last_consistent_total_pnl = sum(self._accumulated_loss.values())
+        self._last_consistent_ts_ns = timebase.now_ns()
+        return True
+
     def _update_peak(self, total_pnl: int) -> None:
         """Update the intraday peak PnL if current total exceeds the recorded peak."""
         if total_pnl > self._peak_pnl_scaled:
@@ -760,7 +828,11 @@ class DailyLossLimitValidator(RiskValidator):
             )
         if complete:
             self._maybe_release_peak_drawdown()
-        if not self.halt_triggered:
+        # A PEAK_DRAWDOWN stop is still judged against the hard limit: the hard
+        # limit is a manual-release stop and the profit lock is not, so a loss
+        # that crosses it while the profit lock holds must change the reason,
+        # or the day's worst loss is released by the next recovery or roll.
+        if not self.halt_triggered or self._halt_reason == "PEAK_DRAWDOWN":
             self._evaluate_halt_from_unrealized()
 
     def _maybe_release_peak_drawdown(self) -> None:
