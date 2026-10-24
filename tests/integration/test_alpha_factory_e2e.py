@@ -86,6 +86,10 @@ def _write_scorecard(
         "correlation_pool_max": corr,
         "latency_profile": latency_profile,
         "replay_parity": {"match_pct": replay_parity_match_pct},
+        # Gate C persists these for Gate D's audits; without them Gate D is
+        # INVALID (unmeasured), which writes no kill.
+        "strategy_type": "taker",
+        "cost_uncertainty": {"passed": True, "outcome": "pass", "metrics": {"p95_lower_bound_pts": 0.5}},
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
@@ -112,7 +116,24 @@ def _setup_alpha_fixture(
     scorecard_path = alpha_dir / "scorecard.json"
     _write_scorecard(scorecard_path, sharpe=sharpe)
 
-    (alpha_dir / "meta.json").write_text(json.dumps({"gate_status": {"gate_c": gate_c_passed}}))
+    (alpha_dir / "meta.json").write_text(
+        json.dumps({"run_id": f"run-{alpha_id}", "gate_status": {"gate_c": gate_c_passed}})
+    )
+    if not gate_c_passed:
+        # A Gate C failure is a kill only when its stored verdict is KILL.
+        (alpha_dir / "backtest_report.json").write_text(
+            json.dumps(
+                {
+                    "details": {
+                        "verdict": {
+                            "verdict": "KILL",
+                            "reasons": ["gate_c.sharpe_oos"],
+                            "failing": ["gate_c.sharpe_oos"],
+                        }
+                    }
+                }
+            )
+        )
 
     (alpha_dir / "manifest.yaml").write_text(
         yaml.safe_dump(
@@ -262,7 +283,7 @@ def test_dod_d4_kill_ledger_row_on_gate_c_raise(
     tmp_path: Path,
     isolated_kill_ledger: Path,
 ) -> None:
-    """Gate-C verification raises ValueError; ledger records gate='C'."""
+    """Gate-C verification raises on a stored KILL verdict; ledger records gate='C'."""
     root, sc_path = _setup_alpha_fixture(tmp_path, "alpha_d4_c", gate_c_passed=False)
     cfg = PromotionConfig(
         alpha_id="alpha_d4_c",
@@ -278,7 +299,8 @@ def test_dod_d4_kill_ledger_row_on_gate_c_raise(
     assert len(rows) == 1, f"expected exactly 1 ledger row, got {rows}"
     assert rows[0]["alpha_id"] == "alpha_d4_c"
     assert rows[0]["gate"] == "C"
-    assert "Gate C has not passed" in rows[0]["reason"]
+    assert rows[0]["reason"] == "gate_c.sharpe_oos"
+    assert rows[0]["run_id"] == "run-alpha_d4_c"
     assert rows[0]["killed_by"] == "promote_alpha:auto"
 
 
