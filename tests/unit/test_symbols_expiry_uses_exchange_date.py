@@ -136,6 +136,7 @@ def test_builder_output_passes_the_connect_gate_it_feeds(frozen_roll_window: Non
     from types import SimpleNamespace
 
     from hft_platform.feed_adapter.shioaji.contracts_runtime import (
+        StaleInstrumentError,
         assert_no_stale_subscriptions,
     )
 
@@ -155,5 +156,12 @@ def test_builder_output_passes_the_connect_gate_it_feeds(frozen_roll_window: Non
     def _lookup(_exchange: str, code: str, _ptype: object) -> object:
         return SimpleNamespace(code=code, delivery_date=delivery_by_code[code])
 
+    assert [entry["code"] for entry in subscribed] == ["TXFI6"]
+
     # Same instant, the gate's own clock: it must accept the whole universe.
-    assert_no_stale_subscriptions(subscribed, _lookup, today=exchange_today())
+    assert assert_no_stale_subscriptions(subscribed, _lookup, today=exchange_today()) is None
+
+    # Control: the same gate, lookup and clock refuse the settled contract, so passing above is not vacuous.
+    settled = [{"code": "TXFH6", "exchange": "TAIFEX", "product_type": "future"}]
+    with pytest.raises(StaleInstrumentError):
+        assert_no_stale_subscriptions(settled, _lookup, today=exchange_today())
