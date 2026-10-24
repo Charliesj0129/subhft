@@ -386,7 +386,7 @@ DiskPressureMonitor levels:
 
 # STORM triggers
 latency_us >= 20_000 (20ms)                           → STORM
-order_rtt_us >= 2_500_000 (2.5s)                      → STORM
+3 orders with rtt >= 2_500_000 (2.5s) within 60s      → STORM, until 300s with none
 feed_gap_s >= 1.0 (when session_active)               → STORM
 feature_failure_active OR norm_failure_active          → STORM
 

@@ -22,6 +22,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops import quarantine_requests, rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.flatten_gate import FlattenGate, FlattenStatus
@@ -29,7 +30,7 @@ from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk import daily_loss_state, kill_switch, manual_latches
 from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
-from hft_platform.risk.loss_exit import LossExitController, OpenPosition, is_platform_exit
+from hft_platform.risk.loss_exit import TRIGGER_KILL_SWITCH, LossExitController, OpenPosition, is_platform_exit
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
@@ -161,6 +162,8 @@ class HFTSystem:
     # written meanwhile is not overwritten with this one's result.
     _operator_flatten_request_id: int = 0
     _flatten_gate: FlattenGate | None = None
+    # The kill switch is holding open positions it may not close; logged once.
+    _kill_flatten_blocked_logged: bool = False
 
     def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
         risk_engine = getattr(self, "risk_engine", None)
@@ -351,6 +354,9 @@ class HFTSystem:
             for p in self.position_store.snapshot_open_positions().values()
             if p.net_qty
         ]
+        kill = auto_enabled and bool(getattr(getattr(self, "storm_guard", None), "kill_switch_hold", False))
+        # Evaluated with the switch off too, so the gauge returns to 0.
+        kill_flatten = self._kill_switch_may_flatten(kill and bool(positions)) and kill
         # Called with no positions too: that is what clears the retry
         # bookkeeping of symbols that have since closed.
         meta = self.position_store.metadata
@@ -372,8 +378,13 @@ class HFTSystem:
             multiplier=meta.contract_multiplier,
             tick_size=meta.tick_size_scaled,
             operator_symbols=operator_symbols,
+            kill_switch=kill_flatten,
         )
-        if operator_symbols:
+        # One call per tick: each call drops the cancel retry bookkeeping of
+        # orders it was not given, so two would reset each other's throttle.
+        if kill:
+            intents.extend(controller.cancel_intents(self._resting_orders(), now_ns, trigger=TRIGGER_KILL_SWITCH))
+        elif operator_symbols:
             resting = [o for o in self._resting_orders() if o[2] in operator_symbols]
             intents.extend(controller.cancel_intents(resting, now_ns))
         # With the gateway on, RiskEngine.run() is never started and nothing
@@ -393,6 +404,34 @@ class HFTSystem:
                     reason=intent.reason,
                     error=str(e),
                 )
+
+    def _kill_switch_may_flatten(self, positions_open: bool) -> bool:
+        """Whether the kill switch may close the book now, and say so when it may not.
+
+        Only on evidence that the book is right: a reconciliation within
+        ``max(15 s, 3 sync intervals)`` that found every platform position equal
+        to the broker's. Without it the switch only stops trading; the gauge
+        ``kill_switch_flatten_blocked`` (alert ``KillSwitchFlattenBlocked``)
+        says positions are being held unclosed.
+        """
+        recon = getattr(self, "recon_service", None)
+        verified_ns = int(getattr(recon, "positions_verified_mono_ns", 0) or 0)
+        interval_s = float(getattr(recon, "check_interval_s", 5.0) or 5.0)  # precision-ok
+        max_age_ns = int(max(15.0, 3 * interval_s) * 1_000_000_000)
+        verified = verified_ns > 0 and time.monotonic_ns() - verified_ns <= max_age_ns
+        blocked = positions_open and not verified
+        try:
+            MetricsRegistry.get().kill_switch_flatten_blocked.set(1 if blocked else 0)
+        except Exception as exc:  # noqa: BLE001 - the gauge must never stop the exit
+            logger.warning("kill_switch_flatten_blocked_gauge_failed", error=str(exc))
+        if blocked and not self._kill_flatten_blocked_logged:
+            logger.critical(
+                "kill_switch_flatten_blocked",
+                reason="no recent reconciliation confirmed the positions against the broker",
+                verified_age_s=(time.monotonic_ns() - verified_ns) / 1e9 if verified_ns else None,
+            )
+        self._kill_flatten_blocked_logged = blocked
+        return verified
 
     def _resting_orders(self) -> list[tuple[str, str, str]]:
         """``(order_key, strategy_id, symbol)`` for each order the broker holds open.

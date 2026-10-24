@@ -20,9 +20,16 @@ into the normal risk queue for any position that meets one of three triggers:
     ``ExpiringContractValidator`` stops new lots in it from the same moment.
 ``operator_flatten``
     An operator asked for it (``hft ops flatten``); the supervisor names the
-    symbols until they are flat or the request's deadline passes. Resting
-    orders in those symbols are cancelled (``cancel_intents``) so one cannot
-    fill after the book is flat and reopen it.
+    symbols until they are flat or the request's deadline passes.
+``kill_switch``
+    The kill switch is set and the last reconciliation, recent enough, found
+    the platform's positions equal to the broker's. Without that evidence the
+    supervisor sends nothing and raises ``kill_switch_flatten_blocked``: a
+    closing order computed from a book that may be wrong can open a position.
+
+Both also cancel resting orders (``cancel_intents``): every order for the kill
+switch, the named symbols' for an operator flatten, so an order left at the
+exchange cannot fill after the book is flat and reopen it.
 
 Orders are marketable limits, never price 0: ``protection_ticks`` through the
 opposite best price. A position with no two-sided book is left alone and
@@ -59,6 +66,7 @@ TRIGGER_DAILY_LOSS_HALT = "daily_loss_halt"
 TRIGGER_POSITION_LOSS = "position_loss"
 TRIGGER_EXPIRY = "expiry"
 TRIGGER_OPERATOR = "operator_flatten"
+TRIGGER_KILL_SWITCH = "kill_switch"
 
 # Books an exit for a position that names no strategy (a legacy recovery entry).
 # Its fill seeds the recovered lot under this id and closes it.
@@ -130,12 +138,15 @@ class LossExitController:
         tick_size: Callable[[str], int],
         expiry_cutoff_minute: int = DEFAULT_EXPIRY_CUTOFF_MINUTE,
         operator_symbols: frozenset[str] = frozenset(),
+        kill_switch: bool = False,
     ) -> list[OrderIntent]:
         """Return the exit intents due now.
 
         ``l1(symbol)`` gives ``(best_bid, best_ask)`` scaled, or None.
         ``position_loss_limit_scaled`` of 0 disables that trigger.
         ``operator_symbols`` are closed because an operator asked.
+        ``kill_switch`` closes everything; the caller passes it only with
+        verified positions.
         """
         # symbol -> [net_qty, signed qty x entry, {strategy_id: net_qty}, basis_known]
         by_symbol: dict[str, list] = {}
@@ -174,6 +185,7 @@ class LossExitController:
                 mid=(bid + ask) // 2 if priced else 0,
                 multiplier=multiplier,
                 operator=symbol in operator_symbols,
+                kill_switch=kill_switch,
             )
             if trigger is None:
                 continue
@@ -253,9 +265,12 @@ class LossExitController:
         mid: int,
         multiplier: Callable[[str], int],
         operator: bool = False,
+        kill_switch: bool = False,
     ) -> str | None:
         if daily_halt:
             return TRIGGER_DAILY_LOSS_HALT
+        if kill_switch:
+            return TRIGGER_KILL_SWITCH
         if operator:
             return TRIGGER_OPERATOR
         if expiry_enabled and self._expiry_passed(symbol, now_ns, expiry_cutoff_minute):

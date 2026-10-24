@@ -31,11 +31,16 @@ NORMAL --auto--> PLATFORM_REDUCE_ONLY --auto (critical)--> HALT
 HALT --X auto--> NORMAL        (only manual_rearm.py, an operator action)
 ```
 
-- HALT blocks new orders; cancels stay allowed. Never auto-recover from HALT.
+- HALT blocks new orders; cancels stay allowed. The autonomy HALT never
+  auto-recovers (data loss needs `hft ops rearm-platform`).
 - A latch must be clearable by something that does not depend on it already
-  being clear. A HALT can fire on a profit; HALT stops orders, it does not flatten.
-- `position_flattener.py` closes positions with a 120 s deadline; a timeout is a
-  failure to escalate. `flatten_gate.py` filters FORCE_FLAT to close-only orders.
+  being clear. HALT alone does not flatten; `risk/loss_exit.py` closes the book
+  for a daily-loss stop, an expiry, an operator `hft ops flatten`, and the kill
+  switch (the last only when a recent reconciliation confirmed the positions).
+- The StormGuard latches end on evidence since 2026-10-24: `daily_loss` at the
+  next 05:00 roll, `reconciliation_mismatch` after two clean reconciliations;
+  only the kill switch needs a person (`docs/runbooks/halt-recovery.md`).
+- `flatten_gate.py` carries `hft ops flatten` requests to the supervisor.
 - Autonomy reason codes are a frozen set (for metrics): add a code to the set
   before using it.
 - Other modules: `margin_monitor`, `platform_degrade`, `strategy_governor`,

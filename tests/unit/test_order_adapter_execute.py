@@ -736,3 +736,82 @@ async def test_amend_target_not_found_increments_reject_metric(adapter):
     )
     # Broker update_order must NOT be called
     adapter.client.update_order.assert_not_called()
+
+
+# --- Kill switch: the exit and the cancels it sends pass a live kill-switch HALT ---
+
+
+def _kill_switch_halted_guard():
+    from hft_platform.risk.storm_guard import StormGuard
+
+    guard = StormGuard()
+    guard.trigger_halt("KILL_SWITCH_FILE: TELEGRAM: drill")
+    guard.set_kill_switch_hold(True)
+    return guard
+
+
+def _as_command(intent: OrderIntent) -> OrderCommand:
+    now = timebase.now_ns()
+    # Stamped NORMAL: the live guard, not the stamp, is what holds HALT here.
+    return OrderCommand(
+        cmd_id=7,
+        intent=intent,
+        deadline_ns=now + 10_000_000_000,
+        storm_guard_state=StormGuardState.NORMAL,
+        created_ns=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_kill_switch_exit_is_dispatched_through_a_live_kill_switch_halt(adapter):
+    from hft_platform.risk.loss_exit import LossExitController, OpenPosition
+
+    adapter.set_storm_guard(_kill_switch_halted_guard())
+    [intent] = LossExitController().plan(
+        now_ns=timebase.now_ns(),
+        positions=[OpenPosition("R47_MAKER_TMF", "TMFK6", 1, 46_000 * 10_000)],
+        daily_halt=False,
+        position_loss_limit_scaled=0,
+        expiry_enabled=False,
+        l1=lambda _s: (46_600 * 10_000, 46_602 * 10_000),
+        multiplier=lambda _s: 10,
+        tick_size=lambda _s: 10_000,
+        kill_switch=True,
+    )
+    cmd = _as_command(intent)
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    adapter._record_local_reject.assert_not_called()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+@pytest.mark.asyncio
+async def test_the_kill_switch_cancel_is_dispatched_through_a_live_kill_switch_halt(adapter):
+    from hft_platform.risk.loss_exit import LossExitController
+
+    adapter.set_storm_guard(_kill_switch_halted_guard())
+    [intent] = LossExitController().cancel_intents([("R47_MAKER_TMF:41", "R47_MAKER_TMF", "TMFK6")], timebase.now_ns())
+    cmd = _as_command(intent)
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    adapter._record_local_reject.assert_not_called()
+    adapter._dispatch_to_api.assert_awaited_once_with(cmd)
+
+
+@pytest.mark.asyncio
+async def test_a_new_order_is_refused_by_the_same_live_kill_switch_halt(adapter):
+    """The control for the two above: the live guard does block."""
+    adapter.set_storm_guard(_kill_switch_halted_guard())
+    cmd = make_cmd(intent_type=IntentType.NEW)
+    adapter.running = False
+    adapter._dispatch_to_api = AsyncMock()
+
+    await adapter.execute(cmd)
+
+    adapter._dispatch_to_api.assert_not_awaited()

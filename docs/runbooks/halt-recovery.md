@@ -155,14 +155,43 @@ Review each correction before confirming.
 
 ### Step 3: A restart is not a release
 
-Do not restart the engine to clear a HALT. The four manual-release stops
-(data loss, reconciliation mismatch, operator kill switch, daily loss limit)
-are files on disk and survive a restart by design; everything else recovers on
-its own. Any restart that is still needed follows
+Do not restart the engine to clear a HALT. The durable stops (data loss,
+reconciliation mismatch, operator kill switch, daily loss limit) are files on
+disk and survive a restart by design. Any restart that is still needed follows
 `.agent/rules/41-deployment.md` (stop, wait 60 s, start; never
 `docker compose restart`).
 
-### Step 4: Release the durable manual latches
+Since 2026-10-24 only the kill switch and the data-loss re-arm need a person.
+The two latches end on their own:
+
+| Latch | Ends when | Log line |
+|---|---|---|
+| `daily_loss` | the first 05:00 Taipei roll after it was written, once the daily-loss validator has released its stop for the new day (it does so only on a complete valuation) | `daily_loss_latch_released_at_day_roll` |
+| `reconciliation_mismatch` | `HFT_RECON_LATCH_RELEASE_AFTER_CLEAN` (default 2) consecutive trusted reconciliations with no discrepancy | `reconciliation_latch_released` |
+
+Both write the same audit line as an operator release, with actor
+`engine:day_roll` or `engine:reconciliation`.
+
+### Kill switch: what the engine does on its own
+
+While the kill switch is set (`hft risk halt`, Telegram `/stop`, or the startup
+recovery gate), `loss_exit` on every supervise tick:
+
+1. cancels every order resting at the broker (`loss_exit_cancel_resting`),
+   retried every `retry_interval_s` while it is still live;
+2. closes every open position with FORCE_FLAT (`loss_exit:kill_switch`), but
+   only when a reconciliation in the last `max(15 s, 3 x check_interval_s)`
+   found the platform's positions equal to the broker's. Otherwise it sends no
+   closing order and sets `kill_switch_flatten_blocked` to 1 (alert
+   `KillSwitchFlattenBlocked`, log `kill_switch_flatten_blocked`).
+
+Under a paper order mode (`HFT_ORDER_MODE=sim`) a local position the broker
+cannot hold is never confirmed, so the switch only stops and cancels. When the
+alert fires, compare `hft risk status` with the broker; `hft ops flatten`
+closes the positions once they are right. `loss_exit.enabled: false` turns
+these kill-switch orders off with the rest of the automatic exit.
+
+### Step 4: Release a durable stop by hand
 
 ```bash
 hft risk status                      # kill switch + manual latches, each with its token
@@ -182,7 +211,8 @@ the directory on every supervise tick, so a release takes effect without a
 restart: HALT then de-escalates through the normal StormGuard cooldown. Watch
 `manual_latch_active{latch=...}` go to 0.
 
-`daily_loss` holds HALT until both the operator has released it and the
+The two latches end on their own (see Step 3); release one by hand only to
+end it early. `daily_loss` holds HALT until both the latch is gone and the
 05:00 Taipei roll has cleared the day's stop; releasing it the same day does
 not resume trading. While it is present, `loss_exit` keeps closing open
 positions.

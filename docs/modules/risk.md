@@ -88,9 +88,21 @@ StormGuard grades platform health and reads no PnL (since 2026-10-23, B4a).
 failures and a crossed book they reach STORM at most. DriftBurst toxicity
 reaches WARM (CAUTION) at most.
 
+Order RTT reaches STORM only on repeated slow orders (since 2026-10-24, B4b):
+`order_rtt_storm_count` (3) orders at or above `order_rtt_storm_us` within
+`order_rtt_storm_window_s` (60 s), held until `order_rtt_storm_dwell_s`
+(300 s) pass with none. One slow order, including a 3 s broker timeout, is
+WARM.
+
 HALT comes only from `trigger_halt()`:
 - Daily loss hard limit (`DailyLossLimitValidator`, via `RiskEngine`)
 - Kill switch, durable manual latches, session-lease loss
+
+The durable latches end on evidence the engine checks: `daily_loss` at the
+next 05:00 roll, `reconciliation_mismatch` after two clean reconciliations.
+Only the kill switch needs a person. While it is set, `loss_exit` cancels
+resting orders and closes positions when a recent reconciliation confirmed
+them (`docs/runbooks/halt-recovery.md`).
 - Bus overflow cascade
 - Reconciliation critical mismatch
 
@@ -146,6 +158,10 @@ Microstructure toxicity scoring based on Christensen, Oomen, Reno (2022):
 | `HFT_STORMGUARD_HALT_COOLDOWN_S` | `60` | HALT recovery cooldown |
 | `HFT_STORMGUARD_STORM_COOLDOWN_S` | `30` | STORM recovery cooldown |
 | `HFT_STORMGUARD_DE_ESCALATE_N` | `5` | Consecutive clears before de-escalation |
+| `HFT_STORMGUARD_ORDER_RTT_STORM_COUNT` | `3` | Slow orders (>= `order_rtt_storm_us`) that make an order-RTT STORM |
+| `HFT_STORMGUARD_ORDER_RTT_STORM_WINDOW_S` | `60` | Window those orders must fall within |
+| `HFT_STORMGUARD_ORDER_RTT_STORM_DWELL_S` | `300` | Quiet time after the last slow order before the STORM ends |
+| `HFT_RECON_LATCH_RELEASE_AFTER_CLEAN` | `2` | Consecutive clean reconciliations that end a `reconciliation_mismatch` latch |
 | `HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES` | — | Comma-separated exempt strategy IDs |
 | `HFT_RISK_FAST_GATE` | `0` | Enable Numba FastGate (skipped for CANCEL, FORCE_FLAT and position-reducing orders) |
 | `HFT_RISK_RUST_VALIDATOR` | `0` | Enable Rust validator FFI (same exemptions; a Rust approval still runs the Python price band, position, daily-loss, per-symbol notional and expiry validators) |
