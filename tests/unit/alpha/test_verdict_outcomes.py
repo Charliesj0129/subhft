@@ -374,12 +374,13 @@ def test_kill_id_without_run_id_is_unchanged():
 # ---------------------------------------------------------------------------
 
 
-def test_replay_parity_missing_report_is_error_not_fail():
+def test_replay_parity_missing_report_is_not_applicable_not_fail():
+    """No report = no live intents yet (ADR-003); never a FAIL of the candidate."""
     from hft_platform.alpha._sub_gates.replay_parity import ReplayParityGate
 
     res = ReplayParityGate().evaluate(_R(), None, {})
     assert res.passed is False
-    assert res.outcome is Outcome.ERROR
+    assert res.outcome is Outcome.NOT_APPLICABLE
 
 
 def test_strict_blocking_replay_parity_without_report_is_invalid_not_kill():
@@ -397,4 +398,24 @@ def test_strict_blocking_replay_parity_without_report_is_invalid_not_kill():
         profile=profile,
     )
     assert verdict.verdict is Verdict.INVALID
-    assert "replay_parity:error" in verdict.reasons
+    assert "replay_parity:not_applicable_not_deferrable" in verdict.reasons
+
+
+def test_deferred_replay_parity_without_report_is_an_obligation_not_invalid():
+    profile = ValidationProfile(
+        name="strict_parity_deferred",
+        is_strict=True,
+        thresholds=_STRICT.thresholds,
+        blocking_sub_gates=(*_STRICT.blocking_sub_gates, "replay_parity"),
+        deferrable={"replay_parity": "shadow_exit"},
+    )
+    daily = list(np.random.default_rng(2).normal(-5.0, 10.0, 120))
+    _, _, verdict = _invoke_sub_gates_with_verdict(
+        strategy_type="maker",
+        result_payload=_maker_payload(daily),
+        thresholds=profile.thresholds_for(strategy_type="maker"),
+        profile=profile,
+    )
+    assert verdict.verdict is not Verdict.INVALID
+    assert ("replay_parity", "shadow_exit") in verdict.obligations
+    assert "replay_parity" not in verdict.failing

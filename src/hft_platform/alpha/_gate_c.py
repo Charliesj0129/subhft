@@ -320,6 +320,67 @@ def _invoke_sub_gates_advisory(
     return advisory
 
 
+# Threshold keys whose direction is known: for these the stricter of the run's
+# value and the profile's wins, so a profile can only tighten a gate.
+_HIGHER_IS_STRICTER = frozenset(
+    {
+        "sharpe_is_min",
+        "sharpe_oos_min",
+        "winning_day_pct_min",
+        "pnl_per_fill_min_pts",
+        "min_fills",
+        "min_days",
+        "min_oos_trades",
+        "min_oos_days",
+        "ic_is_min",
+        "ic_oos_min",
+        "edge_to_cost_ratio_min",
+        "deflated_sharpe_min",
+        "mean_net_edge_pts_per_trade_min",
+        "replay_parity_match_pct_min",
+        "cost_uncertainty_p95_lower_bound_min_pts",
+        "monthly_distribution_min_months",
+        "bootstrap_ci_lower_bound_min",
+        "block_bootstrap_ci_lower_bound_min",
+    }
+)
+_LOWER_IS_STRICTER = frozenset(
+    {
+        "max_drawdown_pct",
+        "adverse_fill_pct_max",
+        "fill_rate_deviation_max",
+        "outlier_day_contribution_max_pct",
+        "top_month_contribution_max_pct",
+        "drawdown_to_avg_monthly_max_ratio",
+        "top_trade_share_max_pct",
+        "worst_loss_share_max_pct",
+        "force_flat_trip_share_max_pct",
+    }
+)
+
+
+def _merge_profile_thresholds(base: dict, profile: Any | None, *, strategy_type: str) -> dict:
+    """Run thresholds with the profile's applied on top; the profile can only tighten.
+
+    The profile is the authority for every key it sets. For keys whose
+    direction is known the stricter of the two values is kept, so neither a
+    loose run default nor a loose profile value can relax a gate.
+    """
+    if profile is None:
+        return dict(base)
+    merged = dict(base)
+    for key, value in profile.thresholds_for(strategy_type=strategy_type).items():
+        current = merged.get(key)
+        numeric = isinstance(value, (int, float)) and isinstance(current, (int, float))
+        if numeric and not isinstance(value, bool) and not isinstance(current, bool):
+            if key in _HIGHER_IS_STRICTER:
+                value = max(current, value)
+            elif key in _LOWER_IS_STRICTER:
+                value = min(current, value)
+        merged[key] = value
+    return merged
+
+
 def _load_maker_thresholds(root: Path) -> dict:
     """Load Gate C maker thresholds from gate_thresholds.yaml, or return {}."""
     import yaml as _yaml
@@ -548,7 +609,9 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         ResultStore().save(result, alpha_id)
 
         # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
-        maker_thresholds = _load_maker_thresholds(root)
+        maker_thresholds = _merge_profile_thresholds(
+            _load_maker_thresholds(root), config.profile, strategy_type="maker"
+        )
 
         scorecard_data = result.maker_scorecard or {}
         n_days = scorecard_data.get("n_days", 0)
@@ -590,11 +653,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 "fill_rate_per_day": (float(total_fills) / max(float(n_days), 1.0)),
                 "daily_pnl": _daily_pnl_sequence(daily_pnl),
             },
-            thresholds=(
-                config.profile.thresholds_for(strategy_type="maker") | maker_thresholds
-                if config.profile is not None
-                else maker_thresholds
-            ),
+            thresholds=_merge_profile_thresholds(maker_thresholds, config.profile, strategy_type="maker"),
             calibration_profile=None,
             profile=config.profile,
             core_checks=maker_check_entries,
@@ -891,10 +950,27 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     }
     scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
 
+    taker_thresholds = _merge_profile_thresholds(
+        {
+            "sharpe_is_min": float(config.min_sharpe_oos),
+            "sharpe_oos_min": float(config.min_sharpe_oos),
+            "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
+            "winning_day_pct_min": 55.0,
+            "ic_is_min": 0.03,
+            "ic_oos_min": 0.02,
+        },
+        config.profile,
+        strategy_type="taker",
+    )
     core_entries = [
-        _threshold_check("gate_c.sharpe_oos", result.sharpe_oos, float(config.min_sharpe_oos), at_least=True),
         _threshold_check(
-            "gate_c.max_drawdown", result.max_drawdown, -abs(float(config.max_abs_drawdown)), at_least=True
+            "gate_c.sharpe_oos", result.sharpe_oos, float(taker_thresholds["sharpe_oos_min"]), at_least=True
+        ),
+        _threshold_check(
+            "gate_c.max_drawdown",
+            result.max_drawdown,
+            -abs(float(taker_thresholds["max_drawdown_pct"])) / 100,
+            at_least=True,
         ),
         _threshold_check("gate_c.turnover", result.turnover, float(config.min_turnover), at_least=True),
     ]
@@ -946,26 +1022,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "ic_oos": None,
             **_daily_payload,
         },
-        thresholds=(
-            (
-                config.profile.thresholds_for(strategy_type="taker")
-                | {
-                    "sharpe_is_min": float(config.min_sharpe_oos),
-                    "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
-                    "winning_day_pct_min": 55.0,
-                    "ic_is_min": 0.03,
-                    "ic_oos_min": 0.02,
-                }
-            )
-            if config.profile is not None
-            else {
-                "sharpe_is_min": float(config.min_sharpe_oos),
-                "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
-                "winning_day_pct_min": 55.0,
-                "ic_is_min": 0.03,
-                "ic_oos_min": 0.02,
-            }
-        ),
+        thresholds=taker_thresholds,
         calibration_profile=None,
         profile=config.profile,
         core_checks=taker_check_entries,
@@ -987,6 +1044,8 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "max_drawdown": result.max_drawdown,
             "capacity_estimate": result.capacity_estimate,
             "regime_metrics": result.regime_metrics,
+            # Thresholds actually applied (run defaults tightened by the profile).
+            "applied_thresholds": dict(taker_thresholds),
             "criteria": {
                 "min_sharpe_oos": config.min_sharpe_oos,
                 "max_abs_drawdown": config.max_abs_drawdown,
