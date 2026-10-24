@@ -432,6 +432,54 @@ jobs:
           path: coverage.xml
 
   # ============================================================================
+  # Stage 3b: Unit tests on the versions production runs (advisory)
+  # ============================================================================
+  prod-dependency-versions:
+    name: Unit tests on production dependency versions (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Advisory: shown on the PR, never blocks it, and nothing depends on it.
+    continue-on-error: true
+    # The Dockerfile builds from the ranges in pyproject.toml, not from uv.lock, so the engine image resolves the
+    # newest pandas and clickhouse-connect those ranges allow (2026-10-03 `pip freeze` on the live engine:
+    # pandas 3.0.3 and clickhouse-connect 1.5.0, while uv.lock pins 2.3.3 and 0.10.0). `test` runs the lock; this
+    # job runs what production runs. Three traps are handled below: `uv run` re-syncs to uv.lock and would silently
+    # undo the upgrade (so every command after it uses --no-sync); naming a package alone does not move it (a trial
+    # with plain `--upgrade-package pandas` left pandas at 2.3.3), so each one carries its production range; and an
+    # upgrade that changes nothing would make the job green for the wrong reason (so the versions are asserted).
+    # The upgrade rewrites uv.lock on the runner only. Delete this job once uv.lock itself carries pandas 3 and
+    # clickhouse-connect 1.
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python-uv
+      - uses: ./.github/actions/setup-rust
+
+      - name: Upgrade pandas and clickhouse-connect to the production majors
+        run: >-
+          uv sync --dev
+          --upgrade-package "pandas>=3,<4"
+          --upgrade-package "clickhouse-connect>=1,<2"
+
+      - name: Assert the production majors are installed
+        run: |
+          uv run --no-sync python - <<'PY'
+          import importlib.metadata as md
+
+          want = {"pandas": 3, "clickhouse-connect": 1}
+          got = {name: md.version(name) for name in want}
+          print(got)
+          old = {name: version for name, version in got.items() if int(version.split(".")[0]) < want[name]}
+          assert not old, f"the upgrade did not reach the production majors: {old}"
+          PY
+
+      - name: Run unit tests (no coverage floors in this job)
+        run: >-
+          uv run --no-sync pytest tests/unit -q -n auto --dist worksteal --timeout=10
+          -p no:hypothesis -p no:faulthandler
+
+  # ============================================================================
   # Stage 4: Benchmark (Darwin Gate)
   # ============================================================================
   benchmark:
