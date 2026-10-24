@@ -149,7 +149,7 @@ class TestSymbolsForTags:
 
 
 class TestPriceScale:
-    def test_price_scale_from_tick_size(self, tmp_path):
+    def test_price_scale_defaults_when_only_tick_size_present(self, tmp_path):
         cfg = tmp_path / "tick.yaml"
         cfg.write_text("symbols:\n  - code: 'SYM'\n    exchange: 'TSE'\n    tick_size: 0.0001\n")
         m = SymbolMetadata(str(cfg))
