@@ -20,7 +20,9 @@ into the normal risk queue for any position that meets one of three triggers:
     ``ExpiringContractValidator`` stops new lots in it from the same moment.
 ``operator_flatten``
     An operator asked for it (``hft ops flatten``); the supervisor names the
-    symbols until they are flat or the request's deadline passes.
+    symbols until they are flat or the request's deadline passes. Resting
+    orders in those symbols are cancelled (``cancel_intents``) so one cannot
+    fill after the book is flat and reopen it.
 
 Orders are marketable limits, never price 0: ``protection_ticks`` through the
 opposite best price. A position with no two-sided book is left alone and
@@ -66,6 +68,12 @@ UNATTRIBUTED_STRATEGY_ID = "__loss_exit__"
 # (``strategy_id:intent_id``) cannot collide with a strategy's own counter,
 # which restarts daily and has reached ~50,000 on THESHOW. Below 2**31.
 INTENT_ID_BASE = 1_900_000_000
+
+
+def is_platform_exit(order_key: str) -> bool:
+    """Whether an order key (``strategy_id:intent_id``) names one of these exits."""
+    _, _, tail = order_key.rpartition(":")
+    return tail.isdigit() and int(tail) >= INTENT_ID_BASE
 
 
 @dataclass(slots=True, frozen=True)
@@ -184,8 +192,51 @@ class LossExitController:
             self._last_submit_ns[key] = now_ns
             MetricsRegistry.get().loss_exit_orders_total.labels(trigger=trigger).inc()
         # A position that no longer triggers (closed, or recovered) starts fresh next time.
-        for key in [k for k in self._last_submit_ns if k not in due]:
+        # (Cancel bookkeeping is ``cancel_intents``' own.)
+        for key in [k for k in self._last_submit_ns if k not in due and not k.startswith("cancel:")]:
             del self._last_submit_ns[key]
+        return intents
+
+    def cancel_intents(
+        self, orders: Iterable[tuple[str, str, str]], now_ns: int, *, trigger: str = TRIGGER_OPERATOR
+    ) -> list[OrderIntent]:
+        """CANCEL intents for resting orders, each retried at most every retry interval.
+
+        ``orders`` are ``(order_key, strategy_id, symbol)``. The platform's own
+        exits (intent ids from ``INTENT_ID_BASE``) are left alone: they are IOC
+        and are what closes the book.
+        """
+        intents: list[OrderIntent] = []
+        due: set[str] = set()
+        for order_key, strategy_id, symbol in orders:
+            if is_platform_exit(order_key):
+                continue
+            key = "cancel:" + order_key
+            due.add(key)
+            last = self._last_submit_ns.get(key)
+            if last is not None and now_ns - last < self._retry_interval_ns:
+                continue
+            self._next_intent_id += 1
+            intents.append(
+                OrderIntent(
+                    intent_id=self._next_intent_id,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    intent_type=IntentType.CANCEL,
+                    side=Side.BUY,
+                    price=0,
+                    qty=0,
+                    target_order_id=order_key,
+                    timestamp_ns=now_ns,
+                    source_ts_ns=now_ns,
+                    reason=f"loss_exit:{trigger}:cancel",
+                )
+            )
+            self._last_submit_ns[key] = now_ns
+        for key in [k for k in self._last_submit_ns if k.startswith("cancel:") and k not in due]:
+            del self._last_submit_ns[key]
+        if intents:
+            logger.warning("loss_exit_cancel_resting", count=len(intents), trigger=trigger)
         return intents
 
     def _trigger(

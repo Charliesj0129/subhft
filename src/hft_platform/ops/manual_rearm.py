@@ -78,7 +78,10 @@ class ManualRearmGate:
         Derived from the flag and its reason only, so the engine's own
         bookkeeping fields do not change it under the operator.
         """
-        platform_state = self._platform_section(self._load_state())
+        return self._platform_token_of(self._platform_section(self._load_state()))
+
+    @staticmethod
+    def _platform_token_of(platform_state: dict[str, Any]) -> str:
         return release_audit.token_for(
             {
                 "manual_rearm_required": bool(platform_state.get("manual_rearm_required")),
@@ -103,17 +106,26 @@ class ManualRearmGate:
         one exists in this process) so the live state mirrors the
         persisted flag.  The persistence step is unconditional so a
         cold-start process picks up the rearmed state.
+
+        The token is checked against the state read inside the same lock that
+        clears it: a degradation the engine records after the operator read
+        the token changes the token, so the stale re-arm is refused rather
+        than clearing the newer latch.
         """
-        release_audit.check_release(current_token=self.platform_token(), given_token=token, reason=reason)
-        platform_state = dict(self._platform_section(self._load_state()))
-        release_audit.append(
-            self.state_path.parent / REARM_AUDIT_FILE,
-            event="platform_rearm",
-            actor=actor,
-            reason=reason,
-            removed=platform_state,
-        )
-        self.clear_platform_flag()
+        with locked_state(self.state_path) as state:
+            platform_state = self._platform_section(state)
+            # Raising here leaves the file untouched (locked_state publishes nothing).
+            release_audit.check_release(
+                current_token=self._platform_token_of(platform_state), given_token=token, reason=reason
+            )
+            release_audit.append(
+                self.state_path.parent / REARM_AUDIT_FILE,
+                event="platform_rearm",
+                actor=actor,
+                reason=reason,
+                removed=dict(platform_state),
+            )
+            self._clear_platform_section(platform_state)
 
         # Best-effort: bridge the live controller through its process-local
         # registry without importing the concrete controller module.
@@ -149,10 +161,13 @@ class ManualRearmGate:
         without deadlocking.
         """
         with locked_state(self.state_path) as state:
-            platform_state = self._platform_section(state)
-            platform_state["manual_rearm_required"] = False
-            platform_state["reason"] = None
-            platform_state["rearm_requested_at"] = timebase.now_s()
+            self._clear_platform_section(self._platform_section(state))
+
+    @staticmethod
+    def _clear_platform_section(platform_state: dict[str, Any]) -> None:
+        platform_state["manual_rearm_required"] = False
+        platform_state["reason"] = None
+        platform_state["rearm_requested_at"] = timebase.now_s()
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
         state = self._load_state()

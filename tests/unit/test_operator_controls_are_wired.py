@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 import types
 from pathlib import Path
 from types import SimpleNamespace
@@ -331,3 +332,147 @@ class TestOperatorFlatten:
         req = gate.read_request()
         assert req.status == FlattenStatus.FAILED
         assert system.risk_queue.items == []
+
+
+def _trade(symbol: str) -> SimpleNamespace:
+    return SimpleNamespace(contract=SimpleNamespace(code=symbol))
+
+
+class TestFlattenCancelsWorkingOrders:
+    """A working order in a flattened symbol can fill after the book is flat and reopen it."""
+
+    def test_a_working_order_is_cancelled_and_holds_completion_until_it_is_gone(self, gate):
+        positions = {"k": _pos("R47_MAKER_TMF", "TMFK6", 2)}
+        system = _system(gate, positions)
+        live = {"R47_MAKER_TMF:17": _trade("TMFK6"), "R47_MAKER_TMF:18": _trade("TXFK6")}
+        system.order_adapter = SimpleNamespace(live_orders=live)
+        gate.submit(scope="all", deadline_s=60)
+
+        _tick(system)
+        cancels = [i for i in system.risk_queue.items if i.intent_type == IntentType.CANCEL]
+        assert [(c.target_order_id, c.symbol) for c in cancels] == [("R47_MAKER_TMF:17", "TMFK6")]
+        assert cancels[0].reason == "loss_exit:operator_flatten:cancel"
+
+        positions.clear()  # the IOC filled; the quote is still resting
+        _tick(system)
+        assert gate.read_request().status == FlattenStatus.PROCESSING
+
+        del live["R47_MAKER_TMF:17"]  # the broker confirmed the cancel
+        _tick(system)
+        req = gate.read_request()
+        assert (req.status, req.fully_closed, req.failed_symbols) == (FlattenStatus.COMPLETED, 1, [])
+
+    def test_an_order_not_yet_acknowledged_holds_completion(self, gate):
+        positions = {"k": _pos("R47_MAKER_TMF", "TMFK6", 1)}
+        system = _system(gate, positions)
+        live: dict = {"R47_MAKER_TMF:19": object()}  # sent, no contract known yet
+        system.order_adapter = SimpleNamespace(live_orders=live)
+        gate.submit(scope="all", deadline_s=60)
+        _tick(system)
+
+        positions.clear()
+        _tick(system)
+        assert gate.read_request().status == FlattenStatus.PROCESSING
+
+        live.clear()
+        _tick(system)
+        assert gate.read_request().status == FlattenStatus.COMPLETED
+
+    def test_a_working_order_left_at_the_deadline_is_reported_open(self, gate):
+        positions = {"k": _pos("R47_MAKER_TMF", "TMFK6", 1)}
+        system = _system(gate, positions)
+        system.order_adapter = SimpleNamespace(live_orders={"R47_MAKER_TMF:17": _trade("TMFK6")})
+        gate.submit(scope="all", deadline_s=5)
+        _tick(system)
+
+        positions.clear()
+        _tick(system, NOW + 6_000_000_000)
+
+        req = gate.read_request()
+        assert req.status == FlattenStatus.COMPLETED
+        assert (req.fully_closed, req.failed_symbols) == (0, ["TMFK6"])
+
+    def test_the_platforms_own_exit_is_neither_cancelled_nor_waited_for(self, gate):
+        from hft_platform.risk.loss_exit import INTENT_ID_BASE
+
+        positions = {"k": _pos("R47_MAKER_TMF", "TMFK6", 1)}
+        system = _system(gate, positions)
+        exit_key = f"R47_MAKER_TMF:{INTENT_ID_BASE + 1}"
+        system.order_adapter = SimpleNamespace(live_orders={exit_key: _trade("TMFK6")})
+        gate.submit(scope="all", deadline_s=60)
+        _tick(system)
+        assert not [i for i in system.risk_queue.items if i.intent_type == IntentType.CANCEL]
+
+        positions.clear()
+        _tick(system)
+        assert gate.read_request().status == FlattenStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# A release and a new stop cannot interleave
+# ---------------------------------------------------------------------------
+
+
+def _during_audit(module, write):
+    """Patch ``release_audit.append`` (between a release's check and its removal)
+    to start ``write`` on another thread, as a second process would.
+
+    The 50 ms join bounds how long an unserialized write needs to land; with
+    the lock it is still blocked when the join gives up.
+    """
+    started: list[threading.Thread] = []
+    real_append = module.release_audit.append
+
+    def _append(*args, **kwargs):
+        real_append(*args, **kwargs)
+        t = threading.Thread(target=write)
+        t.start()
+        t.join(timeout=0.05)
+        started.append(t)
+
+    return started, mock.patch.object(module.release_audit, "append", side_effect=_append)
+
+
+class TestReleaseIsSerializedWithNewStops:
+    def test_a_kill_switch_written_during_a_release_survives_it(self):
+        kill_switch.activate("operator drill", actor="cli")
+        started, patch = _during_audit(kill_switch, lambda: kill_switch.activate("TELEGRAM: real", actor="telegram"))
+        with patch:
+            kill_switch.release(token=kill_switch.current_token(), reason="drill over", actor="cli:op")
+        started[0].join()
+
+        assert kill_switch.read_reason() == "TELEGRAM: real"
+
+    def test_a_manual_latch_raised_during_its_release_survives_it(self):
+        name = manual_latches.RECONCILIATION_MISMATCH
+        manual_latches.activate(name, "first mismatch", actor="engine")
+        token = manual_latches.tokens()[name]
+        started, patch = _during_audit(
+            manual_latches, lambda: manual_latches.activate(name, "second mismatch", actor="engine")
+        )
+        with patch:
+            manual_latches.release(name, token=token, reason="books agree", actor="cli:op")
+        started[0].join()
+
+        assert manual_latches.active() == {name: "second mismatch"}
+
+    def test_a_platform_degradation_recorded_during_a_rearm_survives_it(self, tmp_path):
+        from hft_platform.ops import manual_rearm
+        from hft_platform.ops.runtime_state_store import locked_state
+
+        path = tmp_path / "runtime_state.json"
+        with locked_state(path) as state:
+            state["platform"] = {"manual_rearm_required": True, "reason": "wal_data_loss"}
+        gate_ = manual_rearm.ManualRearmGate(state_path=path)
+
+        def _degrade() -> None:
+            with locked_state(path) as state:
+                state["platform"] = {"manual_rearm_required": True, "reason": "disk_full"}
+
+        started, patch = _during_audit(manual_rearm, _degrade)
+        with patch:
+            gate_.rearm_platform(token=gate_.platform_token(), reason="wal replayed", actor="cli:op")
+        started[0].join()
+
+        assert gate_.requires_manual_rearm("platform") is True
+        assert gate_.snapshot()["platform"]["reason"] == "disk_full"

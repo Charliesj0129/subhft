@@ -29,7 +29,7 @@ from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk import daily_loss_state, kill_switch, manual_latches
 from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
-from hft_platform.risk.loss_exit import LossExitController, OpenPosition
+from hft_platform.risk.loss_exit import LossExitController, OpenPosition, is_platform_exit
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
@@ -343,6 +343,9 @@ class HFTSystem:
             tick_size=meta.tick_size_scaled,
             operator_symbols=operator_symbols,
         )
+        if operator_symbols:
+            resting = [o for o in self._resting_orders() if o[2] in operator_symbols]
+            intents.extend(controller.cancel_intents(resting, now_ns))
         # With the gateway on, RiskEngine.run() is never started and nothing
         # reads risk_queue: the exits must enter where the gateway listens.
         intent_channel = getattr(self, "intent_channel", None)
@@ -360,6 +363,22 @@ class HFTSystem:
                     reason=intent.reason,
                     error=str(e),
                 )
+
+    def _resting_orders(self) -> list[tuple[str, str, str]]:
+        """``(order_key, strategy_id, symbol)`` for each order the broker holds open.
+
+        Read on the event loop, where every writer of ``live_orders`` runs, so
+        the copy is consistent. Entries still waiting for the broker's answer
+        have no contract yet and are taken on a later tick.
+        """
+        live = getattr(getattr(self, "order_adapter", None), "live_orders", None) or {}
+        orders: list[tuple[str, str, str]] = []
+        for order_key, trade in list(live.items()):
+            contract = getattr(trade, "contract", None)
+            if contract is None:
+                continue
+            orders.append((str(order_key), str(order_key).split(":", 1)[0], str(getattr(contract, "code", "") or "")))
+        return orders
 
     def _platform_net_by_symbol(self) -> dict[str, int]:
         """Platform-wide net quantity per symbol, recovered lots included.
@@ -433,7 +452,18 @@ class HFTSystem:
         initial = self._operator_flatten_initial
         net = self._platform_net_by_symbol()
         remaining = {sym: net[sym] for sym in initial if net.get(sym, 0) != 0}
-        if remaining and timebase.now_ns() < self._operator_flatten_deadline_ns:
+        # Flat is not done while an order in the symbol can still fill and
+        # reopen it: those are being cancelled (``_run_loss_exit``) and count
+        # as open until the broker confirms. So does an order not yet
+        # acknowledged, whose symbol is not known yet.
+        live = getattr(getattr(self, "order_adapter", None), "live_orders", None) or {}
+        unacked = any(
+            getattr(trade, "contract", None) is None and not is_platform_exit(str(key)) for key, trade in live.items()
+        )
+        working = {sym for key, _, sym in self._resting_orders() if sym in initial and not is_platform_exit(key)}
+        for sym in working:
+            remaining.setdefault(sym, net.get(sym, 0))
+        if (remaining or unacked) and timebase.now_ns() < self._operator_flatten_deadline_ns:
             return
         partial = sorted(sym for sym, qty in remaining.items() if abs(qty) < abs(initial[sym]))
         failed = sorted(sym for sym in remaining if sym not in partial)

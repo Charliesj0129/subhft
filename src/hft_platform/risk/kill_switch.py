@@ -31,7 +31,7 @@ from typing import Any
 
 from hft_platform.core import timebase
 from hft_platform.ops import release_audit
-from hft_platform.ops.runtime_state_store import atomic_write_json
+from hft_platform.ops.runtime_state_store import atomic_write_json, exclusive_lock
 
 DEFAULT_PATH = ".state/kill_switch"
 LEGACY_PATHS: tuple[str, ...] = (".runtime/kill_switch",)
@@ -74,7 +74,8 @@ def activate(reason: str, *, actor: str, path: str | None = None) -> str:
     """
     target = path or kill_switch_path()
     payload: dict[str, Any] = {"reason": reason, "timestamp_ns": timebase.now_ns(), "actor": actor}
-    atomic_write_json(Path(target), payload)
+    with exclusive_lock(Path(target)):
+        atomic_write_json(Path(target), payload)
     return target
 
 
@@ -140,13 +141,19 @@ def release(*, token: str, reason: str, actor: str, path: str | None = None) -> 
 
     Raises ValueError when ``token`` is not the current latch's token or the
     reason is empty; nothing is removed then.
+
+    The check and the removal share :func:`activate`'s lock: a stop written in
+    between would otherwise be deleted on the authority of the token for the
+    one before it. Only the primary location is ever written, so its lock
+    covers the legacy files too.
     """
-    records = _records(path)
-    if not records:
-        return False
-    release_audit.check_release(current_token=_token_of(records), given_token=token, reason=reason)
-    audit_path = Path(next(iter(records))).with_name(AUDIT_FILE)
-    release_audit.append(audit_path, event="kill_switch_release", actor=actor, reason=reason, removed=records)
-    for candidate in records:
-        os.remove(candidate)
-    return True
+    with exclusive_lock(Path(path or kill_switch_path())):
+        records = _records(path)
+        if not records:
+            return False
+        release_audit.check_release(current_token=_token_of(records), given_token=token, reason=reason)
+        audit_path = Path(next(iter(records))).with_name(AUDIT_FILE)
+        release_audit.append(audit_path, event="kill_switch_release", actor=actor, reason=reason, removed=records)
+        for candidate in records:
+            os.remove(candidate)
+        return True

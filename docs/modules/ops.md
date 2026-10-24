@@ -89,10 +89,16 @@ The CLI writes `flatten_request.json` through `FlattenGate`; the engine's
 supervisor (`HFTSystem._sync_operator_flatten`, 1 Hz) claims it, records the
 platform net position per symbol in scope (`all`, or `strategy` with
 `--scope-id`), and `LossExitController` sends a FORCE_FLAT for each with
-trigger `operator_flatten` (IOC marketable limit, retried every 10 s). The
-request finishes from the position store: COMPLETED with every symbol flat, or
-at the deadline with the still-open symbols counted as partially closed or
-failed. The CLI exits non-zero when any symbol is still open. A request left
+trigger `operator_flatten` (IOC marketable limit, retried every 10 s), and
+cancels every other working order in those symbols (`cancel_intents`, retried
+at the same interval). The request finishes from the position store and the
+order adapter's `live_orders`: COMPLETED once every symbol is flat with no
+working order left in it and no order still awaiting the broker's
+acknowledgement, or at the deadline with the symbols still open or still
+holding an order counted as partially closed or failed. The CLI exits non-zero
+when any symbol is still open. A flatten does not stop trading: a strategy can
+open again after it completes; set the kill switch first (`hft risk halt`)
+to keep the book closed. A request left
 PROCESSING by an engine that restarted is failed on the next boot. A FORCE_FLAT
 closes the platform's whole net position in a symbol, so `strategy` scope
 selects symbols, not lots. `PositionFlattener` is not on this path.

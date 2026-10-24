@@ -137,7 +137,8 @@ class TestKillSwitchDurability:
         target = tmp_path / "ks" / "kill_switch"
         kill_switch.activate("op", actor="cli", path=str(target))
         assert json.loads(target.read_text())["reason"] == "op"
-        assert [p.name for p in target.parent.iterdir()] == ["kill_switch"]
+        # The lock is kept on purpose (it serializes activate with release); a temp file is not.
+        assert sorted(p.name for p in target.parent.iterdir()) == ["kill_switch", "kill_switch.lock"]
 
     def test_legacy_runtime_latch_is_still_active_and_removed_by_resume(self, tmp_path, monkeypatch) -> None:
         monkeypatch.delenv(kill_switch.PATH_ENV, raising=False)

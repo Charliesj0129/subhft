@@ -272,6 +272,20 @@ def locked_state(path: Path, *, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) -> It
     untouched, and an exception raised inside the block does too -- the caller's
     mutation is the thing in doubt, so publishing nothing is fail-closed.
     """
+    with exclusive_lock(path, timeout_s=timeout_s):
+        state = read_state_strict(path)
+        yield state
+        _atomic_write(path, state)
+
+
+@contextmanager
+def exclusive_lock(path: Path, *, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) -> Iterator[None]:
+    """Hold an exclusive ``flock`` on ``<path>.lock`` for the block, across processes.
+
+    For a check-then-act on a file another process also writes (a latch's
+    token check and its removal): without it, a write landing between the two
+    is acted on with the old file's authority. Bounded like ``locked_state``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(f"{path.suffix}.lock")
     with open(lock_path, "a+", encoding="utf-8") as lock_file:
@@ -285,8 +299,6 @@ def locked_state(path: Path, *, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) -> It
                     raise RuntimeStateLockTimeout(f"could not acquire {lock_path} within {timeout_s}s") from None
                 time.sleep(0.01)
         try:
-            state = read_state_strict(path)
-            yield state
-            _atomic_write(path, state)
+            yield
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
