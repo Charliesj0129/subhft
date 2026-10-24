@@ -272,7 +272,7 @@ class HFTSystem:
                 except Exception as exc:  # noqa: BLE001 - retried next tick
                     logger.error("daily_loss_state_write_failed", error=str(exc))
             if not validator.halt_triggered and manual_latches.DAILY_LOSS in self._manual_latches_active:
-                await self._release_daily_loss_latch_after_roll(int(document["validator"]["boundary_ns"]))
+                await self._release_daily_loss_latch_after_roll(int(validator.export_state()["boundary_ns"]))
         try:
             latches = await asyncio.to_thread(manual_latches.active)
         except Exception as exc:  # noqa: BLE001 - keep the last known set
