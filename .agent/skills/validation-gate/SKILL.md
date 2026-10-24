@@ -32,7 +32,7 @@ and shadow evaluation but cannot replace the active loop. Never edit
 ## Run and read
 
 ```bash
-uv run hft alpha validate <alpha_id>                 # Gates A-C (add --profile vm_ul6_strict for promotion eligibility)
+uv run hft alpha validate <alpha_id>                 # Gates A-C (add --profile vm_ul6_strict_v2 for promotion eligibility)
 uv run hft alpha cheap-screen ...                    # pre-Gate-A IC / turnover / cost triage
 uv run hft alpha promote --alpha-id <id> --owner <you>   # Gates D-F, writes the canary config
 uv run hft alpha canary status

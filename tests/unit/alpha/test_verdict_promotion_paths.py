@@ -76,10 +76,42 @@ def test_gate_d_missing_scorecard_field_is_invalid_and_writes_no_kill(tmp_path: 
     assert decision["gate_d_verdict"] == "INVALID"
 
 
-def test_gate_d_missing_replay_parity_is_error_not_fail():
+def test_gate_d_missing_replay_parity_is_not_applicable_and_invalid_without_deferral():
     scorecard = _scorecard()
     scorecard.pop("replay_parity")
     verdict, checks = _evaluate_gate_d_verdict(scorecard, PromotionConfig(alpha_id="a", owner="o"))
+    assert checks["replay_parity_audit"]["outcome"] == "not_applicable"
+    assert verdict.verdict.value == "INVALID"
+
+
+def test_gate_d_missing_replay_parity_deferred_by_profile_is_an_obligation():
+    scorecard = _scorecard()
+    scorecard.pop("replay_parity")
+    profile = ValidationProfile(
+        name="t",
+        is_strict=True,
+        blocking_sub_gates=("replay_parity",),
+        deferrable={"replay_parity": "shadow_exit"},
+    )
+    verdict, checks = _evaluate_gate_d_verdict(
+        scorecard, PromotionConfig(alpha_id="a", owner="o", validation_profile=profile)
+    )
+    assert checks["replay_parity_audit"]["outcome"] == "not_applicable"
+    assert verdict.verdict.value == "PASS"
+    assert verdict.obligations == (("replay_parity_audit", "shadow_exit"),)
+
+
+def test_gate_d_replay_parity_below_threshold_stays_error_even_when_deferrable():
+    profile = ValidationProfile(
+        name="t",
+        is_strict=True,
+        blocking_sub_gates=("replay_parity",),
+        deferrable={"replay_parity": "shadow_exit"},
+    )
+    verdict, checks = _evaluate_gate_d_verdict(
+        _scorecard(replay_parity={"match_pct": 50.0}),
+        PromotionConfig(alpha_id="a", owner="o", validation_profile=profile),
+    )
     assert checks["replay_parity_audit"]["outcome"] == "error"
     assert verdict.verdict.value == "INVALID"
 

@@ -734,7 +734,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=None,
         help=(
-            "REQUIRED: strict validation profile (e.g. vm_ul6_strict). "
+            "REQUIRED: strict validation profile (e.g. vm_ul6_strict_v2). "
             "Loose runs must use `hft alpha screen` instead — `validate` is "
             "promotion-eligible only and refuses non-strict profiles."
         ),
@@ -940,7 +940,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=None,
         help=(
-            "Strict validation profile (e.g. 'vm_ul6_strict' or absolute path) required "
+            "Strict validation profile (e.g. 'vm_ul6_strict_v2' or absolute path) required "
             "for Gate D entry. promote_alpha() refuses to run without is_strict=true."
         ),
     )
