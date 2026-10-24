@@ -109,3 +109,38 @@ def test_experiment_gc_rejects_apply_with_dry_run(roots):
 
     assert gc.main(_argv(runs_root, validations_root, "--apply", "--dry-run")) == 2
     assert all((run / "signals.npy").exists() for run in runs)
+
+
+def _make_old_run(runs_root: Path, name: str, *, age_s: int, timestamp: str | None) -> Path:
+    run = _make_run(runs_root, name, "alpha_y", old=True)
+    meta: dict[str, str] = {"alpha_id": "alpha_y"}
+    if timestamp is not None:
+        meta["timestamp"] = timestamp
+    (run / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    for f in [*run.iterdir(), run]:
+        os.utime(f, (age_s, age_s))
+    return run
+
+
+@pytest.mark.parametrize("timestamped", [True, False], ids=["meta_timestamp", "metadata_mtime"])
+def test_experiment_gc_second_apply_keeps_latest_payloads(tmp_path, timestamped):
+    """Emptying an old run must not make it look newest on the next --apply."""
+    runs_root = tmp_path / "runs"
+    validations_root = tmp_path / "validations"
+    validations_root.mkdir()
+    old = _make_old_run(
+        runs_root, "run-old", age_s=_OLD_MTIME, timestamp="1970-01-12T00:00:00+00:00" if timestamped else None
+    )
+    latest = _make_old_run(
+        runs_root,
+        "run-latest",
+        age_s=_OLD_MTIME + 86_400,
+        timestamp="1970-01-13T00:00:00+00:00" if timestamped else None,
+    )
+
+    assert gc.main(_argv(runs_root, validations_root, "--apply")) == 0
+    assert not any((old / p).exists() for p in _PAYLOADS)
+    assert gc.main(_argv(runs_root, validations_root, "--apply")) == 0
+
+    for payload in _PAYLOADS:
+        assert (latest / payload).exists(), f"second --apply deleted the latest run's {payload}"

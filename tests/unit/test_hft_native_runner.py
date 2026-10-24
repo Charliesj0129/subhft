@@ -110,6 +110,85 @@ class TestResolveHftbtPath:
         assert _resolve_hftbt_path(str(research)) is None
 
 
+def _raw_tick_and_quote(path: Path) -> None:
+    """One trade at 102.0 and a quote whose mid is 101.0 (x1e6 raw scale)."""
+    import json
+
+    rows = [
+        {
+            "symbol": "TXFC6",
+            "type": "BidAsk",
+            "ingest_ts": 1_000_000_000,
+            "bids_price": [100_000_000],
+            "bids_vol": [2],
+            "asks_price": [102_000_000],
+            "asks_vol": [3],
+            "seq_no": 1,
+        },
+        {
+            "symbol": "TXFC6",
+            "type": "Tick",
+            "ingest_ts": 2_000_000_000,
+            "price_scaled": 102_000_000,
+            "volume": 1,
+            "seq_no": 2,
+        },
+        {
+            "symbol": "TXFC6",
+            "type": "BidAsk",
+            "ingest_ts": 3_000_000_000,
+            "bids_price": [100_000_000],
+            "bids_vol": [2],
+            "asks_price": [102_000_000],
+            "asks_vol": [3],
+            "seq_no": 3,
+        },
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+class TestGovernedBundlePairing:
+    def test_governed_bundle_primary_resolves_to_declared_backtest_data(self, tmp_path):
+        """The runner uses the bundle's exported events, not a re-conversion of the primary."""
+        from research.tools.prepare_governed_data import prepare_clickhouse_export
+
+        raw = tmp_path / "TXFC6_20260306.jsonl"
+        _raw_tick_and_quote(raw)
+        bundle = prepare_clickhouse_export(input_path=raw, output_dir=tmp_path / "bundle", alpha_id="a")
+        declared = np.load(bundle.hftbt_path)["data"]
+
+        resolved = ensure_hftbt_npz(str(bundle.primary_data))
+
+        assert Path(resolved) == bundle.hftbt_path.resolve()
+        np.testing.assert_array_equal(np.load(resolved)["data"], declared)
+        assert not list(bundle.primary_data.parent.glob("*.hftbt.npz"))
+
+    def test_bundle_declaring_backtest_data_outside_its_directory_raises(self, tmp_path):
+        import json
+
+        primary = tmp_path / "x_research.npz"
+        primary.touch()
+        elsewhere = tmp_path / "other" / "hftbt.npz"
+        elsewhere.parent.mkdir()
+        elsewhere.touch()
+        (tmp_path / "bundle_audit.json").write_text(
+            json.dumps({"bundle": {"primary_data": str(primary), "backtest_data": str(elsewhere)}})
+        )
+        with pytest.raises(ValueError, match="outside its directory"):
+            _resolve_hftbt_path(str(primary))
+
+    def test_bundle_declaring_missing_backtest_data_raises(self, tmp_path):
+        import json
+
+        primary = tmp_path / "x_research.npz"
+        primary.touch()
+        (tmp_path / "bundle_audit.json").write_text(
+            json.dumps({"bundle": {"primary_data": str(primary), "backtest_data": str(tmp_path / "hftbt.npz")}})
+        )
+        with pytest.raises(FileNotFoundError, match="missing backtest data"):
+            _resolve_hftbt_path(str(primary))
+
+
 # ---------------------------------------------------------------------------
 # has_hftbt_data
 # ---------------------------------------------------------------------------

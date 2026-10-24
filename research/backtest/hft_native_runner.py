@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import copy
 import itertools
+import json
 import os
 import sys
 import tempfile
@@ -94,9 +95,7 @@ except ImportError:
 # to be live so StrategyContext can deliver canonical FE tuples to
 # AlphaStrategyBridge. Both conditions hold for the same set today.
 # Mirrors ``src/hft_platform/feature/registry.py`` builders.
-_FE_V2_V3_SCHEMA_VERSIONS: frozenset[str] = frozenset(
-    {"lob_shared_v2", "lob_shared_v3"}
-)
+_FE_V2_V3_SCHEMA_VERSIONS: frozenset[str] = frozenset({"lob_shared_v2", "lob_shared_v3"})
 
 
 def _alpha_needs_l5_depth(alpha: AlphaProtocol) -> bool:
@@ -188,6 +187,40 @@ def _hftbt_output_path(data_path: str) -> Path:
     return p.parent / f"{p.stem}.hftbt.npz"
 
 
+def _declared_bundle_pair(data_path: str) -> Path | None:
+    """The backtest file a governed bundle declares for ``data_path``, if any.
+
+    ``prepare_governed_data`` writes ``bundle_audit.json`` naming one primary
+    file and the ``hftbt.npz`` it exported from the same raw rows (real trade
+    prices, not mids). That declared pairing wins over re-converting the
+    primary. It is honoured only when the primary matches this input and the
+    declared file sits in the same bundle directory and exists.
+    """
+    p = Path(data_path)
+    audit_path = p.parent / "bundle_audit.json"
+    if not audit_path.is_file():
+        return None
+    try:
+        payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"unreadable governed bundle audit {audit_path}: {exc}") from exc
+    bundle = payload.get("bundle") if isinstance(payload, dict) else None
+    if not isinstance(bundle, dict):
+        return None
+    primary = bundle.get("primary_data")
+    declared = bundle.get("backtest_data")
+    if not primary or not declared:
+        return None
+    if Path(primary).resolve() != p.resolve():
+        return None
+    declared_path = Path(declared).resolve()
+    if declared_path.parent != p.parent.resolve():
+        raise ValueError(f"governed bundle {audit_path} declares backtest data outside its directory: {declared}")
+    if not declared_path.is_file():
+        raise FileNotFoundError(f"governed bundle {audit_path} declares missing backtest data: {declared}")
+    return declared_path
+
+
 def _resolve_hftbt_path(data_path: str) -> str | None:
     """Given a data path (possibly research.npy), find its converted hftbt.npz.
 
@@ -195,13 +228,17 @@ def _resolve_hftbt_path(data_path: str) -> str | None:
       1. data_path itself if its name ends with ``hftbt.npz`` (covers
          both the legacy bare ``hftbt.npz`` and per-day snapshot AOS
          files like ``TMFD6_2026-04-14_l2.hftbt.npz``).
-      2. the input's own output (``_hftbt_output_path``), unless it is older
+      2. the pairing a governed bundle declares (``_declared_bundle_pair``).
+      3. the input's own output (``_hftbt_output_path``), unless it is older
          than the input it was converted from.
     Returns None if not found or stale.
     """
     p = Path(data_path)
     if p.name.endswith("hftbt.npz") and p.exists():
         return str(p)
+    declared = _declared_bundle_pair(data_path)
+    if declared is not None:
+        return str(declared)
     out = _hftbt_output_path(data_path)
     if not out.exists():
         return None

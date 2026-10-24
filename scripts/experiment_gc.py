@@ -14,6 +14,7 @@ deleted failed trial makes the surviving ones look better than they are.
 Usage:
     uv run python scripts/experiment_gc.py [--apply] [--keep-days N] [--keep-latest N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -73,15 +74,37 @@ def _parse_dir_timestamp(directory: Path) -> datetime | None:
     return None
 
 
+def _meta_timestamp(directory: Path) -> datetime | None:
+    """Return the run's recorded ``meta.json`` timestamp, if it has one."""
+    meta = directory / "meta.json"
+    if not meta.is_file():
+        return None
+    try:
+        import json
+
+        raw = json.loads(meta.read_text(encoding="utf-8")).get("timestamp")
+        if not isinstance(raw, str) or not raw:
+            return None
+        ts = datetime.fromisoformat(raw)
+    except (OSError, ValueError, AttributeError):
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
 def _dir_age(directory: Path) -> datetime:
     """Return the effective UTC datetime for a directory.
 
-    Prefers embedded timestamp from directory name; falls back to mtime.
+    Prefers the timestamp the run recorded (``meta.json``), then one embedded
+    in the directory name, then the newest metadata file's mtime. Never the
+    directory's own mtime: deleting payloads updates it, which would make an
+    emptied old run look newest and strip the latest run of its keep_latest
+    protection on the next ``--apply``.
     """
-    ts = _parse_dir_timestamp(directory)
+    ts = _meta_timestamp(directory) or _parse_dir_timestamp(directory)
     if ts is not None:
         return ts
-    mtime = directory.stat().st_mtime
+    metadata = [f for f in directory.rglob("*") if f.is_file() and f.suffix not in PAYLOAD_SUFFIXES]
+    mtime = max((f.stat().st_mtime for f in metadata), default=directory.stat().st_mtime)
     return datetime.fromtimestamp(mtime, tz=timezone.utc)
 
 
