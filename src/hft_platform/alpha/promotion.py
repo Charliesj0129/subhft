@@ -304,6 +304,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         "alpha_id": config.alpha_id,
         "gate_d_passed": gate_d_passed,
         "gate_d_verdict": gate_d_verdict.verdict.value,
+        # Deferred gates this approval still owes to a later stage (ADR-003).
+        "obligations": [{"gate": g, "stage": st} for g, st in gate_d_verdict.obligations],
         "gate_e_passed": gate_e_passed,
         "gate_f_passed": gate_f_passed,
         "gate_e_checks": gate_e_checks,
@@ -414,9 +416,14 @@ def _evaluate_gate_d_verdict(
                 check["outcome"] = Outcome.ERROR.value
             else:
                 check["outcome"] = (Outcome.PASS if check["pass"] else Outcome.FAIL).value
+    # Gate D audits re-check Gate C sub-gates under ``<sub_gate>_audit``; a
+    # sub-gate the profile defers is deferred here under the audit's name.
+    profile = getattr(config, "validation_profile", None)
+    deferrable = {f"{gate}_audit": stage for gate, stage in (getattr(profile, "deferrable", None) or {}).items()}
     verdict = derive_verdict(
         [{"name": name, "outcome": check["outcome"]} for name, check in checks.items()],
         blocking={name for name, check in checks.items() if check.get("blocking", True)},
+        deferrable=deferrable,
         powered=True,
     )
     return verdict, checks
@@ -537,15 +544,26 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
     if isinstance(replay_parity, dict):
         match_pct = _to_float(replay_parity.get("match_pct"))
     min_match_pct = getattr(config, "min_replay_parity_match_pct", 95.0)
-    checks["replay_parity_audit"] = {
-        "value": match_pct,
-        "min": min_match_pct,
-        "required": True,
-        "pass": (match_pct is not None and match_pct >= min_match_pct),
-        "detail": (
-            "OK" if match_pct is not None else "MISSING — scorecard.replay_parity must be populated before promotion"
-        ),
-    }
+    if match_pct is None:
+        # No parity report: a research candidate has no live intents yet
+        # (ADR-003). NOT_APPLICABLE is deferred to Shadow exit only when the
+        # profile says so; otherwise the run is INVALID.
+        checks["replay_parity_audit"] = {
+            "value": None,
+            "min": min_match_pct,
+            "required": True,
+            "outcome": Outcome.NOT_APPLICABLE.value,
+            "pass": False,
+            "detail": "MISSING — scorecard.replay_parity absent; no live intents to compare (ADR-003)",
+        }
+    else:
+        checks["replay_parity_audit"] = {
+            "value": match_pct,
+            "min": min_match_pct,
+            "required": True,
+            "pass": match_pct >= min_match_pct,
+            "detail": "OK" if match_pct >= min_match_pct else f"match_pct {match_pct} below {min_match_pct}",
+        }
 
     # Slice B Task 12: inventory_mtm + cost_uncertainty audits.
     # Belt-and-suspenders re-check of the Gate C sub-gate results that the
@@ -867,6 +885,18 @@ def _evaluate_gate_e(config: PromotionConfig, root: Path) -> tuple[bool, dict[st
 def _evaluate_gate_f(config: PromotionConfig, root: Path) -> tuple[bool, dict[str, Any]]:
     if not bool(config.enable_rust_readiness_gate):
         return True, {"skipped": True, "reason": "enable_rust_readiness_gate=false", "checks": {}}
+    profile = getattr(config, "validation_profile", None)
+    na_reason = (getattr(profile, "not_applicable_gates", None) or {}).get("gate_f")
+    if na_reason:
+        # The profile declares Gate F not applicable (Rust is paused): it
+        # does not block, and it is recorded as NOT_APPLICABLE, not as a PASS.
+        return True, {
+            "skipped": True,
+            "outcome": Outcome.NOT_APPLICABLE.value,
+            "reason": f"not_applicable:{na_reason}",
+            "profile": getattr(profile, "name", ""),
+            "checks": {},
+        }
 
     rust_module = str(config.rust_module_name or "").strip() or _load_rust_module_name(root, config.alpha_id)
     checks: dict[str, dict[str, Any]] = {

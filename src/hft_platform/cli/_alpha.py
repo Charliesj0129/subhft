@@ -536,7 +536,7 @@ def _load_strict_validation_profile(profile_arg: str | None) -> Any:
     if not profile_arg:
         print(
             "[hft alpha validate] --profile is required and must reference a strict "
-            "validation profile (see config/research/profiles/vm_ul6_strict.yaml). "
+            "validation profile (see config/research/profiles/vm_ul6_strict_v2.yaml). "
             "Use `hft alpha screen` for loose pre-Gate-C evaluation.",
             file=sys.stderr,
         )

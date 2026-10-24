@@ -11,16 +11,27 @@ from types import SimpleNamespace
 from typing import Any
 
 from hft_platform.alpha._validation_profile import ValidationProfile, load_profile
-from hft_platform.cli_args.research_pipeline import (
-    STANDARD_VALIDATION_PROFILE as _STANDARD_VALIDATION_PROFILE,
-    VM_UL6_STRICT_VALIDATION_PROFILE as _VM_UL6_STRICT_VALIDATION_PROFILE,
-    VM_UL6_VALIDATION_PROFILE as _VM_UL6_VALIDATION_PROFILE,
-    add_common_research_pipeline_args,
-)
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha, record_gate_c_kill
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+from hft_platform.cli_args.research_pipeline import (
+    GOVERNED_DEFAULT_VALIDATION_PROFILE as _GOVERNED_DEFAULT_VALIDATION_PROFILE,
+)
+from hft_platform.cli_args.research_pipeline import (
+    STANDARD_VALIDATION_PROFILE as _STANDARD_VALIDATION_PROFILE,
+)
+from hft_platform.cli_args.research_pipeline import (
+    VM_UL6_STRICT_V2_VALIDATION_PROFILE as _VM_UL6_STRICT_V2_VALIDATION_PROFILE,
+)
+from hft_platform.cli_args.research_pipeline import (
+    VM_UL6_STRICT_VALIDATION_PROFILE as _VM_UL6_STRICT_VALIDATION_PROFILE,
+)
+from hft_platform.cli_args.research_pipeline import (
+    VM_UL6_VALIDATION_PROFILE as _VM_UL6_VALIDATION_PROFILE,
+)
+from hft_platform.cli_args.research_pipeline import (
+    add_common_research_pipeline_args,
+)
 from research import factory
-
 
 # Stage 2 (2026-05-28): the legacy in-code overrides dict
 # ``_VM_UL6_PROFILE_OVERRIDES`` and ``_PROFILE_BASELINE_DEFAULTS`` were removed.
@@ -119,8 +130,8 @@ def _resolve_profile_token(token: str, *, notes: list[str]) -> str | None:
         warnings.warn(msg, DeprecationWarning, stacklevel=3)
         notes.append(msg)
         return _VM_UL6_STRICT_VALIDATION_PROFILE
-    if raw == _VM_UL6_STRICT_VALIDATION_PROFILE:
-        return _VM_UL6_STRICT_VALIDATION_PROFILE
+    if raw in (_VM_UL6_STRICT_VALIDATION_PROFILE, _VM_UL6_STRICT_V2_VALIDATION_PROFILE):
+        return raw
     raise ValueError(f"Unknown validation_profile: {raw}")
 
 
@@ -140,9 +151,19 @@ def _apply_validation_profile(
     Returns ``None`` for the ``standard`` token (no overrides applied, no
     profile object plumbed into Gate D).
     """
-    raw_profile = str(getattr(args, "validation_profile", _STANDARD_VALIDATION_PROFILE))
+    requested = getattr(args, "validation_profile", None)
+    if requested is None:
+        requested = _GOVERNED_DEFAULT_VALIDATION_PROFILE if strict_mode else _STANDARD_VALIDATION_PROFILE
+    raw_profile = str(requested)
     profile_stem = _resolve_profile_token(raw_profile, notes=notes)
     if profile_stem is None:
+        if strict_mode:
+            # standard is exploratory: it has no blocking sub-gates, so a
+            # governed run under it could reach promotion unmeasured.
+            raise ValueError(
+                "strict (governed) runs need a strict validation profile; "
+                f"'{_STANDARD_VALIDATION_PROFILE}' is exploratory only (use triage mode)"
+            )
         return None
 
     profile = _load_pipeline_profile(profile_stem)
@@ -276,6 +297,9 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
             stress_fee_multiplier=float(args.stress_fee_multiplier),
             min_stress_sharpe_ratio=float(args.min_stress_sharpe_ratio),
             stress_drawdown_limit_multiplier=float(args.stress_drawdown_limit_multiplier),
+            # Gate C blocks on the profile's sub-gates only when it is given
+            # the profile; without it they stay advisory.
+            profile=loaded_profile,
         )
     )
     _write_json(validate_path, validation.to_dict())

@@ -9,6 +9,9 @@ from typing import Any
 STANDARD_VALIDATION_PROFILE = "standard"
 VM_UL6_VALIDATION_PROFILE = "vm_ul6"
 VM_UL6_STRICT_VALIDATION_PROFILE = "vm_ul6_strict"
+VM_UL6_STRICT_V2_VALIDATION_PROFILE = "vm_ul6_strict_v2"
+# Governed (strict-mode) runs use this profile unless one is named.
+GOVERNED_DEFAULT_VALIDATION_PROFILE = VM_UL6_STRICT_V2_VALIDATION_PROFILE
 
 
 def add_common_research_pipeline_args(
@@ -22,14 +25,16 @@ def add_common_research_pipeline_args(
         "--validation-profile",
         choices=(
             STANDARD_VALIDATION_PROFILE,
+            VM_UL6_STRICT_V2_VALIDATION_PROFILE,
             VM_UL6_STRICT_VALIDATION_PROFILE,
             VM_UL6_VALIDATION_PROFILE,
         ),
-        default=STANDARD_VALIDATION_PROFILE,
+        default=None,
         help=(
-            "Validation parameter profile preset. vm_ul6_strict enables stricter "
-            "institutional-grade defaults loaded from "
-            "config/research/profiles/vm_ul6_strict.yaml. vm_ul6 is a deprecated alias."
+            "Validation profile, loaded from config/research/profiles/<name>.yaml. "
+            "Default: vm_ul6_strict_v2 for governed (strict) runs, standard (exploratory, "
+            "never promotable) otherwise. A strict run refuses standard. vm_ul6_strict is "
+            "the frozen v1 profile; vm_ul6 is a deprecated alias for it."
         ),
     )
     cmd.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas/<alpha_id>")
