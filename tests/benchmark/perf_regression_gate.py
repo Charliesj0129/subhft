@@ -23,6 +23,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side, StormGuardState
+from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
@@ -51,8 +52,12 @@ from research.registry.schemas import AlphaManifest
 
 
 class _NoopStrategy(BaseStrategy):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.dispatched = 0
+
     def on_tick(self, event):  # pragma: no cover - microbench hook
-        return None
+        self.dispatched += 1
 
 
 class _DummyAlpha:
@@ -165,14 +170,25 @@ async def _run_recorder_batcher_add(n: int) -> None:
         await batcher.add(row)
 
 
-def bench_strategy_noop(n: int = 50_000) -> float:
+# The runner drops an event older than HFT_STALE_EVENT_THRESHOLD_MS (default 500 ms) before any strategy sees it, and
+# takes the age from ``meta.local_ts`` first, ``meta.source_ts`` second. This bench replays ONE event n times, so
+# the event must carry a current stamp and the threshold must outlast the whole run. With source_ts=local_ts=1
+# every event was dropped by that guard and the gate timed its early return (~1.5 us) instead of dispatch (~5 us).
+_NOOP_STALE_THRESHOLD_MS = 3_600_000
+
+
+def _strategy_noop_run(n: int) -> tuple[float, int, int]:
+    """Replay one tick n times through StrategyRunner; return (us per event, events dispatched, stale skips)."""
     risk_q = asyncio.Queue()
-    with patch("hft_platform.strategy.runner.StrategyRegistry") as mock_reg:
-        mock_reg.return_value.instantiate.return_value = []
-        runner = StrategyRunner(MagicMock(), risk_q, config_path="dummy")
-    runner.register(_NoopStrategy("noop", symbols=["2330"]))
+    with patch.dict(os.environ, {"HFT_STALE_EVENT_THRESHOLD_MS": str(_NOOP_STALE_THRESHOLD_MS)}):
+        with patch("hft_platform.strategy.runner.StrategyRegistry") as mock_reg:
+            mock_reg.return_value.instantiate.return_value = []
+            runner = StrategyRunner(MagicMock(), risk_q, config_path="dummy")
+    strategy = _NoopStrategy("noop", symbols=["2330"])
+    runner.register(strategy)
+    now_ns = timebase.now_ns()
     evt = TickEvent(
-        meta=MetaData(seq=1, topic="tick", source_ts=1, local_ts=1),
+        meta=MetaData(seq=1, topic="tick", source_ts=now_ns, local_ts=now_ns),
         symbol="2330",
         price=10000,
         volume=1,
@@ -185,7 +201,18 @@ def bench_strategy_noop(n: int = 50_000) -> float:
     t0 = time.perf_counter()
     asyncio.run(_run_strategy_loop(runner, evt, n))
     t1 = time.perf_counter()
-    return (t1 - t0) / n * 1e6
+    return (t1 - t0) / n * 1e6, strategy.dispatched, runner._stale_event_skip_total
+
+
+def bench_strategy_noop(n: int = 50_000) -> float:
+    us_per_event, dispatched, stale_skips = _strategy_noop_run(n)
+    if dispatched != n or stale_skips:
+        # Fail closed: a number that is not the cost of dispatch must never be compared with the ceiling.
+        raise RuntimeError(
+            f"strategy_noop did not measure dispatch: {dispatched}/{n} events reached the strategy, "
+            f"{stale_skips} dropped as stale"
+        )
+    return us_per_event
 
 
 def bench_recorder_batcher_add(n: int = 20_000) -> float:
@@ -859,6 +886,49 @@ def _feature_ref_values(
     )
 
 
+# The features ``_feature_ref_values`` reproduces, by name. The engine's feature set has grown since the reference
+# was written (16 -> 27 values per update), and comparing whole value tuples made EVERY event a mismatch: the
+# measured rate was 1.0 and its ceiling was 1.0, so the metric reported total disagreement and passed. Compare by
+# name instead, so a feature the reference does not cover is not a mismatch and a missing one is.
+_FEATURE_REF_IDS = (
+    "best_bid",
+    "best_ask",
+    "mid_price_x2",
+    "spread_scaled",
+    "bid_depth",
+    "ask_depth",
+    "depth_imbalance_ppm",
+    "microprice_x2",
+    "l1_bid_qty",
+    "l1_ask_qty",
+    "l1_imbalance_ppm",
+    "ofi_l1_raw",
+    "ofi_l1_cum",
+    "ofi_l1_ema8",
+    "spread_ema8_scaled",
+    "depth_imbalance_ema8_ppm",
+)
+
+
+def _feature_values_by_id(update, ids: tuple[str, ...] = _FEATURE_REF_IDS) -> tuple | None:
+    """The values of ``ids`` from a feature update, or None if there is no update or it lacks one of them."""
+    if update is None:
+        return None
+    index = {fid: i for i, fid in enumerate(update.feature_ids)}
+    if any(fid not in index for fid in ids):
+        return None
+    return tuple(update.values[index[fid]] for fid in ids)
+
+
+def _require_rust_feature_backend(engine) -> None:
+    """A Rust drill that cannot run must fail, not report 0.0 (which is under every ceiling)."""
+    if engine.kernel_backend() != "rust":
+        raise RuntimeError(
+            "--include-feature-rust was requested but the Rust feature kernel is not loaded "
+            "(build rust_core); refusing to report 0.0"
+        )
+
+
 def bench_feature_engine_parity_mismatch_rate(n: int = 8_000) -> float:
     rng = np.random.default_rng(20260224)
     eng = FeatureEngine(emit_events=True)
@@ -875,19 +945,15 @@ def bench_feature_engine_parity_mismatch_rate(n: int = 8_000) -> float:
         aq = max(1, aq + int(rng.choice([-3, -1, 0, 1, 3])))
         evt, stats = _feature_bench_event_stats(i + 1, bid, bq, ask, aq)
         got = eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        if got is None:
-            mismatches += 1
-            continue
-        expected = _feature_ref_values(ref, evt, stats)
-        if got.values != expected:
+        expected = _feature_ref_values(ref, evt, stats)  # every event, so the reference state never falls behind
+        if _feature_values_by_id(got) != expected:
             mismatches += 1
     return mismatches / max(1, n)
 
 
 def bench_feature_engine_lob_update_rust(iters: int = 80_000) -> float:
     eng = FeatureEngine(emit_events=True, kernel_backend="rust")
-    if eng.kernel_backend() != "rust":
-        return 0.0
+    _require_rust_feature_backend(eng)
     events: list[tuple[BidAskEvent, LOBStatsEvent]] = []
     bid = 1_000_000
     ask = 1_001_000
@@ -921,8 +987,7 @@ def bench_feature_engine_lob_update_rust(iters: int = 80_000) -> float:
 def bench_feature_engine_python_vs_rust_parity_mismatch_rate(n: int = 8_000) -> float:
     py_eng = FeatureEngine(emit_events=True, kernel_backend="python")
     rust_eng = FeatureEngine(emit_events=True, kernel_backend="rust")
-    if rust_eng.kernel_backend() != "rust":
-        return 0.0
+    _require_rust_feature_backend(rust_eng)
     rng = np.random.default_rng(20260224)
     bid = 1_000_000
     ask = 1_001_000
@@ -937,7 +1002,9 @@ def bench_feature_engine_python_vs_rust_parity_mismatch_rate(n: int = 8_000) -> 
         evt, stats = _feature_bench_event_stats(i + 1, bid, bq, ask, aq)
         p = py_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        if p is None or r is None or p.values != r.values:
+        # The Rust kernel computes the 16 v1 features and zero-pads the rest, so only those are comparable.
+        p_values = _feature_values_by_id(p)
+        if p_values is None or p_values != _feature_values_by_id(r):
             mismatches += 1
     return mismatches / max(1, n)
 
