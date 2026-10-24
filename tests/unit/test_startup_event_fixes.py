@@ -294,6 +294,9 @@ class TestStartupFillBackfill:
             # manual latches before anything can dispatch.
             _restore_daily_loss_state=lambda: None,
             _apply_manual_latches=lambda _latches: None,
+            # ...and binds the checkpoint identity to the logged-in account
+            # before recovery reads the checkpoint.
+            _bind_checkpoint_identity=lambda: True,
             # ...and writes the BOOT guardrail row before both.
             _audit_engine_start=HFTSystem._audit_engine_start,
             stop_async=MagicMock(return_value=asyncio.sleep(0)),
