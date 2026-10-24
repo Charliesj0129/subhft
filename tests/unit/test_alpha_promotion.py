@@ -1025,9 +1025,7 @@ class TestSliceDAutoKill:
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        root, sc_path = self._setup_alpha_fixture(
-            tmp_path, "alpha_t14_c", gate_c_passed=False, gate_c_verdict="KILL"
-        )
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c", gate_c_passed=False, gate_c_verdict="KILL")
 
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c",

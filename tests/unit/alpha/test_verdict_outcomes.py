@@ -69,9 +69,7 @@ def test_derive_verdict_blocking_error_is_invalid_even_with_a_powered_fail():
 
 
 def test_derive_verdict_powered_fail_is_kill():
-    v = derive_verdict(
-        [_e("min_sample_size", Outcome.PASS), _e("a", Outcome.FAIL)], blocking={"min_sample_size", "a"}
-    )
+    v = derive_verdict([_e("min_sample_size", Outcome.PASS), _e("a", Outcome.FAIL)], blocking={"min_sample_size", "a"})
     assert v.verdict is Verdict.KILL
     assert v.reasons == ("a",)
 
@@ -161,9 +159,7 @@ def test_max_drawdown_measured_case_unchanged():
 
 
 def test_min_sample_size_short_sample_reports_required_days():
-    res = MinSampleSizeGate().evaluate(
-        _R(n_fills=150, n_trading_days=40), None, {"min_fills": 300, "min_days": 60}
-    )
+    res = MinSampleSizeGate().evaluate(_R(n_fills=150, n_trading_days=40), None, {"min_fills": 300, "min_days": 60})
     assert res.passed is False
     assert res.outcome is Outcome.INSUFFICIENT_SAMPLE
     assert res.metrics["required_n"] == 80  # 300 fills at 150/40 per day
