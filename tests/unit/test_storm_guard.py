@@ -7,6 +7,8 @@ import pytest
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 
+pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
+
 
 class TestStormGuard(unittest.TestCase):
     def setUp(self):

@@ -9,6 +9,8 @@ import pytest
 
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
 
+pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
+
 try:
     from hypothesis import given, settings
     from hypothesis import strategies as st

@@ -2,6 +2,7 @@ import asyncio
 import os
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -113,6 +114,18 @@ class RiskThresholds:
     # above explains the original sizing and is kept for history.
     order_rtt_warm_us: int = 1_500_000  # 1500 ms
     order_rtt_storm_us: int = 2_500_000  # 2500 ms
+    # 2026-10-24: STORM needs ``order_rtt_storm_count`` orders at or above
+    # ``order_rtt_storm_us`` within ``order_rtt_storm_window_s``, and holds
+    # until ``order_rtt_storm_dwell_s`` pass with none. Widening the threshold
+    # on 10-03 did not stop the flapping: of the 496 STORM entries from 10-04
+    # to 10-23 (audit.guardrail_log), 335 read 3000-3100 ms, which is
+    # ``HFT_API_TIMEOUT_S=3.0`` -- one broker call that timed out, entering
+    # STORM for ~85 s and leaving it until the next one. No threshold can
+    # filter a timeout, so one sample no longer decides; a single slow order
+    # still reaches WARM, which blocks nothing.
+    order_rtt_storm_count: int = 3
+    order_rtt_storm_window_s: float = 60.0  # precision-time
+    order_rtt_storm_dwell_s: float = 300.0  # precision-time
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
 
@@ -202,6 +215,13 @@ class StormGuard:
         # ``observe_order_rtt_us`` for why it is not evaluated where it is
         # measured.
         "_order_rtt_peak_us",
+        # ``time.monotonic()`` of the last ``order_rtt_storm_count`` orders at
+        # or above the STORM threshold (a deque bounded at that count), whether
+        # one arrived since the last ``update()``, and whether the order-RTT
+        # STORM they started is on.
+        "_order_rtt_slow_ts",
+        "_order_rtt_slow_fresh",
+        "_order_rtt_storm_on",
         # Why the current HALT was entered. ``update()`` can no longer compute
         # HALT, so ``_target_state_reason`` never names one; this does.
         "_halt_reason",
@@ -224,8 +244,11 @@ class StormGuard:
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
         # Before _apply_env_overrides: it publishes the latency inputs' armed
-        # state, which needs the registry.
+        # state, which needs the registry, and resizes the slow-order window.
         self.metrics = MetricsRegistry.get()
+        self._order_rtt_slow_ts: deque[float] = deque(maxlen=1)  # precision-time
+        self._order_rtt_slow_fresh: bool = False
+        self._order_rtt_storm_on: bool = False
         self._apply_env_overrides()
         self.last_state_change = time.monotonic()
         self._de_escalate_count: int = 0
@@ -344,6 +367,11 @@ class StormGuard:
             ):
                 if key in risk_cfg:
                     setattr(self.thresholds, key, int(risk_cfg[key]))
+            if "order_rtt_storm_count" in risk_cfg:
+                self.thresholds.order_rtt_storm_count = max(1, int(risk_cfg["order_rtt_storm_count"]))
+            for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s"):
+                if key in risk_cfg:
+                    setattr(self.thresholds, key, float(risk_cfg[key]))  # precision-ok
             if "feed_gap_storm_s" in risk_cfg:
                 self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
             self._apply_env_overrides()
@@ -410,6 +438,33 @@ class StormGuard:
                     default_us=getattr(self.thresholds, attr),
                 )
 
+        for var, attr, cast in (
+            ("HFT_STORMGUARD_ORDER_RTT_STORM_COUNT", "order_rtt_storm_count", int),
+            ("HFT_STORMGUARD_ORDER_RTT_STORM_WINDOW_S", "order_rtt_storm_window_s", float),
+            ("HFT_STORMGUARD_ORDER_RTT_STORM_DWELL_S", "order_rtt_storm_dwell_s", float),
+        ):
+            raw = os.getenv(var)
+            if not raw:
+                continue
+            try:
+                value = cast(raw)
+            except ValueError:
+                value = None
+            # A count must be >= 1; a window or dwell of 0 is meaningful
+            # (dwell 0 ends the STORM on the first quiet tick).
+            if value is None or value < (1 if attr == "order_rtt_storm_count" else 0):
+                logger.warning(
+                    "Invalid order-RTT STORM setting; keeping the built-in default",
+                    var=var,
+                    value=raw,
+                    default=getattr(self.thresholds, attr),
+                )
+                continue
+            setattr(self.thresholds, attr, value)
+        count = max(1, int(self.thresholds.order_rtt_storm_count))
+        if self._order_rtt_slow_ts.maxlen != count:
+            self._order_rtt_slow_ts = deque(self._order_rtt_slow_ts, maxlen=count)
+
         self._report_latency_input_health()
 
     # ------------------------------------------------------------------
@@ -445,6 +500,9 @@ class StormGuard:
             loop_lag_storm_us=t.latency_storm_us,
             order_rtt_warm_us=t.order_rtt_warm_us,
             order_rtt_storm_us=t.order_rtt_storm_us,
+            order_rtt_storm_count=t.order_rtt_storm_count,
+            order_rtt_storm_window_s=t.order_rtt_storm_window_s,
+            order_rtt_storm_dwell_s=t.order_rtt_storm_dwell_s,
             order_rtt_armed=self._order_rtt_armed(),
         )
         if stall_kill_seconds > 0:
@@ -500,6 +558,33 @@ class StormGuard:
             return
         if rtt_us > self._order_rtt_peak_us:
             self._order_rtt_peak_us = rtt_us
+        storm_us = self.thresholds.order_rtt_storm_us
+        if storm_us > 0 and rtt_us >= storm_us:
+            self._order_rtt_slow_ts.append(time.monotonic())
+            self._order_rtt_slow_fresh = True
+
+    def _order_rtt_storm_active(self) -> bool:
+        """Whether the order-RTT STORM holds now. Called once per ``update()``.
+
+        Starts on the tick whose slow orders bring the last
+        ``order_rtt_storm_count`` of them within ``order_rtt_storm_window_s``;
+        ends on the first tick with none new once ``order_rtt_storm_dwell_s``
+        has passed since the last. With a count of 1 and a dwell of 0 this is
+        the old single-sample rule.
+        """
+        fresh = self._order_rtt_slow_fresh
+        self._order_rtt_slow_fresh = False
+        slow = self._order_rtt_slow_ts
+        t = self.thresholds
+        if t.order_rtt_storm_us <= 0 or not slow:
+            self._order_rtt_storm_on = False
+            return False
+        if not self._order_rtt_storm_on:
+            if fresh and len(slow) == slow.maxlen and slow[-1] - slow[0] <= t.order_rtt_storm_window_s:
+                self._order_rtt_storm_on = True
+        elif not fresh and time.monotonic() - slow[-1] >= t.order_rtt_storm_dwell_s:
+            self._order_rtt_storm_on = False
+        return self._order_rtt_storm_on
 
     def _drain_order_rtt_peak_us(self) -> int:
         """Return the peak RTT since the last drain and reset it.
@@ -533,6 +618,7 @@ class StormGuard:
         latency_us: int,
         feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
         order_rtt_us: int = 0,
+        order_rtt_storm: bool = False,
     ) -> tuple[StormGuardState, str]:
         """Determine target state from health inputs. Priority: STORM > WARM > NORMAL.
 
@@ -543,14 +629,18 @@ class StormGuard:
         ``latency_us`` is event-loop lag; ``order_rtt_us`` is broker round-trip.
         They are two quantities two orders of magnitude apart and each has its
         own threshold pair — one number cannot serve both.
+
+        ``order_rtt_storm`` is the count-and-dwell decision
+        (``_order_rtt_storm_active``); ``order_rtt_us`` alone reaches WARM.
         """
         t = self.thresholds
         if latency_us >= t.latency_storm_us:
             return StormGuardState.STORM, f"Latency {latency_us}us"
-        # 0 = unarmed, and must stay unarmed: a bare `>=` would escalate on
-        # every sample the moment the threshold is left at its default.
-        if t.order_rtt_storm_us > 0 and order_rtt_us >= t.order_rtt_storm_us:
-            return StormGuardState.STORM, f"Order RTT {order_rtt_us}us"
+        if order_rtt_storm:
+            return StormGuardState.STORM, (
+                f"Order RTT {t.order_rtt_storm_count} orders >= {t.order_rtt_storm_us}us"
+                f" within {t.order_rtt_storm_window_s:g}s, held {t.order_rtt_storm_dwell_s:g}s after the last"
+            )
         if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
         # Component failure holds STORM regardless of the latency WARM thresholds.
@@ -589,6 +679,10 @@ class StormGuard:
                 ``observe_order_rtt_us`` since the last call is drained here and
                 used when it is larger.
         """
+        # An explicit round trip is one more observation, counted toward the
+        # slow-order window like any other.
+        if order_rtt_us > 0:
+            self.observe_order_rtt_us(order_rtt_us)
         # Drain unconditionally: leaving a peak behind would let it surface at
         # an unrelated later tick.
         peak_rtt_us = self._drain_order_rtt_peak_us()
@@ -596,7 +690,9 @@ class StormGuard:
             order_rtt_us = peak_rtt_us
         self._observe_latency_input("loop_lag", latency_us)
         self._observe_latency_input("order_rtt", order_rtt_us)
-        new_state, reason = self._evaluate_target_state(latency_us, feed_gap_s, order_rtt_us)
+        new_state, reason = self._evaluate_target_state(
+            latency_us, feed_gap_s, order_rtt_us, self._order_rtt_storm_active()
+        )
         self._target_state_reason = reason
 
         # Transition Logic (with hysteresis protection for de-escalation)

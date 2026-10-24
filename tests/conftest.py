@@ -416,3 +416,15 @@ def mock_metrics() -> MagicMock:
     mock = MagicMock()
     mock.name = "MockMetricsRegistry"
     return mock
+
+
+@pytest.fixture()
+def order_rtt_single_sample(monkeypatch):
+    """One order at the STORM threshold is a STORM, for one tick (the pre-2026-10-24 rule).
+
+    For tests of the state machine itself, which use the order-RTT input as the
+    simplest health signal that reaches STORM. The count-and-dwell rule has its
+    own tests in ``test_order_rtt_storm_needs_repeated_slow_orders.py``.
+    """
+    monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_COUNT", "1")
+    monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_DWELL_S", "0")

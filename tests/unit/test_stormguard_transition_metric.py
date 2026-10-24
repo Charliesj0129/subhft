@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from hft_platform.risk.storm_guard import StormGuard, StormGuardState
+
+pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
 
 
 def _make_guard() -> tuple[StormGuard, MagicMock]:

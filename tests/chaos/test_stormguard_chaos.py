@@ -12,6 +12,8 @@ import pytest
 
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
 
+pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

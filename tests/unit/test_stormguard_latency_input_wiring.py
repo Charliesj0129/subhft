@@ -53,6 +53,7 @@ def _guard(**thresholds: object) -> StormGuard:
     return guard
 
 
+@pytest.mark.usefixtures("order_rtt_single_sample")
 class TestTheOrderRttInputNowHasAProducer:
     def test_a_recorded_round_trip_reaches_the_next_update(self) -> None:
         guard = _guard(order_rtt_storm_us=200_000)
