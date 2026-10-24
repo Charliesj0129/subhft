@@ -268,12 +268,42 @@ class HFTSystem:
                     self._daily_loss_state_written = document
                 except Exception as exc:  # noqa: BLE001 - retried next tick
                     logger.error("daily_loss_state_write_failed", error=str(exc))
+            if not validator.halt_triggered and manual_latches.DAILY_LOSS in self._manual_latches_active:
+                await self._release_daily_loss_latch_after_roll(int(document["validator"]["boundary_ns"]))
         try:
             latches = await asyncio.to_thread(manual_latches.active)
         except Exception as exc:  # noqa: BLE001 - keep the last known set
             logger.error("manual_latch_read_failed", error=str(exc))
             latches = dict(self._manual_latches_active)
         self._apply_manual_latches(latches)
+
+    @staticmethod
+    async def _release_daily_loss_latch_after_roll(boundary_ns: int) -> None:
+        """Release a daily-loss latch written before the current trading day began.
+
+        The validator has already released its own stop for the day (it does
+        so only on a complete valuation), so the latch is all that still holds
+        HALT. A latch written after the 05:00 boundary is today's stop and
+        stays. An unreadable latch has no date to compare and stays too.
+        """
+
+        def _before_roll(record: Any) -> bool:
+            ts = record.get("timestamp_ns") if isinstance(record, dict) else None
+            return type(ts) is int and ts < boundary_ns
+
+        try:
+            released = await asyncio.to_thread(
+                manual_latches.release_when,
+                manual_latches.DAILY_LOSS,
+                _before_roll,
+                reason="trading day rolled at 05:00 Taipei",
+                actor="engine:day_roll",
+            )
+        except Exception as exc:  # noqa: BLE001 - retried next tick; the latch still holds HALT
+            logger.error("daily_loss_latch_release_failed", error=str(exc))
+            return
+        if released:
+            logger.warning("daily_loss_latch_released_at_day_roll", boundary_ns=boundary_ns)
 
     def _run_loss_exit(self) -> None:
         """Submit the FORCE_FLAT intents ``LossExitController`` says are due.

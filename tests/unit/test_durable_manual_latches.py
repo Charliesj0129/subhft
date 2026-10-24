@@ -1,10 +1,11 @@
-"""B1: the four manual-release stops survive a restart; nothing else is manual.
+"""B1: the durable stops survive a restart; B4b: the engine ends the two latches on evidence.
 
-Policy (2026-10-23): data loss, a reconciliation mismatch, an operator kill and
-the daily loss limit need an operator to resume; everything else recovers on
-its own. Before this batch the daily-loss stop, the day's realized loss and the
-reconciliation hold lived in memory, so a restart released them -- on
-2026-10-22 16:44Z a deploy restart cleared a daily-loss HALT in place.
+Before B1 the daily-loss stop, the day's realized loss and the reconciliation
+hold lived in memory, so a restart released them -- on 2026-10-22 16:44Z a
+deploy restart cleared a daily-loss HALT in place. Since 2026-10-24 only the
+operator kill needs a person: the daily-loss latch ends at the next 05:00 roll
+and the reconciliation latch once the books agree again (an operator can still
+release either with ``hft risk rearm``).
 
     engine                          disk (.state/)                 operator
     ------                          --------------                 --------
@@ -287,8 +288,8 @@ class TestSupervisorSync:
         assert manual_latches.active() == {}
         assert system.storm_guard.manual_latch_hold is False
 
-    def test_latch_outlives_the_validator_flag(self) -> None:
-        """The 05:00 roll clears the validator; the file still holds HALT."""
+    def test_latch_outlives_the_validator_flag_within_the_same_day(self) -> None:
+        """The validator flag clearing before the 05:00 roll does not release today's latch."""
         v = _validator()
         _latch_daily(v)
         system = _system(v)
@@ -299,6 +300,59 @@ class TestSupervisorSync:
         asyncio.run(system._sync_manual_latches())
 
         assert manual_latches.active() == {"daily_loss": "DAILY_LOSS_LIMIT"}
+        assert system.storm_guard.manual_latch_hold is True
+
+    @staticmethod
+    def _roll_the_day(v: DailyLossLimitValidator) -> None:
+        """The 05:00 roll as the validator records it: a later boundary, stop released."""
+        v._current_reset_boundary_ns = (
+            manual_latches._record(manual_latches.latch_dir() / "daily_loss.json")["timestamp_ns"] + 1
+        )
+        v.halt_triggered = False
+        v._halt_reason = ""
+
+    def test_the_day_roll_releases_yesterdays_latch_with_an_audit_line(self) -> None:
+        v = _validator()
+        _latch_daily(v)
+        system = _system(v)
+        asyncio.run(system._sync_manual_latches())
+
+        self._roll_the_day(v)
+        asyncio.run(system._sync_manual_latches())
+
+        assert manual_latches.active() == {}
+        assert system.storm_guard.manual_latch_hold is False
+        audit = (manual_latches.latch_dir() / manual_latches.AUDIT_FILE).read_text(encoding="utf-8").splitlines()
+        entry = json.loads(audit[-1])
+        assert entry["actor"] == "engine:day_roll"
+        assert entry["latch"] == "daily_loss"
+
+    def test_the_day_roll_keeps_the_latch_while_the_validator_still_holds(self) -> None:
+        """The validator releases at the roll only on a complete valuation; until it does, nor does the latch."""
+        v = _validator()
+        _latch_daily(v)
+        system = _system(v)
+        asyncio.run(system._sync_manual_latches())
+
+        self._roll_the_day(v)
+        _latch_daily(v)  # roll seen, but no complete snapshot yet
+        asyncio.run(system._sync_manual_latches())
+
+        assert "daily_loss" in manual_latches.active()
+        assert system.storm_guard.manual_latch_hold is True
+
+    def test_an_unreadable_latch_is_not_released_by_the_day_roll(self) -> None:
+        v = _validator()
+        system = _system(v)
+        directory = manual_latches.latch_dir()
+        directory.mkdir(parents=True)
+        (directory / "daily_loss.json").write_text("{torn", encoding="utf-8")
+        system._apply_manual_latches(manual_latches.active())
+        v._current_reset_boundary_ns += 86_400 * 1_000_000_000
+
+        asyncio.run(system._sync_manual_latches())
+
+        assert manual_latches.active() == {"daily_loss": "unreadable"}
         assert system.storm_guard.manual_latch_hold is True
 
     def test_failed_latch_read_keeps_the_last_known_set(self, monkeypatch) -> None:
