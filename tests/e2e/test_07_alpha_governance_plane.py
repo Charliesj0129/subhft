@@ -163,6 +163,11 @@ class TestChain:
             # what this test pins is what a well-formed scorecard looks like
             # now, and that includes declaring where the equity came from.
             "equity_source": "real",
+            # Gate D's cost-uncertainty audit reads the Gate C sub-gate payload;
+            # a scorecard without it cannot be evaluated (ERROR, not a pass).
+            # inventory_mtm is a maker audit, so a taker scorecard omits it.
+            "strategy_type": "taker",
+            "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
         }
 
         # Validate scorecard against the actual production gate
@@ -200,8 +205,10 @@ class TestChain:
             # the gate returns an explicit advisory PASS when the field is
             # missing, so the field is optional by design.
             "equity_source": "equity_source",
+            # Maker audit: NOT_APPLICABLE (non-blocking) on this taker scorecard.
             "inventory_mtm_audit": None,
-            "cost_uncertainty_audit": None,
+            # Required: a missing payload is an ERROR, not an advisory PASS.
+            "cost_uncertainty_audit": "cost_uncertainty",
         }
         for key, check in checks.items():
             assert key in check_to_scorecard_field, (
@@ -235,6 +242,9 @@ class TestChain:
             # Blocking since Slice C -- see test_gate_c_backtest_scorecard.
             "replay_parity": {"match_pct": 99.0},
             "equity_source": "real",
+            # Required audit payload -- see test_gate_c_backtest_scorecard.
+            "strategy_type": "taker",
+            "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
         }
         config = PromotionConfig(
             alpha_id="test_alpha",

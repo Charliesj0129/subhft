@@ -26,10 +26,25 @@ from uuid import uuid4
 import structlog
 import yaml
 
+from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, derive_verdict
 from hft_platform.alpha.validation import _update_manifest_status
 from hft_platform.core import timebase
 
 _log = structlog.get_logger(__name__)
+
+
+class GateCNotPassedError(ValueError):
+    """Gate C did not record a PASS for the scorecard being promoted.
+
+    ``verdict`` is the stored Gate C verdict when the run recorded one, and
+    ``run_id`` the run it belongs to; promotion records a kill only when that
+    verdict is KILL.
+    """
+
+    def __init__(self, message: str, *, verdict: VerdictResult | None = None, run_id: str = "") -> None:
+        super().__init__(message)
+        self.verdict = verdict
+        self.run_id = run_id
 
 
 class PromotionError(RuntimeError):
@@ -184,14 +199,17 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     # so the rejected alpha is recorded in the durable ledger. The original
     # ``ValueError`` is preserved for backward compatibility with existing
     # callers that match on its message.
+    # A kill is recorded only when the stored Gate C verdict is KILL; an
+    # INVALID / NEEDS-MORE-DAYS / INCONCLUSIVE run is refused without one.
     try:
         _verify_gate_c_passed(scorecard_path)
-    except ValueError as exc:
-        if not config.dry_run:
+    except GateCNotPassedError as exc:
+        if not config.dry_run and exc.verdict is not None and exc.verdict.verdict is Verdict.KILL:
             _auto_kill(
                 alpha_id=config.alpha_id,
                 gate="C",
-                reason=str(exc),
+                verdict=exc.verdict,
+                run_id=exc.run_id,
                 alpha_dir=alpha_dir,
                 scorecard_path=scorecard_path,
             )
@@ -207,7 +225,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         "gate_e_warn": (data_ul is None or data_ul < 5),
         "blocking": False,
     }
-    gate_d_passed, gate_d_checks = _evaluate_gate_d(scorecard, config)
+    gate_d_verdict, gate_d_checks = _evaluate_gate_d_verdict(scorecard, config)
+    gate_d_passed = gate_d_verdict.passed
     if gate_d_passed:
         # Dry-run (Loop_v1 L11) must not mutate alpha status on disk.
         # Codex adversarial-review 2026-05-06 finding 6 (MEDIUM): the call
@@ -216,16 +235,18 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         # contractually required to avoid.
         if not config.dry_run:
             _update_manifest_status(config.alpha_id, "GATE_D", root)
-    elif not config.dry_run:
-        # Slice-D T14: log a kill-ledger row (gate='D') for the rejection.
+    elif not config.dry_run and gate_d_verdict.verdict is Verdict.KILL:
+        # Slice-D T14: log a kill-ledger row (gate='D') for a KILL verdict.
         # Gate D failure does not raise here -- promote_alpha returns a
         # PromotionResult with approved=False -- so this is the *only* path
-        # where the kill is recorded for the Gate-D outcome.
-        # Dry-run mode (Loop_v1 L11) suppresses the durable kill write.
+        # where the kill is recorded for the Gate-D outcome. A Gate D check
+        # that could not be evaluated (missing scorecard field) is INVALID,
+        # not a kill. Dry-run mode (Loop_v1 L11) suppresses the write.
         _auto_kill(
             alpha_id=config.alpha_id,
             gate="D",
-            reason=_aggregate_gate_d_failures(gate_d_checks),
+            verdict=gate_d_verdict,
+            run_id=_scorecard_run_id(scorecard_path),
             alpha_dir=alpha_dir,
             scorecard_path=scorecard_path,
         )
@@ -266,6 +287,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         "alpha_id": config.alpha_id,
         "gate": "Gate D",
         "passed": gate_d_passed,
+        "verdict": gate_d_verdict.to_dict(),
         "checks": gate_d_checks,
         "data_ul_advisory": data_ul_advisory,
         "scorecard_path": str(scorecard_path),
@@ -281,6 +303,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     decision_payload = {
         "alpha_id": config.alpha_id,
         "gate_d_passed": gate_d_passed,
+        "gate_d_verdict": gate_d_verdict.verdict.value,
         "gate_e_passed": gate_e_passed,
         "gate_f_passed": gate_f_passed,
         "gate_e_checks": gate_e_checks,
@@ -349,7 +372,50 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     return result
 
 
+# Gate D checks whose input is a scorecard value: a missing value means the
+# check could not be evaluated (ERROR), not that the candidate failed it.
+_GATE_D_VALUE_REQUIRED: frozenset[str] = frozenset(
+    {"sharpe_oos", "max_drawdown", "turnover", "correlation_pool_max", "latency_profile", "replay_parity_audit"}
+)
+# Gate D checks that audit the evidence (latency assumptions, equity
+# provenance, replay fidelity, feature-set version) rather than the
+# candidate. Failing one makes the evidence unusable (ERROR): it does not
+# show the candidate is dead.
+_GATE_D_EVIDENCE_CHECKS: frozenset[str] = frozenset(
+    {"latency_profile", "latency_audit_strict", "equity_source", "replay_parity_audit", "feature_set_version"}
+)
+
+
 def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tuple[bool, dict[str, Any]]:
+    verdict, checks = _evaluate_gate_d_verdict(scorecard, config)
+    return verdict.passed, checks
+
+
+def _evaluate_gate_d_verdict(
+    scorecard: dict[str, Any], config: PromotionConfig
+) -> tuple[VerdictResult, dict[str, Any]]:
+    """Gate D checks, each with an ``outcome``, and the verdict over them.
+
+    Gate D runs only after Gate C recorded a PASS, which includes the sample
+    floor, so a Gate D FAIL counts as powered.
+    """
+    checks = _gate_d_checks(scorecard, config)
+    for name, check in checks.items():
+        if "outcome" not in check:
+            missing = name in _GATE_D_VALUE_REQUIRED and check.get("value") is None
+            if missing or (name in _GATE_D_EVIDENCE_CHECKS and not check["pass"]):
+                check["outcome"] = Outcome.ERROR.value
+            else:
+                check["outcome"] = (Outcome.PASS if check["pass"] else Outcome.FAIL).value
+    verdict = derive_verdict(
+        [{"name": name, "outcome": check["outcome"]} for name, check in checks.items()],
+        blocking={name for name, check in checks.items() if check.get("blocking", True)},
+        powered=True,
+    )
+    return verdict, checks
+
+
+def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[str, Any]:
     from hft_platform.alpha.latency_audit import latency_audit as _latency_audit
 
     sharpe = _to_float(scorecard.get("sharpe_oos"))
@@ -487,13 +553,16 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
         checks["inventory_mtm_audit"] = {
             "value": None,
             "required": False,
+            "blocking": False,
+            "outcome": Outcome.NOT_APPLICABLE.value,
             "pass": True,
-            "detail": "advisory: inventory_mtm not applicable to taker strategies",
+            "detail": "not applicable to taker strategies (inventory_mtm is a maker audit)",
         }
     elif isinstance(inventory_mtm_payload, dict):
         _inv_raw = inventory_mtm_payload.get("metrics")
         inv_metrics: dict[str, Any] = _inv_raw if isinstance(_inv_raw, dict) else {}
         sub_passed = bool(inventory_mtm_payload.get("passed", False))
+        inv_outcome = _payload_outcome(inventory_mtm_payload)
         net_pts = _to_float(inv_metrics.get("net_pts"))
         cost_floor_total = _to_float(inv_metrics.get("cost_floor_total_pts"))
         checks["inventory_mtm_audit"] = {
@@ -501,21 +570,21 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "cost_floor_total_pts": cost_floor_total,
             "safety_margin_pct": float(config.min_inventory_mtm_safety_margin_pct),
             "required": True,
+            "outcome": inv_outcome,
             "pass": sub_passed,
             "detail": (
                 "OK" if sub_passed else str(inventory_mtm_payload.get("details") or "inventory_mtm sub-gate FAILED")
             ),
         }
     else:
-        # Maker / unknown strategy with no inventory_mtm payload on scorecard.
-        # Treat as advisory (legacy run) — promotion is not blocked by this
-        # audit alone; the Gate C blocking_sub_gates list under strict profile
-        # will already have caught the missing payload.
+        # Maker / unknown strategy with no inventory_mtm payload: the audit
+        # cannot be evaluated, which is an ERROR, not a default PASS.
         checks["inventory_mtm_audit"] = {
             "value": None,
-            "required": False,
-            "pass": True,
-            "detail": ("advisory: scorecard.inventory_mtm missing (legacy run or non-maker strategy)"),
+            "required": True,
+            "outcome": Outcome.ERROR.value,
+            "pass": False,
+            "detail": "MISSING — scorecard.inventory_mtm absent; the audit cannot be evaluated",
         }
 
     # --- cost_uncertainty_audit (applies to maker + taker) ---
@@ -530,6 +599,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             "value": p95_lower,
             "min": min_p95_lower,
             "required": True,
+            "outcome": _payload_outcome(cost_uncertainty_payload),
             "pass": sub_passed,
             "detail": (
                 "OK"
@@ -538,14 +608,14 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             ),
         }
     else:
-        # No cost_uncertainty payload — advisory PASS (legacy run). Strict
-        # profile blocking_sub_gates will catch missing payload at Gate C.
+        # No cost_uncertainty payload: the audit cannot be evaluated (ERROR).
         checks["cost_uncertainty_audit"] = {
             "value": None,
             "min": min_p95_lower,
-            "required": False,
-            "pass": True,
-            "detail": ("advisory: scorecard.cost_uncertainty missing (legacy run)"),
+            "required": True,
+            "outcome": Outcome.ERROR.value,
+            "pass": False,
+            "detail": "MISSING — scorecard.cost_uncertainty absent; the audit cannot be evaluated",
         }
     # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None
@@ -569,8 +639,7 @@ def _evaluate_gate_d(scorecard: dict[str, Any], config: PromotionConfig) -> tupl
             ),
         }
 
-    passed = all(bool(v["pass"]) for v in checks.values())
-    return passed, checks
+    return checks
 
 
 def _resolve_scorecard_path(root: Path, config: PromotionConfig, alpha_dir: Path) -> Path:
@@ -607,11 +676,41 @@ def _verify_gate_c_passed(scorecard_path: Path) -> None:
         return
 
     meta = json.loads(meta_path.read_text())
+    run_id = str(meta.get("run_id") or "")
+    verdict = _stored_gate_c_verdict(scorecard_path.parent / "backtest_report.json")
+    message = f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first."
     gate_status = meta.get("gate_status")
-    if gate_status is None:
-        raise ValueError(f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first.")
-    if not gate_status.get("gate_c", False):
-        raise ValueError(f"Gate C has not passed for this scorecard: {scorecard_path}. Run validate_alpha() first.")
+    if gate_status is None or not gate_status.get("gate_c", False):
+        if verdict is not None:
+            message = f"{message} (verdict={verdict.verdict.value})"
+        raise GateCNotPassedError(message, verdict=verdict, run_id=run_id)
+    if verdict is not None and not verdict.passed:
+        raise GateCNotPassedError(
+            f"{message} (gate_status says passed but the stored verdict is {verdict.verdict.value})",
+            verdict=verdict,
+            run_id=run_id,
+        )
+
+
+def _stored_gate_c_verdict(backtest_report_path: Path) -> VerdictResult | None:
+    """The verdict Gate C wrote into the run's backtest report, if any."""
+    if not backtest_report_path.exists():
+        return None
+    try:
+        payload = json.loads(backtest_report_path.read_text())
+        raw = (payload.get("details") or {}).get("verdict")
+        return VerdictResult.from_dict(raw) if isinstance(raw, dict) else None
+    except (OSError, ValueError, AttributeError, TypeError):
+        _log.warning("gate_c_verdict_unreadable", path=str(backtest_report_path), exc_info=True)
+        return None
+
+
+def _payload_outcome(payload: dict[str, Any]) -> str:
+    """Outcome a stored sub-gate payload carries, derived from ``passed`` if absent."""
+    raw = payload.get("outcome")
+    if raw:
+        return Outcome(str(raw)).value
+    return (Outcome.PASS if payload.get("passed") else Outcome.FAIL).value
 
 
 def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:
@@ -1200,42 +1299,30 @@ def _load_manifest_artifact_hash(alpha_dir: Path) -> str:
         return ""
 
 
-def _aggregate_gate_d_failures(checks: dict[str, Any]) -> str:
-    """Format failed Gate-D check entries into a single ``key=detail; ...`` string.
-
-    Iterates the checks dict produced by :func:`_evaluate_gate_d` and pulls
-    every entry where the ``pass`` flag is False. Falls back to a sentinel
-    when no specific failure is identifiable so the kill row never carries
-    an empty reason (which ``KillRecord.__post_init__`` rejects).
-    """
-    failures: list[str] = []
-    for key, value in checks.items():
-        if isinstance(value, dict):
-            if value.get("pass") is False:
-                detail = value.get("detail")
-                if detail:
-                    failures.append(f"{key}={detail}")
-                else:
-                    val = value.get("value")
-                    failures.append(f"{key}=value={val!r}")
-        elif value is False:
-            failures.append(f"{key}=False")
-    return "; ".join(failures) if failures else "gate_d_failed:no_detail"
+def _scorecard_run_id(scorecard_path: Path) -> str:
+    """Run id from the ``meta.json`` beside a scorecard ("" when absent)."""
+    meta_path = scorecard_path.parent / "meta.json"
+    try:
+        return str(json.loads(meta_path.read_text()).get("run_id") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def _auto_kill(
     *,
     alpha_id: str,
     gate: str,
-    reason: str,
+    verdict: VerdictResult,
+    run_id: str,
     alpha_dir: Path,
     scorecard_path: Path,
 ) -> None:
-    """Best-effort write to the Slice-D kill ledger.
+    """Best-effort write of a KILL verdict to the Slice-D kill ledger.
 
-    Failures here MUST NOT propagate -- the original promotion-rejection
-    signal is what callers contract on. Any exception from the ledger write
-    is logged at WARNING and swallowed.
+    The record is built by ``KillRecord.from_verdict``, which refuses any
+    verdict but KILL. Failures here MUST NOT propagate -- the original
+    promotion-rejection signal is what callers contract on. Any exception
+    from the ledger write is logged at WARNING and swallowed.
     """
     if not _kill_ledger_enabled():
         return
@@ -1243,10 +1330,11 @@ def _auto_kill(
         from hft_platform.alpha.kill_ledger import KillRecord, append_kill
 
         append_kill(
-            KillRecord(
+            KillRecord.from_verdict(
                 alpha_id=alpha_id,
                 gate=gate,
-                reason=(reason or f"gate_{gate.lower()}_failed:no_detail")[:8192],
+                verdict=verdict,
+                run_id=run_id,
                 stable_artifact_hash=_load_manifest_artifact_hash(alpha_dir),
                 scorecard_id=str(scorecard_path),
                 killed_by="promote_alpha:auto",

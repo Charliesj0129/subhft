@@ -216,6 +216,7 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
                 run_id="run-2",
                 config_hash="cfg-2",
                 latency_profile={"model_applied": True},
+                mid_prices=np.asarray([100.0, 100.1, 100.2, 100.3], dtype=np.float64),
             )
 
         def run_walk_forward(self, alpha, cfg):
@@ -252,6 +253,10 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
     )
     monkeypatch.setattr(
         "hft_platform.alpha._gate_c._evaluate_parameter_robustness",
+        lambda **kwargs: {"passed": True},
+    )
+    monkeypatch.setattr(
+        "hft_platform.alpha._gate_c._evaluate_trend_contamination",
         lambda **kwargs: {"passed": True},
     )
 

@@ -284,6 +284,11 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
     promotion_passed = False
     if no_promote:
         notes.append("Promotion step skipped by --no-promote.")
+    elif not validation.passed:
+        # Only a PASS verdict enters promotion. Running promote_alpha on a
+        # failed validation used to raise on the Gate C check and record a
+        # kill for runs that were never measured.
+        notes.append("Promotion step skipped: validation did not reach a PASS verdict.")
     else:
         promotion = promote_alpha(
             PromotionConfig(
