@@ -10,9 +10,9 @@ def _reset_cost_cache():
     """Reset the module-level cache between tests to ensure isolation."""
     import research.backtest.cost_models as _mod
 
-    _mod._cache = None
+    _mod._cache = {}
     yield
-    _mod._cache = None
+    _mod._cache = {}
 
 
 # Index-futures tax is 0.002% of notional on BOTH sides: price x 0.00002 points per side,

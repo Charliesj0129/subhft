@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from hft_platform.alpha._validation_helpers import (
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 from hft_platform.alpha.gate_c_runtime import GateCRuntime
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, check_entry, derive_verdict
+from hft_platform.alpha.provenance import build_run_stamp
 
 logger = structlog.get_logger("alpha.gate_c")
 
@@ -381,6 +383,11 @@ def _merge_profile_thresholds(base: dict, profile: Any | None, *, strategy_type:
     return merged
 
 
+def _run_stamp(data_paths: list[str], config_hash: str, config: ValidationConfig) -> dict[str, Any]:
+    profile = getattr(config, "profile", None)
+    return build_run_stamp(data_paths=data_paths, config_hash=config_hash, profile=getattr(profile, "name", None))
+
+
 def _load_maker_thresholds(root: Path) -> dict:
     """Load Gate C maker thresholds from gate_thresholds.yaml, or return {}."""
     import yaml as _yaml
@@ -508,25 +515,56 @@ def _dated_daily_rows(daily_pnl: Any) -> list[dict]:
     return rows if len(rows) == len(daily_pnl) else []
 
 
-def _maker_protocol_error_report(
-    alpha_id: str, strategy: Any, missing: list[str]
-) -> tuple[GateReport, str, str, str, str]:
-    """Gate C report for a maker alpha that does not implement MakerStrategy."""
-    detail = f"{type(strategy).__name__} lacks MakerStrategy method(s): {', '.join(missing)}"
-    entry = check_entry("gate_c.maker_protocol", Outcome.ERROR, details=detail)
+def _maker_error_report(check_name: str, error: str, **extra: Any) -> tuple[GateReport, str, str, str, str]:
+    """Gate C report for a maker run that cannot be evaluated: one ERROR check, verdict INVALID."""
+    entry = check_entry(check_name, Outcome.ERROR, details=error)
     verdict = derive_verdict([entry], blocking={entry["name"]})
-    logger.warning("maker_gate_c: strategy protocol mismatch", alpha_id=alpha_id, missing=missing)
     report = GateReport(
         gate="Gate C",
         passed=False,
         details={
             "engine_type": "maker",
-            "error": detail,
+            "error": error,
+            **extra,
             "gate_c_checks": [entry],
             "verdict": verdict.to_dict(),
         },
     )
     return report, "", "", "", ""
+
+
+def _maker_protocol_error_report(
+    alpha_id: str, strategy: Any, missing: list[str]
+) -> tuple[GateReport, str, str, str, str]:
+    """Gate C report for a maker alpha that does not implement MakerStrategy."""
+    detail = f"{type(strategy).__name__} lacks MakerStrategy method(s): {', '.join(missing)}"
+    logger.warning("maker_gate_c: strategy protocol mismatch", alpha_id=alpha_id, missing=missing)
+    return _maker_error_report("gate_c.maker_protocol", detail)
+
+
+def _resolve_maker_latency_profile(
+    profile_name: str,
+    resolve_profile: Callable[[str], dict[str, Any]],
+    latency_profile_cls: Callable[..., Any],
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """Build the maker latency injection, or say why Gate C cannot run.
+
+    Returns ``(profile, None)`` on success and ``(None, details)`` otherwise, where
+    ``details["reason"]`` is ``latency_profile_missing`` or ``latency_profile_unresolved``.
+    There is deliberately no instant-RTT fallback: an engine without a latency
+    profile fills at zero round trip, which no real broker can.
+    """
+    if not profile_name:
+        return None, {"reason": "latency_profile_missing", "latency_profile": ""}
+    try:
+        resolved = resolve_profile(profile_name)
+        profile = latency_profile_cls(
+            place_ns=int(float(resolved["submit_ack_latency_ms"]) * 1_000_000),
+            cancel_ns=int(float(resolved["cancel_ack_latency_ms"]) * 1_000_000),
+        )
+    except (KeyError, ValueError, OSError) as exc:
+        return None, {"reason": "latency_profile_unresolved", "latency_profile": profile_name, "detail": str(exc)}
+    return profile, None
 
 
 def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as follow-up
@@ -568,31 +606,31 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         if missing:
             return _maker_protocol_error_report(alpha_id, maker_strategy, missing)
 
+        # Resolve latency_profile metadata string -> LatencyProfile injected into
+        # MakerEngine. A missing or unresolvable profile makes the run INVALID
+        # rather than falling back to instant-RTT, which produced fills no real
+        # broker round trip could. See
+        # docs/incidents/2026-04-24-r47-backtest-credibility-audit.md.
+        latency_profile_name = getattr(alpha.manifest, "latency_profile", "") or ""
+        latency_profile, latency_failure = _resolve_maker_latency_profile(
+            latency_profile_name, resolve_profile, LatencyProfile
+        )
+        if latency_failure is not None:
+            logger.error(
+                "maker_gate_c: latency_profile not usable; run is invalid",
+                alpha_id=alpha_id,
+                latency_profile=latency_profile_name,
+                reason=latency_failure["reason"],
+            )
+            return _maker_error_report(
+                "gate_c.latency_profile", latency_failure["reason"], instrument=instrument, **latency_failure
+            )
+
         ck_source = ClickHouseSource()
         ck_source.health_check()
         cost = load_cost_profile(instrument)
         qf = float(getattr(config, "queue_fraction", 0.5))
         fill_model = QueueDepletionFill(queue_fraction=qf)
-
-        # Resolve latency_profile metadata string -> LatencyProfile injected into
-        # MakerEngine. Missing / unresolvable names fall back to instant-RTT
-        # (logged). This closes the wiring gap identified in
-        # docs/incidents/2026-04-24-r47-backtest-credibility-audit.md.
-        latency_profile_name = getattr(alpha.manifest, "latency_profile", "") or ""
-        latency_profile: Any | None = None
-        if latency_profile_name:
-            try:
-                resolved = resolve_profile(latency_profile_name)
-                latency_profile = LatencyProfile(
-                    place_ns=int(float(resolved["submit_ack_latency_ms"]) * 1_000_000),
-                    cancel_ns=int(float(resolved["cancel_ack_latency_ms"]) * 1_000_000),
-                )
-            except (KeyError, ValueError) as exc:
-                logger.warning(
-                    "maker_gate_c: latency_profile unresolved; defaulting to instant-RTT",
-                    profile=latency_profile_name,
-                    error=str(exc),
-                )
 
         engine = MakerEngine(
             fill_model=fill_model,
@@ -736,6 +774,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             backtest_report_payload=asdict(report),
             signals=result.signals,
             equity=result.equity_curve,
+            run_stamp=_run_stamp(resolved_data_paths, result.config_hash, config),
         )
         report.details["experiment_meta_path"] = str(meta_path)
         return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)
@@ -1141,6 +1180,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         backtest_report_payload=asdict(report),
         signals=result.signals,
         equity=result.equity_curve,
+        run_stamp=_run_stamp(resolved_data_paths, result.config_hash, config),
     )
     report.details["experiment_meta_path"] = str(meta_path)
     return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)

@@ -40,6 +40,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.alpha import audit
+from hft_platform.alpha.paths import repo_path
 from hft_platform.contracts.alpha import AlphaManifest
 from hft_platform.core import timebase
 
@@ -76,7 +77,7 @@ _DEFAULT_JSONL_PATH = Path("research/alphas/_kill_ledger.jsonl")
 def _jsonl_path() -> Path:
     """Resolve the jsonl path; ``HFT_ALPHA_KILL_LEDGER_PATH`` overrides for tests."""
     override = os.getenv("HFT_ALPHA_KILL_LEDGER_PATH")
-    return Path(override) if override else _DEFAULT_JSONL_PATH
+    return Path(override) if override else repo_path(_DEFAULT_JSONL_PATH)
 
 
 @dataclass(frozen=True, slots=True)
