@@ -139,11 +139,12 @@ class TestOverallGate:
 
 
 class TestEdgeCases:
-    def test_short_arrays_pass_by_default(self) -> None:
+    def test_short_arrays_report_insufficient_sample_not_pass(self) -> None:
         signal = np.array([1.0, 2.0, 3.0])
         mid = np.array([100.0, 101.0, 102.0])
         result = _evaluate_trend_contamination(signal, mid)
-        assert result["passed"] is True
+        assert result["passed"] is False
+        assert result["outcome"] == "insufficient_sample"
         assert "insufficient_data" in result["detail"]
 
     def test_constant_signal(self, recwarn) -> None:
@@ -160,8 +161,9 @@ class TestEdgeCases:
         mid = np.ones(n) * 100.0
         signal = np.random.default_rng(42).normal(0, 1, n)
         result = _evaluate_trend_contamination(signal, mid)
-        # Zero returns everywhere, IC should be 0
-        assert result["passed"] is True
+        # Constant mid has no returns to correlate: nothing was measured.
+        assert result["passed"] is False
+        assert result["outcome"] == "error"
 
     def test_mismatched_lengths(self) -> None:
         """Signal and mid_prices of different lengths should be handled."""

@@ -28,6 +28,7 @@ from statistics import median
 from typing import Any
 
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.outcomes import Outcome
 
 
 def _pnl(entry: Any) -> float:
@@ -82,6 +83,7 @@ class MonthlyDistributionGate:
             return SubGateResult(
                 name=self.name,
                 passed=False,
+                outcome=Outcome.ERROR,
                 metrics={
                     "n_months": 0.0,
                     "top_month_contribution_pct": 0.0,
@@ -131,7 +133,8 @@ class MonthlyDistributionGate:
             return SubGateResult(
                 name=self.name,
                 passed=False,
-                metrics=metrics,
+                outcome=Outcome.INSUFFICIENT_SAMPLE,
+                metrics={**metrics, "required_n": None},
                 details=(f"insufficient months: {n_months} < {min_months} required"),
             )
 

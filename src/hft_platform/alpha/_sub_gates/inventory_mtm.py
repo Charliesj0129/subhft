@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.outcomes import Outcome
 
 
 class InventoryMtMGate:
@@ -66,9 +67,12 @@ class InventoryMtMGate:
         net_after_residual = realized + residual_mtm
 
         if schema_advisory:
+            # Rows without the bookkeeping fields cannot be audited: strict
+            # reports ERROR (not a measured failure); loose keeps advisory PASS.
             return SubGateResult(
                 name=self.name,
                 passed=not is_strict,
+                outcome=Outcome.ERROR if is_strict else Outcome.PASS,
                 metrics={
                     "realized_pts": 0.0,
                     "residual_mtm_pts": 0.0,

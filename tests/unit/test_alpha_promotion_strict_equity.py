@@ -50,6 +50,9 @@ def _gate_d_passing_scorecard(equity_source: str | None) -> dict[str, Any]:
             "cancel_ack_latency_ms": 47.0,
         },
         "replay_parity": {"match_pct": 99.0},
+        # Gate D's cost-uncertainty audit errors without this payload.
+        "strategy_type": "taker",
+        "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
     }
     if equity_source is not None:
         payload["equity_source"] = equity_source

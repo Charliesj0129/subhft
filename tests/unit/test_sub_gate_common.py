@@ -89,12 +89,14 @@ def test_max_drawdown_gate_fails_large_dd():
     assert not sub.passed
 
 
-def test_max_drawdown_gate_no_daily_pnl_passes_trivially():
+def test_max_drawdown_gate_no_daily_pnl_is_error_not_pass():
+    # A missing series is a missing input, not a zero drawdown.
     gate = MaxDrawdownGate()
     result = _make_result([])
     sub = gate.evaluate(result, config=None, thresholds={"max_drawdown_pct": 30.0})
-    assert sub.passed
-    assert sub.metrics["max_dd_pct"] == 0.0
+    assert not sub.passed
+    assert sub.outcome == "error"
+    assert sub.metrics["max_dd_pct"] is None
 
 
 def test_max_drawdown_gate_name():

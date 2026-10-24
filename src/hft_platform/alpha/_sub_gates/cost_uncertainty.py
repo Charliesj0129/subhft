@@ -30,6 +30,7 @@ from typing import Any
 
 from hft_platform.alpha._sub_gates.common import _to_traded_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.outcomes import Outcome
 
 # One-sided 95% normal CI z-score.
 _Z_95_ONE_SIDED: float = 1.645
@@ -84,7 +85,8 @@ class CostUncertaintyGate:
                 return SubGateResult(
                     name=self.name,
                     passed=False,
-                    metrics=metrics_short,
+                    outcome=Outcome.INSUFFICIENT_SAMPLE,
+                    metrics={**metrics_short, "required_n": min_n_strict},
                     details=(
                         f"STRICT FAIL: n_days={n_days} < min_n_strict={min_n_strict} (insufficient sample for CI)"
                     ),
@@ -113,6 +115,7 @@ class CostUncertaintyGate:
             return SubGateResult(
                 name=self.name,
                 passed=not is_strict,
+                outcome=Outcome.ERROR if is_strict else Outcome.PASS,
                 metrics=metrics_advisory,
                 details=(
                     f"{prefix}: cost_uncertainty_p95_lower_bound_min_pts threshold absent (lower_bound={p95_lower:.4f})"

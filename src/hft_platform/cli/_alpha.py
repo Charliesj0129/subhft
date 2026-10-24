@@ -1396,24 +1396,18 @@ def cmd_alpha_cheap_screen(args: argparse.Namespace) -> None:
         "cost_floor_breach": result.cost_floor_breach,
         "reason": result.reason,
         "duration_s": result.duration_s,
+        # A cheap screen is not a powered verdict: a screen "kill" means the
+        # candidate is screened out, not that it is dead.
+        "research_outcome": "SCREENED_OUT" if result.verdict == "kill" else "SCREENED_IN",
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
 
-    if result.verdict == "kill" and getattr(args, "write_kill", False):
-        try:
-            from hft_platform.alpha.kill_ledger import KillRecord, append_kill
-
-            record = KillRecord(
-                alpha_id=result.alpha_id,
-                gate="pre_screen",
-                reason=result.reason or "pre_screen_kill",
-                stable_artifact_hash="",
-                scorecard_id="",
-                killed_by="cli:screen",
-            )
-            append_kill(record)
-        except Exception as exc:  # noqa: BLE001
-            print(f"Warning: kill ledger append failed: {exc}", file=sys.stderr)
+    if getattr(args, "write_kill", False):
+        print(
+            "Warning: --write-kill has no effect; screen results are SCREENED_OUT, not kills, "
+            "and are never written to the kill ledger",
+            file=sys.stderr,
+        )
 
     if result.verdict == "kill":
         sys.exit(2)

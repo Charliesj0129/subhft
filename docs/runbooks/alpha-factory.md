@@ -27,7 +27,8 @@ CLI subcommands and their purpose:
 
 ```bash
 # Cheap-screen one alpha (60 s budget; verdict pass | kill | unknown).
-# On verdict='kill' AND --write-kill, appends a gate='pre_screen' row.
+# verdict='kill' is reported as research_outcome=SCREENED_OUT; screens never
+# write kills (--write-kill is a no-op kept for compatibility).
 hft alpha cheap-screen <alpha_id> \
     [--threshold-ic 0.005] \
     [--threshold-turnover 2.0] \
@@ -141,9 +142,9 @@ future change reintroducing a banned token fails CI.
   offline fallback, not the source of truth. CH
   `audit.alpha_kill_ledger` is canonical when CH is up.
 - **`hft alpha cheap-screen` returns `verdict='unknown'` when signals are
-  missing** — the screener fails closed; it never auto-kills on data
-  errors. The ledger row is only written when `--write-kill` is set
-  AND verdict is `'kill'` (turnover or cost-floor breach).
+  missing** — the screener fails closed. It never writes a kill row:
+  a screen is not a powered verdict, so a `'kill'` result is
+  `SCREENED_OUT`. Kills come only from a Gate C/D KILL verdict.
 - **`PYTHONPATH` may be needed for one-shot scripts** —
   `scripts/migrate_alpha_manifests.py` imports
   `research.registry.schemas`. From the repo root,

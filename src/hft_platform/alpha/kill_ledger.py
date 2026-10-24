@@ -8,7 +8,13 @@ Two parallel sinks:
     gitignored per plan §7 T4).
 
 Idempotency contract (plan §5):
-  ``kill_id = sha256(alpha_id || ":" || gate || ":" || stable_artifact_hash)``
+  ``kill_id = sha256(alpha_id || ":" || gate || ":" || stable_artifact_hash)``,
+  with ``":" || run_id`` appended when the kill names the run whose verdict it
+  records (``KillRecord.from_verdict``), so a later run's KILL is its own row.
+
+Automated kills come only from ``KillRecord.from_verdict``: it refuses
+anything but a KILL verdict, so an errored or under-sampled run cannot be
+recorded as dead.
 
 Both sinks dedupe on ``(alpha_id, kill_id)``. CH path runs a
 ``SELECT count() WHERE alpha_id=? AND kill_id=?`` pre-check; jsonl path
@@ -42,7 +48,11 @@ logger = get_logger("alpha_kill_ledger")
 _VALID_GATES: frozenset[str] = frozenset({"A", "B", "C", "D", "E", "F", "pre_screen", "cluster", "manual"})
 
 
-class SampleInsufficientKillError(ValueError):
+class VerdictNotKillError(ValueError):
+    """Raised when a caller tries to record a non-KILL verdict as a kill."""
+
+
+class SampleInsufficientKillError(VerdictNotKillError):
     """Raised when a caller tries to log a sample-insufficient run as a KILL.
 
     Goal 限制 §3 / 驗證標準 §4: runs whose only failure is sample-size
@@ -85,6 +95,7 @@ class KillRecord:
     scorecard_id: str = ""
     killed_by: str = "system"
     killed_at: int = 0  # ns; 0 means "fill in now_ns()"
+    run_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.alpha_id:
@@ -97,12 +108,51 @@ class KillRecord:
     def kill_id(self) -> str:
         """Deterministic dedupe key. Identical inputs → identical kill_id."""
         payload = f"{self.alpha_id}:{self.gate}:{self.stable_artifact_hash}"
+        if self.run_id:
+            payload = f"{payload}:{self.run_id}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def to_jsonl_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["kill_id"] = self.kill_id()
         return d
+
+    @classmethod
+    def from_verdict(
+        cls,
+        *,
+        alpha_id: str,
+        gate: str,
+        verdict: Any,
+        run_id: str,
+        stable_artifact_hash: str = "",
+        scorecard_id: str = "",
+        killed_by: str = "system",
+    ) -> "KillRecord":
+        """Build the kill for a KILL verdict; any other verdict raises.
+
+        ``verdict`` is a ``VerdictResult`` or its ``to_dict()`` form. The
+        reason names the powered failures that produced the KILL.
+        """
+        from hft_platform.alpha.outcomes import Verdict, VerdictResult
+
+        result = verdict if isinstance(verdict, VerdictResult) else VerdictResult.from_dict(verdict)
+        if result.verdict is not Verdict.KILL:
+            raise VerdictNotKillError(
+                f"refusing to log kill for alpha_id={alpha_id!r}: verdict={result.verdict.value} "
+                f"(reasons={list(result.reasons)}) is not KILL"
+            )
+        if not result.reasons:
+            raise VerdictNotKillError(f"refusing to log kill for alpha_id={alpha_id!r}: KILL verdict names no gate")
+        return cls(
+            alpha_id=alpha_id,
+            gate=gate,
+            reason="|".join(result.reasons),
+            stable_artifact_hash=stable_artifact_hash,
+            scorecard_id=scorecard_id,
+            killed_by=killed_by,
+            run_id=run_id,
+        )
 
     @classmethod
     def from_blocking(
@@ -138,6 +188,16 @@ class KillRecord:
                 f"triage_status={status!r} indicates the hypothesis "
                 "is still alive pending more data — record as "
                 "promising / needs_more_sample / inconclusive instead"
+            )
+        if isinstance(blocking.get("verdict"), dict):
+            return cls.from_verdict(
+                alpha_id=alpha_id,
+                gate=gate,
+                verdict=blocking["verdict"],
+                run_id="",
+                stable_artifact_hash=stable_artifact_hash,
+                scorecard_id=scorecard_id,
+                killed_by=killed_by,
             )
         if blocking.get("passed", False):
             raise ValueError(f"refusing to log kill for alpha_id={alpha_id!r}: blocking aggregate reports passed=True")
@@ -378,6 +438,7 @@ def read_kills(alpha_id: str | None = None) -> list[KillRecord]:
                         scorecard_id=str(row.get("scorecard_id", "")),
                         killed_by=str(row.get("killed_by", "system")),
                         killed_at=int(row.get("killed_at", 0)),
+                        run_id=str(row.get("run_id", "")),
                     )
                 )
             except (KeyError, ValueError, TypeError):
