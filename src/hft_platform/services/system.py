@@ -60,6 +60,22 @@ def _read_kill_switch_reason(path: str) -> str:
     return kill_switch.read_reason(path)
 
 
+# Writers of the kill switch whose switch may close the book: a person, by
+# ``hft risk halt`` or Telegram ``/stop``. The startup recovery gate writes it
+# because the position truth is unknown, and a closing order computed from an
+# unknown book can open a position; an unreadable or actor-less record is
+# treated the same way.
+_KILL_FLATTEN_ACTORS = frozenset({"cli", "telegram"})
+
+
+def _read_kill_switch_actor(path: str) -> str:
+    """Actor recorded in the kill-switch file, ``"unreadable"`` when it cannot be read. Runs in an executor."""
+    try:
+        return str(kill_switch.read_payload(path).get("actor", ""))
+    except (OSError, ValueError, AttributeError):
+        return "unreadable"
+
+
 def _log_safety_dispatch_error(task: "asyncio.Task[None]") -> None:
     """done_callback for safety-order dispatch tasks during HALT drain."""
     exc = task.exception() if not task.cancelled() else None
@@ -164,6 +180,8 @@ class HFTSystem:
     _flatten_gate: FlattenGate | None = None
     # The kill switch is holding open positions it may not close; logged once.
     _kill_flatten_blocked_logged: bool = False
+    # Who wrote the present kill-switch file, refreshed every supervise tick.
+    _kill_switch_actor: str = ""
 
     def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
         risk_engine = getattr(self, "risk_engine", None)
@@ -408,9 +426,11 @@ class HFTSystem:
     def _kill_switch_may_flatten(self, positions_open: bool) -> bool:
         """Whether the kill switch may close the book now, and say so when it may not.
 
-        Only on evidence that the book is right: a reconciliation within
+        Only for a switch a person set (``_KILL_FLATTEN_ACTORS``; never the
+        startup recovery gate, whose position store is not trusted) and only on
+        evidence that the book is right: a reconciliation within
         ``max(15 s, 3 sync intervals)`` that found every platform position equal
-        to the broker's. Without it the switch only stops trading; the gauge
+        to the broker's. Otherwise the switch only stops trading; the gauge
         ``kill_switch_flatten_blocked`` (alert ``KillSwitchFlattenBlocked``)
         says positions are being held unclosed.
         """
@@ -419,7 +439,9 @@ class HFTSystem:
         interval_s = float(getattr(recon, "check_interval_s", 5.0) or 5.0)  # precision-ok
         max_age_ns = int(max(15.0, 3 * interval_s) * 1_000_000_000)
         verified = verified_ns > 0 and time.monotonic_ns() - verified_ns <= max_age_ns
-        blocked = positions_open and not verified
+        actor = self._kill_switch_actor
+        by_operator = not getattr(self, "_recovery_halted", False) and actor in _KILL_FLATTEN_ACTORS
+        blocked = positions_open and not (verified and by_operator)
         try:
             MetricsRegistry.get().kill_switch_flatten_blocked.set(1 if blocked else 0)
         except Exception as exc:  # noqa: BLE001 - the gauge must never stop the exit
@@ -427,11 +449,16 @@ class HFTSystem:
         if blocked and not self._kill_flatten_blocked_logged:
             logger.critical(
                 "kill_switch_flatten_blocked",
-                reason="no recent reconciliation confirmed the positions against the broker",
+                reason=(
+                    "no recent reconciliation confirmed the positions against the broker"
+                    if by_operator
+                    else "the kill switch was not set by an operator"
+                ),
+                actor=actor,
                 verified_age_s=(time.monotonic_ns() - verified_ns) / 1e9 if verified_ns else None,
             )
         self._kill_flatten_blocked_logged = blocked
-        return verified
+        return verified and by_operator
 
     def _resting_orders(self) -> list[tuple[str, str, str]]:
         """``(order_key, strategy_id, symbol)`` for each order the broker holds open.
@@ -2484,13 +2511,18 @@ class HFTSystem:
                 # Every tick, not just on entry: the hold is what stops HALT
                 # de-escalating out from under a latch that is still present.
                 self.storm_guard.set_kill_switch_hold(True)
+                # Every tick too: a /stop written over a recovery latch changes
+                # who may close the book.
+                self._kill_switch_actor = await loop.run_in_executor(None, _read_kill_switch_actor, kill_switch_path)
             elif not self._recovery_halted:
                 # The file is the operator's authority, so removing it releases
                 # the hold and HALT de-escalates through the normal cooldown.
                 # A startup recovery halt is the one case that does not: see
                 # ``_on_startup_recovery_halt``.
                 self.storm_guard.set_kill_switch_hold(False)
+                self._kill_switch_actor = ""
             else:
+                self._kill_switch_actor = ""
                 # Startup recovery pin: the hold is already True for the process
                 # lifetime and the file may be gone. Re-assert it so the exported
                 # gauge is rewritten every tick; a first write that failed would

@@ -36,7 +36,8 @@ HALT --X auto--> NORMAL        (only manual_rearm.py, an operator action)
 - A latch must be clearable by something that does not depend on it already
   being clear. HALT alone does not flatten; `risk/loss_exit.py` closes the book
   for a daily-loss stop, an expiry, an operator `hft ops flatten`, and the kill
-  switch (the last only when a recent reconciliation confirmed the positions).
+  switch (the last only when an operator set it and a recent reconciliation
+  confirmed the positions; never for the startup recovery gate).
 - The StormGuard latches end on evidence since 2026-10-24: `daily_loss` at the
   next 05:00 roll, `reconciliation_mismatch` after two clean reconciliations;
   only the kill switch needs a person (`docs/runbooks/halt-recovery.md`).

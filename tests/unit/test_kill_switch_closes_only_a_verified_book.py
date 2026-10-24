@@ -5,17 +5,20 @@ exchange. It closes positions itself only when the last reconciliation, at most
 ``max(15 s, 3 sync intervals)`` old, found the platform's positions equal to
 the broker's; otherwise it sends nothing and raises
 ``kill_switch_flatten_blocked``, because a closing order computed from a wrong
-book can open a position instead of closing one.
+book can open a position instead of closing one. For the same reason the
+switch the startup recovery gate writes never closes anything: only a switch a
+person set (``hft risk halt``, Telegram ``/stop``) does.
 
     kill_switch_hold ──> _run_loss_exit
                            ├─ cancel_intents(live_orders)          always
-                           └─ verified recently?
+                           └─ set by an operator and verified recently?
                                 yes -> FORCE_FLAT (loss_exit:kill_switch)
                                 no  -> gauge = 1, nothing sent
 """
 
 from __future__ import annotations
 
+import json
 import time
 from types import SimpleNamespace
 from unittest import mock
@@ -27,7 +30,7 @@ from hft_platform.execution.positions import Position
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.loss_exit import INTENT_ID_BASE, LossExitController, OpenPosition
 from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
-from hft_platform.services.system import HFTSystem
+from hft_platform.services.system import HFTSystem, _read_kill_switch_actor
 
 SCALE = 10_000
 BID, ASK = 46_600 * SCALE, 46_602 * SCALE
@@ -46,9 +49,17 @@ def _trade(code: str) -> SimpleNamespace:
     return SimpleNamespace(contract=SimpleNamespace(code=code))
 
 
-def _system(*, kill: bool, verified_age_s: float | None, positions: dict | None = None, live: dict | None = None):
+def _system(
+    *,
+    kill: bool,
+    verified_age_s: float | None,
+    positions: dict | None = None,
+    live: dict | None = None,
+    actor: str = "cli",
+):
     cfg = {"intraday_pnl": {"hard_limit_ntd": 5000, "price_scale": 10000}}
     system = HFTSystem.__new__(HFTSystem)
+    system._kill_switch_actor = actor
     system._loss_exit = LossExitController()
     system.storm_guard = SimpleNamespace(kill_switch_hold=kill)
     system.risk_engine = SimpleNamespace(
@@ -139,6 +150,53 @@ def test_an_order_still_waiting_for_the_broker_is_taken_on_a_later_tick() -> Non
     items = _run(_system(kill=True, verified_age_s=None, live=live))
 
     assert items == []
+
+
+@pytest.mark.parametrize("actor", ["cli", "telegram"])
+def test_an_operator_switch_closes_a_verified_book(actor) -> None:
+    items = _run(_system(kill=True, verified_age_s=3, actor=actor))
+
+    assert [i.reason for i in items] == ["loss_exit:kill_switch"]
+
+
+@pytest.mark.parametrize("actor", ["startup_position_recovery", "unreadable", ""])
+def test_a_switch_no_operator_set_cancels_but_never_closes(actor) -> None:
+    live = {"R47_MAKER_TMF:41": _trade("TMFK6")}
+
+    items = _run(_system(kill=True, verified_age_s=3, live=live, actor=actor))
+
+    assert [i.intent_type for i in items] == [IntentType.CANCEL]
+    assert _blocked() == 1
+
+
+def test_a_recovery_halt_never_closes_even_after_an_operator_stop() -> None:
+    """A /stop written over the recovery latch: the store is still the untrusted one."""
+    system = _system(kill=True, verified_age_s=3, actor="telegram")
+    system._recovery_halted = True
+
+    assert _run(system) == []
+    assert _blocked() == 1
+
+
+class TestReadKillSwitchActor:
+    def test_the_recorded_actor_is_returned(self, tmp_path) -> None:
+        path = tmp_path / "kill_switch.json"
+        path.write_text(json.dumps({"reason": "r", "timestamp_ns": 1, "actor": "telegram"}))
+
+        assert _read_kill_switch_actor(str(path)) == "telegram"
+
+    def test_a_record_without_an_actor_reads_empty(self, tmp_path) -> None:
+        path = tmp_path / "kill_switch.json"
+        path.write_text(json.dumps({"reason": "r"}))
+
+        assert _read_kill_switch_actor(str(path)) == ""
+
+    @pytest.mark.parametrize("content", ["{not json", "[1, 2]"])
+    def test_an_unreadable_record_reads_unreadable(self, tmp_path, content) -> None:
+        path = tmp_path / "kill_switch.json"
+        path.write_text(content)
+
+        assert _read_kill_switch_actor(str(path)) == "unreadable"
 
 
 def test_switching_the_automatic_exit_off_also_stops_the_kill_switch_orders() -> None:

@@ -532,7 +532,7 @@ groups:
         severity: critical
     annotations:
         summary: "Kill switch is holding positions it will not close"
-        description: "No reconciliation in the last 15 s confirmed the platform's positions against the broker, so no closing order is sent. Compare `hft risk status` with the broker; `hft ops flatten` closes them once they are right."
+        description: "Either the kill switch was not set by an operator (the startup recovery gate, or an unreadable record; log `kill_switch_flatten_blocked` names the actor) or no reconciliation in the last 15 s confirmed the platform's positions against the broker, so no closing order is sent. Compare `hft risk status` with the broker; `hft ops flatten` closes them once they are right."
         runbook_url: "docs/runbooks/halt-recovery.md"
 
   - alert: ManualLatchActive

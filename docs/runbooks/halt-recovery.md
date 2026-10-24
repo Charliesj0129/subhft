@@ -180,10 +180,14 @@ recovery gate), `loss_exit` on every supervise tick:
 1. cancels every order resting at the broker (`loss_exit_cancel_resting`),
    retried every `retry_interval_s` while it is still live;
 2. closes every open position with FORCE_FLAT (`loss_exit:kill_switch`), but
-   only when a reconciliation in the last `max(15 s, 3 x check_interval_s)`
-   found the platform's positions equal to the broker's. Otherwise it sends no
-   closing order and sets `kill_switch_flatten_blocked` to 1 (alert
-   `KillSwitchFlattenBlocked`, log `kill_switch_flatten_blocked`).
+   only when a person set the switch (the file's `actor` is `cli` or
+   `telegram`) and a reconciliation in the last
+   `max(15 s, 3 x check_interval_s)` found the platform's positions equal to
+   the broker's. Otherwise it sends no closing order and sets
+   `kill_switch_flatten_blocked` to 1 (alert `KillSwitchFlattenBlocked`, log
+   `kill_switch_flatten_blocked` with the actor). The startup recovery gate
+   (`actor` `startup_position_recovery`) never closes anything, even after a
+   later `/stop`: that process does not trust its own position store.
 
 Under a paper order mode (`HFT_ORDER_MODE=sim`) a local position the broker
 cannot hold is never confirmed, so the switch only stops and cancels. When the
