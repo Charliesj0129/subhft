@@ -435,3 +435,20 @@ def test_make_release_converge_mvp_passes_the_delete_flags_only_when_asked() -> 
     assert "$(if $(filter 1,$(ALLOW_DELETE_WAL)),--allow-delete-wal,)" in recipe
     assert "$(if $(filter 1,$(ALLOW_DELETE_DATA)),--allow-delete-data,)" in recipe
     assert "--allow-delete-wal --allow-delete-data" not in recipe
+
+
+def test_mvp_cleanup_never_git_cleans_research_evidence() -> None:
+    """Ignored files under research/ are the only copy of runs, ledgers and datasets."""
+    mod = _load_module()
+
+    steps = mod._cleanup_steps(
+        clean_rust=True,
+        cleanup_flags={},
+        cleanup_profile=mod.CLEANUP_PROFILE_MVP_RELEASE,
+        seed_minimal_sample=True,
+        tracked_slimming_profile=mod.TRACKED_SLIMMING_ROOT_REPORTS_MINIMAL,
+    )
+
+    commands = [str(step["command"]) for step in steps]
+    assert commands, "mvp profile produced no steps"
+    assert not [c for c in commands if "git clean" in c and "research" in c]

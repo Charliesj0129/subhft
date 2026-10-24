@@ -770,8 +770,8 @@ research-hypothesis-top: ## Show top-N pending hypotheses (default N=5)
 research-auto-scaffold: ## Auto-scaffold top-N alpha packages from hypothesis queue
 	$(PY) -m research auto-scaffold $(ARGS)
 
-experiment-gc: ## Delete experiment artifacts older than 90 days (keep latest 3 per alpha)
-	uv run python scripts/experiment_gc.py
+experiment-gc: ## Dry-run GC of experiment array payloads (APPLY=1 deletes *.npy/*.npz >90d; metadata always kept)
+	uv run python scripts/experiment_gc.py $(if $(filter 1,$(APPLY)),--apply,)
 
 experiment-gc-dry-run: ## Dry-run experiment GC (print what would be deleted)
 	uv run python scripts/experiment_gc.py --dry-run
