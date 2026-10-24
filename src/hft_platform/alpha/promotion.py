@@ -26,7 +26,7 @@ from uuid import uuid4
 import structlog
 import yaml
 
-from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, derive_verdict
+from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, derive_verdict, resolve_outcome
 from hft_platform.alpha.validation import _update_manifest_status
 from hft_platform.core import timebase
 
@@ -401,7 +401,14 @@ def _evaluate_gate_d_verdict(
     """
     checks = _gate_d_checks(scorecard, config)
     for name, check in checks.items():
-        if "outcome" not in check:
+        if "outcome" in check:
+            # An outcome set by the check must agree with its pass flag;
+            # a contradiction is an ERROR, never whichever side says PASS.
+            try:
+                resolve_outcome(bool(check["pass"]), check["outcome"])
+            except ValueError:
+                check["outcome"] = Outcome.ERROR.value
+        else:
             missing = name in _GATE_D_VALUE_REQUIRED and check.get("value") is None
             if missing or (name in _GATE_D_EVIDENCE_CHECKS and not check["pass"]):
                 check["outcome"] = Outcome.ERROR.value
@@ -692,6 +699,29 @@ def _verify_gate_c_passed(scorecard_path: Path) -> None:
         )
 
 
+def record_gate_c_kill(*, alpha_id: str, project_root: str | Path, scorecard_path: str | Path) -> bool:
+    """Write the kill for a run whose stored Gate C verdict is KILL.
+
+    Callers that skip promotion on a non-PASS validation use this so a real
+    KILL still reaches the ledger; any other verdict (or none) writes nothing.
+    The kill id carries the run id, so a repeated call is deduplicated by the
+    ledger. Returns True when the stored verdict is KILL.
+    """
+    sc_path = Path(scorecard_path)
+    verdict = _stored_gate_c_verdict(sc_path.parent / "backtest_report.json")
+    if verdict is None or verdict.verdict is not Verdict.KILL:
+        return False
+    _auto_kill(
+        alpha_id=alpha_id,
+        gate="C",
+        verdict=verdict,
+        run_id=_scorecard_run_id(sc_path),
+        alpha_dir=Path(project_root) / "research" / "alphas" / alpha_id,
+        scorecard_path=sc_path,
+    )
+    return True
+
+
 def _stored_gate_c_verdict(backtest_report_path: Path) -> VerdictResult | None:
     """The verdict Gate C wrote into the run's backtest report, if any."""
     if not backtest_report_path.exists():
@@ -706,11 +736,17 @@ def _stored_gate_c_verdict(backtest_report_path: Path) -> VerdictResult | None:
 
 
 def _payload_outcome(payload: dict[str, Any]) -> str:
-    """Outcome a stored sub-gate payload carries, derived from ``passed`` if absent."""
-    raw = payload.get("outcome")
-    if raw:
-        return Outcome(str(raw)).value
-    return (Outcome.PASS if payload.get("passed") else Outcome.FAIL).value
+    """Outcome a stored sub-gate payload carries, checked against its ``passed``.
+
+    A payload whose ``passed`` and ``outcome`` contradict each other, whose
+    outcome is unknown, or that carries neither, cannot be trusted and is an
+    ERROR: a failed audit must never reach promotion as a PASS.
+    """
+    passed = payload.get("passed")
+    try:
+        return resolve_outcome(None if passed is None else bool(passed), payload.get("outcome") or None).value
+    except ValueError:
+        return Outcome.ERROR.value
 
 
 def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:

@@ -503,3 +503,35 @@ class TestGateCResearchEngineRejected:
                 resolved_data_paths=[],
                 experiments_base=gate_c_mocks / "experiments",
             )
+
+
+class TestScorecardCarriesGateDAudits:
+    def test_persisted_scorecard_carries_audit_sub_gates_for_gate_d(self, gate_c_mocks, monkeypatch):
+        """Gate D reads Gate C's audit results from the scorecard, not a missing payload."""
+        from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d_verdict
+
+        captured: dict[str, Any] = {}
+
+        class _CapturingTracker(_FakeTracker):
+            def log_run(self, **kwargs: Any) -> Path:
+                captured.update(kwargs)
+                return self.base_dir / "meta.json"
+
+        monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _CapturingTracker)
+        report, *_ = _run(gate_c_mocks)
+
+        scorecard = captured["scorecard_payload"]
+        sub_gate = next(e for e in report.details["sub_gates_advisory"] if e["name"] == "cost_uncertainty")
+        assert scorecard["strategy_type"] == "taker"
+        assert scorecard["cost_uncertainty"]["outcome"] == sub_gate["outcome"]
+        assert "inventory_mtm" not in scorecard  # maker-only sub-gate
+
+        _, checks = _evaluate_gate_d_verdict(
+            {**scorecard, "sharpe_oos": 1.5, "max_drawdown": -0.05, "turnover": 0.5, "correlation_pool_max": 0.2},
+            PromotionConfig(alpha_id="test_alpha", owner="o"),
+        )
+        assert checks["cost_uncertainty_audit"]["detail"] != (
+            "MISSING — scorecard.cost_uncertainty absent; the audit cannot be evaluated"
+        )
+        assert checks["cost_uncertainty_audit"]["outcome"] == sub_gate["outcome"]
+        assert checks["inventory_mtm_audit"]["outcome"] == "not_applicable"

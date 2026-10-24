@@ -17,7 +17,7 @@ from hft_platform.cli_args.research_pipeline import (
     VM_UL6_VALIDATION_PROFILE as _VM_UL6_VALIDATION_PROFILE,
     add_common_research_pipeline_args,
 )
-from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
+from hft_platform.alpha.promotion import PromotionConfig, promote_alpha, record_gate_c_kill
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
 from research import factory
 
@@ -289,6 +289,12 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
         # failed validation used to raise on the Gate C check and record a
         # kill for runs that were never measured.
         notes.append("Promotion step skipped: validation did not reach a PASS verdict.")
+        # Skipping promotion must not drop a real KILL: record it from the
+        # stored Gate C verdict (nothing is written for any other verdict).
+        if validation.scorecard_path and record_gate_c_kill(
+            alpha_id=args.alpha_id, project_root=root, scorecard_path=validation.scorecard_path
+        ):
+            notes.append("Gate C verdict is KILL; recorded in the kill ledger.")
     else:
         promotion = promote_alpha(
             PromotionConfig(

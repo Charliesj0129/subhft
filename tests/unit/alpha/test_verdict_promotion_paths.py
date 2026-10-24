@@ -166,3 +166,64 @@ def test_gate_d_failed_evidence_audit_is_error_and_writes_no_kill(tmp_path: Path
     result = _promote(tmp_path, _scorecard(**override))
     assert result.gate_d_passed is False
     assert _rows(ledger) == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"passed": False, "outcome": "pass", "metrics": {"p95_lower_bound_pts": 0.5}},
+        {"passed": True, "outcome": "fail", "metrics": {"p95_lower_bound_pts": 0.5}},
+        {"outcome": "bogus", "metrics": {"p95_lower_bound_pts": 0.5}},
+        {"metrics": {"p95_lower_bound_pts": 0.5}},
+    ],
+    ids=["failed_flag_pass_outcome", "passed_flag_fail_outcome", "unknown_outcome", "neither"],
+)
+def test_gate_d_contradictory_audit_payload_is_error_and_not_approved(tmp_path: Path, ledger: Path, payload):
+    verdict, checks = _evaluate_gate_d_verdict(
+        _scorecard(cost_uncertainty=payload), PromotionConfig(alpha_id="a", owner="o", min_sharpe_oos=1.0)
+    )
+    assert checks["cost_uncertainty_audit"]["outcome"] == "error"
+    assert verdict.verdict.value == "INVALID"
+    result = _promote(tmp_path, _scorecard(cost_uncertainty=payload))
+    assert result.approved is False
+    assert _rows(ledger) == []
+
+
+def _stored_run(tmp_path: Path, verdict: str) -> Path:
+    run_dir = tmp_path / "runs" / "run-k"
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(json.dumps({"run_id": "run-k", "gate_status": {"gate_c": False}}))
+    (run_dir / "backtest_report.json").write_text(
+        json.dumps(
+            {
+                "details": {
+                    "verdict": {"verdict": verdict, "reasons": ["gate_c.sharpe_oos"], "failing": ["gate_c.sharpe_oos"]}
+                }
+            }
+        )
+    )
+    sc_path = run_dir / "scorecard.json"
+    sc_path.write_text("{}")
+    return sc_path
+
+
+@pytest.mark.parametrize(("verdict", "n_rows"), [("KILL", 1), ("NEEDS-MORE-DAYS", 0), ("INVALID", 0)])
+def test_pipeline_skipping_promotion_still_records_a_stored_kill(monkeypatch, tmp_path, ledger, verdict, n_rows):
+    sc_path = _stored_run(tmp_path, verdict)
+    validation = types.SimpleNamespace(passed=False, scorecard_path=str(sc_path), to_dict=lambda: {"passed": False})
+    monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
+    monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
+    monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg: validation)
+    args = pipeline.build_parser().parse_args(
+        ["run", "--alpha-id", "alpha_k", "--owner", "o", "--data", "d.npy", "--out-dir", str(tmp_path / "out")]
+    )
+
+    pipeline._run_pipeline(args, mode="strict")
+    pipeline._run_pipeline(args, mode="strict")
+
+    rows = _rows(ledger)
+    assert len(rows) == n_rows
+    if n_rows:
+        assert rows[0]["gate"] == "C"
+        assert rows[0]["run_id"] == "run-k"

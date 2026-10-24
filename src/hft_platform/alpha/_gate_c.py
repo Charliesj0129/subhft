@@ -250,6 +250,29 @@ def _invoke_sub_gates_with_verdict(  # noqa: C901 - branchy dispatch; refactor t
     return advisory, blocking, verdict
 
 
+# Sub-gate results Gate D re-reads from the persisted scorecard.
+_GATE_D_AUDIT_SUB_GATES = ("inventory_mtm", "cost_uncertainty")
+
+
+def _scorecard_with_audits(scorecard_payload: dict, *, strategy_type: str, sub_gates: list[dict]) -> dict:
+    """The persisted scorecard plus what Gate D audits: strategy type and audit sub-gates.
+
+    ``compute_scorecard`` does not carry these, so without them Gate D could
+    only report its audits as missing (ERROR) for every generated scorecard.
+    """
+    payload = {**scorecard_payload, "strategy_type": strategy_type}
+    for entry in sub_gates:
+        name = str(entry.get("name", ""))
+        if name in _GATE_D_AUDIT_SUB_GATES:
+            payload[name] = {
+                "passed": entry.get("passed"),
+                "outcome": entry.get("outcome"),
+                "metrics": dict(entry.get("metrics") or {}),
+                "details": entry.get("details", ""),
+            }
+    return payload
+
+
 _SAMPLE_LABELS = {"promising", "needs_more_sample", "inconclusive"}
 
 
@@ -648,7 +671,9 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 "maker_total_fills": float(total_fills),
             },
             gate_status={"gate_c": bool(maker_passed)},
-            scorecard_payload=scorecard.to_dict(),
+            scorecard_payload=_scorecard_with_audits(
+                scorecard.to_dict(), strategy_type="maker", sub_gates=maker_sub_gates
+            ),
             backtest_report_payload=asdict(report),
             signals=result.signals,
             equity=result.equity_curve,
@@ -1053,7 +1078,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "trend_gate_passed": float(bool(trend_gate_passed)),
         },
         gate_status={"gate_c": bool(passed)},
-        scorecard_payload=scorecard.to_dict(),
+        scorecard_payload=_scorecard_with_audits(scorecard.to_dict(), strategy_type="taker", sub_gates=taker_sub_gates),
         backtest_report_payload=asdict(report),
         signals=result.signals,
         equity=result.equity_curve,
