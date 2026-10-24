@@ -399,7 +399,9 @@ class HFTSystem:
         every other platform exit. The request is finished from the position
         store, not from orders sent: COMPLETED once every named symbol is flat,
         or at the deadline with the symbols still open counted as partially
-        closed or failed. File IO runs in threads.
+        closed or failed; FAILED at the deadline while an order is still
+        unacknowledged. Every write-back names the request it answers. File IO
+        runs in threads.
         """
         gate = self._flatten_gate
         if gate is None:
@@ -413,7 +415,11 @@ class HFTSystem:
         if req.status == FlattenStatus.PROCESSING:
             # Claimed by an earlier process that did not finish it. Its orders
             # stopped with it; say so instead of leaving the CLI waiting.
-            await asyncio.to_thread(gate.fail, "engine restarted before the flatten finished; positions not confirmed")
+            await asyncio.to_thread(
+                gate.fail,
+                "engine restarted before the flatten finished; positions not confirmed",
+                request_id=req.initiated_ns,
+            )
             logger.error("operator_flatten_abandoned_by_restart", scope=req.scope, scope_id=req.scope_id)
             return
         if req.status != FlattenStatus.PENDING:
@@ -423,7 +429,9 @@ class HFTSystem:
             return
         if req.scope not in ("all", "strategy") or (req.scope == "strategy" and not req.scope_id):
             await asyncio.to_thread(
-                gate.fail, f"unsupported flatten scope {req.scope!r} (use all, or strategy with an id)"
+                gate.fail,
+                f"unsupported flatten scope {req.scope!r} (use all, or strategy with an id)",
+                request_id=req.initiated_ns,
             )
             return
         net = self._platform_net_by_symbol()
@@ -442,7 +450,7 @@ class HFTSystem:
             symbols=dict(net),
         )
         if not net:
-            await asyncio.to_thread(gate.complete, 0, 0, 0, [])
+            await asyncio.to_thread(gate.complete, 0, 0, 0, [], request_id=req.initiated_ns)
             return
         self._operator_flatten_initial = MappingProxyType(net)
         self._operator_flatten_deadline_ns = timebase.now_ns() + max(1, int(req.deadline_s)) * 1_000_000_000
@@ -467,18 +475,33 @@ class HFTSystem:
             return
         partial = sorted(sym for sym, qty in remaining.items() if abs(qty) < abs(initial[sym]))
         failed = sorted(sym for sym in remaining if sym not in partial)
-        current = await asyncio.to_thread(gate.read_request)
-        if current is not None and current.initiated_ns == self._operator_flatten_request_id:
-            await asyncio.to_thread(
-                gate.complete, len(initial) - len(remaining), len(partial), len(failed), sorted(remaining)
+        request_id = self._operator_flatten_request_id
+        if unacked:
+            # Flat books prove nothing while an order the broker has not
+            # acknowledged can still fill: its symbol is not even known yet.
+            written = await asyncio.to_thread(
+                gate.fail,
+                "orders still awaiting the broker's acknowledgement at the deadline; positions not confirmed",
+                sorted(remaining),
+                request_id=request_id,
             )
         else:
+            written = await asyncio.to_thread(
+                gate.complete,
+                len(initial) - len(remaining),
+                len(partial),
+                len(failed),
+                sorted(remaining),
+                request_id=request_id,
+            )
+        if not written:
             # A new request replaced this one in the file; it is claimed next
             # tick. This one's outcome is in the log line below only.
             logger.warning("operator_flatten_superseded", request_id=self._operator_flatten_request_id)
-        log = logger.error if remaining else logger.warning
+        log = logger.error if remaining or unacked else logger.warning
         log(
             "operator_flatten_finished",
+            unacknowledged_orders=unacked,
             fully_closed=len(initial) - len(remaining),
             partially_closed=partial,
             failed=failed,

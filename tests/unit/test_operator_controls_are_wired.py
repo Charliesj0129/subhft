@@ -476,3 +476,104 @@ class TestReleaseIsSerializedWithNewStops:
 
         assert gate_.requires_manual_rearm("platform") is True
         assert gate_.snapshot()["platform"]["reason"] == "disk_full"
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (Codex adversarial review of B0-B6, 2026-10-24)
+# ---------------------------------------------------------------------------
+
+
+class TestPlatformTokenNamesOneIncident:
+    def test_a_stale_rearm_does_not_clear_a_second_latch_with_the_same_reason(self, tmp_path):
+        from hft_platform.ops import manual_rearm
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+
+        writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+        gate_ = manual_rearm.ManualRearmGate(state_path=tmp_path / "runtime_state.json")
+
+        def _latch() -> None:
+            writer.record_transition(
+                scope="platform", mode="platform_reduce_only", reason="recorder_data_loss", manual_rearm_required=True
+            )
+
+        _latch()
+        first_token = gate_.platform_token()
+        gate_.rearm_platform(token=first_token, reason="wal replayed", actor="cli:op")
+        _latch()  # the same failure again, a second incident
+
+        with pytest.raises(ValueError, match="does not match"):
+            gate_.rearm_platform(token=first_token, reason="retried command", actor="cli:op")
+        assert gate_.requires_manual_rearm("platform") is True
+
+    def test_re_recording_the_same_latch_keeps_its_token(self, tmp_path):
+        from hft_platform.ops import manual_rearm
+        from hft_platform.ops.evidence import AutonomyEvidenceWriter
+
+        writer = AutonomyEvidenceWriter(base_dir=tmp_path)
+        gate_ = manual_rearm.ManualRearmGate(state_path=tmp_path / "runtime_state.json")
+        for _ in range(2):
+            writer.record_transition(
+                scope="platform", mode="platform_reduce_only", reason="disk_full", manual_rearm_required=True
+            )
+            token = gate_.platform_token() if _ == 0 else token
+
+        assert gate_.platform_token() == token
+
+
+class TestFlattenOutcomeIsHonest:
+    def test_an_order_still_unacknowledged_at_the_deadline_fails_the_request(self, gate):
+        positions = {"k": _pos("R47_MAKER_TMF", "TMFK6", 1)}
+        system = _system(gate, positions)
+        system.order_adapter = SimpleNamespace(live_orders={"R47_MAKER_TMF:19": object()})
+        gate.submit(scope="all", deadline_s=5)
+        _tick(system)
+
+        positions.clear()
+        _tick(system, NOW + 6_000_000_000)
+
+        req = gate.read_request()
+        assert req.status == FlattenStatus.FAILED
+        assert "acknowledg" in (req.error or "")
+
+    def test_the_cli_exits_non_zero_on_a_failed_request(self, gate, capsys):
+        gate.submit(scope="all", deadline_s=5)
+        gate.claim()
+        gate.fail("orders awaiting acknowledgement")
+        with mock.patch("hft_platform.cli._ops._flatten_via_gate", return_value=gate.read_request()):
+            with pytest.raises(SystemExit) as exc:
+                cmd_ops_flatten(SimpleNamespace(scope="all", scope_id=None, deadline=5))
+        assert exc.value.code != 0
+
+    def test_a_result_is_not_written_onto_a_request_submitted_after_the_check(self, gate):
+        positions = {"a": _pos("R47_MAKER_TMF", "TMFK6", 1)}
+        system = _system(gate, positions)
+        gate.submit(scope="all", deadline_s=60)
+        _tick(system)
+        positions.clear()
+
+        # The CLI (another process: a thread here) submits request B just after
+        # the engine has read request A to answer it. The 50 ms join bounds how
+        # long an unserialized submit needs to land; under the lock it waits.
+        real_read = FlattenGate.read_request
+        started: list[threading.Thread] = []
+
+        def _submit_b() -> None:
+            with mock.patch("hft_platform.ops.flatten_gate.time.monotonic_ns", return_value=202):
+                gate.submit(scope="strategy", scope_id="R47_MAKER_TMF", deadline_s=60)
+
+        def _read(self):
+            current = real_read(self)
+            if not started:
+                t = threading.Thread(target=_submit_b)
+                t.start()
+                t.join(timeout=0.05)
+                started.append(t)
+            return current
+
+        with mock.patch.object(FlattenGate, "read_request", _read):
+            with mock.patch("hft_platform.core.timebase.now_ns", return_value=NOW):
+                asyncio.run(system._sync_operator_flatten())
+        started[0].join()
+
+        req = gate.read_request()
+        assert (req.status, req.initiated_ns) == (FlattenStatus.PENDING, 202)

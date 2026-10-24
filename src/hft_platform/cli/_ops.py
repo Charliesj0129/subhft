@@ -506,4 +506,6 @@ def cmd_ops_flatten(args: argparse.Namespace) -> None:
             sys.exit(1)
     elif result.status == FlattenStatus.FAILED:
         print(f"Flatten failed: {result.error}")
+        if result.failed_symbols:
+            print(f"Still open: {', '.join(result.failed_symbols)}")
         sys.exit(1)

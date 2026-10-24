@@ -95,8 +95,12 @@ at the same interval). The request finishes from the position store and the
 order adapter's `live_orders`: COMPLETED once every symbol is flat with no
 working order left in it and no order still awaiting the broker's
 acknowledgement, or at the deadline with the symbols still open or still
-holding an order counted as partially closed or failed. The CLI exits non-zero
-when any symbol is still open. A flatten does not stop trading: a strategy can
+holding an order counted as partially closed or failed. An order still awaiting
+acknowledgement at the deadline makes the request FAILED: its symbol is not
+known, so a flat book proves nothing. Every write-back names the request it
+answers (`initiated_ns`) and runs under the request file's lock, so a request
+submitted meanwhile is never given an earlier one's result. The CLI exits
+non-zero when any symbol is still open or the request failed. A flatten does not stop trading: a strategy can
 open again after it completes; set the kill switch first (`hft risk halt`)
 to keep the book closed. A request left
 PROCESSING by an engine that restarted is failed on the next boot. A FORCE_FLAT

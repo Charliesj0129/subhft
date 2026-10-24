@@ -75,8 +75,10 @@ class ManualRearmGate:
     def platform_token(self) -> str:
         """Token a platform re-arm must quote: it names the latch as last read.
 
-        Derived from the flag and its reason only, so the engine's own
-        bookkeeping fields do not change it under the operator.
+        Derived from the flag, its reason and the incident's ``latch_id``
+        (``AutonomyEvidenceWriter``), so the engine's own bookkeeping fields do
+        not change it under the operator, while a second latch with the same
+        reason gets a new token.
         """
         return self._platform_token_of(self._platform_section(self._load_state()))
 
@@ -86,6 +88,7 @@ class ManualRearmGate:
             {
                 "manual_rearm_required": bool(platform_state.get("manual_rearm_required")),
                 "reason": platform_state.get("reason"),
+                "latch_id": platform_state.get("latch_id"),
             }
         )
 
@@ -167,6 +170,7 @@ class ManualRearmGate:
     def _clear_platform_section(platform_state: dict[str, Any]) -> None:
         platform_state["manual_rearm_required"] = False
         platform_state["reason"] = None
+        platform_state.pop("latch_id", None)
         platform_state["rearm_requested_at"] = timebase.now_s()
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
