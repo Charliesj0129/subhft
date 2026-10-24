@@ -203,6 +203,14 @@ class ReconciliationService:
         #: this is what keeps the latch alive until the drift actually resolves.
         self._drift_reduce_only: bool = False
         self._untrusted_sample_streak: int = 0
+        #: Consecutive trusted syncs in which every platform position matched
+        #: the broker's, and ``time.monotonic_ns()`` of the last one (0 = the
+        #: last sync did not verify). The mismatch latch ends after
+        #: ``_latch_release_after`` of them; the kill-switch exit acts only on
+        #: a recent one (``positions_verified_mono_ns``).
+        self._clean_sync_streak: int = 0
+        self._verified_mono_ns: int = 0
+        self._latch_release_after: int = max(1, int(os.environ.get("HFT_RECON_LATCH_RELEASE_AFTER_CLEAN", "2")))
         self._unverifiable_reduce_only: bool = False
         self._broker_zero_streak: int = 0
         self._consecutive_failures: int = 0
@@ -221,6 +229,36 @@ class ReconciliationService:
         # Platform-managed symbols: derived dynamically from client at sync time.
         # Non-platform symbols (e.g. manually traded via broker app) get relaxed
         # treatment: phantom positions are auto-resolved without triggering HALT.
+
+    @property
+    def positions_verified_mono_ns(self) -> int:
+        """``time.monotonic_ns()`` of the last sync that confirmed every position; 0 if the last one did not."""
+        return self._verified_mono_ns
+
+    def _not_verified(self) -> None:
+        self._clean_sync_streak = 0
+        self._verified_mono_ns = 0
+
+    async def _verified(self) -> None:
+        """A trusted sync found the books equal: count it, and end a mismatch latch once due."""
+        self._clean_sync_streak += 1
+        self._verified_mono_ns = time.monotonic_ns()
+        if self._clean_sync_streak < self._latch_release_after:
+            return
+        streak = self._clean_sync_streak
+        try:
+            released = await asyncio.to_thread(
+                manual_latches.release_when,
+                manual_latches.RECONCILIATION_MISMATCH,
+                lambda _record: True,
+                reason=f"{streak} consecutive trusted reconciliations found no discrepancy",
+                actor="engine:reconciliation",
+            )
+        except Exception as exc:  # noqa: BLE001 - retried on the next clean sync; the latch still holds HALT
+            logger.error("reconciliation_latch_release_failed", error=str(exc))
+            return
+        if released:
+            logger.warning("reconciliation_latch_released", clean_syncs=streak)
 
     @property
     def drift_streak(self) -> int:
@@ -589,6 +627,7 @@ class ReconciliationService:
                         threshold=self.untrusted_sample_degrade_after,
                     )
                     await self.platform_degrade_controller.enter_reduce_only_async(reason="reconciliation_unverifiable")
+                self._not_verified()
                 self._record_sync_duration(time.monotonic() - t0)
                 self._record_sync_result("skipped_untrusted")
                 return
@@ -614,6 +653,7 @@ class ReconciliationService:
                     # that the drift resolved. Clearing it let the supervisor drop
                     # the reason and a pending manual re-arm reopen order flow with
                     # the positions still unreconciled.
+                    self._not_verified()
                     duration = time.monotonic() - t0
                     self._record_sync_duration(duration)
                     self._record_sync_result("success")
@@ -758,6 +798,7 @@ class ReconciliationService:
             self._update_last_success_ts()
 
             if discrepancies:
+                self._not_verified()
                 logger.warning(
                     "Position discrepancies detected",
                     count=len(discrepancies),
@@ -884,6 +925,12 @@ class ReconciliationService:
                     # StormGuard can de-escalate from HALT.
                     self.storm_guard.set_reconciliation_hold(False)
                 self._halt_triggered = False
+                # Under a paper order mode a local position the broker cannot
+                # hold was set aside above, not confirmed: no drift, no proof.
+                if _sim_unverifiable:
+                    self._not_verified()
+                else:
+                    await self._verified()
                 if sync_log_due:
                     logger.info(
                         "Portfolio Sync Complete - No discrepancies",
@@ -894,6 +941,7 @@ class ReconciliationService:
         except Exception as e:
             self._last_noncritical_drift_signature = {}
             self._noncritical_drift_streak = 0
+            self._not_verified()
             duration = time.monotonic() - t0
             self._record_sync_duration(duration)
             self._record_sync_result("failure")
@@ -1214,9 +1262,10 @@ class ReconciliationService:
         self.storm_guard.set_reconciliation_hold(True)
         self.storm_guard.trigger_halt(reason)
 
-        # A mismatch is one of the four manual-release reasons (2026-10-23).
         # The in-memory hold above clears when the drift resolves or the
-        # process restarts; the latch file holds HALT until an operator runs
+        # process restarts; the latch file survives a restart and holds HALT
+        # until ``_latch_release_after`` consecutive trusted syncs find the
+        # books equal (``_verified``), or an operator runs
         # ``hft risk rearm reconciliation_mismatch``.
         try:
             await asyncio.to_thread(
