@@ -795,7 +795,10 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_cheap_screen.add_argument(
         "--write-kill",
         action="store_true",
-        help="On verdict='kill', append a gate='pre_screen' kill ledger row",
+        help=(
+            "Deprecated, no effect: a screen result is SCREENED_OUT, not a KILL, and is never written "
+            "to the kill ledger (kills come only from a Gate C/D KILL verdict)"
+        ),
     )
     alpha_cheap_screen.set_defaults(func=cmd_alpha_cheap_screen)
 

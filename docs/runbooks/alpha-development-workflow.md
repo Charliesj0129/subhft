@@ -143,7 +143,7 @@ hft alpha cheap-screen <alpha_id> [--ic-min 0.005] [--turnover-max 2.0] [--write
 A *narrower* screener that runs **before** Gate A. Source: `src/hft_platform/alpha/screener.py`; CLI at `cli/_alpha.py:972` (`cmd_alpha_cheap_screen`); parser at `_parser.py:611`.
 
 - **Thresholds:** IC ≥ 0.005, turnover < 2.0, cost-floor check, ≤ 60 s budget.
-- **Auto-kill:** with `--write-kill`, a `verdict='kill'` outcome appends a `gate='pre_screen'` row to the kill ledger (`audit.alpha_kill_ledger` ClickHouse table + `research/alphas/_kill_ledger.jsonl` fallback) keyed by `kill_id = sha256(alpha_id ":" gate ":" stable_artifact_hash)`. Idempotent (`(alpha_id, kill_id)` dedupe in both sinks).
+- **No kill:** a `verdict='kill'` screen result is reported as `research_outcome: SCREENED_OUT`. A cheap screen is not a powered verdict, so it never writes to the kill ledger; `--write-kill` is kept for compatibility and has no effect (it prints a warning).
 - **Disambiguation:** `cheap-screen` is **not** a substitute for `screen`. The two run different stages: `cheap-screen` is a 60 s pre-Gate-A signal triage; `screen` is the loose Gate-A–C path that produces a (non-promotion-eligible) scorecard. Use `cheap-screen` first to drop dead signals cheaply, then `screen` for promising ones, then `validate --profile vm_ul6_strict` for promotion candidates.
 
 ### 4c. Profile reference — single token
@@ -304,11 +304,11 @@ Deep dive (fail-closed matrix, canonical schema, stable hash): `docs/runbooks/re
 ## 13. Auto-kill ledger (Slice D, merged #342)
 
 - **Schema:** `audit.alpha_kill_ledger` (ClickHouse — migration `src/hft_platform/migrations/clickhouse/20260505_001_create_alpha_kill_ledger.sql`) with `research/alphas/_kill_ledger.jsonl` offline fallback. The JSONL is git-ignored.
-- **Gate values:** `pre_screen` (cheap-screen), `A`/`B`/`C`/`D`/`E`/`F`, `cluster`, `manual`.
-- **Idempotency:** `kill_id = sha256(alpha_id ":" gate ":" stable_artifact_hash)`. Both sinks dedupe on `(alpha_id, kill_id)`; the same `KillRecord` written twice yields exactly one row in each sink.
+- **Gate values:** `pre_screen` (historical rows only), `A`/`B`/`C`/`D`/`E`/`F`, `cluster`, `manual`.
+- **Idempotency:** `kill_id = sha256(alpha_id ":" gate ":" stable_artifact_hash)`, with `":" run_id` appended for kills built by `KillRecord.from_verdict` (so each run's KILL is its own row). Both sinks dedupe on `(alpha_id, kill_id)`; the same `KillRecord` written twice yields exactly one row in each sink.
 - **Default:** `HFT_KILL_LEDGER_ENABLED=1`.
 - **CLI surface:** `hft alpha kill <subcommand>` — `cli/_alpha.py:1032`.
-- **Auto-trigger:** `cheap-screen` (with `--write-kill`), Gate-C blocking failures, Gate-D rejections each call `kill_ledger.append_kill()` inline. Source: `src/hft_platform/alpha/kill_ledger.py`.
+- **Auto-trigger:** `promote_alpha` records a kill only for a KILL verdict: the Gate C verdict stored in the run's `backtest_report.json`, or the Gate D verdict. Both go through `KillRecord.from_verdict`, which refuses PASS / NEEDS-MORE-DAYS / INCONCLUSIVE / INVALID. Verdict rules: `src/hft_platform/alpha/outcomes.py`. Source: `src/hft_platform/alpha/kill_ledger.py`.
 
 ### Cluster (`alpha cluster`, merged #342)
 

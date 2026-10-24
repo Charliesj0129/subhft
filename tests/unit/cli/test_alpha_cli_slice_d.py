@@ -6,8 +6,8 @@ tests cover the CLI dispatch layer:
 
   * argparse plumbing produces the expected ``argparse.Namespace`` shape.
   * empty / whitespace ``--reason`` rejected by ``cmd_alpha_kill``.
-  * ``--write-kill`` on the screener actually writes a
-    ``gate='pre_screen'`` row (and only when the flag is set).
+  * ``--write-kill`` on the screener writes no kill: a screen result is
+    SCREENED_OUT, and kills come only from a Gate C/D KILL verdict.
   * cluster command emits both table and JSON output and propagates
     ``EmptyCorpusError`` to exit code 2.
 
@@ -199,7 +199,7 @@ def _drifting_prices(n: int = 200, *, seed: int = 7) -> np.ndarray:
     return 100.0 + np.cumsum(rng.standard_normal(n) * 0.1)
 
 
-def test_alpha_screen_kill_writes_ledger_when_flag_set(
+def test_alpha_screen_kill_is_screened_out_and_writes_no_ledger_row(
     _isolated_jsonl: Path,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
@@ -227,15 +227,15 @@ def test_alpha_screen_kill_writes_ledger_when_flag_set(
         cmd_alpha_cheap_screen(args)
     assert exc.value.code == 2
 
-    payload = _extract_json_payload(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = _extract_json_payload(captured.out)
     assert payload["verdict"] == "kill"
+    assert payload["research_outcome"] == "SCREENED_OUT"
     assert payload["alpha_id"] == alpha_id
+    assert "--write-kill has no effect" in captured.err
 
-    rows = _read_jsonl(_isolated_jsonl)
-    assert len(rows) == 1
-    assert rows[0]["alpha_id"] == alpha_id
-    assert rows[0]["gate"] == "pre_screen"
-    assert rows[0]["killed_by"] == "cli:screen"
+    # A cheap screen is not a powered verdict: it never writes a kill.
+    assert _read_jsonl(_isolated_jsonl) == []
 
 
 def test_alpha_screen_kill_does_not_write_ledger_without_flag(

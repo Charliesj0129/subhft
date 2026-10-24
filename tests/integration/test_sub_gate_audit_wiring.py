@@ -98,11 +98,12 @@ class TestSubGateAuditWiring:
         assert row["instrument"] == "TMFD6"
         assert row["strategy_type"] == "maker"
         assert row["profile_name"] == "round9_strict"
-        # The R47 fingerprint hits min_sample_size + single_day_dominance,
-        # so the wiring must persist the killed verdict — not a sample-*
-        # route — verifying triage propagation end-to-end.
+        # The R47 fingerprint hits min_sample_size + single_day_dominance.
+        # The FAIL is measured on a short sample, so verdict rules v1 route
+        # it to NEEDS-MORE-DAYS; the wiring must persist that triage status.
         assert row["blocking_passed"] is False
-        assert row["triage_status"] == "killed"
+        assert row["triage_status"] == blocking["triage_status"]
+        assert row["triage_status"].startswith("sample_")
         assert "min_sample_size" in row["triage_reasons"]
         # Round 5 metric must round-trip through the writer.
         gates = {g["name"]: g for g in row["sub_gates"]}
@@ -146,7 +147,7 @@ class TestSubGateAuditWiring:
             profile=prof,
         )
         assert blocking is not None
-        assert blocking["triage_status"] == "killed"
+        assert blocking["triage_status"].startswith("sample_")
         assert len(advisory) > 0
 
     def test_missing_run_id_skips_emit_silently(self, _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch) -> None:
