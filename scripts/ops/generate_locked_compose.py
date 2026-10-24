@@ -70,6 +70,10 @@ def _git_sha() -> str:
 
 
 def _resolve_compose() -> str:
+    # ``--no-interpolate`` is also what keeps ``env_file`` contents out of the output: plain ``config`` merges them
+    # into ``environment`` (``.env`` is one of them), and the result is committed to a public repo. Checked on
+    # Compose v5.0.2, where ``--no-env-resolution`` has the same effect; the property is pinned by
+    # tests/integration/test_locked_compose_generator_env_file.py, whichever flag provides it.
     cmd = [
         "docker",
         "compose",
