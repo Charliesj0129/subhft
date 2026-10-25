@@ -35,6 +35,7 @@ RESEARCH_DECISION_STATUSES = frozenset(
         "promising",
         "needs_more_sample",
         "inconclusive",
+        "invalid",
         "blocked_by_parity",
         "blocked_by_risk",
         "blocked_by_audit",
@@ -549,6 +550,9 @@ def _derive_research_decision(backtest_report_payload: Any) -> dict[str, Any]:
 
     triage_status = str(blocking.get("triage_status", "")).strip()
     evidence = _gate_c_blocking_evidence(blocking)
+    stored = _stored_verdict(blocking)
+    if stored is not None:
+        return _decision_from_verdict(stored, triage_status, evidence)
     if triage_status in GATE_C_SAMPLE_TRIAGE_STATUSES:
         status = triage_status.removeprefix("sample_")
         return {
@@ -579,6 +583,48 @@ def _derive_research_decision(backtest_report_payload: Any) -> dict[str, Any]:
     return {}
 
 
+def _stored_verdict(blocking: dict[str, Any]) -> str | None:
+    verdict = blocking.get("verdict")
+    if isinstance(verdict, dict) and verdict.get("verdict"):
+        return str(verdict["verdict"])
+    return None
+
+
+def _decision_from_verdict(verdict: str, triage_status: str, evidence: list[str]) -> dict[str, Any]:
+    """Research decision for the verdict Gate C already stored (no re-derivation)."""
+    from hft_platform.alpha.outcomes import Verdict
+
+    resolved = Verdict(verdict)
+    if resolved is Verdict.PASS:
+        return {"status": "keep", "reason": "gate_c_verdict_pass", "evidence": evidence, "decided_by": "gate_c"}
+    if resolved is Verdict.KILL:
+        status = _gate_c_failure_status(evidence)
+        return {
+            "status": status,
+            "reason": _gate_c_failure_reason(status, evidence),
+            "evidence": evidence,
+            "decided_by": "gate_c",
+        }
+    if resolved is Verdict.INVALID:
+        return {
+            "status": "invalid",
+            "reason": "gate_c_verdict_invalid",
+            "evidence": evidence,
+            "decided_by": "gate_c",
+        }
+    status = triage_status.removeprefix("sample_") if triage_status in GATE_C_SAMPLE_TRIAGE_STATUSES else ""
+    if resolved is Verdict.NEEDS_MORE_DAYS:
+        status = status if status in ("promising", "needs_more_sample") else "needs_more_sample"
+    else:
+        status = "inconclusive"
+    return {
+        "status": status,
+        "reason": f"gate_c_verdict_{resolved.value.lower().replace('-', '_')}",
+        "evidence": evidence,
+        "decided_by": "gate_c",
+    }
+
+
 def _gate_c_blocking_payload(backtest_report_payload: Any) -> dict[str, Any] | None:
     if not isinstance(backtest_report_payload, dict):
         return None
@@ -599,10 +645,12 @@ def _gate_c_blocking_evidence(blocking: dict[str, Any]) -> list[str]:
 
 
 def _gate_c_blocking_names(blocking: dict[str, Any]) -> list[str]:
-    names: list[str] = []
-    for raw in blocking.get("names", ()) or ():
-        names.append(str(raw))
+    """Names of the blocking gates that did not pass.
 
+    ``blocking["names"]`` lists every blocking gate the run evaluated, passing
+    ones included, so it must not feed failure evidence or status.
+    """
+    names: list[str] = []
     failing = blocking.get("failing", ())
     if isinstance(failing, list | tuple):
         for entry in failing:
@@ -624,7 +672,7 @@ def _gate_c_failure_status(failure_names: list[str]) -> str:
 
 
 def _gate_c_failure_status_for_name(name: str) -> str:
-    normalized = str(name).strip().lower()
+    normalized = str(name).strip().lower().removeprefix("gate_c.")
     if normalized.endswith(":missing"):
         return "blocked_by_audit"
     return GATE_C_FAILURE_DECISION_BY_NAME.get(normalized, "failed")

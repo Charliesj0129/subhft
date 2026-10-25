@@ -34,6 +34,10 @@ def _write_scorecard(
         "turnover": turnover,
         "correlation_pool_max": corr,
         "latency_profile": latency_profile,
+        # Gate D cannot evaluate a scorecard without the cost-uncertainty
+        # payload (ERROR); taker scorecards carry no inventory_mtm payload.
+        "strategy_type": "taker",
+        "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
     }
     if replay_parity_match_pct is not None:
         payload["replay_parity"] = {"match_pct": replay_parity_match_pct}
@@ -944,9 +948,12 @@ class TestSliceDAutoKill:
         *,
         gate_c_passed: bool,
         sharpe: float = 1.6,
+        gate_c_verdict: str | None = None,
     ) -> tuple[Path, Path]:
         """Lay down ``research/alphas/<alpha_id>/`` with scorecard, meta, manifest.
 
+        ``gate_c_verdict`` writes the verdict Gate C stores in the run's
+        ``backtest_report.json``; None leaves the report out (legacy run).
         Returns ``(project_root, scorecard_path)``.
         """
         alpha_dir = tmp_path / "research" / "alphas" / alpha_id
@@ -957,7 +964,14 @@ class TestSliceDAutoKill:
         _write_scorecard(sc_path, sharpe=sharpe, max_drawdown=-0.05, turnover=0.5, corr=0.3)
 
         # meta.json governs Gate-C verification.
-        (alpha_dir / "meta.json").write_text(json.dumps({"gate_status": {"gate_c": gate_c_passed}}))
+        (alpha_dir / "meta.json").write_text(
+            json.dumps({"run_id": f"run-{alpha_id}", "gate_status": {"gate_c": gate_c_passed}})
+        )
+        if gate_c_verdict is not None:
+            reasons = ["sharpe_threshold"] if gate_c_verdict == "KILL" else []
+            (alpha_dir / "backtest_report.json").write_text(
+                json.dumps({"details": {"verdict": {"verdict": gate_c_verdict, "reasons": reasons}}})
+            )
 
         # Minimal manifest so stable_artifact_hash is computable.
         (alpha_dir / "manifest.yaml").write_text(
@@ -1006,12 +1020,12 @@ class TestSliceDAutoKill:
 
     # -- Gate C raise path -----------------------------------------------
 
-    def test_gate_c_failure_writes_kill_ledger_row(
+    def test_gate_c_kill_verdict_writes_kill_ledger_row(
         self,
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c", gate_c_passed=False)
+        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c", gate_c_passed=False, gate_c_verdict="KILL")
 
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c",
@@ -1027,15 +1041,41 @@ class TestSliceDAutoKill:
         assert len(rows) == 1, f"expected exactly 1 ledger row, got {rows}"
         assert rows[0]["alpha_id"] == "alpha_t14_c"
         assert rows[0]["gate"] == "C"
-        assert "Gate C has not passed" in rows[0]["reason"]
+        assert rows[0]["reason"] == "sharpe_threshold"
+        assert rows[0]["run_id"] == "run-alpha_t14_c"
         assert rows[0]["killed_by"] == "promote_alpha:auto"
+
+    @pytest.mark.parametrize("verdict", [None, "INVALID", "NEEDS-MORE-DAYS", "INCONCLUSIVE"])
+    def test_gate_c_failure_without_kill_verdict_writes_no_kill(
+        self,
+        tmp_path: Path,
+        _isolate_kill_ledger: Path,
+        verdict: str | None,
+    ) -> None:
+        """A Gate C run that errored, lacked sample, or recorded no verdict is not dead."""
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c_alive", gate_c_passed=False, gate_c_verdict=verdict
+        )
+        cfg = PromotionConfig(
+            alpha_id="alpha_t14_c_alive",
+            owner="charlie",
+            project_root=str(root),
+            scorecard_path=str(sc_path),
+            validation_profile=self._strict_profile(),
+        )
+        with pytest.raises(ValueError, match="Gate C has not passed"):
+            promote_alpha(cfg)
+
+        assert self._read_ledger(_isolate_kill_ledger) == []
 
     def test_gate_c_failure_re_run_is_idempotent(
         self,
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c_idem", gate_c_passed=False)
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c_idem", gate_c_passed=False, gate_c_verdict="KILL"
+        )
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c_idem",
             owner="charlie",
@@ -1058,7 +1098,9 @@ class TestSliceDAutoKill:
         _isolate_kill_ledger: Path,
     ) -> None:
         monkeypatch.setenv("HFT_KILL_LEDGER_ENABLED", "0")
-        root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_c_off", gate_c_passed=False)
+        root, sc_path = self._setup_alpha_fixture(
+            tmp_path, "alpha_t14_c_off", gate_c_passed=False, gate_c_verdict="KILL"
+        )
         cfg = PromotionConfig(
             alpha_id="alpha_t14_c_off",
             owner="charlie",
@@ -1304,8 +1346,11 @@ def test_cost_uncertainty_audit_passes_when_p95_lower_above_floor():
     assert checks["cost_uncertainty_audit"]["value"] == 2.5
 
 
-def test_cost_uncertainty_audit_advisory_when_metrics_missing():
-    """Scorecard lacks cost_uncertainty payload (legacy run); advisory PASS."""
+def test_cost_uncertainty_audit_errors_when_payload_missing():
+    """A missing cost_uncertainty payload cannot be evaluated: ERROR, so Gate D
+    is INVALID (no verdict, no kill) instead of an advisory PASS."""
+    from hft_platform.alpha.promotion import _evaluate_gate_d_verdict
+
     scorecard = _gate_d_base_scorecard(strategy_type="taker")
     # No cost_uncertainty key on scorecard.
     config = PromotionConfig(
@@ -1313,11 +1358,12 @@ def test_cost_uncertainty_audit_advisory_when_metrics_missing():
         owner="charlie",
     )
 
-    _passed, checks = _evaluate_gate_d(scorecard, config)
+    verdict, checks = _evaluate_gate_d_verdict(scorecard, config)
 
-    assert checks["cost_uncertainty_audit"]["pass"] is True
-    detail = str(checks["cost_uncertainty_audit"].get("detail", "")).lower()
-    assert "advisory" in detail or "missing" in detail
+    assert checks["cost_uncertainty_audit"]["pass"] is False
+    assert checks["cost_uncertainty_audit"]["outcome"] == "error"
+    assert "missing" in str(checks["cost_uncertainty_audit"].get("detail", "")).lower()
+    assert verdict.verdict.value == "INVALID"
 
 
 # --- PromotionConfig field defaults -----------------------------------------

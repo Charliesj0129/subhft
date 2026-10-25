@@ -41,6 +41,8 @@ def _make_backtest_result(**overrides: Any) -> types.SimpleNamespace:
         "run_id": "run-test",
         "config_hash": "cfg-test",
         "latency_profile": {"model_applied": True},
+        # Gate C reports the trend check as ERROR without mid prices.
+        "mid_prices": np.linspace(100.0, 101.0, 4, dtype=np.float64),
     }
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)
@@ -129,6 +131,7 @@ def gate_c_mocks(monkeypatch, tmp_path):
     monkeypatch.setattr("hft_platform.alpha._gate_c._evaluate_stress_backtest", _stress_pass)
     monkeypatch.setattr("hft_platform.alpha._gate_c._evaluate_parameter_robustness", _robustness_pass)
     monkeypatch.setattr("hft_platform.alpha._gate_c._optimize_parameters", _opt_pass)
+    monkeypatch.setattr("hft_platform.alpha._gate_c._evaluate_trend_contamination", lambda **kw: {"passed": True})
     monkeypatch.setattr(
         "research.registry.scorecard.compute_scorecard",
         lambda *a, **kw: _FakeScorecard(),
@@ -170,6 +173,34 @@ class TestGateCCoreMetrics:
         assert report.passed is True
         assert report.gate == "Gate C"
         assert report.details["core_metrics_passed"] is True
+
+    def test_day_axis_sub_gates_error_on_per_tick_equity(self, gate_c_mocks):
+        # The taker runner's equity curve is per tick; differencing it is not a
+        # daily series, so day-axis sub-gates must report ERROR, not measure it.
+        report, *_ = _run(gate_c_mocks)
+        outcomes = {e["name"]: e["outcome"] for e in report.details["sub_gates_advisory"]}
+        assert outcomes["sharpe_threshold"] == "error"
+        assert outcomes["winning_day_pct"] == "error"
+        assert report.details["verdict"]["verdict"] == "PASS"  # no profile: sub-gates are advisory
+
+    def test_missing_mid_prices_makes_trend_check_error(self, gate_c_mocks, monkeypatch):
+        class NoMidRunner(_FakeRunner):
+            def run(self):
+                return _make_backtest_result(mid_prices=None)
+
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", NoMidRunner)
+        report, *_ = _run(gate_c_mocks)
+        assert report.passed is False
+        assert report.details["trend_gate_passed"] is False
+        assert report.details["verdict"]["verdict"] == "INVALID"
+
+    def test_optimizer_result_without_passed_is_error_not_pass(self, gate_c_mocks, monkeypatch):
+        monkeypatch.setattr(
+            "hft_platform.alpha._gate_c._optimize_parameters", lambda **kw: {"selected_signal_threshold": 0.3}
+        )
+        report, *_ = _run(gate_c_mocks, {"enable_param_optimization": True})
+        assert report.passed is False
+        assert report.details["verdict"]["reasons"] == ["gate_c.parameter_optimization:error"]
 
     def test_fails_when_sharpe_below_threshold(self, gate_c_mocks, monkeypatch):
         class LowSharpeRunner(_FakeRunner):
@@ -472,3 +503,35 @@ class TestGateCResearchEngineRejected:
                 resolved_data_paths=[],
                 experiments_base=gate_c_mocks / "experiments",
             )
+
+
+class TestScorecardCarriesGateDAudits:
+    def test_persisted_scorecard_carries_audit_sub_gates_for_gate_d(self, gate_c_mocks, monkeypatch):
+        """Gate D reads Gate C's audit results from the scorecard, not a missing payload."""
+        from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d_verdict
+
+        captured: dict[str, Any] = {}
+
+        class _CapturingTracker(_FakeTracker):
+            def log_run(self, **kwargs: Any) -> Path:
+                captured.update(kwargs)
+                return self.base_dir / "meta.json"
+
+        monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _CapturingTracker)
+        report, *_ = _run(gate_c_mocks)
+
+        scorecard = captured["scorecard_payload"]
+        sub_gate = next(e for e in report.details["sub_gates_advisory"] if e["name"] == "cost_uncertainty")
+        assert scorecard["strategy_type"] == "taker"
+        assert scorecard["cost_uncertainty"]["outcome"] == sub_gate["outcome"]
+        assert "inventory_mtm" not in scorecard  # maker-only sub-gate
+
+        _, checks = _evaluate_gate_d_verdict(
+            {**scorecard, "sharpe_oos": 1.5, "max_drawdown": -0.05, "turnover": 0.5, "correlation_pool_max": 0.2},
+            PromotionConfig(alpha_id="test_alpha", owner="o"),
+        )
+        assert checks["cost_uncertainty_audit"]["detail"] != (
+            "MISSING — scorecard.cost_uncertainty absent; the audit cannot be evaluated"
+        )
+        assert checks["cost_uncertainty_audit"]["outcome"] == sub_gate["outcome"]
+        assert checks["inventory_mtm_audit"]["outcome"] == "not_applicable"

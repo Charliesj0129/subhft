@@ -153,10 +153,11 @@ class TestBlockingTriageStatus:
         assert blocking is not None
         assert blocking["triage_status"] == "sample_inconclusive"
 
-    def test_status_killed_when_non_sample_gate_also_fails(self) -> None:
+    def test_failure_on_short_sample_is_needs_more_days_not_killed(self) -> None:
         # min_sample_size fails AND single_day_dominance fails (R47
-        # fingerprint has 2325 of 2253 from one day) → real KILL, not a
-        # sample-triage routing.
+        # fingerprint has 2325 of 2253 from one day). Under verdict rules v1
+        # a FAIL measured on a sample below the floor is underpowered, so the
+        # run needs more days; it is not a KILL.
         prof = ValidationProfile(
             name="test_strict",
             is_strict=True,
@@ -176,5 +177,7 @@ class TestBlockingTriageStatus:
             profile=prof,
         )
         assert blocking is not None
-        assert blocking["triage_status"] == "killed"
+        assert blocking["triage_status"].startswith("sample_")
+        assert blocking["verdict"]["verdict"] == "NEEDS-MORE-DAYS"
+        assert blocking["verdict"]["required_n"] > 31
         assert "single_day_dominance" in blocking["triage_reasons"]

@@ -15,6 +15,7 @@ from typing import Any
 
 from hft_platform.alpha._sub_gates.registry import SubGateResult
 from hft_platform.alpha.divergence_category import categorize_histogram
+from hft_platform.alpha.outcomes import Outcome
 
 
 class ReplayParityGate:
@@ -53,10 +54,14 @@ class ReplayParityGate:
         threshold = float(thresholds.get("replay_parity_match_pct_min", 95.0))
 
         report = getattr(result, "replay_parity_report", None)
+        # Parity certifies the backtest, not the candidate: a missing report
+        # or a replay that does not reproduce live intents leaves the edge
+        # unverified (ERROR), it does not refute it.
         if report is None:
             return SubGateResult(
                 name=self.name,
                 passed=False,
+                outcome=Outcome.ERROR,
                 metrics={"threshold": threshold},
                 details="replay_parity_report missing on result; cannot certify parity",
             )
@@ -99,6 +104,7 @@ class ReplayParityGate:
         return SubGateResult(
             name=self.name,
             passed=passed,
+            outcome=Outcome.PASS if passed else Outcome.ERROR,
             metrics=metrics,
             details=(
                 f"match_pct={match_pct:.2f}% vs min {threshold:.2f}% (first_divergence_idx={first_div:.0f}{suffix})"

@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from hft_platform.alpha.outcomes import Outcome, resolve_outcome
+
 
 @dataclass(frozen=True)
 class SubGateResult:
@@ -20,16 +22,39 @@ class SubGateResult:
     ``passed`` is coerced to Python ``bool`` so the result is always
     JSON-serializable without a custom encoder (numpy booleans are not
     handled by stdlib json).
+
+    ``outcome`` says *why* a gate did not pass (see ``alpha.outcomes``). When
+    omitted it is derived from ``passed``; a contradiction raises ``ValueError``.
     """
 
     name: str
     passed: bool
-    metrics: dict[str, float | None] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
     details: str = ""
+    outcome: Outcome | None = None
 
     def __post_init__(self) -> None:
         # frozen=True prevents assignment, so use object.__setattr__
         object.__setattr__(self, "passed", bool(self.passed))
+        object.__setattr__(self, "outcome", resolve_outcome(self.passed, self.outcome))
+
+
+class UnavailableDailyPnl:
+    """Stands in for ``daily_pnl`` when a run has no dated per-day rows.
+
+    Any read raises, so every day-axis gate reports ERROR instead of measuring
+    a series that is not one value per trading day.
+    """
+
+    __slots__ = ("reason",)
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+    def _unavailable(self, *_: Any) -> Any:
+        raise ValueError(f"daily_pnl unavailable: {self.reason}")
+
+    __iter__ = __len__ = __bool__ = __getitem__ = _unavailable
 
 
 @runtime_checkable

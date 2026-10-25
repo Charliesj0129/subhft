@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.outcomes import Outcome
 
 
 def _entry_to_float(entry: Any) -> float:
@@ -122,11 +123,14 @@ class MaxDrawdownGate:
 
     def evaluate(self, result: Any, config: Any, thresholds: dict) -> SubGateResult:
         pnl = _to_daily_series(result.daily_pnl)
+        threshold_pct = thresholds.get("max_drawdown_pct", 30.0)
         if not pnl:
+            # No series is a missing input, not a zero drawdown.
             return SubGateResult(
                 name=self.name,
-                passed=True,
-                metrics={"max_dd_pct": 0.0},
+                passed=False,
+                outcome=Outcome.ERROR,
+                metrics={"max_dd_pct": None, "threshold": float(threshold_pct)},
                 details="no daily pnl to evaluate",
             )
         equity = np.cumsum(pnl)
@@ -134,9 +138,25 @@ class MaxDrawdownGate:
         drawdown = running_max - equity
         max_dd = float(drawdown.max()) if len(drawdown) else 0.0
         peak = float(running_max.max()) if len(running_max) else 0.0
-        max_dd_pct = (max_dd / peak * 100.0) if peak > 0 else 0.0
+        if peak <= 0:
+            if max_dd <= 0:
+                # Equity never moved: there is no drawdown to measure yet.
+                return SubGateResult(
+                    name=self.name,
+                    passed=False,
+                    outcome=Outcome.INSUFFICIENT_SAMPLE,
+                    metrics={"max_dd_pct": None, "threshold": float(threshold_pct), "peak": peak},
+                    details="equity never moved; drawdown not measurable",
+                )
+            # Losses below a non-positive peak are unbounded as a share of peak.
+            return SubGateResult(
+                name=self.name,
+                passed=False,
+                metrics={"max_dd_pct": float("inf"), "threshold": float(threshold_pct), "peak": peak},
+                details=f"equity never above zero (peak={peak:.2f}); drawdown {max_dd:.2f} unbounded vs peak",
+            )
+        max_dd_pct = max_dd / peak * 100.0
 
-        threshold_pct = thresholds.get("max_drawdown_pct", 30.0)
         passed = max_dd_pct <= threshold_pct
         return SubGateResult(
             name=self.name,

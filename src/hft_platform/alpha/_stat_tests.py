@@ -384,10 +384,15 @@ def _check_non_overlapping_ic(
     }
 
 
-def _trend_skip_result(horizons: list[int], detail: str) -> dict[str, Any]:
-    """Return a pass-through result when trend check should be skipped."""
+def _trend_skip_result(horizons: list[int], detail: str, outcome: str) -> dict[str, Any]:
+    """Return the result for a trend check that could not be measured.
+
+    A skip is not a pass: ``passed`` is False and ``outcome`` records why
+    nothing was measured.
+    """
     return {
-        "passed": True,
+        "passed": False,
+        "outcome": outcome,
         "detail": detail,
         "monotonic_ic": {"horizons": horizons, "ics": [], "is_monotonic": False, "pass": True},
         "detrended_ic": {
@@ -440,7 +445,11 @@ def _evaluate_trend_contamination(
 
     min_len = max(horizons) + detrend_window + 1
     if sig.size < min_len or mid.size < min_len:
-        return _trend_skip_result(horizons, f"insufficient_data (need {min_len}, got sig={sig.size} mid={mid.size})")
+        return _trend_skip_result(
+            horizons,
+            f"insufficient_data (need {min_len}, got sig={sig.size} mid={mid.size})",
+            "insufficient_sample",
+        )
 
     n = min(sig.size, mid.size)
     sig = cast(np.ndarray[Any, Any], sig[:n])
@@ -448,7 +457,7 @@ def _evaluate_trend_contamination(
 
     mid_std = float(np.std(mid))
     if mid_std < 1e-10 or not np.isfinite(mid_std):
-        return _trend_skip_result(horizons, "constant_mid_prices (skipped)")
+        return _trend_skip_result(horizons, "constant_mid_prices (skipped)", "error")
 
     mono = _check_monotonic_ic(sig, mid, n, horizons)
     detrended = _check_detrended_ic(sig, mid, n, detrend_window, detrended_ic_threshold)

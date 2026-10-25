@@ -66,6 +66,9 @@ def _write_alpha_fixture(
                 "correlation_pool_max": corr,
                 "latency_profile": "sim_p95_v2026-02-26",
                 "replay_parity": {"match_pct": 100.0},
+                # Gate D's cost-uncertainty audit errors without this payload.
+                "strategy_type": "taker",
+                "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
             },
             indent=2,
             sort_keys=True,

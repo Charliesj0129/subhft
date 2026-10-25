@@ -8,6 +8,7 @@ Tests can call ``clear_registry()`` to isolate test state; call
 from hft_platform.alpha._sub_gates.registry import (
     SubGate,
     SubGateResult,
+    UnavailableDailyPnl,
     clear_registry,
     get_registered_sub_gates,
     register_sub_gate,
@@ -106,6 +107,7 @@ ensure_builtin_sub_gates_registered()
 __all__ = [
     "SubGate",
     "SubGateResult",
+    "UnavailableDailyPnl",
     "clear_registry",
     "ensure_builtin_sub_gates_registered",
     "get_registered_sub_gates",
