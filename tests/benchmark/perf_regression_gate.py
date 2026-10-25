@@ -861,7 +861,8 @@ def _feature_ref_values(
 
 def bench_feature_engine_parity_mismatch_rate(n: int = 8_000) -> float:
     rng = np.random.default_rng(20260224)
-    eng = FeatureEngine(emit_events=True)
+    # _feature_ref_values reproduces the 16 v1 features; the engine's default schema is v3.
+    eng = FeatureEngine(emit_events=True, feature_set_id="lob_shared_v1")
     ref = _FeatureRefState()
     bid = 1_000_000
     ask = 1_001_000
@@ -919,8 +920,12 @@ def bench_feature_engine_lob_update_rust(iters: int = 80_000) -> float:
 
 
 def bench_feature_engine_python_vs_rust_parity_mismatch_rate(n: int = 8_000) -> float:
-    py_eng = FeatureEngine(emit_events=True, kernel_backend="python")
-    rust_eng = FeatureEngine(emit_events=True, kernel_backend="rust")
+    # The Rust kernel implements the 16 v1 features only and zero-pads the rest of a
+    # v2/v3 schema (see FeatureEngine's rust_feature_backend_v1_gap warning), so parity
+    # is measured on the feature set it computes. Against the default v3 schema every
+    # frame differs by construction and the gate could never pass.
+    py_eng = FeatureEngine(emit_events=True, kernel_backend="python", feature_set_id="lob_shared_v1")
+    rust_eng = FeatureEngine(emit_events=True, kernel_backend="rust", feature_set_id="lob_shared_v1")
     if rust_eng.kernel_backend() != "rust":
         return 0.0
     rng = np.random.default_rng(20260224)
