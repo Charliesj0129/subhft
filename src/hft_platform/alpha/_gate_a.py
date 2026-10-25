@@ -137,8 +137,16 @@ def run_gate_a(
                 except Exception as exc:
                     data_ul_warnings.append(f"data_ul_validation_error:{type(exc).__name__}:{exc}")
 
-                if required_data_provenance_fields and data_ul_target < 2:
-                    missing = _missing_or_blank_metadata_keys(meta_payload, required_data_provenance_fields)
+                # Provenance fields are required whenever the run names them,
+                # at every UL: a higher UL target asks for more evidence, so it
+                # must not switch this check off. A seed identifies a generated
+                # dataset; recorded market data has none, so only a dataset
+                # that declares itself real is excused from it.
+                provenance_fields = required_data_provenance_fields
+                if str(meta_payload.get("source_type", "")).strip().lower() == "real":
+                    provenance_fields = tuple(key for key in provenance_fields if key != "seed")
+                if provenance_fields:
+                    missing = _missing_or_blank_metadata_keys(meta_payload, provenance_fields)
                     problems.extend(f"missing_provenance:{key}" for key in missing)
                 if problems:
                     invalid_data_metadata[str(data_path)] = problems
@@ -210,11 +218,13 @@ def run_gate_a(
                         f"latency_profiles.yaml (available: {sorted(profiles.keys())})"
                     )
             else:
-                latency_profile_valid = True
-        except Exception as _exc:  # noqa: BLE001
-            latency_profile_valid = True
+                latency_warnings.append("latency_profiles.yaml has no profiles; the reference cannot be resolved")
+        except Exception as _exc:  # noqa: BLE001 -- reported as a warning; the profile stays invalid
+            latency_warnings.append(f"latency profile lookup failed: {type(_exc).__name__}: {_exc}")
 
-    latency_profile_passed = (not enforce_latency) or latency_profile_present
+    # A reference that does not resolve is not a latency profile: the run
+    # would be costed with whatever a later fallback picks.
+    latency_profile_passed = (not enforce_latency) or (latency_profile_present and latency_profile_valid)
 
     passed = (
         not missing_fields_by_path

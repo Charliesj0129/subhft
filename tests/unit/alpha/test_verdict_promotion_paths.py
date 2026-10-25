@@ -11,12 +11,14 @@ import types
 from pathlib import Path
 
 import pytest
+import yaml
 
 import research.pipeline as pipeline
 from hft_platform.alpha import audit, kill_ledger
 from hft_platform.alpha._gate_c import run_gate_c
 from hft_platform.alpha._validation_profile import ValidationProfile
 from hft_platform.alpha._validation_types import ValidationConfig
+from hft_platform.alpha.canary import CanaryMonitor
 from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d_verdict, promote_alpha
 
 
@@ -76,10 +78,42 @@ def test_gate_d_missing_scorecard_field_is_invalid_and_writes_no_kill(tmp_path: 
     assert decision["gate_d_verdict"] == "INVALID"
 
 
-def test_gate_d_missing_replay_parity_is_error_not_fail():
+def test_gate_d_missing_replay_parity_is_not_applicable_and_invalid_without_deferral():
     scorecard = _scorecard()
     scorecard.pop("replay_parity")
     verdict, checks = _evaluate_gate_d_verdict(scorecard, PromotionConfig(alpha_id="a", owner="o"))
+    assert checks["replay_parity_audit"]["outcome"] == "not_applicable"
+    assert verdict.verdict.value == "INVALID"
+
+
+def test_gate_d_missing_replay_parity_deferred_by_profile_is_an_obligation():
+    scorecard = _scorecard()
+    scorecard.pop("replay_parity")
+    profile = ValidationProfile(
+        name="t",
+        is_strict=True,
+        blocking_sub_gates=("replay_parity",),
+        deferrable={"replay_parity": "shadow_exit"},
+    )
+    verdict, checks = _evaluate_gate_d_verdict(
+        scorecard, PromotionConfig(alpha_id="a", owner="o", validation_profile=profile)
+    )
+    assert checks["replay_parity_audit"]["outcome"] == "not_applicable"
+    assert verdict.verdict.value == "PASS"
+    assert verdict.obligations == (("replay_parity_audit", "shadow_exit"),)
+
+
+def test_gate_d_replay_parity_below_threshold_stays_error_even_when_deferrable():
+    profile = ValidationProfile(
+        name="t",
+        is_strict=True,
+        blocking_sub_gates=("replay_parity",),
+        deferrable={"replay_parity": "shadow_exit"},
+    )
+    verdict, checks = _evaluate_gate_d_verdict(
+        _scorecard(replay_parity={"match_pct": 50.0}),
+        PromotionConfig(alpha_id="a", owner="o", validation_profile=profile),
+    )
     assert checks["replay_parity_audit"]["outcome"] == "error"
     assert verdict.verdict.value == "INVALID"
 
@@ -227,3 +261,108 @@ def test_pipeline_skipping_promotion_still_records_a_stored_kill(monkeypatch, tm
     if n_rows:
         assert rows[0]["gate"] == "C"
         assert rows[0]["run_id"] == "run-k"
+
+
+@pytest.mark.parametrize(
+    "report",
+    [{"match_pct": "broken"}, {"error": "replay crashed"}, {}, {"match_pct": float("nan")}, "99"],
+)
+def test_gate_d_malformed_replay_parity_is_error_even_when_deferrable(report):
+    """A parity report that exists but is unusable is broken evidence, not absent evidence."""
+    profile = ValidationProfile(
+        name="t",
+        is_strict=True,
+        blocking_sub_gates=("replay_parity",),
+        deferrable={"replay_parity": "shadow_exit"},
+    )
+    verdict, checks = _evaluate_gate_d_verdict(
+        _scorecard(replay_parity=report),
+        PromotionConfig(alpha_id="a", owner="o", validation_profile=profile),
+    )
+    assert checks["replay_parity_audit"]["outcome"] == "error"
+    assert verdict.verdict.value == "INVALID"
+    assert verdict.obligations == ()
+
+
+def _deferring_profile() -> ValidationProfile:
+    return ValidationProfile(
+        name="t",
+        is_strict=True,
+        blocking_sub_gates=("sharpe_threshold", "replay_parity"),
+        deferrable={"replay_parity": "shadow_exit"},
+        not_applicable_gates={"gate_f": "rust_paused"},
+    )
+
+
+def _promote_deferred(tmp_path: Path) -> object:
+    scorecard = _scorecard()
+    scorecard.pop("replay_parity")
+    alpha_dir = tmp_path / "research" / "alphas" / "alpha_v"
+    alpha_dir.mkdir(parents=True)
+    sc_path = alpha_dir / "scorecard.json"
+    sc_path.write_text(json.dumps(scorecard))
+    (alpha_dir / "meta.json").write_text(json.dumps({"run_id": "run-v", "gate_status": {"gate_c": True}}))
+    return promote_alpha(
+        PromotionConfig(
+            alpha_id="alpha_v",
+            owner="charlie",
+            project_root=str(tmp_path),
+            scorecard_path=str(sc_path),
+            min_sharpe_oos=1.0,
+            shadow_sessions=5,
+            enable_rust_readiness_gate=True,
+            validation_profile=_deferring_profile(),
+        )
+    )
+
+
+def test_deferred_parity_obligation_reaches_the_canary_config_and_blocks_graduation(tmp_path: Path, ledger: Path):
+    result = _promote_deferred(tmp_path)
+    assert result.approved is True
+    expected = [{"gate": "replay_parity_audit", "stage": "shadow_exit", "min_match_pct": 95.0}]
+    assert json.loads(Path(result.promotion_decision_path).read_text())["obligations"] == expected
+    promo_path = Path(result.promotion_config_path)
+    canary_yaml = yaml.safe_load(promo_path.read_text())
+    assert canary_yaml["obligations"] == expected
+
+    # At the top tier with a strong live Sharpe the canary would graduate;
+    # without parity evidence it must hold.
+    canary_yaml["weight"] = 0.10
+    promo_path.write_text(yaml.safe_dump(canary_yaml))
+    monitor = CanaryMonitor(promotions_dir=str(tmp_path / "config" / "strategy_promotions"))
+    live = {"slippage_bps": 0.0, "drawdown_contribution": 0.0, "execution_error_rate": 0.0, "sessions_live": 99}
+    live["sharpe_live"] = 10.0
+    held = monitor.evaluate("alpha_v", live)
+    assert held.state == "canary"
+    assert held.checks["unmet_obligations"] == ["replay_parity_audit: no replay parity evidence"]
+    assert monitor.evaluate("alpha_v", {**live, "replay_parity_match_pct": 94.9}).state == "canary"
+    assert monitor.evaluate("alpha_v", {**live, "replay_parity_match_pct": 96.0}).state == "graduated"
+
+
+@pytest.mark.parametrize(
+    ("obligations", "reason"),
+    [
+        ("replay_parity_audit", "obligations: malformed"),
+        (["replay_parity_audit"], "obligation: malformed"),
+        ([{"gate": "something_new", "stage": "shadow_exit"}], "something_new: no evidence rule"),
+    ],
+)
+def test_canary_malformed_or_unknown_obligation_blocks_escalation(tmp_path: Path, obligations, reason):
+    promo_dir = tmp_path / "promos"
+    promo_dir.mkdir()
+    payload = {"alpha_id": "a", "enabled": True, "weight": 0.02, "scorecard_snapshot": {"sharpe_oos": 1.0}}
+    payload["obligations"] = obligations
+    (promo_dir / "a.yaml").write_text(yaml.safe_dump(payload))
+    live = {"slippage_bps": 0.0, "drawdown_contribution": 0.0, "execution_error_rate": 0.0, "sessions_live": 99}
+    status = CanaryMonitor(promotions_dir=str(promo_dir)).evaluate(
+        "a", {**live, "sharpe_live": 10.0, "replay_parity_match_pct": 100.0}
+    )
+    assert status.state == "canary"
+    assert status.checks["unmet_obligations"] == [reason]
+
+
+def test_checklist_lists_a_not_applicable_gate_f_instead_of_rust_failures(tmp_path: Path, ledger: Path):
+    result = _promote_deferred(tmp_path)
+    gate_f = [item for item in result.checklist.items if item.label.startswith("Gate F")]
+    assert [(item.label, item.passed) for item in gate_f] == [("Gate F: not applicable", True)]
+    assert gate_f[0].detail == "not_applicable:rust_paused"

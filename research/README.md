@@ -102,7 +102,7 @@ This runs strict `research.pipeline run`, which includes the factory optimize pr
 ### VM-UL6 strict profile (institutional/near-live strictness)
 
 ```bash
-make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path.npy>' ARGS='--validation-profile vm_ul6_strict'
+make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path.npy>' ARGS='--validation-profile vm_ul6_strict_v2'
 ```
 
 `vm_ul6_strict` tightens latency/cost assumptions, stress multipliers, promotion thresholds,

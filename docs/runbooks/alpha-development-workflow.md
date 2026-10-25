@@ -31,7 +31,7 @@ hypothesis ──▶ scaffold ──▶ backtest ──▶ alpha cheap-screen (S
 1. Money fields use scaled int (×10000); never `float` on `risk/order/execution`.
 2. Latency profile is mandatory — Gate D rejects scorecards without one.
 3. Backtest must emit a replay-parity report under strict.
-4. `hft alpha cheap-screen` (Slice D) for pre-Gate-A IC/turnover/cost triage; `hft alpha screen` for loose Gate-A–C iteration; `hft alpha validate --profile vm_ul6_strict` for promotion eligibility.
+4. `hft alpha cheap-screen` (Slice D) for pre-Gate-A IC/turnover/cost triage; `hft alpha screen` for loose Gate-A–C iteration; `hft alpha validate --profile vm_ul6_strict_v2` for promotion eligibility.
 5. Strict profile has 16 blocking sub-gates (Slice B merged 2026-05-29 as part of the Stage-8 research-workflow consolidation).
 6. Synthetic equity is rejected — `require_real_equity: true`.
 7. Canary defaults to 1–7 day evaluation window.
@@ -128,11 +128,11 @@ hft alpha screen --alpha-id <id> --data <paths>
 - Source: `src/hft_platform/cli/_alpha.py:220` (`cmd_alpha_screen`); parser at `_parser.py:576`.
 - Runs the full Gate A → B → C chain with **default loose thresholds** (no strict profile).
 - **Stamps `screen_only=true` on the scorecard.** `hft alpha promote` refuses any artifact with that flag.
-- This is the everyday research-iteration entry point. Use it for daily triage; use `hft alpha validate --profile vm_ul6_strict` only when the artifact must be promotion-eligible.
+- This is the everyday research-iteration entry point. Use it for daily triage; use `hft alpha validate --profile vm_ul6_strict_v2` only when the artifact must be promotion-eligible.
 
 Quoting the validator parser docstring (`_parser.py:567`):
 
-> *"REQUIRED: strict validation profile (e.g. vm_ul6_strict). Loose runs must use `hft alpha screen` instead — `validate` is promotion-eligible only and refuses non-strict profiles."*
+> *"REQUIRED: strict validation profile (e.g. vm_ul6_strict_v2). Loose runs must use `hft alpha screen` instead — `validate` is promotion-eligible only and refuses non-strict profiles."*
 
 ### 4b. Slice D cheap pre-Gate-A screener (`alpha cheap-screen`, merged #342)
 
@@ -144,7 +144,7 @@ A *narrower* screener that runs **before** Gate A. Source: `src/hft_platform/alp
 
 - **Thresholds:** IC ≥ 0.005, turnover < 2.0, cost-floor check, ≤ 60 s budget.
 - **No kill:** a `verdict='kill'` screen result is reported as `research_outcome: SCREENED_OUT`. A cheap screen is not a powered verdict, so it never writes to the kill ledger; `--write-kill` is kept for compatibility and has no effect (it prints a warning).
-- **Disambiguation:** `cheap-screen` is **not** a substitute for `screen`. The two run different stages: `cheap-screen` is a 60 s pre-Gate-A signal triage; `screen` is the loose Gate-A–C path that produces a (non-promotion-eligible) scorecard. Use `cheap-screen` first to drop dead signals cheaply, then `screen` for promising ones, then `validate --profile vm_ul6_strict` for promotion candidates.
+- **Disambiguation:** `cheap-screen` is **not** a substitute for `screen`. The two run different stages: `cheap-screen` is a 60 s pre-Gate-A signal triage; `screen` is the loose Gate-A–C path that produces a (non-promotion-eligible) scorecard. Use `cheap-screen` first to drop dead signals cheaply, then `screen` for promising ones, then `validate --profile vm_ul6_strict_v2` for promotion candidates.
 
 ### 4c. Profile reference — single token
 
@@ -160,12 +160,23 @@ Source: Stage 2 (commit `23edc664`, 2026-05-28) deleted the in-code
 loads the YAML via `hft_platform.alpha._validation_profile.load_profile` — the same path
 `hft alpha …` uses.
 
+**Research v2 successor profile.** `config/research/profiles/vm_ul6_strict_v2.yaml` is the
+default for governed (`--mode strict`) pipeline runs; a strict run refuses `standard`, which
+stays exploratory. v2 keeps v1's thresholds and `blocking_sub_gates` unchanged
+(`tests/unit/alpha/test_research_v2_profile.py` asserts it) and repairs references only:
+the measured Shioaji P95 latency id (v1's `sim_stress_v2026-02-26` never resolved), no maker
+rebate, Gate F reported NOT_APPLICABLE while Rust is paused, and `replay_parity` deferred to
+Shadow exit (ADR-003): with no live intents to compare against, a missing parity report is
+NOT_APPLICABLE and recorded as an obligation, not an INVALID run. The pipeline now passes
+the profile to Gate C, so its blocking sub-gates block there too. Profile thresholds win
+over run defaults, and for keys with a known direction the stricter value is kept.
+
 ---
 
 ## 5. Gate A — manifest & data-field validation
 
 ```bash
-hft alpha validate --alpha-id <id> --profile vm_ul6_strict --data <paths>
+hft alpha validate --alpha-id <id> --profile vm_ul6_strict_v2 --data <paths>
 ```
 
 - Source: `src/hft_platform/alpha/_gate_a.py`, `validation.py`.
@@ -184,7 +195,7 @@ hft alpha validate --alpha-id <id> --profile vm_ul6_strict --data <paths>
 
 ## 7. Gate C — backtest scorecard + sub-gate evaluation
 
-`hft alpha validate --profile vm_ul6_strict` runs Gate C with the strict profile; `hft alpha screen` runs it loose.
+`hft alpha validate --profile vm_ul6_strict_v2` runs Gate C with the strict profile; `hft alpha screen` runs it loose.
 
 ### Sub-gate inventory (verified 2026-05-06)
 

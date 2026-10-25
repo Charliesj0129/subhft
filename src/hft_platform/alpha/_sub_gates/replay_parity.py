@@ -54,16 +54,18 @@ class ReplayParityGate:
         threshold = float(thresholds.get("replay_parity_match_pct_min", 95.0))
 
         report = getattr(result, "replay_parity_report", None)
-        # Parity certifies the backtest, not the candidate: a missing report
-        # or a replay that does not reproduce live intents leaves the edge
-        # unverified (ERROR), it does not refute it.
+        # Parity certifies the backtest, not the candidate. With no report
+        # there are no live intents to replay against yet (ADR-003): the gate
+        # is NOT_APPLICABLE here, which a profile may defer to Shadow exit and
+        # which is otherwise an INVALID run. A replay that does not reproduce
+        # live intents leaves the edge unverified (ERROR); it does not refute it.
         if report is None:
             return SubGateResult(
                 name=self.name,
                 passed=False,
-                outcome=Outcome.ERROR,
+                outcome=Outcome.NOT_APPLICABLE,
                 metrics={"threshold": threshold},
-                details="replay_parity_report missing on result; cannot certify parity",
+                details="replay_parity_report missing on result; no live intents to compare (ADR-003)",
             )
 
         match_pct = float(getattr(report, "match_pct", 0.0))

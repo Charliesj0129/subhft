@@ -214,7 +214,7 @@ def test_run_gate_a_data_meta_requires_provenance_keys(tmp_path: Path):
     np.save(path, arr)
     meta = {
         "dataset_id": "feed",
-        "source_type": "real",
+        "source_type": "synthetic",  # real data is excused from seed only
         "owner": "charlie",
         "schema_version": 1,
         "rows": 8,

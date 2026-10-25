@@ -17,6 +17,12 @@ import yaml
 logger = structlog.get_logger("alpha.validation_profile")
 
 
+# Later stages a deferred gate can be owed to (ADR-003: parity at Shadow exit).
+DEFERRAL_STAGES = frozenset({"shadow_exit"})
+# Promotion gates a profile may declare not applicable (Rust paused 2026-10-10).
+NOT_APPLICABLE_GATES = frozenset({"gate_f"})
+
+
 class ProfileValidationError(ValueError):
     """Raised when a profile is structurally invalid (e.g. references an unregistered gate)."""
 
@@ -34,6 +40,13 @@ class ValidationProfile:
     # fixtures) leave these empty.
     pipeline_overrides: dict[str, Any] = field(default_factory=dict)
     pipeline_baseline_defaults: dict[str, Any] = field(default_factory=dict)
+    # Research v2 (ADR-003/005): a blocking sub-gate that cannot be measured
+    # at this stage, mapped to the later stage that owns it. NOT_APPLICABLE
+    # there becomes that stage's obligation instead of an INVALID run.
+    deferrable: dict[str, str] = field(default_factory=dict)
+    # Whole promotion gates that do not apply under this profile, with the
+    # reason (e.g. ``gate_f: rust_paused``). Reported NOT_APPLICABLE, not PASS.
+    not_applicable_gates: dict[str, str] = field(default_factory=dict)
 
     def thresholds_for(self, *, strategy_type: str) -> dict[str, Any]:
         """Return thresholds for the given strategy type (maker|taker)."""
@@ -92,6 +105,25 @@ def load_profile(path: str | Path) -> ValidationProfile:
     if is_strict and not blocking:
         raise ProfileValidationError(f"profile {name!r}: strict profile must list at least one blocking_sub_gate")
 
+    deferrable = _string_mapping(body.get("deferrable"), name=name, key="deferrable")
+    bad_stage = {g: st for g, st in deferrable.items() if st not in DEFERRAL_STAGES}
+    if bad_stage:
+        raise ProfileValidationError(
+            f"profile {name!r}: deferrable names unknown stage(s) {bad_stage}; allowed: {sorted(DEFERRAL_STAGES)}"
+        )
+    not_blocking = [g for g in deferrable if g not in blocking]
+    if not_blocking:
+        raise ProfileValidationError(
+            f"profile {name!r}: deferrable gate(s) {not_blocking} are not in blocking_sub_gates"
+        )
+    not_applicable_gates = _string_mapping(body.get("not_applicable_gates"), name=name, key="not_applicable_gates")
+    bad_gate = [g for g in not_applicable_gates if g not in NOT_APPLICABLE_GATES]
+    if bad_gate:
+        raise ProfileValidationError(
+            f"profile {name!r}: not_applicable_gates names unknown gate(s) {bad_gate}; "
+            f"allowed: {sorted(NOT_APPLICABLE_GATES)}"
+        )
+
     raw_overrides = body.get("pipeline_overrides") or {}
     if not isinstance(raw_overrides, dict):
         raise ProfileValidationError(
@@ -117,4 +149,14 @@ def load_profile(path: str | Path) -> ValidationProfile:
         blocking_sub_gates=blocking,
         pipeline_overrides=dict(raw_overrides),
         pipeline_baseline_defaults=dict(raw_baselines),
+        deferrable=deferrable,
+        not_applicable_gates=not_applicable_gates,
     )
+
+
+def _string_mapping(raw: Any, *, name: str, key: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in raw.items()):
+        raise ProfileValidationError(f"profile {name!r}: {key} must be a mapping of strings")
+    return dict(raw)

@@ -6,6 +6,7 @@ Supports auto-rollback, escalation tiers, and graduation.
 
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 from dataclasses import dataclass
@@ -41,6 +42,44 @@ class CanaryStatus:
             "reason": self.reason,
             "checks": self.checks,
         }
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _unmet_obligations(obligations: Any, live_metrics: dict[str, Any]) -> list[str]:
+    """Deferred gates in a promotion YAML that the live metrics do not yet satisfy.
+
+    Fail-closed: an obligations field that is not a list, an entry that is not
+    a mapping, and a gate this monitor has no evidence rule for are all unmet.
+    """
+    if obligations is None:
+        return []
+    if not isinstance(obligations, list):
+        return ["obligations: malformed"]
+    unmet: list[str] = []
+    for entry in obligations:
+        if not isinstance(entry, dict):
+            unmet.append("obligation: malformed")
+            continue
+        gate = str(entry.get("gate", ""))
+        if gate == "replay_parity_audit":
+            minimum = _as_float(entry.get("min_match_pct", 95.0))
+            value = _as_float(live_metrics.get("replay_parity_match_pct"))
+            if value is None:
+                unmet.append(f"{gate}: no replay parity evidence")
+                continue
+            if minimum is None or not (math.isfinite(value) and value >= minimum):
+                unmet.append(f"{gate}: match_pct {value} below {minimum}")
+            continue
+        unmet.append(f"{gate or '<unnamed>'}: no evidence rule")
+    return unmet
 
 
 class CanaryMonitor:
@@ -83,6 +122,8 @@ class CanaryMonitor:
           - execution_error_rate: float
           - sessions_live: int
           - sharpe_live: float (optional, for escalation)
+          - replay_parity_match_pct: float (optional; evidence for a
+            deferred replay_parity obligation)
         """
         canary = self._find_canary(alpha_id)
         if canary is None:
@@ -154,6 +195,20 @@ class CanaryMonitor:
             escalation_eligible = (
                 sharpe_live is not None and sharpe_threshold is not None and float(sharpe_live) >= sharpe_threshold
             )
+
+            unmet = _unmet_obligations(canary.get("obligations"), live_metrics)
+            if escalation_eligible and unmet:
+                # A gate deferred at promotion (ADR-003) is still owed: the
+                # weight must not rise, and the canary must not graduate,
+                # until it carries passing evidence.
+                checks["unmet_obligations"] = unmet
+                return CanaryStatus(
+                    alpha_id=alpha_id,
+                    current_weight=current_weight,
+                    state="canary",
+                    reason="Escalation blocked by unmet obligations: " + "; ".join(unmet),
+                    checks=checks,
+                )
 
             if escalation_eligible:
                 checks["sharpe_live"] = float(sharpe_live)  # type: ignore[arg-type]
