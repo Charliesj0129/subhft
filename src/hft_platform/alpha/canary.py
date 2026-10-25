@@ -44,6 +44,15 @@ class CanaryStatus:
         }
 
 
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _unmet_obligations(obligations: Any, live_metrics: dict[str, Any]) -> list[str]:
     """Deferred gates in a promotion YAML that the live metrics do not yet satisfy.
 
@@ -61,13 +70,12 @@ def _unmet_obligations(obligations: Any, live_metrics: dict[str, Any]) -> list[s
             continue
         gate = str(entry.get("gate", ""))
         if gate == "replay_parity_audit":
-            try:
-                minimum = float(entry.get("min_match_pct", 95.0))
-                value = float(live_metrics.get("replay_parity_match_pct"))
-            except (TypeError, ValueError):
+            minimum = _as_float(entry.get("min_match_pct", 95.0))
+            value = _as_float(live_metrics.get("replay_parity_match_pct"))
+            if value is None:
                 unmet.append(f"{gate}: no replay parity evidence")
                 continue
-            if not (math.isfinite(value) and value >= minimum):
+            if minimum is None or not (math.isfinite(value) and value >= minimum):
                 unmet.append(f"{gate}: match_pct {value} below {minimum}")
             continue
         unmet.append(f"{gate or '<unnamed>'}: no evidence rule")
