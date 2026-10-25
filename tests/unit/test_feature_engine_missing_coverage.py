@@ -7,6 +7,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 
 from hft_platform.events import LOBStatsEvent
 from hft_platform.feature.engine import (
@@ -119,6 +120,21 @@ class TestRustBackendGapWarning:
             eng = FeatureEngine(kernel_backend="rust", feature_set_id="lob_shared_v3")
         # Engine should still be created (no error), backend should be "rust"
         assert eng.kernel_backend() == "rust"
+
+    def test_fused_rust_values_match_schema_length_v3(self) -> None:
+        """The fused pipeline returns 16 values; they must be padded to the 27-feature schema."""
+        import hft_platform.feature.engine as engine_mod
+
+        if engine_mod._RUST_FEATURE_PIPELINE_V1 is None or engine_mod._RUST_LOB_FEATURE_KERNEL_V1 is None:
+            pytest.skip("rust_core extension not built")
+        rust = FeatureEngine(kernel_backend="rust", feature_set_id="lob_shared_v3", emit_events=True)
+        python = FeatureEngine(kernel_backend="python", feature_set_id="lob_shared_v3", emit_events=True)
+        got = rust.process_lob_stats(_stats())
+        ref = python.process_lob_stats(_stats())
+        assert got is not None and ref is not None
+        assert len(got.values) == len(got.feature_ids) == 27
+        assert got.values[:16] == ref.values[:16]
+        assert got.values[16:] == (0,) * 11
 
 
 # ---------------------------------------------------------------------------

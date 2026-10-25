@@ -1282,11 +1282,13 @@ class FeatureEngine:
                 l1_ask_qty,
                 warm_count,
             )
-            return (
-                tuple(values_list) if not isinstance(values_list, tuple) else values_list,
-                int(changed_mask),
-                int(warmup_mask),
-            )
+            values = tuple(values_list) if not isinstance(values_list, tuple) else values_list
+            # Pad V1 pipeline output (16 features) to the schema, as _compute_values_rust does;
+            # otherwise values and feature_ids disagree in length for v2/v3.
+            expected = len(self._feature_ids)
+            if len(values) < expected:
+                values = values + (0,) * (expected - len(values))
+            return (values, int(changed_mask), int(warmup_mask))
         except Exception as _exc:  # noqa: BLE001
             # DATA-005: Log Rust fallback so parity violations are visible.
             self._rust_fused_fallback_count += 1
