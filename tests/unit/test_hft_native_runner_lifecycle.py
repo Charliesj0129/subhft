@@ -327,7 +327,25 @@ class TestWalkForwardParallel:
         assert result.folds == sorted(result.folds, key=lambda f: f.fold_idx)
 
     def test_walk_forward_empty_paths_returns_nan(self):
-        """When no hftbt paths found, returns nan-valued WalkForwardResult."""
+        """With no data paths, returns nan-valued WalkForwardResult."""
+        from research.backtest.hft_native_runner import HftNativeRunner
+
+        alpha = MagicMock()
+        alpha.manifest.alpha_id = "test"
+        config = BacktestConfig(data_paths=[])
+        runner = HftNativeRunner(alpha, config)
+
+        with (
+            patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
+            patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
+        ):
+            result = runner.run_walk_forward(alpha)
+
+        assert len(result.folds) == 0
+        assert np.isnan(result.fold_sharpe_mean)
+
+    def test_walk_forward_raises_when_a_data_path_is_missing(self):
+        """A missing input fails walk-forward instead of shrinking the folds silently."""
         from research.backtest.hft_native_runner import HftNativeRunner
 
         alpha = MagicMock()
@@ -339,10 +357,8 @@ class TestWalkForwardParallel:
             patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", True),
             patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True),
         ):
-            result = runner.run_walk_forward(alpha)
-
-        assert len(result.folds) == 0
-        assert np.isnan(result.fold_sharpe_mean)
+            with pytest.raises(FileNotFoundError):
+                runner.run_walk_forward(alpha)
 
     def test_walk_forward_cleans_up_temps_on_error(self):
         """Temp files are cleaned up even if a fold raises an exception."""

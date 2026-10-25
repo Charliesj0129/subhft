@@ -45,7 +45,7 @@ make release-converge-mvp CONFIRM=yes     # 真的執行
 make release-converge-mvp CONFIRM=yes CLEAN_RUST=1
 ```
 
-> **警示：不可逆。** 真的執行（`CONFIRM=yes`）會 `rm -rf .wal data outputs reports .state`，並對 `research/` 底下被忽略的檔案做 `git clean -fdX`。
+> **警示：不可逆。** 真的執行（`CONFIRM=yes`）會 `rm -rf .wal data outputs reports .state`。`research/` 底下被忽略的檔案（實驗紀錄、kill ledger、研究資料）不會被清除。
 > `.wal/` 與 `data/` 被 `.gitignore` 忽略，版本控制沒有它們的副本；`.wal/` 是 ClickHouse 寫入失敗時的耐久後備，
 > `dlq/`、`corrupt/` 內是失敗證據。這兩個目錄只要還有檔案，清理就會被攔下（整個清理都不會執行），
 > 必須另外加 `ALLOW_DELETE_WAL=1`、`ALLOW_DELETE_DATA=1` 才會放行。

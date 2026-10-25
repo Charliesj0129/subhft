@@ -84,6 +84,7 @@ def _run_factory_optimize(
             allow_audit_warnings=allow_audit_warnings,
             skip_clean=skip_clean,
             skip_index=skip_index,
+            skip_converge=True,
         )
     )
 

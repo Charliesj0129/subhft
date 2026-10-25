@@ -3929,7 +3929,11 @@ def cmd_optimize(args: argparse.Namespace) -> int:
         print(f"[research.factory] optimize report: {report_path}")
         return init_rc
 
-    converge_rc = run_step("converge_tools", cmd_converge_tools, argparse.Namespace(dry_run=False))
+    # The governed pipeline passes skip_converge: a research run must not move
+    # files in the checkout. A stray tool then fails the audit step instead.
+    converge_rc = 0
+    if not bool(getattr(args, "skip_converge", False)):
+        converge_rc = run_step("converge_tools", cmd_converge_tools, argparse.Namespace(dry_run=False))
     if converge_rc != 0:
         payload = {
             "started_at": started_at,
