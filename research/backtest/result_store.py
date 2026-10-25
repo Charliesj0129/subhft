@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from hft_platform.alpha.paths import repo_path
 from research.backtest.types import BacktestResult
 
 
@@ -14,7 +15,7 @@ class ResultStore:
     """Persist and query backtest results as JSON + npy."""
 
     def __init__(self, base_dir: Path | str | None = None) -> None:
-        self._base = Path(base_dir) if base_dir else Path("research/experiments/runs")
+        self._base = Path(base_dir) if base_dir else repo_path("research/experiments/runs")
 
     def save(self, result: BacktestResult, alpha_id: str) -> Path:
         run_dir = self._base / result.run_id

@@ -543,12 +543,13 @@ def _load_strict_validation_profile(profile_arg: str | None) -> Any:
         sys.exit(2)
     try:
         from hft_platform.alpha._validation_profile import load_profile
+        from hft_platform.alpha.paths import repo_path_or_relative
     except Exception as exc:
         print(f"Failed to import validation profile loader: {exc}", file=sys.stderr)
         sys.exit(1)
     profile_path = Path(profile_arg)
     if not profile_path.is_absolute() and not profile_path.exists():
-        candidate = Path("config/research/profiles") / f"{profile_arg}.yaml"
+        candidate = repo_path_or_relative("config/research/profiles") / f"{profile_arg}.yaml"
         if candidate.exists():
             profile_path = candidate
     try:

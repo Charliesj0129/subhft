@@ -12,6 +12,15 @@ VM_UL6_STRICT_VALIDATION_PROFILE = "vm_ul6_strict"
 VM_UL6_STRICT_V2_VALIDATION_PROFILE = "vm_ul6_strict_v2"
 # Governed (strict-mode) runs use this profile unless one is named.
 GOVERNED_DEFAULT_VALIDATION_PROFILE = VM_UL6_STRICT_V2_VALIDATION_PROFILE
+# Relative to --project-root.
+DEFAULT_OUT_DIR = "outputs/research_pipeline"
+DEFAULT_EXPERIMENTS_DIR = "research/experiments"
+DEFAULT_ALLOWED_DATA_ROOTS: tuple[str, ...] = (
+    "research/data/raw",
+    "research/data/interim",
+    "research/data/processed",
+    "research/data/hbt_multiproduct",
+)
 
 
 def add_common_research_pipeline_args(
@@ -40,9 +49,19 @@ def add_common_research_pipeline_args(
     cmd.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas/<alpha_id>")
     cmd.add_argument("--owner", required=True, help="Promotion owner")
     cmd.add_argument("--data", nargs="+", required=True, help="Input data paths for Gate A-C validation")
-    cmd.add_argument("--project-root", default=".", help="Project root path")
-    cmd.add_argument("--out-dir", default="outputs/research_pipeline", help="Output directory for pipeline reports")
-    cmd.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
+    # Path defaults are None and filled from the repo root by research.pipeline,
+    # so a run behaves the same whatever the cwd. Paths given here are used as given.
+    cmd.add_argument("--project-root", default=None, help="Project root path (default: the repo root)")
+    cmd.add_argument(
+        "--out-dir",
+        default=None,
+        help="Output directory for pipeline reports (default: <project-root>/outputs/research_pipeline)",
+    )
+    cmd.add_argument(
+        "--experiments-dir",
+        default=None,
+        help="Experiment base directory (default: <project-root>/research/experiments)",
+    )
     cmd.add_argument(
         "--skip-factory-clean",
         action="store_true",
@@ -78,13 +97,11 @@ def add_common_research_pipeline_args(
     cmd.add_argument(
         "--allowed-data-roots",
         nargs="+",
-        default=[
-            "research/data/raw",
-            "research/data/interim",
-            "research/data/processed",
-            "research/data/hbt_multiproduct",
-        ],
-        help="Allowed dataset roots for strict data governance.",
+        default=None,
+        help=(
+            "Allowed dataset roots for strict data governance "
+            f"(default: {', '.join(DEFAULT_ALLOWED_DATA_ROOTS)} under <project-root>)."
+        ),
     )
     cmd.add_argument(
         "--required-data-provenance-fields",

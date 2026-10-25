@@ -4,7 +4,8 @@ Controlled by environment variables:
 - HFT_ALPHA_AUDIT_ENABLED=0|1  (default 0, opt-in)
 - HFT_CLICKHOUSE_HOST           (default localhost)
 - HFT_CLICKHOUSE_PORT           (default 8123)
-- HFT_ALPHA_AUDIT_FALLBACK_DIR  (default research/experiments/.audit_fallback)
+- HFT_ALPHA_AUDIT_FALLBACK_DIR  (default research/experiments/.audit_fallback under the repo root;
+                                read at write time)
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from structlog import get_logger
 
+from hft_platform.alpha.paths import repo_path
 from hft_platform.core import timebase
 
 
@@ -36,7 +38,17 @@ if TYPE_CHECKING:
 
 logger = get_logger("alpha_audit")
 
-_FALLBACK_DIR: Path = Path(os.getenv("HFT_ALPHA_AUDIT_FALLBACK_DIR", "research/experiments/.audit_fallback"))
+_DEFAULT_FALLBACK_DIR = Path("research/experiments/.audit_fallback")
+# ``None`` means: resolve at write time from the env var, else the repo-anchored
+# default. Tests may set a path here directly.
+_FALLBACK_DIR: Path | None = None
+
+
+def _fallback_dir() -> Path:
+    if _FALLBACK_DIR is not None:
+        return _FALLBACK_DIR
+    override = os.getenv("HFT_ALPHA_AUDIT_FALLBACK_DIR")
+    return Path(override) if override else repo_path(_DEFAULT_FALLBACK_DIR)
 
 
 def _write_fallback(table: str, row: dict[str, Any]) -> None:
@@ -45,7 +57,7 @@ def _write_fallback(table: str, row: dict[str, Any]) -> None:
     This function must not raise — any error is logged at ERROR level and swallowed.
     """
     try:
-        fallback_dir = _FALLBACK_DIR
+        fallback_dir = _fallback_dir()
         fallback_dir.mkdir(parents=True, exist_ok=True)
         payload = {**row, "_failed_at": _now_utc().isoformat()}
         fallback_file = fallback_dir / f"{table}.jsonl"

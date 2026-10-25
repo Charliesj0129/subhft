@@ -11,8 +11,15 @@ from types import SimpleNamespace
 from typing import Any
 
 from hft_platform.alpha._validation_profile import ValidationProfile, load_profile
+from hft_platform.alpha.paths import repo_path, repo_root
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha, record_gate_c_kill
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+from hft_platform.cli_args.research_pipeline import (
+    DEFAULT_ALLOWED_DATA_ROOTS,
+    DEFAULT_EXPERIMENTS_DIR,
+    DEFAULT_OUT_DIR,
+    add_common_research_pipeline_args,
+)
 from hft_platform.cli_args.research_pipeline import (
     GOVERNED_DEFAULT_VALIDATION_PROFILE as _GOVERNED_DEFAULT_VALIDATION_PROFILE,
 )
@@ -28,9 +35,6 @@ from hft_platform.cli_args.research_pipeline import (
 from hft_platform.cli_args.research_pipeline import (
     VM_UL6_VALIDATION_PROFILE as _VM_UL6_VALIDATION_PROFILE,
 )
-from hft_platform.cli_args.research_pipeline import (
-    add_common_research_pipeline_args,
-)
 from research import factory
 
 # Stage 2 (2026-05-28): the legacy in-code overrides dict
@@ -40,6 +44,7 @@ from research import factory
 # loaded by ``hft_platform.alpha._validation_profile.load_profile``.
 # See /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 2.
 
+# Relative to the repo root, not the cwd (see ``hft_platform.alpha.paths``).
 _PROFILE_YAML_DIR = Path("config/research/profiles")
 
 
@@ -137,7 +142,7 @@ def _resolve_profile_token(token: str, *, notes: list[str]) -> str | None:
 
 def _load_pipeline_profile(profile_stem: str) -> ValidationProfile:
     """Locate ``config/research/profiles/<stem>.yaml`` and load it."""
-    path = _PROFILE_YAML_DIR / f"{profile_stem}.yaml"
+    path = repo_path(_PROFILE_YAML_DIR) / f"{profile_stem}.yaml"
     if not path.exists():
         raise FileNotFoundError(f"validation profile YAML not found: {path} (expected under {_PROFILE_YAML_DIR}/)")
     return load_profile(path)
@@ -196,8 +201,25 @@ def _apply_validation_profile(
     return profile
 
 
+def _fill_path_defaults(args: argparse.Namespace) -> Path:
+    """Resolve the project root and fill unset path args from it; returns the root.
+
+    Defaults hang off the repo root rather than the cwd, so the same command run
+    from two directories reads and writes the same files.
+    """
+    root = Path(args.project_root).resolve() if args.project_root else repo_root()
+    args.project_root = str(root)
+    if args.out_dir is None:
+        args.out_dir = str(root / DEFAULT_OUT_DIR)
+    if args.experiments_dir is None:
+        args.experiments_dir = str(root / DEFAULT_EXPERIMENTS_DIR)
+    if args.allowed_data_roots is None:
+        args.allowed_data_roots = [str(root / rel) for rel in DEFAULT_ALLOWED_DATA_ROOTS]
+    return root
+
+
 def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
-    root = Path(args.project_root).resolve()
+    root = _fill_path_defaults(args)
     stamp = _stamp()
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

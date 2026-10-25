@@ -8,6 +8,8 @@ from typing import Any, Protocol
 
 import yaml
 
+from hft_platform.alpha.paths import repo_path
+
 
 class CostModel(Protocol):
     """Protocol for cost models."""
@@ -50,25 +52,29 @@ class TAIFEXCost:
         return gross_pnl_pts - n_fills * self.cost_per_side_pts
 
 
+# Relative to the repo root, not the cwd (see ``hft_platform.alpha.paths``).
 _CONFIG_PATH = Path("config/research/cost_profiles.yaml")
-_cache: dict[str, TAIFEXCost] | None = None
+# Keyed by the resolved file, so a different file is never served from another's cache.
+_cache: dict[Path, dict[str, TAIFEXCost]] = {}
 
 
 def _load_all() -> dict[str, TAIFEXCost]:
-    global _cache
-    if _cache is not None:
-        return _cache
-    raw: dict[str, Any] = yaml.safe_load(_CONFIG_PATH.read_text())
-    _cache = {}
+    path = repo_path(_CONFIG_PATH)
+    cached = _cache.get(path)
+    if cached is not None:
+        return cached
+    raw: dict[str, Any] = yaml.safe_load(path.read_text())
+    profiles: dict[str, TAIFEXCost] = {}
     for instrument, vals in raw.items():
-        _cache[instrument] = TAIFEXCost(
+        profiles[instrument] = TAIFEXCost(
             instrument=instrument,
             commission_pts_per_side=float(vals["commission_pts_per_side"]),
             tax_pts_per_side=float(vals["tax_pts_per_side"]),
             point_value_nwd=int(vals["point_value_nwd"]),
             scale=int(vals.get("scale", 1_000_000)),
         )
-    return _cache
+    _cache[path] = profiles
+    return profiles
 
 
 # TAIFEX month codes A-L (Jan-Dec) plus the year digit: TMFJ6 is the October 2026 TMF contract.
@@ -90,5 +96,5 @@ def load_cost_profile(instrument: str) -> TAIFEXCost:
     raise KeyError(
         f"No cost profile for '{instrument}'. "
         f"Available: {sorted(profiles.keys())}. "
-        f"Add to {_CONFIG_PATH}"
+        f"Add to {repo_path(_CONFIG_PATH)}"
     )

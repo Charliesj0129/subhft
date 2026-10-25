@@ -44,15 +44,16 @@ class TestLoadProfiles:
         assert "shioaji_sim_p95_v2026-03-04" in profiles
         assert profiles["shioaji_sim_p95_v2026-03-04"]["submit_ack_latency_ms"] == 36.0
 
-    def test_load_missing_file(self, tmp_path: Path) -> None:
-        profiles = load_profiles(tmp_path / "missing.yaml")
-        assert profiles == {}
+    def test_load_missing_file_raises(self, tmp_path: Path) -> None:
+        # No profiles is not a usable answer: a caller would run at zero latency.
+        with pytest.raises(FileNotFoundError):
+            load_profiles(tmp_path / "missing.yaml")
 
-    def test_load_empty_yaml(self, tmp_path: Path) -> None:
+    def test_load_empty_yaml_raises(self, tmp_path: Path) -> None:
         p = tmp_path / "empty.yaml"
         p.write_text("")
-        profiles = load_profiles(p)
-        assert profiles == {}
+        with pytest.raises(ValueError, match="no 'profiles' mapping"):
+            load_profiles(p)
 
 
 class TestResolveProfile:
@@ -93,14 +94,13 @@ class TestResolveProfile:
         )
         assert result["submit_ack_latency_ms"] == 36.0
 
-    def test_prefix_match(self, profiles_yaml: Path) -> None:
+    def test_unique_prefix_is_not_a_match(self, profiles_yaml: Path) -> None:
+        # A prefix used to resolve to whichever profile shared it; ids are exact now.
         profiles = load_profiles(profiles_yaml)
-        # "shioaji_sim_p95_v2026-03" should match "shioaji_sim_p95_v2026-03-04"
-        # but only if there's exactly one match
-        result = resolve_profile("shioaji_sim_p95_v2026-03", profiles)
-        assert result["submit_ack_latency_ms"] == 36.0
+        with pytest.raises(KeyError, match="not found"):
+            resolve_profile("shioaji_sim_p95_v2026-03", profiles)
 
-    def test_ambiguous_prefix_raises(self, profiles_yaml: Path) -> None:
+    def test_ambiguous_prefix_is_not_a_match(self, profiles_yaml: Path) -> None:
         profiles = load_profiles(profiles_yaml)
-        with pytest.raises(KeyError, match="Ambiguous"):
+        with pytest.raises(KeyError, match="not found"):
             resolve_profile("shioaji_sim_p95", profiles)

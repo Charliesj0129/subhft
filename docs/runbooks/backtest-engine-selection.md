@@ -34,6 +34,9 @@ adapter = HftBacktestAdapter(strategy=..., asset_symbol=spec.instrument,
 * **Fill model**: `QueueDepletionFill` (or any `FillModel` Protocol implementor).
 * **Cost model**: `TAIFEXCost` from `config/research/cost_profiles.yaml`.
 * **Latency**: optional `LatencyProfile(place_ns, cancel_ns)`; `None` = instant RTT.
+  Gate C never runs it that way: a maker manifest whose `latency_profile` is
+  empty or does not resolve to an exact id (or a listed alias) in
+  `config/research/latency_profiles.yaml` makes the run INVALID.
 * **Best for**: maker P&L on CK ticks; cost-sensitivity sweeps; per-spread
   P&L breakdown.
 * **Known bias**: see [calibration table](#bias-matrix) below — CK-direct is

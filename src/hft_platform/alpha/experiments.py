@@ -20,6 +20,8 @@ from uuid import uuid4
 import numpy as np
 from structlog import get_logger
 
+from hft_platform.alpha.paths import repo_path
+from hft_platform.alpha.provenance import build_run_stamp
 from hft_platform.core import timebase
 
 logger = get_logger("alpha.experiments")
@@ -82,6 +84,8 @@ class ExperimentRun:
     signals_path: str | None = None
     equity_path: str | None = None
     research_decision: dict[str, Any] = field(default_factory=dict)
+    # RunStamp (``alpha.provenance``); empty for runs logged before it existed.
+    run_stamp: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -115,8 +119,9 @@ class PaperTradeSession:
 
 
 class ExperimentTracker:
-    def __init__(self, base_dir: str | Path = "research/experiments"):
-        self.base_dir = Path(base_dir)
+    def __init__(self, base_dir: str | Path | None = None):
+        # The default is anchored at the repo root; an explicit path is used as given.
+        self.base_dir = Path(base_dir) if base_dir is not None else repo_path("research/experiments")
         self.runs_dir = self.base_dir / "runs"
         self.comparisons_dir = self.base_dir / "comparisons"
         self.paper_trade_dir = self.base_dir / "paper_trade"
@@ -135,7 +140,13 @@ class ExperimentTracker:
         research_decision: dict[str, Any] | None = None,
         signals: np.ndarray | None = None,
         equity: np.ndarray | None = None,
+        run_stamp: dict[str, Any] | None = None,
     ) -> Path:
+        """Write one run's artifacts and its ``meta.json``.
+
+        ``run_stamp`` defaults to a RunStamp built here from ``data_paths`` and
+        ``config_hash``; callers that know the validation profile pass their own.
+        """
         run_dir = self.runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         scorecard_payload, backtest_report_payload = _stamp_edge_metric_semantics(
@@ -177,6 +188,11 @@ class ExperimentTracker:
             signals_path=(str(signals_path) if signals_path else None),
             equity_path=(str(equity_path) if equity_path else None),
             research_decision=_normalize_research_decision(effective_research_decision),
+            run_stamp=(
+                dict(run_stamp)
+                if run_stamp is not None
+                else build_run_stamp(data_paths=[str(p) for p in data_paths], config_hash=config_hash)
+            ),
         )
         meta_path = run_dir / "meta.json"
         meta_path.write_text(json.dumps(meta.to_dict(), indent=2, sort_keys=True))
@@ -465,6 +481,7 @@ def _from_dict(payload: dict[str, Any]) -> ExperimentRun:
         signals_path=str(payload["signals_path"]) if payload.get("signals_path") else None,
         equity_path=str(payload["equity_path"]) if payload.get("equity_path") else None,
         research_decision=_normalize_research_decision(payload.get("research_decision")),
+        run_stamp=dict(payload.get("run_stamp") or {}),
     )
 
 

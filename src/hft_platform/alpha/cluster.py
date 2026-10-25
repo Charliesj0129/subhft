@@ -41,6 +41,7 @@ import structlog
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import squareform
 
+from hft_platform.alpha.paths import repo_path
 from hft_platform.alpha.pool import compute_pool_matrix
 
 logger = structlog.get_logger(__name__)
@@ -74,9 +75,10 @@ class ClusterAssignment:
     max_intra_cluster_corr: float
 
 
-#: Default sidecar artifact location. Tests monkeypatch this attribute to
-#: redirect writes into ``tmp_path``.
-_ARTIFACT_PATH: Path = Path("research/alphas/_cluster_assignments.json")
+_DEFAULT_ARTIFACT_PATH = Path("research/alphas/_cluster_assignments.json")
+#: Sidecar artifact location; ``None`` means the repo-anchored default. Tests
+#: monkeypatch this attribute to redirect writes into ``tmp_path``.
+_ARTIFACT_PATH: Path | None = None
 
 
 def cluster_alphas(
@@ -269,7 +271,7 @@ def _persist_artifact(
     alpha_ids: list[str],
 ) -> None:
     """Atomic merge-write into ``_ARTIFACT_PATH``."""
-    path = _ARTIFACT_PATH
+    path = _ARTIFACT_PATH if _ARTIFACT_PATH is not None else repo_path(_DEFAULT_ARTIFACT_PATH)
     base_dir_hash = hashlib.sha256(base_dir.encode("utf-8")).hexdigest()
     corpus_hash = hashlib.sha256(json.dumps(sorted(alpha_ids)).encode("utf-8")).hexdigest()
     key = f"{threshold}:{metric}:{base_dir_hash}:{corpus_hash}"

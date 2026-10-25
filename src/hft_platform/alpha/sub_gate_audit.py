@@ -30,6 +30,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.alpha.divergence_category import DivergenceCategory
+from hft_platform.alpha.paths import repo_path
 from hft_platform.core import timebase
 
 logger = get_logger("alpha_sub_gate_audit")
@@ -47,7 +48,7 @@ _DEFAULT_JSONL_PATH = Path("research/audit/sub_gate_runs.jsonl")
 def _jsonl_path() -> Path:
     """Resolve the jsonl path; ``HFT_SUB_GATE_AUDIT_PATH`` overrides for tests."""
     override = os.getenv("HFT_SUB_GATE_AUDIT_PATH")
-    return Path(override) if override else _DEFAULT_JSONL_PATH
+    return Path(override) if override else repo_path(_DEFAULT_JSONL_PATH)
 
 
 @dataclass
