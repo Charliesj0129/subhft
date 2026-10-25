@@ -139,9 +139,14 @@ def run_gate_a(
 
                 # Provenance fields are required whenever the run names them,
                 # at every UL: a higher UL target asks for more evidence, so it
-                # must not switch this check off.
-                if required_data_provenance_fields:
-                    missing = _missing_or_blank_metadata_keys(meta_payload, required_data_provenance_fields)
+                # must not switch this check off. A seed identifies a generated
+                # dataset; recorded market data has none, so only a dataset
+                # that declares itself real is excused from it.
+                provenance_fields = required_data_provenance_fields
+                if str(meta_payload.get("source_type", "")).strip().lower() == "real":
+                    provenance_fields = tuple(key for key in provenance_fields if key != "seed")
+                if provenance_fields:
+                    missing = _missing_or_blank_metadata_keys(meta_payload, provenance_fields)
                     problems.extend(f"missing_provenance:{key}" for key in missing)
                 if problems:
                     invalid_data_metadata[str(data_path)] = problems

@@ -176,6 +176,38 @@ def test_gate_a_checks_provenance_at_high_data_ul(tmp_path: Path):
     assert "missing_provenance:source" in invalid
 
 
+@pytest.mark.parametrize(
+    ("source_type", "seed_required"),
+    [("real", False), ("REAL ", False), ("synthetic", True), (None, True)],
+)
+def test_gate_a_seed_is_required_except_for_real_data(tmp_path: Path, source_type, seed_required):
+    """Recorded market data has no generator seed; every other dataset still needs one."""
+    data_root, path = _gate_a_fixture(tmp_path)
+    meta_path = path.with_suffix(path.suffix + ".meta.json")
+    meta = json.loads(meta_path.read_text())
+    meta.update(source="clickhouse", generator="export_l2_ticks", seed=None)
+    if source_type is None:
+        meta.pop("source_type")
+    else:
+        meta["source_type"] = source_type
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    cfg = ValidationConfig(
+        alpha_id="a",
+        data_paths=[str(path)],
+        enforce_data_governance=True,
+        require_data_meta=True,
+        allowed_data_roots=(str(data_root),),
+        required_data_provenance_fields=("source", "generator", "seed"),
+        data_ul=6,
+        enforce_latency_profile=False,
+    )
+    report = run_gate_a(_manifest(), [str(path)], config=cfg, root=tmp_path)
+    invalid = report.details["data_governance"]["invalid_data_metadata"].get(str(path), [])
+    assert ("missing_provenance:seed" in invalid) is seed_required
+    assert "missing_provenance:source" not in invalid
+    assert "missing_provenance:generator" not in invalid
+
+
 @pytest.mark.parametrize(("latency_id", "passed"), [("no_such_profile_v0", False), ("sim_p95_v2026-02-26", True)])
 def test_gate_a_enforced_latency_profile_must_resolve(tmp_path: Path, latency_id, passed):
     _, path = _gate_a_fixture(tmp_path)

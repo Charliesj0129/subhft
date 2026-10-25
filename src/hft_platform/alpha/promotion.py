@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import math
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass
@@ -300,12 +301,13 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     paper_governance_report_path = artifact_dir / "paper_governance_report.json"
     _write_json(paper_governance_report_path, paper_governance_report)
 
+    obligations = _promotion_obligations(gate_d_verdict, config)
     decision_payload = {
         "alpha_id": config.alpha_id,
         "gate_d_passed": gate_d_passed,
         "gate_d_verdict": gate_d_verdict.verdict.value,
         # Deferred gates this approval still owes to a later stage (ADR-003).
-        "obligations": [{"gate": g, "stage": st} for g, st in gate_d_verdict.obligations],
+        "obligations": obligations,
         "gate_e_passed": gate_e_passed,
         "gate_f_passed": gate_f_passed,
         "gate_e_checks": gate_e_checks,
@@ -332,6 +334,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
             scorecard=scorecard,
             approved=approved,
             forced=forced,
+            obligations=obligations,
         )
     elif approved and config.dry_run:
         reasons.append("dry_run=true: promotion config not persisted")
@@ -427,6 +430,48 @@ def _evaluate_gate_d_verdict(
         powered=True,
     )
     return verdict, checks
+
+
+def _replay_parity_audit(scorecard: dict[str, Any], config: PromotionConfig) -> dict[str, Any]:
+    """Gate D ``replay_parity_audit``: absent defers (ADR-003); present but unusable is an ERROR."""
+    replay_parity = scorecard.get("replay_parity")
+    match_pct: float | None = None
+    if isinstance(replay_parity, dict):
+        match_pct = _to_float(replay_parity.get("match_pct"))
+        if match_pct is not None and not math.isfinite(match_pct):
+            match_pct = None
+    min_match_pct = getattr(config, "min_replay_parity_match_pct", 95.0)
+    if replay_parity is not None and match_pct is None:
+        # A report exists but carries no usable match_pct (malformed, or an
+        # error record): that is broken evidence, not absent evidence, so it
+        # must not be deferred as NOT_APPLICABLE.
+        return {
+            "value": None,
+            "min": min_match_pct,
+            "required": True,
+            "outcome": Outcome.ERROR.value,
+            "pass": False,
+            "detail": "INVALID — scorecard.replay_parity present but has no numeric match_pct",
+        }
+    if match_pct is None:
+        # No parity report: a research candidate has no live intents yet
+        # (ADR-003). NOT_APPLICABLE is deferred to Shadow exit only when the
+        # profile says so; otherwise the run is INVALID.
+        return {
+            "value": None,
+            "min": min_match_pct,
+            "required": True,
+            "outcome": Outcome.NOT_APPLICABLE.value,
+            "pass": False,
+            "detail": "MISSING — scorecard.replay_parity absent; no live intents to compare (ADR-003)",
+        }
+    return {
+        "value": match_pct,
+        "min": min_match_pct,
+        "required": True,
+        "pass": match_pct >= min_match_pct,
+        "detail": "OK" if match_pct >= min_match_pct else f"match_pct {match_pct} below {min_match_pct}",
+    }
 
 
 def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[str, Any]:
@@ -539,31 +584,7 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
     # Slice C: replay-parity audit — mirrors latency_profile fail-closed semantics.
     # Promotion-time check that the scorecard recorded a passing replay_parity_report
     # (live → backtest intent reconstruction within tolerance under a strict profile).
-    replay_parity = scorecard.get("replay_parity") or None
-    match_pct: float | None = None
-    if isinstance(replay_parity, dict):
-        match_pct = _to_float(replay_parity.get("match_pct"))
-    min_match_pct = getattr(config, "min_replay_parity_match_pct", 95.0)
-    if match_pct is None:
-        # No parity report: a research candidate has no live intents yet
-        # (ADR-003). NOT_APPLICABLE is deferred to Shadow exit only when the
-        # profile says so; otherwise the run is INVALID.
-        checks["replay_parity_audit"] = {
-            "value": None,
-            "min": min_match_pct,
-            "required": True,
-            "outcome": Outcome.NOT_APPLICABLE.value,
-            "pass": False,
-            "detail": "MISSING — scorecard.replay_parity absent; no live intents to compare (ADR-003)",
-        }
-    else:
-        checks["replay_parity_audit"] = {
-            "value": match_pct,
-            "min": min_match_pct,
-            "required": True,
-            "pass": match_pct >= min_match_pct,
-            "detail": "OK" if match_pct >= min_match_pct else f"match_pct {match_pct} below {min_match_pct}",
-        }
+    checks["replay_parity_audit"] = _replay_parity_audit(scorecard, config)
 
     # Slice B Task 12: inventory_mtm + cost_uncertainty audits.
     # Belt-and-suspenders re-check of the Gate C sub-gate results that the
@@ -1195,7 +1216,16 @@ def build_promotion_checklist(
                 ),
             ]
         )
-    if bool(config.enable_rust_readiness_gate):
+    if (gate_f_checks or {}).get("outcome") == Outcome.NOT_APPLICABLE.value:
+        # The profile declared Gate F not applicable; there are no Rust checks to list.
+        items.append(
+            PromotionChecklistItem(
+                label="Gate F: not applicable",
+                passed=True,
+                detail=str((gate_f_checks or {}).get("reason", "")),
+            )
+        )
+    elif bool(config.enable_rust_readiness_gate):
         rust_module = gate_f_map.get("rust_module_declared", {})
         rust_parity = gate_f_map.get("rust_parity_tests", {})
         items.extend(
@@ -1238,6 +1268,17 @@ def _suggest_canary_weight(scorecard: dict[str, Any], override: float | None = N
     return 0.02
 
 
+def _promotion_obligations(verdict: VerdictResult, config: PromotionConfig) -> list[dict[str, Any]]:
+    """The deferred gates an approval owes, each with the threshold its evidence must meet."""
+    obligations: list[dict[str, Any]] = []
+    for gate, stage in verdict.obligations:
+        entry: dict[str, Any] = {"gate": gate, "stage": stage}
+        if gate == "replay_parity_audit":
+            entry["min_match_pct"] = float(getattr(config, "min_replay_parity_match_pct", 95.0))
+        obligations.append(entry)
+    return obligations
+
+
 def _write_promotion_config(
     root: Path,
     config: PromotionConfig,
@@ -1246,6 +1287,7 @@ def _write_promotion_config(
     scorecard: dict[str, Any],
     approved: bool,
     forced: bool,
+    obligations: list[dict[str, Any]] | None = None,
 ) -> Path:
     day = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%d")
     if forced:
@@ -1295,6 +1337,9 @@ def _write_promotion_config(
             "enable_rust_readiness_gate": bool(config.enable_rust_readiness_gate),
             "rust_module_name": config.rust_module_name,
         },
+        # Deferred gates still owed (ADR-003); CanaryMonitor will not raise
+        # the weight until each one carries passing evidence.
+        "obligations": list(obligations or []),
         "rollback": {
             "trigger": {
                 "live_slippage_bps_gt": config.max_live_slippage_bps,
