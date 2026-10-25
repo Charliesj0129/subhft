@@ -515,15 +515,17 @@ def _dated_daily_rows(daily_pnl: Any) -> list[dict]:
     return rows if len(rows) == len(daily_pnl) else []
 
 
-def _maker_error_report(check_name: str, error: str, **extra: Any) -> tuple[GateReport, str, str, str, str]:
-    """Gate C report for a maker run that cannot be evaluated: one ERROR check, verdict INVALID."""
+def _invalid_run_report(
+    engine_type: str, check_name: str, error: str, **extra: Any
+) -> tuple[GateReport, str, str, str, str]:
+    """Gate C report for a run that cannot be evaluated: one ERROR check, verdict INVALID."""
     entry = check_entry(check_name, Outcome.ERROR, details=error)
     verdict = derive_verdict([entry], blocking={entry["name"]})
     report = GateReport(
         gate="Gate C",
         passed=False,
         details={
-            "engine_type": "maker",
+            "engine_type": engine_type,
             "error": error,
             **extra,
             "gate_c_checks": [entry],
@@ -531,6 +533,10 @@ def _maker_error_report(check_name: str, error: str, **extra: Any) -> tuple[Gate
         },
     )
     return report, "", "", "", ""
+
+
+def _maker_error_report(check_name: str, error: str, **extra: Any) -> tuple[GateReport, str, str, str, str]:
+    return _invalid_run_report("maker", check_name, error, **extra)
 
 
 def _maker_protocol_error_report(
@@ -565,6 +571,24 @@ def _resolve_maker_latency_profile(
     except (KeyError, ValueError, OSError) as exc:
         return None, {"reason": "latency_profile_unresolved", "latency_profile": profile_name, "detail": str(exc)}
     return profile, None
+
+
+def _check_taker_latency_profile(
+    profile_id: str, resolve_profile: Callable[[str], dict[str, Any]]
+) -> dict[str, Any] | None:
+    """``None`` when the taker run's ``latency_profile_id`` resolves, else why Gate C cannot run.
+
+    The taker engine is costed with the explicit ``*_ack_latency_ms`` values; the id
+    names the profile those values claim to come from. An id that resolves to
+    nothing leaves the run's latency unattributable, so the run is INVALID.
+    """
+    if not profile_id:
+        return {"reason": "latency_profile_missing", "latency_profile": ""}
+    try:
+        resolve_profile(profile_id)
+    except (KeyError, ValueError, OSError) as exc:
+        return {"reason": "latency_profile_unresolved", "latency_profile": profile_id, "detail": str(exc)}
+    return None
 
 
 def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as follow-up
@@ -780,6 +804,20 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)
     else:
         # --- Taker path: existing hft_native_runner (unchanged logic) ---
+        from hft_platform.alpha.latency_profiles import resolve_profile
+
+        latency_failure = _check_taker_latency_profile(str(config.latency_profile_id or ""), resolve_profile)
+        if latency_failure is not None:
+            logger.error(
+                "taker_gate_c: latency_profile_id not usable; run is invalid",
+                alpha_id=alpha_id,
+                latency_profile=latency_failure["latency_profile"],
+                reason=latency_failure["reason"],
+            )
+            return _invalid_run_report(
+                "taker", "gate_c.latency_profile", latency_failure["reason"], instrument=instrument, **latency_failure
+            )
+
         backtest_cfg = BacktestConfig(
             data_paths=resolved_data_paths,
             is_oos_split=float(config.is_oos_split),

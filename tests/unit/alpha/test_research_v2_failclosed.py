@@ -230,3 +230,42 @@ def test_run_stamp_marks_an_unreadable_dataset(tmp_path: Path):
         backtest_report_payload={},
     )
     assert json.loads(meta_path.read_text())["run_stamp"]["datasets"] == {str(tmp_path / "gone.npy"): None}
+
+
+@pytest.mark.parametrize(
+    ("latency_profile_id", "reason"),
+    [
+        ("", "latency_profile_missing"),
+        ("no_such_profile_v0", "latency_profile_unresolved"),
+        ("shioaji_sim_p95", "latency_profile_unresolved"),  # a prefix
+    ],
+)
+def test_taker_gate_c_without_usable_latency_is_invalid_before_any_data(tmp_path: Path, latency_profile_id, reason):
+    def _no_data(*_a, **_k):
+        raise AssertionError("latency must be resolved before any data access")
+
+    runtime = types.SimpleNamespace(
+        hft_native_runner=_no_data,
+        ensure_hftbt_npz=_no_data,
+        backtest_config=_no_data,
+        walk_forward_config=None,
+        compute_scorecard=None,
+        load_taker_runtime=_no_data,
+    )
+    manifest = types.SimpleNamespace(alpha_id="taker_x", strategy_type="taker", instrument="TMF")
+    alpha = types.SimpleNamespace(manifest=manifest)
+    cfg = ValidationConfig(alpha_id="taker_x", data_paths=["d.npy"], latency_profile_id=latency_profile_id)
+
+    report, run_id, *_ = run_gate_c(alpha, cfg, tmp_path, ["d.npy"], tmp_path, runtime=runtime)
+
+    assert report.passed is False
+    assert report.details["engine_type"] == "taker"
+    assert report.details["verdict"]["verdict"] == "INVALID"
+    assert report.details["reason"] == reason
+    assert report.details["gate_c_checks"][0]["name"] == "gate_c.latency_profile"
+    assert report.details["gate_c_checks"][0]["outcome"] == "error"
+    assert run_id == ""
+
+
+def test_taker_gate_c_default_latency_profile_id_resolves():
+    assert resolve_profile(ValidationConfig(alpha_id="a", data_paths=[]).latency_profile_id, load_profiles())
