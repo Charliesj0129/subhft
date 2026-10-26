@@ -4,6 +4,7 @@ import argparse
 import json
 import re
 import shutil
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3864,17 +3865,27 @@ def _load_experiment_stats() -> dict[str, Any]:
 
 
 def cmd_index(args: argparse.Namespace) -> int:
+    from hft_platform.alpha.evidence import EvidenceRootError
+    from hft_platform.alpha.status import effective_status, ledger_events_by_alpha
     from research.registry.alpha_registry import AlphaRegistry
 
+    try:
+        ledger = ledger_events_by_alpha()
+    except (EvidenceRootError, ValueError, OSError) as exc:
+        print(f"[research.factory] index: cannot read the verdict ledger: {exc}", file=sys.stderr)
+        return 2
     registry = AlphaRegistry()
     loaded = registry.discover(ROOT / "alphas")
     manifests = []
     for alpha_id in sorted(loaded):
         manifest = loaded[alpha_id].manifest
+        status = effective_status(manifest.status, ledger.get(manifest.alpha_id, ()))
         manifests.append(
             {
                 "alpha_id": manifest.alpha_id,
-                "status": manifest.status.value,
+                "status": status.status.value,
+                "status_source": status.source.value,
+                "declared_status": manifest.status.value,
                 "tier": manifest.tier.value if manifest.tier else None,
                 "complexity": manifest.complexity,
                 "paper_refs": list(manifest.paper_refs),

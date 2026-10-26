@@ -53,6 +53,7 @@ def test_root_relative_value_is_refused(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_root_default_applies_only_when_not_required(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(EVIDENCE_ROOT_ENV, raising=False)
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     assert evidence_root() == (tmp_path / "hft_research_evidence").resolve()
     assert data_root() == (tmp_path / "hft_research_data").resolve()
@@ -212,6 +213,17 @@ def _report(gate: str, passed: bool, **details) -> GateReport:
     return GateReport(gate=gate, passed=passed, details=dict(details))
 
 
+_IMPL = "MANIFEST = AlphaManifest(alpha_id='a1', status=AlphaStatus.DRAFT)\n"
+
+
+def _write_impl(project_root: Path) -> Path:
+    """A1's impl.py with a status literal the removed regex rewriter used to change."""
+    impl = project_root / "research" / "alphas" / "a1" / "impl.py"
+    impl.parent.mkdir(parents=True, exist_ok=True)
+    impl.write_text(_IMPL, encoding="utf-8")
+    return impl
+
+
 @pytest.fixture
 def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """run_alpha_validation with stubbed gates, a clean tree and an evidence root."""
@@ -222,7 +234,6 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "git_after_gate_c": None,
         "stamp_commit": "c0ffee",
         "stamp_dirty": False,
-        "status_updates": [],
         "gate_a_calls": 0,
     }
     monkeypatch.setattr(validation, "git_state", lambda _root: state["git"])
@@ -255,9 +266,7 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(validation, "run_gate_a", _gate_a)
     monkeypatch.setattr(validation, "run_gate_b", lambda **_k: _report("Gate B", True))
     monkeypatch.setattr(validation, "run_gate_c", _gate_c)
-    monkeypatch.setattr(
-        validation, "_update_manifest_status", lambda alpha_id, status, _root: state["status_updates"].append(status)
-    )
+    impl = _write_impl(tmp_path)
 
     def _run(**overrides):
         cfg = {
@@ -271,7 +280,7 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         cfg.update(overrides)
         return validation.run_alpha_validation(ValidationConfig(**cfg))
 
-    return types.SimpleNamespace(run=_run, root=root, state=state)
+    return types.SimpleNamespace(run=_run, root=root, state=state, impl=impl)
 
 
 def test_governed_validation_seals_evidence_and_appends_one_event_per_gate(governed_validation) -> None:
@@ -286,13 +295,13 @@ def test_governed_validation_seals_evidence_and_appends_one_event_per_gate(gover
     assert manifests[0] == "runs/run-1/manifest.json"
     assert manifests[1].startswith("validations/a1/") and manifests[1].endswith("/manifest.json")
     assert EvidenceWriter.verify(governed_validation.root / "runs" / "run-1") == []
-    # Governed runs never rewrite impl.py; status comes from the ledger.
-    assert governed_validation.state["status_updates"] == []
+    # Validation never rewrites impl.py; status comes from the ledger.
+    assert governed_validation.impl.read_text(encoding="utf-8") == _IMPL
 
 
-def test_exploratory_validation_keeps_legacy_status_and_writes_no_ledger(governed_validation) -> None:
+def test_exploratory_validation_rewrites_no_status_and_writes_no_ledger(governed_validation) -> None:
     governed_validation.run(run_mode="exploratory")
-    assert governed_validation.state["status_updates"] == ["GATE_A", "GATE_B"]
+    assert governed_validation.impl.read_text(encoding="utf-8") == _IMPL
     assert not EvidenceWriter(governed_validation.root).ledger_path.exists()
 
 
@@ -509,9 +518,7 @@ def governed_promotion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     evidence = tmp_path / "evidence"
     monkeypatch.setenv(EVIDENCE_ROOT_ENV, str(evidence))
     monkeypatch.setattr(promotion, "git_state", lambda _root: ("c0ffee", False))
-    status_updates: list[str] = []
-    monkeypatch.setattr(promotion, "_update_manifest_status", lambda _a, s, _r: status_updates.append(s))
-    return types.SimpleNamespace(evidence=evidence, status_updates=status_updates)
+    return types.SimpleNamespace(evidence=evidence, impl=_write_impl(tmp_path))
 
 
 def test_governed_promotion_publishes_to_the_evidence_root_without_rewriting_impl(
@@ -523,7 +530,7 @@ def test_governed_promotion_publishes_to_the_evidence_root_without_rewriting_imp
     scorecard = _sealed_scorecard(evidence)
     result = promote_alpha(_promotion_config(tmp_path, scorecard, evidence))
 
-    assert governed_promotion.status_updates == []
+    assert governed_promotion.impl.read_text(encoding="utf-8") == _IMPL
     decision = Path(result.promotion_decision_path)
     assert evidence in decision.parents
     assert not (tmp_path / "research" / "experiments").exists()
@@ -534,12 +541,23 @@ def test_governed_promotion_publishes_to_the_evidence_root_without_rewriting_imp
     assert "runs/run-1/manifest.json" in events[0]["evidence"]
 
 
-def test_exploratory_promotion_keeps_legacy_status_writes(governed_promotion, tmp_path: Path) -> None:
+def test_exploratory_promotion_rewrites_no_status(governed_promotion, tmp_path: Path) -> None:
     from hft_platform.alpha.promotion import promote_alpha
 
     scorecard = _sealed_scorecard(governed_promotion.evidence)
-    promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, run_mode="exploratory"))
-    assert governed_promotion.status_updates
+    result = promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, run_mode="exploratory"))
+    # Gate E passed: the removed rewriter would have written GATE_E here.
+    assert result.gate_e_passed
+    assert governed_promotion.impl.read_text(encoding="utf-8") == _IMPL
+    assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()
+
+
+def test_governed_dry_run_promotion_appends_nothing_to_the_ledger(governed_promotion, tmp_path: Path) -> None:
+    from hft_platform.alpha.promotion import promote_alpha
+
+    scorecard = _sealed_scorecard(governed_promotion.evidence)
+    result = promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, dry_run=True))
+    assert result.gate_e_passed
     assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()
 
 

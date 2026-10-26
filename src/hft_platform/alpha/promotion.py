@@ -30,7 +30,6 @@ import yaml
 from hft_platform.alpha.evidence import EvidenceWriter, GovernedRunRefused, RunMode, is_sealed, require_governed
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, derive_verdict, resolve_outcome
 from hft_platform.alpha.provenance import file_sha256, git_state
-from hft_platform.alpha.validation import _update_manifest_status
 from hft_platform.core import timebase
 
 _log = structlog.get_logger(__name__)
@@ -236,15 +235,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     }
     gate_d_verdict, gate_d_checks = _evaluate_gate_d_verdict(scorecard, config)
     gate_d_passed = gate_d_verdict.passed
-    if gate_d_passed:
-        # Dry-run (Loop_v1 L11) must not mutate alpha status on disk.
-        # Codex adversarial-review 2026-05-06 finding 6 (MEDIUM): the call
-        # below rewrites ``research/alphas/<alpha_id>/impl.py`` ``status =``
-        # field, which is a durable side effect that ``--dry-run`` is
-        # contractually required to avoid.
-        if not config.dry_run and writer is None:
-            _update_manifest_status(config.alpha_id, "GATE_D", root)
-    elif not config.dry_run and gate_d_verdict.verdict is Verdict.KILL:
+    # Status is derived from the verdict ledger; promotion never rewrites impl.py.
+    if not gate_d_passed and not config.dry_run and gate_d_verdict.verdict is Verdict.KILL:
         # Slice-D T14: log a kill-ledger row (gate='D') for a KILL verdict.
         # Gate D failure does not raise here -- promote_alpha returns a
         # PromotionResult with approved=False -- so this is the *only* path
@@ -261,12 +253,6 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         )
 
     gate_e_passed, gate_e_checks = _evaluate_gate_e(config, root)
-    if gate_e_passed:
-        # Codex adversarial-review 2026-05-06 finding 6 (MEDIUM): same
-        # contract as the Gate-D mutation above. Dry-run never persists
-        # status transitions.
-        if not config.dry_run and writer is None:
-            _update_manifest_status(config.alpha_id, "GATE_E", root)
 
     gate_f_passed, gate_f_checks = _evaluate_gate_f(config, root)
 
@@ -333,7 +319,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     }
     decision_path = artifact_dir / "promotion_decision.json"
     _write_json(decision_path, decision_payload)
-    if writer is not None:
+    # A dry run records nothing in the ledger: status is derived from it (Loop_v1 L11).
+    if writer is not None and not config.dry_run:
         _publish_governed_promotion(
             writer,
             config=config,

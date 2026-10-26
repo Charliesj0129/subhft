@@ -16,6 +16,9 @@ differences here.
   strict run is governed too (sealed scorecard in, `promotions/` and ledger events
   out). Sealed directories are never rewritten. Triage runs are exploratory and
   never reach the ledger.
+- Alpha status is derived from the ledger (`src/hft_platform/alpha/status.py`);
+  no run rewrites `impl.py`. An alpha with no ledger events shows the status its
+  manifest declares.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.

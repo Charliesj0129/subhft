@@ -10,52 +10,6 @@ import pytest
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
 # ---------------------------------------------------------------------------
-# _update_manifest_status — write error path (lines 272-280)
-# ---------------------------------------------------------------------------
-
-
-class TestUpdateManifestStatusWriteError:
-    def test_write_error_returns_false(self, tmp_path: Path):
-        from hft_platform.alpha.validation import _update_manifest_status
-
-        alpha_id = "write_err_alpha"
-        impl_dir = tmp_path / "research" / "alphas" / alpha_id
-        impl_dir.mkdir(parents=True)
-        impl_file = impl_dir / "impl.py"
-        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n")
-
-        with patch.object(Path, "write_text", side_effect=OSError("disk full")):
-            result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
-        assert result is False
-
-    def test_read_error_returns_false(self, tmp_path: Path):
-        from hft_platform.alpha.validation import _update_manifest_status
-
-        alpha_id = "read_err_alpha"
-        impl_dir = tmp_path / "research" / "alphas" / alpha_id
-        impl_dir.mkdir(parents=True)
-        impl_file = impl_dir / "impl.py"
-        impl_file.write_text("some content")
-
-        with patch.object(Path, "read_text", side_effect=OSError("permission denied")):
-            result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
-        assert result is False
-
-    def test_no_pattern_match_returns_false(self, tmp_path: Path):
-        """File exists but does not contain the status=AlphaStatus pattern."""
-        from hft_platform.alpha.validation import _update_manifest_status
-
-        alpha_id = "no_pattern_alpha"
-        impl_dir = tmp_path / "research" / "alphas" / alpha_id
-        impl_dir.mkdir(parents=True)
-        impl_file = impl_dir / "impl.py"
-        impl_file.write_text("# no status pattern here\nx = 1\n")
-
-        result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
-        assert result is False
-
-
-# ---------------------------------------------------------------------------
 # batch_validate — gate_key branches (lines 317-328, 339-342)
 # ---------------------------------------------------------------------------
 
@@ -267,7 +221,6 @@ class TestRunAlphaValidation:
             patch("hft_platform.alpha.validation.run_gate_a", return_value=failed_gate_a),
             patch("hft_platform.alpha.validation.run_gate_b", return_value=passed_gate_b),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
-            patch("hft_platform.alpha.validation._update_manifest_status"),
             patch.dict(
                 "sys.modules", {"hft_platform.alpha.discovery": MagicMock(AlphaDiscoveryRegistry=mock_registry_cls)}
             ),
@@ -313,7 +266,6 @@ class TestRunAlphaValidation:
                 return_value=(passed_c, "run-1", "hash-1", str(tmp_path / "sc.json"), str(tmp_path / "meta.json")),
             ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
-            patch("hft_platform.alpha.validation._update_manifest_status"),
             patch.dict(
                 "sys.modules", {"hft_platform.alpha.discovery": MagicMock(AlphaDiscoveryRegistry=mock_registry_cls)}
             ),
@@ -366,7 +318,6 @@ class TestRunAlphaValidation:
                 return_value=(passed_c, "run-1", "hash-1", str(tmp_path / "sc.json"), str(tmp_path / "meta.json")),
             ),
             patch("hft_platform.alpha.validation._resolve_data_path", side_effect=lambda root, p: p),
-            patch("hft_platform.alpha.validation._update_manifest_status"),
             patch.dict(
                 "sys.modules",
                 {

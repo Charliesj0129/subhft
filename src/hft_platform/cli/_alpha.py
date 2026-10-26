@@ -510,6 +510,15 @@ def cmd_alpha_list(args: argparse.Namespace) -> None:
         print(f"Failed to import alpha discovery registry: {exc}")
         sys.exit(1)
 
+    from hft_platform.alpha.evidence import EvidenceRootError
+    from hft_platform.alpha.status import effective_status, ledger_events_by_alpha
+
+    try:
+        ledger = ledger_events_by_alpha()
+    except (EvidenceRootError, ValueError, OSError) as exc:
+        print(f"Cannot read the verdict ledger: {exc}", file=sys.stderr)
+        sys.exit(2)
+
     registry = AlphaDiscoveryRegistry()
     loaded = registry.discover("research/alphas")
     if not loaded:
@@ -518,7 +527,9 @@ def cmd_alpha_list(args: argparse.Namespace) -> None:
 
     for alpha_id in sorted(loaded):
         manifest = loaded[alpha_id].manifest
-        print(f"{alpha_id}\tstatus={manifest.status.value}\ttier={manifest.tier.value if manifest.tier else '-'}")
+        status = effective_status(manifest.status, ledger.get(alpha_id, ()))
+        tier = manifest.tier.value if manifest.tier else "-"
+        print(f"{alpha_id}\tstatus={status.status.value}\tsource={status.source.value}\ttier={tier}")
 
     if registry.errors:
         print("\nDiscovery warnings:")

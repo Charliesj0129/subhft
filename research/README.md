@@ -106,8 +106,16 @@ go to that root (`runs/<run_id>/`, `validations/<alpha_id>/<stamp>/`), each seal
 by a `manifest.json` of sha256s, and every gate that ran appends one event to
 `ledger/verdicts.jsonl`. Governed promotion reads only a sealed scorecard under that
 root, writes its Gate D-F reports to `promotions/` there and appends their events;
-the run must start and publish on the same commit. Governed runs do not rewrite
-`impl.py` status, and the correlation tools skip sealed scorecards. Triage runs
+the run must start and publish on the same commit. The correlation tools skip
+sealed scorecards.
+
+No run rewrites `impl.py` status. `hft alpha list` and `factory index` show the
+status derived from the ledger (`src/hft_platform/alpha/status.py`, rules v1):
+the highest of Gates A-E whose latest event passed, each no older than the one
+below it; an INVALID verdict is ignored; any KILL makes the alpha KILLED. An
+alpha with no ledger events, or whose manifest declares PRODUCTION, DEPRECATED
+or KILLED, shows the manifest status; a ledger KILL still wins. A malformed
+ledger stops both commands (rc 2). Triage runs
 (`research.pipeline triage`) stay exploratory: labelled in the RunStamp, written to
 `--experiments-dir`, never in the ledger.
 
