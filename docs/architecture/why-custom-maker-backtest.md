@@ -61,7 +61,7 @@ For our current stage (single maker strategy, limited live fill data), the simpl
 
 MakerEngine was designed as part of the `make research` pipeline:
 - Auto-selected via `manifest.yaml` `strategy_type: maker`
-- Results persisted to `ResultStore` with full provenance
+- Results written once by `ExperimentTracker.log_run`, with a RunStamp in `meta.json`
 - Gate C maker thresholds from `gate_thresholds.yaml`
 
 Integrating hftbacktest's queue model into the same pipeline would require the same `BacktestEngine` Protocol wrapper — the calibration work is the bottleneck, not the integration.
@@ -89,7 +89,7 @@ manifest.yaml: strategy_type = ?
   └── "maker" → MakerEngine → QueueDepletionFill(qf) → CK-direct
 ```
 
-Both paths produce `BacktestResult` with full provenance → `ResultStore` → `backtest_report.json`.
+Both paths produce `BacktestResult` → Gate C report → `ExperimentTracker.log_run` → `runs/<run_id>/backtest_report.json`.
 
 ## Honest Assessment
 

@@ -69,6 +69,9 @@ class ValidationConfig:
     enforce_latency_profile: bool = True
     gate_c_tier: str = "promotion"
     profile: Any | None = None
+    # "governed" publishes to the evidence root and the verdict ledger
+    # (alpha.evidence); "exploratory" runs are labelled and never reach the ledger.
+    run_mode: str = "exploratory"
 
 
 @dataclass(frozen=True, slots=True)

@@ -27,7 +27,9 @@ from uuid import uuid4
 import structlog
 import yaml
 
+from hft_platform.alpha.evidence import EvidenceWriter, GovernedRunRefused, RunMode, is_sealed, require_governed
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, derive_verdict, resolve_outcome
+from hft_platform.alpha.provenance import file_sha256, git_state
 from hft_platform.alpha.validation import _update_manifest_status
 from hft_platform.core import timebase
 
@@ -125,6 +127,10 @@ class PromotionConfig:
     # JSON, integration report) still land under the experiments dir for
     # auditability. Set via ``hft alpha promote --dry-run``.
     dry_run: bool = False
+    # ``governed`` promotes only a sealed scorecard under the evidence root,
+    # writes its reports there, appends Gate D/E/F events to the verdict
+    # ledger and never rewrites ``impl.py`` (ADR-005 section 6).
+    run_mode: str = "exploratory"
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     if not scorecard_path.exists():
         raise FileNotFoundError(f"scorecard not found: {scorecard_path}")
 
+    writer, commit = _governed_promotion_writer(config, root, scorecard_path)
+    _verify_sealed_scorecard(scorecard_path)
     scorecard = json.loads(scorecard_path.read_text())
 
     # L6 (#341): refuse screen-only artifacts before any further gate evaluation.
@@ -234,7 +242,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         # below rewrites ``research/alphas/<alpha_id>/impl.py`` ``status =``
         # field, which is a durable side effect that ``--dry-run`` is
         # contractually required to avoid.
-        if not config.dry_run:
+        if not config.dry_run and writer is None:
             _update_manifest_status(config.alpha_id, "GATE_D", root)
     elif not config.dry_run and gate_d_verdict.verdict is Verdict.KILL:
         # Slice-D T14: log a kill-ledger row (gate='D') for a KILL verdict.
@@ -257,7 +265,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         # Codex adversarial-review 2026-05-06 finding 6 (MEDIUM): same
         # contract as the Gate-D mutation above. Dry-run never persists
         # status transitions.
-        if not config.dry_run:
+        if not config.dry_run and writer is None:
             _update_manifest_status(config.alpha_id, "GATE_E", root)
 
     gate_f_passed, gate_f_checks = _evaluate_gate_f(config, root)
@@ -282,7 +290,9 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     weight = _suggest_canary_weight(scorecard, override=config.canary_weight) if approved else 0.0
     now = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
     expiry = (now + timedelta(days=max(config.expiry_days, 1))).date().isoformat()
-    artifact_dir = _promotion_artifact_dir(root, config.alpha_id, now)
+    artifact_dir = _promotion_artifact_dir(
+        writer.root if writer else root / "research" / "experiments", config.alpha_id, now
+    )
 
     integration_report = {
         "alpha_id": config.alpha_id,
@@ -323,6 +333,19 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     }
     decision_path = artifact_dir / "promotion_decision.json"
     _write_json(decision_path, decision_payload)
+    if writer is not None:
+        _publish_governed_promotion(
+            writer,
+            config=config,
+            commit=commit,
+            artifact_dir=artifact_dir,
+            scorecard_path=scorecard_path,
+            gates={
+                "gate_d": (gate_d_passed, gate_d_verdict.verdict.value),
+                "gate_e": (gate_e_passed, None),
+                "gate_f": (gate_f_passed, None),
+            },
+        )
 
     promotion_config_path: Path | None = None
     if approved and config.write_promotion_config and not config.dry_run:
@@ -695,7 +718,7 @@ def _resolve_scorecard_path(root: Path, config: PromotionConfig, alpha_dir: Path
             path = root / path
         return path
 
-    latest = _latest_scorecard_from_runs(root, config.alpha_id)
+    latest = _latest_scorecard_from_runs(root, config.alpha_id, config.experiments_dir)
     if latest is not None:
         return latest
 
@@ -788,11 +811,13 @@ def _payload_outcome(payload: dict[str, Any]) -> str:
         return Outcome.ERROR.value
 
 
-def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:
+def _latest_scorecard_from_runs(
+    root: Path, alpha_id: str, experiments_dir: str = "research/experiments"
+) -> Path | None:
     try:
         from hft_platform.alpha.experiments import ExperimentTracker
 
-        tracker = ExperimentTracker(base_dir=root / "research" / "experiments")
+        tracker = ExperimentTracker(base_dir=root / experiments_dir)
         for row in tracker.list_runs(alpha_id=alpha_id):
             if not row.scorecard_path:
                 continue
@@ -804,9 +829,77 @@ def _latest_scorecard_from_runs(root: Path, alpha_id: str) -> Path | None:
     return None
 
 
-def _promotion_artifact_dir(root: Path, alpha_id: str, now: datetime) -> Path:
+def _governed_promotion_writer(
+    config: PromotionConfig, root: Path, scorecard_path: Path
+) -> tuple[EvidenceWriter | None, str | None]:
+    """The evidence writer and commit for a governed promotion; ``(None, None)`` when exploratory.
+
+    A governed promotion needs the governed-run preconditions, the evidence
+    root as ``experiments_dir``, and a sealed scorecard under that root.
+    """
+    if RunMode(config.run_mode) is not RunMode.GOVERNED:
+        return None, None
+    commit, dirty = git_state(root)
+    profile_name = getattr(config.validation_profile, "name", None) or None
+    evidence = require_governed(git_commit=commit, git_dirty=dirty, profile_name=profile_name)
+    reasons = []
+    if (root / config.experiments_dir).resolve() != evidence:
+        reasons.append(f"experiments_dir {config.experiments_dir} is not the evidence root {evidence}")
+    writer = EvidenceWriter(evidence)
+    try:
+        writer.relpath(scorecard_path)
+    except ValueError:
+        reasons.append(f"scorecard {scorecard_path} is not under the evidence root {evidence}")
+    if not is_sealed(scorecard_path.parent):
+        reasons.append(f"scorecard {scorecard_path} is not sealed evidence")
+    if reasons:
+        raise GovernedRunRefused(reasons)
+    return writer, commit
+
+
+def _verify_sealed_scorecard(scorecard_path: Path) -> None:
+    """Refuse a sealed scorecard whose directory no longer matches its manifest."""
+    if not is_sealed(scorecard_path.parent):
+        return
+    changed = EvidenceWriter.verify(scorecard_path.parent)
+    if changed:
+        raise PromotionError(f"sealed evidence {scorecard_path.parent} changed since it was sealed: {changed}")
+
+
+def _publish_governed_promotion(
+    writer: EvidenceWriter,
+    *,
+    config: PromotionConfig,
+    commit: str | None,
+    artifact_dir: Path,
+    scorecard_path: Path,
+    gates: dict[str, tuple[bool, str | None]],
+) -> None:
+    """Seal the promotion reports and append one ledger event per promotion gate."""
+    manifest = writer.seal(artifact_dir, alpha_id=config.alpha_id, mode=RunMode.GOVERNED)
+    scorecard_manifest = scorecard_path.parent / "manifest.json"
+    evidence = {
+        writer.relpath(manifest): file_sha256(manifest, cached=False),
+        writer.relpath(scorecard_manifest): file_sha256(scorecard_manifest, cached=False),
+    }
+    for stage, (passed, verdict) in gates.items():
+        event: dict[str, Any] = {
+            "alpha_id": config.alpha_id,
+            "run_id": _scorecard_run_id(scorecard_path) or None,
+            "git_commit": commit,
+            "profile": getattr(config.validation_profile, "name", None),
+            "evidence": evidence,
+            "stage": stage,
+            "passed": bool(passed),
+        }
+        if verdict is not None:
+            event["verdict"] = verdict
+        writer.append_verdict(event, mode=RunMode.GOVERNED)
+
+
+def _promotion_artifact_dir(base: Path, alpha_id: str, now: datetime) -> Path:
     stamp = now.strftime("%Y%m%dT%H%M%SZ")
-    out = root / "research" / "experiments" / "promotions" / alpha_id / f"{stamp}_{uuid4().hex[:8]}"
+    out = base / "promotions" / alpha_id / f"{stamp}_{uuid4().hex[:8]}"
     out.mkdir(parents=True, exist_ok=True)
     return out
 

@@ -16,7 +16,6 @@ class GateCMakerRuntime:
     clickhouse_source: type[Any]
     latency_profile: type[Any]
     maker_engine: type[Any]
-    result_store: type[Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +23,6 @@ class GateCTakerRuntime:
     """Research implementations loaded only after the Gate C taker run."""
 
     load_cost_profile: Callable[[str], Any]
-    result_store: type[Any]
     taker_engine: type[Any]
 
 

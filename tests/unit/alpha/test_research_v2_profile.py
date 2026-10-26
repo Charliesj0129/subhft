@@ -243,11 +243,13 @@ def _run_args(tmp_path: Path, *extra: str):
     )
 
 
-def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch, tmp_path: Path):
+def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch, tmp_path: Path, governed_env: Path):
     seen: dict = {}
 
     def _validation(cfg):
         seen["profile"] = cfg.profile
+        seen["run_mode"] = cfg.run_mode
+        seen["experiments_dir"] = cfg.experiments_dir
         return types.SimpleNamespace(passed=False, scorecard_path="", to_dict=lambda: {"passed": False})
 
     monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
@@ -258,6 +260,8 @@ def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch,
 
     assert seen["profile"] is not None
     assert seen["profile"].name == "vm_ul6_strict_v2"
+    assert seen["run_mode"] == "governed"
+    assert seen["experiments_dir"] == str(governed_env)
 
 
 def test_governed_run_refuses_the_exploratory_standard_profile(tmp_path: Path):

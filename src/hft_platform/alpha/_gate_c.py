@@ -383,9 +383,22 @@ def _merge_profile_thresholds(base: dict, profile: Any | None, *, strategy_type:
     return merged
 
 
-def _run_stamp(data_paths: list[str], config_hash: str, config: ValidationConfig) -> dict[str, Any]:
+def _run_stamp(
+    data_paths: list[str], config_hash: str, config: ValidationConfig, *, calibration: str | None = None
+) -> dict[str, Any]:
     profile = getattr(config, "profile", None)
-    return build_run_stamp(data_paths=data_paths, config_hash=config_hash, profile=getattr(profile, "name", None))
+    return build_run_stamp(
+        data_paths=data_paths,
+        config_hash=config_hash,
+        profile=getattr(profile, "name", None),
+        mode=str(getattr(config, "run_mode", "exploratory")),
+        calibration=calibration,
+    )
+
+
+def _stamped_data_paths(inputs: list[str], derived: list[str]) -> list[str]:
+    """The inputs plus each derived file the engine reads, once each, in order."""
+    return list(dict.fromkeys([*inputs, *derived]))
 
 
 def _load_maker_thresholds(root: Path) -> dict:
@@ -623,7 +636,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         ClickHouseSource = maker_runtime.clickhouse_source
         LatencyProfile = maker_runtime.latency_profile
         MakerEngine = maker_runtime.maker_engine
-        ResultStore = maker_runtime.result_store
 
         maker_strategy = alpha.create_maker_strategy() if hasattr(alpha, "create_maker_strategy") else alpha
         missing = [m for m in ("on_tick", "on_fill") if not callable(getattr(maker_strategy, m, None))]
@@ -668,7 +680,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             instrument=instrument,
             pipeline_mode="strict",
         )
-        ResultStore().save(result, alpha_id)
 
         # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
         maker_thresholds = _merge_profile_thresholds(
@@ -798,7 +809,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             backtest_report_payload=asdict(report),
             signals=result.signals,
             equity=result.equity_curve,
-            run_stamp=_run_stamp(resolved_data_paths, result.config_hash, config),
+            run_stamp=_run_stamp(resolved_data_paths, result.config_hash, config, calibration="uncalibrated"),
         )
         report.details["experiment_meta_path"] = str(meta_path)
         return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)
@@ -841,8 +852,9 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         backtest_engine_key = str(config.backtest_engine).lower()
         if backtest_engine_key == "research":
             raise ValueError("backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。")
-        for dp in resolved_data_paths:
-            ensure_hftbt_npz(dp)  # auto-convert research.npy → hftbt.npz; idempotent
+        # auto-convert research.npy -> hftbt.npz (idempotent). The runner reads
+        # the npz, so the RunStamp hashes it alongside the input.
+        hftbt_paths = [str(p) for p in (ensure_hftbt_npz(dp) for dp in resolved_data_paths) if p]
         runner: Any = HftNativeRunner(alpha, backtest_cfg)
         base_result = runner.run()
 
@@ -850,7 +862,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         import dataclasses as _dc
 
         taker_runtime = runtime.load_taker_runtime()
-        ResultStore = taker_runtime.result_store
         TakerEngine = taker_runtime.taker_engine
 
         if _dc.is_dataclass(base_result) and not isinstance(base_result, type):
@@ -876,7 +887,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 pipeline_mode="strict",
                 cost_model=_cost_model,
             )
-            ResultStore().save(base_result, alpha_id)
     _runner_cls = type(runner)
     optimization_eval = _optimize_parameters(
         alpha=alpha,
@@ -1218,7 +1228,12 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         backtest_report_payload=asdict(report),
         signals=result.signals,
         equity=result.equity_curve,
-        run_stamp=_run_stamp(resolved_data_paths, result.config_hash, config),
+        run_stamp=_run_stamp(
+            _stamped_data_paths(resolved_data_paths, hftbt_paths),
+            result.config_hash,
+            config,
+            calibration="uncalibrated",
+        ),
     )
     report.details["experiment_meta_path"] = str(meta_path)
     return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)

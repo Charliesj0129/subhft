@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 from structlog import get_logger
 
+from hft_platform.alpha.evidence import is_sealed
 from hft_platform.alpha.experiments import ExperimentTracker
 
 logger = get_logger("alpha.batch_correlation")
@@ -84,6 +85,14 @@ def batch_compute_correlations(
         if not scorecard_path.exists():
             logger.warning(
                 "batch_correlation: scorecard not found",
+                alpha_id=alpha_id,
+                path=str(scorecard_path),
+            )
+            continue
+        if is_sealed(scorecard_path.parent):
+            # Sealed evidence is never rewritten; the correlation is logged only.
+            logger.warning(
+                "batch_correlation: scorecard is sealed evidence, not patched",
                 alpha_id=alpha_id,
                 path=str(scorecard_path),
             )

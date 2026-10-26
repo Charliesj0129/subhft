@@ -146,8 +146,11 @@ class ExperimentTracker:
 
         ``run_stamp`` defaults to a RunStamp built here from ``data_paths`` and
         ``config_hash``; callers that know the validation profile pass their own.
+        A run sealed by ``alpha.evidence.EvidenceWriter`` is never rewritten.
         """
         run_dir = self.runs_dir / run_id
+        if (run_dir / "manifest.json").exists():
+            raise FileExistsError(f"{run_dir} is sealed evidence; log the rerun under a new run_id")
         run_dir.mkdir(parents=True, exist_ok=True)
         scorecard_payload, backtest_report_payload = _stamp_edge_metric_semantics(
             scorecard_payload,
