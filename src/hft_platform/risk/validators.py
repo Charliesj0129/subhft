@@ -454,6 +454,7 @@ class DailyLossLimitValidator(RiskValidator):
         "_unrealized_day_open",
         "_day_open_known",
         "_unrealized_complete",
+        "_mark_pending",
         "_position_loss_limit_scaled",
     )
 
@@ -525,6 +526,13 @@ class DailyLossLimitValidator(RiskValidator):
         self._unrealized_day_open: int = 0
         self._day_open_known: bool = False
         self._unrealized_complete: bool = False
+        # True from a restore of the day's opening mark until the first
+        # mark-to-market after it. ``_unrealized_pnl`` is not persisted, so it
+        # reads 0 there, and 0 minus the opening mark is a loss the book never
+        # made: an opening order in that window latched the stop (Codex review
+        # of B0-B6, 2026-10-24). Until the mark arrives the unrealized half
+        # counts as nothing and opening orders wait for it.
+        self._mark_pending: bool = False
 
     def _derive_from_defaults(self) -> None:
         """Thresholds only. Runtime state (accumulated loss, latched HALT,
@@ -684,6 +692,7 @@ class DailyLossLimitValidator(RiskValidator):
         self._unrealized_day_open = 0
         self._day_open_known = False
         self._unrealized_complete = False
+        self._mark_pending = False
 
     def daily_unrealized(self) -> int:
         """Today's share of the unrealized PnL: since-entry now minus since-entry at the day's open.
@@ -693,6 +702,8 @@ class DailyLossLimitValidator(RiskValidator):
         but not out of the opening figure, which could turn its loss into an
         apparent gain; the smaller of the two readings is used then.
         """
+        if self._mark_pending:
+            return 0
         if not self._day_open_known:
             return self._unrealized_pnl
         today = self._unrealized_pnl - self._unrealized_day_open
@@ -785,6 +796,7 @@ class DailyLossLimitValidator(RiskValidator):
         self._soft_limit_cooldown_until_ns = state["soft_limit_cooldown_until_ns"]
         self._unrealized_day_open = state["unrealized_day_open"]
         self._day_open_known = state["day_open_known"]
+        self._mark_pending = self._day_open_known
         self._last_consistent_total_pnl = sum(self._accumulated_loss.values())
         self._last_consistent_ts_ns = timebase.now_ns()
         return True
@@ -819,6 +831,7 @@ class DailyLossLimitValidator(RiskValidator):
         self._maybe_reset(release_halt=complete)
         self._unrealized_pnl = unrealized_scaled
         self._unrealized_complete = complete
+        self._mark_pending = False
         if complete and not self._day_open_known:
             self._unrealized_day_open = unrealized_scaled
             self._day_open_known = True
@@ -957,6 +970,12 @@ class DailyLossLimitValidator(RiskValidator):
 
         # b. Daily reset check
         self._maybe_reset()
+
+        # b2. Restored opening mark, no mark since: today's unrealized is not
+        # known yet. Wait for it (the next 1 Hz tick) rather than open blind;
+        # this is a refusal, not a latch.
+        if self._mark_pending:
+            return False, "DAILY_LOSS_AWAITING_MARK"
 
         # c. Compute total PnL (realized + unrealized)
         # NOTE: accumulated is per-strategy realized, _unrealized_pnl is platform-wide.
