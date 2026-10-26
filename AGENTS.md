@@ -61,7 +61,7 @@ Contract chain — every stage crosses one of these, nothing else:
   `rust_core/` (PyO3 kernels), `config/`, `research/`, `tests/`, `scripts/`,
   `docs/`, `.agent/` (rules, skills, memory). ClickHouse DDL source of truth:
   `src/hft_platform/migrations/clickhouse/`.
-- Pinned (bump only with explicit approval): `shioaji==1.5.6`
+- Pinned (bump only with explicit approval): `shioaji==1.7.9`
   (`docs/runbooks/shioaji-version-diff.md`), `prometheus_client<0.25`. The repo
   pin and the production runtime can diverge; verify the running process.
 
