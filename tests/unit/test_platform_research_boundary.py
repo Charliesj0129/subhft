@@ -45,7 +45,6 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("src/hft_platform/cli/_alpha.py", "research.combinatorial.smma_screen"): "`hft alpha` research subcommand",
     ("src/hft_platform/cli/_alpha.py", "research.combinatorial.tick_dataset"): "`hft alpha` research subcommand",
     ("src/hft_platform/cli/_alpha.py", "research.pipeline"): "`hft alpha pipeline` runs the research pipeline",
-    ("src/hft_platform/cli/_alpha.py", "research.rl.lifecycle"): "`hft alpha rl-promote`",
 }
 
 
