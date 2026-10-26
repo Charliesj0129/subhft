@@ -1,4 +1,4 @@
-"""CLI commands: alpha scaffold, search, list, validate, promote, rl-promote, pool, canary, ab-compare, experiments."""
+"""CLI commands: alpha scaffold, search, list, validate, promote, pool, canary, ab-compare, experiments."""
 
 from __future__ import annotations
 
@@ -834,34 +834,6 @@ def cmd_alpha_promote(args: argparse.Namespace) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
     print(json.dumps(summary, indent=2, sort_keys=True))
-    if not result.approved:
-        sys.exit(2)
-
-
-def cmd_alpha_rl_promote(args: argparse.Namespace) -> None:
-    try:
-        promote_latest_rl_run = import_module("research.rl.lifecycle").promote_latest_rl_run
-    except Exception as exc:
-        print(f"Failed to import RL lifecycle promotion utility: {exc}")
-        sys.exit(1)
-
-    result = promote_latest_rl_run(
-        alpha_id=str(args.alpha_id),
-        owner=str(args.owner),
-        base_dir=str(args.base_dir),
-        project_root=str(args.project_root),
-        shadow_sessions=int(args.shadow_sessions),
-        min_shadow_sessions=int(args.min_shadow_sessions),
-        drift_alerts=int(args.drift_alerts),
-        execution_reject_rate=float(args.execution_reject_rate),
-        force=bool(args.force),
-    )
-    payload = result.to_dict()
-    if args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
-    print(json.dumps(payload, indent=2, sort_keys=True))
     if not result.approved:
         sys.exit(2)
 

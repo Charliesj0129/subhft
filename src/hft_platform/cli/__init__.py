@@ -37,7 +37,6 @@ from ._alpha import (  # noqa: F401
     cmd_alpha_pool,
     cmd_alpha_promote,
     cmd_alpha_promote_batch,
-    cmd_alpha_rl_promote,
     cmd_alpha_scaffold,
     cmd_alpha_search,
     cmd_alpha_validate,

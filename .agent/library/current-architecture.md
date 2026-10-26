@@ -142,7 +142,7 @@ The cluster backlog (`cluster-evolution-backlog.md`) this baseline once pointed 
 6. Experiment and RL integration
 
 - `hft alpha experiments list|compare|best` reads `research/experiments/runs/*/meta.json`.
-- RL bridge (historical): the former research/rl/lifecycle.py logged RL runs and promoted the latest run via Gate D-E. The module has been removed, so `hft alpha rl-promote` (`cli/_alpha.py::cmd_alpha_rl_promote`) fails on import.
+- RL bridge (historical): the former research/rl/lifecycle.py logged RL runs and promoted the latest run via Gate D-E. The module has been removed, and the `rl-promote` subcommand that imported it was removed on 2026-10-23.
 
 ## 4A. Research/Runtime Feature Unification (Implemented, Production Backlog Open)
 

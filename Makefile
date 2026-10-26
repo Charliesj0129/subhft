@@ -643,12 +643,12 @@ research-scaffold: ## Scaffold a new governed alpha package under research/alpha
 	fi
 	$(PY) -m research scaffold $(ALPHA) $(ARGS)
 
-research-report: ## Render promotion report markdown for a given alpha
-	@if [ -z "$(ALPHA)" ]; then \
-		echo "Usage: make research-report ALPHA=<alpha_id> [ARGS='--out report.md']"; \
+research-report: ## Render markdown from a promotion/validation JSON artifact
+	@if [ -z "$(INPUT)" ]; then \
+		echo "Usage: make research-report INPUT=<promotion_or_validation.json> [ARGS='--out report.md']"; \
 		exit 2; \
 	fi
-	$(PY) research/tools/render_promotion_report.py --alpha-id "$(ALPHA)" $(ARGS)
+	$(PY) research/tools/render_promotion_report.py "$(INPUT)" $(ARGS)
 
 research-fetch-paper: ## Fetch and index an arxiv paper (e.g. make research-fetch-paper ARXIV=2408.03594)
 	@if [ -z "$(ARXIV)" ]; then \
@@ -737,12 +737,12 @@ research-validate-l2-ticks: ## Validate canonical L2 hftbacktest NPZ contract
 	fi
 	$(PY) -m research data-pipeline validate --path "$(DATA_PATH)"
 
-research-hftbacktest: ## Run hftbacktest via the canonical L2 data pipeline
+research-hftbacktest: ## Run HftNativeRunner (hftbacktest taker path) on one or more data files
 	@if [ -z "$(ALPHA)" ] || [ -z "$(DATA_PATH)" ]; then \
-		echo "Usage: make research-hftbacktest ALPHA=<alpha_id> DATA_PATH=<*_l2.hftbt.npz> [ARGS='--symbol TMFD6']"; \
+		echo "Usage: make research-hftbacktest ALPHA=<alpha_id> DATA_PATH=<file.npy|*.hftbt.npz> [ARGS='--out summary.json']"; \
 		exit 2; \
 	fi
-	$(PY) -m research data-pipeline backtest --alpha-id "$(ALPHA)" --data "$(DATA_PATH)" $(ARGS)
+	$(PY) -m research.backtest.hft_native_runner --alpha "$(ALPHA)" --data $(DATA_PATH) $(ARGS)
 
 
 research-batch-correlation: ## Batch compute pool correlations across all alpha scorecards
@@ -755,11 +755,19 @@ research-promote-batch: ## Batch run promotion pipeline across alphas (dry-run b
 	$(PY) -m hft_platform alpha promote-batch $(ARGS)
 
 research-batch-search: ## Batch search arXiv papers (QUERIES="query1;query2;query3")
-	@if [ -z "$(QUERIES)" ]; then \
+	@if [ -z "$$QUERIES" ]; then \
 		echo "Usage: make research-batch-search QUERIES=\"order flow imbalance;market microstructure\""; \
 		exit 2; \
 	fi
-	$(PY) -m research batch-search $(subst ;, ,$(QUERIES)) $(ARGS)
+	@# QUERIES is read from the environment, never pasted into shell code, so quotes in it are data.
+	@# Split on ';', trim spaces and one pair of surrounding quotes per query, drop empty ones.
+	@set -f; IFS=';'; set -- $$QUERIES; unset IFS; \
+	for q do shift; \
+		q=$$(printf '%s' "$$q" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' -e "s/^'\(.*\)'$$/\1/" -e 's/^"\(.*\)"$$/\1/'); \
+		[ -n "$$q" ] && set -- "$$@" "$$q"; \
+	done; \
+	if [ $$# -eq 0 ]; then echo "research-batch-search: QUERIES has no non-empty query" >&2; exit 2; fi; \
+	$(PY) -m research batch-search "$$@" $(ARGS)
 
 research-hypothesis-ingest: ## Ingest hypotheses from paper index into queue
 	$(PY) -m research hypothesis-queue ingest $(ARGS)

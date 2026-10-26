@@ -50,9 +50,9 @@ All stages must emit deterministic artifacts under `research/` or `config/strate
 - `hft alpha canary status`
 - `hft alpha canary evaluate --apply`
 
-### Stage F: RL bridge (Done)
-1. RL adapter and lifecycle: `research/rl/alpha_adapter.py`, `research/rl/lifecycle.py`.
-2. Command: `hft alpha rl-promote`.
+### Stage F: RL bridge (Removed)
+The RL adapter and lifecycle under `research/rl/` were archived, and the `rl-promote` subcommand
+that depended on them was removed on 2026-10-23.
 
 ## 3. Canonical Command Path
 

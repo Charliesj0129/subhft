@@ -139,7 +139,6 @@ hft alpha scaffold my_alpha --paper arxiv:2408.03594
 hft alpha search --mode random --data data/train.npy --feature-fields f1,f2 --trials 100
 hft alpha validate --alpha-id my_alpha --data data/train.npy data/test.npy
 hft alpha promote --alpha-id my_alpha --owner charlie
-hft alpha rl-promote --alpha-id my_alpha --owner charlie
 hft alpha pool matrix
 hft alpha canary status
 hft alpha ab-compare RUN_A RUN_B

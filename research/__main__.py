@@ -128,7 +128,11 @@ def main() -> int:
         return int(_maint_main())
 
     if cmd in _BATCH_CMDS:
+        # batch_search parses argv[1:] as queries; without the pop the command
+        # name itself became the first query.
+        sys.argv.pop(1)
         from research.tools.batch_search import main as _batch_main
+
         return int(_batch_main())
 
     if cmd == _HYPOTHESIS_CMD:
