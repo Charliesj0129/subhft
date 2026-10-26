@@ -18,7 +18,9 @@ differences here.
   never reach the ledger.
 - Alpha status is derived from the ledger (`src/hft_platform/alpha/status.py`);
   no run rewrites `impl.py`. An alpha with no ledger events shows the status its
-  manifest declares.
+  manifest declares. `python -m research status` shows it with run counts from
+  both roots; `research/experiments/**` is read only through
+  `research/registry/legacy_evidence.py`, which quarantines test-fixture rows.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.

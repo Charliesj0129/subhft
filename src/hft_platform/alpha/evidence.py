@@ -7,7 +7,10 @@ both outside the checkout:
     ``runs/<run_id>/`` and ``validations/<alpha_id>/<stamp>/`` as the
     ExperimentTracker writes them, each sealed by a ``manifest.json`` that
     lists the sha256 of every file; ``ledger/verdicts.jsonl``, the
-    append-only verdict events that alpha status will be derived from.
+    append-only verdict events that alpha status is derived from;
+    ``legacy/kills.jsonl``, kills recorded before the ledger existed, kept
+    as an archive that never derives a status; ``protocols/``,
+    pre-registrations.
 ``$HFT_RESEARCH_DATA_ROOT`` (default ``~/hft_research_data``)
     datasets; not in git.
 
@@ -25,7 +28,9 @@ import fcntl
 import hashlib
 import json
 import os
-from collections.abc import Iterator, Mapping
+import subprocess
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -45,6 +50,9 @@ MANIFEST_NAME = "manifest.json"
 MANIFEST_SCHEMA = "evidence_manifest.v1"
 VERDICT_EVENT_SCHEMA = "verdict_event.v1"
 LEDGER_RELPATH = "ledger/verdicts.jsonl"
+LEGACY_KILLS_RELPATH = "legacy/kills.jsonl"
+LEGACY_KILL_SCHEMA = "legacy_kill.v1"
+ROOT_LAYOUT = ("runs", "validations", "ledger", "legacy", "protocols")
 
 _REQUIRED_EVENT_FIELDS = ("alpha_id", "stage", "passed")
 
@@ -159,6 +167,59 @@ def _append_whole(fd: int, line: bytes, path: Path) -> None:
         raise
 
 
+@contextmanager
+def _locked(path: Path) -> Iterator[int]:
+    """An append descriptor on ``path`` holding an exclusive lock."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _read_jsonl(path: Path, schema: str) -> Iterator[dict[str, Any]]:
+    """The records of ``path`` in order; a line that is not a ``schema`` record raises ``ValueError``."""
+    if not path.exists():
+        return
+    with path.open(encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{lineno}: not JSON ({exc})") from exc
+            if not isinstance(record, dict) or record.get("schema") != schema:
+                raise ValueError(f"{path}:{lineno}: not a {schema} record")
+            yield record
+
+
+def _compact(record: Mapping[str, Any]) -> bytes:
+    return (json.dumps(record, sort_keys=True, separators=(",", ":"), default=str) + "\n").encode("utf-8")
+
+
+def init_root(root: str | Path) -> list[str]:
+    """Create the evidence layout under ``root`` and make it a local git repository.
+
+    Idempotent: returns what was created (empty when the root was complete).
+    No remote is configured; publishing the evidence repository is a separate,
+    deliberate step.
+    """
+    root = Path(root)
+    created: list[str] = []
+    for name in ROOT_LAYOUT:
+        path = root / name
+        if not path.is_dir():
+            path.mkdir(parents=True, exist_ok=True)
+            created.append(f"{name}/")
+    if not (root / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(root)], check=True, capture_output=True, text=True)
+        created.append(".git")
+    return created
+
+
 def is_sealed(directory: str | Path) -> bool:
     """True when ``directory`` carries an evidence manifest and must not be rewritten."""
     return (Path(directory) / MANIFEST_NAME).is_file()
@@ -236,28 +297,38 @@ class EvidenceWriter:
             "mode": RunMode.GOVERNED.value,
             **dict(event),
         }
-        line = (json.dumps(record, sort_keys=True, separators=(",", ":"), default=str) + "\n").encode("utf-8")
-        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.ledger_path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-            _append_whole(fd, line, self.ledger_path)
-        finally:
-            os.close(fd)
+        with _locked(self.ledger_path) as fd:
+            _append_whole(fd, _compact(record), self.ledger_path)
         return record
 
     def read_verdicts(self) -> Iterator[dict[str, Any]]:
         """The ledger's events in order; a malformed line raises ``ValueError``."""
-        if not self.ledger_path.exists():
-            return
-        with self.ledger_path.open(encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                if not line.strip():
+        yield from _read_jsonl(self.ledger_path, VERDICT_EVENT_SCHEMA)
+
+    def append_legacy_kills(self, kills: Iterable[Mapping[str, Any]]) -> int:
+        """Archive pre-ledger kills under ``legacy/kills.jsonl``; return how many were new.
+
+        Each kill needs ``alpha_id`` and ``kill_id``; one already archived
+        (same ``kill_id``) is skipped, so a repeated import adds nothing. The
+        archive never derives a status: those kills predate verdict rules v1.
+        """
+        kills = list(kills)
+        for kill in kills:
+            if not kill.get("alpha_id") or not kill.get("kill_id"):
+                raise ValueError(f"legacy kill lacks alpha_id or kill_id: {dict(kill)!r}")
+        path = self.root / LEGACY_KILLS_RELPATH
+        added = 0
+        with _locked(path) as fd:
+            seen = {r.get("kill_id") for r in _read_jsonl(path, LEGACY_KILL_SCHEMA)}
+            for kill in kills:
+                if kill["kill_id"] in seen:
                     continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"{self.ledger_path}:{lineno}: not JSON ({exc})") from exc
-                if not isinstance(record, dict) or record.get("schema") != VERDICT_EVENT_SCHEMA:
-                    raise ValueError(f"{self.ledger_path}:{lineno}: not a {VERDICT_EVENT_SCHEMA} record")
-                yield record
+                seen.add(kill["kill_id"])
+                record = {"schema": LEGACY_KILL_SCHEMA, "archived_at": _now_iso(), **dict(kill)}
+                _append_whole(fd, _compact(record), path)
+                added += 1
+        return added
+
+    def read_legacy_kills(self) -> Iterator[dict[str, Any]]:
+        """The archived pre-ledger kills in order; a malformed line raises ``ValueError``."""
+        yield from _read_jsonl(self.root / LEGACY_KILLS_RELPATH, LEGACY_KILL_SCHEMA)

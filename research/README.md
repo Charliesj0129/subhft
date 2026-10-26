@@ -119,6 +119,23 @@ ledger stops both commands (rc 2). Triage runs
 (`research.pipeline triage`) stay exploratory: labelled in the RunStamp, written to
 `--experiments-dir`, never in the ledger.
 
+```bash
+python -m research evidence init            # layout + local git init (no remote)
+python -m research evidence import-kills    # archive pre-ledger kills; --dry-run, --from jsonl
+python -m research status [--alpha ID] [--json]
+```
+
+`status` prints each alpha's effective status, its source, the declared status,
+governed runs (`<evidence root>/runs`), legacy runs (`research/experiments/runs`)
+and archived pre-ledger kills. `factory index` records the same run counts.
+Legacy evidence is read-only (`research/registry/legacy_evidence.py`): rows that
+tests wrote into the real sinks (a pytest temp path, or an automated row for an
+alpha with no package under `alphas/` or `archive/`) are quarantined and counted,
+never deleted. `import-kills` copies `_kill_ledger.jsonl` and ClickHouse
+`audit.alpha_kill_ledger` (365-day TTL) into `legacy/kills.jsonl`; those kills
+never derive a status, because they predate verdict rules v1. A ClickHouse
+failure stops the import (rc 2) unless `--from jsonl`.
+
 ### VM-UL6 strict profile (institutional/near-live strictness)
 
 ```bash

@@ -529,8 +529,7 @@ _LOCAL_RESEARCH_REF_ALIASES: dict[str, str] = {
         "halted-2026-04-18-pre-B-C/round-7/artifacts/t1_researcher_proposal.md"
     ),
     "feedback_taifex_fee_structure": (
-        "outputs/team_artifacts/alpha-research/archive/"
-        "halted-2026-04-18-pre-B-C/round-6/summary.md"
+        "outputs/team_artifacts/alpha-research/archive/halted-2026-04-18-pre-B-C/round-6/summary.md"
     ),
     "memory/backtest_method_reliability": "docs/runbooks/backtest-engine-selection.md",
     "r47_backtest_data_regression": "docs/incidents/2026-04-24-r47-backtest-credibility-audit.md",
@@ -538,12 +537,10 @@ _LOCAL_RESEARCH_REF_ALIASES: dict[str, str] = {
     "r47_structural_properties": ".agent/skills/hft-mm-design/SKILL.md",
     "r47_tmfd6_economics": "outputs/team_artifacts/alpha-research/r47_tmfd6_economics.md",
     "r7_summary C66 hedge-cost-dominance lesson": (
-        "outputs/team_artifacts/alpha-research/archive/"
-        "halted-2026-04-19-inst-options/round-7/summary.md"
+        "outputs/team_artifacts/alpha-research/archive/halted-2026-04-19-inst-options/round-7/summary.md"
     ),
     "shared-context_2026-04-19_cost_model": (
-        "outputs/team_artifacts/alpha-research/archive/"
-        "halted-2026-04-19-inst-options/final_summary.md"
+        "outputs/team_artifacts/alpha-research/archive/halted-2026-04-19-inst-options/final_summary.md"
     ),
 }
 
@@ -567,12 +564,9 @@ _LOCAL_RESEARCH_REF_REPAIR_HINTS: dict[str, dict[str, Any]] = {
     "shared-context_2026-04-19_cost_model": {
         "missing_path": "shared-context_2026-04-19_cost_model",
         "candidate_paths": (
-            "outputs/team_artifacts/alpha-research/archive/"
-            "halted-2026-04-19-inst-options/candidate_pool.json",
-            "outputs/team_artifacts/alpha-research/archive/"
-            "halted-2026-04-19-inst-options/progress.jsonl",
-            "outputs/team_artifacts/alpha-research/archive/"
-            "halted-2026-04-19-inst-options/final_summary.md",
+            "outputs/team_artifacts/alpha-research/archive/halted-2026-04-19-inst-options/candidate_pool.json",
+            "outputs/team_artifacts/alpha-research/archive/halted-2026-04-19-inst-options/progress.jsonl",
+            "outputs/team_artifacts/alpha-research/archive/halted-2026-04-19-inst-options/final_summary.md",
             "config/research/cost_profiles.yaml",
             "research/alphas/c60_tmfd6_r47_minimal_inst_rt/manifest.yaml",
             "research/alphas/c63_txfd6_r47_tight_spread/manifest.yaml",
@@ -629,9 +623,7 @@ def _local_research_ref_repair_hints(project_root: Path, refs: set[str]) -> dict
         if not hint:
             continue
         candidate_paths = [
-            rel_path
-            for rel_path in hint.get("candidate_paths", ())
-            if (project_root / str(rel_path)).exists()
+            rel_path for rel_path in hint.get("candidate_paths", ()) if (project_root / str(rel_path)).exists()
         ]
         hints[ref] = {
             "missing_path": str(hint["missing_path"]),
@@ -877,9 +869,7 @@ def _audit_strategy_spec_fixed_templates(errors: list[str], details: dict[str, A
         "parse_errors": parse_errors,
     }
     if template_missing_required or parse_errors:
-        bad = ", ".join(
-            item["path"] for item in [*template_missing_required, *parse_errors]
-        )
+        bad = ", ".join(item["path"] for item in [*template_missing_required, *parse_errors])
         errors.append(f"strategy spec template fixed-field audit failed: {bad}")
     if candidate_invalid:
         bad = ", ".join(item["path"] for item in candidate_invalid)
@@ -1047,9 +1037,7 @@ def _audit_validation_summary_index(details: dict[str, Any]) -> None:
             "full_average_monthly_net_pnl": full_map.get("average_monthly_net_pnl"),
             "full_median_monthly_net_pnl": full_map.get("median_monthly_net_pnl"),
             "full_worst_month_net_pnl": full_map.get("worst_month_net_pnl"),
-            "full_max_single_month_net_share_of_positive": full_map.get(
-                "max_single_month_net_share_of_positive"
-            ),
+            "full_max_single_month_net_share_of_positive": full_map.get("max_single_month_net_share_of_positive"),
             "full_drawdown_within_2x_average_monthly_net_pnl": full_map.get(
                 "drawdown_within_2x_average_monthly_net_pnl"
             ),
@@ -1119,9 +1107,7 @@ def _audit_research_decision_replay(details: dict[str, Any]) -> None:
                 "edge_floor_metric": row_map.get("edge_floor_metric"),
                 "mean_net_edge_pts_per_trade": row_map.get("mean_net_edge_pts_per_trade"),
                 "edge_floor_cleared": row_map.get("edge_floor_cleared"),
-                "out_of_sample_mean_net_edge_pts_per_trade": row_map.get(
-                    "out_of_sample_mean_net_edge_pts_per_trade"
-                ),
+                "out_of_sample_mean_net_edge_pts_per_trade": row_map.get("out_of_sample_mean_net_edge_pts_per_trade"),
                 "risk_gate_drawdown_within_2x_average_monthly_net_pnl": row_map.get(
                     "risk_gate_drawdown_within_2x_average_monthly_net_pnl"
                 ),
@@ -1150,10 +1136,7 @@ def _research_decision_replay_next_actions(
         actions.append("backfill_validation_summary_identity_fields")
     if "research_decision" in traceability_missing:
         actions.append("backfill_research_decision_status_reason_evidence")
-    if any(
-        field in traceability_missing
-        for field in ("edge_floor_metric", "splits.full.mean_net_edge_pts_per_trade")
-    ):
+    if any(field in traceability_missing for field in ("edge_floor_metric", "splits.full.mean_net_edge_pts_per_trade")):
         actions.append("backfill_round_trip_net_edge_metrics")
     actions.append("exclude_from_paper_live_candidate_comparison_until_backfilled")
     return actions
@@ -1435,12 +1418,8 @@ def _audit_research_readiness_summary(details: dict[str, Any]) -> None:
         "total_candidates": len(readiness_rows),
         "paper_live_candidates": [row["candidate"] for row in readiness_rows if row["paper_live_eligible"]],
         "counts_by_status": _count_values(row["readiness_status"] for row in readiness_rows),
-        "counts_by_blocker": _count_values(
-            blocker for row in readiness_rows for blocker in row.get("blockers", [])
-        ),
-        "command_families_by_blocker": _research_readiness_command_families_by_blocker(
-            readiness_rows
-        ),
+        "counts_by_blocker": _count_values(blocker for row in readiness_rows for blocker in row.get("blockers", [])),
+        "command_families_by_blocker": _research_readiness_command_families_by_blocker(readiness_rows),
         "rows": readiness_rows,
     }
 
@@ -1463,27 +1442,15 @@ def _research_readiness_summary_row(row: dict[str, Any]) -> dict[str, Any]:
         "command_families": _research_readiness_command_families(blockers),
         "metrics": {
             "mean_net_edge_pts_per_trade": row.get("mean_net_edge_pts_per_trade"),
-            "out_of_sample_mean_net_edge_pts_per_trade": row.get(
-                "out_of_sample_mean_net_edge_pts_per_trade"
-            ),
+            "out_of_sample_mean_net_edge_pts_per_trade": row.get("out_of_sample_mean_net_edge_pts_per_trade"),
             "edge_floor_pts": row.get("edge_floor_pts"),
             "full_events": row.get("full_events"),
             "out_of_sample_trading_days": row.get("out_of_sample_trading_days"),
-            "drawdown_within_2x_average_monthly_net_pnl": row.get(
-                "drawdown_within_2x_average_monthly_net_pnl"
-            ),
-            "out_of_sample_pnl_distribution_checked": row.get(
-                "out_of_sample_pnl_distribution_checked"
-            ),
-            "out_of_sample_loss_distribution_checked": row.get(
-                "out_of_sample_loss_distribution_checked"
-            ),
-            "out_of_sample_single_trade_dominance_passed": row.get(
-                "out_of_sample_single_trade_dominance_passed"
-            ),
-            "out_of_sample_single_day_dominance_passed": row.get(
-                "out_of_sample_single_day_dominance_passed"
-            ),
+            "drawdown_within_2x_average_monthly_net_pnl": row.get("drawdown_within_2x_average_monthly_net_pnl"),
+            "out_of_sample_pnl_distribution_checked": row.get("out_of_sample_pnl_distribution_checked"),
+            "out_of_sample_loss_distribution_checked": row.get("out_of_sample_loss_distribution_checked"),
+            "out_of_sample_single_trade_dominance_passed": row.get("out_of_sample_single_trade_dominance_passed"),
+            "out_of_sample_single_day_dominance_passed": row.get("out_of_sample_single_day_dominance_passed"),
             "parity_evidence_status": row.get("parity_evidence_status"),
             "replay_match_pct": row.get("replay_match_pct"),
         },
@@ -1518,11 +1485,7 @@ def _research_readiness_next_actions(blockers: list[str]) -> list[str]:
 def _research_readiness_command_families_by_blocker(
     readiness_rows: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    blockers = {
-        str(blocker)
-        for row in readiness_rows
-        for blocker in row.get("blockers", [])
-    }
+    blockers = {str(blocker) for row in readiness_rows for blocker in row.get("blockers", [])}
     return {
         family["blocker"]: {
             "command_family": family["command_family"],
@@ -1609,19 +1572,11 @@ def _research_refinement_iteration_errors(
 
     candidates_raw = advancement.get("candidates")
     candidates = candidates_raw if isinstance(candidates_raw, list) else []
-    candidate_ids = [
-        str(row.get("candidate") or "")
-        for row in candidates
-        if isinstance(row, dict)
-    ]
+    candidate_ids = [str(row.get("candidate") or "") for row in candidates if isinstance(row, dict)]
     if len(candidate_ids) != len(set(candidate_ids)):
         errors.append("duplicate_advancement_candidate")
 
-    candidate_by_id = {
-        str(row.get("candidate") or ""): row
-        for row in candidates
-        if isinstance(row, dict)
-    }
+    candidate_by_id = {str(row.get("candidate") or ""): row for row in candidates if isinstance(row, dict)}
     missing_targets = [str(candidate) for candidate in target_group if str(candidate) not in candidate_by_id]
     if missing_targets:
         errors.append("target_candidate_missing")
@@ -1770,17 +1725,9 @@ def _research_refinement_iteration_payload(
 def _research_candidate_advancement_payload(readiness: dict[str, Any]) -> dict[str, Any]:
     rows = readiness.get("rows")
     readiness_rows = rows if isinstance(rows, list) else []
-    candidates = [
-        _research_candidate_advancement_row(row)
-        for row in readiness_rows
-        if isinstance(row, dict)
-    ]
+    candidates = [_research_candidate_advancement_row(row) for row in readiness_rows if isinstance(row, dict)]
     route, target_status = _research_candidate_advancement_route(candidates)
-    target_group = [
-        str(row.get("candidate") or "")
-        for row in candidates
-        if row["advancement_status"] == target_status
-    ]
+    target_group = [str(row.get("candidate") or "") for row in candidates if row["advancement_status"] == target_status]
     return {
         "generated_at": _now_iso(),
         "schema": "research.readiness_candidate_advancement.v1",
@@ -1789,9 +1736,7 @@ def _research_candidate_advancement_payload(readiness: dict[str, Any]) -> dict[s
         "recommended_candidate": target_group[0] if target_group else "",
         "recommended_candidate_group": target_group,
         "summary": {
-            "counts_by_advancement_status": _count_values(
-                row["advancement_status"] for row in candidates
-            ),
+            "counts_by_advancement_status": _count_values(row["advancement_status"] for row in candidates),
         },
         "candidates": candidates,
     }
@@ -1894,10 +1839,7 @@ def _is_archive_candidate(blockers: set[str]) -> bool:
 
 
 def _has_parity_repair_blocker(blockers: set[str]) -> bool:
-    return any(
-        blocker.startswith("parity_evidence_") and blocker != "parity_evidence_missing"
-        for blocker in blockers
-    )
+    return any(blocker.startswith("parity_evidence_") and blocker != "parity_evidence_missing" for blocker in blockers)
 
 
 def _has_evidence_backfill_blocker(blockers: set[str]) -> bool:
@@ -2353,9 +2295,7 @@ def _research_record_risk_metrics(
         "full_average_monthly_net_pnl": full.get("average_monthly_net_pnl"),
         "full_median_monthly_net_pnl": full.get("median_monthly_net_pnl"),
         "full_worst_month_net_pnl": full.get("worst_month_net_pnl"),
-        "full_drawdown_within_2x_average_monthly_net_pnl": full.get(
-            "drawdown_within_2x_average_monthly_net_pnl"
-        ),
+        "full_drawdown_within_2x_average_monthly_net_pnl": full.get("drawdown_within_2x_average_monthly_net_pnl"),
         "out_of_sample_max_drawdown_net_pts": oos.get("max_drawdown_net_pts"),
         "out_of_sample_average_monthly_net_pnl": oos.get("average_monthly_net_pnl"),
         "out_of_sample_median_monthly_net_pnl": oos.get("median_monthly_net_pnl"),
@@ -2363,9 +2303,7 @@ def _research_record_risk_metrics(
         "out_of_sample_drawdown_within_2x_average_monthly_net_pnl": oos.get(
             "drawdown_within_2x_average_monthly_net_pnl"
         ),
-        "drawdown_within_2x_average_monthly_net_pnl": hard_gate.get(
-            "drawdown_within_2x_average_monthly_net_pnl"
-        ),
+        "drawdown_within_2x_average_monthly_net_pnl": hard_gate.get("drawdown_within_2x_average_monthly_net_pnl"),
     }
     return {key: value for key, value in metrics.items() if value is not None}
 
@@ -2412,9 +2350,7 @@ def cmd_backfill_research_decisions(args: argparse.Namespace) -> int:
         "skipped": skipped,
     }
     out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", "")
-        else (ROOT / "reports" / "research_decision_backfill.json")
+        Path(args.out).resolve() if getattr(args, "out", "") else (ROOT / "reports" / "research_decision_backfill.json")
     )
     _write_json(out_path, payload)
     print(f"[research.factory] research-decision backfill plan: {out_path}")
@@ -2429,9 +2365,7 @@ def cmd_parity_evidence_template(args: argparse.Namespace) -> int:
     """Emit a canonical parity-evidence payload from explicit operator inputs."""
     candidate = str(args.candidate)
     summary_path = str(args.summary_path or "")
-    checked_dimensions = list(getattr(args, "checked_dimension", []) or []) or list(
-        _RESEARCH_PARITY_REQUIRED_CHECKS
-    )
+    checked_dimensions = list(getattr(args, "checked_dimension", []) or []) or list(_RESEARCH_PARITY_REQUIRED_CHECKS)
     parity_evidence = {
         "artifact_scope": "parity_evidence",
         "match_pct": getattr(args, "match_pct", None),
@@ -2471,9 +2405,7 @@ def cmd_parity_evidence_validate(args: argparse.Namespace) -> int:
         parity_evidence=parity_evidence,
     )
     out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", "")
-        else (ROOT / "reports" / "parity_evidence_validation.json")
+        Path(args.out).resolve() if getattr(args, "out", "") else (ROOT / "reports" / "parity_evidence_validation.json")
     )
     _write_json(out_path, artifact)
     print(f"[research.factory] parity-evidence validation: {out_path}")
@@ -2537,9 +2469,7 @@ def cmd_parity_evidence_attach(args: argparse.Namespace) -> int:
         report["mutates_summary"] = True
 
     out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", "")
-        else (ROOT / "reports" / "parity_evidence_attach.json")
+        Path(args.out).resolve() if getattr(args, "out", "") else (ROOT / "reports" / "parity_evidence_attach.json")
     )
     _write_json(out_path, report)
     print(f"[research.factory] parity-evidence attach: {out_path}")
@@ -2619,12 +2549,8 @@ def cmd_oos_distribution_evidence_template(args: argparse.Namespace) -> int:
         "artifact_scope": "oos_distribution_evidence",
         "pnl_distribution_checked": _oos_pass_fail_to_bool(getattr(args, "pnl_distribution", "")),
         "loss_distribution_checked": _oos_pass_fail_to_bool(getattr(args, "loss_distribution", "")),
-        "single_trade_dominance_passed": _oos_pass_fail_to_bool(
-            getattr(args, "single_trade_dominance", "")
-        ),
-        "single_day_dominance_passed": _oos_pass_fail_to_bool(
-            getattr(args, "single_day_dominance", "")
-        ),
+        "single_trade_dominance_passed": _oos_pass_fail_to_bool(getattr(args, "single_trade_dominance", "")),
+        "single_day_dominance_passed": _oos_pass_fail_to_bool(getattr(args, "single_day_dominance", "")),
     }
     validation = _oos_distribution_evidence_row(candidate, summary_path, evidence)
     payload = {
@@ -2637,9 +2563,7 @@ def cmd_oos_distribution_evidence_template(args: argparse.Namespace) -> int:
         "validation": validation,
     }
     out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", "")
-        else ROOT / "reports" / "oos_distribution_evidence.json"
+        Path(args.out).resolve() if getattr(args, "out", "") else ROOT / "reports" / "oos_distribution_evidence.json"
     )
     _write_json(out_path, payload)
     print(f"[research.factory] oos-distribution evidence template: {out_path}")
@@ -2826,9 +2750,7 @@ def _oos_distribution_evidence_attach_report(
 
     status = "blocked" if errors else "ready_to_apply"
     planned_update = {
-        field: evidence_payload[field]
-        for field in _OOS_DISTRIBUTION_EVIDENCE_FIELDS
-        if field in evidence_payload
+        field: evidence_payload[field] for field in _OOS_DISTRIBUTION_EVIDENCE_FIELDS if field in evidence_payload
     }
     return {
         "generated_at": _now_iso(),
@@ -2879,10 +2801,7 @@ def cmd_oos_distribution_evidence_backfill_plan(args: argparse.Namespace) -> int
     )
     _write_json(out_path, payload)
     print(f"[research.factory] oos-distribution evidence backfill plan: {out_path}")
-    print(
-        "[research.factory] "
-        f"mode=dry_run planned={payload['planned_count']} skipped={payload['skipped_count']}"
-    )
+    print(f"[research.factory] mode=dry_run planned={payload['planned_count']} skipped={payload['skipped_count']}")
     return 0
 
 
@@ -3170,11 +3089,7 @@ def cmd_readiness_summary(args: argparse.Namespace) -> int:
         "generated_at": _now_iso(),
         **details["research_readiness_summary"],
     }
-    out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", "")
-        else (ROOT / "reports" / "readiness_summary.json")
-    )
+    out_path = Path(args.out).resolve() if getattr(args, "out", "") else (ROOT / "reports" / "readiness_summary.json")
     _write_json(out_path, payload)
     print(f"[research.factory] readiness summary: {out_path}")
     print(
@@ -3198,16 +3113,11 @@ def cmd_readiness_backfill_queue(args: argparse.Namespace) -> int:
         details["research_candidate_advancement"],
     )
     out_path = (
-        Path(args.out).resolve()
-        if getattr(args, "out", "")
-        else (ROOT / "reports" / "readiness_backfill_queue.json")
+        Path(args.out).resolve() if getattr(args, "out", "") else (ROOT / "reports" / "readiness_backfill_queue.json")
     )
     _write_json(out_path, payload)
     print(f"[research.factory] readiness backfill queue: {out_path}")
-    print(
-        "[research.factory] "
-        f"mode=dry_run queued={payload['queue_count']} skipped={payload['skipped_count']}"
-    )
+    print(f"[research.factory] mode=dry_run queued={payload['queue_count']} skipped={payload['skipped_count']}")
     return 0 if payload["status"] == "ready" else 1
 
 
@@ -3233,8 +3143,7 @@ def cmd_readiness_candidate_advancement(args: argparse.Namespace) -> int:
     _write_json(out_path, payload)
     print(f"[research.factory] readiness candidate advancement: {out_path}")
     print(
-        "[research.factory] "
-        f"route={payload['recommended_research_route']} candidate={payload['recommended_candidate']}"
+        f"[research.factory] route={payload['recommended_research_route']} candidate={payload['recommended_candidate']}"
     )
     return 0
 
@@ -3277,16 +3186,8 @@ def _research_readiness_backfill_queue_payload(
     row_list = rows if isinstance(rows, list) else []
     advancement_rows = advancement.get("candidates")
     advancement_list = advancement_rows if isinstance(advancement_rows, list) else []
-    readiness_ids = [
-        str(row.get("candidate") or "")
-        for row in row_list
-        if isinstance(row, dict)
-    ]
-    advancement_ids = [
-        str(row.get("candidate") or "")
-        for row in advancement_list
-        if isinstance(row, dict)
-    ]
+    readiness_ids = [str(row.get("candidate") or "") for row in row_list if isinstance(row, dict)]
+    advancement_ids = [str(row.get("candidate") or "") for row in advancement_list if isinstance(row, dict)]
     errors: list[str] = []
     if readiness_summary.get("schema") != "research.readiness_summary.v1":
         errors.append("invalid_readiness_schema")
@@ -3304,9 +3205,7 @@ def _research_readiness_backfill_queue_payload(
         return _blocked_research_readiness_backfill_queue(errors)
 
     advancement_by_candidate = {
-        str(row.get("candidate") or ""): row
-        for row in advancement_list
-        if isinstance(row, dict)
+        str(row.get("candidate") or ""): row for row in advancement_list if isinstance(row, dict)
     }
     queue: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -3314,9 +3213,7 @@ def _research_readiness_backfill_queue_payload(
         if not isinstance(row, dict):
             continue
         candidate = str(row.get("candidate") or "")
-        advancement_status = str(
-            advancement_by_candidate[candidate].get("advancement_status") or ""
-        )
+        advancement_status = str(advancement_by_candidate[candidate].get("advancement_status") or "")
         if advancement_status != "evidence_backfill_candidate":
             skipped.append(
                 {
@@ -3346,9 +3243,7 @@ def _research_readiness_backfill_queue_payload(
             blocker = str(family.get("blocker") or "")
             priority, blocked_gate = _research_readiness_backfill_queue_priority(blocker)
             commands = [
-                str(command)
-                for command in family.get("commands", [])
-                if not str(command).endswith("-backfill-plan")
+                str(command) for command in family.get("commands", []) if not str(command).endswith("-backfill-plan")
             ]
             queue.append(
                 {
@@ -3677,9 +3572,7 @@ def _strategy_family_intake_validation_payload(
         "greeks_exposure",
         "validation_plan.net_edge_floor_pts",
     )
-    residual_spec_errors = [
-        err for err in spec_validation_errors if not err.startswith(_covered_prefixes)
-    ]
+    residual_spec_errors = [err for err in spec_validation_errors if not err.startswith(_covered_prefixes)]
 
     errors: list[str] = []
     if family not in allowed_families:
@@ -3840,37 +3733,21 @@ def _strategy_family_shape_requirements() -> dict[str, dict[str, Any]]:
     }
 
 
-def _load_experiment_stats() -> dict[str, Any]:
-    runs_root = ROOT / "experiments" / "runs"
-    per_alpha: dict[str, dict[str, Any]] = {}
-    if not runs_root.exists():
-        return per_alpha
+def _load_experiment_stats(evidence_root: Path) -> dict[str, Any]:
+    from research.registry.legacy_evidence import combined_run_stats
 
-    for meta_path in sorted(runs_root.glob("*/meta.json")):
-        try:
-            payload = json.loads(meta_path.read_text())
-        except (OSError, ValueError):
-            continue
-        alpha_id = str(payload.get("alpha_id", "")).strip()
-        run_id = str(payload.get("run_id", "")).strip()
-        ts = str(payload.get("timestamp", "")).strip()
-        if not alpha_id:
-            continue
-        row = per_alpha.setdefault(alpha_id, {"run_count": 0, "latest_run_id": "", "latest_timestamp": ""})
-        row["run_count"] = int(row["run_count"]) + 1
-        if ts and ts >= str(row["latest_timestamp"]):
-            row["latest_timestamp"] = ts
-            row["latest_run_id"] = run_id
-    return per_alpha
+    return combined_run_stats(evidence_root, ROOT / "experiments" / "runs")
 
 
 def cmd_index(args: argparse.Namespace) -> int:
-    from hft_platform.alpha.evidence import EvidenceRootError
+    from hft_platform.alpha.evidence import EvidenceRootError, evidence_root
     from hft_platform.alpha.status import effective_status, ledger_events_by_alpha
     from research.registry.alpha_registry import AlphaRegistry
 
     try:
-        ledger = ledger_events_by_alpha()
+        root = evidence_root()
+        ledger = ledger_events_by_alpha(root)
+        exp_stats = _load_experiment_stats(root)
     except (EvidenceRootError, ValueError, OSError) as exc:
         print(f"[research.factory] index: cannot read the verdict ledger: {exc}", file=sys.stderr)
         return 2
@@ -3895,10 +3772,12 @@ def cmd_index(args: argparse.Namespace) -> int:
             }
         )
 
-    exp_stats = _load_experiment_stats()
     for item in manifests:
         stats = exp_stats.get(item["alpha_id"], {})
         item["run_count"] = int(stats.get("run_count", 0))
+        item["legacy_run_count"] = int(stats.get("legacy_run_count", 0))
+        item["governed_run_count"] = int(stats.get("governed_run_count", 0))
+        item["quarantined_run_count"] = int(stats.get("quarantined_run_count", 0))
         item["latest_run_id"] = str(stats.get("latest_run_id", ""))
         item["latest_timestamp"] = str(stats.get("latest_timestamp", ""))
 

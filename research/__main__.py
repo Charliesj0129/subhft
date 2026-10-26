@@ -12,6 +12,11 @@ Pipeline commands (alpha lifecycle -- strict / promotable):
   run               Strict SOP: factory optimize -> Gate A/B/C -> Gate D/E -> index
   triage            Debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1; never promotable)
 
+Evidence commands (ADR-005 section 6):
+  status [--alpha ID] [--json]  Effective alpha status from the verdict ledger
+  evidence init                 Create the evidence layout and git init it locally
+  evidence import-kills         Archive pre-ledger kills into legacy/kills.jsonl
+
 Scaffold command:
   scaffold <alpha_id> [--paper ref] [--complexity O1|ON]
                     Scaffold a new governed alpha package under research/alphas/
@@ -52,12 +57,14 @@ _MAINT_CMDS = frozenset({"audit-note-citations", "backfill-note-citations", "tri
 _BATCH_CMDS = frozenset({"batch-search"})
 _HYPOTHESIS_CMD = "hypothesis-queue"
 _AUTO_SCAFFOLD_CMD = "auto-scaffold"
+_EVIDENCE_CMDS = frozenset({"status", "evidence"})
 
 _USAGE = """\
 Usage: python -m research <command> [options]
 
 Factory:  init | clean | converge-tools | audit | index | optimize
 Pipeline: run  | triage
+Evidence: status | evidence {init|import-kills}
 Scaffold: scaffold <alpha_id>
 Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>
@@ -88,6 +95,11 @@ def main() -> int:
         from research.pipeline import main as _pipeline_main
 
         return int(_pipeline_main())
+
+    if cmd in _EVIDENCE_CMDS:
+        from research.registry.status_cli import main as _status_main
+
+        return int(_status_main(sys.argv[1:]))
 
     if cmd == _SCAFFOLD_CMD:
         # Remove "scaffold" so alpha_scaffold's positional arg is alpha_id at [1].
@@ -138,11 +150,13 @@ def main() -> int:
     if cmd == _HYPOTHESIS_CMD:
         sys.argv.pop(1)
         from research.tools.hypothesis_queue import main as _hypothesis_main
+
         return int(_hypothesis_main())
 
     if cmd == _AUTO_SCAFFOLD_CMD:
         sys.argv.pop(1)
         from research.tools.auto_scaffold import main as _auto_scaffold_main
+
         return int(_auto_scaffold_main())
 
     print(f"Unknown command: {cmd!r}\n\n{_USAGE}", file=sys.stderr)

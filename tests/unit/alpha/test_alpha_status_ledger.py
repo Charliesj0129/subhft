@@ -264,7 +264,7 @@ def factory_index(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
     registry = types.SimpleNamespace(errors=(), discover=lambda _path: {"a1": _alpha(AlphaStatus.GATE_C)})
     monkeypatch.setattr("research.registry.alpha_registry.AlphaRegistry", lambda: registry)
-    monkeypatch.setattr(factory, "_load_experiment_stats", lambda: {})
+    monkeypatch.setattr(factory, "_load_experiment_stats", lambda _root: {})
     out = tmp_path / "index.json"
     return lambda: (factory.cmd_index(Namespace(out=str(out))), out)
 
