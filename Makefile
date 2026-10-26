@@ -755,11 +755,18 @@ research-promote-batch: ## Batch run promotion pipeline across alphas (dry-run b
 	$(PY) -m hft_platform alpha promote-batch $(ARGS)
 
 research-batch-search: ## Batch search arXiv papers (QUERIES="query1;query2;query3")
-	@if [ -z "$(QUERIES)" ]; then \
+	@if [ -z "$$QUERIES" ]; then \
 		echo "Usage: make research-batch-search QUERIES=\"order flow imbalance;market microstructure\""; \
 		exit 2; \
 	fi
-	@q='$(QUERIES)'; set -f; IFS=';'; set -- $$q; unset IFS; \
+	@# QUERIES is read from the environment, never pasted into shell code, so quotes in it are data.
+	@# Split on ';', trim spaces and one pair of surrounding quotes per query, drop empty ones.
+	@set -f; IFS=';'; set -- $$QUERIES; unset IFS; \
+	for q do shift; \
+		q=$$(printf '%s' "$$q" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//' -e "s/^'\(.*\)'$$/\1/" -e 's/^"\(.*\)"$$/\1/'); \
+		[ -n "$$q" ] && set -- "$$@" "$$q"; \
+	done; \
+	if [ $$# -eq 0 ]; then echo "research-batch-search: QUERIES has no non-empty query" >&2; exit 2; fi; \
 	$(PY) -m research batch-search "$$@" $(ARGS)
 
 research-hypothesis-ingest: ## Ingest hypotheses from paper index into queue

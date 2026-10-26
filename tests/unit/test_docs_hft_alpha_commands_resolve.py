@@ -14,7 +14,8 @@ from pathlib import Path
 from hft_platform.cli._parser import build_parser
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_USAGE = re.compile(r"\bhft alpha ([a-z][a-z0-9-]*)")
+# "hft alpha validate/promote/canary" lists several subcommands; each one must exist.
+_USAGE = re.compile(r"\bhft alpha ([a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*)")
 # Historical plans record what was run at the time; they are not instructions.
 _EXCLUDED_PREFIXES = ("docs/superpowers/", "docs/archive/")
 
@@ -46,7 +47,14 @@ def test_documented_hft_alpha_subcommands_exist():
     for doc in _tracked_docs():
         for lineno, line in enumerate(doc.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
             for match in _USAGE.finditer(line):
-                if match.group(1) not in known:
-                    unknown.append(f"{doc.relative_to(_REPO_ROOT)}:{lineno}: hft alpha {match.group(1)}")
+                for name in match.group(1).split("/"):
+                    if name not in known:
+                        unknown.append(f"{doc.relative_to(_REPO_ROOT)}:{lineno}: hft alpha {name}")
 
     assert not unknown, "documented hft alpha subcommands that do not exist:\n" + "\n".join(unknown)
+
+
+def test_usage_pattern_reads_every_name_in_a_slash_list():
+    match = _USAGE.search("`hft alpha validate/review-bogus-command` are live")
+    assert match is not None
+    assert match.group(1).split("/") == ["validate", "review-bogus-command"]
