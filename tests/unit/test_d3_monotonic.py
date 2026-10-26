@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
+
 
 class TestStormGuardMonotonic:
     """Sites 3a-3c: StormGuard cooldown uses time.monotonic()."""

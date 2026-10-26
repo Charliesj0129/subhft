@@ -22,6 +22,7 @@ from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops import quarantine_requests, rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
 from hft_platform.ops.flatten_gate import FlattenGate, FlattenStatus
@@ -29,7 +30,7 @@ from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk import daily_loss_state, kill_switch, manual_latches
 from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
-from hft_platform.risk.loss_exit import LossExitController, OpenPosition, is_platform_exit
+from hft_platform.risk.loss_exit import TRIGGER_KILL_SWITCH, LossExitController, OpenPosition, is_platform_exit
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
@@ -57,6 +58,22 @@ def _payload_field(payload: Any, key: str) -> Any:
 def _read_kill_switch_reason(path: str) -> str:
     """Read kill-switch reason from JSON file. Runs in executor thread."""
     return kill_switch.read_reason(path)
+
+
+# Writers of the kill switch whose switch may close the book: a person, by
+# ``hft risk halt`` or Telegram ``/stop``. The startup recovery gate writes it
+# because the position truth is unknown, and a closing order computed from an
+# unknown book can open a position; an unreadable or actor-less record is
+# treated the same way.
+_KILL_FLATTEN_ACTORS = frozenset({"cli", "telegram"})
+
+
+def _read_kill_switch_actor(path: str) -> str:
+    """Actor recorded in the kill-switch file, ``"unreadable"`` when it cannot be read. Runs in an executor."""
+    try:
+        return str(kill_switch.read_payload(path).get("actor", ""))
+    except (OSError, ValueError, AttributeError):
+        return "unreadable"
 
 
 def _log_safety_dispatch_error(task: "asyncio.Task[None]") -> None:
@@ -161,6 +178,10 @@ class HFTSystem:
     # written meanwhile is not overwritten with this one's result.
     _operator_flatten_request_id: int = 0
     _flatten_gate: FlattenGate | None = None
+    # The kill switch is holding open positions it may not close; logged once.
+    _kill_flatten_blocked_logged: bool = False
+    # Who wrote the present kill-switch file, refreshed every supervise tick.
+    _kill_switch_actor: str = ""
 
     def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
         risk_engine = getattr(self, "risk_engine", None)
@@ -268,12 +289,42 @@ class HFTSystem:
                     self._daily_loss_state_written = document
                 except Exception as exc:  # noqa: BLE001 - retried next tick
                     logger.error("daily_loss_state_write_failed", error=str(exc))
+            if not validator.halt_triggered and manual_latches.DAILY_LOSS in self._manual_latches_active:
+                await self._release_daily_loss_latch_after_roll(int(validator.export_state()["boundary_ns"]))
         try:
             latches = await asyncio.to_thread(manual_latches.active)
         except Exception as exc:  # noqa: BLE001 - keep the last known set
             logger.error("manual_latch_read_failed", error=str(exc))
             latches = dict(self._manual_latches_active)
         self._apply_manual_latches(latches)
+
+    @staticmethod
+    async def _release_daily_loss_latch_after_roll(boundary_ns: int) -> None:
+        """Release a daily-loss latch written before the current trading day began.
+
+        The validator has already released its own stop for the day (it does
+        so only on a complete valuation), so the latch is all that still holds
+        HALT. A latch written after the 05:00 boundary is today's stop and
+        stays. An unreadable latch has no date to compare and stays too.
+        """
+
+        def _before_roll(record: Any) -> bool:
+            ts = record.get("timestamp_ns") if isinstance(record, dict) else None
+            return type(ts) is int and ts < boundary_ns
+
+        try:
+            released = await asyncio.to_thread(
+                manual_latches.release_when,
+                manual_latches.DAILY_LOSS,
+                _before_roll,
+                reason="trading day rolled at 05:00 Taipei",
+                actor="engine:day_roll",
+            )
+        except Exception as exc:  # noqa: BLE001 - retried next tick; the latch still holds HALT
+            logger.error("daily_loss_latch_release_failed", error=str(exc))
+            return
+        if released:
+            logger.warning("daily_loss_latch_released_at_day_roll", boundary_ns=boundary_ns)
 
     def _run_loss_exit(self) -> None:
         """Submit the FORCE_FLAT intents ``LossExitController`` says are due.
@@ -321,6 +372,9 @@ class HFTSystem:
             for p in self.position_store.snapshot_open_positions().values()
             if p.net_qty
         ]
+        kill = auto_enabled and bool(getattr(getattr(self, "storm_guard", None), "kill_switch_hold", False))
+        # Evaluated with the switch off too, so the gauge returns to 0.
+        kill_flatten = self._kill_switch_may_flatten(kill and bool(positions)) and kill
         # Called with no positions too: that is what clears the retry
         # bookkeeping of symbols that have since closed.
         meta = self.position_store.metadata
@@ -342,8 +396,13 @@ class HFTSystem:
             multiplier=meta.contract_multiplier,
             tick_size=meta.tick_size_scaled,
             operator_symbols=operator_symbols,
+            kill_switch=kill_flatten,
         )
-        if operator_symbols:
+        # One call per tick: each call drops the cancel retry bookkeeping of
+        # orders it was not given, so two would reset each other's throttle.
+        if kill:
+            intents.extend(controller.cancel_intents(self._resting_orders(), now_ns, trigger=TRIGGER_KILL_SWITCH))
+        elif operator_symbols:
             resting = [o for o in self._resting_orders() if o[2] in operator_symbols]
             intents.extend(controller.cancel_intents(resting, now_ns))
         # With the gateway on, RiskEngine.run() is never started and nothing
@@ -363,6 +422,43 @@ class HFTSystem:
                     reason=intent.reason,
                     error=str(e),
                 )
+
+    def _kill_switch_may_flatten(self, positions_open: bool) -> bool:
+        """Whether the kill switch may close the book now, and say so when it may not.
+
+        Only for a switch a person set (``_KILL_FLATTEN_ACTORS``; never the
+        startup recovery gate, whose position store is not trusted) and only on
+        evidence that the book is right: a reconciliation within
+        ``max(15 s, 3 sync intervals)`` that found every platform position equal
+        to the broker's. Otherwise the switch only stops trading; the gauge
+        ``kill_switch_flatten_blocked`` (alert ``KillSwitchFlattenBlocked``)
+        says positions are being held unclosed.
+        """
+        recon = getattr(self, "recon_service", None)
+        verified_ns = int(getattr(recon, "positions_verified_mono_ns", 0) or 0)
+        interval_s = float(getattr(recon, "check_interval_s", 5.0) or 5.0)  # precision-ok
+        max_age_ns = int(max(15.0, 3 * interval_s) * 1_000_000_000)
+        verified = verified_ns > 0 and time.monotonic_ns() - verified_ns <= max_age_ns
+        actor = self._kill_switch_actor
+        by_operator = not getattr(self, "_recovery_halted", False) and actor in _KILL_FLATTEN_ACTORS
+        blocked = positions_open and not (verified and by_operator)
+        try:
+            MetricsRegistry.get().kill_switch_flatten_blocked.set(1 if blocked else 0)
+        except Exception as exc:  # noqa: BLE001 - the gauge must never stop the exit
+            logger.warning("kill_switch_flatten_blocked_gauge_failed", error=str(exc))
+        if blocked and not self._kill_flatten_blocked_logged:
+            logger.critical(
+                "kill_switch_flatten_blocked",
+                reason=(
+                    "no recent reconciliation confirmed the positions against the broker"
+                    if by_operator
+                    else "the kill switch was not set by an operator"
+                ),
+                actor=actor,
+                verified_age_s=(time.monotonic_ns() - verified_ns) / 1e9 if verified_ns else None,
+            )
+        self._kill_flatten_blocked_logged = blocked
+        return verified and by_operator
 
     def _resting_orders(self) -> list[tuple[str, str, str]]:
         """``(order_key, strategy_id, symbol)`` for each order the broker holds open.
@@ -2450,13 +2546,18 @@ class HFTSystem:
                 # Every tick, not just on entry: the hold is what stops HALT
                 # de-escalating out from under a latch that is still present.
                 self.storm_guard.set_kill_switch_hold(True)
+                # Every tick too: a /stop written over a recovery latch changes
+                # who may close the book.
+                self._kill_switch_actor = await loop.run_in_executor(None, _read_kill_switch_actor, kill_switch_path)
             elif not self._recovery_halted:
                 # The file is the operator's authority, so removing it releases
                 # the hold and HALT de-escalates through the normal cooldown.
                 # A startup recovery halt is the one case that does not: see
                 # ``_on_startup_recovery_halt``.
                 self.storm_guard.set_kill_switch_hold(False)
+                self._kill_switch_actor = ""
             else:
+                self._kill_switch_actor = ""
                 # Startup recovery pin: the hold is already True for the process
                 # lifetime and the file may be gone. Re-assert it so the exported
                 # gauge is rewritten every tick; a first write that failed would

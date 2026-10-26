@@ -296,6 +296,10 @@ Shadow deployment note:
 
 > `HFT_QUOTE_FLAP_*` 系列變數共同控制報價閃爍偵測行為。
 | `HFT_STORMGUARD_FEED_GAP_HALT_S` | `30` | 行情斷流觸發 HALT 門檻（秒） | 超過此值進入 HALT |
+| `HFT_STORMGUARD_ORDER_RTT_STORM_COUNT` | `3` | 幾筆下單 RTT ≥ `order_rtt_storm_us` 才進 STORM（只能減倉） | 1 = 舊的單筆規則 |
+| `HFT_STORMGUARD_ORDER_RTT_STORM_WINDOW_S` | `60` | 上述幾筆須落在幾秒內 | 配合 count |
+| `HFT_STORMGUARD_ORDER_RTT_STORM_DWELL_S` | `300` | 最後一筆慢單後要安靜幾秒 STORM 才結束 | 越長擺盪越少、停報價越久 |
+| `HFT_RECON_LATCH_RELEASE_AFTER_CLEAN` | `2` | 連續幾次乾淨對帳自動解除 `reconciliation_mismatch` latch | 至少 1 |
 | `HFT_DIAG_TRACE_ENABLED` | `0` | `1` = 啟用事件決策 trace 採樣 | 僅事故期間啟用 |
 | `HFT_DIAG_TRACE_SAMPLE_EVERY` | `100` | 每 N 事件採樣一筆決策 trace | 流量大時可提高 |
 | `HFT_ALPHA_AUDIT_ENABLED` | `0` | `1` = 啟用 Alpha 審計模式（release gate 必須設置） | `release-first-ops-gate` 前必須設為 `1` |

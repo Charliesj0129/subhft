@@ -85,7 +85,7 @@ class TestTelegramStop:
         assert kill_switch.read_payload()["actor"] == "telegram"
         [reply] = replies
         assert f"--token {kill_switch.current_token()}" in reply
-        assert "不會平倉" in reply
+        assert "對帳與券商一致才自動平倉" in reply
 
     def test_the_token_in_the_reply_releases_it(self, owner, capsys):
         from argparse import Namespace

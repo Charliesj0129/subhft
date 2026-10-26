@@ -371,7 +371,9 @@ async def cmd_stop(update: Any, context: Any) -> None:
     _log.warning("bot.stop_kill_switch_written", path=path, reason=reason)
     await update.message.reply_text(
         f"🛑 Kill switch 已寫入 {path}\n"
-        "Engine 在下一個 supervise tick（約 1 秒）讀到後進入 HALT：停止新單，撤單仍可送出。這不會平倉。\n"
+        "Engine 在下一個 supervise tick（約 1 秒）讀到後進入 HALT：停止新單並撤掉掛單。\n"
+        "部位：最近一次對帳與券商一致才自動平倉；對不上就不送單，"
+        "並發出 KillSwitchFlattenBlocked 警報。\n"
         "確認：hft risk status，或 stormguard_mode == 3\n"
         f"解除：hft risk resume --token {token} --reason ..."
     )

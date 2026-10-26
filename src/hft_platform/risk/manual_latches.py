@@ -1,17 +1,23 @@
-"""Durable manual latches: stops that only an operator can release.
+"""Durable latches: stops that survive a restart and end on evidence, not on a boot.
 
-Policy (2026-10-23): four conditions require an operator to resume trading --
-data loss, a reconciliation mismatch, an operator kill and the daily loss
-limit. Everything else recovers on its own. Data loss is the platform
-reduce-only latch in ``runtime_state.json`` and the operator kill is
-``risk/kill_switch.py``; this module holds the other two.
+Policy (2026-10-24, replacing the four operator-only stops of 10-23): the
+operator kill (``risk/kill_switch.py``) is the one stop only a person ends.
+The two latches here end on a condition the engine checks itself:
 
-Same shape as the kill switch, deliberately: one file per latch, and presence
-is the signal. The engine writes a latch and never removes one; ``hft risk
-rearm`` removes it, quoting the latch's token (``hft risk latches``) and a
-reason, and appends an audit line. A restart therefore cannot
-release a latch, which is the property the in-memory holds lacked -- on
-2026-10-22 a deploy restart cleared a daily-loss HALT in place.
+``daily_loss``
+    Released at the first 05:00 trading-day roll after it was written, once
+    the daily-loss validator has released its own stop for the new day
+    (``HFTSystem._sync_manual_latches``).
+``reconciliation_mismatch``
+    Released after consecutive trusted reconciliations in which the platform's
+    positions and the broker's agree (``ReconciliationService``).
+
+Same shape as the kill switch: one file per latch, and presence is the
+signal. A restart cannot release a latch, which is the property the in-memory
+holds lacked -- on 2026-10-22 a deploy restart cleared a daily-loss HALT in
+place. Every release, the engine's (``release_when``) or an operator's
+(``hft risk rearm``, quoting the token from ``hft risk latches``), appends an
+audit line first.
 
 The default directory is ``.state/manual_latches`` because ``.state`` is the
 engine's bind mount on the production host; ``.runtime`` and ``outputs`` are
@@ -22,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -133,3 +140,28 @@ def release(name: str, *, token: str, reason: str, actor: str, directory: Path |
         )
         target.unlink()
         return True
+
+
+def release_when(
+    name: str,
+    condition: Callable[[Any], bool],
+    *,
+    reason: str,
+    actor: str,
+    directory: Path | None = None,
+) -> bool:
+    """Release the latch when ``condition(record)`` holds; True if it did.
+
+    For the engine's own releases, whose authority is a condition it can check
+    (the trading day rolled, the books agree again) rather than a token an
+    operator read. ``record`` is the latch's JSON, or ``UNREADABLE_TOKEN`` when
+    the file cannot be parsed. Same audit line as an operator release. Blocking
+    IO; callers on the event loop run it in a thread.
+    """
+    target = _latch_path(name, directory)
+    if not target.exists():
+        return False
+    record = _record(target)
+    if not condition(record):
+        return False
+    return release(name, token=release_audit.token_for(record), reason=reason, actor=actor, directory=directory)

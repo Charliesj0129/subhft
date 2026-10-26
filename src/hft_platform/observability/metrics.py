@@ -164,6 +164,7 @@ class MetricsRegistry:
                 _pn("halt_drain_safety_intent_lost_total"),
                 _pn("loss_exit_orders_total"),
                 _pn("loss_exit_unpriced_total"),
+                _pn("kill_switch_flatten_blocked"),
                 # H2: HALT notification-callback dispatch observability
                 _pn("halt_callback_no_loop_total"),
                 _pn("halt_callback_schedule_failed_total"),
@@ -683,6 +684,11 @@ class MetricsRegistry:
             _pn("loss_exit_unpriced_total"),
             "Exit triggers that could not be priced (no two-sided book), by trigger",
             ["trigger"],
+        )
+        self.kill_switch_flatten_blocked = Gauge(
+            _pn("kill_switch_flatten_blocked"),
+            "1 while the kill switch holds open positions it will not close because no recent "
+            "reconciliation confirmed them against the broker, else 0",
         )
         # H2 (2026-04-25): observability for cross-thread HALT notification dispatch.
         # Production evidence: 8 days of HALT events with no Telegram delivery because

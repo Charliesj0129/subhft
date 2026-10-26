@@ -58,6 +58,7 @@ def _guard(**thresholds: object) -> StormGuard:
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("order_rtt_single_sample")
 def test_an_order_round_trip_can_escalate_on_its_own_threshold() -> None:
     """The trading-path input, at a scale where loop lag never goes."""
     guard = _guard(order_rtt_warm_us=200_000, order_rtt_storm_us=500_000)
@@ -130,9 +131,12 @@ def test_the_measured_healthy_distribution_sits_below_the_warm_threshold() -> No
 @pytest.mark.unit
 def test_two_and_a_half_seconds_at_the_broker_stops_new_quotes() -> None:
     """STORM is reduce-only for NEW/AMEND. That is the whole cost of arming
-    this input, and it must be reachable."""
+    this input, and it must be reachable: three orders at 2.5 s within the
+    minute reach it; the first two only warn."""
     guard = StormGuard()
 
+    assert guard.update(order_rtt_us=2_500_000) is StormGuardState.WARM
+    assert guard.update(order_rtt_us=2_500_000) is StormGuardState.WARM
     assert guard.update(order_rtt_us=2_500_000) is StormGuardState.STORM
 
 

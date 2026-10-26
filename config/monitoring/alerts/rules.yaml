@@ -511,9 +511,10 @@ groups:
         description: "StormGuard has been in HALT state for over 5 minutes. Manual intervention may be required."
         runbook_url: "docs/runbooks/StormGuardHalt.md"
 
-  # The durable stops that only an operator can release (risk/kill_switch.py,
-  # risk/manual_latches.py). Each holds HALT across restarts; StormGuardHalt
-  # says trading stopped, these say which hand has to let go.
+  # The durable stops (risk/kill_switch.py, risk/manual_latches.py). Each holds
+  # HALT across restarts; StormGuardHalt says trading stopped, these say why.
+  # Only the kill switch needs a person; the latches end on evidence the engine
+  # checks (the 05:00 roll, two clean reconciliations).
   - alert: KillSwitchActive
     expr: kill_switch_active == 1
     for: 0s
@@ -521,7 +522,17 @@ groups:
         severity: critical
     annotations:
         summary: "Operator kill switch is set"
-        description: "HALT is held by the kill switch until `hft risk resume`."
+        description: "HALT is held by the kill switch until `hft risk resume`. Resting orders are cancelled; positions close only once a reconciliation confirms them."
+        runbook_url: "docs/runbooks/halt-recovery.md"
+
+  - alert: KillSwitchFlattenBlocked
+    expr: kill_switch_flatten_blocked == 1
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Kill switch is holding positions it will not close"
+        description: "Either the kill switch was not set by an operator (the startup recovery gate, or an unreadable record; log `kill_switch_flatten_blocked` names the actor) or no reconciliation in the last 15 s confirmed the platform's positions against the broker, so no closing order is sent. Compare `hft risk status` with the broker; `hft ops flatten` closes them once they are right."
         runbook_url: "docs/runbooks/halt-recovery.md"
 
   - alert: ManualLatchActive
@@ -530,8 +541,8 @@ groups:
     labels:
         severity: critical
     annotations:
-        summary: "Durable manual latch {{ $labels.latch }} is set"
-        description: "HALT is held until `hft risk rearm {{ $labels.latch }} --reason ...`; a restart does not release it."
+        summary: "Durable latch {{ $labels.latch }} is set"
+        description: "HALT is held; daily_loss ends at the next 05:00 roll, reconciliation_mismatch after two clean reconciliations. `hft risk rearm {{ $labels.latch }}` releases it early; a restart does not."
         runbook_url: "docs/runbooks/halt-recovery.md"
 
   - alert: HighRejectRate
