@@ -552,6 +552,15 @@ def test_exploratory_promotion_rewrites_no_status(governed_promotion, tmp_path: 
     assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()
 
 
+def test_governed_dry_run_promotion_appends_nothing_to_the_ledger(governed_promotion, tmp_path: Path) -> None:
+    from hft_platform.alpha.promotion import promote_alpha
+
+    scorecard = _sealed_scorecard(governed_promotion.evidence)
+    result = promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, dry_run=True))
+    assert result.gate_e_passed
+    assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()
+
+
 def test_governed_promotion_refuses_an_unsealed_or_outside_scorecard(governed_promotion, tmp_path: Path) -> None:
     from hft_platform.alpha.promotion import promote_alpha
 

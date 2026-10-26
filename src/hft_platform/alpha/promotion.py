@@ -319,7 +319,8 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     }
     decision_path = artifact_dir / "promotion_decision.json"
     _write_json(decision_path, decision_payload)
-    if writer is not None:
+    # A dry run records nothing in the ledger: status is derived from it (Loop_v1 L11).
+    if writer is not None and not config.dry_run:
         _publish_governed_promotion(
             writer,
             config=config,

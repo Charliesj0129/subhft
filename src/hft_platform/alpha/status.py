@@ -9,10 +9,16 @@ Derivation rules v1, over one alpha's events in ledger order:
 - Any KILL verdict makes the alpha KILLED. A kill is not undone by a later
   run; retesting a killed hypothesis is a new candidate.
 - Otherwise the status climbs the ladder gate_a -> gate_e and stops at the
-  first stage whose latest event failed, is missing, or is older than the
-  latest event of the stage below it (a pass on evidence the newer lower-stage
-  run has replaced does not count). No passed stage is DRAFT.
+  first stage whose latest event failed, is missing, is older than the latest
+  event of the stage below it, or belongs to a different run (``run_id``) than
+  that event. A promotion of an older scorecard therefore never counts for a
+  newer validation run. No passed stage is DRAFT.
 - gate_f has no status of its own; PRODUCTION is set by the manual config PR.
+
+Every event is checked before it is used: a known ``stage``, a boolean
+``passed``, a known ``verdict`` if present, ``passed`` true only with a PASS
+verdict or none, a string or null ``run_id``. A malformed event raises
+``ValueError``; it never yields a status.
 
 An alpha with no ledger events keeps the status its manifest declares.
 Manifest statuses the ledger never derives (PRODUCTION, DEPRECATED, KILLED)
@@ -41,6 +47,8 @@ _LADDER: tuple[tuple[str, AlphaStatus], ...] = (
     ("gate_e", AlphaStatus.GATE_E),
 )
 _MANUAL_STATUSES = frozenset({AlphaStatus.PRODUCTION, AlphaStatus.DEPRECATED, AlphaStatus.KILLED})
+_STAGES = frozenset(stage for stage, _ in _LADDER) | {"gate_f"}
+_VERDICTS = frozenset(v.value for v in Verdict)
 
 
 class StatusSource(StrEnum):
@@ -54,27 +62,57 @@ class EffectiveStatus:
     source: StatusSource
 
 
+def check_event(event: Mapping[str, Any]) -> None:
+    """Raise ``ValueError`` unless ``event`` is a well-formed verdict event."""
+    alpha_id = event.get("alpha_id")
+    if not isinstance(alpha_id, str) or not alpha_id:
+        raise ValueError(f"verdict event has no alpha_id: {dict(event)!r}")
+    stage = event.get("stage")
+    if stage not in _STAGES:
+        raise ValueError(f"{alpha_id}: unknown stage {stage!r}")
+    passed = event.get("passed")
+    if not isinstance(passed, bool):
+        raise ValueError(f"{alpha_id} {stage}: passed is {passed!r}, not a boolean")
+    verdict = event.get("verdict")
+    if verdict is not None and verdict not in _VERDICTS:
+        raise ValueError(f"{alpha_id} {stage}: unknown verdict {verdict!r}")
+    if passed and verdict not in (None, Verdict.PASS.value):
+        raise ValueError(f"{alpha_id} {stage}: passed with verdict {verdict}")
+    run_id = event.get("run_id")
+    if run_id is not None and not isinstance(run_id, str):
+        raise ValueError(f"{alpha_id} {stage}: run_id is {run_id!r}")
+
+
 def derive_status(events: Iterable[Mapping[str, Any]]) -> AlphaStatus | None:
-    """The status one alpha's ledger events imply, or None when there are none."""
-    latest: dict[str, tuple[int, bool]] = {}
+    """The status one alpha's ledger events imply, or None when there are none.
+
+    A malformed event raises ``ValueError``.
+    """
+    latest: dict[str, tuple[int, bool, str | None]] = {}
+    killed = False
     seen = False
     for index, event in enumerate(events):
+        check_event(event)
         seen = True
         verdict = event.get("verdict")
         if verdict == Verdict.INVALID.value:
             continue
         if verdict == Verdict.KILL.value:
-            return AlphaStatus.KILLED
-        latest[str(event.get("stage"))] = (index, event.get("passed") is True)
+            killed = True
+        latest[event["stage"]] = (index, event["passed"], event.get("run_id"))
     if not seen:
         return None
+    if killed:
+        return AlphaStatus.KILLED
     status = AlphaStatus.DRAFT
-    below = -1
+    below: tuple[int, bool, str | None] | None = None
     for stage, stage_status in _LADDER:
         entry = latest.get(stage)
-        if entry is None or not entry[1] or entry[0] < below:
+        if entry is None or not entry[1]:
             break
-        status, below = stage_status, entry[0]
+        if below is not None and (entry[0] < below[0] or entry[2] != below[2]):
+            break
+        status, below = stage_status, entry
     return status
 
 
@@ -92,10 +130,11 @@ def ledger_events_by_alpha(root: str | Path | None = None) -> dict[str, list[dic
     """Ledger events grouped by alpha, in ledger order.
 
     ``root`` defaults to the evidence root (the default location when unset).
-    A missing ledger is empty; a malformed one raises ``ValueError``.
+    A missing ledger is empty; a malformed line or event raises ``ValueError``.
     """
     writer = EvidenceWriter(root if root is not None else evidence_root())
     grouped: dict[str, list[dict[str, Any]]] = {}
     for event in writer.read_verdicts():
-        grouped.setdefault(str(event["alpha_id"]), []).append(event)
+        check_event(event)
+        grouped.setdefault(event["alpha_id"], []).append(event)
     return grouped

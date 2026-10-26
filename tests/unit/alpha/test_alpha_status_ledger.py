@@ -20,19 +20,27 @@ from hft_platform.alpha.status import (
 from hft_platform.contracts.alpha import AlphaStatus
 
 
-def _ev(stage: str, passed: bool, verdict: str | None = None, alpha_id: str = "a1") -> dict:
-    event = {"alpha_id": alpha_id, "stage": stage, "passed": passed}
+def _ev(stage: str, passed: bool, verdict: str | None = None, alpha_id: str = "a1", run_id: str | None = None) -> dict:
+    event = {"alpha_id": alpha_id, "stage": stage, "passed": passed, "run_id": run_id}
     if verdict is not None:
         event["verdict"] = verdict
     return event
 
 
-def _validation(c_passed: bool = True, verdict: str = "PASS") -> list[dict]:
-    return [_ev("gate_a", True), _ev("gate_b", True), _ev("gate_c", c_passed, verdict)]
+def _validation(c_passed: bool = True, verdict: str = "PASS", run_id: str | None = None) -> list[dict]:
+    return [
+        _ev("gate_a", True, run_id=run_id),
+        _ev("gate_b", True, run_id=run_id),
+        _ev("gate_c", c_passed, verdict, run_id=run_id),
+    ]
 
 
-def _promotion(d: bool = True, e: bool = True, f: bool = True) -> list[dict]:
-    return [_ev("gate_d", d, "PASS" if d else "NEEDS-MORE-DAYS"), _ev("gate_e", e), _ev("gate_f", f)]
+def _promotion(d: bool = True, e: bool = True, f: bool = True, run_id: str | None = None) -> list[dict]:
+    return [
+        _ev("gate_d", d, "PASS" if d else "NEEDS-MORE-DAYS", run_id=run_id),
+        _ev("gate_e", e, run_id=run_id),
+        _ev("gate_f", f, run_id=run_id),
+    ]
 
 
 # --- derive_status ------------------------------------------------------------
@@ -65,6 +73,35 @@ def test_derive_status_a_later_failed_lower_stage_drops_the_status() -> None:
 def test_derive_status_a_newer_lower_stage_run_supersedes_an_older_higher_pass() -> None:
     # Gate D passed on run 1's scorecard; run 2 passed Gate C again but was not promoted.
     assert derive_status(_validation() + _promotion() + _validation()) is AlphaStatus.GATE_C
+
+
+def test_derive_status_a_late_promotion_of_an_older_run_does_not_count_for_a_newer_one() -> None:
+    # r1 and r2 both pass A-C; a promotion of r1's scorecard is appended afterwards.
+    events = _validation(run_id="r1") + _validation(run_id="r2") + _promotion(run_id="r1")
+    assert derive_status(events) is AlphaStatus.GATE_C
+
+
+def test_derive_status_a_promotion_of_the_latest_run_counts() -> None:
+    events = _validation(run_id="r1") + _validation(run_id="r2") + _promotion(run_id="r2")
+    assert derive_status(events) is AlphaStatus.GATE_E
+
+
+@pytest.mark.parametrize(
+    ("event", "match"),
+    [
+        ({"stage": "gate_a", "passed": True}, "no alpha_id"),
+        ({"alpha_id": "a1", "passed": True}, "unknown stage"),
+        ({"alpha_id": "a1", "stage": "gate_z", "passed": True}, "unknown stage"),
+        ({"alpha_id": "a1", "stage": "gate_a"}, "not a boolean"),
+        ({"alpha_id": "a1", "stage": "gate_a", "passed": "yes"}, "not a boolean"),
+        ({"alpha_id": "a1", "stage": "gate_c", "passed": False, "verdict": "MAYBE"}, "unknown verdict"),
+        ({"alpha_id": "a1", "stage": "gate_c", "passed": True, "verdict": "NEEDS-MORE-DAYS"}, "passed with verdict"),
+        ({"alpha_id": "a1", "stage": "gate_a", "passed": True, "run_id": 7}, "run_id"),
+    ],
+)
+def test_derive_status_malformed_event_raises(event, match) -> None:
+    with pytest.raises(ValueError, match=match):
+        derive_status(_validation() + _promotion() + [event])
 
 
 def test_derive_status_ignores_an_invalid_verdict() -> None:
@@ -129,6 +166,15 @@ def test_ledger_events_by_alpha_reads_the_configured_root(monkeypatch: pytest.Mo
     assert list(ledger_events_by_alpha()) == ["a1"]
 
 
+def test_ledger_events_by_alpha_event_without_alpha_id_raises(tmp_path: Path) -> None:
+    path = _ledger(tmp_path, [_ev("gate_a", True)])
+    record = {"schema": "verdict_event.v1", "stage": "gate_a", "passed": False}
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+    with pytest.raises(ValueError, match="no alpha_id"):
+        ledger_events_by_alpha(tmp_path)
+
+
 def test_ledger_events_by_alpha_malformed_ledger_raises(tmp_path: Path) -> None:
     path = _ledger(tmp_path, [_ev("gate_a", True)])
     with path.open("a", encoding="utf-8") as fh:
@@ -185,6 +231,22 @@ def test_alpha_list_without_events_shows_the_manifest_status(ledger_root, fake_d
     assert "a1\tstatus=GATE_C\tsource=manifest\ttier=-" in capsys.readouterr().out
 
 
+def _append_raw(root: Path, record: dict) -> None:
+    with (root / "ledger" / "verdicts.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"schema": "verdict_event.v1", **record}) + "\n")
+
+
+def test_alpha_list_event_without_a_stage_exits_2(ledger_root, fake_discovery, capsys) -> None:
+    from hft_platform.cli._alpha import cmd_alpha_list
+
+    _ledger(ledger_root, _validation() + _promotion())
+    _append_raw(ledger_root, {"alpha_id": "a1", "passed": False})
+    with pytest.raises(SystemExit) as exc:
+        cmd_alpha_list(Namespace())
+    assert exc.value.code == 2
+    assert "status=" not in capsys.readouterr().out
+
+
 def test_alpha_list_malformed_ledger_exits_2(ledger_root, fake_discovery, capsys) -> None:
     from hft_platform.cli._alpha import cmd_alpha_list
 
@@ -213,6 +275,14 @@ def test_factory_index_records_the_ledger_status_beside_the_declared_one(ledger_
     assert rc == 0
     (row,) = json.loads(out.read_text(encoding="utf-8"))["alphas"]
     assert (row["status"], row["status_source"], row["declared_status"]) == ("KILLED", "ledger", "GATE_C")
+
+
+def test_factory_index_contradictory_verdict_returns_2(ledger_root, factory_index) -> None:
+    _ledger(ledger_root, [_ev("gate_a", True), _ev("gate_b", True)])
+    _append_raw(ledger_root, {"alpha_id": "a1", "stage": "gate_c", "passed": True, "verdict": "NEEDS-MORE-DAYS"})
+    rc, out = factory_index()
+    assert rc == 2
+    assert not out.exists()
 
 
 def test_factory_index_malformed_ledger_returns_2(ledger_root, factory_index) -> None:
