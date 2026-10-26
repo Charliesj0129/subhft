@@ -582,13 +582,44 @@ class PositionStore:
 
             return self._on_fill_python(fill, key)
 
+    def realized_before_fill(self, fill: FillEvent) -> int:
+        """Gross realized PnL *fill*'s position carries before the fill is applied.
+
+        The baseline the fill's realized delta is measured from. For a key with
+        no live position it is the recovered lot the fill will be seeded from:
+        that lot's realized PnL is history, already in the restored daily-loss
+        accumulators, and reading 0 here counted it a second time as today's.
+        """
+        key = self._key(fill.account_id, fill.strategy_id, fill.symbol)
+        with self._fill_lock:
+            pos = self.positions.get(key)
+            if pos is not None:
+                return pos.realized_pnl_scaled
+            rkey = self._recovery_key_for(fill)
+            if rkey is None:
+                return 0
+            rdata = self._recovery_positions[rkey]
+            return int(rdata.get("realized_pnl_scaled", 0) or 0) if isinstance(rdata, dict) else 0
+
     def _pop_recovery_for(self, fill: FillEvent) -> Dict[str, Any] | None:
         """Take the recovered lot that belongs to *fill*'s strategy, if any. Caller holds ``_fill_lock``."""
-        recovery = self._recovery_positions.pop(f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", None)
-        if recovery is None:
-            recovery = self._recovery_positions.pop(f"{fill.account_id}:{fill.symbol}", None)
-        if recovery is not None or not self._recovery_positions:
-            return recovery
+        rkey = self._recovery_key_for(fill)
+        if rkey is None:
+            return None
+        if rkey not in (f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", f"{fill.account_id}:{fill.symbol}"):
+            logger.info(
+                "recovery_position_matched_by_symbol",
+                recovery_key=rkey,
+                fill_account=fill.account_id,
+                symbol=fill.symbol,
+            )
+        return self._recovery_positions.pop(rkey)
+
+    def _recovery_key_for(self, fill: FillEvent) -> str | None:
+        """Key of the recovered lot *fill* would be seeded from. Caller holds ``_fill_lock``."""
+        for rkey in (f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}", f"{fill.account_id}:{fill.symbol}"):
+            if rkey in self._recovery_positions:
+                return rkey
         # Fallback: recovery may have been stored with a different account_id
         # domain (e.g., broker_id "shioaji" vs actual account "F123456").
         # Search by symbol suffix when exact key misses -- but never take a lot
@@ -601,13 +632,7 @@ class PositionStore:
             owner = str(rdata.get("strategy_id", "") or "") if isinstance(rdata, dict) else ""
             if owner and owner != fill.strategy_id:
                 continue
-            logger.info(
-                "recovery_position_matched_by_symbol",
-                recovery_key=k,
-                fill_account=fill.account_id,
-                symbol=fill.symbol,
-            )
-            return self._recovery_positions.pop(k)
+            return k
         return None
 
     async def on_fill_async(self, fill: FillEvent) -> PositionDelta:

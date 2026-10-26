@@ -1028,6 +1028,7 @@ class HFTSystem:
             # raw_exec_queue (bounded, with overflow buffer) and are consumed
             # only after the canonical baseline is loaded.
             if orders_enabled and os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
+                self._bind_checkpoint_identity()
                 try:
                     recovery = await self.startup_verifier.recover(
                         account_id=self.registry.account_id or self.registry.broker_id,
@@ -1209,6 +1210,40 @@ class HFTSystem:
             # Use stop_async() for ordered shutdown: bridge → recorder drain → tasks.
             # The sync stop() skips the recorder drain path, risking data loss.
             await self.stop_async()
+
+    def _bind_checkpoint_identity(self) -> bool:
+        """Name the logged-in account in the checkpoint identity, before recovery reads it.
+
+        ``bootstrap.build()`` runs before the broker login, when the client
+        knows no account yet, so its identity fell back to the broker id and
+        every account shared one (Codex review of B0-B6, 2026-10-24): another
+        account's checkpoint restored as this one's. Returns False when the
+        account is still unknown; the identity then carries an empty account,
+        which no checkpoint written with a known account matches, so recovery
+        falls back to the broker snapshot rather than vouch for a stranger's.
+        """
+        from hft_platform.execution.checkpoint import checkpoint_identity  # noqa: PLC0415
+
+        try:
+            account_id = str(getattr(self.order_client, "get_default_account_id", lambda: "")() or "")
+        except Exception as exc:  # noqa: BLE001 - an unknown account is handled below
+            logger.warning("checkpoint_identity_account_lookup_failed", error=str(exc))
+            account_id = ""
+        identity = checkpoint_identity(
+            broker_id=str(getattr(self.registry, "broker_id", "") or ""),
+            account_id=account_id,
+            order_mode=os.getenv("HFT_ORDER_MODE", ""),
+        )
+        for holder in (getattr(self, "checkpoint_writer", None), getattr(self, "startup_verifier", None)):
+            if holder is not None:
+                holder.identity = identity
+        if not account_id:
+            logger.critical(
+                "checkpoint_identity_account_unknown",
+                consequence="no checkpoint stamped with an account is restored; recovery uses the broker snapshot",
+            )
+            return False
+        return True
 
     def _on_startup_recovery_halt(
         self,

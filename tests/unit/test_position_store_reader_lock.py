@@ -409,35 +409,32 @@ class TestR3_4_GetSymbolNetQty:
 
 
 class TestR3_5_RouterPreRealizedSnapshot:
-    """Source-level audit: the three router sites that read `_pre_pos =
-    self.position_store.positions.get(_pos_key)` followed by
-    `_pre_pos.realized_pnl_scaled` must be wrapped in
-    `with self.position_store._fill_lock:` to snapshot the int atomically
-    before any concurrent on_fill_async writer can clobber it.
+    """Source-level audit: the router's three fill paths (live, shutdown drain,
+    DLQ retry) take their pre-fill realized PnL from ``_realized_before``, and
+    every read behind it holds ``_fill_lock`` so a concurrent on_fill_async
+    writer cannot clobber the int between read and use.
     """
 
-    def _router_source(self) -> str:
-        return (_REPO_ROOT / "src/hft_platform/execution/router.py").read_text()
+    def _source(self, rel: str) -> str:
+        return (_REPO_ROOT / rel).read_text()
+
+    @staticmethod
+    def _method(src: str, name: str) -> str:
+        start = src.index(f"    def {name}(")
+        nxt = src.find("\n    def ", start + 1)
+        return src[start : nxt if nxt != -1 else len(src)]
 
     def test_pre_realized_reads_are_lock_guarded(self) -> None:
-        src = self._router_source()
-        # Each _pre_pos snapshot site MUST have _fill_lock in its look-back
-        # window (either holding the lock directly, or as part of the
-        # hasattr-guarded fallback). After the Wave 3 fix, each of the
-        # three logical sites expands to two `positions.get(_pos_key)`
-        # calls (one inside the `with _fill_lock:` block, one in the else
-        # fallback for mocks). Both occurrences must reside in a method
-        # body that references _fill_lock within ~400 chars before the call.
-        get_calls = [(m.start(), m.end()) for m in re.finditer(r"self\.position_store\.positions\.get\(_pos_key", src)]
-        pre_pos_sites = [(s, e) for (s, e) in get_calls if "_pre_pos" in src[max(0, s - 80) : s]]
-        # Pre-fix: 3 sites. Post-fix: 6 sites (each expands to lock + else).
-        assert len(pre_pos_sites) >= 3, f"expected >= 3 _pre_pos snapshot sites, found {len(pre_pos_sites)}"
+        router = self._source("src/hft_platform/execution/router.py")
+        # The three fill paths share one helper.
+        assert len(re.findall(r"self\._realized_before\((?:fill_event|fill)\)", router)) >= 3
+        helper = self._method(router, "_realized_before")
+        assert "realized_before_fill" in helper
+        # The test-double fallback reads under the lock when the double has one.
+        assert "with fill_lock:" in helper
 
-        for s, _e in pre_pos_sites:
-            window = src[max(0, s - 400) : s]
-            assert "_fill_lock" in window, (
-                f"_pre_pos snapshot at offset {s} not guarded by _fill_lock; window={window!r}"
-            )
+        store_method = self._method(self._source("src/hft_platform/execution/positions.py"), "realized_before_fill")
+        assert "with self._fill_lock:" in store_method
 
 
 # ---------------------------------------------------------------------------

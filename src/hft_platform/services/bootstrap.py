@@ -1678,6 +1678,9 @@ class SystemBootstrapper:
 
         # The checkpoint says whose book it is; recovery refuses one that is not
         # this engine's (another account, broker, or the paper/live venue).
+        # Provisional: no broker has logged in yet, so the account is usually
+        # unknown here. HFTSystem._bind_checkpoint_identity replaces it after
+        # the login, before recovery reads the checkpoint.
         account_id = getattr(order_client, "get_default_account_id", lambda: broker_id)()
         from hft_platform.execution.checkpoint import checkpoint_identity
 
