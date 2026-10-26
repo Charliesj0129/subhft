@@ -423,6 +423,17 @@ Slice B 引入 Maker 策略 backtest 的殘餘部位 MtM、佇列校準、成本
 
 ---
 
+## 18. Research 證據根（ADR-005）
+
+兩個根目錄都必須是絕對路徑、位於 repo 之外；呼叫時才讀取。實作：`src/hft_platform/alpha/evidence.py`。
+
+| 變數 | 預設值 | 用途 | 調整建議 |
+|---|---|---|---|
+| `HFT_RESEARCH_EVIDENCE_ROOT` | 無（governed run 必填）；exploratory 讀取時為 `~/hft_research_evidence` | strict（governed）research run 的輸出根：`runs/<run_id>/`、`validations/`，每個目錄以 `manifest.json` 封存，判定事件追加到 `ledger/verdicts.jsonl` | 指向私有 git repo；未設定、相對路徑或位於 repo 內時 strict run 以 rc 2 停止 |
+| `HFT_RESEARCH_DATA_ROOT` | `~/hft_research_data` | research 資料集根目錄（不進 git） | 同上，必須位於 repo 之外 |
+
+---
+
 ## 快速參考：故障對照表
 
 | 症狀 | 優先檢查 | Runbook |

@@ -128,14 +128,14 @@ def test_gate_d_measured_failure_writes_kill_with_run_id(tmp_path: Path, ledger:
     assert rows[0]["run_id"] == "run-v"
 
 
-def test_pipeline_skips_promotion_when_validation_did_not_pass(monkeypatch, tmp_path: Path):
+def test_pipeline_skips_promotion_when_validation_did_not_pass(monkeypatch, tmp_path: Path, governed_env: Path):
     def _no_promotion(_config):
         raise AssertionError("promote_alpha must not run on a non-PASS validation")
 
     validation = types.SimpleNamespace(passed=False, scorecard_path="", to_dict=lambda: {"passed": False})
     monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
-    monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: types.SimpleNamespace(name="p"))
     monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg: validation)
     monkeypatch.setattr(pipeline, "promote_alpha", _no_promotion)
     args = pipeline.build_parser().parse_args(
@@ -160,7 +160,6 @@ def test_maker_without_strategy_protocol_is_error_report_not_attribute_error(tmp
         clickhouse_source=_no_clickhouse,
         latency_profile=None,
         maker_engine=None,
-        result_store=None,
     )
     runtime = types.SimpleNamespace(
         hft_native_runner=None,
@@ -242,12 +241,14 @@ def _stored_run(tmp_path: Path, verdict: str) -> Path:
 
 
 @pytest.mark.parametrize(("verdict", "n_rows"), [("KILL", 1), ("NEEDS-MORE-DAYS", 0), ("INVALID", 0)])
-def test_pipeline_skipping_promotion_still_records_a_stored_kill(monkeypatch, tmp_path, ledger, verdict, n_rows):
+def test_pipeline_skipping_promotion_still_records_a_stored_kill(
+    monkeypatch, tmp_path, ledger, verdict, n_rows, governed_env
+):
     sc_path = _stored_run(tmp_path, verdict)
     validation = types.SimpleNamespace(passed=False, scorecard_path=str(sc_path), to_dict=lambda: {"passed": False})
     monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
-    monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: None)
+    monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: types.SimpleNamespace(name="p"))
     monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg: validation)
     args = pipeline.build_parser().parse_args(
         ["run", "--alpha-id", "alpha_k", "--owner", "o", "--data", "d.npy", "--out-dir", str(tmp_path / "out")]

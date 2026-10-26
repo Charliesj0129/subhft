@@ -151,7 +151,6 @@ def test_maker_gate_c_without_usable_latency_is_invalid_before_any_data(tmp_path
         clickhouse_source=_no_clickhouse,
         latency_profile=_latency_profile,
         maker_engine=None,
-        result_store=None,
     )
     runtime = types.SimpleNamespace(
         hft_native_runner=None,

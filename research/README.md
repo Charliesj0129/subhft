@@ -47,7 +47,7 @@ architecture, review); delegation rules are in `AGENTS.md`. Skills are under
 - `strategy_type: maker` → `MakerEngine` (CK-direct, `QueueDepletionFill(qf=0.5)`)
 - Cost model: `config/research/cost_profiles.yaml`; Gate C thresholds: `config/research/profiles/vm_ul6_strict.yaml`.
 - MakerEngine needs local ClickHouse: `docker compose up -d clickhouse`.
-- Results auto-saved by `ResultStore` to `research/experiments/runs/<run_id>/backtest_report.json`.
+- Each Gate C run is written once by `ExperimentTracker.log_run` to `<experiments_dir>/runs/<run_id>/` (`meta.json` with the RunStamp, `backtest_report.json`, `scorecard.json`). Strict runs use the evidence root (`HFT_RESEARCH_EVIDENCE_ROOT`) and seal the run with a `manifest.json`; see `src/hft_platform/alpha/evidence.py`.
 - Ad-hoc scripts in `research/tools/legacy/` are archived — **do not use for official results**.
 
 ## Paper -> Prototype Bridge
@@ -98,6 +98,15 @@ This runs strict `research.pipeline run`, which includes the factory optimize pr
 2. Gate A/B/C validation
 3. Gate D/E promotion
 4. `factory index` finalization
+
+Strict runs are **governed** (ADR-005): they stop with rc 2 unless
+`HFT_RESEARCH_EVIDENCE_ROOT` is set to an absolute path outside the repository, the
+tree is clean and the validation profile resolves. Runs and validation artifacts
+go to that root (`runs/<run_id>/`, `validations/<alpha_id>/<stamp>/`), each sealed
+by a `manifest.json` of sha256s, and every gate that ran appends one event to
+`ledger/verdicts.jsonl`. Governed runs do not rewrite `impl.py` status. Triage runs
+(`research.pipeline triage`) stay exploratory: labelled in the RunStamp, written to
+`--experiments-dir`, never in the ledger.
 
 ### VM-UL6 strict profile (institutional/near-live strictness)
 

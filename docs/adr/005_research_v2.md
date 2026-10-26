@@ -82,7 +82,8 @@ Code stays in this public repository; evidence and data do not.
 
 ```
 $HFT_RESEARCH_EVIDENCE_ROOT   private git repository, outside this repo
-  runs/<yyyy>/<run_id>/       manifest + report
+  runs/<run_id>/              run artifacts, sealed by manifest.json (sha256 per file)
+  validations/<alpha>/<stamp>/ Gate A/B/C reports, sealed the same way
   ledger/verdicts.jsonl       append-only; status derives from the latest event
   protocols/<id>.yaml         pre-registrations, referenced by sha256
 $HFT_RESEARCH_DATA_ROOT       not in git

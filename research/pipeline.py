@@ -11,8 +11,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from hft_platform.alpha._validation_profile import ValidationProfile, load_profile
+from hft_platform.alpha.evidence import GovernedRunRefused, RunMode, require_governed
 from hft_platform.alpha.paths import repo_path, repo_root
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha, record_gate_c_kill
+from hft_platform.alpha.provenance import git_state
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
 from hft_platform.cli_args.research_pipeline import (
     DEFAULT_ALLOWED_DATA_ROOTS,
@@ -218,61 +220,15 @@ def _fill_path_defaults(args: argparse.Namespace) -> Path:
     return root
 
 
-def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
-    root = _fill_path_defaults(args)
-    stamp = _stamp()
-    out_dir = Path(args.out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    optimize_path = out_dir / f"{args.alpha_id}_{stamp}_factory_optimize.json"
-    audit_path = out_dir / f"{args.alpha_id}_{stamp}_audit.json"
-    validate_path = out_dir / f"{args.alpha_id}_{stamp}_validate.json"
-    promote_path = out_dir / f"{args.alpha_id}_{stamp}_promote.json"
-    index_path = out_dir / f"{args.alpha_id}_{stamp}_index.json"
-    report_path = out_dir / f"{args.alpha_id}_{stamp}_pipeline_report.json"
-
-    strict_mode = mode == "strict"
-    started_at = _now_iso()
-    notes: list[str] = []
-
-    allow_audit_warnings = bool(getattr(args, "allow_audit_warnings", False)) if not strict_mode else False
-    allow_gate_fail = bool(getattr(args, "allow_gate_fail", False)) if not strict_mode else False
-    skip_gate_b_tests = bool(getattr(args, "skip_gate_b_tests", False)) if not strict_mode else False
-    no_promote = bool(getattr(args, "no_promote", False)) if not strict_mode else False
-    force_promote = bool(getattr(args, "force_promote", False)) if not strict_mode else False
-    loaded_profile = _apply_validation_profile(args, strict_mode=strict_mode, notes=notes)
-
-    optimize_rc = _run_factory_optimize(
-        optimize_path,
-        audit_path,
-        index_path,
-        data_paths=list(args.data),
-        allow_audit_warnings=allow_audit_warnings,
-        skip_clean=bool(args.skip_factory_clean),
-        skip_index=True,
-    )
-    if optimize_rc != 0:
-        notes.append("Factory optimize preflight failed; pipeline stopped before validation.")
-        final = PipelineRunReport(
-            alpha_id=args.alpha_id,
-            owner=args.owner,
-            mode=mode,
-            promotable=False,
-            started_at=started_at,
-            finished_at=_now_iso(),
-            passed=False,
-            factory_optimize_report=str(optimize_path),
-            audit_report=str(audit_path),
-            validation_report="",
-            promotion_report=None,
-            index_report="",
-            notes=notes,
-        )
-        _write_json(report_path, final.to_dict())
-        print(f"[research.pipeline] report: {report_path}")
-        return 2
-
-    validation = run_alpha_validation(
+def _validate(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    strict_mode: bool,
+    skip_gate_b_tests: bool,
+    loaded_profile: ValidationProfile | None,
+) -> Any:
+    return run_alpha_validation(
         ValidationConfig(
             alpha_id=args.alpha_id,
             data_paths=list(args.data),
@@ -322,8 +278,120 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
             # Gate C blocks on the profile's sub-gates only when it is given
             # the profile; without it they stay advisory.
             profile=loaded_profile,
+            run_mode=(RunMode.GOVERNED if strict_mode else RunMode.EXPLORATORY).value,
         )
     )
+
+
+def _write_stopped_report(
+    args: argparse.Namespace, mode: str, started_at: str, notes: list[str], report_path: Path
+) -> int:
+    """Write the report of a pipeline stopped before validation finished; returns rc 2."""
+    final = PipelineRunReport(
+        alpha_id=args.alpha_id,
+        owner=args.owner,
+        mode=mode,
+        promotable=False,
+        started_at=started_at,
+        finished_at=_now_iso(),
+        passed=False,
+        factory_optimize_report="",
+        audit_report="",
+        validation_report="",
+        promotion_report=None,
+        index_report="",
+        notes=notes,
+    )
+    _write_json(report_path, final.to_dict())
+    print(f"[research.pipeline] report: {report_path}")
+    return 2
+
+
+def _bind_governed_evidence_root(
+    args: argparse.Namespace, root: Path, profile: ValidationProfile | None, explicit_experiments_dir: str | None
+) -> None:
+    """Point a strict run at the evidence root, or raise ``GovernedRunRefused``.
+
+    Strict runs are governed (ADR-005): clean tree, resolved profile, and their
+    runs and verdicts go to ``$HFT_RESEARCH_EVIDENCE_ROOT``, never into the repo.
+    """
+    commit, dirty = git_state(root)
+    evidence = require_governed(git_commit=commit, git_dirty=dirty, profile_name=getattr(profile, "name", None))
+    if explicit_experiments_dir is not None and Path(explicit_experiments_dir).resolve() != evidence:
+        raise GovernedRunRefused(
+            [f"--experiments-dir {explicit_experiments_dir} differs from the evidence root {evidence}"]
+        )
+    args.experiments_dir = str(evidence)
+
+
+def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
+    explicit_experiments_dir = args.experiments_dir
+    root = _fill_path_defaults(args)
+    stamp = _stamp()
+    out_dir = Path(args.out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    optimize_path = out_dir / f"{args.alpha_id}_{stamp}_factory_optimize.json"
+    audit_path = out_dir / f"{args.alpha_id}_{stamp}_audit.json"
+    validate_path = out_dir / f"{args.alpha_id}_{stamp}_validate.json"
+    promote_path = out_dir / f"{args.alpha_id}_{stamp}_promote.json"
+    index_path = out_dir / f"{args.alpha_id}_{stamp}_index.json"
+    report_path = out_dir / f"{args.alpha_id}_{stamp}_pipeline_report.json"
+
+    strict_mode = mode == "strict"
+    started_at = _now_iso()
+    notes: list[str] = []
+
+    allow_audit_warnings = bool(getattr(args, "allow_audit_warnings", False)) if not strict_mode else False
+    allow_gate_fail = bool(getattr(args, "allow_gate_fail", False)) if not strict_mode else False
+    skip_gate_b_tests = bool(getattr(args, "skip_gate_b_tests", False)) if not strict_mode else False
+    no_promote = bool(getattr(args, "no_promote", False)) if not strict_mode else False
+    force_promote = bool(getattr(args, "force_promote", False)) if not strict_mode else False
+    loaded_profile = _apply_validation_profile(args, strict_mode=strict_mode, notes=notes)
+    if strict_mode:
+        try:
+            _bind_governed_evidence_root(args, root, loaded_profile, explicit_experiments_dir)
+        except GovernedRunRefused as exc:
+            notes.append(f"{exc}; run it in triage mode for an exploratory result.")
+            return _write_stopped_report(args, mode, started_at, notes, report_path)
+
+    optimize_rc = _run_factory_optimize(
+        optimize_path,
+        audit_path,
+        index_path,
+        data_paths=list(args.data),
+        allow_audit_warnings=allow_audit_warnings,
+        skip_clean=bool(args.skip_factory_clean),
+        skip_index=True,
+    )
+    if optimize_rc != 0:
+        notes.append("Factory optimize preflight failed; pipeline stopped before validation.")
+        final = PipelineRunReport(
+            alpha_id=args.alpha_id,
+            owner=args.owner,
+            mode=mode,
+            promotable=False,
+            started_at=started_at,
+            finished_at=_now_iso(),
+            passed=False,
+            factory_optimize_report=str(optimize_path),
+            audit_report=str(audit_path),
+            validation_report="",
+            promotion_report=None,
+            index_report="",
+            notes=notes,
+        )
+        _write_json(report_path, final.to_dict())
+        print(f"[research.pipeline] report: {report_path}")
+        return 2
+
+    try:
+        validation = _validate(
+            args, root, strict_mode=strict_mode, skip_gate_b_tests=skip_gate_b_tests, loaded_profile=loaded_profile
+        )
+    except GovernedRunRefused as exc:
+        notes.append(f"{exc}; nothing was appended to the verdict ledger.")
+        return _write_stopped_report(args, mode, started_at, notes, report_path)
     _write_json(validate_path, validation.to_dict())
 
     promotion_out: str | None = None

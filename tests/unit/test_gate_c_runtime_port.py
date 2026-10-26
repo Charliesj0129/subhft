@@ -48,7 +48,6 @@ def test_research_adapter_binds_all_gate_c_runtime_dependencies() -> None:
     from research.backtest.fill_models import QueueDepletionFill
     from research.backtest.hft_native_runner import HftNativeRunner, ensure_hftbt_npz
     from research.backtest.maker_engine import ClickHouseSource, LatencyProfile, MakerEngine
-    from research.backtest.result_store import ResultStore
     from research.backtest.taker_engine import TakerEngine
     from research.backtest.types import BacktestConfig, WalkForwardConfig
     from research.registry.scorecard import compute_scorecard
@@ -69,11 +68,10 @@ def test_research_adapter_binds_all_gate_c_runtime_dependencies() -> None:
     assert maker_runtime.clickhouse_source is ClickHouseSource
     assert maker_runtime.latency_profile is LatencyProfile
     assert maker_runtime.maker_engine is MakerEngine
-    assert maker_runtime.result_store is ResultStore
+    assert not hasattr(maker_runtime, "result_store")  # Gate C writes runs once, via ExperimentTracker
 
     taker_runtime = runtime.load_taker_runtime()
     assert isinstance(taker_runtime, GateCTakerRuntime)
-    assert taker_runtime.result_store is ResultStore
     assert taker_runtime.taker_engine is TakerEngine
 
 
@@ -105,7 +103,6 @@ def test_gate_c_common_runtime_does_not_eagerly_load_lane_implementations() -> N
             "assert 'research.backtest.maker_engine' not in sys.modules",
             "assert 'research.backtest.fill_models' not in sys.modules",
             "assert 'research.backtest.taker_engine' not in sys.modules",
-            "assert 'research.backtest.result_store' not in sys.modules",
             "assert 'research.backtest.cost_models' not in sys.modules",
         )
     )

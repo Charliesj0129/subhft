@@ -9,6 +9,11 @@ differences here.
 - Book depth is variable (0-5). Filter depth-N features on `length(bids_price)`.
 - `research/experiments/**` is immutable evidence: append new runs, never edit
   existing artifacts.
+- Strict runs (`make research`) are governed: they need `HFT_RESEARCH_EVIDENCE_ROOT`
+  (absolute, outside the repo), a clean tree and a resolved profile, write to
+  that root, seal each run with a `manifest.json` and append to
+  `ledger/verdicts.jsonl` (`src/hft_platform/alpha/evidence.py`). Triage runs are
+  exploratory and never reach the ledger.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.

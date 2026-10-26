@@ -535,3 +535,41 @@ class TestScorecardCarriesGateDAudits:
         )
         assert checks["cost_uncertainty_audit"]["outcome"] == sub_gate["outcome"]
         assert checks["inventory_mtm_audit"]["outcome"] == "not_applicable"
+
+
+# ---------------------------------------------------------------------------
+# RunStamp (research v2 F4)
+# ---------------------------------------------------------------------------
+
+
+def test_taker_run_stamp_hashes_the_hftbt_npz_the_runner_reads(gate_c_mocks, monkeypatch):
+    tmp_path = gate_c_mocks
+    source = tmp_path / "day.npy"
+    source.write_bytes(b"research")
+    converted = tmp_path / "day_hftbt.npz"
+    converted.write_bytes(b"hftbt")
+    logged: dict[str, Any] = {}
+
+    class _CapturingTracker(_FakeTracker):
+        def log_run(self, **kwargs: Any) -> Path:
+            logged.update(kwargs)
+            return self.base_dir / "meta.json"
+
+    monkeypatch.setattr("research.backtest.hft_native_runner.ensure_hftbt_npz", lambda p: str(converted))
+    monkeypatch.setattr("hft_platform.alpha.experiments.ExperimentTracker", _CapturingTracker)
+    alpha = types.SimpleNamespace(manifest=types.SimpleNamespace(alpha_id="test_alpha"))
+    cfg = ValidationConfig(
+        alpha_id="test_alpha",
+        data_paths=[str(source)],
+        enable_walk_forward=False,
+        enable_param_optimization=False,
+        stat_correction_method="none",
+    )
+
+    run_gate_c(alpha, cfg, tmp_path, [str(source)], tmp_path / "experiments")
+
+    datasets = logged["run_stamp"]["datasets"]
+    assert list(datasets) == [str(source), str(converted)]
+    assert all(datasets.values())
+    assert logged["run_stamp"]["mode"] == "exploratory"
+    assert logged["run_stamp"]["calibration"] == "uncalibrated"
