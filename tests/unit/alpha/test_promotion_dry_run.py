@@ -6,12 +6,9 @@ promotion-config writes but did NOT suppress
 ``_update_manifest_status`` calls on Gate D / Gate E pass, which mutate
 ``research/alphas/<alpha_id>/impl.py`` (durable working-tree write).
 
-These tests pin the contract:
-
-* ``dry_run=True`` must leave ``impl.py`` byte-identical for both
-  Gate D-pass and Gate E-pass paths.
-* ``dry_run=False`` (the production path) must rewrite the
-  ``status=AlphaStatus.<X>`` literal as before.
+Research v2 (ADR-005 section 6) removed that rewriter: status is derived
+from the verdict ledger. These tests pin that ``impl.py`` stays
+byte-identical on a Gate D/E pass whether or not ``dry_run`` is set.
 """
 
 from __future__ import annotations
@@ -27,7 +24,7 @@ _IMPL_PY_TEMPLATE = '''"""Synthetic alpha impl.py used by promotion-dry-run test
 from hft_platform.alpha.types import AlphaStatus
 
 
-# This literal is the only thing _update_manifest_status rewrites.
+# The status literal the removed regex rewriter used to change.
 status=AlphaStatus.GATE_C
 '''
 
@@ -110,9 +107,7 @@ def test_dry_run_gate_d_pass_does_not_mutate_impl_status(tmp_path: Path) -> None
 
 
 def test_dry_run_full_promotion_pass_does_not_mutate_impl_status(tmp_path: Path) -> None:
-    """When Gate D + Gate E both pass, BOTH _update_manifest_status sites must
-    stay quiet under dry_run=True. This catches the regression where only one
-    of the two call sites was guarded."""
+    """Gate D and Gate E both pass under dry_run=True and impl.py is unchanged."""
     impl_path, _ = _write_alpha_fixture(tmp_path, "dry_run_alpha_de")
     before = impl_path.read_text(encoding="utf-8")
 
@@ -138,22 +133,17 @@ def test_dry_run_does_not_write_promotion_config(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# dry_run=False: paired tests prove the mutation is real (no false-positive)
+# dry_run=False: the promotion runs for real and still leaves impl.py alone
 # ---------------------------------------------------------------------------
 
 
-def test_non_dry_run_gate_d_pass_mutates_impl_status(tmp_path: Path) -> None:
+def test_non_dry_run_promotion_pass_does_not_mutate_impl_status(tmp_path: Path) -> None:
     impl_path, _ = _write_alpha_fixture(tmp_path, "wet_run_alpha_d")
     before = impl_path.read_text(encoding="utf-8")
-    assert "status=AlphaStatus.GATE_C" in before
 
     result = promote_alpha(_make_config(tmp_path, "wet_run_alpha_d", dry_run=False))
 
-    after = impl_path.read_text(encoding="utf-8")
     assert result.gate_d_passed is True
-    assert "status=AlphaStatus.GATE_C" not in after, (
-        "Production path must rewrite status; if this fails, _update_manifest_status "
-        "regressed and the dry-run test above is a false negative."
-    )
-    # Final state should be one of the higher gates (D or E).
-    assert "status=AlphaStatus.GATE_D" in after or "status=AlphaStatus.GATE_E" in after
+    assert result.gate_e_passed is True
+    assert result.promotion_config_path is not None, "the wet run must really have promoted"
+    assert impl_path.read_text(encoding="utf-8") == before, "promotion rewrote impl.py status"

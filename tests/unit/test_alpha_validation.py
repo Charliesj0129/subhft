@@ -751,45 +751,6 @@ class TestBdsCorrelationDelta:
 
 
 # ---------------------------------------------------------------------------
-# Pure helper: _update_manifest_status
-# ---------------------------------------------------------------------------
-
-
-class TestUpdateManifestStatus:
-    def test_missing_impl_file_returns_false(self, tmp_path: Path):
-        from hft_platform.alpha.validation import _update_manifest_status
-
-        result = _update_manifest_status("nonexistent_alpha", "GATE_A", tmp_path)
-        assert result is False
-
-    def test_updates_status_in_impl_file(self, tmp_path: Path):
-        from hft_platform.alpha.validation import _update_manifest_status
-
-        alpha_id = "test_alpha"
-        impl_dir = tmp_path / "research" / "alphas" / alpha_id
-        impl_dir.mkdir(parents=True)
-        impl_file = impl_dir / "impl.py"
-        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.RESEARCH)\n")
-
-        result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
-        assert result is True
-        updated_content = impl_file.read_text()
-        assert "AlphaStatus.GATE_A" in updated_content
-
-    def test_already_at_target_status_returns_false(self, tmp_path: Path):
-        from hft_platform.alpha.validation import _update_manifest_status
-
-        alpha_id = "test_alpha_noop"
-        impl_dir = tmp_path / "research" / "alphas" / alpha_id
-        impl_dir.mkdir(parents=True)
-        impl_file = impl_dir / "impl.py"
-        impl_file.write_text("manifest = AlphaManifest(status=AlphaStatus.GATE_A)\n")
-
-        result = _update_manifest_status(alpha_id, "GATE_A", tmp_path)
-        assert result is False
-
-
-# ---------------------------------------------------------------------------
 # Pure helper: _check_hftbacktest_v2_data_format
 # ---------------------------------------------------------------------------
 

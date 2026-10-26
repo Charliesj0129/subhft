@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
-import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -154,9 +153,6 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
 
     gate_a = run_gate_a(alpha.manifest, resolved_data_paths, config=config, root=root)
     _write_json(validation_dir / "feasibility_report.json", asdict(gate_a))
-    # Governed runs never rewrite the repository; their status lives in the ledger.
-    if gate_a.passed and not governed:
-        _update_manifest_status(config.alpha_id, "GATE_A", root)
 
     gate_b = run_gate_b(
         alpha_id=config.alpha_id,
@@ -165,8 +161,6 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
         timeout_s=config.pytest_timeout_s,
     )
     _write_json(validation_dir / "correctness_report.json", asdict(gate_b))
-    if gate_b.passed and not governed:
-        _update_manifest_status(config.alpha_id, "GATE_B", root)
 
     if gate_a.passed and gate_b.passed:
         gate_c, run_id, cfg_hash, scorecard_path, experiment_meta_path = run_gate_c(
@@ -213,8 +207,6 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
         experiment_meta_path = None
 
     _write_json(validation_dir / "backtest_report.json", asdict(gate_c))
-    if gate_c.passed and not governed:
-        _update_manifest_status(config.alpha_id, "GATE_C", root)
 
     overall = gate_a.passed and gate_b.passed and gate_c.passed
 
@@ -344,69 +336,6 @@ def _publish_governed_run(
             if reason:
                 event["verdict_reason"] = reason
         writer.append_verdict(event, mode=RunMode.GOVERNED)
-
-
-# ---------------------------------------------------------------------------
-# Manifest status updater — unique to validation.py
-# ---------------------------------------------------------------------------
-def _update_manifest_status(alpha_id: str, new_status: str, project_root: Path) -> bool:
-    """Regex-replace ``status=AlphaStatus.<X>`` in an alpha's impl.py.
-
-    Returns True if the file was updated, False if already at the target status
-    or if the file does not exist.  The function is idempotent: calling it
-    again with the same *new_status* is a no-op.
-
-    Raises no exceptions — all errors are logged and False is returned.
-    """
-    impl_path = project_root / "research" / "alphas" / alpha_id / "impl.py"
-    if not impl_path.exists():
-        _log.warning(
-            "alpha_status_autoupdate.impl_not_found",
-            alpha_id=alpha_id,
-            impl_path=str(impl_path),
-        )
-        return False
-
-    try:
-        original = impl_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        _log.warning(
-            "alpha_status_autoupdate.read_error",
-            alpha_id=alpha_id,
-            error=str(exc),
-        )
-        return False
-
-    pattern = r"status=AlphaStatus\.\w+"
-    replacement = f"status=AlphaStatus.{new_status}"
-    updated = re.sub(pattern, replacement, original)
-
-    if updated == original:
-        # Either already at target status or pattern not found — both are fine.
-        _log.debug(
-            "alpha_status_autoupdate.no_change",
-            alpha_id=alpha_id,
-            new_status=new_status,
-        )
-        return False
-
-    try:
-        impl_path.write_text(updated, encoding="utf-8")
-    except OSError as exc:
-        _log.warning(
-            "alpha_status_autoupdate.write_error",
-            alpha_id=alpha_id,
-            error=str(exc),
-        )
-        return False
-
-    _log.info(
-        "alpha_status_autoupdate.updated",
-        alpha_id=alpha_id,
-        new_status=new_status,
-        impl_path=str(impl_path),
-    )
-    return True
 
 
 # ---------------------------------------------------------------------------

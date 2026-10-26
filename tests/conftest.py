@@ -275,6 +275,11 @@ def _isolate_alpha_audit_sinks(tmp_path, monkeypatch):
     two dedupe caches are module state that would otherwise carry one test's
     opt-in or seen-ids into the next. A test that needs a specific path still
     sets its own, which wins over this fixture.
+
+    The research evidence and data roots point under ``tmp_path`` as well: the
+    status readers (``hft alpha list``, ``factory index``) read the verdict
+    ledger under the default ``~/hft_research_evidence`` otherwise, i.e. the
+    operator's real ledger. A test of the unset case deletes the variable.
     """
     from hft_platform.alpha import audit as _audit
     from hft_platform.alpha import kill_ledger as _kill_ledger
@@ -286,6 +291,8 @@ def _isolate_alpha_audit_sinks(tmp_path, monkeypatch):
     monkeypatch.setattr(_audit, "_ENABLED", None)
     monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(base / "kill_ledger.jsonl"))
     monkeypatch.setenv("HFT_SUB_GATE_AUDIT_PATH", str(base / "sub_gate_runs.jsonl"))
+    monkeypatch.setenv("HFT_RESEARCH_EVIDENCE_ROOT", str(tmp_path / "research_evidence"))
+    monkeypatch.setenv("HFT_RESEARCH_DATA_ROOT", str(tmp_path / "research_data"))
     _kill_ledger._reset_cache_for_tests()
     _sub_gate_audit._reset_cache_for_tests()
     try:

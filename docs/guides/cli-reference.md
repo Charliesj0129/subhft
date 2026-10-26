@@ -134,7 +134,7 @@ hft config contracts-status --contracts config/contracts.json --stale-after-s 86
 
 ## 13) `hft alpha` — 研究工廠治理
 ```bash
-hft alpha list
+hft alpha list            # status from ledger/verdicts.jsonl, else the manifest (source=ledger|manifest)
 hft alpha scaffold my_alpha --paper arxiv:2408.03594
 hft alpha search --mode random --data data/train.npy --feature-fields f1,f2 --trials 100
 hft alpha validate --alpha-id my_alpha --data data/train.npy data/test.npy
