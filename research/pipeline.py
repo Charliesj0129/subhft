@@ -13,7 +13,7 @@ from typing import Any
 from hft_platform.alpha._validation_profile import ValidationProfile, load_profile
 from hft_platform.alpha.evidence import GovernedRunRefused, RunMode, require_governed
 from hft_platform.alpha.paths import repo_path, repo_root
-from hft_platform.alpha.promotion import PromotionConfig, promote_alpha, record_gate_c_kill
+from hft_platform.alpha.promotion import PromotionConfig, PromotionResult, promote_alpha, record_gate_c_kill
 from hft_platform.alpha.provenance import git_state
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
 from hft_platform.cli_args.research_pipeline import (
@@ -324,6 +324,51 @@ def _bind_governed_evidence_root(
     args.experiments_dir = str(evidence)
 
 
+def _promote(
+    args: argparse.Namespace,
+    root: Path,
+    *,
+    strict_mode: bool,
+    force_promote: bool,
+    loaded_profile: ValidationProfile | None,
+    scorecard_path: str | None,
+) -> PromotionResult:
+    """Gates D-F for a validated alpha; a strict run promotes as governed."""
+    config = PromotionConfig(
+        alpha_id=args.alpha_id,
+        owner=args.owner,
+        project_root=str(root),
+        experiments_dir=str(args.experiments_dir),
+        scorecard_path=scorecard_path,
+        shadow_sessions=int(args.shadow_sessions),
+        min_shadow_sessions=int(args.min_shadow_sessions),
+        drift_alerts=int(args.drift_alerts),
+        execution_reject_rate=float(args.execution_reject_rate),
+        max_execution_reject_rate=float(args.max_execution_reject_rate),
+        require_paper_trade_governance=bool(strict_mode),
+        paper_trade_summary_path=(str(args.paper_trade_summary) if args.paper_trade_summary else None),
+        min_paper_trade_calendar_days=int(args.min_paper_trade_calendar_days),
+        min_paper_trade_trading_days=int(args.min_paper_trade_trading_days),
+        min_paper_trade_session_minutes=int(args.min_paper_trade_session_minutes),
+        min_sharpe_oos=float(args.min_sharpe_oos_gate_d),
+        max_abs_drawdown=float(args.max_abs_drawdown_gate_d),
+        max_turnover=float(args.max_turnover_gate_d),
+        max_correlation=float(args.max_correlation_gate_d),
+        enable_rust_readiness_gate=bool(strict_mode),
+        rust_module_name=(str(args.rust_module_name) if args.rust_module_name else None),
+        rust_parity_test_path=str(args.rust_parity_test_path),
+        rust_parity_timeout_s=int(args.rust_parity_timeout_s),
+        enforce_rust_benchmark_gate=bool(args.enforce_rust_benchmark_gate),
+        rust_benchmark_cmd=str(args.rust_benchmark_cmd),
+        canary_weight=(float(args.canary_weight) if args.canary_weight is not None else None),
+        force=force_promote,
+        write_promotion_config=strict_mode,
+        validation_profile=loaded_profile,
+        run_mode=(RunMode.GOVERNED if strict_mode else RunMode.EXPLORATORY).value,
+    )
+    return promote_alpha(config)
+
+
 def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
     explicit_experiments_dir = args.experiments_dir
     root = _fill_path_defaults(args)
@@ -410,39 +455,18 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
         ):
             notes.append("Gate C verdict is KILL; recorded in the kill ledger.")
     else:
-        promotion = promote_alpha(
-            PromotionConfig(
-                alpha_id=args.alpha_id,
-                owner=args.owner,
-                project_root=str(root),
-                experiments_dir=str(args.experiments_dir),
+        try:
+            promotion = _promote(
+                args,
+                root,
+                strict_mode=strict_mode,
+                force_promote=force_promote,
+                loaded_profile=loaded_profile,
                 scorecard_path=validation.scorecard_path,
-                shadow_sessions=int(args.shadow_sessions),
-                min_shadow_sessions=int(args.min_shadow_sessions),
-                drift_alerts=int(args.drift_alerts),
-                execution_reject_rate=float(args.execution_reject_rate),
-                max_execution_reject_rate=float(args.max_execution_reject_rate),
-                require_paper_trade_governance=bool(strict_mode),
-                paper_trade_summary_path=(str(args.paper_trade_summary) if args.paper_trade_summary else None),
-                min_paper_trade_calendar_days=int(args.min_paper_trade_calendar_days),
-                min_paper_trade_trading_days=int(args.min_paper_trade_trading_days),
-                min_paper_trade_session_minutes=int(args.min_paper_trade_session_minutes),
-                min_sharpe_oos=float(args.min_sharpe_oos_gate_d),
-                max_abs_drawdown=float(args.max_abs_drawdown_gate_d),
-                max_turnover=float(args.max_turnover_gate_d),
-                max_correlation=float(args.max_correlation_gate_d),
-                enable_rust_readiness_gate=bool(strict_mode),
-                rust_module_name=(str(args.rust_module_name) if args.rust_module_name else None),
-                rust_parity_test_path=str(args.rust_parity_test_path),
-                rust_parity_timeout_s=int(args.rust_parity_timeout_s),
-                enforce_rust_benchmark_gate=bool(args.enforce_rust_benchmark_gate),
-                rust_benchmark_cmd=str(args.rust_benchmark_cmd),
-                canary_weight=(float(args.canary_weight) if args.canary_weight is not None else None),
-                force=force_promote,
-                write_promotion_config=strict_mode,
-                validation_profile=loaded_profile,
             )
-        )
+        except GovernedRunRefused as exc:
+            notes.append(f"{exc}; promotion events were not appended to the verdict ledger.")
+            return _write_stopped_report(args, mode, started_at, notes, report_path)
         _write_json(promote_path, promotion.to_dict())
         promotion_out = str(promote_path)
         promotion_passed = bool(promotion.approved)

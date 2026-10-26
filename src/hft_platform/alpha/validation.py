@@ -142,7 +142,7 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
     experiments_base = _resolve_data_path(root, config.experiments_dir)
     # An unknown run_mode raises here: a typo must not run as governed or silently as exploratory.
     governed = RunMode(config.run_mode) is RunMode.GOVERNED
-    writer = _start_governed_run(config, root, Path(experiments_base)) if governed else None
+    writer, start_commit = _start_governed_run(config, root, Path(experiments_base)) if governed else (None, None)
     validation_dir = _make_validation_artifact_dir(Path(experiments_base), config.alpha_id)
     registry = AlphaDiscoveryRegistry()
     with _pushd(root):
@@ -236,6 +236,7 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
             reports={"gate_a": gate_a, "gate_b": gate_b, "gate_c": gate_c},
             run_id=run_id,
             experiment_meta_path=experiment_meta_path,
+            start_commit=start_commit,
         )
 
     return ValidationResult(
@@ -258,13 +259,18 @@ def _profile_name(config: ValidationConfig) -> str | None:
     return getattr(config.profile, "name", None) or None
 
 
-def _start_governed_run(config: ValidationConfig, root: Path, experiments_base: Path) -> EvidenceWriter:
-    """Refuse a governed run unless the tree is clean, the profile resolved and it writes to the evidence root."""
+def _start_governed_run(
+    config: ValidationConfig, root: Path, experiments_base: Path
+) -> tuple[EvidenceWriter, str | None]:
+    """Refuse a governed run unless the tree is clean, the profile resolved and it writes to the evidence root.
+
+    Returns the writer and the commit the run starts on; publishing requires the same commit.
+    """
     commit, dirty = git_state(root)
     evidence = require_governed(git_commit=commit, git_dirty=dirty, profile_name=_profile_name(config))
     if experiments_base.resolve() != evidence:
         raise GovernedRunRefused([f"experiments_dir {experiments_base} is not the evidence root {evidence}"])
-    return EvidenceWriter(evidence)
+    return EvidenceWriter(evidence), commit
 
 
 def _gate_c_ledger_verdict(gate_c: GateReport) -> tuple[str, str | None]:
@@ -286,12 +292,13 @@ def _publish_governed_run(
     reports: dict[str, GateReport],
     run_id: str | None,
     experiment_meta_path: str | None,
+    start_commit: str | None,
 ) -> None:
     """Seal the run's evidence and append one ledger event per gate that ran.
 
-    The tree is checked again here: a run that dirtied it, or whose Gate C
-    stamp does not show the same clean commit, is refused before anything
-    reaches the ledger.
+    The tree is checked again here: a run that dirtied it, that ends on a
+    different commit than it started on, or whose Gate C stamp does not show
+    that same clean commit, is refused before anything reaches the ledger.
     """
     commit, dirty = git_state(root)
     stamp: dict[str, Any] = {}
@@ -300,6 +307,8 @@ def _publish_governed_run(
     reasons = []
     if commit is None or dirty is not False:
         reasons.append("tree dirty or unknown when publishing")
+    if commit != start_commit:
+        reasons.append(f"HEAD moved during the run: started on {start_commit}, publishing on {commit}")
     if experiment_meta_path and (stamp.get("git_commit") != commit or stamp.get("git_dirty") is not False):
         reasons.append("Gate C RunStamp does not show the same clean commit")
     if reasons:

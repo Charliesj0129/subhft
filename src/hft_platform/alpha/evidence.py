@@ -21,6 +21,7 @@ relative value is refused: it would resolve against the cwd.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -134,6 +135,35 @@ def _now_iso() -> str:
     return datetime.fromtimestamp(timebase.now_s(), tz=UTC).isoformat()
 
 
+def _append_whole(fd: int, line: bytes, path: Path) -> None:
+    """Append ``line`` and fsync, or leave the file as it was and raise.
+
+    The caller holds an exclusive lock. A short write (disk full, quota, file
+    size limit) is truncated away, so a later append never continues a
+    half-written event; a ledger whose tail is already incomplete is refused.
+    """
+    start = os.fstat(fd).st_size
+    if start and os.pread(fd, 1, start - 1) != b"\n":
+        raise ValueError(f"{path} ends in an incomplete line; repair the ledger before appending")
+    written = 0
+    try:
+        while written < len(line):
+            n = os.write(fd, line[written:])
+            if n <= 0:
+                raise OSError(f"short write to {path}: {written} of {len(line)} bytes")
+            written += n
+        os.fsync(fd)
+    except BaseException:
+        os.ftruncate(fd, start)
+        os.fsync(fd)
+        raise
+
+
+def is_sealed(directory: str | Path) -> bool:
+    """True when ``directory`` carries an evidence manifest and must not be rewritten."""
+    return (Path(directory) / MANIFEST_NAME).is_file()
+
+
 class EvidenceWriter:
     """Seals evidence directories and appends verdict events under one evidence root."""
 
@@ -156,12 +186,12 @@ class EvidenceWriter:
         directory = Path(directory)
         self.relpath(directory)
         manifest_path = directory / MANIFEST_NAME
-        if manifest_path.exists():
+        if is_sealed(directory):
             raise EvidenceSealedError(f"{manifest_path} exists; sealed evidence is not rewritten")
         files = {
             p.relative_to(directory).as_posix(): file_sha256(p, cached=False)
             for p in sorted(directory.rglob("*"))
-            if p.is_file() and p.name != MANIFEST_NAME
+            if p.is_file() and p != manifest_path
         }
         manifest = {
             "schema": MANIFEST_SCHEMA,
@@ -208,10 +238,10 @@ class EvidenceWriter:
         }
         line = (json.dumps(record, sort_keys=True, separators=(",", ":"), default=str) + "\n").encode("utf-8")
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.ledger_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        fd = os.open(self.ledger_path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o644)
         try:
-            os.write(fd, line)
-            os.fsync(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            _append_whole(fd, line, self.ledger_path)
         finally:
             os.close(fd)
         return record

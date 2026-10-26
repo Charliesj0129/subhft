@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import structlog
 
+from hft_platform.alpha.evidence import is_sealed
 from hft_platform.alpha.experiments import ExperimentTracker
 
 logger = structlog.get_logger(__name__)
@@ -540,6 +541,7 @@ def recompute_pool_correlations(
         corr_max[alpha_ids[i]] = max_abs
 
     updated: list[str] = []
+    sealed_skipped: list[str] = []
     if apply:
         runs = tracker.list_runs()
         for run in runs:
@@ -547,6 +549,10 @@ def recompute_pool_correlations(
                 continue
             scorecard_path = Path(run.scorecard_path)
             if not scorecard_path.exists():
+                continue
+            if is_sealed(scorecard_path.parent):
+                # Sealed evidence is never rewritten.
+                sealed_skipped.append(run.run_id)
                 continue
             try:
                 scorecard = json.loads(scorecard_path.read_text())
@@ -560,6 +566,7 @@ def recompute_pool_correlations(
         "alpha_ids": alpha_ids,
         "correlation_pool_max": corr_max,
         "updated_scorecards": updated,
+        "sealed_skipped": sealed_skipped,
         "applied": apply,
     }
 

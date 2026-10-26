@@ -12,8 +12,10 @@ differences here.
 - Strict runs (`make research`) are governed: they need `HFT_RESEARCH_EVIDENCE_ROOT`
   (absolute, outside the repo), a clean tree and a resolved profile, write to
   that root, seal each run with a `manifest.json` and append to
-  `ledger/verdicts.jsonl` (`src/hft_platform/alpha/evidence.py`). Triage runs are
-  exploratory and never reach the ledger.
+  `ledger/verdicts.jsonl` (`src/hft_platform/alpha/evidence.py`). Promotion of a
+  strict run is governed too (sealed scorecard in, `promotions/` and ledger events
+  out). Sealed directories are never rewritten. Triage runs are exploratory and
+  never reach the ledger.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.

@@ -104,7 +104,10 @@ Strict runs are **governed** (ADR-005): they stop with rc 2 unless
 tree is clean and the validation profile resolves. Runs and validation artifacts
 go to that root (`runs/<run_id>/`, `validations/<alpha_id>/<stamp>/`), each sealed
 by a `manifest.json` of sha256s, and every gate that ran appends one event to
-`ledger/verdicts.jsonl`. Governed runs do not rewrite `impl.py` status. Triage runs
+`ledger/verdicts.jsonl`. Governed promotion reads only a sealed scorecard under that
+root, writes its Gate D-F reports to `promotions/` there and appends their events;
+the run must start and publish on the same commit. Governed runs do not rewrite
+`impl.py` status, and the correlation tools skip sealed scorecards. Triage runs
 (`research.pipeline triage`) stay exploratory: labelled in the RunStamp, written to
 `--experiments-dir`, never in the ledger.
 

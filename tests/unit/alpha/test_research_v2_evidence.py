@@ -7,6 +7,7 @@ import os
 import types
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from hft_platform.alpha import validation
@@ -216,7 +217,14 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """run_alpha_validation with stubbed gates, a clean tree and an evidence root."""
     root = tmp_path / "evidence"
     monkeypatch.setenv(EVIDENCE_ROOT_ENV, str(root))
-    state = {"git": ("c0ffee", False), "stamp_dirty": False, "status_updates": [], "gate_a_calls": 0}
+    state = {
+        "git": ("c0ffee", False),
+        "git_after_gate_c": None,
+        "stamp_commit": "c0ffee",
+        "stamp_dirty": False,
+        "status_updates": [],
+        "gate_a_calls": 0,
+    }
     monkeypatch.setattr(validation, "git_state", lambda _root: state["git"])
     alpha = types.SimpleNamespace(manifest=types.SimpleNamespace(alpha_id="a1"))
     registry = types.SimpleNamespace(discover=lambda _path: {"a1": alpha})
@@ -237,8 +245,10 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             gate_status={},
             scorecard_payload={},
             backtest_report_payload={},
-            run_stamp={"git_commit": "c0ffee", "git_dirty": state["stamp_dirty"]},
+            run_stamp={"git_commit": state["stamp_commit"], "git_dirty": state["stamp_dirty"]},
         )
+        if state["git_after_gate_c"] is not None:
+            state["git"] = state["git_after_gate_c"]
         report = _report("Gate C", False, verdict={"verdict": "NEEDS-MORE-DAYS"})
         return report, "run-1", "h", str(meta.parent / "scorecard.json"), str(meta)
 
@@ -382,3 +392,198 @@ def test_governed_validation_whose_gate_c_meta_has_no_stamp_reaches_no_ledger(
     with pytest.raises(GovernedRunRefused, match="same clean commit"):
         governed_validation.run()
     assert not EvidenceWriter(governed_validation.root).ledger_path.exists()
+
+
+# --- review fixes (PR5b dual review) ----------------------------------------
+_EVENT = {"alpha_id": "a", "stage": "gate_a", "passed": True}
+
+
+def test_ledger_short_write_is_rolled_back_and_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    writer = EvidenceWriter(tmp_path)
+    writer.append_verdict(_EVENT, mode="governed")
+    before = writer.ledger_path.read_bytes()
+    real_write = os.write
+    calls = {"n": 0}
+
+    def _disk_full(fd, data):
+        calls["n"] += 1
+        return real_write(fd, data[: len(data) // 2]) if calls["n"] == 1 else 0
+
+    monkeypatch.setattr(os, "write", _disk_full)
+    with pytest.raises(OSError, match="short write"):
+        writer.append_verdict(_EVENT, mode="governed")
+    monkeypatch.setattr(os, "write", real_write)
+    assert writer.ledger_path.read_bytes() == before
+    writer.append_verdict(_EVENT, mode="governed")
+    assert len(list(writer.read_verdicts())) == 2
+
+
+def test_ledger_partial_writes_are_completed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real_write = os.write
+    monkeypatch.setattr(os, "write", lambda fd, data: real_write(fd, data[:7]))
+    writer = EvidenceWriter(tmp_path)
+    writer.append_verdict(_EVENT, mode="governed")
+    monkeypatch.setattr(os, "write", real_write)
+    assert [e["stage"] for e in writer.read_verdicts()] == ["gate_a"]
+
+
+def test_ledger_with_an_incomplete_tail_refuses_appends(tmp_path: Path) -> None:
+    writer = EvidenceWriter(tmp_path)
+    writer.ledger_path.parent.mkdir(parents=True)
+    writer.ledger_path.write_bytes(b'{"schema": "verdict_event.v1", "alpha')
+    with pytest.raises(ValueError, match="incomplete line"):
+        writer.append_verdict(_EVENT, mode="governed")
+    assert writer.ledger_path.read_bytes() == b'{"schema": "verdict_event.v1", "alpha'
+
+
+def test_seal_hashes_a_nested_manifest_json_and_verifies_clean(tmp_path: Path) -> None:
+    run = _run_dir(tmp_path)
+    (run / "sub" / "manifest.json").write_text("{}", encoding="utf-8")
+    manifest = json.loads(EvidenceWriter(tmp_path).seal(run, alpha_id="a", mode="governed").read_text())
+    assert "sub/manifest.json" in manifest["files"]
+    assert EvidenceWriter.verify(run) == []
+
+
+def test_governed_validation_whose_head_moved_during_the_run_reaches_no_ledger(governed_validation) -> None:
+    # Started on c0ffee; another process moved HEAD to a clean beef before Gate C.
+    governed_validation.state["git_after_gate_c"] = ("beef", False)
+    governed_validation.state["stamp_commit"] = "beef"
+    with pytest.raises(GovernedRunRefused, match="HEAD moved"):
+        governed_validation.run()
+    assert not EvidenceWriter(governed_validation.root).ledger_path.exists()
+
+
+def _sealed_scorecard(root: Path, alpha_id: str = "a1") -> Path:
+    run = root / "runs" / "run-1"
+    run.mkdir(parents=True)
+    (run / "meta.json").write_text(json.dumps({"run_id": "run-1", "gate_status": {"gate_c": True}}), encoding="utf-8")
+    scorecard = run / "scorecard.json"
+    scorecard.write_text(json.dumps({"sharpe_oos": 1.6, "correlation_pool_max": 0.3}), encoding="utf-8")
+    EvidenceWriter(root).seal(run, alpha_id=alpha_id, mode="governed")
+    return scorecard
+
+
+def test_correlation_updaters_do_not_rewrite_sealed_scorecards(tmp_path: Path, monkeypatch) -> None:
+    from hft_platform.alpha import batch_correlation, pool
+
+    scorecard = _sealed_scorecard(tmp_path)
+    run = types.SimpleNamespace(run_id="run-1", alpha_id="a1", scorecard_path=str(scorecard))
+    signals = np.arange(10, dtype=np.float64)
+    monkeypatch.setattr(ExperimentTracker, "list_runs", lambda self, **_k: [run])
+    monkeypatch.setattr(ExperimentTracker, "latest_signals_by_alpha", lambda self: {"a1": signals, "b": signals[::-1]})
+    monkeypatch.setattr(
+        pool,
+        "compute_pool_matrix",
+        lambda **_k: {"alpha_ids": ["a1", "b"], "pearson_matrix": [[1.0, -1.0], [-1.0, 1.0]]},
+    )
+
+    result = pool.recompute_pool_correlations(base_dir=str(tmp_path), apply=True)
+    batch_correlation.batch_compute_correlations(tmp_path, tmp_path)
+
+    assert result["sealed_skipped"] == ["run-1"] and result["updated_scorecards"] == []
+    assert EvidenceWriter.verify(scorecard.parent) == []
+
+
+def _promotion_config(tmp_path: Path, scorecard: Path, evidence: Path, **overrides):
+    from hft_platform.alpha._validation_profile import ValidationProfile
+    from hft_platform.alpha.promotion import PromotionConfig
+
+    cfg = {
+        "alpha_id": "a1",
+        "owner": "o",
+        "project_root": str(tmp_path),
+        "experiments_dir": str(evidence),
+        "scorecard_path": str(scorecard),
+        "shadow_sessions": 6,
+        "validation_profile": ValidationProfile(name="p", is_strict=True, blocking_sub_gates=("sharpe_threshold",)),
+        "run_mode": "governed",
+    }
+    cfg.update(overrides)
+    return PromotionConfig(**cfg)
+
+
+@pytest.fixture
+def governed_promotion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    from hft_platform.alpha import promotion
+
+    evidence = tmp_path / "evidence"
+    monkeypatch.setenv(EVIDENCE_ROOT_ENV, str(evidence))
+    monkeypatch.setattr(promotion, "git_state", lambda _root: ("c0ffee", False))
+    status_updates: list[str] = []
+    monkeypatch.setattr(promotion, "_update_manifest_status", lambda _a, s, _r: status_updates.append(s))
+    return types.SimpleNamespace(evidence=evidence, status_updates=status_updates)
+
+
+def test_governed_promotion_publishes_to_the_evidence_root_without_rewriting_impl(
+    governed_promotion, tmp_path: Path
+) -> None:
+    from hft_platform.alpha.promotion import promote_alpha
+
+    evidence = governed_promotion.evidence
+    scorecard = _sealed_scorecard(evidence)
+    result = promote_alpha(_promotion_config(tmp_path, scorecard, evidence))
+
+    assert governed_promotion.status_updates == []
+    decision = Path(result.promotion_decision_path)
+    assert evidence in decision.parents
+    assert not (tmp_path / "research" / "experiments").exists()
+    assert EvidenceWriter.verify(decision.parent) == []
+    events = list(EvidenceWriter(evidence).read_verdicts())
+    assert [e["stage"] for e in events] == ["gate_d", "gate_e", "gate_f"]
+    assert events[0]["run_id"] == "run-1" and "verdict" in events[0]
+    assert "runs/run-1/manifest.json" in events[0]["evidence"]
+
+
+def test_exploratory_promotion_keeps_legacy_status_writes(governed_promotion, tmp_path: Path) -> None:
+    from hft_platform.alpha.promotion import promote_alpha
+
+    scorecard = _sealed_scorecard(governed_promotion.evidence)
+    promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, run_mode="exploratory"))
+    assert governed_promotion.status_updates
+    assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()
+
+
+def test_governed_promotion_refuses_an_unsealed_or_outside_scorecard(governed_promotion, tmp_path: Path) -> None:
+    from hft_platform.alpha.promotion import promote_alpha
+
+    outside = tmp_path / "elsewhere" / "scorecard.json"
+    outside.parent.mkdir()
+    outside.write_text("{}", encoding="utf-8")
+    with pytest.raises(GovernedRunRefused, match="not under the evidence root"):
+        promote_alpha(_promotion_config(tmp_path, outside, governed_promotion.evidence))
+
+    unsealed = governed_promotion.evidence / "runs" / "run-2" / "scorecard.json"
+    unsealed.parent.mkdir(parents=True)
+    unsealed.write_text("{}", encoding="utf-8")
+    with pytest.raises(GovernedRunRefused, match="not sealed"):
+        promote_alpha(_promotion_config(tmp_path, unsealed, governed_promotion.evidence))
+    assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()
+
+
+def test_promotion_refuses_a_sealed_scorecard_that_changed(governed_promotion, tmp_path: Path) -> None:
+    from hft_platform.alpha.promotion import PromotionError, promote_alpha
+
+    scorecard = _sealed_scorecard(governed_promotion.evidence)
+    scorecard.write_text(json.dumps({"sharpe_oos": 9.9}), encoding="utf-8")
+    for mode in ("governed", "exploratory"):
+        with pytest.raises(PromotionError, match="changed since it was sealed"):
+            promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, run_mode=mode))
+
+
+def test_latest_scorecard_lookup_reads_the_configured_experiments_dir(tmp_path: Path) -> None:
+    from hft_platform.alpha.promotion import _latest_scorecard_from_runs
+
+    evidence = tmp_path / "evidence"
+    meta = ExperimentTracker(base_dir=evidence).log_run(
+        run_id="run-1",
+        alpha_id="a1",
+        config_hash="h",
+        data_paths=[],
+        metrics={},
+        gate_status={},
+        scorecard_payload={},
+        backtest_report_payload={},
+        run_stamp={},
+    )
+    assert _latest_scorecard_from_runs(tmp_path, "a1") is None
+    assert _latest_scorecard_from_runs(tmp_path, "a1", str(evidence)) == meta.parent / "scorecard.json"
