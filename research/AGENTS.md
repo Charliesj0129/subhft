@@ -15,5 +15,7 @@ differences here.
 - Float is allowed here for offline metrics only. Nothing in `research/`
   enables live trading; promotion goes through Gates A-F and the frozen
   registry rules in `../AGENTS.md`.
-- `research/` is excluded from the ruff and pytest gates, so run the relevant
-  `make research-*` targets and the gate tooling yourself.
+- `research/` is excluded from the platform ruff and pytest gates. Its own gate
+  is `make research-check` (bug-class ruff, `tests/research`,
+  `tests/unit/research`, the alpha `tests/`, a coverage floor); a test that
+  cannot run goes in `tests/research/quarantine.yaml` with its reason.

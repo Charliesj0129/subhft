@@ -812,6 +812,26 @@ jobs:
           fi
 
   # ============================================================================
+  # Research gate (not a required check yet). pyproject.toml keeps research/ out
+  # of ruff and pytest (norecursedirs skips every directory named `research`, so
+  # tests/unit/research never ran either). `make research-check` runs those
+  # suites and the alpha Gate B tests with bug-class ruff and its own coverage
+  # floor; see scripts/research_check.py. It becomes required after a week of
+  # green runs on main (ADR-005, stage 2).
+  # ============================================================================
+  research-check:
+    name: 🔬 Research Check (not required)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python-uv
+      - name: Research ruff, tests and coverage
+        run: make research-check
+
+  # ============================================================================
   # Stage 6: Security Scanning
   # ============================================================================
   security:
