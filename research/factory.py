@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3840,37 +3841,21 @@ def _strategy_family_shape_requirements() -> dict[str, dict[str, Any]]:
     }
 
 
-def _load_experiment_stats() -> dict[str, Any]:
-    runs_root = ROOT / "experiments" / "runs"
-    per_alpha: dict[str, dict[str, Any]] = {}
-    if not runs_root.exists():
-        return per_alpha
+def _load_experiment_stats(evidence_root: Path, alpha_ids: Iterable[str] = ()) -> dict[str, Any]:
+    from research.registry.legacy_evidence import combined_run_stats, known_alpha_ids
 
-    for meta_path in sorted(runs_root.glob("*/meta.json")):
-        try:
-            payload = json.loads(meta_path.read_text())
-        except (OSError, ValueError):
-            continue
-        alpha_id = str(payload.get("alpha_id", "")).strip()
-        run_id = str(payload.get("run_id", "")).strip()
-        ts = str(payload.get("timestamp", "")).strip()
-        if not alpha_id:
-            continue
-        row = per_alpha.setdefault(alpha_id, {"run_count": 0, "latest_run_id": "", "latest_timestamp": ""})
-        row["run_count"] = int(row["run_count"]) + 1
-        if ts and ts >= str(row["latest_timestamp"]):
-            row["latest_timestamp"] = ts
-            row["latest_run_id"] = run_id
-    return per_alpha
+    known = known_alpha_ids(ROOT, extra=alpha_ids)
+    return combined_run_stats(evidence_root, ROOT / "experiments" / "runs", known)
 
 
 def cmd_index(args: argparse.Namespace) -> int:
-    from hft_platform.alpha.evidence import EvidenceRootError
+    from hft_platform.alpha.evidence import EvidenceRootError, evidence_root
     from hft_platform.alpha.status import effective_status, ledger_events_by_alpha
     from research.registry.alpha_registry import AlphaRegistry
 
     try:
-        ledger = ledger_events_by_alpha()
+        root = evidence_root()
+        ledger = ledger_events_by_alpha(root)
     except (EvidenceRootError, ValueError, OSError) as exc:
         print(f"[research.factory] index: cannot read the verdict ledger: {exc}", file=sys.stderr)
         return 2
@@ -3895,10 +3880,13 @@ def cmd_index(args: argparse.Namespace) -> int:
             }
         )
 
-    exp_stats = _load_experiment_stats()
+    exp_stats = _load_experiment_stats(root, [item["alpha_id"] for item in manifests])
     for item in manifests:
         stats = exp_stats.get(item["alpha_id"], {})
         item["run_count"] = int(stats.get("run_count", 0))
+        item["legacy_run_count"] = int(stats.get("legacy_run_count", 0))
+        item["governed_run_count"] = int(stats.get("governed_run_count", 0))
+        item["quarantined_run_count"] = int(stats.get("quarantined_run_count", 0))
         item["latest_run_id"] = str(stats.get("latest_run_id", ""))
         item["latest_timestamp"] = str(stats.get("latest_timestamp", ""))
 
