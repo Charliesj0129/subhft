@@ -709,10 +709,7 @@ def test_mutual_exclusion_documented_in_manifest_promote_prereqs() -> None:
 
     import yaml
 
-    path = Path(
-        "/home/charlie/hft_platform/research/alphas/"
-        "c74_txf_tmf_basis_mean_reversion/manifest.yaml"
-    )
+    path = Path(__file__).resolve().parents[1] / "manifest.yaml"
     assert path.exists()
     doc = yaml.safe_load(path.read_text())
     prereqs = doc.get("promote_prerequisites", {})
@@ -724,10 +721,7 @@ def test_manifest_documents_all_10_da_mandatory_flags() -> None:
 
     import yaml
 
-    path = Path(
-        "/home/charlie/hft_platform/research/alphas/"
-        "c74_txf_tmf_basis_mean_reversion/manifest.yaml"
-    )
+    path = Path(__file__).resolve().parents[1] / "manifest.yaml"
     doc = yaml.safe_load(path.read_text())
     flags = doc.get("da_t5_mandatory_flags", [])
     assert len(flags) == 10

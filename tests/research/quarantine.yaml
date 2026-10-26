@@ -1,0 +1,29 @@
+# Research tests that `make research-check` does not run, each with the reason.
+# scripts/research_check.py refuses an entry without a reason, or one whose path
+# or test no longer exists, so this list cannot silently outlive its cause.
+#
+#   path:   repo-relative file or directory (kind: ignore), or file::test (kind: deselect)
+#   reason: why it cannot run here, and what would let it come back
+entries:
+  - kind: ignore
+    path: tests/unit/research/candidate_loop/test_governor_client.py
+    reason: >-
+      imports httpx, which only the `research` dependency group installs; CI and
+      `make dev` install the dev group only. Returns when the job syncs that group.
+  - kind: deselect
+    path: tests/unit/research/candidate_loop/test_governor_cli.py::test_governor_generate_fails_closed_without_api_key
+    reason: >-
+      the generate command imports research.candidate_loop.governor.client, which
+      needs httpx from the `research` dependency group (same cause as above).
+  - kind: ignore
+    path: research/alphas/c27_vol_amplification_on_c14
+    reason: >-
+      impl.py imports research.alphas.c14_txf_frontmonth_native_maker, which was
+      archived to research/archive/alphas_2026-05-28/; collection fails with
+      ModuleNotFoundError. Returns if c27 is repointed or archived with c14.
+  - kind: deselect
+    path: tests/research/r52_amhp_dynamic_spread/test_online_hawkes_mle.py::test_vmr_estimator_class_p99_under_1ms
+    reason: >-
+      asserts a wall-clock p99 under 1 ms; it measured 1.38 ms on a loaded laptop and
+      shared CI runners are noisier. A latency budget belongs in a benchmark job with
+      a stated host, not in a correctness gate.

@@ -606,6 +606,10 @@ research-audit-strict: ## Strict audit (--fail-on-warning) for CI compatibility
 research-audit-lifecycle: ## Cross-check alpha lifecycle drift across manifest/ledger/cluster/paper_index
 	$(PY) -m research.tools.lifecycle_audit
 
+.PHONY: research-check
+research-check: ## Research gate: bug-class ruff + research and alpha tests with their own coverage floor
+	$(PY) scripts/research_check.py $(ARGS)
+
 .PHONY: research-spec-check
 research-spec-check: ## Validate every candidate spec.yaml against the goal-§3 schema
 	$(PY) -m hft_platform.alpha.spec_check --all
