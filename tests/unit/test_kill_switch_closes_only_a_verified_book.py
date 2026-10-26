@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import time
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -167,6 +167,24 @@ def test_a_switch_no_operator_set_cancels_but_never_closes(actor) -> None:
 
     assert [i.intent_type for i in items] == [IntentType.CANCEL]
     assert _blocked() == 1
+
+
+def test_a_kill_switch_during_an_operator_flatten_does_not_resend_cancels_every_tick() -> None:
+    """One cancel batch per tick: a second, narrower batch would drop the first's retry clock."""
+    live = {"R47_MAKER_TMF:41": _trade("TMFK6"), "R47_MAKER_TMF:42": _trade("TMFH6")}
+    system = _system(kill=True, verified_age_s=3, live=live)
+    system._operator_flatten_initial = MappingProxyType({"TMFK6": 1})
+
+    def _cancels_at(now_ns: int) -> list:
+        system.risk_queue.items.clear()
+        with mock.patch("hft_platform.core.timebase.now_ns", return_value=now_ns):
+            system._run_loss_exit()
+        return [i for i in system.risk_queue.items if i.intent_type == IntentType.CANCEL]
+
+    first = _cancels_at(NOW)
+    assert sorted(i.target_order_id for i in first) == ["R47_MAKER_TMF:41", "R47_MAKER_TMF:42"]
+    assert {i.reason for i in first} == {"loss_exit:kill_switch:cancel"}
+    assert _cancels_at(NOW + 1_000_000_000) == []
 
 
 def test_a_recovery_halt_never_closes_even_after_an_operator_stop() -> None:
