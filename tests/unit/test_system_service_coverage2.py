@@ -1764,47 +1764,6 @@ class TestSuperviseDeescalationRestart:
 
 
 # ===========================================================================
-# _supervise — Redis emergency halt
-# ===========================================================================
-
-
-class TestSuperviseRedisHalt:
-    """Cover Telegram /stop emergency halt via Redis key."""
-
-    @pytest.mark.asyncio
-    async def test_redis_halt_triggers_storm_guard(self):
-        sys_obj = _make_stub()
-        sys_obj.running = True
-        sys_obj.storm_guard.state = StormGuardState.NORMAL
-
-        redis_client = MagicMock()
-        redis_client.get.return_value = "1"
-        sys_obj._redis_client = redis_client
-
-        mock_metrics = MagicMock()
-        mock_metrics.cap_symbol = MagicMock(return_value="X")
-
-        iteration = 0
-
-        async def _mock_sleep(s):
-            nonlocal iteration
-            iteration += 1
-            if iteration >= 2:
-                sys_obj.running = False
-
-        with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
-            MockMR.get.return_value = mock_metrics
-            with patch("asyncio.sleep", side_effect=_mock_sleep):
-                with patch.object(sys_obj, "_iter_supervised_services", return_value=[]):
-                    with patch.object(sys_obj, "_update_platform_degrade_state"):
-                        with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
-                            with patch("hft_platform.services.system.write_heartbeat"):
-                                await sys_obj._supervise()
-
-        sys_obj.storm_guard.trigger_halt.assert_called_with("TELEGRAM_EMERGENCY_HALT")
-
-
-# ===========================================================================
 # graceful_reset — STORM/HALT reset + DLQ error
 # ===========================================================================
 

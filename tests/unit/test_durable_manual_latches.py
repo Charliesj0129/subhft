@@ -87,7 +87,11 @@ class TestManualLatchStore:
 
     def test_release_audits_then_removes(self) -> None:
         manual_latches.activate(manual_latches.DAILY_LOSS, "DAILY_LOSS_LIMIT", actor="engine")
-        assert manual_latches.release(manual_latches.DAILY_LOSS, reason="flat, reviewed", actor="cli:op") is True
+        token = manual_latches.tokens()["daily_loss"]
+        assert (
+            manual_latches.release(manual_latches.DAILY_LOSS, token=token, reason="flat, reviewed", actor="cli:op")
+            is True
+        )
         assert manual_latches.active() == {}
         audit = (manual_latches.latch_dir() / manual_latches.AUDIT_FILE).read_text(encoding="utf-8").splitlines()
         entry = json.loads(audit[-1])
@@ -98,9 +102,17 @@ class TestManualLatchStore:
 
     def test_release_without_a_reason_is_refused_and_keeps_the_latch(self) -> None:
         manual_latches.activate(manual_latches.DAILY_LOSS, "DAILY_LOSS_LIMIT", actor="engine")
+        token = manual_latches.tokens()["daily_loss"]
         with pytest.raises(ValueError):
-            manual_latches.release(manual_latches.DAILY_LOSS, reason="  ", actor="cli:op")
+            manual_latches.release(manual_latches.DAILY_LOSS, token=token, reason="  ", actor="cli:op")
         assert "daily_loss" in manual_latches.active()
+
+    def test_release_with_a_stale_token_is_refused_and_keeps_the_latch(self) -> None:
+        manual_latches.activate(manual_latches.DAILY_LOSS, "DAILY_LOSS_LIMIT", actor="engine")
+        with pytest.raises(ValueError, match="does not match"):
+            manual_latches.release(manual_latches.DAILY_LOSS, token="stale", reason="reviewed", actor="cli:op")
+        assert "daily_loss" in manual_latches.active()
+        assert not (manual_latches.latch_dir() / manual_latches.AUDIT_FILE).exists()
 
     def test_unknown_latch_name_is_rejected(self) -> None:
         with pytest.raises(ValueError):
@@ -125,7 +137,8 @@ class TestKillSwitchDurability:
         target = tmp_path / "ks" / "kill_switch"
         kill_switch.activate("op", actor="cli", path=str(target))
         assert json.loads(target.read_text())["reason"] == "op"
-        assert [p.name for p in target.parent.iterdir()] == ["kill_switch"]
+        # The lock is kept on purpose (it serializes activate with release); a temp file is not.
+        assert sorted(p.name for p in target.parent.iterdir()) == ["kill_switch", "kill_switch.lock"]
 
     def test_legacy_runtime_latch_is_still_active_and_removed_by_resume(self, tmp_path, monkeypatch) -> None:
         monkeypatch.delenv(kill_switch.PATH_ENV, raising=False)
@@ -267,7 +280,8 @@ class TestSupervisorSync:
         system = _system(v)
         asyncio.run(system._sync_manual_latches())
 
-        manual_latches.release(manual_latches.DAILY_LOSS, reason="reviewed", actor="cli:op")
+        token = manual_latches.tokens()["daily_loss"]
+        manual_latches.release(manual_latches.DAILY_LOSS, token=token, reason="reviewed", actor="cli:op")
         asyncio.run(system._sync_manual_latches())
 
         assert manual_latches.active() == {}
@@ -365,7 +379,8 @@ class TestRearmCli:
         from hft_platform.cli._risk import cmd_risk_rearm
 
         manual_latches.activate(manual_latches.DAILY_LOSS, "DAILY_LOSS_LIMIT", actor="engine")
-        cmd_risk_rearm(Namespace(latch="daily_loss", reason="flat and reviewed"))
+        token = manual_latches.tokens()["daily_loss"]
+        cmd_risk_rearm(Namespace(latch="daily_loss", token=token, reason="flat and reviewed"))
 
         assert manual_latches.active() == {}
         assert "RELEASED" in capsys.readouterr().out
@@ -374,10 +389,12 @@ class TestRearmCli:
         from hft_platform.cli._parser import build_parser
 
         parser = build_parser()
-        args = parser.parse_args(["risk", "rearm", "reconciliation_mismatch", "--reason", "x"])
+        args = parser.parse_args(["risk", "rearm", "reconciliation_mismatch", "--token", "t", "--reason", "x"])
         assert args.latch == "reconciliation_mismatch"
         with pytest.raises(SystemExit):
-            parser.parse_args(["risk", "rearm", "crash_loop", "--reason", "x"])
+            parser.parse_args(["risk", "rearm", "crash_loop", "--token", "t", "--reason", "x"])
+        with pytest.raises(SystemExit):
+            parser.parse_args(["risk", "rearm", "daily_loss", "--reason", "no token"])
 
 
 class TestProdLimits:

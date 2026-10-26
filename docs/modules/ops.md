@@ -19,10 +19,11 @@ Operational automation for session governance, autonomy monitoring, strategy hea
 | `strategy_governor.py` | `StrategyHealthGovernor` | Per-strategy quarantine |
 | `position_flattener.py` | `PositionFlattener` | Emergency position closing |
 | `margin_monitor.py` | `MarginMonitor` | Margin utilization alerts |
-| `flatten_gate.py` | `FlattenGate` | File-based IPC for flatten requests |
+| `flatten_gate.py` | `FlattenGate` | File-based IPC for `hft ops flatten`; the engine supervisor claims it (`HFTSystem._sync_operator_flatten`) |
 | `backup.py` | `BackupManager` | ClickHouse daily backup with verify/restore |
 | `evidence.py` | `AutonomyEvidenceWriter` | Autonomy audit trail (JSONL + Markdown) |
-| `manual_rearm.py` | `ManualRearmGate` | File-based manual rearm state |
+| `manual_rearm.py` | `ManualRearmGate` | File-based manual rearm state; platform re-arm needs `platform_token` + reason, audited |
+| `release_audit.py` | `token_for`, `check_release`, `append` | Token and audit line every operator release of a stop uses |
 | `platform_inputs.py` | `PlatformDegradeInputs` | Multi-source health signal aggregation |
 | `config_snapshot.py` | `build_snapshot()` | Startup config capture to ClickHouse |
 | `daily_pnl_report.py` | `DailyPnlSection` | PnL report formatting |
@@ -81,6 +82,30 @@ result = await flattener.flatten_all()
 - FORCE_FLAT market orders
 - Per-symbol timeout (120s)
 - Retry once per failed symbol
+
+## Operator flatten (`hft ops flatten`)
+
+The CLI writes `flatten_request.json` through `FlattenGate`; the engine's
+supervisor (`HFTSystem._sync_operator_flatten`, 1 Hz) claims it, records the
+platform net position per symbol in scope (`all`, or `strategy` with
+`--scope-id`), and `LossExitController` sends a FORCE_FLAT for each with
+trigger `operator_flatten` (IOC marketable limit, retried every 10 s), and
+cancels every other working order in those symbols (`cancel_intents`, retried
+at the same interval). The request finishes from the position store and the
+order adapter's `live_orders`: COMPLETED once every symbol is flat with no
+working order left in it and no order still awaiting the broker's
+acknowledgement, or at the deadline with the symbols still open or still
+holding an order counted as partially closed or failed. An order still awaiting
+acknowledgement at the deadline makes the request FAILED: its symbol is not
+known, so a flat book proves nothing. Every write-back names the request it
+answers (`initiated_ns`) and runs under the request file's lock, so a request
+submitted meanwhile is never given an earlier one's result. The CLI exits
+non-zero when any symbol is still open or the request failed. A flatten does not stop trading: a strategy can
+open again after it completes; set the kill switch first (`hft risk halt`)
+to keep the book closed. A request left
+PROCESSING by an engine that restarted is failed on the next boot. A FORCE_FLAT
+closes the platform's whole net position in a symbol, so `strategy` scope
+selects symbols, not lots. `PositionFlattener` is not on this path.
 
 ## BackupManager
 

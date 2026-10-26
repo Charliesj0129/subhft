@@ -165,14 +165,19 @@ its own. Any restart that is still needed follows
 ### Step 4: Release the durable manual latches
 
 ```bash
-hft risk status                      # kill switch + manual latches
-hft risk rearm daily_loss --reason "<why it is safe>"
-hft risk rearm reconciliation_mismatch --reason "<why it is safe>"
-hft risk resume                      # operator kill switch
+hft risk status                      # kill switch + manual latches, each with its token
+hft risk rearm daily_loss --token <token> --reason "<why it is safe>"
+hft risk rearm reconciliation_mismatch --token <token> --reason "<why it is safe>"
+hft risk resume --token <token> --reason "<why it is safe>"   # operator kill switch
 ```
 
-Latches live in `.state/manual_latches/` (`HFT_MANUAL_LATCH_DIR`); each
-release appends a line to `.state/manual_latches/audit.jsonl`. The engine reads
+Every release quotes the token `hft risk status` printed for that stop. The
+token is derived from the latch record, so if the stop was rewritten after you
+read it (a Telegram `/stop`, the engine's startup gate) the release is refused
+and you read the status again. Latches live in `.state/manual_latches/`
+(`HFT_MANUAL_LATCH_DIR`); each release appends a line to
+`.state/manual_latches/audit.jsonl`, and a kill-switch release to
+`.state/kill_switch_audit.jsonl`. The engine reads
 the directory on every supervise tick, so a release takes effect without a
 restart: HALT then de-escalates through the normal StormGuard cooldown. Watch
 `manual_latch_active{latch=...}` go to 0.
@@ -187,10 +192,13 @@ positions.
 Only after reconciliation is clean, dependency health is green, and evidence capture is complete:
 
 ```bash
-hft ops autonomy-status
-hft ops rearm-platform
+hft ops autonomy-status              # prints platform_token
+hft ops rearm-platform --token <platform_token> --reason "<why it is safe>"
 hft ops rearm-strategy --strategy-id <strategy_id>
 ```
+
+The platform re-arm is appended to `rearm_audit.jsonl` beside
+`runtime_state.json` before the flag is cleared.
 
 The platform re-arm takes effect in the running engine on its next supervisor
 tick (log `platform_reduce_only_force_cleared`); no restart is needed, and a

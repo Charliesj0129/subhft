@@ -399,7 +399,11 @@ def build_parser() -> argparse.ArgumentParser:
     ops_quarantine_strategy.add_argument("--state-path", help="Override autonomy runtime state path")
     ops_quarantine_strategy.set_defaults(func=cmd_ops_quarantine_strategy)
 
-    ops_rearm_platform = ops_sub.add_parser("rearm-platform", help="Clear platform manual re-arm state")
+    ops_rearm_platform = ops_sub.add_parser("rearm-platform", help="Clear platform manual re-arm state (audited)")
+    ops_rearm_platform.add_argument(
+        "--token", required=True, help="platform_token printed by `hft ops autonomy-status`"
+    )
+    ops_rearm_platform.add_argument("--reason", required=True, help="Why it is safe to resume")
     ops_rearm_platform.add_argument("--state-path", help="Override autonomy runtime state path")
     ops_rearm_platform.set_defaults(func=cmd_ops_rearm_platform)
 
@@ -408,8 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
     ops_status.set_defaults(func=cmd_ops_autonomy_status)
 
     ops_flatten = ops_sub.add_parser("flatten", help="Emergency position flattening")
-    ops_flatten.add_argument("--scope", choices=["all", "strategy", "track"], default="all")
-    ops_flatten.add_argument("--scope-id", default=None, help="Strategy ID or track name")
+    ops_flatten.add_argument("--scope", choices=["all", "strategy"], default="all")
+    ops_flatten.add_argument("--scope-id", default=None, help="Strategy ID (with --scope strategy)")
     ops_flatten.add_argument("--deadline", type=int, default=120, help="Flatten deadline in seconds")
     ops_flatten.set_defaults(func=cmd_ops_flatten)
 
@@ -421,7 +425,9 @@ def build_parser() -> argparse.ArgumentParser:
     risk_halt.add_argument("--reason", required=True, help="Reason for halting")
     risk_halt.set_defaults(func=cmd_risk_halt)
 
-    risk_resume = risk_sub.add_parser("resume", help="Deactivate kill switch")
+    risk_resume = risk_sub.add_parser("resume", help="Deactivate kill switch (audited)")
+    risk_resume.add_argument("--token", required=True, help="Token printed by `hft risk status`")
+    risk_resume.add_argument("--reason", required=True, help="Why it is safe to resume")
     risk_resume.set_defaults(func=cmd_risk_resume)
 
     risk_status_cmd = risk_sub.add_parser("status", help="Check kill switch status")
@@ -432,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     risk_rearm = risk_sub.add_parser("rearm", help="Release one durable manual latch (audited)")
     risk_rearm.add_argument("latch", choices=sorted(manual_latches.LATCH_NAMES))
+    risk_rearm.add_argument("--token", required=True, help="Token printed by `hft risk latches`")
     risk_rearm.add_argument("--reason", required=True, help="Why it is safe to resume")
     risk_rearm.set_defaults(func=cmd_risk_rearm)
 

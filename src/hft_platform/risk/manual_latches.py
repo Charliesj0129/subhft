@@ -8,7 +8,8 @@ reduce-only latch in ``runtime_state.json`` and the operator kill is
 
 Same shape as the kill switch, deliberately: one file per latch, and presence
 is the signal. The engine writes a latch and never removes one; ``hft risk
-rearm`` removes it and appends an audit line. A restart therefore cannot
+rearm`` removes it, quoting the latch's token (``hft risk latches``) and a
+reason, and appends an audit line. A restart therefore cannot
 release a latch, which is the property the in-memory holds lacked -- on
 2026-10-22 a deploy restart cleared a daily-loss HALT in place.
 
@@ -25,7 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from hft_platform.core import timebase
-from hft_platform.ops.runtime_state_store import atomic_write_json
+from hft_platform.ops import release_audit
+from hft_platform.ops.runtime_state_store import atomic_write_json, exclusive_lock
 
 DEFAULT_DIR = ".state/manual_latches"
 DIR_ENV = "HFT_MANUAL_LATCH_DIR"
@@ -57,16 +59,17 @@ def activate(name: str, reason: str, *, actor: str, directory: Path | None = Non
     (two fsyncs); callers on the event loop run it in a thread.
     """
     target = _latch_path(name, directory)
-    if target.exists():
-        return False
-    payload: dict[str, Any] = {
-        "latch": name,
-        "reason": reason,
-        "actor": actor,
-        "timestamp_ns": timebase.now_ns(),
-    }
-    atomic_write_json(target, payload)
-    return True
+    with exclusive_lock(target):
+        if target.exists():
+            return False
+        payload: dict[str, Any] = {
+            "latch": name,
+            "reason": reason,
+            "actor": actor,
+            "timestamp_ns": timebase.now_ns(),
+        }
+        atomic_write_json(target, payload)
+        return True
 
 
 def active(directory: Path | None = None) -> dict[str, str]:
@@ -89,33 +92,44 @@ def active(directory: Path | None = None) -> dict[str, str]:
     return found
 
 
-def release(name: str, *, reason: str, actor: str, directory: Path | None = None) -> bool:
+def _record(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return release_audit.UNREADABLE_TOKEN
+
+
+def tokens(directory: Path | None = None) -> dict[str, str]:
+    """Map each present latch to the token a release of it must quote."""
+    base = directory or latch_dir()
+    return {
+        name: release_audit.token_for(_record(base / f"{name}{_SUFFIX}"))
+        for name in sorted(LATCH_NAMES)
+        if (base / f"{name}{_SUFFIX}").exists()
+    }
+
+
+def release(name: str, *, token: str, reason: str, actor: str, directory: Path | None = None) -> bool:
     """Remove the latch and append an audit line. Returns False if it was absent.
 
-    The audit line is written first, so a removal never happens without a
-    record of who asked for it and why.
+    Raises ValueError, removing nothing, when ``token`` is not the latch's
+    current token or the reason is empty. The audit line is written first, so a
+    removal never happens without a record of who asked for it and why.
+
+    The check and the removal share :func:`activate`'s lock: an activation in
+    between would otherwise find the old file, decline to write, and then
+    lose its latch to this removal.
     """
     if not reason.strip():
         raise ValueError("a release needs a reason")
     target = _latch_path(name, directory)
-    if not target.exists():
-        return False
-    try:
-        removed: Any = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        removed = "unreadable"
-    entry = {
-        "event": "release",
-        "latch": name,
-        "reason": reason,
-        "actor": actor,
-        "timestamp_ns": timebase.now_ns(),
-        "removed": removed,
-    }
-    audit = target.parent / AUDIT_FILE
-    with open(audit, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    target.unlink()
-    return True
+    with exclusive_lock(target):
+        if not target.exists():
+            return False
+        removed = _record(target)
+        release_audit.check_release(current_token=release_audit.token_for(removed), given_token=token, reason=reason)
+        release_audit.append(
+            target.parent / AUDIT_FILE, event="release", actor=actor, reason=reason, removed=removed, latch=name
+        )
+        target.unlink()
+        return True

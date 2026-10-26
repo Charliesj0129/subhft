@@ -363,7 +363,7 @@ class TestManualRearmGateBridge:
         assert ctrl.reduce_only_active is True
 
         gate = ManualRearmGate(state_path=tmp_path / "runtime_state.json")
-        gate.rearm_platform()
+        gate.rearm_platform(token=gate.platform_token(), reason="feed back", actor="test")
 
         # Live controller must be cleared (force_clear bridge fired).
         assert ctrl.reduce_only_active is False
@@ -379,7 +379,7 @@ class TestManualRearmGateBridge:
 
         # Leave _shared_controller as None.
         gate = ManualRearmGate(state_path=tmp_path / "runtime_state.json")
-        gate.rearm_platform()  # must not raise
+        gate.rearm_platform(token=gate.platform_token(), reason="tooling", actor="test")  # must not raise
         snapshot = gate.snapshot()
         assert snapshot["platform"]["manual_rearm_required"] is False
 

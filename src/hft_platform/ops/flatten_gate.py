@@ -2,7 +2,10 @@
 
 CLI writes a ``flatten_request.json``; the running engine polls, claims,
 executes, and writes back the result.  Follows the ManualRearmGate atomic-
-write pattern (write to .tmp, rename).
+write pattern (write to .tmp, rename). Every read-modify-write runs under one
+cross-process lock (``exclusive_lock`` on the request file), and a result names
+the request it belongs to: a request the CLI submits while the engine is
+finishing an earlier one is never marked with that one's outcome.
 """
 
 from __future__ import annotations
@@ -15,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+
+from hft_platform.ops.runtime_state_store import exclusive_lock
 
 logger = structlog.get_logger("flatten_gate")
 
@@ -100,7 +105,8 @@ class FlattenGate:
             status=FlattenStatus.PENDING,
             initiated_ns=time.monotonic_ns(),
         )
-        self._write(req)
+        with exclusive_lock(self._path):
+            self._write(req)
         logger.info(
             "flatten_request_submitted",
             scope=scope,
@@ -123,11 +129,12 @@ class FlattenGate:
 
     def claim(self) -> FlattenRequest | None:
         """Transition PENDING -> PROCESSING.  Returns None if not PENDING."""
-        req = self.read_request()
-        if req is None or req.status != FlattenStatus.PENDING:
-            return None
-        req.status = FlattenStatus.PROCESSING
-        self._write(req)
+        with exclusive_lock(self._path):
+            req = self.read_request()
+            if req is None or req.status != FlattenStatus.PENDING:
+                return None
+            req.status = FlattenStatus.PROCESSING
+            self._write(req)
         logger.info("flatten_request_claimed", scope=req.scope)
         return req
 
@@ -137,33 +144,46 @@ class FlattenGate:
         partially_closed: int,
         failed: int,
         failed_symbols: list[str] | None = None,
-    ) -> None:
-        """Mark the request as COMPLETED with result data."""
-        req = self.read_request()
-        if req is None:
-            return
-        req.status = FlattenStatus.COMPLETED
-        req.fully_closed = fully_closed
-        req.partially_closed = partially_closed
-        req.failed = failed
-        req.failed_symbols = list(failed_symbols) if failed_symbols else []
-        self._write(req)
+        *,
+        request_id: int | None = None,
+    ) -> bool:
+        """Mark the request as COMPLETED with result data.
+
+        With *request_id* (the request's ``initiated_ns``) the result is written
+        only onto that request; False, writing nothing, when the file holds
+        another one or none.
+        """
+        with exclusive_lock(self._path):
+            req = self.read_request()
+            if req is None or (request_id is not None and req.initiated_ns != request_id):
+                return False
+            req.status = FlattenStatus.COMPLETED
+            req.fully_closed = fully_closed
+            req.partially_closed = partially_closed
+            req.failed = failed
+            req.failed_symbols = list(failed_symbols) if failed_symbols else []
+            self._write(req)
         logger.info(
             "flatten_request_completed",
             fully_closed=fully_closed,
             partially_closed=partially_closed,
             failed=failed,
         )
+        return True
 
-    def fail(self, error: str) -> None:
-        """Mark the request as FAILED with an error message."""
-        req = self.read_request()
-        if req is None:
-            return
-        req.status = FlattenStatus.FAILED
-        req.error = error
-        self._write(req)
+    def fail(self, error: str, failed_symbols: list[str] | None = None, *, request_id: int | None = None) -> bool:
+        """Mark the request as FAILED with an error message; *request_id* as in :meth:`complete`."""
+        with exclusive_lock(self._path):
+            req = self.read_request()
+            if req is None or (request_id is not None and req.initiated_ns != request_id):
+                return False
+            req.status = FlattenStatus.FAILED
+            req.error = error
+            if failed_symbols:
+                req.failed_symbols = list(failed_symbols)
+            self._write(req)
         logger.error("flatten_request_failed", error=error)
+        return True
 
     def clear(self) -> None:
         """Remove the request file."""

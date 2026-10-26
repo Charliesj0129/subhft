@@ -7,13 +7,14 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
-from hft_platform.ops import rearm_requests
+from hft_platform.ops import rearm_requests, release_audit
 from hft_platform.ops.platform_degrade_registry import try_force_clear_shared_controller
 from hft_platform.ops.runtime_state_store import locked_state, read_state_strict
 
 logger = get_logger("manual_rearm")
 
 DEFAULT_RUNTIME_STATE_PATH = Path("outputs/production_rollout/autonomy/runtime_state.json")
+REARM_AUDIT_FILE = "rearm_audit.jsonl"
 
 
 class ManualRearmGate:
@@ -71,8 +72,33 @@ class ManualRearmGate:
         )
         return request_id
 
-    def rearm_platform(self) -> None:
+    def platform_token(self) -> str:
+        """Token a platform re-arm must quote: it names the latch as last read.
+
+        Derived from the flag, its reason and the incident's ``latch_id``
+        (``AutonomyEvidenceWriter``), so the engine's own bookkeeping fields do
+        not change it under the operator, while a second latch with the same
+        reason gets a new token.
+        """
+        return self._platform_token_of(self._platform_section(self._load_state()))
+
+    @staticmethod
+    def _platform_token_of(platform_state: dict[str, Any]) -> str:
+        return release_audit.token_for(
+            {
+                "manual_rearm_required": bool(platform_state.get("manual_rearm_required")),
+                "reason": platform_state.get("reason"),
+                "latch_id": platform_state.get("latch_id"),
+            }
+        )
+
+    def rearm_platform(self, *, token: str, reason: str, actor: str) -> None:
         """Persist the manual-rearm flag AND clear the live controller.
+
+        Refused (ValueError, nothing written) unless ``token`` is the current
+        :meth:`platform_token` and a reason is given. The release is appended
+        to ``rearm_audit.jsonl`` beside the state file before anything is
+        cleared.
 
         Prior to this fix the rearm wrote a JSON flag that the
         :class:`~hft_platform.ops.platform_degrade.PlatformDegradeController`
@@ -83,8 +109,26 @@ class ManualRearmGate:
         one exists in this process) so the live state mirrors the
         persisted flag.  The persistence step is unconditional so a
         cold-start process picks up the rearmed state.
+
+        The token is checked against the state read inside the same lock that
+        clears it: a degradation the engine records after the operator read
+        the token changes the token, so the stale re-arm is refused rather
+        than clearing the newer latch.
         """
-        self.clear_platform_flag()
+        with locked_state(self.state_path) as state:
+            platform_state = self._platform_section(state)
+            # Raising here leaves the file untouched (locked_state publishes nothing).
+            release_audit.check_release(
+                current_token=self._platform_token_of(platform_state), given_token=token, reason=reason
+            )
+            release_audit.append(
+                self.state_path.parent / REARM_AUDIT_FILE,
+                event="platform_rearm",
+                actor=actor,
+                reason=reason,
+                removed=dict(platform_state),
+            )
+            self._clear_platform_section(platform_state)
 
         # Best-effort: bridge the live controller through its process-local
         # registry without importing the concrete controller module.
@@ -120,10 +164,14 @@ class ManualRearmGate:
         without deadlocking.
         """
         with locked_state(self.state_path) as state:
-            platform_state = self._platform_section(state)
-            platform_state["manual_rearm_required"] = False
-            platform_state["reason"] = None
-            platform_state["rearm_requested_at"] = timebase.now_s()
+            self._clear_platform_section(self._platform_section(state))
+
+    @staticmethod
+    def _clear_platform_section(platform_state: dict[str, Any]) -> None:
+        platform_state["manual_rearm_required"] = False
+        platform_state["reason"] = None
+        platform_state.pop("latch_id", None)
+        platform_state["rearm_requested_at"] = timebase.now_s()
 
     def requires_manual_rearm(self, scope: str, *, strategy_id: str | None = None) -> bool:
         state = self._load_state()

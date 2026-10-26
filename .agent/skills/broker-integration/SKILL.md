@@ -55,7 +55,9 @@ version differences: `docs/runbooks/shioaji-version-diff.md`; contract refresh:
 
 1. Detect: quote stream stale, repeated order failures, login exhausted.
 2. Flatten or account for positions: `uv run hft ops flatten --scope all`
-   (options `--scope {all,strategy,track}`, `--deadline`).
+   (options `--scope {all,strategy}`, `--scope-id`, `--deadline`). The engine's
+   supervisor sends FORCE_FLAT and reports from positions; a non-zero exit
+   means a symbol is still open.
 3. Stop the engine (local: `make stop`; production: stop -> 60 s -> start per
    `41-deployment.md`; switching the live broker is a user-approved cutover).
 4. Set `HFT_BROKER`, verify credentials exist (names only, never values),

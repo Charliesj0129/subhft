@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from threading import Lock
@@ -264,6 +265,16 @@ class AutonomyEvidenceWriter:
             if scope == "platform":
                 # Only reachable with required=True; see _is_strategy_rearm_ack.
                 platform = state["platform"]
+                # One id per incident: the re-arm token covers it, so a release
+                # quoted for an earlier latch with the same reason cannot clear
+                # this one. Re-recording the latch already held keeps its id.
+                same_incident = (
+                    bool(platform.get("manual_rearm_required"))
+                    and platform.get("reason") == record["reason"]
+                    and bool(platform.get("latch_id"))
+                )
+                if required and not same_incident:
+                    platform["latch_id"] = uuid.uuid4().hex
                 platform["manual_rearm_required"] = required
                 platform["reason"] = record["reason"] if required else None
             elif scope == "strategy":

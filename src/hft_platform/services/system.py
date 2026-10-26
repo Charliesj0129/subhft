@@ -24,11 +24,12 @@ from hft_platform.core.session_hooks import SessionHookManager
 from hft_platform.observability.health import HealthServer
 from hft_platform.ops import quarantine_requests, rearm_requests
 from hft_platform.ops.evidence import get_shared_autonomy_evidence_writer
+from hft_platform.ops.flatten_gate import FlattenGate, FlattenStatus
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
 from hft_platform.risk import daily_loss_state, kill_switch, manual_latches
 from hft_platform.risk.expiry import DEFAULT_EXPIRY_CUTOFF_MINUTE
-from hft_platform.risk.loss_exit import LossExitController, OpenPosition
+from hft_platform.risk.loss_exit import LossExitController, OpenPosition, is_platform_exit
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.risk.validators import DailyLossLimitValidator, ExpiringContractValidator
 from hft_platform.services.bootstrap import SystemBootstrapper, resolve_order_mode
@@ -152,6 +153,14 @@ class HFTSystem:
     _daily_loss_latch_published: bool = False
     # Last document written to daily_loss_state; None before the first write.
     _daily_loss_state_written: dict[str, Any] | None = None
+    # The operator flatten (``hft ops flatten``) this process is working on:
+    # symbol -> platform net qty when it was claimed, and when it gives up.
+    _operator_flatten_initial: Mapping[str, int] = MappingProxyType({})
+    _operator_flatten_deadline_ns: int = 0
+    # ``initiated_ns`` of the claimed request: its id, so a newer request
+    # written meanwhile is not overwritten with this one's result.
+    _operator_flatten_request_id: int = 0
+    _flatten_gate: FlattenGate | None = None
 
     def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
         risk_engine = getattr(self, "risk_engine", None)
@@ -278,7 +287,13 @@ class HFTSystem:
         risk_engine = getattr(self, "risk_engine", None)
         if controller is None or risk_engine is None:
             return
-        if not bool(((getattr(risk_engine, "config", None) or {}).get("loss_exit", {}) or {}).get("enabled", True)):
+        operator_symbols = frozenset(self._operator_flatten_initial)
+        # The config switch turns the automatic triggers off; an operator's
+        # explicit flatten request still runs.
+        auto_enabled = bool(
+            ((getattr(risk_engine, "config", None) or {}).get("loss_exit", {}) or {}).get("enabled", True)
+        )
+        if not auto_enabled and not operator_symbols:
             return
         lob = getattr(self.md_service, "lob", None)
         if lob is None:
@@ -315,15 +330,22 @@ class HFTSystem:
             # The manual latch outlives the validator's own flag (it survives
             # the day roll and a restart); while it holds HALT, the exit must
             # keep working or the stop freezes the book it was meant to close.
-            daily_halt=bool(daily is not None and daily.halt_triggered)
-            or manual_latches.DAILY_LOSS in self._manual_latches_active,
-            position_loss_limit_scaled=daily.position_loss_limit_scaled if daily is not None else 0,
-            expiry_enabled=bool(expiry is not None and expiry.enabled),
+            daily_halt=auto_enabled
+            and (
+                bool(daily is not None and daily.halt_triggered)
+                or manual_latches.DAILY_LOSS in self._manual_latches_active
+            ),
+            position_loss_limit_scaled=daily.position_loss_limit_scaled if auto_enabled and daily is not None else 0,
+            expiry_enabled=auto_enabled and bool(expiry is not None and expiry.enabled),
             expiry_cutoff_minute=expiry.cutoff_minute if expiry is not None else DEFAULT_EXPIRY_CUTOFF_MINUTE,
             l1=_l1,
             multiplier=meta.contract_multiplier,
             tick_size=meta.tick_size_scaled,
+            operator_symbols=operator_symbols,
         )
+        if operator_symbols:
+            resting = [o for o in self._resting_orders() if o[2] in operator_symbols]
+            intents.extend(controller.cancel_intents(resting, now_ns))
         # With the gateway on, RiskEngine.run() is never started and nothing
         # reads risk_queue: the exits must enter where the gateway listens.
         intent_channel = getattr(self, "intent_channel", None)
@@ -341,6 +363,153 @@ class HFTSystem:
                     reason=intent.reason,
                     error=str(e),
                 )
+
+    def _resting_orders(self) -> list[tuple[str, str, str]]:
+        """``(order_key, strategy_id, symbol)`` for each order the broker holds open.
+
+        Read on the event loop, where every writer of ``live_orders`` runs, so
+        the copy is consistent. Entries still waiting for the broker's answer
+        have no contract yet and are taken on a later tick.
+        """
+        live = getattr(getattr(self, "order_adapter", None), "live_orders", None) or {}
+        orders: list[tuple[str, str, str]] = []
+        for order_key, trade in list(live.items()):
+            contract = getattr(trade, "contract", None)
+            if contract is None:
+                continue
+            orders.append((str(order_key), str(order_key).split(":", 1)[0], str(getattr(contract, "code", "") or "")))
+        return orders
+
+    def _platform_net_by_symbol(self) -> dict[str, int]:
+        """Platform-wide net quantity per symbol, recovered lots included.
+
+        A FORCE_FLAT closes this whole net, whichever strategy holds it.
+        """
+        net: dict[str, int] = {}
+        for p in self.position_store.snapshot_open_positions().values():
+            if p.net_qty:
+                net[p.symbol] = net.get(p.symbol, 0) + int(p.net_qty)
+        return {sym: qty for sym, qty in net.items() if qty}
+
+    async def _sync_operator_flatten(self) -> None:
+        """Serve ``hft ops flatten``: claim the request, track it, write back the outcome.
+
+        The orders themselves come from ``_run_loss_exit`` (``operator_flatten``
+        trigger), so they take the same path, price protection and retry as
+        every other platform exit. The request is finished from the position
+        store, not from orders sent: COMPLETED once every named symbol is flat,
+        or at the deadline with the symbols still open counted as partially
+        closed or failed; FAILED at the deadline while an order is still
+        unacknowledged. Every write-back names the request it answers. File IO
+        runs in threads.
+        """
+        gate = self._flatten_gate
+        if gate is None:
+            gate = self._flatten_gate = FlattenGate()
+        if self._operator_flatten_initial:
+            await self._finish_operator_flatten_if_due(gate)
+            return
+        req = await asyncio.to_thread(gate.read_request)
+        if req is None:
+            return
+        if req.status == FlattenStatus.PROCESSING:
+            # Claimed by an earlier process that did not finish it. Its orders
+            # stopped with it; say so instead of leaving the CLI waiting.
+            await asyncio.to_thread(
+                gate.fail,
+                "engine restarted before the flatten finished; positions not confirmed",
+                request_id=req.initiated_ns,
+            )
+            logger.error("operator_flatten_abandoned_by_restart", scope=req.scope, scope_id=req.scope_id)
+            return
+        if req.status != FlattenStatus.PENDING:
+            return
+        req = await asyncio.to_thread(gate.claim)
+        if req is None:
+            return
+        if req.scope not in ("all", "strategy") or (req.scope == "strategy" and not req.scope_id):
+            await asyncio.to_thread(
+                gate.fail,
+                f"unsupported flatten scope {req.scope!r} (use all, or strategy with an id)",
+                request_id=req.initiated_ns,
+            )
+            return
+        net = self._platform_net_by_symbol()
+        if req.scope == "strategy":
+            held = {
+                p.symbol
+                for p in self.position_store.snapshot_open_positions().values()
+                if p.net_qty and p.strategy_id == req.scope_id
+            }
+            net = {sym: qty for sym, qty in net.items() if sym in held}
+        logger.warning(
+            "operator_flatten_started",
+            scope=req.scope,
+            scope_id=req.scope_id,
+            deadline_s=req.deadline_s,
+            symbols=dict(net),
+        )
+        if not net:
+            await asyncio.to_thread(gate.complete, 0, 0, 0, [], request_id=req.initiated_ns)
+            return
+        self._operator_flatten_initial = MappingProxyType(net)
+        self._operator_flatten_deadline_ns = timebase.now_ns() + max(1, int(req.deadline_s)) * 1_000_000_000
+        self._operator_flatten_request_id = req.initiated_ns
+
+    async def _finish_operator_flatten_if_due(self, gate: FlattenGate) -> None:
+        initial = self._operator_flatten_initial
+        net = self._platform_net_by_symbol()
+        remaining = {sym: net[sym] for sym in initial if net.get(sym, 0) != 0}
+        # Flat is not done while an order in the symbol can still fill and
+        # reopen it: those are being cancelled (``_run_loss_exit``) and count
+        # as open until the broker confirms. So does an order not yet
+        # acknowledged, whose symbol is not known yet.
+        live = getattr(getattr(self, "order_adapter", None), "live_orders", None) or {}
+        unacked = any(
+            getattr(trade, "contract", None) is None and not is_platform_exit(str(key)) for key, trade in live.items()
+        )
+        working = {sym for key, _, sym in self._resting_orders() if sym in initial and not is_platform_exit(key)}
+        for sym in working:
+            remaining.setdefault(sym, net.get(sym, 0))
+        if (remaining or unacked) and timebase.now_ns() < self._operator_flatten_deadline_ns:
+            return
+        partial = sorted(sym for sym, qty in remaining.items() if abs(qty) < abs(initial[sym]))
+        failed = sorted(sym for sym in remaining if sym not in partial)
+        request_id = self._operator_flatten_request_id
+        if unacked:
+            # Flat books prove nothing while an order the broker has not
+            # acknowledged can still fill: its symbol is not even known yet.
+            written = await asyncio.to_thread(
+                gate.fail,
+                "orders still awaiting the broker's acknowledgement at the deadline; positions not confirmed",
+                sorted(remaining),
+                request_id=request_id,
+            )
+        else:
+            written = await asyncio.to_thread(
+                gate.complete,
+                len(initial) - len(remaining),
+                len(partial),
+                len(failed),
+                sorted(remaining),
+                request_id=request_id,
+            )
+        if not written:
+            # A new request replaced this one in the file; it is claimed next
+            # tick. This one's outcome is in the log line below only.
+            logger.warning("operator_flatten_superseded", request_id=self._operator_flatten_request_id)
+        log = logger.error if remaining or unacked else logger.warning
+        log(
+            "operator_flatten_finished",
+            unacknowledged_orders=unacked,
+            fully_closed=len(initial) - len(remaining),
+            partially_closed=partial,
+            failed=failed,
+            still_open=remaining,
+        )
+        self._operator_flatten_initial = MappingProxyType({})
+        self._operator_flatten_deadline_ns = 0
+        self._operator_flatten_request_id = 0
 
     @staticmethod
     def _get_max_feed_gap_s(md_service: Any) -> float:
@@ -2138,8 +2307,13 @@ class HFTSystem:
             except Exception as e:
                 logger.error("manual latch sync failed", error=str(e), exc_info=True)
 
-            # 2b. Close positions a latched stop, a per-position loss limit or
-            # an expiring contract would otherwise leave frozen (risk/loss_exit.py).
+            # 2b. Close positions a latched stop, a per-position loss limit,
+            # an expiring contract or an operator's ``hft ops flatten`` would
+            # otherwise leave open (risk/loss_exit.py).
+            try:
+                await self._sync_operator_flatten()
+            except Exception as e:
+                logger.error("operator flatten sync failed", error=str(e), exc_info=True)
             try:
                 self._run_loss_exit()
             except Exception as e:
@@ -2253,28 +2427,6 @@ class HFTSystem:
                 # gauge is rewritten every tick; a first write that failed would
                 # otherwise leave it at 0 while the hold is still set.
                 self.storm_guard.set_kill_switch_hold(True)
-
-            # R11-C4: Telegram /stop emergency halt via Redis key.
-            # P2-e (2026-04-27): the file-based kill-switch above (lines
-            # 991-1002) ALREADY runs every supervise tick regardless of
-            # Redis availability — it is the canonical emergency halt path.
-            # The Redis-key check here is a secondary signal for /stop bot
-            # commands. If Redis is unreachable the file check still runs
-            # next tick, so the previous "Redis unavailable — fall back to
-            # file-based kill switch" comment was misleading. Replace with a
-            # truthful description.
-            _redis_halt = getattr(self, "_redis_client", None)
-            if _redis_halt is not None and self.storm_guard.state != StormGuardState.HALT:
-                try:
-                    _halt_val = await loop.run_in_executor(None, _redis_halt.get, "hft:emergency_halt")
-                    if _halt_val and str(_halt_val) not in ("0", "b'0'", "None"):
-                        self.storm_guard.trigger_halt("TELEGRAM_EMERGENCY_HALT")
-                        logger.critical("Telegram /stop emergency halt activated")
-                except Exception:
-                    # Redis unavailable — kill-switch FILE check at lines
-                    # 991-1002 runs every tick and provides the always-on
-                    # halt path; nothing more to do here.
-                    pass
 
             t_gateway = self.tasks.get("exec_gateway")
             # Check Health for all critical services

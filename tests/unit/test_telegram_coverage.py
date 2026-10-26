@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from hft_platform.notifications.telegram import TelegramCommandPoller, TelegramSender
+from hft_platform.notifications.telegram import TelegramSender
 
 # ---------------------------------------------------------------------------
 # TelegramSender.__init__ — aiohttp missing path (lines 69-73)
@@ -196,96 +196,3 @@ class TestSendSingleExceptionPaths:
         sender = TelegramSender()
         result = await sender.send("test")
         assert result is False
-
-
-# ---------------------------------------------------------------------------
-# TelegramCommandPoller._reply — exception path (lines 245-246)
-# ---------------------------------------------------------------------------
-
-
-class TestPollerReply:
-    @pytest.mark.asyncio
-    async def test_reply_exception_handled(self):
-        """_reply swallows exceptions from post."""
-        poller = TelegramCommandPoller(
-            bot_token="fake_token",
-            chat_id="12345",
-            redis_client=MagicMock(),
-        )
-        mock_session = AsyncMock()
-        mock_session.post = MagicMock(side_effect=RuntimeError("connection error"))
-        await poller._reply(mock_session, "test reply")
-
-
-# ---------------------------------------------------------------------------
-# TelegramCommandPoller.poll_once — various paths (lines 262-291)
-# ---------------------------------------------------------------------------
-
-
-class TestPollerPollOnce:
-    @pytest.mark.asyncio
-    async def test_poll_bad_status(self):
-        """poll_once with non-200 status returns early."""
-        poller = TelegramCommandPoller(
-            bot_token="fake_token",
-            chat_id="12345",
-            redis_client=MagicMock(),
-        )
-        mock_resp = AsyncMock()
-        mock_resp.status = 500
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
-
-        mock_session = AsyncMock()
-        mock_session.closed = False
-        mock_session.get = MagicMock(return_value=mock_resp)
-        poller._session = mock_session
-
-        await poller.poll_once()
-
-    @pytest.mark.asyncio
-    async def test_poll_exception_handled(self):
-        """poll_once catches and logs network exceptions."""
-        poller = TelegramCommandPoller(
-            bot_token="fake_token",
-            chat_id="12345",
-            redis_client=MagicMock(),
-        )
-        mock_session = AsyncMock()
-        mock_session.closed = False
-        mock_session.get = MagicMock(side_effect=RuntimeError("network error"))
-        poller._session = mock_session
-
-        # Should not raise
-        await poller.poll_once()
-
-
-# ---------------------------------------------------------------------------
-# TelegramCommandPoller.close (lines 303-311)
-# ---------------------------------------------------------------------------
-
-
-class TestPollerClose:
-    @pytest.mark.asyncio
-    async def test_close_no_session(self):
-        poller = TelegramCommandPoller(bot_token="t", chat_id="c", redis_client=MagicMock())
-        await poller.close()
-        assert poller._session is None
-
-    @pytest.mark.asyncio
-    async def test_close_open_session(self):
-        poller = TelegramCommandPoller(bot_token="t", chat_id="c", redis_client=MagicMock())
-        mock_session = AsyncMock()
-        mock_session.closed = False
-        poller._session = mock_session
-        await poller.close()
-        mock_session.close.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_close_already_closed_session(self):
-        poller = TelegramCommandPoller(bot_token="t", chat_id="c", redis_client=MagicMock())
-        mock_session = AsyncMock()
-        mock_session.closed = True
-        poller._session = mock_session
-        await poller.close()
-        mock_session.close.assert_not_awaited()

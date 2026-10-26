@@ -18,6 +18,11 @@ into the normal risk queue for any position that meets one of three triggers:
 ``expiry``
     It is the contract's delivery date and past the cutoff (``risk/expiry.py``);
     ``ExpiringContractValidator`` stops new lots in it from the same moment.
+``operator_flatten``
+    An operator asked for it (``hft ops flatten``); the supervisor names the
+    symbols until they are flat or the request's deadline passes. Resting
+    orders in those symbols are cancelled (``cancel_intents``) so one cannot
+    fill after the book is flat and reopen it.
 
 Orders are marketable limits, never price 0: ``protection_ticks`` through the
 opposite best price. A position with no two-sided book is left alone and
@@ -53,6 +58,7 @@ logger = get_logger("risk.loss_exit")
 TRIGGER_DAILY_LOSS_HALT = "daily_loss_halt"
 TRIGGER_POSITION_LOSS = "position_loss"
 TRIGGER_EXPIRY = "expiry"
+TRIGGER_OPERATOR = "operator_flatten"
 
 # Books an exit for a position that names no strategy (a legacy recovery entry).
 # Its fill seeds the recovered lot under this id and closes it.
@@ -62,6 +68,12 @@ UNATTRIBUTED_STRATEGY_ID = "__loss_exit__"
 # (``strategy_id:intent_id``) cannot collide with a strategy's own counter,
 # which restarts daily and has reached ~50,000 on THESHOW. Below 2**31.
 INTENT_ID_BASE = 1_900_000_000
+
+
+def is_platform_exit(order_key: str) -> bool:
+    """Whether an order key (``strategy_id:intent_id``) names one of these exits."""
+    _, _, tail = order_key.rpartition(":")
+    return tail.isdigit() and int(tail) >= INTENT_ID_BASE
 
 
 @dataclass(slots=True, frozen=True)
@@ -117,11 +129,13 @@ class LossExitController:
         multiplier: Callable[[str], int],
         tick_size: Callable[[str], int],
         expiry_cutoff_minute: int = DEFAULT_EXPIRY_CUTOFF_MINUTE,
+        operator_symbols: frozenset[str] = frozenset(),
     ) -> list[OrderIntent]:
         """Return the exit intents due now.
 
         ``l1(symbol)`` gives ``(best_bid, best_ask)`` scaled, or None.
         ``position_loss_limit_scaled`` of 0 disables that trigger.
+        ``operator_symbols`` are closed because an operator asked.
         """
         # symbol -> [net_qty, signed qty x entry, {strategy_id: net_qty}, basis_known]
         by_symbol: dict[str, list] = {}
@@ -159,6 +173,7 @@ class LossExitController:
                 expiry_cutoff_minute=expiry_cutoff_minute,
                 mid=(bid + ask) // 2 if priced else 0,
                 multiplier=multiplier,
+                operator=symbol in operator_symbols,
             )
             if trigger is None:
                 continue
@@ -177,8 +192,51 @@ class LossExitController:
             self._last_submit_ns[key] = now_ns
             MetricsRegistry.get().loss_exit_orders_total.labels(trigger=trigger).inc()
         # A position that no longer triggers (closed, or recovered) starts fresh next time.
-        for key in [k for k in self._last_submit_ns if k not in due]:
+        # (Cancel bookkeeping is ``cancel_intents``' own.)
+        for key in [k for k in self._last_submit_ns if k not in due and not k.startswith("cancel:")]:
             del self._last_submit_ns[key]
+        return intents
+
+    def cancel_intents(
+        self, orders: Iterable[tuple[str, str, str]], now_ns: int, *, trigger: str = TRIGGER_OPERATOR
+    ) -> list[OrderIntent]:
+        """CANCEL intents for resting orders, each retried at most every retry interval.
+
+        ``orders`` are ``(order_key, strategy_id, symbol)``. The platform's own
+        exits (intent ids from ``INTENT_ID_BASE``) are left alone: they are IOC
+        and are what closes the book.
+        """
+        intents: list[OrderIntent] = []
+        due: set[str] = set()
+        for order_key, strategy_id, symbol in orders:
+            if is_platform_exit(order_key):
+                continue
+            key = "cancel:" + order_key
+            due.add(key)
+            last = self._last_submit_ns.get(key)
+            if last is not None and now_ns - last < self._retry_interval_ns:
+                continue
+            self._next_intent_id += 1
+            intents.append(
+                OrderIntent(
+                    intent_id=self._next_intent_id,
+                    strategy_id=strategy_id,
+                    symbol=symbol,
+                    intent_type=IntentType.CANCEL,
+                    side=Side.BUY,
+                    price=0,
+                    qty=0,
+                    target_order_id=order_key,
+                    timestamp_ns=now_ns,
+                    source_ts_ns=now_ns,
+                    reason=f"loss_exit:{trigger}:cancel",
+                )
+            )
+            self._last_submit_ns[key] = now_ns
+        for key in [k for k in self._last_submit_ns if k.startswith("cancel:") and k not in due]:
+            del self._last_submit_ns[key]
+        if intents:
+            logger.warning("loss_exit_cancel_resting", count=len(intents), trigger=trigger)
         return intents
 
     def _trigger(
@@ -194,9 +252,12 @@ class LossExitController:
         expiry_cutoff_minute: int,
         mid: int,
         multiplier: Callable[[str], int],
+        operator: bool = False,
     ) -> str | None:
         if daily_halt:
             return TRIGGER_DAILY_LOSS_HALT
+        if operator:
+            return TRIGGER_OPERATOR
         if expiry_enabled and self._expiry_passed(symbol, now_ns, expiry_cutoff_minute):
             return TRIGGER_EXPIRY
         if position_loss_limit_scaled > 0 and mid > 0:

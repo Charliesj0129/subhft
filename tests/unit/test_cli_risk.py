@@ -60,20 +60,33 @@ class TestCmdRiskHalt:
 
 
 class TestCmdRiskResume:
-    def test_removes_kill_switch_file(self, kill_switch_dir, capsys):
-        # Create file first
+    def test_resume_with_the_status_token_removes_the_file_and_audits(self, kill_switch_dir, capsys):
+        from hft_platform.risk import kill_switch
+
         os.makedirs(os.path.dirname(kill_switch_dir) or ".", exist_ok=True)
         with open(kill_switch_dir, "w") as f:
             json.dump({"reason": "test"}, f)
-        args = Namespace()
-        cmd_risk_resume(args)
+        cmd_risk_resume(Namespace(token=kill_switch.current_token(), reason="checked the book"))
         assert not os.path.exists(kill_switch_dir)
         out = capsys.readouterr().out
         assert "DEACTIVATED" in out
+        audit = os.path.join(os.path.dirname(kill_switch_dir), kill_switch.AUDIT_FILE)
+        with open(audit) as f:
+            entry = json.loads(f.readline())
+        assert (entry["event"], entry["reason"]) == ("kill_switch_release", "checked the book")
+
+    def test_resume_with_a_stale_token_is_refused_and_keeps_the_file(self, kill_switch_dir, capsys):
+        os.makedirs(os.path.dirname(kill_switch_dir) or ".", exist_ok=True)
+        with open(kill_switch_dir, "w") as f:
+            json.dump({"reason": "test"}, f)
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_risk_resume(Namespace(token="stale", reason="checked"))
+        assert exc_info.value.code == 1
+        assert os.path.exists(kill_switch_dir)
+        assert "does not match" in capsys.readouterr().err
 
     def test_no_file_prints_message(self, kill_switch_dir, capsys):
-        args = Namespace()
-        cmd_risk_resume(args)
+        cmd_risk_resume(Namespace(token="any", reason="r"))
         out = capsys.readouterr().out
         assert "No kill switch file" in out
 

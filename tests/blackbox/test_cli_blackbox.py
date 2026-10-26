@@ -166,7 +166,7 @@ def test_cli_ops_rearm_strategy_refuses_a_latch_without_a_token(tmp_path):
 
 
 @pytest.mark.blackbox
-def test_cli_ops_rearm_platform_emits_success_message(tmp_path):
+def test_cli_ops_rearm_platform_needs_the_status_token_and_audits(tmp_path):
     state_path = tmp_path / "outputs/production_rollout/autonomy/runtime_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
@@ -179,13 +179,24 @@ def test_cli_ops_rearm_platform_emits_success_message(tmp_path):
         encoding="utf-8",
     )
 
-    result = _run_cli(["ops", "rearm-platform"], cwd=tmp_path)
+    refused = _run_cli(["ops", "rearm-platform", "--token", "stale", "--reason", "reviewed"], cwd=tmp_path)
+    assert refused.returncode == 1
+    assert "does not match" in refused.stderr
+    assert json.loads(state_path.read_text(encoding="utf-8"))["platform"]["manual_rearm_required"] is True
+
+    status = _run_cli(["ops", "autonomy-status"], cwd=tmp_path)
+    token = json.loads(status.stdout)["platform_token"]
+    result = _run_cli(["ops", "rearm-platform", "--token", token, "--reason", "disk freed"], cwd=tmp_path)
 
     assert result.returncode == 0
-    assert "platform re-armed" in result.stdout.lower()
+    assert "re-arm requested" in result.stdout.lower()
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     assert payload["platform"]["manual_rearm_required"] is False
     assert payload["platform"]["reason"] is None
+    audit = [json.loads(line) for line in (state_path.parent / "rearm_audit.jsonl").read_text().splitlines()]
+    assert [(a["event"], a["reason"], a["removed"]["reason"]) for a in audit] == [
+        ("platform_rearm", "disk freed", "clickhouse_unhealthy")
+    ]
 
 
 @pytest.mark.blackbox

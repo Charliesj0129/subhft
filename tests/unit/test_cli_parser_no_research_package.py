@@ -25,7 +25,7 @@ def test_build_parser_succeeds_when_research_package_missing() -> None:
 
     # Core ops surface must survive; the research-only pipeline commands may
     # be absent, but parsing an ops command must not require research/.
-    args = parser.parse_args(["ops", "rearm-platform"])
+    args = parser.parse_args(["ops", "rearm-platform", "--token", "t", "--reason", "r"])
     assert args.ops_cmd == "rearm-platform"
 
 

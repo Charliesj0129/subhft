@@ -270,6 +270,7 @@ class TestOperatorAndEngineAgreeOnTheLatch:
 
         class _Args:
             reason = "operator stopping R47"
+            token = ""
 
         cmd_risk_halt(_Args())
         capsys.readouterr()
@@ -277,6 +278,7 @@ class TestOperatorAndEngineAgreeOnTheLatch:
         assert kill_switch.read_reason() == "operator stopping R47"
         assert check_kill_switch()["ok"] is False
 
+        _Args.token = kill_switch.current_token()
         cmd_risk_resume(_Args())
         capsys.readouterr()
 
