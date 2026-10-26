@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
 
@@ -48,16 +49,23 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _status_rows(root: Path, only: str | None) -> list[dict[str, Any]]:
+def _discover_declared() -> dict[str, Any]:
+    """Declared status per discovered alpha; discovery output goes to stderr.
+
+    Discovery builds each alpha, and some log on construction; stdout carries
+    only this command's own output (``--json`` must parse).
+    """
     from research.registry.alpha_registry import AlphaRegistry
 
+    with redirect_stdout(sys.stderr):
+        loaded = AlphaRegistry().discover(legacy_evidence.research_root() / "alphas")
+    return {aid: item.manifest.status for aid, item in loaded.items()}
+
+
+def _status_rows(root: Path, only: str | None) -> list[dict[str, Any]]:
     ledger = ledger_events_by_alpha(root)
-    registry = AlphaRegistry()
-    declared = {
-        aid: loaded.manifest.status
-        for aid, loaded in registry.discover(legacy_evidence.research_root() / "alphas").items()
-    }
-    runs = legacy_evidence.combined_run_stats(root)
+    declared = _discover_declared()
+    runs = legacy_evidence.combined_run_stats(root, known=legacy_evidence.known_alpha_ids(extra=declared))
     kills: dict[str, int] = {}
     for kill in EvidenceWriter(root).read_legacy_kills():
         if not kill.get("quarantine"):
@@ -127,10 +135,10 @@ def cmd_import_kills(args: argparse.Namespace) -> int:
     from hft_platform.alpha import audit
     from hft_platform.alpha.kill_ledger import _jsonl_path
 
-    known = legacy_evidence.known_alpha_ids()
     kills: list[dict[str, Any]] = []
     try:
         root = evidence_root()
+        known = legacy_evidence.known_alpha_ids(extra=_discover_declared())
         if args.source in ("all", "jsonl"):
             kills += legacy_evidence.read_jsonl_kills(_jsonl_path(), known)
         if args.source in ("all", "clickhouse"):

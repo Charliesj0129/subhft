@@ -10,7 +10,9 @@ A row is quarantined, with the reason kept beside it, when:
 - ``pytest_tmp_path``: any of its text names a pytest temporary directory;
 - ``unknown_alpha``: it was written by automation (a tracker run, or a kill
   whose ``killed_by`` is not a ``cli:`` operator) for an alpha that has no
-  package under ``research/alphas`` or ``research/archive``.
+  package under ``research/alphas`` or ``research/archive``. A package is
+  known by its directory name, the ``alpha_id`` its ``manifest.yaml``
+  declares, and any id the caller discovered (an ``impl.py`` manifest).
 
 Operator kills (``killed_by`` ``cli:...``) of an alpha without a package are
 kept: abandoned scaffolds were killed by hand before they had a manifest.
@@ -25,6 +27,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from hft_platform.alpha.paths import repo_path
 
@@ -53,11 +57,27 @@ def research_root() -> Path:
     return repo_path("research")
 
 
-def known_alpha_ids(root: Path | None = None) -> frozenset[str]:
-    """Alpha ids with a package under ``alphas/`` or one level into an ``archive/`` batch."""
+def known_alpha_ids(root: Path | None = None, extra: Iterable[str] = ()) -> frozenset[str]:
+    """Alpha ids of the packages under ``alphas/`` and one level into an ``archive/`` batch.
+
+    Each package counts by its directory name and by the ``alpha_id`` its
+    ``manifest.yaml`` declares; ``extra`` adds ids discovered elsewhere. An
+    unreadable manifest adds only the directory name.
+    """
     root = root if root is not None else research_root()
-    ids = {p.name for p in (root / "alphas").glob("*") if p.is_dir() and not p.name.startswith(("_", "."))}
-    ids |= {p.name for p in (root / "archive").glob("*/*") if p.is_dir()}
+    packages = [p for p in (root / "alphas").glob("*") if p.is_dir() and not p.name.startswith(("_", "."))]
+    packages += [p for p in (root / "archive").glob("*/*") if p.is_dir()]
+    ids = {p.name for p in packages} | {str(i) for i in extra}
+    for package in packages:
+        manifest = package / "manifest.yaml"
+        if not manifest.is_file():
+            continue
+        try:
+            declared = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if isinstance(declared, dict) and isinstance(declared.get("alpha_id"), str) and declared["alpha_id"]:
+            ids.add(declared["alpha_id"])
     return frozenset(ids)
 
 
@@ -165,7 +185,9 @@ def read_ch_kills(client: Any, known: frozenset[str]) -> list[dict[str, Any]]:
     return [_kill_row(dict(zip(_CH_KILL_COLUMNS, row, strict=True)), "clickhouse", known) for row in result.result_rows]
 
 
-def combined_run_stats(evidence_root: Path, legacy_runs_root: Path | None = None) -> dict[str, dict[str, Any]]:
+def combined_run_stats(
+    evidence_root: Path, legacy_runs_root: Path | None = None, known: frozenset[str] | None = None
+) -> dict[str, dict[str, Any]]:
     """Per alpha run counts from both roots.
 
     ``legacy_run_count`` (``research/experiments/runs``, fixtures quarantined),
@@ -173,7 +195,7 @@ def combined_run_stats(evidence_root: Path, legacy_runs_root: Path | None = None
     ``quarantined_run_count``, and the latest run across both.
     """
     legacy_root = legacy_runs_root if legacy_runs_root is not None else research_root() / "experiments" / "runs"
-    known = known_alpha_ids()
+    known = known if known is not None else known_alpha_ids()
     legacy = run_stats(read_runs(legacy_root, known))
     governed = run_stats(read_runs(evidence_root / "runs", known, quarantine=False))
     combined: dict[str, dict[str, Any]] = {}

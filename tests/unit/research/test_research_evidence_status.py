@@ -379,3 +379,53 @@ def test_factory_index_records_run_counts_from_both_roots(research_tree, evidenc
         1,
     )
     assert row["latest_run_id"] == "gov1"
+
+
+# --- review fixes ----------------------------------------------------------
+
+
+def test_known_alpha_ids_includes_a_manifest_id_that_differs_from_the_directory(research_tree: Path) -> None:
+    (research_tree / "alphas" / "real" / "manifest.yaml").write_text("alpha_id: real_rescue\n", encoding="utf-8")
+    known = legacy_evidence.known_alpha_ids()
+    assert {"real", "real_rescue"} <= known
+    runs_root = research_tree / "experiments" / "runs"
+    _meta(runs_root, "r1", "real_rescue", "2026-05-01T00:00:00")
+    assert [r.quarantine for r in legacy_evidence.read_runs(runs_root, known)] == [None]
+
+
+def test_known_alpha_ids_includes_discovered_ids(research_tree: Path) -> None:
+    assert "from_impl" in legacy_evidence.known_alpha_ids(extra=["from_impl"])
+
+
+def test_status_json_stays_parseable_when_discovery_prints(research_tree, evidence, monkeypatch, capsys) -> None:
+    def _noisy_discover(_path: Path) -> dict:
+        print("StrategyX initialized")
+        manifest = types.SimpleNamespace(status=AlphaStatus.DRAFT)
+        return {"real": types.SimpleNamespace(manifest=manifest)}
+
+    fake = types.SimpleNamespace(errors=(), discover=_noisy_discover)
+    monkeypatch.setattr("research.registry.alpha_registry.AlphaRegistry", lambda: fake)
+    assert status_cli.main(["status", "--json"]) == 0
+    captured = capsys.readouterr()
+    assert [r["alpha_id"] for r in json.loads(captured.out)["alphas"]] == ["real"]
+    assert "StrategyX initialized" in captured.err
+
+
+def test_research_status_json_with_the_real_registry_is_parseable(tmp_path: Path) -> None:
+    import os
+    import subprocess
+
+    from hft_platform.alpha.paths import repo_root
+
+    env = {**os.environ, EVIDENCE_ROOT_ENV: str(tmp_path / "evidence")}
+    proc = subprocess.run(
+        [sys.executable, "-m", "research", "status", "--json"],
+        cwd=repo_root(),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=25,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout)["alphas"]

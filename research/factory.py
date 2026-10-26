@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3733,10 +3734,11 @@ def _strategy_family_shape_requirements() -> dict[str, dict[str, Any]]:
     }
 
 
-def _load_experiment_stats(evidence_root: Path) -> dict[str, Any]:
-    from research.registry.legacy_evidence import combined_run_stats
+def _load_experiment_stats(evidence_root: Path, alpha_ids: Iterable[str] = ()) -> dict[str, Any]:
+    from research.registry.legacy_evidence import combined_run_stats, known_alpha_ids
 
-    return combined_run_stats(evidence_root, ROOT / "experiments" / "runs")
+    known = known_alpha_ids(ROOT, extra=alpha_ids)
+    return combined_run_stats(evidence_root, ROOT / "experiments" / "runs", known)
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -3747,7 +3749,6 @@ def cmd_index(args: argparse.Namespace) -> int:
     try:
         root = evidence_root()
         ledger = ledger_events_by_alpha(root)
-        exp_stats = _load_experiment_stats(root)
     except (EvidenceRootError, ValueError, OSError) as exc:
         print(f"[research.factory] index: cannot read the verdict ledger: {exc}", file=sys.stderr)
         return 2
@@ -3772,6 +3773,7 @@ def cmd_index(args: argparse.Namespace) -> int:
             }
         )
 
+    exp_stats = _load_experiment_stats(root, [item["alpha_id"] for item in manifests])
     for item in manifests:
         stats = exp_stats.get(item["alpha_id"], {})
         item["run_count"] = int(stats.get("run_count", 0))
