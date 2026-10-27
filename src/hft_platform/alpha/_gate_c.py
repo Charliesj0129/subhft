@@ -384,7 +384,12 @@ def _merge_profile_thresholds(base: dict, profile: Any | None, *, strategy_type:
 
 
 def _run_stamp(
-    data_paths: list[str], config_hash: str, config: ValidationConfig, *, calibration: str | None = None
+    data_paths: list[str],
+    config_hash: str,
+    config: ValidationConfig,
+    *,
+    calibration: str | None = None,
+    protocol_sha256: str | None = None,
 ) -> dict[str, Any]:
     profile = getattr(config, "profile", None)
     return build_run_stamp(
@@ -392,8 +397,23 @@ def _run_stamp(
         config_hash=config_hash,
         profile=getattr(profile, "name", None),
         mode=str(getattr(config, "run_mode", "exploratory")),
+        protocol_sha256=protocol_sha256,
         calibration=calibration,
     )
+
+
+_ROLLED_SUFFIX = "_frontmonth"
+
+
+def _roll_details(schedule: Any) -> dict[str, Any] | None:
+    """The roll protocol and contracts a rolled maker run used, or None for one contract."""
+    if schedule is None:
+        return None
+    return {
+        "protocol_id": schedule.protocol.protocol_id,
+        "protocol_sha256": schedule.protocol.sha256,
+        "contracts": list(schedule.contracts),
+    }
 
 
 def _stamped_data_paths(inputs: list[str], derived: list[str]) -> list[str]:
@@ -668,6 +688,21 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         qf = float(getattr(config, "queue_fraction", 0.5))
         fill_model = QueueDepletionFill(queue_fraction=qf)
 
+        # ADR-004: a `<ROOT>_frontmonth` instrument is one series rolled across
+        # contract months by the pre-registered roll protocol. A protocol or
+        # calendar that cannot be used makes the run INVALID.
+        schedule = None
+        if instrument.endswith(_ROLLED_SUFFIX):
+            build_schedule = getattr(maker_runtime, "rolled_schedule", None)
+            if build_schedule is None:
+                return _maker_error_report("gate_c.rolled_series", "rolled_series_unavailable", instrument=instrument)
+            try:
+                schedule = build_schedule(instrument, ck_source)
+            except (ValueError, OSError) as exc:
+                return _maker_error_report(
+                    "gate_c.rolled_series", "rolled_series_invalid", instrument=instrument, detail=str(exc)
+                )
+
         engine = MakerEngine(
             fill_model=fill_model,
             cost_model=cost,
@@ -675,11 +710,15 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             latency_profile=latency_profile,
         )
 
-        result = engine.run(
-            strategy=maker_strategy,
-            instrument=instrument,
-            pipeline_mode="strict",
-        )
+        if schedule is not None:
+            result = engine.run_rolled(strategy=maker_strategy, schedule=schedule, pipeline_mode="strict")
+        else:
+            result = engine.run(
+                strategy=maker_strategy,
+                instrument=instrument,
+                pipeline_mode="strict",
+            )
+        roll = _roll_details(schedule)
 
         # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
         maker_thresholds = _merge_profile_thresholds(
@@ -770,6 +809,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 "fill_model": result.fill_model,
                 "cost_model": result.cost_model,
                 "instrument": instrument,
+                "roll": roll,
                 "sharpe_is": result.sharpe_is,
                 "sharpe_oos": None,
                 "sharpe_oos_outcome": Outcome.NOT_APPLICABLE.value,
@@ -809,7 +849,13 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             backtest_report_payload=asdict(report),
             signals=result.signals,
             equity=result.equity_curve,
-            run_stamp=_run_stamp(resolved_data_paths, result.config_hash, config, calibration="uncalibrated"),
+            run_stamp=_run_stamp(
+                resolved_data_paths,
+                result.config_hash,
+                config,
+                calibration="uncalibrated",
+                protocol_sha256=roll["protocol_sha256"] if roll else None,
+            ),
         )
         report.details["experiment_meta_path"] = str(meta_path)
         return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)

@@ -11,6 +11,7 @@ def _build_maker_runtime() -> GateCMakerRuntime:
     from research.backtest.cost_models import load_cost_profile
     from research.backtest.fill_models import QueueDepletionFill
     from research.backtest.maker_engine import ClickHouseSource, LatencyProfile, MakerEngine
+    from research.backtest.rolled_series import schedule_from_source
 
     return GateCMakerRuntime(
         load_cost_profile=load_cost_profile,
@@ -18,6 +19,7 @@ def _build_maker_runtime() -> GateCMakerRuntime:
         clickhouse_source=ClickHouseSource,
         latency_profile=LatencyProfile,
         maker_engine=MakerEngine,
+        rolled_schedule=schedule_from_source,
     )
 
 

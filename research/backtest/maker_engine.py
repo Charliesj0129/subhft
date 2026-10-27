@@ -10,8 +10,12 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
+import re
+from collections.abc import Callable, Sequence
+from datetime import date as calendar_date
 from datetime import datetime, timezone
-from typing import Protocol
+from functools import partial
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 import requests
@@ -23,7 +27,16 @@ from research.backtest.fill_models import FillModel, QueuePosition
 from research.backtest.trade_pnl_projector import project_trade_pnl
 from research.backtest.types import BacktestResult
 
+if TYPE_CHECKING:
+    from research.backtest.rolled_series import RolledSchedule
+
 logger = structlog.get_logger()
+
+_ROOT = re.compile(r"^[A-Z]{2,4}$")
+_TZ_NAME = re.compile(r"^[A-Za-z_]+/[A-Za-z_]+$")
+
+# One day of a series: its row label, the contract it runs on, and how to load its events.
+_SeriesDay = tuple[str, str, Callable[[], "list[TickData]"]]
 
 
 @dataclass(frozen=True)
@@ -130,6 +143,13 @@ class ClickHouseSource:
 
     def load_day(self, symbol: str, date: str) -> list[TickData]:
         """Load interleaved bidask + tick events for one day, sorted by exch_ts."""
+        return self._load_events(symbol, f"toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'")
+
+    def load_window(self, symbol: str, start_ns: int, end_ns: int) -> list[TickData]:
+        """Load interleaved bidask + tick events with ``start_ns <= exch_ts < end_ns``."""
+        return self._load_events(symbol, f"exch_ts >= {int(start_ns)} AND exch_ts < {int(end_ns)}")
+
+    def _load_events(self, symbol: str, where: str) -> list[TickData]:
         scale = 1_000_000
 
         ba_sql = f"""
@@ -138,7 +158,7 @@ class ClickHouseSource:
                asks_price[1] AS ask1_p, asks_vol[1] AS ask1_v
         FROM hft.market_data
         WHERE symbol = '{symbol}' AND type = 'BidAsk'
-          AND toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'
+          AND {where}
           AND length(bids_price) >= 1 AND length(asks_price) >= 1
         ORDER BY exch_ts
         """
@@ -146,7 +166,7 @@ class ClickHouseSource:
         SELECT exch_ts, price_scaled AS price, volume
         FROM hft.market_data
         WHERE symbol = '{symbol}' AND type = 'Tick'
-          AND toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'
+          AND {where}
         ORDER BY exch_ts
         """
         ba_rows = self._query(ba_sql)
@@ -200,6 +220,23 @@ class ClickHouseSource:
         if len(rows) <= 1:
             return []
         return [row[0] for row in rows[1:]]
+
+    def available_local_dates(self, root: str, tz: str) -> list[calendar_date]:
+        """Local dates in ``tz`` holding an event of any ``<root>`` contract month (``TMFK6`` ...)."""
+        if not _ROOT.match(root):
+            raise ValueError(f"contract root must be 2-4 capital letters, got {root!r}")
+        if not _TZ_NAME.match(tz):
+            raise ValueError(f"not a timezone name: {tz!r}")
+        sql = f"""
+        SELECT DISTINCT toDate(fromUnixTimestamp64Nano(exch_ts), '{tz}') AS d
+        FROM hft.market_data
+        WHERE match(symbol, '^{root}[A-L][0-9]$')
+        ORDER BY d
+        """
+        rows = self._query(sql)
+        if len(rows) <= 1:
+            return []
+        return [calendar_date.fromisoformat(row[0]) for row in rows[1:]]
 
 
 class MakerEngine:
@@ -258,6 +295,46 @@ class MakerEngine:
         if not dates:
             raise ValueError(f"No data available for {instrument}")
 
+        days = [(d, instrument, partial(self._ck_source.load_day, instrument, d)) for d in dates]
+        return self._run_series(strategy, days, instrument=instrument, pipeline_mode=pipeline_mode, rolled=False)
+
+    def run_rolled(
+        self,
+        strategy: MakerStrategy,
+        schedule: RolledSchedule,
+        pipeline_mode: str = "strict",
+    ) -> BacktestResult:
+        """Run one series across contract months, one row per trading day (ADR-004).
+
+        Each trading day loads its own window on the contract the schedule
+        quotes. Days are independent here as in :meth:`run`, so no position
+        crosses a roll; a strategy with ``set_active_symbol`` is told the new
+        contract before the first event on it.
+        """
+        self._ck_source.health_check()
+        if not schedule.days:
+            raise ValueError(f"No trading days for {schedule.instrument}")
+        days = [
+            (
+                d.trading_day.isoformat(),
+                d.symbol,
+                partial(self._ck_source.load_window, d.symbol, d.start_ns, d.end_ns),
+            )
+            for d in schedule.days
+        ]
+        return self._run_series(
+            strategy, days, instrument=schedule.instrument, pipeline_mode=pipeline_mode, rolled=True
+        )
+
+    def _run_series(
+        self,
+        strategy: MakerStrategy,
+        days: Sequence[_SeriesDay],
+        *,
+        instrument: str,
+        pipeline_mode: str,
+        rolled: bool,
+    ) -> BacktestResult:
         daily_pnl: list[dict] = []
         equity_points: list[float] = [0.0]
         total_gross = 0.0
@@ -279,10 +356,16 @@ class MakerEngine:
         # invariant ``sum(day-trips) == day_net`` holds whenever day_trips > 0.
         trade_pnl_pts: list[float] = []
 
-        for date in dates:
-            events = self._ck_source.load_day(instrument, date)
+        active_contract: str | None = None
+        set_active_symbol = getattr(strategy, "set_active_symbol", None)
+        for date, contract, load_events in days:
+            events = load_events()
             if not events:
                 continue
+            if rolled and contract != active_contract:
+                if callable(set_active_symbol):
+                    set_active_symbol(contract)
+                active_contract = contract
 
             day_fills, day_position, day_last_mid, day_last_avg = self._run_day(strategy, events)
             day_gross, day_trips, day_wins = self._compute_fifo_pnl(day_fills)
@@ -326,6 +409,8 @@ class MakerEngine:
                     "mark_method": self._mark_method,
                 }
             )
+            if rolled:
+                daily_pnl[-1]["contract"] = contract
 
             for f in day_fills:
                 spr = f.get("spread_pts", 0)
@@ -386,7 +471,7 @@ class MakerEngine:
             fill_model=self._fill_model.label,
             cost_model=self._cost_model.label,
             instrument=instrument,
-            data_period=f"{dates[0]}..{dates[-1]}" if dates else "",
+            data_period=f"{days[0][0]}..{days[-1][0]}" if days else "",
             data_source=f"clickhouse://{self._ck_source._host}:{self._ck_source._port}/hft",
             pipeline_mode=pipeline_mode,
             created_at=datetime.now(timezone.utc).isoformat(),

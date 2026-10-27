@@ -16,6 +16,9 @@ class GateCMakerRuntime:
     clickhouse_source: type[Any]
     latency_profile: type[Any]
     maker_engine: type[Any]
+    # (instrument, ck_source) -> the rolled schedule for a ``<ROOT>_frontmonth``
+    # instrument (ADR-004). None: this runtime cannot run a rolled series.
+    rolled_schedule: Callable[[str, Any], Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

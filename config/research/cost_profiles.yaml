@@ -18,8 +18,9 @@
 # Before 2026-10-06 this file charged TXF 1.5 (tax modelled as sell-only, averaged) and
 # TMF 2.0 (tax 0.7 pt, commission 1.3 pt); the TMF figure understated cost by 1.0 pt per side.
 #
-# Lookup: an exact key wins; otherwise a contract-month code such as TMFJ6 falls back to
-# its root key (TXF / MXF / TMF). See research/backtest/cost_models.py.
+# Lookup: an exact key wins; otherwise a contract-month code such as TMFJ6, or a rolled
+# series such as TMF_frontmonth, falls back to its root key (TXF / MXF / TMF). See
+# research/backtest/cost_models.py.
 # Source: memory/feedback_taifex_fee_structure.md (corrected 2026-10-06).
 
 TXF:
