@@ -8,9 +8,11 @@ of those components and:
 - ``no_commit``: the run recorded no commit (every run before RunStamp v0);
 - ``commit_unknown``: its commit is not in this checkout's history;
 - ``before_fix``: its commit does not contain the fix commit;
-- ``dataset_not_deduped``: the defect requires ``dataset_dedup`` and a real
-  dataset the run read has no sidecar recording a dedup rule (a run on a fixed
-  commit can still read data exported before the fix).
+- ``dataset_not_deduped``: the defect requires ``dataset_dedup`` and a dataset
+  the run read cannot be shown to be deduplicated: its bytes no longer match
+  the sha256 the RunStamp recorded, it has no readable sidecar, or a real one
+  records no dedup rule (a run on a fixed commit can still read data exported
+  before the fix).
 
 No run record names its Gate C lane, so every run carries both lanes; a defect
 of a component no run carries (mining) marks nothing here.
@@ -19,7 +21,8 @@ Audited runs: governed runs, one per (``run_id``, ``git_commit``) in
 ``ledger/verdicts.jsonl`` (a promotion can run on a later commit than the
 validation it promotes, so each is judged by its own), and the legacy runs in
 ``research/experiments/runs`` except rows that name a pytest temporary
-directory or cannot be read. A run quarantined only as ``unknown_alpha`` (its
+directory. An unreadable run meta stops the audit: it cannot be shown to be a
+fixture. A run quarantined only as ``unknown_alpha`` (its
 package is gone) is still audited: a missing mark would hide stale evidence,
 an extra one only flags it. Marks are appended to ``ledger/stale.jsonl``;
 evidence is never edited.
@@ -40,6 +43,7 @@ import yaml
 
 from hft_platform.alpha.evidence import EvidenceWriter
 from hft_platform.alpha.paths import repo_path, repo_root
+from hft_platform.alpha.provenance import file_sha256
 from hft_platform.alpha.status import check_event
 from research.registry import legacy_evidence
 
@@ -49,7 +53,9 @@ REQUIREMENTS = frozenset({"dataset_dedup"})
 # Components every research run carries: no run record names its lane, so both Gate C paths apply.
 RUN_COMPONENTS = frozenset({"dataset", "verdict", "gate_c.taker", "gate_c.maker"})
 # Legacy rows that are not evidence at all; every other quarantine reason is still audited.
-_NOT_EVIDENCE = frozenset({"pytest_tmp_path", "unreadable_meta"})
+_NOT_EVIDENCE = frozenset({"pytest_tmp_path"})
+# The converted file the taker runner writes beside its input (hft_native_runner._hftbt_output_path).
+_DERIVED_SUFFIX = "hftbt.npz"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _GIT_TIMEOUT_S = 10.0
 
@@ -76,7 +82,7 @@ class AuditedRun:
     alpha_id: str
     run_id: str | None
     git_commit: str | None
-    dataset_paths: tuple[str, ...] | None
+    datasets: tuple[tuple[str, str | None], ...] | None
     event_ids: tuple[str, ...] = ()
     components: frozenset[str] = RUN_COMPONENTS
 
@@ -150,71 +156,94 @@ class GitHistory:
         return rc == 0
 
 
-def datasets_deduped(paths: Iterable[str] | None, *, base: Path | None = None) -> bool:
-    """True when the run's real datasets all carry a sidecar recording a dedup rule.
+def datasets_deduped(datasets: Iterable[tuple[str, str | None]] | None, *, base: Path | None = None) -> bool:
+    """True when every dataset the run read is provably deduplicated.
 
-    Each dataset's sidecar is ``<path>.meta.json``; derived files without one
-    (the converted ``hftbt.npz``) are skipped, but at least one sidecar must be
-    read. A sidecar whose ``source_type`` is not ``real`` needs no rule; an
-    unreadable one fails.
+    ``datasets`` are the RunStamp's (path, sha256) pairs. Each file must still
+    have the recorded sha256 (an export rewritten in place no longer vouches for
+    the run). Each input needs a readable ``<path>.meta.json`` sidecar, and a
+    real one must record a dedup rule; a sidecar whose ``source_type`` is not
+    ``real`` needs none. Only the converted ``hftbt.npz`` beside an input is
+    exempt from the sidecar, and at least one input must be present.
     """
-    if paths is None:
+    if datasets is None:
         return False
     base = base if base is not None else repo_root()
-    read = 0
-    for raw in paths:
+    inputs = 0
+    for raw, digest in datasets:
         data = Path(raw) if Path(raw).is_absolute() else base / raw
-        sidecar = data.with_name(data.name + ".meta.json")
-        if not sidecar.exists():
-            continue
         try:
-            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+            if digest is None or file_sha256(data, cached=False) != digest:
+                return False
+        except OSError:
+            return False
+        if data.name.endswith(_DERIVED_SUFFIX):
+            continue
+        inputs += 1
+        try:
+            meta = json.loads(data.with_name(data.name + ".meta.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
         if not isinstance(meta, dict):
             return False
-        read += 1
         if meta.get("source_type", "real") == "real" and meta.get("dedup_rule") in (None, "", "unrecorded"):
             return False
-    return read > 0
+    return inputs > 0
+
+
+def governed_run_key(event: Mapping[str, Any]) -> str:
+    """The audited-run identity of a ledger event: its run (or the event itself) at its commit."""
+    run_id = event.get("run_id")
+    run = str(run_id) if run_id else f"event:{event.get('event_id', '')}"
+    return f"governed:{run}@{event.get('git_commit') or 'none'}"
 
 
 def governed_runs(root: Path) -> list[AuditedRun]:
-    """One run per (``run_id``, ``git_commit``) in the verdict ledger, in first-event order.
+    """One run per ``governed_run_key`` in the verdict ledger, in first-event order.
 
     An event without a ``run_id`` is a run of its own. Datasets come from the
-    run's ``runs/<run_id>/meta.json`` RunStamp; None when it is not there.
+    run's ``runs/<run_id>/meta.json`` RunStamp; None when it is not there. An
+    unreadable governed meta raises ``ValueError``.
     """
     writer = EvidenceWriter(root)
-    grouped: dict[tuple[str, str | None], list[Mapping[str, Any]]] = {}
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
     for event in writer.read_verdicts():
         check_event(event)
-        run_id = event.get("run_id")
-        key = (str(run_id) if run_id else f"event:{event.get('event_id', '')}", event.get("git_commit"))
-        grouped.setdefault(key, []).append(event)
-    stamped = {r.run_id: r for r in legacy_evidence.read_runs(root / "runs", frozenset(), quarantine=False)}
+        grouped.setdefault(governed_run_key(event), []).append(event)
+    metas = legacy_evidence.read_runs(root / "runs", frozenset(), quarantine=False)
+    _refuse_unreadable(metas, root / "runs")
+    stamped = {r.run_id: r for r in metas}
     runs: list[AuditedRun] = []
-    for (run_key, commit), events in grouped.items():
+    for run_key, events in grouped.items():
         run_id = events[0].get("run_id") or None
+        commit = events[0].get("git_commit")
         meta = stamped.get(run_id) if run_id else None
         runs.append(
             AuditedRun(
-                run_key=f"governed:{run_key}@{commit or 'none'}",
+                run_key=run_key,
                 origin="governed",
                 alpha_id=str(events[0]["alpha_id"]),
                 run_id=run_id,
                 git_commit=commit if isinstance(commit, str) and commit else None,
-                dataset_paths=meta.dataset_paths if meta is not None else None,
+                datasets=meta.datasets if meta is not None else None,
                 event_ids=tuple(str(e.get("event_id", "")) for e in events),
             )
         )
     return runs
 
 
+def _refuse_unreadable(runs: Iterable[legacy_evidence.LegacyRun], where: Path) -> None:
+    unreadable = sorted(r.run_id for r in runs if r.quarantine == "unreadable_meta")
+    if unreadable:
+        raise ValueError(f"unreadable run meta under {where}: {', '.join(unreadable)}; fix or move them, then rerun")
+
+
 def legacy_runs(runs_root: Path | None = None, known: frozenset[str] | None = None) -> list[AuditedRun]:
-    """The legacy runs to audit: all but pytest fixture rows and unreadable metas."""
+    """The legacy runs to audit: all but pytest fixture rows; an unreadable meta raises ``ValueError``."""
     runs_root = runs_root if runs_root is not None else legacy_evidence.research_root() / "experiments" / "runs"
     known = known if known is not None else legacy_evidence.known_alpha_ids()
+    rows = legacy_evidence.read_runs(runs_root, known)
+    _refuse_unreadable(rows, runs_root)
     return [
         AuditedRun(
             run_key=f"legacy:{run.run_id}",
@@ -222,9 +251,9 @@ def legacy_runs(runs_root: Path | None = None, known: frozenset[str] | None = No
             alpha_id=run.alpha_id,
             run_id=run.run_id,
             git_commit=run.git_commit,
-            dataset_paths=run.dataset_paths,
+            datasets=run.datasets,
         )
-        for run in legacy_evidence.read_runs(runs_root, known)
+        for run in rows
         if run.quarantine not in _NOT_EVIDENCE and run.alpha_id and run.run_id
     ]
 
@@ -241,7 +270,7 @@ def stale_basis(run: AuditedRun, defect: Defect, git: GitHistory, *, base: Path 
         return "commit_unknown"
     if not git.contains(run.git_commit, defect.fix_commit):
         return "before_fix"
-    if "dataset_dedup" in defect.requires and not datasets_deduped(run.dataset_paths, base=base):
+    if "dataset_dedup" in defect.requires and not datasets_deduped(run.datasets, base=base):
         return "dataset_not_deduped"
     return None
 

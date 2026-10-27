@@ -88,23 +88,35 @@ def derive_status(events: Iterable[Mapping[str, Any]]) -> AlphaStatus | None:
 
     A malformed event raises ``ValueError``.
     """
+    return _derive(list(events))[0]
+
+
+def status_basis(events: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The events the derived status rests on: every KILL, else each climbed stage's latest event.
+
+    A malformed event raises ``ValueError``.
+    """
+    events = list(events)
+    return [events[i] for i in _derive(events)[1]]
+
+
+def _derive(events: list[Mapping[str, Any]]) -> tuple[AlphaStatus | None, list[int]]:
     latest: dict[str, tuple[int, bool, str | None]] = {}
-    killed = False
-    seen = False
+    kills: list[int] = []
     for index, event in enumerate(events):
         check_event(event)
-        seen = True
         verdict = event.get("verdict")
         if verdict == Verdict.INVALID.value:
             continue
         if verdict == Verdict.KILL.value:
-            killed = True
+            kills.append(index)
         latest[event["stage"]] = (index, event["passed"], event.get("run_id"))
-    if not seen:
-        return None
-    if killed:
-        return AlphaStatus.KILLED
+    if not events:
+        return None, []
+    if kills:
+        return AlphaStatus.KILLED, kills
     status = AlphaStatus.DRAFT
+    basis: list[int] = []
     below: tuple[int, bool, str | None] | None = None
     for stage, stage_status in _LADDER:
         entry = latest.get(stage)
@@ -113,7 +125,8 @@ def derive_status(events: Iterable[Mapping[str, Any]]) -> AlphaStatus | None:
         if below is not None and (entry[0] < below[0] or entry[2] != below[2]):
             break
         status, below = stage_status, entry
-    return status
+        basis.append(entry[0])
+    return status, basis
 
 
 def effective_status(declared: AlphaStatus, events: Iterable[Mapping[str, Any]]) -> EffectiveStatus:

@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 from hft_platform.alpha.evidence import EVIDENCE_ROOT_ENV, STALE_RELPATH, EvidenceWriter, RunMode
+from hft_platform.alpha.provenance import file_sha256
 from research.registry import legacy_evidence, stale_audit, status_cli
 
 SHIPPED = Path(__file__).resolve().parents[3] / stale_audit.DEFECTS_RELPATH
@@ -61,7 +62,7 @@ def _defect(defect_id: str, fix: str | None, components: list[str], **extra: obj
 
 
 def _run(
-    commit: str | None, datasets: tuple[str, ...] | None = None, key: str = "governed:r1"
+    commit: str | None, datasets: tuple[tuple[str, str | None], ...] | None = None, key: str = "governed:r1"
 ) -> stale_audit.AuditedRun:
     return stale_audit.AuditedRun(key, "governed", "a", "r1", commit, datasets, ("e1",))
 
@@ -152,12 +153,22 @@ def test_a_defect_of_a_component_no_run_carries_marks_nothing(history: dict[str,
     assert stale_audit.stale_basis(_run(None), defect, stale_audit.GitHistory(Path(history["repo"]))) is None
 
 
-def _dataset(base: Path, name: str, meta: dict | None) -> str:
+DEDUPED = {"source_type": "real", "dedup_rule": "content_multiplicity_v1"}
+
+
+def _dataset(base: Path, name: str, meta: dict | None) -> tuple[str, str]:
+    """A dataset file (and its sidecar when ``meta`` is given) as the RunStamp records it: (path, sha256)."""
     data = base / name
-    data.write_bytes(b"x")
+    data.write_bytes(name.encode())
     if meta is not None:
         (base / f"{name}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    return str(data)
+    return str(data), file_sha256(data, cached=False)
+
+
+def _dedup_basis(history: dict[str, str], base: Path, datasets: tuple) -> str | None:
+    defect = stale_audit.Defect("dedup", frozenset({"dataset"}), history["fix"], frozenset({"dataset_dedup"}))
+    git = stale_audit.GitHistory(Path(history["repo"]))
+    return stale_audit.stale_basis(_run(history["after"], datasets), defect, git, base=base)
 
 
 @pytest.mark.parametrize(
@@ -173,12 +184,24 @@ def _dataset(base: Path, name: str, meta: dict | None) -> str:
 def test_dataset_dedup_defect_needs_a_recorded_rule_even_after_the_fix(
     history: dict[str, str], tmp_path: Path, meta: dict | None, stale: bool
 ) -> None:
-    defect = stale_audit.Defect("dedup", frozenset({"dataset"}), history["fix"], frozenset({"dataset_dedup"}))
-    datasets = (_dataset(tmp_path, "day.npz", meta), _dataset(tmp_path, "hftbt.npz", None))
-    basis = stale_audit.stale_basis(
-        _run(history["after"], datasets), defect, stale_audit.GitHistory(Path(history["repo"])), base=tmp_path
-    )
-    assert basis == ("dataset_not_deduped" if stale else None)
+    datasets = (_dataset(tmp_path, "day.npz", meta), _dataset(tmp_path, "day.hftbt.npz", None))
+    assert _dedup_basis(history, tmp_path, datasets) == ("dataset_not_deduped" if stale else None)
+
+
+def test_dataset_dedup_one_input_without_a_sidecar_is_stale(history: dict[str, str], tmp_path: Path) -> None:
+    datasets = (_dataset(tmp_path, "good.npy", DEDUPED), _dataset(tmp_path, "raw.npy", None))
+    assert _dedup_basis(history, tmp_path, datasets) == "dataset_not_deduped"
+
+
+def test_dataset_dedup_rewritten_export_no_longer_vouches_for_the_run(history: dict[str, str], tmp_path: Path) -> None:
+    path, digest = _dataset(tmp_path, "day.npy", DEDUPED)
+    Path(path).write_bytes(b"re-exported after the run")
+    assert _dedup_basis(history, tmp_path, ((path, digest),)) == "dataset_not_deduped"
+    assert _dedup_basis(history, tmp_path, ((path, None),)) == "dataset_not_deduped"
+
+
+def test_dataset_dedup_only_derived_files_is_stale(history: dict[str, str], tmp_path: Path) -> None:
+    assert _dedup_basis(history, tmp_path, (_dataset(tmp_path, "hftbt.npz", None),)) == "dataset_not_deduped"
 
 
 def test_audit_refuses_when_a_fix_commit_is_not_in_the_checkout(history: dict[str, str], tmp_path: Path) -> None:
@@ -205,9 +228,9 @@ def test_governed_runs_split_a_promotion_on_a_later_commit(tmp_path: Path) -> No
         json.dumps({"alpha_id": "a", "run_id": "r1", "run_stamp": stamp}), encoding="utf-8"
     )
     runs = stale_audit.governed_runs(root)
-    assert [(r.run_key, r.git_commit, r.dataset_paths) for r in runs] == [
-        ("governed:r1@c1", "c1", ("/data/day.npz",)),
-        ("governed:r1@c2", "c2", ("/data/day.npz",)),
+    assert [(r.run_key, r.git_commit, r.datasets) for r in runs] == [
+        ("governed:r1@c1", "c1", (("/data/day.npz", "sha"),)),
+        ("governed:r1@c2", "c2", (("/data/day.npz", "sha"),)),
         (f"governed:event:{lone['event_id']}@c1", "c1", None),
     ]
     assert runs[0].event_ids == (first["event_id"],)
@@ -309,7 +332,7 @@ def test_status_flags_a_status_resting_on_a_stale_run_without_changing_it(audit_
 
 
 def test_status_on_stale_run_when_the_latest_event_is_from_a_stale_run(audit_env: Path, history, capsys) -> None:
-    _verdict(audit_env, alpha_id="real", run_id="old2", git_commit=history["before"], verdict="PASS")
+    _verdict(audit_env, alpha_id="real", run_id="old2", git_commit=history["before"], stage="gate_a", verdict="PASS")
     assert status_cli.main(["evidence", "audit-stale"]) == 0
     capsys.readouterr()
     assert status_cli.main(["status", "--alpha", "real", "--json"]) == 0
@@ -340,3 +363,35 @@ def test_research_main_dispatches_audit_stale(audit_env: Path, monkeypatch, caps
     monkeypatch.setattr("sys.argv", ["research", "evidence", "audit-stale", "--dry-run"])
     assert main() == 0
     assert "dry run, nothing written" in capsys.readouterr().out
+
+
+def test_audit_stale_unreadable_legacy_meta_exits_2(audit_env: Path, tmp_path: Path, capsys) -> None:
+    broken = tmp_path / "research" / "experiments" / "runs" / "broken"
+    broken.mkdir()
+    (broken / "meta.json").write_text("{not json", encoding="utf-8")
+    assert status_cli.main(["evidence", "audit-stale"]) == 2
+    assert "unreadable run meta" in capsys.readouterr().err
+    assert not (audit_env / STALE_RELPATH).exists()
+
+
+def test_status_flags_an_event_a_stale_run_gained_after_its_audit(audit_env: Path, history, capsys) -> None:
+    assert status_cli.main(["evidence", "audit-stale"]) == 0
+    # The stale run publishes again after the audit; its new gate_a event is what the status climbs on.
+    _verdict(audit_env, alpha_id="real", run_id="old", git_commit=history["before"], stage="gate_a", verdict="PASS")
+    assert status_cli.main(["evidence", "audit-stale"]) == 0
+    assert "0 new marks" in capsys.readouterr().out
+    assert status_cli.main(["status", "--alpha", "real", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["alphas"][0]["status_on_stale_run"] is True
+
+
+def test_status_ignores_a_stale_stage_the_derived_status_does_not_use(audit_env: Path, history, capsys) -> None:
+    # A stale run once reached gate_d; a newer clean run passes gate_a..gate_c, so the status is GATE_C
+    # and the old gate_d no longer counts toward it.
+    _verdict(audit_env, alpha_id="real", run_id="old", git_commit=history["before"], stage="gate_d", verdict="PASS")
+    for stage in ("gate_a", "gate_b", "gate_c"):
+        _verdict(audit_env, alpha_id="real", run_id="clean", git_commit=history["after"], stage=stage, verdict="PASS")
+    assert status_cli.main(["evidence", "audit-stale"]) == 0
+    capsys.readouterr()
+    assert status_cli.main(["status", "--alpha", "real", "--json"]) == 0
+    row = json.loads(capsys.readouterr().out)["alphas"][0]
+    assert (row["status"], row["status_on_stale_run"]) == ("GATE_C", False)

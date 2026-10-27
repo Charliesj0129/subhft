@@ -53,7 +53,7 @@ class LegacyRun:
     quarantine: str | None
     # From the run's RunStamp; None when the run recorded none (every pre-v0 run).
     git_commit: str | None = None
-    dataset_paths: tuple[str, ...] | None = None
+    datasets: tuple[tuple[str, str | None], ...] | None = None
 
 
 def research_root() -> Path:
@@ -121,7 +121,9 @@ def read_runs(runs_root: Path, known: frozenset[str], *, quarantine: bool = True
                 timestamp=str(payload.get("timestamp", "")).strip(),
                 quarantine=reason,
                 git_commit=commit if isinstance(commit, str) and commit else None,
-                dataset_paths=tuple(str(k) for k in datasets) if isinstance(datasets, dict) else None,
+                datasets=tuple((str(k), v if isinstance(v, str) else None) for k, v in datasets.items())
+                if isinstance(datasets, dict)
+                else None,
             )
         )
     return runs

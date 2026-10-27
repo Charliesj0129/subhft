@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from hft_platform.alpha.evidence import EvidenceRootError, EvidenceWriter, evidence_root, init_root
-from hft_platform.alpha.status import derive_status, effective_status, ledger_events_by_alpha
+from hft_platform.alpha.status import derive_status, effective_status, ledger_events_by_alpha, status_basis
 from research.registry import legacy_evidence, stale_audit
 
 
@@ -68,30 +68,15 @@ def _discover_declared() -> dict[str, Any]:
     return {aid: item.manifest.status for aid, item in loaded.items()}
 
 
-def _status_event_ids(events: list[dict[str, Any]]) -> set[str]:
-    """The events a ledger status rests on: each stage's latest non-INVALID event and every KILL."""
-    latest: dict[str, str] = {}
-    kills: set[str] = set()
-    for event in events:
-        verdict = event.get("verdict")
-        if verdict == "INVALID":
-            continue
-        event_id = str(event.get("event_id", ""))
-        latest[str(event.get("stage"))] = event_id
-        if verdict == "KILL":
-            kills.add(event_id)
-    return (set(latest.values()) | kills) - {""}
-
-
 def _status_rows(root: Path, only: str | None) -> list[dict[str, Any]]:
     ledger = ledger_events_by_alpha(root)
     declared = _discover_declared()
     runs = legacy_evidence.combined_run_stats(root, known=legacy_evidence.known_alpha_ids(extra=declared))
     stale_runs: dict[str, set[str]] = {}
-    stale_events: set[str] = set()
+    stale_keys: set[str] = set()
     for mark in EvidenceWriter(root).read_stale_marks():
         stale_runs.setdefault(str(mark.get("alpha_id", "")), set()).add(str(mark["run_key"]))
-        stale_events.update(str(e) for e in mark.get("event_ids") or ())
+        stale_keys.add(str(mark["run_key"]))
     kills: dict[str, int] = {}
     for kill in EvidenceWriter(root).read_legacy_kills():
         if not kill.get("quarantine"):
@@ -108,7 +93,8 @@ def _status_rows(root: Path, only: str | None) -> list[dict[str, Any]]:
             derived = derive_status(events)
             status, source, declared_value = (derived.value if derived else ""), "ledger", ""
         stats = runs.get(alpha_id, {})
-        basis = _status_event_ids(events) if source == "ledger" else set()
+        # Matched by run identity, not the marks' event snapshot: a run can gain events after its audit.
+        basis = {stale_audit.governed_run_key(e) for e in status_basis(events)} if source == "ledger" else set()
         rows.append(
             {
                 "alpha_id": alpha_id,
@@ -119,7 +105,7 @@ def _status_rows(root: Path, only: str | None) -> list[dict[str, Any]]:
                 "legacy_run_count": int(stats.get("legacy_run_count", 0)),
                 "legacy_kill_count": kills.get(alpha_id, 0),
                 "stale_run_count": len(stale_runs.get(alpha_id, ())),
-                "status_on_stale_run": bool(basis & stale_events),
+                "status_on_stale_run": bool(basis & stale_keys),
             }
         )
     return rows
