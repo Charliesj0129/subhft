@@ -13,7 +13,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.background_tasks import spawn_retained
-from hft_platform.feed_adapter.shioaji._compat import is_leaf_contract, contract_member, iter_contract_category
+from hft_platform.feed_adapter.shioaji._compat import contract_member, is_leaf_contract, iter_contract_category
 from hft_platform.feed_adapter.shioaji._infra import (
     acquire_login_slot,
     client_float,
