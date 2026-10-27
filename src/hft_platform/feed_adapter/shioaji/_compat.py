@@ -28,8 +28,15 @@ happens at module load.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from typing import Any
+
+from structlog import get_logger
+
+from hft_platform.feed_adapter.shioaji._infra import scrub_broker_error
+
+logger = get_logger("feed_adapter.shioaji.compat")
 
 # Real execution payloads nest 2-3 deep (event -> order/status/contract ->
 # scalars). The cap is generous enough to never truncate one while still
@@ -198,3 +205,71 @@ def resolve_trading_account(api: Any, attr: str) -> Any | None:
         return getattr(api, attr, None)
     except Exception:
         return None
+
+
+# The categories this platform subscribes or trades (config/symbols.yaml holds
+# futures, options and TSE stocks). Indexs is left out on purpose: nothing
+# depends on it, and waiting on it would only add a way to never be ready.
+_READY_CATEGORIES = ("Futures", "Options", "Stocks")
+
+
+def contracts_loaded(api: Any) -> bool:
+    """True once every category in ``_READY_CATEGORIES`` is non-empty.
+
+    ``hasattr(api, "Contracts")`` is always True once logged in, and the 1.7.x
+    contracts object has no ``status`` attribute at runtime although its stub
+    declares one (live probe 2026-10-27), so "the category has something in it"
+    is the only readiness signal that holds on every SDK generation. Plain
+    iteration is used on purpose: 1.5 yields contracts and 1.7 yields groups,
+    and telling those apart would mean probing a Rust ``__getattr__`` whose
+    exception type is not pinned.
+    """
+    try:
+        contracts = api.Contracts
+        for name in _READY_CATEGORIES:
+            if next(iter(getattr(contracts, name)), None) is None:
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def wait_contracts_ready(
+    api: Any,
+    *,
+    timeout_s: float,
+    fetch_after_s: float,
+    fetch: Callable[[], Any] | None = None,
+    poll_s: float = 0.2,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[bool, float, bool]:
+    """Wait for the contracts that ``login()`` loads; fetch at most once.
+
+    From shioaji 1.7 ``login()`` starts loading contracts itself, and an
+    explicit ``fetch_contracts`` issued meanwhile fails at once with "exclusive
+    access lost (concurrent API call started)" (probe 2026-10-27, 0.0 ms). The
+    1.5-era login treated that as a failed login and logged in a second time
+    on the same session. So: poll until contracts resolve, call ``fetch`` only
+    if nothing has loaded by ``fetch_after_s``, and treat a failed fetch as
+    "keep waiting". Never logs in again. Blocking; call it off the event loop.
+
+    Returns ``(ready, elapsed_s, fetched)``.
+    """
+    start = clock()
+    fetched = False
+    while True:
+        elapsed = clock() - start
+        if contracts_loaded(api):
+            return True, elapsed, fetched
+        if elapsed >= timeout_s:
+            return False, elapsed, fetched
+        if fetch is not None and not fetched and elapsed >= fetch_after_s:
+            fetched = True
+            try:
+                fetch()
+            except Exception as exc:
+                # "exclusive access lost" included: the load in flight may still finish.
+                logger.warning("contracts_fetch_failed_waiting", error=scrub_broker_error(exc))
+            continue
+        sleep(poll_s)
