@@ -134,6 +134,38 @@ def resolve_quote_api(api: Any) -> Any | None:
     return None
 
 
+def is_leaf_contract(item: Any) -> bool:
+    """True when ``item`` is a contract rather than a group of contracts.
+
+    1.5.x iterates a category flat (contracts); 1.7.x yields ``ContractGroup``
+    objects whose ``__getattr__`` looks the name up as a contract code and
+    raises ``KeyError`` on a miss. ``hasattr`` only swallows
+    ``AttributeError``, so ``hasattr(group, "code")`` escapes with
+    ``KeyError('code')`` (THESHOW 1.7.9 deploy, 2026-10-27: family populator
+    failed and R47 bound no symbols).
+    """
+    try:
+        item.code  # noqa: B018 - attribute probe; a group raises instead of returning
+    except (AttributeError, LookupError):
+        return False
+    return True
+
+
+def contract_member(container: Any, name: str) -> Any | None:
+    """``getattr(container, name, None)`` that also maps a lookup miss to ``None``.
+
+    1.7.x ``ContractCategory`` / ``ContractGroup`` resolve attributes as group
+    or contract codes and raise ``KeyError`` for an unknown one, which
+    ``getattr``'s default does not catch (see :func:`is_leaf_contract`).
+    """
+    if container is None:
+        return None
+    try:
+        return getattr(container, name)
+    except (AttributeError, LookupError):
+        return None
+
+
 def iter_contract_category(category: Any) -> Iterator[Any]:
     """Yield leaf contract objects from a ``Contracts.<Futures|Options|Stocks>``
     category across SDK generations.
@@ -154,7 +186,7 @@ def iter_contract_category(category: Any) -> Iterator[Any]:
             yield from category[root]
         return
     for item in category:
-        if hasattr(item, "code"):
+        if is_leaf_contract(item):
             yield item
         else:
             yield from item
@@ -176,7 +208,7 @@ def contract_category_groups(category: Any) -> dict[str, list[Any]]:
         return {str(root): list(category[root]) for root in roots}
     groups: dict[str, list[Any]] = {}
     for item in category:
-        if hasattr(item, "code"):
+        if is_leaf_contract(item):
             groups.setdefault(str(getattr(item, "category", "") or ""), []).append(item)
         else:
             items = list(item)
