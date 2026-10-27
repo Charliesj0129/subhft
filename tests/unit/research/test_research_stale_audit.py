@@ -204,6 +204,39 @@ def test_dataset_dedup_only_derived_files_is_stale(history: dict[str, str], tmp_
     assert _dedup_basis(history, tmp_path, (_dataset(tmp_path, "hftbt.npz", None),)) == "dataset_not_deduped"
 
 
+def test_dataset_dedup_primary_l2_export_is_judged_by_its_own_sidecar(history: dict[str, str], tmp_path: Path) -> None:
+    deduped_l2 = _dataset(tmp_path, "d1_l2.hftbt.npz", DEDUPED)
+    assert _dedup_basis(history, tmp_path, (deduped_l2,)) is None
+    raw_l2 = _dataset(tmp_path, "d2_l2.hftbt.npz", None)
+    good = _dataset(tmp_path, "good.npy", DEDUPED)
+    assert _dedup_basis(history, tmp_path, (good, raw_l2)) == "dataset_not_deduped"
+
+
+@pytest.mark.parametrize(
+    ("meta", "stale"),
+    [
+        ({"source_type": " REAL "}, True),
+        ({"dedup_rule": " "}, True),
+        ({"source_type": " Synthetic "}, False),
+    ],
+)
+def test_dataset_dedup_normalises_source_type_and_rule(
+    history: dict[str, str], tmp_path: Path, meta: dict, stale: bool
+) -> None:
+    assert _dedup_basis(history, tmp_path, (_dataset(tmp_path, "day.npy", meta),)) == (
+        "dataset_not_deduped" if stale else None
+    )
+
+
+@pytest.mark.parametrize("sidecar", ["day.meta.json", "day.npy.metadata.json", "day.metadata.json"])
+def test_dataset_dedup_reads_every_sidecar_name_gate_a_accepts(
+    history: dict[str, str], tmp_path: Path, sidecar: str
+) -> None:
+    path, digest = _dataset(tmp_path, "day.npy", None)
+    (tmp_path / sidecar).write_text(json.dumps(DEDUPED), encoding="utf-8")
+    assert _dedup_basis(history, tmp_path, ((path, digest),)) is None
+
+
 def test_audit_refuses_when_a_fix_commit_is_not_in_the_checkout(history: dict[str, str], tmp_path: Path) -> None:
     registry = stale_audit.load_registry(_registry(tmp_path / "d.yaml", [_defect("d", "e" * 40, ["verdict"])]))
     with pytest.raises(ValueError, match="fix commits not in this checkout: d"):
@@ -374,6 +407,20 @@ def test_audit_stale_unreadable_legacy_meta_exits_2(audit_env: Path, tmp_path: P
     assert not (audit_env / STALE_RELPATH).exists()
 
 
+@pytest.mark.parametrize("payload", ["null", "[]", '{"run_id": "r"}', '{"alpha_id": " "}'])
+def test_legacy_runs_refuse_a_meta_that_names_no_alpha(tmp_path: Path, payload: str) -> None:
+    (tmp_path / "runs" / "odd").mkdir(parents=True)
+    (tmp_path / "runs" / "odd" / "meta.json").write_text(payload, encoding="utf-8")
+    with pytest.raises(ValueError, match="unreadable run meta .*: odd"):
+        stale_audit.legacy_runs(tmp_path / "runs", frozenset())
+
+
+def test_legacy_runs_name_a_run_without_run_id_by_its_directory(tmp_path: Path) -> None:
+    (tmp_path / "runs" / "dir7").mkdir(parents=True)
+    (tmp_path / "runs" / "dir7" / "meta.json").write_text('{"alpha_id": "a"}', encoding="utf-8")
+    assert [r.run_key for r in stale_audit.legacy_runs(tmp_path / "runs", frozenset({"a"}))] == ["legacy:dir7"]
+
+
 def test_status_flags_an_event_a_stale_run_gained_after_its_audit(audit_env: Path, history, capsys) -> None:
     assert status_cli.main(["evidence", "audit-stale"]) == 0
     # The stale run publishes again after the audit; its new gate_a event is what the status climbs on.
@@ -395,3 +442,23 @@ def test_status_ignores_a_stale_stage_the_derived_status_does_not_use(audit_env:
     assert status_cli.main(["status", "--alpha", "real", "--json"]) == 0
     row = json.loads(capsys.readouterr().out)["alphas"][0]
     assert (row["status"], row["status_on_stale_run"]) == ("GATE_C", False)
+
+
+def test_status_on_stale_run_when_a_stale_failure_demoted_the_alpha(audit_env: Path, history, capsys) -> None:
+    for stage in ("gate_a", "gate_b", "gate_c"):
+        _verdict(audit_env, alpha_id="real", run_id="clean", git_commit=history["after"], stage=stage, verdict="PASS")
+    # A stale run's later gate_a failure replaces the clean pass, so the status falls to DRAFT because of it.
+    _verdict(
+        audit_env,
+        alpha_id="real",
+        run_id="old",
+        git_commit=history["before"],
+        stage="gate_a",
+        passed=False,
+        verdict="NEEDS-MORE-DAYS",
+    )
+    assert status_cli.main(["evidence", "audit-stale"]) == 0
+    capsys.readouterr()
+    assert status_cli.main(["status", "--alpha", "real", "--json"]) == 0
+    row = json.loads(capsys.readouterr().out)["alphas"][0]
+    assert (row["status"], row["status_on_stale_run"]) == ("DRAFT", True)

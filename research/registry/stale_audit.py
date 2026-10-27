@@ -10,9 +10,9 @@ of those components and:
 - ``before_fix``: its commit does not contain the fix commit;
 - ``dataset_not_deduped``: the defect requires ``dataset_dedup`` and a dataset
   the run read cannot be shown to be deduplicated: its bytes no longer match
-  the sha256 the RunStamp recorded, it has no readable sidecar, or a real one
-  records no dedup rule (a run on a fixed commit can still read data exported
-  before the fix).
+  the sha256 the RunStamp recorded, it has no readable sidecar, or one that is
+  not synthetic records no dedup rule (a run on a fixed commit can still read
+  data exported before the fix).
 
 No run record names its Gate C lane, so every run carries both lanes; a defect
 of a component no run carries (mining) marks nothing here.
@@ -21,8 +21,8 @@ Audited runs: governed runs, one per (``run_id``, ``git_commit``) in
 ``ledger/verdicts.jsonl`` (a promotion can run on a later commit than the
 validation it promotes, so each is judged by its own), and the legacy runs in
 ``research/experiments/runs`` except rows that name a pytest temporary
-directory. An unreadable run meta stops the audit: it cannot be shown to be a
-fixture. A run quarantined only as ``unknown_alpha`` (its
+directory. A run meta that is unreadable, not an object or has no alpha id
+stops the audit: it cannot be shown to be a fixture. A run quarantined only as ``unknown_alpha`` (its
 package is gone) is still audited: a missing mark would hide stale evidence,
 an extra one only flags it. Marks are appended to ``ledger/stale.jsonl``;
 evidence is never edited.
@@ -41,6 +41,7 @@ from typing import Any
 
 import yaml
 
+from hft_platform.alpha._validation_helpers import _dataset_metadata_candidates
 from hft_platform.alpha.evidence import EvidenceWriter
 from hft_platform.alpha.paths import repo_path, repo_root
 from hft_platform.alpha.provenance import file_sha256
@@ -54,8 +55,8 @@ REQUIREMENTS = frozenset({"dataset_dedup"})
 RUN_COMPONENTS = frozenset({"dataset", "verdict", "gate_c.taker", "gate_c.maker"})
 # Legacy rows that are not evidence at all; every other quarantine reason is still audited.
 _NOT_EVIDENCE = frozenset({"pytest_tmp_path"})
-# The converted file the taker runner writes beside its input (hft_native_runner._hftbt_output_path).
-_DERIVED_SUFFIX = "hftbt.npz"
+# The suffix of a hftbacktest file: a primary L2 export, or one the taker runner converted from an input.
+_HFTBT_SUFFIX = "hftbt.npz"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _GIT_TIMEOUT_S = 10.0
 
@@ -161,15 +162,16 @@ def datasets_deduped(datasets: Iterable[tuple[str, str | None]] | None, *, base:
 
     ``datasets`` are the RunStamp's (path, sha256) pairs. Each file must still
     have the recorded sha256 (an export rewritten in place no longer vouches for
-    the run). Each input needs a readable ``<path>.meta.json`` sidecar, and a
-    real one must record a dedup rule; a sidecar whose ``source_type`` is not
-    ``real`` needs none. Only the converted ``hftbt.npz`` beside an input is
-    exempt from the sidecar, and at least one input must be present.
+    the run). Each input needs a readable sidecar, found as Gate A finds it, and
+    unless its ``source_type`` is ``synthetic`` it must record a dedup rule. A
+    ``hftbt.npz`` is an input like any other (an L2 export is one); only one
+    with no sidecar that the taker runner converted from another listed input
+    is exempt. At least one input must be present.
     """
     if datasets is None:
         return False
     base = base if base is not None else repo_root()
-    inputs = 0
+    paths: list[Path] = []
     for raw, digest in datasets:
         data = Path(raw) if Path(raw).is_absolute() else base / raw
         try:
@@ -177,18 +179,42 @@ def datasets_deduped(datasets: Iterable[tuple[str, str | None]] | None, *, base:
                 return False
         except OSError:
             return False
-        if data.name.endswith(_DERIVED_SUFFIX):
+        paths.append(data)
+    converted = _converted_outputs(p for p in paths if not p.name.endswith(_HFTBT_SUFFIX))
+    inputs = 0
+    for data in paths:
+        meta_path = next((m for m in _dataset_metadata_candidates(data) if m.exists()), None)
+        if meta_path is None and data.name.endswith(_HFTBT_SUFFIX) and data.resolve() in converted:
             continue
         inputs += 1
+        if meta_path is None:
+            return False
         try:
-            meta = json.loads(data.with_name(data.name + ".meta.json").read_text(encoding="utf-8"))
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
         if not isinstance(meta, dict):
             return False
-        if meta.get("source_type", "real") == "real" and meta.get("dedup_rule") in (None, "", "unrecorded"):
+        synthetic = str(meta.get("source_type", "")).strip().lower() == "synthetic"
+        if not synthetic and str(meta.get("dedup_rule") or "").strip() in ("", "unrecorded"):
             return False
     return inputs > 0
+
+
+def _converted_outputs(inputs: Iterable[Path]) -> frozenset[Path]:
+    """The hftbt.npz files the taker runner converts these inputs into, or a bundle declares for them."""
+    from research.backtest.hft_native_runner import _declared_bundle_pair, _hftbt_output_path
+
+    out: set[Path] = set()
+    for data in inputs:
+        out.add(_hftbt_output_path(str(data)).resolve())
+        try:
+            declared = _declared_bundle_pair(str(data))
+        except ValueError:
+            declared = None  # a broken bundle declares nothing; its npz then needs a sidecar
+        if declared is not None:
+            out.add(Path(declared).resolve())
+    return frozenset(out)
 
 
 def governed_run_key(event: Mapping[str, Any]) -> str:
