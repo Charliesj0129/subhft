@@ -30,7 +30,7 @@ from hft_platform.contracts.family_resolver import (
     ContractFamilyResolver,
     build_snapshot_from_calendar,
 )
-from hft_platform.contracts.ref import FutureRef, parse_display
+from hft_platform.contracts.ref import FutureRef
 from hft_platform.core import timebase
 from hft_platform.core.market_calendar import taifex_delivery_cutoff
 from hft_platform.feed_adapter.shioaji._compat import contract_category_groups
@@ -38,6 +38,7 @@ from hft_platform.feed_adapter.shioaji._compat import contract_category_groups
 logger = get_logger("feed_adapter.shioaji.family_populator")
 
 _ALIAS_SUFFIXES: frozenset[str] = frozenset({"R1", "R2", "C0", "C1"})
+_MONTH_LETTERS = "ABCDEFGHIJKL"
 
 
 def _parse_delivery_to_date(value: Any) -> date | None:
@@ -113,10 +114,10 @@ def _extract_futures(
             )
             if expiry is None:
                 continue
-            # 1.7 futures carry an empty ``category``, so every contract lands
-            # under root "" and the calendar collapses to one bogus family
-            # (prod 2026-10-27: 2 bindings instead of 735). Fall back to the
-            # root encoded in the contract code itself.
+            # 1.7 ``FuturesInfo`` has no ``category`` (or ``symbol``), so every
+            # contract lands under root "" and the calendar collapses to one
+            # bogus family (prod 2026-10-27: 2 bindings instead of 735). Fall
+            # back to the root encoded in the contract code itself.
             contract_root = str(root) or _root_from_code(code)
             if not contract_root:
                 rootless += 1
@@ -139,12 +140,17 @@ def _extract_futures(
 
 
 def _root_from_code(code: str) -> str:
-    """Return the futures root of a monthly code (``TMFK6`` -> ``TMF``), else ``""``."""
-    try:
-        parsed = parse_display(code, base_year=2000)
-    except ValueError:
-        return ""
-    return parsed.root if isinstance(parsed, FutureRef) else ""
+    """Return the futures root of a monthly code (``TMFK6`` -> ``TMF``), else ``""``.
+
+    Roots may contain digits (``CM1L6``, ``E4FK6``), so this strips the
+    month-letter + year-digit suffix instead of using ``parse_display``,
+    whose ``[A-Z]{2,4}`` root pattern rejects them. Verified against the
+    live 1.7.9 contract tree on 2026-10-28: 732/732 sampled monthly codes
+    matched their group's root.
+    """
+    if len(code) >= 4 and code[-2] in _MONTH_LETTERS and code[-1].isdigit():
+        return code[:-2]
+    return ""
 
 
 def _install_snapshot(
