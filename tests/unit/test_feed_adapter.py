@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
+from tests.unit.shioaji_contracts_helper import mark_contracts_loaded
 
 
 @pytest.fixture
@@ -69,6 +70,7 @@ def test_hft_symbols_expands_front_month_alias(tmp_path, monkeypatch):
 
 
 def test_login_args(client):
+    mark_contracts_loaded(client.api)
     client.login(api_key="K", secret_key="S")
     client.api.login.assert_called()
 

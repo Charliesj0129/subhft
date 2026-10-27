@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.shioaji._compat import wait_contracts_ready
 from hft_platform.feed_adapter.shioaji._infra import (
     SDKBusyError,
     acquire_login_slot,
@@ -79,11 +80,10 @@ def classify_login_failure(error: str | None) -> str:
 def _login_timeout_for(c: Any, *, fetch_contract: bool) -> float:
     """Return the login timeout budget for this attempt.
 
-    Fetching contracts adds the contract download and parse on top of the login
-    handshake — ``contracts_timeout`` alone defaults to 10 s — so it gets a
-    separate, longer budget. The no-contract fallback does none of that work and
-    keeps the tight ``login_timeout_s``, so a genuinely wedged login is still
-    caught quickly.
+    A connection that loads contracts gets the longer budget: shioaji 1.5's
+    ``login()`` downloads and parses them inside the call. A quote-only
+    connection keeps the tight ``login_timeout_s``, so a genuinely wedged login
+    is still caught quickly.
     """
     if not fetch_contract:
         return client_float(c, "_login_timeout_s", 20.0)
@@ -212,6 +212,37 @@ class SessionRuntime:
                 return True
         return False
 
+    def _await_contracts(self, contracts_cb: Any = None) -> tuple[bool, float, bool]:
+        """Wait up to ``_login_contract_timeout_s`` for the contracts login loads.
+
+        ``fetch_contracts`` is asked for at most once, half-way through the
+        budget and only if nothing has resolved, and goes through the
+        InflightGuard like every other SDK call.
+        """
+        c = self._client
+        budget_s = client_float(c, "_login_contract_timeout_s", 60.0)
+
+        def _fetch() -> None:
+            start_ns = time.perf_counter_ns()
+            ok, _, err, timed_out = c._safe_call_with_timeout(
+                "fetch_contracts",
+                lambda: c.api.fetch_contracts(
+                    contract_download=False,
+                    contracts_timeout=c.contracts_timeout,
+                    contracts_cb=contracts_cb,
+                ),
+                budget_s / 2,
+            )
+            c._record_api_latency("fetch_contracts", start_ns, ok=ok)
+            if not ok:
+                logger.warning(
+                    "Contract fetch after login failed; still waiting for the login load",
+                    timeout=timed_out,
+                    error=scrub_broker_error(err) if err is not None else "unknown",
+                )
+
+        return wait_contracts_ready(c.api, timeout_s=budget_s, fetch_after_s=budget_s / 2, fetch=_fetch)
+
     def login_with_retry(
         self,
         api_key: str | None = None,
@@ -220,7 +251,7 @@ class SessionRuntime:
         ca_passwd: str | None = None,
         contracts_cb: Any = None,
     ) -> bool:
-        """Full login sequence with retry, CA activation, and contract fetch fallback.
+        """Full login sequence with retry, CA activation, and a wait for contracts.
 
         Extracted from ShioajiClient.login() — all state reads/writes go through
         self._client to maintain a single source of truth.
@@ -242,12 +273,6 @@ class SessionRuntime:
                 return False
             c._ensure_session_lock()
             logger.info("Using API Key/Secret for login")
-            fallback_enabled = os.getenv("HFT_LOGIN_FETCH_CONTRACT_FALLBACK", "1").lower() not in {
-                "0",
-                "false",
-                "no",
-                "off",
-            }
             attempts_total = max(1, c._login_retry_max + 1)
             # ``attempts_total`` is the ladder's *budget*. The ladder also has
             # two paths that stop early on purpose, so the budget is not what
@@ -255,32 +280,27 @@ class SessionRuntime:
             attempts_made = 0
             deferred_reason: str | None = None
 
-            def _do_login(fetch_contract: bool) -> None:
-                # shioaji 1.7.0 removed ``fetch_contract``/``contracts_timeout``/
-                # ``contracts_cb`` from ``login()``; contract loading is now the
-                # caller's explicit ``fetch_contracts`` call. Both stay inside one
-                # guarded call so a failed contract load still takes the
-                # no-contract fallback below exactly as the 1.5 login did.
+            def _do_login() -> None:
+                # Login only. From shioaji 1.7 ``login()`` starts loading
+                # contracts itself, and an explicit ``fetch_contracts`` issued
+                # meanwhile fails at once with "exclusive access lost" (live
+                # probe 2026-10-27). Bundling the two made every login look
+                # failed and sent it down a no-contract fallback that logged in
+                # a second time on the same session. Contracts are awaited
+                # after a successful login instead; see _await_contracts.
                 c.api.login(
                     api_key=key,
                     secret_key=secret,
                     subscribe_trade=c.subscribe_trade,
                 )
-                if fetch_contract:
-                    c.api.fetch_contracts(
-                        contract_download=False,
-                        contracts_timeout=c.contracts_timeout,
-                        contracts_cb=contracts_cb,
-                    )
 
             for attempt in range(1, attempts_total + 1):
                 attempts_made = attempt
-                login_fetch_contract = c.fetch_contract
                 start_ns = time.perf_counter_ns()
                 ok, _, err, timed_out = c._safe_call_with_timeout(
                     "login",
-                    lambda: _do_login(login_fetch_contract),
-                    _login_timeout_for(c, fetch_contract=login_fetch_contract),
+                    _do_login,
+                    _login_timeout_for(c, fetch_contract=c.fetch_contract),
                 )
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
@@ -296,7 +316,7 @@ class SessionRuntime:
                     #                   an abandoned call of ours.
                     #
                     # Only the first was handled, so the second fell through to
-                    # the no-contract fallback and both retries — all re-entering
+                    # the (since removed) no-contract fallback and both retries — all re-entering
                     # the same busy object and failing instantly. Observed
                     # 2026-07-30 04:12 CST: every facade's solace session dropped
                     # at once, the SDK went busy inside its own reconnect, and the
@@ -318,92 +338,54 @@ class SessionRuntime:
                         )
                         deferred_reason = "broker_connection_limit"
                         break
-                    if login_fetch_contract and fallback_enabled:
-                        logger.warning(
-                            "Login failed with contract fetch; retrying without contracts",
-                            attempt=attempt,
-                            timeout=timed_out,
-                            error=c._last_login_error,
-                        )
-                        start_ns = time.perf_counter_ns()
-                        ok_fb, _, err_fb, timed_out_fb = c._safe_call_with_timeout(
-                            "login_fallback",
-                            lambda: _do_login(False),
-                            _login_timeout_for(c, fetch_contract=False),
-                        )
-                        c._record_api_latency("login", start_ns, ok=ok_fb)
-                        if ok_fb:
-                            login_fetch_contract = False
-                            # NOTE: do NOT mutate c.fetch_contract here.
-                            # The local flag `login_fetch_contract` is enough to track
-                            # that this attempt skipped contract fetch.  Mutating the
-                            # persistent c.fetch_contract to False would prevent the
-                            # post-login _ensure_contracts() call at line 196 from
-                            # running, leaving contracts_ready=False permanently.
-                            ok = True
-                        else:
-                            c._last_login_error = scrub_broker_error(err_fb) if err_fb is not None else "unknown"
-                            logger.error(
-                                "Login fallback (no-contract) failed",
-                                attempt=attempt,
-                                timeout=timed_out_fb,
-                                error=c._last_login_error,
-                            )
-                    else:
-                        logger.error(
-                            "Login attempt failed",
-                            attempt=attempt,
-                            timeout=timed_out,
-                            error=c._last_login_error,
-                        )
+                    logger.error(
+                        "Login attempt failed",
+                        attempt=attempt,
+                        timeout=timed_out,
+                        error=c._last_login_error,
+                    )
 
                 if ok:
                     logger.info("Login successful (API Key)", attempt=attempt)
-                    if login_fetch_contract:
-                        # The only contract load on this platform that actually
-                        # works. ``fetch_contracts`` on a logged-in facade fails
-                        # 100% of the time on shioaji 1.5.6 — its Rust ``_core``
-                        # wants exclusive ownership and our 74 live
-                        # subscriptions hold references for the whole session —
-                        # so the hourly refresh never writes the cache and
-                        # ``contract_cache_last_success_ts`` sat at 0.0 forever,
-                        # which in turn made a staleness alert unable to fire.
-                        # Login-time freshness is real freshness; record it.
-                        #
-                        # Deliberately keyed on ``login_fetch_contract``, NOT on
-                        # ``contracts_ready`` — the latter is
-                        # ``hasattr(api, "Contracts")``, always True once logged
-                        # in, and trusting it is the original bug.
-                        try:
-                            gauge = getattr(c.metrics, "contract_cache_last_success_ts", None) if c.metrics else None
-                            if gauge is not None:
-                                gauge.set(timebase.now_s())
-                        except Exception as exc:  # a metric must never break login
-                            logger.debug("operation_fallback", error=str(exc))
-                    if not login_fetch_contract and c.fetch_contract:
-                        c._ensure_contracts()
-                    # Verify contracts regardless of which login path was used.
-                    contracts_ok = c.contracts_ready
-                    c._contracts_ready = contracts_ok
-                    if contracts_ok:
-                        logger.info("Contracts loaded", ready=True)
-                    elif c.fetch_contract:
-                        # This connection was configured to fetch contracts but
-                        # contracts_ready is still False — orders will be blocked.
-                        logger.error(
-                            "Contracts not available after login — order placement will be blocked",
-                            fetch_contract_attempted=login_fetch_contract,
-                            ready=False,
-                        )
+                    if c.fetch_contract:
+                        contracts_ok, elapsed_s, fetched = self._await_contracts(contracts_cb)
+                        c._contracts_ready = contracts_ok
+                        if contracts_ok:
+                            # Login-time freshness is the only contract load on
+                            # this platform that works: the hourly
+                            # ``fetch_contracts`` fails on a subscribed facade,
+                            # so this is what keeps
+                            # ``contract_cache_last_success_ts`` honest. It is
+                            # keyed on contracts that actually resolve, never on
+                            # ``contracts_ready`` (``hasattr(api, "Contracts")``,
+                            # always True once logged in).
+                            try:
+                                gauge = (
+                                    getattr(c.metrics, "contract_cache_last_success_ts", None) if c.metrics else None
+                                )
+                                if gauge is not None:
+                                    gauge.set(timebase.now_s())
+                            except Exception as exc:  # a metric must never break login
+                                logger.debug("operation_fallback", error=str(exc))
+                            logger.info("Contracts loaded", ready=True, elapsed_s=round(elapsed_s, 2), fetched=fetched)
+                        else:
+                            # Configured to load contracts and none resolved in
+                            # the budget -- orders will be blocked. Not a login
+                            # failure: logging in again cannot load them faster.
+                            logger.error(
+                                "Contracts not available after login — order placement will be blocked",
+                                elapsed_s=round(elapsed_s, 2),
+                                fetched=fetched,
+                                ready=False,
+                            )
                     else:
+                        c._contracts_ready = c.contracts_ready
                         # Quote-only connection (fetch_contract=False): contracts are
-                        # intentionally not fetched (e.g. QuoteConnectionPool group_id>0
+                        # intentionally not awaited (e.g. QuoteConnectionPool group_id>0
                         # skips contracts to save ~27 MB per connection).
-                        # contracts_ready=False is expected here — not an error.
                         logger.debug(
                             "Contracts not fetched (quote-only connection)",
                             fetch_contract_configured=False,
-                            ready=False,
                         )
                     if c.activate_ca:
                         if not pid:

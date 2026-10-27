@@ -14,6 +14,7 @@ from hft_platform.feed_adapter.shioaji.session_runtime import (
     SessionRuntime,
     SessionStateSnapshot,
 )
+from tests.unit.shioaji_contracts_helper import FakeClock, Sdk179ContractsApi, mark_contracts_loaded
 
 # ------------------------------------------------------------------ #
 # Phase-1 delegation tests (existing)
@@ -91,7 +92,7 @@ def test_login_with_retry_sdk_unavailable_with_key_returns_false():
 def test_login_with_retry_success_sets_logged_in():
     """Successful login sets client.logged_in = True."""
     client = MagicMock()
-    client.api = MagicMock()
+    client.api = mark_contracts_loaded(MagicMock())
     client._login_retry_max = 0
     client._login_timeout_s = 5.0
     client.fetch_contract = True
@@ -741,7 +742,7 @@ def test_session_refresh_passes_configured_stagger_settings_to_slot():
 
 def _login_client(**overrides):
     client = MagicMock()
-    client.api = MagicMock()
+    client.api = mark_contracts_loaded(MagicMock())
     client._login_retry_max = 1
     client._login_timeout_s = 20.0
     client._login_contract_timeout_s = 60.0
@@ -835,8 +836,12 @@ def test_login_skips_fallback_when_the_sdk_itself_reports_already_borrowed():
     assert ops == ["login"], f"expected one attempt and no fallback, got {ops}"
 
 
-def test_login_still_falls_back_for_a_failure_that_is_not_sdk_busy():
-    """The busy check must not swallow ordinary failures the fallback can fix."""
+def test_login_retries_login_without_a_fallback_for_a_failure_that_is_not_sdk_busy():
+    """The busy check must not swallow ordinary failures: the ladder still retries.
+
+    There is no no-contract fallback any more: login no longer loads contracts,
+    so a login failure is retried as a login, never re-tried "without contracts".
+    """
     client = _login_client()
     client._safe_call_with_timeout.return_value = (
         False,
@@ -848,7 +853,7 @@ def test_login_still_falls_back_for_a_failure_that_is_not_sdk_busy():
     assert SessionRuntime(client).login_with_retry(api_key="k", secret_key="s") is False
 
     ops = [call[0][0] for call in client._safe_call_with_timeout.call_args_list]
-    assert "login_fallback" in ops, f"expected the no-contract fallback to run, got {ops}"
+    assert ops == ["login", "login"], f"expected the two ladder attempts and nothing else, got {ops}"
 
 
 def test_login_records_contract_freshness_when_login_fetched_contracts():
@@ -1031,6 +1036,7 @@ class _Sdk179Api:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
+        mark_contracts_loaded(SimpleNamespace(Contracts=self))
 
     def login(self, api_key, secret_key, subscribe_trade=True, receive_window=30000, force_refresh=False):
         self.calls.append(("login", {"subscribe_trade": subscribe_trade}))
@@ -1038,6 +1044,10 @@ class _Sdk179Api:
 
     def fetch_contracts(self, contract_download=False, contracts_timeout=30000, contracts_cb=None):
         self.calls.append(("fetch_contracts", {"contract_download": contract_download, "timeout": contracts_timeout}))
+
+    @property
+    def Contracts(self):  # noqa: N802 - SDK attribute name
+        return self
 
 
 def _run_login_inline(client):
@@ -1052,13 +1062,13 @@ def _run_login_inline(client):
     return SessionRuntime(client).login_with_retry(api_key="k", secret_key="s")
 
 
-def test_login_on_the_1_7_sdk_loads_contracts_through_fetch_contracts():
+def test_login_on_the_1_7_sdk_calls_login_alone_when_contracts_are_already_loaded():
     client = _login_client(contracts_timeout=10000)
     client.api = _Sdk179Api()
 
     assert _run_login_inline(client) is True
-    assert [name for name, _ in client.api.calls][:2] == ["login", "fetch_contracts"]
-    assert client.api.calls[1][1] == {"contract_download": False, "timeout": 10000}
+    assert [name for name, _ in client.api.calls] == ["login"]
+    assert client._contracts_ready is True
 
 
 def test_login_on_the_1_7_sdk_skips_fetch_contracts_for_a_quote_only_connection():
@@ -1067,3 +1077,63 @@ def test_login_on_the_1_7_sdk_skips_fetch_contracts_for_a_quote_only_connection(
 
     assert _run_login_inline(client) is True
     assert [name for name, _ in client.api.calls] == ["login"]
+
+
+def _login_on_179(load_at_s: float, metrics=None):
+    """Log in against the 1.7.9 contract-load timing on a fake clock."""
+    clock = FakeClock()
+    api = Sdk179ContractsApi(clock, load_at_s=load_at_s)
+    client = _login_client(contracts_timeout=10000, metrics=metrics)
+    client.api = api
+    real_wait = session_runtime_mod.wait_contracts_ready
+
+    def _wait(*args, **kwargs):
+        return real_wait(*args, clock=clock, sleep=clock.sleep, **kwargs)
+
+    with patch.object(session_runtime_mod, "wait_contracts_ready", _wait):
+        ok = _run_login_inline(client)
+    return ok, client, api, clock
+
+
+def test_login_does_not_relogin_when_fetch_contracts_loses_exclusive_access():
+    """1.7.9: ``fetch_contracts`` during the login's own load is refused at once.
+
+    Live probe 2026-10-27: login ok in 463 ms, then "exclusive access lost" in
+    0.0 ms. Bundled with login, that failure sent all five sessions down a
+    no-contract fallback that called ``login()`` again on the logged-in object.
+    """
+    ok, client, api, _clock = _login_on_179(load_at_s=40.0)
+
+    assert ok is True
+    assert api.calls.count("login") == 1, api.calls
+    assert api.calls.count("fetch_contracts") == 1, api.calls
+    assert client._contracts_ready is True
+    ops = [call[0][0] for call in client._safe_call_with_timeout.call_args_list]
+    assert ops == ["login", "fetch_contracts"], ops
+
+
+def test_login_waits_for_contracts_to_resolve_without_fetching():
+    gauge = MagicMock()
+    metrics = MagicMock()
+    metrics.contract_cache_last_success_ts = gauge
+    ok, client, api, clock = _login_on_179(load_at_s=0.4, metrics=metrics)
+
+    assert ok is True
+    assert api.calls == ["login"]
+    assert client._contracts_ready is True
+    assert 0.4 <= clock.now < 1.0
+    assert gauge.set.call_count == 1
+
+
+def test_login_reports_contracts_unavailable_without_relogin_when_never_resolved():
+    gauge = MagicMock()
+    metrics = MagicMock()
+    metrics.contract_cache_last_success_ts = gauge
+    ok, client, api, clock = _login_on_179(load_at_s=float("inf"), metrics=metrics)
+
+    assert ok is True  # the session is up; only order placement is blocked
+    assert client.logged_in is True
+    assert client._contracts_ready is False
+    assert api.calls == ["login", "fetch_contracts"]
+    assert clock.now >= 60.0
+    gauge.set.assert_not_called()

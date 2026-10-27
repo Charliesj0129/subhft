@@ -11,7 +11,7 @@ from typing import Any
 
 from structlog import get_logger
 
-from hft_platform.feed_adapter.shioaji._compat import iter_contract_category
+from hft_platform.feed_adapter.shioaji._compat import iter_contract_category, wait_contracts_ready
 
 logger = get_logger("feed_adapter.contract_fetcher")
 
@@ -19,6 +19,8 @@ try:
     import shioaji as sj
 except ImportError:
     sj = None
+
+_CONTRACTS_WAIT_S = 60.0
 
 
 def _login_shioaji() -> Any:
@@ -31,7 +33,17 @@ def _login_shioaji() -> Any:
         raise RuntimeError("SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY env vars required")
     api = sj.Shioaji(simulation=True)
     api.login(api_key=api_key, secret_key=secret_key)
-    api.fetch_contracts(contracts_timeout=60000)
+    # From shioaji 1.7 login() loads contracts itself, and a fetch_contracts
+    # issued meanwhile fails at once with "exclusive access lost". Wait for the
+    # login's load; fetch only if nothing has arrived half-way through.
+    ready, elapsed_s, fetched = wait_contracts_ready(
+        api,
+        timeout_s=_CONTRACTS_WAIT_S,
+        fetch_after_s=_CONTRACTS_WAIT_S / 2,
+        fetch=lambda: api.fetch_contracts(contracts_timeout=int(_CONTRACTS_WAIT_S / 2 * 1000)),
+    )
+    if not ready:
+        raise RuntimeError(f"contracts not loaded {elapsed_s:.0f}s after login (fetch attempted={fetched})")
     return api
 
 
