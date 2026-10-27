@@ -302,3 +302,27 @@ def test_populator_binds_families_when_sdk_groups_raise_keyerror_on_getattr() ->
 
     assert count == 2
     assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).expiry.month == 5
+
+
+def test_populator_derives_roots_from_codes_when_sdk_category_is_empty() -> None:
+    # Prod 2026-10-27 on 1.7.9: every future had category "", so all contracts
+    # pooled under root "" and only 2 bogus bindings were installed (1.5.6: 735).
+    def _c(code: str, delivery_date: str) -> SimpleNamespace:
+        obj = _mock_contract(code, delivery_date=delivery_date)
+        obj.category = ""
+        return obj
+
+    futures = _Rust17Category(
+        [
+            _Rust17Group([_c("TMFE6", "2026/05/21"), _c("TMFF6", "2026/06/17"), _c("TMFR1", "2026/05/21")]),
+            _Rust17Group([_c("TXFE6", "2026/05/21"), _c("TXFF6", "2026/06/17")]),
+        ]
+    )
+    api = SimpleNamespace(Contracts=SimpleNamespace(Futures=futures))
+    resolver = ContractFamilyResolver()
+
+    count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+    assert count == 4
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).display() == "TMFE6"
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TXF", FamilyCode.R2)).display() == "TXFF6"

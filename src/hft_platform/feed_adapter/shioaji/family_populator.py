@@ -30,7 +30,7 @@ from hft_platform.contracts.family_resolver import (
     ContractFamilyResolver,
     build_snapshot_from_calendar,
 )
-from hft_platform.contracts.ref import FutureRef
+from hft_platform.contracts.ref import FutureRef, parse_display
 from hft_platform.core import timebase
 from hft_platform.core.market_calendar import taifex_delivery_cutoff
 from hft_platform.feed_adapter.shioaji._compat import contract_category_groups
@@ -101,8 +101,8 @@ def _extract_futures(
 
     out: dict[str, list[FutureRef]] = {}
     native_hints: dict[str, object] = {}
+    rootless = 0
     for root, contract_list in groups.items():
-        refs: list[FutureRef] = []
         for contract in contract_list:
             code = str(getattr(contract, "code", "") or "")
             suffix = code[-2:] if len(code) >= 4 else ""
@@ -113,8 +113,16 @@ def _extract_futures(
             )
             if expiry is None:
                 continue
-            ref = FutureRef(root=str(root), expiry=expiry)
-            refs.append(ref)
+            # 1.7 futures carry an empty ``category``, so every contract lands
+            # under root "" and the calendar collapses to one bogus family
+            # (prod 2026-10-27: 2 bindings instead of 735). Fall back to the
+            # root encoded in the contract code itself.
+            contract_root = str(root) or _root_from_code(code)
+            if not contract_root:
+                rootless += 1
+                continue
+            ref = FutureRef(root=contract_root, expiry=expiry)
+            out.setdefault(contract_root, []).append(ref)
             # native_hint key is the canonical display form. A later
             # ``FutureRef`` rebound to R1 keeps the same display string,
             # so OrderAdapter can look the Contract up via ``ref.display()``
@@ -125,9 +133,18 @@ def _extract_futures(
             # from our canonical form).
             if code:
                 native_hints.setdefault(code, contract)
-        if refs:
-            out[str(root)] = refs
+    if rootless:
+        logger.warning("shioaji_family_populator_rootless_contracts", count=rootless)
     return out, native_hints
+
+
+def _root_from_code(code: str) -> str:
+    """Return the futures root of a monthly code (``TMFK6`` -> ``TMF``), else ``""``."""
+    try:
+        parsed = parse_display(code, base_year=2000)
+    except ValueError:
+        return ""
+    return parsed.root if isinstance(parsed, FutureRef) else ""
 
 
 def _install_snapshot(
