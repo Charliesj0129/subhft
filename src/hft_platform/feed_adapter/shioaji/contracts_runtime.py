@@ -13,7 +13,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.background_tasks import spawn_retained
-from hft_platform.feed_adapter.shioaji._compat import iter_contract_category
+from hft_platform.feed_adapter.shioaji._compat import is_leaf_contract, contract_member, iter_contract_category
 from hft_platform.feed_adapter.shioaji._infra import (
     acquire_login_slot,
     client_float,
@@ -520,16 +520,16 @@ class ContractsRuntime:
 
         if prod in {"index", "idx"} or exch in {"IDX", "INDEX"}:
             idx_exch = exch if exch in {"TSE", "OTC"} else self._client.index_exchange
-            idx_group = getattr(self._client.api.Contracts.Indexs, idx_exch, None)
+            idx_group = contract_member(self._client.api.Contracts.Indexs, idx_exch)
             return self._lookup_contract(
                 idx_group, code, allow_symbol_fallback=self._client.allow_symbol_fallback, label="index"
             )
 
         if prod in {"stock", "stk"} or exch in {"TSE", "OTC", "OES"}:
             stocks = getattr(self._client.api.Contracts, "Stocks", None)
-            tse_group = getattr(stocks, "TSE", None) if stocks is not None else None
-            otc_group = getattr(stocks, "OTC", None) if stocks is not None else None
-            oes_group = getattr(stocks, "OES", None) if stocks is not None else None
+            tse_group = contract_member(stocks, "TSE")
+            otc_group = contract_member(stocks, "OTC")
+            oes_group = contract_member(stocks, "OES")
             if isinstance(stocks, dict):
                 tse_group = stocks.get("TSE", tse_group)
                 otc_group = stocks.get("OTC", otc_group)
@@ -581,9 +581,9 @@ class ContractsRuntime:
             # R1/R2 continuous contract alias (e.g. TXFR1 → Contracts.Futures.TXF.TXFR1)
             if len(raw_code) >= 4 and raw_code[-2:] in ("R1", "R2"):
                 root = raw_code[:-2]
-                root_group = getattr(self._client.api.Contracts.Futures, root, None)
+                root_group = contract_member(self._client.api.Contracts.Futures, root)
                 if root_group is not None:
-                    r_contract = getattr(root_group, raw_code, None)
+                    r_contract = contract_member(root_group, raw_code)
                     if r_contract is not None:
                         return r_contract
 
@@ -592,9 +592,9 @@ class ContractsRuntime:
             # may miss them if the container isn't dict-like at the root.
             if len(raw_code) >= 5 and raw_code[-1].isdigit() and raw_code[-2].isalpha():
                 root = raw_code[:-2]
-                root_group = getattr(self._client.api.Contracts.Futures, root, None)
+                root_group = contract_member(self._client.api.Contracts.Futures, root)
                 if root_group is not None:
-                    direct = getattr(root_group, raw_code, None)
+                    direct = contract_member(root_group, raw_code)
                     if direct is not None:
                         return direct
 
@@ -675,7 +675,7 @@ class ContractsRuntime:
             for item in iterable:
                 yield item
                 try:
-                    if hasattr(item, "__iter__") and not hasattr(item, "code"):
+                    if hasattr(item, "__iter__") and not is_leaf_contract(item):
                         for sub in item:
                             yield sub
                 except Exception as exc:

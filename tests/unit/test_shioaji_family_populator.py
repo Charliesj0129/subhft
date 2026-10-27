@@ -260,3 +260,45 @@ class TestPopulator:
         assert len(hook_events) > first_round
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         assert resolver.resolve_family(fam_r1).display() == "TMFF6"
+
+
+class _Rust17Group:
+    """shioaji 1.7.x ``ContractGroup``: ``__getattr__`` raises ``KeyError``."""
+
+    def __init__(self, contracts: list) -> None:
+        self._contracts = contracts
+
+    def __getattr__(self, name: str):
+        raise KeyError(name)
+
+    def __iter__(self):
+        return iter(self.__dict__["_contracts"])
+
+
+class _Rust17Category:
+    """shioaji 1.7.x ``ContractCategory``: any attribute is a group; iterates groups."""
+
+    def __init__(self, groups: list) -> None:
+        self._groups = groups
+
+    def __getattr__(self, name: str):
+        return _Rust17Group([])
+
+    def __iter__(self):
+        return iter(self.__dict__["_groups"])
+
+
+def test_populator_binds_families_when_sdk_groups_raise_keyerror_on_getattr() -> None:
+    def _c(code: str, delivery_date: str) -> SimpleNamespace:
+        obj = _mock_contract(code, delivery_date=delivery_date)
+        obj.category = "TMF"
+        return obj
+
+    futures = _Rust17Category([_Rust17Group([_c("TMFE6", "2026/05/21"), _c("TMFF6", "2026/06/17")])])
+    api = SimpleNamespace(Contracts=SimpleNamespace(Futures=futures))
+    resolver = ContractFamilyResolver()
+
+    count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+    assert count == 2
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).expiry.month == 5

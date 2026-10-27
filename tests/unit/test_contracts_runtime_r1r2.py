@@ -77,3 +77,66 @@ def test_get_contract_ensures_contracts_when_api_lacks_contracts():
 
     client._ensure_contracts.assert_called_once_with()
     assert resolved is contract
+
+
+class _Rust17Group:
+    """shioaji 1.7.x ``ContractGroup``: attribute access is a code lookup that
+    raises ``KeyError`` on a miss."""
+
+    def __init__(self, contracts):
+        self._by_code = {c.code: c for c in contracts}
+
+    def __getattr__(self, name):
+        try:
+            return self.__dict__["_by_code"][name]
+        except KeyError:
+            raise KeyError(name) from None
+
+    def __getitem__(self, code):
+        return self.__dict__["_by_code"][code]
+
+    def __iter__(self):
+        return iter(self.__dict__["_by_code"].values())
+
+
+class _Rust17Category:
+    """shioaji 1.7.x ``ContractCategory``: any attribute is a (possibly empty)
+    group; ``[code]`` raises ``KeyError`` on a miss; iteration yields groups."""
+
+    def __init__(self, groups):
+        self._groups = groups
+
+    def __getattr__(self, name):
+        return self.__dict__["_groups"].get(name, _Rust17Group([]))
+
+    def __getitem__(self, code):
+        for group in self.__dict__["_groups"].values():
+            if code in group.__dict__["_by_code"]:
+                return group[code]
+        raise KeyError(code)
+
+    def __iter__(self):
+        return iter(self.__dict__["_groups"].values())
+
+
+def _rust17_runtime():
+    client = MagicMock()
+    client.allow_symbol_fallback = False
+    tmfr1 = MagicMock(name="TMFR1_contract")
+    tmfr1.code = "TMFR1"
+    tmfk6 = MagicMock(name="TMFK6_contract")
+    tmfk6.code = "TMFK6"
+    client.api.Contracts.Futures = _Rust17Category({"TMF": _Rust17Group([tmfr1, tmfk6])})
+    return ContractsRuntime(client), tmfr1, tmfk6
+
+
+def test_get_contract_returns_none_for_missing_code_when_sdk_group_raises_keyerror():
+    runtime, _, _ = _rust17_runtime()
+    assert runtime._get_contract("FUT", "TMFJ6", product_type="future") is None
+    assert runtime._get_contract("FUT", "ZZZR1", product_type="future") is None
+
+
+def test_get_contract_resolves_codes_when_sdk_group_raises_keyerror():
+    runtime, tmfr1, tmfk6 = _rust17_runtime()
+    assert runtime._get_contract("FUT", "TMFR1", product_type="future") is tmfr1
+    assert runtime._get_contract("FUT", "TMFK6", product_type="future") is tmfk6
