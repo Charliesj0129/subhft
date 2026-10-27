@@ -21,6 +21,9 @@ differences here.
   manifest declares. `python -m research status` shows it with run counts from
   both roots; `research/experiments/**` is read only through
   `research/registry/legacy_evidence.py`, which quarantines test-fixture rows.
+- A defect that changed research results goes into `config/research/defects.yaml`
+  (fix commit + components); `python -m research evidence audit-stale` then marks
+  the affected runs in `ledger/stale.jsonl`. Marks flag evidence, never a status.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.

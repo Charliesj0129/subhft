@@ -122,6 +122,7 @@ ledger stops both commands (rc 2). Triage runs
 ```bash
 python -m research evidence init            # layout + local git init (no remote)
 python -m research evidence import-kills    # archive pre-ledger kills; --dry-run, --from jsonl
+python -m research evidence audit-stale     # mark runs a registered defect affects; --dry-run, --json
 python -m research status [--alpha ID] [--json]
 ```
 
@@ -135,6 +136,18 @@ never deleted. `import-kills` copies `_kill_ledger.jsonl` and ClickHouse
 `audit.alpha_kill_ledger` (365-day TTL) into `legacy/kills.jsonl`; those kills
 never derive a status, because they predate verdict rules v1. A ClickHouse
 failure stops the import (rc 2) unless `--from jsonl`.
+
+Stale results are computed from `config/research/defects.yaml`, which names each
+defect by its fix commit and the components it touched. `audit-stale` appends
+one mark per (run, defect) to `ledger/stale.jsonl` when the run carries one of
+those components and its commit does not contain the fix, it recorded no
+commit, or the defect is still open; a dataset defect also needs every real
+dataset's sidecar to record a dedup rule. It audits governed runs from the
+ledger and every legacy run except pytest fixtures. Marks never change a status
+and never edit evidence; `status` shows `stale_runs` and flags an alpha whose
+status rests on a marked event (`status_on_stale_run`). The audit needs full
+git history (rc 2 when a fix commit is missing). Add a defect when it is fixed
+or found, then rerun the audit.
 
 ### VM-UL6 strict profile (institutional/near-live strictness)
 
