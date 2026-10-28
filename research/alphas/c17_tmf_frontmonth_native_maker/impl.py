@@ -344,6 +344,10 @@ class C17Alpha:
     def maker(self) -> TmfFrontMonthMaker:
         return self._maker
 
+    def create_maker_strategy(self) -> TmfFrontMonthMaker:
+        """The MakerStrategy maker Gate C runs; this wrapper itself has no ``on_tick``."""
+        return self._maker
+
     def update(self, *args: object, **kwargs: object) -> float:
         return self._last_signal
 

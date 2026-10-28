@@ -21,6 +21,9 @@ differences here.
   manifest declares. `python -m research status` shows it with run counts from
   both roots; `research/experiments/**` is read only through
   `research/registry/legacy_evidence.py`, which quarantines test-fixture rows.
+- Pre-registered protocols (`config/research/protocols/*.yaml`, e.g. the maker
+  roll rule) are frozen once a run has used them: add a new version, never
+  edit one; runs record the protocol sha256.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.
