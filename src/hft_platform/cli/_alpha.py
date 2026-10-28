@@ -797,6 +797,8 @@ def cmd_alpha_promote(args: argparse.Namespace) -> None:
         max_execution_reject_rate=float(args.max_execution_reject_rate),
         require_paper_trade_governance=bool(getattr(args, "require_paper_trade_governance", False)),
         paper_trade_summary_path=(getattr(args, "paper_trade_summary", None) or None),
+        replay_parity_report_paths=tuple(str(p) for p in (getattr(args, "replay_parity_report", None) or [])),
+        replay_strategy_id=(getattr(args, "replay_strategy_id", None) or None),
         min_paper_trade_calendar_days=int(getattr(args, "min_paper_trade_calendar_days", 7)),
         min_paper_trade_trading_days=int(getattr(args, "min_paper_trade_trading_days", 5)),
         min_paper_trade_session_minutes=int(getattr(args, "min_paper_trade_session_minutes", 30)),
@@ -950,6 +952,9 @@ def cmd_alpha_canary_evaluate(args: argparse.Namespace) -> None:
     }
     if args.sharpe_live is not None:
         live_metrics["sharpe_live"] = float(args.sharpe_live)
+    reports = [str(p) for p in (getattr(args, "replay_parity_report", None) or [])]
+    if reports:
+        live_metrics["replay_parity_reports"] = reports
 
     status = monitor.evaluate(args.alpha_id, live_metrics)
     payload = status.to_dict()

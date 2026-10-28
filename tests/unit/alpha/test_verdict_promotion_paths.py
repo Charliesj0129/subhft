@@ -320,7 +320,9 @@ def _promote_deferred(tmp_path: Path) -> object:
 def test_deferred_parity_obligation_reaches_the_canary_config_and_blocks_graduation(tmp_path: Path, ledger: Path):
     result = _promote_deferred(tmp_path)
     assert result.approved is True
-    expected = [{"gate": "replay_parity_audit", "stage": "shadow_exit", "min_match_pct": 95.0}]
+    expected = [
+        {"gate": "replay_parity_audit", "stage": "shadow_exit", "min_match_pct": 95.0, "strategy_id": "alpha_v"}
+    ]
     assert json.loads(Path(result.promotion_decision_path).read_text())["obligations"] == expected
     promo_path = Path(result.promotion_config_path)
     canary_yaml = yaml.safe_load(promo_path.read_text())
@@ -335,9 +337,10 @@ def test_deferred_parity_obligation_reaches_the_canary_config_and_blocks_graduat
     live["sharpe_live"] = 10.0
     held = monitor.evaluate("alpha_v", live)
     assert held.state == "canary"
-    assert held.checks["unmet_obligations"] == ["replay_parity_audit: no replay parity evidence"]
-    assert monitor.evaluate("alpha_v", {**live, "replay_parity_match_pct": 94.9}).state == "canary"
-    assert monitor.evaluate("alpha_v", {**live, "replay_parity_match_pct": 96.0}).state == "graduated"
+    assert held.checks["unmet_obligations"] == ["replay_parity_audit: no replay parity report"]
+    # A typed-in percentage is not evidence; only replay reports are
+    # (tests/unit/alpha/test_shadow_exit_parity.py).
+    assert monitor.evaluate("alpha_v", {**live, "replay_parity_match_pct": 99.0}).state == "canary"
 
 
 @pytest.mark.parametrize(

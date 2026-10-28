@@ -27,6 +27,7 @@ from uuid import uuid4
 import structlog
 import yaml
 
+from hft_platform.alpha import shadow_parity
 from hft_platform.alpha.evidence import EvidenceWriter, GovernedRunRefused, RunMode, is_sealed, require_governed
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, derive_verdict, resolve_outcome
 from hft_platform.alpha.provenance import file_sha256, git_state
@@ -79,6 +80,13 @@ class PromotionConfig:
     # ``scorecard.replay_parity.match_pct``; missing or below-threshold values
     # fail closed (see _evaluate_gate_d).
     min_replay_parity_match_pct: float = 95.0
+    # ADR-003: ``report.json`` files written by ``hft run --mode replay``. A
+    # replay_parity obligation deferred to Shadow exit can be certified at
+    # Gate E by these (``alpha/shadow_parity.py``); without them it stays owed
+    # and holds the canary. ``replay_strategy_id`` is the runtime strategy id
+    # the reports must name (default: ``alpha_id``).
+    replay_parity_report_paths: tuple[str, ...] = ()
+    replay_strategy_id: str | None = None
     # Slice B Task 12: belt-and-suspenders Gate D audits that mirror the
     # ``inventory_mtm`` and ``cost_uncertainty`` Gate C sub-gates. The audits
     # read sub-gate metrics that Gate C wrote to the scorecard and re-check
@@ -252,7 +260,9 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
             scorecard_path=scorecard_path,
         )
 
-    gate_e_passed, gate_e_checks = _evaluate_gate_e(config, root)
+    obligations = _promotion_obligations(gate_d_verdict, config)
+    gate_e_passed, gate_e_checks = _evaluate_gate_e(config, root, obligations=obligations)
+    obligations, certified_obligations = _discharge_shadow_exit_obligations(obligations, gate_e_checks)
 
     gate_f_passed, gate_f_checks = _evaluate_gate_f(config, root)
 
@@ -297,13 +307,14 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     paper_governance_report_path = artifact_dir / "paper_governance_report.json"
     _write_json(paper_governance_report_path, paper_governance_report)
 
-    obligations = _promotion_obligations(gate_d_verdict, config)
     decision_payload = {
         "alpha_id": config.alpha_id,
         "gate_d_passed": gate_d_passed,
         "gate_d_verdict": gate_d_verdict.verdict.value,
         # Deferred gates this approval still owes to a later stage (ADR-003).
         "obligations": obligations,
+        # Deferred gates certified here, with the stage and the evidence.
+        "certified_obligations": certified_obligations,
         "gate_e_passed": gate_e_passed,
         "gate_f_passed": gate_f_passed,
         "gate_e_checks": gate_e_checks,
@@ -345,6 +356,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
             approved=approved,
             forced=forced,
             obligations=obligations,
+            certified_obligations=certified_obligations,
         )
     elif approved and config.dry_run:
         reasons.append("dry_run=true: promotion config not persisted")
@@ -891,7 +903,12 @@ def _promotion_artifact_dir(base: Path, alpha_id: str, now: datetime) -> Path:
     return out
 
 
-def _evaluate_gate_e(config: PromotionConfig, root: Path) -> tuple[bool, dict[str, Any]]:
+def _evaluate_gate_e(
+    config: PromotionConfig,
+    root: Path,
+    *,
+    obligations: list[dict[str, Any]] | None = None,
+) -> tuple[bool, dict[str, Any]]:
     paper_summary, summary_source, summary_error = _resolve_paper_trade_summary(config, root)
     summary_session_count = int(paper_summary.get("session_count", 0)) if paper_summary else 0
     summary_calendar_days = int(paper_summary.get("calendar_span_days", 0)) if paper_summary else 0
@@ -972,6 +989,10 @@ def _evaluate_gate_e(config: PromotionConfig, root: Path) -> tuple[bool, dict[st
             "(recommended: trending + mean_reverting). Increase test diversity."
         )
     checks["regime_span"] = regime_span_check
+
+    parity_check = _shadow_exit_replay_parity(config, root, obligations)
+    if parity_check is not None:
+        checks[_SHADOW_EXIT_PARITY_CHECK] = parity_check
 
     passed = all(bool(v.get("pass", True)) for v in checks.values())
     return passed, {
@@ -1225,6 +1246,7 @@ def build_promotion_checklist(
     paper_span = gate_e_map.get("paper_trade_calendar_days", {})
     paper_days = gate_e_map.get("paper_trade_trading_days", {})
     paper_session_duration = gate_e_map.get("paper_trade_session_duration", {})
+    shadow_parity_check = gate_e_map.get(_SHADOW_EXIT_PARITY_CHECK)
 
     latency = gate_d_checks.get("latency_profile", {})
 
@@ -1265,6 +1287,18 @@ def build_promotion_checklist(
             detail=f"reject_rate={reject.get('value')} (max={config.max_execution_reject_rate})",
         ),
     ]
+    if isinstance(shadow_parity_check, dict):
+        items.append(
+            PromotionChecklistItem(
+                label=(
+                    "Gate E: Replay parity reports certify the Shadow-exit obligation (ADR-003)"
+                    if shadow_parity_check.get("required")
+                    else "Gate E: Replay parity (owed to Shadow exit, ADR-003)"
+                ),
+                passed=bool(shadow_parity_check.get("pass", False)),
+                detail=str(shadow_parity_check.get("detail", "")),
+            )
+        )
     if bool(config.require_paper_trade_governance):
         items.extend(
             [
@@ -1353,10 +1387,67 @@ def _promotion_obligations(verdict: VerdictResult, config: PromotionConfig) -> l
     obligations: list[dict[str, Any]] = []
     for gate, stage in verdict.obligations:
         entry: dict[str, Any] = {"gate": gate, "stage": stage}
-        if gate == "replay_parity_audit":
+        if gate == shadow_parity.PARITY_GATE:
             entry["min_match_pct"] = float(getattr(config, "min_replay_parity_match_pct", 95.0))
+            # The runtime strategy id the replay reports must name.
+            entry["strategy_id"] = str(config.replay_strategy_id or config.alpha_id)
         obligations.append(entry)
     return obligations
+
+
+_SHADOW_EXIT_PARITY_CHECK = "replay_parity_shadow_exit"
+
+
+def _shadow_exit_replay_parity(
+    config: PromotionConfig,
+    root: Path,
+    obligations: list[dict[str, Any]] | None,
+) -> dict[str, Any] | None:
+    """Gate E view of a replay_parity obligation owed to Shadow exit (ADR-003).
+
+    None when nothing was deferred. With no replay report yet the obligation
+    stays owed and does not block here: the canary holds its weight until a
+    report is certified (``canary.py``). Reports given here are judged now; one
+    that fails blocks Gate E, and a passing set certifies the obligation early.
+    """
+    obligation = next((e for e in obligations or [] if shadow_parity.is_parity_obligation(e)), None)
+    if obligation is None:
+        return None
+    minimum = shadow_parity.obligation_min_match_pct(obligation, float(config.min_replay_parity_match_pct))
+    strategy_id = str(obligation.get("strategy_id") or config.alpha_id)
+    if not config.replay_parity_report_paths:
+        return {
+            "required": False,
+            "stage": shadow_parity.SHADOW_EXIT,
+            "strategy_id": strategy_id,
+            "min": minimum,
+            "reports": [],
+            "outcome": Outcome.NOT_APPLICABLE.value,
+            "pass": True,
+            "detail": "owed to Shadow exit: no replay report yet; the canary holds until one is certified",
+        }
+    judged = shadow_parity.judge_reports(
+        config.replay_parity_report_paths, root, strategy_id=strategy_id, min_match_pct=minimum
+    )
+    return {"required": True, **judged}
+
+
+def _discharge_shadow_exit_obligations(
+    obligations: list[dict[str, Any]],
+    gate_e_checks: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split obligations into those still owed and those Gate E certified."""
+    checks = gate_e_checks.get("checks")
+    parity = checks.get(_SHADOW_EXIT_PARITY_CHECK) if isinstance(checks, dict) else None
+    if not (isinstance(parity, dict) and parity.get("required") is True and parity.get("pass") is True):
+        return obligations, []
+    remaining = [e for e in obligations if not shadow_parity.is_parity_obligation(e)]
+    done = [
+        shadow_parity.certified(e, parity, certified_by="promotion_gate_e")
+        for e in obligations
+        if shadow_parity.is_parity_obligation(e)
+    ]
+    return remaining, done
 
 
 def _write_promotion_config(
@@ -1368,6 +1459,7 @@ def _write_promotion_config(
     approved: bool,
     forced: bool,
     obligations: list[dict[str, Any]] | None = None,
+    certified_obligations: list[dict[str, Any]] | None = None,
 ) -> Path:
     day = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%d")
     if forced:
@@ -1420,6 +1512,8 @@ def _write_promotion_config(
         # Deferred gates still owed (ADR-003); CanaryMonitor will not raise
         # the weight until each one carries passing evidence.
         "obligations": list(obligations or []),
+        # Deferred gates already certified, with the stage that certified them.
+        "certified_obligations": list(certified_obligations or []),
         "rollback": {
             "trigger": {
                 "live_slippage_bps_gt": config.max_live_slippage_bps,

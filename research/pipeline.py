@@ -347,6 +347,8 @@ def _promote(
         max_execution_reject_rate=float(args.max_execution_reject_rate),
         require_paper_trade_governance=bool(strict_mode),
         paper_trade_summary_path=(str(args.paper_trade_summary) if args.paper_trade_summary else None),
+        replay_parity_report_paths=tuple(str(p) for p in (getattr(args, "replay_parity_report", None) or [])),
+        replay_strategy_id=(getattr(args, "replay_strategy_id", None) or None),
         min_paper_trade_calendar_days=int(args.min_paper_trade_calendar_days),
         min_paper_trade_trading_days=int(args.min_paper_trade_trading_days),
         min_paper_trade_session_minutes=int(args.min_paper_trade_session_minutes),

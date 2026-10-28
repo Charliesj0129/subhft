@@ -16,6 +16,8 @@ from typing import Any
 import yaml
 from structlog import get_logger
 
+from hft_platform.alpha import shadow_parity
+
 logger = get_logger("canary_monitor")
 
 # Escalation tier weights (progressive ramp-up)
@@ -53,33 +55,54 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
-def _unmet_obligations(obligations: Any, live_metrics: dict[str, Any]) -> list[str]:
-    """Deferred gates in a promotion YAML that the live metrics do not yet satisfy.
+def _unmet_obligations(
+    obligations: Any,
+    live_metrics: dict[str, Any],
+    *,
+    alpha_id: str = "",
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Deferred gates in a promotion YAML: those still unmet, and those the live metrics certify.
 
     Fail-closed: an obligations field that is not a list, an entry that is not
     a mapping, and a gate this monitor has no evidence rule for are all unmet.
+    A replay_parity obligation (ADR-003) is met only by ``report.json`` files
+    from ``hft run --mode replay`` (``live_metrics["replay_parity_reports"]``)
+    that ``shadow_parity.judge_reports`` passes; a bare percentage is not evidence.
     """
     if obligations is None:
-        return []
+        return [], []
     if not isinstance(obligations, list):
-        return ["obligations: malformed"]
+        return ["obligations: malformed"], []
     unmet: list[str] = []
+    certified: list[dict[str, Any]] = []
     for entry in obligations:
         if not isinstance(entry, dict):
             unmet.append("obligation: malformed")
             continue
         gate = str(entry.get("gate", ""))
-        if gate == "replay_parity_audit":
+        if gate == shadow_parity.PARITY_GATE:
             minimum = _as_float(entry.get("min_match_pct", 95.0))
-            value = _as_float(live_metrics.get("replay_parity_match_pct"))
-            if value is None:
-                unmet.append(f"{gate}: no replay parity evidence")
-                continue
-            if minimum is None or not (math.isfinite(value) and value >= minimum):
-                unmet.append(f"{gate}: match_pct {value} below {minimum}")
+            paths = live_metrics.get("replay_parity_reports")
+            if minimum is None or not math.isfinite(minimum):
+                unmet.append(f"{gate}: min_match_pct malformed")
+            elif paths is None:
+                unmet.append(f"{gate}: no replay parity report")
+            elif not isinstance(paths, list | tuple) or not all(isinstance(p, str) for p in paths):
+                unmet.append(f"{gate}: replay_parity_reports malformed")
+            else:
+                judged = shadow_parity.judge_reports(
+                    paths,
+                    Path("."),
+                    strategy_id=str(entry.get("strategy_id") or alpha_id),
+                    min_match_pct=minimum,
+                )
+                if judged["pass"]:
+                    certified.append(shadow_parity.certified(entry, judged, certified_by="canary_evaluate"))
+                else:
+                    unmet.append(f"{gate}: {judged['detail']}")
             continue
         unmet.append(f"{gate or '<unnamed>'}: no evidence rule")
-    return unmet
+    return unmet, certified
 
 
 class CanaryMonitor:
@@ -122,8 +145,9 @@ class CanaryMonitor:
           - execution_error_rate: float
           - sessions_live: int
           - sharpe_live: float (optional, for escalation)
-          - replay_parity_match_pct: float (optional; evidence for a
-            deferred replay_parity obligation)
+          - replay_parity_reports: list[str] (optional; ``report.json`` paths
+            from ``hft run --mode replay``, evidence for a deferred
+            replay_parity obligation)
         """
         canary = self._find_canary(alpha_id)
         if canary is None:
@@ -196,7 +220,7 @@ class CanaryMonitor:
                 sharpe_live is not None and sharpe_threshold is not None and float(sharpe_live) >= sharpe_threshold
             )
 
-            unmet = _unmet_obligations(canary.get("obligations"), live_metrics)
+            unmet, certified = _unmet_obligations(canary.get("obligations"), live_metrics, alpha_id=alpha_id)
             if escalation_eligible and unmet:
                 # A gate deferred at promotion (ADR-003) is still owed: the
                 # weight must not rise, and the canary must not graduate,
@@ -213,6 +237,9 @@ class CanaryMonitor:
             if escalation_eligible:
                 checks["sharpe_live"] = float(sharpe_live)  # type: ignore[arg-type]
                 checks["sharpe_threshold"] = sharpe_threshold
+                if certified:
+                    # apply_decision moves these out of ``obligations``.
+                    checks["certified_obligations"] = certified
 
                 # Find next tier
                 next_weight = self._next_tier_weight(current_weight)
@@ -271,6 +298,20 @@ class CanaryMonitor:
         else:
             # hold — no-op
             return
+
+        newly_certified = status.checks.get("certified_obligations")
+        if isinstance(newly_certified, list) and newly_certified:
+            # The obligations this decision's evidence certified are no longer
+            # owed; keep the record of what certified them (ADR-003).
+            done = {(c.get("gate"), c.get("stage")) for c in newly_certified}
+            owed = canary.get("obligations")
+            updated["obligations"] = [
+                o
+                for o in (owed if isinstance(owed, list) else [])
+                if not (isinstance(o, dict) and (o.get("gate"), o.get("stage")) in done)
+            ]
+            prior = canary.get("certified_obligations")
+            updated["certified_obligations"] = [*(prior if isinstance(prior, list) else []), *newly_certified]
 
         # Exclude internal path key from the persisted YAML
         updated_for_write = {k: v for k, v in updated.items() if k != "_path"}
