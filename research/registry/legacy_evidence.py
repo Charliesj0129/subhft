@@ -51,6 +51,9 @@ class LegacyRun:
     run_id: str
     timestamp: str
     quarantine: str | None
+    # From the run's RunStamp; None when the run recorded none (every pre-v0 run).
+    git_commit: str | None = None
+    datasets: tuple[tuple[str, str | None], ...] | None = None
 
 
 def research_root() -> Path:
@@ -95,8 +98,9 @@ def read_runs(runs_root: Path, known: frozenset[str], *, quarantine: bool = True
     """One row per ``<runs_root>/*/meta.json`` with an alpha id, in path order.
 
     ``quarantine`` applies the fixture rules; governed runs under the evidence
-    root were written after test isolation and are read with it off. An
-    unreadable meta is quarantined as ``unreadable_meta``.
+    root were written after test isolation and are read with it off. A meta
+    that is unreadable, not an object or has no alpha id is quarantined as
+    ``unreadable_meta``.
     """
     runs: list[LegacyRun] = []
     for meta_path in sorted(runs_root.glob("*/meta.json")):
@@ -106,14 +110,24 @@ def read_runs(runs_root: Path, known: frozenset[str], *, quarantine: bool = True
             runs.append(LegacyRun("", meta_path.parent.name, "", "unreadable_meta"))
             continue
         if not isinstance(payload, dict) or not str(payload.get("alpha_id", "")).strip():
+            # Valid JSON that names no alpha is no more readable as a run.
+            runs.append(LegacyRun("", meta_path.parent.name, "", "unreadable_meta"))
             continue
         reason = quarantine_reason(payload, automated=True, known=known) if quarantine else None
+        stamp = payload.get("run_stamp") if isinstance(payload.get("run_stamp"), dict) else {}
+        commit = stamp.get("git_commit")
+        datasets = stamp.get("datasets")
         runs.append(
             LegacyRun(
                 alpha_id=str(payload["alpha_id"]).strip(),
-                run_id=str(payload.get("run_id", "")).strip(),
+                # The directory is the run's name when the meta omits it.
+                run_id=str(payload.get("run_id") or "").strip() or meta_path.parent.name,
                 timestamp=str(payload.get("timestamp", "")).strip(),
                 quarantine=reason,
+                git_commit=commit if isinstance(commit, str) and commit else None,
+                datasets=tuple((str(k), v if isinstance(v, str) else None) for k, v in datasets.items())
+                if isinstance(datasets, dict)
+                else None,
             )
         )
     return runs

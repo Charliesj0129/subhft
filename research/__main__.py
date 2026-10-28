@@ -16,6 +16,7 @@ Evidence commands (ADR-005 section 6):
   status [--alpha ID] [--json]  Effective alpha status from the verdict ledger
   evidence init                 Create the evidence layout and git init it locally
   evidence import-kills         Archive pre-ledger kills into legacy/kills.jsonl
+  evidence audit-stale          Mark runs a registered defect affects (ledger/stale.jsonl)
 
 Scaffold command:
   scaffold <alpha_id> [--paper ref] [--complexity O1|ON]
@@ -64,7 +65,7 @@ Usage: python -m research <command> [options]
 
 Factory:  init | clean | converge-tools | audit | index | optimize
 Pipeline: run  | triage
-Evidence: status | evidence {init|import-kills}
+Evidence: status | evidence {init|import-kills|audit-stale}
 Scaffold: scaffold <alpha_id>
 Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>
