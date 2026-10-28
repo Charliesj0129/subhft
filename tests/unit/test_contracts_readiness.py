@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from tests.unit.shioaji_contracts_helper import mark_contracts_loaded
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -182,6 +184,10 @@ def _make_session_mock_client(contracts_ready: bool):
     c._release_session_lock = MagicMock()
     c._ensure_contracts = MagicMock(return_value=contracts_ready)
     c.contracts_ready = contracts_ready
+    if contracts_ready:
+        mark_contracts_loaded(c.api)
+    else:
+        c._login_contract_timeout_s = 0.0  # nothing will load; do not wait out the budget
     c._sanitize_metric_label = MagicMock(return_value="unknown")
     c.reconnect = MagicMock(return_value=True)
     return c

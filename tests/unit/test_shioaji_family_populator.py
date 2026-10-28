@@ -260,3 +260,78 @@ class TestPopulator:
         assert len(hook_events) > first_round
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         assert resolver.resolve_family(fam_r1).display() == "TMFF6"
+
+
+class _Rust17Group:
+    """shioaji 1.7.x ``ContractGroup``: ``__getattr__`` raises ``KeyError``."""
+
+    def __init__(self, contracts: list) -> None:
+        self._contracts = contracts
+
+    def __getattr__(self, name: str):
+        raise KeyError(name)
+
+    def __iter__(self):
+        return iter(self.__dict__["_contracts"])
+
+
+class _Rust17Category:
+    """shioaji 1.7.x ``ContractCategory``: any attribute is a group; iterates groups."""
+
+    def __init__(self, groups: list) -> None:
+        self._groups = groups
+
+    def __getattr__(self, name: str):
+        return _Rust17Group([])
+
+    def __iter__(self):
+        return iter(self.__dict__["_groups"])
+
+
+def test_populator_binds_families_when_sdk_groups_raise_keyerror_on_getattr() -> None:
+    def _c(code: str, delivery_date: str) -> SimpleNamespace:
+        obj = _mock_contract(code, delivery_date=delivery_date)
+        obj.category = "TMF"
+        return obj
+
+    futures = _Rust17Category([_Rust17Group([_c("TMFE6", "2026/05/21"), _c("TMFF6", "2026/06/17")])])
+    api = SimpleNamespace(Contracts=SimpleNamespace(Futures=futures))
+    resolver = ContractFamilyResolver()
+
+    count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+    assert count == 2
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).expiry.month == 5
+
+
+def test_populator_derives_roots_from_codes_when_sdk_category_is_empty() -> None:
+    # Prod 2026-10-27 on 1.7.9: ``FuturesInfo`` has no ``category`` attribute,
+    # so all contracts pooled under root "" and only 2 bogus bindings were
+    # installed (1.5.6: 735). Shape below mirrors the live 2026-10-28 dump:
+    # no category/symbol, ``delivery_date`` is a ``date``, roots may hold digits.
+    class _FuturesInfo:
+        def __init__(self, code: str, delivery_date: date) -> None:
+            self.code = code
+            self.delivery_month = delivery_date.strftime("%Y%m")
+            self.delivery_date = delivery_date
+
+    futures = _Rust17Category(
+        [
+            _Rust17Group(
+                [
+                    _FuturesInfo("TMFE6", date(2026, 5, 20)),
+                    _FuturesInfo("TMFR1", date(2026, 5, 20)),
+                    _FuturesInfo("TMFF6", date(2026, 6, 17)),
+                ]
+            ),
+            _Rust17Group([_FuturesInfo("CM1E6", date(2026, 5, 20)), _FuturesInfo("CM1F6", date(2026, 6, 17))]),
+        ]
+    )
+    api = SimpleNamespace(Contracts=SimpleNamespace(Futures=futures))
+    resolver = ContractFamilyResolver()
+
+    count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
+
+    assert count == 4
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).expiry == date(2026, 5, 20)
+    assert resolver.resolve_family(ContractFamily(Product.FUTURE, "CM1", FamilyCode.R2)).expiry == date(2026, 6, 17)

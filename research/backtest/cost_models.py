@@ -79,10 +79,13 @@ def _load_all() -> dict[str, TAIFEXCost]:
 
 # TAIFEX month codes A-L (Jan-Dec) plus the year digit: TMFJ6 is the October 2026 TMF contract.
 _CONTRACT_MONTH_CODE = re.compile(r"^(?P<root>TXF|MXF|TMF)[A-L]\d$")
+# A rolled front-month series (research/backtest/rolled_series.py) trades only that root's months.
+_ROLLED_SERIES = re.compile(r"^(?P<root>TXF|MXF|TMF)_frontmonth$")
 
 
 def load_cost_profile(instrument: str) -> TAIFEXCost:
-    """Cost profile for ``instrument``: an exact key, else the root of a contract-month code.
+    """Cost profile for ``instrument``: an exact key, else the root of a contract-month code
+    or of a rolled series (``TMF_frontmonth``).
 
     The root profile (``TXF`` / ``MXF`` / ``TMF``) is the conservative default, so a month
     nobody listed (``TMFJ6``) is still costed rather than raising or silently being free.
@@ -90,7 +93,7 @@ def load_cost_profile(instrument: str) -> TAIFEXCost:
     profiles = _load_all()
     if instrument in profiles:
         return profiles[instrument]
-    match = _CONTRACT_MONTH_CODE.match(instrument)
+    match = _CONTRACT_MONTH_CODE.match(instrument) or _ROLLED_SERIES.match(instrument)
     if match and match.group("root") in profiles:
         return replace(profiles[match.group("root")], instrument=instrument)
     raise KeyError(

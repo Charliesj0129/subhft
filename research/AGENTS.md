@@ -24,6 +24,9 @@ differences here.
 - A defect that changed research results goes into `config/research/defects.yaml`
   (fix commit + components); `python -m research evidence audit-stale` then marks
   the affected runs in `ledger/stale.jsonl`. Marks flag evidence, never a status.
+- Pre-registered protocols (`config/research/protocols/*.yaml`, e.g. the maker
+  roll rule) are frozen once a run has used them: add a new version, never
+  edit one; runs record the protocol sha256.
 - Verdicts are faithful: KILL / NEEDS-MORE-DAYS / INCONCLUSIVE. Never relax a
   pre-registered floor or gate to improve an outcome; name the backtest method
   behind every PnL claim; check recent data before claiming an edge holds.

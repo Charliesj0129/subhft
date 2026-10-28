@@ -10,8 +10,12 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import dataclass
+import re
+from collections.abc import Callable, Sequence
+from datetime import date as calendar_date
 from datetime import datetime, timezone
-from typing import Protocol
+from functools import partial
+from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 import requests
@@ -23,7 +27,22 @@ from research.backtest.fill_models import FillModel, QueuePosition
 from research.backtest.trade_pnl_projector import project_trade_pnl
 from research.backtest.types import BacktestResult
 
+if TYPE_CHECKING:
+    from research.backtest.rolled_series import RolledSchedule
+
 logger = structlog.get_logger()
+
+_ROOT = re.compile(r"^[A-Z]{2,4}$")
+_TZ_NAME = re.compile(r"^[A-Za-z_]+/[A-Za-z_]+$")
+
+# One part of a day on one contract: the contract and how to load its events.
+_Segment = tuple[str, Callable[[], "list[TickData]"]]
+# One day of a series: its row label and its segments (two on a rolled delivery day).
+_SeriesDay = tuple[str, tuple[_Segment, ...]]
+
+
+class MissingSeriesData(ValueError):
+    """A rolled series segment holds no events of the contract it quotes."""
 
 
 @dataclass(frozen=True)
@@ -130,6 +149,13 @@ class ClickHouseSource:
 
     def load_day(self, symbol: str, date: str) -> list[TickData]:
         """Load interleaved bidask + tick events for one day, sorted by exch_ts."""
+        return self._load_events(symbol, f"toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'")
+
+    def load_window(self, symbol: str, start_ns: int, end_ns: int) -> list[TickData]:
+        """Load interleaved bidask + tick events with ``start_ns <= exch_ts < end_ns``."""
+        return self._load_events(symbol, f"exch_ts >= {int(start_ns)} AND exch_ts < {int(end_ns)}")
+
+    def _load_events(self, symbol: str, where: str) -> list[TickData]:
         scale = 1_000_000
 
         ba_sql = f"""
@@ -138,7 +164,7 @@ class ClickHouseSource:
                asks_price[1] AS ask1_p, asks_vol[1] AS ask1_v
         FROM hft.market_data
         WHERE symbol = '{symbol}' AND type = 'BidAsk'
-          AND toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'
+          AND {where}
           AND length(bids_price) >= 1 AND length(asks_price) >= 1
         ORDER BY exch_ts
         """
@@ -146,7 +172,7 @@ class ClickHouseSource:
         SELECT exch_ts, price_scaled AS price, volume
         FROM hft.market_data
         WHERE symbol = '{symbol}' AND type = 'Tick'
-          AND toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'
+          AND {where}
         ORDER BY exch_ts
         """
         ba_rows = self._query(ba_sql)
@@ -200,6 +226,32 @@ class ClickHouseSource:
         if len(rows) <= 1:
             return []
         return [row[0] for row in rows[1:]]
+
+    def available_local_slots(self, root: str, tz: str, split_minute: int) -> list[tuple[calendar_date, bool]]:
+        """``(local date, at or after split_minute)`` pairs in ``tz`` holding an event of any ``<root>`` month.
+
+        ``split_minute`` is a minute of the local day; the rolled series dates an
+        event by which side of it the event falls on (``TMFK6`` ... any month).
+        """
+        if not _ROOT.match(root):
+            raise ValueError(f"contract root must be 2-4 capital letters, got {root!r}")
+        if not _TZ_NAME.match(tz):
+            raise ValueError(f"not a timezone name: {tz!r}")
+        if not 0 <= int(split_minute) < 24 * 60:
+            raise ValueError(f"split_minute must be a minute of the day, got {split_minute!r}")
+        sql = f"""
+        SELECT DISTINCT
+            toDate(fromUnixTimestamp64Nano(exch_ts), '{tz}') AS d,
+            toHour(fromUnixTimestamp64Nano(exch_ts), '{tz}') * 60
+                + toMinute(fromUnixTimestamp64Nano(exch_ts), '{tz}') >= {int(split_minute)} AS late
+        FROM hft.market_data
+        WHERE match(symbol, '^{root}[A-L][0-9]$')
+        ORDER BY d, late
+        """
+        rows = self._query(sql)
+        if len(rows) <= 1:
+            return []
+        return [(calendar_date.fromisoformat(row[0]), row[1] == "1") for row in rows[1:]]
 
 
 class MakerEngine:
@@ -258,6 +310,50 @@ class MakerEngine:
         if not dates:
             raise ValueError(f"No data available for {instrument}")
 
+        days = [(d, ((instrument, partial(self._ck_source.load_day, instrument, d)),)) for d in dates]
+        return self._run_series(strategy, days, instrument=instrument, pipeline_mode=pipeline_mode, rolled=False)
+
+    def run_rolled(
+        self,
+        strategy: MakerStrategy,
+        schedule: RolledSchedule,
+        pipeline_mode: str = "strict",
+    ) -> BacktestResult:
+        """Run one series across contract months, one row per trading day (ADR-004).
+
+        Each trading day loads its own window on the contract the schedule
+        quotes, in two segments on a delivery day. Segments are independent
+        here as days are in :meth:`run`, so no position crosses a roll; a
+        strategy with ``set_active_symbol`` is told the new contract before
+        the first event on it. A segment without events raises
+        :class:`MissingSeriesData`: a missing month must not shrink the series.
+        """
+        self._ck_source.health_check()
+        if not schedule.days:
+            raise ValueError(f"No trading days for {schedule.instrument}")
+        days = [
+            (
+                d.trading_day.isoformat(),
+                tuple(
+                    (seg.symbol, partial(self._ck_source.load_window, seg.symbol, seg.start_ns, seg.end_ns))
+                    for seg in d.segments
+                ),
+            )
+            for d in schedule.days
+        ]
+        return self._run_series(
+            strategy, days, instrument=schedule.instrument, pipeline_mode=pipeline_mode, rolled=True
+        )
+
+    def _run_series(
+        self,
+        strategy: MakerStrategy,
+        days: Sequence[_SeriesDay],
+        *,
+        instrument: str,
+        pipeline_mode: str,
+        rolled: bool,
+    ) -> BacktestResult:
         daily_pnl: list[dict] = []
         equity_points: list[float] = [0.0]
         total_gross = 0.0
@@ -279,21 +375,59 @@ class MakerEngine:
         # invariant ``sum(day-trips) == day_net`` holds whenever day_trips > 0.
         trade_pnl_pts: list[float] = []
 
-        for date in dates:
-            events = self._ck_source.load_day(instrument, date)
-            if not events:
+        active_contract: str | None = None
+        set_active_symbol = getattr(strategy, "set_active_symbol", None)
+        # _run_day starts every day flat with no resting orders; a strategy
+        # that keeps its own position is flattened to match before each one.
+        flatten_position = getattr(strategy, "flatten_position", None)
+        for date, segments in days:
+            loaded = [(contract, load_events()) for contract, load_events in segments]
+            if rolled:
+                for contract, events in loaded:
+                    if not events:
+                        raise MissingSeriesData(f"{instrument} {date}: no events of {contract}")
+            elif not loaded[0][1]:
                 continue
 
-            day_fills, day_position, day_last_mid, day_last_avg = self._run_day(strategy, events)
-            day_gross, day_trips, day_wins = self._compute_fifo_pnl(day_fills)
+            day_fills: list[dict] = []
+            day_gross = 0.0
+            day_trips = day_wins = 0
+            day_residual_mtm = 0.0
+            day_trip_grosses: list[float] = []
+            seg_rows: list[dict] = []
+            for contract, events in loaded:
+                if rolled and contract != active_contract:
+                    if callable(set_active_symbol):
+                        set_active_symbol(contract)
+                    active_contract = contract
+                if callable(flatten_position):
+                    flatten_position()
 
-            # Slice B Task 3: residual MtM folded into day-level accounting.
-            day_residual_mtm = self._compute_residual_mtm(
-                open_pos=day_position,
-                mark_price=day_last_mid,
-                avg_entry_price=day_last_avg,
-                mark_method=self._mark_method,
-            )
+                seg_fills, day_position, seg_last_mid, seg_last_avg = self._run_day(strategy, events)
+                seg_gross, seg_trips, seg_wins = self._compute_fifo_pnl(seg_fills)
+                # Slice B Task 3: residual MtM folded into day-level accounting.
+                seg_residual_mtm = self._compute_residual_mtm(
+                    open_pos=day_position,
+                    mark_price=seg_last_mid,
+                    avg_entry_price=seg_last_avg,
+                    mark_method=self._mark_method,
+                )
+                day_fills.extend(seg_fills)
+                day_gross += seg_gross
+                day_trips += seg_trips
+                day_wins += seg_wins
+                day_residual_mtm += seg_residual_mtm
+                # Trips never pair fills across contracts.
+                day_trip_grosses.extend(project_trade_pnl(seg_fills))
+                seg_rows.append(
+                    {
+                        "contract": contract,
+                        "fills": len(seg_fills),
+                        "gross_pts": round(seg_gross, 2),
+                        "final_pos": day_position,
+                        "residual_mtm_pts": round(seg_residual_mtm, 2),
+                    }
+                )
             # Punch-list (2026-05-29): preserve signed residual_qty
             # (positive=long, negative=short) for accounting; expose
             # ``abs_residual_qty`` as the derived display/aggregate field.
@@ -326,6 +460,10 @@ class MakerEngine:
                     "mark_method": self._mark_method,
                 }
             )
+            if rolled:
+                daily_pnl[-1]["contract"] = seg_rows[0]["contract"]
+                if len(seg_rows) > 1:
+                    daily_pnl[-1]["segments"] = seg_rows
 
             for f in day_fills:
                 spr = f.get("spread_pts", 0)
@@ -336,7 +474,6 @@ class MakerEngine:
             # Round 25: project per-round-trip PnL from this day's fills,
             # allocate day-level (cost + residual MtM) delta evenly across
             # trips so sum-per-day == day_net (when day_trips > 0).
-            day_trip_grosses = project_trade_pnl(day_fills)
             if day_trip_grosses:
                 delta_per_trip = (day_net - day_gross) / len(day_trip_grosses)
                 trade_pnl_pts.extend(g + delta_per_trip for g in day_trip_grosses)
@@ -386,7 +523,7 @@ class MakerEngine:
             fill_model=self._fill_model.label,
             cost_model=self._cost_model.label,
             instrument=instrument,
-            data_period=f"{dates[0]}..{dates[-1]}" if dates else "",
+            data_period=f"{days[0][0]}..{days[-1][0]}" if days else "",
             data_source=f"clickhouse://{self._ck_source._host}:{self._ck_source._port}/hft",
             pipeline_mode=pipeline_mode,
             created_at=datetime.now(timezone.utc).isoformat(),

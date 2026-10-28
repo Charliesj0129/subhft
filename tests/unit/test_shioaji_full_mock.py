@@ -17,6 +17,7 @@ from hft_platform.feed_adapter import shioaji_client as _shioaji_client  # noqa:
 from hft_platform.feed_adapter.shioaji import client as _shioaji_inner_client
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 from hft_platform.observability.metrics import MetricsRegistry
+from tests.unit.shioaji_contracts_helper import mark_contracts_loaded
 
 
 class TestShioajiClientFull(unittest.TestCase):
@@ -74,6 +75,7 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_login_flow(self):
         # Test Env var login
+        mark_contracts_loaded(self.mock_api_instance)
         with patch.dict(os.environ, {"SHIOAJI_API_KEY": "TESTKEY", "SHIOAJI_SECRET_KEY": "TESTSECRET"}):
             self.client.login()
             self.mock_api_instance.login.assert_called_once()
