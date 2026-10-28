@@ -11,7 +11,10 @@ says anything else is refused rather than run under a different rule.
 The rule matches the live R1 binding (``build_snapshot_from_calendar`` with
 ``taifex_delivery_cutoff``): trading day D quotes the contract with the
 earliest delivery date on or after D, and D covers the night session that
-opens after the previous day session, then D's day session.
+opens after the previous day session, then D's day session. On a delivery day
+the expiring contract stops trading at 13:30 and live R1 moves to the next
+month at that instant, so that day is split into two segments, each on its own
+contract.
 """
 
 from __future__ import annotations
@@ -41,7 +44,8 @@ _IMPLEMENTED = {
     "delivery_date": "third_wednesday_next_trading_day",
     "quoted_contract": "earliest_delivery_on_or_after_trading_day",
     "month_codes": "ABCDEFGHIJKL",
-    "roll_day_pnl": "per_day_on_quoted_contract",
+    "delivery_cutoff_local": "13:30",
+    "roll_day_pnl": "per_segment_on_quoted_contract",
 }
 _IMPLEMENTED_TRADING_DAY = {"night_session": "next_trading_day", "window_start_local": "14:00"}
 _ROOT = re.compile(r"^[A-Z]{2,4}$")
@@ -59,16 +63,37 @@ class RollProtocol:
     window_start: dt.time
     tz: ZoneInfo
     month_codes: str
+    delivery_cutoff: dt.time
+
+
+@dataclass(frozen=True, slots=True)
+class RolledSegment:
+    """A part of a trading day on one contract: ``start_ns <= exch_ts < end_ns``."""
+
+    symbol: str
+    start_ns: int
+    end_ns: int
 
 
 @dataclass(frozen=True, slots=True)
 class RolledDay:
-    """One trading day of the series: the contract it quotes and its event window."""
+    """One trading day of the series: one segment, or two on a delivery day."""
 
     trading_day: dt.date
-    symbol: str
-    start_ns: int
-    end_ns: int
+    segments: tuple[RolledSegment, ...]
+
+    @property
+    def symbol(self) -> str:
+        """The contract the day opens on."""
+        return self.segments[0].symbol
+
+    @property
+    def start_ns(self) -> int:
+        return self.segments[0].start_ns
+
+    @property
+    def end_ns(self) -> int:
+        return self.segments[-1].end_ns
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +107,9 @@ class RolledSchedule:
     def contracts(self) -> tuple[str, ...]:
         seen: list[str] = []
         for day in self.days:
-            if not seen or seen[-1] != day.symbol:
-                seen.append(day.symbol)
+            for segment in day.segments:
+                if not seen or seen[-1] != segment.symbol:
+                    seen.append(segment.symbol)
         return tuple(seen)
 
 
@@ -159,6 +185,7 @@ def load_roll_protocol(path: str | Path | None = None) -> RollProtocol:
         window_start=dt.time.fromisoformat(_IMPLEMENTED_TRADING_DAY["window_start_local"]),
         tz=ZoneInfo(_IMPLEMENTED["timezone"]),
         month_codes=_IMPLEMENTED["month_codes"],
+        delivery_cutoff=dt.time.fromisoformat(_IMPLEMENTED["delivery_cutoff_local"]),
     )
 
 
@@ -185,12 +212,39 @@ def delivery_date(year: int, month: int, calendar: SessionCalendar) -> dt.date:
     return calendar.next_session(third_wednesday)
 
 
-def quoted_contract(root: str, trading_day: dt.date, protocol: RollProtocol, calendar: SessionCalendar) -> str:
-    """The contract with the earliest delivery date on or after ``trading_day``."""
+def _quoted_month(trading_day: dt.date, calendar: SessionCalendar) -> tuple[int, int]:
     year, month = trading_day.year, trading_day.month
     if delivery_date(year, month, calendar) < trading_day:
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-    return contract_code(root, year, month, protocol)
+        year, month = _next_month(year, month)
+    return year, month
+
+
+def _next_month(year: int, month: int) -> tuple[int, int]:
+    return (year + 1, 1) if month == 12 else (year, month + 1)
+
+
+def quoted_contract(root: str, trading_day: dt.date, protocol: RollProtocol, calendar: SessionCalendar) -> str:
+    """The contract with the earliest delivery date on or after ``trading_day``."""
+    return contract_code(root, *_quoted_month(trading_day, calendar), protocol)
+
+
+def day_segments(
+    root: str, trading_day: dt.date, protocol: RollProtocol, calendar: SessionCalendar
+) -> tuple[RolledSegment, ...]:
+    """The trading day's window on the contract live R1 binds at each instant.
+
+    On the quoted contract's delivery day the window splits at the delivery
+    cutoff (13:30): the expiring contract until then, the next month after,
+    as ``taifex_delivery_cutoff`` does live.
+    """
+    start_ns, end_ns = trading_day_window(trading_day, protocol, calendar)
+    year, month = _quoted_month(trading_day, calendar)
+    symbol = contract_code(root, year, month, protocol)
+    if delivery_date(year, month, calendar) != trading_day:
+        return (RolledSegment(symbol, start_ns, end_ns),)
+    cutoff_ns = _epoch_ns(dt.datetime.combine(trading_day, protocol.delivery_cutoff, tzinfo=protocol.tz))
+    following = contract_code(root, *_next_month(year, month), protocol)
+    return (RolledSegment(symbol, start_ns, cutoff_ns), RolledSegment(following, cutoff_ns, end_ns))
 
 
 def trading_day_window(trading_day: dt.date, protocol: RollProtocol, calendar: SessionCalendar) -> tuple[int, int]:
@@ -218,8 +272,7 @@ def build_schedule(
     for day in sorted(set(trading_days)):
         if not calendar.is_session(day):
             raise RollProtocolError(f"{day} is not a {_IMPLEMENTED['calendar']} trading day")
-        start_ns, end_ns = trading_day_window(day, protocol, calendar)
-        days.append(RolledDay(day, quoted_contract(root, day, protocol, calendar), start_ns, end_ns))
+        days.append(RolledDay(day, day_segments(root, day, protocol, calendar)))
     if not days:
         raise ValueError(f"No trading days for {instrument}")
     return RolledSchedule(instrument=instrument, root=root, protocol=protocol, days=tuple(days))
@@ -232,24 +285,38 @@ def schedule_from_source(
     protocol: RollProtocol | None = None,
     calendar: SessionCalendar | None = None,
 ) -> RolledSchedule:
-    """Every trading day on which ``ck_source`` holds an event of any ``<ROOT>`` contract month."""
+    """Every trading day whose window holds an event of any ``<ROOT>`` contract month.
+
+    An event is dated by the window it falls in, so a Friday night session and
+    its Saturday-morning tail belong to Monday.
+    """
     root = rolled_root(instrument)
     if root is None:
         raise RollProtocolError(f"{instrument!r} is not a rolled instrument (expected <ROOT>{ROLLED_SUFFIX})")
     protocol = protocol or load_roll_protocol()
     calendar = calendar or SessionCalendar(_IMPLEMENTED["calendar"])
-    local_dates = ck_source.available_local_dates(root, protocol.tz.key)
+    slots = ck_source.available_local_slots(root, protocol.tz.key, _minute_of_day(protocol.window_start))
     return build_schedule(
         instrument,
-        _trading_days_of(local_dates, calendar),
+        trading_days_of_slots(slots, calendar),
         protocol=protocol,
         calendar=calendar,
     )
 
 
-def _trading_days_of(local_dates: Iterable[dt.date], calendar: SessionCalendar) -> list[dt.date]:
-    """Sessions among the local dates that hold data (a Saturday-morning tail is not one)."""
-    return [day for day in local_dates if calendar.is_session(day)]
+def trading_days_of_slots(slots: Iterable[tuple[dt.date, bool]], calendar: SessionCalendar) -> list[dt.date]:
+    """The trading day of each ``(local date, at or after the window start)`` slot holding data.
+
+    An event before the window start on a session belongs to that session.
+    Any other (the afternoon and night after a session, or a weekend or
+    holiday) belongs to the next session.
+    """
+    days = {day if not late and calendar.is_session(day) else calendar.next_session(day) for day, late in slots}
+    return sorted(days)
+
+
+def _minute_of_day(moment: dt.time) -> int:
+    return moment.hour * 60 + moment.minute
 
 
 def _epoch_ns(moment: dt.datetime) -> int:

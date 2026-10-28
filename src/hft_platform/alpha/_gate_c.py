@@ -711,7 +711,14 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         )
 
         if schedule is not None:
-            result = engine.run_rolled(strategy=maker_strategy, schedule=schedule, pipeline_mode="strict")
+            # A scheduled segment without events (a missing month) would
+            # shrink the series to fewer contracts, so it is INVALID too.
+            try:
+                result = engine.run_rolled(strategy=maker_strategy, schedule=schedule, pipeline_mode="strict")
+            except ValueError as exc:
+                return _maker_error_report(
+                    "gate_c.rolled_series", "rolled_series_data_missing", instrument=instrument, detail=str(exc)
+                )
         else:
             result = engine.run(
                 strategy=maker_strategy,

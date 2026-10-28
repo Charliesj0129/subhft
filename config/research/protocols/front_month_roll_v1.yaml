@@ -14,9 +14,8 @@
 # src/hft_platform/contracts/family_resolver.py binds R1 to the earliest
 # contract whose delivery date is on or after taifex_delivery_cutoff
 # (src/hft_platform/core/market_calendar.py), which is today before 13:30
-# exchange time and tomorrow from 13:30. A delivery day's night session
-# therefore already trades the next month, and here it belongs to the next
-# trading day, which quotes the next month.
+# exchange time and tomorrow from 13:30. So R1 moves to the next month at
+# 13:30 on a delivery day, and that day's night session already trades it.
 schema: research_protocol.v1
 id: front_month_roll_v1
 kind: roll_rule
@@ -44,8 +43,15 @@ delivery_date: third_wednesday_next_trading_day
 quoted_contract: earliest_delivery_on_or_after_trading_day
 month_codes: ABCDEFGHIJKL
 
-# Each trading day runs on one contract and is marked at that day's last mid,
-# so no position and no PnL cross a roll. The strategy is told the new
-# contract (set_active_symbol, when it has one) before the first event of the
-# first day on it.
-roll_day_pnl: per_day_on_quoted_contract
+# On the quoted contract's delivery day, the expiring contract stops trading
+# at this local time. The day splits there into two segments: the expiring
+# contract before it, the next month from it to the end of the window.
+delivery_cutoff_local: "13:30"
+
+# Each segment (a whole trading day, or one part of a delivery day) runs on
+# one contract, starts flat and is marked at its last mid, so no position and
+# no PnL cross a roll or a day. A trading day's row sums its segments. Before
+# each segment the strategy is flattened (flatten_position, when it has one)
+# and, on a new contract, told the contract (set_active_symbol, when it has
+# one). A segment with no events of its contract makes the run invalid.
+roll_day_pnl: per_segment_on_quoted_contract
