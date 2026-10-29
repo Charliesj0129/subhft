@@ -37,9 +37,17 @@ try:
 
     _ch_password = _os.getenv("CLICKHOUSE_PASSWORD", "")
     if _ch_password:
-        from hft_platform.backtest.ch_data_source import ChDataSource as _ChDataSource  # noqa: PLC0415
+        from research.data_pipeline.reader import GovernedHbtSource, GovernedReader  # noqa: PLC0415
 
-        _ch_source = _ChDataSource(ch_password=_ch_password)
+        # The governed reader (research v2 C1): trading-day windows, session rule, dedup v1.
+        _ch_source = GovernedHbtSource(
+            GovernedReader.connect(
+                host=_os.getenv("CLICKHOUSE_HOST", "localhost"),
+                port=int(_os.getenv("CLICKHOUSE_PORT", "8123")),
+                user=_os.getenv("CLICKHOUSE_USER", "default"),
+                password=_ch_password,
+            )
+        )
         _use_ch_streaming = True
 except Exception:  # noqa: BLE001
     pass

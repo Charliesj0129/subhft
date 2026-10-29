@@ -35,7 +35,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from statistics import median
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from . import dedup
 
@@ -800,7 +800,7 @@ def evaluate_content_duplicates(buckets: Sequence[ContentBucket] | None) -> Chec
     heavy_days = sorted(
         {day for (day, _), (rows, keys) in totals.items() if 1.0 - keys / rows > CONTENT_DUP_HEAVY_DAY_RATE}
     )
-    flagged = []
+    flagged: list[dict[str, Any]] = []
     for (day, kind), entries in sorted(hours.items()):
         worst_hour, worst = max(entries, key=lambda item: item[1])
         rows, keys = totals[(day, kind)]
@@ -988,7 +988,7 @@ def evaluate_non_trading_day_rows(
             "non_trading_day_rows", "warn", "unavailable", "exchange-date statistics were not collected", detail
         )
     sessions = set(expected_days)
-    closed_day_rows = [
+    closed_day_rows: list[dict[str, Any]] = [
         {"date": item.date, "rows": item.rows}
         for item in sorted(rows, key=lambda entry: entry.date)
         if item.rows > 0 and item.date not in sessions
@@ -1123,7 +1123,7 @@ def evaluate_official_volume_reconciliation(rows: Sequence[OfficialVolumeRow] | 
             "no day has an official near-month volume to compare with",
             detail,
         )
-    table = [
+    table: list[dict[str, Any]] = [
         {
             "day": row.day,
             "product": row.product,
@@ -1685,7 +1685,7 @@ def fetch_official_volume(
                     product=product,
                     symbol=symbol,
                     raw=sum(key[2] for key in keys),
-                    deduped=sum(count * key[2] for key, count in keep.items()),
+                    deduped=sum(count * cast(int, key[2]) for key, count in keep.items()),
                     official=contracts,
                 )
             )

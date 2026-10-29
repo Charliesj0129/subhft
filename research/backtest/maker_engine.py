@@ -18,7 +18,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
-import requests
 import structlog
 
 from hft_platform.contracts.maker_actions import CancelQuote, Hold, PostQuote
@@ -26,6 +25,7 @@ from research.backtest.cost_models import CostModel
 from research.backtest.fill_models import FillModel, QueuePosition
 from research.backtest.trade_pnl_projector import project_trade_pnl
 from research.backtest.types import BacktestResult
+from research.data_pipeline.reader import CK_PRICE_SCALE, GovernedReader, WindowRead
 
 if TYPE_CHECKING:
     from research.backtest.rolled_series import RolledSchedule
@@ -102,130 +102,102 @@ class MakerStrategy(Protocol):
 
 
 class ClickHouseSource:
-    """Fetch tick + bidask data from ClickHouse."""
+    """Tick + BidAsk events from ClickHouse through the governed reader (research v2 C1).
 
-    __slots__ = ("_host", "_port", "_password", "_url")
+    Every read goes through :class:`research.data_pipeline.reader.GovernedReader`: the session
+    rule, duplicate-delivery removal and trading-day windows are applied there, and what each
+    read removed is kept in :attr:`reads`. A date is a trading day: the night session before it,
+    then its day session.
+    """
+
+    __slots__ = ("_host", "_port", "_user", "_password", "_reader", "_reads")
 
     def __init__(
         self,
         host: str | None = None,
         port: int | None = None,
         password: str | None = None,
+        *,
+        reader: GovernedReader | None = None,
     ) -> None:
         self._host = host or os.environ.get("CLICKHOUSE_HOST", "localhost")
         self._port = port or int(os.environ.get("CLICKHOUSE_PORT", "8123"))
+        self._user = os.environ.get("CLICKHOUSE_USER", "default")
         self._password = password or os.environ.get("CLICKHOUSE_PASSWORD", "")
-        self._url = f"http://{self._host}:{self._port}/"
+        self._reader = reader
+        self._reads: list[dict] = []
+
+    @property
+    def reads(self) -> tuple[dict, ...]:
+        """Provenance of every window read so far: rows fetched, session-filtered, deduplicated."""
+        return tuple(self._reads)
+
+    def _governed(self) -> GovernedReader:
+        if self._reader is None:
+            self._reader = GovernedReader.connect(
+                host=self._host, port=self._port, user=self._user, password=self._password
+            )
+        return self._reader
 
     def health_check(self) -> None:
         try:
-            resp = requests.post(
-                self._url,
-                params={"password": self._password},
-                data="SELECT 1",
-                timeout=5,
-            )
-            resp.raise_for_status()
+            self._governed().ping()
         except Exception as exc:
             raise ConnectionError(
-                f"ClickHouse not reachable at {self._url}. "
+                f"ClickHouse not reachable at http://{self._host}:{self._port}/. "
                 f"Please start it: docker compose up -d clickhouse\n"
                 f"Original error: {exc}"
             ) from exc
 
-    def _query(self, sql: str) -> list[list[str]]:
-        resp = requests.post(
-            self._url,
-            params={"password": self._password},
-            data=sql + " FORMAT TSVWithNames",
-            timeout=120,
-        )
-        resp.raise_for_status()
-        lines = resp.text.strip().split("\n")
-        if len(lines) < 2:
-            return []
-        rows = [line.split("\t") for line in lines[1:] if line]
-        return [lines[0].split("\t")] + rows
-
     def load_day(self, symbol: str, date: str) -> list[TickData]:
-        """Load interleaved bidask + tick events for one day, sorted by exch_ts."""
-        return self._load_events(symbol, f"toDate(fromUnixTimestamp64Nano(exch_ts)) = '{date}'")
+        """Events of trading day ``date``: the night session before it, then its day session."""
+        return self._events(self._governed().read_trading_day(symbol, calendar_date.fromisoformat(date)))
 
     def load_window(self, symbol: str, start_ns: int, end_ns: int) -> list[TickData]:
-        """Load interleaved bidask + tick events with ``start_ns <= exch_ts < end_ns``."""
-        return self._load_events(symbol, f"exch_ts >= {int(start_ns)} AND exch_ts < {int(end_ns)}")
+        """Events with ``start_ns <= exch_ts < end_ns``, in session and deduplicated."""
+        return self._events(self._governed().read_window(symbol, int(start_ns), int(end_ns)))
 
-    def _load_events(self, symbol: str, where: str) -> list[TickData]:
-        scale = 1_000_000
-
-        ba_sql = f"""
-        SELECT exch_ts,
-               bids_price[1] AS bid1_p, bids_vol[1] AS bid1_v,
-               asks_price[1] AS ask1_p, asks_vol[1] AS ask1_v
-        FROM hft.market_data
-        WHERE symbol = '{symbol}' AND type = 'BidAsk'
-          AND {where}
-          AND length(bids_price) >= 1 AND length(asks_price) >= 1
-        ORDER BY exch_ts
-        """
-        tick_sql = f"""
-        SELECT exch_ts, price_scaled AS price, volume
-        FROM hft.market_data
-        WHERE symbol = '{symbol}' AND type = 'Tick'
-          AND {where}
-        ORDER BY exch_ts
-        """
-        ba_rows = self._query(ba_sql)
-        tick_rows = self._query(tick_sql)
-
+    def _events(self, read: WindowRead) -> list[TickData]:
+        self._reads.append(read.provenance())
+        scale = CK_PRICE_SCALE
         events: list[TickData] = []
-
-        if len(ba_rows) > 1:
-            for row in ba_rows[1:]:
+        for row in read.rows:
+            if row[0] == "BidAsk":
+                bids_price, asks_price, bids_vol, asks_vol = row[3], row[4], row[5], row[6]
+                if not bids_price or not asks_price:
+                    continue
                 events.append(
                     TickData(
-                        exch_ts=int(row[0]),
-                        bid_price=int(row[1]),
-                        ask_price=int(row[3]),
-                        bid_qty=int(row[2]),
-                        ask_qty=int(row[4]),
+                        exch_ts=int(row[1]),
+                        bid_price=int(bids_price[0]),
+                        ask_price=int(asks_price[0]),
+                        bid_qty=int(bids_vol[0]),
+                        ask_qty=int(asks_vol[0]),
                         trade_price=0,
                         trade_volume=0,
                         is_trade=False,
                         scale=scale,
                     )
                 )
-
-        if len(tick_rows) > 1:
-            for row in tick_rows[1:]:
+            elif row[0] == "Tick":
                 events.append(
                     TickData(
-                        exch_ts=int(row[0]),
+                        exch_ts=int(row[1]),
                         bid_price=0,
                         ask_price=0,
                         bid_qty=0,
                         ask_qty=0,
-                        trade_price=int(row[1]),
-                        trade_volume=int(row[2]),
+                        trade_price=int(row[7] or 0),
+                        trade_volume=int(row[8] or 0),
                         is_trade=True,
                         scale=scale,
                     )
                 )
-
-        events.sort(key=lambda e: e.exch_ts)
         return events
 
     def available_dates(self, symbol: str) -> list[str]:
-        sql = f"""
-        SELECT DISTINCT toDate(fromUnixTimestamp64Nano(exch_ts)) AS d
-        FROM hft.market_data
-        WHERE symbol = '{symbol}'
-        ORDER BY d
-        """
-        rows = self._query(sql)
-        if len(rows) <= 1:
-            return []
-        return [row[0] for row in rows[1:]]
+        """Trading days whose window holds an event of ``symbol``."""
+        return [day.isoformat() for day in self._governed().trading_days(symbol)]
 
     def available_local_slots(self, root: str, tz: str, split_minute: int) -> list[tuple[calendar_date, bool]]:
         """``(local date, at or after split_minute)`` pairs in ``tz`` holding an event of any ``<root>`` month.
@@ -239,19 +211,7 @@ class ClickHouseSource:
             raise ValueError(f"not a timezone name: {tz!r}")
         if not 0 <= int(split_minute) < 24 * 60:
             raise ValueError(f"split_minute must be a minute of the day, got {split_minute!r}")
-        sql = f"""
-        SELECT DISTINCT
-            toDate(fromUnixTimestamp64Nano(exch_ts), '{tz}') AS d,
-            toHour(fromUnixTimestamp64Nano(exch_ts), '{tz}') * 60
-                + toMinute(fromUnixTimestamp64Nano(exch_ts), '{tz}') >= {int(split_minute)} AS late
-        FROM hft.market_data
-        WHERE match(symbol, '^{root}[A-L][0-9]$')
-        ORDER BY d, late
-        """
-        rows = self._query(sql)
-        if len(rows) <= 1:
-            return []
-        return [(calendar_date.fromisoformat(row[0]), row[1] == "1") for row in rows[1:]]
+        return self._governed().local_slots(tz=tz, split_minute=int(split_minute), root=root)
 
 
 class MakerEngine:

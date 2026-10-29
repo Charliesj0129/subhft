@@ -18,7 +18,7 @@ from typing import Any, Iterable, Sequence
 
 import numpy as np
 
-from src.hft_platform.backtest.ch_data_source import (
+from hft_platform.backtest.ch_data_source import (
     BUY_EVENT,
     DEPTH_CLEAR_EVENT,
     DEPTH_EVENT,
@@ -205,15 +205,13 @@ def rows_to_l2_and_ticks(  # noqa: C901 - sequential protocol conversion mirrors
     tick_stats = dedup.DedupStats()
     if content_dedup:
         row_list, tick_stats = dedup.dedup_tick_rows(row_list)
+    row_list, bidask_removed = dedup.dedup_bidask_rows(
+        row_list, window_ns=DEDUP_WINDOW_NS, content_dedup=content_dedup
+    )
     event_dtype = _event_dtype()
     events: list[tuple[Any, ...]] = []
     ticks: list[tuple[Any, ...]] = []
     snapshot_written = False
-    prev_bidask_key: tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]] | None = None
-    prev_bidask_ts = 0
-    bidask_removed = 0
-    seen_ts = -1
-    seen_at_ts: set[tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], tuple[int, ...]]] = set()
     best_bid = 0.0
     best_ask = 0.0
     last_trade_price = 0.0
@@ -233,19 +231,6 @@ def rows_to_l2_and_ticks(  # noqa: C901 - sequential protocol conversion mirrors
             ap_list = [int(v) for v in (asks_price or [])]
             bv_list = [int(v) for v in (bids_vol or [])]
             av_list = [int(v) for v in (asks_vol or [])]
-            key = (tuple(bp_list), tuple(ap_list), tuple(bv_list), tuple(av_list))
-            if ts != seen_ts:
-                seen_ts, seen_at_ts = ts, set()
-            if content_dedup and key in seen_at_ts:
-                bidask_removed += 1
-                continue
-            if key == prev_bidask_key and (ts - prev_bidask_ts) < DEDUP_WINDOW_NS:
-                bidask_removed += 1
-                continue
-            seen_at_ts.add(key)
-            prev_bidask_key = key
-            prev_bidask_ts = ts
-
             bids = _valid_levels(bp_list, bv_list, price_scale=price_scale)
             asks = _valid_levels(ap_list, av_list, price_scale=price_scale)
             if not bids or not asks:
