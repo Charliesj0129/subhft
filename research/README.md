@@ -195,6 +195,20 @@ Definitions retired by the move (research v2 C3):
 | `_resampling` bootstraps, `smma_validation` block/cluster bootstraps, `deflated_sharpe`, `effective_test_count` | identical values | `stats.*` (`block_bootstrap_mean` is now `moving_block_bootstrap_mean`) |
 | `_safe_spearmanr`, `smma_validation.spearman_ic`, `candidate_loop` `_rank_ic`, `screener._ic` | identical except on near-constant input: the old rules (std at most 1e-12, std exactly 0, range at most 1e-12) are now one, range at most 1e-12 means undefined | `stats.rank_ic` / `stats.pearson_ic`; callers keep their own undefined-as-0 or NaN |
 
+Retired in research v2 C4:
+
+| Retired | Difference | Replacement |
+|---|---|---|
+| `taker_sim.daily_sharpe`, `metrics.compute_sharpe`, `search_engine._signal_sharpe` bodies | identical except on a constant series, where `np.std` can return ~1e-16 instead of 0 and the old copies reported a Sharpe around 1e16; now 0 | `stats.sharpe_ratio`; each caller keeps its own series and annualization |
+| `metrics.compute_ic` / `compute_ic_incremental` per-chunk Pearson, `metrics.compute_ic_ttest` | identical values | `stats.chunked_ic`, `stats.chunk_pearson_ic`, `stats.ic_ttest` (the `metrics` names remain as wrappers) |
+
+`search_engine`'s score is a screening scale, not a Sharpe: one observation is one
+row of the feature arrays, multiplied by sqrt(252) only so scores stay comparable
+with earlier runs. The engine reports how many expressions it scored
+(`AlphaSearchEngine.trial_summary()`, also in `save_results` and `hft alpha search
+--out`), and `hft alpha mine promote` records it as
+`experiment_metadata.search_trials`. No gate reads that count yet.
+
 ## One Factory Flow
 
 The factory preflight sequence is fixed:

@@ -43,6 +43,7 @@ from typing import Any
 
 import numpy as np
 
+from hft_platform.alpha.stats import sharpe_ratio
 from hft_platform.contracts.strategy import TIF, OrderIntent
 from hft_platform.events import LOBStatsEvent
 from research.backtest.alpha_strategy_bridge import _PRICE_SCALE, AlphaStrategyBridge
@@ -97,13 +98,7 @@ class TakerDay:
 
 
 def daily_sharpe(net_pts: Sequence[float]) -> float:
-    values = np.asarray(net_pts, dtype=np.float64)
-    if values.size < 2:
-        return 0.0
-    std = float(np.std(values))
-    if std <= 0.0:
-        return 0.0
-    return float(np.mean(values) / std * np.sqrt(ANNUALIZATION_DAYS))
+    return sharpe_ratio(net_pts, annualization=ANNUALIZATION_DAYS)
 
 
 @dataclass(frozen=True)

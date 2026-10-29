@@ -352,3 +352,10 @@ def test_simulate_files_rejects_a_day_split_across_files(tmp_path):
     b = _day(tmp_path, "b", np.full(20, 100.0), ts=_blocks(["2026-04-14T10:00:00"], rows_each=20))
     with pytest.raises(TakerSimError, match="more than once"):
         simulate_files(_sim(ScriptedAlpha({})), [a, b])
+
+
+def test_daily_sharpe_of_a_constant_daily_pnl_is_zero_not_float_noise() -> None:
+    # np.std([1.1] * 30) is ~2e-16, not 0: dividing by it reported a Sharpe near 1e17.
+    assert daily_sharpe([1.1] * 30) == 0.0
+    assert daily_sharpe([0.1] * 7) == 0.0
+    assert daily_sharpe([3.0] * 30) == 0.0

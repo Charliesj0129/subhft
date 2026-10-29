@@ -12,6 +12,10 @@ thresholds are in Sharpe units (``deflated_sharpe_min``,
 ``opt_min_deflated_sharpe``) compare ``SR - SR0`` against them, with ``SR0``
 from :func:`expected_max_sharpe`; the probability is reported next to it.
 
+Sharpe itself has one definition too, :func:`sharpe_ratio`; what differs
+between callers is only the series they pass (daily net points, equity
+returns, or a generator's per-row screening PnL) and its annualization.
+
 Pure functions, no I/O. Offline research metrics, so float is allowed.
 """
 
@@ -26,11 +30,30 @@ from scipy.stats import norm, spearmanr
 
 EULER_GAMMA = 0.5772156649015329
 IC_DEGENERATE_PTP = 1e-12
+SHARPE_DEGENERATE_STD = 1e-12
 
 
 # ---------------------------------------------------------------------------
-# Sharpe: probabilistic, expected maximum, deflated
+# Sharpe: plain, probabilistic, expected maximum, deflated
 # ---------------------------------------------------------------------------
+
+
+def sharpe_ratio(values: Sequence[float] | np.ndarray, *, annualization: float = 1.0) -> float:
+    """``mean / std * sqrt(annualization)`` of *values*, population std; 0 when undefined.
+
+    Undefined means fewer than 2 values, a constant series (``ptp == 0``: ``np.std``
+    of one can come out as ~1e-16 times its level, not 0), or a std at most
+    ``SHARPE_DEGENERATE_STD``.
+    The caller chooses the series and says what one observation is: a day of net
+    points annualized by 252 is a Sharpe; a row of tick PnL scaled by 252 is not.
+    """
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size < 2:
+        return 0.0
+    std = float(np.std(arr))
+    if not std > SHARPE_DEGENERATE_STD or float(np.ptp(arr)) == 0.0:
+        return 0.0
+    return float(np.mean(arr) / std * math.sqrt(annualization))
 
 
 def expected_max_sharpe(n_trials: float, trial_sharpe_std: float) -> float:
@@ -378,6 +401,68 @@ def pearson_ic(signal: Sequence[float] | np.ndarray, target: Sequence[float] | n
         return math.nan
     value = float(np.corrcoef(lhs, rhs)[0, 1])
     return value if math.isfinite(value) else math.nan
+
+
+def chunk_pearson_ic(signal_chunks: np.ndarray, target_chunks: np.ndarray) -> np.ndarray:
+    """Pearson IC of each row of two ``(n_chunks, chunk)`` arrays; NaN where a row is constant.
+
+    The kernel behind :func:`chunked_ic` and the backtest runner's incremental
+    IC. A row is constant when ``sqrt(ss_signal * ss_target) < IC_DEGENERATE_PTP``.
+    """
+    sig_centered = signal_chunks - signal_chunks.mean(axis=1, keepdims=True)
+    fut_centered = target_chunks - target_chunks.mean(axis=1, keepdims=True)
+    num = np.einsum("ij,ij->i", sig_centered, fut_centered)
+    denom = np.sqrt(
+        np.einsum("ij,ij->i", sig_centered, sig_centered) * np.einsum("ij,ij->i", fut_centered, fut_centered)
+    )
+    zero_mask = denom < IC_DEGENERATE_PTP
+    safe_denom = np.where(zero_mask, 1.0, denom)
+    return np.asarray(np.where(zero_mask, np.nan, num / safe_denom), dtype=np.float64)
+
+
+def chunked_ic(
+    signal: Sequence[float] | np.ndarray, target: Sequence[float] | np.ndarray, *, buckets: int = 20
+) -> tuple[float, float, np.ndarray]:
+    """Mean and std of per-chunk Pearson IC over ``buckets`` contiguous chunks.
+
+    A different estimator from :func:`pearson_ic`: the series is cut into
+    chunks of ``max(8, n // buckets)`` rows (the tail that does not fill a
+    chunk is dropped) and each chunk's IC is one observation, which is what
+    :func:`ic_ttest` tests. Returns ``(0, 0, empty)`` under 8 rows or when no
+    chunk is defined.
+    """
+    sig = np.asarray(signal, dtype=np.float64).reshape(-1)
+    fut = np.asarray(target, dtype=np.float64).reshape(-1)
+    n = min(sig.size, fut.size)
+    empty = np.asarray([], dtype=np.float64)
+    if n < 8:
+        return 0.0, 0.0, empty
+    chunk = max(8, n // max(buckets, 1))
+    n_chunks = (n - chunk) // chunk + 1
+    if n_chunks < 1:
+        return 0.0, 0.0, empty
+    usable = n_chunks * chunk
+    ic_all = chunk_pearson_ic(sig[:usable].reshape(n_chunks, chunk), fut[:usable].reshape(n_chunks, chunk))
+    series = ic_all[np.isfinite(ic_all)]
+    if series.size == 0:
+        return 0.0, 0.0, empty
+    return float(np.mean(series)), float(np.std(series)), series
+
+
+def ic_ttest(ic_series: Sequence[float] | np.ndarray) -> tuple[float, float]:
+    """One-sample t-test of an IC series against 0: ``(t, one-sided p for mean > 0)``.
+
+    Non-finite entries are dropped; fewer than 3 left is no evidence, ``(0, 1)``.
+    """
+    from scipy.stats import ttest_1samp
+
+    arr = np.asarray(ic_series, dtype=np.float64).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size < 3:
+        return 0.0, 1.0
+    t_stat, p_two = ttest_1samp(arr, 0.0)
+    p_one = float(p_two) / 2.0 if float(t_stat) > 0 else 1.0 - float(p_two) / 2.0
+    return float(t_stat), p_one
 
 
 def min_detectable_ic(observations: int, *, alpha: float = 0.05, power: float = 0.80) -> float:

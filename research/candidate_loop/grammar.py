@@ -1,7 +1,7 @@
 """Formula grammar for the candidate loop DSL (spec §7, prim_v1).
 
-Hand-rolled recursive-descent parser, modeled on
-``src/hft_platform/alpha/dsl/parser.py`` and extended with function calls
+Hand-rolled recursive-descent parser, modeled on the Slice D
+``alpha/dsl/parser.py`` (removed in research v2 C4) and extended with function calls
 (positional + keyword args), string literals, division, and a single
 top-level comparison (regime filters only)::
 

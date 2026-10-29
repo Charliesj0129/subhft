@@ -7,9 +7,8 @@ Mirrors ``research/tools/alpha_scaffold.py``'s plain-f-string-generator /
 driven by what a GP-discovered candidate actually is:
 
   - ``formula`` carries the raw GP expression text (``research/combinatorial``'s
-    function-call grammar); ``dsl_formula`` stays unset (``None``). The two
-    grammars are incompatible (``src/hft_platform/alpha/dsl/`` supports only
-    linear ``+ - *`` weighted sums) -- do not try to unify them.
+    function-call grammar, ``expression_lang``); ``dsl_formula`` stays unset
+    (``None``): it is descriptive text that nothing parses.
   - Unlike ``alpha_scaffold.py`` (which never writes one), this also writes
     ``manifest.yaml`` -- consumed independently by
     ``research/tools/lifecycle_audit.py`` (status source of truth) and
@@ -53,6 +52,7 @@ class Lineage:
     selection_sharpe: float | None
     correlation_pool_max: float | None
     search_algorithm: str | None
+    search_trials: int | None = None
 
 
 def class_name_for(alpha_id: str) -> str:
@@ -70,6 +70,7 @@ def promote_candidate(
     force: bool = False,
     search_result: SearchResult | None = None,
     trial_ledger: TrialLedger | None = None,
+    search_trials: int | None = None,
 ) -> Path:
     """Scaffold ``<out_dir>/<alpha_id>/`` from a GP-discovered *expression*.
 
@@ -87,6 +88,12 @@ def promote_candidate(
     ``TrialLedger``) by looking up the candidate's semantic-identity hash --
     empty/``None`` fields if the expression was never run through the search
     engine (e.g. a hand-typed expression).
+
+    *search_trials* is how many distinct expressions the search scored before
+    this one was selected; on the ledger path it is the ledger's distinct trial
+    count for the candidate's ``search_run_id``. It is recorded in
+    ``experiment_metadata.search_trials`` (``None`` when unknown) for the
+    selection correction; no gate reads it yet.
     """
     compiled = compile_expression(expression)
     window = max_window_for_expression(expression)  # raises on non-streamable expressions
@@ -94,7 +101,7 @@ def promote_candidate(
     complexity = "O(N)" if window > 1 else "O(1)"
 
     lineage = (
-        _lineage_from_search_result(expression, search_result)
+        _lineage_from_search_result(expression, search_result, search_trials)
         if search_result is not None
         else _lineage_from_ledger(expression, trial_ledger or TrialLedger())
     )
@@ -136,21 +143,28 @@ def promote_candidate(
 
 
 def promote_from_results(results_path: Path | str, rank: int, **kwargs: Any) -> Path:
-    """Read an ``AlphaSearchEngine.save_results()`` JSON and promote ``results[rank]``."""
+    """Promote ``results[rank]`` of a ``save_results()`` or ``hft alpha search --out`` JSON.
+
+    Both carry ``{"results": [...], "trials": {...}}``; a bare list (``save_results``
+    before research v2 C4) has no trial count. A row's selection-set Sharpe is
+    ``selection_sharpe``, or ``sharpe_oos`` as the engine writes it.
+    """
     payload = json.loads(Path(results_path).read_text())
-    results = payload.get("results", [])
+    results = payload if isinstance(payload, list) else payload.get("results", [])
+    trials = payload.get("trials") if isinstance(payload, dict) else None
     if not (0 <= rank < len(results)):
         raise IndexError(f"rank {rank} out of range for {len(results)} result(s) in {results_path}")
     row = results[rank]
     result = SearchResult(
         expression=str(row["expression"]),
         score=float(row["score"]),
-        selection_sharpe=float(row["selection_sharpe"]),
+        sharpe_oos=float(row["selection_sharpe"] if "selection_sharpe" in row else row["sharpe_oos"]),
         correlation_pool_max=float(row["correlation_pool_max"]),
         passed=bool(row["passed"]),
         metadata=dict(row.get("metadata", {})),
     )
-    return promote_candidate(result.expression, search_result=result, **kwargs)
+    search_trials = int(trials["distinct"]) if isinstance(trials, dict) and "distinct" in trials else None
+    return promote_candidate(result.expression, search_result=result, search_trials=search_trials, **kwargs)
 
 
 def promote_smma_candidate(
@@ -242,7 +256,7 @@ def promote_smma_candidate(
     return alpha_dir
 
 
-def _lineage_from_search_result(expression: str, result: SearchResult) -> Lineage:
+def _lineage_from_search_result(expression: str, result: SearchResult, search_trials: int | None) -> Lineage:
     return Lineage(
         candidate_id=TrialLedger.candidate_id_for(expression),
         search_run_id=None,
@@ -253,6 +267,7 @@ def _lineage_from_search_result(expression: str, result: SearchResult) -> Lineag
         search_algorithm=(
             str(result.metadata["search_algorithm"]) if result.metadata.get("search_algorithm") else None
         ),
+        search_trials=search_trials,
     )
 
 
@@ -271,14 +286,16 @@ def _lineage_from_ledger(expression: str, ledger: TrialLedger) -> Lineage:
         )
     latest = matching[-1]
     metrics = latest.get("metrics") or {}
+    search_run_id = str(latest["search_run_id"]) if latest.get("search_run_id") else None
     return Lineage(
         candidate_id=candidate_id,
-        search_run_id=(str(latest["search_run_id"]) if latest.get("search_run_id") else None),
+        search_run_id=search_run_id,
         parent_ids=tuple(str(p) for p in latest.get("parent_ids", ())),
         score=_to_optional_float(metrics.get("score")),
         selection_sharpe=_to_optional_float(metrics.get("selection_sharpe")),
         correlation_pool_max=_to_optional_float(metrics.get("correlation_pool_max")),
         search_algorithm=None,
+        search_trials=ledger.unique_trial_count(search_run_id=search_run_id) if search_run_id else None,
     )
 
 
@@ -309,6 +326,7 @@ def _render_manifest_yaml(manifest: AlphaManifest, lineage: Lineage) -> str:
         "discovery_score": lineage.score,
         "discovery_selection_sharpe": lineage.selection_sharpe,
         "discovery_correlation_pool_max": lineage.correlation_pool_max,
+        "search_trials": lineage.search_trials,
         "discovery_metric_note": (
             "score/selection_sharpe/correlation_pool_max are selection-set metrics from "
             "research/combinatorial/search_engine.py, never out-of-sample -- see that "

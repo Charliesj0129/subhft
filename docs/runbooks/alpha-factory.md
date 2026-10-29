@@ -17,9 +17,12 @@ classifying candidates so only credible alphas reach Gate C / Gate D.
 - **Correlation clustering** — single-linkage agglomerative on
   `1 - |corr|`; lex-stable cluster_ids. Optional sidecar artifact.
   Source: `src/hft_platform/alpha/cluster.py`.
-- **Minimal DSL** — recursive-descent parser, tree-walk interpreter.
-  Explicit bans on `eval`, `exec`, `compile`, `__import__`, `getattr`.
-  Source: `src/hft_platform/alpha/dsl/{parser,compiler,formula_context}.py`.
+- **Expressions** — the factory has no DSL of its own. The one expression
+  language for mined candidates is
+  `research/combinatorial/expression_lang.py` (an `ast` whitelist over
+  `research/combinatorial/operator_library.py`). The `alpha/dsl/` package
+  that used to sit here had no importer and was removed in research v2 C4;
+  `AlphaManifest.dsl_formula` is descriptive text that nothing parses.
 
 ## Operator quick reference (DoD-D5)
 
@@ -126,15 +129,12 @@ f"{threshold}:{metric}:{sha256(base_dir)}:{corpus_hash}"
 Multiple thresholds can coexist in the same file; the sidecar is
 merged on each `--write-artifact` invocation, never truncated.
 
-## DSL safety
+## Expression safety
 
-The DSL compiler (`src/hft_platform/alpha/dsl/compiler.py`) is a
-tree-walk interpreter with **explicit bans** on `eval`, `exec`,
-`compile`, `getattr`, and `__import__` — verified by an attestation
-test (`tests/unit/alpha/dsl/test_compile_*` suite). Any new operator
-goes through the parser → AST → tree-walk path; no string-eval
-shortcut exists. The attestation grep is part of `make ci`, so any
-future change reintroducing a banned token fails CI.
+`research/combinatorial/expression_lang.py` parses with `ast` and rejects
+any node outside its whitelist (names, numeric constants, calls into
+`OPERATORS`, `+ - * /`, unary `+ -`) before evaluating the tree itself;
+there is no string-eval path.
 
 ## Common gotchas
 

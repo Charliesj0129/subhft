@@ -240,3 +240,47 @@ def test_min_detectable_ic_shrinks_with_sample_and_detects_nothing_below_four() 
 def test_min_detectable_ic_refuses_a_degenerate_level(alpha: float, power: float) -> None:
     with pytest.raises(ValueError, match="in \\(0, 1\\)"):
         stats.min_detectable_ic(100, alpha=alpha, power=power)
+
+
+# ---------------------------------------------------------------------------
+# Plain Sharpe and chunked IC (research v2 C4)
+# ---------------------------------------------------------------------------
+
+
+def test_sharpe_ratio_is_mean_over_population_std() -> None:
+    values = np.array([1.0, -0.5, 2.0, 0.25, -1.0])
+    expected = float(np.mean(values) / np.std(values) * math.sqrt(252.0))
+    assert stats.sharpe_ratio(values, annualization=252.0) == pytest.approx(expected, rel=1e-15)
+
+
+@pytest.mark.parametrize("values", [[], [3.0], [5.0] * 40, [0.1] * 7, [1.1] * 30, [1e9 + 0.3] * 25])
+def test_sharpe_ratio_of_a_constant_or_short_series_is_zero(values: list[float]) -> None:
+    """``np.std`` of a constant series can come out as ~1e-16, not 0; the retired copies
+    divided by it and reported Sharpe in the 1e16 range for a strategy that earns the same
+    every day."""
+    assert stats.sharpe_ratio(values, annualization=252.0) == 0.0
+
+
+def test_chunked_ic_matches_the_retired_definition() -> None:
+    mean, std, series = stats.chunked_ic(_SIGNAL, _SERIES, buckets=5)
+    assert series.size == 5
+    chunks = [float(np.corrcoef(_SIGNAL[i : i + 12], _SERIES[i : i + 12])[0, 1]) for i in range(0, 60, 12)]
+    np.testing.assert_allclose(series, chunks, rtol=0, atol=1e-12)
+    assert mean == pytest.approx(float(np.mean(chunks)))
+    assert std == pytest.approx(float(np.std(chunks)))
+
+
+def test_chunked_ic_drops_constant_chunks_and_short_input() -> None:
+    signal = _SIGNAL.copy()
+    signal[:12] = 1.0
+    _, _, series = stats.chunked_ic(signal, _SERIES, buckets=5)
+    assert series.size == 4
+    assert stats.chunked_ic(_SIGNAL[:7], _SERIES[:7]) == (0.0, 0.0, pytest.approx(np.asarray([])))
+
+
+def test_ic_ttest_is_one_sided_for_a_positive_mean() -> None:
+    t_pos, p_pos = stats.ic_ttest([0.1, 0.12, 0.08, 0.11, 0.09])
+    t_neg, p_neg = stats.ic_ttest([-0.1, -0.12, -0.08, -0.11, -0.09])
+    assert t_pos > 0 and p_pos < 0.01
+    assert t_neg < 0 and p_neg > 0.99
+    assert stats.ic_ttest([0.1, np.nan]) == (0.0, 1.0)

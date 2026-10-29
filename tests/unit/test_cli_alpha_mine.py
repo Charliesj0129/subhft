@@ -6,9 +6,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 import hft_platform.cli as cli
 from research.combinatorial.partitioning import dataset_fingerprint
+from research.combinatorial.search_engine import AlphaSearchEngine
 
 
 def _mine_init_args(*, data_path, out_dir, session_field="session_id", **overrides) -> Namespace:
@@ -199,15 +201,6 @@ def test_cmd_alpha_mine_promote_writes_alpha_package(capsys, scratch_alpha_id) -
     assert (Path("research/alphas") / scratch_alpha_id / "manifest.yaml").exists()
 
 
-@pytest.mark.skip(
-    reason=(
-        "promote_from_results() reads SearchResult.selection_sharpe, which only exists in the "
-        "GP-search-provenance revision of research/combinatorial/search_engine.py. That revision "
-        "also changes what the field computes (sharpe -> ratio), so it was deliberately excluded "
-        "from this mining-only branch rather than imported unverified. Phase 2.3 rewrites this "
-        "scaffold path for non-SMMA families and must re-enable this test."
-    )
-)
 def test_cmd_alpha_mine_promote_from_results(capsys, scratch_alpha_id, tmp_path) -> None:
     results_path = tmp_path / "results.json"
     results_path.write_text(
@@ -222,7 +215,8 @@ def test_cmd_alpha_mine_promote_from_results(capsys, scratch_alpha_id, tmp_path)
                         "passed": True,
                         "metadata": {},
                     }
-                ]
+                ],
+                "trials": {"evaluated": 40, "distinct": 31},
             }
         )
     )
@@ -230,6 +224,25 @@ def test_cmd_alpha_mine_promote_from_results(capsys, scratch_alpha_id, tmp_path)
     cli.cmd_alpha_mine_promote(args)
     out = capsys.readouterr().out
     assert "Promoted GP candidate to" in out
+    manifest = yaml.safe_load((Path("research/alphas") / scratch_alpha_id / "manifest.yaml").read_text())
+    assert manifest["experiment_metadata"]["search_trials"] == 31
+    assert manifest["experiment_metadata"]["discovery_selection_sharpe"] == 0.5
+
+
+def test_cmd_alpha_mine_promote_from_results_reads_the_engine_output(capsys, scratch_alpha_id, tmp_path) -> None:
+    rng = np.random.default_rng(3)
+    engine = AlphaSearchEngine(features={"x": rng.normal(size=128), "y": rng.normal(size=128)}, random_seed=3)
+    results = engine.random_search(n_trials=12)
+    results_path = Path(engine.save_results(results, path=str(tmp_path / "latest.json")))
+
+    args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(results_path), rank=0)
+    cli.cmd_alpha_mine_promote(args)
+
+    manifest = yaml.safe_load((Path("research/alphas") / scratch_alpha_id / "manifest.yaml").read_text())
+    meta = manifest["experiment_metadata"]
+    assert meta["search_trials"] == engine.trial_summary()["distinct"]
+    assert 1 <= meta["search_trials"] <= 12
+    assert meta["discovery_selection_sharpe"] == results[0].sharpe_oos
 
 
 def test_cmd_alpha_mine_promote_requires_rank_with_from_results(scratch_alpha_id, tmp_path) -> None:
