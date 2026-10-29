@@ -2,7 +2,9 @@
 
 ## Status
 Accepted (2026-10-23). Proposed 2026-10-06. Owner decision: Shadow exit is the blocking stage.
-No threshold changes; implementation is tracked in ADR-005: the Gate C deferral landed in stage 1 (#653); the Shadow-exit check is stage 2.
+No threshold changes; implementation is tracked in ADR-005: the Gate C deferral landed in stage 1 (#653); the Shadow-exit check
+landed in stage 2 (PR8): only `hft run --mode replay` reports discharge the obligation (`src/hft_platform/alpha/shadow_parity.py`),
+each bound to the promoted strategy's code by the sha256 of its module source, and the promotion YAML records which step certified it (`certified_obligations`).
 
 ## Context
 `replay_parity` is a blocking Gate C sub-gate (`config/research/profiles/vm_ul6_strict.yaml`,

@@ -268,7 +268,7 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 
 ### Strict checks
 
-- **Replay-parity audit** — `BacktestResult.replay_parity_report` must be present; missing report = hard fail. Under strict the sub-gate blocks promotion whenever `ok is False` — i.e. **any** structural or hash-level divergence — regardless of `match_pct`. The `replay_parity_match_pct_min: 95.0` threshold is an informational metric only. Fail-closed matrix and canonicalization rules: `docs/runbooks/replay-parity-gate.md`.
+- **Replay-parity audit** — a `scorecard.replay_parity.match_pct` below `replay_parity_match_pct_min: 95.0` fails, and a report with no numeric `match_pct` is an ERROR. A missing report is NOT_APPLICABLE: under `vm_ul6_strict_v2` it becomes a Shadow-exit obligation (section 11), and under any other profile the run is INVALID. Fail-closed matrix and canonicalization rules: `docs/runbooks/replay-parity-gate.md`.
 - **Latency audit** — `python -m hft_platform.alpha.latency_audit --strict` runs against the scorecard. 80 % tolerance violations on P95 for `place_order` / `update_order` / `cancel_order` = hard fail. Source: `latency_audit.py`.
 - **Auto-kill (Slice D, merged #342)** — Gate D rejection writes a row with `gate='D'` to the kill ledger via `kill_ledger.append_kill()`. Default-enabled (`HFT_KILL_LEDGER_ENABLED=1`); set to `0` only in unit-test isolation.
 
@@ -293,6 +293,8 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 
 - **Canary scheduler:** `src/hft_platform/alpha/canary_scheduler.py`.
 - **Shadow runs:** use the locked production compose (`docker-compose.prod.locked.yml`, loop_v1 step L3a).
+- **Replay parity before Live (ADR-003).** A `replay_parity_audit` obligation in the promotion YAML holds the canary: its weight does not rise and it does not graduate until `report.json` files from `hft run --mode replay` certify parity. Pass them with `hft alpha canary evaluate --replay-parity-report <path>` (repeatable; `--apply` records the certification), or at promotion with `hft alpha promote --replay-parity-report <path>`, where a failing report fails Gate E. Promotion must name the runtime strategy with `--replay-strategy module:Class`: the obligation pins the sha256 of that module's source, and Gate E fails if it does not resolve. Each report must come from that harness, be `eligible`, name the obligation's `strategy_id`, carry a `strategy_fingerprint` that matches the pinned module, class and code sha256, compare at least one live intent and reach its `min_match_pct` (a finite percentage in (0, 100]); one report per session, all with the same strategy settings. A report from an earlier version of the strategy does not certify, so a code change after promotion means promoting again. A typed-in match percentage is not evidence. Checks: `src/hft_platform/alpha/shadow_parity.py`.
+- **Live PR checklist:** the PR that adds `config/loops/<id>.yaml` cites the promotion YAML, which lists no `obligations` and records the replay reports under `certified_obligations`.
 - **Live promotion is FROZEN.** The 30-day stabilization window locks the live registry to `r47_tmf_v1`. Enforcement points:
   - `docs/loop_v1_stabilization_charter.md` (charter + clock).
   - `.github/workflows/freeze-guard.yml` (CI block on new strategies).
@@ -306,7 +308,7 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 1. Set `HFT_INTENT_RECORDER_ENABLED=1` for live / shadow runs that should produce reconstruction evidence.
 2. Run `hft run --mode replay` (loop_v1 step L4) over a recorded session. Source: `src/hft_platform/replay/cli_runner.py`.
 3. The engine emits an `IntentDiff` stream; `replay_parity.py` compares live vs. replay.
-4. Under strict, Gate D blocks closed on **any** divergence (`ok is False`); the 95 % `match_pct` is informational only.
+4. The runner writes `outputs/replay/<session>/report.json`. Gate D checks a scorecard `match_pct` against the 95 % floor; for a candidate with no live intents, the same floor is enforced before Live by the Shadow-exit obligation (section 11).
 
 Deep dive (fail-closed matrix, canonical schema, stable hash): `docs/runbooks/replay-parity-gate.md`.
 

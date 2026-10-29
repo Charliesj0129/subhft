@@ -895,6 +895,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Require paper-trade summary checks (1-week governance) in Gate E",
     )
     alpha_promote.add_argument("--paper-trade-summary", default=None, help="Optional paper-trade summary JSON path")
+    alpha_promote.add_argument(
+        "--replay-parity-report",
+        action="append",
+        default=[],
+        help="report.json from `hft run --mode replay` over a shadow session (repeatable; Gate E, ADR-003)",
+    )
+    alpha_promote.add_argument(
+        "--replay-strategy-id", default=None, help="Runtime strategy id the replay reports name (default: alpha_id)"
+    )
+    alpha_promote.add_argument(
+        "--replay-strategy",
+        default=None,
+        help="Runtime strategy module:Class; its source sha256 binds the Shadow-exit replay parity obligation",
+    )
     alpha_promote.add_argument("--min-paper-trade-calendar-days", type=int, default=7)
     alpha_promote.add_argument("--min-paper-trade-trading-days", type=int, default=5)
     alpha_promote.add_argument("--min-paper-trade-session-minutes", type=int, default=30)
@@ -1006,6 +1020,12 @@ def build_parser() -> argparse.ArgumentParser:
     canary_eval.add_argument("--error-rate", type=float, default=0.0, help="Live execution error rate")
     canary_eval.add_argument("--sessions", type=int, default=0, help="Number of live sessions")
     canary_eval.add_argument("--sharpe-live", type=float, default=None, help="Live Sharpe ratio (for escalation)")
+    canary_eval.add_argument(
+        "--replay-parity-report",
+        action="append",
+        default=[],
+        help="report.json from `hft run --mode replay` (repeatable): evidence for a replay_parity obligation",
+    )
     canary_eval.add_argument("--apply", action="store_true", help="Apply decision (modify YAML)")
     canary_eval.add_argument("--promotions-dir", default="config/strategy_promotions", help="Promotions YAML directory")
     canary_eval.add_argument("--out", help="Optional JSON output path")

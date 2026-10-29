@@ -133,6 +133,14 @@ def add_common_research_pipeline_args(
         default=None,
         help="Optional JSON summary path for paper-trade governance (Gate E strict mode).",
     )
+    cmd.add_argument(
+        "--replay-parity-report",
+        action="append",
+        default=[],
+        help="report.json from `hft run --mode replay` over a shadow session (repeatable; Gate E, ADR-003).",
+    )
+    cmd.add_argument("--replay-strategy-id", default=None, help="Runtime strategy id the replay reports name.")
+    cmd.add_argument("--replay-strategy", default=None, help="Runtime strategy module:Class the reports replayed.")
     cmd.add_argument("--min-paper-trade-calendar-days", type=int, default=7)
     cmd.add_argument("--min-paper-trade-trading-days", type=int, default=5)
     cmd.add_argument("--min-paper-trade-session-minutes", type=int, default=30)

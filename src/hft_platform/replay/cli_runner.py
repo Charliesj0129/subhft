@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from hft_platform.alpha.replay_parity import IntentDiff, ReplayParityReport
+from hft_platform.alpha.shadow_parity import strategy_config_sha256, strategy_fingerprint
 from hft_platform.replay.eligibility import (
     Eligible,
     IneligibleNoFixture,
@@ -209,6 +210,9 @@ def run_replay_session(
         "first_divergence_idx": None,
         "harness_version": HARNESS_VERSION,
         "fixture_sha256": "",
+        # The code and settings replayed, so a Shadow-exit certification
+        # (ADR-003) can tell this strategy version from an earlier one.
+        "strategy_fingerprint": _strategy_fingerprint(strategy_cfg),
     }
 
     eligibility = check_eligibility(
@@ -284,6 +288,13 @@ def run_replay_session(
 
     _write_report(out_dir, base_payload, parity=report)
     return 0
+
+
+def _strategy_fingerprint(strategy_cfg: dict[str, Any]) -> dict[str, str] | None:
+    code = strategy_fingerprint(strategy_cfg.get("module"), strategy_cfg.get("class"))
+    if code is None:
+        return None
+    return {**code, "config_sha256": strategy_config_sha256(strategy_cfg)}
 
 
 def _client_or_none() -> Any | None:
