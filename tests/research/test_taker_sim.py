@@ -19,6 +19,8 @@ from research.backtest.taker_sim import (  # noqa: E402
     TakerSimError,
     _TakerOrderBridge,
     daily_sharpe,
+    simulate_files,
+    split_trading_days,
 )
 
 _DTYPE = np.dtype(
@@ -55,14 +57,14 @@ class ScriptedAlpha:
         return value
 
 
-def _day(tmp_path: Path, name: str, bids: np.ndarray, spread: float = 1.0) -> str:
+def _day(tmp_path: Path, name: str, bids: np.ndarray, spread: float = 1.0, ts: np.ndarray | None = None) -> str:
     rows = np.zeros(len(bids), dtype=_DTYPE)
     rows["bid_px"] = bids
     rows["ask_px"] = bids + spread
     rows["bid_qty"] = 5.0
     rows["ask_qty"] = 5.0
     rows["mid_price"] = bids + spread / 2.0
-    rows["local_ts"] = (np.arange(len(bids)) + 1) * _SECOND
+    rows["local_ts"] = (np.arange(len(bids)) + 1) * _SECOND if ts is None else ts
     path = tmp_path / f"{name}.npy"
     np.save(path, rows)
     return ensure_hftbt_npz(str(path))
@@ -260,3 +262,93 @@ def test_position_follows_the_native_runner_ladder_when_orders_fill(tmp_path):
     # after it, so the booked position equals the ladder one event earlier.
     assert day.residual_qty == int(ladder[-2])
     assert sum(f.qty for f in day.fills) == day.residual_qty
+
+
+def test_one_sided_book_holds_the_order_until_both_sides_quote(tmp_path):
+    rows = np.zeros(30, dtype=_DTYPE)
+    rows["bid_px"][10:] = 100.0  # no bid for the first ten rows
+    rows["ask_px"] = np.where(np.arange(30) < 10, 105.0, 101.0)
+    rows["bid_qty"] = 5.0
+    rows["ask_qty"] = 5.0
+    rows["local_ts"] = (np.arange(30) + 1) * _SECOND
+    np.save(tmp_path / "d1.npy", rows)
+    path = ensure_hftbt_npz(str(tmp_path / "d1.npy"))
+
+    day = _sim(ScriptedAlpha({4: 1.0})).run_day(DAY1, path)
+
+    # The adapter emits no book event until both sides quote, so a day that opens one-sided
+    # (as a split day can) never trades against the lone 105 offer.
+    assert [(f.qty, f.price_pts) for f in day.fills] == [(1, 101.0)]
+
+
+def test_rows_carry_the_sub_gate_fields(tmp_path):
+    path = _day(tmp_path, "d1", _rising())
+    row = _sim(ScriptedAlpha({4: 1.0})).run_day(DAY1, path).to_row()
+
+    assert row["pnl_pts"] == row["net_pts"]
+    assert row["fills"] == 2  # the entry and the closing sale
+    assert row["residual_mtm_pts"] == 0.0
+
+
+def _taipei_ns(text: str) -> int:
+    moment = dt.datetime.fromisoformat(text).replace(tzinfo=dt.timezone(dt.timedelta(hours=8)))
+    return int(moment.timestamp()) * _SECOND
+
+
+def _blocks(stamps: list[str], rows_each: int = 10) -> np.ndarray:
+    return np.concatenate([_taipei_ns(t) + np.arange(rows_each) * _SECOND for t in stamps])
+
+
+def test_split_assigns_night_sessions_to_the_next_trading_day(tmp_path):
+    stamps = [
+        "2026-04-13T15:30:00",  # Monday night -> Tuesday 04-14
+        "2026-04-14T09:00:00",  # Tuesday day session -> 04-14
+        "2026-04-14T15:30:00",  # Tuesday night -> Wednesday 04-15
+        "2026-04-17T23:00:00",  # Friday night -> Monday 04-20
+        "2026-04-18T02:00:00",  # after midnight on Saturday -> Monday 04-20
+    ]
+    ts = _blocks(stamps)
+    path = _day(tmp_path, "multi", np.full(ts.size, 100.0), ts=ts)
+    out_dir = tmp_path / "split"
+    out_dir.mkdir()
+
+    days = split_trading_days(path, str(out_dir))
+
+    assert [d for d, _ in days] == [dt.date(2026, 4, 14), dt.date(2026, 4, 15), dt.date(2026, 4, 20)]
+    with np.load(path) as whole:
+        total = len(whole["data"])
+    sizes = []
+    for _, part in days:
+        with np.load(part) as npz:
+            sizes.append(len(npz["data"]))
+    assert sum(sizes) == total  # no event dropped or duplicated
+    assert sizes[0] == 2 * sizes[1]  # 04-14 holds two of the five blocks
+
+
+def test_split_rejects_unordered_timestamps(tmp_path):
+    ts = _blocks(["2026-04-14T09:00:00", "2026-04-13T15:30:00"])
+    path = _day(tmp_path, "unordered", np.full(ts.size, 100.0), ts=ts)
+    with pytest.raises(TakerSimError, match="not in order"):
+        split_trading_days(path, str(tmp_path))
+
+
+def test_split_rejects_dates_outside_the_calendar(tmp_path):
+    path = _day(tmp_path, "epoch", np.full(20, 100.0))  # 1970 timestamps
+    with pytest.raises(TakerSimError, match="outside"):
+        split_trading_days(path, str(tmp_path))
+
+
+def test_simulate_files_runs_every_trading_day(tmp_path):
+    ts = _blocks(["2026-04-14T09:00:00", "2026-04-15T09:00:00", "2026-04-16T09:00:00"], rows_each=20)
+    path = _day(tmp_path, "three", np.full(ts.size, 100.0), ts=ts)
+    result = simulate_files(_sim(ScriptedAlpha({4: 1.0})), [path])
+
+    assert [r["date"] for r in result.daily_rows()] == ["2026-04-14", "2026-04-15", "2026-04-16"]
+    assert all(d.n_contracts == 2 for d in result.days)  # each day enters once and closes once
+
+
+def test_simulate_files_rejects_a_day_split_across_files(tmp_path):
+    a = _day(tmp_path, "a", np.full(20, 100.0), ts=_blocks(["2026-04-14T09:00:00"], rows_each=20))
+    b = _day(tmp_path, "b", np.full(20, 100.0), ts=_blocks(["2026-04-14T10:00:00"], rows_each=20))
+    with pytest.raises(TakerSimError, match="more than once"):
+        simulate_files(_sim(ScriptedAlpha({})), [a, b])

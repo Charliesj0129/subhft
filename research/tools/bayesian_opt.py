@@ -44,8 +44,8 @@ class BayesianOptConfig:
     # backtest config defaults
     is_oos_split: float = 0.7
     max_position: int = 5
-    maker_fee_bps: float = -0.2
-    taker_fee_bps: float = 0.2
+    # Statutory per-side cost in points (cost_models.load_cost_profile); None = gross.
+    cost_per_side_pts: float | None = None
 
     def __post_init__(self) -> None:
         # Frozen dataclass workaround: use object.__setattr__ for default mutable field
@@ -157,8 +157,7 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
         data_paths=resolved_paths,
         is_oos_split=float(config.is_oos_split),
         max_position=int(config.max_position),
-        maker_fee_bps=float(config.maker_fee_bps),
-        taker_fee_bps=float(config.taker_fee_bps),
+        cost_per_side_pts=config.cost_per_side_pts,
         latency_profile_id=str(config.latency_profile_id),
         submit_ack_latency_ms=float(latency["submit_ack_latency_ms"]),
         modify_ack_latency_ms=float(latency["modify_ack_latency_ms"]),

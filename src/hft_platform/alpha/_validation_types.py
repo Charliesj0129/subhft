@@ -24,9 +24,6 @@ class ValidationConfig:
     modify_ack_latency_ms: float = 43.0
     cancel_ack_latency_ms: float = 47.0
     live_uplift_factor: float = 1.5
-    maker_fee_bps: float = -0.2
-    taker_fee_bps: float = 0.2
-    sell_tax_bps: float = 0.0  # Sell-side tax (bps). 0 for futures; set >0 for TWSE equities
     stat_pvalue_threshold: float = 0.1
     min_stat_tests_pass: int = 2
     stat_correction_method: str = "bh"
@@ -85,8 +82,6 @@ class ScreenConfig:
     max_position: int = 5
     min_ic: float = 0.005
     min_sharpe_oos: float = -0.5
-    maker_fee_bps: float = -0.2
-    taker_fee_bps: float = 0.2
     latency_profile_id: str = "sim_p95_v2026-02-26"
     local_decision_pipeline_latency_us: int = 250
     submit_ack_latency_ms: float = 36.0

@@ -292,8 +292,9 @@ def _evaluate_stress_backtest(
     fee_mult = max(1.0, float(config.stress_fee_multiplier))
     stress_cfg = replace(
         base_cfg,
-        maker_fee_bps=float(base_cfg.maker_fee_bps) * fee_mult,
-        taker_fee_bps=float(base_cfg.taker_fee_bps) * fee_mult,
+        cost_per_side_pts=(
+            None if base_cfg.cost_per_side_pts is None else float(base_cfg.cost_per_side_pts) * fee_mult
+        ),
         submit_ack_latency_ms=float(base_cfg.submit_ack_latency_ms) * latency_mult,
         modify_ack_latency_ms=float(base_cfg.modify_ack_latency_ms) * latency_mult,
         cancel_ack_latency_ms=float(base_cfg.cancel_ack_latency_ms) * latency_mult,

@@ -26,8 +26,6 @@ def _make_config(**overrides: object) -> BacktestConfig:
     """Build a BacktestConfig with sensible test defaults."""
     defaults: dict[str, object] = {
         "data_paths": ["/tmp/fake.npy"],
-        "taker_fee_bps": 0.0,
-        "maker_fee_bps": 0.0,
         "signal_threshold": 0.3,
         "max_position": 5,
         "initial_equity": 1_000_000.0,
@@ -59,7 +57,7 @@ class TestComputeEquityCurve:
         """Prices go up, long position -> equity increases."""
         prices = np.array([100.0, 101.0, 102.0], dtype=np.float64)
         positions = np.array([1.0, 1.0, 1.0], dtype=np.float64)
-        config = _make_config(taker_fee_bps=0.0)
+        config = _make_config()
 
         equity = _compute_equity_curve(prices, positions, config)
 
@@ -70,18 +68,24 @@ class TestComputeEquityCurve:
         assert equity[1] == pytest.approx(config.initial_equity + 1.0)
         assert equity[2] == pytest.approx(config.initial_equity + 2.0)
 
-    def test_with_fees(self) -> None:
-        """With fees, equity should be less than the zero-fee case."""
-        # Position changes at tick 1 (0->1) and tick 3 (1->2) to generate
-        # turnover entries that fall within the fee computation window.
+    def test_cost_is_charged_per_contract_changed(self) -> None:
+        """Each contract the position changes by pays ``cost_per_side_pts``; price level is irrelevant."""
         prices = np.array([100.0, 101.0, 102.0, 103.0, 104.0], dtype=np.float64)
-        positions = np.array([0.0, 1.0, 1.0, 2.0, 2.0], dtype=np.float64)
+        positions = np.array([0.0, 1.0, 1.0, 3.0, 2.0], dtype=np.float64)  # 1 + 2 + 1 contracts
 
-        eq_no_fee = _compute_equity_curve(prices, positions, _make_config(taker_fee_bps=0.0))
-        eq_fee = _compute_equity_curve(prices, positions, _make_config(taker_fee_bps=20.0))
+        gross = _compute_equity_curve(prices, positions, _make_config())
+        net = _compute_equity_curve(prices, positions, _make_config(cost_per_side_pts=0.75))
+        far = _compute_equity_curve(prices * 100.0, positions, _make_config(cost_per_side_pts=0.75))
+        far_gross = _compute_equity_curve(prices * 100.0, positions, _make_config())
 
-        # With fees, final equity should be lower than without fees
-        assert eq_fee[-1] < eq_no_fee[-1]
+        assert gross[-1] - net[-1] == pytest.approx(4 * 0.75)
+        assert far_gross[-1] - far[-1] == pytest.approx(4 * 0.75)  # not a bps rate of the price
+
+    def test_negative_cost_is_rejected(self) -> None:
+        prices = np.array([100.0, 101.0], dtype=np.float64)
+        positions = np.array([0.0, 1.0], dtype=np.float64)
+        with pytest.raises(ValueError, match="cost_per_side_pts"):
+            _compute_equity_curve(prices, positions, _make_config(cost_per_side_pts=-0.2))
 
     def test_zero_position(self) -> None:
         """Zero position -> equity stays at initial."""
@@ -244,7 +248,6 @@ class TestRunAdapterSliceEquity:
             local_decision_pipeline_latency_us=0,
             signal_threshold=0.3,
             max_position=5,
-            taker_fee_bps=0.0,
         )
 
         # Mock the adapter to avoid needing real hftbacktest

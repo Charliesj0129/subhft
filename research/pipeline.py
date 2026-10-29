@@ -248,8 +248,6 @@ def _validate(
             modify_ack_latency_ms=float(args.modify_ack_latency_ms),
             cancel_ack_latency_ms=float(args.cancel_ack_latency_ms),
             live_uplift_factor=float(args.live_uplift_factor),
-            maker_fee_bps=float(args.maker_fee_bps),
-            taker_fee_bps=float(args.taker_fee_bps),
             stat_pvalue_threshold=float(args.stat_pvalue_threshold),
             min_stat_tests_pass=int(args.min_stat_tests_pass),
             stat_correction_method=("bh" if strict_mode else "none"),

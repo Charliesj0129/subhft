@@ -27,6 +27,10 @@ class GateCTakerRuntime:
 
     load_cost_profile: Callable[[str], Any]
     taker_engine: type[Any]
+    # (alpha, backtest config, hftbt event paths, cost model) -> a result with dated
+    # ``days``/``daily_rows()``, ``n_is_days(split)``, ``sharpe_split(split)`` and ``method``:
+    # the fill-priced taker backtest Gate C's PnL checks read. None: Gate C cannot price fills.
+    run_taker_sim: Callable[[Any, Any, list[str], Any], Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)

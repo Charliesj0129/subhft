@@ -444,13 +444,11 @@ def _compute_equity_curve(
     *,
     initial_equity: float | None = None,
 ) -> np.ndarray:
-    """Compute equity curve from prices and positions with fee deduction.
+    """Mid-to-mid screening equity curve: mark-to-market PnL less per-contract cost.
 
-    ``pnl_step = positions[:-1] * diff(prices)`` captures mark-to-market PnL.
-    Fees are asymmetric per TAIFEX structure:
-      - buys:  taker_fee_bps
-      - sells: taker_fee_bps + sell_tax_bps (securities transaction tax)
-    maker_fee_bps is reserved for future maker/taker split modelling (not applied).
+    ``pnl_step = positions[:-1] * diff(prices)`` captures mark-to-market PnL; every contract
+    the position changes by pays ``config.cost_per_side_pts`` (the statutory per-side cost,
+    commission plus tax). The spread is never paid here: fill-priced PnL is ``taker_sim``.
     """
     n = min(prices.size, positions.size)
     base = config.initial_equity if initial_equity is None else float(initial_equity)
@@ -461,21 +459,10 @@ def _compute_equity_curve(
 
     pnl_step = pos[:-1] * np.diff(px)
 
-    # Asymmetric TAIFEX fee model:
-    #   buys  → taker_fee_bps only
-    #   sells → taker_fee_bps + sell_tax_bps (securities transaction tax)
-    # maker_fee_bps is preserved in BacktestConfig for future maker/taker split
-    # modelling but is NOT applied here (conservative taker-only assumption).
-    pos_change = np.diff(pos, prepend=0.0)
-    buys = np.maximum(pos_change, 0.0)  # shares added (long entry / short cover)
-    sells = np.maximum(-pos_change, 0.0)  # shares removed (long exit / short entry)
-
-    buy_fee_rate = max(config.taker_fee_bps, 0.0) / 10_000.0
-    sell_fee_rate = (max(config.taker_fee_bps, 0.0) + max(config.sell_tax_bps, 0.0)) / 10_000.0
-
-    buy_fee = buys[1:] * np.abs(px[1:]) * buy_fee_rate
-    sell_fee = sells[1:] * np.abs(px[1:]) * sell_fee_rate
-    fee_step = buy_fee + sell_fee
+    cost_per_side = float(config.cost_per_side_pts or 0.0)
+    if cost_per_side < 0.0:
+        raise ValueError(f"cost_per_side_pts must be >= 0, got {cost_per_side}")
+    fee_step = np.abs(np.diff(pos)) * cost_per_side
     pnl_after_fee = pnl_step - fee_step
     pnl_cum = np.cumsum(pnl_after_fee, dtype=np.float64)
 
@@ -545,8 +532,8 @@ def _run_adapter_slice(
         asset_symbol=symbol,
         data=npz_path,
         latency_us=latency_us,
-        maker_fee=float(config.maker_fee_bps) / 10_000.0,
-        taker_fee=float(config.taker_fee_bps) / 10_000.0,
+        maker_fee=0.0,  # the bridge sends no orders; cost is per contract in _compute_equity_curve
+        taker_fee=0.0,
         equity_sample_ns=1_000_000,  # 1ms equity samples
         feature_mode=_resolve_feature_mode(alpha),
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),

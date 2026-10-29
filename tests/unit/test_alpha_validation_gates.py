@@ -259,6 +259,21 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
         "hft_platform.alpha._gate_c._evaluate_trend_contamination",
         lambda **kwargs: {"passed": True},
     )
+    # A profitable fill-priced taker backtest (research v2 C2c): Gate C's PnL check reads it.
+    fill = types.SimpleNamespace(
+        method="taker_ioc_touch_v1",
+        daily_rows=lambda: [
+            {"date": f"2026-04-{i + 1:02d}", "net_pts": v, "pnl_pts": v, "n_contracts": 2, "fills": 2}
+            for i, v in enumerate([3.0, 1.0, 4.0, 2.0, 5.0, 1.0, 3.0, 2.0, 4.0, 3.0])
+        ],
+        n_is_days=lambda split: 7,
+        sharpe_split=lambda split: (10.0, 12.0),
+    )
+    monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", lambda *a: fill)
+    monkeypatch.setattr(
+        "research.backtest.gate_c_runtime._load_taker_cost_profile",
+        lambda instrument: types.SimpleNamespace(cost_per_side_pts=0.75, label="TEST"),
+    )
 
     alpha = types.SimpleNamespace(manifest=types.SimpleNamespace(alpha_id="ofi_mc"))
     cfg = ValidationConfig(

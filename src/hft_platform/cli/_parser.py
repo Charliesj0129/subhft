@@ -654,8 +654,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=1.5,
         help="Multiplier applied to broker ACK latencies",
     )
-    alpha_validate.add_argument("--maker-fee-bps", type=float, default=-0.2, help="Maker fee in bps for Gate C")
-    alpha_validate.add_argument("--taker-fee-bps", type=float, default=0.2, help="Taker fee in bps for Gate C")
     alpha_validate.add_argument(
         "--stat-pvalue-threshold",
         type=float,

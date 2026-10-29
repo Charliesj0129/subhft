@@ -43,14 +43,20 @@
   `backtest_method_reliability.md`); calibrate with
   `research.calibration` before claiming maker P&L from this engine.
 * **Fills**: none. The bridge sends no orders; positions are rebuilt from the
-  signal ladder and valued mid-to-mid with bps fees, so a taker PnL from this
-  engine never pays the spread. Use `TakerSim` below for taker PnL.
+  signal ladder and valued mid-to-mid, less `BacktestConfig.cost_per_side_pts`
+  per contract changed (None = gross), so a taker PnL from this engine never
+  pays the spread. It is a screening method (`mid_to_mid_screening_v1`): Gate C
+  still runs its IC, optimizer, walk-forward and stress checks on it, but its
+  Sharpe can never satisfy Gate C. Use `TakerSim` below for taker PnL.
 
 ### 2b. `research.backtest.taker_sim.TakerSim`
 
 * **Data source**: one hftbacktest event file per trading day
   (`ensure_hftbt_npz`); each day starts flat and is force-closed at its last
-  touch.
+  touch. `split_trading_days` cuts a multi-day file by exchange timestamp into
+  trading days `[previous session 14:00, D 14:00)` Asia/Taipei on the XTAI
+  calendar (a night session belongs to the next day); `simulate_files` runs
+  every day of a list of files and rejects a day found in two files.
 * **Fills**: the same signal ladder as `HftNativeRunner`, sent as one IOC order
   at a time at the touch; each fill is booked at the price the exchange model
   gave it (method `taker_ioc_touch_v1`).
@@ -58,8 +64,12 @@
   (`load_cost_profile`), including the closing contracts; exchange fees off.
 * **Output**: dated daily rows (`TakerSimResult.daily_rows()`) and a Sharpe on
   the daily net series.
-* **Not yet**: Gate C still reads `HftNativeRunner`; switching it is research
-  v2 C2c.
+* **Gate C**: the taker lane's `gate_c.sharpe_oos` is the out-of-sample daily
+  Sharpe of this simulator (the last `1 - is_oos_split` of the trading days,
+  at least two), at the selected signal threshold; its dated rows feed the
+  day-axis sub-gates and its Sharpe is the scorecard `sharpe_oos` Gate D reads.
+  No cost profile, a failed run, or no data is ERROR (INVALID); fewer than two
+  out-of-sample days is INSUFFICIENT_SAMPLE.
 
 ### 3. `hft_platform.backtest.adapter.HftBacktestAdapter`
 

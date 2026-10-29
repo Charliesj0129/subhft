@@ -29,12 +29,32 @@ def _load_taker_cost_profile(instrument: str) -> Any:
     return load_cost_profile(instrument)
 
 
+def _run_taker_sim(alpha: Any, cfg: Any, hbt_paths: list[str], cost_model: Any) -> Any:
+    """TakerSim over every trading day of ``hbt_paths``, with the screening runner's latency."""
+    from research.backtest.hft_native_runner import _effective_broker_rtt_ms
+    from research.backtest.taker_sim import TakerSim, simulate_files
+
+    sim = TakerSim(
+        alpha=alpha,
+        instrument=str(getattr(cost_model, "instrument", "")),
+        cost_model=cost_model,
+        latency_us=int(cfg.local_decision_pipeline_latency_us + _effective_broker_rtt_ms(cfg) * 1000),
+        signal_threshold=float(cfg.signal_threshold),
+        max_position=int(cfg.max_position),
+        queue_model=str(cfg.queue_model),
+        exchange_model=str(cfg.exchange_model),
+        adapter_kwargs={"latency_model": str(cfg.latency_model)},
+    )
+    return simulate_files(sim, list(hbt_paths))
+
+
 def _build_taker_runtime() -> GateCTakerRuntime:
     from research.backtest.taker_engine import TakerEngine
 
     return GateCTakerRuntime(
         load_cost_profile=_load_taker_cost_profile,
         taker_engine=TakerEngine,
+        run_taker_sim=_run_taker_sim,
     )
 
 

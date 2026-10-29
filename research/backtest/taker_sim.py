@@ -17,7 +17,11 @@ Method (``METHOD_ID``):
 * Fill price: the change in hftbacktest's cash balance divided by the change in position, so
   a fill is charged at the price the exchange model gave it. Exchange fees are off; costs are
   charged afterwards per contract by the statutory cost profile (``cost_models``).
-* Days: each input is one trading day and starts flat. A position still open after the last
+* Days: each input is one trading day and starts flat. ``split_trading_days`` cuts an
+  hftbacktest event file into trading days by exchange timestamp: day D is
+  ``[previous session 14:00, D 14:00)`` Asia/Taipei on the XTAI calendar (the rule of
+  ``config/research/protocols/front_month_roll_v1.yaml`` and the governed reader), so a night
+  session belongs to the next trading day. A position still open after the last
   event is closed at that event's touch (a long sells at the bid, a short buys at the ask) and
   those contracts are costed too. Days never share state.
 * Sharpe: the daily net PnL series, ``mean / std * sqrt(252)`` (population std), the same
@@ -30,6 +34,9 @@ divides ClickHouse x1,000,000 integers), and hftbacktest's balance is in the sam
 from __future__ import annotations
 
 import datetime as dt
+import os
+import shutil
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -81,6 +88,11 @@ class TakerDay:
             "net_pts": self.net_pts,
             "residual_qty": self.residual_qty,
             "close_price_pts": self.close_price_pts,
+            # Sub-gate row shape (``hft_platform.alpha._sub_gates``): net PnL, fills including
+            # the closing one, and no residual inventory (it was closed at the last touch).
+            "pnl_pts": self.net_pts,
+            "fills": len(self.fills) + (1 if self.residual_qty else 0),
+            "residual_mtm_pts": 0.0,
         }
 
 
@@ -117,6 +129,20 @@ class TakerSimResult:
 
     def daily_rows(self) -> list[dict[str, Any]]:
         return [d.to_row() for d in self.days]
+
+    def n_is_days(self, is_oos_split: float) -> int:
+        """Leading days that are in-sample: ``int(n * is_oos_split)``, leaving at least one day
+        on each side (0 with fewer than two days, so everything is out-of-sample)."""
+        n = len(self.days)
+        if n < 2:
+            return 0
+        return max(1, min(n - 1, int(n * float(is_oos_split))))
+
+    def sharpe_split(self, is_oos_split: float) -> tuple[float, float]:
+        """``(in-sample, out-of-sample)`` daily Sharpe over the day split of ``n_is_days``."""
+        net = [d.net_pts for d in self.days]
+        k = self.n_is_days(is_oos_split)
+        return daily_sharpe(net[:k]), daily_sharpe(net[k:])
 
 
 class _TakerOrderBridge(AlphaStrategyBridge):
@@ -302,3 +328,69 @@ class TakerSim:
             queue_model=self.queue_model,
             days=results,
         )
+
+
+def split_trading_days(
+    hbt_path: str, out_dir: str, *, calendar: Any = None, protocol: Any = None
+) -> list[tuple[dt.date, str]]:
+    """Write one event file per trading day of ``hbt_path`` into ``out_dir``, in day order.
+
+    Fails closed: unordered exchange timestamps, a date outside the calendar, or no events.
+    """
+    from research.backtest import rolled_series
+
+    calendar = calendar or rolled_series.SessionCalendar("XTAI")
+    protocol = protocol or rolled_series.load_roll_protocol()
+    with np.load(hbt_path, allow_pickle=False) as npz:
+        events = np.asarray(npz["data"])
+    if events.size == 0:
+        raise TakerSimError(f"{hbt_path}: no events")
+    ts = events["exch_ts"].astype(np.int64)
+    if np.any(np.diff(ts) < 0):
+        raise TakerSimError(f"{hbt_path}: exchange timestamps are not in order")
+
+    first = dt.datetime.fromtimestamp(int(ts[0]) // 1_000_000_000, tz=protocol.tz)
+    last = dt.datetime.fromtimestamp(int(ts[-1]) // 1_000_000_000, tz=protocol.tz)
+    offset = first.utcoffset()
+    if offset is None or last.utcoffset() != offset:
+        raise TakerSimError(f"{hbt_path}: {protocol.tz.key} changes UTC offset inside the file")
+    local_s = ts // 1_000_000_000 + int(offset.total_seconds())
+    local_day = local_s // 86_400
+    split_s = protocol.window_start.hour * 3600 + protocol.window_start.minute * 60
+    late = (local_s % 86_400) >= split_s
+    slot = local_day * 2 + late.astype(np.int64)
+
+    epoch = dt.date(1970, 1, 1)
+    trading_day_of_slot: dict[int, dt.date] = {}
+    for value in np.unique(slot).tolist():
+        day = epoch + dt.timedelta(days=value // 2)
+        try:
+            on_session = not value % 2 and calendar.is_session(day)
+            trading_day_of_slot[value] = day if on_session else calendar.next_session(day)
+        except rolled_series.RollProtocolError as exc:
+            raise TakerSimError(f"{hbt_path}: {exc}") from exc
+
+    day_of_row = np.asarray([trading_day_of_slot[v].toordinal() for v in slot.tolist()], dtype=np.int64)
+    stem = os.path.basename(hbt_path).removesuffix(".npz")
+    out: list[tuple[dt.date, str]] = []
+    for ordinal in np.unique(day_of_row).tolist():
+        day = dt.date.fromordinal(ordinal)
+        path = os.path.join(out_dir, f"{stem}.td{day:%Y%m%d}.npz")
+        np.savez_compressed(path, data=events[day_of_row == ordinal])
+        out.append((day, path))
+    return out
+
+
+def simulate_files(sim: TakerSim, hbt_paths: Sequence[str]) -> TakerSimResult:
+    """Run ``sim`` over every trading day of ``hbt_paths``; a day in two files is an error."""
+    if not hbt_paths:
+        raise TakerSimError("no event files to simulate")
+    tmp_dir = tempfile.mkdtemp(prefix="takersim_")
+    try:
+        days: list[tuple[dt.date, str]] = []
+        for path in hbt_paths:
+            days.extend(split_trading_days(path, tmp_dir))
+        days.sort(key=lambda item: item[0])
+        return sim.run(days)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

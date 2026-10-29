@@ -694,8 +694,6 @@ def cmd_alpha_validate(args: argparse.Namespace) -> None:
         modify_ack_latency_ms=float(getattr(args, "modify_ack_latency_ms", 43.0)),
         cancel_ack_latency_ms=float(getattr(args, "cancel_ack_latency_ms", 47.0)),
         live_uplift_factor=float(getattr(args, "live_uplift_factor", 1.5)),
-        maker_fee_bps=float(getattr(args, "maker_fee_bps", -0.2)),
-        taker_fee_bps=float(getattr(args, "taker_fee_bps", 0.2)),
         stat_pvalue_threshold=float(getattr(args, "stat_pvalue_threshold", 0.1)),
         min_stat_tests_pass=int(getattr(args, "min_stat_tests_pass", 2)),
         stat_correction_method=str(getattr(args, "stat_correction_method", "bh")),
