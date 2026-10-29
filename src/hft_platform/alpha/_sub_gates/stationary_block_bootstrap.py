@@ -6,9 +6,9 @@ from typing import Any
 
 import numpy as np
 
-from hft_platform.alpha._resampling import stationary_block_bootstrap
 from hft_platform.alpha._sub_gates.common import _to_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.stats import stationary_block_bootstrap
 
 
 class StationaryBlockBootstrapGate:

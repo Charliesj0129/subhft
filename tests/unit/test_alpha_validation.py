@@ -491,47 +491,6 @@ class TestBatchValidate:
 
 
 # ---------------------------------------------------------------------------
-# Pure helper: _bh_correction
-# ---------------------------------------------------------------------------
-
-
-class TestBhCorrection:
-    def test_empty_pvalues_returns_empty_lists(self):
-        from hft_platform.alpha.validation import _bh_correction
-
-        reject, adjusted = _bh_correction([], 0.05)
-        assert reject == []
-        assert adjusted == []
-
-    def test_single_pvalue_below_threshold_rejects(self):
-        from hft_platform.alpha.validation import _bh_correction
-
-        reject, adjusted = _bh_correction([0.01], 0.05)
-        assert len(reject) == 1
-        assert reject[0] is True
-        assert len(adjusted) == 1
-
-    def test_all_high_pvalues_no_rejection(self):
-        from hft_platform.alpha.validation import _bh_correction
-
-        pvals = [0.9, 0.8, 0.7, 0.6]
-        reject, adjusted = _bh_correction(pvals, 0.05)
-        assert len(reject) == 4
-        assert not any(reject)
-
-    def test_mixed_pvalues_partial_rejection(self):
-        from hft_platform.alpha.validation import _bh_correction
-
-        # Low p-values should be rejected
-        pvals = [0.001, 0.002, 0.5, 0.9]
-        reject, adjusted = _bh_correction(pvals, 0.05)
-        assert len(reject) == 4
-        # The very small p-values must be rejected
-        assert reject[0] is True
-        assert reject[1] is True
-
-
-# ---------------------------------------------------------------------------
 # Pure helper: _compute_oos_returns
 # ---------------------------------------------------------------------------
 

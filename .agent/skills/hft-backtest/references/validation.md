@@ -37,7 +37,7 @@ CPCV with contiguous date groups, embargo, and purge, producing PBO
 |---|---|
 | Detrended IC (sign preserved) | trend contamination: IC rising monotonically with horizon is a red flag |
 | BDS independence | residual dependence means misspecification |
-| Benjamini-Hochberg / effective test count | multiple comparisons; not a p-value alone |
+| Benjamini-Hochberg / effective test count | multiple comparisons; not a p-value alone; definitions in `src/hft_platform/alpha/stats.py` |
 | Walk-forward consistency | share of positive folds |
 | Regime split | profitable in both high and low volatility |
 

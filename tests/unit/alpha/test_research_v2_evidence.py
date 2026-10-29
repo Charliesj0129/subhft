@@ -235,6 +235,7 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "stamp_commit": "c0ffee",
         "stamp_dirty": False,
         "gate_a_calls": 0,
+        "holdout_key": None,
     }
     monkeypatch.setattr(validation, "git_state", lambda _root: state["git"])
     alpha = types.SimpleNamespace(manifest=types.SimpleNamespace(alpha_id="a1"))
@@ -260,7 +261,8 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         )
         if state["git_after_gate_c"] is not None:
             state["git"] = state["git_after_gate_c"]
-        report = _report("Gate C", False, verdict={"verdict": "NEEDS-MORE-DAYS"})
+        fill = {"fill_backtest": {"holdout": {"key": state["holdout_key"]}}} if state["holdout_key"] else {}
+        report = _report("Gate C", False, verdict={"verdict": "NEEDS-MORE-DAYS"}, **fill)
         return report, "run-1", "h", str(meta.parent / "scorecard.json"), str(meta)
 
     monkeypatch.setattr(validation, "run_gate_a", _gate_a)
@@ -303,6 +305,21 @@ def test_exploratory_validation_rewrites_no_status_and_writes_no_ledger(governed
     governed_validation.run(run_mode="exploratory")
     assert governed_validation.impl.read_text(encoding="utf-8") == _IMPL
     assert not EvidenceWriter(governed_validation.root).ledger_path.exists()
+
+
+def test_validation_flags_a_second_read_of_the_same_holdout(governed_validation) -> None:
+    """S7: an exploratory peek, then a governed run on the same holdout, is flagged on the ledger event."""
+    governed_validation.state["holdout_key"] = "holdout-k"
+    governed_validation.root.mkdir(parents=True)
+    peek = governed_validation.run(run_mode="exploratory")
+    assert peek.gate_c.details["holdout_access"]["reused"] is False
+
+    governed_validation.run()
+
+    writer = EvidenceWriter(governed_validation.root)
+    (gate_c_event,) = [e for e in writer.read_verdicts() if e["stage"] == "gate_c"]
+    assert gate_c_event["holdout"] == {"holdout_key": "holdout-k", "prior_reads": 1, "reused": True}
+    assert [r["mode"] for r in writer.read_holdout_accesses()] == ["exploratory", "governed"]
 
 
 def test_governed_validation_on_a_dirty_tree_is_refused_before_any_gate(governed_validation) -> None:

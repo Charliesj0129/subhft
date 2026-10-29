@@ -1,4 +1,4 @@
-"""Tests for hft_platform.alpha._resampling primitives."""
+"""Tests for the resampling primitives (``_resampling`` and the bootstraps in ``stats``)."""
 
 from __future__ import annotations
 
@@ -7,12 +7,8 @@ import math
 import numpy as np
 import pytest
 
-from hft_platform.alpha._resampling import (
-    day_bootstrap,
-    drop_top_trades,
-    leave_one_day_out,
-    stationary_block_bootstrap,
-)
+from hft_platform.alpha._resampling import drop_top_trades, leave_one_day_out
+from hft_platform.alpha.stats import day_bootstrap, stationary_block_bootstrap
 
 
 class TestLeaveOneDayOut:

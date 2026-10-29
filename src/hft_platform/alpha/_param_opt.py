@@ -10,6 +10,10 @@ from typing import Any
 import numpy as np
 
 from hft_platform.alpha._validation_types import ValidationConfig
+from hft_platform.alpha.stats import selection_sr0
+
+# The runner's Sharpe annualization (research.backtest.metrics.compute_sharpe default).
+_SHARPE_ANNUALIZATION = 252.0
 
 
 def _build_grid_row(
@@ -231,9 +235,16 @@ def _optimize_parameters(
     )
     sign_flip_risk = bool(float(best["sharpe_oos"]) > 0.0 and neighbor_sharpes.size and np.any(neighbor_sharpes <= 0.0))
 
+    # Selection deflation: SR0 for the best of the grid's trials (stats.selection_sr0),
+    # in the trials' annualized unit.
     oos_len = max(2, int((1.0 - float(config.is_oos_split)) * float(base_result.equity_curve.size)))
     n_trials = max(1, len(rows))
-    selection_penalty = float(np.sqrt(2.0 * np.log(float(n_trials)) / float(oos_len)))
+    selection_penalty = selection_sr0(
+        n_trials,
+        observations=oos_len,
+        trial_sharpes=[float(row["sharpe_oos"]) for row in rows],
+        annualization=_SHARPE_ANNUALIZATION,
+    )
     deflated_sharpe = float(best["sharpe_oos"]) - selection_penalty
     selection_bias_risk = deflated_sharpe < float(config.opt_min_deflated_sharpe)
 
@@ -257,6 +268,8 @@ def _optimize_parameters(
         "top_k": ranked[: min(3, len(ranked))],
         "deflated_sharpe": float(deflated_sharpe),
         "selection_penalty": float(selection_penalty),
+        "selection_trials": int(n_trials),
+        "selection_observations": int(oos_len),
         "neighbor_objective_ratio": float(neighbor_ratio),
         "risks": risks,
     }

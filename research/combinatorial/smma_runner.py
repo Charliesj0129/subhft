@@ -23,6 +23,7 @@ from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 
+from hft_platform.alpha.stats import benjamini_hochberg, effective_test_count
 from hft_platform.core import timebase
 from research.backtest.cost_models import load_cost_profile
 from research.combinatorial.bidask import build_bidask_family_features
@@ -58,10 +59,8 @@ from research.combinatorial.smma_validation import (
     LockedMetrics,
     ThresholdResolution,
     activation_mask,
-    benjamini_hochberg,
     build_split_plan,
     candidate_rank_key,
-    effective_test_count,
     evaluate_recent_kill_criteria,
     forward_returns,
     forward_target_indices,
@@ -118,6 +117,7 @@ _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/smma_runner.py",
     "research/combinatorial/smma_screen.py",
     "research/combinatorial/smma_validation.py",
+    "src/hft_platform/alpha/stats.py",
     "research/combinatorial/bidask.py",
     "research/combinatorial/kbar.py",
     "research/combinatorial/tick.py",
@@ -2059,7 +2059,12 @@ class MiningRun:
             locked_results.append(result)
             pvalues.append(max(locked.bootstrap_pvalue, locked.permutation_pvalue))
             self._checkpoint(stage="locked_validation", state=checkpoint_state())
-        bh_mask = benjamini_hochberg(pvalues, q=0.10)
+        # BH counts every candidate the ledger has seen tested on locked validation,
+        # including ones whose p-values are not in hand (a resumed or repeated stage).
+        tested_ids = {str(row.get("candidate_id")) for row in self._ledger.rows(stage="locked_validation")}
+        tested_ids.update(result.candidate.candidate_id for result in locked_results)
+        bh_n_tests = max(len(pvalues), len(tested_ids))
+        bh_mask = benjamini_hochberg(pvalues, q=0.10, n_tests=bh_n_tests).rejected
         survivors = [
             result
             for result, bh_pass in zip(locked_results, bh_mask, strict=True)
@@ -2074,6 +2079,7 @@ class MiningRun:
                     "candidate": asdict(result.candidate),
                     "metrics": metrics_to_dict(result.locked) if result.locked else {},
                     "bh_q10_passed": bool(bh_pass),
+                    "bh_n_tests": bh_n_tests,
                     "recorded_at_ns": timebase.now_ns(),
                 }
             )

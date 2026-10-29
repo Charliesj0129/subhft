@@ -9,8 +9,13 @@ from dataclasses import asdict, dataclass, field
 from typing import Mapping, Sequence
 
 import numpy as np
-from scipy.stats import norm, spearmanr
 
+from hft_platform.alpha.stats import (
+    cluster_bootstrap_mean,
+    deflated_sharpe,
+    moving_block_bootstrap_mean,
+    rank_ic,
+)
 from research.backtest.cost_models import load_cost_profile
 
 SPLIT_ORDER: tuple[str, ...] = ("discovery", "selection", "locked_validation", "final_holdout")
@@ -200,18 +205,9 @@ def rolling_detrend(values: Sequence[float] | np.ndarray, window: int = 5) -> np
 
 
 def spearman_ic(signal: Sequence[float] | np.ndarray, target: Sequence[float] | np.ndarray) -> float:
-    signal_arr = np.asarray(signal, dtype=np.float64).reshape(-1)
-    target_arr = np.asarray(target, dtype=np.float64).reshape(-1)
-    count = min(signal_arr.size, target_arr.size)
-    valid = np.isfinite(signal_arr[:count]) & np.isfinite(target_arr[:count])
-    if int(np.count_nonzero(valid)) < 5:
-        return 0.0
-    lhs, rhs = signal_arr[:count][valid], target_arr[:count][valid]
-    if np.ptp(lhs) <= 1e-12 or np.ptp(rhs) <= 1e-12:
-        return 0.0
-    result = spearmanr(lhs, rhs)
-    value = float(result.statistic)
-    return value if np.isfinite(value) else 0.0
+    """``stats.rank_ic`` over at least 5 finite pairs, with an undefined IC reported as 0."""
+    value = rank_ic(signal, target, min_obs=5)
+    return 0.0 if math.isnan(value) else value
 
 
 def resolve_quantile_threshold(
@@ -438,57 +434,6 @@ def monotonic_horizon_pollution(metrics: Mapping[str, KillMetrics]) -> bool:
     return bool(values[0] < values[1] < values[2])
 
 
-def block_bootstrap_mean(
-    values: Sequence[float] | np.ndarray,
-    *,
-    samples: int = 2_000,
-    seed: int,
-    block_size: int | None = None,
-) -> tuple[float, float]:
-    array = np.asarray(values, dtype=np.float64).reshape(-1)
-    array = array[np.isfinite(array)]
-    if array.size < 2:
-        return 0.0, 1.0
-    width = block_size or max(2, int(round(math.sqrt(array.size))))
-    rng = np.random.default_rng(int(seed))
-    means: np.ndarray = np.empty(max(1, int(samples)), dtype=np.float64)
-    blocks_needed = math.ceil(array.size / width)
-    max_start = max(1, array.size - width + 1)
-    for index in range(means.size):
-        starts = rng.integers(0, max_start, size=blocks_needed)
-        sampled = np.concatenate([array[start : start + width] for start in starts])[: array.size]
-        means[index] = float(np.mean(sampled))
-    return float(np.quantile(means, 0.05)), float(np.mean(means <= 0.0))
-
-
-def cluster_bootstrap_mean(
-    values: Sequence[float] | np.ndarray,
-    clusters: Sequence[str] | np.ndarray,
-    *,
-    samples: int = 2_000,
-    seed: int,
-) -> tuple[float, float]:
-    """Bootstrap whole trading-day/session clusters, retaining intracluster dependence."""
-    array = np.asarray(values, dtype=np.float64).reshape(-1)
-    cluster_array = np.asarray(clusters).astype("<U32").reshape(-1)
-    if array.size != cluster_array.size:
-        raise ValueError("values and clusters must have identical lengths")
-    valid = np.isfinite(array)
-    array = array[valid]
-    cluster_array = cluster_array[valid]
-    ordered = tuple(dict.fromkeys(str(value) for value in cluster_array))
-    if array.size < 2 or len(ordered) < 2:
-        return 0.0, 1.0
-    grouped = [array[cluster_array == cluster] for cluster in ordered]
-    rng = np.random.default_rng(int(seed))
-    means: np.ndarray = np.empty(max(1, int(samples)), dtype=np.float64)
-    for index in range(means.size):
-        selected = rng.integers(0, len(grouped), size=len(grouped))
-        sample = np.concatenate([grouped[item] for item in selected])
-        means[index] = float(np.mean(sample))
-    return float(np.quantile(means, 0.05)), float(np.mean(means <= 0.0))
-
-
 def clustered_execution_sharpe(
     execution: ExecutionResult,
     trading_days: Sequence[str] | np.ndarray,
@@ -543,82 +488,6 @@ def permutation_pvalue(
     for _ in range(max(1, int(samples))):
         exceed += abs(spearman_ic(lhs, rng.permutation(rhs))) >= observed
     return float((exceed + 1) / (max(1, int(samples)) + 1))
-
-
-def benjamini_hochberg(pvalues: Sequence[float], q: float = 0.10) -> np.ndarray:
-    """Return a boolean BH rejection mask in original order."""
-    values = np.asarray(pvalues, dtype=np.float64).reshape(-1)
-    if values.size == 0:
-        return np.asarray([], dtype=np.bool_)
-    order = np.argsort(values, kind="stable")
-    sorted_values = values[order]
-    thresholds = float(q) * np.arange(1, values.size + 1) / float(values.size)
-    passing = np.flatnonzero(sorted_values <= thresholds)
-    mask = np.zeros(values.size, dtype=np.bool_)
-    if passing.size:
-        mask[order[: int(passing[-1]) + 1]] = True
-    return mask
-
-
-def effective_test_count(signals: Sequence[Sequence[float]] | np.ndarray) -> int:
-    """Li-Ji effective count from the correlation eigenvalues of test signals."""
-    matrix = np.asarray(signals, dtype=np.float64)
-    if matrix.ndim == 1:
-        matrix = matrix.reshape(1, -1)
-    if matrix.ndim != 2 or matrix.shape[0] < 1:
-        raise ValueError("signals must be a non-empty tests-by-observations matrix")
-    usable: list[np.ndarray] = []
-    for row in matrix:
-        finite = np.isfinite(row)
-        if int(np.count_nonzero(finite)) < 2:
-            continue
-        filled = row.copy()
-        filled[~finite] = float(np.mean(filled[finite]))
-        deviation = filled - float(np.mean(filled))
-        scale = float(np.std(deviation, ddof=1))
-        if scale > 1e-12:
-            usable.append(deviation / scale)
-    if not usable:
-        return 1
-    standardized = np.vstack(usable)
-    singular_values = np.linalg.svd(standardized, compute_uv=False)
-    eigenvalues = np.square(singular_values) / max(1, standardized.shape[1] - 1)
-    eigenvalues = np.clip(eigenvalues, 0.0, None)
-    nearest_integer = np.rint(eigenvalues)
-    eigenvalues = np.where(
-        np.isclose(eigenvalues, nearest_integer, rtol=1e-10, atol=1e-12),
-        nearest_integer,
-        eigenvalues,
-    )
-    contributions = (eigenvalues >= 1.0).astype(np.float64) + (eigenvalues - np.floor(eigenvalues))
-    estimate = int(math.ceil(float(np.sum(contributions)) - 1e-12))
-    return max(1, min(standardized.shape[0], estimate))
-
-
-def deflated_sharpe(
-    sharpe: float,
-    *,
-    effective_trials: int,
-    observations: int,
-    trial_sharpe_std: float,
-    skewness: float = 0.0,
-    kurtosis: float = 3.0,
-) -> float:
-    """Bailey/López de Prado DSR probability using an effective test count."""
-    if observations < 2 or effective_trials < 1 or not np.isfinite(sharpe) or not np.isfinite(trial_sharpe_std):
-        return 0.0
-    trials = max(1.0, float(effective_trials))
-    if trials <= 1.0 or trial_sharpe_std <= 1e-12:
-        expected_max = 0.0
-    else:
-        euler_gamma = 0.5772156649015329
-        expected_max = float(trial_sharpe_std) * (
-            (1.0 - euler_gamma) * norm.ppf(1.0 - (1.0 / trials))
-            + euler_gamma * norm.ppf(1.0 - (1.0 / (trials * math.e)))
-        )
-    variance_term = 1.0 - float(skewness) * float(sharpe) + ((float(kurtosis) - 1.0) / 4.0) * float(sharpe) ** 2
-    standard_error = math.sqrt(max(1e-12, variance_term / (observations - 1)))
-    return float(norm.cdf((sharpe - expected_max) / standard_error))
 
 
 def purged_walk_forward_sharpes(
@@ -680,7 +549,7 @@ def locked_validation(
 ) -> LockedMetrics:
     if trading_days is None:
         trade_clusters: np.ndarray = np.arange(execution.trade_pnl.size).astype("<U32")
-        lower, bootstrap_p = block_bootstrap_mean(execution.trade_pnl, samples=2_000, seed=seed)
+        lower, bootstrap_p = moving_block_bootstrap_mean(execution.trade_pnl, samples=2_000, seed=seed)
         dsr_values = execution.trade_pnl
     else:
         day_array = np.asarray(trading_days).astype("<U10").reshape(-1)

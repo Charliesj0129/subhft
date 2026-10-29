@@ -1,7 +1,11 @@
 """Deflated-Sharpe sub-gate for maker payloads.
 
-Reuses the Bonferroni-style penalty from `_param_opt.py`:
-    deflated_sharpe = sharpe_oos - sqrt(2 * log(n_trials) / oos_len)
+The annualized daily Sharpe less ``SR0``, the Sharpe the best of
+``deflated_n_trials`` null trials is expected to reach
+(``stats.selection_sr0``), must reach ``deflated_sharpe_min``. The trials
+were not kept, so their spread is the null estimator spread over the same
+days; one trial deflates nothing. The Bailey/Lopez de
+Prado probability is reported beside it as ``dsr_probability``.
 """
 
 from __future__ import annotations
@@ -12,6 +16,9 @@ from typing import Any
 
 from hft_platform.alpha._sub_gates.common import _to_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
+from hft_platform.alpha.stats import deflated_sharpe, null_sharpe_std, sample_skew_kurtosis, selection_sr0
+
+_TRADING_DAYS_PER_YEAR = 252.0
 
 
 class DeflatedSharpeForMakerGate:
@@ -32,11 +39,22 @@ class DeflatedSharpeForMakerGate:
 
         m = mean(daily)
         s = stdev(daily)
-        sharpe = (m / s) * math.sqrt(252.0) if s > 0 else 0.0
+        daily_sharpe = m / s if s > 0 else 0.0
+        sharpe = daily_sharpe * math.sqrt(_TRADING_DAYS_PER_YEAR)
         n_trials = max(1, int(thresholds.get("deflated_n_trials", 1)))
-        oos_len = max(2, len(daily))
-        penalty = math.sqrt(2.0 * math.log(n_trials) / oos_len) if n_trials > 1 else 0.0
+        n_days = len(daily)
+        trial_std = null_sharpe_std(n_days)
+        penalty = selection_sr0(n_trials, observations=n_days, annualization=_TRADING_DAYS_PER_YEAR)
         deflated = sharpe - penalty
+        skewness, kurtosis = sample_skew_kurtosis(daily)
+        probability = deflated_sharpe(
+            daily_sharpe,
+            effective_trials=n_trials,
+            observations=n_days,
+            trial_sharpe_std=trial_std,
+            skewness=skewness,
+            kurtosis=kurtosis,
+        )
 
         threshold = float(thresholds.get("deflated_sharpe_min", 0.5))
         passed = deflated >= threshold
@@ -49,11 +67,12 @@ class DeflatedSharpeForMakerGate:
                 "deflated_sharpe": float(deflated),
                 "deflated_min": float(threshold),
                 "n_trials": float(n_trials),
-                "n_days": float(oos_len),
+                "n_days": float(n_days),
                 "penalty": float(penalty),
+                "dsr_probability": float(probability),
             },
             details=(
                 f"sharpe={sharpe:.2f}, deflated={deflated:.2f} "
-                f"(penalty={penalty:.2f}, trials={n_trials}) vs min {threshold}"
+                f"(SR0={penalty:.2f}, trials={n_trials}, DSR p={probability:.3f}) vs min {threshold}"
             ),
         )

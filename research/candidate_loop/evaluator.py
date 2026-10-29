@@ -39,6 +39,7 @@ from typing import Any
 import numpy as np
 import yaml
 
+from hft_platform.alpha.stats import rank_ic
 from research.backtest.metrics import compute_ic, compute_ic_ttest
 from research.backtest.q_hat_table import QHatTable
 from research.candidate_loop.compiler import evaluate_regime, evaluate_signal
@@ -155,15 +156,9 @@ def _pearson_ic(signal: np.ndarray, label: np.ndarray) -> float:
 
 
 def _rank_ic(signal: np.ndarray, label: np.ndarray) -> float:
-    """Spearman rank IC over already-valid rows; 0.0 when too thin/degenerate."""
-    if signal.size < MIN_IC_ROWS:
-        return 0.0
-    if float(np.std(signal)) == 0.0 or float(np.std(label)) == 0.0:
-        return 0.0  # Spearman undefined on constant input
-    from scipy.stats import spearmanr
-
-    rho, _ = spearmanr(signal, label)
-    return float(rho) if math.isfinite(float(rho)) else 0.0
+    """``stats.rank_ic`` over already-valid rows; 0.0 when too thin/degenerate."""
+    value = rank_ic(signal, label, min_obs=MIN_IC_ROWS)
+    return 0.0 if math.isnan(value) else value
 
 
 # ---------------------------------------------------------------------------

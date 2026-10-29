@@ -1,7 +1,7 @@
 """Gate C/D/E validation tests and supporting statistical helper tests.
 
 This module covers:
-- _compute_oos_returns, _evaluate_oos_statistical_tests, _bh_correction helpers
+- _compute_oos_returns, _evaluate_oos_statistical_tests helpers
 - run_gate_c (walk-forward, parameter optimisation)
 - ValidationConfig defaults
 - _optimize_parameters boundary detection
@@ -16,7 +16,6 @@ import pytest
 
 from hft_platform.alpha.validation import (
     ValidationConfig,
-    _bh_correction,
     _compute_oos_returns,
     _evaluate_oos_statistical_tests,
     _optimize_parameters,
@@ -87,23 +86,6 @@ def test_statistical_tests_bds_detects_dependence():
     )
     assert report["tests"]["bds_independence"]["reject_iid"] is True
     assert report["diagnostic_gate_passed"] is False
-
-
-def test_bh_correction_all_significant():
-    rejected, adjusted = _bh_correction([0.01, 0.01, 0.01, 0.01], alpha=0.1)
-    assert rejected == [True, True, True, True]
-    assert all(0.0 <= p <= 1.0 for p in adjusted)
-
-
-def test_bh_correction_none_significant():
-    rejected, adjusted = _bh_correction([0.5, 0.6, 0.7, 0.8], alpha=0.1)
-    assert rejected == [False, False, False, False]
-    assert all(0.0 <= p <= 1.0 for p in adjusted)
-
-
-def test_bh_correction_partial():
-    rejected, _ = _bh_correction([0.01, 0.5, 0.6, 0.7], alpha=0.1)
-    assert rejected == [True, False, False, False]
 
 
 # ---------------------------------------------------------------------------
@@ -323,22 +305,61 @@ def test_validation_config_defaults():
 # ---------------------------------------------------------------------------
 
 
-def test_optimize_parameters_selects_interior_threshold():
-    class _Runner:
-        def __init__(self, alpha, cfg):
-            self.cfg = cfg
+class _InteriorPeakRunner:
+    def __init__(self, alpha, cfg):
+        self.cfg = cfg
 
-        def run(self):
-            threshold = float(self.cfg.signal_threshold)
-            sharpe_oos = 2.0 - abs(threshold - 0.3) * 8.0
-            return types.SimpleNamespace(
-                sharpe_is=sharpe_oos + 0.2,
-                sharpe_oos=sharpe_oos,
-                max_drawdown=-0.1,
-                turnover=0.4,
-                run_id=f"r-{threshold:.2f}",
-                config_hash=f"c-{threshold:.2f}",
-            )
+    def run(self):
+        threshold = float(self.cfg.signal_threshold)
+        sharpe_oos = 2.0 - abs(threshold - 0.3) * 8.0
+        return types.SimpleNamespace(
+            sharpe_is=sharpe_oos + 0.2,
+            sharpe_oos=sharpe_oos,
+            max_drawdown=-0.1,
+            turnover=0.4,
+            run_id=f"r-{threshold:.2f}",
+            config_hash=f"c-{threshold:.2f}",
+        )
+
+
+def _optimize_interior_peak(n_observations: int) -> dict:
+    cfg = ValidationConfig(
+        alpha_id="x",
+        data_paths=["d.npy"],
+        opt_signal_threshold_min=0.1,
+        opt_signal_threshold_max=0.5,
+        opt_signal_threshold_steps=5,
+        opt_objective="sharpe_oos",
+    )
+    base_result = types.SimpleNamespace(
+        sharpe_is=2.2,
+        sharpe_oos=2.0,
+        max_drawdown=-0.1,
+        turnover=0.4,
+        run_id="base",
+        config_hash="base",
+        equity_curve=np.ones(n_observations, dtype=np.float64),
+    )
+    return _optimize_parameters(
+        alpha=object(),
+        base_cfg=BacktestConfig(data_paths=[], signal_threshold=0.3),
+        base_result=base_result,
+        config=cfg,
+        runner_cls=_InteriorPeakRunner,
+    )
+
+
+def test_optimize_parameters_selection_deflation_flags_a_thin_oos_sample():
+    """Best of 5 at Sharpe 2.0 over 30 OOS observations is within the null's expected maximum."""
+    out = _optimize_interior_peak(100)
+    assert out["risks"]["selection_bias_risk"] is True
+    assert out["selection_penalty"] > 2.0 - 0.2
+    assert out["passed"] is False
+
+
+def test_optimize_parameters_selects_interior_threshold():
+    class _Runner(_InteriorPeakRunner):
+        pass
 
     cfg = ValidationConfig(
         alpha_id="x",
@@ -356,7 +377,7 @@ def test_optimize_parameters_selects_interior_threshold():
         turnover=0.4,
         run_id="base",
         config_hash="base",
-        equity_curve=np.ones(100, dtype=np.float64),
+        equity_curve=np.ones(100_000, dtype=np.float64),
     )
     out = _optimize_parameters(
         alpha=object(),
