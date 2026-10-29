@@ -14,6 +14,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from typing import Any
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -57,6 +58,11 @@ except Exception:  # noqa: BLE001
 # vs. default 3.0 suited to deep US equity books (500-5000)."
 LITERATURE_DEFAULT_EXPONENT = 1.5
 
+# The sweep this CLI runs, named once so the provenance block records what ran.
+_QUEUE_MODELS = ("power_prob", "power_prob2", "power_prob3", "log_prob")
+_EXPONENT_GRID = (0.5, 3.0, 0.25)  # min, max, step
+_PROBE: dict[str, int] = {"qty": 1, "max_pos": 3}
+
 
 def _load_live_fills_from_audit(
     audit_path: Path, instrument: str,
@@ -77,10 +83,35 @@ def _load_live_fills_from_audit(
     return days, fills
 
 
+def _calibration_provenance(args: argparse.Namespace, **facts: Any) -> dict[str, Any]:
+    """What produced a profile: the RunStamp of this process plus the facts the caller names.
+
+    The ground-truth audit report is the hashed dataset; the L2 source is named in
+    ``sweep_config`` (a directory or the governed ClickHouse reader), not hashed.
+    """
+    from hft_platform.alpha.evidence import canonical_sha256  # noqa: PLC0415
+    from hft_platform.alpha.provenance import build_run_stamp  # noqa: PLC0415
+
+    sweep_config = {
+        "instrument": args.instrument,
+        "l2_source": "clickhouse_governed_reader" if _use_ch_streaming else str(args.l2_data_dir),
+        "latency_us": int(args.latency_us),
+        "tick_size": float(args.tick_size),
+        "lot_size": float(args.lot_size),
+        "allow_stub": bool(args.allow_stub),
+        "queue_models": list(_QUEUE_MODELS),
+        "exponent_grid": list(_EXPONENT_GRID),
+        "probe": dict(_PROBE),
+    }
+    stamp = build_run_stamp(data_paths=[str(args.audit_report)], config_hash=canonical_sha256(sweep_config))
+    return {"run_stamp": stamp, "sweep_config": sweep_config, **facts}
+
+
 def _write_fallback_profile(
     instrument: str,
     output: Path,
     reason: str,
+    provenance: dict[str, Any] | None = None,
 ) -> None:
     """Write a low-confidence profile using literature defaults.
 
@@ -100,6 +131,7 @@ def _write_fallback_profile(
         validation_scores=CalibrationScore(0.0, 0.0, 0.0, 0.0),
         confidence="low",
         expected_fill_rate_per_day=0.0,
+        provenance=None if provenance is None else {**provenance, "fallback_reason": reason},
     )
     save_calibration_profile(profile, output)
     print(
@@ -124,7 +156,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
             f"[{args.instrument}] Data gap: {reason}. Writing fallback profile.",
             file=sys.stderr,
         )
-        _write_fallback_profile(args.instrument, args.output, reason)
+        _write_fallback_profile(args.instrument, args.output, reason, _calibration_provenance(args))
         return 0
 
     if not live_fills:
@@ -134,21 +166,21 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
             "Writing fallback profile.",
             file=sys.stderr,
         )
-        _write_fallback_profile(args.instrument, args.output, reason)
+        _write_fallback_profile(args.instrument, args.output, reason, _calibration_provenance(args))
         return 0
 
     train_days, test_days = split_days(days, ratio=0.7)
     print(f"[{args.instrument}] train={len(train_days)} test={len(test_days)} days")
 
     candidates = generate_candidates(
-        queue_models=["power_prob", "power_prob2", "power_prob3", "log_prob"],
-        exponent_min=0.5, exponent_max=3.0, exponent_step=0.25,
+        queue_models=list(_QUEUE_MODELS),
+        exponent_min=_EXPONENT_GRID[0], exponent_max=_EXPONENT_GRID[1], exponent_step=_EXPONENT_GRID[2],
     )
     print(f"[{args.instrument}] {len(candidates)} candidates")
 
     replay_fn = build_probe_replay_fn(
         instrument=args.instrument,
-        probe_factory=lambda: PassiveQuoteProbe(qty=1, max_pos=3),
+        probe_factory=lambda: PassiveQuoteProbe(**_PROBE),
         l2_data_dir=args.l2_data_dir,
         latency_us=args.latency_us,
         tick_size=args.tick_size,
@@ -169,7 +201,8 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     except ReplayNotReadyError as exc:
         print(f"[{args.instrument}] Replay stub blocked execution: {exc}", file=sys.stderr)
         _write_fallback_profile(args.instrument, args.output,
-                                 "replay.py is stub — order submission not wired")
+                                 "replay.py is stub — order submission not wired",
+                                 _calibration_provenance(args))
         return 0
 
     print(
@@ -187,7 +220,8 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     except ReplayNotReadyError as exc:
         print(f"[{args.instrument}] Replay stub blocked validation: {exc}", file=sys.stderr)
         _write_fallback_profile(args.instrument, args.output,
-                                 "replay.py is stub — order submission not wired")
+                                 "replay.py is stub — order submission not wired",
+                                 _calibration_provenance(args))
         return 0
 
     composite = validation_score.composite()
@@ -247,6 +281,13 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         validation_scores=validation_score,
         confidence=confidence,
         expected_fill_rate_per_day=expected_rate,
+        provenance=_calibration_provenance(
+            args,
+            train_days=list(train_days),
+            held_out_days=list(test_days),
+            sweep_trials=len(candidates),
+            sweep_best=sweep_result.best_candidate.label(),
+        ),
     )
     save_calibration_profile(profile, args.output)
     print(f"[{args.instrument}] Wrote profile to {args.output}")

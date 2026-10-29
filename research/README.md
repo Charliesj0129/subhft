@@ -209,6 +209,20 @@ with earlier runs. The engine reports how many expressions it scored
 --out`), and `hft alpha mine promote` records it as
 `experiment_metadata.search_trials`. No gate reads that count yet.
 
+### Generators (research v2 C4)
+
+Mining (`research/combinatorial`), the candidate loop (`research/candidate_loop`) and
+queue calibration (`research/calibration`) produce candidates or calibration inputs;
+none of them promotes or writes a KILL.
+
+- The candidate loop's top status is `SHORTLISTED` (the v1 spec's `PROMOTED`; old rows
+  are read as `SHORTLISTED`). Every test-split read is logged in the evidence root's
+  `ledger/holdout_access.jsonl`, the same log Gate C writes.
+- A calibration profile in `config/research/calibration_profiles.yaml` carries a
+  `provenance` block: the RunStamp, the sweep configuration, the train and held-out
+  days, and how many candidates the sweep scored. A fallback profile also says why it
+  is one.
+
 ## One Factory Flow
 
 The factory preflight sequence is fixed:
