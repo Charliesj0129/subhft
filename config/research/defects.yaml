@@ -1,0 +1,112 @@
+# Research defects registry (ADR-005 section 5).
+#
+# Each entry names a defect that changed, or could have changed, research
+# results, by the commit that fixed it and the components it touched.
+# `python -m research evidence audit-stale` computes from this file which runs
+# are stale and appends one mark per (run, defect) to ledger/stale.jsonl under
+# the evidence root. It never edits evidence. Append entries; do not rewrite
+# or delete one that has been audited, because marks cite it by id.
+#
+# fix_commit: the commit on main that fixed it, or null while it is open. A run
+#   is stale for a defect when it carries one of the defect's components and
+#   its recorded commit does not contain fix_commit, records no commit at all,
+#   or the defect is open.
+# requires: extra conditions a fixed run must also meet. `dataset_dedup`: every
+#   real dataset the run read has a metadata sidecar that records a dedup rule,
+#   since a run on a fixed commit can still read data exported before the fix.
+schema: research_defects.v1
+
+components:
+  dataset: tick and L2 data exported from ClickHouse for a run
+  verdict: gate outcomes and the verdict derived from them
+  gate_c.taker: the taker Gate C path (HftNativeRunner and its sub-gates)
+  gate_c.maker: the maker Gate C path (MakerEngine and its sub-gates)
+  mining.search: combinatorial expression search and its evaluation
+  mining.gp: genetic-programming mutation in combinatorial search
+
+defects:
+  - id: search-self-correlation
+    summary: >-
+      The expression search could pair a feature with itself in the
+      correlation family, emitting a permanent long signal whose Sharpe
+      measures market drift rather than skill.
+    components: [mining.search]
+    fix_commit: 6ce84168ebe38f4d968beb7806c344b329ac2b9b
+    fixed_in: "6ce84168"
+
+  - id: mining-reset-leak
+    summary: >-
+      Rolling operators other than ts_delta, zscore and ts_corr were evaluated
+      across contract and session resets, reading samples from the previous
+      segment.
+    components: [mining.search]
+    fix_commit: d535a5fcd15af7482882ad049510a2931555e0ee
+    fixed_in: "#416"
+
+  - id: duplicate-tick-delivery
+    summary: >-
+      Ticks delivered more than once by the feed were kept in exported
+      datasets, inflating volume and trade counts.
+    components: [dataset]
+    fix_commit: 644202765deb79ebeb72012937868fe35cfd4ec3
+    fixed_in: "#559"
+    requires: [dataset_dedup]
+
+  - id: evidence-pollution
+    summary: >-
+      Tests appended fixture rows to the shipped audit and kill ledgers, and
+      the taker runner shared one converted hftbt.npz across different inputs
+      in a directory.
+    components: [gate_c.taker]
+    fix_commit: 84846423d0f9173b5595b77d88dfbf5c7f8a1d54
+    fixed_in: "#651"
+
+  - id: default-pass-and-false-kill
+    summary: >-
+      Gate results were booleans: missing data passed by default, errors were
+      recorded as kills, and Gate D always failed on a scorecard field that did
+      not exist, writing a kill.
+    components: [verdict]
+    fix_commit: 1624d0cfcb2a12734f8a681e10037c8150cdcde8
+    fixed_in: "#652"
+
+  - id: taker-row-vs-day
+    summary: >-
+      Taker day-axis sub-gates read the per-tick equity curve as a daily
+      series, so their day counts and Sharpe were per row, not per day.
+    components: [gate_c.taker]
+    fix_commit: 1624d0cfcb2a12734f8a681e10037c8150cdcde8
+    fixed_in: "#652"
+
+  - id: maker-latency-instant-rtt
+    summary: >-
+      A maker latency profile that was missing or matched only by prefix ran
+      at instant round-trip time instead of failing.
+    components: [gate_c.maker]
+    fix_commit: 4fc176b485640d9649078d4bea69d1235237e5ce
+    fixed_in: "#654 (supersedes #560)"
+
+  - id: taker-latency-unresolved
+    summary: >-
+      Taker Gate C never resolved its latency_profile_id, so an unknown id did
+      not invalidate the run.
+    components: [gate_c.taker]
+    fix_commit: 8f9148a8cd1800856b279ec29f012e746400e07e
+    fixed_in: "#656"
+
+  - id: maker-report-constants
+    summary: >-
+      The maker report states an OOS Sharpe and latency that the engine did
+      not produce; the Sharpe is now recorded as not measured, the report fix
+      is open.
+    components: [gate_c.maker]
+    fix_commit: null
+    fixed_in: "#553 (open)"
+
+  - id: gp-mutation-shreds
+    summary: >-
+      GP mutation rebuilt expressions instead of mutating them in place, so
+      offspring were unrelated to their parents.
+    components: [mining.gp]
+    fix_commit: null
+    fixed_in: "#552 (open)"

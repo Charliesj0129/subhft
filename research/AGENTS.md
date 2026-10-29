@@ -21,6 +21,9 @@ differences here.
   manifest declares. `python -m research status` shows it with run counts from
   both roots; `research/experiments/**` is read only through
   `research/registry/legacy_evidence.py`, which quarantines test-fixture rows.
+- A defect that changed research results goes into `config/research/defects.yaml`
+  (fix commit + components); `python -m research evidence audit-stale` then marks
+  the affected runs in `ledger/stale.jsonl`. Marks flag evidence, never a status.
 - Pre-registered protocols (`config/research/protocols/*.yaml`, e.g. the maker
   roll rule) are frozen once a run has used them: add a new version, never
   edit one; runs record the protocol sha256.

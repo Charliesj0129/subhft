@@ -88,32 +88,52 @@ def derive_status(events: Iterable[Mapping[str, Any]]) -> AlphaStatus | None:
 
     A malformed event raises ``ValueError``.
     """
+    return _derive(list(events))[0]
+
+
+def status_basis(events: Iterable[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The events the derived status rests on.
+
+    Every KILL; else each climbed stage's latest event, and the event that
+    stopped the climb when the status would differ without it (a failed
+    gate_a that replaced a passed one, but not an old event that a newer run
+    left behind). A malformed event raises ``ValueError``.
+    """
+    events = list(events)
+    status, basis, stop = _derive(events)
+    if stop is not None and _derive(events[:stop] + events[stop + 1 :])[0] is not status:
+        basis = [*basis, stop]
+    return [events[i] for i in basis]
+
+
+def _derive(events: list[Mapping[str, Any]]) -> tuple[AlphaStatus | None, list[int], int | None]:
+    """(status, the indices it climbed on, the index of the event that stopped the climb)."""
     latest: dict[str, tuple[int, bool, str | None]] = {}
-    killed = False
-    seen = False
+    kills: list[int] = []
     for index, event in enumerate(events):
         check_event(event)
-        seen = True
         verdict = event.get("verdict")
         if verdict == Verdict.INVALID.value:
             continue
         if verdict == Verdict.KILL.value:
-            killed = True
+            kills.append(index)
         latest[event["stage"]] = (index, event["passed"], event.get("run_id"))
-    if not seen:
-        return None
-    if killed:
-        return AlphaStatus.KILLED
+    if not events:
+        return None, [], None
+    if kills:
+        return AlphaStatus.KILLED, kills, None
     status = AlphaStatus.DRAFT
+    basis: list[int] = []
     below: tuple[int, bool, str | None] | None = None
     for stage, stage_status in _LADDER:
         entry = latest.get(stage)
-        if entry is None or not entry[1]:
-            break
-        if below is not None and (entry[0] < below[0] or entry[2] != below[2]):
-            break
+        if entry is None:
+            return status, basis, None
+        if not entry[1] or (below is not None and (entry[0] < below[0] or entry[2] != below[2])):
+            return status, basis, entry[0]
         status, below = stage_status, entry
-    return status
+        basis.append(entry[0])
+    return status, basis, None
 
 
 def effective_status(declared: AlphaStatus, events: Iterable[Mapping[str, Any]]) -> EffectiveStatus:

@@ -9,8 +9,9 @@ both outside the checkout:
     lists the sha256 of every file; ``ledger/verdicts.jsonl``, the
     append-only verdict events that alpha status is derived from;
     ``legacy/kills.jsonl``, kills recorded before the ledger existed, kept
-    as an archive that never derives a status; ``protocols/``,
-    pre-registrations.
+    as an archive that never derives a status; ``ledger/stale.jsonl``, marks
+    for runs that a registered defect affects (they flag evidence, never
+    derive a status); ``protocols/``, pre-registrations.
 ``$HFT_RESEARCH_DATA_ROOT`` (default ``~/hft_research_data``)
     datasets; not in git.
 
@@ -52,6 +53,8 @@ VERDICT_EVENT_SCHEMA = "verdict_event.v1"
 LEDGER_RELPATH = "ledger/verdicts.jsonl"
 LEGACY_KILLS_RELPATH = "legacy/kills.jsonl"
 LEGACY_KILL_SCHEMA = "legacy_kill.v1"
+STALE_RELPATH = "ledger/stale.jsonl"
+STALE_MARK_SCHEMA = "stale_mark.v1"
 ROOT_LAYOUT = ("runs", "validations", "ledger", "legacy", "protocols")
 
 _REQUIRED_EVENT_FIELDS = ("alpha_id", "stage", "passed")
@@ -316,19 +319,41 @@ class EvidenceWriter:
         for kill in kills:
             if not kill.get("alpha_id") or not kill.get("kill_id"):
                 raise ValueError(f"legacy kill lacks alpha_id or kill_id: {dict(kill)!r}")
-        path = self.root / LEGACY_KILLS_RELPATH
-        added = 0
-        with _locked(path) as fd:
-            seen = {r.get("kill_id") for r in _read_jsonl(path, LEGACY_KILL_SCHEMA)}
-            for kill in kills:
-                if kill["kill_id"] in seen:
-                    continue
-                seen.add(kill["kill_id"])
-                record = {"schema": LEGACY_KILL_SCHEMA, "archived_at": _now_iso(), **dict(kill)}
-                _append_whole(fd, _compact(record), path)
-                added += 1
-        return added
+        return self._append_unique(
+            self.root / LEGACY_KILLS_RELPATH, LEGACY_KILL_SCHEMA, "kill_id", "archived_at", kills
+        )
 
     def read_legacy_kills(self) -> Iterator[dict[str, Any]]:
         """The archived pre-ledger kills in order; a malformed line raises ``ValueError``."""
         yield from _read_jsonl(self.root / LEGACY_KILLS_RELPATH, LEGACY_KILL_SCHEMA)
+
+    def append_stale_marks(self, marks: Iterable[Mapping[str, Any]]) -> int:
+        """Append stale marks to ``ledger/stale.jsonl``; return how many were new.
+
+        Each mark needs ``mark_id``, ``run_key`` and ``defect_id``; one already
+        there (same ``mark_id``) is skipped, so a repeated audit adds nothing.
+        A mark flags evidence; the status rules never read it.
+        """
+        marks = list(marks)
+        for mark in marks:
+            if not mark.get("mark_id") or not mark.get("run_key") or not mark.get("defect_id"):
+                raise ValueError(f"stale mark lacks mark_id, run_key or defect_id: {dict(mark)!r}")
+        return self._append_unique(self.root / STALE_RELPATH, STALE_MARK_SCHEMA, "mark_id", "marked_at", marks)
+
+    def read_stale_marks(self) -> Iterator[dict[str, Any]]:
+        """The stale marks in order; a malformed line raises ``ValueError``."""
+        yield from _read_jsonl(self.root / STALE_RELPATH, STALE_MARK_SCHEMA)
+
+    @staticmethod
+    def _append_unique(path: Path, schema: str, key: str, stamp: str, records: list[Mapping[str, Any]]) -> int:
+        """Append the ``records`` whose ``key`` is not yet in ``path``, under its lock, stamped at ``stamp``."""
+        added = 0
+        with _locked(path) as fd:
+            seen = {r.get(key) for r in _read_jsonl(path, schema)}
+            for record in records:
+                if record[key] in seen:
+                    continue
+                seen.add(record[key])
+                _append_whole(fd, _compact({"schema": schema, stamp: _now_iso(), **dict(record)}), path)
+                added += 1
+        return added
