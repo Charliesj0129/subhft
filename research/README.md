@@ -166,8 +166,8 @@ token is accepted with a `DeprecationWarning` for one release.
 
 ### Backtest engine selection
 
-For the bias matrix (14× pessimistic to 577× optimistic across engines), calibration
-requirements, and the `BacktestContractSpec` config entrypoint, see
+For the bias matrix (14× pessimistic to 577× optimistic across engines), and calibration
+requirements, see
 [`docs/runbooks/backtest-engine-selection.md`](../docs/runbooks/backtest-engine-selection.md).
 
 ## One Factory Flow

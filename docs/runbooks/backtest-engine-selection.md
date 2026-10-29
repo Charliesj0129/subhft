@@ -1,9 +1,8 @@
 # Backtest Engine Selection
 
 > Stage 4 of the research-workflow deep consolidation (2026-05-28).
-> Picks the right engine for the question, records the bias profile each
-> engine carries, and points at the single config object that drives all
-> three: `research.backtest.contract.BacktestContractSpec`.
+> Picks the right engine for the question and records the bias profile each
+> engine carries.
 
 ## TL;DR
 
@@ -12,19 +11,6 @@
 | "Does this maker quoting strategy survive TAIFEX cost structure on CK ticks?" | `MakerEngine` (CK-direct) | Direct on `hft.market_data`, queue-depletion fills, no synthetic exchange overhead. |
 | "Does this taker signal cross the IC threshold and produce a positive backtest?" | `HftNativeRunner` | hftbacktest V2 with string-named queue / latency / exchange models; fastest for IC-based research. |
 | "Does this `BaseStrategy` survive in the hftbacktest event loop with realistic queue + latency models, including risk gating?" | `HftBacktestAdapter` | Wraps a live-grade `BaseStrategy` inside hftbacktest; supports `BacktestRiskConfig`. The closest to production. |
-
-All three accept a `BacktestContractSpec`; build one from an alpha manifest:
-
-```python
-from research.backtest.contract import BacktestContractSpec
-from research.registry.alpha_registry import AlphaRegistry
-
-manifest = AlphaRegistry().load("c33_txfd6_solo_passive_maker").manifest
-spec = BacktestContractSpec.from_manifest(manifest)  # picks cost_profile_refs[0]
-maker = MakerEngine(**spec.maker_engine_kwargs())
-adapter = HftBacktestAdapter(strategy=..., asset_symbol=spec.instrument,
-                             data=path, **spec.hft_backtest_adapter_kwargs())
-```
 
 ## Engine catalogue
 
@@ -97,9 +83,6 @@ the corresponding queue-model requirement.
   `config/research/latency_profiles.yaml` (see memory
   `shioaji_broker_asymmetric_latency_2026_04_24.md` — quote-activation
   P95 ~395 ms vs cancel P95 ~59 ms, 6.7× asymmetric).
-* `BacktestContractSpec.from_manifest(profile=...)` will pull the
-  pipeline-overrides latency id from the strict validation profile
-  (`vm_ul6_strict.yaml`), which today points at `sim_stress_v2026-02-26`.
 
 ## Cross-references
 

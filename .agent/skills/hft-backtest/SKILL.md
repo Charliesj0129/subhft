@@ -1,13 +1,12 @@
 ---
 name: hft-backtest
-description: "Configure the research backtest engines (MakerEngine, HftNativeRunner, HftBacktestAdapter), BacktestContractSpec, latency profiles; judge results with the method bias matrix. Use when setting up a backtest or interpreting a PnL claim. Not for promotion gate thresholds (validation-gate)."
+description: "Configure the research backtest engines (MakerEngine, HftNativeRunner, HftBacktestAdapter), latency profiles; judge results with the method bias matrix. Use when setting up a backtest or interpreting a PnL claim. Not for promotion gate thresholds (validation-gate)."
 ---
 
 # Backtest engines and honesty
 
-Canonical sources: `docs/runbooks/backtest-engine-selection.md` (engine
-catalogue and bias matrix) and `research/backtest/contract.py`
-(`BacktestContractSpec`). Memory has the evidence (`backtest_method_reliability`,
+Canonical source: `docs/runbooks/backtest-engine-selection.md` (engine
+catalogue and bias matrix). Memory has the evidence (`backtest_method_reliability`,
 `unified_backtest_framework`, `calibration_queue_model_fix`).
 
 ## Pick the engine
@@ -18,9 +17,9 @@ catalogue and bias matrix) and `research/backtest/contract.py`
 | Does a taker signal clear IC and PnL thresholds? | `HftNativeRunner` | `research/backtest/hft_native_runner.py` |
 | Does a live-grade `BaseStrategy` survive queue + latency + risk gating? | `HftBacktestAdapter` | `src/hft_platform/backtest/adapter.py` |
 
-Build all three from one object: `BacktestContractSpec.from_manifest(manifest)`
-(cost profile refs come from the alpha manifest), then `spec.maker_engine_kwargs()`,
-`spec.hft_native_runner_kwargs()`, `spec.hft_backtest_adapter_kwargs()`.
+Costs come from `research.backtest.cost_models.load_cost_profile(instrument)`
+(`config/research/cost_profiles.yaml`); latency from an exact profile id in
+`config/research/latency_profiles.yaml`.
 
 ## Rules that decide whether a number means anything
 
