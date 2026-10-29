@@ -3,7 +3,7 @@
 The split file pins explicit (day, symbol) pairs — front-month TXF per day —
 so evaluation is reproducible against a fixed NPZ inventory
 (``data_version``).  Splits are contiguous in time and day-disjoint; the test
-split is only ever touched for WATCHLIST/PROMOTED candidates (spec §14) and
+split is only ever touched for WATCHLIST/SHORTLISTED candidates (spec §14) and
 never appears in failure summaries (spec §15).
 """
 

@@ -130,3 +130,15 @@ def test_save_results_carries_the_trial_count(tmp_path) -> None:
     assert len(payload["results"]) == 10
     assert payload["trials"] == engine.trial_summary()
     assert payload["trials"]["evaluated"] == 10
+
+
+def test_mutation_never_rewrites_a_negative_literal_or_an_operator_name() -> None:
+    engine = _engine()
+    engine._rng.random = lambda: 0.0  # type: ignore[method-assign] - every leaf is selected
+
+    child = engine._mutate_expression("mul(f0, -7)")
+
+    tree = ast.parse(child, mode="eval")
+    assert isinstance(tree.body, ast.Call) and tree.body.func.id == "mul"
+    negated = tree.body.args[1]
+    assert isinstance(negated, ast.UnaryOp) and negated.operand.value == 7

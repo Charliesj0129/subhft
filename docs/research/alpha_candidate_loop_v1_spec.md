@@ -4,6 +4,16 @@ Status: SPEC (approved 2026-06-11, not yet implemented)
 Owner: research
 Scope: batch alpha-FACTOR candidate generation/validation/evaluation loop. Not a strategy system.
 
+> **Research v2 C4 (2026-10-29):** the top status this spec calls `PROMOTED` is now
+> `SHORTLISTED` (`research/candidate_loop/schema.py`; migration
+> `src/hft_platform/migrations/clickhouse/20261029_001_add_shortlisted_to_research_alpha_candidates.sql`
+> adds the label, and rows already written as `PROMOTED` are read as `SHORTLISTED`). The
+> CLI subcommand is `shortlist` (`promote` remains an alias). The loop is a generator:
+> promotion happens only on the governed Gate A-F path. Every test-split read is also
+> logged in the evidence root's `ledger/holdout_access.jsonl`, the log Gate C writes,
+> and a candidate whose test split was read before is flagged `reused`. The rest of this
+> spec is the v1 text as approved.
+
 Pinned decisions:
 
 - Data scope: full ~Feb–Jun 2026 TXF L2 span, including pre-2026-03-31 days where trade

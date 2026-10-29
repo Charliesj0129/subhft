@@ -17,11 +17,12 @@ import json
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
-from research.candidate_loop.schema import Status
+from research.candidate_loop.schema import LEGACY_STATUS_LABELS, Status
 from research.candidate_loop.scoring import ScoringConfig
 
 SPLITS_INCLUDED: tuple[str, ...] = ("train", "validation")  # FROZEN; never widened
@@ -101,6 +102,7 @@ def build_failure_summary(
     train_by_alpha = {str(r["alpha_id"]): r for r in results if str(r.get("split")) == "train"}
     val_by_alpha = {str(r["alpha_id"]): r for r in results if str(r.get("split")) == "validation"}
 
+    candidate_rows = [_current_label(c) for c in candidate_rows]
     statuses = [str(c.get("status", "")) for c in candidate_rows]
     totals = {
         "candidates": len(candidate_rows),
@@ -109,7 +111,7 @@ def build_failure_summary(
         "evaluated": statuses.count(Status.EVALUATED.value),
         "rejected": statuses.count(Status.REJECTED.value),
         "watchlist": statuses.count(Status.WATCHLIST.value),
-        "promoted": statuses.count(Status.PROMOTED.value),
+        "shortlisted": statuses.count(Status.SHORTLISTED.value),
     }
 
     per_family: dict[str, dict[str, Any]] = {}
@@ -235,10 +237,17 @@ def build_failure_summary(
         "totals": totals,
         "per_family": per_family,
         "watchlist": _terminal_list(Status.WATCHLIST),
-        "promoted": _terminal_list(Status.PROMOTED),
+        "shortlisted": _terminal_list(Status.SHORTLISTED),
         "proposed_new_primitives_tally": dict(sorted(proposed_tally.items())),
         "prompt_ids_used": dict(prompt_ids_used or {}),
     }
+
+
+def _current_label(row: Mapping[str, Any]) -> dict[str, Any]:
+    """*row* with a legacy status label (``PROMOTED``) replaced by its successor."""
+    label = str(row.get("status", ""))
+    successor = LEGACY_STATUS_LABELS.get(label)
+    return {**row, "status": successor.value} if successor is not None else dict(row)
 
 
 def write_failure_summary(summary: dict[str, Any], run_dir: Path) -> Path:

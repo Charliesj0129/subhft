@@ -399,3 +399,26 @@ class EvidenceWriter:
                 _append_whole(fd, _compact({"schema": schema, stamp: _now_iso(), **dict(record)}), path)
                 added += 1
         return added
+
+
+def record_exploratory_holdout_access(
+    *, holdout_key: str, alpha_id: str, run_id: str | None, mode: RunMode = RunMode.EXPLORATORY
+) -> dict[str, Any]:
+    """Record an exploratory read of a holdout under the default evidence root, if that root exists.
+
+    The rule every non-governed reader follows (Gate C in an exploratory
+    validation, a generator's test split): a peek is a read, so it goes in the
+    same ``ledger/holdout_access.jsonl`` a governed run writes, but an
+    exploratory run never creates the root. Returns what
+    :meth:`EvidenceWriter.record_holdout_access` returns, or ``recorded: False``
+    with the reason.
+    """
+    try:
+        root = evidence_root()
+    except EvidenceRootError as exc:
+        return {"recorded": False, "holdout_key": holdout_key, "reason": str(exc)}
+    if not root.is_dir():
+        return {"recorded": False, "holdout_key": holdout_key, "reason": f"no evidence root at {root}"}
+    return EvidenceWriter(root).record_holdout_access(
+        holdout_key=holdout_key, alpha_id=alpha_id, run_id=run_id, mode=mode
+    )
