@@ -904,6 +904,11 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote.add_argument(
         "--replay-strategy-id", default=None, help="Runtime strategy id the replay reports name (default: alpha_id)"
     )
+    alpha_promote.add_argument(
+        "--replay-strategy",
+        default=None,
+        help="Runtime strategy module:Class; its source sha256 binds the Shadow-exit replay parity obligation",
+    )
     alpha_promote.add_argument("--min-paper-trade-calendar-days", type=int, default=7)
     alpha_promote.add_argument("--min-paper-trade-trading-days", type=int, default=5)
     alpha_promote.add_argument("--min-paper-trade-session-minutes", type=int, default=30)

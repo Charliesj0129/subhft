@@ -349,6 +349,7 @@ def _promote(
         paper_trade_summary_path=(str(args.paper_trade_summary) if args.paper_trade_summary else None),
         replay_parity_report_paths=tuple(str(p) for p in (getattr(args, "replay_parity_report", None) or [])),
         replay_strategy_id=(getattr(args, "replay_strategy_id", None) or None),
+        replay_strategy=(getattr(args, "replay_strategy", None) or None),
         min_paper_trade_calendar_days=int(args.min_paper_trade_calendar_days),
         min_paper_trade_trading_days=int(args.min_paper_trade_trading_days),
         min_paper_trade_session_minutes=int(args.min_paper_trade_session_minutes),

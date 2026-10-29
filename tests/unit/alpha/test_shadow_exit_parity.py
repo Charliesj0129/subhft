@@ -34,7 +34,14 @@ from tests.unit.replay.test_cli_runner import (
 )
 
 _CHECK = "replay_parity_shadow_exit"
-_OBLIGATION = {"gate": "replay_parity_audit", "stage": "shadow_exit", "min_match_pct": 95.0, "strategy_id": "ECHO"}
+_ECHO = "tests.unit.replay.test_cli_runner:_EchoStrategy"
+_OBLIGATION = {
+    "gate": "replay_parity_audit",
+    "stage": "shadow_exit",
+    "min_match_pct": 95.0,
+    "strategy_id": "ECHO",
+    "strategy_code": shadow_parity.pin_strategy(_ECHO),
+}
 _REPLAY_SETTINGS = {
     "loop_id": "echo_v1",
     "strategy": {"id": "ECHO", "module": "tests.unit.replay.test_cli_runner", "class": "_EchoStrategy"},
@@ -57,13 +64,13 @@ def _isolated_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     kill_ledger._reset_cache_for_tests()
 
 
-def _replay_report(tmp_path: Path, day: date, *, offset: int = 0) -> Path:
+def _replay_report(tmp_path: Path, day: date, *, offset: int = 0, settings: dict | None = None) -> Path:
     """Run ``hft run --mode replay``'s runner over a fixture with recorded live intents."""
     prices = [1_000_000, 1_000_100, 1_000_200, 1_000_300]
     fixture = _build_fixture(tmp_path / f"wal_{day.isoformat()}.tar.gz", _market_rows(prices))
     out_root = tmp_path / "outputs" / "replay"
     rc = run_replay_session(
-        _REPLAY_SETTINGS,
+        settings or _REPLAY_SETTINGS,
         session_date=day,
         fixture_path=fixture,
         out_root=out_root,
@@ -108,6 +115,8 @@ def _promote(
     with_parity: bool = False,
     force: bool = False,
     strategy_id: str | None = "ECHO",
+    replay_strategy: str | None = _ECHO,
+    min_match_pct: float = 95.0,
 ):
     alpha_dir = tmp_path / "research" / "alphas" / "alpha_v"
     alpha_dir.mkdir(parents=True, exist_ok=True)
@@ -133,6 +142,8 @@ def _promote(
             validation_profile=profile,
             replay_parity_report_paths=tuple(str(p) for p in reports),
             replay_strategy_id=strategy_id,
+            replay_strategy=replay_strategy,
+            min_replay_parity_match_pct=min_match_pct,
             force=force,
             force_reason="test override" if force else "",
         )
@@ -240,6 +251,120 @@ def test_canary_reports_must_name_the_obligation_strategy(tmp_path: Path):
     held = monitor.evaluate("alpha_v", {**_LIVE, "replay_parity_reports": [report]})
     assert held.state == "canary"
     assert "strategy_id 'ECHO' is not 'OTHER'" in held.checks["unmet_obligations"][0]
+
+
+# --- Binding: a report certifies only the strategy code that was promoted ---
+
+
+def _strategy_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> dict:
+    """A runtime strategy module on sys.path, as replay settings that name it."""
+    pkg = tmp_path / "strat_pkg"
+    pkg.mkdir(exist_ok=True)
+    (pkg / "echo_runtime.py").write_text(body)
+    monkeypatch.syspath_prepend(str(pkg))
+    return {"loop_id": "echo_v1", "strategy": {"id": "ECHO", "module": "echo_runtime", "class": "Echo"}}
+
+
+def test_report_from_an_earlier_version_of_the_strategy_does_not_certify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    settings = _strategy_module(tmp_path, monkeypatch, "class Echo:\n    version = 1\n")
+    old_report = _replay_report(tmp_path, date(2026, 4, 21), settings=settings)
+    # The strategy changes but keeps its id; the new version is promoted.
+    _strategy_module(tmp_path, monkeypatch, "class Echo:\n    version = 2\n")
+    result = _promote(tmp_path, (old_report,), replay_strategy="echo_runtime:Echo")
+    assert result.approved is False
+    check = _parity_check(result)
+    assert check["outcome"] == "fail"
+    assert "not the promoted strategy code" in check["detail"]
+    assert _decision(result)["obligations"][0]["strategy_code"]["module"] == "echo_runtime"
+
+    # The canary rejects the stale report the same way.
+    _, monitor = _top_tier_canary(tmp_path, _promote(tmp_path, replay_strategy="echo_runtime:Echo"))
+    held = monitor.evaluate("alpha_v", {**_LIVE, "replay_parity_reports": [str(old_report)]})
+    assert held.state == "canary"
+    assert "not the promoted strategy code" in held.checks["unmet_obligations"][0]
+
+    new_report = _replay_report(tmp_path, date(2026, 4, 22), settings=settings)
+    assert monitor.evaluate("alpha_v", {**_LIVE, "replay_parity_reports": [str(new_report)]}).state == "graduated"
+
+
+def test_report_of_a_different_strategy_class_does_not_certify(tmp_path: Path):
+    report = _replay_report(tmp_path, date(2026, 4, 21))
+    result = _promote(tmp_path, (report,), replay_strategy="tests.unit.replay.test_cli_runner:_Other")
+    assert result.approved is False
+    assert "not the promoted strategy code" in _parity_check(result)["detail"]
+
+
+def test_report_without_a_strategy_fingerprint_fails_closed(tmp_path: Path):
+    result = _promote(tmp_path, (_edited_report(tmp_path, "legacy", strategy_fingerprint=_DROP),))
+    assert result.approved is False
+    assert "does not fingerprint the strategy it replayed" in _parity_check(result)["detail"]
+
+
+def test_reports_that_replayed_different_strategy_settings_fail(tmp_path: Path):
+    good = _replay_report(tmp_path, date(2026, 4, 22))
+    payload = json.loads(good.read_text())
+    tuned = _edited_report(
+        tmp_path, "tuned", strategy_fingerprint={**payload["strategy_fingerprint"], "config_sha256": "0" * 64}
+    )
+    result = _promote(tmp_path, (good, tuned))
+    assert result.approved is False
+    assert "reports replayed different strategy settings" in _parity_check(result)["detail"]
+
+
+@pytest.mark.parametrize("spec", [None, "", "tests.unit.replay.test_cli_runner", "no_such_module_xyz:Echo"])
+def test_promotion_that_cannot_pin_the_strategy_code_fails_gate_e(tmp_path: Path, spec):
+    result = _promote(tmp_path, replay_strategy=spec)
+    assert result.approved is False
+    check = _parity_check(result)
+    assert check["outcome"] == "fail"
+    assert "could not be bound to the promoted code" in check["detail"]
+    assert _decision(result)["obligations"][0]["strategy_code"] is None
+
+
+def test_canary_obligation_without_a_strategy_pin_holds(tmp_path: Path):
+    promo_path, monitor = _top_tier_canary(tmp_path, _promote(tmp_path))
+    payload = yaml.safe_load(promo_path.read_text())
+    payload["obligations"][0].pop("strategy_code")
+    promo_path.write_text(yaml.safe_dump(payload))
+    report = str(_replay_report(tmp_path, date(2026, 4, 21)))
+    held = monitor.evaluate("alpha_v", {**_LIVE, "replay_parity_reports": [report]})
+    assert held.state == "canary"
+    assert "obligation does not pin the strategy code" in held.checks["unmet_obligations"][0]
+
+
+def test_replay_report_fingerprints_the_strategy_it_ran(tmp_path: Path):
+    fingerprint = json.loads(_replay_report(tmp_path, date(2026, 4, 21)).read_text())["strategy_fingerprint"]
+    assert {k: fingerprint[k] for k in ("module", "class", "code_sha256")} == shadow_parity.pin_strategy(_ECHO)
+    assert fingerprint["config_sha256"] == shadow_parity.strategy_config_sha256(_REPLAY_SETTINGS["strategy"])
+
+
+# --- Threshold: a non-finite or out-of-range minimum never certifies ---------
+
+
+@pytest.mark.parametrize("minimum", [float("nan"), float("inf"), float("-inf"), 0.0, -5.0, 100.5])
+def test_promotion_with_a_bad_parity_threshold_keeps_the_obligation(tmp_path: Path, minimum: float):
+    # A 0% report: under ``match_pct < nan`` it would pass.
+    zero = _edited_report(tmp_path, "zero", match_pct=0.0)
+    result = _promote(tmp_path, (zero,), min_match_pct=minimum)
+    assert result.approved is False
+    check = _parity_check(result)
+    assert check["pass"] is False
+    assert "is not a finite percentage in (0, 100]" in check["detail"]
+    assert _decision(result)["certified_obligations"] == []
+    assert [e["gate"] for e in _decision(result)["obligations"]] == ["replay_parity_audit"]
+
+
+def test_judge_reports_rejects_a_nan_threshold_directly(tmp_path: Path):
+    judged = shadow_parity.judge_reports(
+        [str(_replay_report(tmp_path, date(2026, 4, 21)))],
+        tmp_path,
+        strategy_id="ECHO",
+        min_match_pct=float("nan"),
+        strategy_code=shadow_parity.pin_strategy(_ECHO),
+    )
+    assert judged["pass"] is False
 
 
 # --- Promotion: Gate E records the obligation, or certifies it early --------

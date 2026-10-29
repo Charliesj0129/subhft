@@ -95,6 +95,7 @@ def _unmet_obligations(
                     Path("."),
                     strategy_id=str(entry.get("strategy_id") or alpha_id),
                     min_match_pct=minimum,
+                    strategy_code=entry.get("strategy_code"),
                 )
                 if judged["pass"]:
                     certified.append(shadow_parity.certified(entry, judged, certified_by="canary_evaluate"))

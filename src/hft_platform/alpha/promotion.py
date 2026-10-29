@@ -84,9 +84,12 @@ class PromotionConfig:
     # replay_parity obligation deferred to Shadow exit can be certified at
     # Gate E by these (``alpha/shadow_parity.py``); without them it stays owed
     # and holds the canary. ``replay_strategy_id`` is the runtime strategy id
-    # the reports must name (default: ``alpha_id``).
+    # the reports must name (default: ``alpha_id``); ``replay_strategy`` is its
+    # ``module:Class``, whose source sha256 the obligation pins so only reports
+    # that replayed this code can certify it.
     replay_parity_report_paths: tuple[str, ...] = ()
     replay_strategy_id: str | None = None
+    replay_strategy: str | None = None
     # Slice B Task 12: belt-and-suspenders Gate D audits that mirror the
     # ``inventory_mtm`` and ``cost_uncertainty`` Gate C sub-gates. The audits
     # read sub-gate metrics that Gate C wrote to the scorecard and re-check
@@ -1391,6 +1394,9 @@ def _promotion_obligations(verdict: VerdictResult, config: PromotionConfig) -> l
             entry["min_match_pct"] = float(getattr(config, "min_replay_parity_match_pct", 95.0))
             # The runtime strategy id the replay reports must name.
             entry["strategy_id"] = str(config.replay_strategy_id or config.alpha_id)
+            # None when --replay-strategy is absent or does not resolve; Gate E
+            # then fails, since no report could ever be bound to this candidate.
+            entry["strategy_code"] = shadow_parity.pin_strategy(config.replay_strategy)
         obligations.append(entry)
     return obligations
 
@@ -1415,6 +1421,21 @@ def _shadow_exit_replay_parity(
         return None
     minimum = shadow_parity.obligation_min_match_pct(obligation, float(config.min_replay_parity_match_pct))
     strategy_id = str(obligation.get("strategy_id") or config.alpha_id)
+    strategy_code = obligation.get("strategy_code")
+    if not isinstance(strategy_code, dict):
+        return {
+            "required": True,
+            "stage": shadow_parity.SHADOW_EXIT,
+            "strategy_id": strategy_id,
+            "min": minimum,
+            "reports": [],
+            "outcome": Outcome.FAIL.value,
+            "pass": False,
+            "detail": (
+                f"--replay-strategy {config.replay_strategy!r} does not name a module:Class that resolves; "
+                "the Shadow-exit obligation could not be bound to the promoted code"
+            ),
+        }
     if not config.replay_parity_report_paths:
         return {
             "required": False,
@@ -1427,7 +1448,11 @@ def _shadow_exit_replay_parity(
             "detail": "owed to Shadow exit: no replay report yet; the canary holds until one is certified",
         }
     judged = shadow_parity.judge_reports(
-        config.replay_parity_report_paths, root, strategy_id=strategy_id, min_match_pct=minimum
+        config.replay_parity_report_paths,
+        root,
+        strategy_id=strategy_id,
+        min_match_pct=minimum,
+        strategy_code=strategy_code,
     )
     return {"required": True, **judged}
 
