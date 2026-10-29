@@ -42,6 +42,24 @@
   vs CK-direct ground truth on TMFD6 (see memory entry
   `backtest_method_reliability.md`); calibrate with
   `research.calibration` before claiming maker P&L from this engine.
+* **Fills**: none. The bridge sends no orders; positions are rebuilt from the
+  signal ladder and valued mid-to-mid with bps fees, so a taker PnL from this
+  engine never pays the spread. Use `TakerSim` below for taker PnL.
+
+### 2b. `research.backtest.taker_sim.TakerSim`
+
+* **Data source**: one hftbacktest event file per trading day
+  (`ensure_hftbt_npz`); each day starts flat and is force-closed at its last
+  touch.
+* **Fills**: the same signal ladder as `HftNativeRunner`, sent as one IOC order
+  at a time at the touch; each fill is booked at the price the exchange model
+  gave it (method `taker_ioc_touch_v1`).
+* **Cost model**: per contract from `config/research/cost_profiles.yaml`
+  (`load_cost_profile`), including the closing contracts; exchange fees off.
+* **Output**: dated daily rows (`TakerSimResult.daily_rows()`) and a Sharpe on
+  the daily net series.
+* **Not yet**: Gate C still reads `HftNativeRunner`; switching it is research
+  v2 C2c.
 
 ### 3. `hft_platform.backtest.adapter.HftBacktestAdapter`
 
