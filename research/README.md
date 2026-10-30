@@ -207,7 +207,12 @@ row of the feature arrays, multiplied by sqrt(252) only so scores stay comparabl
 with earlier runs. The engine reports how many expressions it scored
 (`AlphaSearchEngine.trial_summary()`, also in `save_results` and `hft alpha search
 --out`), and `hft alpha mine promote` records it as
-`experiment_metadata.search_trials`. No gate reads that count yet.
+`experiment_metadata.search_trials`. The summary also carries `effective`, the Li-Ji
+count of those trials' signals (`stats.effective_test_count`), recorded as
+`experiment_metadata.search_trials_effective`. Gate C's `selection_deflated_sharpe`
+sub-gate (maker and taker) reports the daily Sharpe less `stats.selection_sr0` of that
+effective count against `deflated_sharpe_min`; it is NOT_APPLICABLE when the alpha has no
+search record, and advisory until a profile lists it in `blocking_sub_gates`.
 
 ### Generators (research v2 C4)
 

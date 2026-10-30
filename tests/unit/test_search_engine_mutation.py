@@ -117,7 +117,29 @@ def test_trial_summary_counts_every_scored_expression_and_each_identity_once() -
     engine.evaluate_expression("add(f1, f0)")  # same canonical identity
     engine.evaluate_expression("sign(ts_delta(f2, 5))")
 
-    assert engine.trial_summary() == {"evaluated": 3, "distinct": 2}
+    summary = engine.trial_summary()
+    assert (summary["evaluated"], summary["distinct"]) == (3, 2)
+
+
+def test_effective_trials_count_a_rescaled_expression_as_one_test() -> None:
+    engine = _engine()
+
+    engine.evaluate_expression("ts_delta(f0, 5)")
+    engine.evaluate_expression("ts_delta(f0, 5) * 3")  # distinct text, the same signal up to scale
+
+    assert engine.trial_summary() == {"evaluated": 2, "distinct": 2, "effective": 1}
+
+
+def test_effective_trials_count_unrelated_signals_separately() -> None:
+    engine = _engine()
+
+    engine.evaluate_expression("ts_delta(f0, 5)")
+    engine.evaluate_expression("ts_delta(f1, 5)")
+    engine.evaluate_expression("ts_delta(f2, 5)")
+
+    summary = engine.trial_summary()
+    assert summary["distinct"] == 3
+    assert 2 <= summary["effective"] <= 3
 
 
 def test_save_results_carries_the_trial_count(tmp_path) -> None:

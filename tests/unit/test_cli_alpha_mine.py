@@ -242,6 +242,8 @@ def test_cmd_alpha_mine_promote_from_results_reads_the_engine_output(capsys, scr
     meta = manifest["experiment_metadata"]
     assert meta["search_trials"] == engine.trial_summary()["distinct"]
     assert 1 <= meta["search_trials"] <= 12
+    assert meta["search_trials_effective"] == engine.trial_summary()["effective"]
+    assert 1 <= meta["search_trials_effective"] <= meta["search_trials"]
     assert meta["discovery_selection_sharpe"] == results[0].sharpe_oos
 
 

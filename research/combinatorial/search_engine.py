@@ -18,7 +18,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from structlog import get_logger
 
-from hft_platform.alpha.stats import sharpe_ratio
+from hft_platform.alpha.stats import effective_test_count, sharpe_ratio
 from research.combinatorial.expression_lang import compile_expression
 
 logger = get_logger("search_engine")
@@ -101,6 +101,8 @@ class AlphaSearchEngine:
         self._mutation_failures = 0
         self._trials_evaluated = 0
         self._distinct_trials: set[str] = set()
+        # One fixed-length sample per distinct trial, for the effective trial count.
+        self._trial_samples: dict[str, np.ndarray] = {}
 
     def random_search(self, n_trials: int = 1000) -> list[SearchResult]:
         """Generate and evaluate *n_trials* random expressions; return sorted best-first."""
@@ -168,8 +170,11 @@ class AlphaSearchEngine:
         """Compile and evaluate a single *expression* string; return its ``SearchResult``."""
         compiled = compile_expression(expression)
         self._trials_evaluated += 1
-        self._distinct_trials.add(_trial_identity(expression))
+        identity = _trial_identity(expression)
+        self._distinct_trials.add(identity)
         signal = compiled.evaluate(self.features)
+        if identity not in self._trial_samples:
+            self._trial_samples[identity] = _trial_sample(signal)
         sharpe = _signal_sharpe(signal, self.returns)
         corr = self._pool_corr_max(signal)
         score = float(sharpe - (0.25 * corr))
@@ -193,9 +198,20 @@ class AlphaSearchEngine:
         ``evaluated`` counts each evaluation; ``distinct`` counts semantic identities
         (``canonical_ast.canonical_hash``), so re-scoring a surviving parent is one trial.
         The results a search returns are the best of ``distinct`` trials, not of
-        ``len(results)``.
+        ``len(results)``. ``effective`` is the Li-Ji count (``stats.effective_test_count``)
+        over the distinct trials' signals sampled on one fixed grid: near-duplicate
+        expressions count as one test, so it is the count Gate C deflates by.
         """
-        return {"evaluated": self._trials_evaluated, "distinct": len(self._distinct_trials)}
+        return {
+            "evaluated": self._trials_evaluated,
+            "distinct": len(self._distinct_trials),
+            "effective": self._effective_trials(),
+        }
+
+    def _effective_trials(self) -> int:
+        if not self._trial_samples:
+            return 0
+        return effective_test_count(np.vstack(list(self._trial_samples.values())))
 
     def save_results(
         self,
@@ -311,6 +327,22 @@ class AlphaSearchEngine:
                 if np.isfinite(corr):
                     out = max(out, abs(float(corr)))
         return float(out)
+
+
+_TRIAL_SAMPLE_POINTS = 1024
+
+
+def _trial_sample(signal: Any) -> np.ndarray:
+    """The signal at ``_TRIAL_SAMPLE_POINTS`` evenly spaced positions of its own length.
+
+    Every trial lands on the same number of points, so trials stack into one matrix; a
+    length-1 (constant) signal becomes a constant row, which the effective count ignores.
+    """
+    values = np.asarray(signal, dtype=np.float64).reshape(-1)
+    if values.size == 0:
+        return np.full(_TRIAL_SAMPLE_POINTS, np.nan, dtype=np.float32)
+    positions = np.linspace(0, values.size - 1, _TRIAL_SAMPLE_POINTS).astype(np.int64)
+    return values[positions].astype(np.float32)
 
 
 def _trial_identity(expression: str) -> str:

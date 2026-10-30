@@ -362,6 +362,31 @@ _LOWER_IS_STRICTER = frozenset(
 )
 
 
+def _search_record(root: Path, alpha_id: str) -> dict[str, int]:
+    """The trial counts of the search that selected the alpha, from its manifest's ``experiment_metadata``.
+
+    Keys ``search_trials`` (distinct expressions) and ``search_trials_effective``
+    (their Li-Ji count) appear only when recorded; the ``selection_deflated_sharpe``
+    sub-gate reads them. A missing or unreadable manifest is no search record.
+    """
+    import yaml as _yaml
+
+    path = root / "research" / "alphas" / alpha_id / "manifest.yaml"
+    try:
+        payload = _yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, _yaml.YAMLError):
+        return {}
+    metadata = payload.get("experiment_metadata") if isinstance(payload, dict) else None
+    if not isinstance(metadata, dict):
+        return {}
+    record: dict[str, int] = {}
+    for key in ("search_trials", "search_trials_effective"):
+        value = metadata.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            record[key] = value
+    return record
+
+
 def _merge_profile_thresholds(base: dict, profile: Any | None, *, strategy_type: str) -> dict:
     """Run thresholds with the profile's applied on top; the profile can only tighten.
 
@@ -820,6 +845,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         maker_thresholds = _merge_profile_thresholds(
             _load_maker_thresholds(root), config.profile, strategy_type="maker"
         )
+        maker_thresholds.update(_search_record(root, alpha_id))
 
         scorecard_data = result.maker_scorecard or {}
         n_days = scorecard_data.get("n_days", 0)
@@ -1143,6 +1169,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         config.profile,
         strategy_type="taker",
     )
+    taker_thresholds.update(_search_record(root, alpha_id))
     # PnL is priced by the exchange model's fills (``gate_c.sharpe_oos``). The mid-to-mid
     # screening Sharpe still has to clear the same floor, but it can never satisfy Gate C alone.
     fill_entry, fill_details, fill_rows = _fill_backtest_eval(

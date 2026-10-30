@@ -52,6 +52,9 @@ def ensure_builtin_sub_gates_registered() -> None:
         OutlierTradeRemovalGate,
     )
     from hft_platform.alpha._sub_gates.replay_parity import ReplayParityGate
+    from hft_platform.alpha._sub_gates.selection_deflated_sharpe import (
+        SelectionDeflatedSharpeGate,
+    )
     from hft_platform.alpha._sub_gates.single_day_dominance import (
         SingleDayDominanceGate,
     )
@@ -94,6 +97,8 @@ def ensure_builtin_sub_gates_registered() -> None:
         # Force-flat residual dominance (goal §3 + §5): flag edges
         # propped up by inventory closed at end-of-window mark.
         ForceFlatResidualGate(),
+        # Selection bias of the search that picked the alpha (research v2)
+        SelectionDeflatedSharpeGate(),
     ]
     for gate in candidates:
         if gate.name not in existing_names:
