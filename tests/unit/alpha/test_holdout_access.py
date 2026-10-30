@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from hft_platform.alpha._gate_c import _holdout_identity
@@ -19,10 +20,8 @@ from hft_platform.alpha.validation import _publish_governed_run, _record_holdout
 _DAYS = ["2026-09-01", "2026-09-02", "2026-09-03"]
 
 
-def _event_file(tmp_path: Path, name: str = "a.td.npz", payload: bytes = b"events") -> str:
-    path = tmp_path / name
-    path.write_bytes(payload)
-    return str(path)
+def _rows(days: list[str], tag: str = "e") -> list[dict]:
+    return [{"date": d, "events_sha256": f"{tag}-{d}"} for d in days]
 
 
 def _gate_c(key: str | None, *, reason: str | None = None) -> GateReport:
@@ -39,25 +38,68 @@ def _config(run_mode: str = "exploratory") -> ValidationConfig:
 # ---------------------------------------------------------------------------
 
 
-def test_holdout_identity_is_stable_for_the_same_days_and_events(tmp_path: Path) -> None:
-    path = _event_file(tmp_path)
-    first, second = _holdout_identity([path], _DAYS), _holdout_identity([path], list(_DAYS))
+def test_holdout_identity_is_stable_for_the_same_days_and_events() -> None:
+    first, second = _holdout_identity(_rows(_DAYS)), _holdout_identity(list(reversed(_rows(_DAYS))))
     assert first["key"] == second["key"] and first["key"]
     assert (first["n_days"], first["first_day"], first["last_day"]) == (3, "2026-09-01", "2026-09-03")
 
 
-def test_holdout_identity_changes_with_the_days_or_the_events(tmp_path: Path) -> None:
-    path = _event_file(tmp_path)
-    base = _holdout_identity([path], _DAYS)["key"]
-    assert _holdout_identity([path], _DAYS[:2])["key"] != base
-    other = _event_file(tmp_path, "b.td.npz", b"other events")
-    assert _holdout_identity([other], _DAYS)["key"] != base
+def test_holdout_identity_changes_with_the_days_or_the_events() -> None:
+    base = _holdout_identity(_rows(_DAYS))["key"]
+    assert _holdout_identity(_rows(_DAYS[:2]))["key"] != base
+    assert _holdout_identity(_rows(_DAYS, tag="other"))["key"] != base
 
 
-def test_holdout_identity_without_days_or_files_cannot_be_recorded(tmp_path: Path) -> None:
-    assert _holdout_identity([_event_file(tmp_path)], [])["key"] is None
-    missing = _holdout_identity([str(tmp_path / "missing.npz")], _DAYS)
-    assert missing["key"] is None and "unreadable" in missing["reason"]
+def _fill_eval_key(tmp_path: Path, train_payload: bytes, is_rows: list[dict]) -> str:
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from hft_platform.alpha._gate_c import _fill_backtest_eval  # noqa: PLC0415
+
+    train = tmp_path / f"train_{len(train_payload)}.npz"
+    train.write_bytes(train_payload)
+    oos = tmp_path / "oos.npz"
+    oos.write_bytes(b"oos events")
+    rows = [*is_rows, *_rows(_DAYS)]
+    for r in rows:
+        r.update(net_pts=1.0, pnl_pts=1.0, n_contracts=0, fills=0)
+    sim = SimpleNamespace(
+        method="taker_ioc_touch_v1",
+        daily_rows=lambda: rows,
+        n_is_days=lambda split: len(is_rows),
+        sharpe_split=lambda split: (0.0, 0.0),
+    )
+    _, details, _ = _fill_backtest_eval(
+        lambda *a: sim,
+        alpha=None,
+        cfg=None,
+        hbt_paths=[str(train), str(oos)],
+        cost_model=SimpleNamespace(label="TEST"),
+        is_oos_split=0.5,
+        sharpe_oos_min=0.0,
+    )
+    return details["holdout"]["key"]
+
+
+def test_holdout_key_survives_a_change_to_the_training_data(tmp_path: Path) -> None:
+    before = _fill_eval_key(tmp_path, b"train v1", _rows(["2026-08-28"], tag="train-v1"))
+    after = _fill_eval_key(tmp_path, b"train v2 revised", _rows(["2026-08-27", "2026-08-28"], tag="train-v2"))
+    assert before and before == after
+
+
+def test_events_hash_names_the_rows_not_the_container(tmp_path: Path) -> None:
+    from research.backtest.taker_sim import events_sha256  # noqa: PLC0415
+
+    np.savez_compressed(tmp_path / "a.npz", data=np.arange(6, dtype=np.int64))
+    np.savez(tmp_path / "b.npz", data=np.arange(6, dtype=np.int64))
+    np.savez_compressed(tmp_path / "c.npz", data=np.arange(7, dtype=np.int64))
+    assert events_sha256(str(tmp_path / "a.npz")) == events_sha256(str(tmp_path / "b.npz"))
+    assert events_sha256(str(tmp_path / "a.npz")) != events_sha256(str(tmp_path / "c.npz"))
+
+
+def test_holdout_identity_without_days_or_hashes_cannot_be_recorded() -> None:
+    assert _holdout_identity([])["key"] is None
+    unhashed = _holdout_identity([{"date": d} for d in _DAYS])
+    assert unhashed["key"] is None and "no event hash" in unhashed["reason"]
 
 
 # ---------------------------------------------------------------------------
