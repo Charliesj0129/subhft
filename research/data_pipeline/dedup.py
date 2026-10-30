@@ -151,3 +151,42 @@ def dedup_tick_rows(
             remaining[key] -= 1
             out.append(row)
     return out, stats
+
+
+def dedup_bidask_rows(
+    rows: Sequence[Sequence[Any]],
+    *,
+    window_ns: int,
+    content_dedup: bool = True,
+) -> tuple[list[Sequence[Any]], int]:
+    """Drop repeated ``BidAsk`` snapshots, leaving every other row where it was.
+
+    A snapshot is a repeat when an identical book was already kept at the same ``exch_ts``
+    (only with ``content_dedup``), or when it equals the last kept snapshot and follows it
+    within ``window_ns``. Rows use the exporter's column order; returns the kept rows and
+    the number of snapshots removed.
+    """
+    out: list[Sequence[Any]] = []
+    removed = 0
+    prev_key: tuple[tuple[int, ...], ...] | None = None
+    prev_ts = 0
+    seen_ts = -1
+    seen_at_ts: set[tuple[tuple[int, ...], ...]] = set()
+    for row in rows:
+        if row[0] != "BidAsk":
+            out.append(row)
+            continue
+        ts = int(row[1])
+        key = tuple(tuple(int(v) for v in (row[i] or [])) for i in (3, 4, 5, 6))
+        if ts != seen_ts:
+            seen_ts, seen_at_ts = ts, set()
+        if content_dedup and key in seen_at_ts:
+            removed += 1
+            continue
+        if key == prev_key and (ts - prev_ts) < window_ns:
+            removed += 1
+            continue
+        seen_at_ts.add(key)
+        prev_key, prev_ts = key, ts
+        out.append(row)
+    return out, removed

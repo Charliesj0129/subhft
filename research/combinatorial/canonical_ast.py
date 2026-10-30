@@ -32,6 +32,7 @@ import ast
 import hashlib
 import random
 from dataclasses import dataclass
+from typing import cast
 
 from research.combinatorial.expression_lang import _validate_tree
 
@@ -246,7 +247,7 @@ def _replace_by_identity(node: Node, target: Node, replacement: Node) -> Node:
 
 def _convert(node: ast.AST) -> Node:
     if isinstance(node, ast.Constant):
-        return ConstNode(float(node.value))
+        return ConstNode(float(cast(float, node.value)))
     if isinstance(node, ast.Name):
         return VarNode(node.id)
     if isinstance(node, ast.UnaryOp):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 from functools import lru_cache
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 import numpy as np
 
@@ -147,7 +147,7 @@ def _validate_tree(tree: ast.Expression) -> tuple[list[str], int]:
 
 def _eval_node(node: ast.AST, context: Mapping[str, np.ndarray], base_len: int) -> Any:
     if isinstance(node, ast.Constant):
-        return float(node.value)
+        return float(cast(float, node.value))
     if isinstance(node, ast.Name):
         if node.id not in context:
             raise KeyError(f"Unknown feature name in expression: {node.id}")
