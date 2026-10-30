@@ -225,8 +225,40 @@ def test_window_bounds_are_query_parameters_not_sql_text(calendar: SessionCalend
 
     sql, params = client.queries[-1]
     assert SYMBOL not in sql and str(_ns(FRI, 14)) not in sql
-    assert params == {"symbol": SYMBOL, "start_ns": _ns(FRI, 14), "end_ns": _ns(MON, 14)}
+    utc_midnight = dt.datetime(2026, 3, 13, tzinfo=dt.UTC).timestamp() * 1_000_000_000
+    assert params == {"symbol": SYMBOL, "start_ns": int(utc_midnight), "end_ns": int(utc_midnight) + 4 * 86_400 * 10**9}
     assert "ORDER BY exch_ts, ingest_ts, seq_no" in sql
+
+
+def _doubled_bucket() -> list[tuple[Any, ...]]:
+    """20 distinct trades in one 5-minute bucket, each delivered twice (multiplicity 2)."""
+    rows: list[tuple[Any, ...]] = []
+    for k in range(20):
+        ts = _ns(MON, 9, 0, k)
+        rows += [_tick(ts, BID + k * 1_000_000), _tick(ts, BID + k * 1_000_000)]
+    return rows
+
+
+def test_a_narrow_window_dedups_like_the_full_day_read(calendar: SessionCalendar, protocol: Any) -> None:
+    reader = _reader(_doubled_bucket(), calendar, protocol)
+    full = reader.read_trading_day(SYMBOL, MON)
+    narrow = reader.read_window(SYMBOL, _ns(MON, 9, 0, 0), _ns(MON, 9, 0, 19))
+
+    assert len(full.rows) == 20
+    assert narrow.rows == tuple(r for r in full.rows if r[1] < _ns(MON, 9, 0, 19))
+    assert len(narrow.rows) == 19
+    assert narrow.rows_fetched == 38
+    assert narrow.provenance()["dedup_context_ns"] == list(narrow.dedup_context)
+
+
+def test_a_narrow_window_keeps_a_repeated_snapshot_out(calendar: SessionCalendar, protocol: Any) -> None:
+    rows = [_bidask(_ns(MON, 9, 0, 0)), _bidask(_ns(MON, 9, 0, 0, 400_000))]
+    reader = _reader(rows, calendar, protocol)
+    full = reader.read_trading_day(SYMBOL, MON)
+    narrow = reader.read_window(SYMBOL, _ns(MON, 9, 0, 0, 1), _ns(MON, 9, 1))
+
+    assert len(full.rows) == 1
+    assert narrow.rows == ()
 
 
 def test_a_stale_quote_is_not_the_quote_in_force(calendar: SessionCalendar, protocol: Any) -> None:
