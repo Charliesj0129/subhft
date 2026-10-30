@@ -29,7 +29,7 @@ from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 from hft_platform.alpha.evidence import canonical_sha256
 from hft_platform.alpha.gate_c_runtime import GateCRuntime
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, check_entry, derive_verdict
-from hft_platform.alpha.provenance import build_run_stamp, file_sha256
+from hft_platform.alpha.provenance import build_run_stamp
 from hft_platform.alpha.stats import benjamini_hochberg
 
 logger = structlog.get_logger("alpha.gate_c")
@@ -613,28 +613,29 @@ def _resolve_maker_latency_profile(
 SCREENING_METHOD_ID = "mid_to_mid_screening_v1"
 
 
-def _holdout_identity(hbt_paths: list[str], oos_days: list[str]) -> dict[str, Any]:
-    """Name the out-of-sample holdout a fill backtest scored: its trading days and the event files.
+def _holdout_identity(oos_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Name the out-of-sample holdout a fill backtest scored: its trading days and their events.
 
-    ``key`` is ``None`` (the read cannot be recorded) when there are no OOS days or a file
-    cannot be hashed.
+    The key covers only the out-of-sample days (date and the content hash of that day's
+    event rows), so a change to in-sample data leaves it alone and a rerun is still seen
+    as a reread. ``key`` is ``None`` (the read cannot be recorded) when there are no OOS
+    days or a day carries no event hash.
     """
+    days = [str(r["date"]) for r in oos_rows]
     identity: dict[str, Any] = {
-        "n_days": len(oos_days),
-        "first_day": oos_days[0] if oos_days else None,
-        "last_day": oos_days[-1] if oos_days else None,
+        "n_days": len(days),
+        "first_day": days[0] if days else None,
+        "last_day": days[-1] if days else None,
         "key": None,
     }
-    if not oos_days:
+    if not days:
         identity["reason"] = "no out-of-sample days"
         return identity
-    try:
-        data_sha256 = sorted(file_sha256(Path(path)) for path in hbt_paths)
-    except OSError as exc:
-        identity["reason"] = f"event file unreadable: {exc}"
+    hashes = [str(r.get("events_sha256") or "") for r in oos_rows]
+    if not all(hashes):
+        identity["reason"] = "an out-of-sample day has no event hash"
         return identity
-    identity["data_sha256"] = data_sha256
-    identity["key"] = canonical_sha256({"oos_days": oos_days, "data_sha256": data_sha256})
+    identity["key"] = canonical_sha256({"oos_days": sorted(zip(days, hashes, strict=True))})
     return identity
 
 
@@ -679,7 +680,7 @@ def _fill_backtest_eval(
         "n_contracts": int(sum(int(r["n_contracts"]) for r in rows)),
         "cost_label": str(getattr(cost_model, "label", "")),
         "daily_pnl": rows,
-        "holdout": _holdout_identity(hbt_paths, [str(r["date"]) for r in rows[n_is:]]),
+        "holdout": _holdout_identity(rows[n_is:]),
     }
     if n_oos < 2:
         entry = check_entry(
