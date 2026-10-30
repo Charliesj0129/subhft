@@ -52,7 +52,8 @@ def strategy_fingerprint(module: Any, class_name: Any) -> dict[str, str] | None:
     origin = Path(spec.origin) if spec is not None and spec.origin else None
     if origin is None or not origin.is_file():
         return None
-    return {"module": module, "class": class_name, "code_sha256": file_sha256(origin)}
+    # Uncached: an edit that keeps the file size within one mtime tick keeps the cache key.
+    return {"module": module, "class": class_name, "code_sha256": file_sha256(origin, cached=False)}
 
 
 def pin_strategy(spec: str | None) -> dict[str, str] | None:
@@ -98,11 +99,12 @@ def judge_report(
         path = root / path
     row: dict[str, Any] = {"path": str(path)}
     try:
-        payload = json.loads(path.read_bytes())
+        raw = path.read_bytes()
+        payload = json.loads(raw)
     except (OSError, ValueError) as exc:
         row["problem"] = f"unreadable: {type(exc).__name__}"
         return row
-    row["sha256"] = file_sha256(path)
+    row["sha256"] = hashlib.sha256(raw).hexdigest()  # the bytes judged, not a cached hash
     if not isinstance(payload, dict):
         row["problem"] = "not a JSON object"
         return row
