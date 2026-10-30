@@ -79,7 +79,13 @@ class Status(str, enum.Enum):
     EVALUATED = "EVALUATED"
     REJECTED = "REJECTED"
     WATCHLIST = "WATCHLIST"
-    PROMOTED = "PROMOTED"
+    # Top of the loop's own ranking. The loop is a generator: a shortlisted
+    # candidate goes to the governed Gate A-F path, where promotion happens.
+    SHORTLISTED = "SHORTLISTED"
+
+
+# Labels written before research v2 C4 (append-only rows keep them).
+LEGACY_STATUS_LABELS: dict[str, Status] = {"PROMOTED": Status.SHORTLISTED}
 
 
 class DeathReason(str, enum.Enum):

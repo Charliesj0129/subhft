@@ -356,6 +356,12 @@ def test_simulate_files_rejects_a_day_split_across_files(tmp_path):
         simulate_files(_sim(ScriptedAlpha({})), [a, b])
 
 
+def test_daily_sharpe_of_a_constant_daily_pnl_is_zero_not_float_noise() -> None:
+    # np.std([1.1] * 30) is ~2e-16, not 0: dividing by it reported a Sharpe near 1e17.
+    assert daily_sharpe([1.1] * 30) == 0.0
+    assert daily_sharpe([0.1] * 7) == 0.0
+    assert daily_sharpe([3.0] * 30) == 0.0
+
 
 def test_a_fill_after_the_last_two_sided_book_is_booked_at_feed_end():
     bridge, hbt = _bound_bridge()

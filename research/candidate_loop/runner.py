@@ -4,7 +4,7 @@
 COMPILED; [3]+[4] outer loop over split days (ONE panel in memory, cached),
 inner loop over candidates; [5] reduce per split (train/validation) →
 experiment_results rows + Parquet artifacts → EVALUATED; [6] score/gate →
-REJECTED | WATCHLIST | PROMOTED; [7] test-split pass for WATCHLIST+PROMOTED
+REJECTED | WATCHLIST | SHORTLISTED; [7] test-split pass for WATCHLIST+SHORTLISTED
 only (recorded, never summarized); [8] failure_summary.json
 (train+validation only).
 
@@ -28,6 +28,7 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.alpha.evidence import canonical_sha256, record_exploratory_holdout_access
 from research.backtest.cost_models import load_cost_profile
 from research.backtest.q_hat_table import QHatTable
 from research.candidate_loop.artifacts import (
@@ -502,10 +503,10 @@ class BatchRunner:
                 self.writer.write_result_row(row)
                 result_rows.append(row)
 
-        # [7] test split: WATCHLIST + PROMOTED only — recorded, never summarized
+        # [7] test split: WATCHLIST + SHORTLISTED only — recorded, never summarized
         # (these rows are NOT appended to result_rows; build_failure_summary
         # drops test rows anyway, belt+braces).
-        shortlist = [t for t in compiled if t.status in (Status.WATCHLIST, Status.PROMOTED)]
+        shortlist = [t for t in compiled if t.status in (Status.WATCHLIST, Status.SHORTLISTED)]
         if shortlist:
             test_evals = self._evaluate_split_days(shortlist, "test")
             for t in shortlist:
@@ -514,6 +515,7 @@ class BatchRunner:
                 t.metrics["test"] = self._aggregate(valid, test_evals[valid.alpha_id])
                 row = self._result_row(t, "test", t.metrics["test"], test_evals[valid.alpha_id])
                 self.writer.write_result_row(row)
+                self._record_test_split_read(valid.alpha_id)
 
         # [8] failure summary (train+validation only, mechanically).
         candidate_rows = [
@@ -551,6 +553,38 @@ class BatchRunner:
             summary=str(summary_path),
         )
         return summary
+
+
+    def test_split_holdout_key(self) -> str:
+        """Identity of the test split as a holdout: which (day, symbol) pairs, of which data version.
+
+        Membership only: the pairs are sorted and ``split_definition_version`` is left
+        out, so reordering the pairs or re-labelling the same split does not make
+        already-read observations look fresh.
+        """
+        return canonical_sha256(
+            {
+                "source": "research.candidate_loop",
+                "data_version": self.split_def.data_version,
+                "test": sorted({(ds.day, ds.symbol) for ds in self.split_def.splits["test"]}),
+            }
+        )
+
+    def _record_test_split_read(self, alpha_id: str) -> None:
+        """Log one candidate's read of the test split in the evidence root's holdout access log.
+
+        The same log Gate C writes (research v2 C3): a candidate whose test split was
+        read before, here or by a governed run of the same id, is flagged ``reused``.
+        No evidence root means nothing is recorded; a malformed log raises, as it does
+        for validation (a resumed batch rewrites nothing it already wrote).
+        """
+        access = record_exploratory_holdout_access(
+            holdout_key=self.test_split_holdout_key(), alpha_id=alpha_id, run_id=self.rc.run_id
+        )
+        if access.get("reused"):
+            logger.warning(
+                "test split read again", alpha_id=alpha_id, prior_run_ids=access.get("prior_run_ids")
+            )
 
 
 def run_batch(rc: RunConfig, client: Any | None) -> dict[str, Any]:

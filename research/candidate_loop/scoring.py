@@ -1,4 +1,4 @@
-"""Hard gates, final_score, and promotion (``scoring_version = score_v1``, spec §13/§14).
+"""Hard gates, final_score, and the shortlist (``scoring_version = score_v1``, spec §13/§14).
 
 Gate semantics
 --------------
@@ -215,10 +215,12 @@ class ScoredCandidate:
 
 
 def assign_statuses(rows: list[ScoredCandidate], cfg: ScoringConfig) -> dict[str, Status]:
-    """REJECTED / WATCHLIST / PROMOTED per spec §14 (deterministic ordering).
+    """REJECTED / WATCHLIST / SHORTLISTED per spec §14 (deterministic ordering).
 
     Survivors ranked by validation final_score (ties broken by alpha_id);
-    PROMOTED = top ceil(top_fraction × survivors); WATCHLIST = the next decile
+    SHORTLISTED = top ceil(promotion_top_fraction × survivors), the spec's
+    PROMOTED renamed in research v2 C4 (the yaml key keeps its name);
+    WATCHLIST = the next decile
     plus below-cut survivors with |validation ic_tstat| ≥ threshold; everything
     else (including all gate failures) REJECTED.
     """
@@ -227,14 +229,14 @@ def assign_statuses(rows: list[ScoredCandidate], cfg: ScoringConfig) -> dict[str
     if not survivors:
         return statuses
     ranked = sorted(survivors, key=lambda r: (-r.final_score, r.alpha_id))
-    n_promoted = math.ceil(cfg.promotion_top_fraction * len(ranked))
-    for r in ranked[:n_promoted]:
-        statuses[r.alpha_id] = Status.PROMOTED
+    n_shortlisted = math.ceil(cfg.promotion_top_fraction * len(ranked))
+    for r in ranked[:n_shortlisted]:
+        statuses[r.alpha_id] = Status.SHORTLISTED
     if cfg.watchlist_next_decile:
         n_decile = math.ceil(0.10 * len(ranked))
-        for r in ranked[n_promoted : n_promoted + n_decile]:
+        for r in ranked[n_shortlisted : n_shortlisted + n_decile]:
             statuses[r.alpha_id] = Status.WATCHLIST
-    for r in ranked[n_promoted:]:
+    for r in ranked[n_shortlisted:]:
         if statuses[r.alpha_id] == Status.REJECTED and abs(r.validation_ic_tstat) >= cfg.watchlist_ic_tstat_min:
             statuses[r.alpha_id] = Status.WATCHLIST
     return statuses

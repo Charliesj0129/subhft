@@ -161,11 +161,11 @@ def _scored(alpha_id: str, score: float, *, survived: bool = True, tstat: float 
 
 
 class TestPromotion:
-    def test_hundred_survivors_one_promoted_next_decile_watchlist(self) -> None:
+    def test_hundred_survivors_one_shortlisted_next_decile_watchlist(self) -> None:
         rows = [_scored(f"a{i:03d}", score=float(100 - i)) for i in range(100)]
         statuses = assign_statuses(rows, CFG)
-        assert statuses["a000"] == Status.PROMOTED
-        assert sum(1 for s in statuses.values() if s == Status.PROMOTED) == 1
+        assert statuses["a000"] == Status.SHORTLISTED
+        assert sum(1 for s in statuses.values() if s == Status.SHORTLISTED) == 1
         for i in range(1, 11):  # next decile (10 of 100)
             assert statuses[f"a{i:03d}"] == Status.WATCHLIST
         assert statuses["a011"] == Status.REJECTED
@@ -176,11 +176,11 @@ class TestPromotion:
         statuses = assign_statuses(rows, CFG)
         assert statuses["a099"] == Status.WATCHLIST
 
-    def test_gate_failures_never_promoted(self) -> None:
+    def test_gate_failures_never_shortlisted(self) -> None:
         rows = [_scored("dead0", score=99.0, survived=False, tstat=3.0), _scored("live0", score=1.0)]
         statuses = assign_statuses(rows, CFG)
         assert statuses["dead0"] == Status.REJECTED
-        assert statuses["live0"] == Status.PROMOTED  # only survivor -> top 1%
+        assert statuses["live0"] == Status.SHORTLISTED  # only survivor -> top 1%
 
     def test_no_survivors_everything_rejected(self) -> None:
         rows = [_scored("dead0", score=1.0, survived=False)]
@@ -189,7 +189,7 @@ class TestPromotion:
     def test_deterministic_tie_break_by_alpha_id(self) -> None:
         rows = [_scored("bbb", score=1.0), _scored("aaa", score=1.0)]
         statuses = assign_statuses(rows, CFG)
-        assert statuses["aaa"] == Status.PROMOTED  # ceil(0.01*2)=1; tie -> lower alpha_id
+        assert statuses["aaa"] == Status.SHORTLISTED  # ceil(0.01*2)=1; tie -> lower alpha_id
         assert statuses["bbb"] == Status.WATCHLIST  # next decile of 2 -> 1
 
 

@@ -18,9 +18,14 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from structlog import get_logger
 
+from hft_platform.alpha.stats import sharpe_ratio
 from research.combinatorial.expression_lang import compile_expression
 
 logger = get_logger("search_engine")
+
+# sqrt(252) on a per-row Sharpe: a fixed ranking scale kept so scores stay comparable
+# with earlier runs (the 0.25 pool-correlation weight is tuned against it).
+_SCREEN_SCALE = 252.0
 
 # Rolling operators whose value is identically constant when both operands are
 # the same series, so any candidate containing one is a tautology, not an alpha.
@@ -64,6 +69,11 @@ class SearchResult:
     passed: bool
     metadata: dict[str, Any]
 
+    @property
+    def selection_sharpe(self) -> float:
+        """``sharpe_oos`` under its honest name: a screening score on the search's own rows."""
+        return self.sharpe_oos
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -89,6 +99,8 @@ class AlphaSearchEngine:
         self._window_choices = (3, 5, 10, 20, 50, 100)
         self._pool_corr_groups = _build_pool_corr_groups(self.pool_signals)
         self._mutation_failures = 0
+        self._trials_evaluated = 0
+        self._distinct_trials: set[str] = set()
 
     def random_search(self, n_trials: int = 1000) -> list[SearchResult]:
         """Generate and evaluate *n_trials* random expressions; return sorted best-first."""
@@ -155,6 +167,8 @@ class AlphaSearchEngine:
     def evaluate_expression(self, expression: str) -> SearchResult:
         """Compile and evaluate a single *expression* string; return its ``SearchResult``."""
         compiled = compile_expression(expression)
+        self._trials_evaluated += 1
+        self._distinct_trials.add(_trial_identity(expression))
         signal = compiled.evaluate(self.features)
         sharpe = _signal_sharpe(signal, self.returns)
         corr = self._pool_corr_max(signal)
@@ -173,16 +187,26 @@ class AlphaSearchEngine:
             },
         )
 
+    def trial_summary(self) -> dict[str, int]:
+        """Every expression this engine scored, the count a selection correction needs.
+
+        ``evaluated`` counts each evaluation; ``distinct`` counts semantic identities
+        (``canonical_ast.canonical_hash``), so re-scoring a surviving parent is one trial.
+        The results a search returns are the best of ``distinct`` trials, not of
+        ``len(results)``.
+        """
+        return {"evaluated": self._trials_evaluated, "distinct": len(self._distinct_trials)}
+
     def save_results(
         self,
         results: Sequence[SearchResult],
         *,
         path: str = "research/combinatorial/results/latest.json",
     ) -> str:
-        """Serialise *results* to JSON at *path*; returns the path written."""
+        """Serialise *results* and :meth:`trial_summary` to JSON at *path*; returns the path written."""
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
-        payload = [item.to_dict() for item in results]
+        payload = {"results": [item.to_dict() for item in results], "trials": self.trial_summary()}
         out.write_text(json.dumps(payload, indent=2, sort_keys=True))
         return str(out)
 
@@ -211,15 +235,26 @@ class AlphaSearchEngine:
         return self._rng.choice(candidates)
 
     def _mutate_expression(self, expression: str) -> str:
-        tokens = expression.replace("(", " ").replace(")", " ").replace(",", " ").split()
-        out = list(tokens)
-        for i, token in enumerate(tokens):
-            if token.isdigit() and self._rng.random() < 0.5:
-                out[i] = str(self._rng.choice(self._window_choices))
-            elif token in self.features and self._rng.random() < 0.3:
-                out[i] = self._rng.choice(self._feature_keys)
-        rebuilt = " ".join(out)
-        rebuilt = rebuilt.replace(" ,", ",").replace("( ", "(").replace(" )", ")")
+        """Swap feature names and integer literals in place; operators and nesting are kept.
+
+        Works on the parsed tree ``compile_expression`` validates, visiting leaves in
+        source order. The old token split dropped ``(`` ``)`` ``,`` and rejoined with
+        spaces, so nearly every mutant failed to compile and fell back to a random
+        expression (#552).
+        """
+        try:
+            tree = ast.parse(expression, mode="eval")
+        except SyntaxError as exc:
+            self._mutation_failures += 1
+            logger.warning("alpha_mutation_failed", expr=expression[:120], reason=str(exc))
+            return self._random_expression()
+        for node in _mutable_leaves(tree):
+            if isinstance(node, ast.Constant):
+                if self._rng.random() < 0.5:
+                    node.value = self._rng.choice(self._window_choices)
+            elif node.id in self.features and self._rng.random() < 0.3:
+                node.id = self._rng.choice(self._feature_keys)
+        rebuilt = ast.unparse(tree)
         if has_self_correlation(rebuilt):
             # Swapping a feature token can collapse ts_corr(a, b, w) into
             # ts_corr(a, a, w), which is identically +1 on every non-degenerate
@@ -278,6 +313,39 @@ class AlphaSearchEngine:
         return float(out)
 
 
+def _trial_identity(expression: str) -> str:
+    """Semantic identity of a compiled expression; the text when canonicalization refuses it."""
+    from research.combinatorial.canonical_ast import canonical_hash
+
+    try:
+        return canonical_hash(expression)
+    except (ValueError, SyntaxError):
+        return expression
+
+
+def _mutable_leaves(tree: ast.Expression) -> list[ast.Constant | ast.Name]:
+    """Feature names and non-negative integer literals of *tree*, in source order.
+
+    Operator names (``Call.func``) and the operand of a unary minus are not leaves
+    mutation may touch: the first would change the operator, the second a sign.
+    """
+    skip: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            skip.add(id(node.func))
+        elif isinstance(node, ast.UnaryOp):
+            skip.add(id(node.operand))
+    leaves: list[ast.Constant | ast.Name] = []
+    for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
+        if isinstance(node, ast.Name):
+            leaves.append(node)
+        elif isinstance(node, ast.Constant) and type(node.value) is int and node.value >= 0:
+            leaves.append(node)
+    return sorted(leaves, key=lambda leaf: (leaf.lineno, leaf.col_offset))
+
+
 def _as_returns(values: Sequence[float] | None) -> np.ndarray | None:
     if values is None:
         return None
@@ -288,6 +356,13 @@ def _as_returns(values: Sequence[float] | None) -> np.ndarray | None:
 
 
 def _signal_sharpe(signal: np.ndarray, returns: np.ndarray | None) -> float:
+    """Screening score: ``stats.sharpe_ratio`` of the per-row PnL ``signal * returns``, scaled by sqrt(252).
+
+    One observation is one row of the feature arrays, not a day, so the result is a
+    ranking scale, not an annualized Sharpe; ``SearchResult.sharpe_oos`` carries it
+    under that name for the existing readers. Without *returns* the PnL is
+    ``signal * (next signal - signal)``.
+    """
     sig = np.asarray(signal, dtype=np.float64).reshape(-1)
     if sig.size < 3:
         return 0.0
@@ -298,10 +373,7 @@ def _signal_sharpe(signal: np.ndarray, returns: np.ndarray | None) -> float:
     else:
         n = min(sig.size, returns.size)
         pnl = sig[:n] * returns[:n]
-    sigma = float(np.std(pnl))
-    if sigma <= 1e-12:
-        return 0.0
-    return float(np.mean(pnl) / sigma * np.sqrt(252.0))
+    return sharpe_ratio(pnl, annualization=_SCREEN_SCALE)
 
 
 def _build_pool_corr_groups(pool_signals: Mapping[str, np.ndarray]) -> dict[int, dict[str, np.ndarray]]:

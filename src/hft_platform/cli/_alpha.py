@@ -115,6 +115,7 @@ def cmd_alpha_search(args: argparse.Namespace) -> None:
         "mode": mode,
         "count": len(top_results),
         "results": [item.to_dict() for item in top_results],
+        "trials": engine.trial_summary(),
     }
 
     if args.save_results:

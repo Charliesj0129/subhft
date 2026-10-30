@@ -53,7 +53,7 @@ def _candidates() -> list[dict]:
         {
             "alpha_id": "win1",
             "family": "microprice",
-            "status": "PROMOTED",
+            "status": "SHORTLISTED",
             "death_reason": "",
             "final_score": 1.7,
             "proposed_new_primitives": ["cancel_intensity"],
@@ -139,7 +139,7 @@ class TestTotalsAndFamilies:
         assert summary["totals"]["candidates"] == 4
         assert summary["totals"]["invalid"] == 1
         assert summary["totals"]["rejected"] == 2
-        assert summary["totals"]["promoted"] == 1
+        assert summary["totals"]["shortlisted"] == 1
 
     def test_family_rates(self, summary: dict) -> None:
         fam = summary["per_family"]["microprice"]
@@ -149,7 +149,7 @@ class TestTotalsAndFamilies:
         assert fam["maker_rescuable_count"] == 1  # resc
         assert fam["reduced_day_coverage_count"] == 1  # win1 27 < 40
         assert fam["death_reason_distribution"] == {"COST_KILLED": 2, "FORMULA_PARSE_ERROR": 1}
-        assert fam["status_funnel"]["PROMOTED"] == 1
+        assert fam["status_funnel"]["SHORTLISTED"] == 1
 
     def test_common_failure_patterns_and_near_misses(self, summary: dict) -> None:
         fam = summary["per_family"]["microprice"]
@@ -161,7 +161,7 @@ class TestTotalsAndFamilies:
         assert "dead" not in near  # two gates failed -> not a near miss
 
     def test_terminal_lists_and_tally(self, summary: dict) -> None:
-        assert summary["promoted"] == [{"alpha_id": "win1", "family": "microprice", "final_score": 1.7}]
+        assert summary["shortlisted"] == [{"alpha_id": "win1", "family": "microprice", "final_score": 1.7}]
         assert summary["watchlist"] == []
         assert summary["proposed_new_primitives_tally"] == {"cancel_intensity": 1}
         assert summary["prompt_ids_used"] == {"microprice": "microprice__v1"}
@@ -173,3 +173,21 @@ class TestWrite:
         loaded = json.loads(path.read_text())
         assert loaded["run_id"] == "smoke_001"
         assert loaded["splits_included"] == ["train", "validation"]
+
+
+def test_legacy_promoted_rows_count_as_shortlisted() -> None:
+    """Rows written before research v2 C4 say PROMOTED (append-only); they are the shortlist."""
+    rows = [dict(r) for r in _candidates()]
+    for row in rows:
+        if row["status"] == "SHORTLISTED":
+            row["status"] = "PROMOTED"
+    summary = build_failure_summary(
+        run_id="legacy",
+        versions=VERSIONS,
+        candidate_rows=rows,
+        result_rows=_results(),
+        scoring_cfg=CFG,
+    )
+    assert summary["totals"]["shortlisted"] == 1
+    assert summary["shortlisted"] == [{"alpha_id": "win1", "family": "microprice", "final_score": 1.7}]
+    assert "PROMOTED" not in summary["per_family"]["microprice"]["status_funnel"]

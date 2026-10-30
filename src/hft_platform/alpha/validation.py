@@ -73,12 +73,11 @@ from hft_platform.alpha._validation_types import (  # noqa: E402
     ValidationResult,
 )
 from hft_platform.alpha.evidence import (  # noqa: E402
-    EvidenceRootError,
     EvidenceWriter,
     GovernedRunRefused,
     RunMode,
     canonical_sha256,
-    evidence_root,
+    record_exploratory_holdout_access,
     require_governed,
 )
 from hft_platform.alpha.outcomes import Verdict  # noqa: E402
@@ -283,13 +282,9 @@ def _record_holdout_access(
         reason = holdout.get("reason") if isinstance(holdout, dict) else None
         return {"recorded": False, "reason": reason or "no fill-priced holdout scored"}
     if writer is None:
-        try:
-            root = evidence_root()
-        except EvidenceRootError as exc:
-            return {"recorded": False, "holdout_key": key, "reason": str(exc)}
-        if not root.is_dir():
-            return {"recorded": False, "holdout_key": key, "reason": f"no evidence root at {root}"}
-        writer = EvidenceWriter(root)
+        return record_exploratory_holdout_access(
+            holdout_key=str(key), alpha_id=config.alpha_id, run_id=run_id, mode=RunMode(config.run_mode)
+        )
     return writer.record_holdout_access(
         holdout_key=str(key), alpha_id=config.alpha_id, run_id=run_id, mode=RunMode(config.run_mode)
     )

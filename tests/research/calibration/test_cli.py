@@ -6,6 +6,7 @@ full sweep path requires ClickHouse + hftbacktest integration (covered by A8+).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import yaml
 
 from research.calibration import cli
 from research.calibration.config import load_calibration_profile
+from research.calibration.scoring import DailyFillSummary
 
 
 def _make_args(**overrides) -> argparse.Namespace:
@@ -143,3 +145,55 @@ def test_load_live_fills_from_audit_instrument_present(tmp_path):
     days, fills = cli._load_live_fills_from_audit(audit_path, "TMFD6")
     assert days == ["2026-03-01", "2026-03-02"]
     assert fills == {}  # placeholder — aggregation deferred
+
+
+def test_calibrate_fallback_profile_records_why_and_what_produced_it(tmp_path):
+    audit_path = tmp_path / "audit.json"
+    audit_path.write_text(json.dumps({
+        "per_instrument": {"TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]}},
+        "summary": {},
+    }))
+    output = tmp_path / "profiles.yaml"
+
+    cli.cmd_calibrate(_make_args(audit_report=audit_path, output=output, artifacts_dir=tmp_path / "artifacts"))
+
+    provenance = yaml.safe_load(output.read_text())["TMFD6"]["provenance"]
+    assert provenance["fallback_reason"].startswith("only 2 usable calibration days")
+    stamp = provenance["run_stamp"]
+    assert stamp["schema"].startswith("run_stamp")
+    assert stamp["datasets"] == {str(audit_path): hashlib.sha256(audit_path.read_bytes()).hexdigest()}
+    assert provenance["sweep_config"]["instrument"] == "TMFD6"
+    assert load_calibration_profile("TMFD6", output).provenance == provenance
+
+
+def test_calibrated_profile_records_its_days_and_sweep_size(tmp_path, monkeypatch):
+    days = [f"2026-03-{d:02d}" for d in range(1, 21)]
+    live = {day: DailyFillSummary(date=day, n_fills=10, adverse_pct=0.3, pnl=5.0) for day in days}
+    monkeypatch.setattr(cli, "_load_live_fills_from_audit", lambda path, instrument: (days, live))
+    monkeypatch.setattr(
+        cli,
+        "build_probe_replay_fn",
+        lambda **kwargs: lambda candidate, day: DailyFillSummary(date=day, n_fills=9, adverse_pct=0.3, pnl=4.0),
+    )
+    output = tmp_path / "profiles.yaml"
+
+    result = cli.cmd_calibrate(
+        _make_args(audit_report=tmp_path / "audit.json", output=output, artifacts_dir=tmp_path / "artifacts")
+    )
+
+    assert result == 0
+    provenance = load_calibration_profile("TMFD6", output).provenance
+    assert provenance is not None
+    assert "fallback_reason" not in provenance
+    assert provenance["train_days"] == days[:14]
+    assert provenance["held_out_days"] == days[14:]
+    assert provenance["sweep_trials"] == len(
+        cli.generate_candidates(
+            queue_models=list(cli._QUEUE_MODELS),
+            exponent_min=cli._EXPONENT_GRID[0],
+            exponent_max=cli._EXPONENT_GRID[1],
+            exponent_step=cli._EXPONENT_GRID[2],
+        )
+    )
+    assert provenance["sweep_config"]["queue_models"] == list(cli._QUEUE_MODELS)
+    assert provenance["run_stamp"]["config_hash"]

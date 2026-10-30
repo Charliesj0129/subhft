@@ -28,7 +28,6 @@ _PUBLIC_CONTRACTS = (
 
 _PRODUCTION_CONSUMERS = (
     "src/hft_platform/alpha/_gate_a.py",
-    "src/hft_platform/alpha/dsl/formula_context.py",
     "src/hft_platform/alpha/experiments.py",
     "src/hft_platform/alpha/kill_ledger.py",
     "src/hft_platform/alpha/promotion.py",

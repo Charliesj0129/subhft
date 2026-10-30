@@ -1,14 +1,20 @@
 """Calibration profile load/save.
 
 Profiles are stored in config/research/calibration_profiles.yaml.
-Each instrument has one entry with calibrated params + validation scores.
+Each instrument has one entry with calibrated params + validation scores and,
+since research v2 C4, a ``provenance`` block saying what produced it: the
+RunStamp (commit, dirty flag, module and dataset hashes), the sweep
+configuration, the train and held-out days, and how many candidates the sweep
+scored. Entries written before C4 have no ``provenance``; the platform-side
+loader ignores the key either way.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 
@@ -34,6 +40,7 @@ class CalibrationProfile:
     validation_scores: CalibrationScore
     confidence: Literal["low", "medium", "high"]
     expected_fill_rate_per_day: float
+    provenance: Mapping[str, Any] | None = None
 
 
 def save_calibration_profile(profile: CalibrationProfile, path: Path = DEFAULT_PROFILES_PATH) -> None:
@@ -55,6 +62,8 @@ def save_calibration_profile(profile: CalibrationProfile, path: Path = DEFAULT_P
         "confidence": profile.confidence,
         "expected_fill_rate_per_day": profile.expected_fill_rate_per_day,
     }
+    if profile.provenance is not None:
+        existing[profile.instrument]["provenance"] = dict(profile.provenance)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(existing, sort_keys=False))
 
@@ -80,6 +89,7 @@ def load_calibration_profile(instrument: str, path: Path = DEFAULT_PROFILES_PATH
             ),
             confidence=entry["confidence"],
             expected_fill_rate_per_day=entry["expected_fill_rate_per_day"],
+            provenance=entry.get("provenance"),
         )
     except KeyError as exc:
         raise CalibrationNotFoundError(

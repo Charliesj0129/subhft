@@ -331,9 +331,9 @@ hft alpha cluster
 
 Single-linkage agglomerative clustering on `1 − |ρ|` over recent screener / scorecard outputs at threshold `0.7`. Cluster representatives are kept; non-representatives may be auto-killed with `gate='cluster'`. Source: `src/hft_platform/alpha/cluster.py`; CLI at `cli/_alpha.py:1080`.
 
-### DSL (Slice D, merged #342)
+### DSL (Slice D, merged #342; removed in research v2 C4)
 
-A minimal expression language for declaring screener formulas: parser, compiler, and formula context under `src/hft_platform/alpha/dsl/` (`parser.py`, `compiler.py`, `formula_context.py`). Used by the cheap screener to compose IC / turnover / cost-floor predicates without authoring full Python alpha modules.
+Slice D's `alpha/dsl/` package had no importer and was removed. Mined candidates use the one expression language, `research/combinatorial/expression_lang.py`; `AlphaManifest.dsl_formula` stays as descriptive text that nothing parses.
 
 ---
 

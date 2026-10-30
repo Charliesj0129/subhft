@@ -87,6 +87,9 @@ def test_cmd_alpha_search_random(monkeypatch, capsys, tmp_path):
             assert n_trials == 5
             return [_Result()]
 
+        def trial_summary(self):
+            return {"evaluated": 5, "distinct": 4}
+
     monkeypatch.setitem(
         sys.modules, "research.combinatorial.search_engine", types.SimpleNamespace(AlphaSearchEngine=_Engine)
     )
@@ -110,6 +113,7 @@ def test_cmd_alpha_search_random(monkeypatch, capsys, tmp_path):
     assert payload["mode"] == "random"
     assert payload["count"] == 1
     assert payload["results"][0]["passed"] is True
+    assert payload["trials"] == {"evaluated": 5, "distinct": 4}
 
 
 def test_cmd_alpha_search_template_requires_template(tmp_path):

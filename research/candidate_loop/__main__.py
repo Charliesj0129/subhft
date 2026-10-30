@@ -7,8 +7,10 @@ Subcommands (spec §5/§11):
 * ``run``      — run a batch end-to-end (``--resume`` is the same idempotent
   operation; dedupe writers + cached panels make re-runs zero-new-rows).
 * ``summarize``— rebuild the §15 failure summary from ClickHouse for a run.
-* ``promote``  — print the WATCHLIST/PROMOTED shortlist from a run's
-  failure_summary.json.
+* ``shortlist`` — print the SHORTLISTED/WATCHLIST candidates from a run's
+  failure_summary.json (``promote`` is the pre-C4 name, kept as an alias).
+  The loop never promotes: a shortlisted candidate goes to the governed
+  Gate A-F path.
 * ``replay-fallback`` — flush ``runs/<run_id>/_results_fallback.jsonl`` into CH.
 
 Usage::
@@ -126,14 +128,15 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_promote(args: argparse.Namespace) -> int:
+def _cmd_shortlist(args: argparse.Namespace) -> int:
     path = Path(args.runs_root) / args.batch / "failure_summary.json"
     if not path.exists():
         print(f"ERROR: {path} not found (run the batch first)", file=sys.stderr)
         return 2
     summary = json.loads(path.read_text())
-    for status in ("promoted", "watchlist"):
-        rows = summary.get(status, [])
+    for status in ("shortlisted", "watchlist"):
+        # failure_summary.json files written before research v2 C4 say "promoted".
+        rows = summary.get(status, summary.get("promoted", []) if status == "shortlisted" else [])
         print(f"{status.upper()} ({len(rows)}):")
         for row in rows:
             print(f"  {row['alpha_id']}  {row['family']:<24} final_score={row['final_score']:.4f}")
@@ -230,9 +233,11 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--batch", required=True)
     summarize.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
 
-    promote = sub.add_parser("promote", help="print WATCHLIST/PROMOTED from failure_summary.json")
-    promote.add_argument("--batch", required=True)
-    promote.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
+    shortlist = sub.add_parser(
+        "shortlist", aliases=["promote"], help="print SHORTLISTED/WATCHLIST from failure_summary.json"
+    )
+    shortlist.add_argument("--batch", required=True)
+    shortlist.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
 
     replay = sub.add_parser("replay-fallback", help="flush _results_fallback.jsonl into ClickHouse")
     replay.add_argument("--batch", required=True)
@@ -269,7 +274,8 @@ def main(argv: list[str] | None = None) -> int:
         "generate": _cmd_generate,
         "run": _cmd_run,
         "summarize": _cmd_summarize,
-        "promote": _cmd_promote,
+        "shortlist": _cmd_shortlist,
+        "promote": _cmd_shortlist,
         "replay-fallback": _cmd_replay_fallback,
     }
     return handlers[args.command](args)

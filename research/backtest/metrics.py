@@ -5,6 +5,8 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from hft_platform.alpha.stats import chunk_pearson_ic, chunked_ic, ic_ttest, sharpe_ratio
+
 
 @dataclass(frozen=True, slots=True)
 class ICChunkState:
@@ -42,6 +44,7 @@ class IncrementalMetricsState:
 
 
 def compute_sharpe(equity_curve: Iterable[float], annualization_factor: float = 252.0) -> float:
+    """Sharpe of the equity curve's simple returns (non-finite returns dropped); ``stats.sharpe_ratio``."""
     values = np.asarray(list(equity_curve), dtype=np.float64)
     if values.size < 2:
         return 0.0
@@ -50,13 +53,7 @@ def compute_sharpe(equity_curve: Iterable[float], annualization_factor: float = 
     delta = np.diff(values)
     returns = np.divide(delta, base, out=np.zeros_like(delta), where=base != 0)
     returns = returns[np.isfinite(returns)]
-    if returns.size < 2:
-        return 0.0
-
-    std = float(np.std(returns))
-    if std == 0.0:
-        return 0.0
-    return float(np.mean(returns) / std * np.sqrt(annualization_factor))
+    return sharpe_ratio(returns, annualization=annualization_factor)
 
 
 def compute_ic(
@@ -64,42 +61,12 @@ def compute_ic(
     forward_returns: Iterable[float],
     buckets: int = 20,
 ) -> tuple[float, float, np.ndarray]:
-    sig = np.asarray(list(signals), dtype=np.float64)
-    fut = np.asarray(list(forward_returns), dtype=np.float64)
-    n = min(sig.size, fut.size)
-    if n < 8:
-        return 0.0, 0.0, np.asarray([], dtype=np.float64)
-
-    sig = sig[:n]
-    fut = fut[:n]
-    chunk = max(8, n // max(buckets, 1))
-    n_chunks = (n - chunk) // chunk + 1
-    if n_chunks < 1:
-        return 0.0, 0.0, np.asarray([], dtype=np.float64)
-
-    # Reshape into (n_chunks, chunk) — contiguous, no per-chunk allocation
-    n_usable = n_chunks * chunk
-    sig_chunks = sig[:n_usable].reshape(n_chunks, chunk)
-    fut_chunks = fut[:n_usable].reshape(n_chunks, chunk)
-
-    # Vectorized Pearson across all chunks simultaneously (axis=1)
-    sig_centered = sig_chunks - sig_chunks.mean(axis=1, keepdims=True)
-    fut_centered = fut_chunks - fut_chunks.mean(axis=1, keepdims=True)
-    num = np.einsum("ij,ij->i", sig_centered, fut_centered)
-    sig_ss = np.einsum("ij,ij->i", sig_centered, sig_centered)
-    fut_ss = np.einsum("ij,ij->i", fut_centered, fut_centered)
-    denom = np.sqrt(sig_ss * fut_ss)
-    # Where denom < 1e-12, result is nan (consistent with Pearson undefined case)
-    zero_mask = denom < 1e-12
-    safe_denom = np.where(zero_mask, 1.0, denom)  # avoid divide-by-zero warning
-    ic_all = np.where(zero_mask, np.nan, num / safe_denom)
-
-    # Filter non-finite values
-    series = ic_all[np.isfinite(ic_all)]
-    if series.size == 0:
-        return 0.0, 0.0, np.asarray([], dtype=np.float64)
-
-    return float(np.mean(series)), float(np.std(series)), series
+    """Chunked Pearson IC, ``(mean, std, series)``; ``stats.chunked_ic``."""
+    return chunked_ic(
+        np.asarray(list(signals), dtype=np.float64),
+        np.asarray(list(forward_returns), dtype=np.float64),
+        buckets=buckets,
+    )
 
 
 def compute_ic_incremental(
@@ -157,15 +124,7 @@ def compute_ic_incremental(
         sig_chunks = sig[offset : offset + n_usable_new].reshape(new_n_chunks, chunk)
         fut_chunks = fut[offset : offset + n_usable_new].reshape(new_n_chunks, chunk)
 
-        sig_centered = sig_chunks - sig_chunks.mean(axis=1, keepdims=True)
-        fut_centered = fut_chunks - fut_chunks.mean(axis=1, keepdims=True)
-        num = np.einsum("ij,ij->i", sig_centered, fut_centered)
-        sig_ss = np.einsum("ij,ij->i", sig_centered, sig_centered)
-        fut_ss = np.einsum("ij,ij->i", fut_centered, fut_centered)
-        denom = np.sqrt(sig_ss * fut_ss)
-        zero_mask = denom < 1e-12
-        safe_denom = np.where(zero_mask, 1.0, denom)
-        new_ic = np.where(zero_mask, np.nan, num / safe_denom)
+        new_ic = chunk_pearson_ic(sig_chunks, fut_chunks)
 
         ic_all = np.concatenate([prior_ic, new_ic]) if prior_ic.size > 0 else new_ic
     else:
@@ -185,20 +144,8 @@ def compute_ic_incremental(
 
 
 def compute_ic_ttest(ic_series: np.ndarray) -> tuple[float, float]:
-    """t-test on IC series: H₀ mean IC = 0.
-
-    Returns (t_stat, p_value).  One-sided p-value (H₁: μ > 0).
-    """
-    from scipy.stats import ttest_1samp
-
-    arr = np.asarray(ic_series, dtype=np.float64)
-    arr = arr[np.isfinite(arr)]
-    if arr.size < 3:
-        return 0.0, 1.0
-    t_stat, p_two = ttest_1samp(arr, 0.0)
-    # One-sided: reject H₀ if mean > 0
-    p_one = float(p_two) / 2.0 if float(t_stat) > 0 else 1.0 - float(p_two) / 2.0
-    return float(t_stat), p_one
+    """t-test on IC series, H0 mean IC = 0: ``(t_stat, one-sided p)``; ``stats.ic_ttest``."""
+    return ic_ttest(ic_series)
 
 
 def compute_ic_halflife(signals: np.ndarray, max_lag: int = 50) -> int:

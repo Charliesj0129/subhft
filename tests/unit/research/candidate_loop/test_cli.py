@@ -99,22 +99,30 @@ class TestSummarize:
         assert str(path) in capsys.readouterr().out
 
 
-class TestPromote:
-    def test_promote_prints_shortlist(self, tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+class TestShortlist:
+    @pytest.mark.parametrize(
+        ("command", "key"),
+        [("shortlist", "shortlisted"), ("promote", "shortlisted"), ("shortlist", "promoted")],
+    )
+    def test_shortlist_prints_the_shortlist(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture, command: str, key: str
+    ) -> None:
+        """``promote`` is the pre-C4 alias; a pre-C4 summary keys the shortlist ``promoted``."""
         run_dir = tmp_path / "runs" / "r1"
         run_dir.mkdir(parents=True)
         (run_dir / "failure_summary.json").write_text(
             json.dumps(
                 {
-                    "promoted": [{"alpha_id": "abc", "family": "microprice", "final_score": 1.5}],
+                    key: [{"alpha_id": "abc", "family": "microprice", "final_score": 1.5}],
                     "watchlist": [],
                 }
             )
         )
-        rcode = cli.main(["promote", "--batch", "r1", "--runs-root", str(tmp_path / "runs")])
+        rcode = cli.main([command, "--batch", "r1", "--runs-root", str(tmp_path / "runs")])
         assert rcode == 0
         out = capsys.readouterr().out
-        assert "PROMOTED (1):" in out
+        assert "SHORTLISTED (1):" in out
+        assert "PROMOTED" not in out
         assert "abc" in out
 
     def test_promote_missing_summary_is_an_error(self, tmp_path: Path) -> None:

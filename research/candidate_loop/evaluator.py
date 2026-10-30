@@ -14,8 +14,8 @@ memory), inner loop over candidates:
   columns, including the approved maker extension
   (``taifex_maker_qhat_v1``) when a :class:`QHatTable` is supplied.
 
-Reuses ``research/backtest/metrics.py::compute_ic`` (chunked Pearson) and
-``compute_ic_ttest``; Spearman rank IC is a local NaN-aware implementation
+Statistics come from ``hft_platform.alpha.stats``: ``chunked_ic`` (chunked
+Pearson day IC), ``ic_ttest`` over the daily IC series, and ``rank_ic``
 (``batch_alpha_eval.information_coefficient`` hard-codes a ``signal != 0``
 exclusion that is wrong for two-sided factors).
 
@@ -39,8 +39,7 @@ from typing import Any
 import numpy as np
 import yaml
 
-from hft_platform.alpha.stats import rank_ic
-from research.backtest.metrics import compute_ic, compute_ic_ttest
+from hft_platform.alpha.stats import chunked_ic, ic_ttest, rank_ic
 from research.backtest.q_hat_table import QHatTable
 from research.candidate_loop.compiler import evaluate_regime, evaluate_signal
 from research.candidate_loop.maker_cost import (
@@ -148,10 +147,10 @@ def scale_window(horizon: Window, multiplier: float) -> Window:
 
 
 def _pearson_ic(signal: np.ndarray, label: np.ndarray) -> float:
-    """Chunked Pearson day IC (reuses backtest compute_ic); 0.0 when too thin."""
+    """Chunked Pearson day IC (``stats.chunked_ic``); 0.0 when too thin."""
     if signal.size < MIN_IC_ROWS:
         return 0.0
-    ic_mean, _, _ = compute_ic(signal, label)
+    ic_mean, _, _ = chunked_ic(signal, label)
     return ic_mean
 
 
@@ -316,7 +315,7 @@ def aggregate_split(
 
     ic_mean = float(np.mean(daily_ics)) if daily_ics.size else 0.0
     rank_ic_mean = float(np.mean([d.rank_ic for d in stat_days])) if stat_days else 0.0
-    ic_tstat, _ = compute_ic_ttest(daily_ics)
+    ic_tstat, _ = ic_ttest(daily_ics)
     n_stat = max(len(stat_days), 1)
     sign_consistency = float(np.count_nonzero(np.sign(daily_ics) == expected)) / n_stat if stat_days else 0.0
     day_stability = float(np.count_nonzero(daily_ics > 0.0)) / n_stat if stat_days else 0.0
