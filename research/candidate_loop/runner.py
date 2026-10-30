@@ -556,13 +556,17 @@ class BatchRunner:
 
 
     def test_split_holdout_key(self) -> str:
-        """Identity of the test split as a holdout: the pinned (day, symbol) pairs and data version."""
+        """Identity of the test split as a holdout: which (day, symbol) pairs, of which data version.
+
+        Membership only: the pairs are sorted and ``split_definition_version`` is left
+        out, so reordering the pairs or re-labelling the same split does not make
+        already-read observations look fresh.
+        """
         return canonical_sha256(
             {
                 "source": "research.candidate_loop",
-                "split_definition_version": self.split_def.split_definition_version,
                 "data_version": self.split_def.data_version,
-                "test": [[ds.day, ds.symbol] for ds in self.split_def.splits["test"]],
+                "test": sorted({(ds.day, ds.symbol) for ds in self.split_def.splits["test"]}),
             }
         )
 

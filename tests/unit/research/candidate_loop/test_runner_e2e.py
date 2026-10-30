@@ -14,10 +14,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from research.candidate_loop.generate import build_header, write_family_jsonl
 import research.candidate_loop.runner as runner_mod
+from research.candidate_loop.generate import build_header, write_family_jsonl
 from research.candidate_loop.runner import RunConfig, run_batch
 from research.candidate_loop.schema import FAMILIES, Status
+from research.candidate_loop.splits import DaySymbol, SplitDefinition
 
 REPO = Path(__file__).resolve().parents[4]
 FIXTURE = REPO / "research" / "candidate_loop" / "fixtures" / "validator_matrix_12.jsonl"
@@ -403,3 +404,28 @@ class TestTestSplitHoldoutLog:
         run_batch(rc, client=None)
 
         assert not (tmp_path / "evidence").exists()
+
+
+def _holdout_key(version: str, data_version: str, test: list[tuple[str, str]]) -> str:
+    runner = object.__new__(runner_mod.BatchRunner)
+    runner.split_def = SplitDefinition(
+        split_definition_version=version,
+        data_version=data_version,
+        splits={"test": tuple(DaySymbol(day=d, symbol=s) for d, s in test)},
+    )
+    return runner.test_split_holdout_key()
+
+
+_TEST_PAIRS = [("2026-01-05", "TXFA6"), ("2026-01-06", "TXFA6"), ("2026-01-06", "MXFA6")]
+
+
+def test_holdout_key_ignores_pair_order_and_split_label() -> None:
+    base = _holdout_key("split_v1", "synth_v1", _TEST_PAIRS)
+    assert _holdout_key("split_v1", "synth_v1", list(reversed(_TEST_PAIRS))) == base
+    assert _holdout_key("split_v2", "synth_v1", _TEST_PAIRS) == base
+
+
+def test_holdout_key_changes_with_membership_or_data_version() -> None:
+    base = _holdout_key("split_v1", "synth_v1", _TEST_PAIRS)
+    assert _holdout_key("split_v1", "synth_v2", _TEST_PAIRS) != base
+    assert _holdout_key("split_v1", "synth_v1", _TEST_PAIRS[:2]) != base
