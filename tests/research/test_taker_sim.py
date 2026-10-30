@@ -359,3 +359,15 @@ def test_daily_sharpe_of_a_constant_daily_pnl_is_zero_not_float_noise() -> None:
     assert daily_sharpe([1.1] * 30) == 0.0
     assert daily_sharpe([0.1] * 7) == 0.0
     assert daily_sharpe([3.0] * 30) == 0.0
+
+
+def test_a_fill_after_the_last_two_sided_book_is_booked_at_feed_end():
+    bridge, hbt = _bound_bridge()
+    hbt.state = SimpleNamespace(position=-1.0, balance=100.0)  # filled after the last book callback
+
+    bridge.on_feed_end(7)
+
+    assert [(f.ts_ns, f.qty, f.price_pts) for f in bridge.fills] == [(7, -1, 100.0)]
+    assert bridge.exch_position == -1
+    bridge.on_feed_end(8)  # nothing new: no second fill
+    assert len(bridge.fills) == 1

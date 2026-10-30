@@ -185,6 +185,14 @@ class _TakerOrderBridge(AlphaStrategyBridge):
             raise TakerSimError(f"cash moved at ts={ts_ns} without a position change; exchange fees must be off")
         self.exch_position, self.balance = position, balance
 
+    def on_feed_end(self, ts_ns: int) -> None:
+        """Book what filled after the last two-sided book (the adapter calls this before closing).
+
+        An IOC still in flight when the data ends never reached the book; it has no fill.
+        """
+        if self._hbt is not None:
+            self._collect_fill(ts_ns)
+
     def _order_in_flight(self) -> bool:
         if self._inflight_id is None:
             return False
