@@ -356,3 +356,32 @@ class TestRunElapseTimestampScaling:
 
         _args = mock_build.call_args
         assert _args[0][2] == int(1_234_567_890_123)
+
+
+class TestRunElapseFeedEnd:
+    def test_strategy_sees_the_final_state_before_close(self):
+        adapter, _ = _make_adapter(elapse_results=[1])
+        calls: list[str] = []
+        adapter.strategy.on_feed_end.side_effect = lambda ts: calls.append(f"end:{ts}")
+        adapter.hbt.close.side_effect = lambda: calls.append("close") or "closed"
+
+        assert run_elapse(adapter) == "closed"
+        assert calls == [f"end:{adapter.hbt.current_timestamp}", "close"]
+
+    def test_feed_loop_also_calls_the_hook_before_close(self):
+        from hft_platform.backtest._feed_loop import run_feed
+
+        adapter, _ = _make_adapter(elapse_results=[])
+        adapter._wait_for_next_feed.return_value = False
+        calls: list[str] = []
+        adapter.strategy.on_feed_end.side_effect = lambda ts: calls.append("end")
+        adapter.hbt.close.side_effect = lambda: calls.append("close") or "closed"
+
+        assert run_feed(adapter) == "closed"
+        assert calls == ["end", "close"]
+
+    def test_a_strategy_without_the_hook_is_closed_as_before(self):
+        adapter, _ = _make_adapter(elapse_results=[1])
+        adapter.strategy = object()
+
+        assert run_elapse(adapter) == "closed"
