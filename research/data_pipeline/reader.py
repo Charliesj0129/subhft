@@ -71,6 +71,7 @@ _SLOTS_SQL = """
 _ROOT = re.compile(r"^[A-Z]{2,4}$")
 _SYMBOL = re.compile(r"^[A-Z0-9]{2,16}$")
 _TAIPEI = ZoneInfo("Asia/Taipei")
+_UTC_DAY_NS = 86_400 * 1_000_000_000
 
 
 class ReaderError(RuntimeError):
@@ -90,6 +91,7 @@ class WindowRead:
     tick_dedup: dedup.DedupStats
     bidask_removed: int
     depth_counts: dict[int, int] = field(default_factory=dict)
+    dedup_context: tuple[int, int] | None = None
 
     def quotes(self) -> list[tuple[Any, ...]]:
         """BidAsk rows with at least one level on each side, in row order."""
@@ -113,6 +115,7 @@ class WindowRead:
             "session_rule": SESSION_RULE,
             "session_filtered_rows": self.session_filtered,
             "dedup_rule": dedup.RULE_ID,
+            "dedup_context_ns": list(self.dedup_context) if self.dedup_context else None,
             "tick_dedup": self.tick_dedup.to_payload(),
             "bidask_removed": self.bidask_removed,
             "bidask_depth_counts": {str(k): v for k, v in sorted(self.depth_counts.items())},
@@ -189,28 +192,42 @@ class GovernedReader:
         return frozenset(out)
 
     def read_window(self, symbol: str, start_ns: int, end_ns: int) -> WindowRead:
-        """Rows of ``symbol`` with ``start_ns <= exch_ts < end_ns`` after the session rule and dedup."""
+        """Rows of ``symbol`` with ``start_ns <= exch_ts < end_ns`` after the session rule and dedup.
+
+        Dedup runs over the whole UTC days the window touches (the widest level dedup v1
+        estimates a multiplicity from, and the run a repeated snapshot is judged against),
+        then the result is cut to the window. A narrow window therefore keeps exactly the
+        rows a full-day read keeps in the same span. ``rows_fetched`` and
+        ``session_filtered`` count the window; the dedup stats describe the context days.
+        """
         if not _SYMBOL.match(symbol):
             raise ReaderError(f"not a contract symbol: {symbol!r}")
-        if int(end_ns) <= int(start_ns):
+        start_ns, end_ns = int(start_ns), int(end_ns)
+        if end_ns <= start_ns:
             raise ReaderError(f"empty window [{start_ns}, {end_ns})")
-        sessions = self._sessions(int(start_ns), int(end_ns))
-        result = self._query(_WINDOW_SQL, {"symbol": symbol, "start_ns": int(start_ns), "end_ns": int(end_ns)})
+        context_start = start_ns - start_ns % _UTC_DAY_NS
+        context_end = end_ns + (-end_ns) % _UTC_DAY_NS
+        sessions = self._sessions(context_start, context_end)
+        result = self._query(_WINDOW_SQL, {"symbol": symbol, "start_ns": context_start, "end_ns": context_end})
         fetched = [tuple(r) for r in result.result_rows]
-        in_session, session_filtered = filter_session_rows(fetched, sessions)
+        in_session, _ = filter_session_rows(fetched, sessions)
         rows, tick_stats = dedup.dedup_tick_rows(in_session)
         rows, bidask_removed = dedup.dedup_bidask_rows(rows, window_ns=BIDASK_DEDUP_WINDOW_NS)
+        rows = [r for r in rows if start_ns <= int(r[1]) < end_ns]
+        in_window = [r for r in fetched if start_ns <= int(r[1]) < end_ns]
+        _, session_filtered = filter_session_rows(in_window, sessions)
         depth = Counter(min(len(r[3] or ()), len(r[4] or ())) for r in rows if r[0] == "BidAsk")
         return WindowRead(
             symbol=symbol,
-            start_ns=int(start_ns),
-            end_ns=int(end_ns),
+            start_ns=start_ns,
+            end_ns=end_ns,
             rows=tuple(tuple(r) for r in rows),
-            rows_fetched=len(fetched),
+            rows_fetched=len(in_window),
             session_filtered=session_filtered,
             tick_dedup=tick_stats,
             bidask_removed=bidask_removed,
             depth_counts=dict(depth),
+            dedup_context=(context_start, context_end),
         )
 
     def trading_day_window(self, trading_day: dt.date) -> tuple[int, int]:
