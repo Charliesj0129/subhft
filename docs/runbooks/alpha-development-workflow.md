@@ -258,7 +258,7 @@ Source: `src/hft_platform/alpha/promotion.py::_evaluate_gate_d`.
 - `fill_rate_deviation_max: 0.5`
 - Slice A small-sample: `min_fills: 300`, `min_days: 60`, `outlier_day_contribution_max_pct: 25`, `loo_day_sign_preserved: true`, `outlier_trade_removal_pct: 5`
 - Bootstrap CIs: `bootstrap_ci_lower_bound_min: 0` (n=2000, α=0.05); `block_bootstrap_ci_lower_bound_min: 0` (block=5d, n=1000, α=0.05)
-- Deflated Sharpe: `deflated_sharpe_min: 0.5` (n_trials=1)
+- Deflated Sharpe: `deflated_sharpe_min: 0.5` (n_trials=1); compared against annualized Sharpe less `SR0` (`stats.selection_sr0`), which is 0 at one trial
 - `replay_parity_match_pct_min: 95.0`
 
 ### Equity provenance guard (L6)

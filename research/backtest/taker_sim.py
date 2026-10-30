@@ -34,10 +34,12 @@ divides ClickHouse x1,000,000 integers), and hftbacktest's balance is in the sam
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import shutil
 import tempfile
 from collections.abc import Sequence
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,6 +79,7 @@ class TakerDay:
     gross_pts: float
     cost_pts: float
     net_pts: float
+    events_sha256: str = ""  # content hash of the day's event rows; names the day as a holdout
 
     def to_row(self) -> dict[str, Any]:
         return {
@@ -93,6 +96,7 @@ class TakerDay:
             "pnl_pts": self.net_pts,
             "fills": len(self.fills) + (1 if self.residual_qty else 0),
             "residual_mtm_pts": 0.0,
+            "events_sha256": self.events_sha256,
         }
 
 
@@ -240,6 +244,16 @@ class _TakerOrderBridge(AlphaStrategyBridge):
         return self._generated_intents
 
 
+def events_sha256(event_path: str) -> str:
+    """SHA-256 of an event file's rows (dtype and bytes), not of its compressed container."""
+    with np.load(event_path, allow_pickle=False) as npz:
+        events = np.ascontiguousarray(npz["data"])
+    digest = hashlib.sha256(events.dtype.str.encode())
+    digest.update(str(events.dtype.descr).encode())
+    digest.update(events.tobytes())
+    return digest.hexdigest()
+
+
 def _close_day(bridge: _TakerOrderBridge, trading_day: dt.date, cost_model: CostModel) -> TakerDay:
     fills = tuple(bridge.fills)
     residual = bridge.exch_position
@@ -317,7 +331,8 @@ class TakerSim:
         adapter.run()
         if not bridge.signal_log:
             raise TakerSimError(f"{trading_day}: no book events in {event_path}")
-        return _close_day(bridge, trading_day, self.cost_model)
+        day = _close_day(bridge, trading_day, self.cost_model)
+        return dataclasses.replace(day, events_sha256=events_sha256(event_path))
 
     def run(self, days: Sequence[tuple[dt.date, str]]) -> TakerSimResult:
         """``days`` pairs each trading day with its hftbacktest event file (``ensure_hftbt_npz``)."""

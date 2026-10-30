@@ -5,6 +5,8 @@ from typing import Any, cast
 import numpy as np
 from scipy import stats
 
+from hft_platform.alpha.stats import min_detectable_ic, rank_ic
+
 
 def _compute_oos_returns(equity_curve: np.ndarray, is_oos_split: float) -> np.ndarray:
     eq = np.asarray(equity_curve, dtype=np.float64).reshape(-1)
@@ -252,12 +254,9 @@ def _bds_correlation_delta(arr: np.ndarray, epsilon: float) -> float:
     return float(c2 - (c1 * c1))
 
 
-def _safe_spearmanr(a: np.ndarray, b: np.ndarray) -> float:
-    """Spearman rank correlation, returning NaN on degenerate input."""
-    if np.std(a) <= 1e-12 or np.std(b) <= 1e-12:
-        return float("nan")
-    corr, _ = stats.spearmanr(a, b)
-    return float(corr) if np.isfinite(corr) else float("nan")
+def _spearman_ic(a: np.ndarray, b: np.ndarray) -> float:
+    """Spearman IC of already-masked pairs; NaN when undefined (``stats.rank_ic``)."""
+    return rank_ic(a, b, min_obs=2)
 
 
 def _forward_return_at_horizon(mid: np.ndarray, n: int, h: int) -> np.ndarray:
@@ -286,7 +285,7 @@ def _check_monotonic_ic(
         if mask.sum() < 20:
             horizon_ics.append(float("nan"))
             continue
-        horizon_ics.append(_safe_spearmanr(sig[mask], fwd[mask]))
+        horizon_ics.append(_spearman_ic(sig[mask], fwd[mask]))
 
     finite_ics = [ic for ic in horizon_ics if np.isfinite(ic)]
     is_monotonic = False
@@ -318,7 +317,7 @@ def _check_detrended_ic(
     np.divide(np.diff(mid), base_1, out=fwd_1[:-1], where=base_1 != 0)
 
     mask_raw = np.isfinite(fwd_1) & np.isfinite(sig)
-    raw_ic = _safe_spearmanr(sig[mask_raw], fwd_1[mask_raw]) if mask_raw.sum() >= 20 else 0.0
+    raw_ic = _spearman_ic(sig[mask_raw], fwd_1[mask_raw]) if mask_raw.sum() >= 20 else 0.0
     raw_ic = raw_ic if np.isfinite(raw_ic) else 0.0
 
     # Rolling mean via cumsum trick
@@ -329,17 +328,21 @@ def _check_detrended_ic(
 
     detrended_fwd = fwd_1 - rolling_mean
     mask_dt = np.isfinite(detrended_fwd) & np.isfinite(sig)
-    dt_ic = _safe_spearmanr(sig[mask_dt], detrended_fwd[mask_dt]) if mask_dt.sum() >= 20 else 0.0
+    dt_ic = _spearman_ic(sig[mask_dt], detrended_fwd[mask_dt]) if mask_dt.sum() >= 20 else 0.0
     dt_ic = dt_ic if np.isfinite(dt_ic) else 0.0
 
     sign_flipped = bool((raw_ic > 0 and dt_ic < 0) or (raw_ic < 0 and dt_ic > 0))
     below_threshold = bool(abs(dt_ic) < threshold)
+    n_obs = int(mask_dt.sum())
 
     return {
         "raw_ic": raw_ic,
         "detrended_ic": dt_ic,
         "sign_flipped": sign_flipped,
         "below_threshold": below_threshold,
+        # Advisory: smallest |IC| these pairs could detect, treating them as independent.
+        "n_obs": n_obs,
+        "mdic_iid": min_detectable_ic(n_obs),
         "pass": not sign_flipped and not below_threshold,
     }
 
@@ -363,14 +366,14 @@ def _check_non_overlapping_ic(
                 sub_fwd[j] = (mid[idx + h_no] - mid[idx]) / mid[idx]
         mask_no = np.isfinite(sub_sig) & np.isfinite(sub_fwd)
         if mask_no.sum() >= 10:
-            ic = _safe_spearmanr(sub_sig[mask_no], sub_fwd[mask_no])
+            ic = _spearman_ic(sub_sig[mask_no], sub_fwd[mask_no])
             no_ic = ic if np.isfinite(ic) else 0.0
 
     fwd_h = _forward_return_at_horizon(mid, n, h_no)
     mask_ov = np.isfinite(fwd_h) & np.isfinite(sig)
     ov_ic = 0.0
     if mask_ov.sum() >= 20:
-        ic = _safe_spearmanr(sig[mask_ov], fwd_h[mask_ov])
+        ic = _spearman_ic(sig[mask_ov], fwd_h[mask_ov])
         ov_ic = ic if np.isfinite(ic) else 0.0
 
     drop_pct = max(0.0, 1.0 - abs(no_ic) / abs(ov_ic)) if abs(ov_ic) > 1e-9 else 0.0
@@ -488,30 +491,3 @@ def _evaluate_trend_contamination(
         "detrended_ic": detrended,
         "non_overlapping_ic": non_overlap,
     }
-
-
-def _bh_correction(pvalues: list[float], alpha: float) -> tuple[list[bool], list[float]]:
-    """Benjamini-Hochberg FDR correction."""
-    m = len(pvalues)
-    if m == 0:
-        return [], []
-
-    arr = np.asarray(pvalues, dtype=np.float64)
-    sort_idx = np.argsort(arr)
-    sorted_p = arr[sort_idx]
-    thresholds = (np.arange(1, m + 1, dtype=np.float64) / float(m)) * float(alpha)
-
-    reject_mask = np.zeros(m, dtype=bool)
-    for k in range(m - 1, -1, -1):
-        if sorted_p[k] <= thresholds[k]:
-            reject_mask[sort_idx[: k + 1]] = True
-            break
-
-    adjusted = np.empty(m, dtype=np.float64)
-    prev = 1.0
-    for k in range(m - 1, -1, -1):
-        adj = float(sorted_p[k] * float(m) / float(k + 1))
-        prev = min(prev, adj, 1.0)
-        adjusted[sort_idx[k]] = prev
-
-    return reject_mask.tolist(), adjusted.tolist()

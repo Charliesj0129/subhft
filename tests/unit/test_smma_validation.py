@@ -3,13 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from hft_platform.alpha.stats import benjamini_hochberg, effective_test_count, moving_block_bootstrap_mean
 from research.combinatorial.smma_validation import (
     ExecutionResult,
     activation_mask,
-    benjamini_hochberg,
-    block_bootstrap_mean,
     build_split_plan,
-    effective_test_count,
     evaluate_recent_kill_criteria,
     forward_target_indices,
     locked_validation,
@@ -228,10 +226,10 @@ def test_monotonic_horizon_ic_is_killed() -> None:
 
 
 def test_multiple_testing_and_bootstrap_are_deterministic() -> None:
-    mask = benjamini_hochberg([0.001, 0.02, 0.8], q=0.10)
+    mask = benjamini_hochberg([0.001, 0.02, 0.8], q=0.10).rejected
     assert mask.tolist() == [True, True, False]
     values = np.asarray([1.0, 2.0, 3.0, 4.0])
-    assert block_bootstrap_mean(values, samples=100, seed=7) == block_bootstrap_mean(
+    assert moving_block_bootstrap_mean(values, samples=100, seed=7) == moving_block_bootstrap_mean(
         values,
         samples=100,
         seed=7,

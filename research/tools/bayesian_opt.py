@@ -3,9 +3,9 @@
 Uses Optuna TPE sampler to explore alpha parameter spaces more efficiently
 than grid search, with deflated Sharpe correction for multiple-testing bias.
 """
+
 from __future__ import annotations
 
-import math
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 import structlog
+
+from hft_platform.alpha.stats import selection_sr0
 
 logger = structlog.get_logger(__name__)
 
@@ -136,10 +138,7 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
     loaded = registry.discover(alphas_dir)
     if config.alpha_id not in loaded:
         available = sorted(loaded.keys())
-        raise ValueError(
-            f"Alpha '{config.alpha_id}' not found in research/alphas/. "
-            f"Available: {available}"
-        )
+        raise ValueError(f"Alpha '{config.alpha_id}' not found in research/alphas/. Available: {available}")
 
     # --- Resolve data paths and ensure hftbt format ---
     resolved_paths: list[str] = []
@@ -225,7 +224,7 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
     best_objective = float(best_trial.value)
 
     # --- Compute deflated Sharpe ---
-    # Penalty for multiple testing: best_sharpe - sqrt(2 * log(n_trials) / n_oos)
+    # Multiple-testing deflation: best objective less SR0 for the best of n_trials (stats.selection_sr0)
     n_oos_fraction = 1.0 - config.is_oos_split
     # Estimate n_oos from a representative data file
     n_oos = 100  # fallback
@@ -243,7 +242,12 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
     except Exception:
         pass  # use fallback
 
-    selection_penalty = math.sqrt(2.0 * math.log(max(1, config.n_trials)) / max(1, n_oos))
+    selection_penalty = selection_sr0(
+        config.n_trials,
+        observations=max(2, n_oos),
+        trial_sharpes=[float(t.value) for t in study.trials if t.value is not None],
+        annualization=252.0,  # research.backtest.metrics.compute_sharpe default
+    )
     deflated_sharpe = best_objective - selection_penalty
 
     # --- Parameter importance ---

@@ -11,7 +11,9 @@ both outside the checkout:
     ``legacy/kills.jsonl``, kills recorded before the ledger existed, kept
     as an archive that never derives a status; ``ledger/stale.jsonl``, marks
     for runs that a registered defect affects (they flag evidence, never
-    derive a status); ``protocols/``, pre-registrations.
+    derive a status); ``ledger/holdout_access.jsonl``, every read of an
+    out-of-sample holdout by any run, governed or exploratory (a second read
+    is flagged, never gated); ``protocols/``, pre-registrations.
 ``$HFT_RESEARCH_DATA_ROOT`` (default ``~/hft_research_data``)
     datasets; not in git.
 
@@ -55,6 +57,8 @@ LEGACY_KILLS_RELPATH = "legacy/kills.jsonl"
 LEGACY_KILL_SCHEMA = "legacy_kill.v1"
 STALE_RELPATH = "ledger/stale.jsonl"
 STALE_MARK_SCHEMA = "stale_mark.v1"
+HOLDOUT_ACCESS_RELPATH = "ledger/holdout_access.jsonl"
+HOLDOUT_ACCESS_SCHEMA = "holdout_access.v1"
 ROOT_LAYOUT = ("runs", "validations", "ledger", "legacy", "protocols")
 
 _REQUIRED_EVENT_FIELDS = ("alpha_id", "stage", "passed")
@@ -343,6 +347,44 @@ class EvidenceWriter:
     def read_stale_marks(self) -> Iterator[dict[str, Any]]:
         """The stale marks in order; a malformed line raises ``ValueError``."""
         yield from _read_jsonl(self.root / STALE_RELPATH, STALE_MARK_SCHEMA)
+
+    def record_holdout_access(
+        self, *, holdout_key: str, alpha_id: str, run_id: str | None, mode: RunMode
+    ) -> dict[str, Any]:
+        """Record one read of the holdout ``holdout_key`` and say how often it was read before.
+
+        Every run that scores a holdout is recorded, exploratory ones too: a
+        peek is a read. The result flags reuse (``reused``: this alpha read
+        the same holdout before); it never changes a verdict.
+        """
+        if not holdout_key or not alpha_id:
+            raise ValueError("holdout access needs holdout_key and alpha_id")
+        path = self.root / HOLDOUT_ACCESS_RELPATH
+        with _locked(path) as fd:
+            prior = [r for r in _read_jsonl(path, HOLDOUT_ACCESS_SCHEMA) if r.get("holdout_key") == holdout_key]
+            record = {
+                "schema": HOLDOUT_ACCESS_SCHEMA,
+                "access_id": uuid4().hex,
+                "recorded_at": _now_iso(),
+                "holdout_key": holdout_key,
+                "alpha_id": alpha_id,
+                "run_id": run_id,
+                "mode": RunMode(mode).value,
+            }
+            _append_whole(fd, _compact(record), path)
+        same_alpha = [r for r in prior if r.get("alpha_id") == alpha_id]
+        return {
+            "recorded": True,
+            "holdout_key": holdout_key,
+            "prior_reads": len(same_alpha),
+            "prior_reads_any_alpha": len(prior),
+            "prior_run_ids": [r.get("run_id") for r in same_alpha][-5:],
+            "reused": bool(same_alpha),
+        }
+
+    def read_holdout_accesses(self) -> Iterator[dict[str, Any]]:
+        """The recorded holdout reads in order; a malformed line raises ``ValueError``."""
+        yield from _read_jsonl(self.root / HOLDOUT_ACCESS_RELPATH, HOLDOUT_ACCESS_SCHEMA)
 
     @staticmethod
     def _append_unique(path: Path, schema: str, key: str, stamp: str, records: list[Mapping[str, Any]]) -> int:

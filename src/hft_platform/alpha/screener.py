@@ -29,6 +29,7 @@ laws do not apply here.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,8 @@ from typing import Literal
 
 import numpy as np
 import structlog
+
+from hft_platform.alpha.stats import pearson_ic
 
 logger = structlog.get_logger(__name__)
 
@@ -117,14 +120,12 @@ def _forward_returns(prices: np.ndarray, horizon: int = _FORWARD_HORIZON) -> np.
 
 
 def _ic(signal: np.ndarray, returns: np.ndarray) -> float:
-    """Pearson correlation of signal vs forward returns. NaN if too few obs."""
+    """Pearson correlation of signal vs forward returns. NaN if too few obs, 0.0 if constant."""
     mask = np.isfinite(signal) & np.isfinite(returns)
     if mask.sum() < _MIN_OBS:
         return float("nan")
-    s, r = signal[mask], returns[mask]
-    if s.std() < 1e-12 or r.std() < 1e-12:
-        return 0.0
-    return float(np.corrcoef(s, r)[0, 1])
+    value = pearson_ic(signal[mask], returns[mask], min_obs=_MIN_OBS)
+    return 0.0 if math.isnan(value) else value
 
 
 def _turnover(signal: np.ndarray) -> float:

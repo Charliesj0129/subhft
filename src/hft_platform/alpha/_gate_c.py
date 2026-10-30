@@ -15,7 +15,6 @@ from hft_platform.alpha._param_opt import (
     _optimize_parameters,
 )
 from hft_platform.alpha._stat_tests import (
-    _bh_correction,
     _compute_oos_returns,
     _evaluate_oos_statistical_tests,
     _evaluate_trend_contamination,
@@ -27,9 +26,11 @@ from hft_platform.alpha._validation_helpers import (
     _resolve_first_data_meta_path,
 )
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
+from hft_platform.alpha.evidence import canonical_sha256
 from hft_platform.alpha.gate_c_runtime import GateCRuntime
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, check_entry, derive_verdict
 from hft_platform.alpha.provenance import build_run_stamp
+from hft_platform.alpha.stats import benjamini_hochberg
 
 logger = structlog.get_logger("alpha.gate_c")
 
@@ -612,6 +613,32 @@ def _resolve_maker_latency_profile(
 SCREENING_METHOD_ID = "mid_to_mid_screening_v1"
 
 
+def _holdout_identity(oos_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Name the out-of-sample holdout a fill backtest scored: its trading days and their events.
+
+    The key covers only the out-of-sample days (date and the content hash of that day's
+    event rows), so a change to in-sample data leaves it alone and a rerun is still seen
+    as a reread. ``key`` is ``None`` (the read cannot be recorded) when there are no OOS
+    days or a day carries no event hash.
+    """
+    days = [str(r["date"]) for r in oos_rows]
+    identity: dict[str, Any] = {
+        "n_days": len(days),
+        "first_day": days[0] if days else None,
+        "last_day": days[-1] if days else None,
+        "key": None,
+    }
+    if not days:
+        identity["reason"] = "no out-of-sample days"
+        return identity
+    hashes = [str(r.get("events_sha256") or "") for r in oos_rows]
+    if not all(hashes):
+        identity["reason"] = "an out-of-sample day has no event hash"
+        return identity
+    identity["key"] = canonical_sha256({"oos_days": sorted(zip(days, hashes, strict=True))})
+    return identity
+
+
 def _fill_backtest_eval(
     run_taker_sim: Callable[..., Any] | None,
     *,
@@ -653,6 +680,7 @@ def _fill_backtest_eval(
         "n_contracts": int(sum(int(r["n_contracts"]) for r in rows)),
         "cost_label": str(getattr(cost_model, "label", "")),
         "daily_pnl": rows,
+        "holdout": _holdout_identity(rows[n_is:]),
     }
     if n_oos < 2:
         entry = check_entry(
@@ -1036,7 +1064,8 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     correction_method = str(config.stat_correction_method).strip().lower()
     n_tests = len(raw_pvalues)
     if correction_method == "bh":
-        bh_rejected, bh_adj_pvals = _bh_correction(raw_pvalues, float(config.stat_pvalue_threshold))
+        bh = benjamini_hochberg(raw_pvalues, float(config.stat_pvalue_threshold))
+        bh_rejected, bh_adj_pvals = bh.rejected.tolist(), bh.adjusted.tolist()
     elif correction_method == "bonferroni":
         bonf_alpha = float(config.stat_pvalue_threshold) / max(1, n_tests)
         bh_rejected = [float(p) <= bonf_alpha for p in raw_pvalues]

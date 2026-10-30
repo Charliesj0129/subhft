@@ -1590,3 +1590,48 @@ def test_screen_evidence_is_not_rerun_after_durable_completion(monkeypatch, tmp_
     evidence_path.write_text(json.dumps(tampered))
     with pytest.raises(RunIntegrityError, match="screen evidence hash mismatch"):
         run._screen_survivors([survivor])
+
+
+def _locked_with_restored_pvalue(tmp_path, *, prior_locked_ids: tuple[str, ...]) -> dict:
+    """Run ``_locked`` over one restored candidate whose locked p-value is 0.05."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_dataset(run_dir)
+    run = MiningRun(RunConfig(run_dir=run_dir, max_candidates=1, seeds=(1, 2, 3)))
+    for prior in prior_locked_ids:
+        run._ledger.append({"candidate_id": prior, "stage": "locked_validation", "status": "killed"})
+    candidate = Candidate(
+        candidate_id="candidate-bh",
+        root="TXF",
+        timeframe_min=60,
+        expression="close_l3_atr14_distance",
+        horizon="1h",
+        direction=1,
+        threshold=0.0,
+        seed=1,
+        complexity=1,
+    )
+    kill = KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ())
+    selection = CandidateResult(candidate=candidate, kill=kill, stage="selection", status="passed")
+    restored = CandidateResult(
+        candidate=candidate,
+        kill=kill,
+        locked=LockedMetrics(-1.0, 0.05, 0.01, 0.0, 0.0, (0.0,) * 5, False),
+        stage="locked_validation",
+        status="killed",
+    )
+    run._locked(_dataset(), [selection], [restored])
+    (row,) = [r for r in run._ledger.rows(stage="locked_validation") if r["candidate_id"] == "candidate-bh"]
+    return row
+
+
+def test_locked_bh_counts_only_the_candidates_in_hand_on_a_fresh_ledger(tmp_path) -> None:
+    row = _locked_with_restored_pvalue(tmp_path, prior_locked_ids=())
+    assert row["bh_n_tests"] == 1
+    assert row["bh_q10_passed"] is True  # 0.05 <= 0.10 * 1/1
+
+
+def test_locked_bh_counts_ledger_tests_whose_pvalues_are_not_in_hand(tmp_path) -> None:
+    row = _locked_with_restored_pvalue(tmp_path, prior_locked_ids=("earlier-1", "earlier-2"))
+    assert row["bh_n_tests"] == 3
+    assert row["bh_q10_passed"] is False  # 0.05 > 0.10 * 1/3

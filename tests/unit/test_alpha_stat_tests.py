@@ -1,7 +1,7 @@
 """Unit tests for hft_platform.alpha._stat_tests.
 
 Covers: _compute_oos_returns, _evaluate_oos_statistical_tests,
-_run_bds_independence_test, _bds_correlation_delta, _bh_correction,
+_run_bds_independence_test, _bds_correlation_delta,
 _extract_stat_test_pvalues, _extract_bds_pvalue.
 """
 
@@ -12,7 +12,6 @@ import pytest
 
 from hft_platform.alpha._stat_tests import (
     _bds_correlation_delta,
-    _bh_correction,
     _compute_oos_returns,
     _evaluate_oos_statistical_tests,
     _extract_bds_pvalue,
@@ -297,61 +296,6 @@ def test_bds_correlation_delta_iid_vs_correlated():
     # Just assert both are finite floats; ordering may vary
     assert np.isfinite(delta_iid)
     assert np.isfinite(delta_corr)
-
-
-# ---------------------------------------------------------------------------
-# _bh_correction
-# ---------------------------------------------------------------------------
-
-
-def test_bh_correction_empty_list():
-    reject, adjusted = _bh_correction([], alpha=0.05)
-    assert reject == []
-    assert adjusted == []
-
-
-def test_bh_correction_single_significant_pvalue():
-    reject, adjusted = _bh_correction([0.01], alpha=0.05)
-    assert len(reject) == 1
-    assert len(adjusted) == 1
-    assert reject[0] is True
-    assert 0.0 <= adjusted[0] <= 1.0
-
-
-def test_bh_correction_single_nonsignificant_pvalue():
-    reject, adjusted = _bh_correction([0.90], alpha=0.05)
-    assert len(reject) == 1
-    assert reject[0] is False
-
-
-def test_bh_correction_multiple_pvalues_rejects_small():
-    # With alpha=0.05 and this set, at least the smallest should be rejected.
-    pvalues = [0.001, 0.04, 0.03, 0.20]
-    reject, adjusted = _bh_correction(pvalues, alpha=0.05)
-    assert len(reject) == 4
-    assert len(adjusted) == 4
-    # The smallest p-value should be rejected
-    assert reject[0] is True
-
-
-def test_bh_correction_adjusted_pvalues_bounded():
-    pvalues = [0.001, 0.02, 0.05, 0.10, 0.30]
-    _, adjusted = _bh_correction(pvalues, alpha=0.05)
-    for p in adjusted:
-        assert 0.0 <= p <= 1.0
-
-
-def test_bh_correction_all_nonsignificant():
-    pvalues = [0.5, 0.6, 0.7, 0.8, 0.9]
-    reject, adjusted = _bh_correction(pvalues, alpha=0.05)
-    assert not any(reject)
-
-
-def test_bh_correction_preserves_length():
-    pvalues = [0.01, 0.02, 0.03, 0.04, 0.05]
-    reject, adjusted = _bh_correction(pvalues, alpha=0.05)
-    assert len(reject) == len(pvalues)
-    assert len(adjusted) == len(pvalues)
 
 
 # ---------------------------------------------------------------------------

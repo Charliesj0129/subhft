@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from hft_platform.alpha.stats import expected_max_sharpe, null_sharpe_std
 from research.tools.bayesian_opt import (
     BayesianOptConfig,
     BayesianOptResult,
@@ -229,7 +230,8 @@ class TestRunBayesianOpt:
         result = run_bayesian_opt(config)
 
         assert result.deflated_sharpe < result.best_objective
-        expected_penalty = math.sqrt(2.0 * math.log(5) / 100)  # fallback n_oos=100
+        # Identical trials: SR0 for the best of 5 uses the null spread over the fallback n_oos=100.
+        expected_penalty = expected_max_sharpe(5, null_sharpe_std(100) * math.sqrt(252.0))
         assert abs((result.best_objective - result.deflated_sharpe) - expected_penalty) < 1e-6
 
     @patch("research.tools.latency_profiles.load_latency_profile", return_value=_MOCK_LATENCY)

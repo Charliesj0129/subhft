@@ -37,7 +37,6 @@ from hft_platform.alpha._param_opt import (  # noqa: E402, F401
 # ---------------------------------------------------------------------------
 from hft_platform.alpha._stat_tests import (  # noqa: E402, F401
     _bds_correlation_delta,
-    _bh_correction,
     _compute_oos_returns,
     _evaluate_oos_statistical_tests,
     _extract_bds_pvalue,
@@ -74,10 +73,12 @@ from hft_platform.alpha._validation_types import (  # noqa: E402
     ValidationResult,
 )
 from hft_platform.alpha.evidence import (  # noqa: E402
+    EvidenceRootError,
     EvidenceWriter,
     GovernedRunRefused,
     RunMode,
     canonical_sha256,
+    evidence_root,
     require_governed,
 )
 from hft_platform.alpha.outcomes import Verdict  # noqa: E402
@@ -206,6 +207,8 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
         )
         experiment_meta_path = None
 
+    if not gate_c.details.get("skipped"):
+        gate_c.details["holdout_access"] = _record_holdout_access(writer, config, gate_c, run_id)
     _write_json(validation_dir / "backtest_report.json", asdict(gate_c))
 
     overall = gate_a.passed and gate_b.passed and gate_c.passed
@@ -263,6 +266,33 @@ def _start_governed_run(
     if experiments_base.resolve() != evidence:
         raise GovernedRunRefused([f"experiments_dir {experiments_base} is not the evidence root {evidence}"])
     return EvidenceWriter(evidence), commit
+
+
+def _record_holdout_access(
+    writer: EvidenceWriter | None, config: ValidationConfig, gate_c: GateReport, run_id: str | None
+) -> dict[str, Any]:
+    """Record that this run read its out-of-sample holdout, and say whether it was read before.
+
+    A governed run records under its evidence root; an exploratory one under the default root
+    when that root exists (a peek is still a read). Reuse is flagged, never gated.
+    """
+    fill = gate_c.details.get("fill_backtest")
+    holdout = fill.get("holdout") if isinstance(fill, dict) else None
+    key = holdout.get("key") if isinstance(holdout, dict) else None
+    if not key:
+        reason = holdout.get("reason") if isinstance(holdout, dict) else None
+        return {"recorded": False, "reason": reason or "no fill-priced holdout scored"}
+    if writer is None:
+        try:
+            root = evidence_root()
+        except EvidenceRootError as exc:
+            return {"recorded": False, "holdout_key": key, "reason": str(exc)}
+        if not root.is_dir():
+            return {"recorded": False, "holdout_key": key, "reason": f"no evidence root at {root}"}
+        writer = EvidenceWriter(root)
+    return writer.record_holdout_access(
+        holdout_key=str(key), alpha_id=config.alpha_id, run_id=run_id, mode=RunMode(config.run_mode)
+    )
 
 
 def _gate_c_ledger_verdict(gate_c: GateReport) -> tuple[str, str | None]:
@@ -335,6 +365,9 @@ def _publish_governed_run(
             event["verdict"], reason = _gate_c_ledger_verdict(report)
             if reason:
                 event["verdict_reason"] = reason
+            access = report.details.get("holdout_access")
+            if isinstance(access, dict) and access.get("recorded"):
+                event["holdout"] = {k: access[k] for k in ("holdout_key", "prior_reads", "reused")}
         writer.append_verdict(event, mode=RunMode.GOVERNED)
 
 

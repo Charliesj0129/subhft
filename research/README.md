@@ -171,6 +171,30 @@ For the bias matrix (14× pessimistic to 577× optimistic across engines), and c
 requirements, see
 [`docs/runbooks/backtest-engine-selection.md`](../docs/runbooks/backtest-engine-selection.md).
 
+### Statistics (one module)
+
+Every multiple-testing correction, resampler, Sharpe deflation and IC estimate a gate
+or a generator uses is defined once, in `src/hft_platform/alpha/stats.py`; no gate or
+generator keeps a private copy. Deflated Sharpe has one definition, the Bailey/López de
+Prado probability against `SR0` (the Sharpe the best of N null trials is expected to
+reach). Gates with Sharpe-unit thresholds (`deflated_sharpe_min`,
+`opt_min_deflated_sharpe`) compare `SR - SR0` against the unchanged threshold, and report
+the probability beside it. Benjamini-Hochberg takes the test count from the trials
+ledger when it knows tests whose p-values are not in hand. Every Gate C read of an
+out-of-sample holdout is recorded in `ledger/holdout_access.jsonl` under the evidence
+root; a second read by the same alpha is flagged (`holdout_access.reused`), never gated.
+
+Definitions retired by the move (research v2 C3):
+
+| Retired | Difference | Replacement |
+|---|---|---|
+| `_param_opt` selection haircut `sqrt(2 ln N / T)` | annualized Sharpe less a per-observation penalty over T ticks: about 0 | `stats.selection_sr0`, trials' spread floored at the null spread; never smaller |
+| `deflated_sharpe_maker` haircut, same formula | same unit mismatch; 0 at the profile's `deflated_n_trials: 1` | `stats.selection_sr0`; still 0 at one trial |
+| `research/tools/bayesian_opt.py` haircut, same formula | same unit mismatch | `stats.selection_sr0` |
+| `_stat_tests._bh_correction`, `smma_validation.benjamini_hochberg` | identical values | `stats.benjamini_hochberg` (adds `n_tests`) |
+| `_resampling` bootstraps, `smma_validation` block/cluster bootstraps, `deflated_sharpe`, `effective_test_count` | identical values | `stats.*` (`block_bootstrap_mean` is now `moving_block_bootstrap_mean`) |
+| `_safe_spearmanr`, `smma_validation.spearman_ic`, `candidate_loop` `_rank_ic`, `screener._ic` | identical except on near-constant input: the old rules (std at most 1e-12, std exactly 0, range at most 1e-12) are now one, range at most 1e-12 means undefined | `stats.rank_ic` / `stats.pearson_ic`; callers keep their own undefined-as-0 or NaN |
+
 ## One Factory Flow
 
 The factory preflight sequence is fixed:

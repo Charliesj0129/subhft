@@ -19,6 +19,7 @@ from research.backtest.taker_sim import (  # noqa: E402
     TakerSimError,
     _TakerOrderBridge,
     daily_sharpe,
+    events_sha256,
     simulate_files,
     split_trading_days,
 )
@@ -288,6 +289,7 @@ def test_rows_carry_the_sub_gate_fields(tmp_path):
     assert row["pnl_pts"] == row["net_pts"]
     assert row["fills"] == 2  # the entry and the closing sale
     assert row["residual_mtm_pts"] == 0.0
+    assert row["events_sha256"] == events_sha256(path)  # names the day as a Gate C holdout
 
 
 def _taipei_ns(text: str) -> int:
