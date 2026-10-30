@@ -113,7 +113,7 @@ def run_gate_b(alpha_id: str, project_root: Path, skip_tests: bool = False, time
 
 
 # ---------------------------------------------------------------------------
-# Gate C — delegate to _gate_c (includes trend contamination check + sell_tax_bps)
+# Gate C — delegate to _gate_c (fill-priced taker PnL, trend contamination check)
 # ---------------------------------------------------------------------------
 def run_gate_c(
     alpha: Any,

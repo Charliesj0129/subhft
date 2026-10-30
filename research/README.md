@@ -48,6 +48,7 @@ architecture, review); delegation rules are in `AGENTS.md`. Skills are under
 - Cost model: `config/research/cost_profiles.yaml`; Gate C thresholds: `config/research/profiles/vm_ul6_strict.yaml`.
 - MakerEngine needs local ClickHouse: `docker compose up -d clickhouse`.
 - MakerEngine (`ClickHouseSource`) and the queue calibration read ClickHouse only through `research.data_pipeline.reader.GovernedReader`. It applies the session rule (TAIFEX windows plus the XTAI calendar; no calendar is an error), dedup `content_multiplicity_v1` for ticks and the BidAsk snapshot rule, and orders rows by `exch_ts, ingest_ts, seq_no`. A date is a trading day: `[previous trading day 14:00, D 14:00)` Taipei, so the night session belongs to the next trading day. `ClickHouseSource.reads` records what each read fetched, filtered and deduplicated. Prices stay at the ClickHouse x1,000,000 scale.
+- `research.backtest.taker_sim.TakerSim` is the taker simulator that books exchange-model fills: the `HftNativeRunner` signal ladder sent as IOC orders at the touch, per-contract costs from the cost profile, one dated row per trading day, Sharpe on the daily series. Gate C's taker `gate_c.sharpe_oos` (and the scorecard `sharpe_oos` Gate D reads) comes from it; `HftNativeRunner`'s mid-to-mid Sharpe is screening only (`gate_c.screening_sharpe_oos`). Costs are per contract from the cost profile everywhere; the bps fee and rebate parameters are gone.
 - A maker `instrument: <ROOT>_frontmonth` (e.g. `TMF_frontmonth`) runs on one series rolled across contract months (ADR-004, `MakerEngine.run_rolled`). The roll rule is pre-registered in `config/research/protocols/front_month_roll_v1.yaml` and matches the live R1 binding: trading day D runs on the contract with the earliest delivery date on or after D and covers `[previous trading day 14:00, D 14:00)` Taipei, so `n_days` counts trading days across contracts. On a delivery day the series moves to the next month at 13:30, as live R1 does, and that day's row sums its two segments. Each segment starts flat (the strategy is flattened too). Each run records the protocol's sha256 in its RunStamp and the contracts in `details.roll`; a protocol or calendar that cannot be used, or a scheduled segment with no events of its contract, makes the run INVALID. Never edit a protocol a run has used; add a `_v2`.
 - Each Gate C run is written once by `ExperimentTracker.log_run` to `<experiments_dir>/runs/<run_id>/` (`meta.json` with the RunStamp, `backtest_report.json`, `scorecard.json`). Strict runs use the evidence root (`HFT_RESEARCH_EVIDENCE_ROOT`) and seal the run with a `manifest.json`; see `src/hft_platform/alpha/evidence.py`.
 - Ad-hoc scripts in `research/tools/legacy/` are archived — **do not use for official results**.
@@ -166,8 +167,8 @@ token is accepted with a `DeprecationWarning` for one release.
 
 ### Backtest engine selection
 
-For the bias matrix (14× pessimistic to 577× optimistic across engines), calibration
-requirements, and the `BacktestContractSpec` config entrypoint, see
+For the bias matrix (14× pessimistic to 577× optimistic across engines), and calibration
+requirements, see
 [`docs/runbooks/backtest-engine-selection.md`](../docs/runbooks/backtest-engine-selection.md).
 
 ## One Factory Flow

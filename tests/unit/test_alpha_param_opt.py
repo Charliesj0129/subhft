@@ -45,8 +45,7 @@ class FakeBacktestConfig:
     """Minimal backtest config stub with fields used by _param_opt."""
 
     signal_threshold: float = 0.3
-    maker_fee_bps: float = -0.2
-    taker_fee_bps: float = 0.2
+    cost_per_side_pts: float | None = 0.75
     submit_ack_latency_ms: float = 36.0
     modify_ack_latency_ms: float = 43.0
     cancel_ack_latency_ms: float = 47.0
@@ -374,6 +373,25 @@ class TestEvaluateStressBacktest:
         assert out["passed"] is False
         assert out["checks"]["sharpe_resilience"] is False
 
+    def test_stress_keeps_a_gross_config_gross(self) -> None:
+        captured: list[Any] = []
+
+        class _CapturingRunner:
+            def __init__(self, alpha: Any, cfg: Any) -> None:
+                captured.append(cfg)
+
+            def run(self) -> FakeResult:
+                return FakeResult(sharpe_oos=1.0, max_drawdown=-0.05)
+
+        _evaluate_stress_backtest(
+            alpha="a",
+            base_cfg=FakeBacktestConfig(cost_per_side_pts=None),
+            base_result=FakeResult(),
+            config=_default_vcfg(stress_fee_multiplier=3.0),
+            runner_cls=_CapturingRunner,
+        )
+        assert captured[0].cost_per_side_pts is None
+
     def test_stress_config_applies_multipliers(self) -> None:
         """Verify the stress config applies fee and latency multipliers."""
         captured: list[Any] = []
@@ -386,8 +404,7 @@ class TestEvaluateStressBacktest:
                 return FakeResult(sharpe_oos=1.0, max_drawdown=-0.05)
 
         base_cfg = FakeBacktestConfig(
-            maker_fee_bps=-0.2,
-            taker_fee_bps=0.2,
+            cost_per_side_pts=0.75,
             submit_ack_latency_ms=36.0,
         )
         vcfg = _default_vcfg(stress_latency_multiplier=2.0, stress_fee_multiplier=3.0)
@@ -400,6 +417,5 @@ class TestEvaluateStressBacktest:
         )
         assert len(captured) == 1
         stress_cfg = captured[0]
-        assert stress_cfg.maker_fee_bps == pytest.approx(-0.6)
-        assert stress_cfg.taker_fee_bps == pytest.approx(0.6)
+        assert stress_cfg.cost_per_side_pts == pytest.approx(2.25)
         assert stress_cfg.submit_ack_latency_ms == pytest.approx(72.0)

@@ -8,6 +8,7 @@ from __future__ import annotations
 from hft_platform.backtest._hbt_utils import (
     build_lob_event,
     dispatch_strategy,
+    finish_run,
     logger,
     process_fills,
     validate_depth,
@@ -21,7 +22,7 @@ def run_feed(adapter: object) -> object:
         adapter: HftBacktestAdapter instance (duck-typed to avoid circular import).
 
     Returns:
-        Result of ``adapter.hbt.close()``.
+        Result of ``adapter.hbt.close()`` (via ``finish_run``).
     """
     logger.info("Starting HftBacktest simulation (feed mode)...")
     adapter._reset_equity_buffers()  # type: ignore[attr-defined]
@@ -47,4 +48,4 @@ def run_feed(adapter: object) -> object:
         process_fills(adapter, ts_ns, best_bid_int, best_ask_int)
         dispatch_strategy(adapter, event, feature_event)
 
-    return adapter.hbt.close()  # type: ignore[attr-defined]
+    return finish_run(adapter)

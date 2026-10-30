@@ -82,8 +82,6 @@ def add_common_research_pipeline_args(
     cmd.add_argument("--modify-ack-latency-ms", type=float, default=43.0)
     cmd.add_argument("--cancel-ack-latency-ms", type=float, default=47.0)
     cmd.add_argument("--live-uplift-factor", type=float, default=1.5)
-    cmd.add_argument("--maker-fee-bps", type=float, default=-0.2)
-    cmd.add_argument("--taker-fee-bps", type=float, default=0.2)
     cmd.add_argument("--stat-pvalue-threshold", type=float, default=0.1)
     cmd.add_argument("--min-stat-tests-pass", type=int, default=2)
     cmd.add_argument("--bootstrap-samples", type=int, default=1000)

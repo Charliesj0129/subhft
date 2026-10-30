@@ -143,6 +143,19 @@ def process_fills(adapter: object, ts_ns: int, best_bid: int, best_ask: int) -> 
 # ---------------------------------------------------------------------------
 # Strategy dispatch (was duplicated at lines 296-305 / 421-430)
 # ---------------------------------------------------------------------------
+def finish_run(adapter: object) -> object:
+    """Hand the strategy the final exchange state, then close the simulator.
+
+    The run loops call the strategy only on a two-sided book, so a fill that lands after
+    the last one is otherwise never seen. A strategy with ``on_feed_end(ts_ns)`` gets one
+    last call here, while the exchange state is still readable.
+    """
+    hook = getattr(adapter.strategy, "on_feed_end", None)  # type: ignore[attr-defined]
+    if hook is not None:
+        hook(int(adapter.hbt.current_timestamp))  # type: ignore[attr-defined]
+    return adapter.hbt.close()  # type: ignore[attr-defined]
+
+
 def dispatch_strategy(adapter: object, event: object, feature_event: object | None) -> None:
     """Call strategy.handle_event and execute returned intents."""
     intents = adapter.strategy.handle_event(adapter.ctx, event)  # type: ignore[attr-defined]

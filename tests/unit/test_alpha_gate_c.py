@@ -117,6 +117,51 @@ def _opt_pass(**kwargs: Any) -> dict[str, Any]:
     return {"passed": True, "selected_signal_threshold": 0.3}
 
 
+class _FakeFillResult:
+    """A fill-priced taker result: ``net`` points per trading day from 2026-04-01."""
+
+    method = "taker_ioc_touch_v1"
+
+    def __init__(self, net: list[float]):
+        self.net = list(net)
+
+    def daily_rows(self) -> list[dict[str, Any]]:
+        return [
+            {"date": f"2026-04-{i + 1:02d}", "net_pts": v, "pnl_pts": v, "n_contracts": 2, "fills": 2}
+            for i, v in enumerate(self.net)
+        ]
+
+    def n_is_days(self, split: float) -> int:
+        n = len(self.net)
+        return 0 if n < 2 else max(1, min(n - 1, int(n * split)))
+
+    def sharpe_split(self, split: float) -> tuple[float, float]:
+        k = self.n_is_days(split)
+
+        def sharpe(xs: list[float]) -> float:
+            a = np.asarray(xs, dtype=np.float64)
+            return float(a.mean() / a.std() * np.sqrt(252)) if a.size >= 2 and a.std() > 0 else 0.0
+
+        return sharpe(self.net[:k]), sharpe(self.net[k:])
+
+
+_PROFITABLE_DAYS = [3.0, 1.0, 4.0, 2.0, 5.0, 1.0, 3.0, 2.0, 4.0, 3.0]
+
+
+def _fill_sim(net: list[float]) -> Any:
+    calls: list[tuple] = []
+
+    def run(alpha: Any, cfg: Any, hbt_paths: list[str], cost_model: Any) -> _FakeFillResult:
+        calls.append((cfg, list(hbt_paths), cost_model))
+        return _FakeFillResult(net)
+
+    run.calls = calls  # type: ignore[attr-defined]  # test-only call log on the fake
+    return run
+
+
+_FAKE_COST = types.SimpleNamespace(cost_per_side_pts=0.75, label="TEST(comm=0.25,tax=0.5)")
+
+
 @pytest.fixture()
 def gate_c_mocks(monkeypatch, tmp_path):
     """Patch all external dependencies for Gate C."""
@@ -136,6 +181,8 @@ def gate_c_mocks(monkeypatch, tmp_path):
         "research.registry.scorecard.compute_scorecard",
         lambda *a, **kw: _FakeScorecard(),
     )
+    monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", _fill_sim(_PROFITABLE_DAYS))
+    monkeypatch.setattr("research.backtest.gate_c_runtime._load_taker_cost_profile", lambda instrument: _FAKE_COST)
     return tmp_path
 
 
@@ -174,13 +221,13 @@ class TestGateCCoreMetrics:
         assert report.gate == "Gate C"
         assert report.details["core_metrics_passed"] is True
 
-    def test_day_axis_sub_gates_error_on_per_tick_equity(self, gate_c_mocks):
-        # The taker runner's equity curve is per tick; differencing it is not a
-        # daily series, so day-axis sub-gates must report ERROR, not measure it.
+    def test_day_axis_sub_gates_measure_the_fill_priced_days(self, gate_c_mocks):
+        # Day-axis sub-gates read the dated fill-priced rows, never the per-tick
+        # mid-to-mid equity curve.
         report, *_ = _run(gate_c_mocks)
         outcomes = {e["name"]: e["outcome"] for e in report.details["sub_gates_advisory"]}
-        assert outcomes["sharpe_threshold"] == "error"
-        assert outcomes["winning_day_pct"] == "error"
+        assert outcomes["sharpe_threshold"] == "pass"
+        assert outcomes["winning_day_pct"] == "pass"
         assert report.details["verdict"]["verdict"] == "PASS"  # no profile: sub-gates are advisory
 
     def test_missing_mid_prices_makes_trend_check_error(self, gate_c_mocks, monkeypatch):
@@ -573,3 +620,115 @@ def test_taker_run_stamp_hashes_the_hftbt_npz_the_runner_reads(gate_c_mocks, mon
     assert all(datasets.values())
     assert logged["run_stamp"]["mode"] == "exploratory"
     assert logged["run_stamp"]["calibration"] == "uncalibrated"
+
+
+# ---------------------------------------------------------------------------
+# Fill-priced taker PnL (research v2 C2c)
+# ---------------------------------------------------------------------------
+
+
+def _check(report: GateReport, name: str) -> dict[str, Any]:
+    return next(e for e in report.details["gate_c_checks"] if e["name"] == name)
+
+
+class TestGateCFillPricedPnl:
+    def test_mid_to_mid_alone_cannot_pass_gate_c(self, gate_c_mocks, monkeypatch):
+        # The screening runner reports sharpe_oos 1.2; the fills lose money every day.
+        losing = [-3.0, -1.0, -4.0, -2.0, -5.0, -1.0, -3.0, -2.0, -4.0, -3.0]
+        monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", _fill_sim(losing))
+        report, *_ = _run(gate_c_mocks)
+
+        assert _check(report, "gate_c.screening_sharpe_oos")["outcome"] == "pass"
+        assert _check(report, "gate_c.sharpe_oos")["outcome"] == "fail"
+        assert report.passed is False
+        assert report.details["verdict"]["verdict"] == "KILL"  # a measured fail, not INVALID
+
+    def test_screening_sharpe_still_blocks(self, gate_c_mocks, monkeypatch):
+        class LosingScreen(_FakeRunner):
+            def run(self):
+                return _make_backtest_result(sharpe_oos=-1.0)
+
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", LosingScreen)
+        report, *_ = _run(gate_c_mocks)
+
+        assert _check(report, "gate_c.sharpe_oos")["outcome"] == "pass"
+        assert _check(report, "gate_c.screening_sharpe_oos")["metrics"]["method"] == "mid_to_mid_screening_v1"
+        assert report.passed is False
+
+    def test_reports_fill_priced_sharpe_and_labels_screening(self, gate_c_mocks):
+        report, *_ = _run(gate_c_mocks)
+        fill = report.details["fill_backtest"]
+
+        assert report.details["pnl_method"] == "taker_ioc_touch_v1"
+        assert fill["n_is_days"] == 7 and fill["n_oos_days"] == 3
+        assert report.details["sharpe_oos"] == pytest.approx(fill["sharpe_oos"])
+        assert report.details["sharpe_oos"] != pytest.approx(1.2)  # not the screening value
+        assert report.details["screening"] == {
+            "method": "mid_to_mid_screening_v1",
+            "sharpe_is": 1.5,
+            "sharpe_oos": 1.2,
+            "max_drawdown": -0.05,
+        }
+        assert fill["total_net_pts"] == pytest.approx(sum(_PROFITABLE_DAYS))
+
+    def test_scorecard_carries_the_fill_priced_sharpe_for_gate_d(self, gate_c_mocks, monkeypatch):
+        seen: list[dict] = []
+
+        def capture(payload, **kw):
+            seen.append(payload)
+            return _FakeScorecard()
+
+        monkeypatch.setattr("research.registry.scorecard.compute_scorecard", capture)
+        report, *_ = _run(gate_c_mocks)
+
+        assert seen[0]["sharpe_oos"] == pytest.approx(report.details["fill_backtest"]["sharpe_oos"])
+        assert seen[0]["sharpe_is"] == pytest.approx(report.details["fill_backtest"]["sharpe_is"])
+
+    def test_both_runs_are_costed_by_the_cost_profile(self, gate_c_mocks, monkeypatch):
+        sim = _fill_sim(_PROFITABLE_DAYS)
+        configs: list[Any] = []
+
+        class Recording(_FakeRunner):
+            def __init__(self, alpha, cfg):
+                super().__init__(alpha, cfg)
+                configs.append(cfg)
+
+        monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", sim)
+        monkeypatch.setattr("research.backtest.hft_native_runner.HftNativeRunner", Recording)
+        _run(gate_c_mocks)
+
+        assert configs[0].cost_per_side_pts == pytest.approx(0.75)
+        cfg, _paths, cost = sim.calls[0]
+        assert cost is _FAKE_COST
+        assert cfg.cost_per_side_pts == pytest.approx(0.75)
+
+    def test_missing_cost_profile_is_invalid(self, gate_c_mocks, monkeypatch):
+        def no_profile(instrument):
+            raise KeyError(instrument)
+
+        monkeypatch.setattr("research.backtest.gate_c_runtime._load_taker_cost_profile", no_profile)
+        report, *_ = _run(gate_c_mocks)
+
+        assert _check(report, "gate_c.sharpe_oos")["outcome"] == "error"
+        assert report.passed is False
+        assert report.details["verdict"]["verdict"] == "INVALID"
+
+    def test_failed_fill_run_is_invalid(self, gate_c_mocks, monkeypatch):
+        def broken(*args):
+            raise RuntimeError("exchange model started with position 1; a day must start flat")
+
+        monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", broken)
+        report, *_ = _run(gate_c_mocks)
+
+        entry = _check(report, "gate_c.sharpe_oos")
+        assert entry["outcome"] == "error"
+        assert "start flat" in entry["details"]
+        assert report.details["verdict"]["verdict"] == "INVALID"
+
+    def test_fewer_than_two_oos_days_is_insufficient(self, gate_c_mocks, monkeypatch):
+        monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", _fill_sim([2.0, 3.0, 1.0]))
+        report, *_ = _run(gate_c_mocks)
+
+        entry = _check(report, "gate_c.sharpe_oos")
+        assert entry["outcome"] == "insufficient_sample"
+        assert report.passed is False

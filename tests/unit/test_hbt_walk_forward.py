@@ -41,8 +41,6 @@ def _make_feed(path: Path, n: int, *, seed: int = 7) -> None:
 def _cfg(path: Path) -> BacktestConfig:
     return BacktestConfig(
         data_paths=[str(path)],
-        maker_fee_bps=0.0,
-        taker_fee_bps=0.0,
         signal_threshold=0.1,
         local_decision_pipeline_latency_us=0,
         submit_ack_latency_ms=0.0,
@@ -212,8 +210,6 @@ def test_backtest_run_auto_regime_split_populates_regime_metrics(tmp_path: Path,
         cfg = BacktestConfig(
             data_paths=[str(path)],
             signal_threshold=0.1,
-            maker_fee_bps=0.0,
-            taker_fee_bps=0.0,
             local_decision_pipeline_latency_us=0,
             submit_ack_latency_ms=0.0,
             modify_ack_latency_ms=0.0,
@@ -234,8 +230,6 @@ def test_backtest_run_auto_regime_split_false_skips_regime(tmp_path: Path, mock_
     cfg = BacktestConfig(
         data_paths=[str(path)],
         signal_threshold=0.1,
-        maker_fee_bps=0.0,
-        taker_fee_bps=0.0,
         local_decision_pipeline_latency_us=0,
         submit_ack_latency_ms=0.0,
         modify_ack_latency_ms=0.0,

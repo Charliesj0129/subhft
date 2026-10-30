@@ -18,9 +18,9 @@ import numpy as np
 class BacktestConfig:
     data_paths: list[str]
     is_oos_split: float = 0.7
-    maker_fee_bps: float = -0.2
-    taker_fee_bps: float = 0.2
-    sell_tax_bps: float = 0.0  # Sell-side tax (bps). 0 for futures; set >0 for TWSE equities
+    # Statutory cost per contract per side in points (``cost_models.load_cost_profile``:
+    # commission + tax). None = gross: the mid-to-mid screening curve charges nothing.
+    cost_per_side_pts: float | None = None
     signal_threshold: float = 0.3
     max_position: int = 5
     initial_equity: float = 1_000_000.0

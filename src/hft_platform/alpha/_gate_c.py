@@ -606,6 +606,67 @@ def _resolve_maker_latency_profile(
     return profile, None
 
 
+# The mid-to-mid runner (``HftNativeRunner``) sends no orders: it values a signal ladder
+# mid-to-mid and never pays the spread. Its numbers are screening only and are labelled
+# with this id; Gate C's PnL checks read the fill-priced taker backtest instead.
+SCREENING_METHOD_ID = "mid_to_mid_screening_v1"
+
+
+def _fill_backtest_eval(
+    run_taker_sim: Callable[..., Any] | None,
+    *,
+    alpha: Any,
+    cfg: Any,
+    hbt_paths: list[str],
+    cost_model: Any,
+    is_oos_split: float,
+    sharpe_oos_min: float,
+) -> tuple[dict, dict[str, Any], list[dict]]:
+    """``(gate_c.sharpe_oos check, details, dated daily rows)`` from the fill-priced backtest.
+
+    The check is ERROR when fills cannot be priced (no simulator, no cost profile, the run
+    failed) and INSUFFICIENT_SAMPLE with fewer than two out-of-sample trading days.
+    """
+    name = "gate_c.sharpe_oos"
+    if run_taker_sim is None:
+        return check_entry(name, Outcome.ERROR, details="no fill-priced taker backtest available"), {}, []
+    if cost_model is None:
+        detail = "no cost profile for the instrument; fills cannot be costed"
+        return check_entry(name, Outcome.ERROR, details=detail), {}, []
+    try:
+        sim = run_taker_sim(alpha, cfg, hbt_paths, cost_model)
+    except (RuntimeError, ValueError, OSError) as exc:
+        detail = f"fill-priced taker backtest failed: {exc}"
+        return check_entry(name, Outcome.ERROR, details=detail), {"error": str(exc)}, []
+    rows = list(sim.daily_rows())
+    n_is = int(sim.n_is_days(is_oos_split))
+    sharpe_is, sharpe_oos = sim.sharpe_split(is_oos_split)
+    n_oos = len(rows) - n_is
+    details: dict[str, Any] = {
+        "method": str(sim.method),
+        "n_trading_days": len(rows),
+        "n_is_days": n_is,
+        "n_oos_days": n_oos,
+        "sharpe_is": float(sharpe_is),
+        "sharpe_oos": float(sharpe_oos),
+        "total_net_pts": float(sum(float(r["net_pts"]) for r in rows)),
+        "n_contracts": int(sum(int(r["n_contracts"]) for r in rows)),
+        "cost_label": str(getattr(cost_model, "label", "")),
+        "daily_pnl": rows,
+    }
+    if n_oos < 2:
+        entry = check_entry(
+            name,
+            Outcome.INSUFFICIENT_SAMPLE,
+            metrics={"sample_count": n_oos, "required_n": 2},
+            details=f"{n_oos} out-of-sample trading day(s); daily Sharpe needs at least 2",
+        )
+        return entry, details, rows
+    entry = _threshold_check(name, sharpe_oos, sharpe_oos_min, at_least=True)
+    entry["metrics"]["method"] = str(sim.method)
+    return entry, details, rows
+
+
 def _check_taker_latency_profile(
     profile_id: str, resolve_profile: Callable[[str], dict[str, Any]]
 ) -> dict[str, Any] | None:
@@ -867,7 +928,7 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         report.details["experiment_meta_path"] = str(meta_path)
         return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)
     else:
-        # --- Taker path: existing hft_native_runner (unchanged logic) ---
+        # --- Taker path: mid-to-mid screening runner, then the fill-priced TakerSim ---
         from hft_platform.alpha.latency_profiles import resolve_profile
 
         latency_failure = _check_taker_latency_profile(str(config.latency_profile_id or ""), resolve_profile)
@@ -882,14 +943,23 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
                 "taker", "gate_c.latency_profile", latency_failure["reason"], instrument=instrument, **latency_failure
             )
 
+        taker_runtime = runtime.load_taker_runtime()
+        TakerEngine = taker_runtime.taker_engine
+        # The per-instrument cost profile. Missing (unknown instrument): the screening
+        # trips stay gross and the fill-priced check is ERROR; we never default to a
+        # stand-in cost model (goal 限制 §4).
+        _cost_model = None
+        try:
+            _cost_model = taker_runtime.load_cost_profile(instrument)
+        except (KeyError, FileNotFoundError):
+            _cost_model = None
+
         backtest_cfg = BacktestConfig(
             data_paths=resolved_data_paths,
             is_oos_split=float(config.is_oos_split),
             signal_threshold=float(config.signal_threshold),
             max_position=int(config.max_position),
-            maker_fee_bps=float(config.maker_fee_bps),
-            taker_fee_bps=float(config.taker_fee_bps),
-            sell_tax_bps=float(config.sell_tax_bps),
+            cost_per_side_pts=(float(_cost_model.cost_per_side_pts) if _cost_model is not None else None),
             latency_profile_id=str(config.latency_profile_id),
             local_decision_pipeline_latency_us=int(config.local_decision_pipeline_latency_us),
             submit_ack_latency_ms=float(config.submit_ack_latency_ms),
@@ -914,25 +984,12 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         # Enrich taker result with provenance (only if result is a dataclass instance)
         import dataclasses as _dc
 
-        taker_runtime = runtime.load_taker_runtime()
-        TakerEngine = taker_runtime.taker_engine
-
         if _dc.is_dataclass(base_result) and not isinstance(base_result, type):
             data_period = ""
             if resolved_data_paths:
                 from pathlib import Path as _Path
 
                 data_period = ",".join(str(_Path(p).stem) for p in resolved_data_paths)
-            # Round 40: thread the per-instrument cost profile so
-            # ``BacktestResult.trade_pnl`` reflects NET per-trip PnL.
-            # Missing profile (unknown instrument) falls back to gross
-            # mid-to-mid trips rather than fabricating a cost — goal
-            # 限制 §4.  We never default to a stand-in cost model.
-            _cost_model = None
-            try:
-                _cost_model = taker_runtime.load_cost_profile(instrument)
-            except (KeyError, FileNotFoundError):
-                _cost_model = None
             base_result = TakerEngine().enrich_result(
                 base_result,
                 instrument=instrument,
@@ -1045,6 +1102,29 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         trend_check = {"passed": False, "outcome": "error", "detail": "mid_prices_unavailable"}
     trend_entry = _dict_check("gate_c.trend_contamination", trend_check)
     trend_gate_passed = bool(trend_entry["passed"])
+    taker_thresholds = _merge_profile_thresholds(
+        {
+            "sharpe_is_min": float(config.min_sharpe_oos),
+            "sharpe_oos_min": float(config.min_sharpe_oos),
+            "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
+            "winning_day_pct_min": 55.0,
+            "ic_is_min": 0.03,
+            "ic_oos_min": 0.02,
+        },
+        config.profile,
+        strategy_type="taker",
+    )
+    # PnL is priced by the exchange model's fills (``gate_c.sharpe_oos``). The mid-to-mid
+    # screening Sharpe still has to clear the same floor, but it can never satisfy Gate C alone.
+    fill_entry, fill_details, fill_rows = _fill_backtest_eval(
+        taker_runtime.run_taker_sim,
+        alpha=alpha,
+        cfg=selected_cfg,
+        hbt_paths=hftbt_paths,
+        cost_model=_cost_model,
+        is_oos_split=float(config.is_oos_split),
+        sharpe_oos_min=float(taker_thresholds["sharpe_oos_min"]),
+    )
     scorecard_extra = {
         "walk_forward_sharpe_mean": (float(wf_result.fold_sharpe_mean) if wf_result is not None else None),
         "walk_forward_sharpe_std": (float(wf_result.fold_sharpe_std) if wf_result is not None else None),
@@ -1059,11 +1139,13 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     pool_signals = latest_signals() if callable(latest_signals) else {}
     pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
     data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
+    # Gate D reads ``sharpe_oos`` from this scorecard, so it carries the fill-priced value
+    # (None when fills could not be priced, which Gate D fails).
     scorecard = compute_scorecard(
         {
             "signals": result.signals,
-            "sharpe_is": result.sharpe_is,
-            "sharpe_oos": result.sharpe_oos,
+            "sharpe_is": fill_details.get("sharpe_is"),
+            "sharpe_oos": fill_details.get("sharpe_oos"),
             "ic_mean": result.ic_mean,
             "ic_std": result.ic_std,
             "turnover": result.turnover,
@@ -1090,22 +1172,13 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     }
     scorecard_path = experiments_base / "runs" / result.run_id / "scorecard.json"
 
-    taker_thresholds = _merge_profile_thresholds(
-        {
-            "sharpe_is_min": float(config.min_sharpe_oos),
-            "sharpe_oos_min": float(config.min_sharpe_oos),
-            "max_drawdown_pct": float(abs(config.max_abs_drawdown)) * 100,
-            "winning_day_pct_min": 55.0,
-            "ic_is_min": 0.03,
-            "ic_oos_min": 0.02,
-        },
-        config.profile,
-        strategy_type="taker",
+    screening_entry = _threshold_check(
+        "gate_c.screening_sharpe_oos", result.sharpe_oos, float(taker_thresholds["sharpe_oos_min"]), at_least=True
     )
+    screening_entry["metrics"]["method"] = SCREENING_METHOD_ID
     core_entries = [
-        _threshold_check(
-            "gate_c.sharpe_oos", result.sharpe_oos, float(taker_thresholds["sharpe_oos_min"]), at_least=True
-        ),
+        fill_entry,
+        screening_entry,
         _threshold_check(
             "gate_c.max_drawdown",
             result.max_drawdown,
@@ -1126,19 +1199,16 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     ]
 
     # --- Sub-gates (Plan C Task C10 + Slice A profile blocking) ---
-    # Day-axis sub-gates need one dated row per trading day. The taker runner's
-    # equity curve is per tick, so differencing it is not a daily series; with
-    # no dated rows those gates report ERROR instead of measuring ticks.
+    # Day-axis sub-gates read one dated row per trading day from the fill-priced
+    # backtest. The screening runner's equity curve is per tick and mid-to-mid, so
+    # it never feeds them; with no fill rows those gates report ERROR.
     _eq = getattr(result, "equity_curve", None)
-    _daily_rows = _dated_daily_rows(getattr(result, "daily_pnl", None))
-    _trade_pnl = getattr(result, "trade_pnl", None)
+    _daily_rows = _dated_daily_rows(fill_rows)
     _daily_payload: dict[str, Any] = (
         {"daily_pnl": _daily_rows}
         if _daily_rows
-        else {"daily_pnl_unavailable": "taker result has no dated per-day rows (equity_curve is per tick)"}
+        else {"daily_pnl_unavailable": "no fill-priced per-day rows (see gate_c.sharpe_oos)"}
     )
-    if _trade_pnl is not None:
-        _daily_payload["trade_pnl"] = list(_trade_pnl)
 
     taker_sub_gates, taker_blocking, taker_verdict = _invoke_sub_gates_with_verdict(
         strategy_type="taker",
@@ -1152,10 +1222,8 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "calibration_profile_id": "uncalibrated",
             "data_source": "hftbt_npz",
             "latency_profile": getattr(result, "latency_profile", ""),
-            "pnl_pts": (
-                float(result.equity_curve[-1] - result.equity_curve[0]) if _eq is not None and len(_eq) > 1 else 0.0
-            ),
-            "n_fills": int(len(_trade_pnl)) if _trade_pnl is not None else 0,
+            "pnl_pts": float(fill_details.get("total_net_pts", 0.0)),
+            "n_fills": int(sum(int(r.get("fills", 0)) for r in _daily_rows)),
             "n_trading_days": len({row["date"] for row in _daily_rows}),
             "equity_curve": _eq,
             "ic_is": float(result.ic_mean) if result.ic_mean is not None else None,
@@ -1176,8 +1244,17 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         details={
             "run_id": result.run_id,
             "config_hash": result.config_hash,
-            "sharpe_is": result.sharpe_is,
-            "sharpe_oos": result.sharpe_oos,
+            "sharpe_is": fill_details.get("sharpe_is"),
+            "sharpe_oos": fill_details.get("sharpe_oos"),
+            "pnl_method": fill_details.get("method"),
+            "fill_backtest": fill_details,
+            # Mid-to-mid runner numbers: screening only, never Gate C's PnL.
+            "screening": {
+                "method": SCREENING_METHOD_ID,
+                "sharpe_is": result.sharpe_is,
+                "sharpe_oos": result.sharpe_oos,
+                "max_drawdown": result.max_drawdown,
+            },
             "ic_mean": result.ic_mean,
             "ic_std": result.ic_std,
             "turnover": result.turnover,
@@ -1256,8 +1333,9 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         config_hash=result.config_hash,
         data_paths=resolved_data_paths,
         metrics={
-            "sharpe_is": float(result.sharpe_is),
-            "sharpe_oos": float(result.sharpe_oos),
+            "sharpe_is": float(fill_details.get("sharpe_is", float("nan"))),
+            "sharpe_oos": float(fill_details.get("sharpe_oos", float("nan"))),
+            "screening_sharpe_oos": float(result.sharpe_oos),
             "ic_mean": float(result.ic_mean),
             "ic_std": float(result.ic_std),
             "turnover": float(result.turnover),
