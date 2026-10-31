@@ -135,6 +135,10 @@ discipline-strict: ## Run discipline enforcement in strict mode (warnings block 
 discipline-hft: ## HFT hard-fail discipline gate (incl. HFT-P004 no-float-money)
 	uv run python scripts/check_discipline.py --ci
 
+.PHONY: float-gate
+float-gate: ## Float gate for order/risk/execution/normalizer (explicit exemptions, no grep -v)
+	$(PY) scripts/check_float_in_financial_paths.py
+
 git-precheck: ## Run git precondition checks (AWG-01/03) before merge/rebase
 	bash scripts/check_git_preconditions.sh --pre-merge
 
@@ -162,7 +166,7 @@ git-bundle-backup: ## Verified git bundle backup to DEST (existing dir OUTSIDE t
 	@test -n "$(DEST)" || { echo "DEST=<existing dir outside the repo> is required"; exit 2; }
 	$(PY) scripts/git_bundle_backup.py --dest "$(DEST)"
 
-check: lint typecheck discipline dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
+check: lint typecheck discipline float-gate dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
 
 # ============================================================================
 # Benchmarks
