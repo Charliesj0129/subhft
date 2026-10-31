@@ -341,6 +341,8 @@ Shadow deployment note:
 | `HFT_HALT_AUTO_FLATTEN` | `0` | `1`／`true`／`yes`／`on` = 啟用 HALT 自動平倉；預設關閉（`risk/halt_flattener.py`） | 事故排查時確認未啟用；程式不讀 `HFT_AUTO_FLATTEN_DISABLED` |
 | `HFT_LIVE_CONFIRM` | `0` | `1` = 確認 live 模式啟動（防止誤操作） | 生產環境設 `1` |
 | `HFT_SESSION_GOVERNOR_ENABLED` | `0` | `1` = 啟用 session governor 自動管理 | 多帳號場景使用 |
+| `HFT_SHUTDOWN_GRACE_TIMEOUT_S` | `90` | 收到 SIGTERM 後，`hft_platform.main` 等待 `HFTSystem.stop_async` 完成的秒數（`src/hft_platform/main.py`）；逾時只記 `stop_async_timeout_on_shutdown` 後離開 | 調高時，`docker-compose.yml` 的 `hft-engine.stop_grace_period`（預設 `100s`）要同步調高並維持高出 5 秒以上，否則 Docker 會在關機流程中途 SIGKILL |
+| `HFT_RECORDER_SHUTDOWN_TIMEOUT_S` | `60` | recorder 關機時 drain 與 flush 的秒數上限（`recorder/worker.py`）；`HFTSystem.stop_async` 等 recorder 任務時再多給 5 秒（`services/system.py`） | 加 5 秒後必須小於 `HFT_SHUTDOWN_GRACE_TIMEOUT_S`，否則會被外層預算截斷；`tests/unit/test_compose_engine_stop_grace_period.py` 檢查預設值 |
 
 ---
 
