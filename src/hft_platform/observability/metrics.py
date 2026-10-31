@@ -358,6 +358,7 @@ class MetricsRegistry:
                 _pn("risk_dlq_revalidation_rejected_total"),
                 _pn("risk_dlq_overflow_total"),
                 _pn("fill_dlq_overflow_total"),
+                _pn("fill_dlq_persist_failed_total"),
                 _pn("deferred_terminal_overflow_total"),
                 _pn("audit_dropped_total"),
                 _pn("intent_queue_full_total"),
@@ -1840,6 +1841,10 @@ class MetricsRegistry:
         self.fill_dlq_overflow_total = Counter(
             _pn("fill_dlq_overflow_total"),
             "Orphaned fill DLQ overflow evictions (oldest fill silently dropped)",
+        )
+        self.fill_dlq_persist_failed_total = Counter(
+            _pn("fill_dlq_persist_failed_total"),
+            "Orphaned fills quarantined because they could not be serialised or written to the DLQ file",
         )
         self.deferred_terminal_overflow_total = Counter(
             _pn("deferred_terminal_overflow_total"),

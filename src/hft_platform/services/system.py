@@ -3034,7 +3034,10 @@ class HFTSystem:
         try:
             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
-            get_orphaned_fill_dlq().persist()
+            _fill_dlq = get_orphaned_fill_dlq()
+            _fill_dlq.persist()
+            if _fill_dlq.last_unrecovered:
+                logger.critical("fill_dlq_fills_without_durable_copy_at_shutdown", count=_fill_dlq.last_unrecovered)
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed_shutdown", error=str(exc))
 
