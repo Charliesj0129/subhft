@@ -219,7 +219,7 @@ Do not draw what one sentence already says.
 | ClickHouse research data, book depth, export | `.agent/rules/70-research-data.md` |
 | Changing data flow | `docs/architecture/pipeline-chains.md` |
 | Shioaji SDK behavior | `docs/runbooks/shioaji-version-diff.md` |
-| Alpha lifecycle | `docs/runbooks/alpha-development-workflow.md`, `research/README.md` |
+| Alpha lifecycle, verdicts, gates | `docs/runbooks/alpha-development-workflow.md` (the research handbook) |
 | Live-affecting config change | `docs/operations/change-control.md` |
 | Known risks, past failed attempts | `.agent/memory/current-risks.md`, `.agent/memory/failed-attempts.md` |
 | Task-specific procedure | the matching skill in `.agent/skills/` (the description says when) |

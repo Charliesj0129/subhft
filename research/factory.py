@@ -53,63 +53,34 @@ ALLOWED_ROOT_FILES: set[str] = {
     "CLAUDE.md",
     "factory.py",
     "pipeline.py",
-    "SOP.md",
 }
 
 CORE_TOOL_FILES: set[str] = {
     "alpha_scaffold.py",
     "auto_scaffold.py",
     "batch_search.py",
-    "alpha_trader_walk_forward.py",
     "batch_alpha_eval.py",
     "bayesian_opt.py",
     "ch_batch_export.py",
-    "ch_l2_export.py",
-    "cross_signal_explorer.py",
     "data_governance.py",
     "data_ingest.py",
-    "depth_alpha_explorer.py",
-    "enrich_data_for_alpha.py",
-    "eval_batch_3_depth.py",
-    "eval_batch_9_price.py",
     "factor_registry.py",
     "feature_benchmark_matrix.py",
     "feature_promotion_check.py",
     "feature_screener.py",
     "fetch_paper.py",
     "hypothesis_queue.py",
-    "kalman_filter.py",
     "latency_profiles.py",
     "lifecycle_audit.py",
     "maintenance.py",
-    "microstructure_explorer.py",
-    "mm_diagnostics.py",
-    "mm_param_sweep.py",
-    "mm_walk_forward.py",
-    "momentum_meanrevert_explorer.py",
-    "ofi_alpha_explorer.py",
     "paper_autofill.py",
     "paper_prototype.py",
     "paper_trade.py",
     "prepare_governed_data.py",
     "regime_alpha.py",
     "render_promotion_report.py",
-    "run_alpha_trader_backtest.py",
-    "run_hftbt_realism_check.py",
-    "run_microprice_gates.py",
-    "run_microprice_gates_fast.py",
-    "run_microprice_promotion.py",
-    "run_mm_backtest.py",
-    "run_mm_portfolio.py",
-    "run_production_alpha_screen.py",
-    "run_recent_alpha_backtests.py",
-    "spread_microprice_explorer.py",
     "synth_lob_gen.py",
-    "toxicity_alpha_explorer.py",
-    "toxicity_ii_explorer.py",
     "vm_ul.py",
-    "volatility_regime_explorer.py",
-    "volume_proxy_explorer.py",
 }
 
 LEGACY_ALPHA_REPORT_FILES: set[str] = {
@@ -240,13 +211,13 @@ def _audit_alpha_contract(errors: list[str], warnings: list[str], details: dict[
         warnings.append(
             "Manifest skills_used is empty for: "
             + ", ".join(sorted(alphas_missing_skills))
-            + ". Add skill attribution per SOP Stage 2 (iterative-retrieval, hft-backtest-engine, etc.)."
+            + ". Add skill attribution to the alpha manifest (for example hft-alpha-research, hft-backtest)."
         )
     if alphas_missing_roles:
         warnings.append(
             "Manifest roles_used is empty for: "
             + ", ".join(sorted(alphas_missing_roles))
-            + ". Add role attribution per SOP Stage 2 (planner, code-reviewer, etc.)."
+            + ". Add role attribution to the alpha manifest (for example planner, code-reviewer)."
         )
 
     details["alpha_contract"] = {

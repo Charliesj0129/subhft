@@ -163,13 +163,10 @@ def run_gate_a(
     skills_warnings: list[str] = []
     if not skills_used:
         skills_warnings.append(
-            "manifest.skills_used is empty — add skill attribution per SOP Stage 2"
-            " (e.g. iterative-retrieval, hft-backtest-engine)"
+            "manifest.skills_used is empty — add skill attribution (e.g. iterative-retrieval, hft-backtest-engine)"
         )
     if not roles_used:
-        skills_warnings.append(
-            "manifest.roles_used is empty — add role attribution per SOP Stage 2 (e.g. planner, code-reviewer)"
-        )
+        skills_warnings.append("manifest.roles_used is empty — add role attribution (e.g. planner, code-reviewer)")
     try:
         from hft_platform.contracts.alpha import VALID_ROLES, VALID_SKILLS
 

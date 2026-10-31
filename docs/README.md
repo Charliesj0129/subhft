@@ -23,7 +23,7 @@
 
 | Doc | Description |
 |-----|-------------|
-| [../research/SOP.md](../research/SOP.md) | Research SOP (Paper to Live Factory, 8 stages) |
+| [runbooks/alpha-development-workflow.md](runbooks/alpha-development-workflow.md) | Alpha research handbook (lifecycle, verdicts, Gates A-F) |
 | [HFTBacktest Integration](guides/hftbacktest-integration.md) | Backtest workflow |
 | [Feed Adapter](guides/feed-adapter.md) | Feed adapter internals |
 

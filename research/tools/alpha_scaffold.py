@@ -100,7 +100,7 @@ def main() -> int:
     print("[INFO] Next: generate or link real data (Stage 3)")
     print(f"  python -m research data-check {alpha_id}")
     print(f"  # or: python -m research generate-sim-data {alpha_id} --bars 10000")
-    print("[INFO] Update manifest roles_used/skills_used in impl.py per SOP Stage 2")
+    print("[INFO] Update manifest roles_used/skills_used in impl.py")
     return 0
 
 

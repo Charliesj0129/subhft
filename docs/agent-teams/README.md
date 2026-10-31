@@ -23,7 +23,7 @@ Agent teams 已透過 `.claude/settings.local.json` 啟用:
 **團隊**: Team Lead (Sonnet) + Researcher + Challenger + Execution (全 Opus)
 **模式**: 三角牽制 — Challenger 全程質疑，Execution 驗證可交易性
 **你的角色**: 每個 stage 結束後審查報告，決定是否推進
-**SOP**: `research/SOP.md` 8-stage pipeline
+**手冊**: `docs/runbooks/alpha-development-workflow.md`
 **詳細設計**: `docs/superpowers/specs/2026-03-22-agent-teams-design.md#team-1-alpha-research`
 
 ### 2. Code Review — 多維度平行審查
@@ -88,6 +88,6 @@ Agent teams 已透過 `.claude/settings.local.json` 啟用:
 | 文件 | 路徑 |
 |------|------|
 | 完整設計 spec | `docs/superpowers/specs/2026-03-22-agent-teams-design.md` |
-| Research SOP | `research/SOP.md` |
+| Research handbook | `docs/runbooks/alpha-development-workflow.md` |
 | HFT Constitution | `CLAUDE.md` |
 | Agent Rules | `.agent/rules/` |

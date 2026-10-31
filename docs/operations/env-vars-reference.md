@@ -435,6 +435,7 @@ Slice B 引入 Maker 策略 backtest 的殘餘部位 MtM、佇列校準、成本
 |---|---|---|---|
 | `HFT_RESEARCH_EVIDENCE_ROOT` | 無（governed run 必填）；exploratory 讀取時為 `~/hft_research_evidence` | strict（governed）research run 的輸出根：`runs/<run_id>/`、`validations/`，每個目錄以 `manifest.json` 封存，判定事件追加到 `ledger/verdicts.jsonl` | 指向私有 git repo；未設定、相對路徑或位於 repo 內時 strict run 以 rc 2 停止 |
 | `HFT_RESEARCH_DATA_ROOT` | `~/hft_research_data` | research 資料集根目錄（不進 git） | 同上，必須位於 repo 之外 |
+| `HFT_RESEARCH_ALLOW_TRIAGE` | `0` | 設為 `1` 才允許 `research.pipeline triage` / `hft alpha pipeline triage`（略過 gate 的除錯模式，輸出永遠不可 promote）；實作：`research/pipeline.py`、`research/registry/alpha_cli.py` | 只在本機除錯時臨時設定，不寫入任何 env 檔 |
 
 ---
 

@@ -1,7 +1,7 @@
 # research/ — governed alpha research
 
-Project-wide rules: `../AGENTS.md`. Process and stages: `README.md`. Only the
-differences here.
+Project-wide rules: `../AGENTS.md`. Process, verdict vocabulary and gates: the
+handbook `../docs/runbooks/alpha-development-workflow.md`. Only the differences here.
 
 - Research ClickHouse raw prices are **x1,000,000**; platform event prices are
   x10000. Convert explicitly; option strikes use a different scale again.

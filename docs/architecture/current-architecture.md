@@ -284,7 +284,7 @@ Closes the residual-MtM / queue-calibration / cost-uncertainty / strict-latency 
 
 ### 7C. Slice D — Alpha Factory MVP (2026-05-05)
 
-Adds an offline alpha-factory upstream of promotion: cheap pre-screen, append-only kill ledger, and correlation clustering (Slice D's minimal DSL, `alpha/dsl/`, had no importer and was removed in research v2 C4). Operator runbook: `docs/runbooks/alpha-factory.md`.
+Adds an offline alpha-factory upstream of promotion: cheap pre-screen, append-only kill ledger, and correlation clustering (Slice D's minimal DSL, `alpha/dsl/`, had no importer and was removed in research v2 C4). Operator reference: `docs/runbooks/alpha-development-workflow.md` section 9.
 
 | Component | Source | Purpose |
 | --- | --- | --- |
