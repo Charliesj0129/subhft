@@ -357,25 +357,29 @@ class SymbolMetadata:
         return parsed
 
     def price_scale(self, symbol: str) -> int:
+        """Price scale for *symbol*: its ``price_scale``, else ``DEFAULT_SCALE`` (x10000).
+
+        A ``tick_size`` is a price step, not a scale, and is never used to derive
+        one. It used to be (``1 / tick_size``), so a futures entry with
+        ``tick_size: 1`` and no ``price_scale`` resolved to scale 1 and every
+        price of that symbol was read 10,000 times too small. Event prices are
+        x10000 (Law 4). A symbol with a ``tick_size`` but no ``price_scale`` is logged once
+        per load; the result is cached, so this runs once per symbol, not per tick.
+        """
         cached = self._price_scale_cache.get(symbol)
         if cached is not None:
             return cached
-        # Avoid creating empty dict
         entry = self.meta.get(symbol)
         if entry:
-            if "price_scale" in entry:
-                scale = int(entry.get("price_scale", self.DEFAULT_SCALE))
+            raw = entry.get("price_scale")
+            if raw is not None:
+                scale = int(raw)
                 self._price_scale_cache[symbol] = scale
                 return scale
-            tick_size = entry.get("tick_size")
-            if tick_size:
-                try:
-                    scale = int(round(1 / float(tick_size)))
-                    if scale > 0:
-                        self._price_scale_cache[symbol] = scale
-                        return scale
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pass
+            if entry.get("tick_size") is not None:
+                # Only a row that carries a tick but no scale changed meaning (it used to resolve to 1/tick);
+                # rows with neither were always x10000 and would just repeat on every reload.
+                logger.warning("price_scale_missing_default_used", symbol=symbol, default=self.DEFAULT_SCALE)
         self._price_scale_cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
 
