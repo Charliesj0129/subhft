@@ -694,7 +694,7 @@ def test_selection_clustered_sharpe_uses_full_trading_day_axis() -> None:
 def test_hash_chain_ledger_detects_tamper(tmp_path) -> None:
     path = tmp_path / "trials.jsonl"
     ledger = HashChainLedger(path)
-    assert ledger.append({"candidate_id": "a", "stage": "discovery", "status": "killed"})
+    assert ledger.append({"candidate_id": "a", "stage": "discovery", "status": "screened_out"})
     assert not ledger.append({"candidate_id": "a", "stage": "discovery", "status": "passed"})
     row = json.loads(path.read_text())
     row["status"] = "passed"
@@ -787,16 +787,16 @@ def test_checkpoint_cadence_counts_post_discovery_ledger_rows(monkeypatch, tmp_p
     monkeypatch.setattr(runner, "CHECKPOINT_TRIALS", 2)
     run = MiningRun(RunConfig(run_dir=run_dir, max_candidates=2, seeds=(1, 2, 3)))
     for candidate_id in ("discovery-1", "discovery-2"):
-        run._ledger.append({"candidate_id": candidate_id, "stage": "discovery", "status": "killed"})
+        run._ledger.append({"candidate_id": candidate_id, "stage": "discovery", "status": "screened_out"})
     run._checkpoint(stage="discovery", state={})
     discovery_checkpoint = json.loads(run.checkpoint_path.read_text())
 
-    run._ledger.append({"candidate_id": "selection-1", "stage": "selection", "status": "killed"})
+    run._ledger.append({"candidate_id": "selection-1", "stage": "selection", "status": "screened_out"})
     run._checkpoint(stage="selection", state={"selection_passed": []})
     assert json.loads(run.checkpoint_path.read_text()) == discovery_checkpoint
     assert run._active_checkpoint_stage == "selection"
 
-    run._ledger.append({"candidate_id": "selection-2", "stage": "selection", "status": "killed"})
+    run._ledger.append({"candidate_id": "selection-2", "stage": "selection", "status": "screened_out"})
     run._checkpoint(stage="selection", state={"selection_passed": []})
     selection_checkpoint = json.loads(run.checkpoint_path.read_text())
     assert selection_checkpoint["stage"] == "selection"
@@ -881,7 +881,7 @@ def test_resume_routes_locked_checkpoint_without_repeating_selection(monkeypatch
         kill=kill,
         locked=locked,
         stage="locked_validation",
-        status="killed",
+        status="screened_out",
     )
     run = MiningRun(RunConfig(run_dir=run_dir, max_candidates=1, seeds=(1, 2, 3), resume=True))
     run._checkpoint(
@@ -916,7 +916,7 @@ def test_selection_rejects_ledger_candidate_outside_frozen_discovery(tmp_path) -
         {
             "candidate_id": "unexpected",
             "stage": "selection",
-            "status": "killed",
+            "status": "screened_out",
             "candidate": asdict(
                 Candidate(
                     candidate_id="unexpected",
@@ -959,14 +959,14 @@ def test_locked_rejects_checkpoint_candidate_outside_frozen_selection(tmp_path) 
         kill=KillMetrics(0.02, 0.02, 0.02, 1.0, 2.0, 1.0, 0.1, 8.0, True, ()),
         locked=LockedMetrics(-1.0, 0.5, 0.5, 0.0, 0.0, (0.0,) * 5, False),
         stage="locked_validation",
-        status="killed",
+        status="screened_out",
     )
 
     with pytest.raises(RunIntegrityError, match="outside the frozen selection set"):
         run._locked(_dataset(), [], [restored])
 
 
-def test_discovery_trend_pollution_uses_killed_horizon_metrics(tmp_path) -> None:
+def test_discovery_trend_pollution_uses_screened_out_horizon_metrics(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     _write_dataset(run_dir)
@@ -999,7 +999,7 @@ def test_discovery_trend_pollution_uses_killed_horizon_metrics(tmp_path) -> None
             {
                 "candidate_id": candidate.candidate_id,
                 "stage": "discovery",
-                "status": "passed" if passed else "killed",
+                "status": "passed" if passed else "screened_out",
                 "candidate": asdict(candidate),
                 "metrics": asdict(kill),
             }
@@ -1497,7 +1497,7 @@ def test_bounded_run_writes_kill_report_when_first_hypothesis_fails(monkeypatch,
     assert status["run_manifest"]["edge_thresholds"]["TXF"]["minimum_edge_nwd"] == 200.0
     assert status["run_manifest"]["dataset_date_from"] == "2026-03-19"
     assert status["run_manifest"]["dataset_date_to"] == "2026-07-24"
-    assert report["funnel"]["discovery"]["killed"] == 1
+    assert report["funnel"]["discovery"]["screened_out"] == 1
     assert report["gate_failure_histogram"]
 
 
@@ -1599,7 +1599,7 @@ def _locked_with_restored_pvalue(tmp_path, *, prior_locked_ids: tuple[str, ...])
     _write_dataset(run_dir)
     run = MiningRun(RunConfig(run_dir=run_dir, max_candidates=1, seeds=(1, 2, 3)))
     for prior in prior_locked_ids:
-        run._ledger.append({"candidate_id": prior, "stage": "locked_validation", "status": "killed"})
+        run._ledger.append({"candidate_id": prior, "stage": "locked_validation", "status": "screened_out"})
     candidate = Candidate(
         candidate_id="candidate-bh",
         root="TXF",
@@ -1618,7 +1618,7 @@ def _locked_with_restored_pvalue(tmp_path, *, prior_locked_ids: tuple[str, ...])
         kill=kill,
         locked=LockedMetrics(-1.0, 0.05, 0.01, 0.0, 0.0, (0.0,) * 5, False),
         stage="locked_validation",
-        status="killed",
+        status="screened_out",
     )
     run._locked(_dataset(), [selection], [restored])
     (row,) = [r for r in run._ledger.rows(stage="locked_validation") if r["candidate_id"] == "candidate-bh"]

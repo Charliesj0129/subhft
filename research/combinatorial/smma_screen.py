@@ -33,6 +33,7 @@ from research.combinatorial.smma import (
 from research.combinatorial.smma_alpha_adapter import SMMACompiledAlpha
 from research.combinatorial.smma_dataset import ROOTS, BarDataset, load_governed_dataset
 from research.combinatorial.smma_runner import (
+    SCREENED_OUT,
     SUPPORTED_PRIMARY_TIMEFRAMES_MINUTES,
     Candidate,
     CandidateResult,
@@ -337,7 +338,7 @@ def run_smma_screen(
             candidate=candidate,
             kill=primary.kill,
             stage="screen",
-            status="passed" if gate_c_passed else "killed",
+            status="passed" if gate_c_passed else SCREENED_OUT,
         ),
         evaluation_scope="pre_final_screen",
     )

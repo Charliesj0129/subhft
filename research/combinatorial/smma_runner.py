@@ -110,6 +110,11 @@ RSS_PAUSE_BYTES = 18 * 1024**3
 RSS_STOP_BYTES = 20 * 1024**3
 OUTPUT_STOP_BYTES = 100 * 1024**3
 
+# A candidate that fails a screen is screened out, not killed: KILL is the governed
+# verdict (status.py), and these rows are search-stage dispositions.
+SCREENED_OUT = "screened_out"
+_TESTED_STATUSES = frozenset({"passed", SCREENED_OUT})
+
 _CODE_FILES: tuple[str, ...] = (
     "research/combinatorial/smma.py",
     "research/combinatorial/smma_alpha_adapter.py",
@@ -837,7 +842,7 @@ def _evaluate_candidate(
         candidate=candidate,
         kill=kill,
         stage=split_name,
-        status="passed" if kill.passed else "killed",
+        status="passed" if kill.passed else SCREENED_OUT,
         failure_reason=",".join(kill.reasons),
     )
 
@@ -1565,7 +1570,7 @@ class MiningRun:
                 "effective_trials_total": max(1, sum(self._effective_trial_counts.values())),
                 "expression_supply_by_group": dict(sorted(self._expression_supply.items())),
                 "hypotheses_considered": len(discovery_rows),
-                "raw_trials_evaluated": sum(row.get("status") in {"passed", "killed"} for row in discovery_rows),
+                "raw_trials_evaluated": sum(row.get("status") in _TESTED_STATUSES for row in discovery_rows),
                 "exact_cut_duplicates": sum(row.get("status") == "deduplicated" for row in discovery_rows),
                 "entry_rule_version": ENTRY_RULE_VERSION,
                 "entry_comparator": ">=",
@@ -1576,7 +1581,7 @@ class MiningRun:
         _atomic_json(self.run_dir / "search_space.json", search_space)
         pollution_groups: dict[tuple[Any, ...], dict[str, CandidateResult]] = {}
         discovery_results = [
-            _result_from_kill_ledger_row(row) for row in discovery_rows if row.get("status") in {"passed", "killed"}
+            _result_from_kill_ledger_row(row) for row in discovery_rows if row.get("status") in _TESTED_STATUSES
         ]
         for result in discovery_results:
             candidate = result.candidate
@@ -1847,7 +1852,7 @@ class MiningRun:
         recorded = {
             candidate_id: _result_from_kill_ledger_row(row)
             for candidate_id, row in selection_rows.items()
-            if row.get("status") in {"passed", "killed"}
+            if row.get("status") in _TESTED_STATUSES
         }
         if not set(selection_rows).issubset(discovery_ids):
             raise RunIntegrityError("selection ledger contains a candidate outside the frozen discovery set")
@@ -2054,7 +2059,7 @@ class MiningRun:
                     kill=selected.kill,
                     locked=locked,
                     stage="locked_validation",
-                    status="passed" if locked.passed else "killed",
+                    status="passed" if locked.passed else SCREENED_OUT,
                 )
             locked_results.append(result)
             pvalues.append(max(locked.bootstrap_pvalue, locked.permutation_pvalue))
@@ -2075,7 +2080,7 @@ class MiningRun:
                 {
                     "candidate_id": result.candidate.candidate_id,
                     "stage": "locked_validation",
-                    "status": "passed" if result in survivors else "killed",
+                    "status": "passed" if result in survivors else SCREENED_OUT,
                     "candidate": asdict(result.candidate),
                     "metrics": metrics_to_dict(result.locked) if result.locked else {},
                     "bh_q10_passed": bool(bh_pass),
@@ -2609,9 +2614,9 @@ class MiningRun:
             stage = str(row.get("stage", "unknown"))
             status = str(row.get("status", "unknown"))
             stages.setdefault(stage, Counter())[status] += 1
-            if status not in {"passed", "killed"}:
+            if status not in _TESTED_STATUSES:
                 dispositions.setdefault(stage, Counter())[status] += 1
-            if status != "killed":
+            if status != SCREENED_OUT:
                 continue
             reasons = [value for value in str(row.get("failure_reason", "")).split(",") if value]
             metrics = row.get("metrics")
@@ -2692,7 +2697,7 @@ class MiningRun:
                 "minimum_days_for_promotion": MIN_DAYS_FOR_PROMOTION,
                 "unique_hypotheses": self._ledger.unique_candidates,
                 "evaluated_hypotheses": sum(
-                    row.get("status") in {"passed", "killed"} for row in self._ledger.rows(stage="discovery")
+                    row.get("status") in _TESTED_STATUSES for row in self._ledger.rows(stage="discovery")
                 ),
                 "survivors": [item.to_dict() for item in survivors],
                 "survivor_stage": (
