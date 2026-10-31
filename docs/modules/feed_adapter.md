@@ -105,8 +105,8 @@ Same structure as Shioaji. Pre-allocated translation buffers, 10s cooldown.
 |-----------|---------|---------|
 | Trading hours | `HFT_RECONNECT_HOURS` | `08:30-13:35` |
 | Secondary hours | `HFT_RECONNECT_HOURS_2` | — |
-| Cooldown | `HFT_RECONNECT_COOLDOWN` | `60s` |
-| Initial backoff | `HFT_RECONNECT_BACKOFF_S` | `5s` |
+| Cooldown | `HFT_RECONNECT_COOLDOWN` | `30s` |
+| Initial backoff | `HFT_RECONNECT_BACKOFF_S` | `30s` |
 | Max backoff | `HFT_RECONNECT_BACKOFF_MAX_S` | `120s` |
 
 ### Quote Flap Detection
@@ -122,7 +122,7 @@ Same structure as Shioaji. Pre-allocated translation buffers, 10s cooldown.
 | `HFT_BROKER` | `shioaji` | Active broker backend |
 | `HFT_QUOTE_VERSION` | `auto` | Shioaji quote protocol version |
 | `HFT_FUSED_NORMALIZER` | `0` | Enable fused Rust normalizer+LOB |
-| `HFT_STRICT_PRICE_MODE` | `0` | Reject float prices with TypeError |
+| `HFT_STRICT_PRICE_MODE` | `1` | Reject float prices with TypeError (`0` = warn and scale via `Decimal`) |
 | `SHIOAJI_API_KEY` | — | Shioaji broker API key |
 | `SHIOAJI_SECRET_KEY` | — | Shioaji broker secret key |
 

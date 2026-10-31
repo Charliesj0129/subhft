@@ -29,7 +29,7 @@ docker compose restart hft-engine
 
 升級路徑（重啟後仍無行情）：
 1. 確認 watchdog 啟動：`docker compose logs hft-engine | rg "quote_watchdog"`。
-2. 調整 quote 閾值（縮短）: `HFT_QUOTE_NO_DATA_S`（預設 10s）、`HFT_QUOTE_WATCHDOG_S`（預設 5s）。
+2. 調整 quote 閾值（縮短）: `HFT_QUOTE_NO_DATA_S`（預設 30s）、`HFT_QUOTE_WATCHDOG_S`（預設 5s）。
 3. 查看 `shioaji_quote_pending_stall_total` 是否持續累積（表示 watchdog 在持續 stall 中但無法恢復）。
 4. 若 `quote_version_switch_total[direction=downgrade]` 出現但未恢復 → 手動固定 `HFT_QUOTE_VERSION=v0`。
 5. 仍無法恢復 → 參考 `docs/runbooks/shioaji-contract-refresh-operations.md`。

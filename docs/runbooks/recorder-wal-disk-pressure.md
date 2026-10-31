@@ -9,7 +9,8 @@ This runbook covers the scenario where the WAL disk guard circuit breaker activa
 | Variable | Default | Purpose |
 |---|---|---|
 | `HFT_WAL_DISK_MIN_MB` | `500` | Minimum free MB before guard activates |
-| `HFT_WAL_DISK_PRESSURE_POLICY` | `drop` | `drop` = drop records; `warn` = log warning only |
+| `HFT_WAL_DISK_PRESSURE_POLICY` | `halt` | Below `HFT_WAL_DISK_MIN_MB` the circuit breaker drops the batch and logs a warning. Only `raise` raises; `halt`, `drop`, `warn` and any other value all drop (`recorder/wal.py:52`, `:97-117`). `halt` by itself does not trigger a HALT, but this is the fallback after a ClickHouse write failure: the dropped batch is recorded as `data_loss` and the recorder goes to `DATA_LOSS` (`recorder/writer.py:723-731`; consequences in `docs/operations/env-vars-reference.md` §6.6). |
+| `HFT_WAL_FIRST_POLICY_<TABLE>` | `write` | `wal_first` mode only: at CRITICAL pressure `write` keeps writing, `drop` and `halt` both drop the rows; at HALT pressure every table drops (`recorder/wal_first.py:36-65`) |
 | `HFT_RECORDER_MODE` | `direct` | `wal_first` routes all writes through WAL first |
 | `HFT_WAL_LOADER_CONCURRENCY` | `4` | Threads for parallel WAL replay |
 

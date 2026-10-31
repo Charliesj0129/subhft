@@ -78,7 +78,7 @@ await loader.replay()  # Dedup-aware replay
 
 - Idempotent replay: dedup keys prevent duplicate inserts
 - DLQ for malformed WAL entries
-- Retention: `HFT_WAL_RETENTION_DAYS`
+- Retention: `HFT_ARCHIVE_RETENTION_DAYS` (default `14`; `HFT_WAL_RETENTION_DAYS` has no reader)
 
 ## DiskPressureMonitor
 
@@ -94,7 +94,7 @@ await loader.replay()  # Dedup-aware replay
 | `HFT_RECORDER_MODE` | `direct` | `direct` or `wal_first` |
 | `HFT_CLICKHOUSE_HOST` | `localhost` | ClickHouse host |
 | `HFT_CLICKHOUSE_ENABLED` | — | Enable ClickHouse recording |
-| `HFT_WAL_RETENTION_DAYS` | — | WAL file retention |
+| `HFT_ARCHIVE_RETENTION_DAYS` | `14` | WAL archive retention (days) |
 | `HFT_RECORDER_FLUSH_SIZE` | — | Batch flush threshold |
 | `HFT_RECORDER_FLUSH_INTERVAL_S` | — | Batch flush interval |
 
