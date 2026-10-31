@@ -147,8 +147,8 @@ def main() -> int:
     parser.add_argument(
         "--max-advisory",
         type=int,
-        default=0,
-        help="Fail if advisory zero-assertion count exceeds this threshold (0=no limit)",
+        default=None,
+        help="Fail if the advisory zero-assertion count exceeds this threshold (0 allows none; omit for no limit)",
     )
     args = parser.parse_args()
 
@@ -196,7 +196,7 @@ def main() -> int:
 
     if critical:
         return 1
-    if args.max_advisory > 0 and len(advisory) > args.max_advisory:
+    if args.max_advisory is not None and len(advisory) > args.max_advisory:
         print(f"\n::error::Advisory zero-assertion count ({len(advisory)}) exceeds "
               f"threshold ({args.max_advisory}). Fix or allowlist with '# noqa: no-assert'.")
         return 1

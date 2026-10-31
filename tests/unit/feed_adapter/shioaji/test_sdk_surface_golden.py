@@ -92,6 +92,8 @@ def test_installed_shioaji_surface_matches_committed_golden() -> None:
             f"review `make shioaji-diff`, update docs/runbooks/shioaji-version-diff.md, "
             f"and commit.\n\n{delta[:6000]}"
         )
+    # Not reached on drift (``pytest.fail`` above carries the diff); this is the contract the test states.
+    assert actual == expected
 
 
 @pytest.mark.unit

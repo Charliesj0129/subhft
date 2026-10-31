@@ -54,7 +54,7 @@ class TestQueueBackpressure:
         await producer(10000)
 
         # Wait for queue to drain
-        await asyncio.sleep(0.5)
+        await asyncio.wait_for(queue.join(), timeout=5.0)
         consumer_task.cancel()
 
         elapsed = time.monotonic() - start
@@ -100,7 +100,7 @@ class TestQueueBackpressure:
         producer_tasks = [asyncio.create_task(producer(i, 1000)) for i in range(5)]
 
         await asyncio.gather(*producer_tasks)
-        await asyncio.sleep(0.5)
+        await asyncio.wait_for(queue.join(), timeout=5.0)
         consumer_task.cancel()
 
         total_attempts = stats["produced"] + stats["dropped"]

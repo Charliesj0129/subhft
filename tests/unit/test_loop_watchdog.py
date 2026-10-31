@@ -98,9 +98,16 @@ class TestLoopStallWatchdog:
         clock = _Clock()
         wd, _ = self._make(clock, threshold=60.0)
         wd.start()
+        first = wd._thread
+        assert first is not None
+        assert first.is_alive()
         wd.start()  # second start must not spawn a second thread or raise
+        assert wd._thread is first
         wd.stop()
+        assert wd._thread is None
+        assert not first.is_alive()
         wd.stop()  # stop after stop is safe
+        assert wd._thread is None
 
 
 class TestHeartbeatWritable:

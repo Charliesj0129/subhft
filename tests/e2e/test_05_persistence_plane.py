@@ -22,6 +22,7 @@ import pytest
 from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 from hft_platform.recorder.wal import WALWriter
 from tests.e2e.conftest import DEFAULT_SYMBOL, DEFAULT_TS_NS
+from tests.waiting import await_until
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -144,10 +145,9 @@ class TestIntegration:
 
             service = RecorderService(queue=recorder_queue)
 
-            # Run service briefly, then cancel
+            # Run the service until it has taken all 20 items, then cancel
             task = asyncio.create_task(service.run())
-            # Give enough time for all 20 items to be processed
-            await asyncio.sleep(0.3)
+            await await_until(recorder_queue.empty, message="recorder service never drained the queue")
             task.cancel()
             try:
                 await task

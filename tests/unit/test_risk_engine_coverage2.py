@@ -42,6 +42,7 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator
+from tests.waiting import await_until
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -412,12 +413,21 @@ async def test_run_order_queue_full_consecutive_triggers_halt(risk_config):
     eng._dlq_drain_interval = 999
     eng._oq_full_halt_threshold = 2
 
-    # Put 3 intents to exceed threshold
-    for i in range(3):
-        q_in.put_nowait(_make_intent(intent_id=i))
-
+    # CANCELs: after the first full queue the guard is in STORM, which blocks a new order before it reaches the
+    # queue, so only a cancel can be the second consecutive failure.
+    q_in.put_nowait(_make_intent(intent_id=0, intent_type=IntentType.CANCEL))
     task = asyncio.create_task(eng.run())
-    await asyncio.sleep(0.2)
+    await await_until(
+        lambda: eng.storm_guard.state == StormGuardState.STORM,
+        message="the first full-queue failure never pushed the storm guard to STORM",
+    )
+    assert eng._oq_full_consecutive == 1  # below the threshold of 2: STORM, not yet HALT
+
+    q_in.put_nowait(_make_intent(intent_id=1, intent_type=IntentType.CANCEL))
+    await await_until(
+        lambda: eng.storm_guard.state == StormGuardState.HALT,
+        message="two consecutive full-queue failures never pushed the storm guard to HALT",
+    )
     eng.running = False
     task.cancel()
     try:
@@ -425,8 +435,9 @@ async def test_run_order_queue_full_consecutive_triggers_halt(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Storm guard should have been triggered
-    assert eng.storm_guard.state in (StormGuardState.STORM, StormGuardState.HALT)
+    assert eng.storm_guard.state == StormGuardState.HALT
+    assert eng._oq_full_consecutive == 2
+    assert len(eng._order_dlq) == 2  # both cancels went to the DLQ, none to the full order queue
 
 
 # ── run() loop: generic exception sends feedback ─────────────────────────

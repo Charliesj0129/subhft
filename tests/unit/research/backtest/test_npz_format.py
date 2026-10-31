@@ -184,5 +184,5 @@ def test_assert_format_passes_on_match(tmp_path: Path) -> None:
     _write_event_npz(npz)
     _write_meta(npz, depth_levels=5)
 
-    # Should not raise
-    assert_format(npz, NpzFormat.HFTBT_EVENT_L5)
+    assert detect_npz_format(npz) is NpzFormat.HFTBT_EVENT_L5
+    assert assert_format(npz, NpzFormat.HFTBT_EVENT_L5) is None
