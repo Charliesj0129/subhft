@@ -58,6 +58,13 @@ def test_handler_for_maps_a_parsed_command_to_its_body(argv: list[str], body: st
     assert alpha_cli.handler_for(args) is getattr(alpha_cli, body)
 
 
+@pytest.fixture(autouse=True)
+def _no_global_logging_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    # main() calls configure_logging(); its cache_logger_on_first_use=True would
+    # blind capture_logs for later tests on the worker (tests/unit/conftest.py:module_log_sink).
+    monkeypatch.setattr("hft_platform.utils.logging.configure_logging", lambda *a, **k: None)
+
+
 def test_main_returns_the_body_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     def _exit_2(_args):
         sys.exit(2)
