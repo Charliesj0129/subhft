@@ -73,7 +73,6 @@ class PipelineRunReport:
     started_at: str
     finished_at: str
     passed: bool
-    factory_optimize_report: str
     audit_report: str
     validation_report: str
     promotion_report: str | None
@@ -84,26 +83,13 @@ class PipelineRunReport:
         return asdict(self)
 
 
-def _run_factory_optimize(
-    out_path: Path,
-    audit_out: Path,
-    index_out: Path,
-    *,
-    data_paths: list[str] | None,
-    allow_audit_warnings: bool,
-    skip_clean: bool,
-    skip_index: bool,
-) -> int:
-    return factory.cmd_optimize(
+def _run_factory_audit(audit_out: Path, *, data_paths: list[str] | None, allow_audit_warnings: bool) -> int:
+    """Read-only preflight: the factory audit, failing on warnings unless they are allowed."""
+    return factory.cmd_audit(
         SimpleNamespace(
-            out=str(out_path),
-            audit_out=str(audit_out),
-            index_out=str(index_out),
+            out=str(audit_out),
+            fail_on_warning=not allow_audit_warnings,
             data=list(data_paths or []),
-            allow_audit_warnings=allow_audit_warnings,
-            skip_clean=skip_clean,
-            skip_index=skip_index,
-            skip_converge=True,
         )
     )
 
@@ -295,7 +281,6 @@ def _write_stopped_report(
         started_at=started_at,
         finished_at=_now_iso(),
         passed=False,
-        factory_optimize_report="",
         audit_report="",
         validation_report="",
         promotion_report=None,
@@ -379,7 +364,6 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    optimize_path = out_dir / f"{args.alpha_id}_{stamp}_factory_optimize.json"
     audit_path = out_dir / f"{args.alpha_id}_{stamp}_audit.json"
     validate_path = out_dir / f"{args.alpha_id}_{stamp}_validate.json"
     promote_path = out_dir / f"{args.alpha_id}_{stamp}_promote.json"
@@ -403,17 +387,9 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
             notes.append(f"{exc}; run it in triage mode for an exploratory result.")
             return _write_stopped_report(args, mode, started_at, notes, report_path)
 
-    optimize_rc = _run_factory_optimize(
-        optimize_path,
-        audit_path,
-        index_path,
-        data_paths=list(args.data),
-        allow_audit_warnings=allow_audit_warnings,
-        skip_clean=bool(args.skip_factory_clean),
-        skip_index=True,
-    )
-    if optimize_rc != 0:
-        notes.append("Factory optimize preflight failed; pipeline stopped before validation.")
+    audit_rc = _run_factory_audit(audit_path, data_paths=list(args.data), allow_audit_warnings=allow_audit_warnings)
+    if audit_rc != 0:
+        notes.append("Factory audit preflight failed; pipeline stopped before validation.")
         final = PipelineRunReport(
             alpha_id=args.alpha_id,
             owner=args.owner,
@@ -422,7 +398,6 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
             started_at=started_at,
             finished_at=_now_iso(),
             passed=False,
-            factory_optimize_report=str(optimize_path),
             audit_report=str(audit_path),
             validation_report="",
             promotion_report=None,
@@ -497,7 +472,6 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
         started_at=started_at,
         finished_at=_now_iso(),
         passed=flow_pass,
-        factory_optimize_report=str(optimize_path),
         audit_report=str(audit_path),
         validation_report=str(validate_path),
         promotion_report=promotion_out,
@@ -539,7 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Single standard research workflow entrypoint (one-flow strict mode).")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="Strict SOP: optimize preflight -> validate -> promote -> index (non-bypassable)")
+    run = sub.add_parser("run", help="Strict SOP: audit preflight -> validate -> promote -> index (non-bypassable)")
     _add_common_run_args(run, strict=True)
 
     triage = sub.add_parser(

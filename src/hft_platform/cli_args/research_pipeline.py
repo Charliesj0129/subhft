@@ -62,11 +62,6 @@ def add_common_research_pipeline_args(
         default=None,
         help="Experiment base directory (default: <project-root>/research/experiments)",
     )
-    cmd.add_argument(
-        "--skip-factory-clean",
-        action="store_true",
-        help="Skip factory clean stage in preflight optimize.",
-    )
 
     cmd.add_argument("--is-oos-split", type=float, default=0.7)
     cmd.add_argument("--signal-threshold", type=float, default=0.3)

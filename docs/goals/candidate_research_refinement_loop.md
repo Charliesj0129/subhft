@@ -18,7 +18,11 @@ The loop advances the candidate pool toward one of these outcomes:
 
 ## Implemented Surface
 
-The route-correctness slice is exposed through:
+Retired in research v2 C6 (`research.factory` keeps only the read-only `audit`
+and `index`): the commands below and their report writers no longer exist. The
+section records what the slice shipped.
+
+The route-correctness slice was exposed through:
 
 - `python -m research.factory refinement-iteration`
 - `research/reports/readiness_refinement_iteration.json`

@@ -1,8 +1,9 @@
-"""The governed research pipeline must not move files in the checkout.
+"""The governed research pipeline must not move, create or delete files in the checkout.
 
-``research.factory.cmd_optimize`` runs ``converge-tools``, which
-``shutil.move``s every non-core ``research/tools/*.py`` into ``legacy/``.
-Running it as the ``make research`` preflight rewrote the tree on every run.
+Its preflight used to be ``research.factory optimize`` (init, converge-tools,
+clean, audit), and ``converge-tools`` ``shutil.move``d every non-core
+``research/tools/*.py`` into ``legacy/``. research v2 C6 left the factory with
+only the read-only ``audit`` and ``index``; the preflight runs ``audit`` alone.
 """
 
 from __future__ import annotations
@@ -14,52 +15,33 @@ import research.factory as factory
 import research.pipeline as pipeline
 
 
-def _stub_steps(monkeypatch, calls: list[str]) -> None:
-    def _recorder(name: str):
-        def _fn(_ns: argparse.Namespace) -> int:
-            calls.append(name)
-            return 0
+def test_pipeline_preflight_runs_only_the_read_only_audit(monkeypatch, tmp_path: Path) -> None:
+    seen: list[argparse.Namespace] = []
+    monkeypatch.setattr(factory, "cmd_audit", lambda ns: seen.append(ns) or 0)
 
-        return _fn
-
-    for name in ("init", "converge_tools", "clean", "audit", "index"):
-        monkeypatch.setattr(factory, f"cmd_{name}", _recorder(name))
-
-
-def test_pipeline_preflight_skips_converge_tools(monkeypatch, tmp_path: Path) -> None:
-    calls: list[str] = []
-    _stub_steps(monkeypatch, calls)
-
-    rc = pipeline._run_factory_optimize(
-        tmp_path / "optimize.json",
-        tmp_path / "audit.json",
-        tmp_path / "index.json",
-        data_paths=[],
-        allow_audit_warnings=False,
-        skip_clean=True,
-        skip_index=True,
-    )
+    rc = pipeline._run_factory_audit(tmp_path / "audit.json", data_paths=["d.npy"], allow_audit_warnings=False)
 
     assert rc == 0
-    assert "converge_tools" not in calls
-    assert calls == ["init", "audit"]
+    assert len(seen) == 1
+    assert seen[0].out == str(tmp_path / "audit.json")
+    assert seen[0].fail_on_warning is True
+    assert seen[0].data == ["d.npy"]
 
 
-def test_factory_optimize_cli_still_converges_by_default(monkeypatch, tmp_path: Path) -> None:
-    calls: list[str] = []
-    _stub_steps(monkeypatch, calls)
+def test_pipeline_preflight_allows_warnings_only_when_asked(monkeypatch, tmp_path: Path) -> None:
+    seen: list[argparse.Namespace] = []
+    monkeypatch.setattr(factory, "cmd_audit", lambda ns: seen.append(ns) or 1)
 
-    rc = factory.cmd_optimize(
-        argparse.Namespace(
-            out=str(tmp_path / "optimize.json"),
-            audit_out=str(tmp_path / "audit.json"),
-            index_out=str(tmp_path / "index.json"),
-            data=[],
-            allow_audit_warnings=False,
-            skip_clean=True,
-            skip_index=True,
-        )
-    )
+    rc = pipeline._run_factory_audit(tmp_path / "audit.json", data_paths=None, allow_audit_warnings=True)
 
-    assert rc == 0
-    assert calls == ["init", "converge_tools", "audit"]
+    assert rc == 1
+    assert seen[0].fail_on_warning is False
+    assert seen[0].data == []
+
+
+def test_factory_exposes_only_audit_and_index() -> None:
+    sub = next(a for a in factory.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+
+    assert set(sub.choices) == {"audit", "index"}
+    for mutating in ("cmd_init", "cmd_clean", "cmd_converge_tools", "cmd_optimize"):
+        assert not hasattr(factory, mutating)

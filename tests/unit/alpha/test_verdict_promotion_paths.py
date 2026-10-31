@@ -133,7 +133,7 @@ def test_pipeline_skips_promotion_when_validation_did_not_pass(monkeypatch, tmp_
         raise AssertionError("promote_alpha must not run on a non-PASS validation")
 
     validation = types.SimpleNamespace(passed=False, scorecard_path="", to_dict=lambda: {"passed": False})
-    monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
+    monkeypatch.setattr(pipeline, "_run_factory_audit", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: types.SimpleNamespace(name="p"))
     monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg, **_kw: validation)
@@ -246,7 +246,7 @@ def test_pipeline_skipping_promotion_still_records_a_stored_kill(
 ):
     sc_path = _stored_run(tmp_path, verdict)
     validation = types.SimpleNamespace(passed=False, scorecard_path=str(sc_path), to_dict=lambda: {"passed": False})
-    monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
+    monkeypatch.setattr(pipeline, "_run_factory_audit", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: types.SimpleNamespace(name="p"))
     monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg, **_kw: validation)

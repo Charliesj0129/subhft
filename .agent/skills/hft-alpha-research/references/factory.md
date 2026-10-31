@@ -5,9 +5,9 @@
 | 1 | Paper intake | `research/knowledge/` | arXiv MCP tools; `make research-fetch-paper ARXIV=...`; `make research-paper-prototype PAPER_REF=...` |
 | 2 | Prototype | `research/alphas/<id>/` | `uv run python -m research scaffold <id>` |
 | 3 | Data | `research/data/` | `make research-gen-synth-lob`, `make research-validate-data-meta` |
-| 4 | Backtest | `research/backtest/` | `uv run python -m research.factory run-gate-c ...` |
+| 4 | Backtest | `research/backtest/` | Gate C inside `uv run hft alpha validate <id>` |
 | 5 | Statistical validation | `research/experiments/validations/` | `uv run hft alpha validate <id>` |
-| 6 | Parameter optimization | `research/experiments/runs/` | `uv run python -m research.factory optimize` |
+| 6 | Parameter robustness | `research/experiments/validations/` | Gate C parameter-robustness check inside `uv run hft alpha validate <id>` |
 | 7 | Paper trade | `research/experiments/promotions/` | `make research-record-paper`, `research-summarize-paper`, `research-check-paper-governance` |
 | 8 | Live (Rust) | `rust_core/src/` | `uv run hft alpha promote --alpha-id <id> --owner <you>` (user-driven; frozen registry) |
 

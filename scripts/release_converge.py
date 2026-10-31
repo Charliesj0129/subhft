@@ -363,7 +363,7 @@ def _cleanup_steps(
         },
         {
             "step": "research_clean",
-            "command": "(.venv/bin/python -m research.factory clean 2>/dev/null || python3 -m research.factory clean)",
+            "command": "find research -type f \\( -name '*.nbi' -o -name '*.nbc' \\) -delete",
             "destructive": True,
             "targets": [],
             "risk": "low",
@@ -412,15 +412,6 @@ def _cleanup_steps(
         # No ``git clean -fdX`` over research/: the ignored files there are the
         # only copy of experiment runs, kill ledgers, trial records and the
         # research datasets, and a release must not delete research evidence.
-        steps.append(
-            {
-                "step": "mvp_research_init",
-                "command": "(.venv/bin/python -m research.factory init 2>/dev/null || python3 -m research.factory init)",
-                "destructive": True,
-                "targets": [],
-                "risk": "medium",
-            }
-        )
         if seed_minimal_sample:
             steps.append(
                 {
@@ -444,7 +435,7 @@ def _cleanup_steps(
         steps.append(
             {
                 "step": "mvp_research_clean",
-                "command": "(.venv/bin/python -m research.factory clean 2>/dev/null || python3 -m research.factory clean)",
+                "command": "find research -type f \\( -name '*.nbi' -o -name '*.nbc' \\) -delete",
                 "destructive": True,
                 "targets": [],
                 "risk": "low",

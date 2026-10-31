@@ -367,7 +367,7 @@ def test_strict_pipeline_without_evidence_root_stops_before_any_work(monkeypatch
         raise AssertionError("no work may start for a refused governed run")
 
     monkeypatch.delenv(EVIDENCE_ROOT_ENV, raising=False)
-    monkeypatch.setattr(pipeline, "_run_factory_optimize", _never)
+    monkeypatch.setattr(pipeline, "_run_factory_audit", _never)
     monkeypatch.setattr(pipeline, "run_alpha_validation", _never)
     args = pipeline.build_parser().parse_args(
         ["run", "--alpha-id", "a", "--owner", "o", "--data", "d.npy", "--out-dir", str(tmp_path)]
@@ -383,7 +383,7 @@ def test_strict_pipeline_explicit_experiments_dir_must_be_the_evidence_root(
 ) -> None:
     from research import pipeline
 
-    monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
+    monkeypatch.setattr(pipeline, "_run_factory_audit", lambda *a, **k: 0)
     args = pipeline.build_parser().parse_args(
         ["run", "--alpha-id", "a", "--owner", "o", "--data", "d.npy", "--out-dir", str(tmp_path)]
         + ["--experiments-dir", str(tmp_path / "elsewhere")]

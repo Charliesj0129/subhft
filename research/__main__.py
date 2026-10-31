@@ -1,15 +1,11 @@
 """Single entry point: python -m research <command> [args]
 
-Factory commands (layout / governance):
-  init              Initialize canonical directory layout
-  clean             Remove __pycache__ and compiled artifacts
-  converge-tools    Move non-core scripts to research/tools/legacy
+Factory commands (read-only governance):
   audit             Audit pipeline contract (writes factory_audit.json)
   index             Build machine-readable alpha index
-  optimize          One-flow: init -> converge-tools -> clean -> audit -> index
 
 Pipeline commands (alpha lifecycle -- strict / promotable):
-  run               Strict SOP: factory optimize -> Gate A/B/C -> Gate D/E -> index
+  run               Strict SOP: factory audit -> Gate A/B/C -> Gate D/E -> index
   triage            Debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1; never promotable)
 
 Evidence commands (ADR-005 section 6):
@@ -19,7 +15,8 @@ Evidence commands (ADR-005 section 6):
   evidence audit-stale          Mark runs a registered defect affects (ledger/stale.jsonl)
 
 `hft alpha` research subcommands (forwarded by the platform CLI, ADR-005):
-  alpha {scaffold|search|mine|screen|validate|validate-batch|pipeline} ...
+  alpha {scaffold|search|mine|screen|validate|validate-batch|pipeline|
+         batch-correlation|promote-batch} ...
 
 Scaffold command:
   scaffold <alpha_id> [--paper ref] [--complexity O1|ON]
@@ -49,7 +46,7 @@ from __future__ import annotations
 
 import sys
 
-_FACTORY_CMDS = frozenset({"init", "clean", "converge-tools", "audit", "index", "optimize"})
+_FACTORY_CMDS = frozenset({"audit", "index"})
 _PIPELINE_CMDS = frozenset({"run", "triage"})
 _SCAFFOLD_CMD = "scaffold"
 _PAPER_CMDS = frozenset({"fetch-paper", "search-papers"})
@@ -67,10 +64,11 @@ _ALPHA_CMD = "alpha"
 _USAGE = """\
 Usage: python -m research <command> [options]
 
-Factory:  init | clean | converge-tools | audit | index | optimize
+Factory:  audit | index
 Pipeline: run  | triage
 Evidence: status | evidence {init|import-kills|audit-stale}
-Alpha:    alpha {scaffold|search|mine|screen|validate|validate-batch|pipeline} (as `hft alpha`)
+Alpha:    alpha {scaffold|search|mine|screen|validate|validate-batch|pipeline|
+          batch-correlation|promote-batch} (as `hft alpha`)
 Scaffold: scaffold <alpha_id>
 Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>

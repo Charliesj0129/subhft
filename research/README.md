@@ -95,9 +95,9 @@ This generator writes a sidecar with provenance fields (`source`, `generator`, `
 make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path1.npy [path2.npy ...]>' [ARGS='...']
 ```
 
-This runs strict `research.pipeline run`, which includes the factory optimize preflight by default:
+This runs strict `research.pipeline run`:
 
-1. `factory optimize` preflight (`init -> converge-tools -> clean -> audit(strict)`)
+1. `factory audit` preflight (read-only; warnings fail a strict run)
 2. Gate A/B/C validation
 3. Gate D/E promotion
 4. `factory index` finalization
@@ -247,21 +247,18 @@ Their research-side modules live in `research/registry/` too: `batch_correlation
 `batch_promote.py`, and the sub-gate audit reader `audit_cli.py`
 (`python -m research.registry.audit_cli`).
 
-## One Factory Flow
+## Factory: audit and index
 
-The factory preflight sequence is fixed:
-
-1. `init`
-2. `converge-tools`
-3. `clean`
-4. `audit --fail-on-warning`
-5. `index` (post-pipeline finalization)
-
-Standalone command:
+`research.factory` is read-only: it never moves, creates or deletes files in the
+checkout (research v2 C6). It has two commands:
 
 ```bash
-uv run python -m research.factory optimize
+uv run python -m research.factory audit [--fail-on-warning] [--data <path> ...]  # writes reports/factory_audit.json
+uv run python -m research.factory index                                          # writes reports/pipeline_index.json
 ```
+
+The governed pipeline runs `audit` as its preflight and `index` as its
+finalization.
 
 ## Canonical Layout
 
