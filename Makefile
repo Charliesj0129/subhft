@@ -588,15 +588,6 @@ history-repair: ## Repair fragmented historical parquet exports and resample to 
 # Research Factory
 # ============================================================================
 
-research-init: ## Initialize canonical research layout
-	$(PY) -m research.factory init
-
-research-converge-tools: ## Move non-core scripts to research/tools/legacy
-	$(PY) -m research.factory converge-tools
-
-research-clean: ## Remove research cache artifacts (__pycache__, .pyc, numba caches)
-	$(PY) -m research.factory clean
-
 research-audit: ## Audit research pipeline contract and write report
 	$(PY) -m research.factory audit
 
@@ -617,10 +608,7 @@ research-spec-check: ## Validate every candidate spec.yaml against the goal-§3 
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index
 
-research-optimize: ## One-flow factory optimize (init -> converge-tools -> clean -> audit -> index)
-	$(PY) -m research.factory optimize
-
-research: ## Official single entrance: strict pipeline with factory optimize preflight
+research: ## Official single entrance: strict pipeline with factory audit preflight
 	@if [ -z "$(ALPHA)" ] || [ -z "$(OWNER)" ] || [ -z "$(DATA)" ]; then \
 		echo "Usage: make research ALPHA=<alpha_id> OWNER=<owner> DATA='<path1.npy [path2.npy ...]' [ARGS='--min-sharpe-oos-gate-d 1.2']"; \
 		exit 2; \

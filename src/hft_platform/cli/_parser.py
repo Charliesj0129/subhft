@@ -1128,7 +1128,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     alpha_pipeline_run = alpha_pipeline_sub.add_parser(
         "run",
-        help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
+        help="Strict SOP: audit preflight → validate → promote → index (non-bypassable).",
     )
     add_common_research_pipeline_args(
         alpha_pipeline_run,

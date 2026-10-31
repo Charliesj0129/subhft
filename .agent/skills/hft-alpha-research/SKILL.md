@@ -16,8 +16,8 @@ paper -> prototype -> data -> backtest (latency + cost) -> statistical validity 
 ```
 
 Single entrance: `make research ALPHA=<id> OWNER=<you> DATA='<path.npy>'`
-(`--validation-profile vm_ul6` for the strict profile). Preflight steps it runs:
-init, converge-tools, clean, audit, index.
+(`--validation-profile vm_ul6` for the strict profile). Preflight: the read-only
+factory audit; finalization: the factory index.
 
 ## Commands
 
@@ -25,8 +25,6 @@ init, converge-tools, clean, audit, index.
 uv run python -m research scaffold <alpha_id>          # canonical layout under research/alphas/<id>/
 make research-paper-prototype PAPER_REF=<ref> ARGS='--alpha-id <id> --complexity O1'
 uv run hft alpha validate <alpha_id>                   # governed lane, Gates A-C
-uv run python -m research.factory run-gate-c <alpha_id> --data <file.npy> --latency-profile <profile>
-uv run python -m research.factory optimize
 make research-stamp-data-meta DATA_PATH=<file.npy>     # sidecar
 make research-validate-data-meta DATA_PATH=<file.npy>
 make research-gen-synth-lob OUT=research/data/processed/<id>/<file>.npy ARGS='--version v2 --rng-seed 42'

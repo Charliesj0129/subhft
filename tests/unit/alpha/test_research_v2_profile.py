@@ -254,7 +254,7 @@ def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch,
         seen["experiments_dir"] = cfg.experiments_dir
         return types.SimpleNamespace(passed=False, scorecard_path="", to_dict=lambda: {"passed": False})
 
-    monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
+    monkeypatch.setattr(pipeline, "_run_factory_audit", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "run_alpha_validation", _validation)
 
