@@ -39,6 +39,8 @@ def child(monkeypatch: pytest.MonkeyPatch) -> dict:
         ["alpha", "mine", "status", "--run-dir", "runs/x"],
         ["alpha", "pipeline", "run", "--alpha-id", "a1", "--owner", "o", "--data", "d.npy"],
         ["alpha", "scaffold", "new_alpha", "--complexity", "ON"],
+        ["alpha", "batch-correlation", "--dry-run"],
+        ["alpha", "promote-batch", "--profile", "vm_ul6_strict_v2", "--alpha-ids", "a1", "a2"],
     ],
 )
 def test_research_subcommand_forwards_its_exact_argv_to_the_research_entry(child: dict, argv: list[str]) -> None:

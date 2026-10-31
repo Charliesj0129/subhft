@@ -21,7 +21,6 @@ from hft_platform.utils.logging import configure_logging
 # ---------------------------------------------------------------------------
 from ._alpha import (  # noqa: F401
     cmd_alpha_ab_compare,
-    cmd_alpha_batch_correlation,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
     cmd_alpha_experiments_best,
@@ -31,7 +30,6 @@ from ._alpha import (  # noqa: F401
     cmd_alpha_paper_trade_batch,
     cmd_alpha_pool,
     cmd_alpha_promote,
-    cmd_alpha_promote_batch,
 )
 from ._feasibility import cmd_feasibility_report  # noqa: F401
 from ._feature import (  # noqa: F401

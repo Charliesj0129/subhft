@@ -236,13 +236,16 @@ none of them promotes or writes a KILL.
 
 ### `hft alpha` research subcommands (research v2 C5)
 
-`hft alpha {scaffold,search,mine,screen,validate,validate-batch,pipeline}` parse their
+`hft alpha {scaffold,search,mine,screen,validate,validate-batch,pipeline,batch-correlation,promote-batch}` parse their
 arguments in the platform CLI, then run as `python -m research alpha <same arguments>`
 (`src/hft_platform/cli/_research.py` forwards; the bodies are in
 `research/registry/alpha_cli.py`). The exit code is the child's. Gate C runs only with an
 injected runtime (`research/backtest/gate_c_runtime.py:build_gate_c_runtime`); called
 without one, `run_gate_c` raises `GateCRuntimeMissingError` instead of importing research.
 Where `research/` is absent (production images) these subcommands exit 2 with a message.
+Their research-side modules live in `research/registry/` too: `batch_correlation.py`,
+`batch_promote.py`, and the sub-gate audit reader `audit_cli.py`
+(`python -m research.registry.audit_cli`).
 
 ## One Factory Flow
 

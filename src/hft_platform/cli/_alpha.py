@@ -1,7 +1,8 @@
-"""CLI commands: alpha list, promote, pool, canary, ab-compare, experiments, batch, kill, cluster.
+"""CLI commands: alpha list, promote, pool, canary, ab-compare, experiments, paper-trade-batch, kill, cluster.
 
 The research subcommands (scaffold, search, mine, screen, validate, validate-batch,
-pipeline) run in research's process: see cli/_research.py and research/registry/alpha_cli.py.
+pipeline, batch-correlation, promote-batch) run in research's process: see
+cli/_research.py and research/registry/alpha_cli.py.
 """
 
 from __future__ import annotations
@@ -458,26 +459,6 @@ def cmd_alpha_experiments_list(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-def cmd_alpha_batch_correlation(args: argparse.Namespace) -> None:
-    try:
-        from hft_platform.alpha.batch_correlation import batch_compute_correlations
-    except Exception as exc:
-        print(f"Failed to import batch correlation module: {exc}")
-        sys.exit(1)
-
-    results = batch_compute_correlations(
-        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
-        project_root=".",
-        dry_run=bool(getattr(args, "dry_run", False)),
-    )
-    payload = {"correlations": results, "count": len(results)}
-    if args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
-    print(json.dumps(payload, indent=2, sort_keys=True))
-
-
 def cmd_alpha_paper_trade_batch(args: argparse.Namespace) -> None:
     try:
         from hft_platform.alpha.paper_trade_batch import (
@@ -523,51 +504,6 @@ def cmd_alpha_paper_trade_batch(args: argparse.Namespace) -> None:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print("Usage: hft alpha paper-trade-batch {discover|record}")
-        sys.exit(2)
-
-
-def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
-    try:
-        from hft_platform.alpha.batch_promote import BatchPromoter
-    except Exception as exc:
-        print(f"Failed to import batch promote module: {exc}")
-        sys.exit(1)
-
-    # Stage 2 (2026-05-28): batch promotion must enter Gate D with the same
-    # strict-profile contract as single-alpha promotion. Without this, batch
-    # promote silently bypassed the YAML profile (D9).
-    profile = _load_strict_validation_profile(getattr(args, "profile", None))
-
-    promoter = BatchPromoter(
-        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
-        project_root=".",
-        owner=str(getattr(args, "owner", "batch")),
-        min_sharpe_oos=float(getattr(args, "min_sharpe_oos", 1.0)),
-        max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.2)),
-        max_correlation=float(getattr(args, "max_correlation", 0.7)),
-        validation_profile=profile,
-    )
-
-    alpha_ids = list(getattr(args, "alpha_ids", None) or []) or None
-    results = promoter.run_fleet(
-        dry_run=bool(getattr(args, "dry_run", True)),
-        top_n=int(getattr(args, "top_n", 50)),
-        alpha_ids=alpha_ids,
-    )
-
-    approved = sum(1 for r in results if r.get("approved"))
-    payload = {
-        "results": results,
-        "total": len(results),
-        "approved": approved,
-        "rejected": len(results) - approved,
-    }
-    if args.out:
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
-    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
-    if approved == 0 and results:
         sys.exit(2)
 
 

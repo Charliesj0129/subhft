@@ -48,6 +48,8 @@ def test_every_forwarded_platform_subcommand_has_exactly_one_research_body() -> 
         (["validate", "--alpha-id", "a1", "--data", "d.npz"], "cmd_alpha_validate"),
         (["mine", "status", "--run-dir", "runs/x"], "cmd_alpha_mine_status"),
         (["pipeline", "triage", "--alpha-id", "a1", "--owner", "o", "--data", "d.npy"], "cmd_alpha_pipeline_triage"),
+        (["batch-correlation", "--dry-run"], "cmd_alpha_batch_correlation"),
+        (["promote-batch", "--profile", "vm_ul6_strict_v2"], "cmd_alpha_promote_batch"),
     ],
 )
 def test_handler_for_maps_a_parsed_command_to_its_body(argv: list[str], body: str) -> None:
