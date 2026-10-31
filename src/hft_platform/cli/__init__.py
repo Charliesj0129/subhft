@@ -28,18 +28,10 @@ from ._alpha import (  # noqa: F401
     cmd_alpha_experiments_compare,
     cmd_alpha_experiments_list,
     cmd_alpha_list,
-    cmd_alpha_mine_campaign,
-    cmd_alpha_mine_init,
-    cmd_alpha_mine_promote,
-    cmd_alpha_mine_run,
-    cmd_alpha_mine_status,
     cmd_alpha_paper_trade_batch,
     cmd_alpha_pool,
     cmd_alpha_promote,
     cmd_alpha_promote_batch,
-    cmd_alpha_scaffold,
-    cmd_alpha_search,
-    cmd_alpha_validate,
 )
 from ._feasibility import cmd_feasibility_report  # noqa: F401
 from ._feature import (  # noqa: F401
@@ -60,6 +52,7 @@ from ._ops import (  # noqa: F401
     cmd_strat_test,
 )
 from ._parser import build_parser
+from ._research import forward_to_research, run_research_alpha
 from ._run import (  # noqa: F401
     _resolve_default_mode,
     cmd_check,
@@ -79,7 +72,7 @@ from ._utils import _safe_write  # noqa: F401
 
 
 def _ensure_project_root_on_path() -> None:
-    """Ensure repository root is importable for research/* modules."""
+    """Put the checkout root on sys.path so alpha discovery can import research/alphas/<id>/impl.py by name."""
     root = Path(__file__).resolve().parents[3]
     if (root / "research").exists():
         root_str = str(root)
@@ -88,6 +81,7 @@ def _ensure_project_root_on_path() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     _ensure_project_root_on_path()
     # Reduce default thread stack from 8 MB to 2 MB.
     # Most platform threads are I/O waiters; 2 MB is sufficient.
@@ -104,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
     if not hasattr(args, "func"):
         parser.print_help()
         return 1
+    if args.func is forward_to_research:
+        return run_research_alpha(argv[argv.index("alpha") + 1 :])
     args.func(args)
     return 0
 

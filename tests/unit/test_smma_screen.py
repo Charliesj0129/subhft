@@ -10,12 +10,12 @@ import numpy as np
 import pytest
 import yaml
 
-from hft_platform.cli._alpha import cmd_alpha_screen
 from research.combinatorial.promote import promote_smma_candidate
 from research.combinatorial.smma_dataset import BarDataset, save_governed_dataset
 from research.combinatorial.smma_runner import Candidate, _candidate_id
 from research.combinatorial.smma_screen import SMMAScreenError, is_smma_screen_package, run_smma_screen
 from research.combinatorial.smma_validation import ENTRY_RULE_VERSION, resolve_quantile_threshold
+from research.registry.alpha_cli import cmd_alpha_screen
 
 
 def _candidate(*, expression: str = "close_l3_atr14_distance", timeframe_min: int = 60) -> Candidate:

@@ -18,6 +18,9 @@ Evidence commands (ADR-005 section 6):
   evidence import-kills         Archive pre-ledger kills into legacy/kills.jsonl
   evidence audit-stale          Mark runs a registered defect affects (ledger/stale.jsonl)
 
+`hft alpha` research subcommands (forwarded by the platform CLI, ADR-005):
+  alpha {scaffold|search|mine|screen|validate|validate-batch|pipeline} ...
+
 Scaffold command:
   scaffold <alpha_id> [--paper ref] [--complexity O1|ON]
                     Scaffold a new governed alpha package under research/alphas/
@@ -59,6 +62,7 @@ _BATCH_CMDS = frozenset({"batch-search"})
 _HYPOTHESIS_CMD = "hypothesis-queue"
 _AUTO_SCAFFOLD_CMD = "auto-scaffold"
 _EVIDENCE_CMDS = frozenset({"status", "evidence"})
+_ALPHA_CMD = "alpha"
 
 _USAGE = """\
 Usage: python -m research <command> [options]
@@ -66,6 +70,7 @@ Usage: python -m research <command> [options]
 Factory:  init | clean | converge-tools | audit | index | optimize
 Pipeline: run  | triage
 Evidence: status | evidence {init|import-kills|audit-stale}
+Alpha:    alpha {scaffold|search|mine|screen|validate|validate-batch|pipeline} (as `hft alpha`)
 Scaffold: scaffold <alpha_id>
 Paper:    fetch-paper <arxiv_id> | search-papers <query>
 Paper-prototype: paper-to-prototype <paper_ref>
@@ -101,6 +106,11 @@ def main() -> int:
         from research.registry.status_cli import main as _status_main
 
         return int(_status_main(sys.argv[1:]))
+
+    if cmd == _ALPHA_CMD:
+        from research.registry.alpha_cli import main as _alpha_main
+
+        return int(_alpha_main(sys.argv[2:]))
 
     if cmd == _SCAFFOLD_CMD:
         # Remove "scaffold" so alpha_scaffold's positional arg is alpha_id at [1].

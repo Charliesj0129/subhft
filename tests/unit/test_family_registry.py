@@ -27,6 +27,7 @@ from research.combinatorial.tick_dataset import (
     TickDatasetGovernanceError,
     save_governed_tick_dataset,
 )
+from research.registry import alpha_cli
 
 
 def _bars(days: int = 30) -> BarDataset:
@@ -389,7 +390,7 @@ def test_parser_accepts_every_registered_family(family: str) -> None:
             "20260728",
         ]
     )
-    assert args.func is cli.cmd_alpha_mine_run
+    assert alpha_cli.handler_for(args) is alpha_cli.cmd_alpha_mine_run
     assert args.family == family
 
 
@@ -429,8 +430,8 @@ def test_campaign_parser_and_driver_supervise_all_six_locked_diagnostic_legs(
         ]
     )
 
-    assert args.func is cli.cmd_alpha_mine_campaign
-    cli.cmd_alpha_mine_campaign(args)
+    assert alpha_cli.handler_for(args) is alpha_cli.cmd_alpha_mine_campaign
+    alpha_cli.cmd_alpha_mine_campaign(args)
     payload = json.loads(capsys.readouterr().out)
 
     assert len(captured) == 6
@@ -475,7 +476,7 @@ def test_campaign_records_dataset_governance_failures_and_exits_nonzero(
     )
 
     with pytest.raises(SystemExit, match="2"):
-        cli.cmd_alpha_mine_campaign(args)
+        alpha_cli.cmd_alpha_mine_campaign(args)
 
     payload = json.loads((tmp_path / "failed-campaign" / "campaign_report.json").read_text())
     assert len(payload["legs"]) == 6
@@ -492,7 +493,7 @@ def test_cmd_run_passes_the_new_families_through_to_the_runner(family, monkeypat
         return {"verdict": "KILL", "screen_only": True}
 
     monkeypatch.setattr(runner, "run_mining", fake_run)
-    cli.cmd_alpha_mine_run(
+    alpha_cli.cmd_alpha_mine_run(
         Namespace(
             family=family,
             run_dir=str(tmp_path / "run"),

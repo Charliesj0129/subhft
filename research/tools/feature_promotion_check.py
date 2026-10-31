@@ -8,6 +8,7 @@ from pathlib import Path
 from hft_platform.feature.profile import load_feature_profile_registry
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
+from research.backtest.gate_c_runtime import build_gate_c_runtime
 
 
 def main() -> int:
@@ -23,7 +24,9 @@ def main() -> int:
     prof_reg = load_feature_profile_registry(args.profiles)
     prof_errors = prof_reg.validate()
 
-    validation = run_alpha_validation(ValidationConfig(alpha_id=args.alpha_id, data_paths=list(args.data)))
+    validation = run_alpha_validation(
+        ValidationConfig(alpha_id=args.alpha_id, data_paths=list(args.data)), gate_c_runtime=build_gate_c_runtime()
+    )
     result = {
         'alpha_id': args.alpha_id,
         'feature_profiles_path': args.profiles,

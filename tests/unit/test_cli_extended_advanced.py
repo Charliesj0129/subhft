@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 import hft_platform.cli as cli
+from research.registry import alpha_cli
 
 
 def test_cmd_alpha_list(monkeypatch, capsys):
@@ -49,11 +50,9 @@ def test_cmd_alpha_scaffold(monkeypatch):
         calls["check"] = check
         return _Proc()
 
-    import hft_platform.cli._alpha as _alpha_mod
-
-    monkeypatch.setattr(_alpha_mod.subprocess, "run", _run)
+    monkeypatch.setattr(alpha_cli.subprocess, "run", _run)
     args = Namespace(alpha_id="ofi_mc_v2", paper=["018"], complexity="O1", force=False)
-    cli.cmd_alpha_scaffold(args)
+    alpha_cli.cmd_alpha_scaffold(args)
     assert calls["cmd"][0] == sys.executable
     assert calls["cmd"][1:3] == ["-m", "research.tools.alpha_scaffold"]
     assert "ofi_mc_v2" in calls["cmd"]
@@ -108,7 +107,7 @@ def test_cmd_alpha_search_random(monkeypatch, capsys, tmp_path):
         save_results=None,
         out=None,
     )
-    cli.cmd_alpha_search(args)
+    alpha_cli.cmd_alpha_search(args)
     payload = json.loads(capsys.readouterr().out)
     assert payload["mode"] == "random"
     assert payload["count"] == 1
@@ -136,7 +135,7 @@ def test_cmd_alpha_search_template_requires_template(tmp_path):
         out=None,
     )
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_search(args)
+        alpha_cli.cmd_alpha_search(args)
     assert exc.value.code == 2
 
 
@@ -154,7 +153,7 @@ def test_cmd_alpha_validate(monkeypatch, capsys, tmp_path):
         def to_dict():
             return {"alpha_id": "ofi_mc", "passed": True, "gate_a": {"passed": True}}
 
-    def _run_alpha_validation(cfg):
+    def _run_alpha_validation(cfg, **_kw):
         calls["validate_called"] = isinstance(cfg, _ValidationConfig)
         return _Result()
 
@@ -187,7 +186,7 @@ def test_cmd_alpha_validate(monkeypatch, capsys, tmp_path):
         out=str(out_file),
         profile="vm_ul6_strict",
     )
-    cli.cmd_alpha_validate(args)
+    alpha_cli.cmd_alpha_validate(args)
 
     assert calls["validate_called"]
     assert calls["config"]["alpha_id"] == "ofi_mc"

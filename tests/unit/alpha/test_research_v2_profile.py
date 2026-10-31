@@ -22,6 +22,7 @@ from hft_platform.alpha._gate_a import run_gate_a
 from hft_platform.alpha._gate_c import _merge_profile_thresholds
 from hft_platform.alpha._validation_profile import ProfileValidationError, ValidationProfile, load_profile
 from hft_platform.alpha._validation_types import ValidationConfig
+from hft_platform.alpha.gate_c_runtime import GateCRuntime
 from hft_platform.alpha.latency_profiles import load_profiles
 from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_f
 
@@ -246,7 +247,8 @@ def _run_args(tmp_path: Path, *extra: str):
 def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch, tmp_path: Path, governed_env: Path):
     seen: dict = {}
 
-    def _validation(cfg):
+    def _validation(cfg, *, gate_c_runtime=None):
+        seen["gate_c_runtime"] = gate_c_runtime
         seen["profile"] = cfg.profile
         seen["run_mode"] = cfg.run_mode
         seen["experiments_dir"] = cfg.experiments_dir
@@ -262,6 +264,7 @@ def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch,
     assert seen["profile"].name == "vm_ul6_strict_v2"
     assert seen["run_mode"] == "governed"
     assert seen["experiments_dir"] == str(governed_env)
+    assert isinstance(seen["gate_c_runtime"], GateCRuntime)  # research injects it; the platform never loads it
 
 
 def test_governed_run_refuses_the_exploratory_standard_profile(tmp_path: Path):

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import argparse
 import os
-from importlib.util import find_spec
-from pathlib import Path
 
 from hft_platform.cli_args.research_pipeline import add_common_research_pipeline_args
 from hft_platform.risk import manual_latches
@@ -23,22 +21,10 @@ from ._alpha import (
     cmd_alpha_experiments_list,
     cmd_alpha_kill,
     cmd_alpha_list,
-    cmd_alpha_mine_campaign,
-    cmd_alpha_mine_init,
-    cmd_alpha_mine_promote,
-    cmd_alpha_mine_run,
-    cmd_alpha_mine_status,
     cmd_alpha_paper_trade_batch,
-    cmd_alpha_pipeline_run,
-    cmd_alpha_pipeline_triage,
     cmd_alpha_pool,
     cmd_alpha_promote,
     cmd_alpha_promote_batch,
-    cmd_alpha_scaffold,
-    cmd_alpha_screen,
-    cmd_alpha_search,
-    cmd_alpha_validate,
-    cmd_alpha_validate_batch,
 )
 from ._feasibility import cmd_feasibility_report
 from ._feature import (
@@ -65,6 +51,7 @@ from ._ops import (
     cmd_recorder_status,
     cmd_strat_test,
 )
+from ._research import forward_to_research
 from ._risk import cmd_risk_halt, cmd_risk_latches, cmd_risk_rearm, cmd_risk_resume, cmd_risk_status
 from ._run import cmd_check, cmd_init, cmd_run, cmd_wizard
 from ._symbols import (
@@ -75,17 +62,6 @@ from ._symbols import (
     cmd_symbols_validate,
 )
 from ._tca import cmd_tca_daily
-
-
-def _research_pipeline_available() -> bool:
-    """Check for the dev-only pipeline module without importing research."""
-    try:
-        spec = find_spec("research")
-    except (AttributeError, ImportError, ValueError):
-        return False
-    if spec is None or spec.submodule_search_locations is None:
-        return False
-    return any((Path(root) / "pipeline.py").is_file() for root in spec.submodule_search_locations)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -470,7 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_scaffold.add_argument("--paper", action="append", default=[], help="Paper reference (repeatable)")
     alpha_scaffold.add_argument("--complexity", default="O1", help="Complexity target, e.g. O1 or ON")
     alpha_scaffold.add_argument("--force", action="store_true", help="Overwrite existing files")
-    alpha_scaffold.set_defaults(func=cmd_alpha_scaffold)
+    alpha_scaffold.set_defaults(func=forward_to_research)
 
     alpha_search = alpha_sub.add_parser("search", help="Run combinatorial alpha search")
     alpha_search.add_argument("--mode", choices=["random", "template", "genetic"], default="random")
@@ -489,7 +465,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_search.add_argument("--top", type=int, default=10, help="Top-N results in output")
     alpha_search.add_argument("--save-results", help="Optional path to persist result artifacts")
     alpha_search.add_argument("--out", help="Optional JSON output path")
-    alpha_search.set_defaults(func=cmd_alpha_search)
+    alpha_search.set_defaults(func=forward_to_research)
 
     alpha_mine = alpha_sub.add_parser("mine", help="SubHFT Alpha Mining v2 (Phase 1: partitioning + trial ledger)")
     alpha_mine_sub = alpha_mine.add_subparsers(dest="mine_cmd")
@@ -508,7 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
     mine_init.add_argument("--out-dir", required=True, help="Directory for partition_manifest.json + audit logs")
     mine_init.add_argument("--seed", type=int, default=42, help="Random seed (recorded, not used for row assignment)")
     mine_init.add_argument("--out", help="Optional JSON output path")
-    mine_init.set_defaults(func=cmd_alpha_mine_init)
+    mine_init.set_defaults(func=forward_to_research)
 
     mine_run = alpha_mine_sub.add_parser(
         "run",
@@ -564,11 +540,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly unlock final holdout after locked validation; requires research-owner approval",
     )
     mine_run.add_argument("--resume", action="store_true")
-    mine_run.set_defaults(func=cmd_alpha_mine_run)
+    mine_run.set_defaults(func=forward_to_research)
 
     mine_status = alpha_mine_sub.add_parser("status", help="Read mining manifest/checkpoint/heartbeat status")
     mine_status.add_argument("--run-dir", required=True)
-    mine_status.set_defaults(func=cmd_alpha_mine_status)
+    mine_status.set_defaults(func=forward_to_research)
 
     mine_campaign = alpha_mine_sub.add_parser(
         "campaign",
@@ -589,7 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar=("SEED1", "SEED2", "SEED3"),
     )
     mine_campaign.add_argument("--resume", action="store_true")
-    mine_campaign.set_defaults(func=cmd_alpha_mine_campaign)
+    mine_campaign.set_defaults(func=forward_to_research)
 
     mine_promote = alpha_mine_sub.add_parser(
         "promote", help="Scaffold a research/alphas/<id>/ package from a GP-discovered expression"
@@ -603,7 +579,7 @@ def build_parser() -> argparse.ArgumentParser:
     mine_promote.add_argument("--strategy-type", default="taker", help="taker|maker (default: taker)")
     mine_promote.add_argument("--instrument", required=True, help="Primary instrument, e.g. TMFD6")
     mine_promote.add_argument("--force", action="store_true", help="Overwrite an existing alpha directory")
-    mine_promote.set_defaults(func=cmd_alpha_mine_promote)
+    mine_promote.set_defaults(func=forward_to_research)
 
     alpha_validate = alpha_sub.add_parser("validate", help="Run alpha validation pipeline (Gate A-C)")
     alpha_validate.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas")
@@ -744,7 +720,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     alpha_validate.add_argument("--out", help="Optional summary JSON output path")
-    alpha_validate.set_defaults(func=cmd_alpha_validate)
+    alpha_validate.set_defaults(func=forward_to_research)
 
     # L6: loose-mode screening — produces a non-promotion-eligible artifact.
     alpha_screen = alpha_sub.add_parser(
@@ -765,7 +741,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_screen.add_argument("--pytest-timeout", type=int, default=300)
     alpha_screen.add_argument("--experiments-dir", default="research/experiments", help="Experiment base directory")
     alpha_screen.add_argument("--out", help="Optional summary JSON output path")
-    alpha_screen.set_defaults(func=cmd_alpha_screen)
+    alpha_screen.set_defaults(func=forward_to_research)
 
     alpha_vb = alpha_sub.add_parser("validate-batch", help="Run Gate A-C across multiple alphas")
     alpha_vb.add_argument("--data", nargs="+", required=True, help="npy/npz path(s)")
@@ -777,7 +753,7 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_vb.add_argument("--alphas-dir", default="research/alphas")
     alpha_vb.add_argument("--fail-fast", action="store_true", help="Stop on first failure")
     alpha_vb.add_argument("--out", help="Batch report JSON path")
-    alpha_vb.set_defaults(func=cmd_alpha_validate_batch)
+    alpha_vb.set_defaults(func=forward_to_research)
 
     # ── Slice-D Task 11: cheap pre-screener (renamed onto #341) ─────────
     # `alpha screen` is the loose-mode validate verb from #341; the
@@ -1144,36 +1120,33 @@ def build_parser() -> argparse.ArgumentParser:
     # parser and `research.pipeline` import — platform code must not import
     # `research`, so the contract moved to the platform side rather than being
     # borrowed from it.
-    # `research/` is dev-only and not shipped in production images/mounts;
-    # the whole CLI must stay usable there (ops commands like
-    # `hft ops rearm-platform` run in-container), so the pipeline commands
-    # are registered only when the package is present.
-    if _research_pipeline_available():
-        alpha_pipeline = alpha_sub.add_parser(
-            "pipeline",
-            help="Canonical research pipeline orchestrator (mirrors `make research`).",
-        )
-        alpha_pipeline_sub = alpha_pipeline.add_subparsers(dest="alpha_pipeline_cmd", required=True)
+    # The body runs as `python -m research alpha pipeline ...` (cli/_research.py);
+    # where `research/` is absent (production images) the forward reports that.
+    alpha_pipeline = alpha_sub.add_parser(
+        "pipeline",
+        help="Canonical research pipeline orchestrator (mirrors `make research`).",
+    )
+    alpha_pipeline_sub = alpha_pipeline.add_subparsers(dest="alpha_pipeline_cmd", required=True)
 
-        alpha_pipeline_run = alpha_pipeline_sub.add_parser(
-            "run",
-            help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
-        )
-        add_common_research_pipeline_args(
-            alpha_pipeline_run,
-            strict=True,
-            handler=cmd_alpha_pipeline_run,
-        )
+    alpha_pipeline_run = alpha_pipeline_sub.add_parser(
+        "run",
+        help="Strict SOP: optimize preflight → validate → promote → index (non-bypassable).",
+    )
+    add_common_research_pipeline_args(
+        alpha_pipeline_run,
+        strict=True,
+        handler=forward_to_research,
+    )
 
-        alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
-            "triage",
-            help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
-        )
-        add_common_research_pipeline_args(
-            alpha_pipeline_triage,
-            strict=False,
-            handler=cmd_alpha_pipeline_triage,
-        )
+    alpha_pipeline_triage = alpha_pipeline_sub.add_parser(
+        "triage",
+        help="Internal debug mode (requires HFT_RESEARCH_ALLOW_TRIAGE=1); outputs non-promotable.",
+    )
+    add_common_research_pipeline_args(
+        alpha_pipeline_triage,
+        strict=False,
+        handler=forward_to_research,
+    )
 
     # ── TCA ─────────────────────────────────────────────────────────────
     tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")

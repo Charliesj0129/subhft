@@ -80,6 +80,7 @@ from hft_platform.alpha.evidence import (  # noqa: E402
     record_exploratory_holdout_access,
     require_governed,
 )
+from hft_platform.alpha.gate_c_runtime import GateCRuntime  # noqa: E402
 from hft_platform.alpha.outcomes import Verdict  # noqa: E402
 from hft_platform.alpha.provenance import file_sha256, git_state  # noqa: E402
 
@@ -121,17 +122,19 @@ def run_gate_c(
     root: Path,
     resolved_data_paths: list[str],
     experiments_base: Path,
+    runtime: GateCRuntime | None = None,
 ) -> tuple[GateReport, str, str, str, str]:
     """Delegate to _gate_c.run_gate_c which includes trend contamination check."""
     from hft_platform.alpha._gate_c import run_gate_c as _run_gate_c  # noqa: PLC0415
 
-    return _run_gate_c(alpha, config, root, resolved_data_paths, experiments_base)
+    return _run_gate_c(alpha, config, root, resolved_data_paths, experiments_base, runtime=runtime)
 
 
 # ---------------------------------------------------------------------------
 # Orchestrator — stays in validation.py (unique)
 # ---------------------------------------------------------------------------
-def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
+def run_alpha_validation(config: ValidationConfig, *, gate_c_runtime: GateCRuntime | None = None) -> ValidationResult:
+    """Gates A-C for one alpha. Gate C runs only with ``gate_c_runtime`` injected (research side, ADR-005)."""
     from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
 
     root = Path(config.project_root).resolve()
@@ -164,7 +167,7 @@ def run_alpha_validation(config: ValidationConfig) -> ValidationResult:
 
     if gate_a.passed and gate_b.passed:
         gate_c, run_id, cfg_hash, scorecard_path, experiment_meta_path = run_gate_c(
-            alpha, config, root, resolved_data_paths, Path(experiments_base)
+            alpha, config, root, resolved_data_paths, Path(experiments_base), runtime=gate_c_runtime
         )
     else:
         gate_c = GateReport(
@@ -378,6 +381,7 @@ def batch_validate(
     experiments_dir: str = "research/experiments",
     project_root: str = ".",
     skip_gate_b_tests: bool = False,
+    gate_c_runtime: GateCRuntime | None = None,
 ) -> dict[str, Any]:
     """Batch-validate multiple alphas through Gate A/B/C pipeline."""
     gate_key = str(gate).strip().lower()
@@ -391,7 +395,7 @@ def batch_validate(
                 project_root=project_root,
                 skip_gate_b_tests=skip_gate_b_tests or gate_key == "a",
             )
-            result = run_alpha_validation(config)
+            result = run_alpha_validation(config, gate_c_runtime=gate_c_runtime)
             entry: dict[str, Any] = {
                 "alpha_id": alpha_id,
                 "passed": result.passed,

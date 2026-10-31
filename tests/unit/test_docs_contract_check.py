@@ -340,8 +340,8 @@ def test_doc_roots_are_scanned_recursively(tmp_path: Path):
 def test_the_cli_tree_includes_dev_only_commands_whatever_the_start_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # `hft alpha pipeline` is registered only when `research` is importable, which depends on sys.path. The checker
-    # must see the tree a developer has, not the one the shell happened to start it from.
+    # `hft alpha pipeline` used to be registered only when `research` was importable. It is always registered now
+    # (its body runs as `python -m research alpha`); the checker must still see it with no `research` on sys.path.
     root = _repo(tmp_path)
     (root / "research").mkdir()
     (root / "research" / "__init__.py").write_text("", encoding="utf-8")

@@ -24,27 +24,19 @@ _SRC = _ROOT / "src" / "hft_platform"
 _DYNAMIC_IMPORTERS = frozenset({"import_module", "__import__", "find_spec"})
 _SYS_PATH_EDITS = frozenset({"insert", "append", "extend"})
 
-# (importer, imported) -> why it is still allowed. Research-v2 C5 moves the
-# research subcommands behind ``python -m research`` and the Gate C runtime into
-# research-side injection; those entries go then.
+# (importer, imported) -> why it is still allowed. Research-v2 C5 moved the
+# `hft alpha` research subcommands behind ``python -m research alpha`` and Gate
+# C's runtime into research-side injection; these are the deliberate edges left.
 _ALLOWED: dict[tuple[str, str], str] = {
-    ("src/hft_platform/alpha/_gate_c.py", "research.backtest.gate_c_runtime"): (
-        "fallback when no GateCRuntime is injected; removed in C5"
-    ),
     ("src/hft_platform/alpha/_validation_helpers.py", "sys.path"): (
         "puts the project root on sys.path so an alpha impl.py can be loaded"
     ),
-    ("src/hft_platform/cli/__init__.py", "sys.path"): "lets `hft alpha` research subcommands import research",
-    ("src/hft_platform/cli/_parser.py", "research"): "find_spec probe: research subcommands only when installed",
-    ("src/hft_platform/cli/_alpha.py", "-m research.tools.alpha_scaffold"): "`hft alpha scaffold` shells out",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.partitioning"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.promote"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.search_engine"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.smma_dataset"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.smma_runner"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.smma_screen"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.combinatorial.tick_dataset"): "`hft alpha` research subcommand",
-    ("src/hft_platform/cli/_alpha.py", "research.pipeline"): "`hft alpha pipeline` runs the research pipeline",
+    ("src/hft_platform/cli/__init__.py", "sys.path"): (
+        "alpha discovery (`hft alpha list`, promote) imports research/alphas/<id>/impl.py by package name"
+    ),
+    ("src/hft_platform/cli/_research.py", "-m research"): (
+        "`hft alpha` research subcommands run as a `python -m research alpha` child process"
+    ),
 }
 
 

@@ -21,6 +21,7 @@ from hft_platform.alpha.validation import (
     _optimize_parameters,
     run_gate_c,
 )
+from research.backtest.gate_c_runtime import build_gate_c_runtime
 from research.backtest.types import BacktestConfig
 from research.registry.schemas import Scorecard
 
@@ -171,6 +172,7 @@ def test_gate_c_walk_forward_fail(monkeypatch, tmp_path: Path):
         root=tmp_path,
         resolved_data_paths=[],
         experiments_base=tmp_path / "experiments",
+        runtime=build_gate_c_runtime(),
     )
     assert report.passed is False
     assert report.details["walk_forward_gate_passed"] is False
@@ -273,6 +275,7 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
         root=tmp_path,
         resolved_data_paths=[],
         experiments_base=tmp_path / "experiments",
+        runtime=build_gate_c_runtime(),
     )
     assert report.passed is True
     assert report.details["walk_forward"]["skipped"] is True

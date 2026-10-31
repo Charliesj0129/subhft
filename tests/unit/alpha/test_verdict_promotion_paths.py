@@ -136,7 +136,7 @@ def test_pipeline_skips_promotion_when_validation_did_not_pass(monkeypatch, tmp_
     monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: types.SimpleNamespace(name="p"))
-    monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg: validation)
+    monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg, **_kw: validation)
     monkeypatch.setattr(pipeline, "promote_alpha", _no_promotion)
     args = pipeline.build_parser().parse_args(
         ["run", "--alpha-id", "alpha_v", "--owner", "o", "--data", "d.npy", "--out-dir", str(tmp_path)]
@@ -249,7 +249,7 @@ def test_pipeline_skipping_promotion_still_records_a_stored_kill(
     monkeypatch.setattr(pipeline, "_run_factory_optimize", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_run_factory_index", lambda *a, **k: 0)
     monkeypatch.setattr(pipeline, "_apply_validation_profile", lambda *a, **k: types.SimpleNamespace(name="p"))
-    monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg: validation)
+    monkeypatch.setattr(pipeline, "run_alpha_validation", lambda _cfg, **_kw: validation)
     args = pipeline.build_parser().parse_args(
         ["run", "--alpha-id", "alpha_k", "--owner", "o", "--data", "d.npy", "--out-dir", str(tmp_path / "out")]
     )

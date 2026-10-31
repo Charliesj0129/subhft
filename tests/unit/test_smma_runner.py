@@ -42,6 +42,7 @@ from research.combinatorial.smma_validation import (
     forward_target_indices,
     simulate_next_bar_execution,
 )
+from research.registry import alpha_cli
 
 
 def _dataset(days: int = 30) -> BarDataset:
@@ -1249,7 +1250,7 @@ def test_parser_accepts_frozen_smma_run_and_status_contract() -> None:
             "--resume",
         ]
     )
-    assert run_args.func is cli.cmd_alpha_mine_run
+    assert alpha_cli.handler_for(run_args) is alpha_cli.cmd_alpha_mine_run
     assert run_args.seeds == [20260726, 20260727, 20260728]
     assert run_args.timeframes_minutes == [2]
     assert run_args.smma_lengths == [1, 2, 3, 5, 8, 13, 21, 34, 55]
@@ -1260,7 +1261,7 @@ def test_parser_accepts_frozen_smma_run_and_status_contract() -> None:
     status_args = cli.build_parser().parse_args(
         ["alpha", "mine", "status", "--run-dir", "research/experiments/runs/smma_test"]
     )
-    assert status_args.func is cli.cmd_alpha_mine_status
+    assert alpha_cli.handler_for(status_args) is alpha_cli.cmd_alpha_mine_status
 
 
 def test_cmd_status_reports_integrity_error(monkeypatch, capsys) -> None:
@@ -1271,7 +1272,7 @@ def test_cmd_status_reports_integrity_error(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr(runner, "mining_status", fail)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_status(Namespace(run_dir="/tmp/not-used"))
+        alpha_cli.cmd_alpha_mine_status(Namespace(run_dir="/tmp/not-used"))
     assert exc.value.code == 2
     assert "tampered" in capsys.readouterr().err
 
@@ -1298,7 +1299,7 @@ def test_cmd_run_passes_frozen_contract_to_runner(monkeypatch, capsys, tmp_path)
         posthoc_diagnostic=True,
         resume=False,
     )
-    cli.cmd_alpha_mine_run(args)
+    alpha_cli.cmd_alpha_mine_run(args)
 
     assert captured["config"].run_dir == tmp_path / "run"
     assert captured["config"].seeds == (20260726, 20260727, 20260728)
@@ -1376,7 +1377,7 @@ def test_campaign_separates_full_search_from_promotion_day_eligibility(
         resume=False,
     )
 
-    cli.cmd_alpha_mine_campaign(args)
+    alpha_cli.cmd_alpha_mine_campaign(args)
 
     report = json.loads(capsys.readouterr().out)
     assert len(captured) == 6
@@ -1443,7 +1444,7 @@ def test_campaign_preserves_preflight_dataset_cache_evidence(
         resume=False,
     )
 
-    cli.cmd_alpha_mine_campaign(args)
+    alpha_cli.cmd_alpha_mine_campaign(args)
 
     assert len(captured) == 6
     for family, evidence in captured:
