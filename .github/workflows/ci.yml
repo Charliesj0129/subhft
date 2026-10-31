@@ -76,67 +76,11 @@ jobs:
         run: make discipline-hft
 
       - name: Detect float in financial paths
-        run: |
-          FOUND=$(grep -rnE ':\s*float\b|float\(' \
-            src/hft_platform/order/ \
-            src/hft_platform/risk/ \
-            src/hft_platform/execution/ \
-            --include='*.py' \
-            | grep -v '# noqa' \
-            | grep -v 'timestamp' \
-            | grep -v 'latency' \
-            | grep -v '_seconds' \
-            | grep -v '_ratio' \
-            | grep -v 'precision-' \
-            | grep -v '_interval' \
-            | grep -v 'interval_s' \
-            | grep -v 'concentration' \
-            | grep -v 'last_sync_ts' \
-            | grep -v 'checkpoint' \
-            | grep -v '_storm_ts' \
-            | grep -v 'threshold' \
-            | grep -v 'imbalance' \
-            | grep -v '_pct' \
-            | grep -v '_bps' \
-            | grep -v '_bpv' \
-            | grep -v 'drift_' \
-            | grep -v 'fill_score' \
-            | grep -v 'spread_pts' \
-            | grep -v '_EPS' \
-            | grep -v '_MU1' \
-            | grep -v '_DEFAULT_' \
-            | grep -v 'caps' \
-            | grep -v 'drawdown' \
-            | grep -v 'dlq_ttl' \
-            | grep -v 'mid_price_max_age' \
-            | grep -v 'recovery_hold' \
-            | grep -v '_ts:' \
-            | grep -v 'monotonic_ts' \
-            | grep -v 'ttl_s' \
-            | grep -v 'ttl_ns' \
-            | grep -v 'TTL_S' \
-            | grep -v 'max_age_s' \
-            | grep -v 'cooldown' \
-            | grep -v 'toxicity' \
-            | grep -v 'sigma' \
-            | grep -v 'vol_shift' \
-            | grep -v 'pnl_ntd' \
-            | grep -v 'underlying_price' \
-            | grep -v 'multiplier' \
-            | grep -v 'risk_free_rate' \
-            | grep -v 'tick_size' \
-            | grep -v 'point_value' \
-            | grep -v 'drain_timeout' \
-            | grep -v 'sym_cap' \
-            | grep -v 'stress_test' \
-            | grep -v 'slippage' \
-            | grep -v 'normalizer' || true)
-          if [ -n "$FOUND" ]; then
-            echo "::error::float usage detected in financial code paths:"
-            echo "$FOUND"
-            echo "Use Decimal or scaled int for prices/balances (see CLAUDE.md Precision Law)."
-            exit 1
-          fi
+        # Exemptions are explicit: scripts/float_gate_exemptions.yaml (file + exact code + kind + reason)
+        # or an inline `# precision-ok: <reason>`. The old step grepped `file:line:text` through ~49
+        # `grep -v` substrings, so a word in a path ('normalizer') or in a comment ('precision-') exempted
+        # a whole line or file. HFT-P004 (above) is the AST check for money-named fields and is unchanged.
+        run: make float-gate
 
       - name: Detect print() in production code
         run: |
