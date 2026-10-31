@@ -13,6 +13,7 @@ The reports used here come from the real replay runner.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 
@@ -525,3 +526,20 @@ def test_promote_and_canary_cli_collect_repeated_replay_parity_reports():
         ["alpha", "canary", "evaluate", "--alpha-id", "alpha_v", "--replay-parity-report", "a/report.json"]
     )
     assert canary.replay_parity_report == ["a/report.json"]
+
+
+def test_strategy_fingerprint_sees_an_edit_that_keeps_size_and_mtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from hft_platform.alpha.shadow_parity import strategy_fingerprint
+
+    _strategy_module(tmp_path, monkeypatch, "class Echo:\n    version = 1\n")
+    source = tmp_path / "strat_pkg" / "echo_runtime.py"
+    stat = source.stat()
+    before = strategy_fingerprint("echo_runtime", "Echo")
+    # Same size, same mtime: the file-hash cache key does not change.
+    source.write_text("class Echo:\n    version = 2\n")
+    os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+    after = strategy_fingerprint("echo_runtime", "Echo")
+
+    assert before is not None and after is not None
+    assert after["code_sha256"] != before["code_sha256"]
