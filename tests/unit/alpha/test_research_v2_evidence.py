@@ -490,7 +490,8 @@ def _sealed_scorecard(root: Path, alpha_id: str = "a1") -> Path:
 
 
 def test_correlation_updaters_do_not_rewrite_sealed_scorecards(tmp_path: Path, monkeypatch) -> None:
-    from hft_platform.alpha import batch_correlation, pool
+    from hft_platform.alpha import pool
+    from research.registry import batch_correlation
 
     scorecard = _sealed_scorecard(tmp_path)
     run = types.SimpleNamespace(run_id="run-1", alpha_id="a1", scorecard_path=str(scorecard))

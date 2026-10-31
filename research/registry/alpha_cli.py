@@ -1,6 +1,7 @@
 """`hft alpha` research subcommands, run in research's own process (ADR-005, research v2 C5).
 
-``hft alpha {scaffold,search,mine,screen,validate,validate-batch,pipeline}``
+``hft alpha {scaffold,search,mine,screen,validate,validate-batch,pipeline,
+batch-correlation,promote-batch}``
 parses its arguments with the platform parser, then re-runs as
 ``python -m research alpha <same argv>``; this module is that entry. The
 argument definitions stay in ``hft_platform.cli._parser`` (one source, and
@@ -806,6 +807,71 @@ def cmd_alpha_pipeline_triage(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_alpha_batch_correlation(args: argparse.Namespace) -> None:
+    try:
+        from research.registry.batch_correlation import batch_compute_correlations
+    except Exception as exc:
+        print(f"Failed to import batch correlation module: {exc}")
+        sys.exit(1)
+
+    results = batch_compute_correlations(
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        project_root=".",
+        dry_run=bool(getattr(args, "dry_run", False)),
+    )
+    payload = {"correlations": results, "count": len(results)}
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+    print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
+    try:
+        from research.registry.batch_promote import BatchPromoter
+    except Exception as exc:
+        print(f"Failed to import batch promote module: {exc}")
+        sys.exit(1)
+
+    # Stage 2 (2026-05-28): batch promotion must enter Gate D with the same
+    # strict-profile contract as single-alpha promotion. Without this, batch
+    # promote silently bypassed the YAML profile (D9).
+    profile = _platform_alpha._load_strict_validation_profile(getattr(args, "profile", None))
+
+    promoter = BatchPromoter(
+        experiments_dir=str(getattr(args, "experiments_dir", "research/experiments")),
+        project_root=".",
+        owner=str(getattr(args, "owner", "batch")),
+        min_sharpe_oos=float(getattr(args, "min_sharpe_oos", 1.0)),
+        max_abs_drawdown=float(getattr(args, "max_abs_drawdown", 0.2)),
+        max_correlation=float(getattr(args, "max_correlation", 0.7)),
+        validation_profile=profile,
+    )
+
+    alpha_ids = list(getattr(args, "alpha_ids", None) or []) or None
+    results = promoter.run_fleet(
+        dry_run=bool(getattr(args, "dry_run", True)),
+        top_n=int(getattr(args, "top_n", 50)),
+        alpha_ids=alpha_ids,
+    )
+
+    approved = sum(1 for r in results if r.get("approved"))
+    payload = {
+        "results": results,
+        "total": len(results),
+        "approved": approved,
+        "rejected": len(results) - approved,
+    }
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    if approved == 0 and results:
+        sys.exit(2)
+
+
 # (alpha_cmd, nested subcommand or None) -> command body. Every command the
 # platform parser marks as forwarded has exactly one entry
 # (tests/unit/research/test_alpha_cli.py checks both directions).
@@ -822,6 +888,8 @@ HANDLERS: dict[tuple[str, str | None], Callable[[argparse.Namespace], None]] = {
     ("validate-batch", None): cmd_alpha_validate_batch,
     ("pipeline", "run"): cmd_alpha_pipeline_run,
     ("pipeline", "triage"): cmd_alpha_pipeline_triage,
+    ("batch-correlation", None): cmd_alpha_batch_correlation,
+    ("promote-batch", None): cmd_alpha_promote_batch,
 }
 
 _NESTED_DEST = {"mine": "mine_cmd", "pipeline": "alpha_pipeline_cmd"}

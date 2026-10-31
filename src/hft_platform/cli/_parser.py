@@ -10,7 +10,6 @@ from hft_platform.risk import manual_latches
 
 from ._alpha import (
     cmd_alpha_ab_compare,
-    cmd_alpha_batch_correlation,
     cmd_alpha_canary_auto_evaluate,
     cmd_alpha_canary_evaluate,
     cmd_alpha_canary_status,
@@ -24,7 +23,6 @@ from ._alpha import (
     cmd_alpha_paper_trade_batch,
     cmd_alpha_pool,
     cmd_alpha_promote,
-    cmd_alpha_promote_batch,
 )
 from ._feasibility import cmd_feasibility_report
 from ._feature import (
@@ -1065,7 +1063,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Show correlations without patching scorecards"
     )
     alpha_batch_corr.add_argument("--out", help="Optional JSON output path")
-    alpha_batch_corr.set_defaults(func=cmd_alpha_batch_correlation)
+    alpha_batch_corr.set_defaults(func=forward_to_research)
 
     alpha_pt_batch = alpha_sub.add_parser("paper-trade-batch", help="Batch paper-trade session management")
     alpha_pt_batch_sub = alpha_pt_batch.add_subparsers(dest="paper_trade_action")
@@ -1111,7 +1109,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-dry-run", dest="dry_run", action="store_false", help="Write promotion configs"
     )
     alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
-    alpha_promote_batch.set_defaults(func=cmd_alpha_promote_batch)
+    alpha_promote_batch.set_defaults(func=forward_to_research)
 
     # ── Stage 5: canonical pipeline orchestrator (D2) ───────────────────
     # `hft alpha pipeline {run,triage}` is the single entrypoint that

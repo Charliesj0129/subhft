@@ -48,12 +48,21 @@ def test_every_forwarded_platform_subcommand_has_exactly_one_research_body() -> 
         (["validate", "--alpha-id", "a1", "--data", "d.npz"], "cmd_alpha_validate"),
         (["mine", "status", "--run-dir", "runs/x"], "cmd_alpha_mine_status"),
         (["pipeline", "triage", "--alpha-id", "a1", "--owner", "o", "--data", "d.npy"], "cmd_alpha_pipeline_triage"),
+        (["batch-correlation", "--dry-run"], "cmd_alpha_batch_correlation"),
+        (["promote-batch", "--profile", "vm_ul6_strict_v2"], "cmd_alpha_promote_batch"),
     ],
 )
 def test_handler_for_maps_a_parsed_command_to_its_body(argv: list[str], body: str) -> None:
     args = build_parser().parse_args(["alpha", *argv])
 
     assert alpha_cli.handler_for(args) is getattr(alpha_cli, body)
+
+
+@pytest.fixture(autouse=True)
+def _no_global_logging_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    # main() calls configure_logging(); its cache_logger_on_first_use=True would
+    # blind capture_logs for later tests on the worker (tests/unit/conftest.py:module_log_sink).
+    monkeypatch.setattr("hft_platform.utils.logging.configure_logging", lambda *a, **k: None)
 
 
 def test_main_returns_the_body_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:

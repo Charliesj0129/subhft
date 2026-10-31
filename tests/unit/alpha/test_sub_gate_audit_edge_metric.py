@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from hft_platform.alpha import audit_cli, sub_gate_audit
+from hft_platform.alpha import sub_gate_audit
+from research.registry import audit_cli
 
 
 def _advisory_with_edge(value: float | None) -> list[dict]:

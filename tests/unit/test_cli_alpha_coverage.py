@@ -530,21 +530,21 @@ class TestCmdAlphaPool:
 # ---------------------------------------------------------------------------
 
 
-from hft_platform.cli._alpha import cmd_alpha_batch_correlation  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_batch_correlation  # noqa: E402
 
 
 class TestCmdAlphaBatchCorrelation:
     def test_basic(self, capsys):
         fake_mod = MagicMock()
         fake_mod.batch_compute_correlations.return_value = [{"pair": ("a1", "a2"), "corr": 0.9}]
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_correlation": fake_mod}):
+        with patch.dict("sys.modules", {"research.registry.batch_correlation": fake_mod}):
             cmd_alpha_batch_correlation(_ns(experiments_dir="e", dry_run=False))
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["count"] == 1
 
     def test_import_failure_exits(self):
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_correlation": None}):
+        with patch.dict("sys.modules", {"research.registry.batch_correlation": None}):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_batch_correlation(_ns(experiments_dir="e", dry_run=False))
         assert exc_info.value.code == 1
@@ -553,7 +553,7 @@ class TestCmdAlphaBatchCorrelation:
         out_file = tmp_path / "corr.json"
         fake_mod = MagicMock()
         fake_mod.batch_compute_correlations.return_value = []
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_correlation": fake_mod}):
+        with patch.dict("sys.modules", {"research.registry.batch_correlation": fake_mod}):
             cmd_alpha_batch_correlation(_ns(experiments_dir="e", dry_run=True, out=str(out_file)))
         assert out_file.exists()
 
@@ -625,7 +625,7 @@ class TestCmdAlphaPaperTradeBatch:
 # ---------------------------------------------------------------------------
 
 
-from hft_platform.cli._alpha import cmd_alpha_promote_batch  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_promote_batch  # noqa: E402
 
 
 class TestCmdAlphaPromoteBatch:
@@ -653,7 +653,7 @@ class TestCmdAlphaPromoteBatch:
         promoter.run_fleet.return_value = [{"alpha_id": "a1", "approved": True}]
         fake_mod = MagicMock()
         fake_mod.BatchPromoter = MagicMock(return_value=promoter)
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_promote": fake_mod}):
+        with patch.dict("sys.modules", {"research.registry.batch_promote": fake_mod}):
             cmd_alpha_promote_batch(self._make_args())
         out = capsys.readouterr().out
         # Stage 2: profile loader emits a structlog info line on stdout before
@@ -666,7 +666,7 @@ class TestCmdAlphaPromoteBatch:
         promoter.run_fleet.return_value = [{"alpha_id": "a1", "approved": False}]
         fake_mod = MagicMock()
         fake_mod.BatchPromoter = MagicMock(return_value=promoter)
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_promote": fake_mod}):
+        with patch.dict("sys.modules", {"research.registry.batch_promote": fake_mod}):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_promote_batch(self._make_args())
         assert exc_info.value.code == 2
@@ -676,7 +676,7 @@ class TestCmdAlphaPromoteBatch:
         promoter.run_fleet.return_value = []
         fake_mod = MagicMock()
         fake_mod.BatchPromoter = MagicMock(return_value=promoter)
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_promote": fake_mod}):
+        with patch.dict("sys.modules", {"research.registry.batch_promote": fake_mod}):
             cmd_alpha_promote_batch(self._make_args())  # no SystemExit
         out = capsys.readouterr().out
         # Stage 2: skip profile-loader stdout preamble.
@@ -684,7 +684,7 @@ class TestCmdAlphaPromoteBatch:
         assert data["total"] == 0
 
     def test_import_failure_exits(self):
-        with patch.dict("sys.modules", {"hft_platform.alpha.batch_promote": None}):
+        with patch.dict("sys.modules", {"research.registry.batch_promote": None}):
             with pytest.raises(SystemExit) as exc_info:
                 cmd_alpha_promote_batch(self._make_args())
         assert exc_info.value.code == 1
