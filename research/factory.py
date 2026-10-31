@@ -132,19 +132,6 @@ CORE_TOOL_FILES: set[str] = {
     "paper_autofill.py",
     "paper_prototype.py",
     "paper_trade.py",
-    # pdq causal sweep tools — import targets of tests/unit/research/test_pdq_*.py;
-    # converge-tools must NOT move them to legacy/ or those imports break.
-    "pdq_causal_day_session_only.py",
-    "pdq_causal_supertrend_grid_search.py",
-    "pdq_causal_supertrend_grid_search_uncapped.py",
-    "pdq_causal_supertrend_grid_search_v2.py",
-    "pdq_causal_timeframe_sweep.py",
-    "pdq_causal_uncapped_exit.py",
-    "pdq_causal_walkforward.py",
-    "pdq_opportunity_standalone_validation.py",
-    "pdq_supertrend_exit_search.py",
-    "pdq_supertrend_signal_lopez_validation.py",
-    "pdq_tsi15_decomposition_audit.py",  # BASE_TOOL loaded by file path from the pdq causal tools above
     "prepare_governed_data.py",
     "regime_alpha.py",
     "render_promotion_report.py",
