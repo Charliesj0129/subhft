@@ -25,6 +25,10 @@ def child(monkeypatch: pytest.MonkeyPatch) -> dict:
         return SimpleNamespace(returncode=seen.get("rc", 0))
 
     monkeypatch.setattr(_research.subprocess, "run", _run)
+    # cli.main() calls configure_logging(), whose cache_logger_on_first_use=True
+    # blinds structlog.testing.capture_logs for later tests on the same worker
+    # (tests/unit/conftest.py:module_log_sink); patch it as the neighbours do.
+    monkeypatch.setattr(cli, "configure_logging", lambda *a, **k: None)
     return seen
 
 
