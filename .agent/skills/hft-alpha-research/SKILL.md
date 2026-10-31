@@ -5,18 +5,19 @@ description: "Run the governed alpha research factory: scaffold, datasets with m
 
 # Alpha research
 
-Process handbook: `research/README.md`; lifecycle and gate contract:
+Handbook (lifecycle, verdict vocabulary, gates, evidence root, factory):
 `docs/runbooks/alpha-development-workflow.md`; project rules for this tree:
 `research/AGENTS.md`. Research artifacts never enable live trading.
 
 ## Pipeline
 
 ```
-paper -> prototype -> data -> backtest (latency + cost) -> statistical validity -> param optimization -> paper trade -> live (Rust)
+generator (paper | mining | candidate_loop | manual) -> data -> Gates A-C -> Gates D-E -> canary -> shadow -> live (frozen)
 ```
 
-Single entrance: `make research ALPHA=<id> OWNER=<you> DATA='<path.npy>'`
-(`--validation-profile vm_ul6` for the strict profile). Preflight: the read-only
+Single entrance: `make research ALPHA=<id> OWNER=<you> DATA='<path.npy>'`, a
+governed strict run on `vm_ul6_strict_v2` that needs `HFT_RESEARCH_EVIDENCE_ROOT`
+and a clean tree. There is no Rust stage while Rust is paused. Preflight: the read-only
 factory audit; finalization: the factory index.
 
 ## Commands
@@ -24,7 +25,7 @@ factory audit; finalization: the factory index.
 ```bash
 uv run python -m research scaffold <alpha_id>          # canonical layout under research/alphas/<id>/
 make research-paper-prototype PAPER_REF=<ref> ARGS='--alpha-id <id> --complexity O1'
-uv run hft alpha validate <alpha_id>                   # governed lane, Gates A-C
+uv run hft alpha validate --alpha-id <id> --profile vm_ul6_strict_v2 --data <path>  # strict Gates A-C
 make research-stamp-data-meta DATA_PATH=<file.npy>     # sidecar
 make research-validate-data-meta DATA_PATH=<file.npy>
 make research-gen-synth-lob OUT=research/data/processed/<id>/<file>.npy ARGS='--version v2 --rng-seed 42'
@@ -41,13 +42,13 @@ promotable (`HFT_RESEARCH_ALLOW_TRIAGE=1`, `make research-triage`).
    has a `.meta.json` sidecar; preserve `local_ts`; use versioned latency profiles.
 2. `paper_refs` in the manifest map to `paper_index.json`; Gate A strict mode
    enforces it, plus sidecar validity, allowed roots, and a `complexity` field.
-3. Generated artifacts go to `research/experiments/` or `outputs/`, never into
-   `research/alphas/<id>/` (source and manifest only). Binary artifacts stay out of source dirs.
-4. Verdicts (KILL / NEEDS-MORE-DAYS / RESCUED / INCONCLUSIVE / PROMOTED) are faithful:
-   never relax pre-registered floors or gates in committed artifacts. Commit the
-   candidate's new evidence under `research/experiments/validations/` (append-only,
-   new files only) with an `alpha:` commit when the verdict is reached, so it exists
-   somewhere other than one disk; stage only your files (`git-safety`).
+3. Governed runs write their evidence to `HFT_RESEARCH_EVIDENCE_ROOT` (outside this
+   repository, sealed, ledgered); exploratory output goes to `outputs/`. Never write into
+   `research/alphas/<id>/` (source and manifest only); `research/experiments/**` is frozen
+   legacy evidence. Binary artifacts stay out of source dirs.
+4. Verdicts are the handbook's vocabulary (PASS / KILL / NEEDS-MORE-DAYS / INCONCLUSIVE /
+   INVALID, handbook section 2), written only by `derive_verdict`. Generators shortlist,
+   never KILL. Never relax a pre-registered floor or gate.
 5. Float is allowed in research for offline metrics; nothing here reaches live accounting.
    Manifest `skills_used` is validated against `VALID_SKILLS` in `contracts/alpha.py`
    (Do-NOT-Edit), which still lists the retired skill names; use those tokens, not directory names.
@@ -68,7 +69,7 @@ promotable (`HFT_RESEARCH_ALLOW_TRIAGE=1`, `make research-triage`).
 
 The alpha has a valid manifest and sidecars, Gates A-C ran with a declared
 latency profile and cost profile, outputs sit under `research/experiments/`, and
-the verdict and its evidence are recorded as they came out.
+the verdict and its evidence are in the evidence root as they came out.
 
 ## References
 

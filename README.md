@@ -59,12 +59,11 @@ Shioaji；Fubon 設 `HFT_BROKER=fubon` 與 `HFT_FUBON_*`。
 ## 研究 Pipeline
 
 ```
-論文 -> 原型 -> 資料 -> 回測(延遲+成本) -> 統計驗證 -> 參數優化 -> Paper trade -> Live
+generators -> Gate A -> B -> C -> D -> E -> canary -> shadow -> Live（registry 凍結）
 ```
 
-Gate A–F（Manifest／測試／回測／晉升門檻／Paper trade／Rust readiness，後者暫停）與 Canary 的定義和門檻在
-[docs/runbooks/alpha-development-workflow.md](docs/runbooks/alpha-development-workflow.md)；工廠操作手冊是
-[research/README.md](research/README.md)。入口：`make research ALPHA=<id> OWNER=<you> DATA='<path>'`。
+研究流程只有一份手冊：[docs/runbooks/alpha-development-workflow.md](docs/runbooks/alpha-development-workflow.md)，
+內含判定詞彙、Gate A–F 與門檻（Gate F 在 Rust 暫停期間為 NOT_APPLICABLE）、證據根與工廠操作。入口：`make research ALPHA=<id> OWNER=<you> DATA='<path>'`。
 
 ## 設定與環境變數
 
@@ -84,7 +83,7 @@ Gate A–F（Manifest／測試／回測／晉升門檻／Paper trade／Rust read
 | 從零建置堆疊 | [docs/operations/deployment.md](docs/operations/deployment.md) |
 | 變更管理 | [docs/operations/change-control.md](docs/operations/change-control.md) |
 | Runbooks／排錯 | [docs/runbooks/README.md](docs/runbooks/README.md)、[troubleshooting](docs/operations/troubleshooting.md) |
-| 研究 | [research/README.md](research/README.md)、[research/SOP.md](research/SOP.md) |
+| 研究 | [研究手冊](docs/runbooks/alpha-development-workflow.md)、[research/README.md](research/README.md) |
 | 路線圖 | [ROADMAP.md](ROADMAP.md) |
 | 文件總索引 | [docs/README.md](docs/README.md) |
 
