@@ -19,6 +19,7 @@ import pytest
 
 from hft_platform.alpha._gate_c import run_gate_c
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
+from research.backtest.gate_c_runtime import build_gate_c_runtime
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -206,6 +207,7 @@ def _run(tmp_path: Path, cfg_overrides: dict | None = None) -> tuple[GateReport,
         root=tmp_path,
         resolved_data_paths=[],
         experiments_base=tmp_path / "experiments",
+        runtime=build_gate_c_runtime(),
     )
 
 
@@ -549,6 +551,7 @@ class TestGateCResearchEngineRejected:
                 root=gate_c_mocks,
                 resolved_data_paths=[],
                 experiments_base=gate_c_mocks / "experiments",
+                runtime=build_gate_c_runtime(),
             )
 
 
@@ -613,7 +616,7 @@ def test_taker_run_stamp_hashes_the_hftbt_npz_the_runner_reads(gate_c_mocks, mon
         stat_correction_method="none",
     )
 
-    run_gate_c(alpha, cfg, tmp_path, [str(source)], tmp_path / "experiments")
+    run_gate_c(alpha, cfg, tmp_path, [str(source)], tmp_path / "experiments", runtime=build_gate_c_runtime())
 
     datasets = logged["run_stamp"]["datasets"]
     assert list(datasets) == [str(source), str(converted)]

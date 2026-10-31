@@ -35,7 +35,7 @@ def _strict_profile_loader_module() -> SimpleNamespace:
 # ---------------------------------------------------------------------------
 
 
-from hft_platform.cli._alpha import _parse_param_grid  # noqa: E402
+from research.registry.alpha_cli import _parse_param_grid  # noqa: E402
 
 
 class TestParseParamGrid:
@@ -80,7 +80,7 @@ class TestParseParamGrid:
 # ---------------------------------------------------------------------------
 
 
-from hft_platform.cli._alpha import cmd_alpha_scaffold  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_scaffold  # noqa: E402
 
 
 class TestCmdAlphaScaffold:
@@ -143,16 +143,10 @@ class TestCmdAlphaList:
 
     def test_lists_alphas(self, capsys):
         registry = self._make_registry()
-        with patch("hft_platform.cli._alpha.import_module") as mock_import:
-            mock_mod = MagicMock()
-            mock_mod.AlphaDiscoveryRegistry.return_value = registry
-            mock_import.return_value = mock_mod
-            # Directly patch the inner import via builtins would be complex;
-            # instead patch using sys.modules insertion
-            fake_mod = MagicMock()
-            fake_mod.AlphaDiscoveryRegistry = MagicMock(return_value=registry)
-            with patch.dict("sys.modules", {"hft_platform.alpha.discovery": fake_mod}):
-                cmd_alpha_list(_ns())
+        fake_mod = MagicMock()
+        fake_mod.AlphaDiscoveryRegistry = MagicMock(return_value=registry)
+        with patch.dict("sys.modules", {"hft_platform.alpha.discovery": fake_mod}):
+            cmd_alpha_list(_ns())
         out = capsys.readouterr().out
         assert "alpha_one" in out
         assert "validated" in out
@@ -701,7 +695,7 @@ class TestCmdAlphaPromoteBatch:
 # ---------------------------------------------------------------------------
 
 
-from hft_platform.cli._alpha import cmd_alpha_validate  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_validate  # noqa: E402
 
 
 class TestCmdAlphaValidate:
@@ -940,7 +934,7 @@ class TestCmdAlphaCanaryAutoEvaluate:
 # ---------------------------------------------------------------------------
 
 
-from hft_platform.cli._alpha import cmd_alpha_validate_batch  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_validate_batch  # noqa: E402
 
 
 class TestCmdAlphaValidateBatch:

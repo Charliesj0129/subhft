@@ -246,7 +246,7 @@ def governed_validation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         state["gate_a_calls"] += 1
         return _report("Gate A", True)
 
-    def _gate_c(_alpha, _config, _root, _data, experiments_base):
+    def _gate_c(_alpha, _config, _root, _data, experiments_base, runtime=None):
         tracker = ExperimentTracker(base_dir=experiments_base)
         meta = tracker.log_run(
             run_id="run-1",

@@ -44,3 +44,7 @@ class GateCRuntime:
     compute_scorecard: Callable[..., Any]
     load_maker_runtime: Callable[[], GateCMakerRuntime]
     load_taker_runtime: Callable[[], GateCTakerRuntime]
+
+
+class GateCRuntimeMissingError(RuntimeError):
+    """Gate C was reached without an injected runtime; it fails closed rather than importing research."""

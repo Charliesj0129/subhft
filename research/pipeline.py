@@ -16,6 +16,7 @@ from hft_platform.alpha.paths import repo_path, repo_root
 from hft_platform.alpha.promotion import PromotionConfig, PromotionResult, promote_alpha, record_gate_c_kill
 from hft_platform.alpha.provenance import git_state
 from hft_platform.alpha.validation import ValidationConfig, run_alpha_validation
+from research.backtest.gate_c_runtime import build_gate_c_runtime
 from hft_platform.cli_args.research_pipeline import (
     DEFAULT_ALLOWED_DATA_ROOTS,
     DEFAULT_EXPERIMENTS_DIR,
@@ -277,7 +278,8 @@ def _validate(
             # the profile; without it they stay advisory.
             profile=loaded_profile,
             run_mode=(RunMode.GOVERNED if strict_mode else RunMode.EXPLORATORY).value,
-        )
+        ),
+        gate_c_runtime=build_gate_c_runtime()
     )
 
 

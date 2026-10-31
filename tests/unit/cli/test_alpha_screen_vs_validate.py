@@ -37,7 +37,7 @@ def _validate_args(profile: str | None = None, **overrides: Any) -> argparse.Nam
 
 
 def test_validate_without_profile_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
-    from hft_platform.cli._alpha import cmd_alpha_validate
+    from research.registry.alpha_cli import cmd_alpha_validate
 
     with pytest.raises(SystemExit) as excinfo:
         cmd_alpha_validate(_validate_args(profile=None))
@@ -48,7 +48,7 @@ def test_validate_without_profile_exits_2(capsys: pytest.CaptureFixture[str]) ->
 
 
 def test_validate_with_loose_profile_exits_2(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    from hft_platform.cli._alpha import cmd_alpha_validate
+    from research.registry.alpha_cli import cmd_alpha_validate
 
     loose = tmp_path / "loose.yaml"
     loose.write_text("name: loose_test\nis_strict: false\nthresholds: {}\nblocking_sub_gates: []\n")
@@ -63,7 +63,7 @@ def test_validate_with_loose_profile_exits_2(capsys: pytest.CaptureFixture[str],
 def test_validate_with_missing_profile_path_exits_2(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from hft_platform.cli._alpha import cmd_alpha_validate
+    from research.registry.alpha_cli import cmd_alpha_validate
 
     with pytest.raises(SystemExit) as excinfo:
         cmd_alpha_validate(_validate_args(profile="/nonexistent/path/to/profile.yaml"))
@@ -73,7 +73,7 @@ def test_validate_with_missing_profile_path_exits_2(
 
 
 def test_screen_stamps_screen_only_on_scorecard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from hft_platform.cli import _alpha as cli_alpha
+    from research.registry import alpha_cli as cli_alpha
 
     scorecard_path = tmp_path / "scorecard.json"
     scorecard_path.write_text(json.dumps({"sharpe_oos": 0.5, "max_drawdown": -0.1}))
@@ -88,7 +88,7 @@ def test_screen_stamps_screen_only_on_scorecard(monkeypatch: pytest.MonkeyPatch,
         },
     )
 
-    def fake_run_alpha_validation(_config: Any) -> Any:
+    def fake_run_alpha_validation(_config: Any, **_kw: Any) -> Any:
         return fake_result
 
     fake_module = SimpleNamespace(

@@ -27,7 +27,7 @@ from hft_platform.alpha._validation_helpers import (
 )
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 from hft_platform.alpha.evidence import canonical_sha256
-from hft_platform.alpha.gate_c_runtime import GateCRuntime
+from hft_platform.alpha.gate_c_runtime import GateCRuntime, GateCRuntimeMissingError
 from hft_platform.alpha.outcomes import Outcome, Verdict, VerdictResult, check_entry, derive_verdict
 from hft_platform.alpha.provenance import build_run_stamp
 from hft_platform.alpha.stats import benjamini_hochberg
@@ -465,17 +465,14 @@ def _equity_to_daily_pnl(equity_curve: Any) -> list[float]:
     return []
 
 
-def _load_gate_c_runtime() -> GateCRuntime:
-    """Load the research adapter during the compatibility migration window."""
-    from research.backtest.gate_c_runtime import build_gate_c_runtime
-
-    return build_gate_c_runtime()
-
-
 def _resolve_gate_c_runtime(runtime: GateCRuntime | None) -> GateCRuntime:
-    if runtime is not None:
-        return runtime
-    return _load_gate_c_runtime()
+    """The injected runtime; the platform never loads research's backtests itself (ADR-005)."""
+    if runtime is None:
+        raise GateCRuntimeMissingError(
+            "Gate C needs a GateCRuntime: run validation through `hft alpha validate` / `python -m research`, "
+            "or pass research.backtest.gate_c_runtime.build_gate_c_runtime()"
+        )
+    return runtime
 
 
 def _threshold_check(name: str, value: Any, threshold: float, *, at_least: bool) -> dict:

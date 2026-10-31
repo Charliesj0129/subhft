@@ -6,8 +6,15 @@ import sys
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from hft_platform.alpha import _gate_c
-from hft_platform.alpha.gate_c_runtime import GateCMakerRuntime, GateCRuntime, GateCTakerRuntime
+from hft_platform.alpha.gate_c_runtime import (
+    GateCMakerRuntime,
+    GateCRuntime,
+    GateCRuntimeMissingError,
+    GateCTakerRuntime,
+)
 from research.backtest.gate_c_runtime import build_gate_c_runtime
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,23 +31,10 @@ def _research_imports(path: Path) -> list[tuple[str, int]]:
     return sorted(imports)
 
 
-def test_gate_c_platform_policy_has_only_explicit_compatibility_adapter_edge() -> None:
+def test_gate_c_platform_policy_imports_no_research_module() -> None:
     path = _REPO_ROOT / "src" / "hft_platform" / "alpha" / "_gate_c.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    loader = next(
-        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_load_gate_c_runtime"
-    )
-    gate = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "run_gate_c")
 
-    assert [module for module, _ in _research_imports(path)] == ["research.backtest.gate_c_runtime"]
-    assert any(
-        isinstance(node, ast.ImportFrom) and node.module == "research.backtest.gate_c_runtime"
-        for node in ast.walk(loader)
-    )
-    assert not any(
-        isinstance(node, ast.ImportFrom) and node.module is not None and node.module.startswith("research.")
-        for node in ast.walk(gate)
-    )
+    assert _research_imports(path) == []
 
 
 def test_research_adapter_binds_all_gate_c_runtime_dependencies() -> None:
@@ -75,23 +69,15 @@ def test_research_adapter_binds_all_gate_c_runtime_dependencies() -> None:
     assert taker_runtime.taker_engine is TakerEngine
 
 
-def test_gate_c_runtime_prefers_injected_port(monkeypatch) -> None:
+def test_gate_c_runtime_uses_the_injected_port() -> None:
     injected = cast(GateCRuntime, object())
-
-    monkeypatch.setattr(
-        _gate_c,
-        "_load_gate_c_runtime",
-        lambda: (_ for _ in ()).throw(AssertionError("compatibility adapter must not load")),
-    )
 
     assert _gate_c._resolve_gate_c_runtime(injected) is injected
 
 
-def test_gate_c_runtime_loads_compatibility_adapter_when_not_injected(monkeypatch) -> None:
-    loaded = cast(GateCRuntime, object())
-    monkeypatch.setattr(_gate_c, "_load_gate_c_runtime", lambda: loaded)
-
-    assert _gate_c._resolve_gate_c_runtime(None) is loaded
+def test_gate_c_without_an_injected_runtime_fails_closed() -> None:
+    with pytest.raises(GateCRuntimeMissingError, match="needs a GateCRuntime"):
+        _gate_c._resolve_gate_c_runtime(None)
 
 
 def test_gate_c_common_runtime_does_not_eagerly_load_lane_implementations() -> None:

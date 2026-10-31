@@ -234,6 +234,16 @@ none of them promotes or writes a KILL.
   days, and how many candidates the sweep scored. A fallback profile also says why it
   is one.
 
+### `hft alpha` research subcommands (research v2 C5)
+
+`hft alpha {scaffold,search,mine,screen,validate,validate-batch,pipeline}` parse their
+arguments in the platform CLI, then run as `python -m research alpha <same arguments>`
+(`src/hft_platform/cli/_research.py` forwards; the bodies are in
+`research/registry/alpha_cli.py`). The exit code is the child's. Gate C runs only with an
+injected runtime (`research/backtest/gate_c_runtime.py:build_gate_c_runtime`); called
+without one, `run_gate_c` raises `GateCRuntimeMissingError` instead of importing research.
+Where `research/` is absent (production images) these subcommands exit 2 with a message.
+
 ## One Factory Flow
 
 The factory preflight sequence is fixed:

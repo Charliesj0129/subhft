@@ -3999,6 +3999,7 @@ def cmd_optimize(args: argparse.Namespace) -> int:
 
 def cmd_run_gate_c(args: argparse.Namespace) -> int:
     """Run Gate A → B → C for a single alpha and print the scorecard summary."""
+    from research.backtest.gate_c_runtime import build_gate_c_runtime
     from research.registry.alpha_registry import AlphaRegistry
     from research.tools.latency_profiles import load_latency_profile
     from src.hft_platform.alpha.validation import ValidationConfig, run_gate_a, run_gate_b, run_gate_c
@@ -4080,7 +4081,9 @@ def cmd_run_gate_c(args: argparse.Namespace) -> int:
 
     # --- Gate C ---
     experiments_base = ROOT / "experiments"
-    gate_c_result = run_gate_c(alpha_instance, config, project_root, resolved_paths, experiments_base)
+    gate_c_result = run_gate_c(
+        alpha_instance, config, project_root, resolved_paths, experiments_base, runtime=build_gate_c_runtime()
+    )
     gate_c, run_id, config_hash, scorecard_path, experiment_meta_path = gate_c_result
     status_c = "PASS" if gate_c.passed else "FAIL"
     print(f"[run-gate-c] Gate C → {status_c}")

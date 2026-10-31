@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 import yaml
 
-import hft_platform.cli as cli
 from research.combinatorial.partitioning import dataset_fingerprint
 from research.combinatorial.search_engine import AlphaSearchEngine
+from research.registry import alpha_cli
 
 
 def _mine_init_args(*, data_path, out_dir, session_field="session_id", **overrides) -> Namespace:
@@ -45,7 +45,7 @@ def test_cmd_alpha_mine_init_writes_manifest_and_prints_payload(capsys, tmp_path
     out_dir = tmp_path / "manifest"
 
     args = _mine_init_args(data_path=data_path, out_dir=out_dir)
-    cli.cmd_alpha_mine_init(args)
+    alpha_cli.cmd_alpha_mine_init(args)
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["partition_manifest_path"]
@@ -91,7 +91,7 @@ def test_cmd_alpha_mine_init_rejects_non_structured_array(capsys, tmp_path):
 
     args = _mine_init_args(data_path=data_path, out_dir=out_dir)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_init(args)
+        alpha_cli.cmd_alpha_mine_init(args)
     assert exc.value.code == 2
 
 
@@ -102,7 +102,7 @@ def test_cmd_alpha_mine_init_rejects_missing_session_field(capsys, tmp_path):
 
     args = _mine_init_args(data_path=data_path, out_dir=out_dir, session_field="not_a_field")
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_init(args)
+        alpha_cli.cmd_alpha_mine_init(args)
     assert exc.value.code == 2
 
 
@@ -170,7 +170,8 @@ def test_parser_mine_promote_rejects_both_expression_and_from_results() -> None:
 
 
 def test_parser_mine_promote_parses_expression_flags() -> None:
-    from hft_platform.cli import build_parser, cmd_alpha_mine_promote
+    from hft_platform.cli import build_parser
+    from research.registry.alpha_cli import cmd_alpha_mine_promote, handler_for
 
     parser = build_parser()
     args = parser.parse_args(
@@ -190,12 +191,12 @@ def test_parser_mine_promote_parses_expression_flags() -> None:
     )
     assert args.expression == "add(x, y)"
     assert args.from_results is None
-    assert args.func is cmd_alpha_mine_promote
+    assert handler_for(args) is cmd_alpha_mine_promote
 
 
 def test_cmd_alpha_mine_promote_writes_alpha_package(capsys, scratch_alpha_id) -> None:
     args = _mine_promote_args(alpha_id=scratch_alpha_id, expression="add(x, y)")
-    cli.cmd_alpha_mine_promote(args)
+    alpha_cli.cmd_alpha_mine_promote(args)
     out = capsys.readouterr().out
     assert "Promoted GP candidate to" in out
     assert (Path("research/alphas") / scratch_alpha_id / "manifest.yaml").exists()
@@ -221,7 +222,7 @@ def test_cmd_alpha_mine_promote_from_results(capsys, scratch_alpha_id, tmp_path)
         )
     )
     args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(results_path), rank=0)
-    cli.cmd_alpha_mine_promote(args)
+    alpha_cli.cmd_alpha_mine_promote(args)
     out = capsys.readouterr().out
     assert "Promoted GP candidate to" in out
     manifest = yaml.safe_load((Path("research/alphas") / scratch_alpha_id / "manifest.yaml").read_text())
@@ -236,7 +237,7 @@ def test_cmd_alpha_mine_promote_from_results_reads_the_engine_output(capsys, scr
     results_path = Path(engine.save_results(results, path=str(tmp_path / "latest.json")))
 
     args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(results_path), rank=0)
-    cli.cmd_alpha_mine_promote(args)
+    alpha_cli.cmd_alpha_mine_promote(args)
 
     manifest = yaml.safe_load((Path("research/alphas") / scratch_alpha_id / "manifest.yaml").read_text())
     meta = manifest["experiment_metadata"]
@@ -252,29 +253,29 @@ def test_cmd_alpha_mine_promote_requires_rank_with_from_results(scratch_alpha_id
     results_path.write_text(json.dumps({"results": []}))
     args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(results_path), rank=None)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_promote(args)
+        alpha_cli.cmd_alpha_mine_promote(args)
     assert exc.value.code == 2
 
 
 def test_cmd_alpha_mine_promote_neither_source_exits_2(scratch_alpha_id) -> None:
     args = _mine_promote_args(alpha_id=scratch_alpha_id)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_promote(args)
+        alpha_cli.cmd_alpha_mine_promote(args)
     assert exc.value.code == 2
 
 
 def test_cmd_alpha_mine_promote_refuses_overwrite_without_force(scratch_alpha_id) -> None:
     args = _mine_promote_args(alpha_id=scratch_alpha_id, expression="add(x, y)")
-    cli.cmd_alpha_mine_promote(args)
+    alpha_cli.cmd_alpha_mine_promote(args)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_promote(args)
+        alpha_cli.cmd_alpha_mine_promote(args)
     assert exc.value.code == 2
 
 
 def test_cmd_alpha_mine_promote_rejects_noncausal_expression(scratch_alpha_id) -> None:
     args = _mine_promote_args(alpha_id=scratch_alpha_id, expression="rank(x)")
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_promote(args)
+        alpha_cli.cmd_alpha_mine_promote(args)
     assert exc.value.code == 2
 
 
@@ -282,7 +283,7 @@ def test_cmd_alpha_mine_promote_missing_results_file_exits_cleanly(scratch_alpha
     missing_path = tmp_path / "does_not_exist.json"
     args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(missing_path), rank=0)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_promote(args)
+        alpha_cli.cmd_alpha_mine_promote(args)
     assert exc.value.code == 2
     assert "[hft alpha mine promote]" in capsys.readouterr().out
 
@@ -292,6 +293,6 @@ def test_cmd_alpha_mine_promote_malformed_results_row_exits_cleanly(scratch_alph
     results_path.write_text(json.dumps({"results": [{"expression": "add(x, y)"}]}))  # missing score/etc.
     args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(results_path), rank=0)
     with pytest.raises(SystemExit) as exc:
-        cli.cmd_alpha_mine_promote(args)
+        alpha_cli.cmd_alpha_mine_promote(args)
     assert exc.value.code == 2
     assert "[hft alpha mine promote]" in capsys.readouterr().out
