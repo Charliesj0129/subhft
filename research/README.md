@@ -223,6 +223,12 @@ none of them promotes or writes a KILL.
 - The candidate loop's top status is `SHORTLISTED` (the v1 spec's `PROMOTED`; old rows
   are read as `SHORTLISTED`). Every test-split read is logged in the evidence root's
   `ledger/holdout_access.jsonl`, the same log Gate C writes.
+- A shortlisted candidate reaches Gate C as `research.candidate_loop.gate_c_alpha.
+  CandidateGateCAlpha`: its validator-canonical signal is evaluated once on the day
+  panels (`panels.build_panel`) of the same `*_l2.hftbt.npz` files Gate C replays, and
+  each tick reads the latest batch at or before the tick's `local_ts`. Regime-off rows,
+  `expected_sign: negative` and days that are not `dir_clean` for a `trade_imbalance`
+  candidate follow the evaluator. Nothing is hand-ported; no CLI wires it to Gate C yet.
 - A calibration profile in `config/research/calibration_profiles.yaml` carries a
   `provenance` block: the RunStamp, the sweep configuration, the train and held-out
   days, and how many candidates the sweep scored. A fallback profile also says why it
