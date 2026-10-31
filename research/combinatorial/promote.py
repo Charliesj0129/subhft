@@ -53,6 +53,7 @@ class Lineage:
     correlation_pool_max: float | None
     search_algorithm: str | None
     search_trials: int | None = None
+    search_trials_effective: int | None = None
 
 
 def class_name_for(alpha_id: str) -> str:
@@ -71,6 +72,7 @@ def promote_candidate(
     search_result: SearchResult | None = None,
     trial_ledger: TrialLedger | None = None,
     search_trials: int | None = None,
+    search_trials_effective: int | None = None,
 ) -> Path:
     """Scaffold ``<out_dir>/<alpha_id>/`` from a GP-discovered *expression*.
 
@@ -92,8 +94,11 @@ def promote_candidate(
     *search_trials* is how many distinct expressions the search scored before
     this one was selected; on the ledger path it is the ledger's distinct trial
     count for the candidate's ``search_run_id``. It is recorded in
-    ``experiment_metadata.search_trials`` (``None`` when unknown) for the
-    selection correction; no gate reads it yet.
+    ``experiment_metadata.search_trials`` (``None`` when unknown).
+    *search_trials_effective* is the search's Li-Ji effective count of those
+    trials (``trial_summary()["effective"]``), recorded as
+    ``experiment_metadata.search_trials_effective``; Gate C's
+    ``selection_deflated_sharpe`` sub-gate deflates by it.
     """
     compiled = compile_expression(expression)
     window = max_window_for_expression(expression)  # raises on non-streamable expressions
@@ -101,7 +106,7 @@ def promote_candidate(
     complexity = "O(N)" if window > 1 else "O(1)"
 
     lineage = (
-        _lineage_from_search_result(expression, search_result, search_trials)
+        _lineage_from_search_result(expression, search_result, search_trials, search_trials_effective)
         if search_result is not None
         else _lineage_from_ledger(expression, trial_ledger or TrialLedger())
     )
@@ -164,7 +169,16 @@ def promote_from_results(results_path: Path | str, rank: int, **kwargs: Any) -> 
         metadata=dict(row.get("metadata", {})),
     )
     search_trials = int(trials["distinct"]) if isinstance(trials, dict) and "distinct" in trials else None
-    return promote_candidate(result.expression, search_result=result, search_trials=search_trials, **kwargs)
+    search_trials_effective = (
+        int(trials["effective"]) if isinstance(trials, dict) and trials.get("effective") else None
+    )
+    return promote_candidate(
+        result.expression,
+        search_result=result,
+        search_trials=search_trials,
+        search_trials_effective=search_trials_effective,
+        **kwargs,
+    )
 
 
 def promote_smma_candidate(
@@ -256,7 +270,12 @@ def promote_smma_candidate(
     return alpha_dir
 
 
-def _lineage_from_search_result(expression: str, result: SearchResult, search_trials: int | None) -> Lineage:
+def _lineage_from_search_result(
+    expression: str,
+    result: SearchResult,
+    search_trials: int | None,
+    search_trials_effective: int | None,
+) -> Lineage:
     return Lineage(
         candidate_id=TrialLedger.candidate_id_for(expression),
         search_run_id=None,
@@ -268,6 +287,7 @@ def _lineage_from_search_result(expression: str, result: SearchResult, search_tr
             str(result.metadata["search_algorithm"]) if result.metadata.get("search_algorithm") else None
         ),
         search_trials=search_trials,
+        search_trials_effective=search_trials_effective,
     )
 
 
@@ -327,6 +347,7 @@ def _render_manifest_yaml(manifest: AlphaManifest, lineage: Lineage) -> str:
         "discovery_selection_sharpe": lineage.selection_sharpe,
         "discovery_correlation_pool_max": lineage.correlation_pool_max,
         "search_trials": lineage.search_trials,
+        "search_trials_effective": lineage.search_trials_effective,
         "discovery_metric_note": (
             "score/selection_sharpe/correlation_pool_max are selection-set metrics from "
             "research/combinatorial/search_engine.py, never out-of-sample -- see that "

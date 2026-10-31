@@ -216,6 +216,7 @@ hft alpha validate --alpha-id <id> --profile vm_ul6_strict_v2 --data <paths>
 | `replay_parity.py` | maker + taker | Slice C (#339) |
 | `inventory_mtm.py` | maker | Slice B (#340, merged 2026-05-29) |
 | `cost_uncertainty.py` | maker + taker | Slice B (#340, merged 2026-05-29) |
+| `selection_deflated_sharpe.py` | maker + taker | research v2 (advisory; deflates by the search's `search_trials_effective`) |
 
 ### Blocking sub-gates under `vm_ul6_strict` (verified from `config/research/profiles/vm_ul6_strict.yaml::blocking_sub_gates`)
 

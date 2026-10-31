@@ -16,6 +16,7 @@ _NEW_GATE_NAMES = {
     "day_bootstrap_ci",
     "stationary_block_bootstrap",
     "deflated_sharpe_maker",
+    "selection_deflated_sharpe",
 }
 
 
