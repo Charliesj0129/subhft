@@ -56,6 +56,10 @@ _MARKET_DATA_COLS: list[str] = [
     "strike_scaled",
     "option_right",
     "expiry",
+    # Tick integrity fields (added 2026-10-06)
+    "total_volume",
+    "is_simtrade",
+    "is_odd_lot",
 ]
 
 
@@ -171,6 +175,9 @@ def format_market_data(
             int(r.get("strike_scaled", 0)),
             r.get("option_right", ""),
             _to_date(r.get("expiry", "1970-01-01")),
+            int(r.get("total_volume", 0) or 0),
+            int(r.get("is_simtrade", 0) or 0),
+            int(r.get("is_odd_lot", 0) or 0),
         ]
         data.append(row_data)
 
