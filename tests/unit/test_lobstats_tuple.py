@@ -42,16 +42,20 @@ class TestGetStatsTupleTag:
         assert t[1] == "TEST"
         assert len(t) == 10
 
-    def test_rust_path_prepends_lobstats_tag(self):
+    def test_rust_state_present_still_reads_python_fields(self):
+        # The Rust state misses stats-path updates (it can hold the boot snapshot).
         bs = BookState("SYM")
         mock_rs = MagicMock()
-        rust_tuple = ("SYM", 100, 2000, 10, 0.5, 1000, 1010, 50, 30)
-        mock_rs.get_stats_tuple.return_value = rust_tuple
+        mock_rs.get_stats_tuple.return_value = ("SYM", 100, 2000, 10, 0.5, 1000, 1010, 50, 30)
         bs._rust_state = mock_rs
+        bs.bids = np.array([[500000, 10]], dtype=np.int64)
+        bs.asks = np.array([[510000, 5]], dtype=np.int64)
+        bs.mid_price_x2 = 1010000
         t = bs.get_stats_tuple()
         assert t[0] == "lobstats"
-        assert t[1:] == rust_tuple
+        assert t[6:8] == (500000, 510000)
         assert len(t) == 10
+        mock_rs.get_stats_tuple.assert_not_called()
 
     def test_rust_fallback_still_has_tag(self):
         bs = BookState("FB")

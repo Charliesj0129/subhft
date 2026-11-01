@@ -329,14 +329,10 @@ class BookState:
             )
 
     def get_stats_tuple(self) -> tuple:
+        # Read the Python fields, never ``_rust_state``: only ``apply_update``
+        # feeds the Rust state, while ``apply_update_with_stats*``, the fused
+        # bypass and ``update_tick`` do not, so it can hold the boot snapshot.
         with self.lock:
-            rs = self._rust_state
-            if rs is not None:
-                try:
-                    rust_t = rs.get_stats_tuple()
-                    return ("lobstats",) + rust_t
-                except Exception as exc:
-                    logger.debug("rust_stats_tuple_fallback", symbol=self.symbol, error=str(exc))
             if isinstance(self.bids, np.ndarray):
                 best_bid = int(self.bids[0, 0]) if self.bids.size > 0 else 0
             else:
@@ -846,13 +842,9 @@ class LOBEngine:
         book = self.books[symbol]
 
         lock_ctx = book.lock if _READ_LOCKS_ENABLED else _NoopLock()
+        # Python fields only, as in ``BookState.get_stats_tuple``: the Rust state
+        # misses every update that does not go through ``apply_update``.
         with lock_ctx:
-            rs = book._rust_state
-            if rs is not None:
-                try:
-                    return rs.get_l1_scaled()
-                except Exception as exc:
-                    logger.debug("rust_l1_scaled_fallback", symbol=symbol, error=str(exc))
             if isinstance(book.bids, np.ndarray):
                 best_bid = int(book.bids[0, 0]) if book.bids.size > 0 else 0
             else:
