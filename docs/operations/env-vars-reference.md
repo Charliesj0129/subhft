@@ -265,6 +265,7 @@ Shadow deployment note:
 | `HFT_RECORDER_DATA_LOSS_BOOT_GRACE_S` | `60` | 開機後此秒數內暫不 latch `recorder_data_loss`（2026-06-18 boot-latch 事故：開機瞬態 DATA_LOSS 誤觸永久 reduce-only/HALT） | `0` = 停用（回到立即 latch）；真實 data loss 超過窗口仍會 latch |
 | `HFT_MANUAL_LATCH_DIR` | `.state/manual_latches` | 需人工解除的 latch（`daily_loss`、`reconciliation_mismatch`）各存成一個 JSON 檔，另有 `audit.jsonl`；見 `docs/runbooks/halt-recovery.md` | 必須指向重啟後仍保留的路徑，否則 latch 會隨容器消失 |
 | `HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_S` | `600` | Active-symbol-aware feed-gap 觸發 `feed_reconnect_unhealthy` 的秒數門檻；2026-04 由 120s 提升為 600s，配合 800 標的訂閱宇宙與 illiquid 期權容忍度 | 視訂閱集流動性調整；過低易在 night session 誤觸發 |
+| `HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_ROOTS` | `TXF,MXF,TMF` | 只有這些商品根（各月份）的 latched 期貨會計入上面那個 feed gap。2026-10-30 EXFK6 在行情正常時靜默 600 s，觸發全平台 reduce-only；EXF 在 10/05–10/30 有 9 次單獨盤中靜默 ≥ 300 s，而 TXF/MXF/TMF 的長空窗都是同時發生（真斷線） | 逗號分隔、不分大小寫；空白或空字串 = 預設值（不會變成「全部」）。策略交易其他商品根時要把它加進來 |
 
 重點：
 - `platform_reduce_only_active=1` 時，shadow 策略即使仍在產生 intents，也可能沒有任何 new order 能往下游流動。

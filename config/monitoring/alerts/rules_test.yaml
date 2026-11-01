@@ -366,7 +366,7 @@ tests:
   # `interval: 1m` matters: a longer interval than Prometheus's 5m lookback
   # lets the input series go stale between samples, and then nothing fires.
   - interval: 1m
-    name: an order dead-letter pages as an order fault, not a recorder one
+    name: an order dead-letter is an order warning, not a recorder page
     input_series:
       - series: 'dlq_size_total{source="order"}'
         values: "0+0x10 1+0x30"
@@ -378,7 +378,7 @@ tests:
         alertname: OrderDeadLetterQueueGrowing
         exp_alerts:
           - exp_labels:
-              severity: critical
+              severity: warning
               source: order
             exp_annotations:
               summary: "An order was dead-lettered"
@@ -395,11 +395,16 @@ tests:
                 113 of them inside the 00:45Z market-open minute where the order
                 session was not yet established. A burst at the open and a trickle
                 through the session are different faults; check the timestamps before
-                treating them as one.
+                treating them as one. A timed-out order that did not end cleanly pages
+                separately as OrderOutcomeUnresolved.
       # The whole point of the fix: the same input must NOT reach the recorder
       # alert. This case fails on every build before 2026-09-14.
       - eval_time: 15m
         alertname: RecorderDeadLetterQueueGrowing
+        exp_alerts: []
+      # A dead-letter on its own is not an unresolved order.
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
         exp_alerts: []
 
   - interval: 1m
@@ -441,6 +446,117 @@ tests:
         exp_alerts: []
       - eval_time: 15m
         alertname: OrderDeadLetterQueueGrowing
+        exp_alerts: []
+
+  # ── OrderOutcomeUnresolved ──────────────────────────────────────
+  # The critical half of the order DLQ split. The three phantom_bound_total
+  # children start at 0 here because MetricsRegistry creates them at 0; a
+  # series born at 1 would never move increase().
+  - interval: 1m
+    name: a timed-out order that did not end cleanly pages critical, per outcome
+    input_series:
+      - series: 'phantom_bound_total{outcome="cancel_timeout"}'
+        values: "0+0x10 1+0x30"
+      - series: 'phantom_bound_total{outcome="cancel_failed"}'
+        values: "0+0x10 1+0x30"
+      - series: 'phantom_bound_total{outcome="fill_claimed_after_expiry"}'
+        values: "0+0x10 1+0x30"
+      - series: "live_order_ttl_releases_total"
+        values: "0+0x40"
+      - series: "phantom_recovery_releases_total"
+        values: "0+0x40"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: cancel_timeout
+            exp_annotations:
+              summary: "A timed-out order did not end cleanly (cancel_timeout)"
+              description: &unresolved_one |
+                1 in 30m. The broker may hold an order, or a
+                fill, that the strategy's pending count does not reflect. Compare the
+                broker's open orders and positions with the platform before trusting
+                the next quote. The engine log events are `phantom_bound` (details
+                carry the outcome), `phantom_fill_resolved_via_expired_phantom`,
+                `phantom_recovery_swept` and `live_orders_stale_sweep`;
+                `cancel_unconfirmed_total{outcome="gave_up"}` says a cancel was left
+                to the TTL.
+          - exp_labels:
+              severity: critical
+              outcome: cancel_failed
+            exp_annotations:
+              summary: "A timed-out order did not end cleanly (cancel_failed)"
+              description: *unresolved_one
+          - exp_labels:
+              severity: critical
+              outcome: fill_claimed_after_expiry
+            exp_annotations:
+              summary: "A timed-out order did not end cleanly (fill_claimed_after_expiry)"
+              description: *unresolved_one
+      # The window passes with no new increment: it clears.
+      - eval_time: 42m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts: []
+
+  - interval: 1m
+    name: a TTL release pages critical under its own outcome
+    input_series:
+      - series: "live_order_ttl_releases_total"
+        values: "0+0x10 1+0x30"
+      - series: "phantom_recovery_releases_total"
+        values: "0+0x10 2+0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: live_order_ttl_release
+            exp_annotations:
+              summary: "A timed-out order did not end cleanly (live_order_ttl_release)"
+              description: *unresolved_one
+          - exp_labels:
+              severity: critical
+              outcome: phantom_ttl_release
+            exp_annotations:
+              summary: "A timed-out order did not end cleanly (phantom_ttl_release)"
+              description: |
+                2 in 30m. The broker may hold an order, or a
+                fill, that the strategy's pending count does not reflect. Compare the
+                broker's open orders and positions with the platform before trusting
+                the next quote. The engine log events are `phantom_bound` (details
+                carry the outcome), `phantom_fill_resolved_via_expired_phantom`,
+                `phantom_recovery_swept` and `live_orders_stale_sweep`;
+                `cancel_unconfirmed_total{outcome="gave_up"}` says a cancel was left
+                to the TTL.
+
+  # The 2026-10-29 shape that paged critical 9 times: dead-letters and late
+  # Trades that were bound and cancelled cleanly. Nothing here is unresolved.
+  - interval: 1m
+    name: dead-letters whose late Trades were cancelled cleanly page nobody critical
+    input_series:
+      - series: 'dlq_size_total{source="order"}'
+        values: "0+0x10 30+0x30"
+      - series: 'phantom_bound_total{outcome="cancel_sent"}'
+        values: "0+0x10 25+0x30"
+      - series: 'phantom_bound_total{outcome="kept_for_ttl"}'
+        values: "0+0x10 1+0x30"
+      - series: 'phantom_bound_total{outcome="skipped_filled"}'
+        values: "0+0x10 1+0x30"
+      - series: 'phantom_bound_total{outcome="cancel_timeout"}'
+        values: "0+0x40"
+      - series: "live_order_ttl_releases_total"
+        values: "0+0x40"
+      - series: "phantom_recovery_releases_total"
+        values: "0+0x40"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
         exp_alerts: []
 
   # ── StrategyPendingWithNoInflightOrder ──────────────────────────

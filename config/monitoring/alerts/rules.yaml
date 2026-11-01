@@ -156,9 +156,9 @@ groups:
   # form would page critical on the DLQ being tidied up. It has not yet, only
   # because that series has never materialised.
   #
-  # Severity and repeat interval are unchanged on both rules below: an order
-  # dead-letter still pages critical exactly as it does today, and so does a
-  # recorder one. What changes is that the message is true.
+  # A recorder dead-letter pages critical: those rows are not in ClickHouse.
+  # An order dead-letter is a warning since 2026-11 (see
+  # OrderOutcomeUnresolved below for what still pages).
   - alert: RecorderDeadLetterQueueGrowing
     expr: increase(dlq_size_total{source="recorder"}[30m]) > 0
     for: 0s
@@ -175,11 +175,17 @@ groups:
           way this has failed before (hft.fills, 2026-04-25 to 2026-08-21, four
           months undetected because this alert did not exist).
 
+  # Warning since 2026-11. THESHOW 2026-10-29..30 (SIM broker): 91 order
+  # dead-letters, connection_error from place_order answering in 5-19 s against
+  # the 3 s wrapper timeout, paged critical 9 times. A dead-letter there is a
+  # timed-out call, and _bind_late_trade then binds the late Trade and cancels
+  # it (phantom_bound_total{outcome="cancel_sent"} reached 76). The case that
+  # needs a person is the one that did not end cleanly: OrderOutcomeUnresolved.
   - alert: OrderDeadLetterQueueGrowing
     expr: increase(dlq_size_total{source="order"}[30m]) > 0
     for: 0s
     labels:
-        severity: critical
+        severity: warning
     annotations:
         summary: "An order was dead-lettered"
         description: |
@@ -195,7 +201,42 @@ groups:
           113 of them inside the 00:45Z market-open minute where the order
           session was not yet established. A burst at the open and a trickle
           through the session are different faults; check the timestamps before
-          treating them as one.
+          treating them as one. A timed-out order that did not end cleanly pages
+          separately as OrderOutcomeUnresolved.
+
+  # The critical half of the order DLQ split. Each outcome is a state the
+  # platform no longer knows the end of:
+  #   cancel_timeout / cancel_failed   a timed-out place_order came back live and
+  #                                    its cancel did not land (the cancel watch
+  #                                    re-checks once, then leaves it to the TTL)
+  #   fill_claimed_after_expiry        a fill was matched to a phantom already
+  #                                    expired and released
+  #   live_order_ttl_release           a live order swept with no terminal
+  #   phantom_ttl_release              a phantom released with no Trade at all
+  # The three phantom_bound_total children are created at 0 by MetricsRegistry:
+  # increase() over a series born at 1 is 0, which is how the first
+  # cancel_timeout (2026-10-29 15:10Z) and the only fill_claimed_after_expiry
+  # (15:38Z) went unseen. Over 10/28-11/01 this would have paged for 2 windows,
+  # both in the 10/29 15Z RTT storm, against 9 for the DLQ rule above.
+  - alert: OrderOutcomeUnresolved
+    expr: |
+      sum by (outcome) (increase(phantom_bound_total{outcome=~"cancel_timeout|cancel_failed|fill_claimed_after_expiry"}[30m])) > 0
+      or label_replace(sum(increase(live_order_ttl_releases_total[30m])) > 0, "outcome", "live_order_ttl_release", "", "")
+      or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "A timed-out order did not end cleanly ({{ $labels.outcome }})"
+        description: |
+          {{ $value | printf "%.0f" }} in 30m. The broker may hold an order, or a
+          fill, that the strategy's pending count does not reflect. Compare the
+          broker's open orders and positions with the platform before trusting
+          the next quote. The engine log events are `phantom_bound` (details
+          carry the outcome), `phantom_fill_resolved_via_expired_phantom`,
+          `phantom_recovery_swept` and `live_orders_stale_sweep`;
+          `cancel_unconfirmed_total{outcome="gave_up"}` says a cancel was left
+          to the TTL.
 
   - alert: RecorderDeadLetterQueueNonEmpty
     expr: wal_file_count_tiered{tier="dlq"} > 0

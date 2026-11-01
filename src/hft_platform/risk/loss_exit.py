@@ -77,6 +77,11 @@ UNATTRIBUTED_STRATEGY_ID = "__loss_exit__"
 # which restarts daily and has reached ~50,000 on THESHOW. Below 2**31.
 INTENT_ID_BASE = 1_900_000_000
 
+# An unpriced exit is retried every supervisor tick (1 Hz). Logging each retry
+# wrote ``loss_exit_unpriced`` 62,946 times on THESHOW 10/30-10/31 while the
+# HALT waited for a book; the counter still counts every tick.
+UNPRICED_LOG_INTERVAL_NS = 60 * 1_000_000_000
+
 
 def is_platform_exit(order_key: str) -> bool:
     """Whether an order key (``strategy_id:intent_id``) names one of these exits."""
@@ -107,6 +112,7 @@ class LossExitController:
         "_last_submit_ns",
         "_next_intent_id",
         "_window_ns_cache",
+        "_unpriced_logged_ns",
     )
 
     def __init__(self, *, protection_ticks: int = 5, retry_interval_s: float = 10.0) -> None:
@@ -116,6 +122,8 @@ class LossExitController:
         self._last_submit_ns: dict[str, int] = {}
         self._next_intent_id = INTENT_ID_BASE
         self._window_ns_cache: dict[tuple[str, int], tuple[int, int]] = {}
+        # symbol -> when ``loss_exit_unpriced`` was last logged for it.
+        self._unpriced_logged_ns: dict[str, int] = {}
 
     def _expiry_passed(self, symbol: str, now_ns: int, cutoff_minute: int) -> bool:
         key = (symbol, cutoff_minute)
@@ -196,8 +204,12 @@ class LossExitController:
                 continue
             if not priced:
                 MetricsRegistry.get().loss_exit_unpriced_total.labels(trigger=trigger).inc()
-                logger.warning("loss_exit_unpriced", strategy_id=strategy_id, symbol=symbol, trigger=trigger)
+                logged = self._unpriced_logged_ns.get(key)
+                if logged is None or now_ns - logged >= UNPRICED_LOG_INTERVAL_NS:
+                    self._unpriced_logged_ns[key] = now_ns
+                    logger.warning("loss_exit_unpriced", strategy_id=strategy_id, symbol=symbol, trigger=trigger)
                 continue
+            self._unpriced_logged_ns.pop(key, None)
             if sum(1 for q in holders.values() if q != 0) > 1:
                 logger.warning("loss_exit_shared_symbol", symbol=symbol, holders=dict(holders), booked_to=strategy_id)
             intents.append(self._build(strategy_id, symbol, net_qty, bid, ask, tick_size(symbol), trigger, now_ns))
@@ -207,6 +219,8 @@ class LossExitController:
         # (Cancel bookkeeping is ``cancel_intents``' own.)
         for key in [k for k in self._last_submit_ns if k not in due and not k.startswith("cancel:")]:
             del self._last_submit_ns[key]
+        for key in [k for k in self._unpriced_logged_ns if k not in due]:
+            del self._unpriced_logged_ns[key]
         return intents
 
     def cancel_intents(

@@ -258,7 +258,18 @@ class TestMarketDataConsumerYields(unittest.IsolatedAsyncioTestCase):
         seen = await self._drain_burst(64)
         longest_run = max(seen.count(v) for v in set(seen))
         self.assertEqual(len(seen), 64)
-        # Default HFT_MD_YIELD_EVERY=8: the other task runs at least once per 8 messages.
+        # Default HFT_MD_YIELD_EVERY=1: the other task runs between any two queued messages.
+        self.assertEqual(longest_run, 1)
+
+    async def test_consumer_yield_every_env_still_batches_a_burst(self):
+        with patch.dict(os.environ, {"HFT_MD_YIELD_EVERY": "8"}):
+            client = MagicMock()
+            client.login.return_value = True
+            self.service = MarketDataService(MagicMock(spec=RingBufferBus), self.raw_queue, client)
+        seen = await self._drain_burst(64)
+        longest_run = max(seen.count(v) for v in set(seen))
+        self.assertEqual(len(seen), 64)
+        self.assertGreater(longest_run, 1)
         self.assertLessEqual(longest_run, 8)
 
     async def test_consumer_yield_every_is_bounded_below_by_one(self):

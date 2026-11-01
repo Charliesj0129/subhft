@@ -85,6 +85,27 @@ def _parse_symbol_gap_overrides(raw: str) -> dict[str, float]:
     return overrides
 
 
+def _parse_feed_gap_roots(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Parse 'TXF,MXF,TMF' into the product roots the reduce-only feed gap watches.
+
+    Unset or blank means the default, never "every root": an empty set read as a
+    wildcard would put the illiquid roots straight back into the health signal.
+    A token that cannot be a product root ('TXF;MXF', 'TX F') is dropped with a
+    warning: kept, it would match no code and silently turn the signal off.
+    """
+    if raw is None:
+        return default
+    tokens = dict.fromkeys(token.strip().upper() for token in raw.split(",") if token.strip())
+    invalid = [t for t in tokens if not (2 <= len(t) <= 4 and t.isascii() and t.isalnum())]
+    if invalid:
+        logger.warning("feed_gap_health_roots_invalid_tokens_dropped", tokens=",".join(invalid))
+    roots = tuple(t for t in tokens if t not in invalid)
+    if not roots:
+        logger.warning("feed_gap_health_roots_blank_using_default", default=",".join(default))
+        return default
+    return roots
+
+
 def _get_trace_sampler():
     try:
         from hft_platform.diagnostics.trace import get_trace_sampler
@@ -469,6 +490,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # feed signal (not a structural illiquid quirk).
         self._event_counts: dict[str, int] = {}
         self._ever_active_symbols: set[str] = set()
+        # Product roots whose latched symbols feed the reduce-only feed gap
+        # (``get_active_feed_gap_s``); see ``_FEED_GAP_HEALTH_ROOTS_DEFAULT``.
+        self._feed_gap_health_roots: tuple[str, ...] = _parse_feed_gap_roots(
+            os.getenv("HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_ROOTS"), self._FEED_GAP_HEALTH_ROOTS_DEFAULT
+        )
         self._symbol_gap_threshold_s = float(os.getenv("HFT_SYMBOL_GAP_THRESHOLD_S", "6.0"))
         # Bug #36: per-symbol overrides for the watchdog gap threshold.
         # Format: HFT_SYMBOL_GAP_THRESHOLD_OVERRIDES="TXFG6=60,2207=120,..."
@@ -578,7 +604,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # p99 40-80 ms, 1,747 probe overshoots >25 ms/hour, per-minute count
         # correlated 0.90 with tick volume; execution reports waited behind it
         # (execution_router_lag_ns p99 46-77 ms, ExecutionLagHigh x40).
-        self._md_yield_every = env_int("HFT_MD_YIELD_EVERY", 8)
+        #
+        # Default 1, not 8: 8 left one step at ~8 x 600 us of CPU per message
+        # (engine CPU = 0.17 core + 597 us per feed event, R^2 0.95, THESHOW
+        # 10/30), and with GIL handoffs to the broker threads that was still
+        # 400-1,300 probe overshoots >10 ms per hour in the day session, rising
+        # with tick volume -- ExecutionLagHigh x6 after the 10/28 deploy.
+        # Replaying recorded ticks at 600 us/msg: >10 ms per hour 1,740 (8),
+        # 540 (4), 60 (2), 0 (1). One yield costs ~2.4 us.
+        self._md_yield_every = env_int("HFT_MD_YIELD_EVERY", 1)
         self._md_burst_run = 0
         self._md_latency_sample_every = env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
         self._md_callback_parse_metrics_every = env_int("HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default)
@@ -2136,29 +2170,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # would falsely trigger StormGuard STORM if included.
     _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
-    # Futures symbol prefixes considered for feed-gap calculation.
-    # During night sessions, only futures trade — stock symbols (numeric codes
-    # like 2330, 2615) have no quotes and would falsely inflate the max gap.
-    # When set, only symbols matching these prefixes are included; everything
-    # else (stocks, options already excluded above) is ignored.
-    _FEED_GAP_FUTURES_PREFIXES: tuple[str, ...] = (
-        "TMF",
-        "TXF",
-        "MXF",
-        "TGF",
-        "XIF",
-        "T5F",
-        "UDF",
-        "GTF",
-        "BTF",
-        "RHF",
-        "SPF",
-        "UNF",
-        "E4F",
-        "NYF",
-        "EXF",
-        "ZEF",
-    )
+    # Product roots whose latched symbols decide the reduce-only feed gap
+    # (``get_active_feed_gap_s``). Override: HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_ROOTS.
+    # 2026-10-30 20:20Z: EXFK6 had crossed the 5-event latch, then sat silent
+    # 600 s at 04:10 Taipei while the feed carried ~3,500 events/min, and put the
+    # whole platform in reduce-only. Over 2026-10-05..30 EXF alone went quiet
+    # >= 300 s inside a session 9 times (3 of them >= 600 s); every such gap on
+    # TXF/MXF/TMF, any month, hit all of them at once -- a real outage, which
+    # these roots still see.
+    _FEED_GAP_HEALTH_ROOTS_DEFAULT: tuple[str, ...] = ("TXF", "MXF", "TMF")
 
     @staticmethod
     def _is_futures_symbol(symbol: str) -> bool:
@@ -2258,10 +2278,18 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
           preserves the partial-outage signal in any environment that
           cannot answer the membership question authoritatively.
 
-        Falls back to :meth:`get_max_feed_gap_s` when the latched set is
-        empty after de-latching (legitimate cold start before any
-        symbol has crossed the 5-event baseline, or every latched
-        symbol just got de-subscribed).
+        * **Health roots**: only latched symbols under
+          ``_feed_gap_health_roots`` (default TXF/MXF/TMF,
+          ``HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_ROOTS``) contribute.  A
+          latched illiquid root (EXFK6, 2026-10-30) can sit silent past the
+          threshold in a healthy feed; the liquid roots cannot, so their
+          silence is the outage signal.
+
+        Falls back to :meth:`get_max_feed_gap_s` when no latched
+        health-root symbol is left after de-latching (legitimate cold start
+        before any symbol has crossed the 5-event baseline, or every latched
+        symbol just got de-subscribed) -- only while membership is unknown;
+        with a subscription set the answer is ``0.0`` (see below).
 
         Args:
             active_threshold_s: deprecated; ignored.  Retained for
@@ -2377,6 +2405,10 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
                         latched_silent_counter.labels(symbol=capped, action="unsubscribed").inc()
                     except Exception:
                         pass
+                continue
+            # After the de-latch, so an expired contract of any root is still
+            # pruned from the latched set.
+            if not symbol.startswith(self._feed_gap_health_roots):
                 continue
             age_s = now - last_ts
             active_count += 1

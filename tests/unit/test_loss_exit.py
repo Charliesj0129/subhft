@@ -12,6 +12,8 @@ import datetime as dt
 import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, Side
+from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.risk import loss_exit as loss_exit_module
 from hft_platform.risk.loss_exit import (
     INTENT_ID_BASE,
     TRIGGER_DAILY_LOSS_HALT,
@@ -117,6 +119,44 @@ def test_without_a_two_sided_book_nothing_is_sent_and_it_is_retried_later():
     assert _plan(ctrl, [_long()], daily_halt=True, book=(BID, 0)) == []
     # Being unpriced does not start the retry clock: the first priced tick sends.
     assert len(_plan(ctrl, [_long()], daily_halt=True, now=NOW + 1)) == 1
+
+
+def _unpriced_count() -> float:
+    # Read the counter object the controller increments: other tests rebuild
+    # MetricsRegistry and unregister its collectors from the default REGISTRY.
+    counter = MetricsRegistry.get().loss_exit_unpriced_total
+    return sum(
+        sample.value
+        for metric in counter.collect()
+        for sample in metric.samples
+        if sample.name == "loss_exit_unpriced_total" and sample.labels.get("trigger") == TRIGGER_DAILY_LOSS_HALT
+    )
+
+
+def test_an_unpriced_exit_logs_once_a_minute_while_it_is_retried_every_tick(module_log_sink):
+    """THESHOW 10/30-10/31: a HALT with no book logged ``loss_exit_unpriced`` 62,946 times, once per tick."""
+    logs = module_log_sink(loss_exit_module)
+    ctrl = LossExitController(retry_interval_s=10)
+    before = _unpriced_count()
+
+    for second in range(120):  # two minutes of 1 Hz supervisor ticks, no two-sided book
+        assert _plan(ctrl, [_long()], daily_halt=True, now=NOW + second * 1_000_000_000, book=None) == []
+
+    assert [e["event"] for e in logs].count("loss_exit_unpriced") == 2  # t=0 s and t=60 s
+    assert _unpriced_count() - before == 120
+
+
+def test_a_new_unpriced_episode_is_logged_at_once(module_log_sink):
+    logs = module_log_sink(loss_exit_module)
+    ctrl = LossExitController(retry_interval_s=10)
+
+    _plan(ctrl, [_long()], daily_halt=True, book=None)
+    assert len(_plan(ctrl, [_long()], daily_halt=True, now=NOW + 1_000_000_000)) == 1  # priced: exit sent
+    _plan(ctrl, [_long()], daily_halt=True, now=NOW + 2_000_000_000, book=None)  # inside the retry interval
+    _plan(ctrl, [], daily_halt=True, now=NOW + 3_000_000_000)  # flat
+    _plan(ctrl, [_long()], daily_halt=True, now=NOW + 4_000_000_000, book=None)  # a new lot, no book
+
+    assert [e["event"] for e in logs].count("loss_exit_unpriced") == 2
 
 
 def test_a_due_exit_is_resent_only_after_the_retry_interval():
