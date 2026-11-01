@@ -578,7 +578,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # p99 40-80 ms, 1,747 probe overshoots >25 ms/hour, per-minute count
         # correlated 0.90 with tick volume; execution reports waited behind it
         # (execution_router_lag_ns p99 46-77 ms, ExecutionLagHigh x40).
-        self._md_yield_every = env_int("HFT_MD_YIELD_EVERY", 8)
+        #
+        # Default 1, not 8: 8 left one step at ~8 x 600 us of CPU per message
+        # (engine CPU = 0.17 core + 597 us per feed event, R^2 0.95, THESHOW
+        # 10/30), and with GIL handoffs to the broker threads that was still
+        # 400-1,300 probe overshoots >10 ms per hour in the day session, rising
+        # with tick volume -- ExecutionLagHigh x6 after the 10/28 deploy.
+        # Replaying recorded ticks at 600 us/msg: >10 ms per hour 1,740 (8),
+        # 540 (4), 60 (2), 0 (1). One yield costs ~2.4 us.
+        self._md_yield_every = env_int("HFT_MD_YIELD_EVERY", 1)
         self._md_burst_run = 0
         self._md_latency_sample_every = env_int("HFT_MD_LATENCY_SAMPLE_EVERY", md_latency_default)
         self._md_callback_parse_metrics_every = env_int("HFT_MD_CALLBACK_PARSE_METRICS_EVERY", cb_parse_metrics_default)

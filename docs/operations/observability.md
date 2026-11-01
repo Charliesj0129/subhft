@@ -34,8 +34,11 @@
   - The two Histograms expose `_bucket`, `_sum` and `_count` only; a query for the bare name returns nothing.
   - `execution_router_lag_ns` (`ExecutionLagHigh`) is time from an execution report's broker-thread stamp to the
     router dequeuing it, so it rises with loop congestion, not with broker latency. The market-data consumer
-    yields to the loop every `HFT_MD_YIELD_EVERY` consecutive queued ticks (default 8); without that yield a tick
+    yields to the loop every `HFT_MD_YIELD_EVERY` consecutive queued ticks (default 1); without that yield a tick
     burst was drained in one loop step and blocked execution reports for 25-50 ms (THESHOW day session, 2026-10-21).
+    The default was 8 until 2026-11: at ~600 us of CPU per feed event an 8-message step still produced 400-1,300
+    probe overshoots >10 ms per hour in the day session, scaling with tick volume (ExecutionLagHigh after the
+    10/28 deploy). A yield costs ~2.4 us.
 
 ## 3) Strategy / Risk
 - `strategy_latency_ns`
