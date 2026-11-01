@@ -2164,7 +2164,6 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # would falsely trigger StormGuard STORM if included.
     _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
-    # Futures symbol prefixes considered for feed-gap calculation.
     # Product roots whose latched symbols decide the reduce-only feed gap
     # (``get_active_feed_gap_s``). Override: HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_ROOTS.
     # 2026-10-30 20:20Z: EXFK6 had crossed the 5-event latch, then sat silent
