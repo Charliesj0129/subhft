@@ -352,13 +352,19 @@ class TestGetStats:
 
 
 class TestGetStatsTuple:
-    def test_with_rust_state(self):
+    def test_ignores_rust_state(self):
+        # The Rust state misses stats-path updates, so it must not be the source.
         bs = BookState("2330")
         mock_rs = MagicMock()
         mock_rs.get_stats_tuple.return_value = (1, 2, 3, 4, 5, 6)
         bs._rust_state = mock_rs
+        bs.bids = np.array([[1000000, 10]], dtype=np.int64)
+        bs.asks = np.array([[1010000, 5]], dtype=np.int64)
+        bs.mid_price_x2 = 2010000
         result = bs.get_stats_tuple()
-        assert result == ("lobstats", 1, 2, 3, 4, 5, 6)
+        assert result[:4] == ("lobstats", "2330", bs.exch_ts, 2010000)
+        assert result[6:8] == (1000000, 1010000)
+        mock_rs.get_stats_tuple.assert_not_called()
 
     def test_rust_exception_fallback(self):
         bs = BookState("2330")
