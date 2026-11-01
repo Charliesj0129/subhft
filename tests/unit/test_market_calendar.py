@@ -191,10 +191,15 @@ def test_get_calendar_respects_env():
     from hft_platform.core.market_calendar import get_calendar, reset_calendar
 
     reset_calendar()
-    with patch.dict(os.environ, {"HFT_MARKET_EXCHANGE": "XNYS"}):
+    try:
+        with patch.dict(os.environ, {"HFT_MARKET_EXCHANGE": "XNYS"}):
+            reset_calendar()
+            calendar = get_calendar()
+            assert calendar._exchange == "XNYS"
+    finally:
+        # The singleton outlives the env patch: left as XNYS, a later test on the same
+        # xdist worker reads NYSE hours (23:00 Taipei = 15:00 UTC is "open").
         reset_calendar()
-        calendar = get_calendar()
-        assert calendar._exchange == "XNYS"
 
 
 def test_session_close_returns_none_for_non_trading_day():
