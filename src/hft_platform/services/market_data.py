@@ -90,10 +90,16 @@ def _parse_feed_gap_roots(raw: str | None, default: tuple[str, ...]) -> tuple[st
 
     Unset or blank means the default, never "every root": an empty set read as a
     wildcard would put the illiquid roots straight back into the health signal.
+    A token that cannot be a product root ('TXF;MXF', 'TX F') is dropped with a
+    warning: kept, it would match no code and silently turn the signal off.
     """
     if raw is None:
         return default
-    roots = tuple(dict.fromkeys(token.strip().upper() for token in raw.split(",") if token.strip()))
+    tokens = dict.fromkeys(token.strip().upper() for token in raw.split(",") if token.strip())
+    invalid = [t for t in tokens if not (2 <= len(t) <= 4 and t.isascii() and t.isalnum())]
+    if invalid:
+        logger.warning("feed_gap_health_roots_invalid_tokens_dropped", tokens=",".join(invalid))
+    roots = tuple(t for t in tokens if t not in invalid)
     if not roots:
         logger.warning("feed_gap_health_roots_blank_using_default", default=",".join(default))
         return default

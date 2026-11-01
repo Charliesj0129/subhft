@@ -105,6 +105,20 @@ def test_feed_gap_blank_roots_env_keeps_the_default_not_every_root(raw: str) -> 
     assert gap < 5.0, f"a blank override read as a wildcard: {gap=}"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("TXF;MXF", ("TXF", "MXF", "TMF")), ("TX F,TMF", ("TMF",)), ("TMF,TXFK6TOOLONG", ("TMF",))],
+)
+def test_feed_gap_roots_env_drops_a_token_that_cannot_be_a_root(raw: str, expected: tuple[str, ...]) -> None:
+    svc = _make_service(roots_env=raw)
+    _latch(svc, {"TXFK6": 0.4, "TMFK6": 900.0})
+
+    gap = svc.get_active_feed_gap_s()
+
+    assert svc._feed_gap_health_roots == expected
+    assert gap >= 890.0, f"a mistyped override switched the TMFK6 outage off: {gap=}"
+
+
 def test_feed_gap_still_delatches_an_unsubscribed_illiquid_root() -> None:
     svc = _make_service()
     svc.client.subscribed_codes = {"TXFK6", "TMFK6"}
