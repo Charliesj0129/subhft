@@ -2,8 +2,15 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+# A rule_files path that matches no file is NOT an error in Prometheus (a server started without the mount loads the
+# other groups and says nothing; only `promtool check config` reports it). Every path here must be reachable through a
+# volume of the compose `prometheus` service, which mounts config/monitoring/alerts as a directory: put new rule files
+# there. tests/unit/test_prometheus_rule_files_loaded.py checks that, and that no rule file under config/monitoring
+# is left out. After a deploy, GET /api/v1/rules must list the groups of all three files.
 rule_files:
   - /etc/prometheus/alerts/rules.yaml
+  - /etc/prometheus/alerts/replay_parity_alert.yml
+  - /etc/prometheus/alerts/slo_recording_rules.yaml
 
 alerting:
   alertmanagers:

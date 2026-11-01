@@ -1,0 +1,29 @@
+# Loaded by config/monitoring/prometheus.yml (rule_files). This file used to be config/monitoring/recording_rules/slo.yaml,
+# which nothing loaded and the prometheus container never mounted, so every rule below had never been evaluated --
+# including slo:e2e_order_latency:p95_ms_rate5m -- and the two alerts that read slo:feed_availability and
+# slo:order_success (rules.yaml) had no input. It now sits in config/monitoring/alerts, the one directory the container
+# mounts (a directory mount: a Prometheus reload picks it up, no container recreation, and docker-compose.yml, which
+# tests/integration/test_prod_compose_parity.py compares with the locked production compose, is untouched).
+#
+# slo:feed_availability:ratio_rate5m is 0 whenever no feed event arrived in 5 minutes and
+# slo:order_success:ratio_rate5m is 0 when no order action or reject did (0 / clamp_min(0, 0.001)): both are the
+# normal state outside a session or for an idle strategy, which is why the two alerts are gated (see rules_test.yaml).
+# A new alert on these series needs the same gate.
+#
+# tests/unit/test_prometheus_rule_files_loaded.py fails when this file stops being listed in prometheus.yml, or when an
+# alert reads a recorded series that no loaded file defines.
+
+groups:
+- name: slo_recording
+  interval: 30s
+  rules:
+  - record: slo:feed_availability:ratio_rate5m
+    expr: clamp_min(1 - (sum(increase(feed_events_total[5m])) == bool 0), 0)
+  - record: slo:order_success:ratio_rate5m
+    expr: (sum(rate(order_actions_total[5m])) or vector(0)) / clamp_min((sum(rate(order_actions_total[5m])) or vector(0)) + (sum(rate(order_reject_total[5m])) or vector(0)), 0.001)
+  - record: slo:recorder_success:ratio_rate5m
+    expr: 1 - ((sum(rate(recorder_failures_total[5m])) or vector(0)) / clamp_min((sum(rate(recorder_batches_flushed_total[5m])) or vector(0)), 0.001))
+  - record: slo:normalize_latency_p99_us
+    expr: histogram_quantile(0.99, sum(rate(pipeline_latency_ns_bucket{stage="normalize"}[5m])) by (le)) / 1000
+  - record: slo:e2e_order_latency:p95_ms_rate5m
+    expr: histogram_quantile(0.95, sum(rate(e2e_order_latency_ns_bucket[5m])) by (le)) / 1e6
