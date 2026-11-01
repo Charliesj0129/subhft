@@ -339,3 +339,21 @@ def test_contract_refresh_reports_error_when_the_rebuild_raises(tmp_path: Path):
     assert "not JSON serializable" in status["error"]
     assert Path(client._contract_cache_path).read_text(encoding="utf-8") == before
     assert client._contract_refresh_lock.locked() is False
+
+
+def test_registry_creates_the_alerted_contract_refresh_results_at_zero() -> None:
+    from hft_platform.observability.metrics import MetricsRegistry
+
+    MetricsRegistry._instance = None
+    try:
+        counter = MetricsRegistry.get().contract_refresh_total
+        samples = {
+            s.labels["result"]: s.value
+            for metric in counter.collect()
+            for s in metric.samples
+            if s.name.endswith("_total")
+        }
+    finally:
+        MetricsRegistry._instance = None
+
+    assert {r: samples.get(r) for r in ("ok", "error")} == {"ok": 0.0, "error": 0.0}

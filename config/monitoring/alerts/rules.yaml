@@ -310,9 +310,10 @@ groups:
         summary: "The contract cache rebuild keeps failing; the universe roll is reading a frozen cache"
         description: |
           {{ $value | humanize }} contract cache rebuilds failed in the last 2h
-          and none succeeded. config/contracts.json is not being rewritten, so
-          the next contract roll builds the universe from whatever the last
-          successful write held. Read the engine log for
+          and none succeeded. Either config/contracts.json is not being
+          rewritten, or it was written and the symbol build from it failed; the
+          next contract roll may then build the universe from a stale cache.
+          Read the engine log for
           "Symbol rebuild failed, keeping existing symbols" (the error field
           names the cause) and the refresh status file's `error`.
 
