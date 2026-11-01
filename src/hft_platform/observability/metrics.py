@@ -55,6 +55,10 @@ def cap_exception_type(exc: BaseException) -> str:
 # into a catch-all.
 _REJECT_REASON_MAX_LEN = 64
 
+# ``phantom_bound_total`` outcomes that page as OrderOutcomeUnresolved
+# (config/monitoring/alerts/rules.yaml); the registry creates each at 0.
+UNRESOLVED_PHANTOM_OUTCOMES: tuple[str, ...] = ("cancel_timeout", "cancel_failed", "fill_claimed_after_expiry")
+
 
 def cap_reject_reason(reason: str) -> str:
     """Return the stable code at the head of a reject reason, else ``'OTHER'``.
@@ -829,6 +833,12 @@ class MetricsRegistry:
             "released_not_sent / kept_for_ttl)",
             ["outcome"],
         )
+        # OrderOutcomeUnresolved pages on increase() of these. A labelled child
+        # does not exist before its first inc(), and increase() over a series
+        # born at 1 is 0: THESHOW 2026-10-29 lost the first cancel_timeout and
+        # the only fill_claimed_after_expiry that way. Born at 0, the first counts.
+        for _outcome in UNRESOLVED_PHANTOM_OUTCOMES:
+            self.phantom_bound_total.labels(outcome=_outcome)
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),
             "Timed-out mutating API calls that may have succeeded at broker",
