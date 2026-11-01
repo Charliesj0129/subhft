@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +109,21 @@ def load_contract_cache(path: str = DEFAULT_CONTRACT_CACHE, metrics_path: str | 
     return ContractIndex(contracts=contracts, metrics_by_code=metrics)
 
 
+def _json_cache_default(value: Any) -> Any:
+    """Serialise the SDK dates JSON rejects, in the cache's ``YYYY/MM/DD`` form.
+
+    shioaji 1.7.9 returns ``datetime.date`` for ``delivery_date`` and
+    ``update_date`` where 1.5.6 returned ``"2026/11/18"``. Any other non-JSON
+    type is still an error: a silently stringified unknown type would put a
+    value no reader parses into the cache.
+    """
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return value.strftime("%Y/%m/%d")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
 def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CONTRACT_CACHE) -> None:
     """Atomically write *contracts* to a versioned JSON cache file."""
     dest = Path(path)
@@ -131,10 +146,17 @@ def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CO
         "contracts": contracts,
     }
     tmp = dest.with_suffix(".json.tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=True)
-        f.flush()
-        os.fsync(f.fileno())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=True, default=_json_cache_default)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        # json.dump streams, so a failure part-way leaves a truncated temp file
+        # (THESHOW kept a 390 KB contracts.json.tmp). The live cache is
+        # untouched either way; do not leave the fragment beside it.
+        tmp.unlink(missing_ok=True)
+        raise
     tmp.rename(dest)
     logger.info("contract_cache_written", cache_version=cache_version, contract_count=len(contracts))
 

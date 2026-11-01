@@ -283,3 +283,59 @@ def test_contract_cache_gauge_is_not_advanced_by_a_refresh_that_never_reached_th
     results = [call.kwargs.get("result") for call in client.metrics.contract_refresh_total.labels.call_args_list]
     assert "ok" in results, "the rebuild itself still succeeds"
     assert client.metrics.contract_cache_last_success_ts.set.call_count == 0
+
+
+class _FuturesInfo179:
+    """1.7.9 ``FuturesInfo`` leaf: ``root`` and a ``date``, no ``category``/``symbol``."""
+
+    __slots__ = ("code", "name", "root", "delivery_date")
+
+    def __init__(self, code: str, delivery: object) -> None:
+        self.code = code
+        self.name = code
+        self.root = "TMF"
+        self.delivery_date = delivery
+
+
+def _refresh_client_179(tmp_path: Path, futures: list[object]):
+    client = _refresh_client(tmp_path, cached_contracts=[{"code": "2330", "exchange": "TSE", "type": "stock"}])
+    client.api.Contracts.Stocks.TSE = [SimpleNamespace(code="2330", symbol="2330", name="TSMC", category="24")]
+    client.api.Contracts.Stocks.OTC = []
+    client.api.Contracts.Futures = futures
+    client.api.Contracts.Options = []
+    return client
+
+
+def test_contract_refresh_writes_the_cache_from_179_rows_with_dates_and_roots(tmp_path: Path):
+    """THESHOW 10/28-11/01: 332 rebuilds died on a ``date`` and the cache never moved."""
+    import datetime as dt
+
+    client = _refresh_client_179(tmp_path, [_FuturesInfo179("TMFK6", dt.date(2026, 11, 18))])
+
+    with structlog.testing.capture_logs() as logs:
+        ContractsRuntime(client).refresh_contracts_and_symbols()
+
+    events = [entry.get("event") for entry in logs]
+    assert "Symbol rebuild failed, keeping existing symbols" not in events
+    rows = json.loads(Path(client._contract_cache_path).read_text(encoding="utf-8"))["contracts"]
+    tmf = next(r for r in rows if r["code"] == "TMFK6")
+    assert tmf["root"] == "TMF"
+    assert tmf["delivery_date"] == "2026/11/18"
+    results = [call.kwargs.get("result") for call in client.metrics.contract_refresh_total.labels.call_args_list]
+    assert results == ["ok"]
+
+
+def test_contract_refresh_reports_error_when_the_rebuild_raises(tmp_path: Path):
+    """A rebuild that never wrote the cache must not count as ``result="ok"``."""
+    client = _refresh_client_179(tmp_path, [_FuturesInfo179("TMFK6", object())])
+    before = Path(client._contract_cache_path).read_text(encoding="utf-8")
+
+    ContractsRuntime(client).refresh_contracts_and_symbols()
+
+    results = [call.kwargs.get("result") for call in client.metrics.contract_refresh_total.labels.call_args_list]
+    assert results == ["error"]
+    status = json.loads(Path(client._contract_refresh_status_path).read_text(encoding="utf-8"))
+    assert status["result"] == "error"
+    assert "not JSON serializable" in status["error"]
+    assert Path(client._contract_cache_path).read_text(encoding="utf-8") == before
+    assert client._contract_refresh_lock.locked() is False

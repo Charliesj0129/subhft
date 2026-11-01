@@ -292,6 +292,30 @@ groups:
           the usual cause, not the contract path itself. The `> 0` gate keeps
           this quiet before a fresh process's first login.
 
+  # The hourly rebuild re-serialises the SDK's contracts into
+  # config/contracts.json, the file the pool's universe roll reads at every
+  # contract roll. After the shioaji 1.7.9 deploy it failed on every cycle for
+  # four days (json.dump rejected a datetime.date) while counting
+  # result="ok", so the cache froze at the last 1.5.6 write and nothing paged.
+  # Each of the four pooled facades rebuilds once an hour when no sibling
+  # publishes, so two errors in 2h with no success is a broken rebuild rather
+  # than one unlucky cycle. `unless` (not `and ... == 0`) because the ok series
+  # does not exist at all in a process whose rebuild has never succeeded.
+  - alert: ContractCacheRebuildFailing
+    expr: sum(increase(contract_refresh_total{result="error"}[2h])) >= 2 unless on() sum(increase(contract_refresh_total{result="ok"}[2h])) > 0
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "The contract cache rebuild keeps failing; the universe roll is reading a frozen cache"
+        description: |
+          {{ $value | humanize }} contract cache rebuilds failed in the last 2h
+          and none succeeded. config/contracts.json is not being rewritten, so
+          the next contract roll builds the universe from whatever the last
+          successful write held. Read the engine log for
+          "Symbol rebuild failed, keeping existing symbols" (the error field
+          names the cause) and the refresh status file's `error`.
+
   # The real staleness condition, and the reason the poll was never needed: the
   # broker announces contract changes on APISUB/V1/SYS/CONTRACT, and
   # `contract_update_last_event_ts` records when it last did. If the broker has
