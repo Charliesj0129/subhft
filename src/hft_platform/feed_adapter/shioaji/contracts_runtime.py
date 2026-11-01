@@ -19,6 +19,7 @@ from hft_platform.feed_adapter.shioaji._infra import (
     client_float,
     release_login_slot,
 )
+from hft_platform.feed_adapter.shioaji.family_populator import _root_from_code
 
 logger = get_logger("feed_adapter.contracts_runtime")
 
@@ -336,6 +337,56 @@ def _coerce_delivery_date(value: Any) -> dt.date:
     if len(s) >= 8:
         return dt.date(int(s[:4]), int(s[4:6]), int(s[6:8]))
     raise ValueError(f"unparseable delivery_date: {value!r}")
+
+
+def _cache_date_text(value: Any) -> Any:
+    """Render an SDK date the way the contract cache has always stored it.
+
+    shioaji 1.5.6 returned ``delivery_date`` as the string ``"2026/11/18"``;
+    1.7.9 returns ``datetime.date``, which ``json.dump`` rejects, so every
+    hourly rebuild after the 1.7.9 deploy died before writing the cache
+    (THESHOW 10/28-11/01: 332 x "Object of type date is not JSON
+    serializable"). Keeping the old text means readers that compare the raw
+    string, such as the options expiry selector, see one format on both SDKs.
+    """
+    if isinstance(value, dt.datetime):
+        value = value.date()
+    if isinstance(value, dt.date):
+        return value.strftime("%Y/%m/%d")
+    return value
+
+
+def _normalize_contract_row(c: Any, exchange: str, kind: str) -> dict[str, Any]:
+    """Flatten one SDK contract into a contract-cache row.
+
+    The root is ``category`` on 1.5.6 (and for 1.7.9 stocks, where it is the
+    industry code) and ``root`` on 1.7.9 ``FuturesInfo``/``OptionInfo``, which
+    have neither ``category`` nor ``symbol``. A row without a root falls back
+    to ``derive_root`` in ``ContractIndex``, which reads ``TMFK6`` as ``TMFK``
+    and ``TX141400K6`` as ``TX``, so ``TMF@front`` would match nothing and the
+    universe roll would refuse the whole rebuild.
+    """
+    right = getattr(c, "option_right", None) or getattr(c, "right", None)
+    if right is not None:
+        right = getattr(right, "value", right)
+    code = getattr(c, "code", None)
+    root = getattr(c, "category", None) or contract_member(c, "root") or getattr(c, "symbol", None)
+    if not root and kind == "future" and code:
+        root = _root_from_code(str(code)) or None
+    payload = {
+        "code": code,
+        "symbol": getattr(c, "symbol", None),
+        "name": getattr(c, "name", None),
+        "exchange": exchange,
+        "type": kind,
+        "root": root,
+        "tick_size": getattr(c, "tick_size", None),
+        "price_scale": getattr(c, "price_scale", None),
+        "delivery_date": _cache_date_text(getattr(c, "delivery_date", None)),
+        "strike": getattr(c, "strike_price", None) or getattr(c, "strike", None),
+        "right": right,
+    }
+    return {k: v for k, v in payload.items() if v is not None}
 
 
 def assert_not_expired(contract: Any, *, today: dt.date) -> None:
@@ -910,6 +961,10 @@ class ContractsRuntime:
         # and zero fallback — anything else means the barrier is not trading.
         shared_role = "owner" if rebuild_slot_held else ("fallback" if is_pool_shard else "solo")
 
+        # Set when the rebuild below raises, so the metric and the status file
+        # stop reporting ``ok`` for a cache that was never written (THESHOW
+        # 10/28-11/01: 332 failures, all counted as ``result="ok"``).
+        rebuild_error: str | None = None
         codes_before: set[str] = set()
         contracts_before: list[dict[str, Any]] = []
         _t_phase = time.monotonic()
@@ -956,25 +1011,7 @@ class ContractsRuntime:
             )
 
             raw_contracts: list[dict] = []
-
-            def _normalize(c: Any, exchange: str, kind: str) -> dict:
-                right = getattr(c, "option_right", None) or getattr(c, "right", None)
-                if right is not None:
-                    right = getattr(right, "value", right)
-                payload = {
-                    "code": getattr(c, "code", None),
-                    "symbol": getattr(c, "symbol", None),
-                    "name": getattr(c, "name", None),
-                    "exchange": exchange,
-                    "type": kind,
-                    "root": getattr(c, "category", None) or getattr(c, "symbol", None),
-                    "tick_size": getattr(c, "tick_size", None),
-                    "price_scale": getattr(c, "price_scale", None),
-                    "delivery_date": getattr(c, "delivery_date", None),
-                    "strike": getattr(c, "strike_price", None) or getattr(c, "strike", None),
-                    "right": right,
-                }
-                return {k: v for k, v in payload.items() if v is not None}
+            _normalize = _normalize_contract_row
 
             # Serialise the pooled facades. Walking the SDK's contract store is a
             # read, not a fetch, but four facades entering it on the same hourly
@@ -1166,7 +1203,8 @@ class ContractsRuntime:
             if build_result.errors:
                 logger.warning("Symbol rebuild had errors", errors=build_result.errors[:5])
         except Exception as exc:
-            logger.warning("Symbol rebuild failed, keeping existing symbols", error=str(exc))
+            rebuild_error = str(exc)
+            logger.warning("Symbol rebuild failed, keeping existing symbols", error=rebuild_error)
 
         try:
             self._client._load_config()
@@ -1227,7 +1265,9 @@ class ContractsRuntime:
                 rebuild_slot_held = False
             try:
                 if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
-                    self._client.metrics.contract_refresh_total.labels(result="ok").inc()
+                    self._client.metrics.contract_refresh_total.labels(
+                        result="error" if rebuild_error is not None else "ok"
+                    ).inc()
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
@@ -1247,7 +1287,10 @@ class ContractsRuntime:
                 except Exception as exc:
                     logger.warning("contract_refresh_resubscribe_failed", error=str(exc))
             self._client._contract_refresh_lock.release()
-            self.write_refresh_status(result="ok")
+            if rebuild_error is not None:
+                self.write_refresh_status(result="error", error=rebuild_error)
+            else:
+                self.write_refresh_status(result="ok")
 
     def _reuse_shared_rebuild(self, shared: _SharedRebuild) -> None:
         """Complete this facade's refresh cycle from a sibling facade's rebuild.

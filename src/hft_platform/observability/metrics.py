@@ -1719,6 +1719,10 @@ class MetricsRegistry:
             "Contract refresh operations",
             ["result"],  # ok|error|fetch_failed|skipped_locked
         )
+        # ContractCacheRebuildFailing reads increase() of these two; a labelled child
+        # born at 1 on its first inc() has no increase, so the first failure would not count.
+        for result in ("ok", "error"):
+            self.contract_refresh_total.labels(result=result)
         # Freshness of the contract cache. ``contract_refresh_total{result="ok"}``
         # alone cannot show a stuck cache: it counts attempts that reached the
         # end of the routine, which for a long time included every fetch that

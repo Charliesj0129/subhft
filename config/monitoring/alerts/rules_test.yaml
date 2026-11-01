@@ -313,6 +313,49 @@ tests:
         alertname: ContractCacheStale
         exp_alerts: []
 
+  # ── ContractCacheRebuildFailing ─────────────────────────────────
+  #
+  # THESHOW 10/28-11/01: four facades x one failed rebuild per hour, and the
+  # ok series never existed. The positive control is exactly that shape; the
+  # negative one is a single failed cycle among successful ones.
+  - interval: 1m
+    name: contract-cache-rebuild-failing fires when only errors are counted
+    input_series:
+      - series: 'contract_refresh_total{result="error"}'
+        values: "0+0.0667x240"
+    alert_rule_test:
+      # 1.3 errors in the window: below the two-failure floor
+      - eval_time: 20m
+        alertname: ContractCacheRebuildFailing
+        exp_alerts: []
+      - eval_time: 120m
+        alertname: ContractCacheRebuildFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The contract cache rebuild keeps failing; the universe roll is reading a frozen cache"
+              description: |
+                8.004 contract cache rebuilds failed in the last 2h
+                and none succeeded. Either config/contracts.json is not being
+                rewritten, or it was written and the symbol build from it failed; the
+                next contract roll may then build the universe from a stale cache.
+                Read the engine log for
+                "Symbol rebuild failed, keeping existing symbols" (the error field
+                names the cause) and the refresh status file's `error`.
+
+  - interval: 1m
+    name: contract-cache-rebuild-failing stays quiet while rebuilds also succeed
+    input_series:
+      - series: 'contract_refresh_total{result="error"}'
+        values: "0+0.0667x240"
+      - series: 'contract_refresh_total{result="ok"}'
+        values: "0+0.05x240"
+    alert_rule_test:
+      - eval_time: 120m
+        alertname: ContractCacheRebuildFailing
+        exp_alerts: []
+
   # ── DLQ source attribution ──────────────────────────────────────
   #
   # `dlq_size_total` has three producers under one metric name. Before
