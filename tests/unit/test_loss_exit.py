@@ -11,9 +11,9 @@ import datetime as dt
 
 import pytest
 import structlog
-from prometheus_client import REGISTRY
 
 from hft_platform.contracts.strategy import TIF, IntentType, Side
+from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.risk.loss_exit import (
     INTENT_ID_BASE,
     TRIGGER_DAILY_LOSS_HALT,
@@ -122,7 +122,15 @@ def test_without_a_two_sided_book_nothing_is_sent_and_it_is_retried_later():
 
 
 def _unpriced_count() -> float:
-    return REGISTRY.get_sample_value("loss_exit_unpriced_total", {"trigger": TRIGGER_DAILY_LOSS_HALT}) or 0.0
+    # Read the counter object the controller increments: other tests rebuild
+    # MetricsRegistry and unregister its collectors from the default REGISTRY.
+    counter = MetricsRegistry.get().loss_exit_unpriced_total
+    return sum(
+        sample.value
+        for metric in counter.collect()
+        for sample in metric.samples
+        if sample.name == "loss_exit_unpriced_total" and sample.labels.get("trigger") == TRIGGER_DAILY_LOSS_HALT
+    )
 
 
 def test_an_unpriced_exit_logs_once_a_minute_while_it_is_retried_every_tick():
