@@ -120,9 +120,7 @@ def test_get_l1_scaled_follows_stats_update_after_snapshot(engine: LOBEngine) ->
 
 def test_get_l1_scaled_follows_tuple_stats_update_after_snapshot(engine: LOBEngine) -> None:
     bids, asks = _book(LIVE_BID, LIVE_ASK)
-    engine.process_event(
-        ("bidask", "TMFK6", bids, asks, LIVE_TS, False, LIVE_BID, LIVE_ASK, 5, 5, 0.0, 0.0, 0.0)
-    )
+    engine.process_event(("bidask", "TMFK6", bids, asks, LIVE_TS, False, LIVE_BID, LIVE_ASK, 5, 5, 0.0, 0.0, 0.0))
 
     ts, bid, ask, *_ = engine.get_l1_scaled("TMFK6")
 
@@ -169,7 +167,15 @@ def test_get_l1_scaled_matches_rust_fed_update(engine: LOBEngine) -> None:
         BidAskEvent(meta=MetaData(seq=2, source_ts=LIVE_TS, local_ts=LIVE_TS), symbol="TMFK6", bids=bids, asks=asks)
     )
 
-    assert engine.get_l1_scaled("TMFK6") == (LIVE_TS, LIVE_BID, LIVE_ASK, LIVE_BID + LIVE_ASK, LIVE_ASK - LIVE_BID, 5, 5)
+    assert engine.get_l1_scaled("TMFK6") == (
+        LIVE_TS,
+        LIVE_BID,
+        LIVE_ASK,
+        LIVE_BID + LIVE_ASK,
+        LIVE_ASK - LIVE_BID,
+        5,
+        5,
+    )
 
 
 @pytest.mark.skipif(lob_engine._RustBookState is None, reason="rust_core extension not built")
