@@ -97,9 +97,9 @@ When a mutating API call (place_order, update_order) times out:
 3. Reconciliation responsible for confirming resolution
 4. Eviction: entries >1 hour old auto-evicted when dict exceeds 1000
 
-The timeout is an **unknown outcome, not a failure** (2026-11-02; on THESHOW
-116 of 120 timed-out place_orders were accepted and answered 5-30 s later). At
-the timeout only `order_outcome_unknown_total{op}` counts: no
+A **NEW** order's timeout is an **unknown outcome, not a failure** (2026-11-02;
+on THESHOW 116 of 120 timed-out place_orders were accepted and answered 5-30 s
+later). At the timeout only `order_outcome_unknown_total{op}` counts: no
 `order_reject_total`, no global or per-strategy circuit-breaker failure, no
 dead letter, and the strategy keeps its pending slot (`was_approved=True`).
 The outcome is booked when known, in `_late_place_reporter` and the TTL sweep:
@@ -110,11 +110,18 @@ The outcome is booked when known, in `_late_place_reporter` and the TTL sweep:
 | Late answer "not sent" (`_release_unsent_phantom`) | reject + DLQ `connection_error` |
 | No answer within the phantom TTL (`release_stale_phantom_pendings`) | reject + DLQ `outcome_unresolved` |
 
+The "not sent" row also counts a failure on both circuit breakers. A
+FORCE_FLAT or AMEND timeout has no phantom and no later booking, so it still
+counts `order_reject_total` and both breaker failures at the timeout (as well
+as `order_outcome_unknown_total`).
+
 The late call's real duration goes to
 `pipeline_latency_ns{stage="api_place_order_late"}`; `place_order_late_result`
 logs the broker's `order_datetime` beside `sent_at_ns`. The order DLQ counts by
 reason on `order_dlq_adds_total{reason}`. A broker that stops answering is held
-by StormGuard's broker back-pressure (`order/broker_stall.py`), not the breaker.
+by StormGuard's broker back-pressure (`order/broker_stall.py`), not the breaker;
+a broker that answers every order in 3-10 s trips neither the breaker nor the
+10 s STORM and is surfaced by the `BrokerPathMostlySilent` alert.
 
 ## Configuration
 

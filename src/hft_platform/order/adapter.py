@@ -1606,6 +1606,7 @@ class OrderAdapter:
         # Now known to have failed: the reject and dead letter the timeout
         # deferred (``_dispatch_to_api`` books neither for a phantom).
         self.metrics.order_reject_total.inc()
+        self._record_broker_failure(intent)
         self._spawn_dlq_add(intent, RejectionReason.CONNECTION_ERROR, "place_order_not_sent")
         self._audit_log_order(
             {
@@ -1632,7 +1633,23 @@ class OrderAdapter:
             logger.warning("dlq_add_no_loop", strategy_id=intent.strategy_id, reason=reason.value)
             return
         self._phantom_bind_tasks.add(task)
-        task.add_done_callback(self._phantom_bind_tasks.discard)
+        task.add_done_callback(self._dlq_add_done)
+
+    def _dlq_add_done(self, task: asyncio.Task[Any]) -> None:
+        self._phantom_bind_tasks.discard(task)
+        if task.cancelled():
+            logger.warning("dlq_add_cancelled", task=task.get_name())
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("dlq_add_failed", task=task.get_name(), error=repr(exc))
+
+    def _record_broker_failure(self, intent: OrderIntent | None) -> None:
+        """A broker call is known to have failed: count it toward both breakers."""
+        self.circuit_breaker.record_failure()
+        self._update_cb_metric()
+        if intent is not None and intent.strategy_id:
+            self.strategy_cb_mgr.record_failure(intent.strategy_id)
 
     def _spawn_phantom_bind(self, intent: OrderIntent, trade: Any) -> None:
         task = asyncio.get_running_loop().create_task(
@@ -5083,10 +5100,17 @@ class OrderAdapter:
                         # release_stale_phantom_pendings). A broker that stops
                         # answering is held by StormGuard's broker back-pressure
                         # and long-stall STORM instead.
+                        # Only a NEW has that later booking (phantom + late
+                        # reporter + TTL sweep). A FORCE_FLAT or AMEND that times
+                        # out is never booked again, so it is still counted as a
+                        # failure here, as before.
                         try:
                             self.metrics.order_outcome_unknown_total.labels(op=op).inc()
                         except Exception:  # noqa: BLE001 - a metric must never block the order path
                             logger.debug("order_outcome_unknown_metric_failed", exc_info=True)
+                        if intent is None or intent.intent_type != IntentType.NEW:
+                            self.metrics.order_reject_total.inc()
+                            self._record_broker_failure(intent)
                         # D-03: Track phantom order candidates for reconciliation
                         # R2-02: Use 2-part order_key format for reconciliation parity
                         # Bug #29: only NEW intents can produce phantom orders.

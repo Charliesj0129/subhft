@@ -244,7 +244,7 @@ groups:
     labels:
         severity: critical
     annotations:
-        summary: "A timed-out order did not end cleanly ({{ $labels.outcome }})"
+        summary: "An order may still be live at the broker or its outcome is unresolved ({{ $labels.outcome }})"
         description: |
           {{ $value | printf "%.0f" }} in 30m. The broker may hold an order, or a
           fill, that the strategy's pending count does not reflect. Compare the

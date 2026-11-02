@@ -164,6 +164,82 @@ async def test_a_timed_out_order_answered_not_sent_is_dead_lettered_then(tmp_con
 
     assert _dlq_reasons(adapter) == [RejectionReason.CONNECTION_ERROR]
     adapter.metrics.order_reject_total.inc.assert_called_once()
+    assert adapter.circuit_breaker.failure_count == 1, "a known failure counts toward the breaker"
+    assert adapter.strategy_cb_mgr.get_breaker(_STRATEGY).failure_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_ttl_release_then_a_late_not_sent_answer_is_booked_once(tmp_config):
+    broker = _LateBroker(RuntimeError("Session not ready"))
+    adapter = _adapter(tmp_config, broker)
+    late_seen = asyncio.Event()
+    real_reporter = adapter._late_place_reporter
+
+    def _reporter(intent: OrderIntent, start_ns: int):
+        inner = real_reporter(intent, start_ns)
+
+        def _wrapped(kind: str, value: Any) -> None:
+            inner(kind, value)
+            late_seen.set()
+
+        return _wrapped
+
+    adapter._late_place_reporter = _reporter
+    await adapter._dispatch_to_api(_command())
+    assert await adapter.release_stale_phantom_pendings(ttl_s=0.0) == 1
+
+    broker.release.set()
+    await asyncio.wait_for(late_seen.wait(), timeout=5.0)
+    await asyncio.sleep(0)  # let a (wrongly) spawned DLQ task run
+
+    assert _dlq_reasons(adapter) == [RejectionReason.OUTCOME_UNRESOLVED]
+    adapter.metrics.order_reject_total.inc.assert_called_once()
+
+
+def _intent(intent_type: IntentType) -> OrderIntent:
+    return OrderIntent(
+        intent_id=99,
+        strategy_id=_STRATEGY,
+        symbol="TMFI6",
+        price=4623_9000,
+        qty=1,
+        side=Side.SELL,
+        intent_type=intent_type,
+        tif=TIF.LIMIT,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("intent_type", "op"), [(IntentType.FORCE_FLAT, "place_order"), (IntentType.AMEND, "update_order")]
+)
+async def test_a_timed_out_flatten_or_amend_is_still_a_failure(tmp_config, intent_type, op):
+    # Review of dc21fd6da: only a NEW is booked again later (phantom, late
+    # reporter, TTL sweep); a FORCE_FLAT or AMEND timeout must count here.
+    broker = _LateBroker({"order": {"ordno": "A1"}})
+    adapter = _adapter(tmp_config, broker)
+
+    result = await adapter._call_api(op, broker, intent=_intent(intent_type))
+    broker.release.set()
+
+    assert result is None
+    adapter.metrics.order_outcome_unknown_total.labels.assert_called_with(op=op)
+    adapter.metrics.order_reject_total.inc.assert_called_once()
+    assert adapter.circuit_breaker.failure_count == 1
+    assert adapter.strategy_cb_mgr.get_breaker(_STRATEGY).failure_count == 1
+    assert adapter.get_phantom_candidates() == frozenset(), "no phantom: nothing books it later"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_dlq_add_is_logged(tmp_config):
+    adapter = _adapter(tmp_config, _LateBroker(None))
+    adapter._add_to_dlq = AsyncMock(side_effect=RuntimeError("dlq disk"))
+
+    with patch("hft_platform.order.adapter.logger") as log:
+        adapter._spawn_dlq_add(_intent(IntentType.NEW), RejectionReason.CONNECTION_ERROR, "x")
+        await _until(lambda: not adapter._phantom_bind_tasks)
+
+    assert any(c.args and c.args[0] == "dlq_add_failed" for c in log.error.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -222,10 +298,18 @@ async def test_a_late_trade_records_its_real_duration_and_broker_stamp(tmp_confi
 # --------------------------------------------------------------------------- #
 
 
-def _real_dlq(tmp_path) -> DeadLetterQueue:
+@pytest.fixture()
+def _fresh_registry():
     from hft_platform.observability.metrics import MetricsRegistry
 
     MetricsRegistry._instance = None
+    try:
+        yield
+    finally:
+        MetricsRegistry._instance = None
+
+
+def _real_dlq(tmp_path) -> DeadLetterQueue:
     return DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"))
 
 
@@ -238,14 +322,14 @@ def _adds(dlq: DeadLetterQueue) -> dict[str, float]:
     }
 
 
-def test_every_dlq_reason_exists_at_zero(tmp_path):
+def test_every_dlq_reason_exists_at_zero(tmp_path, _fresh_registry):
     dlq = _real_dlq(tmp_path)
 
     assert _adds(dlq) == {r.value: 0.0 for r in RejectionReason}
 
 
 @pytest.mark.asyncio
-async def test_a_dlq_add_is_counted_under_its_reason(tmp_path):
+async def test_a_dlq_add_is_counted_under_its_reason(tmp_path, _fresh_registry):
     dlq = _real_dlq(tmp_path)
 
     await dlq.add(

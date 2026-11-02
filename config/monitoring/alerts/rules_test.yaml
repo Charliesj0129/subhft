@@ -498,7 +498,7 @@ tests:
               severity: critical
               outcome: cancel_gave_up
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (cancel_gave_up)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (cancel_gave_up)"
               description: &unresolved_one |
                 1 in 30m. The broker may hold an order, or a
                 fill, that the strategy's pending count does not reflect. Compare the
@@ -512,7 +512,7 @@ tests:
               severity: critical
               outcome: fill_claimed_after_expiry
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (fill_claimed_after_expiry)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (fill_claimed_after_expiry)"
               description: *unresolved_one
       # The window passes with no new increment: it clears.
       - eval_time: 42m
@@ -534,13 +534,13 @@ tests:
               severity: critical
               outcome: live_order_ttl_release
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (live_order_ttl_release)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (live_order_ttl_release)"
               description: *unresolved_one
           - exp_labels:
               severity: critical
               outcome: phantom_ttl_release
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (phantom_ttl_release)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (phantom_ttl_release)"
               description: |
                 2 in 30m. The broker may hold an order, or a
                 fill, that the strategy's pending count does not reflect. Compare the
