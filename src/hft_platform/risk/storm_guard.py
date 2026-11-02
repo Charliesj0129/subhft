@@ -112,8 +112,19 @@ class RiskThresholds:
     # traffic windows is now 1.7-2.3 s, so the breaker escalated ~100x/day on
     # a broker that was merely slow, and R47 sat reduce-only. The paragraph
     # above explains the original sizing and is kept for history.
+    #
+    # 2026-11-02: STORM side DISARMED by default (0). Its readings are capped
+    # at ``HFT_API_TIMEOUT_S`` (3 s), so it can only tell "slower than 2.5 s"
+    # from "not slower", and it then holds 300 s after the stall is over: on
+    # the 11-02 day session the broker answered 116 of 120 timed-out orders
+    # (late, 5-30 s) and this rule kept R47 reduce-only for 19.6% of the
+    # session. ``broker_backpressure_silence_us`` below replaces it: it blocks
+    # new risk exactly while a call is waiting and releases on the answer. The
+    # count/window/dwell rule is kept and can be re-armed by setting
+    # ``order_rtt_storm_us`` (YAML ``global_defaults`` or env). WARM stays: it
+    # blocks nothing and keeps the slow-answer signal visible.
     order_rtt_warm_us: int = 1_500_000  # 1500 ms
-    order_rtt_storm_us: int = 2_500_000  # 2500 ms
+    order_rtt_storm_us: int = 0  # disarmed; see above
     # 2026-10-24: STORM needs ``order_rtt_storm_count`` orders at or above
     # ``order_rtt_storm_us`` within ``order_rtt_storm_window_s``, and holds
     # until ``order_rtt_storm_dwell_s`` pass with none. Widening the threshold
@@ -128,6 +139,38 @@ class RiskThresholds:
     order_rtt_storm_dwell_s: float = 300.0  # precision-time
 
     feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
+
+    # Broker back-pressure (2026-11-02). ``OrderAdapter`` tracks its own
+    # outstanding broker calls (``order/broker_stall.py``); "silence" is how
+    # long the oldest call sent after the last answer has been waiting. The
+    # broker serialises our calls, so while one waits every new order joins
+    # its queue. While silence >= ``broker_backpressure_silence_us``, a NEW or
+    # AMEND that does not reduce a position is refused with
+    # ``BROKER_BACKPRESSURE`` -- at RiskEngine and again just before dispatch.
+    # This is NOT a StormGuard state: no transition, no cooldown, released on
+    # the first answer. A replay of THESHOW's logged NEW spans put it at
+    # 0.3-2.0% of a session against 1.7-19.6% for the order-RTT STORM rule.
+    # 0 disarms it.
+    broker_backpressure_silence_us: int = 1_000_000  # 1 s
+    # A silence this long is not a slow broker but one that is not answering:
+    # enter STORM through the normal state machine (cooldown, de-escalation).
+    # 0 disarms it.
+    broker_stall_storm_us: int = 10_000_000  # 10 s
+
+
+# Keys ``StormGuard.reload_thresholds`` reads from the risk config
+# (``strategy_limits.yaml`` ``global_defaults``, or a ``risk`` section).
+_INT_US_KEYS: tuple[str, ...] = (
+    "latency_warm_us",
+    "latency_storm_us",
+    "order_rtt_warm_us",
+    "order_rtt_storm_us",
+    "broker_backpressure_silence_us",
+    "broker_stall_storm_us",
+)
+STORMGUARD_CONFIG_KEYS: frozenset[str] = frozenset(
+    _INT_US_KEYS + ("order_rtt_storm_count", "order_rtt_storm_window_s", "order_rtt_storm_dwell_s", "feed_gap_storm_s")
+)
 
 
 class StormGuard:
@@ -231,6 +274,9 @@ class StormGuard:
         # interleaved HALT emits could each leave their label at 1.
         "_halt_reason_label",
         "_halt_label_lock",
+        # ``() -> int`` nanoseconds the broker order path has been silent
+        # (``OrderAdapter.broker_silence_ns``); None until the adapter is wired.
+        "_broker_stall_provider",
     )
 
     def __init__(
@@ -249,6 +295,7 @@ class StormGuard:
         self._order_rtt_slow_ts: deque[float] = deque(maxlen=1)  # precision-time
         self._order_rtt_slow_fresh: bool = False
         self._order_rtt_storm_on: bool = False
+        self._broker_stall_provider: Callable[[], int] | None = None
         self._apply_env_overrides()
         self.last_state_change = time.monotonic()
         self._de_escalate_count: int = 0
@@ -355,25 +402,37 @@ class StormGuard:
         """
         return self._loop
 
+    @staticmethod
+    def config_section(config: dict) -> dict:
+        """The mapping ``reload_thresholds`` reads its keys from."""
+        section = config.get("risk", config.get("global_defaults", {})) if isinstance(config, dict) else {}
+        return section if isinstance(section, dict) else {}
+
+    @classmethod
+    def config_has_thresholds(cls, config: dict) -> bool:
+        """True iff ``config`` sets any key ``reload_thresholds`` applies."""
+        section = cls.config_section(config)
+        return any(key in section for key in STORMGUARD_CONFIG_KEYS)
+
     def reload_thresholds(self, config: dict) -> None:
-        """Update thresholds from new config."""
+        """Update thresholds from new config; env overrides are re-applied on top.
+
+        Every key is parsed before any is applied, so one bad value leaves all
+        thresholds (and the env overrides on them) as they were.
+        """
+        risk_cfg = self.config_section(config)
+        parsed: dict[str, int | float] = {}
+        for key in _INT_US_KEYS:
+            if key in risk_cfg:
+                parsed[key] = int(risk_cfg[key])
+        if "order_rtt_storm_count" in risk_cfg:
+            parsed["order_rtt_storm_count"] = max(1, int(risk_cfg["order_rtt_storm_count"]))
+        for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s", "feed_gap_storm_s"):
+            if key in risk_cfg:
+                parsed[key] = float(risk_cfg[key])  # precision-ok
         with self._state_lock:
-            risk_cfg = config.get("risk", config.get("global_defaults", {}))
-            for key in (
-                "latency_warm_us",
-                "latency_storm_us",
-                "order_rtt_warm_us",
-                "order_rtt_storm_us",
-            ):
-                if key in risk_cfg:
-                    setattr(self.thresholds, key, int(risk_cfg[key]))
-            if "order_rtt_storm_count" in risk_cfg:
-                self.thresholds.order_rtt_storm_count = max(1, int(risk_cfg["order_rtt_storm_count"]))
-            for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s"):
-                if key in risk_cfg:
-                    setattr(self.thresholds, key, float(risk_cfg[key]))  # precision-ok
-            if "feed_gap_storm_s" in risk_cfg:
-                self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
+            for key, value in parsed.items():
+                setattr(self.thresholds, key, value)
             self._apply_env_overrides()
         logger.info("StormGuard thresholds reloaded")
 
@@ -418,6 +477,8 @@ class StormGuard:
         for var, attr in (
             ("HFT_STORMGUARD_ORDER_RTT_WARM_US", "order_rtt_warm_us"),
             ("HFT_STORMGUARD_ORDER_RTT_STORM_US", "order_rtt_storm_us"),
+            ("HFT_STORMGUARD_BROKER_BACKPRESSURE_SILENCE_US", "broker_backpressure_silence_us"),
+            ("HFT_STORMGUARD_BROKER_STALL_STORM_US", "broker_stall_storm_us"),
         ):
             raw = os.getenv(var)
             if not raw:
@@ -504,6 +565,8 @@ class StormGuard:
             order_rtt_storm_window_s=t.order_rtt_storm_window_s,
             order_rtt_storm_dwell_s=t.order_rtt_storm_dwell_s,
             order_rtt_armed=self._order_rtt_armed(),
+            broker_backpressure_silence_us=t.broker_backpressure_silence_us,
+            broker_stall_storm_us=t.broker_stall_storm_us,
         )
         if stall_kill_seconds > 0:
             kill_us = int(stall_kill_seconds * 1_000_000)
@@ -619,6 +682,7 @@ class StormGuard:
         feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
         order_rtt_us: int = 0,
         order_rtt_storm: bool = False,
+        broker_silence_us: int = 0,
     ) -> tuple[StormGuardState, str]:
         """Determine target state from health inputs. Priority: STORM > WARM > NORMAL.
 
@@ -636,6 +700,8 @@ class StormGuard:
         t = self.thresholds
         if latency_us >= t.latency_storm_us:
             return StormGuardState.STORM, f"Latency {latency_us}us"
+        if t.broker_stall_storm_us > 0 and broker_silence_us >= t.broker_stall_storm_us:
+            return StormGuardState.STORM, f"Broker silent {broker_silence_us}us"
         if order_rtt_storm:
             return StormGuardState.STORM, (
                 f"Order RTT {t.order_rtt_storm_count} orders >= {t.order_rtt_storm_us}us"
@@ -690,8 +756,10 @@ class StormGuard:
             order_rtt_us = peak_rtt_us
         self._observe_latency_input("loop_lag", latency_us)
         self._observe_latency_input("order_rtt", order_rtt_us)
+        broker_silence_us = self.broker_silence_ns() // 1000
+        self._publish_broker_silence(broker_silence_us)
         new_state, reason = self._evaluate_target_state(
-            latency_us, feed_gap_s, order_rtt_us, self._order_rtt_storm_active()
+            latency_us, feed_gap_s, order_rtt_us, self._order_rtt_storm_active(), broker_silence_us
         )
         self._target_state_reason = reason
 
@@ -1258,8 +1326,64 @@ class StormGuard:
             self._fire_halt_callback()
 
     def validate(self, intent: OrderIntent) -> tuple[bool, str]:
+        """RiskEngine's StormGuard gate: the state policy, then broker back-pressure.
+
+        Back-pressure is checked here and not in ``_validate_locked`` because
+        that body also opens dispatch tickets (``begin_dispatch``) for orders
+        already on their way to the broker; a ticket refused there is not a
+        refused order, only a lost HALT-TOCTOU cancel. ``OrderAdapter`` asks
+        ``backpressure_blocks`` itself just before dispatch.
+        """
         with self._state_lock:
-            return self._validate_locked(intent)
+            ok, reason = self._validate_locked(intent)
+        if ok and self.backpressure_blocks(intent):
+            return False, "BROKER_BACKPRESSURE"
+        return ok, reason
+
+    def set_broker_stall_provider(self, provider: Callable[[], int] | None) -> None:
+        """Wire ``() -> int`` nanoseconds of broker order-path silence.
+
+        ``OrderAdapter.broker_silence_ns`` in production. Bound after
+        construction, like ``set_position_provider``: StormGuard is built
+        before the adapter.
+        """
+        self._broker_stall_provider = provider
+
+    def broker_silence_ns(self) -> int:
+        """Current broker order-path silence; 0 when unwired or the provider fails."""
+        provider = self._broker_stall_provider
+        if provider is None:
+            return 0
+        try:
+            return max(0, int(provider()))
+        except Exception:  # noqa: BLE001 - a broken probe must not block orders or the breaker
+            return 0
+
+    def backpressure_blocks(self, intent: OrderIntent) -> bool:
+        """True iff ``intent`` must wait for the broker to answer before it may go.
+
+        Same exemptions as STORM: only NEW and AMEND are held, and not when
+        they reduce the position or the strategy is HALT-exempt. Stateless:
+        it reads the silence now, so the first answer releases it.
+        """
+        threshold_us = self.thresholds.broker_backpressure_silence_us
+        if threshold_us <= 0:
+            return False
+        if intent.intent_type not in (IntentType.NEW, IntentType.AMEND):
+            return False
+        if self.broker_silence_ns() < threshold_us * 1000:
+            return False
+        if intent.strategy_id in self._halt_exempt_strategies:
+            return False
+        if self._intent_reduces_position(intent):
+            return False
+        return True
+
+    def _publish_broker_silence(self, silence_us: int) -> None:
+        try:
+            self.metrics.order_broker_silence_seconds.set(silence_us / 1_000_000)  # precision-time
+        except Exception:  # noqa: BLE001 - observability must never break the breaker
+            logger.debug("broker_silence_publish_failed", exc_info=True)
 
     def _validate_locked(self, intent: OrderIntent) -> tuple[bool, str]:
         """H4: policy body for validate / check_and_submit. Caller MUST

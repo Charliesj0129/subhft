@@ -14,6 +14,13 @@ from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuard
 
 pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
 
+
+def _armed_thresholds() -> RiskThresholds:
+    """Built-in thresholds with the order-RTT STORM rule re-armed at its former
+    2.5 s; it is disarmed by default since 2026-11-02 (broker back-pressure)."""
+    return RiskThresholds(order_rtt_storm_us=2_500_000)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -122,7 +129,7 @@ class TestStormGuardChaos:
     # 4. Rapid state oscillation ---------------------------------------------
     def test_rapid_state_oscillation(self):
         """Oscillate NORMAL/WARM 1000 times without crash."""
-        guard = StormGuard(thresholds=RiskThresholds())
+        guard = StormGuard(thresholds=_armed_thresholds())
         for _ in range(1000):
             guard.update(order_rtt_us=1_500_000)  # -> WARM
             # WARM -> NORMAL requires de-escalation threshold; force via transition
@@ -220,7 +227,7 @@ class TestStormGuardChaos:
     # 8. De-escalation under concurrent load ---------------------------------
     def test_deescalation_under_load(self):
         """Concurrent clear evaluations eventually de-escalate from STORM."""
-        guard = StormGuard(thresholds=RiskThresholds())
+        guard = StormGuard(thresholds=_armed_thresholds())
         guard._storm_cooldown_s = 0.0  # disable cooldown for test speed
         guard._de_escalate_threshold = 3
         # Escalate to STORM
@@ -274,7 +281,7 @@ class TestStormGuardChaos:
     # 10. Storm cooldown timing (mock time) ----------------------------------
     def test_storm_cooldown_timing(self):
         """STORM does not de-escalate before cooldown period elapses."""
-        guard = StormGuard(thresholds=RiskThresholds())
+        guard = StormGuard(thresholds=_armed_thresholds())
         guard._storm_cooldown_s = 30.0
         guard._de_escalate_threshold = 1
 
@@ -301,7 +308,7 @@ class TestStormGuardChaos:
     # 12. Escalation cascade WARM -> STORM -> HALT ---------------------------
     def test_escalation_cascade(self):
         """Worsening health escalates to STORM; HALT needs trigger_halt."""
-        guard = StormGuard(thresholds=RiskThresholds())
+        guard = StormGuard(thresholds=_armed_thresholds())
         s1 = guard.update(order_rtt_us=1_500_000)
         assert s1 == StormGuardState.WARM
 

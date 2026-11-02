@@ -6,6 +6,10 @@ call. One timeout put the maker reduce-only for ~85 s, and the next one did it
 again. STORM now needs ``order_rtt_storm_count`` slow orders within
 ``order_rtt_storm_window_s`` and ends only ``order_rtt_storm_dwell_s`` after
 the last one.
+
+2026-11-02: the rule is disarmed by default (``order_rtt_storm_us=0``); broker
+back-pressure replaced it (``test_broker_backpressure.py``). These tests arm it
+at its former 2.5 s threshold, which a host can still do.
 """
 
 from __future__ import annotations
@@ -34,6 +38,13 @@ def clock(monkeypatch) -> _Clock:
     return c
 
 
+ARMED_STORM_US = 2_500_000  # the threshold the rule had before 2026-11-02
+
+
+def _armed_guard() -> StormGuard:
+    return StormGuard(RiskThresholds(order_rtt_storm_us=ARMED_STORM_US))
+
+
 def _quiet_ticks(guard: StormGuard, clock: _Clock, n: int, step_s: float = 1.0) -> StormGuardState:
     state = guard.state
     for _ in range(n):
@@ -51,7 +62,7 @@ def test_one_timed_out_order_warns_and_does_not_stop_quoting(clock) -> None:
 
 
 def test_three_slow_orders_within_a_minute_enter_storm(clock) -> None:
-    guard = StormGuard()
+    guard = _armed_guard()
 
     for _ in range(2):
         guard.observe_order_rtt_us(TIMEOUT_US)
@@ -64,7 +75,7 @@ def test_three_slow_orders_within_a_minute_enter_storm(clock) -> None:
 
 
 def test_three_slow_orders_spread_over_more_than_a_minute_stay_out_of_storm(clock) -> None:
-    guard = StormGuard()
+    guard = _armed_guard()
 
     for _ in range(3):
         guard.observe_order_rtt_us(TIMEOUT_US)
@@ -82,7 +93,7 @@ def _enter_storm(guard: StormGuard, clock: _Clock) -> None:
 
 
 def test_storm_holds_for_the_dwell_after_the_last_slow_order(clock) -> None:
-    guard = StormGuard()
+    guard = _armed_guard()
     _enter_storm(guard, clock)
 
     # 299 s of quiet ticks: still STORM.
@@ -92,7 +103,7 @@ def test_storm_holds_for_the_dwell_after_the_last_slow_order(clock) -> None:
 
 
 def test_a_slow_order_during_the_dwell_restarts_it(clock) -> None:
-    guard = StormGuard()
+    guard = _armed_guard()
     _enter_storm(guard, clock)
 
     _quiet_ticks(guard, clock, 200)
@@ -106,6 +117,7 @@ def test_a_slow_order_during_the_dwell_restarts_it(clock) -> None:
 
 
 def test_the_host_can_set_count_window_and_dwell(clock, monkeypatch) -> None:
+    monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_US", str(ARMED_STORM_US))
     monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_COUNT", "2")
     monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_WINDOW_S", "10")
     monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_DWELL_S", "60")
@@ -132,3 +144,18 @@ def test_the_defaults_are_three_in_sixty_seconds_held_three_hundred() -> None:
     t = RiskThresholds()
 
     assert (t.order_rtt_storm_count, t.order_rtt_storm_window_s, t.order_rtt_storm_dwell_s) == (3, 60.0, 300.0)
+
+
+def test_timed_out_orders_do_not_enter_storm_by_default(clock) -> None:
+    """11-02 day session: this rule held R47 reduce-only for 19.6% of it while
+    the broker went on to answer 116 of the 120 timed-out orders. Disarmed by
+    default; a single slow order still warns."""
+    guard = StormGuard()
+    assert guard.thresholds.order_rtt_storm_us == 0
+
+    for _ in range(10):
+        guard.observe_order_rtt_us(TIMEOUT_US)
+        clock.now += 1
+        assert guard.update() is not StormGuardState.STORM
+
+    assert guard.state is StormGuardState.WARM

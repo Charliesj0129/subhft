@@ -237,6 +237,13 @@ class RiskEngine:
             self.storm_guard.set_position_provider(self._current_strategy_symbol_net_position)
         except Exception:  # noqa: BLE001 — defensive: never break engine init
             logger.warning("stormguard_position_provider_wire_failed", exc_info=True)
+        # StormGuard keys in the risk config apply from boot, not only after a
+        # SIGHUP. Before this a threshold could be changed on a running host
+        # only through an env var, i.e. a container recreate; a YAML edit plus
+        # the normal stop/start now reaches it. Env still wins (reload
+        # re-applies it on top), and a config that sets none of the keys
+        # changes nothing.
+        self._apply_stormguard_config()
         self._notification_dispatcher = notification_dispatcher
         self._rust_validator = self._init_rust_validator(price_scale_provider)
         self._rust_validator_reason_map = {
@@ -478,6 +485,18 @@ class RiskEngine:
     def load_config(self) -> None:
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
+
+    def _apply_stormguard_config(self) -> None:
+        sg = self.storm_guard
+        reload_thresholds = getattr(sg, "reload_thresholds", None)
+        has_thresholds = getattr(sg, "config_has_thresholds", None)
+        if reload_thresholds is None or has_thresholds is None:
+            return
+        try:
+            if has_thresholds(self.config):
+                reload_thresholds(self.config)
+        except Exception:  # noqa: BLE001 - keep the built-in thresholds rather than fail boot
+            logger.error("stormguard_config_apply_failed", exc_info=True)
 
     def reload_config(self) -> None:
         """Re-read strategy_limits.yaml and update validators with new thresholds."""

@@ -184,6 +184,9 @@ class MetricsRegistry:
                 _pn("order_deadline_overridden_total"),
                 _pn("order_session_warmup_total"),
                 _pn("order_local_reject_total"),
+                _pn("order_broker_silence_seconds"),
+                _pn("order_broker_inflight"),
+                _pn("order_broker_silence_episode_seconds"),
                 _pn("place_order_late_result_total"),
                 _pn("phantom_bound_total"),
                 _pn("phantom_order_candidates_total"),
@@ -819,6 +822,27 @@ class MetricsRegistry:
             "1,733 circuit_breaker refusals over 2026-08-28..09-16 drove "
             "OrderDeadLetterQueueGrowing (critical) on THESHOW.",
             ["reason"],
+        )
+        # Broker order-path silence (order/broker_stall.py): how long the
+        # oldest call sent after the last broker answer has been waiting. Read
+        # by StormGuard's back-pressure gate and long-stall STORM; published
+        # here at the StormGuard tick (1 Hz), so a 15 s scrape sees a sample.
+        self.order_broker_silence_seconds = Gauge(
+            _pn("order_broker_silence_seconds"),
+            "Seconds the oldest broker order call sent after the last broker answer has been waiting (0 = none)",
+        )
+        self.order_broker_inflight = Gauge(
+            _pn("order_broker_inflight"),
+            "Broker order calls (place/cancel/update) handed to the SDK and not yet ended, timed-out ones included",
+        )
+        # One observation per broker answer: how long the path had been silent
+        # when it came (the answered call's own RTT on a quiet path, longer
+        # when it waited behind a stuck call). Buckets span the 3 s wrapper
+        # timeout and the SDK's 30 s ceiling, so stalls are not clipped.
+        self.order_broker_silence_episode_seconds = Histogram(
+            _pn("order_broker_silence_episode_seconds"),
+            "Broker order-path silence ended by an answer, seconds",
+            buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 60.0),
         )
         self.place_order_late_result_total = Counter(
             _pn("place_order_late_result_total"),

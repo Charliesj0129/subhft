@@ -137,6 +137,8 @@ strategy.handle_event() → List[OrderIntent]
     │   client validate; returns False on a refusal
     ↓
   _api_queue → _api_worker
+    ↓ re-checks HALT, then broker back-pressure (NEW/AMEND
+    │   refused while the broker has not answered for >= 1 s)
     ↓
   _dispatch_to_api() → broker.place_order()
     (re-checks HFT_ORDER_MODE: the HALT drain calls it directly)
@@ -386,7 +388,10 @@ DiskPressureMonitor levels:
 
 # STORM triggers
 latency_us >= 20_000 (20ms)                           → STORM
-3 orders with rtt >= 2_500_000 (2.5s) within 60s      → STORM, until 300s with none
+broker order path silent >= 10_000_000 (10s)          → STORM (broker_stall_storm_us)
+3 orders with rtt >= order_rtt_storm_us within 60s    → STORM, until 300s with none
+                                                        (order_rtt_storm_us = 0: off
+                                                         by default since 2026-11-02)
 feed_gap_s >= 1.0 (when session_active)               → STORM
 feature_failure_active OR norm_failure_active          → STORM
 
@@ -395,6 +400,43 @@ latency_us >= 5_000 (5ms)                             → WARM
 order_rtt_us >= 1_500_000 (1.5s)                      → WARM
 DriftBurst toxicity > 0.5 (update_with_lob)           → WARM (never higher)
 ```
+
+### Broker back-pressure (not a state)
+
+`OrderAdapter._run_blocking_call` registers every place/cancel/update broker
+call with `BrokerStallTracker` (`order/broker_stall.py`) until it ends, past
+the `HFT_API_TIMEOUT_S` wrapper timeout included, or for at most 300 s.
+*Silence* covers the oldest still-waiting call sent after the newest call the
+broker has answered, measured from the later of its send time and the last
+answer's arrival (a call queued behind a stuck one starts counting when that
+one comes back). A waiting call sent before an answered one is a lost reply,
+not silence. While
+silence >= `broker_backpressure_silence_us` (1 s), a NEW/AMEND that does not
+reduce a position (and is not from a HALT-exempt strategy) is refused with
+`BROKER_BACKPRESSURE`:
+
+```
+  RiskEngine.evaluate()
+    storm_guard.validate(intent)
+      _validate_locked()        HALT / STORM policy (state)
+      backpressure_blocks()     silence >= 1 s ? -> (False, "BROKER_BACKPRESSURE")
+  ...
+  OrderAdapter._api_worker()
+    HALT re-check
+    _backpressure_blocks()      same predicate, for commands queued
+                                before the stall began
+      -> _reject_before_dispatch(BROKER_BACKPRESSURE)   refusal, not DLQ
+         order_local_reject_total{reason="broker_backpressure"}
+```
+
+No transition, no cooldown: the broker's answer to the waiting call releases it. Silence
+>= `broker_stall_storm_us` (10 s) is fed to `update()` and enters STORM
+through the normal state machine. Both thresholds come from
+`HFT_STORMGUARD_BROKER_BACKPRESSURE_SILENCE_US` /
+`HFT_STORMGUARD_BROKER_STALL_STORM_US` or the risk config's
+`global_defaults`, which `RiskEngine` now applies at boot as well as on
+SIGHUP (env wins). Metrics: `order_broker_silence_seconds`,
+`order_broker_inflight`, `order_broker_silence_episode_seconds`.
 
 ### De-escalation Rules
 

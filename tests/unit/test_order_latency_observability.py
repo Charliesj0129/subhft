@@ -42,17 +42,32 @@ class TestThePipelineHistogramReachesPastTheStormThreshold:
             f"top finite bucket is {max(bounds) / 1e9:.2f}s"
         )
 
-    def test_the_buckets_straddle_the_storm_threshold_they_must_describe(self):
+    def test_the_buckets_straddle_the_order_rtt_thresholds_they_must_describe(self):
+        """The order-RTT STORM side is disarmed by default since 2026-11-02, so
+        the line a quantile must see past is WARM, or STORM when a host arms it
+        at its former 2.5 s."""
         from hft_platform.risk.storm_guard import RiskThresholds
 
         MetricsRegistry._instance = None
         bounds = _bucket_bounds(MetricsRegistry.get().pipeline_latency_ns)
-        storm_ns = RiskThresholds().order_rtt_storm_us * 1_000
-        assert storm_ns > 0, "order_rtt STORM threshold is disarmed; this test is vacuous"
-        assert any(b > storm_ns for b in bounds), (
-            "no bucket sits above the order_rtt STORM threshold, so a quantile can "
+        t = RiskThresholds()
+        line_ns = max(t.order_rtt_warm_us, t.order_rtt_storm_us, 2_500_000) * 1_000
+        assert t.order_rtt_warm_us > 0, "order_rtt WARM threshold is disarmed; this test is vacuous"
+        assert any(b > line_ns for b in bounds), (
+            "no bucket sits above the order_rtt threshold, so a quantile can "
             "never distinguish 'just over the line' from 'not answering at all'"
         )
+
+    def test_the_silence_buckets_reach_past_the_broker_stall_storm_threshold(self):
+        from hft_platform.risk.storm_guard import RiskThresholds
+
+        MetricsRegistry._instance = None
+        hist = MetricsRegistry.get().order_broker_silence_episode_seconds
+        bounds = _bucket_bounds(hist)
+        t = RiskThresholds()
+        assert t.broker_stall_storm_us > 0
+        assert any(b * 1e6 > t.broker_stall_storm_us for b in bounds)
+        assert any(b * 1e6 < t.broker_backpressure_silence_us for b in bounds)
 
     def test_the_buckets_stay_sorted_and_unique(self):
         MetricsRegistry._instance = None

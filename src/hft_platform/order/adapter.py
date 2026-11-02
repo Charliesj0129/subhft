@@ -22,6 +22,7 @@ from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.observability.latency import LatencyRecorder
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.ops.platform_degrade import get_shared_platform_degrade_controller
+from hft_platform.order.broker_stall import BrokerStallTracker
 from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.shadow import ShadowOrderSink
@@ -236,6 +237,9 @@ class OrderAdapter:
         "_audit_writer",
         "_explanation_assembler",
         "_rejection_sink",
+        # Outstanding broker order calls and the last broker answer; source of
+        # ``broker_silence_ns`` for StormGuard's back-pressure gate.
+        "_broker_stall",
         "_pending_fill_index",
         "_pending_fill_registered_at",
         "_pending_fill_ttl_s",
@@ -291,6 +295,7 @@ class OrderAdapter:
         self._cmd_trace_id_map: Dict[str, str] = cmd_trace_id_map if cmd_trace_id_map is not None else {}
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
         self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
+        self._broker_stall = BrokerStallTracker(on_episode=self._observe_broker_silence_episode)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
@@ -528,8 +533,57 @@ class OrderAdapter:
         self._rejection_sink = sink
 
     def set_storm_guard(self, storm_guard: Any) -> None:
-        """Inject StormGuard reference for live HALT checks (M1 gap closure)."""
+        """Inject StormGuard reference for live HALT checks (M1 gap closure).
+
+        Also hands StormGuard this adapter's broker-silence probe, which its
+        back-pressure gate and long-stall STORM read.
+        """
         self._storm_guard = storm_guard
+        wire = getattr(storm_guard, "set_broker_stall_provider", None)
+        if wire is not None:
+            wire(self.broker_silence_ns)
+
+    def _backpressure_blocks(self, intent: OrderIntent) -> bool:
+        """StormGuard's back-pressure predicate; False when unwired or it fails.
+
+        Only NEW and AMEND are ever held; asking for anything else would cost a
+        call on the CANCEL/FORCE_FLAT path for an answer that is always no.
+        Only a literal ``True`` refuses, so a stand-in guard that answers with
+        some truthy object cannot hold orders.
+        """
+        if intent.intent_type not in (IntentType.NEW, IntentType.AMEND):
+            return False
+        guard = self._storm_guard
+        if guard is None:
+            return False
+        check = getattr(guard, "backpressure_blocks", None)
+        if check is None:
+            return False
+        try:
+            return check(intent) is True
+        except Exception:  # noqa: BLE001 - the predicate is advisory; HALT is enforced separately
+            logger.warning("backpressure_check_failed", exc_info=True)
+            return False
+
+    def broker_silence_ns(self) -> int:
+        """Nanoseconds the broker order path has been silent (``order/broker_stall.py``).
+
+        Read-only: StormGuard calls it per NEW/AMEND intent, so it publishes
+        nothing. ``order_broker_inflight`` is set where the count changes.
+        """
+        return self._broker_stall.silence_ns()
+
+    def _publish_broker_inflight(self) -> None:
+        try:
+            self.metrics.order_broker_inflight.set(self._broker_stall.inflight())
+        except Exception:  # noqa: BLE001 - a metric must never block the order path
+            logger.debug("order_broker_inflight_publish_failed", exc_info=True)
+
+    def _observe_broker_silence_episode(self, duration_ns: int) -> None:
+        try:
+            self.metrics.order_broker_silence_episode_seconds.observe(duration_ns / 1e9)  # precision-time
+        except Exception:  # noqa: BLE001 - a metric must never block the order path
+            logger.debug("order_broker_silence_episode_observe_failed", exc_info=True)
 
     def _observe_order_rtt(self, op: str, duration_ns: int) -> None:
         """Report one broker round-trip to StormGuard's ``order_rtt`` input.
@@ -637,7 +691,7 @@ class OrderAdapter:
         )
         try:
             await asyncio.wait_for(
-                self._run_blocking_call(self.client.cancel_order, trade),
+                self._run_blocking_call(self.client.cancel_order, trade, _track_broker=True),
                 timeout=self._api_timeout_s,
             )
         except Exception as exc:  # noqa: BLE001 — best-effort defensive cancel
@@ -1624,7 +1678,12 @@ class OrderAdapter:
         return "cancel_sent"
 
     async def _run_blocking_call(
-        self, fn: Any, *args: Any, _on_late: Callable[[str, Any], None] | None = None, **kwargs: Any
+        self,
+        fn: Any,
+        *args: Any,
+        _on_late: Callable[[str, Any], None] | None = None,
+        _track_broker: bool = False,
+        **kwargs: Any,
     ) -> Any:
         """Run a synchronous broker call off-loop without using the loop's default executor.
 
@@ -1636,9 +1695,19 @@ class OrderAdapter:
         answer being dropped: ``kind`` is ``trade`` (a result), ``error`` (the SDK
         raised) or ``cancelled_before_send`` (the guard stopped it before the SDK
         was reached). It must not raise; if it does the exception is swallowed.
+
+        ``_track_broker`` registers the call with ``_broker_stall`` until it
+        ends -- including after the waiter timed out, which is exactly the
+        stall the back-pressure gate exists to see. A result is a broker
+        answer; an exception only stops the call waiting.
         """
         loop = asyncio.get_running_loop()
         result_future: asyncio.Future[Any] = loop.create_future()
+        tracker = self._broker_stall if _track_broker else None
+        token = -1
+        if tracker is not None:
+            token = tracker.sent()
+            self._publish_broker_inflight()
 
         def _late(kind: str, value: Any) -> None:
             if _on_late is None:
@@ -1649,12 +1718,18 @@ class OrderAdapter:
                 logger.warning("late_result_callback_failed", exc_info=True)
 
         def _set_result(value: Any) -> None:
+            if tracker is not None:
+                tracker.answered(token)
+                self._publish_broker_inflight()
             if not result_future.done():
                 result_future.set_result(value)
             else:
                 _late("trade", value)
 
         def _set_exception(exc: BaseException) -> None:
+            if tracker is not None:
+                tracker.abandoned(token)
+                self._publish_broker_inflight()
             if not result_future.done():
                 result_future.set_exception(exc)
             else:
@@ -1674,7 +1749,13 @@ class OrderAdapter:
                 except RuntimeError:
                     return
 
-        threading.Thread(target=_worker, name="order-adapter-call", daemon=True).start()
+        try:
+            threading.Thread(target=_worker, name="order-adapter-call", daemon=True).start()
+        except BaseException:
+            if tracker is not None:
+                tracker.abandoned(token)
+                self._publish_broker_inflight()
+            raise
         return await result_future
 
     def get_phantom_candidates(self) -> frozenset[str]:
@@ -2401,7 +2482,9 @@ class OrderAdapter:
             if trade is None or trade is _PENDING_SENTINEL or trade is _TERMINAL_BEFORE_REGISTERED:
                 continue
             try:
-                await asyncio.wait_for(self._run_blocking_call(self.client.cancel_order, trade), timeout=timeout_s)
+                await asyncio.wait_for(
+                    self._run_blocking_call(self.client.cancel_order, trade, _track_broker=True), timeout=timeout_s
+                )
                 cancelled += 1
                 logger.info("Drained live order", order_key=key)
             except asyncio.TimeoutError:
@@ -4606,6 +4689,25 @@ class OrderAdapter:
                         except ValueError:
                             pass
                         continue
+                    # Broker back-pressure, re-asked at the last moment: this
+                    # worker is serial, so a NEW queued behind a call that just
+                    # timed out reaches here while that call is still waiting
+                    # at the broker -- RiskEngine approved it before the stall
+                    # began. Refused, not dead-lettered: nothing was sent, and
+                    # the price that justified it will be stale by the answer.
+                    if self._backpressure_blocks(item.intent):
+                        self._dedup_release(item.intent.idempotency_key)
+                        await self._reject_before_dispatch(
+                            item.intent,
+                            RejectionReason.BROKER_BACKPRESSURE,
+                            "BROKER_BACKPRESSURE",
+                            "dispatch_broker_backpressure",
+                        )
+                        try:
+                            self._api_inflight.remove(item)
+                        except ValueError:
+                            pass
+                        continue
                     past_deadline = bool(item.deadline_ns) and time.monotonic_ns() > item.deadline_ns
                     if past_deadline and self._deadline_exempt(item.intent):
                         self._note_late_dispatch(item.cmd_id, item.intent)
@@ -4846,6 +4948,7 @@ class OrderAdapter:
                         self._run_blocking_call(
                             _guarded_call,
                             _on_late=self._late_place_reporter(intent, start_ns) if op == "place_order" else None,
+                            _track_broker=op in _ORDER_RTT_OPS,
                         ),
                         timeout=self._api_timeout_s,
                     )

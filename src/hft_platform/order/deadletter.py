@@ -55,6 +55,9 @@ class RejectionReason(str, Enum):
     AMEND_TARGET_PENDING = "amend_target_pending"
     AMEND_TARGET_TERMINAL = "amend_target_terminal"
     ORDER_MODE = "order_mode"
+    # Refused before dispatch while the broker had not answered an earlier call
+    # for longer than StormGuard's ``broker_backpressure_silence_us``.
+    BROKER_BACKPRESSURE = "broker_backpressure"
     UNKNOWN = "unknown"
 
 
