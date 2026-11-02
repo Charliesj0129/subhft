@@ -365,10 +365,15 @@ tests:
   #
   # `interval: 1m` matters: a longer interval than Prometheus's 5m lookback
   # lets the input series go stale between samples, and then nothing fires.
+  # Since 2026-11-02 the order alert reads order_dlq_adds_total{reason}; the
+  # recorder keeps dlq_size_total{source="recorder"}. Both are fed below so the
+  # source split is still pinned.
   - interval: 1m
     name: an order dead-letter is an order warning, not a recorder page
     input_series:
       - series: 'dlq_size_total{source="order"}'
+        values: "0+0x10 1+0x30"
+      - series: 'order_dlq_adds_total{reason="connection_error"}'
         values: "0+0x10 1+0x30"
     alert_rule_test:
       - eval_time: 5m
@@ -379,18 +384,21 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              source: order
+              reason: connection_error
             exp_annotations:
-              summary: "An order was dead-lettered"
+              summary: "An order was dead-lettered (connection_error)"
               description: |
                 The order path gave up on a command and wrote it to the order DLQ.
                 This is NOT the recorder and NOT ClickHouse: nothing under .wal/dlq/
-                is involved. Grep the engine log for `"event": "Order added to DLQ"`
-                and read its `reason`:
-                  connection_error        the broker call failed or timed out
-                  circuit_breaker         5 consecutive failures already tripped it,
-                                          so these are downstream of the first cause
-                  cancel_target_not_found the order was already terminal
+                is involved. Grep the engine log for `"event": "Order added to DLQ"`.
+                By reason:
+                  connection_error        the broker call failed, or a timed-out
+                                          place_order was answered "not sent"
+                  outcome_unresolved      a timed-out place_order got no answer at all
+                                          within the phantom TTL
+                  api_timeout             the API guard never got a slot
+                  deadline_exceeded       a command waited past its deadline
+                  *_target_*              the cancel/amend target was gone or pending
                 Measured 2026-09-14: 131 entries in 6 h against 3,128 placements,
                 113 of them inside the 00:45Z market-open minute where the order
                 session was not yet established. A burst at the open and a trickle
@@ -448,6 +456,22 @@ tests:
         alertname: OrderDeadLetterQueueGrowing
         exp_alerts: []
 
+  # A HALT skip and a back-pressure refusal are the platform saying no on
+  # purpose; neither pages as a dead letter.
+  - interval: 1m
+    name: halt skips and back-pressure refusals page nobody as dead letters
+    input_series:
+      - series: 'order_dlq_adds_total{reason="stormguard_halt"}'
+        values: "0+0x10 40+0x30"
+      - series: 'order_dlq_adds_total{reason="broker_backpressure"}'
+        values: "0+0x10 40+0x30"
+      - series: 'order_dlq_adds_total{reason="connection_error"}'
+        values: "0+0x40"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OrderDeadLetterQueueGrowing
+        exp_alerts: []
+
   # ── OrderOutcomeUnresolved ──────────────────────────────────────
   # The critical half of the order DLQ split. The three phantom_bound_total
   # children start at 0 here because MetricsRegistry creates them at 0; a
@@ -455,9 +479,7 @@ tests:
   - interval: 1m
     name: a timed-out order that did not end cleanly pages critical, per outcome
     input_series:
-      - series: 'phantom_bound_total{outcome="cancel_timeout"}'
-        values: "0+0x10 1+0x30"
-      - series: 'phantom_bound_total{outcome="cancel_failed"}'
+      - series: 'cancel_unconfirmed_total{outcome="gave_up"}'
         values: "0+0x10 1+0x30"
       - series: 'phantom_bound_total{outcome="fill_claimed_after_expiry"}'
         values: "0+0x10 1+0x30"
@@ -474,9 +496,9 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: critical
-              outcome: cancel_timeout
+              outcome: cancel_gave_up
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (cancel_timeout)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (cancel_gave_up)"
               description: &unresolved_one |
                 1 in 30m. The broker may hold an order, or a
                 fill, that the strategy's pending count does not reflect. Compare the
@@ -488,15 +510,9 @@ tests:
                 to the TTL.
           - exp_labels:
               severity: critical
-              outcome: cancel_failed
-            exp_annotations:
-              summary: "A timed-out order did not end cleanly (cancel_failed)"
-              description: *unresolved_one
-          - exp_labels:
-              severity: critical
               outcome: fill_claimed_after_expiry
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (fill_claimed_after_expiry)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (fill_claimed_after_expiry)"
               description: *unresolved_one
       # The window passes with no new increment: it clears.
       - eval_time: 42m
@@ -518,13 +534,13 @@ tests:
               severity: critical
               outcome: live_order_ttl_release
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (live_order_ttl_release)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (live_order_ttl_release)"
               description: *unresolved_one
           - exp_labels:
               severity: critical
               outcome: phantom_ttl_release
             exp_annotations:
-              summary: "A timed-out order did not end cleanly (phantom_ttl_release)"
+              summary: "An order may still be live at the broker or its outcome is unresolved (phantom_ttl_release)"
               description: |
                 2 in 30m. The broker may hold an order, or a
                 fill, that the strategy's pending count does not reflect. Compare the
@@ -537,6 +553,8 @@ tests:
 
   # The 2026-10-29 shape that paged critical 9 times: dead-letters and late
   # Trades that were bound and cancelled cleanly. Nothing here is unresolved.
+  # Since 2026-11-02 a slow cancel call (phantom_bound cancel_timeout) does not
+  # page either; its cancel watch confirmed it (no gave_up).
   - interval: 1m
     name: dead-letters whose late Trades were cancelled cleanly page nobody critical
     input_series:
@@ -549,6 +567,8 @@ tests:
       - series: 'phantom_bound_total{outcome="skipped_filled"}'
         values: "0+0x10 1+0x30"
       - series: 'phantom_bound_total{outcome="cancel_timeout"}'
+        values: "0+0x10 3+0x30"
+      - series: 'cancel_unconfirmed_total{outcome="gave_up"}'
         values: "0+0x40"
       - series: "live_order_ttl_releases_total"
         values: "0+0x40"
@@ -558,6 +578,64 @@ tests:
       - eval_time: 15m
         alertname: OrderOutcomeUnresolved
         exp_alerts: []
+
+  # ── BrokerPathSilent / BrokerPathMostlySilent ───────────────────
+  # The 11-02 shape: a 3-30 s stall now and then. A 12 s one warns once; the
+  # critical needs the broker silent for most of 15 minutes.
+  - interval: 15s
+    name: a single long broker stall warns and does not page
+    input_series:
+      - series: "order_broker_silence_seconds"
+        values: "0x20 4 8 12 0x60"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: BrokerPathSilent
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: BrokerPathSilent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The broker left an order call unanswered for 12s"
+              description: |
+                order_broker_silence_seconds reached 10 s in the last 5 minutes, so
+                StormGuard went to STORM (reduce-only) for at least its 30 s cooldown.
+                New orders were held while it lasted; cancels and reducing orders were
+                not. Check `place_order_late_result` in the engine log for the late
+                answers and the quote feed's latency for the same minutes: if quotes
+                were on time, the stall is at the broker's order server.
+      - eval_time: 6m
+        alertname: BrokerPathMostlySilent
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: BrokerPathSilent
+        exp_alerts: []
+
+  - interval: 15s
+    name: a broker that stops answering pages critical
+    input_series:
+      # The SDK gives up after 30 s and the next order starts a new wait: a
+      # sawtooth that is >= 1 s nearly all the time.
+      - series: "order_broker_silence_seconds"
+        values: "0x4 1+1x29 0 1+1x29 0 1+1x29 0"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BrokerPathMostlySilent
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: BrokerPathMostlySilent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Broker back-pressure held new orders for most of 15 minutes"
+              description: |
+                For more than half of the last 15 minutes a broker order call had been
+                waiting for >= 1 s, so new orders were held. Positions are not being
+                managed by new quotes; cancels still go out but queue behind the same
+                broker. Check the order session (relogin, `order_session_*` logs) and
+                the broker's status before anything else.
 
   # ── StrategyPendingWithNoInflightOrder ──────────────────────────
   # Positive control: the 2026-09-07 shape. R47 flat, pending_sell=2 on the

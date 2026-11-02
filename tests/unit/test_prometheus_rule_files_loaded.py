@@ -30,6 +30,8 @@ COMPOSE_YML = ROOT / "docker-compose.yml"
 
 # A quoted PromQL string (label values such as instance="host:9090" contain colons that are not series names).
 _QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|`[^`]*`')
+# A range or subquery selector (``[5m]``, ``[15m:15s]``): its colon is a step, not a series name.
+_RANGE = re.compile(r"\[[^\]]*\]")
 # By convention a PromQL identifier that contains a colon is a recording-rule output.
 _RECORDED_SERIES = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)+")
 
@@ -124,7 +126,7 @@ def test_every_recorded_series_an_alert_reads_is_defined_by_a_loaded_rule():
     for rule in loaded:
         if "alert" not in rule:
             continue
-        for name in _RECORDED_SERIES.findall(_QUOTED.sub("", str(rule["expr"]))):
+        for name in _RECORDED_SERIES.findall(_RANGE.sub("", _QUOTED.sub("", str(rule["expr"])))):
             if name not in recorded:
                 missing.setdefault(name, []).append(rule["alert"])
     assert not missing, f"alerts read recorded series that no loaded rule defines: {missing}"
