@@ -114,7 +114,9 @@ def test_the_order_rtt_input_ships_armed_at_the_operator_set_thresholds() -> Non
     those numbers had not been connected to this breaker; a zero was the honest
     answer then and would be a dead branch now."""
     assert RiskThresholds().order_rtt_warm_us == 1_500_000
-    assert RiskThresholds().order_rtt_storm_us == 2_500_000
+    # STORM side disarmed 2026-11-02: broker back-pressure replaced it (see
+    # RiskThresholds). WARM stays armed, so the input still reports armed.
+    assert RiskThresholds().order_rtt_storm_us == 0
 
 
 @pytest.mark.unit
@@ -129,11 +131,11 @@ def test_the_measured_healthy_distribution_sits_below_the_warm_threshold() -> No
 
 
 @pytest.mark.unit
-def test_two_and_a_half_seconds_at_the_broker_stops_new_quotes() -> None:
+def test_two_and_a_half_seconds_at_the_broker_stops_new_quotes_once_armed() -> None:
     """STORM is reduce-only for NEW/AMEND. That is the whole cost of arming
-    this input, and it must be reachable: three orders at 2.5 s within the
-    minute reach it; the first two only warn."""
-    guard = StormGuard()
+    this input, and it must be reachable when a host arms it: three orders at
+    2.5 s within the minute reach it; the first two only warn."""
+    guard = _guard(order_rtt_storm_us=2_500_000)
 
     assert guard.update(order_rtt_us=2_500_000) is StormGuardState.WARM
     assert guard.update(order_rtt_us=2_500_000) is StormGuardState.WARM

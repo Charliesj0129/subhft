@@ -31,6 +31,16 @@ class MyStrategy(BaseStrategy):
     def on_risk_feedback(self, feedback: RiskFeedback): ...
 ```
 
+**`on_risk_feedback` semantics** (what a strategy may do next):
+
+| Feedback | Meaning | Resend? |
+|---|---|---|
+| `was_approved=False` | Refused before any broker call (risk validator, StormGuard, adapter guard such as `BROKER_BACKPRESSURE` / `dispatch_broker_backpressure`); release the pending slot | Yes, at a fresh price once the condition clears |
+| `was_approved=True` | Risk approved it and it did not complete normally: a broker call that timed out and may be live (`OrderAdapter`, `phantom_pending`), or an approved command dead-lettered (`RiskEngine._send_dlq_rejection`) | Not for a timed-out call: the fill or the late answer settles it |
+
+`BROKER_BACKPRESSURE` lasts as long as the broker has an unanswered call
+older than 1 s, usually under a second past that; it is not a StormGuard state.
+
 **Order placement**:
 ```python
 self.buy(symbol, price=Decimal("600.5"), qty=1)

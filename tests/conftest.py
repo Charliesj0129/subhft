@@ -432,6 +432,21 @@ def order_rtt_single_sample(monkeypatch):
     For tests of the state machine itself, which use the order-RTT input as the
     simplest health signal that reaches STORM. The count-and-dwell rule has its
     own tests in ``test_order_rtt_storm_needs_repeated_slow_orders.py``.
+
+    The rule is disarmed by default since 2026-11-02 (broker back-pressure
+    replaced it), so a StormGuard built without explicit thresholds gets it
+    re-armed at the threshold it had before. Through the default, not the env
+    var: the env var would also override every explicit threshold and reload
+    the tests pass in.
     """
+    import functools
+
+    from hft_platform.risk import storm_guard as storm_guard_module
+
+    monkeypatch.setattr(
+        storm_guard_module,
+        "RiskThresholds",
+        functools.partial(storm_guard_module.RiskThresholds, order_rtt_storm_us=2_500_000),
+    )
     monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_COUNT", "1")
     monkeypatch.setenv("HFT_STORMGUARD_ORDER_RTT_STORM_DWELL_S", "0")

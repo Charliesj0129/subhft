@@ -192,7 +192,9 @@ class TestEffectiveThresholdsAreLogged:
         assert report["daily_loss"]["hard_limit_ntd"] == 15_000
         assert report["daily_loss"]["position_loss_limit_ntd"] == 5_000
         assert report["loss_exit"]["enabled"] is True
-        assert report["stormguard"]["order_rtt_storm_us"] > 0
+        assert report["stormguard"]["order_rtt_warm_us"] > 0
+        assert report["stormguard"]["broker_backpressure_silence_us"] > 0
+        assert report["stormguard"]["broker_stall_storm_us"] > 0
 
     def test_boot_logs_it_once(self) -> None:
         with patch("hft_platform.risk.engine.logger") as log:
