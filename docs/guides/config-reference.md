@@ -93,7 +93,8 @@
 - `HFT_WAL_DIR`
 - `HFT_WAL_BATCH_MAX_ROWS`
 - `HFT_WAL_DISK_MIN_MB`
-- `HFT_WAL_DISK_PRESSURE_POLICY=drop|write|halt`（依實作）
+- `HFT_WAL_DISK_PRESSURE_POLICY`（預設 `halt`；只有 `raise` 會拋例外，其他值一律丟列，見 `docs/operations/env-vars-reference.md` §6.6）
+- `HFT_WAL_FIRST_POLICY_<TABLE>=write|drop|halt`（只在 `wal_first` 模式、CRITICAL 壓力時有效）
 
 ### 3.7 Feature Plane
 - `HFT_FEATURE_ENGINE_ENABLED=0|1`

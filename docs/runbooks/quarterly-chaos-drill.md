@@ -71,7 +71,7 @@ uv run pytest tests/chaos/test_playbook_disk_full.py -v --no-cov
 - **Failure mode**: WAL directory or ClickHouse data disk reaches capacity.
 - **Expected system response**: WAL writer detects disk pressure, emits `wal_disk_pressure_critical` alert, recorder enters degraded mode (drops non-critical events).
 - **Pass criteria**: System does not crash, trading continues in degraded mode, disk pressure metric and alert fire correctly.
-- **If it fails**: Check `recorder/wal.py` disk pressure detection, verify `HFT_WAL_RETENTION_DAYS` auto-cleanup, review disk monitoring thresholds.
+- **If it fails**: Check `recorder/wal.py` disk pressure detection, verify `HFT_ARCHIVE_RETENTION_DAYS` (default 14) auto-cleanup, review disk monitoring thresholds.
 
 ## Post-Drill Checklist
 
