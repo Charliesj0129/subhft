@@ -163,8 +163,18 @@ def test_contract_update_event_handler_never_raises_into_the_sdk():
         def action(self):
             raise RuntimeError("boom")
 
-    runtime = _runtime(_Api())
-    runtime._on_contract_update_event(_Exploding())  # must not raise
+    metrics = SimpleNamespace(
+        contract_update_events_total=MagicMock(),
+        contract_update_last_event_ts=MagicMock(),
+    )
+    runtime = _runtime(_Api(), metrics)
+
+    assert runtime._on_contract_update_event(_Exploding()) is None
+
+    # The event that blew up is not recorded as if it had been handled.
+    assert runtime._client._contract_update_last_event_s == 0.0
+    metrics.contract_update_events_total.labels.assert_not_called()
+    metrics.contract_update_last_event_ts.set.assert_not_called()
 
 
 def test_contract_update_event_does_not_re_enter_the_sdk():
