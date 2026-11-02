@@ -58,6 +58,11 @@ _REJECT_REASON_MAX_LEN = 64
 # ``phantom_bound_total`` outcomes that page as OrderOutcomeUnresolved
 # (config/monitoring/alerts/rules.yaml); the registry creates each at 0.
 UNRESOLVED_PHANTOM_OUTCOMES: tuple[str, ...] = ("cancel_timeout", "cancel_failed", "fill_claimed_after_expiry")
+# The subset OrderOutcomeUnresolved pages on. Since 2026-11-02 a slow cancel call
+# (cancel_timeout / cancel_failed) is not paged when it happens: the cancel watch
+# that follows it pages through cancel_unconfirmed_total{outcome="gave_up"} if
+# the order really stayed live. The two are still created at 0 and counted.
+PAGED_PHANTOM_OUTCOMES: tuple[str, ...] = ("fill_claimed_after_expiry",)
 
 
 def cap_reject_reason(reason: str) -> str:
@@ -196,6 +201,8 @@ class MetricsRegistry:
                 _pn("live_order_completed_by_fill_total"),
                 _pn("order_repeat_terminal_total"),
                 _pn("cancel_unconfirmed_total"),
+                _pn("order_outcome_unknown_total"),
+                _pn("order_dlq_adds_total"),
                 _pn("cancel_retry_total"),
                 _pn("api_guard_timeout_total"),
                 _pn("shadow_orders_total"),
@@ -896,6 +903,22 @@ class MetricsRegistry:
             "(outcome=retried: re-sent once; gave_up: second look, left to the TTL sweep)",
             ["outcome"],
         )
+        # OrderOutcomeUnresolved alerts on increase() of the gave_up child; born
+        # at 0 so the first one counts (a labelled child born at 1 has no increase).
+        for _outcome in ("retried", "gave_up"):
+            self.cancel_unconfirmed_total.labels(outcome=_outcome)
+        # A place/update call that hit the HFT_API_TIMEOUT_S wrapper timeout. Its
+        # result is not known yet -- on THESHOW 116 of 120 were accepted and
+        # answered 5-30 s later -- so it is counted here and NOT as a reject, a
+        # circuit-breaker failure or a dead letter. What it turns into is counted
+        # where it becomes known: phantom_bound_total, phantom_recovery_releases_total.
+        self.order_outcome_unknown_total = Counter(
+            _pn("order_outcome_unknown_total"),
+            "Mutating broker calls that timed out with their outcome unknown, by op",
+            ["op"],
+        )
+        for _op in ("place_order", "update_order"):
+            self.order_outcome_unknown_total.labels(op=_op)
         self.cancel_retry_total = Counter(
             _pn("cancel_retry_total"),
             "Result of the single re-sent cancel for an unconfirmed cancel",
@@ -1146,6 +1169,15 @@ class MetricsRegistry:
             _pn("dlq_size_total"),
             "Dead Letter Queue cumulative entry count",
             ["source"],  # e.g., "order", "recorder"
+        )
+        # The order DLQ by reason. dlq_size_total{source="order"} has no reason,
+        # so an alert on it could not tell a dead letter from a refusal. Every
+        # RejectionReason child is created at 0 by DeadLetterQueue.__init__
+        # (this module cannot import order/deadletter.py: it imports us).
+        self.order_dlq_adds_total = Counter(
+            _pn("order_dlq_adds_total"),
+            "Orders written to the order dead-letter queue, by RejectionReason value",
+            ["reason"],
         )
         # Reconciliation discrepancy count
         self.reconciliation_discrepancy_count = Gauge(

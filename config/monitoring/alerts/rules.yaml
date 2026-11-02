@@ -181,22 +181,32 @@ groups:
   # timed-out call, and _bind_late_trade then binds the late Trade and cancels
   # it (phantom_bound_total{outcome="cancel_sent"} reached 76). The case that
   # needs a person is the one that did not end cleanly: OrderOutcomeUnresolved.
+  #
+  # 2026-11-02: on order_dlq_adds_total{reason} instead of the reason-less
+  # dlq_size_total{source="order"}. A timed-out place_order is no longer a dead
+  # letter when it times out (its outcome is unknown; most are answered late),
+  # only when it is known to be one: never sent (connection_error) or never
+  # answered within the phantom TTL (outcome_unresolved). stormguard_halt is a
+  # HALT doing its job and broker_backpressure a refusal; neither pages here.
   - alert: OrderDeadLetterQueueGrowing
-    expr: increase(dlq_size_total{source="order"}[30m]) > 0
+    expr: sum by (reason) (increase(order_dlq_adds_total{reason!~"broker_backpressure|stormguard_halt"}[30m])) > 0
     for: 0s
     labels:
         severity: warning
     annotations:
-        summary: "An order was dead-lettered"
+        summary: "An order was dead-lettered ({{ $labels.reason }})"
         description: |
           The order path gave up on a command and wrote it to the order DLQ.
           This is NOT the recorder and NOT ClickHouse: nothing under .wal/dlq/
-          is involved. Grep the engine log for `"event": "Order added to DLQ"`
-          and read its `reason`:
-            connection_error        the broker call failed or timed out
-            circuit_breaker         5 consecutive failures already tripped it,
-                                    so these are downstream of the first cause
-            cancel_target_not_found the order was already terminal
+          is involved. Grep the engine log for `"event": "Order added to DLQ"`.
+          By reason:
+            connection_error        the broker call failed, or a timed-out
+                                    place_order was answered "not sent"
+            outcome_unresolved      a timed-out place_order got no answer at all
+                                    within the phantom TTL
+            api_timeout             the API guard never got a slot
+            deadline_exceeded       a command waited past its deadline
+            *_target_*              the cancel/amend target was gone or pending
           Measured 2026-09-14: 131 entries in 6 h against 3,128 placements,
           113 of them inside the 00:45Z market-open minute where the order
           session was not yet established. A burst at the open and a trickle
@@ -206,9 +216,15 @@ groups:
 
   # The critical half of the order DLQ split. Each outcome is a state the
   # platform no longer knows the end of:
-  #   cancel_timeout / cancel_failed   a timed-out place_order came back live and
-  #                                    its cancel did not land (the cancel watch
-  #                                    re-checks once, then leaves it to the TTL)
+  #   cancel_gave_up                   a cancel was still unconfirmed after the
+  #                                    confirm window and one re-send
+  #                                    (cancel_unconfirmed_total{outcome="gave_up"}).
+  #                                    2026-11-02: this replaced cancel_timeout /
+  #                                    cancel_failed of phantom_bound_total, which
+  #                                    counted a cancel the moment its call was
+  #                                    slow -- on the paper broker most of those
+  #                                    landed, and the watch that follows each one
+  #                                    is what knows whether it did.
   #   fill_claimed_after_expiry        a fill was matched to a phantom already
   #                                    expired and released
   #   live_order_ttl_release           a live order swept with no terminal
@@ -220,7 +236,8 @@ groups:
   # both in the 10/29 15Z RTT storm, against 9 for the DLQ rule above.
   - alert: OrderOutcomeUnresolved
     expr: |
-      sum by (outcome) (increase(phantom_bound_total{outcome=~"cancel_timeout|cancel_failed|fill_claimed_after_expiry"}[30m])) > 0
+      sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
+      or label_replace(sum(increase(cancel_unconfirmed_total{outcome="gave_up"}[30m])) > 0, "outcome", "cancel_gave_up", "", "")
       or label_replace(sum(increase(live_order_ttl_releases_total[30m])) > 0, "outcome", "live_order_ttl_release", "", "")
       or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
     for: 0s
@@ -237,6 +254,45 @@ groups:
           `phantom_recovery_swept` and `live_orders_stale_sweep`;
           `cancel_unconfirmed_total{outcome="gave_up"}` says a cancel was left
           to the TTL.
+
+  # Broker back-pressure (2026-11-02, order/broker_stall.py): new orders are held
+  # while the oldest broker call sent after the last answer has waited >= 1 s,
+  # and STORM is entered at 10 s. On the paper broker a stall is usually 3-30 s
+  # and over in under a minute (11-02 replay: held 2.0% of the day session). A
+  # stall reaching 10 s is worth a look; held for most of 15 minutes, the
+  # broker is not answering and nothing new is trading.
+  - alert: BrokerPathSilent
+    expr: max_over_time(order_broker_silence_seconds[5m]) >= 10
+    for: 0s
+    labels:
+        severity: warning
+    annotations:
+        summary: "The broker left an order call unanswered for {{ $value | printf \"%.0f\" }}s"
+        description: |
+          order_broker_silence_seconds reached 10 s in the last 5 minutes, so
+          StormGuard went to STORM (reduce-only) for at least its 30 s cooldown.
+          New orders were held while it lasted; cancels and reducing orders were
+          not. Check `place_order_late_result` in the engine log for the late
+          answers and the quote feed's latency for the same minutes: if quotes
+          were on time, the stall is at the broker's order server.
+
+  - alert: BrokerPathMostlySilent
+    # A count, not avg_over_time: an average over a window with only a few
+    # minutes of history (just after a restart) would page on a 2-minute stall.
+    # 30 of the 60 15 s steps = more than half of 15 minutes, however much
+    # history exists.
+    expr: sum_over_time((order_broker_silence_seconds >= bool 1)[15m:15s]) > 30
+    for: 0s
+    labels:
+        severity: critical
+    annotations:
+        summary: "Broker back-pressure held new orders for most of 15 minutes"
+        description: |
+          For more than half of the last 15 minutes a broker order call had been
+          waiting for >= 1 s, so new orders were held. Positions are not being
+          managed by new quotes; cancels still go out but queue behind the same
+          broker. Check the order session (relogin, `order_session_*` logs) and
+          the broker's status before anything else.
 
   - alert: RecorderDeadLetterQueueNonEmpty
     expr: wal_file_count_tiered{tier="dlq"} > 0

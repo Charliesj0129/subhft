@@ -58,6 +58,9 @@ class RejectionReason(str, Enum):
     # Refused before dispatch while the broker had not answered an earlier call
     # for longer than StormGuard's ``broker_backpressure_silence_us``.
     BROKER_BACKPRESSURE = "broker_backpressure"
+    # A place_order that timed out and never resolved: no Trade, no error,
+    # nothing bound, past the phantom TTL (``release_stale_phantom_pendings``).
+    OUTCOME_UNRESOLVED = "outcome_unresolved"
     UNKNOWN = "unknown"
 
 
@@ -120,6 +123,12 @@ class DeadLetterQueue:
 
         # Metrics
         self._metrics = MetricsRegistry.get()
+        try:
+            adds = self._metrics.order_dlq_adds_total
+            for _reason in RejectionReason:
+                adds.labels(reason=_reason.value)
+        except Exception:  # noqa: BLE001 - metrics must never block DLQ construction
+            logger.debug("order_dlq_adds_precreate_failed", exc_info=True)
 
         logger.info("DeadLetterQueue initialized", dir=str(self.dlq_dir), max_buffer=max_buffer_size)
 
@@ -160,6 +169,7 @@ class DeadLetterQueue:
             self.total_entries += 1
             try:
                 self._metrics.dlq_size_total.labels(source="order").inc()
+                self._metrics.order_dlq_adds_total.labels(reason=entry.reason).inc()
             except Exception:
                 pass  # Metrics must never block DLQ operation
 

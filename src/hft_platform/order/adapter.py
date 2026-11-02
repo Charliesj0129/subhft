@@ -1432,6 +1432,10 @@ class OrderAdapter:
                     "error": f"phantom_ttl_{ttl:g}s",
                 }
             )
+            # No Trade, no error, nothing bound, for the whole TTL: this one is a
+            # dead letter, and the only kind a timeout produces.
+            self.metrics.order_reject_total.inc()
+            await self._add_to_dlq(intent, RejectionReason.OUTCOME_UNRESOLVED, f"phantom_ttl_{ttl:g}s")
             if self._send_dispatch_rejection(
                 intent,
                 "phantom_recovery_ttl_expired",
@@ -1476,12 +1480,38 @@ class OrderAdapter:
             return None
 
         def _report(kind: str, value: Any) -> None:
-            elapsed_s = (time.perf_counter_ns() - start_ns) / 1e9
+            elapsed_ns = time.perf_counter_ns() - start_ns
+            elapsed_s = elapsed_ns / 1e9
             try:
                 has_ids = kind == "trade" and self._trade_has_broker_ids(value)
             except Exception:  # noqa: BLE001 — an odd SDK object must not cost the whole report
                 has_ids = False
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
+            # When the broker stamped the order, beside when we sent it: a stamp
+            # near the send means the order sat at the broker and the answer was
+            # slow to come back; a stamp near the answer means it queued before
+            # the broker took it. Raw SDK value, no timezone assumed.
+            order_datetime = ""
+            if kind == "trade":
+                try:
+                    status = value.get("status") if isinstance(value, dict) else getattr(value, "status", None)
+                    stamp = (
+                        status.get("order_datetime")
+                        if isinstance(status, dict)
+                        else getattr(status, "order_datetime", None)
+                    )
+                    order_datetime = "" if stamp is None else str(stamp)
+                except Exception:  # noqa: BLE001 — an odd SDK object must not cost the whole report
+                    order_datetime = ""
+                if self.latency:
+                    # The real duration; api_place_order stopped at the timeout.
+                    self.latency.record(
+                        "api_place_order_late",
+                        elapsed_ns,
+                        trace_id=intent.trace_id,
+                        symbol=intent.symbol,
+                        strategy_id=intent.strategy_id,
+                    )
             logger.warning(
                 "place_order_late_result",
                 order_key=order_key,
@@ -1489,6 +1519,8 @@ class OrderAdapter:
                 kind=kind,
                 elapsed_s=round(elapsed_s, 1),
                 has_ids=has_ids,
+                sent_at_ns=timebase.now_ns() - elapsed_ns,
+                order_datetime=order_datetime,
             )
             try:
                 self.metrics.place_order_late_result_total.labels(kind=kind).inc()
@@ -1571,6 +1603,10 @@ class OrderAdapter:
         if self._send_dispatch_rejection(intent, "place_order_not_sent", phantom_pending=False):
             self._mark_finished(order_key)  # nothing will ever terminal this order
         self._count_phantom_bound("released_not_sent")
+        # Now known to have failed: the reject and dead letter the timeout
+        # deferred (``_dispatch_to_api`` books neither for a phantom).
+        self.metrics.order_reject_total.inc()
+        self._spawn_dlq_add(intent, RejectionReason.CONNECTION_ERROR, "place_order_not_sent")
         self._audit_log_order(
             {
                 "event": "phantom_released",
@@ -1584,6 +1620,19 @@ class OrderAdapter:
                 "details": "outcome=released_not_sent",
             }
         )
+
+    def _spawn_dlq_add(self, intent: OrderIntent, reason: RejectionReason, error_message: str) -> None:
+        """``_add_to_dlq`` from a synchronous loop callback; the task is kept until done."""
+        try:
+            task = asyncio.get_running_loop().create_task(
+                self._add_to_dlq(intent, reason, error_message),
+                name=f"dlq_add:{intent.strategy_id}:{intent.intent_id}",
+            )
+        except RuntimeError:
+            logger.warning("dlq_add_no_loop", strategy_id=intent.strategy_id, reason=reason.value)
+            return
+        self._phantom_bind_tasks.add(task)
+        task.add_done_callback(self._phantom_bind_tasks.discard)
 
     def _spawn_phantom_bind(self, intent: OrderIntent, trade: Any) -> None:
         task = asyncio.get_running_loop().create_task(
@@ -3922,7 +3971,10 @@ class OrderAdapter:
                         self._pending_order_keys.discard(order_key)
                     if not _is_timeout:
                         self._remove_pending_fill(order_key)
-                    self.metrics.order_reject_total.inc()
+                    if not _phantom_pending:
+                        # A phantom's reject (or not) is booked when its outcome
+                        # is known; ``_call_api`` counted it as unknown.
+                        self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
                     # A timed-out place_order left no row in audit.orders_log: the
                     # order is accepted by the broker later, shows up as UNKNOWN
@@ -3944,7 +3996,13 @@ class OrderAdapter:
                             "phantom": _phantom_pending,
                         }
                     )
-                    await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
+                    if not _phantom_pending:
+                        # A phantom is not a dead letter yet: the broker answers
+                        # most of them late, and _bind_late_trade cancels those.
+                        # It is dead-lettered once it is known to be one --
+                        # never sent (_release_unsent_phantom) or never answered
+                        # (release_stale_phantom_pendings).
+                        await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
                     # The strategy is still holding the pending slot it took to
                     # emit this intent, and this is the last point at which
                     # anything can tell it otherwise. Returning False without
@@ -5017,11 +5075,18 @@ class OrderAdapter:
                             attempt=attempt + 1,
                             timeout_s=self._api_timeout_s,
                         )
-                        self.metrics.order_reject_total.inc()
-                        self.circuit_breaker.record_failure()
-                        self._update_cb_metric()
-                        if intent and intent.strategy_id:
-                            self.strategy_cb_mgr.record_failure(intent.strategy_id)
+                        # Outcome unknown, not failed: on THESHOW 116 of 120 of
+                        # these were accepted and answered 5-30 s later. Counting
+                        # them as rejects and breaker failures tripped the breaker
+                        # on orders that existed; what each one turns into is
+                        # booked when it is known (_late_place_reporter,
+                        # release_stale_phantom_pendings). A broker that stops
+                        # answering is held by StormGuard's broker back-pressure
+                        # and long-stall STORM instead.
+                        try:
+                            self.metrics.order_outcome_unknown_total.labels(op=op).inc()
+                        except Exception:  # noqa: BLE001 - a metric must never block the order path
+                            logger.debug("order_outcome_unknown_metric_failed", exc_info=True)
                         # D-03: Track phantom order candidates for reconciliation
                         # R2-02: Use 2-part order_key format for reconciliation parity
                         # Bug #29: only NEW intents can produce phantom orders.

@@ -26,6 +26,10 @@ _VALID_STAGES: frozenset[str] = frozenset(
         "record",
         "bus_publish",
         "api_place_order",
+        # The real duration of a place_order that outlived the HFT_API_TIMEOUT_S
+        # wrapper (recorded when its late answer arrives). api_place_order stops
+        # at the timeout, so without this the tail above 3 s is invisible.
+        "api_place_order_late",
         "api_cancel_order",
         "api_update_order",
         "e2e_order",

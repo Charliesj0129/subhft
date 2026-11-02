@@ -23,6 +23,7 @@ class TestValidStagesAllowlist:
             "record",
             "bus_publish",
             "api_place_order",
+            "api_place_order_late",
             "api_update_order",
             "api_cancel_order",
             "e2e_order",
