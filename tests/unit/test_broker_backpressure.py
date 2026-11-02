@@ -160,9 +160,58 @@ def test_each_answer_reports_the_silence_it_ended() -> None:
     clock.now += 4 * S
     tracker.answered(stuck)
     clock.now += S // 10
-    tracker.answered(queued)  # overtaken by the first answer: no new episode
+    tracker.answered(queued)  # served after the stuck one: waited only since it came back
 
-    assert episodes == [5 * S]
+    assert episodes == [5 * S, S // 10]
+
+
+def test_a_call_queued_behind_a_stuck_one_counts_once_that_one_is_answered() -> None:
+    # Review of f54e334c7: B, sent after the stuck A, was ignored once A was
+    # answered (it was sent before A's answer arrived), so a stall on B was
+    # invisible and new orders queued behind it.
+    clock = _Clock()
+    tracker = BrokerStallTracker(clock=clock)
+
+    stuck = tracker.sent()
+    clock.now += 3 * S
+    tracker.sent()  # queued behind ``stuck`` (e.g. an exempt cancel)
+    clock.now += 16 * S
+    tracker.answered(stuck)
+
+    assert tracker.silence_ns() == 0
+    clock.now += 14 * S
+    assert tracker.silence_ns() == 14 * S
+
+
+def test_the_age_bound_applies_without_a_new_send() -> None:
+    # Back-pressure stops new sends, so the bound cannot depend on one.
+    clock = _Clock()
+    tracker = BrokerStallTracker(clock=clock, max_age_ns=60 * S)
+
+    tracker.sent()  # its completion is never delivered
+    clock.now += 59 * S
+    assert tracker.silence_ns() == 59 * S
+    clock.now += 2 * S
+
+    assert tracker.silence_ns() == 0
+    assert tracker.inflight() == 0
+
+
+def test_a_late_answer_for_an_evicted_call_still_moves_the_last_answer() -> None:
+    clock = _Clock()
+    tracker = BrokerStallTracker(clock=clock, max_age_ns=60 * S)
+
+    evicted = tracker.sent()
+    clock.now += 61 * S
+    waiting = tracker.sent()  # evicts ``evicted``
+    clock.now += 5 * S
+    tracker.answered(evicted)
+
+    assert tracker.silence_ns() == 0
+    clock.now += 2 * S
+    assert tracker.silence_ns() == 2 * S
+    tracker.answered(waiting)
+    assert tracker.silence_ns() == 0
 
 
 def test_calls_older_than_the_bound_are_dropped() -> None:
@@ -347,6 +396,23 @@ def test_a_risk_config_without_stormguard_keys_changes_nothing(tmp_path) -> None
     assert guard.thresholds == before
 
 
+def test_a_bad_risk_config_value_changes_no_threshold_and_keeps_env(tmp_path, monkeypatch) -> None:
+    # Review of f54e334c7: a bad key aborted reload_thresholds after earlier
+    # keys were set and before env was re-applied, so YAML beat env.
+    monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "123456")
+    guard = StormGuard()
+    before = guard.thresholds.latency_storm_us
+
+    _risk_engine(
+        tmp_path,
+        "global_defaults:\n  latency_storm_us: 999\n  order_rtt_storm_us: '2.5s'\n",
+        guard,
+    )
+
+    assert before == 123_456
+    assert guard.thresholds.latency_storm_us == 123_456
+
+
 # --------------------------------------------------------------------------- #
 # OrderAdapter                                                                 #
 # --------------------------------------------------------------------------- #
@@ -402,6 +468,7 @@ async def test_a_timed_out_call_keeps_counting_until_its_late_answer(tmp_path) -
             timeout=0.02,
         )
     assert adapter._broker_stall.inflight() == 1
+    assert adapter.metrics.order_broker_inflight._value.get() == 1
     assert adapter.broker_silence_ns() > 0
 
     release.set()
@@ -409,6 +476,17 @@ async def test_a_timed_out_call_keeps_counting_until_its_late_answer(tmp_path) -
 
     assert adapter._broker_stall.inflight() == 0
     assert adapter.broker_silence_ns() == 0
+    assert adapter.metrics.order_broker_inflight._value.get() == 0
+
+
+def test_reading_the_silence_writes_no_metric(tmp_path) -> None:
+    # StormGuard reads it per NEW/AMEND intent; the gauge must not be set there.
+    adapter = _adapter(tmp_path)
+    adapter.metrics = MagicMock()
+
+    adapter.broker_silence_ns()
+
+    assert adapter.metrics.mock_calls == []
 
 
 @pytest.mark.asyncio

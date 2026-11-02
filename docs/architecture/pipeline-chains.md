@@ -405,8 +405,12 @@ DriftBurst toxicity > 0.5 (update_with_lob)           → WARM (never higher)
 
 `OrderAdapter._run_blocking_call` registers every place/cancel/update broker
 call with `BrokerStallTracker` (`order/broker_stall.py`) until it ends, past
-the `HFT_API_TIMEOUT_S` wrapper timeout included. *Silence* is the age of the
-oldest call sent after the last broker answer that is still waiting. While
+the `HFT_API_TIMEOUT_S` wrapper timeout included, or for at most 300 s.
+*Silence* covers the oldest still-waiting call sent after the newest call the
+broker has answered, measured from the later of its send time and the last
+answer's arrival (a call queued behind a stuck one starts counting when that
+one comes back). A waiting call sent before an answered one is a lost reply,
+not silence. While
 silence >= `broker_backpressure_silence_us` (1 s), a NEW/AMEND that does not
 reduce a position (and is not from a HALT-exempt strategy) is refused with
 `BROKER_BACKPRESSURE`:
@@ -425,7 +429,7 @@ reduce a position (and is not from a HALT-exempt strategy) is refused with
          order_local_reject_total{reason="broker_backpressure"}
 ```
 
-No transition, no cooldown: the first broker answer releases it. Silence
+No transition, no cooldown: the broker's answer to the waiting call releases it. Silence
 >= `broker_stall_storm_us` (10 s) is fed to `update()` and enters STORM
 through the normal state machine. Both thresholds come from
 `HFT_STORMGUARD_BROKER_BACKPRESSURE_SILENCE_US` /

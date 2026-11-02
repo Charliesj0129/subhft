@@ -415,19 +415,24 @@ class StormGuard:
         return any(key in section for key in STORMGUARD_CONFIG_KEYS)
 
     def reload_thresholds(self, config: dict) -> None:
-        """Update thresholds from new config; env overrides are re-applied on top."""
+        """Update thresholds from new config; env overrides are re-applied on top.
+
+        Every key is parsed before any is applied, so one bad value leaves all
+        thresholds (and the env overrides on them) as they were.
+        """
+        risk_cfg = self.config_section(config)
+        parsed: dict[str, int | float] = {}
+        for key in _INT_US_KEYS:
+            if key in risk_cfg:
+                parsed[key] = int(risk_cfg[key])
+        if "order_rtt_storm_count" in risk_cfg:
+            parsed["order_rtt_storm_count"] = max(1, int(risk_cfg["order_rtt_storm_count"]))
+        for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s", "feed_gap_storm_s"):
+            if key in risk_cfg:
+                parsed[key] = float(risk_cfg[key])  # precision-ok
         with self._state_lock:
-            risk_cfg = self.config_section(config)
-            for key in _INT_US_KEYS:
-                if key in risk_cfg:
-                    setattr(self.thresholds, key, int(risk_cfg[key]))
-            if "order_rtt_storm_count" in risk_cfg:
-                self.thresholds.order_rtt_storm_count = max(1, int(risk_cfg["order_rtt_storm_count"]))
-            for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s"):
-                if key in risk_cfg:
-                    setattr(self.thresholds, key, float(risk_cfg[key]))  # precision-ok
-            if "feed_gap_storm_s" in risk_cfg:
-                self.thresholds.feed_gap_storm_s = float(risk_cfg["feed_gap_storm_s"])  # precision-ok
+            for key, value in parsed.items():
+                setattr(self.thresholds, key, value)
             self._apply_env_overrides()
         logger.info("StormGuard thresholds reloaded")
 

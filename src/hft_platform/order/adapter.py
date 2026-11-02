@@ -568,15 +568,16 @@ class OrderAdapter:
     def broker_silence_ns(self) -> int:
         """Nanoseconds the broker order path has been silent (``order/broker_stall.py``).
 
-        Also refreshes ``order_broker_inflight``: StormGuard reads this once a
-        second from its tick, which is the cadence the gauge needs.
+        Read-only: StormGuard calls it per NEW/AMEND intent, so it publishes
+        nothing. ``order_broker_inflight`` is set where the count changes.
         """
-        tracker = self._broker_stall
+        return self._broker_stall.silence_ns()
+
+    def _publish_broker_inflight(self) -> None:
         try:
-            self.metrics.order_broker_inflight.set(tracker.inflight())
+            self.metrics.order_broker_inflight.set(self._broker_stall.inflight())
         except Exception:  # noqa: BLE001 - a metric must never block the order path
             logger.debug("order_broker_inflight_publish_failed", exc_info=True)
-        return tracker.silence_ns()
 
     def _observe_broker_silence_episode(self, duration_ns: int) -> None:
         try:
@@ -1703,7 +1704,10 @@ class OrderAdapter:
         loop = asyncio.get_running_loop()
         result_future: asyncio.Future[Any] = loop.create_future()
         tracker = self._broker_stall if _track_broker else None
-        token = tracker.sent() if tracker is not None else -1
+        token = -1
+        if tracker is not None:
+            token = tracker.sent()
+            self._publish_broker_inflight()
 
         def _late(kind: str, value: Any) -> None:
             if _on_late is None:
@@ -1716,6 +1720,7 @@ class OrderAdapter:
         def _set_result(value: Any) -> None:
             if tracker is not None:
                 tracker.answered(token)
+                self._publish_broker_inflight()
             if not result_future.done():
                 result_future.set_result(value)
             else:
@@ -1724,6 +1729,7 @@ class OrderAdapter:
         def _set_exception(exc: BaseException) -> None:
             if tracker is not None:
                 tracker.abandoned(token)
+                self._publish_broker_inflight()
             if not result_future.done():
                 result_future.set_exception(exc)
             else:
@@ -1748,6 +1754,7 @@ class OrderAdapter:
         except BaseException:
             if tracker is not None:
                 tracker.abandoned(token)
+                self._publish_broker_inflight()
             raise
         return await result_future
 

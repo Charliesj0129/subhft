@@ -7,10 +7,17 @@ calls sent while one was stuck came back only after it did (61 calls, median
 send joins the same queue at the broker; the useful question is not "how slow
 was the last answer" but "is anything waiting right now, and for how long".
 
-``silence_ns`` answers that. It is the age of the oldest call that was sent
-AFTER the last answer and is still waiting. A call sent BEFORE the last answer
-that never came back is not silence: the broker answered something sent later,
-so the path is moving and that one reply was lost or is slow on its own.
+``silence_ns`` answers that. A waiting call counts if it was sent AFTER the
+newest call the broker has answered: the broker has not yet got past it. Its
+silence is measured from the later of its send time and the last answer's
+arrival, so a call queued behind a stuck one starts counting only when the
+stuck one comes back. A waiting call sent BEFORE an answered one is not
+silence: the broker answered something sent later, so the path is moving and
+that one reply was lost or is slow on its own.
+
+Calls older than ``max_age_ns`` are dropped on every read as well as on every
+send, so a call whose completion is never delivered stops counting after the
+bound even when nothing new is sent (back-pressure itself stops new sends).
 
 Single-threaded by contract: every mutation happens on the event loop
 (``OrderAdapter._run_blocking_call`` registers before it starts the worker
@@ -43,6 +50,7 @@ class BrokerStallTracker:
     __slots__ = (
         "_outstanding",
         "_last_answer_ns",
+        "_last_answered_send_ns",
         "_next_token",
         "_max_entries",
         "_max_age_ns",
@@ -63,6 +71,9 @@ class BrokerStallTracker:
         # iteration order is the oldest.
         self._outstanding: dict[int, int] = {}
         self._last_answer_ns: int = 0
+        # Send time of the newest call the broker has answered. Calls sent at
+        # or before it and still waiting were overtaken, not stalled.
+        self._last_answered_send_ns: int = 0
         self._next_token: int = 0
         self._max_entries = max(1, int(max_entries))
         self._max_age_ns = max(1, int(max_age_ns))
@@ -83,15 +94,17 @@ class BrokerStallTracker:
     def answered(self, token: int) -> None:
         """The broker answered ``token`` (a result, possibly after our timeout)."""
         sent_ns = self._outstanding.pop(token, None)
-        if sent_ns is None:
-            return
         now = self._clock()
-        oldest_waiting = self._oldest_waiting_send_ns(include=sent_ns)
-        if oldest_waiting is not None and self._on_episode is not None:
-            try:
-                self._on_episode(now - oldest_waiting)
-            except Exception:  # noqa: BLE001 - observation must never disturb the order path
-                logger.debug("broker_silence_episode_observer_failed", exc_info=True)
+        if sent_ns is not None:
+            start = self._silence_start_ns(include=sent_ns)
+            if start is not None and self._on_episode is not None:
+                try:
+                    self._on_episode(max(0, now - start))
+                except Exception:  # noqa: BLE001 - observation must never disturb the order path
+                    logger.debug("broker_silence_episode_observer_failed", exc_info=True)
+            if sent_ns > self._last_answered_send_ns:
+                self._last_answered_send_ns = sent_ns
+        # An answer for a token already evicted still proves the broker moved.
         if now > self._last_answer_ns:
             self._last_answer_ns = now
 
@@ -104,31 +117,42 @@ class BrokerStallTracker:
         self._outstanding.pop(token, None)
 
     def silence_ns(self) -> int:
-        """Age of the oldest call sent after the last answer that is still waiting."""
-        oldest = self._oldest_waiting_send_ns()
-        if oldest is None:
+        """How long the broker has left a call it has not got past waiting."""
+        now = self._clock()
+        self._evict(now)
+        start = self._silence_start_ns()
+        if start is None:
             return 0
-        return max(0, self._clock() - oldest)
+        return max(0, now - start)
 
     def inflight(self) -> int:
         """Number of broker calls handed off and not yet ended."""
         return len(self._outstanding)
 
-    def _oldest_waiting_send_ns(self, include: int | None = None) -> int | None:
-        last = self._last_answer_ns
-        oldest = include if include is not None and include > last else None
+    def _silence_start_ns(self, include: int | None = None) -> int | None:
+        """When the current silence began, or None if nothing is waiting on it.
+
+        ``include`` is the send time of a call being answered right now, so the
+        episode it ends is measured as if it were still waiting.
+        """
+        floor = self._last_answered_send_ns
+        oldest = include if include is not None and include > floor else None
         try:
             for sent_ns in self._outstanding.values():
-                if sent_ns > last:
+                if sent_ns > floor:
                     if oldest is None or sent_ns < oldest:
                         oldest = sent_ns
                     break  # values are in send order; the first match is the oldest
         except RuntimeError:
             # Mutated mid-iteration: a reader off the loop thread, which the
-            # contract excludes. Report what was found so far rather than raise
+            # contract excludes. Use what was found so far rather than raise
             # into the risk gate.
-            return oldest
-        return oldest
+            pass
+        if oldest is None:
+            return None
+        # A call queued behind a stuck one cannot be served before the stuck
+        # one is answered; its own wait starts there.
+        return max(oldest, self._last_answer_ns)
 
     def _evict(self, now: int) -> None:
         outstanding = self._outstanding
