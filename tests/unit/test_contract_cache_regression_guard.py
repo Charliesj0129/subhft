@@ -9,6 +9,7 @@ cache with *zero* derivatives; a cache missing two roots passed it.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import threading
 from pathlib import Path
@@ -31,6 +32,21 @@ def _fut(code: str, root: str, delivery: str = "2026/11/18") -> dict:
 
 def _opt(code: str, root: str = "TXO") -> dict:
     return {"code": code, "root": root, "type": "option", "exchange": "TAIFEX", "delivery_date": "2026/11/18"}
+
+
+TAIPEI = dt.timezone(dt.timedelta(hours=8))
+
+
+def _taipei_ns(y: int, m: int, d: int, hh: int = 0, mm: int = 0) -> int:
+    return int(dt.datetime(y, m, d, hh, mm, tzinfo=TAIPEI).timestamp() * 1e9)
+
+
+@pytest.fixture(autouse=True)
+def _clock_on_2026_11_03(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard ignores rows settled by now; pin "now" so the fixtures stay live."""
+    from hft_platform.core import timebase
+
+    monkeypatch.setattr(timebase, "now_ns", lambda: _taipei_ns(2026, 11, 3, 14))
 
 
 FULL = [_fut("TXFK6", "TXF"), _fut("MXFK6", "MXF"), _fut("TMFK6", "TMF"), _fut("TMFL6", "TMF", "2026/12/16")]
@@ -155,3 +171,32 @@ def test_refresh_keeps_the_cache_when_the_sdk_walk_lost_two_roots(tmp_path: Path
     assert failed and "TXF" in failed[0]["error"]
     status = json.loads((tmp_path / "contract_refresh_status.json").read_text(encoding="utf-8"))
     assert status.get("result") == "error"
+
+
+def _weekly(code: str, root: str, delivery: str) -> dict:
+    return {"code": code, "root": root, "type": "option", "exchange": "TAIFEX", "delivery_date": delivery}
+
+
+WEEKLY_TX1 = [_weekly(f"TX1{k}", "TX1", "2026/11/04") for k in range(3)]
+
+
+def test_a_weekly_root_that_settled_may_disappear() -> None:
+    """TX1 delivers 11-04 and is its own root; the broker drops it after 13:30."""
+    before = FULL + WEEKLY_TX1
+    assert contract_cache_regressions(before, FULL, as_of=dt.date(2026, 11, 5)) == []
+
+
+def test_a_weekly_root_that_still_trades_may_not_disappear() -> None:
+    before = FULL + WEEKLY_TX1
+    reasons = contract_cache_regressions(before, FULL, as_of=dt.date(2026, 11, 4))
+    assert "option roots missing: TX1" in reasons
+
+
+def test_default_cutoff_moves_at_1330_on_the_delivery_day(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hft_platform.core import timebase
+
+    before = FULL + WEEKLY_TX1
+    monkeypatch.setattr(timebase, "now_ns", lambda: _taipei_ns(2026, 11, 4, 13, 29))
+    assert "option roots missing: TX1" in contract_cache_regressions(before, FULL)
+    monkeypatch.setattr(timebase, "now_ns", lambda: _taipei_ns(2026, 11, 4, 13, 30))
+    assert contract_cache_regressions(before, FULL) == []

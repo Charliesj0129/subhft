@@ -1665,10 +1665,11 @@ class QuoteConnectionPool:
     def _adopt_last_good_universe(self, *, cutoff: dt.date, reason: str) -> bool:
         """Boot from the last validated universe instead of the canonical file.
 
-        Refuses — staying on the canonical file, loudly — when the snapshot is
-        missing, unreadable, or now holds a contract past ``cutoff`` (it is
-        validated with the delivery dates recorded beside it, because the
-        contract cache is exactly what just failed).
+        Codes that have settled since the snapshot was written are dropped
+        first, judged by the delivery dates recorded beside it (the contract
+        cache is exactly what just failed). Refuses — staying on the canonical
+        file, loudly — when the snapshot is missing, unreadable, or what is
+        left fails ``validate_universe`` (e.g. nothing is left).
         """
         from hft_platform.config.universe_plan import (
             UniversePlanError,
@@ -1692,6 +1693,20 @@ class QuoteConnectionPool:
         except Exception as exc:  # noqa: BLE001 — a corrupt snapshot must not kill boot
             return self._stay_on_canonical(reason=reason, why=f"last-good universe unreadable: {exc}", path=path)
 
+        # A weekly option series settles every few days, so a snapshot only a
+        # day old already holds settled codes. Drop those (they are what
+        # validate_universe would refuse) and keep the rest: a front month that
+        # settled is replaced by the ``@next`` entry the same snapshot holds.
+        live_symbols = [
+            entry
+            for entry in symbols
+            if isinstance(entry, dict)
+            and not (
+                (delivery := deliveries.get(str(entry.get("code") or "").strip())) is not None and delivery < cutoff
+            )
+        ]
+        dropped = len(symbols) - len(live_symbols)
+        symbols = live_symbols
         errors = validate_universe(
             symbols,
             delivery_of=deliveries.get,
@@ -1722,6 +1737,7 @@ class QuoteConnectionPool:
             path=path,
             written_at=str(data.get("written_at") or ""),
             symbols=len(symbols),
+            settled_dropped=dropped,
             added_count=len(plan.added_codes),
             removed_count=len(plan.removed_codes),
         )

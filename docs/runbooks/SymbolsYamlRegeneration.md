@@ -58,14 +58,17 @@ for the whole night session. Three changes follow from it:
 
 - `write_contract_cache` (`src/hft_platform/config/_symbols_contracts.py`)
   refuses a rewrite that drops a futures/options root the cache already holds,
-  or keeps less than half of a category's rows. The refresh then logs
+  or keeps less than half of a category's rows (rows already settled by the
+  13:30 delivery cutoff are left out, so a weekly root such as `TX1` or `MX1`
+  may disappear after its delivery). The refresh then logs
   `contract_refresh_integrity_failed` and counts `contract_refresh_total{result="error"}`;
   the old cache stays. `hft config sync --allow-contract-regression` overrides
   it for a listing that really shrank.
 - Every roll that validates writes `data/universe_last_good.yaml`
   (`HFT_UNIVERSE_LAST_GOOD_PATH`) with each code's delivery date. A boot whose
-  own roll fails starts from that file, after re-validating it against those
-  dates (`universe_boot_on_last_good`). Only when it is missing or has itself
+  own roll fails starts from that file: codes settled since it was written are
+  dropped by those dates, and the rest is re-validated
+  (`universe_boot_on_last_good`, `settled_dropped`). Only when it is missing or has itself
   settled does the pool keep `config/symbols.yaml` (`universe_boot_on_canonical`),
   and then the roll clock repairs it inside the session as soon as a rebuild
   validates (`universe_roll_repair_in_session`).

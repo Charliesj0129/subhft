@@ -717,9 +717,10 @@ class TestBootFallsBackToLastGood:
         assert pool.universe_source == "canonical"
         assert _universe_codes(pool) == {"TMFE6", "TXFE6"}
 
-    def test_boot_refuses_a_last_good_universe_that_has_since_settled(
+    def test_boot_drops_last_good_codes_that_have_since_settled(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The snapshot holds K6 and L6; after the November delivery only L6 is kept."""
         self._good_boot(tmp_path, monkeypatch)
         results = self._record_results(monkeypatch)
         pool = _make_pool(
@@ -732,10 +733,32 @@ class TestBootFallsBackToLastGood:
         )
         after_november_settlement = int(dt.datetime(2026, 11, 19, 12, 0, tzinfo=dt.UTC).timestamp() * 1e9)
 
-        assert pool.roll_universe(live=False, now_ns=after_november_settlement) is False
+        assert pool.roll_universe(live=False, now_ns=after_november_settlement) is True
+
+        assert results[-1] == "fallback_last_good"
+        assert pool.universe_source == "last_good"
+        assert _universe_codes(pool) == {"TMFL6"}
+
+    def test_boot_stays_on_canonical_when_every_last_good_code_has_settled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._good_boot(tmp_path, monkeypatch)
+        results = self._record_results(monkeypatch)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFE6"],
+            contracts=NOVEMBER_PARTIAL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 12, 17),
+        )
+        after_december_settlement = int(dt.datetime(2026, 12, 17, 12, 0, tzinfo=dt.UTC).timestamp() * 1e9)
+
+        assert pool.roll_universe(live=False, now_ns=after_december_settlement) is False
 
         assert results[-1] == "fallback_canonical"
         assert pool.universe_source == "canonical"
+        assert _universe_codes(pool) == {"TMFE6"}
 
     def test_live_roll_failure_keeps_the_running_universe(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

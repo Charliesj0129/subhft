@@ -144,6 +144,23 @@ class ContractCacheRegressionError(ValueError):
         self.reasons = reasons
 
 
+def _row_kind(row: dict[str, Any]) -> str:
+    return str(row.get("type") or row.get("security_type") or "").strip().lower()
+
+
+def _row_still_trading(row: dict[str, Any], as_of: date) -> bool:
+    """False only for a row whose delivery date is known and before ``as_of``."""
+    for key in ("delivery_date", "expiry", "due_date", "maturity_date"):
+        raw = str(row.get(key) or "").strip().replace("/", "-")
+        if len(raw) != 10:
+            continue
+        try:
+            return date.fromisoformat(raw) >= as_of
+        except ValueError:
+            continue
+    return True
+
+
 def _explicit_derivative_roots(contracts: list[dict[str, Any]]) -> dict[str, set[str]]:
     """Return ``{kind: {root}}`` for futures/options rows that carry a root.
 
@@ -155,7 +172,7 @@ def _explicit_derivative_roots(contracts: list[dict[str, Any]]) -> dict[str, set
     for row in contracts:
         if not isinstance(row, dict):
             continue
-        kind = str(row.get("type") or row.get("security_type") or "").strip().lower()
+        kind = _row_kind(row)
         if kind not in roots:
             continue
         root = str(row.get("root") or row.get("category") or "").strip().upper()
@@ -164,38 +181,50 @@ def _explicit_derivative_roots(contracts: list[dict[str, Any]]) -> dict[str, set
     return roots
 
 
-def contract_cache_regressions(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[str]:
+def contract_cache_regressions(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+    *,
+    as_of: date | None = None,
+) -> list[str]:
     """Return why replacing *before* with *after* would lose contracts; empty means safe.
 
     Two signals of a partial broker download (2026-11-02: a rewrite lost every
     TXF and MXF row, and the boot universe roll could not resolve them):
 
-    - a futures/options root present before is absent after;
+    - a futures/options root that still had a trading contract before is
+      absent after;
     - a futures/options category keeps less than
-      :data:`CONTRACT_CACHE_MIN_KEEP_RATIO` of its rows.
+      :data:`CONTRACT_CACHE_MIN_KEEP_RATIO` of its still-trading rows.
 
-    A root the exchange really delists trips the first check too. That is the
-    intended direction: the old cache stays until an operator writes the new
-    one with ``allow_regression=True``.
+    Rows that have settled by ``as_of`` (default: the TAIFEX delivery cutoff
+    now, which moves at 13:30) are left out of ``before``. Weekly series live
+    under their own root (``TX1``, ``TXU``, ``MX1``...) with a single delivery
+    date, and the broker drops the whole root when it settles; that is a
+    listing change, not a lost download.
+
+    A root the exchange really delists while it still trades trips the first
+    check too. That is the intended direction: the old cache stays until an
+    operator writes the new one with ``allow_regression=True``.
     """
+    if as_of is None:
+        from hft_platform.core import timebase
+        from hft_platform.core.market_calendar import taifex_delivery_cutoff
+
+        as_of = taifex_delivery_cutoff(timebase.now_ns())
+    live_before = [row for row in before if isinstance(row, dict) and _row_still_trading(row, as_of)]
+
     reasons: list[str] = []
-    roots_before = _explicit_derivative_roots(before)
+    roots_before = _explicit_derivative_roots(live_before)
     roots_after = _explicit_derivative_roots(after)
     for kind in _DERIVATIVE_KINDS:
         missing = sorted(roots_before[kind] - roots_after[kind])
         if missing:
             reasons.append(f"{kind} roots missing: {', '.join(missing[:10])}")
 
-    def _count(rows: list[dict[str, Any]], kind: str) -> int:
-        return sum(
-            1
-            for row in rows
-            if isinstance(row, dict) and str(row.get("type") or row.get("security_type") or "").strip().lower() == kind
-        )
-
     for kind in _DERIVATIVE_KINDS:
-        n_before = _count(before, kind)
-        n_after = _count(after, kind)
+        n_before = sum(1 for row in live_before if _row_kind(row) == kind)
+        n_after = sum(1 for row in after if isinstance(row, dict) and _row_kind(row) == kind)
         if n_before > 0 and n_after < n_before * CONTRACT_CACHE_MIN_KEEP_RATIO:
             reasons.append(f"{kind} rows {n_before} -> {n_after}")
     return reasons
