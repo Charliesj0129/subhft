@@ -242,6 +242,22 @@ class TestRefusals:
         assert pool.roll_universe(live=False, now_ns=SETTLEMENT_EVENING_NS) is True
         assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
 
+    def test_weekly_futures_root_is_not_held_to_the_monthly_rule(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``MX1`` lists a single Wednesday; the monthly cross-check must skip it."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFJ6"],
+            contracts=SEPTEMBER_CONTRACTS + [_future("MX1J6", "MX1", "2026/10/07")],
+            list_body=TMF_LIST + "MX1@front exchange=FUT tags=futures|weekly\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "MX1J6"}
+
     def test_cache_that_lost_the_front_month_is_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The cache holds November and December but not October: ``TMF@front``
         would quietly resolve to November. The TAIFEX rule says October."""

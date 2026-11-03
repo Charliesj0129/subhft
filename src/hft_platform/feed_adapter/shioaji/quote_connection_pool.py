@@ -1505,6 +1505,10 @@ class QuoteConnectionPool:
                 for row in futures_by_root.get(root, [])
                 if isinstance(row, dict)
             ]
+            if len({delivery for _code, delivery in pairs if delivery is not None}) < 2:
+                # A weekly series (``MX1``, ``MX2``...) lists one delivery date
+                # under its own root; the monthly rule does not describe it.
+                continue
             reason = front_month_disagreement(root, pairs, now_ns=now_ns)
             if reason is not None:
                 reasons.append(f"front month disagrees with the TAIFEX rule: {reason}")
