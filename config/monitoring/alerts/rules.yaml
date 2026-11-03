@@ -1346,6 +1346,57 @@ groups:
         `shioaji_family_populator_snapshot_installed` in the engine log.
       runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
+  # ── Front-month invariant (ops/front_month_watch.py) ─────────────
+  #
+  # Every roll failure in 2026 surfaced through a side effect (a failed
+  # subscription, dropped intents, a stop that would not release), and each
+  # alert watched one such counter. These read the invariant directly, once a
+  # minute, against the exchange rule (third Wednesday, holiday-adjusted,
+  # 13:30 cutoff) rather than against broker data that may itself be partial.
+  - alert: FrontMonthNotSubscribed
+    expr: front_month_subscribed == 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "The feed does not carry the {{ $labels.root }} front month"
+      description: >-
+        The exchange rule's front contract for {{ $labels.root }} is not in the
+        subscribed set (subscribed codes plus resolved aliases), so a strategy
+        on it sees no quotes. Read `front_month_mismatch` in the engine log
+        (`expected`), then hft_quote_pool_universe_roll_total by result and
+        `universe_roll_refused` for why the roll did not follow.
+      runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - alert: StrategyOffFrontMonth
+    expr: front_month_strategy_on_front == 0 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Strategy {{ $labels.strategy_id }} holds a {{ $labels.root }} month that is not the front month"
+      description: >-
+        A symbol this strategy trades for {{ $labels.root }} is not the exchange
+        rule's front contract (a settled month, or a later one it was never
+        meant to trade). R2 families are excluded. Read `front_month_mismatch`
+        (`off_front`) in the engine log; the binding is moved by the 60 s
+        family clock (`shioaji_family_populator`), so a persisting mismatch
+        means that clock did not run or read a stale contract table.
+      runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - alert: FrontMonthWatchStalled
+    expr: time() - front_month_check_timestamp_seconds > 600 and on() market_trading_hours_active == 1
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "The front-month watch has not run for over 10 minutes"
+      description: >-
+        front_month_check_timestamp_seconds stopped advancing, so
+        FrontMonthNotSubscribed and StrategyOffFrontMonth are reading frozen
+        values. Look for `front_month_watch_failed` in the engine log.
+      runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
   # ── Strategy health, not strategy opinion (2026-09-10) ───────────
   # This block replaces StrategyProducesNoIntentsDuringSession, which alerted
   # on the strategy's *output*: "no intent in 30 minutes of open session". A

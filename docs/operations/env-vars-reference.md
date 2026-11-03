@@ -305,6 +305,7 @@ Shadow deployment note:
 | `HFT_DIAG_TRACE_ENABLED` | `0` | `1` = 啟用事件決策 trace 採樣 | 僅事故期間啟用 |
 | `HFT_DIAG_TRACE_SAMPLE_EVERY` | `100` | 每 N 事件採樣一筆決策 trace | 流量大時可提高 |
 | `HFT_ALPHA_AUDIT_ENABLED` | `0` | `1` = 啟用 Alpha 審計模式（release gate 必須設置） | `release-first-ops-gate` 前必須設為 `1` |
+| `HFT_FRONT_MONTH_WATCH_S` | `60` | 近月一致性檢查間隔（秒）：行情是否訂到交易所規則的近月、各策略是否在近月；輸出 `front_month_*` gauge（`ops/front_month_watch.py`） | `0` = 停用（`FrontMonthWatchStalled` 會告警） |
 
 **Runbook 參考**: [Section 8 — 時間偏移](../runbooks.md#8-時間偏移--未來時間資料), [incident-diagnostics](../runbooks/incident-diagnostics.md)
 

@@ -1650,6 +1650,13 @@ class SystemBootstrapper:
         if hasattr(md_client, "run_universe_roll_clock"):
             deferred_tasks.append(md_client.run_universe_roll_clock())
 
+        # Both clocks above can be wrong in ways neither reports (a partial
+        # contract cache, a binding that never moved). This one checks their
+        # result against the exchange rule once a minute and publishes it.
+        from hft_platform.ops.front_month_watch import run_front_month_watch
+
+        deferred_tasks.append(run_front_month_watch(strategy_runner, md_client))
+
         # The order facade is idle between sessions, so its transport session
         # lapses and the first order of the day pays the handshake (27 s on
         # 2026-09-16) against a 30 ms retry budget. Warm it ahead of the open

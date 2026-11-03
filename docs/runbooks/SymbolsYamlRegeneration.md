@@ -118,6 +118,19 @@ Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
 | 13:45 (day close) to the 15:00 night open, minus the pre-open lead | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
 | Any check while a session is open | The rebuild validates again but the change stays deferred, unless the pool booted on the canonical `symbols.yaml`; then it is repaired at once | `result="deferred_session"` (the log line is debug level); a repair logs `universe_roll_repair_in_session` |
 
+The invariant itself is watched once a minute by
+`src/hft_platform/ops/front_month_watch.py` (`HFT_FRONT_MONTH_WATCH_S`, default
+60, 0 disables). For every futures root a strategy trades it compares the
+exchange rule's front contract with the subscribed feed and with each
+strategy's symbols, and publishes `front_month_subscribed{root}`,
+`front_month_strategy_on_front{strategy_id,root}` and
+`front_month_check_timestamp_seconds`. Alerts: `FrontMonthNotSubscribed`,
+`StrategyOffFrontMonth` (both critical, 5 min, trading hours only) and
+`FrontMonthWatchStalled`. The engine log carries `front_month_mismatch` /
+`front_month_ok` once per change of state. Both alerts should stay quiet
+through a normal delivery day: the next month is already subscribed
+(`@next` lines), and R47 rebinds within a minute of 13:30.
+
 Pass criteria for the roll (capture the baseline before it):
 
 - `hft_quote_pool_universe_roll_total{result="rolled"}` rises by 1; no `build_errors`,

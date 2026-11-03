@@ -451,6 +451,100 @@ tests:
         exp_alerts: []
       - eval_time: 35m
         alertname: UniverseOnLastGoodFallback
+
+  # ── Front-month invariant ───────────────────────────────────────
+  - interval: 1m
+    name: front-month-not-subscribed fires during the session
+    input_series:
+      - series: 'front_month_subscribed{root="TXF"}'
+        values: "0x20"
+      - series: 'front_month_subscribed{root="TMF"}'
+        values: "1x20"
+      - series: "market_trading_hours_active"
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: FrontMonthNotSubscribed
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: FrontMonthNotSubscribed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              root: TXF
+            exp_annotations:
+              summary: "The feed does not carry the TXF front month"
+              description: >-
+                The exchange rule's front contract for TXF is not in the
+                subscribed set (subscribed codes plus resolved aliases), so a strategy
+                on it sees no quotes. Read `front_month_mismatch` in the engine log
+                (`expected`), then hft_quote_pool_universe_roll_total by result and
+                `universe_roll_refused` for why the roll did not follow.
+              runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - interval: 1m
+    name: front-month-not-subscribed stays quiet outside trading hours
+    input_series:
+      - series: 'front_month_subscribed{root="TXF"}'
+        values: "0x20"
+      - series: "market_trading_hours_active"
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: FrontMonthNotSubscribed
+        exp_alerts: []
+
+  - interval: 1m
+    name: strategy-off-front-month fires for the strategy on a settled month
+    input_series:
+      - series: 'front_month_strategy_on_front{strategy_id="R47_MAKER_TMF",root="TMF"}'
+        values: "0x20"
+      - series: "market_trading_hours_active"
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StrategyOffFrontMonth
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              strategy_id: R47_MAKER_TMF
+              root: TMF
+            exp_annotations:
+              summary: "Strategy R47_MAKER_TMF holds a TMF month that is not the front month"
+              description: >-
+                A symbol this strategy trades for TMF is not the exchange
+                rule's front contract (a settled month, or a later one it was never
+                meant to trade). R2 families are excluded. Read `front_month_mismatch`
+                (`off_front`) in the engine log; the binding is moved by the 60 s
+                family clock (`shioaji_family_populator`), so a persisting mismatch
+                means that clock did not run or read a stale contract table.
+              runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - interval: 1m
+    name: strategy-off-front-month tolerates the 13:30 rebind minute
+    input_series:
+      - series: 'front_month_strategy_on_front{strategy_id="R47_MAKER_TMF",root="TMF"}'
+        values: "1 1 0 0 1x16"
+      - series: "market_trading_hours_active"
+        values: "1x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: StrategyOffFrontMonth
+        exp_alerts: []
+
+  - interval: 1m
+    name: front-month-watch-stalled fires when the timestamp freezes
+    input_series:
+      - series: "front_month_check_timestamp_seconds"
+        values: "0+60x5 300x20"
+      - series: "market_trading_hours_active"
+        values: "1x25"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: FrontMonthWatchStalled
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: FrontMonthWatchStalled
         exp_alerts:
           - exp_labels:
               severity: warning
@@ -462,6 +556,12 @@ tests:
                 dates). That is safe until the next settlement; it clears once a
                 rebuild validates and is adopted or matches. Read
                 universe_boot_on_last_good (`reason`) in the engine log.
+
+              summary: "The front-month watch has not run for over 10 minutes"
+              description: >-
+                front_month_check_timestamp_seconds stopped advancing, so
+                FrontMonthNotSubscribed and StrategyOffFrontMonth are reading frozen
+                values. Look for `front_month_watch_failed` in the engine log.
               runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
   # ── DLQ source attribution ──────────────────────────────────────
