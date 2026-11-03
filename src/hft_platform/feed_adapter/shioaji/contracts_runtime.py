@@ -1005,6 +1005,7 @@ class ContractsRuntime:
         try:
             from hft_platform.config.symbols import (
                 DEFAULT_LIST_PATH,
+                ContractCacheRegressionError,
                 ContractIndex,
                 build_symbols,
                 write_contract_cache,
@@ -1094,7 +1095,31 @@ class ContractsRuntime:
                 return
 
             _t_write = time.monotonic()
-            write_contract_cache(raw_contracts, self._client._contract_cache_path)
+            try:
+                write_contract_cache(raw_contracts, self._client._contract_cache_path)
+            except ContractCacheRegressionError as exc:
+                # A partial SDK walk (2026-11-02: no TXF/MXF rows) must not
+                # replace the last complete cache: the universe roll and every
+                # boot read it. Same exit as the zero-derivatives branch above.
+                try:
+                    logger.error(
+                        "contract_refresh_integrity_failed",
+                        error=f"contract cache rewrite refused: {exc}",
+                        before=counts_before,
+                        after=counts_after,
+                        configured_derivatives=configured_derivatives,
+                    )
+                    self.write_refresh_status(result="error", error=f"contract cache rewrite refused: {exc}")
+                    if self._client.metrics and hasattr(self._client.metrics, "contract_refresh_total"):
+                        self._client.metrics.contract_refresh_total.labels(result="error").inc()
+                except Exception as log_exc:
+                    logger.debug("operation_fallback", error=str(log_exc))
+                finally:
+                    if rebuild_slot_held:
+                        _release_rebuild_slot()
+                        rebuild_slot_held = False
+                    self._client._contract_refresh_lock.release()
+                return
             _ms_cache_write = (time.monotonic() - _t_write) * 1000.0
             # ``contract_cache_last_success_ts`` is deliberately NOT advanced
             # here. It means "when did we last load contracts *from the broker*",

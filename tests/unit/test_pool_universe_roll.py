@@ -113,6 +113,7 @@ def _make_pool(
     (tmp_path / "symbols.list").write_text(list_body, encoding="utf-8")
     monkeypatch.setenv("HFT_CONTRACT_CACHE_PATH", _contract_cache(tmp_path, contracts))
     monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", str(tmp_path / "runtime.yaml"))
+    monkeypatch.setenv("HFT_UNIVERSE_LAST_GOOD_PATH", str(tmp_path / "universe_last_good.yaml"))
     monkeypatch.setattr(symbols_types, "exchange_today", lambda: today)
     return QuoteConnectionPool(str(canonical), {}, num_conns=num_conns)
 
@@ -274,7 +275,8 @@ class TestRefusals:
 
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
 
-        assert results == ["refused"]
+        # No last-good universe on disk, so boot stays on the canonical file.
+        assert results == ["refused", "fallback_canonical"]
         assert _universe_codes(pool) == {"TMFJ6"}
 
     def test_build_failure_keeps_the_running_universe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -399,11 +401,35 @@ class TestLiveRoll:
             today=dt.date(2026, 9, 17),
         )
         clients = _attach_facades(pool)
+        # The running universe came from a validated rebuild (the boot roll).
+        pool._set_universe_source("list")
         monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
 
         assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
         assert _universe_codes(pool) == {"TMFI6", "TMFJ6"}
         assert all(client.unsubscribed == [] and client.subscribed == [] for client in clients)
+
+    def test_roll_repairs_a_canonical_universe_while_a_session_is_open(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A boot that fell back to symbols.yaml is already wrong: fix it now, not at the close."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=SEPTEMBER_CONTRACTS,
+            list_body=TMF_LIST,
+            today=dt.date(2026, 9, 17),
+        )
+        clients = _attach_facades(pool)
+        assert pool.universe_source == "canonical"
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+        assert pool.universe_source == "list"
+        assert any("TMFI6" in client.unsubscribed for client in clients)
 
     def test_a_logged_out_facade_gets_its_shard_but_no_broker_call(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -648,3 +674,173 @@ class TestOctoberExpiryTimeline:
 
         assert [code for client in clients for code in client.unsubscribed] == ["TMFJ6"]
         assert [code for client in clients for code in client.subscribed] == ["TMFL6"]
+
+
+TXF_TMF_LIST = TMF_LIST + "TXF@front exchange=FUT tags=futures|front_month|txf\n"
+NOVEMBER_FULL_CONTRACTS = [
+    _future("TMFK6", "TMF", NOVEMBER),
+    _future("TMFL6", "TMF", DECEMBER),
+    _future("TXFK6", "TXF", NOVEMBER),
+]
+# 2026-11-02: the contract cache on disk had lost every TXF row.
+NOVEMBER_PARTIAL_CONTRACTS = [
+    _future("TMFK6", "TMF", NOVEMBER),
+    _future("TMFL6", "TMF", DECEMBER),
+]
+# 2026-11-02 22:00 Taipei.
+NOVEMBER_BOOT_NS = int(dt.datetime(2026, 11, 2, 14, 0, tzinfo=dt.UTC).timestamp() * 1e9)
+
+
+class TestBootFallsBackToLastGood:
+    """2026-11-02: a partial contract cache refused the boot roll, and the pool
+    subscribed the canonical ``symbols.yaml`` -- last edited 04-26 -- all night."""
+
+    @staticmethod
+    def _record_results(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        results: list[str] = []
+        monkeypatch.setattr(QuoteConnectionPool, "_bump_universe_roll_metric", staticmethod(results.append))
+        return results
+
+    def _good_boot(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFK6", "TMFL6", "TXFK6"],
+            contracts=NOVEMBER_FULL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 11, 1),
+        )
+        pool.roll_universe(live=False, now_ns=NOVEMBER_BOOT_NS)
+        assert pool.universe_source == "list"
+        assert (tmp_path / "universe_last_good.yaml").exists()
+
+    def test_boot_roll_failure_adopts_the_last_good_universe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._good_boot(tmp_path, monkeypatch)
+        results = self._record_results(monkeypatch)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFE6", "TXFE6"],  # the stale canonical file
+            contracts=NOVEMBER_PARTIAL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 11, 2),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=NOVEMBER_BOOT_NS) is True
+
+        assert results == ["build_errors", "fallback_last_good"]
+        assert pool.universe_source == "last_good"
+        assert _universe_codes(pool) == {"TMFK6", "TMFL6", "TXFK6"}
+
+    def test_boot_roll_failure_without_last_good_stays_on_canonical(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        results = self._record_results(monkeypatch)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFE6", "TXFE6"],
+            contracts=NOVEMBER_PARTIAL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 11, 2),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=NOVEMBER_BOOT_NS) is False
+
+        assert results == ["build_errors", "fallback_canonical"]
+        assert pool.universe_source == "canonical"
+        assert _universe_codes(pool) == {"TMFE6", "TXFE6"}
+
+    def test_boot_drops_last_good_codes_that_have_since_settled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The snapshot holds K6 and L6; after the November delivery only L6 is kept."""
+        self._good_boot(tmp_path, monkeypatch)
+        results = self._record_results(monkeypatch)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFE6"],
+            contracts=NOVEMBER_PARTIAL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 11, 19),
+        )
+        after_november_settlement = int(dt.datetime(2026, 11, 19, 12, 0, tzinfo=dt.UTC).timestamp() * 1e9)
+
+        assert pool.roll_universe(live=False, now_ns=after_november_settlement) is True
+
+        assert results[-1] == "fallback_last_good"
+        assert pool.universe_source == "last_good"
+        assert _universe_codes(pool) == {"TMFL6"}
+
+    def test_boot_stays_on_canonical_when_every_last_good_code_has_settled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._good_boot(tmp_path, monkeypatch)
+        results = self._record_results(monkeypatch)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFE6"],
+            contracts=NOVEMBER_PARTIAL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 12, 17),
+        )
+        after_december_settlement = int(dt.datetime(2026, 12, 17, 12, 0, tzinfo=dt.UTC).timestamp() * 1e9)
+
+        assert pool.roll_universe(live=False, now_ns=after_december_settlement) is False
+
+        assert results[-1] == "fallback_canonical"
+        assert pool.universe_source == "canonical"
+        assert _universe_codes(pool) == {"TMFE6"}
+
+    def test_live_roll_failure_keeps_the_running_universe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._good_boot(tmp_path, monkeypatch)
+        results = self._record_results(monkeypatch)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFK6", "TXFK6"],
+            contracts=NOVEMBER_PARTIAL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 11, 2),
+        )
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: False)
+
+        assert pool.roll_universe(now_ns=NOVEMBER_BOOT_NS) is False
+
+        assert results == ["build_errors"]
+        assert _universe_codes(pool) == {"TMFK6", "TXFK6"}
+        assert all(client.unsubscribed == [] and client.subscribed == [] for client in clients)
+
+    def test_last_good_is_never_written_over_the_canonical_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFK6"],
+            contracts=NOVEMBER_FULL_CONTRACTS,
+            list_body=TXF_TMF_LIST,
+            today=dt.date(2026, 11, 1),
+        )
+        canonical = tmp_path / "symbols.yaml"
+        before = canonical.read_text(encoding="utf-8")
+        monkeypatch.setenv("HFT_UNIVERSE_LAST_GOOD_PATH", str(canonical))
+
+        pool.roll_universe(live=False, now_ns=NOVEMBER_BOOT_NS)
+
+        assert canonical.read_text(encoding="utf-8") == before
+        assert (tmp_path / "symbols.last_good.yaml").exists()
+
+    def test_last_good_records_each_code_delivery_date(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._good_boot(tmp_path, monkeypatch)
+        data = yaml.safe_load((tmp_path / "universe_last_good.yaml").read_text(encoding="utf-8"))
+
+        assert data["deliveries"] == {"TMFK6": "2026-11-18", "TMFL6": "2026-12-16", "TXFK6": "2026-11-18"}
+        assert all("group" not in entry for entry in data["symbols"])

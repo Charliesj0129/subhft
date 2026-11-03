@@ -75,14 +75,72 @@ groups:
     labels:
         severity: warning
     annotations:
-        summary: "Symbol subscription permanently failed (likely stale symbols.yaml after a contract roll)"
+        summary: "Symbol subscription permanently failed (likely a settled contract still in the universe)"
         description: |
           symbol="{{ $labels.symbol }}" crossed HFT_SUB_RETRY_MAX_ATTEMPTS and
-          stopped retrying. Most common cause: config/symbols.yaml lists an
-          expired month code (e.g. TXFE6 after the May settlement) that the
-          broker has dropped, so subscribe returns "Contract not found".
-          Pool-mode engines do NOT auto-rebuild symbols.yaml — regenerate it
-          offline (make rebuild-symbols-yaml) and restart the engine.
+          stopped retrying. Most common cause: the running universe holds a
+          settled month code the broker has dropped, so subscribe returns
+          "Contract not found". Pool-mode engines roll the universe themselves
+          (QuoteConnectionPool.roll_universe) and drop this series when a roll
+          removes the code, so a firing alert means no roll has removed it:
+          check hft_quote_pool_universe_source and
+          UniverseRollNotValidating before regenerating anything by hand.
+        runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  # ── Subscription-universe roll health ───────────────────────────
+  #
+  # THESHOW 2026-11-02 22:00: a partial contracts.json made the boot roll fail
+  # and the pool subscribed config/symbols.yaml (last edited 04-26) for the
+  # whole night session. One warning log line was the only trace.
+  #
+  # The roll validates its rebuild every 600 s, inside sessions too, and
+  # stamps hft_quote_pool_universe_last_valid_timestamp_seconds when it passes
+  # (0 until the first pass). 12 h covers the one expected gap: on a delivery
+  # day from 13:30 to midnight the rebuild still holds the settling month and
+  # is refused by design (docs/runbooks/SymbolsYamlRegeneration.md).
+  - alert: UniverseRollNotValidating
+    expr: time() - max(hft_quote_pool_universe_last_valid_timestamp_seconds) > 43200
+    for: 10m
+    labels:
+        severity: warning
+    annotations:
+        summary: "The subscription-universe roll has not produced a valid universe for 12h"
+        description: |
+          No rebuild of symbols.list against config/contracts.json has passed
+          validate_universe for {{ $value | humanizeDuration }}. The next
+          contract settlement will not be followed. Read
+          hft_quote_pool_universe_roll_total by result and the
+          universe_roll_build_failed / universe_roll_refused log lines.
+        runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - alert: UniverseOnCanonicalFallback
+    expr: max(hft_quote_pool_universe_source{source="canonical"}) == 1 and on() market_trading_hours_active == 1
+    for: 15m
+    labels:
+        severity: critical
+    annotations:
+        summary: "The quote pool is subscribed to the hand-kept symbols.yaml, not a rolled universe"
+        description: |
+          The boot roll failed and no valid last-good universe was on disk, so
+          the pool kept config/symbols.yaml, which nothing keeps current. The
+          roll clock repairs this inside the session once a rebuild validates;
+          if this keeps firing, read universe_boot_on_canonical in the engine
+          log (its `why` field) and hft_quote_pool_universe_roll_total.
+        runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - alert: UniverseOnLastGoodFallback
+    expr: max(hft_quote_pool_universe_source{source="last_good"}) == 1
+    for: 30m
+    labels:
+        severity: warning
+    annotations:
+        summary: "The quote pool booted from the last-good universe; its own roll failed"
+        description: |
+          The boot roll failed and the pool started from
+          data/universe_last_good.yaml (validated against its recorded delivery
+          dates). That is safe until the next settlement; it clears once a
+          rebuild validates and is adopted or matches. Read
+          universe_boot_on_last_good (`reason`) in the engine log.
         runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
 
   # Feed timestamp skew. `feed_time_skew_ns` is clamped at HFT_TS_MAX_LAG_S
