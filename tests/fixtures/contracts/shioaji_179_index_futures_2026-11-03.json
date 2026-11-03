@@ -1,0 +1,197 @@
+{
+  "source": "THESHOW config/contracts.json (shioaji 1.7.9 login download, cache_version 2357, updated_at 2026-11-03T11:01:28.414565Z), TMF/TXF/MXF futures rows only, verbatim",
+  "contracts": [
+    {
+      "code": "MXFK6",
+      "name": "小型臺指期貨 202611",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2026/11/18"
+    },
+    {
+      "code": "MXFR1",
+      "name": "小型臺指期貨 近月",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2026/11/18"
+    },
+    {
+      "code": "MXFL6",
+      "name": "小型臺指期貨 202612",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2026/12/16"
+    },
+    {
+      "code": "MXFR2",
+      "name": "小型臺指期貨 次月",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2026/12/16"
+    },
+    {
+      "code": "MXFA7",
+      "name": "小型臺指期貨 202701",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2027/01/20"
+    },
+    {
+      "code": "MXFC7",
+      "name": "小型臺指期貨 202703",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2027/03/17"
+    },
+    {
+      "code": "MXFF7",
+      "name": "小型臺指期貨 202706",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2027/06/16"
+    },
+    {
+      "code": "MXFI7",
+      "name": "小型臺指期貨 202709",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "MXF",
+      "delivery_date": "2027/09/16"
+    },
+    {
+      "code": "TMFK6",
+      "name": "微型臺指期貨 202611",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2026/11/18"
+    },
+    {
+      "code": "TMFR1",
+      "name": "微型臺指期貨 近月",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2026/11/18"
+    },
+    {
+      "code": "TMFL6",
+      "name": "微型臺指期貨 202612",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2026/12/16"
+    },
+    {
+      "code": "TMFR2",
+      "name": "微型臺指期貨 次月",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2026/12/16"
+    },
+    {
+      "code": "TMFA7",
+      "name": "微型臺指期貨 202701",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2027/01/20"
+    },
+    {
+      "code": "TMFC7",
+      "name": "微型臺指期貨 202703",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2027/03/17"
+    },
+    {
+      "code": "TMFF7",
+      "name": "微型臺指期貨 202706",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2027/06/16"
+    },
+    {
+      "code": "TMFI7",
+      "name": "微型臺指期貨 202709",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TMF",
+      "delivery_date": "2027/09/16"
+    },
+    {
+      "code": "TXFK6",
+      "name": "臺股期貨 202611",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2026/11/18"
+    },
+    {
+      "code": "TXFR1",
+      "name": "臺股期貨 近月",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2026/11/18"
+    },
+    {
+      "code": "TXFL6",
+      "name": "臺股期貨 202612",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2026/12/16"
+    },
+    {
+      "code": "TXFR2",
+      "name": "臺股期貨 次月",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2026/12/16"
+    },
+    {
+      "code": "TXFA7",
+      "name": "臺股期貨 202701",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2027/01/20"
+    },
+    {
+      "code": "TXFC7",
+      "name": "臺股期貨 202703",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2027/03/17"
+    },
+    {
+      "code": "TXFF7",
+      "name": "臺股期貨 202706",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2027/06/16"
+    },
+    {
+      "code": "TXFI7",
+      "name": "臺股期貨 202709",
+      "exchange": "TAIFEX",
+      "type": "future",
+      "root": "TXF",
+      "delivery_date": "2027/09/16"
+    }
+  ]
+}
