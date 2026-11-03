@@ -35,6 +35,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
 | `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |
+| `HFT_UNIVERSE_LAST_GOOD_PATH` | `data/universe_last_good.yaml` | 最後一次驗證通過的 universe 快照（含各代碼交割日）；開機 roll 失敗時以它開機而非 `config/symbols.yaml`。指向 canonical 檔時改寫為 `<stem>.last_good.yaml`（見 `docs/runbooks/SymbolsYamlRegeneration.md`） |
 
 ---
 
