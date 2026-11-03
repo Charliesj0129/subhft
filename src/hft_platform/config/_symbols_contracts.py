@@ -124,20 +124,122 @@ def _json_cache_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def write_contract_cache(contracts: list[dict[str, Any]], path: str = DEFAULT_CONTRACT_CACHE) -> None:
-    """Atomically write *contracts* to a versioned JSON cache file."""
+#: A rewrite that keeps less than this share of the previous cache's
+#: futures/options rows is a partial download, not a listing change. A monthly
+#: settlement moves a handful of rows; it never halves a category.
+CONTRACT_CACHE_MIN_KEEP_RATIO = 0.5
+
+_DERIVATIVE_KINDS = ("future", "option")
+
+
+class ContractCacheRegressionError(ValueError):
+    """A contract rewrite would drop roots or rows the current cache holds.
+
+    Raised by :func:`write_contract_cache` before anything is written: the
+    cache on disk stays the last complete download.
+    """
+
+    def __init__(self, reasons: list[str]) -> None:
+        super().__init__("; ".join(reasons))
+        self.reasons = reasons
+
+
+def _explicit_derivative_roots(contracts: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Return ``{kind: {root}}`` for futures/options rows that carry a root.
+
+    Only an explicit ``root`` (or the 1.5.6 ``category``) counts. Deriving one
+    from the code would read ``TXFK6`` as ``TXFK``, a different "root" every
+    month, and turn each settlement into a false regression.
+    """
+    roots: dict[str, set[str]] = {kind: set() for kind in _DERIVATIVE_KINDS}
+    for row in contracts:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("type") or row.get("security_type") or "").strip().lower()
+        if kind not in roots:
+            continue
+        root = str(row.get("root") or row.get("category") or "").strip().upper()
+        if root:
+            roots[kind].add(root)
+    return roots
+
+
+def contract_cache_regressions(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[str]:
+    """Return why replacing *before* with *after* would lose contracts; empty means safe.
+
+    Two signals of a partial broker download (2026-11-02: a rewrite lost every
+    TXF and MXF row, and the boot universe roll could not resolve them):
+
+    - a futures/options root present before is absent after;
+    - a futures/options category keeps less than
+      :data:`CONTRACT_CACHE_MIN_KEEP_RATIO` of its rows.
+
+    A root the exchange really delists trips the first check too. That is the
+    intended direction: the old cache stays until an operator writes the new
+    one with ``allow_regression=True``.
+    """
+    reasons: list[str] = []
+    roots_before = _explicit_derivative_roots(before)
+    roots_after = _explicit_derivative_roots(after)
+    for kind in _DERIVATIVE_KINDS:
+        missing = sorted(roots_before[kind] - roots_after[kind])
+        if missing:
+            reasons.append(f"{kind} roots missing: {', '.join(missing[:10])}")
+
+    def _count(rows: list[dict[str, Any]], kind: str) -> int:
+        return sum(
+            1
+            for row in rows
+            if isinstance(row, dict) and str(row.get("type") or row.get("security_type") or "").strip().lower() == kind
+        )
+
+    for kind in _DERIVATIVE_KINDS:
+        n_before = _count(before, kind)
+        n_after = _count(after, kind)
+        if n_before > 0 and n_after < n_before * CONTRACT_CACHE_MIN_KEEP_RATIO:
+            reasons.append(f"{kind} rows {n_before} -> {n_after}")
+    return reasons
+
+
+def write_contract_cache(
+    contracts: list[dict[str, Any]],
+    path: str = DEFAULT_CONTRACT_CACHE,
+    *,
+    allow_regression: bool = False,
+) -> None:
+    """Atomically write *contracts* to a versioned JSON cache file.
+
+    Refuses (raises :class:`ContractCacheRegressionError`, writes nothing) when
+    the rewrite would drop futures/options the current cache holds -- see
+    :func:`contract_cache_regressions`. ``allow_regression=True`` is for an
+    operator who has checked the listing really shrank.
+    """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     # Read existing cache_version and increment
     cache_version = 0
+    existing_contracts: list[dict[str, Any]] = []
     if dest.exists():
         try:
             existing = json.loads(dest.read_text(encoding="utf-8"))
             cache_version = int(existing.get("cache_version", 0))
+            rows = existing.get("contracts", [])
+            existing_contracts = rows if isinstance(rows, list) else []
         except Exception as exc:
+            # An unreadable cache has nothing to protect: overwrite it.
             logger.debug("operation_fallback", error=str(exc))
-            pass
+    if not allow_regression:
+        reasons = contract_cache_regressions(existing_contracts, contracts)
+        if reasons:
+            logger.error(
+                "contract_cache_write_refused",
+                path=str(dest),
+                reasons=reasons,
+                existing_count=len(existing_contracts),
+                new_count=len(contracts),
+            )
+            raise ContractCacheRegressionError(reasons)
     cache_version += 1
 
     payload = {
