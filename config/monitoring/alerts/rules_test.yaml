@@ -356,6 +356,102 @@ tests:
         alertname: ContractCacheRebuildFailing
         exp_alerts: []
 
+  # ── Subscription-universe roll health ───────────────────────────
+  #
+  # THESHOW 2026-11-02: the boot roll failed on a partial contract cache and
+  # the pool ran on config/symbols.yaml all night. Positive controls are that
+  # shape; negative controls are a roll that keeps validating.
+  - interval: 10m
+    name: universe-roll-not-validating fires when no rebuild ever passed
+    input_series:
+      - series: "hft_quote_pool_universe_last_valid_timestamp_seconds"
+        values: "0x80"
+    alert_rule_test:
+      - eval_time: 700m
+        alertname: UniverseRollNotValidating
+        exp_alerts: []
+      - eval_time: 740m
+        alertname: UniverseRollNotValidating
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "The subscription-universe roll has not produced a valid universe for 12h"
+              description: |
+                No rebuild of symbols.list against config/contracts.json has passed
+                validate_universe for 12h 20m 0s. The next
+                contract settlement will not be followed. Read
+                hft_quote_pool_universe_roll_total by result and the
+                universe_roll_build_failed / universe_roll_refused log lines.
+              runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - interval: 10m
+    name: universe-roll-not-validating stays quiet while the roll validates every 10m
+    input_series:
+      - series: "hft_quote_pool_universe_last_valid_timestamp_seconds"
+        values: "0+600x80"
+    alert_rule_test:
+      - eval_time: 790m
+        alertname: UniverseRollNotValidating
+        exp_alerts: []
+
+  - interval: 1m
+    name: universe-on-canonical-fallback fires during trading hours
+    input_series:
+      - series: 'hft_quote_pool_universe_source{source="canonical"}'
+        values: "1x40"
+      - series: 'hft_quote_pool_universe_source{source="list"}'
+        values: "0x40"
+      - series: "market_trading_hours_active"
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: UniverseOnCanonicalFallback
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: UniverseOnCanonicalFallback
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "The quote pool is subscribed to the hand-kept symbols.yaml, not a rolled universe"
+              description: |
+                The boot roll failed and no valid last-good universe was on disk, so
+                the pool kept config/symbols.yaml, which nothing keeps current. The
+                roll clock repairs this inside the session once a rebuild validates;
+                if this keeps firing, read universe_boot_on_canonical in the engine
+                log (its `why` field) and hft_quote_pool_universe_roll_total.
+              runbook_url: "docs/runbooks/SymbolsYamlRegeneration.md"
+
+  - interval: 1m
+    name: universe-on-canonical-fallback stays quiet on a rolled universe
+    input_series:
+      - series: 'hft_quote_pool_universe_source{source="canonical"}'
+        values: "0x40"
+      - series: 'hft_quote_pool_universe_source{source="list"}'
+        values: "1x40"
+      - series: "market_trading_hours_active"
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: UniverseOnCanonicalFallback
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: UniverseOnLastGoodFallback
+        exp_alerts: []
+
+  - interval: 1m
+    name: universe-on-last-good-fallback fires after 30m
+    input_series:
+      - series: 'hft_quote_pool_universe_source{source="last_good"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: UniverseOnLastGoodFallback
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: UniverseOnLastGoodFallback
+
   # ── Front-month invariant ───────────────────────────────────────
   - interval: 1m
     name: front-month-not-subscribed fires during the session
@@ -453,6 +549,14 @@ tests:
           - exp_labels:
               severity: warning
             exp_annotations:
+              summary: "The quote pool booted from the last-good universe; its own roll failed"
+              description: |
+                The boot roll failed and the pool started from
+                data/universe_last_good.yaml (validated against its recorded delivery
+                dates). That is safe until the next settlement; it clears once a
+                rebuild validates and is adopted or matches. Read
+                universe_boot_on_last_good (`reason`) in the engine log.
+
               summary: "The front-month watch has not run for over 10 minutes"
               description: >-
                 front_month_check_timestamp_seconds stopped advancing, so
