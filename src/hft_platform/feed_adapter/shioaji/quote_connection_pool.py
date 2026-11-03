@@ -64,12 +64,38 @@ _METRIC_PUBLISH_ERRORS = None
 # fires and a roll that is refused every hour look identical from the
 # subscription count alone, and only one of them is safe.
 _METRIC_UNIVERSE_ROLL = None
+# Which file the running universe came from (one child per source, the current
+# one at 1). ``canonical`` means the hand-kept ``symbols.yaml`` -- the fallback
+# that held expired month codes on 2026-11-02 -- so it is alerted on.
+_METRIC_UNIVERSE_SOURCE = None
+# Wall-clock seconds of the last rebuild that passed ``validate_universe``,
+# whether or not it was adopted. A roll that keeps failing stops advancing it.
+_METRIC_UNIVERSE_LAST_VALID = None
+
+#: Every ``roll_universe`` result label. Pre-created at 0 so ``increase()``
+#: sees the first failure (a child born at 1 has no increase).
+UNIVERSE_ROLL_RESULTS = (
+    "deferred_session",
+    "no_contracts",
+    "build_errors",
+    "refused",
+    "unplaceable",
+    "no_change",
+    "rolled",
+    "fallback_last_good",
+    "fallback_canonical",
+)
+#: Where the running universe was read from. ``list`` = rebuilt from
+#: ``symbols.list`` against the contract cache and validated; ``last_good`` =
+#: the last such universe, kept on disk; ``canonical`` = ``symbols.yaml``.
+UNIVERSE_SOURCES = ("list", "last_good", "canonical")
 
 
 def _ensure_metrics() -> None:
     global _METRIC_SUBSCRIBED, _METRIC_LOGGED_IN, _METRIC_LAST_DATA_AGE, _METRIC_CONN_STATE
     global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
     global _METRIC_PUBLISHED, _METRIC_PUBLISH_ERRORS, _METRIC_UNIVERSE_ROLL
+    global _METRIC_UNIVERSE_SOURCE, _METRIC_UNIVERSE_LAST_VALID
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     if Counter is not None:
@@ -78,6 +104,8 @@ def _ensure_metrics() -> None:
             "QuoteConnectionPool.roll_universe outcomes",
             ["result"],
         )
+        for result in UNIVERSE_ROLL_RESULTS:
+            _METRIC_UNIVERSE_ROLL.labels(result=result)
         _METRIC_PUBLISHED = Counter(
             "hft_quote_pool_metrics_published_total",
             "Successful QuoteConnectionPool.update_metrics() publishes",
@@ -114,6 +142,17 @@ def _ensure_metrics() -> None:
         "hft_quote_pool_degraded_fraction",
         "Fraction of quote connection slots currently NOT in CONNECTED state (0.0 - 1.0)",
     )
+    _METRIC_UNIVERSE_SOURCE = Gauge(
+        "hft_quote_pool_universe_source",
+        "Where the running subscription universe came from (1 = current): list, last_good, canonical",
+        ["source"],
+    )
+    for source in UNIVERSE_SOURCES:
+        _METRIC_UNIVERSE_SOURCE.labels(source=source).set(0)
+    _METRIC_UNIVERSE_LAST_VALID = Gauge(
+        "hft_quote_pool_universe_last_valid_timestamp_seconds",
+        "Unix time of the last universe rebuild that passed validate_universe (0 = none yet)",
+    )
 
 
 _SHIOAJI_MAX_CONNECTIONS = 5
@@ -127,6 +166,12 @@ _MAX_SUBSCRIPTIONS_PER_CONN = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 # 2026-04-27 root cause of B2 metadata gap (``config/symbols.yaml`` truncated
 # from 1868 → 370 lines, see commit log near this comment).
 _DEFAULT_RUNTIME_SNAPSHOT_PATH = "data/live_with_options.yaml"
+
+# The last universe that was rebuilt from ``symbols.list`` and passed
+# ``validate_universe``, with the delivery date of every code in it. A boot whose
+# own roll fails starts from this instead of the canonical ``symbols.yaml``,
+# which nothing keeps current (2026-11-02: it still listed the April months).
+_DEFAULT_LAST_GOOD_UNIVERSE_PATH = "data/universe_last_good.yaml"
 
 
 def _paths_collide(a: str, b: str) -> bool:
@@ -273,6 +318,7 @@ class QuoteConnectionPool:
         # this pool has adopted a universe other than the canonical file's.
         "_universe_listener",
         "_universe_rolled",
+        "_universe_source",
         # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
@@ -310,6 +356,9 @@ class QuoteConnectionPool:
         # Fired with the adopted universe after a roll — see set_universe_listener.
         self._universe_listener: Callable[[list[dict[str, Any]]], None] | None = None
         self._universe_rolled: bool = False
+        # See UNIVERSE_SOURCES. Boot reads the canonical file; a successful
+        # roll (or a last-good fallback) replaces it.
+        self._universe_source: str = "canonical"
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
         # Default 5min so a brief reconnect storm does not trigger;
@@ -1471,6 +1520,49 @@ class QuoteConnectionPool:
 
         return delivery_of
 
+    @classmethod
+    def _front_month_disagreements(cls, symbols: list[dict[str, Any]], index: Any, *, now_ns: int) -> list[str]:
+        """Cross-check each futures root in ``symbols`` against the exchange rule.
+
+        The rebuild trusts the contract cache for "which month is front". The
+        cache has been wrong before (2026-11-02: every TXF row missing), so the
+        broker's front delivery date for every futures root the universe uses
+        must equal the one the TAIFEX rule derives. A disagreement refuses the
+        roll; see ``core.front_month.front_month_disagreement``.
+        """
+        from hft_platform.config._symbols_types import derive_root
+        from hft_platform.core.front_month import front_month_disagreement
+
+        futures_by_root = getattr(index, "futures_by_root", {}) or {}
+        by_code = getattr(index, "by_code", {}) or {}
+        roots: set[str] = set()
+        for entry in symbols:
+            code = str(entry.get("code") or "").strip()
+            row = by_code.get(code)
+            if not isinstance(row, dict):
+                continue
+            kind = str(row.get("type") or row.get("security_type") or "").lower()
+            if kind not in {"future", "fut", "futures"}:
+                continue
+            roots.add(str(row.get("root") or derive_root(code)).upper())
+
+        delivery_of = cls._delivery_lookup(index)
+        reasons: list[str] = []
+        for root in sorted(roots):
+            pairs = [
+                (str(row.get("code") or ""), delivery_of(str(row.get("code") or "")))
+                for row in futures_by_root.get(root, [])
+                if isinstance(row, dict)
+            ]
+            if len({delivery for _code, delivery in pairs if delivery is not None}) < 2:
+                # A weekly series (``MX1``, ``MX2``...) lists one delivery date
+                # under its own root; the monthly rule does not describe it.
+                continue
+            reason = front_month_disagreement(root, pairs, now_ns=now_ns)
+            if reason is not None:
+                reasons.append(f"front month disagrees with the TAIFEX rule: {reason}")
+        return reasons
+
     def _current_groups(self) -> dict[int, list[dict[str, Any]]]:
         groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
         for sym in self._all_symbols:
@@ -1488,10 +1580,22 @@ class QuoteConnectionPool:
         connections. Every refusal keeps today's working subscriptions, which is
         the fail-closed direction for a feed.
 
+        At boot (``live=False``) "today's subscriptions" do not exist yet: the
+        pool holds the canonical ``symbols.yaml``, which nothing keeps current.
+        So a refused boot roll falls back to the last universe that did pass
+        validation (:meth:`_adopt_last_good_universe`) and only keeps the
+        canonical file when that is missing or itself settled.
+
         ``live`` decides whether the broker is touched. The default infers it:
         with facades logged in, the roll unsubscribes settled codes and
         subscribes new ones; before login (boot) it only rewrites the shards the
         facades are about to read.
+
+        While a session is open the rebuild still runs and is validated (so
+        ``hft_quote_pool_universe_last_valid_timestamp_seconds`` keeps moving),
+        but a change is applied only if the running universe is the canonical
+        fallback: then the feed is already wrong and repairing it beats waiting
+        for the close.
         """
         from hft_platform.config.symbols import build_symbols
         from hft_platform.config.universe_plan import (
@@ -1509,18 +1613,20 @@ class QuoteConnectionPool:
         # one it would churn the book mid-trade. ``reconnect_allowed`` covers
         # both windows and fails open, so an unanswerable calendar defers the
         # roll rather than running it at a bad time.
-        if live and self.reconnect_allowed():
-            logger.debug("universe_roll_deferred_session_open")
-            self._bump_universe_roll_metric("deferred_session")
-            return False
+        in_session = bool(live and self.reconnect_allowed())
+        roll_now_ns = now_ns if now_ns is not None else timebase.now_ns()
+        cutoff = taifex_delivery_cutoff(roll_now_ns)
 
         with self._refresh_lock:
             try:
                 index = self._contract_index()
             except Exception as exc:  # noqa: BLE001 — cache missing/corrupt must not kill the caller
                 logger.warning("universe_roll_contract_cache_unreadable", error=str(exc))
-                self._bump_universe_roll_metric("no_contracts")
-                return False
+                return self._roll_failed("no_contracts", live=live, in_session=in_session, cutoff=cutoff)
+            # ``@front`` must mean what ``validate_universe`` means by
+            # "still trading" (core/front_month.py), or every delivery day
+            # from 13:30 to midnight builds a universe it then refuses.
+            index.as_of = cutoff
 
             list_path = self._symbols_list_path()
             build_result = build_symbols(list_path, index)
@@ -1530,17 +1636,17 @@ class QuoteConnectionPool:
                     list_path=list_path,
                     errors=build_result.errors[:5],
                 )
-                self._bump_universe_roll_metric("build_errors")
-                return False
+                return self._roll_failed("build_errors", live=live, in_session=in_session, cutoff=cutoff)
 
-            cutoff = taifex_delivery_cutoff(now_ns if now_ns is not None else timebase.now_ns())
+            delivery_of = self._delivery_lookup(index)
             errors = validate_universe(
                 build_result.symbols,
-                delivery_of=self._delivery_lookup(index),
+                delivery_of=delivery_of,
                 cutoff=cutoff,
                 num_conns=self._num_conns,
                 per_conn_cap=_MAX_SUBSCRIPTIONS_PER_CONN,
             )
+            errors.extend(self._front_month_disagreements(build_result.symbols, index, now_ns=roll_now_ns))
             if errors:
                 logger.error(
                     "universe_roll_refused",
@@ -1548,8 +1654,7 @@ class QuoteConnectionPool:
                     rebuilt_count=len(build_result.symbols),
                     delivery_cutoff=cutoff.isoformat(),
                 )
-                self._bump_universe_roll_metric("refused")
-                return False
+                return self._roll_failed("refused", live=live, in_session=in_session, cutoff=cutoff)
 
             try:
                 plan = plan_shards(
@@ -1560,18 +1665,226 @@ class QuoteConnectionPool:
                 )
             except UniversePlanError as exc:
                 logger.error("universe_roll_unplaceable", error=str(exc))
-                self._bump_universe_roll_metric("unplaceable")
-                return False
+                return self._roll_failed("unplaceable", live=live, in_session=in_session, cutoff=cutoff)
+
+            self._set_universe_last_valid()
+            deliveries = self._deliveries_for(build_result.symbols, delivery_of)
 
             if not plan.changed:
                 logger.debug("universe_roll_no_change", symbols=len(build_result.symbols))
+                if self._universe_source != "list":
+                    # The running universe equals a validated rebuild: it is
+                    # current, whatever file it was read from.
+                    self._set_universe_source("list")
+                self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
                 self._bump_universe_roll_metric("no_change")
                 return False
 
+            if in_session and self._universe_source != "canonical":
+                logger.debug("universe_roll_deferred_session_open", pending_added=len(plan.added_codes))
+                self._bump_universe_roll_metric("deferred_session")
+                return False
+            if in_session:
+                logger.warning(
+                    "universe_roll_repair_in_session",
+                    reason="running universe is the canonical fallback",
+                    added_count=len(plan.added_codes),
+                    removed_count=len(plan.removed_codes),
+                )
+
             self._apply_universe(plan, live=live, cutoff=cutoff)
+            self._set_universe_source("list")
+            self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
             return True
 
-    def _apply_universe(self, plan: Any, *, live: bool, cutoff: dt.date) -> None:
+    def _roll_failed(self, result: str, *, live: bool, in_session: bool, cutoff: dt.date) -> bool:
+        """Record a refused roll; at boot, fall back to the last good universe.
+
+        Caller holds ``_refresh_lock``. A live refusal keeps the running
+        universe (fail-closed for a feed). A boot refusal has no running
+        universe to keep, only the canonical file, so it tries the last good
+        one first.
+        """
+        del in_session  # a refusal is counted the same inside a session or outside it
+        self._bump_universe_roll_metric(result)
+        if live:
+            return False
+        return self._adopt_last_good_universe(cutoff=cutoff, reason=result)
+
+    def _adopt_last_good_universe(self, *, cutoff: dt.date, reason: str) -> bool:
+        """Boot from the last validated universe instead of the canonical file.
+
+        Codes that have settled since the snapshot was written are dropped
+        first, judged by the delivery dates recorded beside it (the contract
+        cache is exactly what just failed). Refuses — staying on the canonical
+        file, loudly — when the snapshot is missing, unreadable, or what is
+        left fails ``validate_universe`` (e.g. nothing is left).
+        """
+        from hft_platform.config.universe_plan import (
+            UniversePlanError,
+            plan_shards,
+            validate_universe,
+        )
+
+        path = self._last_good_universe_path()
+        try:
+            with open(path) as fh:
+                data = yaml.safe_load(fh) or {}
+            symbols = data.get("symbols") or []
+            raw_deliveries = data.get("deliveries") or {}
+            if not isinstance(symbols, list) or not isinstance(raw_deliveries, dict):
+                raise ValueError("snapshot has no symbols list / deliveries map")
+            deliveries: dict[str, dt.date] = {}
+            for code, raw in raw_deliveries.items():
+                deliveries[str(code)] = dt.date.fromisoformat(str(raw))
+        except FileNotFoundError:
+            return self._stay_on_canonical(reason=reason, why="no last-good universe on disk", path=path)
+        except Exception as exc:  # noqa: BLE001 — a corrupt snapshot must not kill boot
+            return self._stay_on_canonical(reason=reason, why=f"last-good universe unreadable: {exc}", path=path)
+
+        # A weekly option series settles every few days, so a snapshot only a
+        # day old already holds settled codes. Drop those (they are what
+        # validate_universe would refuse) and keep the rest: a front month that
+        # settled is replaced by the ``@next`` entry the same snapshot holds.
+        live_symbols = [
+            entry
+            for entry in symbols
+            if isinstance(entry, dict)
+            and not (
+                (delivery := deliveries.get(str(entry.get("code") or "").strip())) is not None and delivery < cutoff
+            )
+        ]
+        dropped = len(symbols) - len(live_symbols)
+        symbols = live_symbols
+        errors = validate_universe(
+            symbols,
+            delivery_of=deliveries.get,
+            cutoff=cutoff,
+            num_conns=self._num_conns,
+            per_conn_cap=_MAX_SUBSCRIPTIONS_PER_CONN,
+        )
+        if errors:
+            return self._stay_on_canonical(
+                reason=reason, why=f"last-good universe refused: {'; '.join(errors[:3])}", path=path
+            )
+        try:
+            plan = plan_shards(
+                self._current_groups(),
+                symbols,
+                num_conns=self._num_conns,
+                per_conn_cap=_MAX_SUBSCRIPTIONS_PER_CONN,
+            )
+        except UniversePlanError as exc:
+            return self._stay_on_canonical(reason=reason, why=f"last-good universe unplaceable: {exc}", path=path)
+
+        if plan.changed:
+            self._apply_universe(plan, live=False, cutoff=cutoff, result="fallback_last_good")
+        self._set_universe_source("last_good")
+        logger.error(
+            "universe_boot_on_last_good",
+            reason=reason,
+            path=path,
+            written_at=str(data.get("written_at") or ""),
+            symbols=len(symbols),
+            settled_dropped=dropped,
+            added_count=len(plan.added_codes),
+            removed_count=len(plan.removed_codes),
+        )
+        self._bump_universe_roll_metric("fallback_last_good")
+        return plan.changed
+
+    def _stay_on_canonical(self, *, reason: str, why: str, path: str) -> bool:
+        self._set_universe_source("canonical")
+        logger.error(
+            "universe_boot_on_canonical",
+            reason=reason,
+            why=why,
+            last_good_path=path,
+            canonical=self._symbols_input_path,
+        )
+        self._bump_universe_roll_metric("fallback_canonical")
+        return False
+
+    @staticmethod
+    def _deliveries_for(
+        symbols: list[dict[str, Any]], delivery_of: Callable[[str], dt.date | None]
+    ) -> dict[str, dt.date]:
+        out: dict[str, dt.date] = {}
+        for entry in symbols:
+            code = str(entry.get("code") or "").strip()
+            if not code:
+                continue
+            delivery = delivery_of(code)
+            if delivery is not None:
+                out[code] = delivery
+        return out
+
+    def _last_good_universe_path(self) -> str:
+        path = os.getenv("HFT_UNIVERSE_LAST_GOOD_PATH", _DEFAULT_LAST_GOOD_UNIVERSE_PATH)
+        if _paths_collide(path, self._symbols_input_path):
+            # Never write over the canonical input (2026-04-27 B2).
+            stem, _ext = os.path.splitext(self._symbols_input_path)
+            path = f"{stem}.last_good.yaml"
+        return path
+
+    def _write_last_good_universe(
+        self, symbols: list[dict[str, Any]], deliveries: dict[str, dt.date], *, cutoff: dt.date
+    ) -> None:
+        """Persist a validated universe atomically; a failure only logs."""
+        path = self._last_good_universe_path()
+        tmp = f"{path}.tmp"
+        try:
+            parent = os.path.dirname(path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            payload = {
+                "written_at": dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.UTC).isoformat(),
+                "delivery_cutoff": cutoff.isoformat(),
+                "source_list": self._symbols_list_path(),
+                "deliveries": {code: day.isoformat() for code, day in sorted(deliveries.items())},
+                "symbols": [{k: v for k, v in entry.items() if k != "group"} for entry in symbols],
+            }
+            with open(tmp, "w") as fh:
+                yaml.safe_dump(payload, fh, sort_keys=False, allow_unicode=True)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
+        except Exception as exc:  # noqa: BLE001 — the snapshot is a fallback, not the state
+            logger.warning("universe_last_good_write_failed", path=path, error=str(exc))
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+    def _set_universe_source(self, source: str) -> None:
+        self._universe_source = source
+        _ensure_metrics()
+        gauge = _METRIC_UNIVERSE_SOURCE
+        if gauge is None:
+            return
+        try:
+            for name in UNIVERSE_SOURCES:
+                gauge.labels(source=name).set(1 if name == source else 0)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("operation_fallback", error=str(exc))
+
+    @staticmethod
+    def _set_universe_last_valid() -> None:
+        _ensure_metrics()
+        gauge = _METRIC_UNIVERSE_LAST_VALID
+        if gauge is None:
+            return
+        try:
+            gauge.set(timebase.now_s())
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("operation_fallback", error=str(exc))
+
+    @property
+    def universe_source(self) -> str:
+        """Where the running universe came from; see ``UNIVERSE_SOURCES``."""
+        return self._universe_source
+
+    def _apply_universe(self, plan: Any, *, live: bool, cutoff: dt.date, result: str = "rolled") -> None:
         """Write the planned universe to shards, facades and listeners."""
         new_symbols = [entry for group_id in range(self._num_conns) for entry in plan.groups[group_id]]
 
@@ -1616,8 +1929,39 @@ class QuoteConnectionPool:
             delivery_cutoff=cutoff.isoformat(),
             live=live,
             facades_updated=resubscribed,
+            result=result,
         )
-        self._bump_universe_roll_metric("rolled")
+        self._clear_permanent_failure_series(plan.removed_codes)
+        if result == "rolled":
+            self._bump_universe_roll_metric("rolled")
+
+    @staticmethod
+    def _clear_permanent_failure_series(codes: set[str]) -> None:
+        """Drop ``feed_subscription_permanent_failures_total{symbol}`` for codes the roll removed.
+
+        The counter only ever grows, so before this a settled code that failed
+        to subscribe kept ``FeedSubscriptionPermanentlyFailed`` firing until the
+        next restart, long after the roll had replaced it. Removing the series
+        is what lets the alert resolve. A code that was capped to ``_other``
+        has no series of its own and is skipped.
+        """
+        if not codes:
+            return
+        from hft_platform.observability.metrics import MetricsRegistry
+
+        # Never construct the registry here: its __init__ unregisters every
+        # custom collector.
+        registry = getattr(MetricsRegistry, "_instance", None)
+        counter = getattr(registry, "feed_subscription_permanent_failures_total", None)
+        if counter is None:
+            return
+        for code in codes:
+            try:
+                counter.remove(code)
+            except KeyError:
+                continue
+            except Exception as exc:  # noqa: BLE001 — metrics must not fail a roll
+                logger.debug("operation_fallback", error=str(exc))
 
     def _apply_universe_to_facade(self, conn_id: int, facade: Any, plan: Any) -> int:
         """Unsubscribe this facade's settled codes, subscribe its new ones.

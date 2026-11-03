@@ -16,6 +16,8 @@ import os
 from typing import Any
 
 from hft_platform.config._symbols_contracts import (
+    ContractCacheRegressionError,
+    contract_cache_regressions,
     fetch_contracts_from_broker,
     load_contract_cache,
     load_metrics_cache,
@@ -59,6 +61,7 @@ __all__ = [
     "SymbolBuildResult",
     "ContractIndex",
     "FilterSpec",
+    "ContractCacheRegressionError",
     # Constants
     "DEFAULT_LIST_PATH",
     "DEFAULT_OUTPUT_PATH",
@@ -79,6 +82,7 @@ __all__ = [
     "load_metrics_cache",
     "load_contract_cache",
     "write_contract_cache",
+    "contract_cache_regressions",
     "write_symbols_yaml",
     "parse_symbols_list",
     "build_symbols",

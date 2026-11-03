@@ -31,6 +31,7 @@ def _filter_active_contracts(
     contracts: list[dict[str, Any]],
     result: SymbolBuildResult,
     context: str,
+    as_of: Any = None,
 ) -> list[dict[str, Any]]:
     """Drop derivatives whose delivery_date is strictly in the past.
 
@@ -40,7 +41,7 @@ def _filter_active_contracts(
     active: list[dict[str, Any]] = []
     expired: list[str] = []
     for c in contracts:
-        dte = contract_dte_days(c)
+        dte = contract_dte_days(c, as_of)
         if dte is None:
             active.append(c)
             continue
@@ -268,7 +269,7 @@ def _expand_futures(
         result.errors.append(f"No futures contracts found for root {root} after filtering R1/R2")
         return
 
-    contracts = _filter_active_contracts(contracts, result, context=f"futures {root}")
+    contracts = _filter_active_contracts(contracts, result, context=f"futures {root}", as_of=contract_index.as_of)
     if not contracts:
         result.errors.append(f"No active (non-expired) futures contracts for root {root}")
         return
@@ -289,7 +290,7 @@ def _expand_futures(
     if filters.roll or str(month_token).lower() == "roll":
         threshold = filters.roll_dte_max if filters.roll_dte_max is not None else 5
         front_group = groups[0] if groups else []
-        front_dte = contract_dte_days(front_group[0]) if front_group else None
+        front_dte = contract_dte_days(front_group[0], contract_index.as_of) if front_group else None
         idx = 0
         label = "front"
         if front_dte is not None and front_dte <= threshold and len(groups) > 1:
@@ -378,7 +379,11 @@ def pick_underlying_price(
 
     future_root = UNDERLYING_FUTURE_ROOT.get(root.upper())
     futures = contract_index.futures_by_root.get(future_root, []) if future_root else []
-    dated = [(dte, contract) for contract in futures if (dte := contract_dte_days(contract)) is not None and dte >= 0]
+    dated = [
+        (dte, contract)
+        for contract in futures
+        if (dte := contract_dte_days(contract, contract_index.as_of)) is not None and dte >= 0
+    ]
     for _, contract in sorted(dated, key=lambda item: item[0]):
         code = str(contract.get("code") or "")
         for source in (contract_index.metrics_by_code.get(code, {}), contract):
@@ -435,7 +440,7 @@ def _expand_options(
         result.errors.append(f"No option contracts found for root {root}")
         return
 
-    contracts = _filter_active_contracts(contracts, result, context=f"options {root}")
+    contracts = _filter_active_contracts(contracts, result, context=f"options {root}", as_of=contract_index.as_of)
     if not contracts:
         result.errors.append(f"No active (non-expired) option contracts for root {root}")
         return

@@ -566,15 +566,43 @@ def taifex_delivery_cutoff(now_ns: int) -> dt.date:
     return local.date()
 
 
-def taifex_monthly_delivery_date(year: int, month: int) -> dt.date:
-    """The third Wednesday of ``year``-``month``: a TAIFEX monthly contract's delivery date.
+#: How far a holiday can push a delivery date. Taiwan's longest closure (Lunar
+#: New Year) is under ten calendar days; past this the calendar is wrong, and
+#: the unadjusted third Wednesday is returned rather than a guess.
+_MAX_DELIVERY_HOLIDAY_SHIFT_DAYS = 14
 
-    TAIFEX moves delivery to the next business day when the third Wednesday
-    is a holiday, and this function does not. Callers that only hold a contract
-    code use it, because a delisted contract has no broker record to read its
-    real date from. Anything holding a broker ``delivery_date`` must use that.
-    """
+
+def taifex_third_wednesday(year: int, month: int) -> dt.date:
+    """The third Wednesday of ``year``-``month``, with no holiday adjustment."""
     first = dt.date(year, month, 1)
     # weekday(): Monday=0 ... Wednesday=2
     first_wednesday = 1 + (2 - first.weekday()) % 7
     return dt.date(year, month, first_wednesday + 14)
+
+
+def taifex_monthly_delivery_date(year: int, month: int, *, calendar: MarketCalendar | None = None) -> dt.date:
+    """A TAIFEX monthly contract's delivery date: the third Wednesday, or the
+    next trading day when that Wednesday is a holiday.
+
+    2026-02-18 (third Wednesday of February 2026) was a Lunar New Year closure,
+    so February's contracts delivered on the next trading day; the unadjusted
+    rule declared them settled while they still traded.
+
+    Callers that only hold a contract code use this, because a delisted contract
+    has no broker record to read its real date from. Anything holding a broker
+    ``delivery_date`` must use that instead. The holiday check reads
+    :class:`MarketCalendar` (``exchange_calendars`` XTAI, which covers about a
+    year ahead); when it cannot answer, the third Wednesday is returned
+    unadjusted, which is the pre-2026-11 behaviour.
+    """
+    wednesday = taifex_third_wednesday(year, month)
+    cal = calendar if calendar is not None else get_calendar()
+    day = wednesday
+    try:
+        for _ in range(_MAX_DELIVERY_HOLIDAY_SHIFT_DAYS):
+            if cal.is_trading_day(day):
+                return day
+            day += dt.timedelta(days=1)
+    except Exception as exc:  # noqa: BLE001 — an unanswerable calendar keeps the plain rule
+        logger.debug("operation_fallback", error=str(exc))
+    return wednesday

@@ -166,6 +166,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync.add_argument("--preview", action="store_true", help="Show preview summary")
     sync.add_argument("--sample", type=int, default=10, help="Preview sample size")
+    sync.add_argument(
+        "--allow-contract-regression",
+        action="store_true",
+        help="Write the contract cache even if it drops futures/options roots the current cache holds.",
+    )
     sync.set_defaults(func=cmd_symbols_sync)
 
     contracts_status = config_sub.add_parser("contracts-status", help="Inspect contract cache freshness/version")

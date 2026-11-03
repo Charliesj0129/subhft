@@ -49,15 +49,65 @@ Two consequences:
   (Procedure below) so the file in the repo and on the host keeps matching the
   broker's listing.
 
+## Update 2026-11-03: what the pool boots from, and how a failure shows
+
+On 2026-11-02 the hourly contract refresh wrote a `config/contracts.json`
+without any TXF or MXF row. The next boot roll could not resolve `TXF@front`,
+refused, and the pool subscribed `config/symbols.yaml` (last edited 2026-04-26)
+for the whole night session. Three changes follow from it:
+
+- `write_contract_cache` (`src/hft_platform/config/_symbols_contracts.py`)
+  refuses a rewrite that drops a futures/options root the cache already holds,
+  or keeps less than half of a category's rows (rows already settled by the
+  13:30 delivery cutoff are left out, so a weekly root such as `TX1` or `MX1`
+  may disappear after its delivery). The refresh then logs
+  `contract_refresh_integrity_failed` and counts `contract_refresh_total{result="error"}`;
+  the old cache stays. `hft config sync --allow-contract-regression` overrides
+  it for a listing that really shrank.
+- Every roll that validates writes `data/universe_last_good.yaml`
+  (`HFT_UNIVERSE_LAST_GOOD_PATH`) with each code's delivery date. A boot whose
+  own roll fails starts from that file: codes settled since it was written are
+  dropped by those dates, and the rest is re-validated
+  (`universe_boot_on_last_good`, `settled_dropped`). Only when it is missing or has itself
+  settled does the pool keep `config/symbols.yaml` (`universe_boot_on_canonical`),
+  and then the roll clock repairs it inside the session as soon as a rebuild
+  validates (`universe_roll_repair_in_session`).
+- The roll now validates its rebuild inside sessions too (it still defers the
+  change to the close, unless the running universe is the canonical fallback).
+
+Which file is running: `hft_quote_pool_universe_source{source}` (`list`,
+`last_good`, `canonical`; the current one reads 1). When a rebuild last passed:
+`hft_quote_pool_universe_last_valid_timestamp_seconds`. Alerts:
+`UniverseOnCanonicalFallback` (critical), `UniverseOnLastGoodFallback`,
+`UniverseRollNotValidating` (12 h, which covers the delivery-day refusal window
+below). `FeedSubscriptionPermanentlyFailed` now resolves when a roll removes the
+failed code, instead of firing until the next restart.
+
+So regenerating `config/symbols.yaml` by hand is no longer part of a normal
+month. It is the last fallback only; keeping it current still helps the case
+where both the cache and the last-good file are unusable.
+
 ## Contract roll checklist (monthly delivery, third Wednesday)
 
 A monthly future stops trading at 13:30 on its delivery date
-(`core/market_calendar.py:taifex_delivery_cutoff`). The roll compares delivery
-dates with that cutoff, but the symbol builder filters by the exchange *date*.
-So on the delivery day, after 13:30, the rebuilt universe still holds the
-expiring contract and `validate_universe` refuses it. The first adoptable window
-is after the 05:00 night close on the next day. The sequence below is pinned by
-`TestOctoberExpiryTimeline` in `tests/unit/test_pool_universe_roll.py`.
+(`core/market_calendar.py:taifex_delivery_cutoff`). Since 2026-11 there is one
+definition of the front month, `src/hft_platform/core/front_month.py`: the
+symbol builder (`ContractIndex.as_of`), `validate_universe`, and the strategy
+family clock all read that cutoff, so from 13:30 the rebuilt universe already
+holds the next month. Before, the builder filtered by the exchange *date*, kept
+the settling contract until midnight, and every check in between was refused.
+
+The delivery date itself is the third Wednesday, moved to the next trading day
+when that is a holiday (`taifex_monthly_delivery_date`; 2026-02-18 was one).
+Each roll also cross-checks every futures root it subscribes: the contract
+cache's front delivery date must equal the rule's
+(`front_month_disagreement`). A cache that lost its front month, or a TAIFEX
+schedule change the rule does not know, refuses the roll with
+`front month disagrees with the TAIFEX rule` in `universe_roll_refused`.
+Read the broker's announcement before changing anything.
+
+The sequence below is pinned by `TestOctoberExpiryTimeline` in
+`tests/unit/test_pool_universe_roll.py`.
 
 Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
 
@@ -65,19 +115,20 @@ Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
 |---|---|---|
 | Delivery day, before 13:30 | Nothing changes; the expiring contract still trades | `hft_quote_pool_universe_roll_total{result="no_change"}` or `deferred_session` |
 | 13:30 | R47 rebinds TMF/R1 to the next month (separate 60 s family clock, `ShioajiFamilyPopulator`; `tests/unit/test_contract_family_roll.py`) | Check the bound code is the new month. The gauge `strategy_bound_live_symbols` read 1 for a dead contract on 2026-09-16, so it is not enough alone |
-| 13:30 to midnight | Universe roll is **refused** whenever a check runs outside a session. This is expected, not a fault | `result="refused"` and the `universe_roll_refused` log; `deferred_session` while a session is open |
-| Midnight to 05:00 | Night session is open; the roll stays deferred | `result="deferred_session"` (the log line is debug level) |
-| After 05:00, until the pre-open lead of the 08:45 session (default 15 min, `HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S`) | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
+| 13:45 (day close) to the 15:00 night open, minus the pre-open lead | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
+| Any check while a session is open | The rebuild validates again but the change stays deferred, unless the pool booted on the canonical `symbols.yaml`; then it is repaired at once | `result="deferred_session"` (the log line is debug level); a repair logs `universe_roll_repair_in_session` |
 
 Pass criteria for the roll (capture the baseline before it):
 
 - `hft_quote_pool_universe_roll_total{result="rolled"}` rises by 1; no `build_errors`,
-  `unplaceable` or `no_contracts` results (those are not expected, investigate).
+  `unplaceable`, `no_contracts` or `refused` results (none is expected on a
+  normal delivery day any more, investigate).
 - `hft_quote_conn_subscribed_count` summed over connections is close to
   `symbols` in the `universe_rolled` line. Codes the broker refuses are queued
   for retry, so a small gap is explained by `_failed_sub_symbols`, not by a failed roll.
 - `FeedSubscriptionPermanentlyFailed` (`config/monitoring/alerts/rules.yaml`) is
   not firing for the settled codes.
+- `hft_quote_pool_universe_source{source="list"}` reads 1.
 
 ### A strategy still holds the expiring month at 13:30
 
