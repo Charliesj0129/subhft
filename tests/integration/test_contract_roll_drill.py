@@ -338,15 +338,9 @@ def test_order_path_expiry_window_opens_on_the_recorded_delivery_date(code: str)
     assert _expiry_window_start(code, delivery) == _ns(expected)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "taifex_monthly_delivery_date ignores holidays and opens the window a day early; "
-        "fixed by the holiday-aware rule (feat/front-month-resolver). Remove this mark when it lands."
-    ),
-)
 @pytest.mark.parametrize("code", _HOLIDAY_SHIFTED)
 def test_order_path_expiry_window_follows_a_holiday_shifted_delivery(code: str) -> None:
+    """2027-09-15 is Mid-Autumn; the broker row delivers 09-16 and so must the order path."""
     delivery = _delivery(next(r for r in _rows() if r["code"] == code))
     expected = dt.datetime.combine(delivery, dt.time(13, 0), tzinfo=TAIPEI)
     assert _expiry_window_start(code, delivery) == _ns(expected)
