@@ -429,6 +429,9 @@ class MetricsRegistry:
                 _pn("alias_resolution_coverage_ratio"),
                 _pn("alias_map_size"),
                 _pn("strategy_bound_live_symbols"),
+                _pn("front_month_subscribed"),
+                _pn("front_month_strategy_on_front"),
+                _pn("front_month_check_timestamp_seconds"),
                 _pn("feed_connect_gate_blocked_total"),
                 _pn("reconciliation_drift_streak"),
                 _pn("reconciliation_untrusted_sample_streak"),
@@ -2037,6 +2040,22 @@ class MetricsRegistry:
             _pn("strategy_bound_live_symbols"),
             "Count of a strategy's symbols that are actually present in the subscribed feed",
             ["strategy_id"],
+        )
+        # The front-month invariant itself (ops/front_month_watch.py), once a
+        # minute against the exchange rule rather than once per connect.
+        self.front_month_subscribed = Gauge(
+            _pn("front_month_subscribed"),
+            "1 when the feed carries the exchange-rule front month of a traded futures root",
+            ["root"],
+        )
+        self.front_month_strategy_on_front = Gauge(
+            _pn("front_month_strategy_on_front"),
+            "1 when every symbol a strategy holds for a futures root is the exchange-rule front month",
+            ["strategy_id", "root"],
+        )
+        self.front_month_check_timestamp_seconds = Gauge(
+            _pn("front_month_check_timestamp_seconds"),
+            "Unix time of the last front-month watch evaluation",
         )
         # A connect gate refusing is deliberate fail-closed behaviour, and it
         # presents as a feed that simply never delivers data. Without this the
