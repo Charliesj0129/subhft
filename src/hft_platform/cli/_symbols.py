@@ -181,6 +181,7 @@ def cmd_symbols_validate(args: argparse.Namespace) -> None:
 
 def cmd_symbols_sync(args: argparse.Namespace) -> None:
     from hft_platform.config.symbols import (
+        ContractCacheRegressionError,
         ContractIndex,
         build_symbols,
         fetch_contracts_from_broker,
@@ -192,7 +193,16 @@ def cmd_symbols_sync(args: argparse.Namespace) -> None:
     )
 
     contracts = fetch_contracts_from_broker()
-    write_contract_cache(contracts, args.contracts)
+    try:
+        write_contract_cache(
+            contracts,
+            args.contracts,
+            allow_regression=bool(getattr(args, "allow_contract_regression", False)),
+        )
+    except ContractCacheRegressionError as exc:
+        print(f"Contract cache NOT written ({args.contracts} kept): {exc}", file=sys.stderr)
+        print("Re-run with --allow-contract-regression if the broker listing really shrank.", file=sys.stderr)
+        sys.exit(1)
     metrics = load_metrics_cache(args.metrics) if args.metrics else {}
     contract_index = ContractIndex(contracts=contracts, metrics_by_code=metrics)
 

@@ -49,6 +49,44 @@ Two consequences:
   (Procedure below) so the file in the repo and on the host keeps matching the
   broker's listing.
 
+## Update 2026-11-03: what the pool boots from, and how a failure shows
+
+On 2026-11-02 the hourly contract refresh wrote a `config/contracts.json`
+without any TXF or MXF row. The next boot roll could not resolve `TXF@front`,
+refused, and the pool subscribed `config/symbols.yaml` (last edited 2026-04-26)
+for the whole night session. Three changes follow from it:
+
+- `write_contract_cache` (`src/hft_platform/config/_symbols_contracts.py`)
+  refuses a rewrite that drops a futures/options root the cache already holds,
+  or keeps less than half of a category's rows (rows already settled by the
+  13:30 delivery cutoff are left out, so a weekly root such as `TX1` or `MX1`
+  may disappear after its delivery). The refresh then logs
+  `contract_refresh_integrity_failed` and counts `contract_refresh_total{result="error"}`;
+  the old cache stays. `hft config sync --allow-contract-regression` overrides
+  it for a listing that really shrank.
+- Every roll that validates writes `data/universe_last_good.yaml`
+  (`HFT_UNIVERSE_LAST_GOOD_PATH`) with each code's delivery date. A boot whose
+  own roll fails starts from that file: codes settled since it was written are
+  dropped by those dates, and the rest is re-validated
+  (`universe_boot_on_last_good`, `settled_dropped`). Only when it is missing or has itself
+  settled does the pool keep `config/symbols.yaml` (`universe_boot_on_canonical`),
+  and then the roll clock repairs it inside the session as soon as a rebuild
+  validates (`universe_roll_repair_in_session`).
+- The roll now validates its rebuild inside sessions too (it still defers the
+  change to the close, unless the running universe is the canonical fallback).
+
+Which file is running: `hft_quote_pool_universe_source{source}` (`list`,
+`last_good`, `canonical`; the current one reads 1). When a rebuild last passed:
+`hft_quote_pool_universe_last_valid_timestamp_seconds`. Alerts:
+`UniverseOnCanonicalFallback` (critical), `UniverseOnLastGoodFallback`,
+`UniverseRollNotValidating` (12 h, which covers the delivery-day refusal window
+below). `FeedSubscriptionPermanentlyFailed` now resolves when a roll removes the
+failed code, instead of firing until the next restart.
+
+So regenerating `config/symbols.yaml` by hand is no longer part of a normal
+month. It is the last fallback only; keeping it current still helps the case
+where both the cache and the last-good file are unusable.
+
 ## Contract roll checklist (monthly delivery, third Wednesday)
 
 A monthly future stops trading at 13:30 on its delivery date
@@ -66,7 +104,7 @@ Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
 | Delivery day, before 13:30 | Nothing changes; the expiring contract still trades | `hft_quote_pool_universe_roll_total{result="no_change"}` or `deferred_session` |
 | 13:30 | R47 rebinds TMF/R1 to the next month (separate 60 s family clock, `ShioajiFamilyPopulator`; `tests/unit/test_contract_family_roll.py`) | Check the bound code is the new month. The gauge `strategy_bound_live_symbols` read 1 for a dead contract on 2026-09-16, so it is not enough alone |
 | 13:30 to midnight | Universe roll is **refused** whenever a check runs outside a session. This is expected, not a fault | `result="refused"` and the `universe_roll_refused` log; `deferred_session` while a session is open |
-| Midnight to 05:00 | Night session is open; the roll stays deferred | `result="deferred_session"` (the log line is debug level) |
+| Midnight to 05:00 | Night session is open; the rebuild validates again but the change stays deferred | `result="deferred_session"` (the log line is debug level) |
 | After 05:00, until the pre-open lead of the 08:45 session (default 15 min, `HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S`) | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
 
 Pass criteria for the roll (capture the baseline before it):
@@ -78,6 +116,7 @@ Pass criteria for the roll (capture the baseline before it):
   for retry, so a small gap is explained by `_failed_sub_symbols`, not by a failed roll.
 - `FeedSubscriptionPermanentlyFailed` (`config/monitoring/alerts/rules.yaml`) is
   not firing for the settled codes.
+- `hft_quote_pool_universe_source{source="list"}` reads 1.
 
 ### A strategy still holds the expiring month at 13:30
 
