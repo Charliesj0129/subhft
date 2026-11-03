@@ -68,7 +68,8 @@ def _settled_delivery_date(symbol: str, *, cutoff: date) -> date | None:
 
     Derived from the code, not looked up: once a contract settles the broker
     delists it, so there is no record left to read a ``delivery_date`` from.
-    The date is the third Wednesday, see ``taifex_monthly_delivery_date``.
+    The date is the third Wednesday, or the next trading day when that is a
+    holiday, see ``taifex_monthly_delivery_date``.
     """
     try:
         ref = parse_display(symbol, base_year=cutoff.year)

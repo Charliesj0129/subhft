@@ -224,11 +224,12 @@ class TestBootRoll:
 
 
 class TestRefusals:
-    def test_universe_still_holding_a_settled_contract_is_refused(
+    def test_settlement_evening_builds_the_next_month_instead_of_refusing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Settlement day after 13:30: the builder's date filter still keeps I6,
-        the delivery cutoff does not. The stricter one wins and nothing moves."""
+        """Settlement day after 13:30. Before 2026-11 the builder filtered by
+        *date* and still chose I6, which the delivery cutoff then refused, so
+        nothing moved until after midnight. Both now read the cutoff."""
         pool = _make_pool(
             tmp_path,
             monkeypatch,
@@ -238,8 +239,27 @@ class TestRefusals:
             today=dt.date(2026, 9, 16),
         )
 
-        assert pool.roll_universe(live=False, now_ns=SETTLEMENT_EVENING_NS) is False
-        assert _universe_codes(pool) == {"TMFH6"}
+        assert pool.roll_universe(live=False, now_ns=SETTLEMENT_EVENING_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+
+    def test_cache_that_lost_the_front_month_is_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The cache holds November and December but not October: ``TMF@front``
+        would quietly resolve to November. The TAIFEX rule says October."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFJ6"],
+            contracts=[_future("TMFK6", "TMF", NOVEMBER), _future("TMFL6", "TMF", "2026/12/16")],
+            list_body=TMF_LIST,
+            today=dt.date(2026, 9, 17),
+        )
+        results: list[str] = []
+        monkeypatch.setattr(QuoteConnectionPool, "_bump_universe_roll_metric", staticmethod(results.append))
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
+
+        assert results == ["refused"]
+        assert _universe_codes(pool) == {"TMFJ6"}
 
     def test_build_failure_keeps_the_running_universe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         pool = _make_pool(
@@ -532,12 +552,12 @@ OCTOBER_CONTRACTS = [
 class TestOctoberExpiryTimeline:
     """2026-10-21 (third Wednesday) is TMFJ6's delivery date.
 
-    The universe cannot roll on the delivery day itself: from 13:30 the builder
-    (which filters by *date*) still keeps TMFJ6 while the delivery cutoff says it
-    has settled, so ``validate_universe`` refuses. After Taipei midnight the
-    night session keeps the roll deferred, and the first adoptable window is
-    after the 05:00 close on 10/22. ``reconnect_allowed`` reads the real clock, so
-    the session-open deferral is pinned by ``test_roll_is_deferred_while_a_session_is_open``.
+    From 13:30 on the delivery day the builder and the validator both read the
+    delivery cutoff (``core/front_month.py``), so a roll outside a session adopts
+    TMFK6 at once. Before 2026-11 the builder filtered by *date*, kept TMFJ6, and
+    every check until midnight was refused. A live roll is still deferred while a
+    session is open; ``reconnect_allowed`` reads the real clock, so that is
+    pinned by ``test_roll_is_deferred_while_a_session_is_open``.
     """
 
     @staticmethod
@@ -567,16 +587,16 @@ class TestOctoberExpiryTimeline:
             pytest.param(_taipei_ns(10, 21, 23, 59, 59), id="last_second_before_midnight"),
         ],
     )
-    def test_roll_on_delivery_day_after_the_final_session_close_is_refused(
+    def test_roll_on_delivery_day_after_the_final_session_close_is_adopted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, now_ns: int
     ) -> None:
         results = self._record_results(monkeypatch)
         pool = self._october_pool(tmp_path, monkeypatch, today=dt.date(2026, 10, 21), universe=["TMFJ6", "TMFK6"])
 
-        assert pool.roll_universe(live=False, now_ns=now_ns) is False
+        assert pool.roll_universe(live=False, now_ns=now_ns) is True
 
-        assert results == ["refused"]
-        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+        assert results == ["rolled"]
+        assert _universe_codes(pool) == {"TMFK6", "TMFL6"}
 
     def test_roll_one_second_before_the_final_session_close_is_not_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
