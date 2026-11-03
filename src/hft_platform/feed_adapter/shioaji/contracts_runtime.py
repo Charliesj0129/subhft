@@ -13,6 +13,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.background_tasks import spawn_retained
+from hft_platform.core.market_calendar import taifex_delivery_cutoff
 from hft_platform.feed_adapter.shioaji._compat import contract_member, is_leaf_contract, iter_contract_category
 from hft_platform.feed_adapter.shioaji._infra import (
     acquire_login_slot,
@@ -1195,7 +1196,11 @@ class ContractsRuntime:
                 pass
 
             _t_build = time.monotonic()
-            contract_index = ContractIndex(contracts=raw_contracts)
+            # Same "still trading" as the universe roll (core/front_month.py).
+            contract_index = ContractIndex(
+                contracts=raw_contracts,
+                as_of=taifex_delivery_cutoff(timebase.now_ns()),
+            )
             list_path = Path(Path(self._client.config_path).parent / "symbols.list")
             if not list_path.exists():
                 list_path = Path(DEFAULT_LIST_PATH)

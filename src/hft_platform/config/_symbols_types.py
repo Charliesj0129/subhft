@@ -171,13 +171,22 @@ def exchange_today() -> date:
     return datetime.now(TZINFO).date()
 
 
-def contract_dte_days(contract: dict[str, Any]) -> int | None:
+def contract_dte_days(contract: dict[str, Any], as_of: date | None = None) -> int | None:
+    """Days from ``as_of`` to the contract's delivery date; negative means settled.
+
+    ``as_of`` is the earliest delivery date still trading. Runtime builds pass
+    ``core.market_calendar.taifex_delivery_cutoff(now)``, which is tomorrow from
+    13:30 on a delivery day, so a contract in its final afternoon already reads
+    -1 here exactly as it does to ``validate_universe``. ``None`` keeps the
+    plain exchange date (operator tooling and tests that pin the date).
+    """
+    reference = as_of if as_of is not None else exchange_today()
     for key in ("delivery_date", "expiry", "due_date", "maturity_date"):
         parsed = parse_date_key(contract.get(key))
         if parsed:
             try:
                 date_val = datetime.strptime(str(parsed), "%Y%m%d").date()
-                return (date_val - exchange_today()).days
+                return (date_val - reference).days
             except ValueError:
                 continue
     return None
@@ -194,6 +203,10 @@ class ContractIndex:
     # median-strike guess. Runtime rebuilds (universe roll, contract refresh) leave it off: an error there
     # would refuse the roll, so they keep the warning.
     require_underlying: bool = False
+    # The earliest delivery date still trading (``taifex_delivery_cutoff``).
+    # Runtime rebuilds set it so ``@front`` and ``validate_universe`` use one
+    # definition; None falls back to the exchange date.
+    as_of: date | None = None
 
     def __post_init__(self) -> None:
         normalized_metrics: dict[str, dict[str, Any]] = {}

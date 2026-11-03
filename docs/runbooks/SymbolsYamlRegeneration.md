@@ -90,12 +90,24 @@ where both the cache and the last-good file are unusable.
 ## Contract roll checklist (monthly delivery, third Wednesday)
 
 A monthly future stops trading at 13:30 on its delivery date
-(`core/market_calendar.py:taifex_delivery_cutoff`). The roll compares delivery
-dates with that cutoff, but the symbol builder filters by the exchange *date*.
-So on the delivery day, after 13:30, the rebuilt universe still holds the
-expiring contract and `validate_universe` refuses it. The first adoptable window
-is after the 05:00 night close on the next day. The sequence below is pinned by
-`TestOctoberExpiryTimeline` in `tests/unit/test_pool_universe_roll.py`.
+(`core/market_calendar.py:taifex_delivery_cutoff`). Since 2026-11 there is one
+definition of the front month, `src/hft_platform/core/front_month.py`: the
+symbol builder (`ContractIndex.as_of`), `validate_universe`, and the strategy
+family clock all read that cutoff, so from 13:30 the rebuilt universe already
+holds the next month. Before, the builder filtered by the exchange *date*, kept
+the settling contract until midnight, and every check in between was refused.
+
+The delivery date itself is the third Wednesday, moved to the next trading day
+when that is a holiday (`taifex_monthly_delivery_date`; 2026-02-18 was one).
+Each roll also cross-checks every futures root it subscribes: the contract
+cache's front delivery date must equal the rule's
+(`front_month_disagreement`). A cache that lost its front month, or a TAIFEX
+schedule change the rule does not know, refuses the roll with
+`front month disagrees with the TAIFEX rule` in `universe_roll_refused`.
+Read the broker's announcement before changing anything.
+
+The sequence below is pinned by `TestOctoberExpiryTimeline` in
+`tests/unit/test_pool_universe_roll.py`.
 
 Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
 
@@ -103,14 +115,14 @@ Example: 2026-10-21 (TMFJ6 delivery), Taipei time.
 |---|---|---|
 | Delivery day, before 13:30 | Nothing changes; the expiring contract still trades | `hft_quote_pool_universe_roll_total{result="no_change"}` or `deferred_session` |
 | 13:30 | R47 rebinds TMF/R1 to the next month (separate 60 s family clock, `ShioajiFamilyPopulator`; `tests/unit/test_contract_family_roll.py`) | Check the bound code is the new month. The gauge `strategy_bound_live_symbols` read 1 for a dead contract on 2026-09-16, so it is not enough alone |
-| 13:30 to midnight | Universe roll is **refused** whenever a check runs outside a session. This is expected, not a fault | `result="refused"` and the `universe_roll_refused` log; `deferred_session` while a session is open |
-| Midnight to 05:00 | Night session is open; the rebuild validates again but the change stays deferred | `result="deferred_session"` (the log line is debug level) |
-| After 05:00, until the pre-open lead of the 08:45 session (default 15 min, `HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S`) | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
+| 13:45 (day close) to the 15:00 night open, minus the pre-open lead | First roll is adopted: the settled code is unsubscribed, the new month subscribed | `result="rolled"` and the `universe_rolled` log (`added_count`, `removed_count`, `per_group`) |
+| Any check while a session is open | The rebuild validates again but the change stays deferred, unless the pool booted on the canonical `symbols.yaml`; then it is repaired at once | `result="deferred_session"` (the log line is debug level); a repair logs `universe_roll_repair_in_session` |
 
 Pass criteria for the roll (capture the baseline before it):
 
 - `hft_quote_pool_universe_roll_total{result="rolled"}` rises by 1; no `build_errors`,
-  `unplaceable` or `no_contracts` results (those are not expected, investigate).
+  `unplaceable`, `no_contracts` or `refused` results (none is expected on a
+  normal delivery day any more, investigate).
 - `hft_quote_conn_subscribed_count` summed over connections is close to
   `symbols` in the `universe_rolled` line. Codes the broker refuses are queued
   for retry, so a small gap is explained by `_failed_sub_symbols`, not by a failed roll.

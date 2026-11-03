@@ -8,11 +8,11 @@ TMFK6 and opened another lot next to it, and the settled lot stayed in the
 position store until a restart dropped it unbooked. The cutoff here is the point
 after which the platform stops adding to such a position and starts closing it.
 
-The delivery date is derived from the code (third Wednesday,
-``taifex_monthly_delivery_date``), the same rule ``startup_recon`` uses. TAIFEX
-moves delivery to the next business day when that Wednesday is a holiday and the
-derivation does not; on such a month the guard fires one business day early,
-which is the safe direction.
+The delivery date is derived from the code (third Wednesday, moved to the next
+trading day when it is a holiday: ``taifex_monthly_delivery_date``), the same
+rule ``startup_recon`` uses. When the calendar cannot answer, the unadjusted
+Wednesday is used and the guard fires early on a holiday month, which is the
+safe direction.
 """
 
 from __future__ import annotations

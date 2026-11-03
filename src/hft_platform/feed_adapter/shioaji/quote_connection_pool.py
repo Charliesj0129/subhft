@@ -1520,6 +1520,49 @@ class QuoteConnectionPool:
 
         return delivery_of
 
+    @classmethod
+    def _front_month_disagreements(cls, symbols: list[dict[str, Any]], index: Any, *, now_ns: int) -> list[str]:
+        """Cross-check each futures root in ``symbols`` against the exchange rule.
+
+        The rebuild trusts the contract cache for "which month is front". The
+        cache has been wrong before (2026-11-02: every TXF row missing), so the
+        broker's front delivery date for every futures root the universe uses
+        must equal the one the TAIFEX rule derives. A disagreement refuses the
+        roll; see ``core.front_month.front_month_disagreement``.
+        """
+        from hft_platform.config._symbols_types import derive_root
+        from hft_platform.core.front_month import front_month_disagreement
+
+        futures_by_root = getattr(index, "futures_by_root", {}) or {}
+        by_code = getattr(index, "by_code", {}) or {}
+        roots: set[str] = set()
+        for entry in symbols:
+            code = str(entry.get("code") or "").strip()
+            row = by_code.get(code)
+            if not isinstance(row, dict):
+                continue
+            kind = str(row.get("type") or row.get("security_type") or "").lower()
+            if kind not in {"future", "fut", "futures"}:
+                continue
+            roots.add(str(row.get("root") or derive_root(code)).upper())
+
+        delivery_of = cls._delivery_lookup(index)
+        reasons: list[str] = []
+        for root in sorted(roots):
+            pairs = [
+                (str(row.get("code") or ""), delivery_of(str(row.get("code") or "")))
+                for row in futures_by_root.get(root, [])
+                if isinstance(row, dict)
+            ]
+            if len({delivery for _code, delivery in pairs if delivery is not None}) < 2:
+                # A weekly series (``MX1``, ``MX2``...) lists one delivery date
+                # under its own root; the monthly rule does not describe it.
+                continue
+            reason = front_month_disagreement(root, pairs, now_ns=now_ns)
+            if reason is not None:
+                reasons.append(f"front month disagrees with the TAIFEX rule: {reason}")
+        return reasons
+
     def _current_groups(self) -> dict[int, list[dict[str, Any]]]:
         groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
         for sym in self._all_symbols:
@@ -1571,7 +1614,8 @@ class QuoteConnectionPool:
         # both windows and fails open, so an unanswerable calendar defers the
         # roll rather than running it at a bad time.
         in_session = bool(live and self.reconnect_allowed())
-        cutoff = taifex_delivery_cutoff(now_ns if now_ns is not None else timebase.now_ns())
+        roll_now_ns = now_ns if now_ns is not None else timebase.now_ns()
+        cutoff = taifex_delivery_cutoff(roll_now_ns)
 
         with self._refresh_lock:
             try:
@@ -1579,6 +1623,10 @@ class QuoteConnectionPool:
             except Exception as exc:  # noqa: BLE001 — cache missing/corrupt must not kill the caller
                 logger.warning("universe_roll_contract_cache_unreadable", error=str(exc))
                 return self._roll_failed("no_contracts", live=live, in_session=in_session, cutoff=cutoff)
+            # ``@front`` must mean what ``validate_universe`` means by
+            # "still trading" (core/front_month.py), or every delivery day
+            # from 13:30 to midnight builds a universe it then refuses.
+            index.as_of = cutoff
 
             list_path = self._symbols_list_path()
             build_result = build_symbols(list_path, index)
@@ -1598,6 +1646,7 @@ class QuoteConnectionPool:
                 num_conns=self._num_conns,
                 per_conn_cap=_MAX_SUBSCRIPTIONS_PER_CONN,
             )
+            errors.extend(self._front_month_disagreements(build_result.symbols, index, now_ns=roll_now_ns))
             if errors:
                 logger.error(
                     "universe_roll_refused",
