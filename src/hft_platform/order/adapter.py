@@ -44,6 +44,8 @@ _GUARD_TIMEOUT = object()
 # ``None`` (a failure that is known to have failed): the first attempt may still be
 # running in the SDK thread, so the cancel may well have landed.
 _CANCEL_TIMED_OUT = object()
+# ``_match_open_order``: more than one broker order fits a phantom; hold its slot.
+_AMBIGUOUS_MATCH = object()
 
 
 class _CancelWatch(NamedTuple):
@@ -234,6 +236,10 @@ class OrderAdapter:
         "_phantom_order_max",
         "_phantom_recovery_ttl_s",
         "_phantom_lock",
+        # Broker search for TTL-expired phantoms (``_settle_expired_phantoms``).
+        "_phantom_lookup_task",
+        "_phantom_lookup_timeout_s",
+        "_phantom_lookup_max_hold_s",
         "_audit_writer",
         "_explanation_assembler",
         "_rejection_sink",
@@ -460,6 +466,14 @@ class OrderAdapter:
         self._phantom_intents: dict[str, OrderIntent] = {}
         self._phantom_order_max: int = 1000
         self._phantom_recovery_ttl_s: float = float(os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "300"))
+        # Before a TTL-expired phantom gives its slot back, the broker's working
+        # orders are searched for it (THESHOW 2026-11-05: R47:33723 timed out,
+        # was released at the TTL while it sat at the broker, filled 6 min
+        # later and took R47 to -2 against max_pos=1). A failed search keeps the
+        # slot; after this long the old unconditional release applies.
+        self._phantom_lookup_task: asyncio.Task[None] | None = None
+        self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))  # precision-time
+        self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))  # precision-time
         # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
         # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
         # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
@@ -1364,26 +1378,28 @@ class OrderAdapter:
             ]
 
     async def release_stale_phantom_pendings(self, ttl_s: float | None = None) -> int:
-        """Bug D (2026-04-20): release strategy pending counters for phantoms past TTL.
+        """Bug D (2026-04-20): settle phantoms past TTL so their slot is not held forever.
 
         Phantom-pending feedbacks (was_approved=True) keep strategy
-        ``_pending_buy/_pending_sell`` counters elevated indefinitely while
-        waiting for a fill or cancel callback. When the broker never sends one
-        (Shioaji client-side exception that didn't reach the exchange — confirmed
-        via Shioaji enumeration during 2026-04-20 incident), the strategy stays
-        frozen. After ``ttl_s`` seconds we assume the phantom is orphaned and
-        emit a fresh feedback with ``was_approved=False`` so the strategy
-        releases the slot.
+        ``_pending_buy/_pending_sell`` counters elevated while waiting for a
+        fill or cancel callback. When the broker never sends one, the strategy
+        stays frozen; after ``ttl_s`` seconds the phantom is settled.
 
-        Trade-off: if a phantom does later fill, on_fill will create an
-        unexpected position update on the strategy. The premise that a timed-out
-        order "did not reach the exchange" was wrong on THESHOW (2026-10-05..06,
-        SIM): 40 of 40 were accepted, their Trade coming back 3.1-21.4 s later.
-        Those are now bound and cancelled by ``_bind_late_trade``, which hands the
-        slot back on the order's own terminal; this TTL is only the fallback for
-        an answer that never comes, so it is as long as the live-order TTL.
+        The premise that a timed-out order "did not reach the exchange" was
+        wrong on THESHOW (2026-10-05..06, SIM: 40 of 40 were accepted). Late
+        Trades are bound and cancelled by ``_bind_late_trade``; but when the SDK
+        answers with a timeout error and no Trade, nothing ever binds the order
+        (2026-11-05: R47:33723 sat at the broker as 1B2839, was released here at
+        the TTL, filled 6 min later, R47 -2 against max_pos=1). So when the
+        client can list the broker's working orders, the slot is only handed
+        back once the broker shows no such order; an order it does show is
+        bound and cancelled, and its own terminal hands the slot back
+        (``_settle_expired_phantoms``). Without that capability the old
+        unconditional release applies.
 
-        Returns the number of phantoms released. Called from supervisor loop.
+        Returns the number of phantoms released by this call (a broker search
+        runs in the background and releases from there). Called from the
+        supervisor loop.
         """
         # M4: materialise legacy-only entries (see ``resolve_phantom_fill``).
         with self._phantom_lock:
@@ -1391,32 +1407,186 @@ class OrderAdapter:
         if not self._get_phantom_records():
             return 0
         ttl = ttl_s if ttl_s is not None else self._phantom_recovery_ttl_s
+        due = self._due_phantoms(ttl)
+        if not due:
+            return 0
+        if self._open_order_lister() is None:
+            return await self._release_phantoms(due, ttl)
+        task = getattr(self, "_phantom_lookup_task", None)
+        if task is None or task.done():
+            self._phantom_lookup_task = asyncio.get_running_loop().create_task(
+                self._settle_expired_phantoms(ttl), name="phantom_broker_lookup"
+            )
+        return 0
+
+    def _due_phantoms(self, ttl_s: float) -> list[tuple[str, _PhantomEntry]]:
+        """Phantom records at least ``ttl_s`` seconds old (snapshot; nothing removed)."""
+        now_mono = time.monotonic()
+        with self._phantom_lock:
+            return [
+                (pkey, record)
+                for pkey, records in self._get_phantom_records().items()
+                for record in records
+                if (now_mono - record.monotonic_ts) >= ttl_s
+            ]
+
+    def _open_order_lister(self) -> Callable[[], Any] | None:
+        """The client's ``list_open_orders``, or None when it cannot list them.
+
+        Read from the client's class: the capability is a method the broker
+        client defines, not an attribute any object (a mock, a no-op client)
+        answers to.
+        """
+        if not callable(getattr(type(self.client), "list_open_orders", None)):
+            return None
+        fn = getattr(self.client, "list_open_orders", None)
+        return fn if callable(fn) else None
+
+    async def _settle_expired_phantoms(self, ttl_s: float) -> None:
+        """Search the broker for TTL-expired phantoms; bind what it holds, release the rest."""
+        try:
+            await self._settle_expired_phantoms_once(ttl_s)
+        except Exception:  # noqa: BLE001 — a background task: log it, the next sweep retries
+            logger.error("phantom_broker_lookup_crashed", exc_info=True)
+            self._count_phantom_bound("lookup_failed")
+
+    async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:
+        lister = self._open_order_lister()
+        if lister is None:
+            return
+        try:
+            trades: list[Any] | None = list(
+                await asyncio.wait_for(
+                    self._run_blocking_call(lister),
+                    timeout=getattr(self, "_phantom_lookup_timeout_s", 15.0),
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — any failure means "broker state unknown": keep the slot
+            logger.warning("phantom_broker_lookup_failed", error=repr(exc))
+            trades = None
+        due = self._due_phantoms(ttl_s)  # re-read: a fill or a late Trade may have settled some meanwhile
+        if trades is None:
+            self._count_phantom_bound("lookup_failed")
+            max_hold = getattr(self, "_phantom_lookup_max_hold_s", 1800.0)
+            now_mono = time.monotonic()
+            overdue = [(k, r) for k, r in due if (now_mono - r.monotonic_ts) >= ttl_s + max_hold]
+            if overdue:
+                await self._release_phantoms(overdue, ttl_s)
+            return
+        release: list[tuple[str, _PhantomEntry]] = []
+        claimed: set[int] = set()
+        for pkey, record in due:
+            match = self._match_open_order(pkey, record, trades, claimed)
+            if match is _AMBIGUOUS_MATCH:
+                self._count_phantom_bound("lookup_ambiguous")
+                logger.warning("phantom_broker_lookup_ambiguous", order_key=pkey, symbol=record.symbol)
+                continue  # held; retried next sweep, released after the max hold
+            if match is None:
+                release.append((pkey, record))
+                continue
+            claimed.add(id(match))
+            self._count_phantom_bound("found_open")
+            logger.warning("phantom_found_open_at_broker", order_key=pkey, symbol=record.symbol)
+            self._spawn_phantom_bind(record.intent, match)
+        if release:
+            await self._release_phantoms(release, ttl_s)
+
+    def _custom_field_token_for(self, order_key: str) -> str | None:
+        """The ``custom_field`` token this order was sent with, if still mapped."""
+        with self._order_id_map_lock:
+            for token, key in self.order_id_map.items():
+                if key == order_key and len(token) == 6:
+                    return token
+        return None
+
+    @staticmethod
+    def _sdk_field(obj: Any, name: str) -> Any:
+        if obj is None:
+            return None
+        return obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+
+    def _match_open_order(self, order_key: str, record: _PhantomEntry, trades: list[Any], claimed: set[int]) -> Any:
+        """The broker order that is this phantom: a Trade, None, or ``_AMBIGUOUS_MATCH``.
+
+        When the SDK echoes ``custom_field`` (any listed order carries one),
+        only the order with this phantom's token matches. Otherwise one order
+        with the same contract, side, quantity and price, not bound to any
+        platform order, is a match; two or more are ambiguous and the slot is
+        held.
+        """
+        intent = record.intent
+        token = self._custom_field_token_for(order_key)
+        try:
+            code = self._resolve_broker_contract_code(intent)
+        except Exception:  # noqa: BLE001 — fall back to the platform symbol
+            code = intent.symbol
+        codec = self._broker_codec
+        action = codec.encode_side(intent.side) if codec is not None else ("Buy" if intent.side == Side.BUY else "Sell")
+        # An SDK that echoes custom_field on any listed order echoes it on all:
+        # then an order without one was not placed by the platform (a manual
+        # order on the same account) and must never be taken over.
+        echoes = any(self._sdk_field(self._sdk_field(t, "order"), "custom_field") for t in trades)
+        candidates: list[Any] = []
+        for trade in trades:
+            if id(trade) in claimed:
+                continue
+            order = self._sdk_field(trade, "order")
+            if self._trade_bound_elsewhere(trade, order_key):
+                continue
+            field = self._sdk_field(order, "custom_field")
+            if echoes:
+                if token and field and str(field) == token:
+                    return trade
+                continue
+            contract = self._sdk_field(trade, "contract")
+            raw_action = self._sdk_field(order, "action")
+            if str(self._sdk_field(contract, "code") or "") not in {code, intent.symbol}:
+                continue
+            if str(getattr(raw_action, "value", raw_action)) != str(action):
+                continue
+            if self._sdk_field(order, "quantity") != intent.qty:
+                continue
+            price = self._sdk_field(order, "price")
+            if price is None or self.price_codec.scale(intent.symbol, price) != intent.price:
+                continue
+            candidates.append(trade)
+        if len(candidates) == 1:
+            return candidates[0]
+        return _AMBIGUOUS_MATCH if candidates else None
+
+    def _trade_bound_elsewhere(self, trade: Any, order_key: str) -> bool:
+        """True when one of the trade's broker ids already maps to another platform order."""
+        ids: list[Any] = []
+        for holder in (trade, self._sdk_field(trade, "order"), self._sdk_field(trade, "status")):
+            for name in ("seq_no", "seqno", "ord_no", "ordno", "id"):
+                val = self._sdk_field(holder, name)
+                if val:
+                    ids.append(val)
+        with self._order_id_map_lock:
+            return any(self.order_id_map.get(str(v), order_key) != order_key for v in ids)
+
+    async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl_s: float) -> int:
+        """Hand the slot back for these phantom records (the pre-lookup TTL release)."""
         now_mono = time.monotonic()
         released = 0
-        # P0-E2 + M4: snapshot + per-occurrence evict under _phantom_lock,
-        # emit feedback after. ``_send_dispatch_rejection`` calls into
+        # P0-E2 + M4: per-occurrence evict under _phantom_lock, emit feedback
+        # after. ``_send_dispatch_rejection`` calls into
         # _rejection_sink.put_nowait; we intentionally release the lock
         # before that to avoid holding the phantom lock across queue I/O.
         expired: list[tuple[str, OrderIntent]] = []
         with self._phantom_lock:
             records_dict = self._get_phantom_records()
-            legacy_keys = self._get_phantom_legacy_keys()
-            legacy_intents = self._get_phantom_legacy_intents()
-            for pkey, records in list(records_dict.items()):
-                kept: list[_PhantomEntry] = []
-                for record in records:
-                    if (now_mono - record.monotonic_ts) < ttl:
-                        kept.append(record)
-                        continue
-                    expired.append((pkey, record.intent))
-                    self._get_expired_phantoms().append((now_mono, pkey, record.symbol, int(record.intent.side)))
-                if kept:
-                    records_dict[pkey] = kept
-                    last = kept[-1]
-                    legacy_keys[pkey] = (last.monotonic_ts, last.symbol)
-                    legacy_intents[pkey] = last.intent
+            for pkey, record in due:
+                records = records_dict.get(pkey)
+                if not records or not any(r is record for r in records):
+                    continue  # settled meanwhile (fill claim, late Trade bind)
+                records_dict[pkey] = [r for r in records if r is not record]
+                if records_dict[pkey]:
+                    self._phantom_resync_legacy(pkey)
                 else:
                     self._phantom_drop_key(pkey)
+                expired.append((pkey, record.intent))
+                self._get_expired_phantoms().append((now_mono, pkey, record.symbol, int(record.intent.side)))
         for _pkey, intent in expired:
             # After this the record can no longer claim a fill: a late fill for
             # the order reaches the router as strategy UNKNOWN.
@@ -1430,13 +1600,13 @@ class OrderAdapter:
                     "price": intent.price,
                     "qty": intent.qty,
                     "strategy_id": intent.strategy_id,
-                    "error": f"phantom_ttl_{ttl:g}s",
+                    "error": f"phantom_ttl_{ttl_s:g}s",
                 }
             )
             # No Trade, no error, nothing bound, for the whole TTL: this one is a
             # dead letter, and the only kind a timeout produces.
             self.metrics.order_reject_total.inc()
-            await self._add_to_dlq(intent, RejectionReason.OUTCOME_UNRESOLVED, f"phantom_ttl_{ttl:g}s")
+            await self._add_to_dlq(intent, RejectionReason.OUTCOME_UNRESOLVED, f"phantom_ttl_{ttl_s:g}s")
             if self._send_dispatch_rejection(
                 intent,
                 "phantom_recovery_ttl_expired",
@@ -1455,7 +1625,7 @@ class OrderAdapter:
             logger.warning(
                 "phantom_recovery_swept",
                 released=released,
-                ttl_s=ttl,
+                ttl_s=ttl_s,
                 remaining=len(self._get_phantom_records()),
             )
         return released

@@ -63,6 +63,9 @@ UNRESOLVED_PHANTOM_OUTCOMES: tuple[str, ...] = ("cancel_timeout", "cancel_failed
 # that follows it pages through cancel_unconfirmed_total{outcome="gave_up"} if
 # the order really stayed live. The two are still created at 0 and counted.
 PAGED_PHANTOM_OUTCOMES: tuple[str, ...] = ("fill_claimed_after_expiry",)
+# Outcomes of the broker search a TTL-expired phantom gets before its slot is
+# released (``OrderAdapter._settle_expired_phantoms``), also created at 0.
+BROKER_LOOKUP_PHANTOM_OUTCOMES: tuple[str, ...] = ("found_open", "lookup_failed", "lookup_ambiguous")
 
 
 def cap_reject_reason(reason: str) -> str:
@@ -864,14 +867,14 @@ class MetricsRegistry:
             _pn("phantom_bound_total"),
             "What was done with a timed-out place_order once its answer arrived "
             "(cancel_sent / cancel_timeout / cancel_failed / cancel_inflight / skipped_filled / skipped_gone / "
-            "released_not_sent / kept_for_ttl)",
+            "released_not_sent / kept_for_ttl; at the TTL: found_open / lookup_failed / lookup_ambiguous)",
             ["outcome"],
         )
         # OrderOutcomeUnresolved pages on increase() of these. A labelled child
         # does not exist before its first inc(), and increase() over a series
         # born at 1 is 0: THESHOW 2026-10-29 lost the first cancel_timeout and
         # the only fill_claimed_after_expiry that way. Born at 0, the first counts.
-        for _outcome in UNRESOLVED_PHANTOM_OUTCOMES:
+        for _outcome in UNRESOLVED_PHANTOM_OUTCOMES + BROKER_LOOKUP_PHANTOM_OUTCOMES:
             self.phantom_bound_total.labels(outcome=_outcome)
         self.phantom_order_candidates_total = Counter(
             _pn("phantom_order_candidates_total"),
