@@ -247,3 +247,27 @@ def test_registry_creates_each_broker_lookup_outcome_at_zero() -> None:
     assert {o: samples.get(o) for o in BROKER_LOOKUP_PHANTOM_OUTCOMES} == dict.fromkeys(
         BROKER_LOOKUP_PHANTOM_OUTCOMES, 0.0
     )
+
+
+@pytest.mark.asyncio
+async def test_expired_phantom_never_takes_a_manual_order_when_sdk_echoes_tokens(tmp_config):
+    """Another platform order shows the SDK echoes custom_field; the token-less twin is manual."""
+    manual = _trade(custom_field=None)
+    platform_other = _trade(custom_field="000010", ordno="1B3000", price=27900.0)
+    adapter, sink = _adapter(tmp_config, _ListingClient([manual, platform_other]))
+
+    await _sweep(adapter)
+
+    adapter._spawn_phantom_bind.assert_not_called()
+    assert len(_released_feedbacks(sink)) == 1
+
+
+@pytest.mark.asyncio
+async def test_broker_lookup_crash_is_logged_and_keeps_the_slot(tmp_config):
+    adapter, sink = _adapter(tmp_config, _ListingClient([_trade(custom_field=TOKEN)]))
+    adapter._match_open_order = MagicMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]  # force a crash
+
+    await _sweep(adapter)
+
+    assert _released_feedbacks(sink) == []
+    assert KEY in adapter._phantom_records

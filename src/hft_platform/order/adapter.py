@@ -1444,6 +1444,13 @@ class OrderAdapter:
 
     async def _settle_expired_phantoms(self, ttl: float) -> None:
         """Search the broker for TTL-expired phantoms; bind what it holds, release the rest."""
+        try:
+            await self._settle_expired_phantoms_once(ttl)
+        except Exception:  # noqa: BLE001 — a background task: log it, the next sweep retries
+            logger.error("phantom_broker_lookup_crashed", exc_info=True)
+            self._count_phantom_bound("lookup_failed")
+
+    async def _settle_expired_phantoms_once(self, ttl: float) -> None:
         lister = self._open_order_lister()
         if lister is None:
             return
@@ -1501,10 +1508,11 @@ class OrderAdapter:
     def _match_open_order(self, order_key: str, record: _PhantomEntry, trades: list[Any], claimed: set[int]) -> Any:
         """The broker order that is this phantom: a Trade, None, or ``_AMBIGUOUS_MATCH``.
 
-        The ``custom_field`` token decides when both sides carry one. Otherwise
-        (an SDK that does not echo it) one order with the same contract, side,
-        quantity and price, not bound to any platform order, is a match; two or
-        more are ambiguous and the slot is held.
+        When the SDK echoes ``custom_field`` (any listed order carries one),
+        only the order with this phantom's token matches. Otherwise one order
+        with the same contract, side, quantity and price, not bound to any
+        platform order, is a match; two or more are ambiguous and the slot is
+        held.
         """
         intent = record.intent
         token = self._custom_field_token_for(order_key)
@@ -1514,6 +1522,10 @@ class OrderAdapter:
             code = intent.symbol
         codec = self._broker_codec
         action = codec.encode_side(intent.side) if codec is not None else ("Buy" if intent.side == Side.BUY else "Sell")
+        # An SDK that echoes custom_field on any listed order echoes it on all:
+        # then an order without one was not placed by the platform (a manual
+        # order on the same account) and must never be taken over.
+        echoes = any(self._sdk_field(self._sdk_field(t, "order"), "custom_field") for t in trades)
         candidates: list[Any] = []
         for trade in trades:
             if id(trade) in claimed:
@@ -1522,8 +1534,8 @@ class OrderAdapter:
             if self._trade_bound_elsewhere(trade, order_key):
                 continue
             field = self._sdk_field(order, "custom_field")
-            if token and field:
-                if str(field) == token:
+            if echoes:
+                if token and field and str(field) == token:
                     return trade
                 continue
             contract = self._sdk_field(trade, "contract")
