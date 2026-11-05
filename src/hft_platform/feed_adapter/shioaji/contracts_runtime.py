@@ -1096,7 +1096,15 @@ class ContractsRuntime:
 
             _t_write = time.monotonic()
             try:
-                write_contract_cache(raw_contracts, self._client._contract_cache_path)
+                write_contract_cache(
+                    raw_contracts,
+                    self._client._contract_cache_path,
+                    # The roots the platform trades must survive a rewrite;
+                    # any other root may leave the listing (a delisting).
+                    protected_codes=[
+                        sym.get("code") for sym in getattr(self._client, "symbols", []) if isinstance(sym, dict)
+                    ],
+                )
             except ContractCacheRegressionError as exc:
                 # A partial SDK walk (2026-11-02: no TXF/MXF rows) must not
                 # replace the last complete cache: the universe roll and every

@@ -7,6 +7,7 @@ and fetching live contracts from the Shioaji broker SDK.
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -131,6 +132,20 @@ CONTRACT_CACHE_MIN_KEEP_RATIO = 0.5
 
 _DERIVATIVE_KINDS = ("future", "option")
 
+#: Roots whose loss is always refused: the index products, including the
+#: weekly TAIEX series that live under their own roots (``TX1``, ``TXU``,
+#: ``MX1``...). Roots of the configured symbols are added per call
+#: (``protected_codes``).
+CONTRACT_CACHE_PROTECTED_ROOTS = frozenset({"TXF", "MXF", "TMF", "TXO"})
+_PROTECTED_ROOT_PREFIXES = ("TX", "MX")
+
+#: More unprotected roots than this (per category, floor 3) vanishing at once is
+#: a partial download, not delistings. Single stock futures leave the listing
+#: on their own (2026-11-05: QBF, a capital reduction halting the underlying),
+#: and that must not freeze the cache for every other contract.
+CONTRACT_CACHE_MAX_ROOT_LOSS_RATIO = 0.05
+_CONTRACT_CACHE_MIN_ROOT_LOSS = 3
+
 
 class ContractCacheRegressionError(ValueError):
     """A contract rewrite would drop roots or rows the current cache holds.
@@ -181,31 +196,71 @@ def _explicit_derivative_roots(contracts: list[dict[str, Any]]) -> dict[str, set
     return roots
 
 
+def _protected_roots(before: list[dict[str, Any]], protected_codes: Any) -> set[str]:
+    """Index roots plus the root of every *before* row whose code is configured."""
+    protected = set(CONTRACT_CACHE_PROTECTED_ROOTS)
+    codes = {str(c).strip().upper() for c in (protected_codes or ()) if str(c).strip()}
+    if not codes:
+        return protected
+    for row in before:
+        if not isinstance(row, dict) or _row_kind(row) not in _DERIVATIVE_KINDS:
+            continue
+        if str(row.get("code") or "").strip().upper() in codes:
+            root = str(row.get("root") or row.get("category") or "").strip().upper()
+            if root:
+                protected.add(root)
+    return protected
+
+
+def contract_cache_dropped_roots(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+    *,
+    as_of: date | None = None,
+) -> dict[str, list[str]]:
+    """``{kind: [root]}`` of futures/options roots still trading in *before* and absent from *after*."""
+    if as_of is None:
+        from hft_platform.core import timebase
+        from hft_platform.core.market_calendar import taifex_delivery_cutoff
+
+        as_of = taifex_delivery_cutoff(timebase.now_ns())
+    live_before = [row for row in before if isinstance(row, dict) and _row_still_trading(row, as_of)]
+    roots_before = _explicit_derivative_roots(live_before)
+    roots_after = _explicit_derivative_roots(after)
+    return {kind: sorted(roots_before[kind] - roots_after[kind]) for kind in _DERIVATIVE_KINDS}
+
+
 def contract_cache_regressions(
     before: list[dict[str, Any]],
     after: list[dict[str, Any]],
     *,
     as_of: date | None = None,
+    protected_codes: Any = None,
 ) -> list[str]:
     """Return why replacing *before* with *after* would lose contracts; empty means safe.
 
-    Two signals of a partial broker download (2026-11-02: a rewrite lost every
-    TXF and MXF row, and the boot universe roll could not resolve them):
+    Signals of a partial broker download (2026-11-02: a rewrite lost every TXF
+    and MXF row, and the boot universe roll could not resolve them; 2026-11-04:
+    a walk returned no futures at all):
 
-    - a futures/options root that still had a trading contract before is
-      absent after;
+    - a protected futures/options root (an index product, or the root of a
+      configured symbol in ``protected_codes``) that still had a trading
+      contract before is absent after;
+    - more unprotected roots than :data:`CONTRACT_CACHE_MAX_ROOT_LOSS_RATIO`
+      of a category (floor 3) are absent at once;
     - a futures/options category keeps less than
       :data:`CONTRACT_CACHE_MIN_KEEP_RATIO` of its still-trading rows.
+
+    A few unprotected roots leaving is a delisting (2026-11-05: QBF, after its
+    underlying's capital reduction; the strict rule refused 44 rewrites in a
+    row and froze the cache for every new strike). Those are reported by
+    :func:`contract_cache_dropped_roots`, not refused.
 
     Rows that have settled by ``as_of`` (default: the TAIFEX delivery cutoff
     now, which moves at 13:30) are left out of ``before``. Weekly series live
     under their own root (``TX1``, ``TXU``, ``MX1``...) with a single delivery
     date, and the broker drops the whole root when it settles; that is a
     listing change, not a lost download.
-
-    A root the exchange really delists while it still trades trips the first
-    check too. That is the intended direction: the old cache stays until an
-    operator writes the new one with ``allow_regression=True``.
     """
     if as_of is None:
         from hft_platform.core import timebase
@@ -213,14 +268,22 @@ def contract_cache_regressions(
 
         as_of = taifex_delivery_cutoff(timebase.now_ns())
     live_before = [row for row in before if isinstance(row, dict) and _row_still_trading(row, as_of)]
+    protected = _protected_roots(before, protected_codes)
 
     reasons: list[str] = []
     roots_before = _explicit_derivative_roots(live_before)
-    roots_after = _explicit_derivative_roots(after)
+    dropped = contract_cache_dropped_roots(before, after, as_of=as_of)
     for kind in _DERIVATIVE_KINDS:
-        missing = sorted(roots_before[kind] - roots_after[kind])
-        if missing:
-            reasons.append(f"{kind} roots missing: {', '.join(missing[:10])}")
+        missing = dropped[kind]
+        lost_protected = [root for root in missing if root in protected or root.startswith(_PROTECTED_ROOT_PREFIXES)]
+        if lost_protected:
+            reasons.append(f"{kind} roots missing: {', '.join(lost_protected[:10])}")
+            continue
+        limit = max(
+            _CONTRACT_CACHE_MIN_ROOT_LOSS, math.ceil(len(roots_before[kind]) * CONTRACT_CACHE_MAX_ROOT_LOSS_RATIO)
+        )
+        if len(missing) > limit:
+            reasons.append(f"{kind} roots missing: {len(missing)} > {limit} ({', '.join(missing[:10])})")
 
     for kind in _DERIVATIVE_KINDS:
         n_before = sum(1 for row in live_before if _row_kind(row) == kind)
@@ -235,13 +298,16 @@ def write_contract_cache(
     path: str = DEFAULT_CONTRACT_CACHE,
     *,
     allow_regression: bool = False,
+    protected_codes: Any = None,
 ) -> None:
     """Atomically write *contracts* to a versioned JSON cache file.
 
     Refuses (raises :class:`ContractCacheRegressionError`, writes nothing) when
     the rewrite would drop futures/options the current cache holds -- see
-    :func:`contract_cache_regressions`. ``allow_regression=True`` is for an
-    operator who has checked the listing really shrank.
+    :func:`contract_cache_regressions`; ``protected_codes`` are the configured
+    symbol codes whose roots must survive. ``allow_regression=True`` is for an
+    operator who has checked the listing really shrank. Roots that leave
+    without tripping a check are logged as ``contract_roots_delisted``.
     """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -259,7 +325,7 @@ def write_contract_cache(
             # An unreadable cache has nothing to protect: overwrite it.
             logger.debug("operation_fallback", error=str(exc))
     if not allow_regression:
-        reasons = contract_cache_regressions(existing_contracts, contracts)
+        reasons = contract_cache_regressions(existing_contracts, contracts, protected_codes=protected_codes)
         if reasons:
             logger.error(
                 "contract_cache_write_refused",
@@ -269,6 +335,12 @@ def write_contract_cache(
                 new_count=len(contracts),
             )
             raise ContractCacheRegressionError(reasons)
+    if existing_contracts:
+        dropped = {
+            kind: roots for kind, roots in contract_cache_dropped_roots(existing_contracts, contracts).items() if roots
+        }
+        if dropped:
+            logger.warning("contract_roots_delisted", path=str(dest), roots=dropped)
     cache_version += 1
 
     payload = {
