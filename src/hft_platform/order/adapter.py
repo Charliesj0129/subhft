@@ -472,8 +472,8 @@ class OrderAdapter:
         # later and took R47 to -2 against max_pos=1). A failed search keeps the
         # slot; after this long the old unconditional release applies.
         self._phantom_lookup_task: asyncio.Task[None] | None = None
-        self._phantom_lookup_timeout_s: float = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))
-        self._phantom_lookup_max_hold_s: float = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))
+        self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))  # precision-time
+        self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))  # precision-time
         # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
         # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
         # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
@@ -1419,15 +1419,15 @@ class OrderAdapter:
             )
         return 0
 
-    def _due_phantoms(self, ttl: float) -> list[tuple[str, _PhantomEntry]]:
-        """Phantom records at least ``ttl`` seconds old (snapshot; nothing removed)."""
+    def _due_phantoms(self, ttl_s: float) -> list[tuple[str, _PhantomEntry]]:
+        """Phantom records at least ``ttl_s`` seconds old (snapshot; nothing removed)."""
         now_mono = time.monotonic()
         with self._phantom_lock:
             return [
                 (pkey, record)
                 for pkey, records in self._get_phantom_records().items()
                 for record in records
-                if (now_mono - record.monotonic_ts) >= ttl
+                if (now_mono - record.monotonic_ts) >= ttl_s
             ]
 
     def _open_order_lister(self) -> Callable[[], Any] | None:
@@ -1442,15 +1442,15 @@ class OrderAdapter:
         fn = getattr(self.client, "list_open_orders", None)
         return fn if callable(fn) else None
 
-    async def _settle_expired_phantoms(self, ttl: float) -> None:
+    async def _settle_expired_phantoms(self, ttl_s: float) -> None:
         """Search the broker for TTL-expired phantoms; bind what it holds, release the rest."""
         try:
-            await self._settle_expired_phantoms_once(ttl)
+            await self._settle_expired_phantoms_once(ttl_s)
         except Exception:  # noqa: BLE001 — a background task: log it, the next sweep retries
             logger.error("phantom_broker_lookup_crashed", exc_info=True)
             self._count_phantom_bound("lookup_failed")
 
-    async def _settle_expired_phantoms_once(self, ttl: float) -> None:
+    async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:
         lister = self._open_order_lister()
         if lister is None:
             return
@@ -1464,14 +1464,14 @@ class OrderAdapter:
         except Exception as exc:  # noqa: BLE001 — any failure means "broker state unknown": keep the slot
             logger.warning("phantom_broker_lookup_failed", error=repr(exc))
             trades = None
-        due = self._due_phantoms(ttl)  # re-read: a fill or a late Trade may have settled some meanwhile
+        due = self._due_phantoms(ttl_s)  # re-read: a fill or a late Trade may have settled some meanwhile
         if trades is None:
             self._count_phantom_bound("lookup_failed")
             max_hold = getattr(self, "_phantom_lookup_max_hold_s", 1800.0)
             now_mono = time.monotonic()
-            overdue = [(k, r) for k, r in due if (now_mono - r.monotonic_ts) >= ttl + max_hold]
+            overdue = [(k, r) for k, r in due if (now_mono - r.monotonic_ts) >= ttl_s + max_hold]
             if overdue:
-                await self._release_phantoms(overdue, ttl)
+                await self._release_phantoms(overdue, ttl_s)
             return
         release: list[tuple[str, _PhantomEntry]] = []
         claimed: set[int] = set()
@@ -1489,7 +1489,7 @@ class OrderAdapter:
             logger.warning("phantom_found_open_at_broker", order_key=pkey, symbol=record.symbol)
             self._spawn_phantom_bind(record.intent, match)
         if release:
-            await self._release_phantoms(release, ttl)
+            await self._release_phantoms(release, ttl_s)
 
     def _custom_field_token_for(self, order_key: str) -> str | None:
         """The ``custom_field`` token this order was sent with, if still mapped."""
@@ -1565,7 +1565,7 @@ class OrderAdapter:
         with self._order_id_map_lock:
             return any(self.order_id_map.get(str(v), order_key) != order_key for v in ids)
 
-    async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl: float) -> int:
+    async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl_s: float) -> int:
         """Hand the slot back for these phantom records (the pre-lookup TTL release)."""
         now_mono = time.monotonic()
         released = 0
@@ -1600,13 +1600,13 @@ class OrderAdapter:
                     "price": intent.price,
                     "qty": intent.qty,
                     "strategy_id": intent.strategy_id,
-                    "error": f"phantom_ttl_{ttl:g}s",
+                    "error": f"phantom_ttl_{ttl_s:g}s",
                 }
             )
             # No Trade, no error, nothing bound, for the whole TTL: this one is a
             # dead letter, and the only kind a timeout produces.
             self.metrics.order_reject_total.inc()
-            await self._add_to_dlq(intent, RejectionReason.OUTCOME_UNRESOLVED, f"phantom_ttl_{ttl:g}s")
+            await self._add_to_dlq(intent, RejectionReason.OUTCOME_UNRESOLVED, f"phantom_ttl_{ttl_s:g}s")
             if self._send_dispatch_rejection(
                 intent,
                 "phantom_recovery_ttl_expired",
@@ -1625,7 +1625,7 @@ class OrderAdapter:
             logger.warning(
                 "phantom_recovery_swept",
                 released=released,
-                ttl_s=ttl,
+                ttl_s=ttl_s,
                 remaining=len(self._get_phantom_records()),
             )
         return released
