@@ -137,6 +137,10 @@ class ShioajiClientFacade:
     ) -> Any:
         return self.order_gateway.cancel_order(trade, timeout=timeout, cb=cb)
 
+    def list_open_orders(self) -> list[Any]:
+        """Working orders on the broker, including ones whose place_order timed out here."""
+        return self.order_gateway.list_open_orders()
+
     def update_order(
         self,
         trade: Any,

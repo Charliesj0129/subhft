@@ -15,6 +15,18 @@ if TYPE_CHECKING:
 logger = get_logger("feed_adapter.order_gateway")
 
 
+# ``OrderStatus`` values of an order that can still trade.
+_OPEN_ORDER_STATUSES = frozenset({"PendingSubmit", "PreSubmitted", "Submitted", "PartFilled"})
+
+
+def _trade_status_value(trade: Any) -> str:
+    """``trade.status.status`` as its string value ("" when absent)."""
+    status = trade.get("status") if isinstance(trade, dict) else getattr(trade, "status", None)
+    raw = status.get("status") if isinstance(status, dict) else getattr(status, "status", None)
+    value = getattr(raw, "value", raw)
+    return "" if value is None else str(value)
+
+
 def _default_order_timeout_ms() -> int:
     """Default ACK timeout for place / update / cancel.
 
@@ -375,6 +387,41 @@ class OrderGateway:
             client._record_api_latency("warm_session", start_ns, ok=False)
             logger.warning("order_session_warm_probe_failed", error=str(exc))
             return False
+
+    def list_open_orders(self, timeout_ms: int = 10000) -> list[Any]:
+        """Return the broker's working orders (Submitted / PartFilled / pending).
+
+        ``update_status`` pulls every account's order state from the broker
+        first, so an order whose ``place_order`` call timed out on this side
+        (no Trade ever came back) is listed too. Raises on any failure: an
+        empty list means the broker confirmed there are no working orders,
+        and callers release order slots on that answer.
+        """
+        api = self._client.api
+        if not api:
+            return []  # mock mode: there is no broker that could hold an order
+        if not hasattr(api, "update_status") or not hasattr(api, "list_trades"):
+            raise RuntimeError("Shioaji API missing update_status/list_trades")
+        accounts = [
+            acct
+            for acct in (
+                resolve_trading_account(api, "futopt_account"),
+                resolve_trading_account(api, "stock_account"),
+            )
+            if acct is not None
+        ]
+        if not accounts:
+            raise RuntimeError("no trading account resolved for update_status")
+        start_ns = time.perf_counter_ns()
+        try:
+            for acct in accounts:
+                api.update_status(acct, timeout=timeout_ms)
+            trades = list(api.list_trades())
+        except Exception:
+            self._client._record_api_latency("list_open_orders", start_ns, ok=False)
+            raise
+        self._client._record_api_latency("list_open_orders", start_ns, ok=True)
+        return [t for t in trades if _trade_status_value(t) in _OPEN_ORDER_STATUSES]
 
     def cancel_order(
         self,
