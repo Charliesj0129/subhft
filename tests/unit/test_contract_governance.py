@@ -160,7 +160,7 @@ def test_refresh_diff_logged(tmp_path: Path):
         client.api.Contracts.Options.keys.return_value = []
 
         # Patch write_contract_cache to a successful no-op so diff logging always fires
-        def _fake_write_cc(contracts, path):
+        def _fake_write_cc(contracts, path, **_kwargs):
             pass
 
         # Simulate _ensure_contracts doing nothing
