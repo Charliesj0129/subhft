@@ -605,6 +605,10 @@ research-check: ## Research gate: bug-class ruff + research and alpha tests with
 research-spec-check: ## Validate every candidate spec.yaml against the goal-§3 schema
 	$(PY) -m hft_platform.alpha.spec_check --all
 
+.PHONY: research-similar-hint
+research-similar-hint: ## Hint which KILLED manifests resemble a candidate (report-only, never a verdict): ALPHA=<alpha_id> | MANIFEST=<path> | HYPOTHESIS="<text>"
+	$(PY) scripts/similar_mechanism_hint.py $(if $(ALPHA),--alpha-id $(ALPHA),) $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(HYPOTHESIS),--hypothesis "$(HYPOTHESIS)",)
+
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index
 
