@@ -329,6 +329,7 @@ class QuoteConnectionPool:
         "_universe_listener",
         "_universe_rolled",
         "_universe_source",
+        "_option_window_held",
         # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
@@ -370,6 +371,10 @@ class QuoteConnectionPool:
         # See UNIVERSE_SOURCES. Boot reads the canonical file; a successful
         # roll (or a last-good fallback) replaces it.
         self._universe_source: str = "canonical"
+        # True while the running universe holds an option window that a rebuild could not price (no underlying
+        # reference). Such a universe is incomplete, so it is never written as last-good, and once a rebuild prices
+        # the window again it is adopted even inside a session (see roll_universe).
+        self._option_window_held: bool = False
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
         # Default 5min so a brief reconnect storm does not trigger;
@@ -1718,8 +1723,9 @@ class QuoteConnectionPool:
             list_path = self._symbols_list_path()
             build_result = build_symbols(list_path, index)
             delivery_of = self._delivery_lookup(index)
+            held = False
             if build_result.errors:
-                self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff)
+                held = self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff)
             if build_result.errors:
                 logger.warning(
                     "universe_roll_build_failed",
@@ -1765,25 +1771,37 @@ class QuoteConnectionPool:
                     # The running universe equals a validated rebuild: it is
                     # current, whatever file it was read from.
                     self._set_universe_source("list")
-                self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+                if not held:
+                    self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+                self._option_window_held = held
                 self._bump_universe_roll_metric("no_change")
                 return False
 
-            if in_session and self._universe_source != "canonical":
+            # A held (unpriced) option window that this rebuild can price again is a degraded feed being repaired,
+            # like a canonical fallback: waiting for the close would leave the options out for the whole session.
+            repair_held = self._option_window_held and not held
+            if in_session and self._universe_source != "canonical" and not repair_held:
                 logger.debug("universe_roll_deferred_session_open", pending_added=len(plan.added_codes))
                 self._bump_universe_roll_metric("deferred_session")
                 return False
             if in_session:
                 logger.warning(
                     "universe_roll_repair_in_session",
-                    reason="running universe is the canonical fallback",
+                    reason=(
+                        "running universe holds an unpriced option window"
+                        if repair_held
+                        else "running universe is the canonical fallback"
+                    ),
                     added_count=len(plan.added_codes),
                     removed_count=len(plan.removed_codes),
                 )
 
             self._apply_universe(plan, live=live, cutoff=cutoff)
             self._set_universe_source("list")
-            self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+            if not held:
+                # An incomplete (held) universe must not replace a complete last-good one.
+                self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+            self._option_window_held = held
             return True
 
     def _hold_unpriced_option_windows(
@@ -1792,7 +1810,7 @@ class QuoteConnectionPool:
         index: Any,
         delivery_of: Callable[[str], dt.date | None],
         cutoff: dt.date,
-    ) -> None:
+    ) -> bool:
         """Keep the running option window for a chain that has no underlying price, so the rest still rolls.
 
         ``require_underlying`` refuses to centre an option window on a guess. If that refusal failed the whole
@@ -1800,12 +1818,14 @@ class QuoteConnectionPool:
         a deploy) would also block the futures roll every 10 minutes. When every build error is such a refusal,
         the running codes of the affected roots that the cache still lists with an unpassed delivery date are carried
         into the rebuild and the errors are cleared; any other error leaves the build failed. Mutates ``build_result``.
+        Returns True when the errors were cleared this way: the rebuilt universe is then incomplete, even when nothing
+        could be held.
         """
         from hft_platform.config._symbols_expansion import OPTION_ROOT_FAMILIES
 
         unpriced = set(build_result.unpriced_option_errors)
         if not unpriced or any(error not in unpriced for error in build_result.errors):
-            return
+            return False
         roots: set[str] = set()
         for rule_root in build_result.unpriced_option_roots:
             roots.update(OPTION_ROOT_FAMILIES.get(rule_root, (rule_root,)))
@@ -1847,6 +1867,7 @@ class QuoteConnectionPool:
             dropped_unverified=dropped_unverified,
             errors=sorted(unpriced)[:5],
         )
+        return True
 
     def _roll_failed(self, result: str, *, live: bool, in_session: bool, cutoff: dt.date) -> bool:
         """Record a refused roll; at boot, fall back to the last good universe.
@@ -2232,12 +2253,15 @@ class QuoteConnectionPool:
     ) -> None:
         """Start a background thread that checks for TXO expiry changes.
 
-        Default interval: HFT_OPTIONS_REFRESH_S env var or 3600 (hourly).
+        Default interval: HFT_OPTIONS_REFRESH_S env var, else 0 (disabled). The universe roll
+        (``run_universe_roll_clock``) owns the option subscriptions; this legacy refresh rebuilds them as the
+        nearest monthly TXO chain only, so leaving it on by default would drop the weekly chain ``symbols.list``
+        asks for. Set HFT_OPTIONS_REFRESH_S > 0 to opt back in.
         """
         if getattr(self, "_options_refresh_running", False):
             return
         if interval_s is None:
-            interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "3600"))
+            interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "0"))
 
         if interval_s <= 0:
             logger.info("options_refresh_thread_disabled", interval_s=interval_s)

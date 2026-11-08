@@ -398,6 +398,69 @@ class TestRefusals:
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
         assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "TXO20000J6"}
 
+    def test_held_option_window_is_repaired_in_session_once_the_reference_returns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Boot without a TXF reference holds an empty option window; the reference arriving mid-session repairs it."""
+        options = [
+            {
+                "code": f"TXO{strike}{right}J6",
+                "symbol": f"TXO{strike}{right}J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": right,
+                "strike": str(strike),
+            }
+            for strike in (19000, 20000, 21000)
+            for right in ("C", "P")
+        ]
+        txf = _future("TXFJ6", "TXF", OCTOBER)
+        list_body = TMF_LIST + "OPT@TXO@near@ATM exchange=OPT tags=options\n"
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, txf, *options],
+            list_body=list_body,
+            today=dt.date(2026, 9, 17),
+        )
+        last_good = tmp_path / "universe_last_good.yaml"
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+        assert pool.universe_source == "list"
+        assert not last_good.exists()  # an incomplete universe is never the last good one
+
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)  # session open
+        _contract_cache(tmp_path, [*SEPTEMBER_CONTRACTS, {**txf, "reference": 20000.0}, *options])
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TXO20000CJ6", "TXO20000PJ6"} <= _universe_codes(pool)
+        assert any("TXO20000CJ6" in client.subscribed for client in clients)
+        assert last_good.exists()
+
+    def test_complete_universe_change_is_still_deferred_in_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The held-window repair must not turn every in-session change into an applied one."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=SEPTEMBER_CONTRACTS,
+            list_body=TMF_LIST,
+            today=dt.date(2026, 9, 17),
+        )
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        (tmp_path / "symbols.list").write_text("TMF@next exchange=FUT tags=futures\n", encoding="utf-8")
+        _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+
     def test_unpriced_option_window_with_another_build_error_keeps_the_running_universe(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

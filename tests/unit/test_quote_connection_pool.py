@@ -634,6 +634,14 @@ class TestOptionsRefreshGuards:
         assert pool._options_refresh_running is False
         assert pool._refresh_thread is None
 
+    def test_thread_is_off_by_default_so_the_universe_roll_owns_options(self, tmp_path, monkeypatch):
+        """The legacy refresh rebuilds options as the monthly TXO chain only; on by default it drops the weeklies."""
+        monkeypatch.delenv("HFT_OPTIONS_REFRESH_S", raising=False)
+        pool = self._make_pool(tmp_path)
+        pool.start_options_refresh_thread()
+        assert pool._options_refresh_running is False
+        assert pool._refresh_thread is None
+
     def test_thread_skipped_when_interval_negative(self, tmp_path):
         """Negative interval_s must also be treated as disabled."""
         pool = self._make_pool(tmp_path)
