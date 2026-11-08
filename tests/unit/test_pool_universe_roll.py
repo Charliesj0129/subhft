@@ -486,6 +486,46 @@ class TestRefusals:
         assert any("TX120000CJ6" in client.subscribed for client in clients)
         assert last_good.exists()
 
+    def test_monthly_chain_is_repaired_in_session_while_the_weekly_is_still_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Degraded state is per root: an empty weekly must not block the monthly repair once TXF is priced."""
+        monthly = [
+            {
+                "code": f"TXO{k}{r}J6",
+                "symbol": f"TXO{k}{r}J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": r,
+                "strike": str(k),
+            }
+            for k in (19000, 20000, 21000)
+            for r in ("C", "P")
+        ]
+        txf = _future("TXFJ6", "TXF", OCTOBER)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, txf, *monthly],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert not any(code.startswith("TX") for code in _universe_codes(pool))
+
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+        _contract_cache(tmp_path, [*SEPTEMBER_CONTRACTS, {**txf, "reference": 20000.0}, *monthly])
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TXO20000CJ6", "TXO20000PJ6"} <= _universe_codes(pool)
+        assert any("TXO20000CJ6" in client.subscribed for client in clients)
+        assert not (tmp_path / "universe_last_good.yaml").exists()  # still short of the weekly
+
     def test_complete_universe_change_is_still_deferred_in_session(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

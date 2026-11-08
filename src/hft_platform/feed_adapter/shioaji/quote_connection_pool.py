@@ -329,7 +329,7 @@ class QuoteConnectionPool:
         "_universe_listener",
         "_universe_rolled",
         "_universe_source",
-        "_option_window_held",
+        "_degraded_option_roots",
         # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
@@ -371,11 +371,12 @@ class QuoteConnectionPool:
         # See UNIVERSE_SOURCES. Boot reads the canonical file; a successful
         # roll (or a last-good fallback) replaces it.
         self._universe_source: str = "canonical"
-        # True while the running universe is short of a requested option chain: a window a rebuild could not price
-        # (no underlying reference, held) or an option family with nothing listed. Such a universe is incomplete, so
-        # it is never written as last-good, and once a rebuild has the chain in full it is adopted even inside a
-        # session (see roll_universe).
-        self._option_window_held: bool = False
+        # The symbols.list option rule roots (e.g. "TXO", "TXO_WEEKLY") the running universe is short of: a window a
+        # rebuild could not price (no underlying reference, held) or a family with nothing listed. Such a universe is
+        # incomplete, so it is never written as last-good, and a rebuild that has any of these chains again is
+        # adopted even inside a session (see roll_universe). Tracked per root so one still-missing chain does not
+        # block the repair of another.
+        self._degraded_option_roots: frozenset[str] = frozenset()
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
         # Default 5min so a brief reconnect storm does not trigger;
@@ -1724,11 +1725,11 @@ class QuoteConnectionPool:
             list_path = self._symbols_list_path()
             build_result = build_symbols(list_path, index)
             delivery_of = self._delivery_lookup(index)
-            held = False
-            if build_result.errors:
-                held = self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff)
-            # Short of a requested option chain, held or not listed: degraded, see _option_window_held.
-            held = held or bool(getattr(build_result, "missing_option_roots", None))
+            degraded: set[str] = set()
+            if build_result.errors and self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff):
+                degraded.update(build_result.unpriced_option_roots)
+            # Short of a requested option chain, held or not listed: degraded, see _degraded_option_roots.
+            degraded.update(getattr(build_result, "missing_option_roots", None) or ())
             if build_result.errors:
                 logger.warning(
                     "universe_roll_build_failed",
@@ -1774,16 +1775,16 @@ class QuoteConnectionPool:
                     # The running universe equals a validated rebuild: it is
                     # current, whatever file it was read from.
                     self._set_universe_source("list")
-                if not held:
+                if not degraded:
                     self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
-                self._option_window_held = held
+                self._degraded_option_roots = frozenset(degraded)
                 self._bump_universe_roll_metric("no_change")
                 return False
 
             # A held or missing option chain that this rebuild now has in full is a degraded feed being repaired,
             # like a canonical fallback: waiting for the close would leave the options out for the whole session.
-            repair_held = self._option_window_held and not held
-            if in_session and self._universe_source != "canonical" and not repair_held:
+            repaired_roots = sorted(self._degraded_option_roots - degraded)
+            if in_session and self._universe_source != "canonical" and not repaired_roots:
                 logger.debug("universe_roll_deferred_session_open", pending_added=len(plan.added_codes))
                 self._bump_universe_roll_metric("deferred_session")
                 return False
@@ -1791,8 +1792,8 @@ class QuoteConnectionPool:
                 logger.warning(
                     "universe_roll_repair_in_session",
                     reason=(
-                        "running universe is short of a requested option chain"
-                        if repair_held
+                        f"option chain(s) {', '.join(repaired_roots)} available again"
+                        if repaired_roots
                         else "running universe is the canonical fallback"
                     ),
                     added_count=len(plan.added_codes),
@@ -1801,10 +1802,10 @@ class QuoteConnectionPool:
 
             self._apply_universe(plan, live=live, cutoff=cutoff)
             self._set_universe_source("list")
-            if not held:
-                # An incomplete (held) universe must not replace a complete last-good one.
+            if not degraded:
+                # An incomplete (degraded) universe must not replace a complete last-good one.
                 self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
-            self._option_window_held = held
+            self._degraded_option_roots = frozenset(degraded)
             return True
 
     def _hold_unpriced_option_windows(
