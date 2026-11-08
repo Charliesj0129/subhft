@@ -371,9 +371,10 @@ class QuoteConnectionPool:
         # See UNIVERSE_SOURCES. Boot reads the canonical file; a successful
         # roll (or a last-good fallback) replaces it.
         self._universe_source: str = "canonical"
-        # True while the running universe holds an option window that a rebuild could not price (no underlying
-        # reference). Such a universe is incomplete, so it is never written as last-good, and once a rebuild prices
-        # the window again it is adopted even inside a session (see roll_universe).
+        # True while the running universe is short of a requested option chain: a window a rebuild could not price
+        # (no underlying reference, held) or an option family with nothing listed. Such a universe is incomplete, so
+        # it is never written as last-good, and once a rebuild has the chain in full it is adopted even inside a
+        # session (see roll_universe).
         self._option_window_held: bool = False
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
@@ -1726,6 +1727,8 @@ class QuoteConnectionPool:
             held = False
             if build_result.errors:
                 held = self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff)
+            # Short of a requested option chain, held or not listed: degraded, see _option_window_held.
+            held = held or bool(getattr(build_result, "missing_option_roots", None))
             if build_result.errors:
                 logger.warning(
                     "universe_roll_build_failed",
@@ -1777,7 +1780,7 @@ class QuoteConnectionPool:
                 self._bump_universe_roll_metric("no_change")
                 return False
 
-            # A held (unpriced) option window that this rebuild can price again is a degraded feed being repaired,
+            # A held or missing option chain that this rebuild now has in full is a degraded feed being repaired,
             # like a canonical fallback: waiting for the close would leave the options out for the whole session.
             repair_held = self._option_window_held and not held
             if in_session and self._universe_source != "canonical" and not repair_held:
@@ -1788,7 +1791,7 @@ class QuoteConnectionPool:
                 logger.warning(
                     "universe_roll_repair_in_session",
                     reason=(
-                        "running universe holds an unpriced option window"
+                        "running universe is short of a requested option chain"
                         if repair_held
                         else "running universe is the canonical fallback"
                     ),

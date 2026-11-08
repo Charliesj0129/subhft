@@ -501,7 +501,15 @@ def _expand_options(
     # A family with no listed weekly (a holiday week, or a cache refreshed before the next weekly is listed) must not
     # fail the whole build: the universe roll refuses a build with errors, which would also drop the monthly chain and
     # the futures. The family's expiry is skipped with a warning instead; a plain root keeps its error.
-    report = result.warnings.append if family is not None else result.errors.append
+    def report(message: str) -> None:
+        if family is None:
+            result.errors.append(message)
+            return
+        result.warnings.append(message)
+        # Not an error, but the universe is short of a chain symbols.list asks for: the roll treats it as degraded
+        # (never last-good, repaired in session once the chain is listed).
+        result.missing_option_roots.append(root.upper())
+
     if not contracts:
         report(f"No option contracts found for root {root}")
         return

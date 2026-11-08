@@ -441,6 +441,51 @@ class TestRefusals:
         assert any("TXO20000CJ6" in client.subscribed for client in clients)
         assert last_good.exists()
 
+    def test_weekly_family_listed_mid_session_is_repaired_in_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Boot with no weekly listed adopts the rest; the weekly appearing during the session is subscribed then."""
+
+        def option(code: str, root: str, delivery: str, strike: int, right: str) -> dict[str, Any]:
+            return {
+                "code": code,
+                "symbol": code,
+                "root": root,
+                "type": "option",
+                "delivery_date": delivery,
+                "right": right,
+                "strike": str(strike),
+            }
+
+        monthly = [option(f"TXO{k}{r}J6", "TXO", OCTOBER, k, r) for k in (19000, 20000, 21000) for r in ("C", "P")]
+        weekly = [option(f"TX1{k}{r}J6", "TX1", "2026/10/07", k, r) for k in (19000, 20000, 21000) for r in ("C", "P")]
+        txf = {**_future("TXFJ6", "TXF", OCTOBER), "reference": 20000.0}
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, txf, *monthly],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+        last_good = tmp_path / "universe_last_good.yaml"
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TXO20000CJ6", "TXO20000PJ6"} <= _universe_codes(pool)
+        assert not any(code.startswith("TX1") for code in _universe_codes(pool))
+        assert not last_good.exists()
+
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+        _contract_cache(tmp_path, [*SEPTEMBER_CONTRACTS, txf, *monthly, *weekly])
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TX120000CJ6", "TX120000PJ6"} <= _universe_codes(pool)
+        assert any("TX120000CJ6" in client.subscribed for client in clients)
+        assert last_good.exists()
+
     def test_complete_universe_change_is_still_deferred_in_session(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -86,6 +86,8 @@ class SymbolBuildResult:
     # is also in ``errors``, and its rule root (e.g. "TXO", "TXO_WEEKLY") is in ``unpriced_option_roots``.
     unpriced_option_errors: list[str] = field(default_factory=list)
     unpriced_option_roots: list[str] = field(default_factory=list)
+    # Option families (e.g. "TXO_WEEKLY") skipped with only a warning because nothing active is listed for them.
+    missing_option_roots: list[str] = field(default_factory=list)
 
     def ok(self) -> bool:
         return not self.errors
