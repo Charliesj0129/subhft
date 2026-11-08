@@ -1798,8 +1798,8 @@ class QuoteConnectionPool:
         ``require_underlying`` refuses to centre an option window on a guess. If that refusal failed the whole
         build, a missing or mis-scaled TXF reference (the cache holds none until the first contract refresh after
         a deploy) would also block the futures roll every 10 minutes. When every build error is such a refusal,
-        the running codes of the affected roots that have not settled are carried into the rebuild and the errors
-        are cleared; any other error leaves the build failed. Mutates ``build_result``.
+        the running codes of the affected roots that the cache still lists with an unpassed delivery date are carried
+        into the rebuild and the errors are cleared; any other error leaves the build failed. Mutates ``build_result``.
         """
         from hft_platform.config._symbols_expansion import OPTION_ROOT_FAMILIES
 
@@ -1813,6 +1813,7 @@ class QuoteConnectionPool:
         rebuilt = {str(entry.get("code") or "") for entry in build_result.symbols}
         held: list[dict[str, Any]] = []
         dropped_settled = 0
+        dropped_unverified = 0
         for sym in self._all_symbols:
             code = str(sym.get("code") or "").strip()
             if not code or code in rebuilt:
@@ -1821,8 +1822,14 @@ class QuoteConnectionPool:
             row_root = str(row.get("root") or "").upper() if isinstance(row, dict) else ""
             if not (row_root in roots if row_root else any(code.startswith(r) for r in roots)):
                 continue
-            delivery = delivery_of(code)
-            if delivery is not None and delivery < cutoff:
+            # Only a code the broker still lists, with a delivery date that has not passed, is held. A code missing
+            # from the cache (the broker delists a settled option) or without a date cannot be shown to be live,
+            # and validate_universe, reading the same cache, would not catch it either.
+            delivery = delivery_of(code) if isinstance(row, dict) else None
+            if delivery is None:
+                dropped_unverified += 1
+                continue
+            if delivery < cutoff:
                 dropped_settled += 1
                 continue
             entry = dict(sym)
@@ -1837,6 +1844,7 @@ class QuoteConnectionPool:
             roots=sorted(roots),
             held_count=len(held),
             dropped_settled=dropped_settled,
+            dropped_unverified=dropped_unverified,
             errors=sorted(unpriced)[:5],
         )
 

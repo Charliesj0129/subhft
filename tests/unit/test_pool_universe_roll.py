@@ -360,6 +360,44 @@ class TestRefusals:
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
         assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "TXO20000J6", "TXO20000V6", "TX120000J6", "TX120000V6"}
 
+    def test_unpriced_option_window_drops_a_running_code_the_cache_no_longer_lists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A settled weekly the broker has delisted has no delivery date to check: it must not be held."""
+        options = [
+            {
+                "code": "TXO20000J6",
+                "symbol": "TXO20000J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": "C",
+                "strike": "20000",
+            },
+            {  # listed, but with no delivery date at all
+                "code": "TX120000J6",
+                "symbol": "TX120000J6",
+                "root": "TX1",
+                "type": "option",
+                "right": "C",
+                "strike": "20000",
+            },
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            # TX220000I6 settled on 09-16 and is gone from the cache.
+            universe=["TMFI6", "TMFJ6", "TXO20000J6", "TX220000I6", "TX120000J6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM+/-1 exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM+/-1 exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "TXO20000J6"}
+
     def test_unpriced_option_window_with_another_build_error_keeps_the_running_universe(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
