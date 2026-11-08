@@ -157,6 +157,8 @@ class QuoteRuntime:
         "_retry_next_ts",
         "_permanently_failed",
         "_retry_state_lock",
+        # Serialises the retry worker's start against its exit; see start_sub_retry_thread.
+        "_sub_retry_lock",
     )
 
     # D1: backoff schedule in seconds. Beyond the schedule, the cap (3600 s)
@@ -171,6 +173,7 @@ class QuoteRuntime:
         self._retry_next_ts: dict[str, float] = {}
         self._permanently_failed: set[str] = set()
         self._retry_state_lock = threading.Lock()
+        self._sub_retry_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # D1: subscription retry state helpers
@@ -1069,121 +1072,139 @@ class QuoteRuntime:
             )
 
     def start_sub_retry_thread(self, cb: Callable[..., Any]) -> None:
+        """Start the subscription retry worker unless one is running.
+
+        The check-and-set here and the worker's exit share ``_sub_retry_lock``: a code queued while the worker is
+        leaving (it saw an empty queue, then a universe roll appended and found the flag still set) is picked up by
+        the exiting worker, which re-checks the queue under the lock before it clears the flag.
+        """
         c = self._client
-        if c._sub_retry_running:
-            return
-        c._sub_retry_running = True
+        with self._sub_retry_lock:
+            if c._sub_retry_running:
+                return
+            c._sub_retry_running = True
         c._set_thread_alive_metric("sub_retry", True)
         logger.info("Starting subscription retry thread", failed=len(c._failed_sub_symbols))
 
         def _retry_loop() -> None:
             interval = c._contract_retry_s
-            while c._sub_retry_running and c._failed_sub_symbols:
-                time.sleep(interval)
-                if not c._sub_retry_running:
-                    break
-                if not c.logged_in:
-                    continue
-                if not (c._callbacks_registered and c._event_callback_registered):
-                    if c.tick_callback:
-                        c._ensure_callbacks(c.tick_callback)
-                    if not (c._callbacks_registered and c._event_callback_registered):
-                        logger.warning("Subscription retry waiting for quote callbacks to register")
+            while True:
+                capacity_stop = False
+                while c._sub_retry_running and c._failed_sub_symbols:
+                    time.sleep(interval)
+                    if not c._sub_retry_running:
+                        break
+                    if not c.logged_in:
                         continue
-                quote_api = c._quote_api()
-                if quote_api is None or not hasattr(quote_api, "subscribe"):
-                    logger.warning("Subscription retry waiting for quote API availability")
-                    continue
-                # Check capacity before retrying — if at limit, stop the loop
-                # to avoid infinite retries against a permanent broker limit.
-                if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                    if not (c._callbacks_registered and c._event_callback_registered):
+                        if c.tick_callback:
+                            c._ensure_callbacks(c.tick_callback)
+                        if not (c._callbacks_registered and c._event_callback_registered):
+                            logger.warning("Subscription retry waiting for quote callbacks to register")
+                            continue
+                    quote_api = c._quote_api()
+                    if quote_api is None or not hasattr(quote_api, "subscribe"):
+                        logger.warning("Subscription retry waiting for quote API availability")
+                        continue
+                    # Check capacity before retrying — if at limit, stop the loop
+                    # to avoid infinite retries against a permanent broker limit.
+                    if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                        logger.warning(
+                            "Subscription retry aborted: at capacity",
+                            subscribed=c.subscribed_count,
+                            limit=c.MAX_SUBSCRIPTIONS,
+                            dropped=len(c._failed_sub_symbols),
+                            codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
+                        )
+                        capacity_stop = True
+                        break
+                    # L2: drain in place via ``popleft`` and conditionally
+                    # re-``append`` on failure. The previous pattern built a
+                    # ``remaining`` list and reassigned ``c._failed_sub_symbols
+                    # = remaining``, which lost any concurrent ``append`` from
+                    # ``subscription_manager.py:112`` (event loop) that landed
+                    # on the OLD list between snapshot and reassign. Drain +
+                    # append-back keeps everything on the same deque object,
+                    # and each individual deque op is GIL-atomic.
+                    #
+                    # Bound the work per pass to the size at entry so a
+                    # peer-thread append during this pass does not livelock
+                    # the loop here — those new entries are picked up on the
+                    # next interval tick.
+                    pending = len(c._failed_sub_symbols)
+                    now = timebase.now_s()
+                    for _ in range(pending):
+                        if not c._sub_retry_running:
+                            break
+                        try:
+                            sym = c._failed_sub_symbols.popleft()
+                        except IndexError:
+                            break
+                        if not c._sub_retry_running:
+                            c._failed_sub_symbols.append(sym)
+                            continue
+                        if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                            c._failed_sub_symbols.append(sym)
+                            continue
+                        # D1: per-symbol backoff + max-attempts gate.
+                        code = sym.get("code") or ""
+                        allowed, reason = self._should_attempt_subscription(code, now)
+                        if not allowed:
+                            if reason == "skip_permanent":
+                                # Drop permanently — never re-append.
+                                continue
+                            # skip_backoff: retain in queue for next interval.
+                            c._failed_sub_symbols.append(sym)
+                            continue
+                        if c._subscribe_symbol(sym, cb):
+                            if code:
+                                c.subscribed_codes.add(code)
+                            c.subscribed_count = len(c.subscribed_codes)
+                            # D1: success clears retry state for this symbol.
+                            self._record_subscription_success(code)
+                            logger.info("Subscription retry succeeded", code=code)
+                            # Bug 12: trigger alias propagation so strategies re-resolve
+                            # symbols when subscribe succeeds after the initial
+                            # connect sequence finished.
+                            _cb_alias = getattr(c, "on_alias_map_updated", None)
+                            if _cb_alias is not None:
+                                try:
+                                    _cb_alias()
+                                except Exception as exc:
+                                    logger.warning("on_alias_map_updated_failed", error=str(exc))
+                        else:
+                            # D1: record failure → may move to _permanently_failed
+                            # after HFT_SUB_RETRY_MAX_ATTEMPTS. Permanent symbols
+                            # are NOT re-appended to _failed_sub_symbols.
+                            permanent = self._record_subscription_failure(code, now)
+                            if not permanent:
+                                c._failed_sub_symbols.append(sym)
+                    if not c._failed_sub_symbols:
+                        logger.info("All failed subscriptions resolved")
+                        break
+                    # If all remaining failures are due to capacity, stop retrying
+                    if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
+                        logger.warning(
+                            "Subscription retry stopped: capacity reached",
+                            subscribed=c.subscribed_count,
+                            limit=c.MAX_SUBSCRIPTIONS,
+                            remaining=len(c._failed_sub_symbols),
+                        )
+                        capacity_stop = True
+                        break
                     logger.warning(
-                        "Subscription retry aborted: at capacity",
-                        subscribed=c.subscribed_count,
-                        limit=c.MAX_SUBSCRIPTIONS,
-                        dropped=len(c._failed_sub_symbols),
+                        "Subscription retry: still pending",
+                        count=len(c._failed_sub_symbols),
                         codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
                     )
-                    break
-                # L2: drain in place via ``popleft`` and conditionally
-                # re-``append`` on failure. The previous pattern built a
-                # ``remaining`` list and reassigned ``c._failed_sub_symbols
-                # = remaining``, which lost any concurrent ``append`` from
-                # ``subscription_manager.py:112`` (event loop) that landed
-                # on the OLD list between snapshot and reassign. Drain +
-                # append-back keeps everything on the same deque object,
-                # and each individual deque op is GIL-atomic.
-                #
-                # Bound the work per pass to the size at entry so a
-                # peer-thread append during this pass does not livelock
-                # the loop here — those new entries are picked up on the
-                # next interval tick.
-                pending = len(c._failed_sub_symbols)
-                now = timebase.now_s()
-                for _ in range(pending):
-                    if not c._sub_retry_running:
-                        break
-                    try:
-                        sym = c._failed_sub_symbols.popleft()
-                    except IndexError:
-                        break
-                    if not c._sub_retry_running:
-                        c._failed_sub_symbols.append(sym)
+                with self._sub_retry_lock:
+                    # A code queued after the empty-queue check above found the flag still set, so its caller did
+                    # not start a worker: serve it here rather than leave it unretried. A capacity stop or an
+                    # external stop (flag cleared) still exits.
+                    if c._sub_retry_running and c._failed_sub_symbols and not capacity_stop:
                         continue
-                    if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                        c._failed_sub_symbols.append(sym)
-                        continue
-                    # D1: per-symbol backoff + max-attempts gate.
-                    code = sym.get("code") or ""
-                    allowed, reason = self._should_attempt_subscription(code, now)
-                    if not allowed:
-                        if reason == "skip_permanent":
-                            # Drop permanently — never re-append.
-                            continue
-                        # skip_backoff: retain in queue for next interval.
-                        c._failed_sub_symbols.append(sym)
-                        continue
-                    if c._subscribe_symbol(sym, cb):
-                        if code:
-                            c.subscribed_codes.add(code)
-                        c.subscribed_count = len(c.subscribed_codes)
-                        # D1: success clears retry state for this symbol.
-                        self._record_subscription_success(code)
-                        logger.info("Subscription retry succeeded", code=code)
-                        # Bug 12: trigger alias propagation so strategies re-resolve
-                        # symbols when subscribe succeeds after the initial
-                        # connect sequence finished.
-                        _cb_alias = getattr(c, "on_alias_map_updated", None)
-                        if _cb_alias is not None:
-                            try:
-                                _cb_alias()
-                            except Exception as exc:
-                                logger.warning("on_alias_map_updated_failed", error=str(exc))
-                    else:
-                        # D1: record failure → may move to _permanently_failed
-                        # after HFT_SUB_RETRY_MAX_ATTEMPTS. Permanent symbols
-                        # are NOT re-appended to _failed_sub_symbols.
-                        permanent = self._record_subscription_failure(code, now)
-                        if not permanent:
-                            c._failed_sub_symbols.append(sym)
-                if not c._failed_sub_symbols:
-                    logger.info("All failed subscriptions resolved")
-                    break
-                # If all remaining failures are due to capacity, stop retrying
-                if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                    logger.warning(
-                        "Subscription retry stopped: capacity reached",
-                        subscribed=c.subscribed_count,
-                        limit=c.MAX_SUBSCRIPTIONS,
-                        remaining=len(c._failed_sub_symbols),
-                    )
-                    break
-                logger.warning(
-                    "Subscription retry: still pending",
-                    count=len(c._failed_sub_symbols),
-                    codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
-                )
-            c._sub_retry_running = False
+                    c._sub_retry_running = False
+                break
             c._set_thread_alive_metric("sub_retry", False)
 
         c._sub_retry_thread = threading.Thread(
