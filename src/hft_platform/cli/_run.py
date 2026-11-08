@@ -107,11 +107,19 @@ def cmd_run(args: argparse.Namespace) -> None:
     start_resilient_metrics_server(_prom_port)
     print(f"Prometheus metrics started on :{_prom_port}")
 
+    # Before any SDK object exists (HFTSystem builds the broker client): the SDK
+    # prints session events, which carry the login person ID, to fd 1. This is
+    # the `python -m hft_platform run` path the Dockerfile CMD uses.
+    from hft_platform.utils.sdk_stdout import isolate_sdk_stdout
+
+    isolate_sdk_stdout()
+
     system = HFTSystem(settings)
     try:
         asyncio.run(system.run())
     except KeyboardInterrupt:
-        print("Interrupted, shutting down...")
+        # stdout is /dev/null after isolate_sdk_stdout(); keep this notice visible.
+        print("Interrupted, shutting down...", file=sys.stderr)
 
 
 def _apply_live_downgrade_fallback(settings: Dict[str, Any]) -> str | None:

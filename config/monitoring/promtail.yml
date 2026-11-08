@@ -47,8 +47,8 @@ scrape_configs:
       # layer writes lines such as
       #   Response Code: 200 | Event Code: 18 | Info: #P2P/v:.../PYAPI/<account id>/1003/...
       # straight to stdout (fd 1) on session events (measured 2026-10-23: 1024 lines in one
-      # hft-engine container, all on stdout). `python -m hft_platform.main` now points fd 1 at
-      # /dev/null (HFT_SDK_STDOUT, utils/sdk_stdout.py); this stage stays as defence in depth. And
+      # hft-engine container, all on stdout). `python -m hft_platform.main` and `hft run` (live/sim)
+      # now point fd 1 at /dev/null (HFT_SDK_STDOUT, utils/sdk_stdout.py); this stage stays as defence in depth. And
       # python-telegram-bot's HTTP client puts the bot token in a request URL. Neither can
       # be fixed in Python, so mask them here.
       #
