@@ -54,12 +54,12 @@ def test_symbol_metadata_price_scale_explicit(sym_yaml):
     assert sm.price_scale("TSMC") == 10000
 
 
-def test_symbol_metadata_price_scale_from_tick_size(sym_yaml):
+def test_symbol_metadata_price_scale_is_not_derived_from_tick_size(sym_yaml):
     from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
     sm = SymbolMetadata(sym_yaml)
-    scale = sm.price_scale("2330")
-    assert scale == 100  # 1/0.01 = 100
+    scale = sm.price_scale("2330")  # fixture has tick_size 0.01 and no price_scale
+    assert scale == SymbolMetadata.DEFAULT_SCALE
 
 
 def test_symbol_metadata_price_scale_default(sym_yaml):

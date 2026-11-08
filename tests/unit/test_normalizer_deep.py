@@ -130,7 +130,8 @@ class TestSymbolMetadata:
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         meta = SymbolMetadata(str(cfg))
-        assert meta.price_scale("6666") == 100
+        # tick_size is a price step, not a scale (Law 4: event prices are x10000).
+        assert meta.price_scale("6666") == SymbolMetadata.DEFAULT_SCALE
 
     def test_price_scale_cache(self, tmp_path):
         """Second lookup uses cached value."""
