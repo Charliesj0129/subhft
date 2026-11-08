@@ -66,10 +66,10 @@ def _dotted(node: ast.AST) -> str | None:
 
 
 def _isolate_stmt_index(body: list[ast.stmt]) -> int | None:
-    """Index of the first statement that is a bare, unconditional isolate call."""
+    """Index of the first statement that is an unconditional isolate call (bare or assigned)."""
     for i, stmt in enumerate(body):
         if (
-            isinstance(stmt, ast.Expr)
+            isinstance(stmt, (ast.Expr, ast.Assign, ast.AnnAssign))
             and isinstance(stmt.value, ast.Call)
             and _dotted(stmt.value.func) in _ISOLATE_NAMES
         ):

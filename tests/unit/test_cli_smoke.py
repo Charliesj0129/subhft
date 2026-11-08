@@ -44,6 +44,8 @@ class TestCLISmoke(unittest.TestCase):
             patch("hft_platform.observability.metrics.MetricsRegistry"),
             patch("hft_platform.main.HFTSystem") as mock_sys_cls,
             patch("hft_platform.cli._run.load_settings", return_value=({"mode": "sim", "prometheus_port": 9090}, {})),
+            # cmd_run would otherwise dup2 /dev/null onto the pytest process's fd 1 (lost output under -s).
+            patch("hft_platform.utils.sdk_stdout.isolate_sdk_stdout") as mock_isolate,
         ):
             mock_sys = mock_sys_cls.return_value
 
@@ -62,6 +64,7 @@ class TestCLISmoke(unittest.TestCase):
 
             mock_sys_cls.assert_called()
             mock_metrics.assert_called_once_with(9090)
+            mock_isolate.assert_called_once_with()
 
     def test_main_dispatch(self):
         with patch("hft_platform.cli._run.cmd_init") as mock_init:
