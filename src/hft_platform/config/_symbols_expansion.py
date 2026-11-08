@@ -498,6 +498,7 @@ def _expand_options(
         contracts = [c for member in family for c in contract_index.options_by_root.get(member, [])]
     else:
         contracts = contract_index.options_by_root.get(root) or []
+
     # A family with no listed weekly (a holiday week, or a cache refreshed before the next weekly is listed) must not
     # fail the whole build: the universe roll refuses a build with errors, which would also drop the monthly chain and
     # the futures. The family's expiry is skipped with a warning instead; a plain root keeps its error.
