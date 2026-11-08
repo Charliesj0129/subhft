@@ -1199,11 +1199,7 @@ class QuoteRuntime:
                     # worker: serve it here rather than leave it unretried. Capacity is read now, not taken from the
                     # check that stopped the pass: a roll may have freed a slot and queued a code in between. An
                     # external stop (flag cleared) or a still-full connection exits.
-                    if (
-                        c._sub_retry_running
-                        and c._failed_sub_symbols
-                        and c.subscribed_count < c.MAX_SUBSCRIPTIONS
-                    ):
+                    if c._sub_retry_running and c._failed_sub_symbols and c.subscribed_count < c.MAX_SUBSCRIPTIONS:
                         continue
                     c._sub_retry_running = False
                 break
