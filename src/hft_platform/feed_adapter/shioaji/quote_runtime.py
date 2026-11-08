@@ -1089,7 +1089,6 @@ class QuoteRuntime:
         def _retry_loop() -> None:
             interval = c._contract_retry_s
             while True:
-                capacity_stop = False
                 while c._sub_retry_running and c._failed_sub_symbols:
                     time.sleep(interval)
                     if not c._sub_retry_running:
@@ -1116,7 +1115,6 @@ class QuoteRuntime:
                             dropped=len(c._failed_sub_symbols),
                             codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
                         )
-                        capacity_stop = True
                         break
                     # L2: drain in place via ``popleft`` and conditionally
                     # re-``append`` on failure. The previous pattern built a
@@ -1190,7 +1188,6 @@ class QuoteRuntime:
                             limit=c.MAX_SUBSCRIPTIONS,
                             remaining=len(c._failed_sub_symbols),
                         )
-                        capacity_stop = True
                         break
                     logger.warning(
                         "Subscription retry: still pending",
@@ -1198,10 +1195,15 @@ class QuoteRuntime:
                         codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
                     )
                 with self._sub_retry_lock:
-                    # A code queued after the empty-queue check above found the flag still set, so its caller did
-                    # not start a worker: serve it here rather than leave it unretried. A capacity stop or an
-                    # external stop (flag cleared) still exits.
-                    if c._sub_retry_running and c._failed_sub_symbols and not capacity_stop:
+                    # A code queued after the checks above found the flag still set, so its caller did not start a
+                    # worker: serve it here rather than leave it unretried. Capacity is read now, not taken from the
+                    # check that stopped the pass: a roll may have freed a slot and queued a code in between. An
+                    # external stop (flag cleared) or a still-full connection exits.
+                    if (
+                        c._sub_retry_running
+                        and c._failed_sub_symbols
+                        and c.subscribed_count < c.MAX_SUBSCRIPTIONS
+                    ):
                         continue
                     c._sub_retry_running = False
                 break

@@ -58,8 +58,10 @@ class _Logger:
             self.fired += 1
             self._on_resolved()
 
-    def warning(self, *args: Any, **kwargs: Any) -> None:
-        pass
+    def warning(self, event: str = "", **kwargs: Any) -> None:
+        if event == "Subscription retry stopped: capacity reached" and not self.fired:
+            self.fired += 1
+            self._on_resolved()
 
     def debug(self, *args: Any, **kwargs: Any) -> None:
         pass
@@ -101,3 +103,41 @@ def test_capacity_stop_still_exits_with_codes_left(monkeypatch: pytest.MonkeyPat
     assert not client._sub_retry_thread.is_alive()
     assert client._sub_retry_running is False
     assert client.subscribed == []
+
+
+def test_capacity_freed_while_the_worker_exits_on_capacity_is_still_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The worker stopped on a full connection; a roll then freed a slot and queued a code before the worker left."""
+    client = _client()
+    client.MAX_SUBSCRIPTIONS = 1
+    client.subscribed_codes = {"SETTLED"}
+    client.subscribed_count = 1
+    runtime = QuoteRuntime(client)  # type: ignore[arg-type]  # a duck-typed client is enough for the worker
+
+    attempts = {"n": 0}
+
+    def subscribe(sym: dict[str, Any], cb: Any) -> bool:
+        attempts["n"] += 1
+        if attempts["n"] == 1:  # the first pass fills the last slot's competitor: keep FULL queued
+            client.subscribed_count = client.MAX_SUBSCRIPTIONS
+            return False
+        client.subscribed.append(sym["code"])
+        return True
+
+    client._subscribe_symbol = subscribe
+
+    def roll_frees_a_slot_and_queues() -> None:
+        client.subscribed_codes.discard("SETTLED")
+        client.subscribed_count = 0
+        client._failed_sub_symbols.append({"code": "NEW"})
+        runtime.start_sub_retry_thread(lambda *a: None)  # returns: the worker still looks alive
+
+    monkeypatch.setattr(qr, "logger", _Logger(roll_frees_a_slot_and_queues))
+    client._failed_sub_symbols.append({"code": "FULL"})
+    client.subscribed_count = 0  # room for one attempt on the first pass
+
+    runtime.start_sub_retry_thread(lambda *a: None)
+    client._sub_retry_thread.join(timeout=5)
+
+    assert not client._sub_retry_thread.is_alive()
+    assert "NEW" in client.subscribed
+    assert client._sub_retry_running is False
