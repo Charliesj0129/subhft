@@ -83,6 +83,10 @@ class FakeClient:
         self.subscribed: list[str] = []
         self.refuse_codes: set[str] = set()
         self.routes_refreshed = 0
+        self.retry_starts = 0
+
+    def _start_sub_retry_thread(self, cb: Any) -> None:
+        self.retry_starts += 1
 
     def _subscriptions(self) -> FakeSubscriptions:
         return FakeSubscriptions(self)
@@ -670,6 +674,9 @@ class TestLiveRoll:
         assert queued == ["TMFK6"]
         live_codes = {code for client in clients for code in client.subscribed_codes}
         assert "TMFK6" not in live_codes
+        # The boot retry worker may have exited on an empty queue: the roll must start one for its own refusal.
+        assert [client.retry_starts for client in clients if client._failed_sub_symbols] == [1]
+        assert all(client.retry_starts == 0 for client in clients if not client._failed_sub_symbols)
 
     def test_roll_is_deferred_while_a_session_is_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Four facades churning subscriptions mid-session is not worth the roll."""

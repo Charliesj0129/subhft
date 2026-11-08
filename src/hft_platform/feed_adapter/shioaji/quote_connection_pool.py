@@ -2170,6 +2170,7 @@ class QuoteConnectionPool:
         slot = self._slots[conn_id] if conn_id < len(self._slots) else None
         wrapped_cb = self._make_callback_wrapper(slot, callback) if (slot is not None and callback) else callback
         subscribed = 0
+        failed = 0
         if wrapped_cb is not None:
             for sym in list(getattr(client, "symbols", ()) or ()):
                 code = str(sym.get("code") or "")
@@ -2180,7 +2181,17 @@ class QuoteConnectionPool:
                     subscribed += 1
                 else:
                     client._failed_sub_symbols.append(sym)
+                    failed += 1
         client.subscribed_count = len(client.subscribed_codes)
+        if failed and wrapped_cb is not None:
+            # The boot-time retry worker exits once its queue drains, so a code refused by a later roll would sit in
+            # the queue with nobody to retry it (and the next roll sees no change). Start (or keep) the worker.
+            start_retry = getattr(client, "_start_sub_retry_thread", None)
+            if callable(start_retry):
+                try:
+                    start_retry(wrapped_cb)
+                except Exception as exc:  # noqa: BLE001 — the queue is kept; the next reconnect retries it too
+                    logger.warning("universe_roll_retry_start_failed", conn_id=conn_id, error=str(exc))
         try:
             client._refresh_quote_routes()
         except Exception as exc:  # noqa: BLE001 — routing refresh is best effort
