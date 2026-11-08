@@ -1131,6 +1131,8 @@ class QuoteRuntime:
                     # next interval tick.
                     pending = len(c._failed_sub_symbols)
                     now = timebase.now_s()
+                    # Codes a universe roll removed from this facade since they were queued are dropped, not retried.
+                    current_codes = {str(s.get("code") or "") for s in (getattr(c, "symbols", None) or ())}
                     for _ in range(pending):
                         if not c._sub_retry_running:
                             break
@@ -1140,6 +1142,9 @@ class QuoteRuntime:
                             break
                         if not c._sub_retry_running:
                             c._failed_sub_symbols.append(sym)
+                            continue
+                        if current_codes and str(sym.get("code") or "") not in current_codes:
+                            logger.info("Subscription retry dropped: no longer in the universe", code=sym.get("code"))
                             continue
                         if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                             c._failed_sub_symbols.append(sym)

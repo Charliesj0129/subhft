@@ -2163,6 +2163,17 @@ class QuoteConnectionPool:
                     logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
                 client.subscribed_codes.discard(code)
         client.subscribed_count = len(client.subscribed_codes)
+        # A removed code still queued for retry would compete with its replacement for the connection's last slots.
+        # Drain-and-re-append keeps the same deque the retry worker reads (each op is GIL-atomic).
+        queue = getattr(client, "_failed_sub_symbols", None)
+        if removed and queue is not None:
+            for _ in range(len(queue)):
+                try:
+                    queued = queue.popleft()
+                except (IndexError, AttributeError):
+                    break
+                if str(queued.get("code") or "") not in removed:
+                    queue.append(queued)
 
         client._load_config()
 

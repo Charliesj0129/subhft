@@ -14,6 +14,7 @@ boot and re-sharding had no owner. These tests pin the owner.
 
 from __future__ import annotations
 
+import collections
 import datetime as dt
 import json
 from pathlib import Path
@@ -78,7 +79,7 @@ class FakeClient:
         self.symbols = symbols
         self.subscribed_codes: set[str] = {str(s["code"]) for s in symbols}
         self.subscribed_count = len(self.subscribed_codes)
-        self._failed_sub_symbols: list[dict[str, Any]] = []
+        self._failed_sub_symbols: collections.deque[dict[str, Any]] = collections.deque()  # the real client's type
         self.unsubscribed: list[str] = []
         self.subscribed: list[str] = []
         self.refuse_codes: set[str] = set()
@@ -677,6 +678,29 @@ class TestLiveRoll:
         # The boot retry worker may have exited on an empty queue: the roll must start one for its own refusal.
         assert [client.retry_starts for client in clients if client._failed_sub_symbols] == [1]
         assert all(client.retry_starts == 0 for client in clients if not client._failed_sub_symbols)
+
+    def test_a_removed_code_still_queued_for_retry_is_pruned_by_the_roll(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A settled code waiting for retry must not compete with its replacement for the connection's slots."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=SEPTEMBER_CONTRACTS,
+            list_body=TMF_LIST,
+            today=dt.date(2026, 9, 17),
+        )
+        clients = _attach_facades(pool)
+        owner = next(client for client in clients if "TMFI6" in client.subscribed_codes)
+        owner.subscribed_codes.discard("TMFI6")  # its subscribe failed: it sits in the retry queue
+        owner._failed_sub_symbols.append({"code": "TMFI6"})
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: False)
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+
+        queued = [str(sym.get("code")) for client in clients for sym in client._failed_sub_symbols]
+        assert "TMFI6" not in queued
 
     def test_roll_is_deferred_while_a_session_is_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Four facades churning subscriptions mid-session is not worth the roll."""

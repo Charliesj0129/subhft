@@ -141,3 +141,17 @@ def test_capacity_freed_while_the_worker_exits_on_capacity_is_still_retried(monk
     assert not client._sub_retry_thread.is_alive()
     assert "NEW" in client.subscribed
     assert client._sub_retry_running is False
+
+
+def test_a_queued_code_no_longer_in_the_facade_symbols_is_dropped_not_retried() -> None:
+    """A universe roll removed the code after it was queued: the worker must not spend a slot on it."""
+    client = _client()
+    client.symbols = [{"code": "NEW"}]
+    runtime = QuoteRuntime(client)  # type: ignore[arg-type]  # a duck-typed client is enough for the worker
+    client._failed_sub_symbols.extend([{"code": "OLD"}, {"code": "NEW"}])
+
+    runtime.start_sub_retry_thread(lambda *a: None)
+    client._sub_retry_thread.join(timeout=5)
+
+    assert client.subscribed == ["NEW"]
+    assert not client._failed_sub_symbols
