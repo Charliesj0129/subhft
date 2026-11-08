@@ -34,6 +34,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_ALPHA_KILL_LEDGER_PATH` | `research/alphas/_kill_ledger.jsonl` | 覆寫離線 kill-ledger jsonl sink 路徑（測試用；生產環境不應設定） |
 | `HFT_BUS_BATCH_SIZE` | `0` | >1 時使用 batch consumer，減少事件迴圈喚醒次數 |
 | `HFT_BROKER` | `shioaji` | Broker 後端選擇：`shioaji` / `fubon` |
+| `HFT_SDK_STDOUT` | `devnull` | `python -m hft_platform.main` 與 `hft run`（含 `python -m hft_platform run`，即 Dockerfile CMD）啟動時把 fd 1 指向 `/dev/null`（`hft run --mode replay` 不經此路徑）。Shioaji 原生核心會把 session 事件（內含登入身分證字號）直接印到 stdout，繞過 structlog 的遮蔽；engine 自己的 log 走 stderr。`inherit` = 保留 stdout（只在本機除錯用）；其他值一律當 `devnull` |
 | `SYMBOLS_CONFIG` | `config/symbols.yaml` | 交易標的設定檔路徑 |
 | `HFT_UNIVERSE_LAST_GOOD_PATH` | `data/universe_last_good.yaml` | 最後一次驗證通過的 universe 快照（含各代碼交割日）；開機 roll 失敗時以它開機而非 `config/symbols.yaml`。指向 canonical 檔時改寫為 `<stem>.last_good.yaml`（見 `docs/runbooks/SymbolsYamlRegeneration.md`） |
 
