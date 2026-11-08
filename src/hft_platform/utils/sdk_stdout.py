@@ -44,6 +44,7 @@ def isolate_sdk_stdout() -> str:
     try:
         sys.stdout.flush()
     except (OSError, ValueError):
+        # A closed (ValueError) or broken (OSError) stdout must not stop the fd-1 redirect below.
         pass
     devnull = os.open(os.devnull, os.O_WRONLY)
     try:
