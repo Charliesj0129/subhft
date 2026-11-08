@@ -497,7 +497,7 @@ def _expand_options(
     if family is not None:
         contracts = [c for member in family for c in contract_index.options_by_root.get(member, [])]
     else:
-        contracts = contract_index.options_by_root.get(root)
+        contracts = contract_index.options_by_root.get(root) or []
     # A family with no listed weekly (a holiday week, or a cache refreshed before the next weekly is listed) must not
     # fail the whole build: the universe roll refuses a build with errors, which would also drop the monthly chain and
     # the futures. The family's expiry is skipped with a warning instead; a plain root keeps its error.
@@ -558,11 +558,16 @@ def _expand_options(
         reference = _vet_underlying(reference, source, strikes, f"{root} {month}", result)
         if reference is None:
             if contract_index.require_underlying:
-                result.errors.append(
+                message = (
                     f"No underlying price to centre the {root} {month} option window on; refusing to guess. "
                     f"Supply underlying_price for the {root} chain or a reference for the nearest "
                     f"{UNDERLYING_FUTURE_ROOT.get(root.upper(), 'underlying')} future in the metrics file"
                 )
+                result.errors.append(message)
+                # The universe roll may hold this chain's running window and still roll the rest; see
+                # QuoteConnectionPool._hold_unpriced_option_windows.
+                result.unpriced_option_errors.append(message)
+                result.unpriced_option_roots.append(root.upper())
                 return
             reference = strikes[len(strikes) // 2]
             result.warnings.append(

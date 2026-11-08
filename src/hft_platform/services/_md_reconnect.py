@@ -14,6 +14,7 @@ from typing import Any
 
 from structlog import get_logger
 
+from hft_platform.config._symbols_expansion import TXO_WEEKLY_ROOTS
 from hft_platform.core import timebase
 
 from ._md_ingestion import FeedState
@@ -21,8 +22,10 @@ from ._md_ingestion import FeedState
 logger = get_logger("service.market_data")
 
 # Option symbol prefixes excluded from the per-symbol gap watchdog.
-# Must stay in sync with MarketDataService._FEED_GAP_EXCLUDE_PREFIXES.
-_WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
+# MarketDataService._FEED_GAP_EXCLUDE_PREFIXES is this same tuple. The weekly TXO
+# roots (TX1.., TXU..) share no prefix with "TXO", so they are listed too: left
+# out, the far weekly strikes would count as stale futures in a night session.
+_WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", *TXO_WEEKLY_ROOTS, "MXO", "TEO", "TFO")
 
 
 def _prefix_gap_threshold(symbol: str, prefix_defaults: dict[str, float]) -> float | None:

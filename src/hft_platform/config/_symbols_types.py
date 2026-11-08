@@ -82,6 +82,10 @@ class SymbolBuildResult:
     symbols: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Option rules refused only for want of an underlying price (``ContractIndex.require_underlying``): each message
+    # is also in ``errors``, and its rule root (e.g. "TXO", "TXO_WEEKLY") is in ``unpriced_option_roots``.
+    unpriced_option_errors: list[str] = field(default_factory=list)
+    unpriced_option_roots: list[str] = field(default_factory=list)
 
     def ok(self) -> bool:
         return not self.errors

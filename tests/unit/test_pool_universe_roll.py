@@ -318,6 +318,72 @@ class TestRefusals:
             today=dt.date(2026, 9, 17),
         )
 
+        # The futures still roll (TMFI6 settled); the option window is held, and nothing was running to hold.
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        codes = _universe_codes(pool)
+        assert codes == {"TMFJ6", "TMFK6"}
+        assert not any(code.startswith("TXO") for code in codes)
+
+    def test_unpriced_option_window_holds_the_running_chain_and_still_rolls_futures(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing TXF reference must not freeze the futures roll; the running TXO and weekly codes are kept."""
+        options = [
+            {
+                "code": code,
+                "symbol": code,
+                "root": root,
+                "type": "option",
+                "delivery_date": delivery,
+                "right": right,
+                "strike": "20000",
+            }
+            for code, root, delivery, right in (
+                ("TXO20000J6", "TXO", OCTOBER, "C"),
+                ("TXO20000V6", "TXO", OCTOBER, "P"),
+                ("TX120000J6", "TX1", "2026/10/07", "C"),
+                ("TX120000V6", "TX1", "2026/10/07", "P"),
+                ("TX220000I6", "TX2", "2026/09/16", "C"),  # settled weekly: must not be carried
+            )
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6", "TXO20000J6", "TXO20000V6", "TX120000J6", "TX120000V6", "TX220000I6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM+/-1 exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM+/-1 exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "TXO20000J6", "TXO20000V6", "TX120000J6", "TX120000V6"}
+
+    def test_unpriced_option_window_with_another_build_error_keeps_the_running_universe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only an all-unpriced failure is relaxed: a second, unrelated error still refuses the whole roll."""
+        options = [
+            {
+                "code": "TXO20000J6",
+                "symbol": "TXO20000J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": "C",
+                "strike": "20000",
+            }
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST + "OPT@TXO@near@ATM exchange=OPT tags=options\nZZZ@front exchange=FUT tags=futures\n",
+            today=dt.date(2026, 9, 17),
+        )
+
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
         assert _universe_codes(pool) == {"TMFI6", "TMFJ6"}
 

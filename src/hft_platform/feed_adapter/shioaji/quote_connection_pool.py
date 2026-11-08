@@ -1515,8 +1515,11 @@ class QuoteConnectionPool:
         """
         from hft_platform.config._symbols_expansion import TXO_WEEKLY_ROOTS, pick_underlying_price
         from hft_platform.config.option_chain_coverage import chain_coverage
+        from hft_platform.core.market_calendar import taifex_delivery_cutoff
 
         index = self._contract_index()
+        # After 13:30 on a delivery day the settled TXF must not be the reference; see roll_universe.
+        index.as_of = taifex_delivery_cutoff(timebase.now_ns())
         # What the broker accepted, not what was configured: a failed subscribe leaves the chain short.
         codes = sorted(self.subscribed_codes)
         # The monthly TXO and its weeklies share one underlying (the nearest TXF); each expiry is judged on its own.
@@ -1714,6 +1717,9 @@ class QuoteConnectionPool:
 
             list_path = self._symbols_list_path()
             build_result = build_symbols(list_path, index)
+            delivery_of = self._delivery_lookup(index)
+            if build_result.errors:
+                self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff)
             if build_result.errors:
                 logger.warning(
                     "universe_roll_build_failed",
@@ -1722,7 +1728,6 @@ class QuoteConnectionPool:
                 )
                 return self._roll_failed("build_errors", live=live, in_session=in_session, cutoff=cutoff)
 
-            delivery_of = self._delivery_lookup(index)
             errors = validate_universe(
                 build_result.symbols,
                 delivery_of=delivery_of,
@@ -1780,6 +1785,60 @@ class QuoteConnectionPool:
             self._set_universe_source("list")
             self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
             return True
+
+    def _hold_unpriced_option_windows(
+        self,
+        build_result: Any,
+        index: Any,
+        delivery_of: Callable[[str], dt.date | None],
+        cutoff: dt.date,
+    ) -> None:
+        """Keep the running option window for a chain that has no underlying price, so the rest still rolls.
+
+        ``require_underlying`` refuses to centre an option window on a guess. If that refusal failed the whole
+        build, a missing or mis-scaled TXF reference (the cache holds none until the first contract refresh after
+        a deploy) would also block the futures roll every 10 minutes. When every build error is such a refusal,
+        the running codes of the affected roots that have not settled are carried into the rebuild and the errors
+        are cleared; any other error leaves the build failed. Mutates ``build_result``.
+        """
+        from hft_platform.config._symbols_expansion import OPTION_ROOT_FAMILIES
+
+        unpriced = set(build_result.unpriced_option_errors)
+        if not unpriced or any(error not in unpriced for error in build_result.errors):
+            return
+        roots: set[str] = set()
+        for rule_root in build_result.unpriced_option_roots:
+            roots.update(OPTION_ROOT_FAMILIES.get(rule_root, (rule_root,)))
+        by_code = getattr(index, "by_code", {}) or {}
+        rebuilt = {str(entry.get("code") or "") for entry in build_result.symbols}
+        held: list[dict[str, Any]] = []
+        dropped_settled = 0
+        for sym in self._all_symbols:
+            code = str(sym.get("code") or "").strip()
+            if not code or code in rebuilt:
+                continue
+            row = by_code.get(code)
+            row_root = str(row.get("root") or "").upper() if isinstance(row, dict) else ""
+            if not (row_root in roots if row_root else any(code.startswith(r) for r in roots)):
+                continue
+            delivery = delivery_of(code)
+            if delivery is not None and delivery < cutoff:
+                dropped_settled += 1
+                continue
+            entry = dict(sym)
+            entry.pop("group", None)
+            held.append(entry)
+            rebuilt.add(code)
+        build_result.symbols.extend(held)
+        build_result.errors.clear()
+        logger.error(
+            "universe_roll_option_window_held",
+            reason="no underlying price for the option window",
+            roots=sorted(roots),
+            held_count=len(held),
+            dropped_settled=dropped_settled,
+            errors=sorted(unpriced)[:5],
+        )
 
     def _roll_failed(self, result: str, *, live: bool, in_session: bool, cutoff: dt.date) -> bool:
         """Record a refused roll; at boot, fall back to the last good universe.
@@ -2120,6 +2179,9 @@ class QuoteConnectionPool:
                 await asyncio.to_thread(self.roll_universe)
             except Exception as exc:  # noqa: BLE001 — the clock outlives any single failure
                 logger.warning("universe_roll_clock_failed", error=str(exc))
+            # The options refresh thread is off in production (HFT_OPTIONS_REFRESH_S=0), so the coverage gauge
+            # is published here, after each roll check, from the subscriptions the roll left in place.
+            await asyncio.to_thread(self._report_chain_coverage_safely)
 
     def _write_universe_snapshot(self, symbols: list[dict[str, Any]], *, cutoff: dt.date) -> None:
         """Write the adopted universe beside the canonical file, never over it."""

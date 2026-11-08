@@ -288,3 +288,51 @@ def test_a_weekly_expiry_that_rolled_off_stops_reporting(tmp_path):
     _report(pool, {**next_week, **monthly})
 
     assert _gauge_values() == {"2030-04-03": 1.0, _MONTHLY_ISO: 0.0}
+
+
+def test_roll_clock_publishes_chain_coverage_after_each_roll_check() -> None:
+    """Production runs with HFT_OPTIONS_REFRESH_S=0, so the refresh thread never reports; the roll clock must."""
+    import asyncio
+
+    calls: list[str] = []
+    pool: Any = SimpleNamespace(
+        roll_universe=lambda: calls.append("roll"),
+        _report_chain_coverage_safely=lambda: calls.append("coverage"),
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(QuoteConnectionPool.run_universe_roll_clock(pool, interval_s=0))
+        while calls.count("coverage") < 2:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    assert calls[:4] == ["roll", "coverage", "roll", "coverage"]
+
+
+def test_roll_clock_still_reports_coverage_when_the_roll_raises() -> None:
+    import asyncio
+
+    calls: list[str] = []
+
+    def failing_roll() -> None:
+        calls.append("roll")
+        raise RuntimeError("cache unreadable")
+
+    pool: Any = SimpleNamespace(
+        roll_universe=failing_roll,
+        _report_chain_coverage_safely=lambda: calls.append("coverage"),
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(QuoteConnectionPool.run_universe_roll_clock(pool, interval_s=0))
+        while "coverage" not in calls:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(asyncio.wait_for(run(), timeout=5))
+    assert calls[:2] == ["roll", "coverage"]
