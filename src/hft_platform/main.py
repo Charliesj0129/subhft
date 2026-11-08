@@ -8,6 +8,7 @@ from hft_platform.config.loader import load_settings
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.observability.metrics_server import start_resilient_metrics_server
 from hft_platform.services.system import HFTSystem
+from hft_platform.utils.sdk_stdout import isolate_sdk_stdout
 
 # Configure structlog globally? HFTSystem does it.
 logger = get_logger("launcher")
@@ -119,4 +120,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Before any SDK object exists: the SDK prints session events, which carry
+    # the login person ID, to fd 1 (see utils/sdk_stdout.py).
+    isolate_sdk_stdout()
     asyncio.run(main())
