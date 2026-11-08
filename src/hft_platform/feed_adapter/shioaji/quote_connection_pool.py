@@ -1506,24 +1506,26 @@ class QuoteConnectionPool:
         return DEFAULT_LIST_PATH
 
     def report_option_chain_coverage(self) -> list[Any]:
-        """Publish ``option_chain_atm_coverage{expiry}`` for the TXO chain this pool is subscribed to (F3).
+        """Publish ``option_chain_atm_coverage{expiry}`` for the subscribed TXO chain, monthly and weekly (F3).
 
         1 = the expiry's strikes reach both F-500 and F+500, 0 = they do not, -1 = no underlying price to judge by.
         A chain that stops below the money cannot give an implied volatility; the research audit found that on most
         recorded days, a night later. This says so when the subscription is made. Reads the contract cache the hourly
         refresh already writes (no SDK call), so it is safe on the refresh thread. Returns the per-expiry coverage.
         """
-        from hft_platform.config._symbols_expansion import pick_underlying_price
+        from hft_platform.config._symbols_expansion import TXO_WEEKLY_ROOTS, pick_underlying_price
         from hft_platform.config.option_chain_coverage import chain_coverage
 
         index = self._contract_index()
         # What the broker accepted, not what was configured: a failed subscribe leaves the chain short.
         codes = sorted(self.subscribed_codes)
+        # The monthly TXO and its weeklies share one underlying (the nearest TXF); each expiry is judged on its own.
+        roots = ("TXO", *TXO_WEEKLY_ROOTS)
         chain_rows = [
-            row for code in codes if (row := index.by_code.get(code)) and str(row.get("root") or "").upper() == "TXO"
+            row for code in codes if (row := index.by_code.get(code)) and str(row.get("root") or "").upper() in roots
         ]
         reference, source = pick_underlying_price("TXO", chain_rows, index)
-        coverage = chain_coverage(codes, index.by_code, reference)
+        coverage = chain_coverage(codes, index.by_code, reference, root=roots)
         self._publish_chain_coverage(coverage, source)
         return coverage
 

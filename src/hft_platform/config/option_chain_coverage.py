@@ -69,23 +69,25 @@ def chain_coverage(
     contracts_by_code: Mapping[str, Mapping[str, Any]],
     reference: float | None,
     *,
-    root: str = "TXO",
+    root: str | Iterable[str] = "TXO",
     half_width: float = ATM_HALF_WIDTH_POINTS,
 ) -> list[ExpiryCoverage]:
     """Per-expiry coverage of the subscribed ``root`` options, nearest expiry first.
 
     Codes the contract cache does not know, rows that are not options of ``root``, and rows without a positive strike
-    or a parseable expiry are left out: they say nothing about where the chain sits. ``reference`` is the underlying
+    or a parseable expiry are left out: they say nothing about where the chain sits. ``root`` may be several roots
+    (the monthly TXO plus its weekly roots): every expiry is still judged on its own. ``reference`` is the underlying
     future's price in the same units as the strikes; without one every expiry is ``covered=None``.
     """
     ref = _positive_float(reference)
+    roots = {root.upper()} if isinstance(root, str) else {str(r).upper() for r in root}
     span: dict[str, list[float]] = {}  # expiry -> [min_strike, max_strike, contracts]
     for code in dict.fromkeys(subscribed_codes):  # a code listed twice is one contract
         row = contracts_by_code.get(code)
         if row is None:
             continue
         kind = str(row.get("type") or row.get("security_type") or "").lower()
-        if kind not in _OPTION_KINDS or str(row.get("root") or "").upper() != root.upper():
+        if kind not in _OPTION_KINDS or str(row.get("root") or "").upper() not in roots:
             continue
         strike = _positive_float(row.get("strike"))
         expiry = _iso_expiry(row)

@@ -114,9 +114,21 @@ def build_entry(
 # Option enrichment helpers
 # ---------------------------------------------------------------------------
 
+# TAIEX weekly option roots as the broker lists them: Wednesday weeklies TX1/TX2/TX4/TX5 (the third Wednesday is the
+# monthly TXO, so TX3 is normally absent) and Friday weeklies TXU, TXV, ... TX1, TX2, TXU and TXV were seen in the
+# 2026-08-31 contract cache; the rest are listed so a week that uses them is not silently dropped. A root that is not
+# listed by the broker simply contributes no contracts.
+TXO_WEEKLY_ROOTS: tuple[str, ...] = ("TX1", "TX2", "TX3", "TX4", "TX5", "TXU", "TXV", "TXW", "TXX", "TXY", "TXZ")
+
+# A virtual option root that stands for several broker roots. ``OPT@TXO_WEEKLY@near`` is the nearest weekly expiry of
+# any of them, so the rule follows the Wednesday and Friday weeklies without naming the week. It never includes the
+# monthly TXO: the current month is its own rule (``OPT@TXO@near``).
+OPTION_ROOT_FAMILIES: dict[str, tuple[str, ...]] = {"TXO_WEEKLY": TXO_WEEKLY_ROOTS}
+
 # Map option root prefix → underlying futures root
 _OPTION_UNDERLYING_MAP: dict[str, str] = {
     "TXO": "TX",
+    **{weekly: "TX" for weekly in TXO_WEEKLY_ROOTS},
     "MXO": "MX",
     "NQO": "NQ",
     "XIO": "XI",
@@ -126,6 +138,7 @@ _OPTION_UNDERLYING_MAP: dict[str, str] = {
 # Default point value per option root (NTD per index point)
 _OPTION_POINT_VALUE: dict[str, int] = {
     "TXO": 50,
+    **{weekly: 50 for weekly in TXO_WEEKLY_ROOTS},
     "MXO": 10,
 }
 
@@ -348,7 +361,11 @@ def _normalize_option_right(value: Any) -> str:
 
 # Option root -> the future whose price the strike window must be centred on. Only roots whose underlying
 # is certain are listed; anything else needs an explicit ``underlying_price``.
-UNDERLYING_FUTURE_ROOT: dict[str, str] = {"TXO": "TXF"}
+UNDERLYING_FUTURE_ROOT: dict[str, str] = {
+    "TXO": "TXF",
+    "TXO_WEEKLY": "TXF",
+    **{weekly: "TXF" for weekly in TXO_WEEKLY_ROOTS},
+}
 # A reference price this many times above or below the chain's middle strike is a unit slip (x10, /10), not a market
 # move; a real move, or a chain that has not caught up with it, stays well inside this band.
 UNDERLYING_SCALE_FACTOR = 2.0
@@ -476,14 +493,22 @@ def _expand_options(
         result.errors.append(f"Option rule requires contract cache: OPT@{root}@{month_token}@{selector}")
         return
 
-    contracts = contract_index.options_by_root.get(root)
+    family = OPTION_ROOT_FAMILIES.get(root.upper())
+    if family is not None:
+        contracts = [c for member in family for c in contract_index.options_by_root.get(member, [])]
+    else:
+        contracts = contract_index.options_by_root.get(root)
+    # A family with no listed weekly (a holiday week, or a cache refreshed before the next weekly is listed) must not
+    # fail the whole build: the universe roll refuses a build with errors, which would also drop the monthly chain and
+    # the futures. The family's expiry is skipped with a warning instead; a plain root keeps its error.
+    report = result.warnings.append if family is not None else result.errors.append
     if not contracts:
-        result.errors.append(f"No option contracts found for root {root}")
+        report(f"No option contracts found for root {root}")
         return
 
     contracts = _filter_active_contracts(contracts, result, context=f"options {root}", as_of=contract_index.as_of)
     if not contracts:
-        result.errors.append(f"No active (non-expired) option contracts for root {root}")
+        report(f"No active (non-expired) option contracts for root {root}")
         return
 
     groups = _group_by_expiry(contracts)
