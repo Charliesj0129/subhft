@@ -1226,8 +1226,11 @@ groups:
         severity: warning
     annotations:
         summary: Feed availability SLO burn rate high
-  # Order success: more than 1% of the order outcomes of the last 30 minutes were broker rejects, there were at least
-  # 5 rejects, and both held for 10 minutes. 0.99 is twice the error budget of the 99.5% target; 30 m, 5 and 10 m are
+  # Order success: more than 1% of the order outcomes of the last 30 minutes were rejects, there were at least 5
+  # rejects, and both held for 10 minutes. order_reject_total counts broker rejects AND the order adapter's own local
+  # rejects (dedup, platform reduce-only, deadline expired, API queue full, codec/validation, StormGuard HALT skip of
+  # already-queued commands; order/adapter.py), so a maker that keeps sending opening orders into platform reduce-only
+  # also fires this. A StormGuard HALT alone does not: risk rejects intents before they reach the adapter. 0.99 is twice the error budget of the 99.5% target; 30 m, 5 and 10 m are
   # round numbers, not fitted values.
   # It replaces `slo:order_success:ratio_rate5m < 0.995` with `for: 5m`. The strategy sends ~100 order actions in a busy
   # 5 minutes and a handful at night, so ONE reject in a thin window pushes the 5m ratio under 0.995 (1 / 200). Over
