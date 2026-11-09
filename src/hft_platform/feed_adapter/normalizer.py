@@ -3,6 +3,7 @@ import importlib
 import os
 import re
 import sys
+import threading
 from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any, cast
@@ -178,6 +179,16 @@ def _derive_monthly_expiry(code: str) -> dt.date | None:
     return _third_wednesday(year, month)
 
 
+def _normalize_tags(tags_raw: Any) -> set[str]:
+    if isinstance(tags_raw, str):
+        tags = [t.strip() for t in re.split(r"[|,]", tags_raw) if t.strip()]
+    elif isinstance(tags_raw, (list, tuple, set)):
+        tags = [str(t).strip() for t in tags_raw if str(t).strip()]
+    else:
+        tags = []
+    return {t.lower() for t in tags}
+
+
 class SymbolMetadata:
     """
     Loads per-symbol configuration.
@@ -207,6 +218,10 @@ class SymbolMetadata:
         # would price a freshly subscribed month off a file that predates it.
         self._runtime_overlay: list[dict[str, Any]] = []
         self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFR1 → TXFE6)
+        # Serialises whole reloads so two loads (roll worker vs loop-thread
+        # ``reload_if_changed``) cannot publish out of order. The event loop
+        # never waits on it: ``reload_if_changed`` skips when it is held.
+        self._reload_lock = threading.Lock()
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
         self.registry = InstrumentRegistry()
@@ -214,18 +229,25 @@ class SymbolMetadata:
         self._populate_registry()
 
     def _load(self) -> None:
+        """Re-read the symbol file and fold the runtime overlay over it.
+
+        ``apply_runtime_overlay`` runs this on the universe-roll worker thread
+        while the event loop keeps reading ``exchange()``/``product_type()``.
+        Everything is therefore built in locals and published at the end, the
+        new ``meta`` before the emptied caches, so a reader never sees a
+        half-filled table. Clearing ``meta`` first let a loop-thread lookup
+        cache ``""`` for TMFK6, and every later order went out untyped
+        (2026-11-09 incident).
+        """
         import yaml
 
-        self.meta = {}
-        self.tags_by_symbol = {}
-        self.symbols_by_tag = {}
-        self._price_scale_cache = {}
-        self._exchange_cache = {}
-        self._product_type_cache = {}
+        meta: dict[str, dict[str, Any]] = {}
+        tags_by_symbol: dict[str, set[str]] = {}
+        symbols_by_tag: dict[str, set[str]] = {}
         try:
-            self._mtime = os.path.getmtime(self.config_path)
+            mtime: float | None = os.path.getmtime(self.config_path)
         except OSError:
-            self._mtime = None
+            mtime = None
         try:
             with open(self.config_path) as f:
                 data = yaml.safe_load(f) or {}
@@ -233,47 +255,65 @@ class SymbolMetadata:
                     code = item.get("code")
                     if not code:
                         continue
-                    self.meta[code] = item
-                    tags_raw = item.get("tags", [])
-                    if isinstance(tags_raw, str):
-                        tags = [t.strip() for t in re.split(r"[|,]", tags_raw) if t.strip()]
-                    elif isinstance(tags_raw, (list, tuple, set)):
-                        tags = [str(t).strip() for t in tags_raw if str(t).strip()]
-                    else:
-                        tags = []
-                    normalized = {t.lower() for t in tags}
+                    meta[code] = item
+                    normalized = _normalize_tags(item.get("tags", []))
                     if normalized:
-                        self.tags_by_symbol[code] = normalized
+                        tags_by_symbol[code] = normalized
                         for tag in normalized:
-                            self.symbols_by_tag.setdefault(tag, set()).add(code)
+                            symbols_by_tag.setdefault(tag, set()).add(code)
         except Exception as exc:
             logger.warning("symbol_metadata_load_failed", error=str(exc), config_path=self.config_path)
-        self._apply_overlay()
+        self._apply_overlay(meta, tags_by_symbol, symbols_by_tag)
+        # An actual month code that exists only through ``set_alias_map`` is
+        # not in the file, so a reload would otherwise drop it and its lookups
+        # would resolve to "".
+        self._copy_alias_entries(meta)
 
-    def _apply_overlay(self) -> None:
-        """Fold the rolled universe (if any) over what the file just gave us."""
+        # Publish: tables first, then fresh caches. A reader holding an old
+        # cache may still fill it, but that dict is discarded; a reader that
+        # sees a new cache reads it after ``meta`` was replaced.
+        self.meta = meta
+        self.tags_by_symbol = tags_by_symbol
+        self.symbols_by_tag = symbols_by_tag
+        self._mtime = mtime
+        self._price_scale_cache = {}
+        self._exchange_cache = {}
+        self._product_type_cache = {}
+        # ``set_alias_map`` on another thread may have recorded an alias after
+        # the copy above and written its entry into the old table. It updates
+        # ``alias_to_actual`` before touching ``meta``, so a second pass over
+        # the published table catches it.
+        self._copy_alias_entries(self.meta)
+
+    def _copy_alias_entries(self, meta: dict[str, dict[str, Any]]) -> None:
+        for config_code, actual_code in list(self.alias_to_actual.items()):
+            if actual_code != config_code and actual_code not in meta:
+                config_entry = meta.get(config_code)
+                if config_entry is not None:
+                    meta[actual_code] = config_entry
+
+    def _apply_overlay(
+        self,
+        meta: dict[str, dict[str, Any]],
+        tags_by_symbol: dict[str, set[str]],
+        symbols_by_tag: dict[str, set[str]],
+    ) -> None:
+        """Fold the rolled universe (if any) over the tables being built."""
         for item in getattr(self, "_runtime_overlay", ()):
             code = item.get("code")
             if not code:
                 continue
-            self.meta[code] = item
-            tags_raw = item.get("tags", [])
-            if isinstance(tags_raw, str):
-                tags = [t.strip() for t in re.split(r"[|,]", tags_raw) if t.strip()]
-            elif isinstance(tags_raw, (list, tuple, set)):
-                tags = [str(t).strip() for t in tags_raw if str(t).strip()]
-            else:
-                tags = []
-            normalized = {t.lower() for t in tags}
-            previous = self.tags_by_symbol.pop(code, set())
+            meta[code] = item
+            normalized = _normalize_tags(item.get("tags", []))
+            previous = tags_by_symbol.pop(code, set())
             for tag in previous - normalized:
-                holders = self.symbols_by_tag.get(tag)
+                holders = symbols_by_tag.get(tag)
                 if holders:
                     holders.discard(code)
             if normalized:
-                self.tags_by_symbol[code] = normalized
+                tags_by_symbol[code] = normalized
                 for tag in normalized:
-                    self.symbols_by_tag.setdefault(tag, set()).add(code)
+                    symbols_by_tag.setdefault(tag, set()).add(code)
 
     def apply_runtime_overlay(self, symbols: list[dict[str, Any]]) -> None:
         """Adopt a rolled universe as the metadata of record, over the file.
@@ -286,8 +326,9 @@ class SymbolMetadata:
         self.reload()
 
     def reload(self) -> None:
-        self._load()
-        self._populate_registry()
+        with self._reload_lock:
+            self._load()
+            self._populate_registry()
 
     def reload_if_changed(self) -> bool:
         try:
@@ -295,7 +336,15 @@ class SymbolMetadata:
         except OSError:
             return False
         if self._mtime is None or mtime > self._mtime:
-            self._load()
+            # Runs on the event loop: never wait for a roll's reload. If one
+            # is in flight, skip; ``_mtime`` is still the old one unless that
+            # reload saw the new file, so the next call retries.
+            if not self._reload_lock.acquire(blocking=False):
+                return False
+            try:
+                self._load()
+            finally:
+                self._reload_lock.release()
             return True
         return False
 
@@ -357,26 +406,32 @@ class SymbolMetadata:
         return parsed
 
     def price_scale(self, symbol: str) -> int:
-        cached = self._price_scale_cache.get(symbol)
+        # Bind the cache before reading ``meta``: a concurrent ``_load`` swaps
+        # ``meta`` before the caches, so a value computed here lands either in
+        # the dict it was read against or in one that is already discarded.
+        # Only symbols with an entry are cached; a miss stays uncached so it
+        # cannot outlive the reload that adds the symbol.
+        cache = self._price_scale_cache
+        cached = cache.get(symbol)
         if cached is not None:
             return cached
-        # Avoid creating empty dict
         entry = self.meta.get(symbol)
-        if entry:
-            if "price_scale" in entry:
-                scale = int(entry.get("price_scale", self.DEFAULT_SCALE))
-                self._price_scale_cache[symbol] = scale
-                return scale
-            tick_size = entry.get("tick_size")
-            if tick_size:
-                try:
-                    scale = int(round(1 / float(tick_size)))
-                    if scale > 0:
-                        self._price_scale_cache[symbol] = scale
-                        return scale
-                except (TypeError, ValueError, ZeroDivisionError):
-                    pass
-        self._price_scale_cache[symbol] = self.DEFAULT_SCALE
+        if not entry:
+            return self.DEFAULT_SCALE
+        if "price_scale" in entry:
+            scale = int(entry.get("price_scale", self.DEFAULT_SCALE))
+            cache[symbol] = scale
+            return scale
+        tick_size = entry.get("tick_size")
+        if tick_size:
+            try:
+                scale = int(round(1 / float(tick_size)))
+                if scale > 0:
+                    cache[symbol] = scale
+                    return scale
+            except (TypeError, ValueError, ZeroDivisionError):
+                pass
+        cache[symbol] = self.DEFAULT_SCALE
         return self.DEFAULT_SCALE
 
     def tick_size_scaled(self, symbol: str) -> int:
@@ -405,19 +460,28 @@ class SymbolMetadata:
         return 1
 
     def exchange(self, symbol: str) -> str:
-        cached = self._exchange_cache.get(symbol)
+        # Same cache discipline as ``price_scale``: bind first, cache hits only.
+        cache = self._exchange_cache
+        cached = cache.get(symbol)
         if cached is not None:
             return cached
-        entry = self.meta.get(symbol) or {}
+        entry = self.meta.get(symbol)
+        if entry is None:
+            return ""
         value = str(entry.get("exchange", ""))
-        self._exchange_cache[symbol] = value
+        cache[symbol] = value
         return value
 
     def product_type(self, symbol: str) -> str:
-        cached = self._product_type_cache.get(symbol)
+        cache = self._product_type_cache
+        cached = cache.get(symbol)
         if cached is not None:
             return cached
-        entry = self.meta.get(symbol) or {}
+        entry = self.meta.get(symbol)
+        if entry is None:
+            # Not cached: a "" here sent TMFK6 orders down the untyped
+            # stock path until restart (2026-11-09).
+            return ""
         raw = (
             entry.get("product_type")
             or entry.get("security_type")
@@ -426,25 +490,18 @@ class SymbolMetadata:
             or ""
         )
         raw = str(raw).strip().lower()
-        if raw:
-            self._product_type_cache[symbol] = raw
-            return raw
-
-        exchange = self.exchange(symbol).upper()
-        if exchange in {"TSE", "OTC", "OES"}:
-            self._product_type_cache[symbol] = "stock"
-            return "stock"
-        if exchange in {"FUT", "FUTURES", "TAIFEX"}:
-            self._product_type_cache[symbol] = "future"
-            return "future"
-        if exchange in {"OPT", "OPTIONS"}:
-            self._product_type_cache[symbol] = "option"
-            return "option"
-        if exchange in {"IDX", "INDEX"}:
-            self._product_type_cache[symbol] = "index"
-            return "index"
-        self._product_type_cache[symbol] = ""
-        return ""
+        if not raw:
+            exchange = str(entry.get("exchange", "")).upper()
+            if exchange in {"TSE", "OTC", "OES"}:
+                raw = "stock"
+            elif exchange in {"FUT", "FUTURES", "TAIFEX"}:
+                raw = "future"
+            elif exchange in {"OPT", "OPTIONS"}:
+                raw = "option"
+            elif exchange in {"IDX", "INDEX"}:
+                raw = "index"
+        cache[symbol] = raw
+        return raw
 
     def order_params(self, symbol: str) -> dict[str, Any]:
         entry = self.meta.get(symbol) or {}

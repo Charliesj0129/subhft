@@ -42,6 +42,25 @@ def _default_order_timeout_ms() -> int:
     return 0 if raw in {"1", "true", "True", "yes", "on"} else 5000
 
 
+_CONTRACT_SECURITY_TYPES = {"FUT": "future", "OPT": "option"}
+
+
+def _contract_product_type(contract: Any) -> str | None:
+    """Map a broker contract's ``security_type`` to ``future``/``option``.
+
+    Returns ``None`` for stocks, indices and anything unrecognised, which keeps
+    the untyped stock path for them. 1.7.9 exposes ``SecurityType`` members
+    whose ``value`` is ``"FUT"``/``"OPT"``; a plain string is accepted too.
+    """
+    raw = getattr(contract, "security_type", None)
+    if raw is None:
+        return None
+    value = getattr(raw, "value", raw)
+    if not isinstance(value, str):
+        return None
+    return _CONTRACT_SECURITY_TYPES.get(value.strip().upper())
+
+
 class OrderGateway:
     """Dedicated order entry/cancel gateway."""
 
@@ -115,6 +134,19 @@ class OrderGateway:
         if not contract:
             raise ValueError(f"Contract {contract_code} not found")
         act = sdk.constant.Action.Buy if action == "Buy" else sdk.constant.Action.Sell
+
+        if not product_type:
+            # The untyped branch below builds a stock-priced ``sj.Order``; on a
+            # futures/options contract the SDK rejects it with "FuturesPriceType
+            # must be FuturesPriceType enum or string" on every order
+            # (2026-11-09). Let the broker's contract say what it is.
+            product_type = _contract_product_type(contract)
+            if product_type:
+                logger.warning(
+                    "order_product_type_from_contract",
+                    symbol=contract_code,
+                    product_type=product_type,
+                )
 
         if product_type:
             return self._place_order_typed(
