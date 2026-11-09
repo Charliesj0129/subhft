@@ -1111,7 +1111,7 @@ tests:
 
   # ── SLO alerts (read series recorded by slo_recording_rules.yaml) ──────────
   # slo_recording_rules.yaml records slo:feed_availability:ratio_rate5m as 0 whenever no feed event arrived in 5 minutes, and
-  # slo:order_success:ratio_rate5m as 0 when there were no order actions or rejects (0 / clamp_min(0, 0.001)).
+  # slo:order_success:ratio_rate5m / ratio_rate30m as 0 when there were no order actions or rejects (0 / clamp_min(0, x)).
   # Both are the normal state outside a session and with an idle strategy, so the alerts must not read a quiet
   # system as a failing one.
   - interval: 1m
@@ -1197,5 +1197,146 @@ tests:
         values: "1+0x40"
     alert_rule_test:
       - eval_time: 30m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+
+  # ── SLOOrderSuccessRateLow: 30 m success ratio < 0.99 AND >= 5 rejects in the 30 m, held for 10 m ──────────
+  # The old rule (5 m ratio < 0.995, `for: 5m`) fired on a lone reject in a thin window; rules.yaml has the
+  # backtest. Counters below step once a minute, so the figures read as: actions a/min, rejects r/min.
+  - interval: 1m
+    name: order success SLO is quiet on two rejects in a thin window
+    input_series:
+      # 2 actions a minute; one reject at minute 10 and one at minute 12, nothing else.
+      - series: 'order_actions_total{type="new"}'
+        values: "0+2x70"
+      - series: "order_reject_total"
+        values: "0x9 1x1 2x60"
+      - series: "market_trading_hours_active"
+        values: "1+0x70"
+    alert_rule_test:
+      # 16m is inside the window where the old 5 m rule had held for 5 m (ratio 0.83-0.91 from minute 10 to 17).
+      - eval_time: 16m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+
+  - interval: 1m
+    name: order success SLO is quiet below the reject floor even when no order succeeds
+    input_series:
+      # No order action at all and three rejects at minutes 1-3: the ratio is 0, but there are only 3 rejects.
+      - series: 'order_actions_total{type="new"}'
+        values: "0x70"
+      - series: "order_reject_total"
+        values: "0+1x3 3x70"
+      - series: "market_trading_hours_active"
+        values: "1+0x70"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+
+  - interval: 1m
+    name: order success SLO fires on a burst of rejects with no successful order and clears after it
+    input_series:
+      # Six rejects at minutes 1-6 and no order action: ratio 0 and 6 rejects in the 30 m window until minute 36.
+      - series: 'order_actions_total{type="new"}'
+        values: "0x70"
+      - series: "order_reject_total"
+        values: "0+1x6 6x70"
+      - series: "market_trading_hours_active"
+        values: "1+0x70"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order success rate below SLO
+      - eval_time: 60m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+
+  - interval: 1m
+    name: order success SLO fires on a sustained 3 percent reject share like the 2026-11-02 RTT storm
+    input_series:
+      # 28 actions and 1 reject a minute: success ratio 0.9655 over every 30 m window.
+      - series: 'order_actions_total{type="new"}'
+        values: "0+28x120"
+      - series: "order_reject_total"
+        values: "0+1x120"
+      - series: "market_trading_hours_active"
+        values: "1+0x120"
+    alert_rule_test:
+      # Pending, not firing, until the condition has held for 10 m (it starts at minute 5, the 5th reject).
+      - eval_time: 10m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order success rate below SLO
+      - eval_time: 100m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order success rate below SLO
+
+  - interval: 1m
+    name: order success SLO clears once the storm leaves the window
+    input_series:
+      # The same 3 percent reject share for 40 minutes, then orders keep flowing and none is rejected.
+      - series: 'order_actions_total{type="new"}'
+        values: "0+28x120"
+      - series: "order_reject_total"
+        values: "0+1x40 40x80"
+      - series: "market_trading_hours_active"
+        values: "1+0x120"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Order success rate below SLO
+      - eval_time: 100m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+
+  - interval: 1m
+    name: order success SLO is quiet when the rejects are within the 1 percent budget of a busy session
+    input_series:
+      # 100 actions a minute and a reject every 5 minutes: 6 rejects in 30 m (the floor is met), ratio 0.998.
+      - series: 'order_actions_total{type="new"}'
+        values: "0+100x120"
+      - series: "order_reject_total"
+        values: "0+0.2x120"
+      - series: "market_trading_hours_active"
+        values: "1+0x120"
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: SLOOrderSuccessRateLow
+        exp_alerts: []
+      - eval_time: 100m
         alertname: SLOOrderSuccessRateLow
         exp_alerts: []
