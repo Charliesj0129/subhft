@@ -559,10 +559,71 @@ def test_slo_feed_alert_is_gated_on_the_trading_session():
     assert "market_trading_hours_active == 1" in expr, expr
 
 
-def test_slo_order_success_alert_needs_order_activity():
-    """slo:order_success:ratio_rate5m is 0 / clamp_min(0, 0.001) = 0 when no order or reject was seen.
+SLO_RECORDING_RULES_PATH = RULES_PATH.with_name("slo_recording_rules.yaml")
 
-    An idle strategy is not a failing one: the alert must require traffic in the same window.
+# slo:order_success:ratio_rate<N>m < <threshold>  and on() (sum(increase(order_reject_total[<N>m])) >= <floor>)
+_ORDER_SLO_RATIO = re.compile(r"slo:order_success:ratio_rate(\d+)m\s*<\s*([0-9.]+)")
+_ORDER_SLO_FLOOR = re.compile(r"sum\(increase\(order_reject_total\[(\d+)m\]\)\)\s*>=\s*(\d+)")
+
+
+def _load_recording_rules_by_name() -> dict[str, dict]:
+    with SLO_RECORDING_RULES_PATH.open() as f:
+        data = yaml.safe_load(f)
+    return {
+        rule["record"]: rule for group in data.get("groups", []) for rule in group.get("rules", []) if "record" in rule
+    }
+
+
+def _order_slo_alert_parts() -> tuple[dict, int, float, int, int]:
+    """Return (rule, ratio window minutes, ratio threshold, floor window minutes, reject floor)."""
+    rule = _load_alerts_by_name()["SLOOrderSuccessRateLow"]
+    ratio = _ORDER_SLO_RATIO.search(rule["expr"])
+    floor = _ORDER_SLO_FLOOR.search(rule["expr"])
+    assert ratio, f"SLOOrderSuccessRateLow must read a slo:order_success:ratio_rate<N>m series: {rule['expr']!r}"
+    assert floor, f"SLOOrderSuccessRateLow must floor sum(increase(order_reject_total[<N>m])): {rule['expr']!r}"
+    return rule, int(ratio.group(1)), float(ratio.group(2)), int(floor.group(1)), int(floor.group(2))
+
+
+def test_slo_order_success_alert_needs_a_reject_floor_over_the_ratio_window():
+    """slo:order_success:ratio_rate30m is 0 / clamp_min(0, x) = 0 when no order or reject was seen.
+
+    An idle strategy is not a failing one, and a thin window is not a failing one either: with a handful of order
+    outcomes in the window one or two rejects drop the ratio under the threshold. The alert must therefore require a
+    count of rejects (at least 3, so a lone reject or a pair cannot trip it) over the SAME window as the ratio.
     """
-    expr = _load_alerts_by_name()["SLOOrderSuccessRateLow"]["expr"]
-    assert "order_actions_total" in expr and "order_reject_total" in expr, expr
+    _, ratio_window, _, floor_window, floor = _order_slo_alert_parts()
+    assert floor_window == ratio_window, (
+        f"the reject floor looks back {floor_window}m but the ratio {ratio_window}m; the two must describe one window"
+    )
+    assert floor >= 3, f"a reject floor of {floor} lets one or two rejects in a thin window page"
+
+
+def test_slo_order_success_alert_does_not_decide_on_a_five_minute_window():
+    """A 5-minute window holds a few dozen order outcomes at night, which is why the old rule fired ~30 times a week.
+
+    In the 2026-11-09 backtest of 7 days of production counts, every 5-minute-window variant tried (thresholds
+    0.9-0.995, reject floors, traffic floors, `for` up to 15m) either paged more than once a day from 2026-11-03 or
+    was firing for at most 5% of the 2026-11-02 reject storm session. Do not shorten the window without re-running it.
+    """
+    rule, ratio_window, threshold, _, _ = _order_slo_alert_parts()
+    assert ratio_window >= 15, f"ratio window is {ratio_window}m"
+    assert threshold <= 0.995, f"threshold {threshold} would page inside the 99.5% success target"
+    hold = re.fullmatch(r"(\d+)m", str(rule.get("for", "0s")))
+    assert hold and int(hold.group(1)) >= 5, f"`for:` is {rule.get('for')!r}; it must be at least 5m"
+
+
+def test_slo_order_success_30m_recording_rule_is_defined_and_idle_safe():
+    """The alert reads slo:order_success:ratio_rate30m, and the 5m series it replaced stays recorded.
+
+    Both counters use the 30m window, each side is ``or vector(0)`` so an absent series reads 0 instead of dropping
+    the sample, and the divisor is clamped so an idle window is 0 rather than NaN.
+    """
+    recorded = _load_recording_rules_by_name()
+    assert "slo:order_success:ratio_rate5m" in recorded, "the 5m series must not be removed; others may read it"
+    rule = recorded.get("slo:order_success:ratio_rate30m")
+    assert rule is not None, "slo:order_success:ratio_rate30m is not recorded in slo_recording_rules.yaml"
+    expr = rule["expr"]
+    assert "rate(order_actions_total[30m])" in expr and "rate(order_reject_total[30m])" in expr, expr
+    assert "[5m]" not in expr, expr
+    assert expr.count("or vector(0)") == 3, expr  # actions (numerator), actions and rejects (denominator)
+    assert "clamp_min(" in expr, expr

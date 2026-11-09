@@ -1216,8 +1216,9 @@ groups:
         summary: Orphaned fills detected
         runbook_url: docs/runbooks/OrphanedFillDetected.md
   # Both SLO alerts read series recorded by slo_recording_rules.yaml (next to this file). That file records 0 for
-  # "no feed event in 5 minutes" and for "no order action or reject in 5 minutes", which is the normal state outside
-  # a session and for an idle strategy, so each alert is gated on there being something to measure.
+  # "no feed event in 5 minutes" and for "no order action or reject in the window" (5 or 30 minutes), which is the
+  # normal state outside a session and for an idle strategy, so each alert is gated on there being something to
+  # measure.
   - alert: SLOFeedAvailabilityBurnRateHigh
     expr: (1 - slo:feed_availability:ratio_rate5m > 0.01) and on() (market_trading_hours_active == 1)
     for: 5m
@@ -1225,11 +1226,32 @@ groups:
         severity: warning
     annotations:
         summary: Feed availability SLO burn rate high
+  # Order success: more than 1% of the order outcomes of the last 30 minutes were rejects, there were at least 5
+  # rejects, and both held for 10 minutes. order_reject_total counts broker rejects AND the order adapter's own local
+  # rejects (dedup, platform reduce-only, deadline expired, API queue full, codec/validation, StormGuard HALT skip of
+  # already-queued commands; order/adapter.py), so a maker that keeps sending opening orders into platform reduce-only
+  # also fires this. A StormGuard HALT alone does not: risk rejects intents before they reach the adapter. 0.99 is twice the error budget of the 99.5% target; 30 m, 5 and 10 m are
+  # round numbers, not fitted values.
+  # It replaces `slo:order_success:ratio_rate5m < 0.995` with `for: 5m`. The strategy sends ~100 order actions in a busy
+  # 5 minutes and a handful at night, so ONE reject in a thin window pushes the 5m ratio under 0.995 (1 / 200). Over
+  # 2026-11-02..11-09 (122,839 actions, 363 rejects = 0.29%) that rule would have fired ~30 times, ~8 of them on the
+  # normal days from 11-03. The reject-count floor keeps a thin window quiet; the 30 m window keeps a busy one from
+  # being decided by a single minute.
+  # Offline backtest of this expression on the same 7 days of per-minute production counts (`for:` counted at minute
+  # resolution, both rounding ways): on 2026-11-02, the broker paper-server RTT storm (3.4% of outcomes rejected for the
+  # whole session: 138 rejects vs 3,876 actions in 09:00-13:45 Taipei), it fires about 22 minutes after the first
+  # reject, is up for ~78% of the session, and again on the storm's tail until the 22:00 deploy. From 11-03 it fires
+  # twice, once per day, both real reject bursts: 11-05 ~08:55 (16 rejects at 08:46-08:47) and 11-06 ~11:14 (20 rejects
+  # at 10:54-11:06, then 61 rejects against 10 orders sent at 11:30-11:34, one episode until 12:02). All 72
+  # neighbouring settings (window 15-60 m, threshold 0.97-0.99, floor 3-10 rejects, `for` 5-10 m) also catch the
+  # storm and fire 1-3 times from 11-03.
+  # The floor reads increase(order_reject_total) itself: it is a count, not a ratio, and the vector is empty (so
+  # the alert is quiet) while that counter has no series.
   - alert: SLOOrderSuccessRateLow
     expr: |
-      (slo:order_success:ratio_rate5m < 0.995)
-      and on() ((sum(rate(order_actions_total[5m])) or vector(0)) + (sum(rate(order_reject_total[5m])) or vector(0)) > 0)
-    for: 5m
+      (slo:order_success:ratio_rate30m < 0.99)
+      and on() (sum(increase(order_reject_total[30m])) >= 5)
+    for: 10m
     labels:
         severity: warning
     annotations:

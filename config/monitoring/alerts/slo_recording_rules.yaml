@@ -6,9 +6,13 @@
 # tests/integration/test_prod_compose_parity.py compares with the locked production compose, is untouched).
 #
 # slo:feed_availability:ratio_rate5m is 0 whenever no feed event arrived in 5 minutes and
-# slo:order_success:ratio_rate5m is 0 when no order action or reject did (0 / clamp_min(0, 0.001)): both are the
-# normal state outside a session or for an idle strategy, which is why the two alerts are gated (see rules_test.yaml).
+# slo:order_success:ratio_rate5m (and ratio_rate30m) is 0 when no order action or reject did (0 / clamp_min(0, x)): both
+# are the normal state outside a session or for an idle strategy, which is why the alerts are gated (see rules_test.yaml).
 # A new alert on these series needs the same gate.
+#
+# slo:order_success:ratio_rate30m exists for SLOOrderSuccessRateLow (rules.yaml): a 5-minute window holds a few dozen
+# order outcomes at night, so one reject moves the ratio by several percent. slo:order_success:ratio_rate5m is kept
+# (nothing in the repo reads it any more, but it is a recorded series dashboards and ad-hoc queries may use).
 #
 # tests/unit/test_prometheus_rule_files_loaded.py fails when this file stops being listed in prometheus.yml, or when an
 # alert reads a recorded series that no loaded file defines.
@@ -21,6 +25,10 @@ groups:
     expr: clamp_min(1 - (sum(increase(feed_events_total[5m])) == bool 0), 0)
   - record: slo:order_success:ratio_rate5m
     expr: (sum(rate(order_actions_total[5m])) or vector(0)) / clamp_min((sum(rate(order_actions_total[5m])) or vector(0)) + (sum(rate(order_reject_total[5m])) or vector(0)), 0.001)
+  # The clamp is in events per second: 0.0001 is 0.18 events in 30 minutes, so a window with at least one order outcome
+  # is exact (the 5m rule's 0.001 would read 1 action in 30 minutes as a 0.55 ratio) and an idle one is still 0.
+  - record: slo:order_success:ratio_rate30m
+    expr: (sum(rate(order_actions_total[30m])) or vector(0)) / clamp_min((sum(rate(order_actions_total[30m])) or vector(0)) + (sum(rate(order_reject_total[30m])) or vector(0)), 0.0001)
   - record: slo:recorder_success:ratio_rate5m
     expr: 1 - ((sum(rate(recorder_failures_total[5m])) or vector(0)) / clamp_min((sum(rate(recorder_batches_flushed_total[5m])) or vector(0)), 0.001))
   - record: slo:normalize_latency_p99_us
