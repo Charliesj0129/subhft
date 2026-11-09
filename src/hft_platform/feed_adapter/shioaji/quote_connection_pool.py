@@ -26,6 +26,7 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
     check_facade_health,
     get_healthy_feed_gap_s,
 )
+from hft_platform.feed_adapter.shioaji.quote_runtime import subscription_lifecycle_lock
 
 try:
     from prometheus_client import Counter, Gauge
@@ -2150,50 +2151,52 @@ class QuoteConnectionPool:
             return 0
 
         client = facade._client
-        sub_mgr = client._subscriptions()
-        removed = set(plan.removed.get(conn_id, ()))
-        added = set(plan.added.get(conn_id, ()))
+        # The retry worker must not subscribe a code this roll is removing, nor check membership mid-swap.
+        with subscription_lifecycle_lock(client):
+            sub_mgr = client._subscriptions()
+            removed = set(plan.removed.get(conn_id, ()))
+            added = set(plan.added.get(conn_id, ()))
 
-        for sym in list(getattr(client, "symbols", ()) or ()):
-            code = str(sym.get("code") or "")
-            if code in removed and code in client.subscribed_codes:
-                try:
-                    sub_mgr._unsubscribe_symbol(sym)
-                except Exception as exc:  # noqa: BLE001 — a delisted code often refuses
-                    logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
-                client.subscribed_codes.discard(code)
-        client.subscribed_count = len(client.subscribed_codes)
-        # A removed code still queued for retry would compete with its replacement for the connection's last slots.
-        # Drain-and-re-append keeps the same deque the retry worker reads (each op is GIL-atomic).
-        queue = getattr(client, "_failed_sub_symbols", None)
-        if removed and queue is not None:
-            for _ in range(len(queue)):
-                try:
-                    queued = queue.popleft()
-                except (IndexError, AttributeError):
-                    break
-                if str(queued.get("code") or "") not in removed:
-                    queue.append(queued)
-
-        client._load_config()
-
-        callback = self._user_callback
-        slot = self._slots[conn_id] if conn_id < len(self._slots) else None
-        wrapped_cb = self._make_callback_wrapper(slot, callback) if (slot is not None and callback) else callback
-        subscribed = 0
-        failed = 0
-        if wrapped_cb is not None:
             for sym in list(getattr(client, "symbols", ()) or ()):
                 code = str(sym.get("code") or "")
-                if code not in added or code in client.subscribed_codes:
-                    continue
-                if sub_mgr._subscribe_symbol(sym, wrapped_cb):
-                    client.subscribed_codes.add(code)
-                    subscribed += 1
-                else:
-                    client._failed_sub_symbols.append(sym)
-                    failed += 1
-        client.subscribed_count = len(client.subscribed_codes)
+                if code in removed and code in client.subscribed_codes:
+                    try:
+                        sub_mgr._unsubscribe_symbol(sym)
+                    except Exception as exc:  # noqa: BLE001 — a delisted code often refuses
+                        logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
+                    client.subscribed_codes.discard(code)
+            client.subscribed_count = len(client.subscribed_codes)
+            # A removed code still queued for retry would compete with its replacement for the connection's last slots.
+            # Drain-and-re-append keeps the same deque the retry worker reads (each op is GIL-atomic).
+            queue = getattr(client, "_failed_sub_symbols", None)
+            if removed and queue is not None:
+                for _ in range(len(queue)):
+                    try:
+                        queued = queue.popleft()
+                    except (IndexError, AttributeError):
+                        break
+                    if str(queued.get("code") or "") not in removed:
+                        queue.append(queued)
+
+            client._load_config()
+
+            callback = self._user_callback
+            slot = self._slots[conn_id] if conn_id < len(self._slots) else None
+            wrapped_cb = self._make_callback_wrapper(slot, callback) if (slot is not None and callback) else callback
+            subscribed = 0
+            failed = 0
+            if wrapped_cb is not None:
+                for sym in list(getattr(client, "symbols", ()) or ()):
+                    code = str(sym.get("code") or "")
+                    if code not in added or code in client.subscribed_codes:
+                        continue
+                    if sub_mgr._subscribe_symbol(sym, wrapped_cb):
+                        client.subscribed_codes.add(code)
+                        subscribed += 1
+                    else:
+                        client._failed_sub_symbols.append(sym)
+                        failed += 1
+            client.subscribed_count = len(client.subscribed_codes)
         if failed and wrapped_cb is not None:
             # The boot-time retry worker exits once its queue drains, so a code refused by a later roll would sit in
             # the queue with nobody to retry it (and the next roll sees no change). Start (or keep) the worker.

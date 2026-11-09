@@ -155,3 +155,52 @@ def test_a_queued_code_no_longer_in_the_facade_symbols_is_dropped_not_retried() 
 
     assert client.subscribed == ["NEW"]
     assert not client._failed_sub_symbols
+
+
+def test_roll_waits_for_an_in_flight_retry_and_then_removes_its_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex round 9: a retry mid-subscribe of OLD while a roll swaps OLD for NEW left OLD subscribed for good."""
+    import threading
+
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+    client = _client()
+    client.symbols = [{"code": "OLD"}]
+    in_subscribe = threading.Event()
+    release = threading.Event()
+    unsubscribed: list[str] = []
+
+    def slow_subscribe(sym: dict[str, Any], cb: Any) -> bool:
+        if sym["code"] == "OLD":
+            in_subscribe.set()
+            assert release.wait(timeout=5)
+        client.subscribed.append(sym["code"])
+        return True
+
+    client._subscribe_symbol = slow_subscribe
+    client._subscriptions = lambda: SimpleNamespace(
+        _unsubscribe_symbol=lambda sym: unsubscribed.append(sym["code"]),
+        _subscribe_symbol=slow_subscribe,
+    )
+    client._load_config = lambda: setattr(client, "symbols", [{"code": "NEW"}])
+    client._refresh_quote_routes = lambda: None
+    runtime = QuoteRuntime(client)  # type: ignore[arg-type]  # a duck-typed client is enough for the worker
+    client._failed_sub_symbols.append({"code": "OLD"})
+    runtime.start_sub_retry_thread(lambda *a: None)
+    assert in_subscribe.wait(timeout=5)
+
+    pool: Any = SimpleNamespace(_user_callback=lambda *a: None, _slots=[], _make_callback_wrapper=lambda s, cb: cb)
+    plan = SimpleNamespace(removed={0: ["OLD"]}, added={0: ["NEW"]})
+    facade = SimpleNamespace(logged_in=True, _client=client)
+    roll = threading.Thread(target=QuoteConnectionPool._apply_universe_to_facade, args=(pool, 0, facade, plan))
+    roll.start()
+    # Bounded 50 ms wait (AGENTS: <= 50 ms when unavoidable): proving a thread is blocked needs some time to pass;
+    # the retry is parked on ``release`` and cannot finish, so this cannot pass by luck when the lock is missing.
+    roll.join(timeout=0.05)
+    assert roll.is_alive()  # the roll waits for the in-flight retry instead of interleaving with it
+
+    release.set()
+    roll.join(timeout=5)
+    client._sub_retry_thread.join(timeout=5)
+
+    assert unsubscribed == ["OLD"]
+    assert client.subscribed_codes == {"NEW"}

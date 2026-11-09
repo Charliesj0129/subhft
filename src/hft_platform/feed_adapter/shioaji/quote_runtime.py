@@ -23,6 +23,27 @@ logger = get_logger("feed_adapter.quote_runtime")
 _WATCHDOG_MAX_CONSECUTIVE_ERRORS = 5
 
 
+_LIFECYCLE_LOCK_GUARD = threading.Lock()
+
+
+def subscription_lifecycle_lock(client: Any) -> threading.RLock:
+    """The per-client lock a universe roll and the retry worker take around a subscription change.
+
+    A roll's unsubscribe / config reload / subscribe of one facade, and the retry worker's membership check, SDK
+    subscribe and ``subscribed_codes`` update for one code, run under it, so neither sees the other half-done (a
+    retried code that the roll has just removed, or a check against the universe before the roll). Not taken by
+    ``_resubscribe_all``, whose callers must never block or be skipped by a retry.
+    """
+    lock = getattr(client, "_sub_lifecycle_lock", None)
+    if lock is None:
+        with _LIFECYCLE_LOCK_GUARD:
+            lock = getattr(client, "_sub_lifecycle_lock", None)
+            if lock is None:
+                lock = threading.RLock()
+                client._sub_lifecycle_lock = lock
+    return lock
+
+
 @dataclass(frozen=True)
 class QuotePendingState:
     """Immutable snapshot of the quote pending state at a point in time.
@@ -1131,8 +1152,6 @@ class QuoteRuntime:
                     # next interval tick.
                     pending = len(c._failed_sub_symbols)
                     now = timebase.now_s()
-                    # Codes a universe roll removed from this facade since they were queued are dropped, not retried.
-                    current_codes = {str(s.get("code") or "") for s in (getattr(c, "symbols", None) or ())}
                     for _ in range(pending):
                         if not c._sub_retry_running:
                             break
@@ -1143,45 +1162,49 @@ class QuoteRuntime:
                         if not c._sub_retry_running:
                             c._failed_sub_symbols.append(sym)
                             continue
-                        if current_codes and str(sym.get("code") or "") not in current_codes:
-                            logger.info("Subscription retry dropped: no longer in the universe", code=sym.get("code"))
-                            continue
-                        if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                            c._failed_sub_symbols.append(sym)
-                            continue
-                        # D1: per-symbol backoff + max-attempts gate.
-                        code = sym.get("code") or ""
-                        allowed, reason = self._should_attempt_subscription(code, now)
-                        if not allowed:
-                            if reason == "skip_permanent":
-                                # Drop permanently — never re-append.
+                        with subscription_lifecycle_lock(c):
+                            # Membership is read live, under the lock a universe roll holds while it swaps this
+                            # facade's codes: a code the roll removed is dropped, one it added is kept.
+                            current_codes = {str(x.get("code") or "") for x in (getattr(c, "symbols", None) or ())}
+                            if current_codes and str(sym.get("code") or "") not in current_codes:
+                                logger.info("Subscription retry dropped: not in the universe", code=sym.get("code"))
                                 continue
-                            # skip_backoff: retain in queue for next interval.
-                            c._failed_sub_symbols.append(sym)
-                            continue
-                        if c._subscribe_symbol(sym, cb):
-                            if code:
-                                c.subscribed_codes.add(code)
-                            c.subscribed_count = len(c.subscribed_codes)
-                            # D1: success clears retry state for this symbol.
-                            self._record_subscription_success(code)
-                            logger.info("Subscription retry succeeded", code=code)
-                            # Bug 12: trigger alias propagation so strategies re-resolve
-                            # symbols when subscribe succeeds after the initial
-                            # connect sequence finished.
-                            _cb_alias = getattr(c, "on_alias_map_updated", None)
-                            if _cb_alias is not None:
-                                try:
-                                    _cb_alias()
-                                except Exception as exc:
-                                    logger.warning("on_alias_map_updated_failed", error=str(exc))
-                        else:
-                            # D1: record failure → may move to _permanently_failed
-                            # after HFT_SUB_RETRY_MAX_ATTEMPTS. Permanent symbols
-                            # are NOT re-appended to _failed_sub_symbols.
-                            permanent = self._record_subscription_failure(code, now)
-                            if not permanent:
+                            if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                                 c._failed_sub_symbols.append(sym)
+                                continue
+                            # D1: per-symbol backoff + max-attempts gate.
+                            code = sym.get("code") or ""
+                            allowed, reason = self._should_attempt_subscription(code, now)
+                            if not allowed:
+                                if reason == "skip_permanent":
+                                    # Drop permanently — never re-append.
+                                    continue
+                                # skip_backoff: retain in queue for next interval.
+                                c._failed_sub_symbols.append(sym)
+                                continue
+                            if c._subscribe_symbol(sym, cb):
+                                if code:
+                                    c.subscribed_codes.add(code)
+                                c.subscribed_count = len(c.subscribed_codes)
+                                # D1: success clears retry state for this symbol.
+                                self._record_subscription_success(code)
+                                logger.info("Subscription retry succeeded", code=code)
+                                # Bug 12: trigger alias propagation so strategies re-resolve
+                                # symbols when subscribe succeeds after the initial
+                                # connect sequence finished.
+                                _cb_alias = getattr(c, "on_alias_map_updated", None)
+                                if _cb_alias is not None:
+                                    try:
+                                        _cb_alias()
+                                    except Exception as exc:
+                                        logger.warning("on_alias_map_updated_failed", error=str(exc))
+                            else:
+                                # D1: record failure → may move to _permanently_failed
+                                # after HFT_SUB_RETRY_MAX_ATTEMPTS. Permanent symbols
+                                # are NOT re-appended to _failed_sub_symbols.
+                                permanent = self._record_subscription_failure(code, now)
+                                if not permanent:
+                                    c._failed_sub_symbols.append(sym)
                     if not c._failed_sub_symbols:
                         logger.info("All failed subscriptions resolved")
                         break
