@@ -28,13 +28,15 @@
 #   uv run python -m scripts.shioaji_api_diff diff --from 1.5.6 --to <version> \
 #     > tests/golden/shioaji_sdk/diff_1.5.6_to_<version>.json
 
-pin: "1.7.9"
+pin: "1.7.11"
 
-# 2026-10-22: pin moved 1.5.6 -> 1.7.9 at the owner's request. 1.5.6 had been
-# deleted from PyPI, so the lock could no longer be re-resolved and the image
-# could not be rebuilt. The three platform breaks the 1.5.6-pinned ledger
-# recorded for every 1.7.x release (SecurityType.Future -> Futures; login()
-# lost contracts_timeout and fetch_contract) are remediated in the adapter;
-# git history holds the superseded 1.5.6-relative entries. No release newer
-# than 1.7.9 exists yet.
+# 2026-11-10: pin moved 1.7.9 -> 1.7.11 at the owner's request (supersedes
+# Dependabot #715, which bumped pyproject.toml without the lock or evidence).
+# diff_1.7.9_to_1.7.11.json is SAFE with zero surface changes; the releases are
+# compiled-core fixes only (1.7.10: futures deal reports with a fill-suffixed
+# ordno were dropped; DataStore stops caching empty ticks/kbars. 1.7.11: WRT
+# orders via HTTP server/CLI; late post-timeout replies log as warning; bundled
+# TLS roots). A surface diff cannot clear compiled behaviour, so an
+# HFT_MODE=sim session is still owed before the production deploy. No release
+# newer than 1.7.11 exists yet.
 decisions: []
