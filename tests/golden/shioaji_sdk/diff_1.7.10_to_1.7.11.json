@@ -1,0 +1,17 @@
+{
+  "changes": [],
+  "counts": {
+    "additive": 0,
+    "behavioral": 0,
+    "benign": 0,
+    "breaking_other": 0,
+    "breaking_platform": 0,
+    "informational": 0
+  },
+  "from": "1.7.10",
+  "from_sha256": "b913afe4c2e14749dd6eb2cbe8ef4bea0fab12fbf1ca4a7bcc2e360b6666c70d",
+  "generated_by": "scripts/shioaji_api_diff",
+  "to": "1.7.11",
+  "to_sha256": "b1699c0398f2ac26d1eed170f00f7d3ddb1448d4d7c545c0264c6201ba7c3d61",
+  "verdict": "SAFE"
+}
