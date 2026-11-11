@@ -71,6 +71,10 @@ class _PhantomEntry(NamedTuple):
     symbol: str
     created_ns: int
     intent: OrderIntent
+    # Side actually placed at the broker (int(Side)); -1 = unknown, matches either
+    # side. A FORCE_FLAT places on the closing side derived from the position, not
+    # ``intent.side``; legacy-materialised records carry a placeholder intent.
+    side: int = -1
 
 
 # Operations that mutate broker state and must not be retried if the
@@ -1149,11 +1153,19 @@ class OrderAdapter:
             )
 
         if is_phantom_candidate:
+            # The phantom must carry the side that went to the broker: a
+            # FORCE_FLAT places on ``close_side`` (tracked with the live order),
+            # which can differ from ``intent.side``. A FORCE_FLAT that failed
+            # before it was tracked has no known side (-1, matches either).
+            placed_side: int | None = None
+            if intent.intent_type == IntentType.FORCE_FLAT:
+                tracked = self._live_order_intents.get(f"{intent.strategy_id}:{intent.intent_id}")
+                placed_side = int(tracked[1]) if tracked is not None else -1
             # M4: append per-occurrence record under _phantom_lock so concurrent
             # ``resolve_phantom_fill`` / ``clear_phantom_candidate`` cannot
             # race with insert + capacity-eviction sweep.
             with self._phantom_lock:
-                phantom_key = self._register_phantom(intent)
+                phantom_key = self._register_phantom(intent, placed_side)
                 if self._phantom_record_count() > self._phantom_order_max:
                     self._evict_stale_phantom_records(max_age_s=3600.0)
             logger.warning(
@@ -1229,13 +1241,14 @@ class OrderAdapter:
             self._phantom_intents = view
         return view
 
-    def _register_phantom(self, intent: OrderIntent) -> str:
+    def _register_phantom(self, intent: OrderIntent, side: int | None = None) -> str:
         """M4: append a new ``_PhantomEntry`` for ``intent``. Multiple
         registrations with the same key (same ``strategy_id:intent_id``)
         accumulate as separate list entries — none overwrites another.
         Returns the canonical phantom key (``"strategy_id:intent_id"``).
         Caller MUST be inside ``_phantom_lock`` already (insert is paired
-        with a capacity-eviction sweep).
+        with a capacity-eviction sweep). ``side`` is the side placed at the
+        broker; None means ``intent.side`` (a NEW), -1 means unknown.
         """
         phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
         entry = _PhantomEntry(
@@ -1243,6 +1256,7 @@ class OrderAdapter:
             symbol=intent.symbol,
             created_ns=timebase.now_ns(),
             intent=intent,
+            side=int(intent.side) if side is None else int(side),
         )
         records = self._get_phantom_records()
         records.setdefault(phantom_key, []).append(entry)
@@ -1586,7 +1600,9 @@ class OrderAdapter:
                 else:
                     self._phantom_drop_key(pkey)
                 expired.append((pkey, record.intent))
-                self._get_expired_phantoms().append((now_mono, pkey, record.symbol, int(record.intent.side)))
+                self._get_expired_phantoms().append(
+                    (now_mono, pkey, record.symbol, record.side if record.side != -1 else int(record.intent.side))
+                )
         for _pkey, intent in expired:
             # After this the record can no longer claim a fill: a late fill for
             # the order reaches the router as strategy UNKNOWN.
@@ -2082,8 +2098,12 @@ class OrderAdapter:
                 with self._phantom_lock:
                     records = self._get_phantom_records().get(order_key)
                     if records:
-                        records.pop(0)
-                        self._phantom_resync_legacy(order_key)
+                        # Oldest occurrence of THIS side: a reused intent_id may
+                        # hold an opposite-side occurrence that is not this fill's.
+                        idx = next((i for i, r in enumerate(records) if r.side in (-1, int(side))), None)
+                        if idx is not None:
+                            records.pop(idx)
+                            self._phantom_resync_legacy(order_key)
                 logger.warning(
                     "phantom_fill_resolved_via_pending_index",
                     symbol=symbol,
@@ -2101,26 +2121,30 @@ class OrderAdapter:
             for pkey, records in list(self._get_phantom_records().items()):
                 if not records:
                     continue
-                # FIFO: examine the oldest record first. A symbol mismatch
-                # means we cannot use ANY occurrence under this key (they
-                # all share the same symbol since the same intent_id from
-                # the same strategy hits the same symbol), so move on.
-                head = records[0]
-                # Skip entries older than 2 hours (stale phantoms)
-                if (now_mono - head.monotonic_ts) > 7200.0:
-                    continue
-                # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
-                if head.symbol and head.symbol != symbol:
-                    continue
-                # A fill can only belong to an order of its own side: a SELL fill
-                # popping an older BUY phantom leaked the strategy's BUY pending
-                # slot forever (THESHOW 2026-11-11, R47 TMFK6). Legacy-materialised
-                # records carry qty 0 and a placeholder side, so they still match.
-                if head.intent.qty > 0 and int(head.intent.side) != int(side):
+                # FIFO over this key's occurrences: the oldest one that is fresh,
+                # on the fill's symbol and on the fill's side. A fill can only
+                # belong to an order of its own side: a SELL fill popping an older
+                # BUY phantom leaked the strategy's BUY pending slot forever
+                # (THESHOW 2026-11-11, R47). An occurrence of the other side under
+                # a reused intent_id must not hide a matching one behind it.
+                # Side -1 (unknown: legacy record, untracked FORCE_FLAT) matches.
+                idx = None
+                for i, rec in enumerate(records):
+                    # Skip entries older than 2 hours (stale phantoms)
+                    if (now_mono - rec.monotonic_ts) > 7200.0:
+                        continue
+                    # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
+                    if rec.symbol and rec.symbol != symbol:
+                        continue
+                    if rec.side != -1 and rec.side != int(side):
+                        continue
+                    idx = i
+                    break
+                if idx is None:
                     continue
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
-                # M4: pop ONE occurrence FIFO; siblings retained.
-                records.pop(0)
+                # M4: pop ONE occurrence; siblings retained.
+                records.pop(idx)
                 self._phantom_resync_legacy(pkey)
                 # The order's Trade may still come back: ``_bind_late_trade`` must
                 # find it already filled instead of cancelling a finished order.

@@ -12,6 +12,14 @@ The expired-ledger tier of the same method already matches side; the record loop
 must too. Legacy records materialised from ``_phantom_order_keys`` carry a
 synthesised ``side=BUY, qty=0`` intent that says nothing about the real side,
 so they must stay matchable by either side.
+
+A phantom carries the side that was actually placed at the broker, not just
+``intent.side``: a FORCE_FLAT places on the closing side derived from the
+position, so a failed FORCE_FLAT is registered with the tracked ``close_side``
+(or side -1, "unknown, matches either", when it failed before it was tracked).
+A reused ``intent_id`` can hold occurrences of both sides under one key; the
+fill must claim the oldest occurrence of ITS side, and must not be hidden from
+a matching occurrence behind an opposite-side head.
 """
 
 from __future__ import annotations
@@ -25,7 +33,7 @@ import pytest
 
 from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
-from hft_platform.order.adapter import OrderAdapter
+from hft_platform.order.adapter import _PENDING_SENTINEL, OrderAdapter
 
 _STRATEGY = "R47_MAKER_TMF"
 _SYMBOL = "TMFK6"
@@ -73,15 +81,22 @@ def _adapter(tmp_config: str) -> OrderAdapter:
     return adapter
 
 
-def _intent(intent_id: int, side: Side, symbol: str = _SYMBOL, qty: int = 1) -> OrderIntent:
+def _intent(
+    intent_id: int,
+    side: Side,
+    symbol: str = _SYMBOL,
+    qty: int = 1,
+    strategy_id: str = _STRATEGY,
+    intent_type: IntentType = IntentType.NEW,
+) -> OrderIntent:
     return OrderIntent(
         intent_id=intent_id,
-        strategy_id=_STRATEGY,
+        strategy_id=strategy_id,
         symbol=symbol,
         price=_PRICE_X10000,
         qty=qty,
         side=side,
-        intent_type=IntentType.NEW,
+        intent_type=intent_type,
         tif=TIF.LIMIT,
     )
 
@@ -226,3 +241,147 @@ def test_resolve_phantom_fill_legacy_zero_qty_record_still_matches_any_side(tmp_
     assert adapter.get_phantom_candidates() == frozenset(), "the legacy record is consumed"
     assert legacy_key not in adapter._phantom_order_keys
     assert adapter.filled_qty_for(legacy_key) == 1
+
+
+# --------------------------------------------------------------------------- #
+# A phantom carries the side placed at the broker (FORCE_FLAT: the close side)  #
+# --------------------------------------------------------------------------- #
+
+_FF_ID = 2001
+_FF_KEY = f"{_STRATEGY}:{_FF_ID}"
+
+
+async def _fail_force_flat_dispatch(adapter: OrderAdapter, intent: OrderIntent, tracked_side: Side | None) -> None:
+    """Drive ``_handle_dispatch_exception`` for a FORCE_FLAT whose place_order raised.
+
+    ``tracked_side`` is the ``close_side`` that ``_dispatch_force_flat`` tracks with the
+    in-flight sentinel before it calls the broker; None = it failed before it was tracked.
+    The pending-fill index is left empty so a later fill takes the phantom-record fallback.
+    """
+    key = f"{intent.strategy_id}:{intent.intent_id}"
+    if tracked_side is not None:
+        async with adapter._live_orders_lock:
+            adapter.live_orders[key] = _PENDING_SENTINEL
+            adapter._pending_order_keys.add(key)
+            adapter._track_live_order_intent(key, intent, tracked_side)
+    await adapter._handle_dispatch_exception(intent=intent, cmd_id=1)
+    assert not adapter._pending_fill_index, "the scenario needs the phantom-record fallback, not the index"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fill_side", "expected"),
+    [(Side.SELL, _STRATEGY), (Side.BUY, None)],
+    ids=["close_side_fill_resolves", "intent_side_fill_does_not"],
+)
+async def test_failed_force_flat_phantom_matches_the_tracked_close_side_not_intent_side(
+    tmp_config, fill_side, expected
+):
+    adapter = _adapter(tmp_config)
+    # The intent says BUY, but the position being flattened is long: the order went out as a SELL.
+    intent = _intent(_FF_ID, Side.BUY, intent_type=IntentType.FORCE_FLAT)
+    await _fail_force_flat_dispatch(adapter, intent, tracked_side=Side.SELL)
+    assert adapter.get_phantom_candidates() == frozenset({_FF_KEY})
+
+    assert adapter.resolve_phantom_fill(_fill(fill_side)) == expected
+
+    if expected is None:
+        assert adapter.get_phantom_candidates() == frozenset({_FF_KEY}), "the phantom is left for its own fill"
+        assert adapter.filled_qty_for(_FF_KEY) == 0
+    else:
+        assert adapter.get_phantom_candidates() == frozenset(), "the SELL fill consumes the phantom"
+        assert adapter.filled_qty_for(_FF_KEY) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fill_side", [Side.SELL, Side.BUY], ids=["sell_fill", "buy_fill"])
+async def test_failed_force_flat_phantom_without_tracked_order_matches_either_side(tmp_config, fill_side):
+    adapter = _adapter(tmp_config)
+    # Failed before the live order was tracked: nothing says which side went out (side -1).
+    intent = _intent(_FF_ID, Side.BUY, intent_type=IntentType.FORCE_FLAT)
+    assert _FF_KEY not in adapter._live_order_intents
+    await _fail_force_flat_dispatch(adapter, intent, tracked_side=None)
+    assert adapter.get_phantom_candidates() == frozenset({_FF_KEY})
+
+    assert adapter.resolve_phantom_fill(_fill(fill_side)) == _STRATEGY
+
+    assert adapter.get_phantom_candidates() == frozenset(), "the unknown-side phantom is consumed"
+    assert adapter.filled_qty_for(_FF_KEY) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_force_flat_phantom_ledger_records_the_tracked_close_side(tmp_config):
+    adapter = _adapter(tmp_config)
+    intent = _intent(_FF_ID, Side.BUY, intent_type=IntentType.FORCE_FLAT)
+    await _fail_force_flat_dispatch(adapter, intent, tracked_side=Side.SELL)
+
+    assert await adapter.release_stale_phantom_pendings(ttl_s=0.0) == 1
+
+    assert adapter.get_phantom_candidates() == frozenset()
+    assert [(key, sym, side) for _ts, key, sym, side in adapter._get_expired_phantoms()] == [
+        (_FF_KEY, _SYMBOL, int(Side.SELL))
+    ], "the ledger holds the side placed at the broker (SELL), not intent.side (BUY)"
+    # Behavioural consequence: a late SELL fill is still claimed, a BUY fill is not.
+    assert adapter.resolve_phantom_fill(_fill(Side.BUY)) is None
+    assert len(adapter._get_expired_phantoms()) == 1
+    assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _STRATEGY
+    assert len(adapter._get_expired_phantoms()) == 0
+
+
+# --------------------------------------------------------------------------- #
+# A reused intent_id holds occurrences of both sides under one key              #
+# --------------------------------------------------------------------------- #
+
+_A_STRATEGY = "STRAT_A"
+_B_STRATEGY = "STRAT_B"
+_A_ID = 3001
+_B_ID = 3002
+_A_KEY = f"{_A_STRATEGY}:{_A_ID}"
+_B_KEY = f"{_B_STRATEGY}:{_B_ID}"
+
+
+def _sides(adapter: OrderAdapter, key: str) -> list[int]:
+    return [int(r.intent.side) for r in adapter._get_phantom_records()[key]]
+
+
+def test_resolve_phantom_fill_scans_past_opposite_side_head_of_a_reused_intent_id(tmp_config):
+    adapter = _adapter(tmp_config)
+    # Key A holds [BUY, SELL] (intent_id reused); key B, registered after both, holds [SELL].
+    assert _register(adapter, _intent(_A_ID, Side.BUY, strategy_id=_A_STRATEGY)) == _A_KEY
+    assert _register(adapter, _intent(_A_ID, Side.SELL, strategy_id=_A_STRATEGY)) == _A_KEY
+    assert _register(adapter, _intent(_B_ID, Side.SELL, strategy_id=_B_STRATEGY)) == _B_KEY
+    assert _sides(adapter, _A_KEY) == [int(Side.BUY), int(Side.SELL)]
+    assert not adapter._pending_fill_index, "the scenario needs the phantom-record fallback, not the index"
+
+    assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY, "the older SELL under A wins over B's"
+
+    assert _sides(adapter, _A_KEY) == [int(Side.BUY)], "A's remaining occurrence is the BUY one"
+    assert _sides(adapter, _B_KEY) == [int(Side.SELL)], "B is untouched"
+    assert adapter.filled_qty_for(_A_KEY) == 1
+    assert adapter.filled_qty_for(_B_KEY) == 0
+
+
+def test_resolve_phantom_fill_pending_index_pops_the_same_side_occurrence_of_a_reused_intent_id(tmp_config):
+    adapter = _adapter(tmp_config)
+    assert _register(adapter, _intent(_A_ID, Side.BUY, strategy_id=_A_STRATEGY)) == _A_KEY
+    assert _register(adapter, _intent(_A_ID, Side.SELL, strategy_id=_A_STRATEGY)) == _A_KEY
+    # The SELL submission registered its early-fill correlation; the BUY one did not (or already settled).
+    adapter._pending_fill_index[f"{_SYMBOL}:SELL"] = [_A_KEY]
+
+    assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY
+
+    assert not adapter._pending_fill_index, "the SELL pending-fill entry is consumed"
+    assert _sides(adapter, _A_KEY) == [int(Side.BUY)], "the BUY occurrence is not the one popped"
+    assert adapter.get_phantom_candidates() == frozenset({_A_KEY})
+    assert adapter.filled_qty_for(_A_KEY) == 1
+
+
+def test_resolve_phantom_fill_pending_index_keeps_all_phantoms_when_none_match_the_side(tmp_config):
+    adapter = _adapter(tmp_config)
+    _register(adapter, _intent(_A_ID, Side.BUY, strategy_id=_A_STRATEGY))
+    adapter._pending_fill_index[f"{_SYMBOL}:SELL"] = [_A_KEY]
+
+    assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY, "the index still attributes the fill"
+
+    assert adapter.get_phantom_candidates() == frozenset({_A_KEY}), "a BUY phantom is never popped by a SELL fill"
+    assert _sides(adapter, _A_KEY) == [int(Side.BUY)]
