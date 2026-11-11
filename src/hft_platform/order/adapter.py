@@ -2112,6 +2112,12 @@ class OrderAdapter:
                 # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
                 if head.symbol and head.symbol != symbol:
                     continue
+                # A fill can only belong to an order of its own side: a SELL fill
+                # popping an older BUY phantom leaked the strategy's BUY pending
+                # slot forever (THESHOW 2026-11-11, R47 TMFK6). Legacy-materialised
+                # records carry qty 0 and a placeholder side, so they still match.
+                if head.intent.qty > 0 and int(head.intent.side) != int(side):
+                    continue
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
                 # M4: pop ONE occurrence FIFO; siblings retained.
                 records.pop(0)
