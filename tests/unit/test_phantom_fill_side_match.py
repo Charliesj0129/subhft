@@ -29,8 +29,8 @@ from hft_platform.order.adapter import OrderAdapter
 
 _STRATEGY = "R47_MAKER_TMF"
 _SYMBOL = "TMFK6"
-_BUY_ID = 28866  # older BUY phantom
-_SELL_ID = 28964  # newer SELL phantom
+_BUY_ID = 1001  # older BUY phantom
+_SELL_ID = 1002  # newer SELL phantom
 _BUY_KEY = f"{_STRATEGY}:{_BUY_ID}"
 _SELL_KEY = f"{_STRATEGY}:{_SELL_ID}"
 _PRICE_X10000 = 32_150 * 10_000  # 32,150 index points, scaled int x10000
