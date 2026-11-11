@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -385,3 +385,87 @@ def test_resolve_phantom_fill_pending_index_keeps_all_phantoms_when_none_match_t
 
     assert adapter.get_phantom_candidates() == frozenset({_A_KEY}), "a BUY phantom is never popped by a SELL fill"
     assert _sides(adapter, _A_KEY) == [int(Side.BUY)]
+
+
+# --------------------------------------------------------------------------- #
+# The fallback claims the oldest eligible occurrence across ALL keys            #
+# --------------------------------------------------------------------------- #
+
+_OLD_SYMBOL = "TMFJ6"
+
+
+def _stamp_registration_order(adapter: OrderAdapter, *keys_in_order: str) -> None:
+    """Give the registered occurrences strictly increasing ``monotonic_ts`` in the order listed.
+
+    ``keys_in_order`` names a key once per occurrence, in registration order; the n-th mention
+    of a key stamps that key's n-th occurrence. Registration reads the real clock, whose ticks can
+    tie, so the ordering is set explicitly instead of slept for. All stamps are a few seconds in
+    the past, well inside the 2 h freshness window.
+    """
+    base = time.monotonic() - 10.0
+    seen: dict[str, int] = {}
+    records = adapter._get_phantom_records()
+    for n, key in enumerate(keys_in_order):
+        i = seen.get(key, 0)
+        seen[key] = i + 1
+        records[key][i] = records[key][i]._replace(monotonic_ts=base + n)
+    stamps = [r.monotonic_ts for recs in records.values() for r in recs]
+    assert len(set(stamps)) == len(stamps), "the scenario needs strictly ordered registration times"
+
+
+def test_resolve_phantom_fill_claims_oldest_occurrence_across_keys_not_first_key_in_dict_order(tmp_config):
+    adapter = _adapter(tmp_config)
+    # Registration order (oldest first):
+    #   1. A:id BUY  on OLD   (key A is created first, so it iterates first)
+    #   2. B:id2 SELL on NEW  (the oldest occurrence that can own a SELL fill on NEW)
+    #   3. A:id SELL on NEW   (the intent_id is reused: newer, but it sits under the first key)
+    assert _register(adapter, _intent(_A_ID, Side.BUY, symbol=_OLD_SYMBOL, strategy_id=_A_STRATEGY)) == _A_KEY
+    assert _register(adapter, _intent(_B_ID, Side.SELL, strategy_id=_B_STRATEGY)) == _B_KEY
+    assert _register(adapter, _intent(_A_ID, Side.SELL, strategy_id=_A_STRATEGY)) == _A_KEY
+    _stamp_registration_order(adapter, _A_KEY, _B_KEY, _A_KEY)
+    assert list(adapter._get_phantom_records()) == [_A_KEY, _B_KEY], "A iterates before B"
+    assert not adapter._pending_fill_index, "the scenario needs the phantom-record fallback, not the index"
+
+    assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _B_STRATEGY, "B's SELL is older than A's reused one"
+
+    assert _B_KEY not in adapter._get_phantom_records(), "B's only occurrence is consumed"
+    assert adapter.filled_qty_for(_B_KEY) == 1
+    assert [(r.symbol, r.side) for r in adapter._get_phantom_records()[_A_KEY]] == [
+        (_OLD_SYMBOL, int(Side.BUY)),
+        (_SYMBOL, int(Side.SELL)),
+    ], "A keeps both occurrences, including its newer SELL on NEW"
+    assert adapter.filled_qty_for(_A_KEY) == 0
+    assert adapter.get_phantom_candidates() == frozenset({_A_KEY})
+    # The next SELL fill on NEW then finds A's occurrence: nothing was lost, only ordered.
+    assert adapter.resolve_phantom_fill(_fill(Side.SELL)) == _A_STRATEGY
+    assert [(r.symbol, r.side) for r in adapter._get_phantom_records()[_A_KEY]] == [(_OLD_SYMBOL, int(Side.BUY))]
+
+
+# --------------------------------------------------------------------------- #
+# A malformed side must not break registration                                  #
+# --------------------------------------------------------------------------- #
+
+_BAD_ID = 4001
+_BAD_KEY = f"{_STRATEGY}:{_BAD_ID}"
+
+
+@pytest.mark.asyncio
+async def test_failed_new_intent_with_missing_side_registers_unknown_side_phantom_without_raising(tmp_config):
+    adapter = _adapter(tmp_config)
+    # OrderIntent is an unvalidated slots dataclass, so side=None builds; cast(Any, ...) only
+    # keeps the static type honest. Registration runs after the phantom-pending feedback went
+    # out, so a raise here would drop the rest of the worker's batch.
+    intent = _intent(_BAD_ID, cast(Any, None))
+    assert intent.side is None
+
+    await adapter._handle_dispatch_exception(intent=intent, cmd_id=1)  # must not raise
+
+    (record,) = adapter._get_phantom_records()[_BAD_KEY]
+    assert record.side == -1, "unknown side, not a crash and not a guessed BUY"
+    assert record.symbol == _SYMBOL
+    assert record.intent is intent
+    assert adapter.get_phantom_candidates() == frozenset({_BAD_KEY})
+    # Unknown side matches either side: the order may have gone out as either.
+    assert adapter.resolve_phantom_fill(_fill(Side.BUY)) == _STRATEGY
+    assert adapter.get_phantom_candidates() == frozenset()
+    assert adapter.filled_qty_for(_BAD_KEY) == 1

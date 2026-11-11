@@ -58,6 +58,16 @@ class _CancelWatch(NamedTuple):
     confirm_s: float | None = None  # precision-time: None uses the global window
 
 
+def _phantom_side(side: Any) -> int:
+    """int(Side) for a phantom record; -1 (unknown, matches either side) when the
+    side is missing or malformed. Registration runs after phantom-pending feedback
+    was sent and must never raise, or the worker drops the rest of its batch."""
+    try:
+        return int(side)
+    except (TypeError, ValueError):
+        return -1
+
+
 class _PhantomEntry(NamedTuple):
     """M4: per-occurrence phantom record. Multiple entries can share the
     same ``(strategy_id, intent_id)`` key when an intent_id is reused in
@@ -1160,7 +1170,7 @@ class OrderAdapter:
             placed_side: int | None = None
             if intent.intent_type == IntentType.FORCE_FLAT:
                 tracked = self._live_order_intents.get(f"{intent.strategy_id}:{intent.intent_id}")
-                placed_side = int(tracked[1]) if tracked is not None else -1
+                placed_side = _phantom_side(tracked[1]) if tracked is not None else -1
             # M4: append per-occurrence record under _phantom_lock so concurrent
             # ``resolve_phantom_fill`` / ``clear_phantom_candidate`` cannot
             # race with insert + capacity-eviction sweep.
@@ -1256,7 +1266,7 @@ class OrderAdapter:
             symbol=intent.symbol,
             created_ns=timebase.now_ns(),
             intent=intent,
-            side=int(intent.side) if side is None else int(side),
+            side=_phantom_side(intent.side if side is None else side),
         )
         records = self._get_phantom_records()
         records.setdefault(phantom_key, []).append(entry)
@@ -1600,9 +1610,8 @@ class OrderAdapter:
                 else:
                     self._phantom_drop_key(pkey)
                 expired.append((pkey, record.intent))
-                self._get_expired_phantoms().append(
-                    (now_mono, pkey, record.symbol, record.side if record.side != -1 else int(record.intent.side))
-                )
+                placed = record.side if record.side != -1 else _phantom_side(record.intent.side)
+                self._get_expired_phantoms().append((now_mono, pkey, record.symbol, placed))
         for _pkey, intent in expired:
             # After this the record can no longer claim a fill: a late fill for
             # the order reaches the router as strategy UNKNOWN.
@@ -2118,30 +2127,31 @@ class OrderAdapter:
             # Snapshot inside the lock; process candidates below (still holding
             # the lock for the matching pop to avoid a concurrent task stealing
             # the same key between our match decision and the pop).
-            for pkey, records in list(self._get_phantom_records().items()):
-                if not records:
-                    continue
-                # FIFO over this key's occurrences: the oldest one that is fresh,
-                # on the fill's symbol and on the fill's side. A fill can only
-                # belong to an order of its own side: a SELL fill popping an older
-                # BUY phantom leaked the strategy's BUY pending slot forever
-                # (THESHOW 2026-11-11, R47). An occurrence of the other side under
-                # a reused intent_id must not hide a matching one behind it.
-                # Side -1 (unknown: legacy record, untracked FORCE_FLAT) matches.
-                idx = None
-                for i, rec in enumerate(records):
+            # Oldest eligible occurrence across ALL keys (registration time), not the
+            # first key in dict order: a reused key's newer occurrence must not beat
+            # another key's older one. Eligible = fresh, on the fill's symbol, on the
+            # fill's side. A fill can only belong to an order of its own side: a SELL
+            # fill popping an older BUY phantom leaked the strategy's BUY pending slot
+            # forever (THESHOW 2026-11-11, R47). Side -1 (unknown: legacy record,
+            # untracked FORCE_FLAT, malformed side) matches either side.
+            best: tuple[float, str, int] | None = None
+            fill_side = int(side)
+            for key, recs in self._get_phantom_records().items():
+                for i, rec in enumerate(recs):
                     # Skip entries older than 2 hours (stale phantoms)
                     if (now_mono - rec.monotonic_ts) > 7200.0:
                         continue
                     # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
                     if rec.symbol and rec.symbol != symbol:
                         continue
-                    if rec.side != -1 and rec.side != int(side):
+                    if rec.side != -1 and rec.side != fill_side:
                         continue
-                    idx = i
-                    break
-                if idx is None:
-                    continue
+                    if best is None or rec.monotonic_ts < best[0]:
+                        best = (rec.monotonic_ts, key, i)
+                    break  # occurrences are appended in order: the first eligible is this key's oldest
+            if best is not None:
+                _, pkey, idx = best
+                records = self._get_phantom_records()[pkey]
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
                 # M4: pop ONE occurrence; siblings retained.
                 records.pop(idx)
