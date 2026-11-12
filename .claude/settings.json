@@ -44,6 +44,16 @@
           }
         ]
       }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-/home/charlie/hft_platform}/scripts/hooks/teammate_idle_guard.sh\""
+          }
+        ]
+      }
     ]
   },
   "permissions": {
