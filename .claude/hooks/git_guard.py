@@ -30,13 +30,15 @@ READONLY = {
     "ls-remote",
     "var",
     "help",
-    # Inspection plumbing: reads objects and refs, writes none of them.
+    # Inspection plumbing: writes no ref and no index entry. Like `diff` and
+    # `log` above, diff-tree and range-diff can write a file through --output;
+    # this guard is about git state, and a subagent can already write files.
+    # `archive` stays out: --exec and --remote run a command of the caller's choosing.
     "rev-list",
     "ls-tree",
     "diff-tree",
     "range-diff",
     "show-ref",
-    "archive",
 }
 LIST_FORMS = {
     "stash": ("list", "show"),

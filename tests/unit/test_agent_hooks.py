@@ -1551,6 +1551,8 @@ _LOOP_READONLY = (
     "until git diff --quiet; do git status --short; done",
     "! git diff --quiet HEAD",
     "{ git status --short; git log -1; }",
+    "time git status --short",
+    "time -p git log -1",
 )
 
 
@@ -1576,24 +1578,54 @@ def test_git_guard_blocks_mutation_inside_loop_and_conditional_bodies(tmp_path):
         assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
 
 
+def test_git_guard_blocks_string_commands_inside_loop_and_conditional_bodies(tmp_path):
+    """`bash -c` and `env -S` hide the command in one token. Behind a reserved word
+    the payload was never flattened, so these passed while the same command at the
+    top level was blocked."""
+    for cmd in (
+        "for x in 1; do bash -c 'git reset --hard HEAD~1'; done",
+        'if true; then sh -c "git push origin HEAD"; fi',
+        "! bash -c 'git commit -m x'",
+        "{ bash -c 'git clean -fd'; }",
+        "time bash -c 'git reset --hard'",
+        "time -p bash -c 'git reset --hard'",
+        "for x in 1; do env -S 'git push origin HEAD'; done",
+        "for x in 1; do timeout 5 bash -c 'git reset --hard'; done",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        assert run_hook("git_guard.py", ev, tmp_path).returncode == 2, f"not blocked: {cmd!r}"
+
+
+def test_git_guard_blocks_a_reserved_word_that_is_only_an_argument(tmp_path):
+    """Only a leading reserved word is skipped; `echo do git ...` is still a segment
+    naming git that the parser cannot attribute, and that stays fail-closed."""
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "echo do git reset --hard"}}
+    assert run_hook("git_guard.py", ev, tmp_path).returncode == 2
+
+
 def test_git_guard_allows_readonly_plumbing_subcommands(tmp_path):
-    """Inspection commands reviewers actually reach for; none of them changes a ref,
-    the index, or the working tree."""
+    """Inspection commands reviewers actually reach for; none writes a ref or the index."""
     for cmd in (
         "git rev-list --count main..HEAD",
         "git ls-tree -r --name-only HEAD",
         "git range-diff main...HEAD",
         "git diff-tree --no-commit-id --name-only -r HEAD",
         "git show-ref --heads",
-        "git archive HEAD src | tar -t",
     ):
         ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
         r = run_hook("git_guard.py", ev, tmp_path)
         assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
 
 
-def test_git_guard_still_blocks_object_and_ref_writers(tmp_path):
-    for cmd in ("git hash-object -w file.txt", "git fetch origin", "git update-ref refs/heads/x HEAD"):
+def test_git_guard_still_blocks_object_and_ref_writers_and_archive(tmp_path):
+    """`archive` is not on the read-only list: --exec and --remote run a command."""
+    for cmd in (
+        "git hash-object -w file.txt",
+        "git fetch origin",
+        "git update-ref refs/heads/x HEAD",
+        "git archive --remote=. --exec='touch marker;' HEAD",
+        "git archive HEAD src",
+    ):
         ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
         assert run_hook("git_guard.py", ev, tmp_path).returncode == 2, f"not blocked: {cmd!r}"
 

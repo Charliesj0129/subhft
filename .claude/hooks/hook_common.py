@@ -19,7 +19,11 @@ _WRAPPERS = {
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
     "nice": {"-n", "--adjustment"},
+    "time": {"-o", "--output", "-f", "--format"},
 }
+# Reserved words that can open a segment once a compound command is split on
+# `;`, `&&`, `|` or a newline. The program is the token after them.
+_SHELL_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{"})
 # Global options that take a separate value argument, per tool.
 _GIT_OPTS_WITH_VALUE = {"-C", "-c", "--namespace", "--work-tree", "--git-dir", "--exec-path"}
 _GH_OPTS_WITH_VALUE = {"-R", "--repo", "--hostname"}
@@ -131,7 +135,10 @@ def _string_command(toks: list[str]) -> tuple[bool, str | None]:
     """
     i = 0
     while i < len(toks):
-        if _ENV_ASSIGN.match(toks[i]):
+        # Reserved words are skipped here as in _skip_prefix: `do bash -c '...'`
+        # was otherwise never flattened, and the payload stayed one token that
+        # no basename check could see.
+        if _ENV_ASSIGN.match(toks[i]) or toks[i] in _SHELL_KEYWORDS:
             i += 1
             continue
         base = os.path.basename(toks[i])
@@ -187,11 +194,6 @@ def _repo_selectors(toks: list[str], i: int) -> list[str]:
             found.append(toks[j])
         j += 2 if toks[j] in _GIT_OPTS_WITH_VALUE else 1
     return found
-
-
-#: Reserved words that can open a segment once a compound command is split on
-#: `;`, `&&`, `|` or a newline. The program is the token after them.
-_SHELL_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time"})
 
 
 def _skip_prefix(toks: list[str]) -> int:
