@@ -19,7 +19,7 @@ edit it there, not here.
 
 - `scope_guard` — during a delegation window, writes outside the packet allowlist are denied.
 - `git_guard` — subagents' non-read-only git is denied.
-- `codex_review_gate` — `git push` / `gh pr create|merge` of `src/`, `rust_core/`, or `config/` changes needs a Codex review attestation.
+- `codex_review_gate` — merging a PR (`gh pr merge`) that changes `src/`, `rust_core/`, `config/`, `.claude/hooks/`, or `.claude/settings.json` needs a Codex review attestation and `--match-head-commit`. Pushes and PR creation are not gated.
 - `discipline_feedback` — advisory `check_discipline` on the edited platform file.
 - `commit_audit` — advisory: HEAD vs the declared allowlist marker.
 

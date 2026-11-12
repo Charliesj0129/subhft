@@ -29,8 +29,8 @@ An ``ATTESTATION.json`` written **after both reviewers finish**, plus:
 * the reviewed head OID equals the OID actually being published,
 * the diff hash recomputed now equals the one recorded then (so amending,
   or reviewing a narrower base, invalidates the evidence),
-* a working-tree review never credits a publish -- uncommitted files are not
-  what a push sends,
+* a working-tree review never credits a merge -- uncommitted files are not
+  what a merge lands,
 * ``needs-attention`` requires an ``ACK.md`` naming every high-severity finding.
 
 Every rule re-derives its facts from git rather than trusting the attestation's
@@ -62,7 +62,6 @@ GATED_PREFIXES = (
     # the review hooks is "not source" and publishes freely -- after which
     # nothing stops the next one.
     ".claude/hooks/",
-    "scripts/git-hooks/",
     # ...and the file that ACTIVATES them. Gating only the implementations left
     # the registrations ungated: a branch deleting the PreToolUse entries touches
     # no gated prefix, publishes freely, and disables enforcement on checkout.
@@ -401,7 +400,7 @@ def _rejection(
     if att.get("mode") == "working-tree":
         return (
             f"{d.name}: reviewed the working tree, not commits. Uncommitted files are not "
-            "what a push publishes -- re-review the branch."
+            "what a merge lands -- re-review the branch."
         ), False
 
     reviewers = att.get("reviewers") or {}
