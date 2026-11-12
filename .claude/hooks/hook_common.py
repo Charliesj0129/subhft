@@ -101,35 +101,46 @@ def _split_background(seg: str) -> list[str]:
     `git status & git reset --hard` is two commands, so the `&` must end the
     first one. A `&` inside quotes is an argument character: cutting
     `git -C "/tmp/R&D" reset --hard` there left `git -C "/tmp/R`, which names no
-    subcommand, and the reset went unseen. Redirections stay whole (`2>&1`,
-    `>&2`, `<&3`, `&>file`), and `\\&` is a literal character.
+    subcommand, and the reset went unseen.
 
-    A segment whose quotes do not balance is cut at every `&`. The caller
-    tokenises such a segment on whitespace, so its quotes protect nothing there
-    either, and a command glued to the operator (`x "a&git reset --hard`) would
-    otherwise sit inside one token.
+    What counts as outside quotes is what bash would say of this segment alone:
+    single quotes, double quotes, `$'...'` (where a backslash escapes) and a
+    backslash before the character. An `&` that the segment shows as quoted is
+    never cut, also when the segment's quotes do not balance. That happens when
+    the caller cut a quoted `;` or `|` first, and cutting the earlier, complete
+    `"/tmp/R&D"` on top of that lost a command the uncut segment still showed.
+
+    An `&` next to a redirection operator is part of it (`2>&1`, `>&2`, `<&3`,
+    `&>file`). The `<` or `>` must itself be an operator: in `--grep \\>& git
+    reset` it is an escaped argument and the `&` ends the command.
 
     Only `&` is read this way. The other operators are still cut wherever they
     appear, quoted or not. Reading quotes across a whole command needs comments
     and heredoc bodies modelled first: without that, an apostrophe in either
     one swallows the commands that follow it.
     """
-    quoted: list[int] = []
-    bare: list[int] = []
+    cuts: list[int] = []
     quote = ""
+    dollar = redirect = -2
     i = 0
     while i < len(seg):
         c = seg[i]
         if c == "\\" and quote != "'":
             i += 1
-        elif c == quote:
-            quote = ""
-        elif not quote and c in "'\"":
+        elif quote:
+            if c == quote[-1]:
+                quote = ""
+        elif c == "'":
+            quote = "$'" if dollar == i - 1 else "'"
+        elif c == '"':
             quote = c
-        elif c == "&" and not ((i > 0 and seg[i - 1] in "<>") or seg.startswith("&>", i)):
-            (quoted if quote else bare).append(i)
+        elif c == "$":
+            dollar = i
+        elif c in "<>":
+            redirect = i
+        elif c == "&" and redirect != i - 1 and not seg.startswith("&>", i):
+            cuts.append(i)
         i += 1
-    cuts = sorted(quoted + bare) if quote else bare
     parts: list[str] = []
     start = 0
     for cut in cuts:

@@ -1607,12 +1607,55 @@ def test_hooks_cut_on_a_background_operator_between_quoted_ampersands(tmp_path):
     assert "match-head-commit" in r.stderr, r.stderr
 
 
-def test_hooks_cut_on_every_ampersand_when_the_quotes_do_not_balance(tmp_path):
-    """Unbalanced quotes are tokenised on whitespace, so they must not hide a glued command."""
-    for cmd in ('echo "a&git reset --hard', "echo 'a&git reset --hard"):
+def test_git_guard_keeps_a_quoted_ampersand_whole_when_another_quoted_operator_was_cut(tmp_path):
+    """A quoted `;` or `|` is still cut, which leaves a piece with an odd quote.
+
+    Codex review of PR #718, round 4: that piece was then cut at every `&`, so the
+    complete `"/tmp/R&D"` before it was cut too and the git command lost its subcommand.
+    """
+    for cmd, named in (
+        ('git -C "/tmp/R&D" clean -fd -- "old;file"', "git clean"),
+        ('git -C "/tmp/R&D" reset --hard "a|b"', "git reset"),
+        ('git -C "/tmp/R&D" reset --hard "a && b"', "git reset"),
+        ("git -C '/tmp/R&D' branch -D 'old\nname'", "git branch"),
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_cuts_on_a_background_operator_after_an_angle_bracket_that_is_an_argument(tmp_path):
+    r"""`\>&` is an escaped `>` and then a background operator, not the redirection `>&`."""
+    for cmd in (
+        "for x in 1; do git log --grep \\>& git reset --hard HEAD~1; done",
+        "git log --grep \\<& git reset --hard HEAD~1",
+        'git log --grep ">"& git reset --hard',
+        "git log --grep '<'& git reset --hard",
+    ):
         r = _guard(tmp_path, cmd)
         assert r.returncode == 2, f"not blocked: {cmd!r}"
         assert "git reset" in r.stderr, r.stderr
+
+
+def test_git_guard_reads_a_backslash_as_an_escape_inside_dollar_single_quotes(tmp_path):
+    r"""In `$'a\'b'` the backslash escapes the quote; in `'a\'` it does not."""
+    for cmd in (
+        "git -C $'a\\'b&c' reset --hard",
+        "git log --grep $'a\\'b' & git reset --hard",
+        # An escaped dollar sign does not start the `$'` form: the string ends at `a\`.
+        "git log --grep \\$'a\\' & git reset --hard '\\'",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "git reset" in r.stderr, r.stderr
+
+
+def test_git_guard_reads_the_arguments_that_follow_a_redirection(tmp_path):
+    """Cutting at the `&` of `&>` or `>&` would leave `git branch`, which only lists."""
+    for cmd in ("git branch &>/dev/null -D old", "git branch >&/dev/null -D old", "git branch 2>&1 -D old"):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "git branch" in r.stderr, r.stderr
 
 
 def test_hooks_leave_a_quoted_ampersand_in_a_harmless_command_alone(tmp_path):
