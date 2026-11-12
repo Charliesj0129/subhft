@@ -30,6 +30,13 @@ READONLY = {
     "ls-remote",
     "var",
     "help",
+    # Inspection plumbing: reads objects and refs, writes none of them.
+    "rev-list",
+    "ls-tree",
+    "diff-tree",
+    "range-diff",
+    "show-ref",
+    "archive",
 }
 LIST_FORMS = {
     "stash": ("list", "show"),

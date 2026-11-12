@@ -189,6 +189,11 @@ def _repo_selectors(toks: list[str], i: int) -> list[str]:
     return found
 
 
+#: Reserved words that can open a segment once a compound command is split on
+#: `;`, `&&`, `|` or a newline. The program is the token after them.
+_SHELL_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{", "time"})
+
+
 def _skip_prefix(toks: list[str]) -> int:
     """Index of the program name, past env assignments and wrapper commands.
 
@@ -196,10 +201,16 @@ def _skip_prefix(toks: list[str]) -> int:
     operand where the old code expected a flag, so it stopped there and reported
     no git invocation at all -- a bypass of BOTH this gate and the subagent
     mutation guard. `timeout 5 env A=b git push` nests the same trap.
+
+    Shell reserved words are skipped for the same reason: splitting
+    `for c in a b; do git merge-base $c HEAD; done` on `;` leaves a segment that
+    opens with `do`. Stopping there made every git or gh command in a loop or
+    conditional body unattributable, so read-only loops were denied while the
+    real subcommand was never looked at.
     """
     i = 0
     while i < len(toks):
-        if _ENV_ASSIGN.match(toks[i]):
+        if _ENV_ASSIGN.match(toks[i]) or toks[i] in _SHELL_KEYWORDS:
             i += 1
             continue
         wrapper = _WRAPPERS.get(os.path.basename(toks[i]))

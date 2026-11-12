@@ -1532,3 +1532,92 @@ def test_a_newer_blocking_review_is_not_outvoted_by_an_older_approval(tmp_path):
     )
     assert r.returncode == 2, f"the older approval outvoted the newer blocking review\n{r.stderr}"
     assert "new-blocking" in r.stderr, r.stderr
+
+
+# --- loop and conditional bodies ---------------------------------------------
+#
+# `_segments` splits on `;`, so the body of `for ...; do git ...; done` starts
+# with the reserved word `do`, not with the program. The parser read that as a
+# git command it could not attribute, and both hooks fail closed on those: a
+# read-only loop was denied as "unreadable", while the same command outside the
+# loop passed. Session transcripts showed it as the largest single source of
+# denials for either hook.
+
+_LOOP_READONLY = (
+    "for c in 6b241e64b 309aa6bf4; do git merge-base --is-ancestor $c HEAD && echo yes; done",
+    "for b in a b; do git cat-file -t $b 2>&1; done",
+    "if git diff --quiet; then git status --short; else git log -1; fi",
+    "while read c; do git show --stat $c; done < /dev/null",
+    "until git diff --quiet; do git status --short; done",
+    "! git diff --quiet HEAD",
+    "{ git status --short; git log -1; }",
+)
+
+
+def test_git_guard_allows_readonly_git_inside_loop_and_conditional_bodies(tmp_path):
+    for cmd in _LOOP_READONLY:
+        ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_blocks_mutation_inside_loop_and_conditional_bodies(tmp_path):
+    """Reading past the reserved word must expose the mutation, not excuse it."""
+    for cmd, named in (
+        ("for b in a b; do git branch -D $b; done", "git branch"),
+        ("if true; then git reset --hard HEAD^; fi", "git reset"),
+        ("while true; do git push origin main; done", "git push"),
+        ("for b in a b; do env LANG=C git commit -m x; done", "git commit"),
+        ("if false; then :; else git clean -fd; fi", "git clean"),
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_allows_readonly_plumbing_subcommands(tmp_path):
+    """Inspection commands reviewers actually reach for; none of them changes a ref,
+    the index, or the working tree."""
+    for cmd in (
+        "git rev-list --count main..HEAD",
+        "git ls-tree -r --name-only HEAD",
+        "git range-diff main...HEAD",
+        "git diff-tree --no-commit-id --name-only -r HEAD",
+        "git show-ref --heads",
+        "git archive HEAD src | tar -t",
+    ):
+        ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_still_blocks_object_and_ref_writers(tmp_path):
+    for cmd in ("git hash-object -w file.txt", "git fetch origin", "git update-ref refs/heads/x HEAD"):
+        ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        assert run_hook("git_guard.py", ev, tmp_path).returncode == 2, f"not blocked: {cmd!r}"
+
+
+def test_review_gate_ignores_readonly_git_and_gh_inside_loop_bodies(tmp_path):
+    for cmd in (
+        "for c in 6b241e64b 309aa6bf4; do git merge-base --is-ancestor $c HEAD; done",
+        "for c in a b; do git log --oneline --ancestry-path $c..HEAD --merges; done",
+        "while read n; do gh pr view $n --json mergeable; done < /dev/null",
+        "for n in 1 2; do gh api repos/o/r/pulls/$n --jq .state; done",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_review_gate_reads_a_merge_inside_a_loop_body_instead_of_calling_it_unreadable(tmp_path):
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "for n in 1 2; do gh pr merge $n; done"}},
+        tmp_path,
+    )
+    assert r.returncode == 2, "a merge in a loop body must still be gated"
+    assert "match-head-commit" in r.stderr and "unreadable" not in r.stderr, r.stderr
