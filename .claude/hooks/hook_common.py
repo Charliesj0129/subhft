@@ -102,7 +102,10 @@ def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     invocation while `echo "git push"` is not -- shlex drops the quotes, so a
     quoted mention lands inside a single token rather than at position 0.
     """
-    for seg in re.split(r"(?:\|\||&&|;|\||\n|\$\(|`)", cmd):
+    # A lone `&` ends a command as surely as `;` does: `git status & git reset
+    # --hard` is two commands. The lookarounds leave redirections whole
+    # (`2>&1`, `>&2`, `<&3`, `&>file`).
+    for seg in re.split(r"(?:\|\||&&|;|\||\n|\$\(|`|(?<![<>])&(?!>))", cmd):
         try:
             toks = shlex.split(seg)
         except ValueError:

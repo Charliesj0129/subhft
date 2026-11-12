@@ -1507,3 +1507,50 @@ def test_review_gate_reads_a_merge_inside_a_loop_body_instead_of_calling_it_unre
     )
     assert r.returncode == 2, "a merge in a loop body must still be gated"
     assert "match-head-commit" in r.stderr and "unreadable" not in r.stderr, r.stderr
+
+
+def test_git_guard_blocks_a_mutation_after_a_background_operator(tmp_path):
+    """`a & b` is two commands; the parser read it as one and judged only `a`.
+
+    Found by the Codex review of this change: inside a loop body the parent
+    blocked these only because it could not read the segment at all.
+    """
+    for cmd, named in (
+        ("for x in 1; do git status --short & git reset --hard HEAD~1; done", "git reset"),
+        ("git status --short & git reset --hard HEAD~1", "git reset"),
+        ("git log -1 &git clean -fd", "git clean"),
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_keeps_redirections_whole_when_splitting_on_the_background_operator(tmp_path):
+    for cmd in (
+        "git status --short 2>&1",
+        "git log -1 >&2",
+        "git diff --stat &> /dev/null",
+        "git status --short & git log -1",
+        "git rev-parse HEAD 2>&1 & wait",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "git reset --hard 2>&1"}}
+    r = run_hook("git_guard.py", ev, tmp_path)
+    assert r.returncode == 2 and "git reset" in r.stderr, r.stderr
+
+
+def test_review_gate_gates_a_merge_after_a_background_operator(tmp_path):
+    for cmd in (
+        "for n in 7; do gh pr view $n & gh pr merge $n --squash; done",
+        "gh pr view 7 & gh pr merge 7 --squash",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 2, f"a merge behind `&` was not gated: {cmd!r}"
+        assert "match-head-commit" in r.stderr, r.stderr
