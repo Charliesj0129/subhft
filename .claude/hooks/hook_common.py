@@ -108,6 +108,11 @@ def _split_background(seg: str) -> list[str]:
     tokenises such a segment on whitespace, so its quotes protect nothing there
     either, and a command glued to the operator (`x "a&git reset --hard`) would
     otherwise sit inside one token.
+
+    Only `&` is read this way. The other operators are still cut wherever they
+    appear, quoted or not. Reading quotes across a whole command needs comments
+    and heredoc bodies modelled first: without that, an apostrophe in either
+    one swallows the commands that follow it.
     """
     quoted: list[int] = []
     bare: list[int] = []
