@@ -95,6 +95,45 @@ def is_subagent(event: dict) -> bool:
     return bool(event.get("agent_type"))
 
 
+def _split_background(seg: str) -> list[str]:
+    """Cut a segment at each background operator: a lone `&` outside quotes.
+
+    `git status & git reset --hard` is two commands, so the `&` must end the
+    first one. A `&` inside quotes is an argument character: cutting
+    `git -C "/tmp/R&D" reset --hard` there left `git -C "/tmp/R`, which names no
+    subcommand, and the reset went unseen. Redirections stay whole (`2>&1`,
+    `>&2`, `<&3`, `&>file`), and `\\&` is a literal character.
+
+    A segment whose quotes do not balance is cut at every `&`. The caller
+    tokenises such a segment on whitespace, so its quotes protect nothing there
+    either, and a command glued to the operator (`x "a&git reset --hard`) would
+    otherwise sit inside one token.
+    """
+    quoted: list[int] = []
+    bare: list[int] = []
+    quote = ""
+    i = 0
+    while i < len(seg):
+        c = seg[i]
+        if c == "\\" and quote != "'":
+            i += 1
+        elif c == quote:
+            quote = ""
+        elif not quote and c in "'\"":
+            quote = c
+        elif c == "&" and not ((i > 0 and seg[i - 1] in "<>") or seg.startswith("&>", i)):
+            (quoted if quote else bare).append(i)
+        i += 1
+    cuts = sorted(quoted + bare) if quote else bare
+    parts: list[str] = []
+    start = 0
+    for cut in cuts:
+        parts.append(seg[start:cut])
+        start = cut + 1
+    parts.append(seg[start:])
+    return parts
+
+
 def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     """Yield the token list of each shell segment of a command string.
 
@@ -102,10 +141,8 @@ def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     invocation while `echo "git push"` is not -- shlex drops the quotes, so a
     quoted mention lands inside a single token rather than at position 0.
     """
-    # A lone `&` ends a command as surely as `;` does: `git status & git reset
-    # --hard` is two commands. The lookarounds leave redirections whole
-    # (`2>&1`, `>&2`, `<&3`, `&>file`).
-    for seg in re.split(r"(?:\|\||&&|;|\||\n|\$\(|`|(?<![<>])&(?!>))", cmd):
+    pieces = re.split(r"(?:\|\||&&|;|\||\n|\$\(|`)", cmd)
+    for seg in (part for piece in pieces for part in _split_background(piece)):
         try:
             toks = shlex.split(seg)
         except ValueError:

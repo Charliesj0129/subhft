@@ -1554,3 +1554,77 @@ def test_review_gate_gates_a_merge_after_a_background_operator(tmp_path):
         )
         assert r.returncode == 2, f"a merge behind `&` was not gated: {cmd!r}"
         assert "match-head-commit" in r.stderr, r.stderr
+
+
+def _guard(tmp_path, cmd):
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+    return run_hook("git_guard.py", ev, tmp_path)
+
+
+def _gate(tmp_path, cmd):
+    ev = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}}
+    return run_hook("codex_review_gate.py", ev, tmp_path)
+
+
+def test_git_guard_blocks_a_mutation_whose_quoted_argument_contains_an_ampersand(tmp_path):
+    """Cutting on every `&` lost the git command when the `&` sat inside an argument.
+
+    Codex review of PR #718: `git -C "/tmp/R&D" reset --hard` became `git -C "/tmp/R`
+    and `D" reset --hard`, neither of which is a git mutation.
+    """
+    for cmd, named in (
+        ('git -C "/tmp/R&D" reset --hard HEAD~1', "git reset"),
+        ("git -C '/tmp/R&D' clean -fd", "git clean"),
+        ("git -C /tmp/R\\&D reset --hard", "git reset"),
+        ('git -C "/tmp/R\\"&D" reset --hard', "git reset"),
+        ("bash -c 'git -C \"/tmp/R&D\" branch -D old'", "git branch"),
+        # A backslash is literal inside single quotes, so the first string ends at `a\\`.
+        ("git log --grep 'a\\' & git reset --hard '\\'", "git reset"),
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_review_gate_gates_a_merge_whose_quoted_argument_contains_an_ampersand(tmp_path):
+    for cmd in (
+        "bash -c 'gh pr merge 7 --squash --subject \"fix A&B\"'",
+        'gh pr merge 7 --squash --subject "fix A&B"',
+        "gh pr merge 7 --squash --body 'R&D notes'",
+    ):
+        r = _gate(tmp_path, cmd)
+        assert r.returncode == 2, f"a merge with an ampersand in a quoted argument was not gated: {cmd!r}"
+        assert "match-head-commit" in r.stderr, r.stderr
+
+
+def test_hooks_cut_on_a_background_operator_between_quoted_ampersands(tmp_path):
+    """The operator outside the quotes still ends the command; the ones inside do not."""
+    r = _guard(tmp_path, 'git log --grep "R&D" & git reset --hard "A&B"')
+    assert r.returncode == 2
+    assert "git reset" in r.stderr, r.stderr
+    r = _gate(tmp_path, 'gh pr view 7 --jq "a&b" & gh pr merge 7 --squash --subject "c&d"')
+    assert r.returncode == 2
+    assert "match-head-commit" in r.stderr, r.stderr
+
+
+def test_hooks_cut_on_every_ampersand_when_the_quotes_do_not_balance(tmp_path):
+    """Unbalanced quotes are tokenised on whitespace, so they must not hide a glued command."""
+    for cmd in ('echo "a&git reset --hard', "echo 'a&git reset --hard"):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "git reset" in r.stderr, r.stderr
+
+
+def test_hooks_leave_a_quoted_ampersand_in_a_harmless_command_alone(tmp_path):
+    for cmd in (
+        'git log --grep "R&D" -3',
+        "git -C '/tmp/R&D' status --short",
+        "git status --short 2>&1 &",
+        # A redirection, not an operator: bash writes `note reset --hard` to a file named git.
+        "echo note >&git reset --hard",
+        "echo note &>git reset --hard",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 0, f"read-only command blocked: {cmd!r} -> {r.stderr}"
+    r = _gate(tmp_path, 'git commit -m "notes & gh pr merge 7 later"')
+    assert r.returncode == 0, f"a quoted mention was read as a merge: {r.stderr}"
