@@ -2,7 +2,8 @@
 
 THESHOW, 2026-11-13 (same on 11-09 and 11-10): the order session was not
 established after a heartbeat-gap relogin at 00:30. Five warm-up windows of ten
-probes each all failed (00:40:13-00:44:28), each logged
+probes each -- five batches inside ONE pre-open window -- all failed
+(00:40:13-00:44:28), each logged
 ``order_session_warmup_exhausted`` and nothing else happened. At 00:45:00 R47's
 first six ``place_order`` calls hit ``SessionNotEstablished``, went to the DLQ
 and tripped the breaker. Only then did the order watchdog relogin, and the
@@ -10,7 +11,8 @@ session was warm 2.2 s later.
 
 So a relogin heals it in seconds; the warm-up just never asked for one. These
 tests pin that it now asks (through a hook, never the broker directly) once
-enough whole windows have failed, and that asking is the guarded path
+enough probe batches have failed -- at most once per pre-open window -- and that
+asking is the guarded path
 (``reconnect(force=False)`` plus the execution-callback restore).
 """
 
@@ -43,7 +45,11 @@ class ScriptedClient:
 
 
 async def _drive(warmup: OrderSessionWarmup, script: list[tuple[bool, bool]]) -> None:
-    """Run the loop through ``script`` one window per tick, then stop it.
+    """Run the loop through ``script``, one entry per tick, then stop it.
+
+    Consecutive ``OPEN_AHEAD`` entries are probe batches inside one pre-open
+    window (a failed batch leaves the clock armed, exactly as in production);
+    an ``IN_SESSION`` entry ends that window.
 
     The source hands out one window per tick and sets ``done`` on the first tick
     after the script, which is only reached once the previous window (and any
@@ -72,9 +78,9 @@ def _warmup(client: ScriptedClient, **kwargs: Any) -> OrderSessionWarmup:
     return OrderSessionWarmup(client, tick_s=0.0, attempts=1, retry_interval_s=0.0, **kwargs)
 
 
-class TestExhaustedWindowsRequestARelogin:
+class TestExhaustedBatchesRequestARelogin:
     @pytest.mark.asyncio
-    async def test_two_exhausted_windows_request_a_reconnect_once(self) -> None:
+    async def test_two_exhausted_batches_request_a_reconnect_once(self) -> None:
         client = ScriptedClient([])  # never answers
         hook = AsyncMock()
         warmup = _warmup(client, on_exhausted=hook)
@@ -85,7 +91,7 @@ class TestExhaustedWindowsRequestARelogin:
         hook.assert_awaited_once_with("order_warmup_exhausted")
 
     @pytest.mark.asyncio
-    async def test_one_exhausted_window_does_not_request_a_reconnect(self) -> None:
+    async def test_one_exhausted_batch_does_not_request_a_reconnect(self) -> None:
         """A single slow handshake is the warm-up's own job, not a relogin."""
         hook = AsyncMock()
         warmup = _warmup(ScriptedClient([]), on_exhausted=hook)
@@ -95,15 +101,25 @@ class TestExhaustedWindowsRequestARelogin:
         hook.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_persistently_dead_session_asks_once_per_n_windows(self) -> None:
-        """Not once per window: the reconnect path's cooldown is the storm guard,
-        and the request rate must not be the thing that tests it."""
+    async def test_a_dead_session_asks_once_per_pre_open_window(self) -> None:
+        """Five failed batches in one window (11-13 00:40-00:44) ask once: a
+        second relogin close to the open could leave the session logged out at
+        the bell."""
         hook = AsyncMock()
         warmup = _warmup(ScriptedClient([]), on_exhausted=hook)
 
         await _drive(warmup, [OPEN_AHEAD] * 5)
 
-        assert hook.await_count == 2  # after window 2 and window 4
+        hook.assert_awaited_once_with("order_warmup_exhausted")
+
+    @pytest.mark.asyncio
+    async def test_the_next_pre_open_window_may_ask_again(self) -> None:
+        hook = AsyncMock()
+        warmup = _warmup(ScriptedClient([]), on_exhausted=hook)
+
+        await _drive(warmup, [OPEN_AHEAD, OPEN_AHEAD, IN_SESSION, OPEN_AHEAD, OPEN_AHEAD])
+
+        assert hook.await_count == 2
 
     @pytest.mark.asyncio
     async def test_a_successful_window_resets_the_exhausted_count(self) -> None:
@@ -149,7 +165,7 @@ class TestAHookFailureNeverEndsTheClock:
         await _drive(warmup, [OPEN_AHEAD] * 4)
 
         assert client.calls == 4, "the loop must keep probing after the hook raised"
-        assert hook.await_count == 2
+        hook.assert_awaited_once_with("order_warmup_exhausted")
 
     @pytest.mark.asyncio
     async def test_no_hook_is_not_an_error(self) -> None:
@@ -161,6 +177,24 @@ class TestAHookFailureNeverEndsTheClock:
 
         assert warmup.on_exhausted is None
         assert client.calls == 3
+
+
+class TestARequestBeforeTheHookExistsIsKept:
+    @pytest.mark.asyncio
+    async def test_a_request_with_no_hook_yet_fires_once_the_hook_is_attached(self) -> None:
+        """HFTSystem attaches the hook after startup recovery; batches that fail
+        before that must not use up the window's request."""
+        hook = AsyncMock()
+        warmup = _warmup(ScriptedClient([]))
+
+        await warmup._on_batch_exhausted()
+        await warmup._on_batch_exhausted()
+        hook.assert_not_awaited()
+
+        warmup.on_exhausted = hook
+        await warmup._on_batch_exhausted()
+
+        hook.assert_awaited_once_with("order_warmup_exhausted")
 
 
 class _StubSystem:

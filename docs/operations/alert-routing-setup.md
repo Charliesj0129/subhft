@@ -74,6 +74,21 @@ to `hft-bot:8081` (reload Alertmanager) BEFORE any engine deploy that drops the 
 bridge. Done the other way round, alerts are undeliverable in between: the old url
 points at an engine that no longer serves the bridge.
 
+**Network precondition.** `alertmanager` must be able to resolve `hft-bot`. On THESHOW
+(checked 2026-11-13, `docker inspect`) `hft-bot`, `alertmanager` and `hft-engine` all sit
+on `subhft_default`. The repo's `docker-compose.production.yml` and
+`docker-compose.prod.locked.yml` put `alertmanager` on `hft-internal` and leave `hft-bot`
+on `default`; a stack started from those files cannot reach the bridge, so every alert
+fails. Before switching the url, confirm from the host that the two containers share a
+network:
+
+```bash
+docker inspect hft-bot alertmanager --format '{{.Name}} {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+```
+
+If they do not share one, add `hft-bot` to `hft-internal` first (a protected compose
+edit) and do not switch the url until it is deployed.
+
 ## Testing
 
 ### Send a test alert

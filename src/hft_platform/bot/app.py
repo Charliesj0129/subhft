@@ -221,6 +221,9 @@ async def _post_shutdown(application: Any) -> None:
     _alertmanager_bridge_task = None
     if task is not None and not task.done():
         task.cancel()
+        # Let the cancellation run before PTB closes the loop: otherwise the
+        # task is destroyed pending and run()'s cleanup never logs.
+        await asyncio.wait({task}, timeout=5.0)
     if bridge is not None:
         try:
             await bridge.close()
