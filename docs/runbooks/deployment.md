@@ -50,7 +50,7 @@ trips alerts that page Telegram: `HFTEngineDown`, `QuoteFacade*`, `QuotePool*`,
 `ShioajiLoginFailuresDetected`. `HFTEngineDown` fired on every deploy stop on
 2026-11-10 (06:12Z, 06:37–06:43Z) and 2026-11-11 (10:08Z, 21:46Z) because no
 deploy set a silence (`/api/v2/silences` was empty). `HFTEngineDown`,
-`Backup*` and `HostDiskSpace*` are routed without the `taipei_off_hours` mute,
+`ScrapeTargetDown`, `Backup*` and `HostDiskSpaceCritical` are routed without the `taipei_off_hours` mute,
 so the silence is the only thing that keeps a deploy quiet.
 
 Alertmanager runs on the host as container `alertmanager`

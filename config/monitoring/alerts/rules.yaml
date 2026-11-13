@@ -246,8 +246,13 @@ groups:
   # only when it is known to be one: never sent (connection_error) or never
   # answered within the phantom TTL (outcome_unresolved). stormguard_halt is a
   # HALT doing its job and broker_backpressure a refusal; neither pages here.
+  #
+  # 2026-11-13: outcome_unresolved is excluded too. 7 days on THESHOW: the
+  # reason=outcome_unresolved adds equalled phantom_recovery_releases_total
+  # exactly (17 vs 17, same timestamps), and those already page as
+  # OrderOutcomeUnresolved{outcome="phantom_ttl_release"}: a double page.
   - alert: OrderDeadLetterQueueGrowing
-    expr: sum by (reason) (increase(order_dlq_adds_total{reason!~"broker_backpressure|stormguard_halt"}[30m])) > 0
+    expr: sum by (reason) (increase(order_dlq_adds_total{reason!~"broker_backpressure|stormguard_halt|outcome_unresolved"}[30m])) > 0
     for: 0s
     labels:
         severity: warning
@@ -292,13 +297,31 @@ groups:
   # cancel_timeout (2026-10-29 15:10Z) and the only fill_claimed_after_expiry
   # (15:38Z) went unseen. Over 10/28-11/01 this would have paged for 2 windows,
   # both in the 10/29 15Z RTT storm, against 9 for the DLQ rule above.
+  #
+  # 2026-11-13, split by broker stall. 7 days on THESHOW: 21 raw runs, each
+  # exactly 30 m (the increase() window); keep_firing_for: 1h merges them to 9.
+  # Every phantom_ttl_release run (4/4) and every fill_claimed_after_expiry run
+  # (3/3) had a >= 10 s order_broker_silence_seconds stall in the prior 30
+  # minutes (the paper server's 30 s place_order SDK timeouts): a phantom is a
+  # timed-out call, so these two follow a stall by construction and they page
+  # as a WARNING during one (OrderOutcomeUnresolvedDuringBrokerStall below).
+  # cancel_gave_up and live_order_ttl_release include runs with no stall and no
+  # confirmed broker terminal: real defect candidates, critical unconditionally.
+  #
+  # Stall look-back 40m, not 30m: a phantom releases <= 300 s after its stall, so [30m] pages critical in a run's last 5 min.
   - alert: OrderOutcomeUnresolved
     expr: |
-      sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
-      or label_replace(sum(increase(cancel_unconfirmed_total{outcome="gave_up"}[30m])) > 0, "outcome", "cancel_gave_up", "", "")
+      label_replace(sum(increase(cancel_unconfirmed_total{outcome="gave_up"}[30m])) > 0, "outcome", "cancel_gave_up", "", "")
       or label_replace(sum(increase(live_order_ttl_releases_total[30m])) > 0, "outcome", "live_order_ttl_release", "", "")
-      or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+      or (
+        (
+          sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
+          or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+        )
+        unless on() (max_over_time(order_broker_silence_seconds[40m]) >= 10)
+      )
     for: 0s
+    keep_firing_for: 1h
     labels:
         severity: critical
     annotations:
@@ -312,6 +335,30 @@ groups:
           `phantom_recovery_swept` and `live_orders_stale_sweep`;
           `cancel_unconfirmed_total{outcome="gave_up"}` says a cancel was left
           to the TTL.
+
+  # The stall half of the two outcomes a broker stall explains
+  # (phantom_ttl_release, fill_claimed_after_expiry); the other half pages
+  # critical above. Same terms, same labels, complementary condition.
+  - alert: OrderOutcomeUnresolvedDuringBrokerStall
+    expr: |
+      (
+        sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
+        or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+      )
+      and on() (max_over_time(order_broker_silence_seconds[40m]) >= 10)
+    for: 0s
+    keep_firing_for: 1h
+    labels:
+        severity: warning
+    annotations:
+        summary: "An order outcome is unresolved after a broker stall ({{ $labels.outcome }})"
+        description: |
+          {{ $value | printf "%.0f" }} in 30m, and order_broker_silence_seconds
+          reached >= 10 s in the last 40 minutes. A timed-out place_order is a
+          phantom that is released unanswered after the TTL, which is what a
+          broker stall produces. Still compare the broker's open orders and
+          positions with the platform; the engine log events are
+          `phantom_recovery_swept` and `phantom_fill_resolved_via_expired_phantom`.
 
   # Broker back-pressure (2026-11-02, order/broker_stall.py): new orders are held
   # while the oldest broker call sent after the last answer has waited >= 1 s,
@@ -1542,13 +1589,23 @@ groups:
   #
   # `strategy_inflight_oids` carries {strategy, side} only, so the join is on
   # those two labels and pending is summed over symbol first.
+  #
+  # 2026-11-13: not while a phantom order candidate is in the last 10 minutes.
+  # A timed-out place_order is counted as pending and tracked in no in-flight
+  # set until its phantom resolves (<= 300 s). THESHOW 11-12 05:00-05:25Z paged
+  # on chained phantom SELLs (releases at 04:55:48, 05:08:43, 05:15:38,
+  # 05:25:23), not a leak. Each candidate restarts the `for: 15m` clock, so a
+  # real leak is reported at most 10 minutes later than before.
   - alert: StrategyPendingWithNoInflightOrder
     expr: |
       (
-        (sum by (strategy, side) (strategy_pending_qty) > 0)
-        and on(strategy, side) (strategy_inflight_oids == 0)
+        (
+          (sum by (strategy, side) (strategy_pending_qty) > 0)
+          and on(strategy, side) (strategy_inflight_oids == 0)
+        )
+        and on() market_trading_hours_active == 1
       )
-      and on() market_trading_hours_active == 1
+      unless on() (sum(increase(phantom_order_candidates_total[10m])) > 0)
     for: 15m
     labels:
       severity: warning

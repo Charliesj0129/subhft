@@ -722,13 +722,14 @@ tests:
             exp_annotations:
               summary: "An order may still be live at the broker or its outcome is unresolved (fill_claimed_after_expiry)"
               description: *unresolved_one
-      # The window passes with no new increment: it clears.
-      - eval_time: 42m
+      # The window passes with no new increment: it clears once keep_firing_for
+      # (1h, which merges a flapping run into one page) has also elapsed.
+      - eval_time: 110m
         alertname: OrderOutcomeUnresolved
         exp_alerts: []
 
   - interval: 1m
-    name: a TTL release pages critical under its own outcome
+    name: a TTL release with no broker stall pages critical under its own outcome
     input_series:
       - series: "live_order_ttl_releases_total"
         values: "0+0x10 1+0x30"
@@ -786,6 +787,133 @@ tests:
       - eval_time: 15m
         alertname: OrderOutcomeUnresolved
         exp_alerts: []
+
+  # 2026-11-13: a phantom TTL release and a fill claimed after expiry are what
+  # a broker stall leaves behind (7 days on THESHOW: 4/4 and 3/3 runs had an
+  # order_broker_silence_seconds stall >= 10 s in the prior 30 minutes). With
+  # one in the last 40 minutes they warn instead of paging critical. The stall
+  # here is the single 15 s sample at t=5m; the counters move at t=11m, a
+  # phantom TTL later. The 37m check is the tail of the 30m increase() window:
+  # the stall is 32 minutes old, so a 30m stall look-back would unmask it and
+  # page critical for the last minutes of every run.
+  - interval: 1m
+    name: a phantom TTL release and a fill claimed after expiry during a broker stall warn only
+    input_series:
+      - series: "phantom_recovery_releases_total"
+        values: "0+0x10 1+0x45"
+      - series: 'phantom_bound_total{outcome="fill_claimed_after_expiry"}'
+        values: "0+0x10 1+0x45"
+      - series: "order_broker_silence_seconds"
+        values: "0+0x4 15 0+0x51"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: OrderOutcomeUnresolvedDuringBrokerStall
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolvedDuringBrokerStall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              outcome: fill_claimed_after_expiry
+            exp_annotations:
+              summary: "An order outcome is unresolved after a broker stall (fill_claimed_after_expiry)"
+              description: &stall_one |
+                1 in 30m, and order_broker_silence_seconds
+                reached >= 10 s in the last 40 minutes. A timed-out place_order is a
+                phantom that is released unanswered after the TTL, which is what a
+                broker stall produces. Still compare the broker's open orders and
+                positions with the platform; the engine log events are
+                `phantom_recovery_swept` and `phantom_fill_resolved_via_expired_phantom`.
+          - exp_labels:
+              severity: warning
+              outcome: phantom_ttl_release
+            exp_annotations:
+              summary: "An order outcome is unresolved after a broker stall (phantom_ttl_release)"
+              description: *stall_one
+      - eval_time: 37m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: OrderOutcomeUnresolvedDuringBrokerStall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              outcome: fill_claimed_after_expiry
+            exp_annotations:
+              summary: "An order outcome is unresolved after a broker stall (fill_claimed_after_expiry)"
+              description: *stall_one
+          - exp_labels:
+              severity: warning
+              outcome: phantom_ttl_release
+            exp_annotations:
+              summary: "An order outcome is unresolved after a broker stall (phantom_ttl_release)"
+              description: *stall_one
+      # Past the last increment's window and keep_firing_for (1h): both clear.
+      - eval_time: 110m
+        alertname: OrderOutcomeUnresolvedDuringBrokerStall
+        exp_alerts: []
+      - eval_time: 110m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts: []
+
+  # The other two outcomes are not explained by a stall: no confirmed broker
+  # terminal after a cancel, or a live order swept with none, is a defect to
+  # look at even while the broker is slow. They stay critical.
+  - interval: 1m
+    name: a cancel that gave up and a live order TTL release page critical during a broker stall
+    input_series:
+      - series: 'cancel_unconfirmed_total{outcome="gave_up"}'
+        values: "0+0x10 1+0x45"
+      - series: "live_order_ttl_releases_total"
+        values: "0+0x10 1+0x45"
+      - series: "order_broker_silence_seconds"
+        values: "0+0x4 15 0+0x51"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: cancel_gave_up
+            exp_annotations:
+              summary: "An order may still be live at the broker or its outcome is unresolved (cancel_gave_up)"
+              description: *unresolved_one
+          - exp_labels:
+              severity: critical
+              outcome: live_order_ttl_release
+            exp_annotations:
+              summary: "An order may still be live at the broker or its outcome is unresolved (live_order_ttl_release)"
+              description: *unresolved_one
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolvedDuringBrokerStall
+        exp_alerts: []
+
+  # The order DLQ adds reason=outcome_unresolved one-for-one with phantom TTL
+  # releases (17 vs 17 over 7 days on THESHOW), so that reason no longer pages
+  # as a dead-letter; the phantom release pages once, as OrderOutcomeUnresolved.
+  - interval: 1m
+    name: an outcome_unresolved dead-letter pages once, as OrderOutcomeUnresolved
+    input_series:
+      - series: 'order_dlq_adds_total{reason="outcome_unresolved"}'
+        values: "0+0x10 1+0x30"
+      - series: "phantom_recovery_releases_total"
+        values: "0+0x10 1+0x30"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: OrderDeadLetterQueueGrowing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: OrderOutcomeUnresolved
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              outcome: phantom_ttl_release
+            exp_annotations:
+              summary: "An order may still be live at the broker or its outcome is unresolved (phantom_ttl_release)"
+              description: *unresolved_one
 
   # ── BrokerPathSilent / BrokerPathMostlySilent ───────────────────
   # The 11-02 shape: a 3-30 s stall now and then. One 12 s stall (StormGuard
@@ -888,7 +1016,7 @@ tests:
               side: SELL
             exp_annotations:
               summary: "R47_MAKER_TMF counts SELL quantity as working at the broker but tracks no order for it (15m of open session)"
-              description: >-
+              description: &pending_noinflight >-
                 The strategy's pending quantity for this side has been above zero for
                 15 minutes while its in-flight order set for the same side is empty.
                 Nothing is left to complete, cancel or time out, so the pending count
@@ -1010,6 +1138,60 @@ tests:
       - eval_time: 30m
         alertname: StrategyPendingWithNoInflightOrder
         exp_alerts: []
+
+  # 2026-11-13: chained phantom SELLs (THESHOW 11-12 05:00-05:25Z, releases at
+  # 04:55:48, 05:08:43, 05:15:38, 05:25:23; each phantom lives <= 300 s) left a
+  # pending SELL with no tracked order for 25 minutes. That is not a leak: a
+  # phantom order candidate in the last 10 minutes keeps the rule quiet. Here a
+  # candidate arrives every 5 minutes, so the 10m increase() never reaches 0.
+  - interval: 1m
+    name: pending with no in-flight order is quiet while phantom order candidates keep arriving
+    input_series:
+      - series: 'strategy_pending_qty{strategy="R47_MAKER_TMF",symbol="TMFJ6",side="SELL"}'
+        values: "2+0x50"
+      - series: 'strategy_inflight_oids{strategy="R47_MAKER_TMF",side="SELL"}'
+        values: "0+0x50"
+      - series: "market_trading_hours_active"
+        values: "1+0x50"
+      - series: "phantom_order_candidates_total"
+        values: "0+0x4 1+0x4 2+0x4 3+0x4 4+0x4 5+0x4 6+0x4 7+0x4 8+0x4 9+0x4"
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: StrategyPendingWithNoInflightOrder
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: StrategyPendingWithNoInflightOrder
+        exp_alerts: []
+
+  # The reverse: one candidate at t=2m and none after. The suppression ends at
+  # t=12m (its 10m window passes), the `for: 15m` clock then runs, and the
+  # alert fires at 27m: a real leak is still reported, 10 minutes later.
+  - interval: 1m
+    name: pending with no in-flight order still fires once the last phantom candidate is 10m old
+    input_series:
+      - series: 'strategy_pending_qty{strategy="R47_MAKER_TMF",symbol="TMFJ6",side="SELL"}'
+        values: "2+0x45"
+      - series: 'strategy_inflight_oids{strategy="R47_MAKER_TMF",side="SELL"}'
+        values: "0+0x45"
+      - series: "market_trading_hours_active"
+        values: "1+0x45"
+      - series: "phantom_order_candidates_total"
+        values: "0+0x1 5+0x43"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: StrategyPendingWithNoInflightOrder
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: StrategyPendingWithNoInflightOrder
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              strategy: R47_MAKER_TMF
+              side: SELL
+            exp_annotations:
+              summary: "R47_MAKER_TMF counts SELL quantity as working at the broker but tracks no order for it (15m of open session)"
+              description: *pending_noinflight
+              runbook_url: "docs/runbooks/alpha-development-workflow.md"
 
   # ── ScrapeTargetDown ───────────────────────────────────────────
   # Positive control: the node-exporter outage that hid the 2026-10-21 disk-full.
