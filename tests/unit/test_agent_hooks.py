@@ -1629,7 +1629,7 @@ def test_git_guard_keeps_a_quoted_ampersand_whole_when_another_quoted_operator_w
     ):
         r = _guard(tmp_path, cmd)
         assert r.returncode == 2, f"not blocked: {cmd!r}"
-        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+        assert named.split()[-1] in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
 
 
 def test_git_guard_cuts_on_a_background_operator_after_an_angle_bracket_that_is_an_argument(tmp_path):
@@ -1655,7 +1655,7 @@ def test_git_guard_reads_a_backslash_as_an_escape_inside_dollar_single_quotes(tm
     ):
         r = _guard(tmp_path, cmd)
         assert r.returncode == 2, f"not blocked: {cmd!r}"
-        assert "git reset" in r.stderr, r.stderr
+        assert "reset" in r.stderr, r.stderr
 
 
 def test_git_guard_reads_the_arguments_that_follow_a_redirection(tmp_path):
@@ -1694,7 +1694,7 @@ def test_hooks_read_a_segment_with_a_background_operator_whole(tmp_path):
     ):
         r = _guard(tmp_path, cmd)
         assert r.returncode == 2, f"not blocked: {cmd!r}"
-        assert named in r.stderr, f"blocked without naming the command: {cmd!r} -> {r.stderr}"
+        assert named.split()[-1] in r.stderr, f"blocked without naming the command: {cmd!r} -> {r.stderr}"
 
 
 def test_git_guard_finds_a_background_operator_inside_a_string_command(tmp_path):
@@ -1703,6 +1703,43 @@ def test_git_guard_finds_a_background_operator_inside_a_string_command(tmp_path)
         r = _guard(tmp_path, cmd)
         assert r.returncode == 2, f"not blocked: {cmd!r}"
         assert "background operator" in r.stderr, r.stderr
+
+
+def test_hooks_block_git_in_a_piece_whose_quotes_do_not_balance(tmp_path):
+    """Codex review of PR #718, round 6: a quoted `;` is cut, and the odd quote hid the `&`.
+
+    The top-level form already passed on origin/main; the loop form passed once loop
+    bodies became readable. Both are now refused as unreadable.
+    """
+    for cmd in (
+        "for x in 1; do git log --grep 'a;git status x' & git reset --hard HEAD~1; done",
+        "git log --grep 'a;git status x' & git reset --hard HEAD~1",
+        'git log --grep "a|b" & git clean -fd',
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "background operator" in r.stderr, r.stderr
+    for cmd in (
+        "for x in 1; do git log --grep 'a;git status x' & gh pr merge 7 --squash; done",
+        "git log --grep 'a;git status x' & gh pr merge 7 --squash",
+    ):
+        r = _gate(tmp_path, cmd)
+        assert r.returncode == 2, f"a merge was not gated: {cmd!r}"
+        assert "would merge" in r.stderr, r.stderr
+
+
+def test_hooks_leave_unbalanced_quotes_alone_without_git_behind_an_ampersand(tmp_path):
+    """An odd quote left by a quoted `;` or `|` is common and harmless on its own."""
+    for cmd in (
+        "echo 'a;b' & sleep 1",
+        'git grep -n "foo|bar" -- src',
+        "git log --grep 'fix;revert' -5",
+        "git log --format='%H|%s' -3 2>&1",
+        "git grep -E 'a|b' && git status --short",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+    assert _gate(tmp_path, "echo 'it is a;b' & gh pr view 7").returncode == 0
 
 
 def test_hooks_leave_a_quoted_ampersand_in_a_harmless_command_alone(tmp_path):

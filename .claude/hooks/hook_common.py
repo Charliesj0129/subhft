@@ -96,9 +96,11 @@ def is_subagent(event: dict) -> bool:
 
 
 #: Where `_segments` cuts a command. A lone `&` is deliberately not here: see
-#: _backgrounded_git for why it is handled by blocking rather than cutting.
+#: _unreadable_by_shape for why it is handled by blocking rather than cutting.
 _OPERATORS = re.compile(r"(?:\|\||&&|;|\||\n|\$\(|`)")
 _GIT_OR_GH = re.compile(r"(?<![\w.-])(?:git|gh)(?![\w-])")
+#: An `&` that is not part of `&&` or a redirection, read without regard to quotes.
+_ANY_AMPERSAND = re.compile(r"(?<![&<>])&(?![&>])")
 
 
 def _bare_ampersands(seg: str) -> list[int]:
@@ -108,7 +110,7 @@ def _bare_ampersands(seg: str) -> list[int]:
     one, and one that belongs to a redirection (`2>&1`, `>&2`, `<&3`, `&>file`,
     where the `<` or `>` is itself unquoted and unescaped). Parameter
     expansions such as `${x:-a&b}` are not modelled, so their `&` is listed.
-    Only _backgrounded_git reads this, and a wrong answer there can only add or
+    Only _unreadable_by_shape reads this, and a wrong answer there can only add or
     skip an extra block, never hide a command (see its docstring).
     """
     found: list[int] = []
@@ -136,34 +138,50 @@ def _bare_ampersands(seg: str) -> list[int]:
     return found
 
 
-def _backgrounded_git(cmd: str, _depth: int = 0) -> Iterator[str]:
-    """Segments in which git or gh follows a background operator (`a & git ...`).
+def _unreadable_by_shape(cmd: str, _depth: int = 0) -> Iterator[str]:
+    """Segments naming git or gh whose shape the parser cannot read, each with the reason.
 
-    `git status & git reset --hard` is two commands, but `_segments` reads it as
-    one `git status` and never sees the reset. Cutting the segment at the `&`
-    was tried on PR #718 and failed four Codex rounds in a row: every `&` the
-    cut misread (inside quotes, after `\\>`, inside `${...}`) removed a git
-    command from the segment it was in, and an unseen command passes.
+    Two shapes, both found by the Codex review of PR #718:
 
-    So nothing is cut. `_segments` reads every segment exactly as before, and
-    this adds one more reason to call a segment unreadable. A mistake here can
-    therefore only add a block or miss an extra one; it cannot make a command
-    that was blocked without it pass. String commands (`bash -c '...'`) are
-    followed the same way `_segments` follows them.
+    - Git or gh after a background operator (`a & git ...`). `_segments` reads
+      `git status & git reset --hard` as one `git status` and never sees the
+      reset. Cutting the segment at the `&` was tried and failed four review
+      rounds in a row: every `&` the cut misread (quoted, after `\\>`, inside
+      `${...}`) removed a git command from its segment, and an unseen command
+      passes.
+    - Quotes that do not balance around an `&`. `_segments` cuts on `;`, `|`
+      and newlines without looking at quotes, so
+      `git log --grep 'a;b' & git reset --hard` leaves the piece
+      `b' & git reset --hard`, whose quote now opens instead of closing and
+      hides the `&`. In such a piece any `&` before git or gh counts, quoted
+      or not. An odd quote alone is not enough: `git grep "a|b"` leaves one in
+      every piece, and 636 of 20,091 recorded commands had that shape. Only
+      `&` needs this, because `;`, `|` and newlines are always cut.
+
+    Nothing is cut here. `_segments` reads every segment as before, and this
+    only adds reasons to call one unreadable, so a mistake here can add a block
+    or miss an extra one but cannot make a blocked command pass. String
+    commands (`bash -c '...'`) are followed the same way `_segments` follows
+    them.
     """
     for seg in _OPERATORS.split(cmd):
-        amps = _bare_ampersands(seg)
-        if amps and _GIT_OR_GH.search(seg, amps[0] + 1):
-            yield seg.strip()
+        if not _GIT_OR_GH.search(seg):
             continue
         try:
             toks = shlex.split(seg)
         except ValueError:
-            toks = seg.split()
+            # Any `&` at all: the odd quote makes the quote state unknowable.
+            if any(_GIT_OR_GH.search(seg, m.end()) for m in _ANY_AMPERSAND.finditer(seg)):
+                yield f"{seg.strip()}  [quotes do not balance around a background operator `&`]"
+            continue
+        amps = _bare_ampersands(seg)
+        if amps and _GIT_OR_GH.search(seg, amps[0] + 1):
+            yield f"{seg.strip()}  [git or gh after a background operator `&`]"
+            continue
         if toks and _depth < _MAX_SHELL_DEPTH:
             hidden, payload = _string_command(toks)
             if hidden and payload is not None:
-                yield from _backgrounded_git(payload, _depth + 1)
+                yield from _unreadable_by_shape(payload, _depth + 1)
 
 
 def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
@@ -319,7 +337,7 @@ def unattributed_segments(cmd: str) -> list[str]:
     to do; both of ours block, because not knowing what is about to run is the
     state that must not pass.
     """
-    out = [f"{seg}  [git or gh after a background operator `&`]" for seg in _backgrounded_git(cmd)]
+    out = list(_unreadable_by_shape(cmd))
     for toks in _segments(cmd):
         # A string-command form reaching here is one _segments could not flatten.
         if _string_command(toks)[0]:
