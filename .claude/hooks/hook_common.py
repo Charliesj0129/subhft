@@ -19,7 +19,11 @@ _WRAPPERS = {
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
     "timeout": {"-s", "--signal", "-k", "--kill-after"},
     "nice": {"-n", "--adjustment"},
+    "time": {"-o", "--output", "-f", "--format"},
 }
+# Reserved words that can open a segment once a compound command is split on
+# `;`, `&&`, `|` or a newline. The program is the token after them.
+_SHELL_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{"})
 # Global options that take a separate value argument, per tool.
 _GIT_OPTS_WITH_VALUE = {"-C", "-c", "--namespace", "--work-tree", "--git-dir", "--exec-path"}
 _GH_OPTS_WITH_VALUE = {"-R", "--repo", "--hostname"}
@@ -91,6 +95,95 @@ def is_subagent(event: dict) -> bool:
     return bool(event.get("agent_type"))
 
 
+#: Where `_segments` cuts a command. A lone `&` is deliberately not here: see
+#: _unreadable_by_shape for why it is handled by blocking rather than cutting.
+_OPERATORS = re.compile(r"(?:\|\||&&|;|\||\n|\$\(|`)")
+_GIT_OR_GH = re.compile(r"(?<![\w.-])(?:git|gh)(?![\w-])")
+#: An `&` that is not part of `&&` or a redirection, read without regard to quotes.
+_ANY_AMPERSAND = re.compile(r"(?<![&<>])&(?![&>])")
+
+
+def _bare_ampersands(seg: str) -> list[int]:
+    """Positions of each `&` in `seg` that bash would read as a background operator.
+
+    Skipped: an `&` inside single quotes, double quotes or `$'...'`, an escaped
+    one, and one that belongs to a redirection (`2>&1`, `>&2`, `<&3`, `&>file`,
+    where the `<` or `>` is itself unquoted and unescaped). Parameter
+    expansions such as `${x:-a&b}` are not modelled, so their `&` is listed.
+    Only _unreadable_by_shape reads this, and a wrong answer there can only add or
+    skip an extra block, never hide a command (see its docstring).
+    """
+    found: list[int] = []
+    quote = ""
+    dollar = redirect = -2
+    i = 0
+    while i < len(seg):
+        c = seg[i]
+        if c == "\\" and quote != "'":
+            i += 1
+        elif quote:
+            if c == quote[-1]:
+                quote = ""
+        elif c == "'":
+            quote = "$'" if dollar == i - 1 else "'"
+        elif c == '"':
+            quote = c
+        elif c == "$":
+            dollar = i
+        elif c in "<>":
+            redirect = i
+        elif c == "&" and redirect != i - 1 and not seg.startswith("&>", i):
+            found.append(i)
+        i += 1
+    return found
+
+
+def _unreadable_by_shape(cmd: str, _depth: int = 0) -> Iterator[str]:
+    """Segments naming git or gh whose shape the parser cannot read, each with the reason.
+
+    Two shapes, both found by the Codex review of PR #718:
+
+    - Git or gh after a background operator (`a & git ...`). `_segments` reads
+      `git status & git reset --hard` as one `git status` and never sees the
+      reset. Cutting the segment at the `&` was tried and failed four review
+      rounds in a row: every `&` the cut misread (quoted, after `\\>`, inside
+      `${...}`) removed a git command from its segment, and an unseen command
+      passes.
+    - Quotes that do not balance around an `&`. `_segments` cuts on `;`, `|`
+      and newlines without looking at quotes, so
+      `git log --grep 'a;b' & git reset --hard` leaves the piece
+      `b' & git reset --hard`, whose quote now opens instead of closing and
+      hides the `&`. In such a piece any `&` before git or gh counts, quoted
+      or not. An odd quote alone is not enough: `git grep "a|b"` leaves one in
+      every piece, and 636 of 20,091 recorded commands had that shape. Only
+      `&` needs this, because `;`, `|` and newlines are always cut.
+
+    Nothing is cut here. `_segments` reads every segment as before, and this
+    only adds reasons to call one unreadable, so a mistake here can add a block
+    or miss an extra one but cannot make a blocked command pass. String
+    commands (`bash -c '...'`) are followed the same way `_segments` follows
+    them.
+    """
+    for seg in _OPERATORS.split(cmd):
+        if not _GIT_OR_GH.search(seg):
+            continue
+        try:
+            toks = shlex.split(seg)
+        except ValueError:
+            # Any `&` at all: the odd quote makes the quote state unknowable.
+            if any(_GIT_OR_GH.search(seg, m.end()) for m in _ANY_AMPERSAND.finditer(seg)):
+                yield f"{seg.strip()}  [quotes do not balance around a background operator `&`]"
+            continue
+        amps = _bare_ampersands(seg)
+        if amps and _GIT_OR_GH.search(seg, amps[0] + 1):
+            yield f"{seg.strip()}  [git or gh after a background operator `&`]"
+            continue
+        if toks and _depth < _MAX_SHELL_DEPTH:
+            hidden, payload = _string_command(toks)
+            if hidden and payload is not None:
+                yield from _unreadable_by_shape(payload, _depth + 1)
+
+
 def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     """Yield the token list of each shell segment of a command string.
 
@@ -98,7 +191,7 @@ def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     invocation while `echo "git push"` is not -- shlex drops the quotes, so a
     quoted mention lands inside a single token rather than at position 0.
     """
-    for seg in re.split(r"(?:\|\||&&|;|\||\n|\$\(|`)", cmd):
+    for seg in _OPERATORS.split(cmd):
         try:
             toks = shlex.split(seg)
         except ValueError:
@@ -131,7 +224,10 @@ def _string_command(toks: list[str]) -> tuple[bool, str | None]:
     """
     i = 0
     while i < len(toks):
-        if _ENV_ASSIGN.match(toks[i]):
+        # Reserved words are skipped here as in _skip_prefix: `do bash -c '...'`
+        # was otherwise never flattened, and the payload stayed one token that
+        # no basename check could see.
+        if _ENV_ASSIGN.match(toks[i]) or toks[i] in _SHELL_KEYWORDS:
             i += 1
             continue
         base = os.path.basename(toks[i])
@@ -196,10 +292,16 @@ def _skip_prefix(toks: list[str]) -> int:
     operand where the old code expected a flag, so it stopped there and reported
     no git invocation at all -- a bypass of BOTH this gate and the subagent
     mutation guard. `timeout 5 env A=b git push` nests the same trap.
+
+    Shell reserved words are skipped for the same reason: splitting
+    `for c in a b; do git merge-base $c HEAD; done` on `;` leaves a segment that
+    opens with `do`. Stopping there made every git or gh command in a loop or
+    conditional body unattributable, so read-only loops were denied while the
+    real subcommand was never looked at.
     """
     i = 0
     while i < len(toks):
-        if _ENV_ASSIGN.match(toks[i]):
+        if _ENV_ASSIGN.match(toks[i]) or toks[i] in _SHELL_KEYWORDS:
             i += 1
             continue
         wrapper = _WRAPPERS.get(os.path.basename(toks[i]))
@@ -235,7 +337,7 @@ def unattributed_segments(cmd: str) -> list[str]:
     to do; both of ours block, because not knowing what is about to run is the
     state that must not pass.
     """
-    out: list[str] = []
+    out = list(_unreadable_by_shape(cmd))
     for toks in _segments(cmd):
         # A string-command form reaching here is one _segments could not flatten.
         if _string_command(toks)[0]:

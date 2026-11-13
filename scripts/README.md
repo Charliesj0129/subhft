@@ -22,7 +22,7 @@ not here. Research tooling lives in `research/`.
 | `env_var_reference_guard.py` | Keeps `docs/operations/env-vars-reference.md` covering runbook `HFT_*` variables |
 | `check_git_preconditions.sh` | Agent-workflow git safety pre-checks |
 | `git_bundle_backup.py` | Local git-bundle backup (fail-closed) |
-| `git-hooks/`, `hooks/` | Git pre-push hook and Claude Code task hooks |
+| `hooks/` | Claude Code task hooks |
 
 ## Release, deploy and canary
 

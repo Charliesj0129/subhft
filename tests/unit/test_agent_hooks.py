@@ -7,7 +7,6 @@ harness invokes them. Probe verdict 2026-07-14: subagent tool calls carry
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -362,25 +361,49 @@ def _report(
     return d
 
 
-def _push(repo, reports, command="git push origin main"):
+def _stub_gh(tmp_path, head_oid):
+    """A `gh` on PATH that answers `pr view --json headRefOid` and nothing else."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    gh = bin_dir / "gh"
+    gh.write_text(f'#!/bin/sh\nprintf \'{{"headRefOid":"{head_oid}"}}\'\n')
+    gh.chmod(0o755)
+    return bin_dir
+
+
+def _merge(repo, reports, *, head=None, command=None):
+    """Run the gate on a `gh pr merge` of `repo`, with a stub `gh` reporting `head`.
+
+    `head` defaults to the repo's current HEAD, and the default command pins that
+    same OID, so a block comes from the attestation rules and not from a pin that
+    disagrees with the PR head. The stub is the only `gh` the hook can reach.
+    """
+    head = head or _run_git(repo, "rev-parse", "HEAD")
     return run_hook(
         "codex_review_gate.py",
-        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}},
+        {
+            "tool_name": "Bash",
+            "cwd": str(repo),
+            "tool_input": {"command": command or f"gh pr merge 7 --merge --match-head-commit {head}"},
+        },
         repo,
-        env={"DUAL_REVIEW_REPORTS": str(reports)},
+        env={
+            "DUAL_REVIEW_REPORTS": str(reports),
+            "PATH": f"{_stub_gh(repo.parent, head)}{os.pathsep}{os.environ['PATH']}",
+        },
     )
 
 
-def test_review_gate_allows_a_push_with_a_complete_approving_review(tmp_path):
+def test_review_gate_allows_a_merge_with_a_complete_approving_review(tmp_path):
     repo, head = _gated_repo(tmp_path)
     _report(tmp_path / "reports", repo, head)
-    assert _push(repo, tmp_path / "reports").returncode == 0
+    assert _merge(repo, tmp_path / "reports").returncode == 0
 
 
 def test_review_gate_blocks_an_attestation_marked_incomplete(tmp_path):
     repo, head = _gated_repo(tmp_path)
     _report(tmp_path / "reports", repo, head, native_ok=False, complete=False)
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2
     assert "never finished" in r.stderr or "produced no report" in r.stderr
 
@@ -394,7 +417,7 @@ def test_review_gate_blocks_needs_attention_without_an_ack(tmp_path):
         verdict="needs-attention",
         adversarial_body="Findings:\n- [high] Latch is released on restart (src/a.py:10-12)\n",
     )
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "ACK.md" in r.stderr
 
 
@@ -408,7 +431,7 @@ def test_review_gate_allows_needs_attention_with_a_reasoned_ack(tmp_path):
         adversarial_body="Findings:\n- [high] Latch is released on restart (src/a.py:10-12)\n",
         ack="- [high] Latch is released on restart\n  Accepted: the restart path is unreachable on this branch.\n",
     )
-    assert _push(repo, tmp_path / "reports").returncode == 0
+    assert _merge(repo, tmp_path / "reports").returncode == 0
 
 
 def test_review_gate_blocks_an_ack_that_omits_a_high_finding(tmp_path):
@@ -425,7 +448,7 @@ def test_review_gate_blocks_an_ack_that_omits_a_high_finding(tmp_path):
         ),
         ack="- [high] Latch is released on restart\n  Accepted: unreachable on this branch, see the guard.\n",
     )
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "Token is never registered" in r.stderr
 
 
@@ -439,14 +462,14 @@ def test_review_gate_blocks_an_ack_that_names_a_finding_without_a_reason(tmp_pat
         adversarial_body="Findings:\n- [high] Latch is released on restart (src/a.py:10-12)\n",
         ack="- [high] Latch is released on restart\n  ok\n",
     )
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "no reason" in r.stderr
 
 
 def test_review_gate_blocks_when_the_attestation_covers_a_different_diff(tmp_path):
     repo, head = _gated_repo(tmp_path)
     _report(tmp_path / "reports", repo, head, diff_sha="0" * 64)
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "different diff" in r.stderr
 
 
@@ -456,32 +479,32 @@ def test_review_gate_blocks_after_the_reviewed_commit_is_amended(tmp_path):
     (repo / "src/hft_platform/x.py").write_text("value = 2\n")
     _run_git(repo, "add", "-A")
     _run_git(repo, "commit", "-q", "--amend", "-m", "work amended")
-    r = _push(repo, tmp_path / "reports")
+    amended = _run_git(repo, "rev-parse", "HEAD")
+    assert amended != head, "premise broken: the amend was expected to change the head OID"
+    # The stub reports the NEW head and the command pins it, so the pin and the
+    # live head agree and the only thing left to refuse is the missing review.
+    r = _merge(repo, tmp_path / "reports", head=amended)
     assert r.returncode == 2 and "no completed Codex review" in r.stderr
 
 
-def test_review_gate_refuses_a_working_tree_attestation_for_a_push(tmp_path):
+def test_review_gate_refuses_a_working_tree_attestation_for_a_merge(tmp_path):
     repo, head = _gated_repo(tmp_path)
     _report(tmp_path / "reports", repo, head, mode="working-tree")
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "working tree" in r.stderr
+    assert "what a merge lands" in r.stderr, "the refusal still describes a push"
 
 
-def test_review_gate_detects_a_push_behind_git_global_options(tmp_path):
+def test_review_gate_detects_a_merge_behind_wrappers_and_chains(tmp_path):
+    """A merge behind `env`, `timeout`, or `&&` is still the merge that gets gated."""
     repo, head = _gated_repo(tmp_path)
     reports = tmp_path / "reports"
     reports.mkdir()
-    for cmd in (f"git -C {repo} push origin main", "git -c push.default=current push"):
-        r = _push(repo, reports, command=cmd)
+    merge = f"gh pr merge 7 --merge --match-head-commit {head}"
+    for cmd in (f"env LANG=C {merge}", f"timeout 30 {merge}", f"echo ok && {merge}"):
+        r = _merge(repo, reports, head=head, command=cmd)
         assert r.returncode == 2, f"{cmd!r} was not gated"
-
-
-def test_review_gate_detects_gh_pr_create_behind_global_options(tmp_path):
-    repo, _ = _gated_repo(tmp_path)
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    r = _push(repo, reports, command="gh --repo owner/name pr create --fill")
-    assert r.returncode == 2
+        assert "this merge carries" in r.stderr, f"{cmd!r} blocked for the wrong reason: {r.stderr}"
 
 
 def test_review_gate_gates_a_source_file_moved_out_of_src(tmp_path):
@@ -503,7 +526,7 @@ def test_review_gate_gates_a_source_file_moved_out_of_src(tmp_path):
         "premise broken: rename detection was expected to hide the src/ path"
     )
 
-    r = _push(repo, reports)
+    r = _merge(repo, reports)
     assert r.returncode == 2, "a rename out of src/ escaped the gate"
 
 
@@ -511,44 +534,56 @@ def test_review_gate_gates_config_changes(tmp_path):
     repo, _ = _gated_repo(tmp_path, files=("config/live/strategies.yaml",))
     reports = tmp_path / "reports"
     reports.mkdir()
-    assert _push(repo, reports).returncode == 2
+    assert _merge(repo, reports).returncode == 2
 
 
-def test_review_gate_allows_a_docs_only_push(tmp_path):
+def test_review_gate_allows_a_docs_only_merge(tmp_path):
     repo, _ = _gated_repo(tmp_path, files=("docs/notes.md",))
     reports = tmp_path / "reports"
     reports.mkdir()
-    assert _push(repo, reports).returncode == 0
+    assert _merge(repo, reports).returncode == 0
 
 
-def test_review_gate_allows_a_ref_deletion(tmp_path):
-    repo, _ = _gated_repo(tmp_path)
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    assert _push(repo, reports, command="git push origin --delete stale").returncode == 0
-
-
-def test_review_gate_blocks_an_unresolvable_refspec(tmp_path):
-    repo, _ = _gated_repo(tmp_path)
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    r = _push(repo, reports, command="git push origin no-such-branch")
-    assert r.returncode == 2 and "cannot resolve" in r.stderr
+def test_review_gate_blocks_a_merge_whose_head_cannot_be_resolved(tmp_path):
+    """A `gh` that cannot name the PR head leaves the gate nothing to inspect."""
+    repo, head = _gated_repo(tmp_path)
+    _report(tmp_path / "reports", repo, head)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\nexit 1\n")
+    gh.chmod(0o755)
+    r = run_hook(
+        "codex_review_gate.py",
+        {
+            "tool_name": "Bash",
+            "cwd": str(repo),
+            "tool_input": {"command": f"gh pr merge 7 --merge --match-head-commit {head}"},
+        },
+        repo,
+        env={
+            "DUAL_REVIEW_REPORTS": str(tmp_path / "reports"),
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        },
+    )
+    assert r.returncode == 2 and "cannot resolve what this command would merge" in r.stderr, r.stderr
 
 
 def test_review_gate_honours_an_explicit_override(tmp_path):
-    repo, _ = _gated_repo(tmp_path)
+    repo, head = _gated_repo(tmp_path)
     reports = tmp_path / "reports"
     reports.mkdir()
-    r = _push(repo, reports, command="CODEX_REVIEW_OVERRIDE=1 git push origin main")
+    cmd = f"CODEX_REVIEW_OVERRIDE=1 gh pr merge 7 --merge --match-head-commit {head}"
+    r = _merge(repo, reports, head=head, command=cmd)
     assert r.returncode == 0 and "overridden" in r.stderr
 
 
-def test_review_gate_ignores_a_push_mentioned_inside_a_quoted_argument(tmp_path):
-    repo, _ = _gated_repo(tmp_path)
+def test_review_gate_ignores_a_merge_mentioned_inside_a_quoted_argument(tmp_path):
+    repo, head = _gated_repo(tmp_path)
     reports = tmp_path / "reports"
     reports.mkdir()
-    assert _push(repo, reports, command='echo "git push origin main"').returncode == 0
+    r = _merge(repo, reports, head=head, command='echo "gh pr merge 7 --merge"')
+    assert r.returncode == 0, r.stderr
 
 
 # --- attestation producer ----------------------------------------------------
@@ -806,16 +841,6 @@ def test_only_high_severity_findings_require_an_ack(tmp_path):
     assert not any(t == "Typo" for _, t in required), "a low finding must not demand an ACK"
 
 
-def _stub_gh(tmp_path, head_oid):
-    """A `gh` on PATH that answers `pr view --json headRefOid` and nothing else."""
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir(exist_ok=True)
-    gh = bin_dir / "gh"
-    gh.write_text(f'#!/bin/sh\nprintf \'{{"headRefOid":"{head_oid}"}}\'\n')
-    gh.chmod(0o755)
-    return bin_dir
-
-
 def test_review_gate_blocks_a_pr_head_that_is_not_present_locally(tmp_path):
     """A PR head that was never fetched must not read as "nothing to gate".
 
@@ -846,7 +871,7 @@ def test_review_gate_blocks_a_pr_head_that_is_not_present_locally(tmp_path):
     assert r.returncode == 2 and "not present locally" in r.stderr
 
 
-def test_review_gate_allows_a_push_in_a_repository_without_origin_main(tmp_path):
+def test_review_gate_allows_a_merge_in_a_repository_without_origin_main(tmp_path):
     """The other half of that fork: an unrelated repo must not be gated at all."""
     repo = tmp_path / "other"
     repo.mkdir()
@@ -857,7 +882,7 @@ def test_review_gate_allows_a_push_in_a_repository_without_origin_main(tmp_path)
     _run_git(repo, "commit", "-q", "-m", "work")
     reports = tmp_path / "reports"
     reports.mkdir()
-    assert _push(repo, reports).returncode == 0
+    assert _merge(repo, reports).returncode == 0
 
 
 def test_verifier_reports_a_missing_attestation_rather_than_crashing(tmp_path):
@@ -887,7 +912,7 @@ def test_review_gate_survives_origin_main_advancing_after_the_review(tmp_path):
     _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _run_git(repo, "checkout", "-q", head)
 
-    assert _push(repo, tmp_path / "reports", command=f"git push origin {head}").returncode == 0
+    assert _merge(repo, tmp_path / "reports").returncode == 0
 
 
 def test_review_gate_blocks_a_review_whose_base_was_narrowed(tmp_path):
@@ -901,7 +926,7 @@ def test_review_gate_blocks_a_review_whose_base_was_narrowed(tmp_path):
     narrow_base = _run_git(repo, "rev-parse", "HEAD~1")
 
     _report(tmp_path / "reports", repo, head, base=narrow_base)
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2, "a narrowed review base credited unreviewed files"
     assert "NARROWER" in r.stderr
 
@@ -912,7 +937,7 @@ def test_review_gate_blocks_an_attestation_with_no_recorded_base(tmp_path):
     att = json.loads((d / "ATTESTATION.json").read_text())
     att["base_oid"] = None
     (d / "ATTESTATION.json").write_text(json.dumps(att))
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "no reviewed base" in r.stderr
 
 
@@ -941,7 +966,7 @@ def test_review_gate_blocks_a_narrowed_review_that_reuses_the_same_file(tmp_path
     assert publishing == reviewed, "premise broken: the filename sets were expected to be equal"
 
     _report(tmp_path / "reports", repo, head, base=narrow_base)
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "NARROWER" in r.stderr
 
 
@@ -951,7 +976,7 @@ def test_review_gate_requires_an_ack_for_a_native_p1_even_when_adversarial_appro
     att = json.loads((d / "ATTESTATION.json").read_text())
     att["findings"] = [{"reviewer": "review", "severity": "P1", "title": "Blocking native finding"}]
     (d / "ATTESTATION.json").write_text(json.dumps(att))
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "Blocking native finding" in r.stderr
 
 
@@ -964,56 +989,45 @@ def test_review_gate_keeps_blocking_findings_when_the_reports_are_deleted(tmp_pa
     (d / "ATTESTATION.json").write_text(json.dumps(att))
     (d / "adversarial.md").unlink()
     (d / "review.md").unlink()
-    r = _push(repo, tmp_path / "reports")
+    r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2, "deleting the reports turned NO SHIP into an approval"
     assert "A real problem" in r.stderr
 
 
-def test_review_gate_fails_closed_on_a_multi_ref_push(tmp_path):
-    """`git push --all` publishes refs the gate cannot enumerate."""
+def test_review_gate_does_not_gate_pushes_or_pr_creation(tmp_path):
+    """Only `gh pr merge` is gated; publishing a branch for CI and review is not.
+
+    The repo carries a gated change and the reports directory is empty, so a
+    command the gate DID treat as publishing would be refused. These are the
+    shapes the push-era parser used to block: global options, wrappers, env
+    assignments, enumerating pushes, an unresolvable refspec, a repository
+    selector, and `gh pr create` behind its own global options.
+    """
     repo, _ = _gated_repo(tmp_path)
     reports = tmp_path / "reports"
     reports.mkdir()
-    for cmd in ("git push --all origin", "git push --mirror origin", "git push --branches origin"):
-        r = _push(repo, reports, command=cmd)
-        assert r.returncode == 2, f"{cmd!r} published unenumerated refs"
-        assert "cannot enumerate" in r.stderr or "cannot resolve" in r.stderr
-
-
-def test_review_gate_does_not_mistake_a_push_option_value_for_a_refspec(tmp_path):
-    """`git push -o ci.skip` must gate HEAD, not try to resolve 'ci.skip'."""
-    repo, head = _gated_repo(tmp_path)
-    _report(tmp_path / "reports", repo, head)
-    r = _push(repo, tmp_path / "reports", command="git push -o ci.skip origin main")
-    assert r.returncode == 0, r.stderr
-
-
-def test_review_gate_resolves_the_worktree_named_by_git_dash_c(tmp_path):
-    """`git -C <other> push` publishes THAT worktree's HEAD, not this one's."""
-    other, other_head = _gated_repo(tmp_path)
-    here = tmp_path / "here"
-    here.mkdir()
-    _run_git(here, "init", "-q", "-b", "main")
-    _run_git(here, "commit", "-q", "--allow-empty", "-m", "docs only")
-    _run_git(here, "update-ref", "refs/remotes/origin/main", "HEAD")
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    r = run_hook(
-        "codex_review_gate.py",
-        {"tool_name": "Bash", "cwd": str(here), "tool_input": {"command": f"git -C {other} push origin main"}},
-        here,
-        env={"DUAL_REVIEW_REPORTS": str(reports)},
-    )
-    assert r.returncode == 2, "the other worktree's gated changes were attested against this HEAD"
-    assert other_head[:8] in r.stderr or "no completed Codex review" in r.stderr
-
-
-def test_review_gate_sees_a_push_behind_an_env_assignment_wrapper(tmp_path):
-    """`env LANG=C git push` was invisible to the parser entirely."""
-    repo, _ = _gated_repo(tmp_path)
-    reports = tmp_path / "reports"
-    reports.mkdir()
-    assert _push(repo, reports, command="env LANG=C git push origin main").returncode == 2
+    for cmd in (
+        "git push origin main",
+        f"git -C {repo} push origin main",
+        "git push --all",
+        "git push --mirror origin",
+        "git push origin no-such-branch",
+        "git push origin --delete stale",
+        "git -c push.default=matching push origin",
+        "FOO=1 git push origin main",
+        "env LANG=C git push origin main",
+        f"git --git-dir={tmp_path}/other/.git push origin HEAD",
+        "git rev-parse --git-dir",
+        "gh pr create --fill",
+        "gh --repo owner/name pr create --fill",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}},
+            repo,
+            env={"DUAL_REVIEW_REPORTS": str(reports)},
+        )
+        assert r.returncode == 0, f"{cmd!r} was gated, but only a merge may be: {r.stderr}"
 
 
 def test_git_guard_blocks_a_subagent_mutation_behind_an_env_wrapper(tmp_path):
@@ -1029,11 +1043,11 @@ def test_git_guard_blocks_a_subagent_mutation_behind_an_env_wrapper(tmp_path):
 
 
 def test_review_gate_gates_changes_to_its_own_enforcement_code(tmp_path):
-    """A change that weakens the gate must not publish unreviewed."""
+    """A change that weakens the gate must not merge unreviewed."""
     repo, _ = _gated_repo(tmp_path, files=(".claude/hooks/codex_review_gate.py",))
     reports = tmp_path / "reports"
     reports.mkdir()
-    assert _push(repo, reports).returncode == 2
+    assert _merge(repo, reports).returncode == 2
 
 
 # --- regressions for the 2026-08-29 adversarial review ------------------------
@@ -1157,6 +1171,64 @@ def test_review_gate_allows_rather_than_wedging_on_malformed_stdin(tmp_path):
     assert r.returncode == 0
 
 
+def test_review_gate_blocks_an_unreadable_segment_that_names_gh_and_merge(tmp_path):
+    """A segment the parser cannot attribute fails closed when it could be the merge.
+
+    `xargs` and `find -exec` put `gh` behind a program the parser does not
+    unwrap, so no invocation is read -- but the segment still names `gh` and
+    `merge` as words of their own, which is what a merge the gate cannot see
+    looks like.
+    """
+    for cmd in (
+        "xargs gh pr merge 7",
+        "echo 7 | xargs -n1 gh pr merge",
+        "find . -name x -exec gh pr merge 7 ;",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 2, f"an unreadable merge was allowed: {cmd!r}"
+        assert "unreadable command" in r.stderr, f"{cmd!r} blocked for the wrong reason: {r.stderr}"
+        assert "cannot resolve what this command would merge" in r.stderr, r.stderr
+
+
+def test_review_gate_ignores_an_unreadable_segment_that_only_names_merge_base(tmp_path):
+    """`merge-base` is not `merge`: the word match must not split it at the hyphen.
+
+    The second and third commands also name `gh`, so they reach the merge-word
+    check; only a boundary that counts `merge-base` or `merge_base_commit` as the
+    word `merge` would block them.
+    """
+    for cmd in (
+        "xargs git merge-base a b",
+        "xargs gh pr view merge-base",
+        "xargs gh api repos/o/r/compare/a...b --jq .merge_base_commit.sha",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_review_gate_ignores_an_unreadable_segment_that_does_not_name_both_gh_and_merge(tmp_path):
+    """Each word alone is not enough: both `gh` and `merge` must be present."""
+    for cmd in (
+        "xargs gh pr view 7",  # names gh, not merge
+        "xargs git merge main",  # names merge, not gh
+        "xargs gh pr view 7 --json mergeable",  # `mergeable` is not the word `merge`
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
 # --- Adversarial review r5: five paths that published or mutated unseen -------
 
 
@@ -1198,81 +1270,11 @@ def test_git_guard_still_allows_shell_commands_that_do_not_run_git(tmp_path):
         assert r.returncode == 0, f"false positive: {cmd}\n{r.stderr}"
 
 
-def test_review_gate_blocks_a_push_aimed_at_another_repository(tmp_path):
-    """`--git-dir` / `GIT_DIR=` publish from a repo the gate never resolved.
-
-    The global-option parser consumed both and returned only a -C-derived cwd,
-    so the gate attested THIS worktree's HEAD while git pushed another
-    repository's objects. `-C` stays allowed: its value is honoured.
-    """
-    repo, head = _gated_repo(tmp_path)
-    _report(tmp_path / "reports", repo, head)
-    for cmd in (
-        f"git --git-dir={tmp_path}/other/.git push origin HEAD",
-        f"GIT_DIR={tmp_path}/other/.git git push origin HEAD",
-        f"git --work-tree={tmp_path}/other push origin HEAD",
-    ):
-        r = run_hook(
-            "codex_review_gate.py",
-            {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}},
-            repo,
-            env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
-        )
-        assert r.returncode == 2, f"not blocked: {cmd}\n{r.stderr}"
-
-
-def test_review_gate_still_allows_reading_this_repositorys_git_dir(tmp_path):
-    """`git rev-parse --git-dir` asks THIS repo where it is; it publishes nothing.
-
-    Only the global-option span is scanned, so a subcommand flag of the same
-    spelling must not be mistaken for a repository selector.
-    """
-    repo, head = _gated_repo(tmp_path)
-    _report(tmp_path / "reports", repo, head)
-    r = run_hook(
-        "codex_review_gate.py",
-        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git rev-parse --git-dir"}},
-        repo,
-        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
-    )
-    assert r.returncode == 0, r.stderr
-
-
-def test_review_gate_resolves_the_refspec_when_repo_supplies_the_remote(tmp_path):
-    """`git push --repo=origin <refspec>` attested HEAD instead of the refspec.
-
-    positional[0] was discarded unconditionally as the remote, but `--repo`
-    already supplied it -- so the first positional is a refspec, and dropping it
-    fell through to HEAD. A reviewed HEAD then authorised publishing another ref.
-    """
-    repo, head = _gated_repo(tmp_path)
-    # A second branch carrying its OWN unreviewed gated change.
-    _run_git(repo, "checkout", "-q", "-b", "unreviewed", "origin/main")
-    (repo / "src" / "hft_platform").mkdir(parents=True, exist_ok=True)
-    (repo / "src" / "hft_platform" / "sneaky.py").write_text("value = 2\n")
-    _run_git(repo, "add", "-A")
-    _run_git(repo, "commit", "-q", "-m", "unreviewed work")
-    other = _run_git(repo, "rev-parse", "unreviewed")
-    _run_git(repo, "checkout", "-q", head)
-    _report(tmp_path / "reports", repo, head)  # only HEAD is reviewed
-    for cmd in (
-        "git push --repo=origin unreviewed:refs/heads/x",
-        "git push --repo origin unreviewed:refs/heads/x",
-    ):
-        r = run_hook(
-            "codex_review_gate.py",
-            {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": cmd}},
-            repo,
-            env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
-        )
-        assert r.returncode == 2, f"HEAD authorised {other[:8]}: {cmd}\n{r.stderr}"
-
-
 def test_the_file_that_activates_the_hooks_is_gated_source(tmp_path):
     """Gating the hook implementations but not their registration is not a gate.
 
     A branch deleting the PreToolUse entries from `.claude/settings.json` touched
-    no gated prefix, published freely, and disabled enforcement on checkout.
+    no gated prefix, merged freely, and disabled enforcement on checkout.
     """
     sys.path.insert(0, str(HOOKS))
     try:
@@ -1281,64 +1283,12 @@ def test_the_file_that_activates_the_hooks_is_gated_source(tmp_path):
         sys.path.pop(0)
     assert ".claude/settings.json" in review_attestation.GATED_PREFIXES
     assert ".claude/settings.json".startswith(review_attestation.GATED_PREFIXES)
+    assert ".claude/hooks/" in review_attestation.GATED_PREFIXES
     assert not "docs/notes.md".startswith(review_attestation.GATED_PREFIXES)
-
-
-def test_pre_push_loads_its_verifier_from_the_published_ref(tmp_path):
-    """The outgoing branch supplied the verifier that judged its own push.
-
-    `sys.path.insert(root/.claude/hooks)` meant a branch could ship
-    `GATED_PREFIXES = ()` or an approving `verify` and that code authorised the
-    same push. The verifier is read from origin/main instead: a branch may
-    improve it, but not use the improvement before it is reviewed.
-    """
-    import importlib.util
-    from importlib.machinery import SourceFileLoader
-
-    repo = tmp_path / "repo"
-    (repo / ".claude" / "hooks").mkdir(parents=True)
-    shutil.copy(HOOKS / "review_attestation.py", repo / ".claude" / "hooks" / "review_attestation.py")
-    _run_git(repo, "init", "-q", "-b", "main")
-    _run_git(repo, "add", "-A")
-    _run_git(repo, "commit", "-q", "-m", "the real verifier")
-    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-    (repo / ".claude" / "hooks" / "review_attestation.py").write_text(
-        "GATED_PREFIXES = ()\n"
-        "def canonical_range(*a, **k): return None\n"
-        "def gated_files(*a, **k): return []\n"
-        "def verify(*a, **k): return True\n"
-    )
-    _run_git(repo, "commit", "-qam", "a verifier that approves everything")
-
-    path = HOOKS.parents[1] / "scripts" / "git-hooks" / "pre-push"
-    spec = importlib.util.spec_from_loader("prepush_under_test", SourceFileLoader("prepush_under_test", str(path)))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    verifier, why = mod.load_verifier(str(repo))
-    assert verifier is not None, why
-    assert verifier.GATED_PREFIXES, "the outgoing tree's empty GATED_PREFIXES was used"
-    assert "src/" in verifier.GATED_PREFIXES
-
-
-def test_pre_push_refuses_when_the_published_verifier_is_unreadable(tmp_path):
-    """Fail-closed, unlike the Claude-side hook: this one has `--no-verify`."""
-    import importlib.util
-    from importlib.machinery import SourceFileLoader
-
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    _run_git(repo, "init", "-q", "-b", "main")
-    _run_git(repo, "commit", "-q", "--allow-empty", "-m", "no verifier here")
-    _run_git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    path = HOOKS.parents[1] / "scripts" / "git-hooks" / "pre-push"
-    spec = importlib.util.spec_from_loader("prepush_missing", SourceFileLoader("prepush_missing", str(path)))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    verifier, why = mod.load_verifier(str(repo))
-    assert verifier is None and "not readable" in why
+    # The git hook that lived under `scripts/git-hooks/` is gone, so the prefix no
+    # longer names anything the gate protects.
+    assert "scripts/git-hooks/" not in review_attestation.GATED_PREFIXES
+    assert not "scripts/git-hooks/anything".startswith(review_attestation.GATED_PREFIXES)
 
 
 # --- Adversarial review r6: four more, found after the r5 round ---------------
@@ -1365,48 +1315,6 @@ def test_git_guard_blocks_a_mutation_hidden_in_an_env_split_string(tmp_path):
     assert run_hook("git_guard.py", ok, tmp_path).returncode == 0, "benign env -S must still pass"
 
 
-def test_review_gate_blocks_a_bare_push_whose_refspec_is_configured(tmp_path):
-    """A refspec-less `git push` does not necessarily publish HEAD.
-
-    `remote.<name>.push` and `push.default = matching` override it. A probe with
-    `remote.probe.push` set had `git push --dry-run` publishing
-    `refs/remotes/origin/main` while the gate attested the branch tip.
-    """
-    repo, head = _gated_repo(tmp_path)
-    _report(tmp_path / "reports", repo, head)
-    _run_git(repo, "config", "--local", "remote.probe.url", ".")
-    _run_git(repo, "config", "--local", "remote.probe.push", "refs/remotes/origin/main:refs/heads/x")
-    r = run_hook(
-        "codex_review_gate.py",
-        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git push probe"}},
-        repo,
-        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
-    )
-    assert r.returncode == 2 and "remote.probe.push" in r.stderr, r.stderr
-
-
-def test_review_gate_blocks_a_push_that_rewrites_its_own_push_config(tmp_path):
-    """`git -c push.default=matching push` -- the override never reaches `rest`.
-
-    `-c` is consumed as a global option, so the gate saw a plain `git push` and
-    resolved HEAD. A push that rewrites its own refspec rules on the command
-    line is not resolvable from the command line.
-    """
-    repo, head = _gated_repo(tmp_path)
-    _report(tmp_path / "reports", repo, head)
-    r = run_hook(
-        "codex_review_gate.py",
-        {
-            "tool_name": "Bash",
-            "cwd": str(repo),
-            "tool_input": {"command": "git -c push.default=matching push origin"},
-        },
-        repo,
-        env={"DUAL_REVIEW_REPORTS": str(tmp_path / "reports")},
-    )
-    assert r.returncode == 2, r.stderr
-
-
 def test_attestation_is_incomplete_without_a_positive_completion_status(tmp_path):
     """Absence of a known error string is not evidence that the reviewer finished.
 
@@ -1431,55 +1339,6 @@ def test_attestation_is_incomplete_without_a_positive_completion_status(tmp_path
         )
         assert a["reviewers"]["adversarial"]["completed"] is False, f"status {status!r} counted as finished"
         assert a["complete"] is False
-
-
-def test_pre_push_refuses_a_rewind_and_a_deletion(tmp_path):
-    """The remote OID was discarded, so a force-push inspected clean.
-
-    The gated range is `merge-base(origin/main, local)..local`, which describes
-    what SURVIVES a rewind, never what is dropped -- and for a local OID already
-    an ancestor of origin/main it is empty. A force-push removing files under
-    `src/` therefore returned no gated files at all.
-    """
-    import importlib.util
-    from importlib.machinery import SourceFileLoader
-
-    repo = tmp_path / "repo"
-    (repo / ".claude" / "hooks").mkdir(parents=True)
-    shutil.copy(HOOKS / "review_attestation.py", repo / ".claude" / "hooks" / "review_attestation.py")
-    _run_git(repo, "init", "-q", "-b", "main")
-    _run_git(repo, "add", "-A")
-    _run_git(repo, "commit", "-q", "-m", "one")
-    old = _run_git(repo, "rev-parse", "HEAD")
-    (repo / "src").mkdir()
-    (repo / "src" / "money.py").write_text("value = 1\n")
-    _run_git(repo, "add", "-A")
-    _run_git(repo, "commit", "-q", "-m", "two")
-    new = _run_git(repo, "rev-parse", "HEAD")
-    _run_git(repo, "update-ref", "refs/remotes/origin/main", new)
-
-    path = HOOKS.parents[1] / "scripts" / "git-hooks" / "pre-push"
-    spec = importlib.util.spec_from_loader("prepush_rewind", SourceFileLoader("prepush_rewind", str(path)))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    # Premise: the range for the rewind target is empty, so the old check saw nothing.
-    verifier, _ = mod.load_verifier(str(repo))
-    rng = verifier.canonical_range(old, cwd=str(repo))
-    assert verifier.gated_files(rng, cwd=str(repo)) == [], "premise: a rewind shows no gated files"
-
-    zero = "0" * 40
-    rewind = f"refs/heads/main {old} refs/heads/main {new}"
-    delete = f"(delete) {zero} refs/heads/main {new}"
-    for stdin_line, what in ((rewind, "rewind"), (delete, "deletion")):
-        r = subprocess.run(
-            [sys.executable, str(path)],
-            cwd=repo,
-            input=stdin_line + "\n",
-            capture_output=True,
-            text=True,
-        )
-        assert r.returncode == 1, f"{what} was allowed:\n{r.stdout}{r.stderr}"
 
 
 def test_git_guard_blocks_a_mutation_behind_a_shell_c_separator(tmp_path):
@@ -1524,11 +1383,375 @@ def test_a_newer_blocking_review_is_not_outvoted_by_an_older_approval(tmp_path):
         verdict="needs-attention",
         adversarial_body="Findings:\n- [high] the money path is wrong (src/x.py:1)\n",
     )
-    r = run_hook(
-        "codex_review_gate.py",
-        {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "git push origin HEAD"}},
-        repo,
-        env={"DUAL_REVIEW_REPORTS": str(reports)},
-    )
+    r = _merge(repo, reports)
     assert r.returncode == 2, f"the older approval outvoted the newer blocking review\n{r.stderr}"
     assert "new-blocking" in r.stderr, r.stderr
+
+
+# --- loop and conditional bodies ---------------------------------------------
+#
+# `_segments` splits on `;`, so the body of `for ...; do git ...; done` starts
+# with the reserved word `do`, not with the program. The parser read that as a
+# git command it could not attribute, and both hooks fail closed on those: a
+# read-only loop was denied as "unreadable", while the same command outside the
+# loop passed. Session transcripts showed it as the largest single source of
+# denials for either hook.
+
+_LOOP_READONLY = (
+    "for c in 6b241e64b 309aa6bf4; do git merge-base --is-ancestor $c HEAD && echo yes; done",
+    "for b in a b; do git cat-file -t $b 2>&1; done",
+    "if git diff --quiet; then git status --short; else git log -1; fi",
+    "while read c; do git show --stat $c; done < /dev/null",
+    "until git diff --quiet; do git status --short; done",
+    "! git diff --quiet HEAD",
+    "{ git status --short; git log -1; }",
+    "time git status --short",
+    "time -p git log -1",
+)
+
+
+def test_git_guard_allows_readonly_git_inside_loop_and_conditional_bodies(tmp_path):
+    for cmd in _LOOP_READONLY:
+        ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_blocks_mutation_inside_loop_and_conditional_bodies(tmp_path):
+    """Reading past the reserved word must expose the mutation, not excuse it."""
+    for cmd, named in (
+        ("for b in a b; do git branch -D $b; done", "git branch"),
+        ("if true; then git reset --hard HEAD^; fi", "git reset"),
+        ("while true; do git push origin main; done", "git push"),
+        ("for b in a b; do env LANG=C git commit -m x; done", "git commit"),
+        ("if false; then :; else git clean -fd; fi", "git clean"),
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_blocks_string_commands_inside_loop_and_conditional_bodies(tmp_path):
+    """`bash -c` and `env -S` hide the command in one token. Behind a reserved word
+    the payload was never flattened, so these passed while the same command at the
+    top level was blocked."""
+    for cmd in (
+        "for x in 1; do bash -c 'git reset --hard HEAD~1'; done",
+        'if true; then sh -c "git push origin HEAD"; fi',
+        "! bash -c 'git commit -m x'",
+        "{ bash -c 'git clean -fd'; }",
+        "time bash -c 'git reset --hard'",
+        "time -p bash -c 'git reset --hard'",
+        "for x in 1; do env -S 'git push origin HEAD'; done",
+        "for x in 1; do timeout 5 bash -c 'git reset --hard'; done",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        assert run_hook("git_guard.py", ev, tmp_path).returncode == 2, f"not blocked: {cmd!r}"
+
+
+def test_git_guard_blocks_a_reserved_word_that_is_only_an_argument(tmp_path):
+    """Only a leading reserved word is skipped; `echo do git ...` is still a segment
+    naming git that the parser cannot attribute, and that stays fail-closed."""
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "echo do git reset --hard"}}
+    assert run_hook("git_guard.py", ev, tmp_path).returncode == 2
+
+
+def test_git_guard_allows_readonly_plumbing_subcommands(tmp_path):
+    """Inspection commands reviewers actually reach for; none writes a ref or the index."""
+    for cmd in (
+        "git rev-list --count main..HEAD",
+        "git ls-tree -r --name-only HEAD",
+        "git range-diff main...HEAD",
+        "git diff-tree --no-commit-id --name-only -r HEAD",
+        "git show-ref --heads",
+    ):
+        ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_still_blocks_object_and_ref_writers_and_archive(tmp_path):
+    """`archive` is not on the read-only list: --exec and --remote run a command."""
+    for cmd in (
+        "git hash-object -w file.txt",
+        "git fetch origin",
+        "git update-ref refs/heads/x HEAD",
+        "git archive --remote=. --exec='touch marker;' HEAD",
+        "git archive HEAD src",
+    ):
+        ev = {"agent_type": "hft-reviewer", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        assert run_hook("git_guard.py", ev, tmp_path).returncode == 2, f"not blocked: {cmd!r}"
+
+
+def test_review_gate_ignores_readonly_git_and_gh_inside_loop_bodies(tmp_path):
+    for cmd in (
+        "for c in 6b241e64b 309aa6bf4; do git merge-base --is-ancestor $c HEAD; done",
+        "for c in a b; do git log --oneline --ancestry-path $c..HEAD --merges; done",
+        "while read n; do gh pr view $n --json mergeable; done < /dev/null",
+        "for n in 1 2; do gh api repos/o/r/pulls/$n --jq .state; done",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+
+
+def test_review_gate_reads_a_merge_inside_a_loop_body_instead_of_calling_it_unreadable(tmp_path):
+    r = run_hook(
+        "codex_review_gate.py",
+        {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": "for n in 1 2; do gh pr merge $n; done"}},
+        tmp_path,
+    )
+    assert r.returncode == 2, "a merge in a loop body must still be gated"
+    assert "match-head-commit" in r.stderr and "unreadable" not in r.stderr, r.stderr
+
+
+def test_git_guard_blocks_a_mutation_after_a_background_operator(tmp_path):
+    """`a & b` is two commands; the parser read it as one and judged only `a`.
+
+    Found by the Codex review of this change: inside a loop body the parent
+    blocked these only because it could not read the segment at all.
+    """
+    for cmd, named in (
+        ("for x in 1; do git status --short & git reset --hard HEAD~1; done", "git reset"),
+        ("git status --short & git reset --hard HEAD~1", "git reset"),
+        ("git log -1 &git clean -fd", "git clean"),
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_keeps_redirections_whole_when_splitting_on_the_background_operator(tmp_path):
+    for cmd in (
+        "git status --short 2>&1",
+        "git log -1 >&2",
+        "git diff --stat &> /dev/null",
+        "git rev-parse HEAD 2>&1 & wait",
+    ):
+        ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = run_hook("git_guard.py", ev, tmp_path)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+    # The price of not cutting on `&`: git behind a background operator is unreadable
+    # to the hook, so even two reads are refused. Run them with `;` or `&&` instead.
+    ev = {
+        "agent_type": "hft-executor",
+        "tool_name": "Bash",
+        "tool_input": {"command": "git status --short & git log -1"},
+    }
+    r = run_hook("git_guard.py", ev, tmp_path)
+    assert r.returncode == 2 and "background operator" in r.stderr, r.stderr
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "git reset --hard 2>&1"}}
+    r = run_hook("git_guard.py", ev, tmp_path)
+    assert r.returncode == 2 and "git reset" in r.stderr, r.stderr
+
+
+def test_review_gate_gates_a_merge_after_a_background_operator(tmp_path):
+    for cmd in (
+        "for n in 7; do gh pr view $n & gh pr merge $n --squash; done",
+        "gh pr view 7 & gh pr merge 7 --squash",
+    ):
+        r = run_hook(
+            "codex_review_gate.py",
+            {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}},
+            tmp_path,
+        )
+        assert r.returncode == 2, f"a merge behind `&` was not gated: {cmd!r}"
+        assert "would merge" in r.stderr, r.stderr
+
+
+def _guard(tmp_path, cmd):
+    ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
+    return run_hook("git_guard.py", ev, tmp_path)
+
+
+def _gate(tmp_path, cmd):
+    ev = {"tool_name": "Bash", "cwd": str(tmp_path), "tool_input": {"command": cmd}}
+    return run_hook("codex_review_gate.py", ev, tmp_path)
+
+
+def test_git_guard_blocks_a_mutation_whose_quoted_argument_contains_an_ampersand(tmp_path):
+    """Cutting on every `&` lost the git command when the `&` sat inside an argument.
+
+    Codex review of PR #718: `git -C "/tmp/R&D" reset --hard` became `git -C "/tmp/R`
+    and `D" reset --hard`, neither of which is a git mutation.
+    """
+    for cmd, named in (
+        ('git -C "/tmp/R&D" reset --hard HEAD~1', "git reset"),
+        ("git -C '/tmp/R&D' clean -fd", "git clean"),
+        ("git -C /tmp/R\\&D reset --hard", "git reset"),
+        ('git -C "/tmp/R\\"&D" reset --hard', "git reset"),
+        ("bash -c 'git -C \"/tmp/R&D\" branch -D old'", "git branch"),
+        # A backslash is literal inside single quotes, so the first string ends at `a\\`.
+        ("git log --grep 'a\\' & git reset --hard '\\'", "git reset"),
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_review_gate_gates_a_merge_whose_quoted_argument_contains_an_ampersand(tmp_path):
+    for cmd in (
+        "bash -c 'gh pr merge 7 --squash --subject \"fix A&B\"'",
+        'gh pr merge 7 --squash --subject "fix A&B"',
+        "gh pr merge 7 --squash --body 'R&D notes'",
+    ):
+        r = _gate(tmp_path, cmd)
+        assert r.returncode == 2, f"a merge with an ampersand in a quoted argument was not gated: {cmd!r}"
+        assert "match-head-commit" in r.stderr, r.stderr
+
+
+def test_hooks_cut_on_a_background_operator_between_quoted_ampersands(tmp_path):
+    """The operator outside the quotes still ends the command; the ones inside do not."""
+    r = _guard(tmp_path, 'git log --grep "R&D" & git reset --hard "A&B"')
+    assert r.returncode == 2
+    assert "git reset" in r.stderr, r.stderr
+    r = _gate(tmp_path, 'gh pr view 7 --jq "a&b" & gh pr merge 7 --squash --subject "c&d"')
+    assert r.returncode == 2
+    assert "would merge" in r.stderr, r.stderr
+
+
+def test_git_guard_keeps_a_quoted_ampersand_whole_when_another_quoted_operator_was_cut(tmp_path):
+    """A quoted `;` or `|` is still cut, which leaves a piece with an odd quote.
+
+    Codex review of PR #718, round 4: that piece was then cut at every `&`, so the
+    complete `"/tmp/R&D"` before it was cut too and the git command lost its subcommand.
+    """
+    for cmd, named in (
+        ('git -C "/tmp/R&D" clean -fd -- "old;file"', "git clean"),
+        ('git -C "/tmp/R&D" reset --hard "a|b"', "git reset"),
+        ('git -C "/tmp/R&D" reset --hard "a && b"', "git reset"),
+        ("git -C '/tmp/R&D' branch -D 'old\nname'", "git branch"),
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named.split()[-1] in r.stderr, f"blocked without naming the subcommand: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_cuts_on_a_background_operator_after_an_angle_bracket_that_is_an_argument(tmp_path):
+    r"""`\>&` is an escaped `>` and then a background operator, not the redirection `>&`."""
+    for cmd in (
+        "for x in 1; do git log --grep \\>& git reset --hard HEAD~1; done",
+        "git log --grep \\<& git reset --hard HEAD~1",
+        'git log --grep ">"& git reset --hard',
+        "git log --grep '<'& git reset --hard",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "git reset" in r.stderr, r.stderr
+
+
+def test_git_guard_reads_a_backslash_as_an_escape_inside_dollar_single_quotes(tmp_path):
+    r"""In `$'a\'b'` the backslash escapes the quote; in `'a\'` it does not."""
+    for cmd in (
+        "git -C $'a\\'b&c' reset --hard",
+        "git log --grep $'a\\'b' & git reset --hard",
+        # An escaped dollar sign does not start the `$'` form: the string ends at `a\`.
+        "git log --grep \\$'a\\' & git reset --hard '\\'",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "reset" in r.stderr, r.stderr
+
+
+def test_git_guard_reads_the_arguments_that_follow_a_redirection(tmp_path):
+    """Cutting at the `&` of `&>` or `>&` would leave `git branch`, which only lists."""
+    for cmd in ("git branch &>/dev/null -D old", "git branch >&/dev/null -D old", "git branch 2>&1 -D old"):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "git branch" in r.stderr, r.stderr
+
+
+def test_hooks_block_git_whose_argument_holds_an_ampersand_in_a_parameter_expansion(tmp_path):
+    """Codex review of PR #718, round 5: `${x:-a&b}` holds an argument `&`, not an operator.
+
+    Cutting there removed the git command from its segment. The segment is now read whole.
+    """
+    r = _guard(tmp_path, "git -C ${review_dir:-/tmp/R&D} reset --hard HEAD~1")
+    assert r.returncode == 2
+    assert "git reset" in r.stderr, r.stderr
+    r = _gate(tmp_path, "target=org/repo; gh --repo ${target%&} pr merge 7 --squash")
+    assert r.returncode == 2, r.stderr
+    assert "would merge" in r.stderr, r.stderr
+
+
+def test_hooks_read_a_segment_with_a_background_operator_whole(tmp_path):
+    """Whatever the `&` handling decides, the git command before the `&` is still read.
+
+    This is the property the four failed cut-based versions lacked: the extra check can
+    only add a block. Each command here is blocked by the plain segment reading alone.
+    """
+    for cmd, named in (
+        ('git -C "/tmp/R&D" reset --hard', "git reset"),
+        ("git -C ${d:-a&b} clean -fd", "git clean"),
+        ("git -C $'a\\'b&c' reset --hard", "git reset"),
+        ("git -C a\\&b branch -D old", "git branch"),
+        ("git -C a&b reset --hard", "git"),
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named.split()[-1] in r.stderr, f"blocked without naming the command: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_finds_a_background_operator_inside_a_string_command(tmp_path):
+    """The `&` inside `bash -c '...'` is quoted to the outer shell and bare to the inner one."""
+    for cmd in ("bash -c 'git status & git reset --hard'", "env -S 'git log -1 & git clean -fd'"):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "background operator" in r.stderr, r.stderr
+
+
+def test_hooks_block_git_in_a_piece_whose_quotes_do_not_balance(tmp_path):
+    """Codex review of PR #718, round 6: a quoted `;` is cut, and the odd quote hid the `&`.
+
+    The top-level form already passed on origin/main; the loop form passed once loop
+    bodies became readable. Both are now refused as unreadable.
+    """
+    for cmd in (
+        "for x in 1; do git log --grep 'a;git status x' & git reset --hard HEAD~1; done",
+        "git log --grep 'a;git status x' & git reset --hard HEAD~1",
+        'git log --grep "a|b" & git clean -fd',
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "background operator" in r.stderr, r.stderr
+    for cmd in (
+        "for x in 1; do git log --grep 'a;git status x' & gh pr merge 7 --squash; done",
+        "git log --grep 'a;git status x' & gh pr merge 7 --squash",
+    ):
+        r = _gate(tmp_path, cmd)
+        assert r.returncode == 2, f"a merge was not gated: {cmd!r}"
+        assert "would merge" in r.stderr, r.stderr
+
+
+def test_hooks_leave_unbalanced_quotes_alone_without_git_behind_an_ampersand(tmp_path):
+    """An odd quote left by a quoted `;` or `|` is common and harmless on its own."""
+    for cmd in (
+        "echo 'a;b' & sleep 1",
+        'git grep -n "foo|bar" -- src',
+        "git log --grep 'fix;revert' -5",
+        "git log --format='%H|%s' -3 2>&1",
+        "git grep -E 'a|b' && git status --short",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+    assert _gate(tmp_path, "echo 'it is a;b' & gh pr view 7").returncode == 0
+
+
+def test_hooks_leave_a_quoted_ampersand_in_a_harmless_command_alone(tmp_path):
+    for cmd in (
+        'git log --grep "R&D" -3',
+        "git -C '/tmp/R&D' status --short",
+        "git status --short 2>&1 &",
+        # A redirection, not an operator: bash writes `note reset --hard` to a file named git.
+        "echo note >&git reset --hard",
+        "echo note &>git reset --hard",
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 0, f"read-only command blocked: {cmd!r} -> {r.stderr}"
+    r = _gate(tmp_path, 'git commit -m "notes & gh pr merge 7 later"')
+    assert r.returncode == 0, f"a quoted mention was read as a merge: {r.stderr}"
