@@ -1661,10 +1661,12 @@ class SystemBootstrapper:
         # lapses and the first order of the day pays the handshake (27 s on
         # 2026-09-16) against a 30 ms retry budget. Warm it ahead of the open
         # instead; a warm-up that fails changes nothing about how orders go out.
+        order_session_warmup = None
         if hasattr(order_client, "warm_order_session"):
             from hft_platform.services.order_session_warmup import OrderSessionWarmup
 
-            deferred_tasks.append(OrderSessionWarmup(order_client).run())
+            order_session_warmup = OrderSessionWarmup(order_client)
+            deferred_tasks.append(order_session_warmup.run())
 
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
@@ -1740,6 +1742,7 @@ class SystemBootstrapper:
             checkpoint_writer=checkpoint_writer,
             startup_verifier=startup_verifier,
             startup_fill_reconciler=startup_fill_reconciler,
+            order_session_warmup=order_session_warmup,
             deferred_tasks=deferred_tasks,
         )
 

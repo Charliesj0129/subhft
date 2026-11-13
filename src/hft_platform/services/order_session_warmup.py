@@ -39,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -59,6 +59,7 @@ DEFAULT_LEAD_S = 300.0
 DEFAULT_TICK_S = 30.0
 DEFAULT_ATTEMPTS = 10
 DEFAULT_RETRY_INTERVAL_S = 3.0
+DEFAULT_RECONNECT_AFTER = 2
 
 
 class _WarmableClient(Protocol):
@@ -143,6 +144,9 @@ class OrderSessionWarmup:
         "_product_type",
         "_metrics",
         "_window_source",
+        "_reconnect_after",
+        "_exhausted_windows",
+        "on_exhausted",
     )
 
     def __init__(
@@ -156,6 +160,8 @@ class OrderSessionWarmup:
         product_type: str = "future",
         metrics: Any | None = None,
         window_source: Callable[[], tuple[bool, bool] | None] | None = None,
+        reconnect_after: int | None = None,
+        on_exhausted: Callable[[str], Awaitable[Any]] | None = None,
     ) -> None:
         self._client = client
         self._clock = WarmupClock(_pick(lead_s, "HFT_ORDER_WARMUP_LEAD_S", DEFAULT_LEAD_S))
@@ -167,6 +173,15 @@ class OrderSessionWarmup:
         self._retry_interval_s = _pick(retry_interval_s, "HFT_ORDER_WARMUP_RETRY_S", DEFAULT_RETRY_INTERVAL_S)
         self._product_type = product_type
         self._metrics = metrics
+        # A probe that keeps failing across whole windows is a session that
+        # will not heal by waiting (THESHOW 2026-11-13: five exhausted windows,
+        # then a relogin fixed it in 2 s). The hook asks the owner of the
+        # guarded reconnect path to relogin; this class never touches the broker
+        # beyond the probe. Set by HFTSystem once the order watchdog exists.
+        reconnect_after = _pick(reconnect_after, "HFT_ORDER_WARMUP_RECONNECT_AFTER", DEFAULT_RECONNECT_AFTER)
+        self._reconnect_after = max(1, int(reconnect_after))
+        self._exhausted_windows = 0
+        self.on_exhausted = on_exhausted
 
     @property
     def clock(self) -> WarmupClock:
@@ -209,6 +224,7 @@ class OrderSessionWarmup:
                 ok = False
             if ok:
                 self._bump("ok")
+                self._exhausted_windows = 0
                 logger.info("order_session_warmed", attempts=attempt)
                 return True
             if attempt < max(1, self._attempts):
@@ -242,12 +258,35 @@ class OrderSessionWarmup:
                     )
                     if plan.warm:
                         logger.info("order_session_warmup_window", reason=plan.reason, lead_s=self._clock.lead_s)
-                        self._clock.mark(await self.warm_once())
+                        ok = await self.warm_once()
+                        self._clock.mark(ok)
+                        if not ok:
+                            await self._on_window_exhausted()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — one bad tick must not end the clock
                 logger.warning("order_session_warmup_tick_failed", error=str(exc))
             await asyncio.sleep(self._tick_s)
+
+    async def _on_window_exhausted(self) -> None:
+        """Ask for a guarded relogin once enough whole windows have failed."""
+        self._exhausted_windows += 1
+        if self._exhausted_windows < self._reconnect_after:
+            return
+        count = self._exhausted_windows
+        # Reset first: at most one request per N failed windows, even if the
+        # hook raises. The reconnect path's own cooldown is the storm guard.
+        self._exhausted_windows = 0
+        hook = self.on_exhausted
+        if hook is None:
+            return
+        logger.warning("order_session_warmup_reconnect_requested", exhausted_windows=count)
+        try:
+            await hook("order_warmup_exhausted")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — one bad hook must not end the clock
+            logger.warning("order_session_warmup_reconnect_failed", error=str(exc))
 
     def _bump(self, result: str) -> None:
         metrics = self._metrics
