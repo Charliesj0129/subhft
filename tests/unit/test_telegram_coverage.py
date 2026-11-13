@@ -196,3 +196,105 @@ class TestSendSingleExceptionPaths:
         sender = TelegramSender()
         result = await sender.send("test")
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Log content: why a send failed, and never the chat id
+# ---------------------------------------------------------------------------
+
+
+def _session_raising(exc: BaseException) -> MagicMock:
+    session = MagicMock()
+    session.closed = False
+    session.post = MagicMock(side_effect=exc)
+    session.close = AsyncMock()
+    return session
+
+
+class TestSendLogContent:
+    @pytest.mark.asyncio
+    async def test_send_exception_with_empty_str_logs_type_and_nonempty_exc(self, module_log_sink):
+        """aiohttp's ClientTimeout raises TimeoutError whose str() is ''."""
+        import hft_platform.notifications.telegram as tel_mod
+
+        assert str(TimeoutError()) == ""  # the production shape (exc="" in prod logs)
+        events = module_log_sink(tel_mod)
+        sender = TelegramSender(bot_token="TEST", chat_id="0", enabled=True)
+        sender._session = _session_raising(TimeoutError())
+
+        result = await sender._send_single("test", critical=False)
+
+        assert result is False
+        failed = [e for e in events if e["event"] == "telegram.send_exception"]
+        assert len(failed) == 1
+        assert failed[0]["exc_type"] == "TimeoutError"
+        assert failed[0]["exc"] != ""
+
+    @pytest.mark.asyncio
+    async def test_retry_on_exception_with_empty_str_logs_type_and_nonempty_exc(self, module_log_sink, monkeypatch):
+        import hft_platform.notifications.telegram as tel_mod
+
+        events = module_log_sink(tel_mod)
+        monkeypatch.setattr(TelegramSender, "_RETRY_BACKOFF_S", 0.0)
+        sender = TelegramSender(bot_token="TEST", chat_id="0", enabled=True)
+        session = _session_raising(TimeoutError())
+        sender._session = session
+
+        # A failed attempt drops the session and the retry builds a new one:
+        # hand it back the same mock so no real ClientSession (network) is made.
+        fake_aiohttp = MagicMock()
+        fake_aiohttp.ClientSession.return_value = session
+        monkeypatch.setattr(tel_mod, "aiohttp", fake_aiohttp)
+
+        result = await sender._send_single("test", critical=True)
+
+        assert result is False
+        assert session.post.call_count == TelegramSender._MAX_CRITICAL_RETRIES + 1
+        retried = [e for e in events if e["event"] == "telegram.retry_on_exception"]
+        assert len(retried) == TelegramSender._MAX_CRITICAL_RETRIES
+        for entry in retried:
+            assert entry["exc_type"] == "TimeoutError"
+            assert entry["exc"] != ""
+        final = [e for e in events if e["event"] == "telegram.send_exception"]
+        assert len(final) == 1
+        assert final[0]["exc_type"] == "TimeoutError"
+        assert final[0]["exc"] != ""
+
+    @pytest.mark.asyncio
+    async def test_send_exception_with_message_keeps_the_message(self, module_log_sink):
+        import hft_platform.notifications.telegram as tel_mod
+
+        events = module_log_sink(tel_mod)
+        sender = TelegramSender(bot_token="TEST", chat_id="0", enabled=True)
+        sender._session = _session_raising(RuntimeError("connection refused"))
+
+        await sender._send_single("test", critical=False)
+
+        failed = [e for e in events if e["event"] == "telegram.send_exception"]
+        assert failed[0]["exc_type"] == "RuntimeError"
+        assert failed[0]["exc"] == "connection refused"
+
+    @pytest.mark.asyncio
+    async def test_sent_log_event_has_no_chat_id(self, module_log_sink):
+        import hft_platform.notifications.telegram as tel_mod
+
+        events = module_log_sink(tel_mod)
+        response = AsyncMock()
+        response.status = 200
+        response.__aenter__ = AsyncMock(return_value=response)
+        response.__aexit__ = AsyncMock(return_value=False)
+        session = MagicMock()
+        session.closed = False
+        session.post = MagicMock(return_value=response)
+        sender = TelegramSender(bot_token="TEST", chat_id="0", enabled=True)
+        sender._session = session
+
+        result = await sender._send_single("test", critical=False)
+
+        assert result is True
+        sent = [e for e in events if e["event"] == "telegram.sent"]
+        assert len(sent) == 1
+        assert "chat_id" not in sent[0]
+        # No log event of this send carries the chat id value under any key.
+        for entry in events:
+            assert "0" not in [v for v in entry.values() if isinstance(v, str)]
