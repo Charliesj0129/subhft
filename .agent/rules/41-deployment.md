@@ -6,6 +6,15 @@ guardrail form — when in doubt, open the runbook.
 
 ## Laws
 
+- **D0 Silence before any engine stop.** From the host, POST a 30-minute
+  Alertmanager silence (`127.0.0.1:9093/api/v2/silences`; alertname regex and
+  exact call in the runbook's D0, `createdBy: deploy`, comment = batch id).
+  `HFTEngineDown` has no off-hours mute, so an unsilenced stop pages Telegram.
+  Expire it (`DELETE .../api/v2/silence/<id>`) after D9 PASS. It only stops pages.
+- **D0a No engine stop while the backup runs.** `scripts/clickhouse_backup.sh`
+  execs inside `hft-engine`; a stop SIGKILLs it (11-10: `BackupFailed` latched
+  24 h). Abort if `pgrep -f '[c]lickhouse_backup.sh'` prints a pid; avoid
+  14:25-14:50 Taipei (06:25-06:50Z) on weekdays.
 - **D1 Manual + per-batch authorization.** Never deploy on your own initiative,
   and never carry a previous batch's approval forward. `HFT_ORDER_MODE=live`
   cutover is a separate red line.
@@ -37,7 +46,8 @@ guardrail form — when in doubt, open the runbook.
   facades. Batch fixes; a ready fix waits for its batch.
 - **D9 Name the pass criteria before restarting**, as specific series with
   expected direction, and capture their pre-restart baseline.
-- **D10 Append to `~/deploy_ledger.tsv`** after every batch. Without it D3 has
+- **D10 Append to `~/deploy_ledger.tsv`** after every batch, with the D0
+  `silenceID` as the last column (`-` if no engine stop). Without it D3 has
   no SHA to diff against — host `git status` shows deployed files as plain `M`.
 
 ## Reject on sight

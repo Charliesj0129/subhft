@@ -42,6 +42,67 @@ Following it as written would have silently reverted four production edits.
 Numbered so reviews and handoffs can cite them. A deploy that breaks one of
 these is stopped, not argued about.
 
+### D0 — Silence the stop's pages first; expire the silence after D9
+
+Every engine stop — Class A step 7, the Class C recreate, the rollback stop —
+trips alerts that page Telegram: `HFTEngineDown`, `QuoteFacade*`, `QuotePool*`,
+`FrontMonthNotSubscribed`, `FeedReconnect*`, `BrokerPath*`,
+`ShioajiLoginFailuresDetected`. `HFTEngineDown` fired on every deploy stop on
+2026-11-10 (06:12Z, 06:37–06:43Z) and 2026-11-11 (10:08Z, 21:46Z) because no
+deploy set a silence (`/api/v2/silences` was empty). `HFTEngineDown`,
+`Backup*` and `HostDiskSpace*` are routed without the `taipei_off_hours` mute,
+so the silence is the only thing that keeps a deploy quiet.
+
+Alertmanager runs on the host as container `alertmanager`
+(`prom/alertmanager:v0.27.0`), API on `127.0.0.1:9093`. From a shell on the
+host, immediately before the stop (and after the D0a check), create a
+30-minute silence:
+
+```bash
+BATCH_ID=<batch-name>
+STARTS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ENDS=$(date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)
+curl -s -X POST http://127.0.0.1:9093/api/v2/silences \
+  -H 'Content-Type: application/json' \
+  -d '{"matchers":[{"name":"alertname","value":"HFTEngineDown|QuoteFacade.*|QuotePool.*|FrontMonthNotSubscribed|FeedReconnect.*|BrokerPath.*|ShioajiLoginFailuresDetected","isRegex":true}],"startsAt":"'"$STARTS"'","endsAt":"'"$ENDS"'","createdBy":"deploy","comment":"deploy '"$BATCH_ID"'"}'
+# prints {"silenceID":"<id>"} -- no silenceID means no silence: fix it before the stop
+```
+
+Alertmanager anchors the regex, so `QuoteFacade.*` covers every `QuoteFacade…`
+alert. Do not widen it to `.*`: the silence must not hide `Backup*`,
+`HostDiskSpace*` or a risk alert. Record the returned `silenceID` in the D10
+ledger row. After D9 PASS, expire it:
+
+```bash
+curl -s -X DELETE http://127.0.0.1:9093/api/v2/silence/<silenceID>
+```
+
+A silence delivers nothing; it only stops the pages. The alerts still fire in
+Prometheus, so D9 is read exactly as before. It lapses on its own at `ENDS`;
+a deploy that overruns 30 minutes needs a new silence.
+
+### D0a — No engine stop while the backup runs
+
+`scripts/clickhouse_backup.sh` runs `BackupManager` through
+`docker compose exec -T hft-engine python -c ...`, so stopping `hft-engine`
+mid-backup SIGKILLs the exec (exit 137). The 2026-11-10 deploy did exactly
+that: the cron (`30 14 * * 1-5`, host cron runs in Asia/Taipei, so 14:30
+Taipei = 06:30Z) was running, and `BackupFailed` stayed latched for 24 h
+(06:36Z 2026-11-10 → 06:37Z 2026-11-11) until the next run succeeded.
+
+On the host, before the stop:
+
+```bash
+pgrep -f '[c]lickhouse_backup.sh'      # any pid printed: abort, do not stop the engine
+```
+
+The `[c]` bracket is deliberate: `ssh $HOST 'pgrep -f clickhouse_backup.sh'`
+matches the remote `bash -c` that carries the pattern in its own command line
+and always reports a pid. Wait for the backup to finish, then re-run the
+check. Also schedule around the window: avoid 14:25–14:50 Taipei
+(06:25–06:50Z) on weekdays. The `pgrep` check is the guard; the window is only
+how you avoid hitting it.
+
 ### D1 — Manual, and authorized per deploy
 
 No automated push, no CI-triggered deploy, no agent deploying on its own
@@ -248,15 +309,19 @@ D3 has no `<LAST_DEPLOYED_SHA>` to diff against and the next operator has to
 reconstruct it from memory or session logs.
 
 ```
-<utc_iso>	<commit_sha>	<class>	<n_files>	<restarted>	<backup_dir>	<summary>
+<utc_iso>	<commit_sha>	<class>	<n_files>	<restarted>	<backup_dir>	<summary>	<silence_id>
 ```
 
 ```bash
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "<sha>" "A" "9" "yes" \
-  "~/deploy_backup_20260726/phaseE" "<one-line summary>" \
+  "~/deploy_backup_20260726/phaseE" "<one-line summary>" "<silenceID from D0>" \
   >> ~/deploy_ledger.tsv
 ```
+
+`<silence_id>` is the D0 `silenceID` (`-` for a batch with no engine stop, e.g.
+Class B). It is the last column, so rows written before D0 existed — 7 columns —
+still read correctly for D3.
 
 The host tree's own `git status` cannot serve this purpose: the deployed files
 show as plain `M`, with no record of which commit they came from.
@@ -295,6 +360,8 @@ ssh -o BatchMode=yes -o ConnectTimeout=8 charl@100.91.176.126 \
 [ ] deploy class (A / B / C)                   : ____
 [ ] D3 diff done for every file; live edits identified
 [ ] pass criteria written down (D9)
+[ ] D0a not planned for 14:25-14:50 Taipei on a weekday (backup window)
+[ ] D0  silence command ready; it is created at step 6a, just before the stop
 [ ] market closed, or change is safe mid-session
 [ ] disk >= 20% free: ssh ... 'df -h /home/charl/subhft'
 ```
@@ -353,6 +420,11 @@ ssh $HOST "docker exec hft-engine python -m py_compile $(printf '/app/%s ' $FILE
 **6. Capture the baseline** for the metrics named in D9 — you cannot show a
 metric changed without its before value.
 
+**6a. D0a, then D0 — immediately before the stop.** On the host, the
+`pgrep -f '[c]lickhouse_backup.sh'` check must print nothing (any pid: abort and
+wait); then create the 30-minute silence and keep its `silenceID` (commands in
+D0a / D0 above).
+
 **7. Stop, wait, start** (D6a — never `restart`, never `up -d`):
 
 ```bash
@@ -384,7 +456,8 @@ ssh $HOST "docker logs hft-engine --since 10m 2>&1 | grep running_code_identity"
 `count by (code_sha) (hft_build_info) > 1` catches two engines running
 different source from the same image.
 
-**9. D10 append the ledger line.**
+**9. After D9 PASS, expire the silence (D0), then D10 append the ledger line**
+with the `silenceID`.
 
 ---
 
