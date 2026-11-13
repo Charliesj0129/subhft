@@ -178,8 +178,8 @@ class OrderSessionWarmup:
         # then a relogin fixed it in 2 s). The hook asks the owner of the
         # guarded reconnect path to relogin; this class never touches the broker
         # beyond the probe. Set by HFTSystem once the order watchdog exists.
-        reconnect_after = _pick(reconnect_after, "HFT_ORDER_WARMUP_RECONNECT_AFTER", DEFAULT_RECONNECT_AFTER)
-        self._reconnect_after = max(1, int(reconnect_after))
+        picked = _pick(reconnect_after, "HFT_ORDER_WARMUP_RECONNECT_AFTER", DEFAULT_RECONNECT_AFTER)
+        self._reconnect_after = max(1, int(picked))
         self._exhausted_windows = 0
         self.on_exhausted = on_exhausted
 
