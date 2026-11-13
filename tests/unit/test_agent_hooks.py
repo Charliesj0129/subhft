@@ -1531,12 +1531,20 @@ def test_git_guard_keeps_redirections_whole_when_splitting_on_the_background_ope
         "git status --short 2>&1",
         "git log -1 >&2",
         "git diff --stat &> /dev/null",
-        "git status --short & git log -1",
         "git rev-parse HEAD 2>&1 & wait",
     ):
         ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
         r = run_hook("git_guard.py", ev, tmp_path)
         assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
+    # The price of not cutting on `&`: git behind a background operator is unreadable
+    # to the hook, so even two reads are refused. Run them with `;` or `&&` instead.
+    ev = {
+        "agent_type": "hft-executor",
+        "tool_name": "Bash",
+        "tool_input": {"command": "git status --short & git log -1"},
+    }
+    r = run_hook("git_guard.py", ev, tmp_path)
+    assert r.returncode == 2 and "background operator" in r.stderr, r.stderr
     ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "git reset --hard 2>&1"}}
     r = run_hook("git_guard.py", ev, tmp_path)
     assert r.returncode == 2 and "git reset" in r.stderr, r.stderr
@@ -1553,7 +1561,7 @@ def test_review_gate_gates_a_merge_after_a_background_operator(tmp_path):
             tmp_path,
         )
         assert r.returncode == 2, f"a merge behind `&` was not gated: {cmd!r}"
-        assert "match-head-commit" in r.stderr, r.stderr
+        assert "would merge" in r.stderr, r.stderr
 
 
 def _guard(tmp_path, cmd):
@@ -1604,7 +1612,7 @@ def test_hooks_cut_on_a_background_operator_between_quoted_ampersands(tmp_path):
     assert "git reset" in r.stderr, r.stderr
     r = _gate(tmp_path, 'gh pr view 7 --jq "a&b" & gh pr merge 7 --squash --subject "c&d"')
     assert r.returncode == 2
-    assert "match-head-commit" in r.stderr, r.stderr
+    assert "would merge" in r.stderr, r.stderr
 
 
 def test_git_guard_keeps_a_quoted_ampersand_whole_when_another_quoted_operator_was_cut(tmp_path):
@@ -1656,6 +1664,45 @@ def test_git_guard_reads_the_arguments_that_follow_a_redirection(tmp_path):
         r = _guard(tmp_path, cmd)
         assert r.returncode == 2, f"not blocked: {cmd!r}"
         assert "git branch" in r.stderr, r.stderr
+
+
+def test_hooks_block_git_whose_argument_holds_an_ampersand_in_a_parameter_expansion(tmp_path):
+    """Codex review of PR #718, round 5: `${x:-a&b}` holds an argument `&`, not an operator.
+
+    Cutting there removed the git command from its segment. The segment is now read whole.
+    """
+    r = _guard(tmp_path, "git -C ${review_dir:-/tmp/R&D} reset --hard HEAD~1")
+    assert r.returncode == 2
+    assert "git reset" in r.stderr, r.stderr
+    r = _gate(tmp_path, "target=org/repo; gh --repo ${target%&} pr merge 7 --squash")
+    assert r.returncode == 2, r.stderr
+    assert "would merge" in r.stderr, r.stderr
+
+
+def test_hooks_read_a_segment_with_a_background_operator_whole(tmp_path):
+    """Whatever the `&` handling decides, the git command before the `&` is still read.
+
+    This is the property the four failed cut-based versions lacked: the extra check can
+    only add a block. Each command here is blocked by the plain segment reading alone.
+    """
+    for cmd, named in (
+        ('git -C "/tmp/R&D" reset --hard', "git reset"),
+        ("git -C ${d:-a&b} clean -fd", "git clean"),
+        ("git -C $'a\\'b&c' reset --hard", "git reset"),
+        ("git -C a\\&b branch -D old", "git branch"),
+        ("git -C a&b reset --hard", "git"),
+    ):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert named in r.stderr, f"blocked without naming the command: {cmd!r} -> {r.stderr}"
+
+
+def test_git_guard_finds_a_background_operator_inside_a_string_command(tmp_path):
+    """The `&` inside `bash -c '...'` is quoted to the outer shell and bare to the inner one."""
+    for cmd in ("bash -c 'git status & git reset --hard'", "env -S 'git log -1 & git clean -fd'"):
+        r = _guard(tmp_path, cmd)
+        assert r.returncode == 2, f"not blocked: {cmd!r}"
+        assert "background operator" in r.stderr, r.stderr
 
 
 def test_hooks_leave_a_quoted_ampersand_in_a_harmless_command_alone(tmp_path):

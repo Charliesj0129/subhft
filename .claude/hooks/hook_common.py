@@ -95,31 +95,23 @@ def is_subagent(event: dict) -> bool:
     return bool(event.get("agent_type"))
 
 
-def _split_background(seg: str) -> list[str]:
-    """Cut a segment at each background operator: a lone `&` outside quotes.
+#: Where `_segments` cuts a command. A lone `&` is deliberately not here: see
+#: _backgrounded_git for why it is handled by blocking rather than cutting.
+_OPERATORS = re.compile(r"(?:\|\||&&|;|\||\n|\$\(|`)")
+_GIT_OR_GH = re.compile(r"(?<![\w.-])(?:git|gh)(?![\w-])")
 
-    `git status & git reset --hard` is two commands, so the `&` must end the
-    first one. A `&` inside quotes is an argument character: cutting
-    `git -C "/tmp/R&D" reset --hard` there left `git -C "/tmp/R`, which names no
-    subcommand, and the reset went unseen.
 
-    What counts as outside quotes is what bash would say of this segment alone:
-    single quotes, double quotes, `$'...'` (where a backslash escapes) and a
-    backslash before the character. An `&` that the segment shows as quoted is
-    never cut, also when the segment's quotes do not balance. That happens when
-    the caller cut a quoted `;` or `|` first, and cutting the earlier, complete
-    `"/tmp/R&D"` on top of that lost a command the uncut segment still showed.
+def _bare_ampersands(seg: str) -> list[int]:
+    """Positions of each `&` in `seg` that bash would read as a background operator.
 
-    An `&` next to a redirection operator is part of it (`2>&1`, `>&2`, `<&3`,
-    `&>file`). The `<` or `>` must itself be an operator: in `--grep \\>& git
-    reset` it is an escaped argument and the `&` ends the command.
-
-    Only `&` is read this way. The other operators are still cut wherever they
-    appear, quoted or not. Reading quotes across a whole command needs comments
-    and heredoc bodies modelled first: without that, an apostrophe in either
-    one swallows the commands that follow it.
+    Skipped: an `&` inside single quotes, double quotes or `$'...'`, an escaped
+    one, and one that belongs to a redirection (`2>&1`, `>&2`, `<&3`, `&>file`,
+    where the `<` or `>` is itself unquoted and unescaped). Parameter
+    expansions such as `${x:-a&b}` are not modelled, so their `&` is listed.
+    Only _backgrounded_git reads this, and a wrong answer there can only add or
+    skip an extra block, never hide a command (see its docstring).
     """
-    cuts: list[int] = []
+    found: list[int] = []
     quote = ""
     dollar = redirect = -2
     i = 0
@@ -139,15 +131,39 @@ def _split_background(seg: str) -> list[str]:
         elif c in "<>":
             redirect = i
         elif c == "&" and redirect != i - 1 and not seg.startswith("&>", i):
-            cuts.append(i)
+            found.append(i)
         i += 1
-    parts: list[str] = []
-    start = 0
-    for cut in cuts:
-        parts.append(seg[start:cut])
-        start = cut + 1
-    parts.append(seg[start:])
-    return parts
+    return found
+
+
+def _backgrounded_git(cmd: str, _depth: int = 0) -> Iterator[str]:
+    """Segments in which git or gh follows a background operator (`a & git ...`).
+
+    `git status & git reset --hard` is two commands, but `_segments` reads it as
+    one `git status` and never sees the reset. Cutting the segment at the `&`
+    was tried on PR #718 and failed four Codex rounds in a row: every `&` the
+    cut misread (inside quotes, after `\\>`, inside `${...}`) removed a git
+    command from the segment it was in, and an unseen command passes.
+
+    So nothing is cut. `_segments` reads every segment exactly as before, and
+    this adds one more reason to call a segment unreadable. A mistake here can
+    therefore only add a block or miss an extra one; it cannot make a command
+    that was blocked without it pass. String commands (`bash -c '...'`) are
+    followed the same way `_segments` follows them.
+    """
+    for seg in _OPERATORS.split(cmd):
+        amps = _bare_ampersands(seg)
+        if amps and _GIT_OR_GH.search(seg, amps[0] + 1):
+            yield seg.strip()
+            continue
+        try:
+            toks = shlex.split(seg)
+        except ValueError:
+            toks = seg.split()
+        if toks and _depth < _MAX_SHELL_DEPTH:
+            hidden, payload = _string_command(toks)
+            if hidden and payload is not None:
+                yield from _backgrounded_git(payload, _depth + 1)
 
 
 def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
@@ -157,8 +173,7 @@ def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
     invocation while `echo "git push"` is not -- shlex drops the quotes, so a
     quoted mention lands inside a single token rather than at position 0.
     """
-    pieces = re.split(r"(?:\|\||&&|;|\||\n|\$\(|`)", cmd)
-    for seg in (part for piece in pieces for part in _split_background(piece)):
+    for seg in _OPERATORS.split(cmd):
         try:
             toks = shlex.split(seg)
         except ValueError:
@@ -304,7 +319,7 @@ def unattributed_segments(cmd: str) -> list[str]:
     to do; both of ours block, because not knowing what is about to run is the
     state that must not pass.
     """
-    out: list[str] = []
+    out = [f"{seg}  [git or gh after a background operator `&`]" for seg in _backgrounded_git(cmd)]
     for toks in _segments(cmd):
         # A string-command form reaching here is one _segments could not flatten.
         if _string_command(toks)[0]:
