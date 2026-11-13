@@ -106,7 +106,9 @@ route:
 receivers:
   - name: telegram-bridge
     webhook_configs:
-      - url: http://hft-engine:8081/webhook/alertmanager
+      # The bridge runs in hft-bot (always on), not hft-engine: alerts must
+      # survive an engine stop. Deploy hft-bot first, then reload this.
+      - url: http://hft-bot:8081/webhook/alertmanager
         send_resolved: true
 
   - name: "null"

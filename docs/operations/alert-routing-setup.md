@@ -53,6 +53,27 @@ Store these in `.env` or inject via your secret manager. Never commit actual val
    curl -s http://localhost:9093/-/healthy
    ```
 
+## Telegram bridge location (webhook receiver)
+
+The Alertmanager -> Telegram bridge (`AlertmanagerBridge`, `POST /webhook/alertmanager`,
+port 8081) runs inside the **`hft-bot`** container (`python -m hft_platform.bot`), not
+the trading engine. The engine can be stopped or down while alerts (above all
+`HFTEngineDown`) still reach Telegram. On 2026-11-11 the bridge lived in `hft-engine`
+and Alertmanager gave up 18 notifications with "lookup hft-engine" / "connection
+refused".
+
+- Alertmanager webhook url: `http://hft-bot:8081/webhook/alertmanager`
+  (not `hft-engine:8081`).
+- `hft-bot` needs `HFT_TELEGRAM_BOT_TOKEN` / `HFT_TELEGRAM_CHAT_ID` in its environment
+  (the bridge sends with the same `TelegramSender` env names).
+- Kill-switch: `HFT_ALERTMANAGER_BRIDGE_ENABLED=0` in the `hft-bot` environment leaves
+  the bridge off (default `1`).
+
+**Deploy order.** Deploy `hft-bot` with the bridge and switch Alertmanager's webhook url
+to `hft-bot:8081` (reload Alertmanager) BEFORE any engine deploy that drops the engine's
+bridge. Done the other way round, alerts are undeliverable in between: the old url
+points at an engine that no longer serves the bridge.
+
 ## Testing
 
 ### Send a test alert

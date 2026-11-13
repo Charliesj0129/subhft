@@ -1668,15 +1668,9 @@ class SystemBootstrapper:
             order_session_warmup = OrderSessionWarmup(order_client)
             deferred_tasks.append(order_session_warmup.run())
 
-        # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
-        try:
-            from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge
-
-            _alert_bridge = AlertmanagerBridge()
-            deferred_tasks.append(_alert_bridge.run())
-            logger.info("alertmanager_bridge_scheduled_deferred")
-        except Exception:  # noqa: BLE001
-            logger.warning("alertmanager_bridge_start_failed", exc_info=True)
+        # The Alertmanager -> Telegram bridge runs in hft-bot since 2026-11-13, so
+        # alerts (HFTEngineDown above all) survive an engine stop. Alertmanager's
+        # webhook url must point at hft-bot:8081, not hft-engine.
 
         # Inject LOB + FeatureEngine into Pool for targeted warmup reset
         if hasattr(md_client, "set_reset_targets"):

@@ -85,6 +85,8 @@ hft-bot:
 
 Also starts a background `/healthz` HTTP server for container liveness probes.
 
+Also hosts the Alertmanager -> Telegram bridge (`AlertmanagerBridge`, port 8081; started from the PTB `post_init` hook on the bot's event loop since 2026-11-13) so alerts are delivered while `hft-engine` is stopped. Alertmanager's webhook url is `http://hft-bot:8081/webhook/alertmanager`; `HFT_ALERTMANAGER_BRIDGE_ENABLED=0` leaves it off. See `docs/modules/notifications.md`.
+
 ## Configuration
 
 | Variable | Default | Purpose |

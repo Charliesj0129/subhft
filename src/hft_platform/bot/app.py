@@ -146,6 +146,88 @@ async def _telegram_error_handler(update: Any, context: Any) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Alertmanager -> Telegram bridge
+#
+# Runs here, not in the trading engine: when hft-engine is stopped or down the
+# bridge inside it is down too, so Alertmanager cannot deliver HFTEngineDown
+# (2026-11-11: 18 notifications given up with "lookup hft-engine"). This process
+# is always on. Alertmanager's webhook url must point at hft-bot:8081.
+# ---------------------------------------------------------------------------
+
+_ALERTMANAGER_BRIDGE_ENV = "HFT_ALERTMANAGER_BRIDGE_ENABLED"
+_BRIDGE_DISABLED_VALUES = frozenset({"0", "false", "no", "off"})
+
+# Strong references: the event loop only keeps weak references to tasks, so a
+# bridge task nobody holds can be garbage-collected mid-flight.
+_alertmanager_bridge: Any = None
+_alertmanager_bridge_task: asyncio.Task[None] | None = None
+
+
+def _alertmanager_bridge_enabled() -> bool:
+    """Env kill-switch: ``HFT_ALERTMANAGER_BRIDGE_ENABLED=0`` leaves the bridge off."""
+    raw = os.environ.get(_ALERTMANAGER_BRIDGE_ENV, "1").strip().lower()
+    return raw not in _BRIDGE_DISABLED_VALUES
+
+
+def _on_bridge_task_done(task: asyncio.Task[None]) -> None:
+    """A bridge that stops on its own (bind failure, crash) must not do so silently."""
+    # run() swallows CancelledError, so a shutdown-driven stop ends "normally";
+    # _post_shutdown drops the module reference first, which marks it expected.
+    if task.cancelled() or task is not _alertmanager_bridge_task:
+        return
+    exc = task.exception()
+    _log.warning(
+        "alertmanager_bridge_task_ended_in_bot",
+        error=repr(exc) if exc is not None else "run() returned (see alertmanager_bridge_bind_failed)",
+    )
+
+
+def _start_alertmanager_bridge() -> asyncio.Task[None] | None:
+    """Schedule ``AlertmanagerBridge().run()`` on the running loop.
+
+    Never raises: a bridge that cannot start costs the Alertmanager relay, not
+    the bot's command handlers and scheduled reports.
+    """
+    global _alertmanager_bridge, _alertmanager_bridge_task  # noqa: PLW0603
+    if not _alertmanager_bridge_enabled():
+        _log.info("alertmanager_bridge_disabled_in_bot", env=_ALERTMANAGER_BRIDGE_ENV)
+        return None
+    try:
+        from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge
+
+        bridge = AlertmanagerBridge()
+        task = asyncio.get_running_loop().create_task(bridge.run(), name="alertmanager-bridge")
+    except Exception:  # noqa: BLE001 — bridge failure must not stop the bot
+        _log.warning("alertmanager_bridge_start_failed_in_bot", exc_info=True)
+        return None
+    task.add_done_callback(_on_bridge_task_done)
+    _alertmanager_bridge = bridge
+    _alertmanager_bridge_task = task
+    _log.info("alertmanager_bridge_started_in_bot")
+    return task
+
+
+async def _post_init(application: Any) -> None:
+    """PTB ``post_init`` hook: runs on the loop ``run_polling`` owns."""
+    _start_alertmanager_bridge()
+
+
+async def _post_shutdown(application: Any) -> None:
+    """PTB ``post_shutdown`` hook: stop the bridge and release its Telegram session."""
+    global _alertmanager_bridge, _alertmanager_bridge_task  # noqa: PLW0603
+    bridge, task = _alertmanager_bridge, _alertmanager_bridge_task
+    _alertmanager_bridge = None
+    _alertmanager_bridge_task = None
+    if task is not None and not task.done():
+        task.cancel()
+    if bridge is not None:
+        try:
+            await bridge.close()
+        except Exception:  # noqa: BLE001 — shutdown must finish
+            _log.warning("alertmanager_bridge_close_failed_in_bot", exc_info=True)
+
+
 def create_app() -> Any:
     """Build and return a configured telegram.ext.Application."""
     from telegram.ext import Application, CommandHandler
@@ -167,7 +249,9 @@ def create_app() -> Any:
     if not token:
         raise RuntimeError("HFT_TELEGRAM_BOT_TOKEN is required")
 
-    app = Application.builder().token(token).build()
+    # post_init runs on the loop run_polling() owns; it starts the Alertmanager
+    # bridge there. create_app() had no post_init before, so nothing to chain.
+    app = Application.builder().token(token).post_init(_post_init).post_shutdown(_post_shutdown).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("report", cmd_report))
