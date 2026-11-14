@@ -538,7 +538,7 @@ class TestQueueConcurrentPutGet:
         consumers = [asyncio.create_task(consumer()) for _ in range(2)]
 
         await asyncio.gather(*producers)
-        await asyncio.sleep(0.5)  # Let consumers drain
+        await asyncio.wait_for(queue.join(), timeout=5.0)  # every produced item has been consumed
 
         for c in consumers:
             c.cancel()
@@ -548,7 +548,7 @@ class TestQueueConcurrentPutGet:
                 pass
 
         assert len(produced) == 150
-        assert len(consumed) >= 100  # At least most should be consumed
+        assert sorted(consumed) == sorted(produced)
 
 
 @pytest.mark.integration

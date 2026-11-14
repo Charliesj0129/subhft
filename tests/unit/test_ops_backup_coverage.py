@@ -298,7 +298,9 @@ def test_verify_backup_passes_when_dir_visible_but_empty(tmp_path: Path) -> None
     (tmp_path / "daily_20260329").mkdir()
 
     with _patch_client(mgr, client):
-        mgr._verify_backup("daily_20260329")  # should not raise
+        assert mgr._verify_backup("daily_20260329") is None
+        assert client.query.called  # the authoritative system.backups status was read
+    assert list((tmp_path / "daily_20260329").iterdir()) == []
 
 
 def test_verify_backup_success(tmp_path: Path) -> None:

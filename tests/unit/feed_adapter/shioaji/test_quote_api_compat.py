@@ -133,5 +133,8 @@ def test_dispatch_tick_cb_bridges_single_arg_v1(monkeypatch):
 def test_dispatch_tick_cb_single_arg_does_not_raise(monkeypatch):
     # Pre-fix a 1-arg call raised TypeError (missing 'quote') before the router
     # body's try/except — disconnecting the feed on the first 1.5.3 tick.
-    monkeypatch.setattr(client_mod._router, "dispatch_tick_cb", lambda topic, quote: None)
-    client_mod.dispatch_tick_cb(types.SimpleNamespace(code="2330"))  # must not raise
+    seen = []
+    monkeypatch.setattr(client_mod._router, "dispatch_tick_cb", lambda topic, quote: seen.append((topic, quote)))
+    tick = types.SimpleNamespace(code="2330")
+    assert client_mod.dispatch_tick_cb(tick) is None
+    assert seen == [(None, tick)]
