@@ -56,8 +56,9 @@ _STALE_RECANCEL_CAP = 3
 # Trade that still comes for one is cancelled and its order marked finished, so
 # its terminal cannot free the strategy's slot a second time.
 _FORGOTTEN_CLAIM_MAX = 1024
-# Shioaji ``OrderStatus.order_datetime`` is a naive wall time in the exchange's
-# zone (NOT VERIFIED on live payloads; pinned by test_phantom_claim_identity.py).
+# Shioaji ``OrderStatus.order_datetime`` is an Asia/Taipei wall time. On live
+# 1.7.11 payloads it is AWARE (+08:00; THESHOW engine logs, 2026-11-12); a naive
+# value is still read as Taipei. Pinned by test_phantom_claim_identity.py.
 _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 _EPOCH_UTC = _datetime(1970, 1, 1, tzinfo=_timezone.utc)
 
@@ -2315,9 +2316,9 @@ class OrderAdapter:
     def _order_datetime_ns(trade: Any) -> int | None:
         """``trade.status.order_datetime`` as epoch ns, or None when absent or unreadable.
 
-        Shioaji gives a naive wall time in Asia/Taipei (a ``datetime`` or its
-        ISO text); it is pinned to that zone with ``zoneinfo``, never a fixed
-        offset. An aware value is taken as is.
+        Shioaji 1.7.11 gives an aware Asia/Taipei time (+08:00), as a ``datetime``
+        or its ISO text; an aware value is taken as is. A naive one is pinned to
+        Asia/Taipei with ``zoneinfo``, never a fixed offset.
         """
         stamp = OrderAdapter._sdk_field(OrderAdapter._sdk_field(trade, "status"), "order_datetime")
         if isinstance(stamp, str):

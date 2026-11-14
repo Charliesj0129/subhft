@@ -354,7 +354,7 @@ def test_a_claimed_record_does_not_claim_a_second_fill(tmp_config):
 
 
 # --------------------------------------------------------------------------- #
-# order_datetime is naive Asia/Taipei                                          #
+# order_datetime: Asia/Taipei wall time, aware on live 1.7.11 payloads        #
 # --------------------------------------------------------------------------- #
 
 
@@ -364,9 +364,13 @@ def test_a_claimed_record_does_not_claim_a_second_fill(tmp_config):
         _ORDER_DT_TAIPEI,
         "2026-11-12 11:34:11.946000",
         _ORDER_DT_TAIPEI.replace(tzinfo=dt.timezone(dt.timedelta(hours=8))),
+        # The form THESHOW's shioaji 1.7.11 engine logs carry (2026-11-12):
+        # aware, with a +08:00 offset, stringified by the order-event log.
+        "2026-11-12 11:34:11.946000+08:00",
+        dt.datetime.fromisoformat("2026-11-12 11:34:11.946000+08:00"),
     ],
 )
-def test_order_datetime_naive_is_read_as_asia_taipei(stamp):
+def test_order_datetime_naive_or_live_aware_is_read_as_asia_taipei(stamp):
     from zoneinfo import ZoneInfo
 
     expected = dt.datetime(2026, 11, 12, 11, 34, 11, 946000, tzinfo=ZoneInfo("Asia/Taipei"))
