@@ -148,3 +148,14 @@ def test_both_unresolved_alerts_merge_flapping_runs_for_an_hour() -> None:
 
     assert alerts["OrderOutcomeUnresolved"]["keep_firing_for"] == "1h"
     assert alerts["OrderOutcomeUnresolvedDuringBrokerStall"]["keep_firing_for"] == "1h"
+
+
+def test_critical_alert_pages_a_misattributed_phantom_claim_regardless_of_stall() -> None:
+    """A misattributed claim means a fill was booked to the wrong order and that
+    order's working cancel was sent: a position question no broker stall explains.
+    It pages critical outside the stall mask, with its own outcome label."""
+    expr = _alerts()["OrderOutcomeUnresolved"]["expr"]
+    unmasked, _, _ = expr.partition("or (")
+
+    assert 'phantom_claim_total{outcome="misattributed"}' in unmasked
+    assert '"outcome", "claim_misattributed"' in unmasked

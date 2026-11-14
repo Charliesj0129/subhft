@@ -292,6 +292,12 @@ groups:
   #                                    expired and released
   #   live_order_ttl_release           a live order swept with no terminal
   #   phantom_ttl_release              a phantom released with no Trade at all
+  #   claim_misattributed              a fill was booked to a phantom whose own
+  #                                    Trade then proved it was another order's;
+  #                                    the phantom's working order was cancelled
+  #                                    (phantom_claim_total{outcome="misattributed"},
+  #                                    exported by fix/fill-identity-stale-orders;
+  #                                    empty until that build is deployed)
   # The three phantom_bound_total children are created at 0 by MetricsRegistry:
   # increase() over a series born at 1 is 0, which is how the first
   # cancel_timeout (2026-10-29 15:10Z) and the only fill_claimed_after_expiry
@@ -313,6 +319,7 @@ groups:
     expr: |
       label_replace(sum(increase(cancel_unconfirmed_total{outcome="gave_up"}[30m])) > 0, "outcome", "cancel_gave_up", "", "")
       or label_replace(sum(increase(live_order_ttl_releases_total[30m])) > 0, "outcome", "live_order_ttl_release", "", "")
+      or label_replace(sum(increase(phantom_claim_total{outcome="misattributed"}[30m])) > 0, "outcome", "claim_misattributed", "", "")
       or (
         (
           sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
