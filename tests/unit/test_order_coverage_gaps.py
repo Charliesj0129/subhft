@@ -403,8 +403,10 @@ def test_resolve_phantom_fill_via_pending_fill_index(tmp_config):
     result = adapter.resolve_phantom_fill(fill)
 
     assert result == "s1"
-    # order_key should be removed from phantom candidates
-    assert order_key not in adapter._phantom_order_keys
+    # 2026-11-13: the claim is tentative, so the record is kept holding it until the
+    # phantom's Trade confirms or refutes it (was: removed from phantom candidates).
+    assert [r.claim is not None for r in adapter._phantom_records[order_key]] == [True]
+    assert pf_key not in adapter._pending_fill_index
 
 
 def test_resolve_phantom_fill_via_fallback_phantom_keys(tmp_config):

@@ -6,7 +6,10 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable
+from datetime import datetime as _datetime
+from datetime import timezone as _timezone
 from typing import Any, Dict, NamedTuple, TypeAlias, TypeGuard, cast
+from zoneinfo import ZoneInfo
 
 import yaml
 from structlog import get_logger
@@ -46,6 +49,18 @@ _GUARD_TIMEOUT = object()
 _CANCEL_TIMED_OUT = object()
 # ``_match_open_order``: more than one broker order fits a phantom; hold its slot.
 _AMBIGUOUS_MATCH = object()
+# Re-cancels a stale live order gets while the broker still lists it open; past
+# this it is held like a failed lookup and released at the max hold.
+_STALE_RECANCEL_CAP = 3
+# Keys whose claim left the expired-claim ledger unsettled (evicted, aged out). A
+# Trade that still comes for one is cancelled and its order marked finished, so
+# its terminal cannot free the strategy's slot a second time.
+_FORGOTTEN_CLAIM_MAX = 1024
+# Shioaji ``OrderStatus.order_datetime`` is an Asia/Taipei wall time. On live
+# 1.7.11 payloads it is AWARE (+08:00; THESHOW engine logs, 2026-11-12); a naive
+# value is still read as Taipei. Pinned by test_phantom_claim_identity.py.
+_TZ_TAIPEI = ZoneInfo("Asia/Taipei")
+_EPOCH_UTC = _datetime(1970, 1, 1, tzinfo=_timezone.utc)
 
 
 class _CancelWatch(NamedTuple):
@@ -68,6 +83,27 @@ def _phantom_side(side: Any) -> int:
         return -1
 
 
+class _PhantomClaim(NamedTuple):
+    """A fill given to a phantom by symbol and side, not yet tied to it by identity.
+
+    A phantom has no broker ids, so the claim is tentative until the phantom's own
+    Trade arrives: its ids must contain ``ordno`` (THESHOW 2026-11-12 03:34Z: 6816
+    claimed a fill its Trade, stamped 8 s later, could not have made).
+    """
+
+    ordno: str  # the fill's broker order number; "" when the deal carried none
+    qty: int
+    fill_ts_ns: int  # the fill's match time, epoch ns; 0 when unknown
+    claimed_at: float  # precision-time: monotonic stamp of the claim
+
+
+class _StaleVerify(NamedTuple):
+    """A stale live order held while the broker is asked whether it still works."""
+
+    since: float  # precision-time: monotonic stamp of the sweep that first held it
+    recancels: int  # re-cancels sent because the broker listed it open
+
+
 class _PhantomEntry(NamedTuple):
     """M4: per-occurrence phantom record. Multiple entries can share the
     same ``(strategy_id, intent_id)`` key when an intent_id is reused in
@@ -85,6 +121,9 @@ class _PhantomEntry(NamedTuple):
     # side. A FORCE_FLAT places on the closing side derived from the position, not
     # ``intent.side``; legacy-materialised records carry a placeholder intent.
     side: int = -1
+    # A fill claimed by symbol+side, kept with the record until the phantom's
+    # Trade confirms or refutes it (``_bind_late_trade``). None = unclaimed.
+    claim: _PhantomClaim | None = None
 
 
 # Operations that mutate broker state and must not be retried if the
@@ -254,6 +293,14 @@ class OrderAdapter:
         "_phantom_lookup_task",
         "_phantom_lookup_timeout_s",
         "_phantom_lookup_max_hold_s",
+        # order_key -> _StaleVerify: stale live orders held for the broker search
+        # that the same lookup task runs. Keys are always live_orders keys.
+        "_stale_verify",
+        # phantom key -> _PhantomClaim made through the expired-phantom ledger,
+        # kept until that order's Trade confirms or refutes it. Bounded.
+        "_expired_claims",
+        # phantom key -> monotonic stamp: claims dropped unsettled (bounded).
+        "_forgotten_claims",
         "_audit_writer",
         "_explanation_assembler",
         "_rejection_sink",
@@ -488,6 +535,13 @@ class OrderAdapter:
         self._phantom_lookup_task: asyncio.Task[None] | None = None
         self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))  # precision-time
         self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))  # precision-time
+        # The same search covers stale live orders that carry broker ids: such an
+        # order keeps its slot until the broker shows it gone (2026-09-03..10-03:
+        # four orders released at the TTL filled 5.6-27 min later). Bounded by
+        # live_orders: an entry leaves with its key.
+        self._stale_verify: dict[str, _StaleVerify] = {}
+        self._expired_claims: collections.OrderedDict[str, _PhantomClaim] = collections.OrderedDict()
+        self._forgotten_claims: collections.OrderedDict[str, float] = collections.OrderedDict()
         # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
         # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
         # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
@@ -820,8 +874,29 @@ class OrderAdapter:
 
         Idempotent — every ``live_orders`` removal path calls this, and several
         of them can run for the same key (terminal callback then sweep).
+
+        An order held for the broker search that ends here (its terminal, its
+        completing fill) has been released by that route: the search must not
+        release it again, so it leaves the verify set too.
         """
         self._live_order_intents.pop(order_key, None)
+        verify = getattr(self, "_stale_verify", None)
+        if verify and verify.pop(order_key, None) is not None:
+            self._count_stale_verify("terminal_during_verify")
+            logger.info("live_order_ended_during_verify", order_key=order_key)
+            self._publish_held_for_verify()
+
+    def _count_stale_verify(self, outcome: str) -> None:
+        try:
+            self.metrics.live_order_stale_verify_total.labels(outcome=outcome).inc()
+        except Exception as exc:  # noqa: BLE001 — a metric must never break the order path
+            logger.debug("metric_update_failed", metric="live_order_stale_verify_total", error=repr(exc))
+
+    def _publish_held_for_verify(self) -> None:
+        try:
+            self.metrics.live_orders_held_for_verify.set(len(getattr(self, "_stale_verify", None) or ()))
+        except Exception as exc:  # noqa: BLE001 — a metric must never break the order path
+            logger.debug("metric_update_failed", metric="live_orders_held_for_verify", error=repr(exc))
 
     @staticmethod
     def _deadline_exempt(intent: OrderIntent) -> bool:
@@ -969,6 +1044,13 @@ class OrderAdapter:
                 self._pending_order_keys.clear()
                 self._live_orders_inserted_at.clear()
                 self._live_order_intents.clear()
+            # The keys held for the broker search went with live_orders. A search
+            # already running reads this set after its listing returns, so it
+            # finds nothing to act on with a pre-reconnect snapshot.
+            verify = getattr(self, "_stale_verify", None)
+            if verify:
+                verify.clear()
+                self._publish_held_for_verify()
             return count
 
     async def sweep_stale_live_orders(self) -> int:
@@ -989,6 +1071,17 @@ class OrderAdapter:
         same ``was_approved=False`` feedback the phantom janitor uses. The
         strategy dedups a late terminal callback for the released order against
         ``client_order_id`` so the slot is not paid for twice.
+
+        2026-11-13: releasing at the TTL without asking the broker freed slots
+        of orders that were still working (2026-09-03..10-03: four filled
+        5.6-27 min later, three took R47 to +2). Stale keys now split:
+
+        * A -- no broker ids, or the client cannot list working orders: released
+          here, as before.
+        * B -- a Trade with broker ids and a client that can list: held in
+          ``live_orders`` and marked in ``_stale_verify``; one broker listing per
+          sweep (the phantom lookup task) settles them in
+          ``_settle_stale_verify``.
         """
         now_mono = time.monotonic()
         # The cancel watch runs on its own, shorter clock: a timed-out cancel is
@@ -1011,6 +1104,9 @@ class OrderAdapter:
         # live-orders lock is held.
         orphaned_pendings: list[tuple[str, OrderIntent, Side]] = []
         filled_swept = 0
+        can_list = getattr(self, "client", None) is not None and self._open_order_lister() is not None
+        verify = self._get_stale_verify()
+        held_for_verify = 0
         async with self._live_orders_lock:
             stale_keys = [
                 k
@@ -1018,6 +1114,27 @@ class OrderAdapter:
                 if ts < cutoff and k not in self._pending_order_keys
             ]
             for k in stale_keys:
+                held = self._live_order_intents.get(k)
+                if (
+                    can_list
+                    and held is not None
+                    and self.filled_qty_for(k) < held[0].qty
+                    and self._is_broker_trade(self.live_orders.get(k))
+                ):
+                    # B: the broker may still hold this order; keep its slot
+                    # until the listing says it is gone (_settle_stale_verify).
+                    if k not in verify:
+                        verify[k] = _StaleVerify(since=now_mono, recancels=0)
+                        logger.warning(
+                            "live_order_stale_held_for_verify",
+                            order_key=k,
+                            strategy_id=held[0].strategy_id,
+                            symbol=held[0].symbol,
+                            age_s=round(now_mono - self._live_orders_inserted_at[k], 1),
+                        )
+                    held_for_verify += 1
+                    continue
+                verify.pop(k, None)
                 self.live_orders.pop(k, None)
                 self._live_orders_inserted_at.pop(k, None)
                 tracked = self._live_order_intents.pop(k, None)
@@ -1036,6 +1153,9 @@ class OrderAdapter:
             orphaned = [k for k in self._live_orders_inserted_at if k not in self.live_orders]
             for k in orphaned:
                 del self._live_orders_inserted_at[k]
+        if held_for_verify:
+            self._publish_held_for_verify()
+            self._start_broker_lookup(getattr(self, "_phantom_recovery_ttl_s", 300.0))
         if evicted > 0:
             logger.warning(
                 "live_orders_stale_sweep",
@@ -1077,9 +1197,13 @@ class OrderAdapter:
                 for k in sorted_keys[:overflow]:
                     self.live_orders.pop(k, None)
                     self._live_orders_inserted_at.pop(k, None)
+                    if verify.pop(k, None) is not None:
+                        self._count_stale_verify("evicted")
+                        logger.warning("live_order_evicted_during_verify", order_key=k)
                     self._untrack_live_order_intent(k)
                     evicted += 1
                 if overflow > 0:
+                    self._publish_held_for_verify()
                     logger.warning(
                         "live_orders_overflow_evicted",
                         evicted=overflow,
@@ -1425,6 +1549,7 @@ class OrderAdapter:
         runs in the background and releases from there). Called from the
         supervisor loop.
         """
+        self._prune_expired_claims()
         # M4: materialise legacy-only entries (see ``resolve_phantom_fill``).
         with self._phantom_lock:
             self._phantom_materialize_legacy()
@@ -1436,12 +1561,45 @@ class OrderAdapter:
             return 0
         if self._open_order_lister() is None:
             return await self._release_phantoms(due, ttl)
+        self._start_broker_lookup(ttl)
+        return 0
+
+    def _start_broker_lookup(self, ttl_s: float) -> None:
+        """Start the one background broker listing, unless it is already running.
+
+        Shared by the phantom janitor and the stale live-order sweep: whichever
+        asks first starts it, and the task reads both the due phantoms and the
+        held live orders after its listing returns, so one call serves both.
+        """
         task = getattr(self, "_phantom_lookup_task", None)
         if task is None or task.done():
             self._phantom_lookup_task = asyncio.get_running_loop().create_task(
-                self._settle_expired_phantoms(ttl), name="phantom_broker_lookup"
+                self._settle_expired_phantoms(ttl_s), name="phantom_broker_lookup"
             )
-        return 0
+
+    def _get_stale_verify(self) -> dict[str, _StaleVerify]:
+        """Lazy accessor: adapters built with ``__new__`` (tests) have no verify set."""
+        verify = getattr(self, "_stale_verify", None)
+        if verify is None:
+            verify = {}
+            self._stale_verify = verify
+        return verify
+
+    def _get_forgotten_claims(self) -> collections.OrderedDict[str, float]:
+        """Lazy accessor for keys whose claim was dropped unsettled."""
+        forgotten = getattr(self, "_forgotten_claims", None)
+        if forgotten is None:
+            forgotten = collections.OrderedDict()
+            self._forgotten_claims = forgotten
+        return forgotten
+
+    def _get_expired_claims(self) -> collections.OrderedDict[str, _PhantomClaim]:
+        """Lazy accessor for claims made through the expired-phantom ledger."""
+        claims = getattr(self, "_expired_claims", None)
+        if claims is None:
+            claims = collections.OrderedDict()
+            self._expired_claims = claims
+        return claims
 
     def _due_phantoms(self, ttl_s: float) -> list[tuple[str, _PhantomEntry]]:
         """Phantom records at least ``ttl_s`` seconds old (snapshot; nothing removed)."""
@@ -1467,19 +1625,33 @@ class OrderAdapter:
         return fn if callable(fn) else None
 
     async def _settle_expired_phantoms(self, ttl_s: float) -> None:
-        """Search the broker for TTL-expired phantoms; bind what it holds, release the rest."""
+        """One broker listing: settle TTL-expired phantoms and stale live orders held for it.
+
+        Phantoms: bind what the broker holds, release the rest. Held live orders:
+        see ``_settle_stale_verify``.
+        """
         try:
-            await self._settle_expired_phantoms_once(ttl_s)
+            trades = await self._list_open_orders_once()
+        except Exception:  # noqa: BLE001 — a background task: log it, the next sweep retries
+            logger.error("broker_open_order_lookup_crashed", exc_info=True)
+            trades = None
+        try:
+            await self._settle_expired_phantoms_once(ttl_s, trades)
         except Exception:  # noqa: BLE001 — a background task: log it, the next sweep retries
             logger.error("phantom_broker_lookup_crashed", exc_info=True)
             self._count_phantom_bound("lookup_failed")
+        try:
+            await self._settle_stale_verify(trades)
+        except Exception:  # noqa: BLE001 — held keys stay held; the next sweep retries
+            logger.error("live_order_stale_verify_crashed", exc_info=True)
 
-    async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:
+    async def _list_open_orders_once(self) -> list[Any] | None:
+        """The broker's working orders, off the loop, or None when they are unknown."""
         lister = self._open_order_lister()
         if lister is None:
-            return
+            return None
         try:
-            trades: list[Any] | None = list(
+            return list(
                 await asyncio.wait_for(
                     self._run_blocking_call(lister),
                     timeout=getattr(self, "_phantom_lookup_timeout_s", 15.0),
@@ -1487,8 +1659,12 @@ class OrderAdapter:
             )
         except Exception as exc:  # noqa: BLE001 — any failure means "broker state unknown": keep the slot
             logger.warning("phantom_broker_lookup_failed", error=repr(exc))
-            trades = None
+            return None
+
+    async def _settle_expired_phantoms_once(self, ttl_s: float, trades: list[Any] | None) -> None:
         due = self._due_phantoms(ttl_s)  # re-read: a fill or a late Trade may have settled some meanwhile
+        if not due:
+            return
         if trades is None:
             self._count_phantom_bound("lookup_failed")
             max_hold = getattr(self, "_phantom_lookup_max_hold_s", 1800.0)
@@ -1498,8 +1674,23 @@ class OrderAdapter:
                 await self._release_phantoms(overdue, ttl_s)
             return
         release: list[tuple[str, _PhantomEntry]] = []
+        leftovers: list[tuple[str, _PhantomEntry]] = []
         claimed: set[int] = set()
         for pkey, record in due:
+            if record.claim is not None:
+                # Its claimed fill already freed the slot, and parameters are not
+                # identity: an order with the same contract/side/qty/price may be
+                # an unclaimed twin's. Only a listed order carrying the claimed
+                # ordno is this one (``_bind_late_trade`` then confirms it).
+                own = self._match_claimed_ordno(pkey, record.claim, trades, claimed)
+                if own is None:
+                    leftovers.append((pkey, record))  # tried by parameters after the unclaimed ones
+                    continue
+                claimed.add(id(own))
+                self._count_phantom_bound("found_open")
+                logger.warning("phantom_found_open_at_broker", order_key=pkey, symbol=record.symbol, by="ordno")
+                self._spawn_phantom_bind(record.intent, own)
+                continue
             match = self._match_open_order(pkey, record, trades, claimed)
             if match is _AMBIGUOUS_MATCH:
                 self._count_phantom_bound("lookup_ambiguous")
@@ -1512,8 +1703,52 @@ class OrderAdapter:
             self._count_phantom_bound("found_open")
             logger.warning("phantom_found_open_at_broker", order_key=pkey, symbol=record.symbol)
             self._spawn_phantom_bind(record.intent, match)
+        # A claimed record whose ordno is not listed may still have its OWN order
+        # working (the claim was another order's fill). Unclaimed twins took their
+        # parameter matches first; what is left and fits this record uniquely is
+        # bound, and ``_bind_late_trade`` judges the claim (misattributed: cancel,
+        # mark finished, page). Two fits: held, released at the max hold.
+        max_hold = getattr(self, "_phantom_lookup_max_hold_s", 1800.0)
+        now_mono = time.monotonic()
+        for pkey, record in leftovers:
+            match = self._match_open_order(pkey, record, trades, claimed)
+            if match is _AMBIGUOUS_MATCH:
+                self._count_phantom_bound("lookup_ambiguous")
+                if (now_mono - record.monotonic_ts) >= ttl_s + max_hold:
+                    logger.error(
+                        "phantom_claim_ambiguous_released",
+                        order_key=pkey,
+                        symbol=record.symbol,
+                        claimed_ordno=record.claim.ordno if record.claim is not None else "",
+                    )
+                    release.append((pkey, record))
+                else:
+                    logger.warning(
+                        "phantom_broker_lookup_ambiguous", order_key=pkey, symbol=record.symbol, claimed=True
+                    )
+                continue
+            if match is None:
+                release.append((pkey, record))  # dropped; its claim waits for a late Trade
+                continue
+            claimed.add(id(match))
+            self._count_phantom_bound("found_open")
+            logger.warning("phantom_found_open_at_broker", order_key=pkey, symbol=record.symbol, by="params_claimed")
+            self._spawn_phantom_bind(record.intent, match)
         if release:
             await self._release_phantoms(release, ttl_s)
+
+    def _match_claimed_ordno(self, order_key: str, claim: _PhantomClaim, trades: list[Any], claimed: set[int]) -> Any:
+        """The one listed order whose ids contain the claim's ordno, else None."""
+        if not claim.ordno:
+            return None
+        hits = [
+            t
+            for t in trades
+            if id(t) not in claimed
+            and claim.ordno in self._broker_ids_of(t)
+            and not self._trade_bound_elsewhere(t, order_key)
+        ]
+        return hits[0] if len(hits) == 1 else None
 
     def _custom_field_token_for(self, order_key: str) -> str | None:
         """The ``custom_field`` token this order was sent with, if still mapped."""
@@ -1589,6 +1824,241 @@ class OrderAdapter:
         with self._order_id_map_lock:
             return any(self.order_id_map.get(str(v), order_key) != order_key for v in ids)
 
+    @staticmethod
+    def _broker_ids_of(trade: Any) -> set[str]:
+        """Every broker id ``_register_broker_ids`` maps for ``trade``, as strings.
+
+        Trade level and ``order``: seq_no/seqno/ord_no/ordno/order_id/id;
+        ``status``: id/seq_no/seqno/ord_no/ordno. Falsy values are skipped.
+        """
+        ids: set[str] = set()
+        if trade is None:
+            return ids
+        id_keys = ("seq_no", "seqno", "ord_no", "ordno", "order_id", "id")
+        status_keys = ("id", "seq_no", "seqno", "ord_no", "ordno")
+        if isinstance(trade, dict):
+            holders: list[tuple[Any, tuple[str, ...]]] = [(trade, id_keys)]
+            order = trade.get("order")
+            if isinstance(order, dict):
+                holders.append((order, id_keys))
+            status = trade.get("status")
+            if isinstance(status, dict):
+                holders.append((status, status_keys))
+            for holder, keys in holders:
+                for key in keys:
+                    val = holder.get(key)
+                    if val:
+                        ids.add(str(val))
+            return ids
+        holders = [(trade, id_keys)]
+        order = getattr(trade, "order", None)
+        if order:
+            holders.append((order, id_keys))
+        status = getattr(trade, "status", None)
+        if status:
+            holders.append((status, status_keys))
+        for holder, keys in holders:
+            for attr in keys:
+                val = getattr(holder, attr, None)
+                if val:
+                    ids.add(str(val))
+        return ids
+
+    def _is_broker_trade(self, trade: Any) -> bool:
+        """A real broker Trade (not a placeholder) that carries broker ids."""
+        if trade is None or trade is _PENDING_SENTINEL or trade is _TERMINAL_BEFORE_REGISTERED:
+            return False
+        return bool(self._broker_ids_of(trade))
+
+    def _match_stale_trade(self, order_key: str, held: Any, trades: list[Any]) -> Any:
+        """The listed order that is ``held``: a Trade, None, or ``_AMBIGUOUS_MATCH``.
+
+        A listed order matches when it carries every broker id the platform
+        holds for this order and none of its ids is bound to another platform
+        order (a recycled id: THESHOW 2026-11-12/13, the day session reissued
+        night-session seqnos). One shared id is not enough. A listed order that
+        carries every held id but has an id bound elsewhere, or two that carry
+        them, is ``_AMBIGUOUS_MATCH`` (held), never "gone".
+        """
+        held_ids = self._broker_ids_of(held)
+        if not held_ids:
+            return None
+        carrying = [t for t in trades if held_ids <= self._broker_ids_of(t)]
+        matches = [t for t in carrying if not self._trade_bound_elsewhere(t, order_key)]
+        if len(matches) == 1 and len(carrying) == 1:
+            return matches[0]
+        # A listed order carrying every held id but also bound to another platform
+        # order may still be this one: not proof it is gone -- hold it.
+        return _AMBIGUOUS_MATCH if carrying else None
+
+    async def _settle_stale_verify(self, trades: list[Any] | None) -> None:
+        """Act on the broker listing for every stale live order held for it.
+
+        * listed open (``_match_stale_trade``): re-cancel with the held Trade,
+          keep the slot, start a new TTL; at most ``_STALE_RECANCEL_CAP`` times;
+        * not listed: release the slot (verified gone);
+        * listing failed, ambiguous, or open past the cap: keep holding; once
+          the order is ``ttl + _phantom_lookup_max_hold_s`` old (since its last
+          TTL start), release it unverified with an ERROR.
+
+        No fill is synthesised and no exposure changes here. A key that ended
+        meanwhile left the set in ``_untrack_live_order_intent``.
+        """
+        verify = self._get_stale_verify()
+        if not verify:
+            return
+        now_mono = time.monotonic()
+        ttl_s = getattr(self, "_live_orders_ttl_s", 300.0)
+        max_hold_s = getattr(self, "_phantom_lookup_max_hold_s", 1800.0)
+        recancel: list[tuple[str, Any, OrderIntent, int]] = []
+        released: list[tuple[str, OrderIntent, Side, bool, _StaleVerify]] = []
+        async with self._live_orders_lock:
+            for key, state in list(verify.items()):
+                trade = self.live_orders.get(key)
+                tracked = self._live_order_intents.get(key)
+                if not self._is_broker_trade(trade) or tracked is None:
+                    # Ended by a path that did not untrack it: nothing to release.
+                    verify.pop(key, None)
+                    self._count_stale_verify("terminal_during_verify")
+                    continue
+                if self._live_orders_inserted_at.get(key, state.since) > now_mono - ttl_s:
+                    # Re-cancelled within its current TTL: a lookup another key or a
+                    # phantom started must not spend this key's re-cancel budget.
+                    continue
+                if trades is None:
+                    outcome = "lookup_failed"
+                else:
+                    match = self._match_stale_trade(key, trade, trades)
+                    outcome = "gone" if match is None else "ambiguous" if match is _AMBIGUOUS_MATCH else "found_open"
+                self._count_stale_verify(outcome)
+                if outcome == "gone":
+                    released.append((key, tracked[0], tracked[1], True, state))
+                elif outcome == "found_open" and state.recancels < _STALE_RECANCEL_CAP:
+                    verify[key] = state._replace(recancels=state.recancels + 1)
+                    self._live_orders_inserted_at[key] = now_mono  # a new TTL
+                    recancel.append((key, trade, tracked[0], state.recancels + 1))
+                    continue
+                elif now_mono - self._live_orders_inserted_at.get(key, state.since) >= ttl_s + max_hold_s:
+                    self._count_stale_verify("released_unverified")
+                    released.append((key, tracked[0], tracked[1], False, state))
+                else:
+                    logger.warning(
+                        "live_order_stale_still_held",
+                        order_key=key,
+                        outcome=outcome,
+                        recancels=state.recancels,
+                        held_s=round(now_mono - state.since, 1),
+                    )
+                    continue
+                verify.pop(key, None)
+                self.live_orders.pop(key, None)
+                self._live_orders_inserted_at.pop(key, None)
+                self._live_order_intents.pop(key, None)
+                self._remove_pending_fill(key)
+        self._publish_held_for_verify()
+        for key, intent, side, verified, state in released:
+            self._release_stale(key, intent, side, verified=verified, state=state, now_mono=now_mono)
+        for key, trade, intent, attempt in recancel:
+            await self._recancel_stale(key, trade, intent, attempt)
+
+    def _release_stale(
+        self,
+        key: str,
+        intent: OrderIntent,
+        side: Side,
+        *,
+        verified: bool,
+        state: _StaleVerify,
+        now_mono: float,  # precision-time: monotonic seconds, not a price
+    ) -> None:
+        """Hand back the slot of a held stale order (already out of ``live_orders``).
+
+        The RiskFeedback reason stays ``live_order_ttl_expired``: the strategy
+        keys its late-terminal dedup on that exact code (r47_maker.py:751).
+        """
+        if self._send_dispatch_rejection(intent, "live_order_ttl_expired", phantom_pending=False, side=side):
+            self._mark_finished(key)  # the order's own terminal, if it ever comes, releases nothing
+        reason = "live_order_ttl_expired_verified_gone" if verified else "live_order_released_unverified"
+        fields: dict[str, Any] = {
+            "order_key": key,
+            "strategy_id": intent.strategy_id,
+            "symbol": intent.symbol,
+            "side": str(side),
+            "held_s": round(now_mono - state.since, 1),
+            "recancels": state.recancels,
+        }
+        if verified:
+            logger.warning(reason, **fields)
+        else:
+            # A person must compare the broker's working orders with the platform:
+            # the slot is free while the order may still be live.
+            logger.error(reason, **fields)
+            try:
+                self.metrics.live_order_ttl_releases_total.inc()
+            except Exception as exc:  # noqa: BLE001 — metric must never break order path
+                logger.debug("metric_update_failed", metric="live_order_ttl_releases_total", error=repr(exc))
+        self._audit_log_order(
+            {
+                "event": "live_order_released",
+                "intent_type": "NEW",
+                "order_key": key,
+                "symbol": intent.symbol,
+                "side": str(side),
+                "price": intent.price,
+                "qty": intent.qty,
+                "strategy_id": intent.strategy_id,
+                "details": f"reason={reason} recancels={state.recancels}",
+            }
+        )
+
+    async def _recancel_stale(self, key: str, trade: Any, intent: OrderIntent, attempt: int) -> None:
+        """Cancel again an order the broker still lists open (HALT allows cancels).
+
+        Not put on the cancel watch: the next sweep's listing is this cancel's
+        check, so it is not retried or paged a second time from there.
+        """
+        cancel_intent = dataclasses.replace(
+            intent, intent_type=IntentType.CANCEL, target_order_id=key, reason="stale_verify_recancel"
+        )
+        self._mark_cancel_inflight(key)
+        try:
+            result = await self._call_api("cancel_order", self.client.cancel_order, trade, intent=cancel_intent)
+        except Exception as exc:  # noqa: BLE001 — a failed re-cancel is retried by the next listing
+            logger.warning("live_order_stale_recancel_error", order_key=key, error=repr(exc))
+            result = None
+        if result is _CANCEL_TIMED_OUT:
+            label = "timeout"  # may have landed; stays in flight until its TTL or terminal
+        elif result is None or result is _GUARD_TIMEOUT:
+            label = "failed"
+            self._clear_cancel_inflight(key)
+        else:
+            label = "sent"
+            try:
+                self.metrics.order_actions_total.labels(type="cancel").inc()
+            except Exception as exc:  # noqa: BLE001 — metric must never break order path
+                logger.debug("metric_update_failed", metric="order_actions_total", error=repr(exc))
+            self.rate_limiter.record()
+            self.per_symbol_rate_limiter.record(intent.symbol)
+        logger.warning(
+            "live_order_stale_recancel",
+            order_key=key,
+            strategy_id=intent.strategy_id,
+            symbol=intent.symbol,
+            attempt=attempt,
+            result=label,
+        )
+        self._audit_log_order(
+            {
+                "event": "cancel_stale_verify",
+                "intent_type": "CANCEL",
+                "order_key": key,
+                "target_key": key,
+                "symbol": intent.symbol,
+                "strategy_id": intent.strategy_id,
+                "details": f"attempt={attempt} result={label}",
+            }
+        )
+
     async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl_s: float) -> int:
         """Hand the slot back for these phantom records (the pre-lookup TTL release)."""
         now_mono = time.monotonic()
@@ -1598,6 +2068,7 @@ class OrderAdapter:
         # _rejection_sink.put_nowait; we intentionally release the lock
         # before that to avoid holding the phantom lock across queue I/O.
         expired: list[tuple[str, OrderIntent]] = []
+        unverified: list[tuple[str, _PhantomEntry]] = []
         with self._phantom_lock:
             records_dict = self._get_phantom_records()
             for pkey, record in due:
@@ -1609,9 +2080,31 @@ class OrderAdapter:
                     self._phantom_resync_legacy(pkey)
                 else:
                     self._phantom_drop_key(pkey)
+                if record.claim is not None:
+                    # Its claimed fill already freed the slot; no Trade came to
+                    # confirm the claim. No second release, and it cannot claim
+                    # another fill; the claim waits for a late Trade (below).
+                    unverified.append((pkey, record))
+                    continue
                 expired.append((pkey, record.intent))
                 placed = record.side if record.side != -1 else _phantom_side(record.intent.side)
                 self._get_expired_phantoms().append((now_mono, pkey, record.symbol, placed))
+        for pkey, record in unverified:
+            claim = record.claim
+            if claim is None:
+                continue
+            # Still unsettled: a Trade that comes back after the TTL is judged
+            # against it (``_bind_late_trade``) -- confirmed, no cancel; refuted,
+            # cancelled and marked finished. Counted ``unverified`` only if no
+            # Trade comes within the retention window (``_prune_expired_claims``).
+            self._stash_expired_claim(pkey, claim)
+            logger.warning(
+                "phantom_claim_kept_after_ttl",
+                phantom_key=pkey,
+                symbol=record.symbol,
+                claimed_ordno=claim.ordno,
+                ttl_s=ttl_s,
+            )
         for _pkey, intent in expired:
             # After this the record can no longer claim a fill: a late fill for
             # the order reaches the router as strategy UNKNOWN.
@@ -1780,22 +2273,142 @@ class OrderAdapter:
     def _take_phantom_record(self, order_key: str) -> bool:
         """Remove the oldest phantom record for ``order_key``; True when one existed.
 
-        True means the strategy still holds the pending slot this order took (the
-        TTL sweep and a fill claim both remove the record when they give it back).
+        True means a record existed; the strategy still holds the pending slot
+        unless that record carries a fill claim (see ``_pop_phantom_record``).
+        """
+        return self._pop_phantom_record(order_key) is not None
+
+    def _pop_phantom_record(self, order_key: str) -> _PhantomEntry | None:
+        """Remove and return the oldest phantom record for ``order_key``, if any.
+
+        A record with ``claim`` set gave its slot back through the claimed fill
+        (``on_fill``); one without still holds it (the TTL sweep removes the
+        record when it gives the slot back).
         """
         with self._phantom_lock:
             records = self._get_phantom_records().get(order_key)
             if not records:
-                return False
-            records.pop(0)
+                return None
+            record = records.pop(0)
             self._phantom_resync_legacy(order_key)
-            return True
+            return record
+
+    def _count_phantom_claim(self, outcome: str) -> None:
+        try:
+            self.metrics.phantom_claim_total.labels(outcome=outcome).inc()
+        except Exception as exc:  # noqa: BLE001 — a metric must never break the order path
+            logger.debug("metric_update_failed", metric="phantom_claim_total", error=repr(exc))
+
+    @staticmethod
+    def _claim_of(fill_event: Any) -> _PhantomClaim:
+        """The identity a fill carries for a later check against the phantom's Trade."""
+        ordno = getattr(fill_event, "order_id", "")
+        qty = getattr(fill_event, "qty", 0)
+        ts_ns = getattr(fill_event, "match_ts_ns", 0)
+        return _PhantomClaim(
+            ordno=ordno if isinstance(ordno, str) else "",
+            qty=qty if isinstance(qty, int) else 0,
+            fill_ts_ns=ts_ns if isinstance(ts_ns, int) else 0,
+            claimed_at=time.monotonic(),
+        )
+
+    @staticmethod
+    def _order_datetime_ns(trade: Any) -> int | None:
+        """``trade.status.order_datetime`` as epoch ns, or None when absent or unreadable.
+
+        Shioaji 1.7.11 gives an aware Asia/Taipei time (+08:00), as a ``datetime``
+        or its ISO text; an aware value is taken as is. A naive one is pinned to
+        Asia/Taipei with ``zoneinfo``, never a fixed offset.
+        """
+        stamp = OrderAdapter._sdk_field(OrderAdapter._sdk_field(trade, "status"), "order_datetime")
+        if isinstance(stamp, str):
+            text = stamp.strip()
+            if not text:
+                return None
+            try:
+                stamp = _datetime.fromisoformat(text)
+            except ValueError:
+                return None
+        if not isinstance(stamp, _datetime):
+            return None
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=_TZ_TAIPEI)
+        delta = stamp - _EPOCH_UTC
+        return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
+
+    def _judge_claim(self, claim: _PhantomClaim, trade: Any) -> str:
+        """``confirmed`` when the phantom's Trade is the claimed fill's order, else ``misattributed``.
+
+        Confirmed needs all of: the fill carried an ordno, the Trade's ids contain
+        it, and the broker did not stamp the order after the fill's match time.
+        """
+        if not claim.ordno or claim.ordno not in self._broker_ids_of(trade):
+            return "misattributed"
+        stamped_ns = self._order_datetime_ns(trade)
+        if stamped_ns is not None and claim.fill_ts_ns > 0 and stamped_ns > claim.fill_ts_ns:
+            return "misattributed"
+        return "confirmed"
+
+    def _stash_expired_claim(self, pkey: str, claim: _PhantomClaim) -> None:
+        """Keep a claim whose phantom record is gone, for that order's late Trade (bounded)."""
+        claims = self._get_expired_claims()
+        previous = claims.get(pkey)
+        if previous is not None:
+            self._forget_claim(pkey, previous, reason="overwritten")
+        claims[pkey] = claim
+        claims.move_to_end(pkey)
+        while len(claims) > _EXPIRED_PHANTOM_MAX:
+            old_key, old = claims.popitem(last=False)
+            self._forget_claim(old_key, old, reason="evicted")
+
+    def _forget_claim(self, pkey: str, claim: _PhantomClaim, *, reason: str) -> None:
+        """A claim leaves the ledger unsettled: count it, and remember the key.
+
+        The claimed fill already freed the order's slot (on_fill). If the order's
+        Trade still comes, ``_bind_late_trade`` cancels it and marks it finished,
+        so its terminal releases nothing more.
+        """
+        self._count_phantom_claim("unverified")
+        logger.warning("phantom_claim_unverified", phantom_key=pkey, claimed_ordno=claim.ordno, reason=reason)
+        forgotten = self._get_forgotten_claims()
+        forgotten[pkey] = time.monotonic()
+        forgotten.move_to_end(pkey)
+        while len(forgotten) > _FORGOTTEN_CLAIM_MAX:
+            forgotten.popitem(last=False)
+
+    def _prune_expired_claims(self) -> None:
+        """Forget claims no Trade came for within the retention window.
+
+        The whole ledger (<= ``_EXPIRED_PHANTOM_MAX``) is scanned: a claim moved
+        from a live record keeps its original stamp, so stamps are not in
+        insertion order.
+        """
+        claims = self._get_expired_claims()
+        if not claims:
+            return
+        cutoff = time.monotonic() - _EXPIRED_PHANTOM_RETENTION_S
+        for key, claim in list(claims.items()):
+            if claim.claimed_at < cutoff:
+                del claims[key]
+                self._forget_claim(key, claim, reason="retention")
 
     def _release_unsent_phantom(self, intent: OrderIntent) -> None:
         """The SDK answered that no order exists: hand the pending slot back now."""
         order_key = f"{intent.strategy_id}:{intent.intent_id}"
-        if not self._take_phantom_record(order_key):
-            return  # the TTL sweep or a fill claim already settled the slot
+        record = self._pop_phantom_record(order_key)
+        if record is None:
+            return  # the TTL sweep already settled the slot
+        if record.claim is not None:
+            # The order never existed, so the fill it claimed was another order's.
+            # That fill already freed the slot (on_fill); nothing to release here.
+            self._count_phantom_claim("misattributed")
+            logger.critical(
+                "claim_misattributed",
+                order_key=order_key,
+                claimed_ordno=record.claim.ordno,
+                reason="place_order_not_sent",
+            )
+            return
         if self._send_dispatch_rejection(intent, "place_order_not_sent", phantom_pending=False):
             self._mark_finished(order_key)  # nothing will ever terminal this order
         self._count_phantom_bound("released_not_sent")
@@ -1881,8 +2494,22 @@ class OrderAdapter:
                 self._count_phantom_bound("kept_for_ttl")
                 return
             self._remove_pending_fill(order_key)
-            slot_held = self._take_phantom_record(order_key)
-            filled = self.filled_qty_for(order_key) >= intent.qty
+            record = self._pop_phantom_record(order_key)
+            claim = record.claim if record is not None else None
+            from_expired = False
+            if record is None:
+                claim = self._get_expired_claims().pop(order_key, None)
+                from_expired = claim is not None
+                if claim is None and self._get_forgotten_claims().pop(order_key, None) is not None:
+                    # Its claim left the ledger unsettled; its claimed fill freed the
+                    # slot. Cancel it (below) and let its terminal release nothing.
+                    self._mark_finished(order_key)
+                    logger.warning("phantom_trade_after_forgotten_claim", order_key=order_key)
+            # A claimed fill already gave the slot back through on_fill.
+            slot_held = record is not None and claim is None
+            verdict = self._settle_claim(order_key, claim, trade, from_expired) if claim is not None else None
+            # An unconfirmed claim never stops the cancel of a working order.
+            filled = verdict != "misattributed" and self.filled_qty_for(order_key) >= intent.qty
             if not filled:
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = trade
@@ -1911,12 +2538,45 @@ class OrderAdapter:
                     "price": intent.price,
                     "qty": intent.qty,
                     "strategy_id": intent.strategy_id,
-                    "details": f"outcome={outcome} slot_held={slot_held}",
+                    "details": f"outcome={outcome} slot_held={slot_held}"
+                    + ("" if verdict is None else f" claim={verdict}"),
                 }
             )
         except Exception:  # noqa: BLE001 — a failed bind falls back to the TTL release
             logger.warning("phantom_bind_failed", order_key=order_key, exc_info=True)
             self._count_phantom_bound("kept_for_ttl")
+
+    def _settle_claim(self, order_key: str, claim: _PhantomClaim, trade: Any, from_expired: bool) -> str:
+        """Confirm or refute a phantom's fill claim with its Trade; returns the verdict.
+
+        Confirmed: the fill is noted in the order's ledger (so the bind finds it
+        filled and does not cancel it). A claim made after the phantom's TTL was
+        already counted ``fill_claimed_after_expiry`` when it was made, and is
+        not counted again here. Misattributed: the
+        order is still working and is cancelled by the caller; its slot was
+        already freed by the claimed fill, so it is marked finished and its own
+        terminal releases nothing more.
+        """
+        verdict = self._judge_claim(claim, trade)
+        self._count_phantom_claim(verdict)
+        if verdict == "confirmed":
+            if getattr(self, "_fill_ledger", None) is not None:
+                self._record_fill_ledger(order_key, claim.qty)
+            logger.warning(
+                "phantom_claim_confirmed", order_key=order_key, claimed_ordno=claim.ordno, expired=from_expired
+            )
+            return verdict
+        self._mark_finished(order_key)
+        logger.critical(
+            "claim_misattributed",
+            order_key=order_key,
+            claimed_ordno=claim.ordno,
+            trade_ids=sorted(self._broker_ids_of(trade)),
+            fill_ts_ns=claim.fill_ts_ns,
+            order_datetime_ns=self._order_datetime_ns(trade),
+            expired=from_expired,
+        )
+        return verdict
 
     async def _cancel_bound_trade(self, order_key: str, intent: OrderIntent, trade: Any) -> str:
         cancel_intent = dataclasses.replace(
@@ -2100,25 +2760,37 @@ class OrderAdapter:
                 if not pending:
                     del self._pending_fill_index[pf_key]
                 strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
-                self._note_phantom_fill(order_key, fill_event)
-                # M4: pop ONE phantom occurrence (FIFO) for ``order_key`` so a
+                # M4: claim ONE phantom occurrence (FIFO) for ``order_key`` so a
                 # sibling occurrence (same intent_id, second submission) stays
-                # resolvable for its own fill.
+                # resolvable for its own fill. The pending index matched by
+                # symbol+side only, so the claim is tentative: the record is kept
+                # until its Trade confirms it (``_bind_late_trade``).
+                tentative = False
                 with self._phantom_lock:
                     records = self._get_phantom_records().get(order_key)
                     if records:
-                        # Oldest occurrence of THIS side: a reused intent_id may
-                        # hold an opposite-side occurrence that is not this fill's.
-                        idx = next((i for i, r in enumerate(records) if r.side in (-1, int(side))), None)
+                        # Oldest unclaimed occurrence of THIS side: a reused intent_id
+                        # may hold an opposite-side occurrence that is not this fill's.
+                        idx = next(
+                            (i for i, r in enumerate(records) if r.claim is None and r.side in (-1, int(side))),
+                            None,
+                        )
                         if idx is not None:
-                            records.pop(idx)
+                            records[idx] = records[idx]._replace(claim=self._claim_of(fill_event))
                             self._phantom_resync_legacy(order_key)
+                            tentative = True
+                if tentative:
+                    self._count_phantom_claim("tentative")
+                else:
+                    # Not a phantom of this side: the order is known by key.
+                    self._note_phantom_fill(order_key, fill_event)
                 logger.warning(
                     "phantom_fill_resolved_via_pending_index",
                     symbol=symbol,
                     side=side_name,
                     order_key=order_key,
                     strategy_id=strategy_id,
+                    tentative=tentative,
                 )
                 return strategy_id
         # Fallback: match phantom key with verified symbol match.
@@ -2138,6 +2810,9 @@ class OrderAdapter:
             fill_side = int(side)
             for key, recs in self._get_phantom_records().items():
                 for i, rec in enumerate(recs):
+                    # A record holding a claim awaits its Trade; one fill per record.
+                    if rec.claim is not None:
+                        continue
                     # Skip entries older than 2 hours (stale phantoms)
                     if (now_mono - rec.monotonic_ts) > 7200.0:
                         continue
@@ -2153,18 +2828,22 @@ class OrderAdapter:
                 _, pkey, idx = best
                 records = self._get_phantom_records()[pkey]
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
-                # M4: pop ONE occurrence; siblings retained.
-                records.pop(idx)
+                # M4: claim ONE occurrence; siblings retained. Symbol+side is not
+                # identity (THESHOW 2026-11-12 03:34Z, 6816): the position is booked
+                # to the strategy now, the record is KEPT with the claim, and the
+                # order's Trade confirms or refutes it in ``_bind_late_trade``. The
+                # ledger is noted only on confirmation, so an unconfirmed claim can
+                # never make the bind skip the cancel of a working order.
+                records[idx] = records[idx]._replace(claim=self._claim_of(fill_event))
                 self._phantom_resync_legacy(pkey)
-                # The order's Trade may still come back: ``_bind_late_trade`` must
-                # find it already filled instead of cancelling a finished order.
-                self._note_phantom_fill(pkey, fill_event)
+                self._count_phantom_claim("tentative")
                 logger.warning(
                     "phantom_fill_resolved_via_phantom_keys",
                     symbol=symbol,
                     side=side_name,
                     phantom_key=pkey,
                     strategy_id=strategy_id,
+                    tentative=True,
                 )
                 return strategy_id
             # Last resort: a phantom whose TTL ran out with no answer from the SDK.
@@ -2179,8 +2858,13 @@ class OrderAdapter:
                     continue
                 ledger.remove(entry)
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
-                self._note_phantom_fill(pkey, fill_event)
+                # The phantom's slot was already handed back at its TTL, so this fill
+                # is an unresolved outcome now: it pages (``fill_claimed_after_expiry``)
+                # here, once. The claim itself stays tentative, kept for the order's
+                # Trade (``_settle_claim``), which does not count it again.
                 self._count_phantom_bound("fill_claimed_after_expiry")
+                self._count_phantom_claim("tentative")
+                self._stash_expired_claim(pkey, self._claim_of(fill_event))
                 logger.warning(
                     "phantom_fill_resolved_via_expired_phantom",
                     symbol=symbol,
@@ -2188,6 +2872,7 @@ class OrderAdapter:
                     phantom_key=pkey,
                     strategy_id=strategy_id,
                     expired_s=round(now_mono - expired_at, 1),
+                    tentative=True,
                 )
                 return strategy_id
         return None
@@ -3170,45 +3855,9 @@ class OrderAdapter:
 
     async def _register_broker_ids(self, order_key: str, trade: Any) -> bool:
         """Register broker IDs to order_key mapping with lock protection."""
-        ids = set()
-        id_keys = ("seq_no", "seqno", "ord_no", "ordno", "order_id", "id")
-
-        if isinstance(trade, dict):
-            for key in id_keys:
-                val = trade.get(key)
-                if val:
-                    ids.add(val)
-
-            order = trade.get("order")
-            if isinstance(order, dict):
-                for key in id_keys:
-                    val = order.get(key)
-                    if val:
-                        ids.add(val)
-            status = trade.get("status")
-            if isinstance(status, dict):
-                for key in ("id", "seq_no", "seqno", "ord_no", "ordno"):
-                    val = status.get(key)
-                    if val:
-                        ids.add(val)
-        else:
-            for attr in id_keys:
-                val = getattr(trade, attr, None)
-                if val:
-                    ids.add(val)
-
-            order = getattr(trade, "order", None)
-            if order:
-                for attr in id_keys:
-                    val = getattr(order, attr, None)
-                    if val:
-                        ids.add(val)
-            status = getattr(trade, "status", None)
-            if status:
-                for attr in ("id", "seq_no", "seqno", "ord_no", "ordno"):
-                    val = getattr(status, attr, None)
-                    if val:
-                        ids.add(val)
+        # Shared with the stale-order and phantom-claim matching, so what is
+        # registered and what is matched against can never drift apart.
+        ids = self._broker_ids_of(trade)
 
         changed = False
         # P0-E1: synchronous lock, because broker-thread readers (_on_exec)

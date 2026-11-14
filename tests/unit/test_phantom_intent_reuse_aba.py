@@ -86,18 +86,19 @@ class TestPhantomIntentReuseABA:
             adapter._register_phantom(i1)
             adapter._register_phantom(i2)
 
-        # First fill resolves first occurrence — second occurrence stays.
+        # First fill claims the first occurrence — second occurrence stays free.
+        # (2026-11-13: a claim keeps its record until the phantom's Trade settles it.)
         fill1 = MagicMock(symbol="TMFD6", side=Side.BUY)
         strategy1 = adapter.resolve_phantom_fill(fill1)
         assert strategy1 == "S1"
-        assert "S1:42" in adapter._phantom_records
-        assert len(adapter._phantom_records["S1:42"]) == 1
+        assert [r.claim is not None for r in adapter._phantom_records["S1:42"]] == [True, False]
 
-        # Second fill resolves the remaining occurrence — key is now empty.
+        # Second fill claims the remaining occurrence — no free occurrence is left.
         fill2 = MagicMock(symbol="TMFD6", side=Side.BUY)
         strategy2 = adapter.resolve_phantom_fill(fill2)
         assert strategy2 == "S1"
-        assert "S1:42" not in adapter._phantom_records
+        assert [r.claim is not None for r in adapter._phantom_records["S1:42"]] == [True, True]
+        assert adapter.resolve_phantom_fill(MagicMock(symbol="TMFD6", side=Side.BUY)) is None
 
     def test_release_stale_processes_each_occurrence_independently(self, tmp_config):
         """release_stale_phantom_pendings emits one feedback per expired

@@ -104,7 +104,11 @@ async def test_a_fill_after_the_phantom_ttl_is_claimed_by_its_strategy(tmp_confi
     assert adapter.get_phantom_candidates() == frozenset()
 
     assert adapter.resolve_phantom_fill(_fill()) == _STRATEGY
+    # The phantom's slot was already released, so the outcome is unresolved: it pages
+    # at claim time. The claim itself stays tentative until the order's Trade settles
+    # it (test_phantom_claim_identity.py).
     assert _outcomes(adapter) == ["fill_claimed_after_expiry"]
+    assert _STRATEGY + ":3767" in adapter._get_expired_claims()
 
 
 @pytest.mark.asyncio
@@ -148,7 +152,10 @@ async def test_a_live_phantom_is_claimed_before_an_expired_one(tmp_config):
     live_key = _register(adapter, _intent(2))
 
     assert adapter.resolve_phantom_fill(_fill()) == _STRATEGY
-    assert live_key not in adapter.get_phantom_candidates(), "the live record took the fill"
+    # 2026-11-13: the live record keeps the (tentative) claim instead of being popped.
+    assert [r.claim is not None for r in adapter._get_phantom_records()[live_key]] == [True], (
+        "the live record took the fill"
+    )
     assert len(adapter._get_expired_phantoms()) == 1, "the expired one stays for the next fill"
 
 

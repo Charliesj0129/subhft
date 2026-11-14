@@ -75,28 +75,29 @@ class TestFillDedupPersistence:
         import orjson
 
         router, path = self._make_router(tmp_path)
-        router._seen_fill_ids["key1"] = None
-        router._seen_fill_ids["key2"] = None
-        router._seen_fill_ids["key3"] = None
+        router._seen_fill_ids["v2|key1"] = None
+        router._seen_fill_ids["v2|key2"] = None
+        router._seen_fill_ids["v2|key3"] = None
 
         router.persist_fill_dedup()
 
         assert os.path.exists(path)
         with open(path, "rb") as f:
             keys = [orjson.loads(line.strip()) for line in f if line.strip()]
-        assert keys == ["key1", "key2", "key3"]
+        assert keys == ["v2|key1", "v2|key2", "v2|key3"]
 
     def test_load_restores_dedup_keys(self, tmp_path):
-        pre_seed = ["fill_a", "fill_b", "fill_c"]
+        pre_seed = ["v2|fill_a", "v2|fill_b", "v2|fill_c"]
         router, _ = self._make_router(tmp_path, pre_seed=pre_seed)
 
-        assert "fill_a" in router._seen_fill_ids
-        assert "fill_b" in router._seen_fill_ids
-        assert "fill_c" in router._seen_fill_ids
+        assert "v2|fill_a" in router._seen_fill_ids
+        assert "v2|fill_b" in router._seen_fill_ids
+        assert "v2|fill_c" in router._seen_fill_ids
         assert len(router._seen_fill_ids) == 3
+        assert not router._legacy_fill_ids
 
     def test_load_enforces_max_size(self, tmp_path):
-        pre_seed = [f"key_{i}" for i in range(20)]
+        pre_seed = [f"v2|key_{i}" for i in range(20)]
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_MAX_SIZE": "5"}):
             router, _ = self._make_router(tmp_path, pre_seed=pre_seed)
 
@@ -108,8 +109,8 @@ class TestFillDedupPersistence:
 
     def test_roundtrip_persist_then_load(self, tmp_path):
         router1, path = self._make_router(tmp_path)
-        router1._seen_fill_ids["dup_1"] = None
-        router1._seen_fill_ids["dup_2"] = None
+        router1._seen_fill_ids["v2|dup_1"] = None
+        router1._seen_fill_ids["v2|dup_2"] = None
         router1.persist_fill_dedup()
 
         # Simulate restart: create new router that loads from same path
@@ -119,8 +120,8 @@ class TestFillDedupPersistence:
             router2._fill_dedup_persist_path = path
             router2._load_fill_dedup()
 
-        assert "dup_1" in router2._seen_fill_ids
-        assert "dup_2" in router2._seen_fill_ids
+        assert "v2|dup_1" in router2._seen_fill_ids
+        assert "v2|dup_2" in router2._seen_fill_ids
 
     @pytest.mark.asyncio
     async def test_new_fill_persists_dedup_window_without_graceful_shutdown(self, tmp_path):
@@ -128,6 +129,7 @@ class TestFillDedupPersistence:
         from hft_platform.contracts.strategy import Side
         from hft_platform.core import timebase
         from hft_platform.execution.normalizer import RawExecEvent
+        from hft_platform.execution.router import fill_dedup_key
 
         persist_path = str(tmp_path / "fill_dedup.jsonl")
         with patch.dict(
@@ -170,7 +172,7 @@ class TestFillDedupPersistence:
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
             restarted, _ = self._make_router(tmp_path)
 
-        assert "F_RESTART" in restarted._seen_fill_ids
+        assert fill_dedup_key(fill) in restarted._seen_fill_ids
 
 
 # ---------------------------------------------------------------------------

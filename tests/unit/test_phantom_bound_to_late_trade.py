@@ -422,12 +422,16 @@ def test_the_phantom_fallback_ttl_matches_the_live_order_ttl(tmp_config):
 @pytest.mark.asyncio
 async def test_a_fill_claimed_before_the_trade_arrives_stops_the_bind_from_cancelling(tmp_config):
     """A fill that beat the Trade is attributed through the phantom record; the order is
-    done, so the late Trade must not be cancelled (a failed cancel feeds the breakers)."""
+    done, so the late Trade must not be cancelled (a failed cancel feeds the breakers).
+
+    2026-11-13: only when the Trade confirms the claim by identity -- its ids contain
+    the fill's ordno. A claim the Trade refutes cancels the order
+    (test_phantom_claim_identity.py)."""
     broker = _LateBroker(_TRADE)
     adapter = _adapter(tmp_config, place_order=broker)
     ok = await adapter._dispatch_to_api(_command())
     assert ok is False
-    fill = MagicMock(symbol="TMFI6", side=Side.BUY, qty=1)
+    fill = MagicMock(symbol="TMFI6", side=Side.BUY, qty=1, order_id="A1B2C", match_ts_ns=0)
 
     assert adapter.resolve_phantom_fill(fill) == _STRATEGY
     broker.release.set()

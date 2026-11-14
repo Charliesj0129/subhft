@@ -10,7 +10,7 @@ import pytest
 
 from hft_platform.core import timebase
 from hft_platform.execution.normalizer import RawExecEvent
-from hft_platform.execution.router import ExecutionRouter
+from hft_platform.execution.router import ExecutionRouter, fill_dedup_key
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.services.system import HFTSystem
 
@@ -88,6 +88,12 @@ def _write_symbols_config(tmp_path: Path) -> str:
     return str(cfg)
 
 
+# A deal carries one exchange timestamp. Reading the clock per call made every
+# "replay" of the same deal a different one under the dedup key, which includes
+# the match timestamp.
+_DEAL_TS_NS = 1_760_000_000_000_000_000
+
+
 def _make_fill_raw(*, order_id: str, fill_id: str) -> RawExecEvent:
     return RawExecEvent(
         topic="deal",
@@ -99,7 +105,7 @@ def _make_fill_raw(*, order_id: str, fill_id: str) -> RawExecEvent:
             "quantity": 1,
             "seqno": fill_id,
             "account_id": "FUTACC1",
-            "ts": timebase.now_ns(),
+            "ts": _DEAL_TS_NS,
         },
         ingest_ts_ns=timebase.now_ns(),
     )
@@ -204,7 +210,7 @@ async def test_system_crash_restart_restores_order_routing_and_fill_dedup(tmp_pa
 
     assert fill is not None
     assert fill.strategy_id == "R47"
-    assert "FILL_RESTART" in system2.exec_service._seen_fill_ids
+    assert fill_dedup_key(fill) in system2.exec_service._seen_fill_ids
 
     system2.raw_exec_queue.put_nowait(_make_fill_raw(order_id="ORD_RESTART", fill_id="FILL_RESTART"))
     drained_again = await system2.exec_service.stop(drain_timeout_s=1.0)
@@ -238,4 +244,4 @@ async def test_system_stop_async_restart_restores_execution_recovery_state(tmp_p
 
     assert fill is not None
     assert fill.strategy_id == "R47"
-    assert "FILL_STOP" in system2.exec_service._seen_fill_ids
+    assert fill_dedup_key(fill) in system2.exec_service._seen_fill_ids
