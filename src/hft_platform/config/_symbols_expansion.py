@@ -114,9 +114,21 @@ def build_entry(
 # Option enrichment helpers
 # ---------------------------------------------------------------------------
 
+# TAIEX weekly option roots as the broker lists them: Wednesday weeklies TX1/TX2/TX4/TX5 (the third Wednesday is the
+# monthly TXO, so TX3 is normally absent) and Friday weeklies TXU, TXV, ... TX1, TX2, TXU and TXV were seen in the
+# 2026-08-31 contract cache; the rest are listed so a week that uses them is not silently dropped. A root that is not
+# listed by the broker simply contributes no contracts.
+TXO_WEEKLY_ROOTS: tuple[str, ...] = ("TX1", "TX2", "TX3", "TX4", "TX5", "TXU", "TXV", "TXW", "TXX", "TXY", "TXZ")
+
+# A virtual option root that stands for several broker roots. ``OPT@TXO_WEEKLY@near`` is the nearest weekly expiry of
+# any of them, so the rule follows the Wednesday and Friday weeklies without naming the week. It never includes the
+# monthly TXO: the current month is its own rule (``OPT@TXO@near``).
+OPTION_ROOT_FAMILIES: dict[str, tuple[str, ...]] = {"TXO_WEEKLY": TXO_WEEKLY_ROOTS}
+
 # Map option root prefix → underlying futures root
 _OPTION_UNDERLYING_MAP: dict[str, str] = {
     "TXO": "TX",
+    **{weekly: "TX" for weekly in TXO_WEEKLY_ROOTS},
     "MXO": "MX",
     "NQO": "NQ",
     "XIO": "XI",
@@ -126,6 +138,7 @@ _OPTION_UNDERLYING_MAP: dict[str, str] = {
 # Default point value per option root (NTD per index point)
 _OPTION_POINT_VALUE: dict[str, int] = {
     "TXO": 50,
+    **{weekly: 50 for weekly in TXO_WEEKLY_ROOTS},
     "MXO": 10,
 }
 
@@ -348,7 +361,14 @@ def _normalize_option_right(value: Any) -> str:
 
 # Option root -> the future whose price the strike window must be centred on. Only roots whose underlying
 # is certain are listed; anything else needs an explicit ``underlying_price``.
-UNDERLYING_FUTURE_ROOT: dict[str, str] = {"TXO": "TXF"}
+UNDERLYING_FUTURE_ROOT: dict[str, str] = {
+    "TXO": "TXF",
+    "TXO_WEEKLY": "TXF",
+    **{weekly: "TXF" for weekly in TXO_WEEKLY_ROOTS},
+}
+# A reference price this many times above or below the chain's middle strike is a unit slip (x10, /10), not a market
+# move; a real move, or a chain that has not caught up with it, stays well inside this band.
+UNDERLYING_SCALE_FACTOR = 2.0
 
 
 def _positive_float(value: Any) -> float | None:
@@ -384,14 +404,18 @@ def pick_underlying_price(
         for contract in futures
         if (dte := contract_dte_days(contract, contract_index.as_of)) is not None and dte >= 0
     ]
-    for _, contract in sorted(dated, key=lambda item: item[0]):
+    if not dated:
+        return None, ""
+    nearest = min(dte for dte, _ in dated)
+    # Only the nearest expiry is the underlying, but the continuous aliases (TXFR1/R2) share its date and the
+    # real contract's cache order is not guaranteed, so every row at that expiry is tried.
+    for _, contract in (item for item in dated if item[0] == nearest):
         code = str(contract.get("code") or "")
         for source in (contract_index.metrics_by_code.get(code, {}), contract):
             for key in ("underlying_price", "reference"):
                 value = _positive_float(source.get(key))
                 if value is not None:
                     return value, f"{future_root}:{code}"
-        break  # only the nearest future is the underlying
     return None, ""
 
 
@@ -420,6 +444,40 @@ def _parse_selector(selector: str) -> tuple[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def underlying_on_chain_scale(reference: float, strikes: list[float]) -> bool:
+    """True when ``reference`` is within ``UNDERLYING_SCALE_FACTOR`` of the chain's middle strike.
+
+    Shared by the DSL expander and the connection pool's options roll, so a unit slip is judged the same way in both.
+    """
+    middle = strikes[len(strikes) // 2]
+    return middle <= 0 or middle / UNDERLYING_SCALE_FACTOR <= reference <= middle * UNDERLYING_SCALE_FACTOR
+
+
+def _vet_underlying(
+    reference: float | None, source: str | None, strikes: list[float], label: str, result: SymbolBuildResult
+) -> float | None:
+    """Drop a reference whose scale is wrong; keep (and flag) one that is merely beyond the chain's edge.
+
+    A unit slip would pin the window to an edge strike without a trace, so it is treated as no underlying and the
+    strict / median paths decide. A price just past the last listed strike is a real market, so the window keeps
+    clamping to the edge strike as before (replacing it with the median would select in-the-money options).
+    """
+    if reference is None:
+        return None
+    if not underlying_on_chain_scale(reference, strikes):
+        result.warnings.append(
+            f"Ignoring underlying {reference:g} from {source or 'chain'}: not within a factor of "
+            f"{UNDERLYING_SCALE_FACTOR:g} of the {label} strikes {strikes[0]:g}-{strikes[-1]:g} (unit slip?)"
+        )
+        return None
+    if not strikes[0] <= reference <= strikes[-1]:
+        result.warnings.append(
+            f"Underlying {reference:g} from {source or 'chain'} is beyond the {label} strike range "
+            f"{strikes[0]:g}-{strikes[-1]:g}: the window is clamped to the edge strike"
+        )
+    return reference
+
+
 def _expand_options(
     root: str,
     month_token: str,
@@ -435,14 +493,31 @@ def _expand_options(
         result.errors.append(f"Option rule requires contract cache: OPT@{root}@{month_token}@{selector}")
         return
 
-    contracts = contract_index.options_by_root.get(root)
+    family = OPTION_ROOT_FAMILIES.get(root.upper())
+    if family is not None:
+        contracts = [c for member in family for c in contract_index.options_by_root.get(member, [])]
+    else:
+        contracts = contract_index.options_by_root.get(root) or []
+
+    # A family with no listed weekly (a holiday week, or a cache refreshed before the next weekly is listed) must not
+    # fail the whole build: the universe roll refuses a build with errors, which would also drop the monthly chain and
+    # the futures. The family's expiry is skipped with a warning instead; a plain root keeps its error.
+    def report(message: str) -> None:
+        if family is None:
+            result.errors.append(message)
+            return
+        result.warnings.append(message)
+        # Not an error, but the universe is short of a chain symbols.list asks for: the roll treats it as degraded
+        # (never last-good, repaired in session once the chain is listed).
+        result.missing_option_roots.append(root.upper())
+
     if not contracts:
-        result.errors.append(f"No option contracts found for root {root}")
+        report(f"No option contracts found for root {root}")
         return
 
     contracts = _filter_active_contracts(contracts, result, context=f"options {root}", as_of=contract_index.as_of)
     if not contracts:
-        result.errors.append(f"No active (non-expired) option contracts for root {root}")
+        report(f"No active (non-expired) option contracts for root {root}")
         return
 
     groups = _group_by_expiry(contracts)
@@ -488,14 +563,20 @@ def _expand_options(
             result.errors.append(f"No strike data for options root {root}")
             return
 
-        reference, _ = pick_underlying_price(root, group, contract_index)
+        reference, source = pick_underlying_price(root, group, contract_index)
+        reference = _vet_underlying(reference, source, strikes, f"{root} {month}", result)
         if reference is None:
             if contract_index.require_underlying:
-                result.errors.append(
+                message = (
                     f"No underlying price to centre the {root} {month} option window on; refusing to guess. "
                     f"Supply underlying_price for the {root} chain or a reference for the nearest "
                     f"{UNDERLYING_FUTURE_ROOT.get(root.upper(), 'underlying')} future in the metrics file"
                 )
+                result.errors.append(message)
+                # The universe roll may hold this chain's running window and still roll the rest; see
+                # QuoteConnectionPool._hold_unpriced_option_windows.
+                result.unpriced_option_errors.append(message)
+                result.unpriced_option_roots.append(root.upper())
                 return
             reference = strikes[len(strikes) // 2]
             result.warnings.append(

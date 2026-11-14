@@ -14,6 +14,7 @@ boot and re-sharding had no owner. These tests pin the owner.
 
 from __future__ import annotations
 
+import collections
 import datetime as dt
 import json
 from pathlib import Path
@@ -78,11 +79,15 @@ class FakeClient:
         self.symbols = symbols
         self.subscribed_codes: set[str] = {str(s["code"]) for s in symbols}
         self.subscribed_count = len(self.subscribed_codes)
-        self._failed_sub_symbols: list[dict[str, Any]] = []
+        self._failed_sub_symbols: collections.deque[dict[str, Any]] = collections.deque()  # the real client's type
         self.unsubscribed: list[str] = []
         self.subscribed: list[str] = []
         self.refuse_codes: set[str] = set()
         self.routes_refreshed = 0
+        self.retry_starts = 0
+
+    def _start_sub_retry_thread(self, cb: Any) -> None:
+        self.retry_starts += 1
 
     def _subscriptions(self) -> FakeSubscriptions:
         return FakeSubscriptions(self)
@@ -292,6 +297,287 @@ class TestRefusals:
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
         assert _universe_codes(pool) == {"TMFJ6"}
 
+    def test_option_window_without_an_underlying_price_keeps_the_running_universe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No TXF reference in the cache: the roll must not centre the TXO window on a median-strike guess."""
+        options = [
+            {
+                "code": f"TXO{strike}{right}J6",
+                "symbol": f"TXO{strike}{right}J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": right,
+                "strike": str(strike),
+            }
+            for strike in (19000, 20000, 21000)
+            for right in ("C", "P")
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST + "OPT@TXO@front@ATM exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        # The futures still roll (TMFI6 settled); the option window is held, and nothing was running to hold.
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        codes = _universe_codes(pool)
+        assert codes == {"TMFJ6", "TMFK6"}
+        assert not any(code.startswith("TXO") for code in codes)
+
+    def test_unpriced_option_window_holds_the_running_chain_and_still_rolls_futures(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing TXF reference must not freeze the futures roll; the running TXO and weekly codes are kept."""
+        options = [
+            {
+                "code": code,
+                "symbol": code,
+                "root": root,
+                "type": "option",
+                "delivery_date": delivery,
+                "right": right,
+                "strike": "20000",
+            }
+            for code, root, delivery, right in (
+                ("TXO20000J6", "TXO", OCTOBER, "C"),
+                ("TXO20000V6", "TXO", OCTOBER, "P"),
+                ("TX120000J6", "TX1", "2026/10/07", "C"),
+                ("TX120000V6", "TX1", "2026/10/07", "P"),
+                ("TX220000I6", "TX2", "2026/09/16", "C"),  # settled weekly: must not be carried
+            )
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6", "TXO20000J6", "TXO20000V6", "TX120000J6", "TX120000V6", "TX220000I6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM+/-1 exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM+/-1 exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "TXO20000J6", "TXO20000V6", "TX120000J6", "TX120000V6"}
+
+    def test_unpriced_option_window_drops_a_running_code_the_cache_no_longer_lists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A settled weekly the broker has delisted has no delivery date to check: it must not be held."""
+        options = [
+            {
+                "code": "TXO20000J6",
+                "symbol": "TXO20000J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": "C",
+                "strike": "20000",
+            },
+            {  # listed, but with no delivery date at all
+                "code": "TX120000J6",
+                "symbol": "TX120000J6",
+                "root": "TX1",
+                "type": "option",
+                "right": "C",
+                "strike": "20000",
+            },
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            # TX220000I6 settled on 09-16 and is gone from the cache.
+            universe=["TMFI6", "TMFJ6", "TXO20000J6", "TX220000I6", "TX120000J6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM+/-1 exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM+/-1 exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6", "TXO20000J6"}
+
+    def test_held_option_window_is_repaired_in_session_once_the_reference_returns(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Boot without a TXF reference holds an empty option window; the reference arriving mid-session repairs it."""
+        options = [
+            {
+                "code": f"TXO{strike}{right}J6",
+                "symbol": f"TXO{strike}{right}J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": right,
+                "strike": str(strike),
+            }
+            for strike in (19000, 20000, 21000)
+            for right in ("C", "P")
+        ]
+        txf = _future("TXFJ6", "TXF", OCTOBER)
+        list_body = TMF_LIST + "OPT@TXO@near@ATM exchange=OPT tags=options\n"
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, txf, *options],
+            list_body=list_body,
+            today=dt.date(2026, 9, 17),
+        )
+        last_good = tmp_path / "universe_last_good.yaml"
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+        assert pool.universe_source == "list"
+        assert not last_good.exists()  # an incomplete universe is never the last good one
+
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)  # session open
+        _contract_cache(tmp_path, [*SEPTEMBER_CONTRACTS, {**txf, "reference": 20000.0}, *options])
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TXO20000CJ6", "TXO20000PJ6"} <= _universe_codes(pool)
+        assert any("TXO20000CJ6" in client.subscribed for client in clients)
+        assert last_good.exists()
+
+    def test_weekly_family_listed_mid_session_is_repaired_in_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Boot with no weekly listed adopts the rest; the weekly appearing during the session is subscribed then."""
+
+        def option(code: str, root: str, delivery: str, strike: int, right: str) -> dict[str, Any]:
+            return {
+                "code": code,
+                "symbol": code,
+                "root": root,
+                "type": "option",
+                "delivery_date": delivery,
+                "right": right,
+                "strike": str(strike),
+            }
+
+        monthly = [option(f"TXO{k}{r}J6", "TXO", OCTOBER, k, r) for k in (19000, 20000, 21000) for r in ("C", "P")]
+        weekly = [option(f"TX1{k}{r}J6", "TX1", "2026/10/07", k, r) for k in (19000, 20000, 21000) for r in ("C", "P")]
+        txf = {**_future("TXFJ6", "TXF", OCTOBER), "reference": 20000.0}
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, txf, *monthly],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+        last_good = tmp_path / "universe_last_good.yaml"
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TXO20000CJ6", "TXO20000PJ6"} <= _universe_codes(pool)
+        assert not any(code.startswith("TX1") for code in _universe_codes(pool))
+        assert not last_good.exists()
+
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+        _contract_cache(tmp_path, [*SEPTEMBER_CONTRACTS, txf, *monthly, *weekly])
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TX120000CJ6", "TX120000PJ6"} <= _universe_codes(pool)
+        assert any("TX120000CJ6" in client.subscribed for client in clients)
+        assert last_good.exists()
+
+    def test_monthly_chain_is_repaired_in_session_while_the_weekly_is_still_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Degraded state is per root: an empty weekly must not block the monthly repair once TXF is priced."""
+        monthly = [
+            {
+                "code": f"TXO{k}{r}J6",
+                "symbol": f"TXO{k}{r}J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": r,
+                "strike": str(k),
+            }
+            for k in (19000, 20000, 21000)
+            for r in ("C", "P")
+        ]
+        txf = _future("TXFJ6", "TXF", OCTOBER)
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, txf, *monthly],
+            list_body=TMF_LIST
+            + "OPT@TXO_WEEKLY@near@ATM exchange=OPT tags=options\n"
+            + "OPT@TXO@near@ATM exchange=OPT tags=options\n",
+            today=dt.date(2026, 9, 17),
+        )
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert not any(code.startswith("TX") for code in _universe_codes(pool))
+
+        clients = _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+        _contract_cache(tmp_path, [*SEPTEMBER_CONTRACTS, {**txf, "reference": 20000.0}, *monthly])
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        assert {"TXO20000CJ6", "TXO20000PJ6"} <= _universe_codes(pool)
+        assert any("TXO20000CJ6" in client.subscribed for client in clients)
+        assert not (tmp_path / "universe_last_good.yaml").exists()  # still short of the weekly
+
+    def test_complete_universe_change_is_still_deferred_in_session(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The held-window repair must not turn every in-session change into an applied one."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=SEPTEMBER_CONTRACTS,
+            list_body=TMF_LIST,
+            today=dt.date(2026, 9, 17),
+        )
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+        (tmp_path / "symbols.list").write_text("TMF@next exchange=FUT tags=futures\n", encoding="utf-8")
+        _attach_facades(pool)
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
+        assert _universe_codes(pool) == {"TMFJ6", "TMFK6"}
+
+    def test_unpriced_option_window_with_another_build_error_keeps_the_running_universe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only an all-unpriced failure is relaxed: a second, unrelated error still refuses the whole roll."""
+        options = [
+            {
+                "code": "TXO20000J6",
+                "symbol": "TXO20000J6",
+                "root": "TXO",
+                "type": "option",
+                "delivery_date": OCTOBER,
+                "right": "C",
+                "strike": "20000",
+            }
+        ]
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=[*SEPTEMBER_CONTRACTS, *options],
+            list_body=TMF_LIST + "OPT@TXO@near@ATM exchange=OPT tags=options\nZZZ@front exchange=FUT tags=futures\n",
+            today=dt.date(2026, 9, 17),
+        )
+
+        assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
+        assert _universe_codes(pool) == {"TMFI6", "TMFJ6"}
+
     def test_unreadable_contract_cache_keeps_the_running_universe(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -389,6 +675,32 @@ class TestLiveRoll:
         assert queued == ["TMFK6"]
         live_codes = {code for client in clients for code in client.subscribed_codes}
         assert "TMFK6" not in live_codes
+        # The boot retry worker may have exited on an empty queue: the roll must start one for its own refusal.
+        assert [client.retry_starts for client in clients if client._failed_sub_symbols] == [1]
+        assert all(client.retry_starts == 0 for client in clients if not client._failed_sub_symbols)
+
+    def test_a_removed_code_still_queued_for_retry_is_pruned_by_the_roll(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A settled code waiting for retry must not compete with its replacement for the connection's slots."""
+        pool = _make_pool(
+            tmp_path,
+            monkeypatch,
+            universe=["TMFI6", "TMFJ6"],
+            contracts=SEPTEMBER_CONTRACTS,
+            list_body=TMF_LIST,
+            today=dt.date(2026, 9, 17),
+        )
+        clients = _attach_facades(pool)
+        owner = next(client for client in clients if "TMFI6" in client.subscribed_codes)
+        owner.subscribed_codes.discard("TMFI6")  # its subscribe failed: it sits in the retry queue
+        owner._failed_sub_symbols.append({"code": "TMFI6"})
+        monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: False)
+
+        assert pool.roll_universe(now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is True
+
+        queued = [str(sym.get("code")) for client in clients for sym in client._failed_sub_symbols]
+        assert "TMFI6" not in queued
 
     def test_roll_is_deferred_while_a_session_is_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Four facades churning subscriptions mid-session is not worth the roll."""

@@ -26,6 +26,7 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
     check_facade_health,
     get_healthy_feed_gap_s,
 )
+from hft_platform.feed_adapter.shioaji.quote_runtime import subscription_lifecycle_lock
 
 try:
     from prometheus_client import Counter, Gauge
@@ -89,6 +90,8 @@ UNIVERSE_ROLL_RESULTS = (
 #: ``symbols.list`` against the contract cache and validated; ``last_good`` =
 #: the last such universe, kept on disk; ``canonical`` = ``symbols.yaml``.
 UNIVERSE_SOURCES = ("list", "last_good", "canonical")
+# 1 / 0 / -1 per subscribed TXO expiry: does the chain span the futures price +/- 500 points (F3).
+_METRIC_ATM_COVERAGE = None
 
 
 def _ensure_metrics() -> None:
@@ -96,6 +99,7 @@ def _ensure_metrics() -> None:
     global _METRIC_POOL_DEGRADED, _METRIC_POOL_DEGRADED_FRACTION
     global _METRIC_PUBLISHED, _METRIC_PUBLISH_ERRORS, _METRIC_UNIVERSE_ROLL
     global _METRIC_UNIVERSE_SOURCE, _METRIC_UNIVERSE_LAST_VALID
+    global _METRIC_ATM_COVERAGE
     if Gauge is None or _METRIC_SUBSCRIBED is not None:
         return
     if Counter is not None:
@@ -152,6 +156,12 @@ def _ensure_metrics() -> None:
     _METRIC_UNIVERSE_LAST_VALID = Gauge(
         "hft_quote_pool_universe_last_valid_timestamp_seconds",
         "Unix time of the last universe rebuild that passed validate_universe (0 = none yet)",
+    )
+    _METRIC_ATM_COVERAGE = Gauge(
+        "option_chain_atm_coverage",
+        "Whether the subscribed TXO chain of an expiry spans the futures price +/- 500 points: "
+        "1 covered, 0 not covered, -1 unknown (no underlying price to judge by)",
+        ["expiry"],
     )
 
 
@@ -301,6 +311,7 @@ class QuoteConnectionPool:
         "_all_symbols",
         "_login_interval_s",
         "_options_expiry",
+        "_chain_coverage_last",
         "_options_refresh_running",
         "_refresh_lock",
         "_refresh_thread",
@@ -319,6 +330,7 @@ class QuoteConnectionPool:
         "_universe_listener",
         "_universe_rolled",
         "_universe_source",
+        "_degraded_option_roots",
         # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
@@ -339,6 +351,7 @@ class QuoteConnectionPool:
         self._config = shioaji_cfg
         self._login_interval_s = float(os.getenv("HFT_QUOTE_LOGIN_INTERVAL_S", "2"))
         self._options_expiry: str | None = None
+        self._chain_coverage_last: dict[str, int] = {}  # expiry -> last published gauge value
         self._options_refresh_running: bool = False
         self._refresh_lock: threading.Lock = threading.Lock()
         self._refresh_thread: threading.Thread | None = None
@@ -359,6 +372,12 @@ class QuoteConnectionPool:
         # See UNIVERSE_SOURCES. Boot reads the canonical file; a successful
         # roll (or a last-good fallback) replaces it.
         self._universe_source: str = "canonical"
+        # The symbols.list option rule roots (e.g. "TXO", "TXO_WEEKLY") the running universe is short of: a window a
+        # rebuild could not price (no underlying reference, held) or a family with nothing listed. Such a universe is
+        # incomplete, so it is never written as last-good, and a rebuild that has any of these chains again is
+        # adopted even inside a session (see roll_universe). Tracked per root so one still-missing chain does not
+        # block the repair of another.
+        self._degraded_option_roots: frozenset[str] = frozenset()
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
         # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
         # Default 5min so a brief reconnect storm does not trigger;
@@ -1310,13 +1329,25 @@ class QuoteConnectionPool:
             if strike_range > 0:
                 # Centre on the underlying future, never on option premiums: an option contract's
                 # ``reference`` is its own premium. No underlying price -> keep the current chain.
-                from hft_platform.config._symbols_expansion import pick_underlying_price
+                from hft_platform.config._symbols_expansion import pick_underlying_price, underlying_on_chain_scale
 
                 atm, atm_source = pick_underlying_price("TXO", nearest, self._contract_index())
                 if atm is None:
                     logger.error("options_refresh_no_underlying", expiry=nearest_date, strike_range=strike_range)
                     return False
                 strikes = sorted(set(float(c["strike"]) for c in nearest if c.get("strike")))
+                if strikes and not underlying_on_chain_scale(atm, strikes):
+                    # A unit slip would centre the window on the wrong strikes AND mark this expiry as done, so a
+                    # corrected reference could never retry. Keep the current chain and leave _options_expiry alone.
+                    logger.error(
+                        "options_refresh_underlying_scale_mismatch",
+                        expiry=nearest_date,
+                        atm=atm,
+                        atm_source=atm_source,
+                        strike_low=strikes[0],
+                        strike_high=strikes[-1],
+                    )
+                    return False
                 if strikes:
                     atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - atm))
                     lo = max(atm_idx - strike_range, 0)
@@ -1482,6 +1513,66 @@ class QuoteConnectionPool:
             return candidate
         return DEFAULT_LIST_PATH
 
+    def report_option_chain_coverage(self) -> list[Any]:
+        """Publish ``option_chain_atm_coverage{expiry}`` for the subscribed TXO chain, monthly and weekly (F3).
+
+        1 = the expiry's strikes reach both F-500 and F+500, 0 = they do not, -1 = no underlying price to judge by.
+        A chain that stops below the money cannot give an implied volatility; the research audit found that on most
+        recorded days, a night later. This says so when the subscription is made. Reads the contract cache the hourly
+        refresh already writes (no SDK call), so it is safe on the refresh thread. Returns the per-expiry coverage.
+        """
+        from hft_platform.config._symbols_expansion import TXO_WEEKLY_ROOTS, pick_underlying_price
+        from hft_platform.config.option_chain_coverage import chain_coverage
+        from hft_platform.core.market_calendar import taifex_delivery_cutoff
+
+        index = self._contract_index()
+        # After 13:30 on a delivery day the settled TXF must not be the reference; see roll_universe.
+        index.as_of = taifex_delivery_cutoff(timebase.now_ns())
+        # What the broker accepted, not what was configured: a failed subscribe leaves the chain short.
+        codes = sorted(self.subscribed_codes)
+        # The monthly TXO and its weeklies share one underlying (the nearest TXF); each expiry is judged on its own.
+        roots = ("TXO", *TXO_WEEKLY_ROOTS)
+        chain_rows = [
+            row for code in codes if (row := index.by_code.get(code)) and str(row.get("root") or "").upper() in roots
+        ]
+        reference, source = pick_underlying_price("TXO", chain_rows, index)
+        coverage = chain_coverage(codes, index.by_code, reference, root=roots)
+        self._publish_chain_coverage(coverage, source)
+        return coverage
+
+    def _publish_chain_coverage(self, coverage: list[Any], reference_source: str) -> None:
+        _ensure_metrics()
+        current = {item.expiry: item.gauge_value for item in coverage}
+        gauge = _METRIC_ATM_COVERAGE
+        if gauge is not None:
+            for expiry, value in current.items():
+                gauge.labels(expiry=expiry).set(value)
+            for expiry in self._chain_coverage_last.keys() - current.keys():
+                try:
+                    gauge.remove(expiry)  # an expiry that rolled off must not keep reporting its last value
+                except KeyError:
+                    pass
+        if current == self._chain_coverage_last:
+            return
+        self._chain_coverage_last = current
+        detail = [
+            {
+                "expiry": item.expiry,
+                "contracts": item.contracts,
+                "min_strike": item.min_strike,
+                "max_strike": item.max_strike,
+                "gauge": item.gauge_value,
+            }
+            for item in coverage
+        ]
+        reference = coverage[0].reference if coverage else None
+        if any(value == 0 for value in current.values()):
+            logger.warning(
+                "option_chain_atm_coverage_missing", reference=reference, source=reference_source, expiries=detail
+            )
+        else:
+            logger.info("option_chain_atm_coverage", reference=reference, source=reference_source, expiries=detail)
+
     def _contract_index(self) -> Any:
         """Build a ``ContractIndex`` from the broker contract cache on disk.
 
@@ -1497,7 +1588,11 @@ class QuoteConnectionPool:
         with open(cache_path) as fh:
             data = json.load(fh)
         contracts = data.get("contracts", []) if isinstance(data, dict) else []
-        return ContractIndex(contracts=list(contracts))
+        index = ContractIndex(contracts=list(contracts))
+        # A rebuild with no underlying price must fail (the roll then keeps the running universe) rather than
+        # centre the option window on a median-strike guess.
+        index.require_underlying = True
+        return index
 
     @staticmethod
     def _delivery_lookup(index: Any) -> Callable[[str], dt.date | None]:
@@ -1630,6 +1725,12 @@ class QuoteConnectionPool:
 
             list_path = self._symbols_list_path()
             build_result = build_symbols(list_path, index)
+            delivery_of = self._delivery_lookup(index)
+            degraded: set[str] = set()
+            if build_result.errors and self._hold_unpriced_option_windows(build_result, index, delivery_of, cutoff):
+                degraded.update(build_result.unpriced_option_roots)
+            # Short of a requested option chain, held or not listed: degraded, see _degraded_option_roots.
+            degraded.update(getattr(build_result, "missing_option_roots", None) or ())
             if build_result.errors:
                 logger.warning(
                     "universe_roll_build_failed",
@@ -1638,7 +1739,6 @@ class QuoteConnectionPool:
                 )
                 return self._roll_failed("build_errors", live=live, in_session=in_session, cutoff=cutoff)
 
-            delivery_of = self._delivery_lookup(index)
             errors = validate_universe(
                 build_result.symbols,
                 delivery_of=delivery_of,
@@ -1676,26 +1776,103 @@ class QuoteConnectionPool:
                     # The running universe equals a validated rebuild: it is
                     # current, whatever file it was read from.
                     self._set_universe_source("list")
-                self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+                if not degraded:
+                    self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+                self._degraded_option_roots = frozenset(degraded)
                 self._bump_universe_roll_metric("no_change")
                 return False
 
-            if in_session and self._universe_source != "canonical":
+            # A held or missing option chain that this rebuild now has in full is a degraded feed being repaired,
+            # like a canonical fallback: waiting for the close would leave the options out for the whole session.
+            repaired_roots = sorted(self._degraded_option_roots - degraded)
+            if in_session and self._universe_source != "canonical" and not repaired_roots:
                 logger.debug("universe_roll_deferred_session_open", pending_added=len(plan.added_codes))
                 self._bump_universe_roll_metric("deferred_session")
                 return False
             if in_session:
                 logger.warning(
                     "universe_roll_repair_in_session",
-                    reason="running universe is the canonical fallback",
+                    reason=(
+                        f"option chain(s) {', '.join(repaired_roots)} available again"
+                        if repaired_roots
+                        else "running universe is the canonical fallback"
+                    ),
                     added_count=len(plan.added_codes),
                     removed_count=len(plan.removed_codes),
                 )
 
             self._apply_universe(plan, live=live, cutoff=cutoff)
             self._set_universe_source("list")
-            self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+            if not degraded:
+                # An incomplete (degraded) universe must not replace a complete last-good one.
+                self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
+            self._degraded_option_roots = frozenset(degraded)
             return True
+
+    def _hold_unpriced_option_windows(
+        self,
+        build_result: Any,
+        index: Any,
+        delivery_of: Callable[[str], dt.date | None],
+        cutoff: dt.date,
+    ) -> bool:
+        """Keep the running option window for a chain that has no underlying price, so the rest still rolls.
+
+        ``require_underlying`` refuses to centre an option window on a guess. If that refusal failed the whole
+        build, a missing or mis-scaled TXF reference (the cache holds none until the first contract refresh after
+        a deploy) would also block the futures roll every 10 minutes. When every build error is such a refusal,
+        the running codes of the affected roots that the cache still lists with an unpassed delivery date are carried
+        into the rebuild and the errors are cleared; any other error leaves the build failed. Mutates ``build_result``.
+        Returns True when the errors were cleared this way: the rebuilt universe is then incomplete, even when nothing
+        could be held.
+        """
+        from hft_platform.config._symbols_expansion import OPTION_ROOT_FAMILIES
+
+        unpriced = set(build_result.unpriced_option_errors)
+        if not unpriced or any(error not in unpriced for error in build_result.errors):
+            return False
+        roots: set[str] = set()
+        for rule_root in build_result.unpriced_option_roots:
+            roots.update(OPTION_ROOT_FAMILIES.get(rule_root, (rule_root,)))
+        by_code = getattr(index, "by_code", {}) or {}
+        rebuilt = {str(entry.get("code") or "") for entry in build_result.symbols}
+        held: list[dict[str, Any]] = []
+        dropped_settled = 0
+        dropped_unverified = 0
+        for sym in self._all_symbols:
+            code = str(sym.get("code") or "").strip()
+            if not code or code in rebuilt:
+                continue
+            row = by_code.get(code)
+            row_root = str(row.get("root") or "").upper() if isinstance(row, dict) else ""
+            if not (row_root in roots if row_root else any(code.startswith(r) for r in roots)):
+                continue
+            # Only a code the broker still lists, with a delivery date that has not passed, is held. A code missing
+            # from the cache (the broker delists a settled option) or without a date cannot be shown to be live,
+            # and validate_universe, reading the same cache, would not catch it either.
+            delivery = delivery_of(code) if isinstance(row, dict) else None
+            if delivery is None:
+                dropped_unverified += 1
+                continue
+            if delivery < cutoff:
+                dropped_settled += 1
+                continue
+            entry = dict(sym)
+            entry.pop("group", None)
+            held.append(entry)
+            rebuilt.add(code)
+        build_result.symbols.extend(held)
+        build_result.errors.clear()
+        logger.error(
+            "universe_roll_option_window_held",
+            reason="no underlying price for the option window",
+            roots=sorted(roots),
+            held_count=len(held),
+            dropped_settled=dropped_settled,
+            dropped_unverified=dropped_unverified,
+            errors=sorted(unpriced)[:5],
+        )
+        return True
 
     def _roll_failed(self, result: str, *, live: bool, in_session: bool, cutoff: dt.date) -> bool:
         """Record a refused roll; at boot, fall back to the last good universe.
@@ -1974,37 +2151,61 @@ class QuoteConnectionPool:
             return 0
 
         client = facade._client
-        sub_mgr = client._subscriptions()
-        removed = set(plan.removed.get(conn_id, ()))
-        added = set(plan.added.get(conn_id, ()))
+        # The retry worker must not subscribe a code this roll is removing, nor check membership mid-swap.
+        with subscription_lifecycle_lock(client):
+            sub_mgr = client._subscriptions()
+            removed = set(plan.removed.get(conn_id, ()))
+            added = set(plan.added.get(conn_id, ()))
 
-        for sym in list(getattr(client, "symbols", ()) or ()):
-            code = str(sym.get("code") or "")
-            if code in removed and code in client.subscribed_codes:
-                try:
-                    sub_mgr._unsubscribe_symbol(sym)
-                except Exception as exc:  # noqa: BLE001 — a delisted code often refuses
-                    logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
-                client.subscribed_codes.discard(code)
-        client.subscribed_count = len(client.subscribed_codes)
-
-        client._load_config()
-
-        callback = self._user_callback
-        slot = self._slots[conn_id] if conn_id < len(self._slots) else None
-        wrapped_cb = self._make_callback_wrapper(slot, callback) if (slot is not None and callback) else callback
-        subscribed = 0
-        if wrapped_cb is not None:
             for sym in list(getattr(client, "symbols", ()) or ()):
                 code = str(sym.get("code") or "")
-                if code not in added or code in client.subscribed_codes:
-                    continue
-                if sub_mgr._subscribe_symbol(sym, wrapped_cb):
-                    client.subscribed_codes.add(code)
-                    subscribed += 1
-                else:
-                    client._failed_sub_symbols.append(sym)
-        client.subscribed_count = len(client.subscribed_codes)
+                if code in removed and code in client.subscribed_codes:
+                    try:
+                        sub_mgr._unsubscribe_symbol(sym)
+                    except Exception as exc:  # noqa: BLE001 — a delisted code often refuses
+                        logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
+                    client.subscribed_codes.discard(code)
+            client.subscribed_count = len(client.subscribed_codes)
+            # A removed code still queued for retry would compete with its replacement for the connection's last slots.
+            # Drain-and-re-append keeps the same deque the retry worker reads (each op is GIL-atomic).
+            queue = getattr(client, "_failed_sub_symbols", None)
+            if removed and queue is not None:
+                for _ in range(len(queue)):
+                    try:
+                        queued = queue.popleft()
+                    except (IndexError, AttributeError):
+                        break
+                    if str(queued.get("code") or "") not in removed:
+                        queue.append(queued)
+
+            client._load_config()
+
+            callback = self._user_callback
+            slot = self._slots[conn_id] if conn_id < len(self._slots) else None
+            wrapped_cb = self._make_callback_wrapper(slot, callback) if (slot is not None and callback) else callback
+            subscribed = 0
+            failed = 0
+            if wrapped_cb is not None:
+                for sym in list(getattr(client, "symbols", ()) or ()):
+                    code = str(sym.get("code") or "")
+                    if code not in added or code in client.subscribed_codes:
+                        continue
+                    if sub_mgr._subscribe_symbol(sym, wrapped_cb):
+                        client.subscribed_codes.add(code)
+                        subscribed += 1
+                    else:
+                        client._failed_sub_symbols.append(sym)
+                        failed += 1
+            client.subscribed_count = len(client.subscribed_codes)
+        if failed and wrapped_cb is not None:
+            # The boot-time retry worker exits once its queue drains, so a code refused by a later roll would sit in
+            # the queue with nobody to retry it (and the next roll sees no change). Start (or keep) the worker.
+            start_retry = getattr(client, "_start_sub_retry_thread", None)
+            if callable(start_retry):
+                try:
+                    start_retry(wrapped_cb)
+                except Exception as exc:  # noqa: BLE001 — the queue is kept; the next reconnect retries it too
+                    logger.warning("universe_roll_retry_start_failed", conn_id=conn_id, error=str(exc))
         try:
             client._refresh_quote_routes()
         except Exception as exc:  # noqa: BLE001 — routing refresh is best effort
@@ -2036,6 +2237,9 @@ class QuoteConnectionPool:
                 await asyncio.to_thread(self.roll_universe)
             except Exception as exc:  # noqa: BLE001 — the clock outlives any single failure
                 logger.warning("universe_roll_clock_failed", error=str(exc))
+            # The options refresh thread is off in production (HFT_OPTIONS_REFRESH_S=0), so the coverage gauge
+            # is published here, after each roll check, from the subscriptions the roll left in place.
+            await asyncio.to_thread(self._report_chain_coverage_safely)
 
     def _write_universe_snapshot(self, symbols: list[dict[str, Any]], *, cutoff: dt.date) -> None:
         """Write the adopted universe beside the canonical file, never over it."""
@@ -2064,6 +2268,13 @@ class QuoteConnectionPool:
         except Exception as exc:  # noqa: BLE001
             logger.debug("operation_fallback", error=str(exc))
 
+    def _report_chain_coverage_safely(self) -> None:
+        """The coverage gauge is a diagnostic: its failure must not end the refresh thread."""
+        try:
+            self.report_option_chain_coverage()
+        except Exception as exc:
+            logger.warning("option_chain_coverage_failed", error=str(exc))
+
     def start_options_refresh_thread(
         self,
         cb: Callable[..., Any] | None = None,
@@ -2071,12 +2282,15 @@ class QuoteConnectionPool:
     ) -> None:
         """Start a background thread that checks for TXO expiry changes.
 
-        Default interval: HFT_OPTIONS_REFRESH_S env var or 3600 (hourly).
+        Default interval: HFT_OPTIONS_REFRESH_S env var, else 0 (disabled). The universe roll
+        (``run_universe_roll_clock``) owns the option subscriptions; this legacy refresh rebuilds them as the
+        nearest monthly TXO chain only, so leaving it on by default would drop the weekly chain ``symbols.list``
+        asks for. Set HFT_OPTIONS_REFRESH_S > 0 to opt back in.
         """
         if getattr(self, "_options_refresh_running", False):
             return
         if interval_s is None:
-            interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "3600"))
+            interval_s = float(os.getenv("HFT_OPTIONS_REFRESH_S", "0"))
 
         if interval_s <= 0:
             logger.info("options_refresh_thread_disabled", interval_s=interval_s)
@@ -2093,6 +2307,7 @@ class QuoteConnectionPool:
                 self.refresh_options_symbols()
             except Exception as exc:
                 logger.warning("options_refresh_initial_failed", error=str(exc))
+            self._report_chain_coverage_safely()
 
             next_check = time.monotonic() + interval_s
             while not self._refresh_stop_event.is_set():
@@ -2105,6 +2320,7 @@ class QuoteConnectionPool:
                         self.refresh_options_symbols()
                     except Exception as exc:
                         logger.warning("options_refresh_failed", error=str(exc))
+                    self._report_chain_coverage_safely()
                     next_check = time.monotonic() + interval_s
 
         t = threading.Thread(target=_loop, name="options-expiry-refresh", daemon=True)

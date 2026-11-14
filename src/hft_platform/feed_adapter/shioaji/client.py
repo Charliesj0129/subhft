@@ -317,6 +317,8 @@ class ShioajiClient:
         # MarketDataService._attempt_resubscribe via to_thread).
         # try_acquire(blocking=False) so concurrent callers no-op.
         self._resubscribe_lock: threading.Lock = threading.Lock()
+        # See quote_runtime.subscription_lifecycle_lock: a universe roll vs. the retry worker.
+        self._sub_lifecycle_lock: threading.RLock = threading.RLock()
         self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {

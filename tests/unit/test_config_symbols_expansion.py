@@ -15,6 +15,8 @@ Covers all public functions and their branches including:
 
 from __future__ import annotations
 
+import pytest
+
 from hft_platform.config._symbols_expansion import (
     _default_exchange_for_code,
     _expand_futures,
@@ -236,6 +238,16 @@ class TestPickUnderlyingPrice:
         idx = _make_contract_index(chain + futures)
 
         assert pick_underlying_price("TXO", chain, idx) == (18500.0, "TXF:TXFB7")
+
+    def test_an_alias_row_without_a_reference_does_not_hide_the_real_nearest_future(self):
+        # TXFR1 shares the real contract's expiry; cache order is not a contract.
+        alias = _make_futures_contract("TXFR1", root="TXF", delivery_date=20270217)
+        real = _make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19000.0)
+        idx = _make_contract_index([alias, real])
+
+        price, source = pick_underlying_price("TXO", _txo_chain(), idx)
+
+        assert (price, source) == (19000.0, "TXF:TXFB7")
 
     def test_an_option_premium_reference_is_never_taken_for_the_underlying(self):
         chain = _txo_chain(reference=120.0, close=118.0)
@@ -764,6 +776,63 @@ class TestExpandOptions:
         assert result.symbols
         assert "NOT centred" in result.warnings[0]
 
+    def test_an_underlying_on_the_wrong_scale_is_not_used_to_centre_the_window(self):
+        # A x10 slip (190000 for 19000) would otherwise pin the window to the top strike without a trace.
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=190000.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        strikes = {int(s["code"][3:8]) for s in result.symbols}
+        assert strikes == {17500, 18000, 18500}
+        assert any("not within a factor of 2" in w and "190000" in w for w in result.warnings)
+
+    def test_an_underlying_slightly_beyond_the_chain_still_centres_the_window_on_the_edge_strike(self):
+        # The chain has not caught up with a real move: 19050 against strikes 17000..19000 is the market, not an error.
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19050.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        strikes = {int(s["code"][3:8]) for s in result.symbols}
+        assert strikes == {18500, 19000}
+        assert not any("median strike" in w or "Ignoring" in w for w in result.warnings)
+        assert any("beyond the TXO front strike range" in w for w in result.warnings)
+
+    def test_otm_selection_past_the_chain_edge_never_picks_an_in_the_money_call(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19050.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        result = _make_result()
+
+        _expand_options("TXO", "front", "OTM+1", {}, idx, result)
+
+        picked = {(int(s["code"][3:8]), s["code"][8]) for s in result.symbols}
+        assert picked == {(18500, "P")}  # no call is out of the money above the last strike
+
+    def test_a_strict_build_accepts_an_underlying_slightly_beyond_the_chain(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=19050.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        idx.require_underlying = True
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        assert result.errors == []
+        assert {int(s["code"][3:8]) for s in result.symbols} == {18500, 19000}
+
+    def test_strict_build_refuses_an_underlying_on_the_wrong_scale(self):
+        futures = [_make_futures_contract("TXFB7", root="TXF", delivery_date=20270217, reference=1900.0)]
+        idx = _make_contract_index(self._skewed_chain() + futures)
+        idx.require_underlying = True
+        result = _make_result()
+
+        _expand_options("TXO", "front", "ATM+1", {}, idx, result)
+
+        assert result.symbols == []
+        assert any("refusing to guess" in e for e in result.errors)
+
     def test_option_premium_reference_no_longer_steers_the_window(self):
         # reference on an option record is its premium; 120 would have picked the lowest strike.
         idx = _make_contract_index(self._skewed_chain(reference=120.0))
@@ -1030,3 +1099,22 @@ class TestExpandSpec:
         expand_spec("OPT@TXO@front@ATM+1", {}, idx, result)
         # ATM+1 → 3 strikes × C+P = 6
         assert len(result.symbols) == 6
+
+
+class TestUnderlyingOnChainScale:
+    @pytest.mark.parametrize("reference", [9000.0, 18000.0, 19050.0, 35999.0])
+    def test_a_price_within_a_factor_of_two_of_the_middle_strike_is_on_scale(self, reference):
+        from hft_platform.config._symbols_expansion import underlying_on_chain_scale
+
+        assert underlying_on_chain_scale(reference, [17000.0, 18000.0, 19000.0]) is True
+
+    @pytest.mark.parametrize("reference", [1900.0, 8999.0, 36001.0, 190000.0, 0.0])
+    def test_a_unit_slip_is_off_scale(self, reference):
+        from hft_platform.config._symbols_expansion import underlying_on_chain_scale
+
+        assert underlying_on_chain_scale(reference, [17000.0, 18000.0, 19000.0]) is False
+
+    def test_a_non_positive_middle_strike_cannot_judge_the_scale(self):
+        from hft_platform.config._symbols_expansion import underlying_on_chain_scale
+
+        assert underlying_on_chain_scale(5.0, [0.0]) is True

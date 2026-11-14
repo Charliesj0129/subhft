@@ -634,6 +634,14 @@ class TestOptionsRefreshGuards:
         assert pool._options_refresh_running is False
         assert pool._refresh_thread is None
 
+    def test_thread_is_off_by_default_so_the_universe_roll_owns_options(self, tmp_path, monkeypatch):
+        """The legacy refresh rebuilds options as the monthly TXO chain only; on by default it drops the weeklies."""
+        monkeypatch.delenv("HFT_OPTIONS_REFRESH_S", raising=False)
+        pool = self._make_pool(tmp_path)
+        pool.start_options_refresh_thread()
+        assert pool._options_refresh_running is False
+        assert pool._refresh_thread is None
+
     def test_thread_skipped_when_interval_negative(self, tmp_path):
         """Negative interval_s must also be treated as disabled."""
         pool = self._make_pool(tmp_path)
@@ -761,6 +769,49 @@ class TestOptionsRefreshGuards:
         assert result is False
         assert pool._options_expiry != "2030/04/17"
         assert not os.path.exists(out_path)
+
+    def test_strike_window_refuses_an_underlying_on_the_wrong_scale_and_retries_once_corrected(
+        self, tmp_path, monkeypatch
+    ):
+        from hft_platform.config._symbols_types import ContractIndex
+
+        slipped = {
+            "code": "TXFB0",
+            "type": "future",
+            "root": "TXF",
+            "delivery_date": "2030/03/20",
+            "reference": 208000.0,
+        }
+        pool, result, out_path = self._refresh_with_strike_range(
+            tmp_path, monkeypatch, ContractIndex(contracts=[slipped])
+        )
+
+        assert result is False  # x10 slip: not centred on the top strike, and the expiry is not marked as done
+        assert pool._options_expiry != "2030/04/17"
+        assert not os.path.exists(out_path)
+
+        corrected = {**slipped, "reference": 20800.0}
+        with (
+            mock.patch.object(type(pool), "_load_options_from_cache", return_value=self._strike_range_options()),
+            mock.patch.object(type(pool), "_contract_index", return_value=ContractIndex(contracts=[corrected])),
+        ):
+            assert pool.refresh_options_symbols() is True  # the same expiry retries once the reference is fixed
+        with open(out_path) as f:
+            codes = [s["code"] for s in yaml.safe_load(f)["symbols"] if s["code"].startswith("TXO")]
+        assert {int(code[3:8]) for code in codes} == {20700, 20800, 20900}
+
+    def test_strike_window_keeps_an_underlying_just_past_the_last_strike(self, tmp_path, monkeypatch):
+        from hft_platform.config._symbols_types import ContractIndex
+
+        future = {"code": "TXFB0", "type": "future", "root": "TXF", "delivery_date": "2030/03/20", "reference": 21050.0}
+        pool, result, out_path = self._refresh_with_strike_range(
+            tmp_path, monkeypatch, ContractIndex(contracts=[future])
+        )
+
+        assert result is True
+        with open(out_path) as f:
+            codes = [s["code"] for s in yaml.safe_load(f)["symbols"] if s["code"].startswith("TXO")]
+        assert {int(code[3:8]) for code in codes} == {20900, 21000}  # clamped to the edge, as before
 
 
 class TestSubscriptionLimitConstant:
