@@ -141,6 +141,9 @@ def map_event_to_record(
             "asks_vol": [],
             "seq_no": int(event.meta.seq),
             "trade_direction": int(event.trade_direction),
+            "total_volume": int(event.total_volume),
+            "is_simtrade": 1 if event.is_simtrade else 0,
+            "is_odd_lot": 1 if event.is_odd_lot else 0,
         }
         record.update(_instrument_fields(symbol, metadata))
         return ("market_data", record)
