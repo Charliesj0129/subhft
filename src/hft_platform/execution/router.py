@@ -235,7 +235,18 @@ class ExecutionRouter:
         self._overflow_buf = buf
 
     def _load_fill_dedup(self) -> None:
-        """Load fill dedup window from disk on startup (restart-safe dedup)."""
+        """Load fill dedup window from disk on startup (restart-safe dedup).
+
+        A damaged line leaves a hole in the window, so a replayed fill with that
+        key would be booked twice. Skips are therefore counted and logged, split
+        by where they sit (``tail`` = the last line, ``mid`` = one with good lines
+        after it). The writer is temp+fsync+rename, so neither is an expected
+        crash artefact: any skip is filesystem-level damage. The last line is the
+        newest key, the one most likely to be replayed, so it is not downgraded.
+        Dedup behaviour itself is unchanged.
+        """
+        self._fill_dedup_load_tail_skipped = 0
+        self._fill_dedup_load_mid_skipped = 0
         path = self._fill_dedup_persist_path
         if not os.path.exists(path):
             return
@@ -243,21 +254,42 @@ class ExecutionRouter:
             import orjson
 
             loaded = 0
-            with open(path, "rb") as f:
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        key = orjson.loads(raw)
+            # Stream, holding one bad line back until the next line shows whether it was
+            # the last: keys read before an I/O error stay in the window (those fills are
+            # already booked), and the tail/mid split still needs no second pass.
+            pending_bad = False
+            try:
+                with open(path, "rb") as f:
+                    for raw in f:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        if pending_bad:
+                            self._fill_dedup_load_mid_skipped += 1
+                            pending_bad = False
+                        try:
+                            key = orjson.loads(raw)
+                        except orjson.JSONDecodeError:
+                            key = None
                         if isinstance(key, str) and key:
                             self._seen_fill_ids[key] = None
                             loaded += 1
-                    except Exception:
-                        continue
+                        else:
+                            pending_bad = True
+            finally:
+                if pending_bad:
+                    self._fill_dedup_load_tail_skipped += 1
             # Enforce max size
             while len(self._seen_fill_ids) > self._fill_dedup_max_size:
                 self._seen_fill_ids.popitem(last=False)
+            if self._fill_dedup_load_mid_skipped or self._fill_dedup_load_tail_skipped:
+                logger.error(
+                    "fill_dedup_load_corrupt_lines",
+                    mid_skipped=self._fill_dedup_load_mid_skipped,
+                    tail_skipped=self._fill_dedup_load_tail_skipped,
+                    loaded=loaded,
+                    path=path,
+                )
             logger.info("fill_dedup_loaded", count=loaded, path=path)
         except Exception as exc:
             logger.warning("fill_dedup_load_failed", error=str(exc), path=path)
