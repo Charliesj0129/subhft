@@ -86,7 +86,10 @@ The `wal-loader` service moves files to `.wal/archive/` only after confirmed CK 
 ## Research Data Rotation Strategy
 
 Research data in `research/data/` is the largest uncontrolled disk consumer (~44 GB baseline,
-growing ~44 GB per major research round). The current strategy is manual:
+growing ~44 GB per major research round). Three mechanisms exist: the quarterly manual review below,
+`scripts/research_data_rotate.sh` (which `docs/operations/cron-setup-remote.md` schedules weekly) and the
+manual `make experiment-gc`. The two scripts do not implement this policy in several places; see
+"Known divergences" below before running either.
 
 ### Classification
 
@@ -95,7 +98,7 @@ growing ~44 GB per major research round). The current strategy is manual:
 | `research/data/processed/<alpha_id>/` | Training/validation datasets | Keep while alpha is active (GATE_B or above) |
 | `research/data/raw/` | Raw market data snapshots | Keep for 90 days; archive to cold storage |
 | `research/data/synthetic/` | Synthetic test datasets | Keep the latest version; delete older versions |
-| `research/experiments/runs/` | Experiment run outputs | Keep for 90 days; scorecard promoted to CK |
+| `research/experiments/runs/` | Experiment run outputs (untracked; only `.gitkeep` is in git) | `research/experiments/**` is immutable evidence (`research/AGENTS.md`), so the policy is no automatic deletion; the 90-day rule that used to be listed here is withdrawn. Scorecard promoted to CK. Two scripts still delete runs today (`research_data_rotate.sh` Tier 4 and `make experiment-gc`, see "Known divergences"); only `gc_experiment_runs` keeps gate_c-passed and promoted runs |
 
 ### MVP 發行最小樣本（release-converge-mvp）
 
@@ -116,20 +119,43 @@ growing ~44 GB per major research round). The current strategy is manual:
 
 ### Quarterly Review Procedure
 
-1. List research data by size and age:
+1. List research data by size and age (file age, not directory age: a directory's mtime does not move when an
+   existing file inside it is rewritten in place):
    ```bash
    du -sh research/data/*/ | sort -rh
    find research/data/ -name "*.npy" -mtime +90 | head -20
    ```
 
-2. For alphas in `DRAFT` or `REJECTED` status, archive their data:
+2. For alphas in `DRAFT` or `REJECTED` status, archive their data to a durable directory. It must be outside
+   `/tmp` (cleared on reboot) and outside `research/data/` (the rotation script deletes
+   `research/data/archive/*.tar.gz` after 180 days). The command refuses to run until you name the directory:
    ```bash
-   tar -czf /tmp/alpha_archive_$(date +%Y%m%d).tar.gz research/alphas/<rejected_alpha>/
+   tar -czf "${ALPHA_ARCHIVE_DIR:?set ALPHA_ARCHIVE_DIR to a durable directory}/alpha_archive_$(date +%Y%m%d).tar.gz" \
+     research/alphas/<rejected_alpha>/
    ```
 
 3. Delete synthetic datasets older than the current version (keep only `*_v<latest>.*`).
 
 4. Archive old experiment runs to cold storage if available.
+
+### Known divergences: `scripts/research_data_rotate.sh` vs this policy
+
+Read from the script (not from a host crontab; whether and how it is installed on a host is NOT VERIFIED here).
+Remove a row when the script is changed to match.
+
+| Part | This policy says | The script does | What that means |
+|---|---|---|---|
+| Invocation | Preview before deleting | `DRY_RUN="${1:-}"` (line 10): with no argument it **deletes**; only the literal `--dry-run` previews (`run_or_print`, lines 19-25). The cron line in `docs/operations/cron-setup-remote.md` has no `--dry-run` | Always run `./scripts/research_data_rotate.sh --dry-run` and read the output first |
+| Tier 1 `raw/` | Keep 90 days, archive to cold storage | Tars each directory idle for 90 days into `research/data/archive/`, then `rm -rf`s the source; deletes `research/data/archive/*.tar.gz` after 180 days | Archive-then-delete order is right, but the "cold storage" copy is on the same disk and is itself deleted at 180 days. No off-host copy is defined |
+| Tier 2 `processed/` | Keep while the alpha is active (GATE_B or above) | `rm -rf`s every `processed/<dir>` idle for 90 days except `smoke`; never reads alpha status; archives nothing first | An active alpha's dataset can be deleted. "Idle" is the **directory** mtime, which an in-place rewrite of an existing file does not refresh |
+| Tier 3 `synthetic/` | Keep the latest version | Keeps the newest file per subdirectory (`ls -t`) | Matches in effect: "newest" is by mtime, not by version number |
+| Tier 4 `experiments/runs/` | No automatic deletion (`research/AGENTS.md`: `research/experiments/**` is immutable evidence) | `rm -rf`s every run directory idle for 90 days, with no protection | Not recoverable from git: `.gitignore` tracks only `runs/.gitkeep`. The protection logic (skip gate_c-passed and promoted runs, dry-run by default) exists only in `gc_experiment_runs` (`src/hft_platform/alpha/experiments.py`), which nothing outside tests calls |
+| `make experiment-gc` (`scripts/experiment_gc.py`) | No automatic deletion (same rule) | A manual target (`Makefile:762-766`); nothing in the repo schedules it. With no flag it **deletes**; only `--dry-run` previews. It removes run directories under `runs/` and under `validations/<alpha>/` that are older than 90 days, keeping the newest 3 per alpha. Age is the `YYYYMMDDTHHMMSSZ` prefix of the directory name when it has one, else the directory mtime. It reads only `alpha_id` from `meta.json`, so gate_c-passed and promoted runs are not protected. No test covers it | A second deleter, weaker than `gc_experiment_runs`. Files git tracks under `validations/` can be restored with git; the bulk types `.gitignore:127-135` excludes (npz, npy, parquet, feather, arrow, h5, pkl, csv, json) cannot unless they were force-added, and `runs/` is never tracked. `.agent/skills/hft-alpha-research/references/factory.md:40` lists the target without this warning |
+
+Tiers 1, 2 and 4 age-test the directory mtime, while the quarterly review above uses file age (`find -name "*.npy" -mtime +90`).
+The file test is the right one. Candidate fix: `fix/research-rotate-safe-defaults` (dry-run unless `--apply`, skip
+alphas at GATE_B or above, route Tier 4 and `make experiment-gc` through `gc_experiment_runs` or remove them). Whether
+either stays at all is an open decision for the repository owner.
 
 ### Future Automation (TODO)
 
@@ -179,3 +205,4 @@ Total Docker log ceiling: ~2.8 GB. Docker logs are stored in
 | Date | Change | Author |
 |---|---|---|
 | 2026-03-02 | Initial policy created after disk crisis post-mortem | claude-sonnet-4-6 |
+| 2026-10-16 | Research rotation: archive location moved off `/tmp`, experiments retention aligned with `research/AGENTS.md`, known divergences of `research_data_rotate.sh` and `experiment_gc.py` recorded | claude-sonnet-5-5 |
