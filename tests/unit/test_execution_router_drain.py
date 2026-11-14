@@ -9,6 +9,7 @@ import pytest
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
 from hft_platform.core import timebase
 from hft_platform.execution.normalizer import RawExecEvent
+from hft_platform.execution.router import fill_dedup_key
 
 
 def _make_deal_raw(fill_id: str = "F001", symbol: str = "2330") -> RawExecEvent:
@@ -95,8 +96,8 @@ async def test_stop_skips_duplicate_fills_during_drain(router_parts):
 
     fill = _make_fill("F001")
     normalizer.normalize_fill.return_value = fill
-    # Pre-register the fill_id as already seen
-    router._seen_fill_ids["F001"] = None
+    # Pre-register the deal's dedup key as already seen
+    router._seen_fill_ids[fill_dedup_key(fill)] = None
     raw_queue.put_nowait(_make_deal_raw("F001"))
 
     drained = await router.stop(drain_timeout_s=1.0)
