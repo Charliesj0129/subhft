@@ -1969,7 +1969,7 @@ class OrderAdapter:
         *,
         verified: bool,
         state: _StaleVerify,
-        now_mono: float,
+        now_mono: float,  # precision-time: monotonic seconds, not a price
     ) -> None:
         """Hand back the slot of a held stale order (already out of ``live_orders``).
 
