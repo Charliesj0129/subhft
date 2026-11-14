@@ -38,7 +38,9 @@
     burst was drained in one loop step and blocked execution reports for 25-50 ms (THESHOW day session, 2026-10-21).
     The default was 8 until 2026-11: at ~600 us of CPU per feed event an 8-message step still produced 400-1,300
     probe overshoots >10 ms per hour in the day session, scaling with tick volume (ExecutionLagHigh after the
-    10/28 deploy). A yield costs ~2.4 us.
+    10/28 deploy). A yield costs ~2.4 us. `ExecutionLagHigh` (2026-11-13) fires when more than 5% of the reports in
+    the last 10 minutes were over 10 ms (`le="1e+07"` bucket), held for 10 minutes and with at least 100 reports in
+    the window; the earlier p99-over-30-seconds form paged on a single slow report.
 
 ## 3) Strategy / Risk
 - `strategy_latency_ns`

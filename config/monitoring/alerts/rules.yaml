@@ -246,8 +246,13 @@ groups:
   # only when it is known to be one: never sent (connection_error) or never
   # answered within the phantom TTL (outcome_unresolved). stormguard_halt is a
   # HALT doing its job and broker_backpressure a refusal; neither pages here.
+  #
+  # 2026-11-13: outcome_unresolved is excluded too. 7 days on THESHOW: the
+  # reason=outcome_unresolved adds equalled phantom_recovery_releases_total
+  # exactly (17 vs 17, same timestamps), and those already page as
+  # OrderOutcomeUnresolved{outcome="phantom_ttl_release"}: a double page.
   - alert: OrderDeadLetterQueueGrowing
-    expr: sum by (reason) (increase(order_dlq_adds_total{reason!~"broker_backpressure|stormguard_halt"}[30m])) > 0
+    expr: sum by (reason) (increase(order_dlq_adds_total{reason!~"broker_backpressure|stormguard_halt|outcome_unresolved"}[30m])) > 0
     for: 0s
     labels:
         severity: warning
@@ -287,18 +292,43 @@ groups:
   #                                    expired and released
   #   live_order_ttl_release           a live order swept with no terminal
   #   phantom_ttl_release              a phantom released with no Trade at all
+  #   claim_misattributed              a fill was booked to a phantom whose own
+  #                                    Trade then proved it was another order's;
+  #                                    the phantom's working order was cancelled
+  #                                    (phantom_claim_total{outcome="misattributed"},
+  #                                    exported by fix/fill-identity-stale-orders;
+  #                                    empty until that build is deployed)
   # The three phantom_bound_total children are created at 0 by MetricsRegistry:
   # increase() over a series born at 1 is 0, which is how the first
   # cancel_timeout (2026-10-29 15:10Z) and the only fill_claimed_after_expiry
   # (15:38Z) went unseen. Over 10/28-11/01 this would have paged for 2 windows,
   # both in the 10/29 15Z RTT storm, against 9 for the DLQ rule above.
+  #
+  # 2026-11-13, split by broker stall. 7 days on THESHOW: 21 raw runs, each
+  # exactly 30 m (the increase() window); keep_firing_for: 1h merges them to 9.
+  # Every phantom_ttl_release run (4/4) and every fill_claimed_after_expiry run
+  # (3/3) had a >= 10 s order_broker_silence_seconds stall in the prior 30
+  # minutes (the paper server's 30 s place_order SDK timeouts): a phantom is a
+  # timed-out call, so these two follow a stall by construction and they page
+  # as a WARNING during one (OrderOutcomeUnresolvedDuringBrokerStall below).
+  # cancel_gave_up and live_order_ttl_release include runs with no stall and no
+  # confirmed broker terminal: real defect candidates, critical unconditionally.
+  #
+  # Stall look-back 40m, not 30m: a phantom releases <= 300 s after its stall, so [30m] pages critical in a run's last 5 min.
   - alert: OrderOutcomeUnresolved
     expr: |
-      sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
-      or label_replace(sum(increase(cancel_unconfirmed_total{outcome="gave_up"}[30m])) > 0, "outcome", "cancel_gave_up", "", "")
+      label_replace(sum(increase(cancel_unconfirmed_total{outcome="gave_up"}[30m])) > 0, "outcome", "cancel_gave_up", "", "")
       or label_replace(sum(increase(live_order_ttl_releases_total[30m])) > 0, "outcome", "live_order_ttl_release", "", "")
-      or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+      or label_replace(sum(increase(phantom_claim_total{outcome="misattributed"}[30m])) > 0, "outcome", "claim_misattributed", "", "")
+      or (
+        (
+          sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
+          or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+        )
+        unless on() (max_over_time(order_broker_silence_seconds[40m]) >= 10)
+      )
     for: 0s
+    keep_firing_for: 1h
     labels:
         severity: critical
     annotations:
@@ -313,6 +343,30 @@ groups:
           `cancel_unconfirmed_total{outcome="gave_up"}` says a cancel was left
           to the TTL.
 
+  # The stall half of the two outcomes a broker stall explains
+  # (phantom_ttl_release, fill_claimed_after_expiry); the other half pages
+  # critical above. Same terms, same labels, complementary condition.
+  - alert: OrderOutcomeUnresolvedDuringBrokerStall
+    expr: |
+      (
+        sum by (outcome) (increase(phantom_bound_total{outcome="fill_claimed_after_expiry"}[30m])) > 0
+        or label_replace(sum(increase(phantom_recovery_releases_total[30m])) > 0, "outcome", "phantom_ttl_release", "", "")
+      )
+      and on() (max_over_time(order_broker_silence_seconds[40m]) >= 10)
+    for: 0s
+    keep_firing_for: 1h
+    labels:
+        severity: warning
+    annotations:
+        summary: "An order outcome is unresolved after a broker stall ({{ $labels.outcome }})"
+        description: |
+          {{ $value | printf "%.0f" }} in 30m, and order_broker_silence_seconds
+          reached >= 10 s in the last 40 minutes. A timed-out place_order is a
+          phantom that is released unanswered after the TTL, which is what a
+          broker stall produces. Still compare the broker's open orders and
+          positions with the platform; the engine log events are
+          `phantom_recovery_swept` and `phantom_fill_resolved_via_expired_phantom`.
+
   # Broker back-pressure (2026-11-02, order/broker_stall.py): new orders are held
   # while the oldest broker call sent after the last answer has waited >= 1 s,
   # and STORM is entered at 10 s. On the paper broker a stall is usually 3-30 s
@@ -320,19 +374,28 @@ groups:
   # stall reaching 10 s is worth a look; held for most of 15 minutes, the
   # broker is not answering and nothing new is trading.
   - alert: BrokerPathSilent
-    expr: max_over_time(order_broker_silence_seconds[5m]) >= 10
+    # Sustained, not a single sample (2026-11-13). One 10 s stall already sent
+    # StormGuard to STORM by itself (30 s cooldown) and the paper broker has
+    # them on a clock even on its good days (hourly at :35:07, every 5 minutes
+    # at :00:07/:05:07). 7 days on THESHOW: the old max_over_time(...[5m]) >= 10
+    # was 39 runs; quiet days (11-09, 11-10, 11-13) never had more than 4 of the
+    # 60 15 s steps in a 15-minute window at >= 10 s, the 11-11 and 11-12
+    # incidents had 9 and 19. 6 steps = 90 s sits between them.
+    # $value is the seconds spent at >= 10 s in the last 15 minutes.
+    expr: 15 * sum_over_time((order_broker_silence_seconds >= bool 10)[15m:15s]) > 90
     for: 0s
+    keep_firing_for: 10m
     labels:
         severity: warning
     annotations:
-        summary: "The broker left an order call unanswered for {{ $value | printf \"%.0f\" }}s"
+        summary: "The broker left an order call unanswered for >= 10 s for {{ $value | printf \"%.0f\" }}s of the last 15 minutes"
         description: |
-          order_broker_silence_seconds reached 10 s in the last 5 minutes, so
-          StormGuard went to STORM (reduce-only) for at least its 30 s cooldown.
-          New orders were held while it lasted; cancels and reducing orders were
-          not. Check `place_order_late_result` in the engine log for the late
-          answers and the quote feed's latency for the same minutes: if quotes
-          were on time, the stall is at the broker's order server.
+          order_broker_silence_seconds was >= 10 s for more than 90 s of the
+          last 15 minutes, so StormGuard was in STORM (reduce-only) for much of
+          it. New orders were held while it lasted; cancels and reducing orders
+          were not. Check `place_order_late_result` in the engine log for the
+          late answers and the quote feed's latency for the same minutes: if
+          quotes were on time, the stall is at the broker's order server.
 
   - alert: BrokerPathMostlySilent
     # A count, not avg_over_time: an average over a window with only a few
@@ -341,6 +404,8 @@ groups:
     # history exists.
     expr: sum_over_time((order_broker_silence_seconds >= bool 1)[15m:15s]) > 30
     for: 0s
+    # One degraded session was 8 runs on 11-12 (flapping around the 50% line).
+    keep_firing_for: 10m
     labels:
         severity: critical
     annotations:
@@ -736,14 +801,24 @@ groups:
         runbook_url: "docs/runbooks/HighRejectRate.md"
 
   # Execution Health
+  # A share, not a p99 over 30 s (2026-11-13). The old rule's p99 over a 30 s
+  # window was the max of ~33 samples, so one report over 10 ms paged: 222
+  # firings in 7 days (11-06..11-13) on THESHOW, 73% with exactly one slow
+  # report. The share of reports over 10 ms > 5% backtests to 0 firings that
+  # week and still fires on the 2026-10-21 congestion (14% of reports > 10 ms).
+  # le="1e+07" is the 10,000,000 ns bucket edge of execution_router_lag_ns; the
+  # count guard keeps a quiet 10 minutes from deciding on a handful of reports.
   - alert: ExecutionLagHigh
-    expr: histogram_quantile(0.99, sum(rate(execution_router_lag_ns_bucket[30s])) by (le)) > 1e7
-    for: 30s
+    expr: |
+      (1 - sum(increase(execution_router_lag_ns_bucket{le="1e+07"}[10m]))
+         / sum(increase(execution_router_lag_ns_count[10m]))) > 0.05
+      and on() sum(increase(execution_router_lag_ns_count[10m])) >= 100
+    for: 10m
     labels:
         severity: warning
     annotations:
         summary: "Execution Lag High"
-        description: "P99 execution report lag > 10ms."
+        description: "More than 5% of execution reports waited over 10 ms in the router for 10 minutes."
 
   - alert: QueueDepthSpike
     expr: max_over_time(queue_depth[30s]) > 1000
@@ -1001,13 +1076,15 @@ groups:
         description: "Execution router heartbeat has not been updated for > 120s; router may be hung or crashed."
 
   - alert: ExecutionRouterLagP99High
-    expr: histogram_quantile(0.99, sum(rate(execution_router_lag_ns_bucket[1m])) by (le)) > 5e7
-    for: 1m
+    expr: |
+      histogram_quantile(0.99, sum(rate(execution_router_lag_ns_bucket[10m])) by (le)) > 5e7
+      and on() sum(increase(execution_router_lag_ns_count[10m])) >= 100
+    for: 5m
     labels:
         severity: warning
     annotations:
         summary: "Execution router lag p99 high"
-        description: "Execution router lag p99 exceeded 50ms for 1m."
+        description: "Execution router lag p99 over 10m exceeded 50ms for 5m (at least 100 reports)."
 
   # CE-M3 WAL SLO
   - alert: WALReplayLagHigh
@@ -1182,24 +1259,24 @@ groups:
         summary: "Strategy exceptions rate high"
         description: "Strategy exception rate > 0.1/s for 2 minutes."
 
-  # Portfolio drawdown
-  - alert: PortfolioDrawdownHigh
-    expr: portfolio_drawdown_pct > 0.05
-    for: 1m
-    labels:
-        severity: warning
-    annotations:
-        summary: "Portfolio drawdown > 5%"
-        description: "Portfolio has drawn down more than 5% from peak realized PnL."
-
-  - alert: PortfolioDrawdownCritical
+  # Portfolio drawdown -- informational only, never a page.
+  # ``portfolio_drawdown_pct`` is NOT the risk gate. It is (peak - now) / peak over the
+  # cumulative GROSS realized PnL (fees and unrealized excluded; the denominator is the
+  # whole sim ledger, ~190-220k NTD), with peak = the intraday high-water mark re-based at the
+  # 21:00Z roll. The gate is DailyLossLimitValidator: the day's net change (gross - fees +
+  # today's unrealized) against soft 500 / hard 15,000 NTD, and StormGuard reads no PnL.
+  # 2026-11-05..13 the old warning/critical pair fired 1,776 / 1,096 min on days whose gross
+  # realized PnL closed positive (the critical only on net-positive days), never during a
+  # StormGuard HALT, and was silent through the 11-05 hard-limit HALT (gauge 0.0: cumulative
+  # PnL < the 10,000 NTD cold-start floor). A halt is paged by StormGuardHalt / ManualLatchActive.
+  - alert: PortfolioRealizedGivebackInfo
     expr: portfolio_drawdown_pct > 0.10
-    for: 0s
+    for: 5m
     labels:
-        severity: critical
+        severity: info
     annotations:
-        summary: "Portfolio drawdown > 10%"
-        description: "Portfolio drawdown exceeded 10%. StormGuard reads no PnL, so this does not halt; the daily-loss hard limit is the only loss stop."
+        summary: "Realized gross PnL gave back > 10% of its intraday peak"
+        description: "Gross realized PnL fell more than 10% below its intraday high-water mark. Not the risk gate: fees and unrealized are excluded; the daily-loss limit judges the day's net change."
 
   # Redis health monitoring removed 2026-04-24 — engine does not probe Redis
   # (no `redis` Python module in engine container; only the separate monitor
@@ -1519,13 +1596,23 @@ groups:
   #
   # `strategy_inflight_oids` carries {strategy, side} only, so the join is on
   # those two labels and pending is summed over symbol first.
+  #
+  # 2026-11-13: not while a phantom order candidate is in the last 10 minutes.
+  # A timed-out place_order is counted as pending and tracked in no in-flight
+  # set until its phantom resolves (<= 300 s). THESHOW 11-12 05:00-05:25Z paged
+  # on chained phantom SELLs (releases at 04:55:48, 05:08:43, 05:15:38,
+  # 05:25:23), not a leak. Each candidate restarts the `for: 15m` clock, so a
+  # real leak is reported at most 10 minutes later than before.
   - alert: StrategyPendingWithNoInflightOrder
     expr: |
       (
-        (sum by (strategy, side) (strategy_pending_qty) > 0)
-        and on(strategy, side) (strategy_inflight_oids == 0)
+        (
+          (sum by (strategy, side) (strategy_pending_qty) > 0)
+          and on(strategy, side) (strategy_inflight_oids == 0)
+        )
+        and on() market_trading_hours_active == 1
       )
-      and on() market_trading_hours_active == 1
+      unless on() (sum(increase(phantom_order_candidates_total[10m])) > 0)
     for: 15m
     labels:
       severity: warning

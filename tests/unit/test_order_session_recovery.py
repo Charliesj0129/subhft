@@ -145,6 +145,7 @@ class _StubSystem:
     """
 
     _check_order_session_once = HFTSystem._check_order_session_once
+    _reconnect_order_session = HFTSystem._reconnect_order_session
 
     def __init__(self, *, failures: int, reconnect_result=True, with_callbacks: bool = True):
         self.order_adapter = SimpleNamespace(consecutive_session_errors=failures)

@@ -627,3 +627,25 @@ def test_slo_order_success_30m_recording_rule_is_defined_and_idle_safe():
     assert "[5m]" not in expr, expr
     assert expr.count("or vector(0)") == 3, expr  # actions (numerator), actions and rejects (denominator)
     assert "clamp_min(" in expr, expr
+
+
+def test_order_dlq_alert_does_not_page_the_reason_that_pages_as_a_phantom_release():
+    """reason=outcome_unresolved adds equal phantom_recovery_releases_total (17 vs 17 over 7 days on THESHOW),
+    which already pages as OrderOutcomeUnresolved{outcome="phantom_ttl_release"}."""
+    expr = _load_alerts_by_name()["OrderDeadLetterQueueGrowing"]["expr"]
+
+    match = re.search(r'reason!~"([^"]+)"', expr)
+    assert match, expr
+    assert {"broker_backpressure", "stormguard_halt", "outcome_unresolved"} <= set(match.group(1).split("|"))
+    # connection_error is still a dead-letter page.
+    assert "connection_error" not in match.group(1)
+
+
+def test_strategy_pending_alert_is_quiet_while_phantom_candidates_arrive():
+    """Chained phantom SELLs (11-12 05:00-05:25Z) are not a leak; each candidate restarts the `for:` clock."""
+    rule = _load_alerts_by_name()["StrategyPendingWithNoInflightOrder"]
+
+    assert "unless on() (sum(increase(phantom_order_candidates_total[10m])) > 0)" in rule["expr"]
+    assert "strategy_inflight_oids == 0" in rule["expr"]
+    assert "market_trading_hours_active == 1" in rule["expr"]
+    assert rule["for"] == "15m"

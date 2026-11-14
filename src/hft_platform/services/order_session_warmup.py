@@ -39,7 +39,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -59,6 +59,7 @@ DEFAULT_LEAD_S = 300.0
 DEFAULT_TICK_S = 30.0
 DEFAULT_ATTEMPTS = 10
 DEFAULT_RETRY_INTERVAL_S = 3.0
+DEFAULT_RECONNECT_AFTER = 2
 
 
 class _WarmableClient(Protocol):
@@ -143,6 +144,10 @@ class OrderSessionWarmup:
         "_product_type",
         "_metrics",
         "_window_source",
+        "_reconnect_after",
+        "_exhausted_batches",
+        "_reconnect_requested",
+        "on_exhausted",
     )
 
     def __init__(
@@ -156,6 +161,8 @@ class OrderSessionWarmup:
         product_type: str = "future",
         metrics: Any | None = None,
         window_source: Callable[[], tuple[bool, bool] | None] | None = None,
+        reconnect_after: int | None = None,
+        on_exhausted: Callable[[str], Awaitable[Any]] | None = None,
     ) -> None:
         self._client = client
         self._clock = WarmupClock(_pick(lead_s, "HFT_ORDER_WARMUP_LEAD_S", DEFAULT_LEAD_S))
@@ -167,6 +174,19 @@ class OrderSessionWarmup:
         self._retry_interval_s = _pick(retry_interval_s, "HFT_ORDER_WARMUP_RETRY_S", DEFAULT_RETRY_INTERVAL_S)
         self._product_type = product_type
         self._metrics = metrics
+        # A probe that keeps failing is a session that will not heal by waiting
+        # (THESHOW 2026-11-13: five exhausted probe batches in one pre-open
+        # window, then a relogin fixed it in 2 s). After `reconnect_after`
+        # exhausted batches the hook asks the owner of the guarded reconnect path
+        # to relogin -- at most ONCE per pre-open window: a second relogin close
+        # to the open could leave the session logged out at the bell. This class
+        # never touches the broker beyond the probe. Set by HFTSystem once the
+        # order watchdog exists.
+        picked = _pick(reconnect_after, "HFT_ORDER_WARMUP_RECONNECT_AFTER", DEFAULT_RECONNECT_AFTER)
+        self._reconnect_after = max(1, int(picked))
+        self._exhausted_batches = 0
+        self._reconnect_requested = False
+        self.on_exhausted = on_exhausted
 
     @property
     def clock(self) -> WarmupClock:
@@ -209,6 +229,7 @@ class OrderSessionWarmup:
                 ok = False
             if ok:
                 self._bump("ok")
+                self._exhausted_batches = 0
                 logger.info("order_session_warmed", attempts=attempt)
                 return True
             if attempt < max(1, self._attempts):
@@ -242,12 +263,45 @@ class OrderSessionWarmup:
                     )
                     if plan.warm:
                         logger.info("order_session_warmup_window", reason=plan.reason, lead_s=self._clock.lead_s)
-                        self._clock.mark(await self.warm_once())
+                        ok = await self.warm_once()
+                        self._clock.mark(ok)
+                        if not ok:
+                            await self._on_batch_exhausted()
+                    else:
+                        # Outside a pre-open window (open, closed, already warm):
+                        # the next window starts with a fresh relogin budget.
+                        self._exhausted_batches = 0
+                        self._reconnect_requested = False
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 — one bad tick must not end the clock
                 logger.warning("order_session_warmup_tick_failed", error=str(exc))
             await asyncio.sleep(self._tick_s)
+
+    async def _on_batch_exhausted(self) -> None:
+        """Ask for a guarded relogin once enough probe batches have failed.
+
+        At most one request per pre-open window (``run`` clears the flag when
+        the window ends), even if the hook raises.
+        """
+        self._exhausted_batches += 1
+        if self._reconnect_requested or self._exhausted_batches < self._reconnect_after:
+            return
+        count = self._exhausted_batches
+        hook = self.on_exhausted
+        if hook is None:
+            # Startup recovery can still be running (HFTSystem attaches the hook
+            # after it); keep the count so the next failed batch asks again.
+            logger.warning("order_session_warmup_reconnect_unavailable", exhausted_batches=count)
+            return
+        self._reconnect_requested = True
+        logger.warning("order_session_warmup_reconnect_requested", exhausted_batches=count)
+        try:
+            await hook("order_warmup_exhausted")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — one bad hook must not end the clock
+            logger.warning("order_session_warmup_reconnect_failed", error=str(exc))
 
     def _bump(self, result: str) -> None:
         metrics = self._metrics

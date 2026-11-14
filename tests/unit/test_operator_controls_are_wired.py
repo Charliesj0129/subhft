@@ -137,7 +137,15 @@ class TestTelegramStop:
             def add_error_handler(self, _h):
                 pass
 
-        builder = SimpleNamespace(token=lambda _t: SimpleNamespace(build=lambda: _App()))
+        class _Builder:
+            # Chainable like PTB's ApplicationBuilder (token/post_init/post_shutdown).
+            def __getattr__(self, _name):
+                return lambda *_a, **_k: self
+
+            def build(self):
+                return _App()
+
+        builder = _Builder()
         ext = types.ModuleType("telegram.ext")
         ext.Application = SimpleNamespace(builder=lambda: builder)
         ext.CommandHandler = _CommandHandler

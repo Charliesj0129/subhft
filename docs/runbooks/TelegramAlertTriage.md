@@ -6,10 +6,12 @@ surface problems before re-arming the platform.
 
 ## Scope
 
-This covers alerts delivered through Alertmanager to the engine webhook:
+This covers alerts delivered through Alertmanager to the bridge webhook, which
+runs in hft-bot since 2026-11-13 (before that it ran inside hft-engine and went
+down with it):
 
 ```text
-Alertmanager -> hft-engine:8081/webhook/alertmanager -> Telegram
+Alertmanager -> hft-bot:8081/webhook/alertmanager -> Telegram
 ```
 
 Primary alerts in this incident class:
@@ -111,9 +113,12 @@ manual_rearm_required{scope="platform"} 0.0
 
 ## Alertmanager Retries and Duplicate Telegram Messages
 
-Duplicate Telegram messages can be expected when Alertmanager cannot deliver to
-`hft-engine:8081` during an engine restart. Confirm whether this is delivery
-retry behavior before treating it as a new incident:
+Duplicate Telegram messages can be expected when Alertmanager retries a
+delivery: the bridge answers 503 when the Telegram send fails (so Alertmanager
+retries instead of dropping the alert), and a retried multi-part message can
+repeat parts that already went out; an hft-bot restart also makes deliveries
+fail until it is back. Confirm whether this is delivery retry behavior before
+treating it as a new incident:
 
 ```bash
 docker compose logs --tail=200 alertmanager
