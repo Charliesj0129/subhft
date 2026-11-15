@@ -24,7 +24,7 @@ Exchange → BrokerFacade (Shioaji|Fubon)
 | Top-level | 5+ | `Normalizer`, `LOBEngine`, `broker_registry`, `protocols` | Shared normalization, LOB, broker abstractions |
 | `_base/` | 3+ | `BaseBrokerSessionRuntime`, `BaseQuoteWatchdog`, `CooldownManager` | Shared broker abstractions |
 | `shioaji/` | 20 | `ShioajiClientFacade`, `ShioajiClient`, `TickDispatcher`, `ReconnectOrchestrator` | Full Shioaji integration |
-| `fubon/` | 14 | `FubonClientFacade`, `FubonQuoteRuntime` | Full Fubon integration |
+| `fubon/` | 14 | `FubonClientFacade`, `FubonQuoteRuntime` | Integration incomplete; see [Fubon status](../guides/feed-adapter.md#1c-fubon-設定) |
 
 ## Broker Registry Pattern
 
