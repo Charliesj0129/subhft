@@ -44,7 +44,7 @@ def audit_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "if code:\n"
         "    print('lock export error', file=sys.stderr); sys.exit(code)\n"
         "if os.environ.get('AUDIT_EMPTY_EXPORT') != '1':\n"
-        "    pathlib.Path(args[args.index('--output-file') + 1]).write_text('numpy==2.2.0\\n')\n"
+        "    pathlib.Path(args[args.index('--output-file') + 1]).write_text(os.environ.get('AUDIT_EXPORT', 'numpy==2.2.0\\n'))\n"
     )
     uv.chmod(0o755)
     modules = root / "modules"
@@ -57,7 +57,10 @@ def audit_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "pathlib.Path('audit-args.json').write_text(json.dumps(args))\n"
         "if '--requirement' in args:\n"
         "    requirements = pathlib.Path(args[args.index('--requirement') + 1])\n"
+        "    names = [line.split('==')[0] for line in requirements.read_text().splitlines()]\n"
+        "    if len(names) != len(set(names)): print('duplicate package'); sys.exit(2)\n"
         "    pathlib.Path('audited-requirements.txt').write_text(requirements.read_text())\n"
+        "    with pathlib.Path('all-audited.txt').open('a') as output: output.write(requirements.read_text())\n"
         "print(os.environ.get('AUDIT_MESSAGE', 'No known vulnerabilities found'))\n"
         "sys.exit(int(os.environ.get('AUDIT_SCANNER_STATUS', '0')))\n"
     )
@@ -69,6 +72,7 @@ def audit_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "AUDIT_MISSING_SCANNER",
         "AUDIT_SCANNER_STATUS",
         "AUDIT_MESSAGE",
+        "AUDIT_EXPORT",
     ):
         monkeypatch.delenv(variable, raising=False)
     return root
@@ -92,6 +96,32 @@ def test_security_audit_complete_lock_clean_result(audit_repo: Path) -> None:
     assert (audit_repo / "audited-requirements.txt").read_text() == "numpy==2.2.0\n"
     assert "No known vulnerabilities found" in (audit_repo / "audit-output.txt").read_text()
     assert "private Fubon SDK" in result.stdout
+
+
+def test_security_audit_includes_all_platforms_and_versions(audit_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "AUDIT_EXPORT",
+        "example==1.0 ; sys_platform == 'win32'\nexample==2.0 ; sys_platform == 'linux'\n"
+        "other==3.0 ; python_version < '3.12'\n",
+    )
+    result = run_audit(audit_repo)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert set((audit_repo / "all-audited.txt").read_text().splitlines()) == {
+        "example==1.0",
+        "example==2.0",
+        "other==3.0",
+    }
+
+
+@pytest.mark.parametrize("export", ["example>=1.0\n", "example @ https://example.com/example.whl\n", "# empty\n"])
+def test_security_audit_rejects_unusable_exports(
+    audit_repo: Path, monkeypatch: pytest.MonkeyPatch, export: str
+) -> None:
+    monkeypatch.setenv("AUDIT_EXPORT", export)
+    result = run_audit(audit_repo)
+    assert result.returncode != 0
+    assert "invalid locked dependency export" in result.stdout
+    assert not (audit_repo / "audit-args.json").exists()
 
 
 @pytest.mark.parametrize("status,message", [(1, "vulnerability found"), (2, "database or network error")])

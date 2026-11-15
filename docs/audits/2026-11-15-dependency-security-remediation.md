@@ -1,5 +1,13 @@
 # Dependency security remediation, 2026-11-15
 
+**2026-11-16 follow-up:** The inventory and test results below describe the
+original remediation. Torch and stable-baselines3 were subsequently removed
+from the research group and lock, which also removed their fsspec dependency.
+The TorchScript and Torch ONNX exporter tests and the Torch-specific onnx-ir
+constraint were removed; ONNX CPU inference remains covered separately. Alerts
+for Torch and fsspec therefore require verification as removed dependencies,
+not as upgrades. See the current lock and fresh scan results for current state.
+
 [STATUS] Local dependency remediation, full local CI and research checks
 verified. No push, merge, deployment or broker session is part of this change.
 
