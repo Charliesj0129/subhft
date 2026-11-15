@@ -1,6 +1,6 @@
 # Dependency Audit SOP (Quarterly)
 
-Last reviewed: 2026-03-18
+Last reviewed: 2026-11-15
 
 ## Schedule
 
@@ -11,10 +11,15 @@ Run quarterly (Q1/Q2/Q3/Q4 first week). Assign owner in the team rotation.
 ### 1.1 Run pip-audit
 
 ```bash
-uv run pip-audit --strict --desc
+uv sync --locked --dev
+make security-audit
 ```
 
-Review output for known CVEs. Any CRITICAL or HIGH severity finding blocks release.
+The target exports the locked runtime, dev, research, bot and monitor dependencies
+and runs `pip-audit --strict --no-deps --disable-pip`. Research packages need not
+be installed to scan them. Any vulnerability or tool/export/network failure fails
+the audit; there is no `pip check` fallback. Review `audit-output.txt` for the
+result. The private Fubon SDK is not in the public lock and is not covered.
 
 ### 1.2 Check for outdated packages
 
@@ -37,8 +42,8 @@ Ensure `uv.lock` is consistent with `pyproject.toml`.
 ### 2.1 Install and run cargo-audit
 
 ```bash
-cargo install cargo-audit  # first time only
-cargo audit --file rust_core/Cargo.lock
+cargo install cargo-audit --locked  # first time only
+cargo audit --file Cargo.lock
 ```
 
 ### 2.2 Check for outdated crates
@@ -92,8 +97,8 @@ cargo geiger --manifest-path rust_core/Cargo.toml
 
 ## 5. Audit Checklist
 
-- [ ] Python `pip-audit` clean (no CRITICAL/HIGH)
-- [ ] Rust `cargo audit` clean (no CRITICAL/HIGH)
+- [ ] Python `make security-audit` clean (no known vulnerabilities)
+- [ ] Rust `cargo audit --file Cargo.lock` clean (no known vulnerabilities)
 - [ ] Outdated packages reviewed and updated where safe
 - [ ] CI passes on updated dependencies
 - [ ] Benchmark shows no regression >5%

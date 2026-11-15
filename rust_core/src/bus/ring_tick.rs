@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 
 #[derive(Clone)]
 pub(crate) struct TickFrame {
@@ -54,21 +55,24 @@ impl FastTickRingBuffer {
         });
     }
 
-    pub fn get<'py>(&self, py: Python<'py>, idx: usize) -> Option<PyObject> {
+    pub fn get<'py>(&self, py: Python<'py>, idx: usize) -> PyResult<Option<Py<PyAny>>> {
         let slot = idx % self.size;
-        self.buffer[slot].as_ref().map(|f| {
-            (
-                "tick",
-                f.symbol.clone(),
-                f.price,
-                f.volume,
-                f.total_volume,
-                f.is_simtrade,
-                f.is_odd_lot,
-                f.exch_ts,
-            )
-                .into_py(py)
-        })
+        self.buffer[slot]
+            .as_ref()
+            .map(|f| {
+                (
+                    "tick",
+                    f.symbol.clone(),
+                    f.price,
+                    f.volume,
+                    f.total_volume,
+                    f.is_simtrade,
+                    f.is_odd_lot,
+                    f.exch_ts,
+                )
+                    .into_py_any(py)
+            })
+            .transpose()
     }
 }
 

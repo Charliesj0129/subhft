@@ -307,16 +307,9 @@ render-incident-timeline-json: ## Render incident timeline JSON from nightly_tra
 render-incident-timeline-md: ## Render incident timeline markdown from nightly_trace.jsonl
 	PYTHONPATH=src $(PY) scripts/render_incident_timeline.py nightly_trace.jsonl --format md --out diagnostics_timeline.md
 
-security-audit: ## Dependency security scan with pip-audit fallback to pip check
-	@set -e; \
-	if uv run python -c "import pip_audit" >/dev/null 2>&1; then \
-		rc=0; uv run python -m pip_audit --progress-spinner off > audit-output.txt || rc=$$?; \
-		cat audit-output.txt; exit $$rc; \
-	else \
-		echo "pip-audit unavailable; fallback to pip check" > audit-output.txt; \
-		rc=0; uv run python -m pip check >> audit-output.txt || rc=$$?; \
-		cat audit-output.txt; exit $$rc; \
-	fi
+security-audit: ## Fail-closed audit of all public locked Python dependency groups and extras
+	@rc=0; uv run --locked --no-sync python scripts/security_audit.py > audit-output.txt 2>&1 || rc=$$?; \
+	cat audit-output.txt; exit $$rc
 
 latency-audit: ## Validate alpha scorecards declare latency profile + pass Gate D 80% tolerance
 	uv run python -m hft_platform.alpha.latency_audit --strict

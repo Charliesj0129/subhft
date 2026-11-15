@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct PriceLevel {
     #[pyo3(get, set)]
     pub price: f64,
@@ -12,7 +12,7 @@ pub struct PriceLevel {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[pyclass]
+#[pyclass(from_py_object)]
 pub struct LimitOrderBook {
     #[pyo3(get)]
     pub symbol: String,

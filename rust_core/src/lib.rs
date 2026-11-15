@@ -40,7 +40,7 @@ mod normalizer_lob_fused;
 mod typed_ring;
 
 /// The HFT Platform Rust Core Module
-#[pymodule]
+#[pymodule(gil_used = true)]
 fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<lob::LimitOrderBook>()?;
     m.add_class::<alpha::AlphaDepthSlope>()?;

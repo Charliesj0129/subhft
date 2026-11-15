@@ -76,6 +76,6 @@ impl AlphaMarkovTransition {
         // My Rust code here implements `_compute_markov_numba`.
         // So I should return `signal` as is.
 
-        Ok(signal.into_pyarray_bound(py).unbind())
+        Ok(signal.into_pyarray(py).unbind())
     }
 }

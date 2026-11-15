@@ -265,8 +265,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            rust_core/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('rust_core/Cargo.lock', 'rust_core/Cargo.toml') }}
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'rust_core/Cargo.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -280,8 +280,13 @@ jobs:
         run: cargo test --manifest-path rust_core/Cargo.toml --no-default-features
 
       - name: Security audit (cargo audit)
-        continue-on-error: true  # pre-existing advisory findings
-        run: cargo install cargo-audit --locked && cargo audit --file rust_core/Cargo.lock
+        id: cargo_audit
+        if: always()
+        run: cargo install cargo-audit --locked && cargo audit --file Cargo.lock
+
+      - name: Rust security summary
+        if: always()
+        run: echo 'cargo-audit | ${{ steps.cargo_audit.outcome }}' >> "$GITHUB_STEP_SUMMARY"
 
   # ============================================================================
   # Stage 2b: Type Check
@@ -828,6 +833,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
+      - name: Install locked research dependencies
+        run: uv sync --locked --dev --group research
       - name: Research ruff, tests and coverage
         run: make research-check
 
@@ -846,25 +853,39 @@ jobs:
       - uses: ./.github/actions/setup-python-uv
 
       - name: Run pip-audit
+        id: pip_audit
+        if: always()
         run: make security-audit
 
       - name: Code security scan (bandit)
+        id: bandit
+        if: always()
         # Fail-closed at -ll (medium+). B608 SQL-string findings carry
         # `# nosec B608` annotations after upstream input validation.
         run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
 
       - name: Secret scanning (gitleaks)
+        id: gitleaks
+        if: always()
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: License compliance check
+        id: licenses
+        if: always()
         run: uv run pip-licenses --format=markdown --fail-on="GPL-2.0-only;GPL-2.0-or-later;GPL-3.0-only;GPL-3.0-or-later"
 
       - name: Security Summary
         if: always()
         run: |
           echo "## 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo '| Scanner | Outcome |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| pip-audit | ${{ steps.pip_audit.outcome }} |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| bandit | ${{ steps.bandit.outcome }} |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| gitleaks | ${{ steps.gitleaks.outcome }} |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| licenses | ${{ steps.licenses.outcome }} |' >> "$GITHUB_STEP_SUMMARY"
           if [ -f audit-output.txt ]; then
             echo '```' >> $GITHUB_STEP_SUMMARY
             cat audit-output.txt >> $GITHUB_STEP_SUMMARY

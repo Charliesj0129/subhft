@@ -59,16 +59,16 @@ pub fn compute_book_stats(
 }
 
 #[pyfunction]
-pub fn get_field(payload: &Bound<'_, PyAny>, keys: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+pub fn get_field(payload: &Bound<'_, PyAny>, keys: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     let py = payload.py();
-    let mut key_iter = keys.iter()?;
+    let mut key_iter = keys.try_iter()?;
 
-    if let Ok(dict) = payload.downcast::<PyDict>() {
+    if let Ok(dict) = payload.cast::<PyDict>() {
         for item in key_iter.by_ref() {
             let key = item?;
             if let Ok(Some(value)) = dict.get_item(&key) {
                 if !value.is_none() {
-                    return Ok(value.into_py(py));
+                    return Ok(value.unbind());
                 }
             }
         }
@@ -81,7 +81,7 @@ pub fn get_field(payload: &Bound<'_, PyAny>, keys: &Bound<'_, PyAny>) -> PyResul
         let name = key_str.to_str()?;
         if let Ok(value) = payload.getattr(name) {
             if !value.is_none() {
-                return Ok(value.into_py(py));
+                return Ok(value.unbind());
             }
         }
     }
@@ -89,13 +89,12 @@ pub fn get_field(payload: &Bound<'_, PyAny>, keys: &Bound<'_, PyAny>) -> PyResul
     Ok(py.None())
 }
 
-pub(super) fn get_optional(payload: &Bound<'_, PyAny>, keys: &[&str]) -> Option<PyObject> {
-    let py = payload.py();
-    if let Ok(dict) = payload.downcast::<PyDict>() {
+pub(super) fn get_optional(payload: &Bound<'_, PyAny>, keys: &[&str]) -> Option<Py<PyAny>> {
+    if let Ok(dict) = payload.cast::<PyDict>() {
         for key in keys {
             if let Ok(Some(value)) = dict.get_item(*key) {
                 if !value.is_none() {
-                    return Some(value.into_py(py));
+                    return Some(value.unbind());
                 }
             }
         }
@@ -105,7 +104,7 @@ pub(super) fn get_optional(payload: &Bound<'_, PyAny>, keys: &[&str]) -> Option<
     for key in keys {
         if let Ok(value) = payload.getattr(*key) {
             if !value.is_none() {
-                return Some(value.into_py(py));
+                return Some(value.unbind());
             }
         }
     }
@@ -113,7 +112,7 @@ pub(super) fn get_optional(payload: &Bound<'_, PyAny>, keys: &[&str]) -> Option<
     None
 }
 
-pub(super) fn extract_ts(value: Option<PyObject>, py: Python<'_>) -> PyResult<i64> {
+pub(super) fn extract_ts(value: Option<Py<PyAny>>, py: Python<'_>) -> PyResult<i64> {
     if let Some(obj) = value {
         let obj = obj.bind(py);
         if obj.hasattr("timestamp")? {
