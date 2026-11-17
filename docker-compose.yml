@@ -169,6 +169,11 @@ services:
     <<: *hft-common
     container_name: hft-engine
     command: ["sh", "-lc", "HFT_RUNTIME_ROLE=engine HFT_RECORDER_MODE=${HFT_ENGINE_RECORDER_MODE:-wal_first} exec python -m hft_platform.main"]
+    # `docker stop` sends SIGKILL this long after SIGTERM (10 s if unset). The engine's own shutdown waits up to
+    # HFT_SHUTDOWN_GRACE_TIMEOUT_S (main.py, default 90 s), and the recorder flush inside it up to
+    # HFT_RECORDER_SHUTDOWN_TIMEOUT_S + 5 s (default 65 s). Keep this above the first by a few seconds; if you raise
+    # either variable in .env, raise this too. tests/unit/test_compose_engine_stop_grace_period.py checks the defaults.
+    stop_grace_period: 100s
     # Network mode handling
     # Removed default network_mode: ${HFT_NETWORK_MODE:-bridge} to allow proper DNS resolution
     # network_mode: ${HFT_NETWORK_MODE:-}
