@@ -12,10 +12,11 @@ Haiku can run this end to end. It changes nothing on the host.
 Use the literal command (an allow rule only matches a literal `ssh theshow`):
 
 ```bash
-ssh theshow 'bash -s' < .agent/skills/theshow-status/scripts/host_snapshot.sh
+ssh theshow 'bash -s' < /home/charlie/hft_platform/.agent/skills/theshow-status/scripts/host_snapshot.sh
 ```
 
-Wider window: `ssh theshow 'HOURS=48 bash -s' < .agent/skills/theshow-status/scripts/host_snapshot.sh`
+Use the absolute path: the shell's cwd does not carry between agent tool calls.
+Default window is 24 h; wider: `ssh theshow 'HOURS=48 bash -s' < <same path>`.
 
 The script redacts account-ID-shaped tokens. Never paste `.env` content,
 credentials, or account IDs into the reply.
@@ -31,7 +32,16 @@ credentials, or account IDs into the reply.
 | ERROR/WARN | 前 5 類與次數 | 只列類別，不貼整段 log |
 | ledger 最後部署 | 日期 + 說明 | |
 
-End with one line: `[VERDICT] 正常 / 需注意 / 異常`.
+End with one line: `[VERDICT] 正常 / 需注意 / 異常`, always, even when escalating:
+
+- 異常: a critical alert firing, a container not Up, or RestartCount rose.
+- 需注意: only warning alerts firing, disk 85-90%, or unexplained ERROR classes.
+- 正常: none of the above.
+
+Reading the numbers: alert "samples" are `ALERTS` series points, not fire counts.
+The risk-hint line counts log strings (e.g. "during HALT" also matches); the
+current HALT / reduce-only state is the firing `StormGuardHalt` /
+`PlatformReduceOnlyActive` alerts, not that count. Ledger lines are cut at 200 chars.
 
 ## Escalate (hand back to a stronger model)
 
