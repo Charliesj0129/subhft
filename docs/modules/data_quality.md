@@ -149,3 +149,4 @@ detection do not fit the whole corpus in one query.
 
 - `.agent/rules/70-research-data.md` — price scale and export contract
 - `docs/operations/local-clickhouse-market-data-corpus.md` — corpus provenance and coverage
+- `docs/research/official-tick-gates.md` — integrity gates for the parsed official tick files, and why they are never deduplicated
