@@ -30,6 +30,7 @@ import pytest
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
 from hft_platform.core import timebase
 from hft_platform.execution.normalizer import RawExecEvent
+from hft_platform.execution.router import fill_dedup_key
 
 
 @pytest.fixture(autouse=True)
@@ -184,16 +185,16 @@ def test_load_fill_dedup_skips_empty_lines(tmp_path, monkeypatch):
 
     dedup_path = tmp_path / "fill_dedup.jsonl"
     lines = [
-        orjson.dumps("key1") + b"\n",
+        orjson.dumps("v2|key1") + b"\n",
         b"\n",
         b"  \n",
-        orjson.dumps("key2") + b"\n",
+        orjson.dumps("v2|key2") + b"\n",
     ]
     dedup_path.write_bytes(b"".join(lines))
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(dedup_path))
     router = _make_router()
-    assert "key1" in router._seen_fill_ids
-    assert "key2" in router._seen_fill_ids
+    assert "v2|key1" in router._seen_fill_ids
+    assert "v2|key2" in router._seen_fill_ids
     assert len(router._seen_fill_ids) == 2
 
 
@@ -203,16 +204,16 @@ def test_load_fill_dedup_skips_non_string_entries(tmp_path, monkeypatch):
 
     dedup_path = tmp_path / "fill_dedup.jsonl"
     lines = [
-        orjson.dumps("valid_key") + b"\n",
+        orjson.dumps("v2|valid_key") + b"\n",
         orjson.dumps(12345) + b"\n",  # int, not string
         orjson.dumps("") + b"\n",  # empty string
-        orjson.dumps("another_key") + b"\n",
+        orjson.dumps("v2|another_key") + b"\n",
     ]
     dedup_path.write_bytes(b"".join(lines))
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(dedup_path))
     router = _make_router()
-    assert "valid_key" in router._seen_fill_ids
-    assert "another_key" in router._seen_fill_ids
+    assert "v2|valid_key" in router._seen_fill_ids
+    assert "v2|another_key" in router._seen_fill_ids
     assert len(router._seen_fill_ids) == 2
 
 
@@ -599,7 +600,7 @@ async def test_retry_orphaned_fills_duplicate_skipped():
     router = _make_router(metrics)
 
     fill = _make_fill_event(fill_id="DUP_FILL")
-    router._seen_fill_ids["DUP_FILL"] = None  # Already seen
+    router._seen_fill_ids[fill_dedup_key(fill)] = None  # Already seen
 
     mock_dlq = MagicMock()
     mock_dlq.count = 1
@@ -752,19 +753,19 @@ def test_wal_fallback_write_ensure_future_exception():
     assert True
 
 
-# ── _synthesize_dedup_key ────────────────────────────────────────────────
+# ── fill_dedup_key ───────────────────────────────────────────────────────
 
 
-def test_synthesize_dedup_key_generates_deterministic_key():
-    """_synthesize_dedup_key creates consistent key from fill fields."""
-    from hft_platform.execution.router import _synthesize_dedup_key
-
+def test_fill_dedup_key_generates_deterministic_key():
+    """fill_dedup_key creates a consistent key from the deal's identity fields."""
     fill = _make_fill_event()
-    key1 = _synthesize_dedup_key(fill)
-    key2 = _synthesize_dedup_key(fill)
+    key1 = fill_dedup_key(fill)
+    key2 = fill_dedup_key(fill)
     assert key1 == key2
+    assert key1.startswith("v2|")
     assert fill.symbol in key1
     assert fill.order_id in key1
+    assert fill.fill_id in key1
 
 
 # ── run() fill: duplicate fill skipped ───────────────────────────────────
@@ -777,7 +778,7 @@ async def test_run_duplicate_fill_skipped():
     router = _make_router(metrics)
 
     fill = _make_fill_event(fill_id="DUP_RUN")
-    router._seen_fill_ids["DUP_RUN"] = None  # Pre-register
+    router._seen_fill_ids[fill_dedup_key(fill)] = None  # Pre-register
 
     with patch.object(router.normalizer, "normalize_fill", return_value=fill):
         raw = RawExecEvent(topic="deal", data={}, ingest_ts_ns=timebase.now_ns())
@@ -866,7 +867,7 @@ async def test_recover_fill_gaps_skips_dedup():
     router = _make_router(metrics)
 
     fill = _make_fill_event(fill_id="DEDUP_REC")
-    router._seen_fill_ids["DEDUP_REC"] = None  # Pre-register
+    router._seen_fill_ids[fill_dedup_key(fill)] = None  # Pre-register
 
     mock_dlq = MagicMock()
     mock_dlq.count = 1

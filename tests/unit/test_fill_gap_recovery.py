@@ -17,7 +17,7 @@ from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
 from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 from hft_platform.execution.positions import PositionStore
-from hft_platform.execution.router import ExecutionRouter
+from hft_platform.execution.router import ExecutionRouter, fill_dedup_key
 
 
 def _make_orphaned_fill(
@@ -140,7 +140,7 @@ class TestRecoverFillGaps:
 
     @pytest.mark.asyncio
     async def test_dedup_skips_already_processed_fills(self, tmp_path):
-        """Fills whose fill_id is already in dedup window are skipped."""
+        """Fills whose dedup key is already in the dedup window are skipped."""
         import hashlib
 
         import orjson
@@ -172,8 +172,8 @@ class TestRecoverFillGaps:
         dlq.add(fill)
 
         router = _make_router()
-        # Pre-seed dedup window
-        router._seen_fill_ids["ALREADY_SEEN"] = None
+        # Pre-seed dedup window with the deal's key
+        router._seen_fill_ids[fill_dedup_key(fill)] = None
 
         result = await router.recover_fill_gaps(checkpoint_path=ckpt_path)
 

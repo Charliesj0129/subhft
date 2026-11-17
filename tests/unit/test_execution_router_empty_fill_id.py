@@ -16,7 +16,7 @@ import pytest
 
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
-from hft_platform.execution.router import ExecutionRouter, _synthesize_dedup_key
+from hft_platform.execution.router import ExecutionRouter, fill_dedup_key
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -149,27 +149,27 @@ def terminal_handler() -> MagicMock:
 
 
 # ===========================================================================
-# 1. _synthesize_dedup_key unit tests
+# 1. fill_dedup_key unit tests
 # ===========================================================================
 
 
-class TestSynthesizeDedupKey:
-    """Unit tests for _synthesize_dedup_key helper."""
+class TestFillDedupKey:
+    """Unit tests for the fill_dedup_key helper (an empty fill_id still yields a key)."""
 
     def test_produces_deterministic_key(self) -> None:
         fill = _make_fill(fill_id="", symbol="TMFD6", side=Side.BUY, price=500_000, qty=1, match_ts_ns=999)
-        key = _synthesize_dedup_key(fill)
-        assert key == f"TMFD6|ORD001|{Side.BUY}|500000|1|999"
+        key = fill_dedup_key(fill)
+        assert key == f"v2|TMFD6|ORD001|{Side.BUY}|500000|1|999|"
 
     def test_same_fill_produces_same_key(self) -> None:
         f1 = _make_fill(fill_id="", symbol="2330", side=Side.SELL, price=100, qty=5, match_ts_ns=123)
         f2 = _make_fill(fill_id="", symbol="2330", side=Side.SELL, price=100, qty=5, match_ts_ns=123)
-        assert _synthesize_dedup_key(f1) == _synthesize_dedup_key(f2)
+        assert fill_dedup_key(f1) == fill_dedup_key(f2)
 
     def test_different_fields_produce_different_keys(self) -> None:
         f1 = _make_fill(fill_id="", symbol="2330", side=Side.BUY, price=100, qty=5, match_ts_ns=123)
         f2 = _make_fill(fill_id="", symbol="2330", side=Side.SELL, price=100, qty=5, match_ts_ns=123)
-        assert _synthesize_dedup_key(f1) != _synthesize_dedup_key(f2)
+        assert fill_dedup_key(f1) != fill_dedup_key(f2)
 
 
 # ===========================================================================
@@ -385,9 +385,9 @@ class TestNormalizerSyntheticFillId:
         on the reasoning that a per-call counter "disambiguates". It does the
         reverse: a reconnect replay of one deal got two ids, dedup could never
         match them, and the position and realized PnL were counted twice. The
-        id was also always truthy, which made the router's content-keyed
-        fallback (``fill.fill_id or _synthesize_dedup_key(fill)``) dead code at
-        all four of its call sites.
+        id was also always truthy, which made the router's then content-keyed
+        fallback (``fill.fill_id or <synthesized key>``, since replaced by
+        ``fill_dedup_key``) dead code at all four of its call sites.
 
         The tradeoff is explicit and is the safer side of it: with no broker
         sequence number you cannot both dedup a replay and disambiguate two
