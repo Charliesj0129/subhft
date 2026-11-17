@@ -8,8 +8,8 @@ pub fn normalize_tick_v2(
     price: f64,
     volume: f64,
     price_scale: i64,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(_py);
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(_py);
     // Round, do not truncate -- see the note in fast_lob/normalize_tick.rs.
     dict.set_item(
         "price",

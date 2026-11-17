@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 
 #[derive(Clone)]
 pub(crate) struct LOBStatsFrame {
@@ -56,22 +57,25 @@ impl FastLOBStatsRingBuffer {
         });
     }
 
-    pub fn get<'py>(&self, py: Python<'py>, idx: usize) -> Option<PyObject> {
+    pub fn get<'py>(&self, py: Python<'py>, idx: usize) -> PyResult<Option<Py<PyAny>>> {
         let slot = idx % self.size;
-        self.buffer[slot].as_ref().map(|f| {
-            (
-                f.symbol.clone(),
-                f.ts,
-                f.mid_price_x2,
-                f.spread_scaled,
-                f.imbalance,
-                f.best_bid,
-                f.best_ask,
-                f.bid_depth,
-                f.ask_depth,
-            )
-                .into_py(py)
-        })
+        self.buffer[slot]
+            .as_ref()
+            .map(|f| {
+                (
+                    f.symbol.clone(),
+                    f.ts,
+                    f.mid_price_x2,
+                    f.spread_scaled,
+                    f.imbalance,
+                    f.best_bid,
+                    f.best_ask,
+                    f.bid_depth,
+                    f.ask_depth,
+                )
+                    .into_py_any(py)
+            })
+            .transpose()
     }
 }
 

@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 
 use super::stats::{extract_ts, get_optional};
 
@@ -8,7 +9,7 @@ pub fn normalize_tick_tuple(
     payload: &Bound<'_, PyAny>,
     symbol: &str,
     scale: i64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     if symbol.is_empty() {
         return Ok(py.None());
     }
@@ -95,5 +96,5 @@ pub fn normalize_tick_tuple(
         is_odd_lot,
         exch_ts,
     );
-    Ok(result.into_py(py))
+    result.into_py_any(py)
 }

@@ -66,7 +66,7 @@ impl AlphaOFI {
         }
 
         // Convert to Python Object (Zero-Copy if possible, but here we transfer ownership of new array)
-        Ok(ofi.into_pyarray_bound(py).unbind())
+        Ok(ofi.into_pyarray(py).unbind())
     }
 }
 

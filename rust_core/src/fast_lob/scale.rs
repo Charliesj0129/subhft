@@ -49,7 +49,7 @@ pub fn scale_book(
         }
     }
 
-    let out = PyArray2::<i64>::zeros_bound(py, [rows, 2], false);
+    let out = PyArray2::<i64>::zeros(py, [rows, 2], false);
     let mut out_view = unsafe { out.as_array_mut() };
     let mut idx = 0usize;
     for (&p, &v) in prices.iter().zip(vols.iter()) {
@@ -171,7 +171,7 @@ pub(super) fn scale_side_with_stats(
         }
     }
 
-    let out = PyArray2::<i64>::zeros_bound(py, [rows, 2], false);
+    let out = PyArray2::<i64>::zeros(py, [rows, 2], false);
     let mut out_view = unsafe { out.as_array_mut() };
 
     let mut idx = 0usize;
@@ -202,8 +202,8 @@ pub(super) fn scale_book_seq_inner(
     vols: &Bound<'_, PyAny>,
     scale: i64,
 ) -> PyResult<Py<PyArray2<i64>>> {
-    let mut price_iter = prices.iter()?;
-    let mut vol_iter = vols.iter()?;
+    let mut price_iter = prices.try_iter()?;
+    let mut vol_iter = vols.try_iter()?;
     let mut flat: Vec<i64> = Vec::new();
 
     loop {
@@ -228,7 +228,7 @@ pub(super) fn scale_book_seq_inner(
     }
 
     let rows = flat.len() / 2;
-    let out = PyArray2::<i64>::zeros_bound(py, [rows, 2], false);
+    let out = PyArray2::<i64>::zeros(py, [rows, 2], false);
     let mut out_view = unsafe { out.as_array_mut() };
     for i in 0..rows {
         out_view[(i, 0)] = flat[i * 2];

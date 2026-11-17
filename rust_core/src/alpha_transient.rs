@@ -55,6 +55,6 @@ impl AlphaTransientReprice {
             signal[t] = -val;
         }
 
-        Ok(signal.into_pyarray_bound(py).unbind())
+        Ok(signal.into_pyarray(py).unbind())
     }
 }

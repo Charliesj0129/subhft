@@ -43,15 +43,14 @@ dev = [
     "pyarrow>=23.0.1",
 ]
 
+# Torch and stable-baselines3 are temporarily excluded from the research group.
 research = [
     "gymnasium>=1.2.3",
-    "stable-baselines3>=2.7.1",
     "shimmy>=2.0.0",
     "optuna>=4.7.0",
-    "onnx>=1.20.1",
+    "onnx>=1.22.0",
     "onnxruntime>=1.23.2",
     "onnxscript>=0.6.0",
-    "torch>=2.10.0",
     "scikit-learn>=1.7.2",
     "statsmodels>=0.14.0",  # BDS independence test (lazy import in validation.py)
     "pyarrow>=23.0.1",  # candidate_loop artifacts + q_hat parquet (also in dev)
@@ -269,3 +268,11 @@ conflicts = [
 # Override it to an empty constraint so the lockfile resolver succeeds.
 # Users install fubon-neo manually: pip install fubon-neo>=2.2.7
 override-dependencies = ["fubon-neo>=0.0.0; python_version == '0'"]
+
+# Security floors for transitive research/dev dependencies; retain locked
+# versions of unrelated packages and the protected broker/metrics pins.
+constraint-dependencies = [
+    "fsspec>=2026.6.0",
+    "mako>=1.4.2",
+    "tornado>=6.6.1",
+]

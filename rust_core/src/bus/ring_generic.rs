@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 #[pyclass]
 pub struct FastRingBuffer {
     size: usize,
-    buffer: Vec<Option<PyObject>>,
+    buffer: Vec<Option<Py<PyAny>>>,
 }
 
 #[pymethods]
@@ -11,7 +11,8 @@ impl FastRingBuffer {
     #[new]
     pub fn new(size: usize) -> Self {
         let size = size.max(1);
-        let buffer = vec![None; size];
+        let mut buffer = Vec::with_capacity(size);
+        buffer.resize_with(size, || None);
         Self { size, buffer }
     }
 
@@ -19,12 +20,12 @@ impl FastRingBuffer {
         self.size
     }
 
-    pub fn set(&mut self, idx: usize, event: PyObject) {
+    pub fn set(&mut self, idx: usize, event: Py<PyAny>) {
         let slot = idx % self.size;
         self.buffer[slot] = Some(event);
     }
 
-    pub fn get<'py>(&self, py: Python<'py>, idx: usize) -> Option<PyObject> {
+    pub fn get<'py>(&self, py: Python<'py>, idx: usize) -> Option<Py<PyAny>> {
         let slot = idx % self.size;
         self.buffer[slot].as_ref().map(|obj| obj.clone_ref(py))
     }

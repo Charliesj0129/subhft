@@ -23,8 +23,8 @@ pub fn map_tick_record(
     volume: i64,
     ts_ns: i64,
     price_scale: i64,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(py);
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
     dict.set_item("symbol", symbol)?;
     dict.set_item("price_scaled", to_ch_price_scaled(price, price_scale))?;
     dict.set_item("volume", volume)?;
@@ -44,8 +44,8 @@ pub fn map_bidask_record(
     ask_qty: i64,
     ts_ns: i64,
     price_scale: i64,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(py);
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
     dict.set_item("symbol", symbol)?;
     dict.set_item(
         "bid_price_scaled",
@@ -71,8 +71,8 @@ pub fn map_order_record(
     side: &str,
     ts_ns: i64,
     price_scale: i64,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(py);
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
     dict.set_item("symbol", symbol)?;
     dict.set_item("price_scaled", to_ch_price_scaled(price, price_scale))?;
     dict.set_item("qty", qty)?;
@@ -91,8 +91,8 @@ pub fn map_fill_record(
     fee: i64,
     ts_ns: i64,
     price_scale: i64,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(py);
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
     dict.set_item("symbol", symbol)?;
     dict.set_item("price_scaled", to_ch_price_scaled(price, price_scale))?;
     dict.set_item("qty", qty)?;

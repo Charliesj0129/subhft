@@ -7,20 +7,23 @@ const SLOT_SIZE: usize = 64;
 
 #[pyclass]
 pub struct ShmRingBuffer {
-    #[allow(dead_code)]
     mmap: MmapMut,
     capacity: usize,
-    header_ptr: *mut u64,
-    buffer_ptr: *mut u8,
 }
-
-unsafe impl Send for ShmRingBuffer {}
 
 #[pymethods]
 impl ShmRingBuffer {
     #[new]
     pub fn new(name: String, capacity: usize, create: bool) -> PyResult<Self> {
-        let size = HEADER_SIZE + (capacity * SLOT_SIZE);
+        if capacity == 0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "capacity must be positive",
+            ));
+        }
+        let size = capacity
+            .checked_mul(SLOT_SIZE)
+            .and_then(|slots| slots.checked_add(HEADER_SIZE))
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("capacity is too large"))?;
 
         let path = if name.starts_with('/') {
             name
@@ -37,33 +40,34 @@ impl ShmRingBuffer {
         if create {
             file.set_len(size as u64)?;
         }
+        if file.metadata()?.len() < size as u64 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "shared memory is smaller than the requested capacity",
+            ));
+        }
 
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
-
-        // Pointers
-        let header_ptr = mmap.as_mut_ptr() as *mut u64;
-        let buffer_ptr = unsafe { mmap.as_mut_ptr().add(HEADER_SIZE) };
 
         // Zero header if create
         if create {
             unsafe {
+                let header_ptr = mmap.as_mut_ptr().cast::<u64>();
                 std::ptr::write_volatile(header_ptr.add(0), 0); // write
                 std::ptr::write_volatile(header_ptr.add(1), 0); // read
             }
         }
 
-        Ok(ShmRingBuffer {
-            mmap,
-            capacity,
-            header_ptr,
-            buffer_ptr,
-        })
+        Ok(ShmRingBuffer { mmap, capacity })
     }
 
     pub fn write(&mut self, data: &[u8]) -> PyResult<bool> {
         unsafe {
-            let write_cursor = std::ptr::read_volatile(self.header_ptr.add(0));
-            let read_cursor = std::ptr::read_volatile(self.header_ptr.add(1));
+            // The mapping owns these pointers; keep them local to this borrow.
+            let base = self.mmap.as_mut_ptr();
+            let header_ptr = base.cast::<u64>();
+            let buffer_ptr = base.add(HEADER_SIZE);
+            let write_cursor = std::ptr::read_volatile(header_ptr.add(0));
+            let read_cursor = std::ptr::read_volatile(header_ptr.add(1));
 
             if write_cursor - read_cursor >= self.capacity as u64 {
                 return Ok(false);
@@ -72,14 +76,14 @@ impl ShmRingBuffer {
             let slot_idx = (write_cursor as usize) % self.capacity;
             let offset = slot_idx * SLOT_SIZE;
 
-            let dest = self.buffer_ptr.add(offset);
+            let dest = buffer_ptr.add(offset);
 
             // Fast copy
             let len = data.len().min(SLOT_SIZE);
             std::ptr::copy_nonoverlapping(data.as_ptr(), dest, len);
 
             // Bump cursor
-            std::ptr::write_volatile(self.header_ptr.add(0), write_cursor + 1);
+            std::ptr::write_volatile(header_ptr.add(0), write_cursor + 1);
             Ok(true)
         }
     }
@@ -89,8 +93,11 @@ impl ShmRingBuffer {
         py: Python<'py>,
     ) -> PyResult<Option<Bound<'py, pyo3::types::PyBytes>>> {
         unsafe {
-            let write_cursor = std::ptr::read_volatile(self.header_ptr.add(0));
-            let read_cursor = std::ptr::read_volatile(self.header_ptr.add(1));
+            let base = self.mmap.as_mut_ptr();
+            let header_ptr = base.cast::<u64>();
+            let buffer_ptr = base.add(HEADER_SIZE);
+            let write_cursor = std::ptr::read_volatile(header_ptr.add(0));
+            let read_cursor = std::ptr::read_volatile(header_ptr.add(1));
 
             if read_cursor >= write_cursor {
                 return Ok(None);
@@ -99,14 +106,14 @@ impl ShmRingBuffer {
             let slot_idx = (read_cursor as usize) % self.capacity;
             let offset = slot_idx * SLOT_SIZE;
 
-            let src = self.buffer_ptr.add(offset);
+            let src = buffer_ptr.add(offset);
             let bytes = std::slice::from_raw_parts(src, SLOT_SIZE);
 
             // Create Python Bytes (overhead here, but this is proof of concept)
-            let pystruct = pyo3::types::PyBytes::new_bound(py, bytes);
+            let pystruct = pyo3::types::PyBytes::new(py, bytes);
 
             // Bump cursor
-            std::ptr::write_volatile(self.header_ptr.add(1), read_cursor + 1);
+            std::ptr::write_volatile(header_ptr.add(1), read_cursor + 1);
 
             Ok(Some(pystruct))
         }

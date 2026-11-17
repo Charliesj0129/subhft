@@ -248,6 +248,7 @@ One branch = one theme; update this table when creating or retiring a branch.
 
 | Branch | Theme / purpose | Expected lifetime |
 |---|---|---|
+| `fix/security-audit-pyo3-20261115` | approved dependency security remediation and fail-closed scans; local verification report in docs/audits/2026-11-15-dependency-security-remediation.md | until reviewed and explicitly published; GPU validation pending |
 | `alpha/mining-convergence-pr1-harness-20260811` | correct and converge Alpha Mining PR #411 harness | until #411 is merged or superseded |
 | `research-flow/edge-evidence-parity-hardening` | edge-evidence/§7 parity hardening (pushed, synced) | until merged or superseded |
 | `research/replay-parity-field-set` | `OrderIntent.session_phase` §7 groundwork (pushed, synced) | until merged or superseded |

@@ -13,6 +13,8 @@ lessons. Do NOT record: generic model claims; single anecdotes (wait for a
 | Sonnet | Tier-2 code+test | 2 | 2 | 1 (report nudge; 0 this run) | 0/2 (capability probes) |
 | Sonnet | Tier-1 docs verify | 1 | 0 (1 PARTIAL) | 2 (false-positive fixes) | 0/1 |
 | Sonnet | Tier-2 alpha-research (append-only research/) | 2 | 2 | 0 (1 review-caught narrative overclaim, no code fix needed) | 2/2 (context-isolation, parallelism) |
+| Codex (inherited) | Tier-2 security scan implementation | 1 | 1 | 1 (environment recovery; no semantic revision) | 1/1 (parallelism) |
+| Codex (orchestrator-class) | Tier-3 dependency/FFI review | 1 | 1 | 1 (research CI provisioning fix, then APPROVE) | 1/1 (review-separation) |
 
 Net-win = delegations that were cheaper/faster than doing it directly (not
 capability probes). ROI-first routing (the `delegation` skill)
@@ -343,3 +345,13 @@ Lessons:
   keeping this framing in future packets for the same class of task ("a
   rule passing is not the same as a rule being meaningful — report which one
   you're claiming").
+
+### 2026-11-15 · Tier 2 · security scan code and tests · Codex (inherited) · SUCCESS
+Interventions: 1 environment recovery; no semantic executor revision. Cost: not measured.
+ROI: net-win yes · realized-saving parallelism · would-delegate-again y
+Archive: .agent/memory/delegations/2026-11-15-security-scans.md
+- Permission-environment switching removed the temporary worktree; the executor
+  restored its bounded four-file result in the durable worktree and reran its checks.
+- The independent review caught missing research dependencies in the research CI
+  job after the orchestrator added compatibility tests; the orchestrator fixed it
+  and added a provisioning regression test. Re-review returned APPROVE.

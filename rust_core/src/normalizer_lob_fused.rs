@@ -6,9 +6,10 @@
 
 use std::collections::HashMap;
 
-use ndarray::Array2;
+use numpy::ndarray::Array2;
 use numpy::IntoPyArray;
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 
 /// Internal per-symbol book state.
 struct BookStateInner {
@@ -86,18 +87,18 @@ impl BookStateInner {
 }
 
 /// Convert Vec<[i64; 2]> to a numpy (N, 2) i64 array.
-fn levels_to_numpy(py: Python<'_>, levels: &[[i64; 2]]) -> PyObject {
+fn levels_to_numpy(py: Python<'_>, levels: &[[i64; 2]]) -> Py<PyAny> {
     let n = levels.len();
     if n == 0 {
         let arr = Array2::<i64>::zeros((0, 2));
-        return arr.into_pyarray_bound(py).into();
+        return arr.into_pyarray(py).into();
     }
     let mut arr = Array2::<i64>::zeros((n, 2));
     for (i, row) in levels.iter().enumerate() {
         arr[[i, 0]] = row[0];
         arr[[i, 1]] = row[1];
     }
-    arr.into_pyarray_bound(py).into()
+    arr.into_pyarray(py).into()
 }
 
 #[pyclass]
@@ -131,7 +132,7 @@ impl RustNormalizerLobFused {
         ask_volumes: Vec<i64>,
         scale: i64,
         tick_size_scaled: i64,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let _ = tick_size_scaled; // reserved for future synthetic side generation
 
         let book = self
@@ -181,7 +182,7 @@ impl RustNormalizerLobFused {
         let bids_np = levels_to_numpy(py, &book.bids);
         let asks_np = levels_to_numpy(py, &book.asks);
 
-        Ok((
+        (
             bids_np,
             asks_np,
             book.best_bid,
@@ -194,12 +195,12 @@ impl RustNormalizerLobFused {
             book.version,
             book.top_imbalance,
         )
-            .into_py(py))
+            .into_py_any(py)
     }
 
     /// Get cached stats tuple for a symbol.
     /// Returns: (symbol, 0, mid_x2, spread_scaled, imbalance_f64, best_bid, best_ask, bid_depth, ask_depth)
-    pub fn get_stats_tuple(&self, py: Python<'_>, symbol: &str) -> PyResult<Option<PyObject>> {
+    pub fn get_stats_tuple(&self, py: Python<'_>, symbol: &str) -> PyResult<Option<Py<PyAny>>> {
         match self.books.get(symbol) {
             Some(book) => {
                 let imbalance_f64 = book.imbalance_ppm as f64 / 1_000_000.0;
@@ -215,7 +216,7 @@ impl RustNormalizerLobFused {
                         book.bid_depth,
                         book.ask_depth,
                     )
-                        .into_py(py),
+                        .into_py_any(py)?,
                 ))
             }
             None => Ok(None),

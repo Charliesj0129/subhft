@@ -8,8 +8,8 @@ pub fn normalize_bidask_v2(
     bids: Vec<(f64, f64)>,
     asks: Vec<(f64, f64)>,
     price_scale: i64,
-) -> PyResult<PyObject> {
-    let dict = PyDict::new_bound(_py);
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(_py);
     let scaled_bids: Vec<(i64, i64)> = bids
         .iter()
         .map(|(p, q)| ((p * price_scale as f64).round_ties_even() as i64, *q as i64))

@@ -4,6 +4,7 @@
 /// Follows the Allocator Law: single Vec pre-allocated at construction.
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+use pyo3::IntoPyObjectExt;
 
 use crate::md_event_frame::MdEventFrame;
 
@@ -67,7 +68,7 @@ impl FastTypedRingBuffer {
     }
 
     /// Retrieve frame by seq. Returns None if seq is out of range or overwritten.
-    pub fn get(&self, py: Python<'_>, seq: u64) -> PyResult<Option<PyObject>> {
+    pub fn get(&self, py: Python<'_>, seq: u64) -> PyResult<Option<Py<PyAny>>> {
         // seq 0 is sentinel "no data"
         if seq == 0 || seq >= self.next_seq {
             return Ok(None);
@@ -79,26 +80,26 @@ impl FastTypedRingBuffer {
         }
         let idx = (seq as usize) % self.cap;
         let f = &self.buf[idx];
-        let tuple = PyTuple::new_bound(
+        let tuple = PyTuple::new(
             py,
             &[
-                f.kind.into_py(py),
-                f.flags.into_py(py),
-                f.reserved.into_py(py),
-                f.symbol_id.into_py(py),
-                f.seq.into_py(py),
-                f.exch_ts_ns.into_py(py),
-                f.local_ts_ns.into_py(py),
-                f.price0.into_py(py),
-                f.price1.into_py(py),
-                f.qty0.into_py(py),
-                f.qty1.into_py(py),
-                f.aux0.into_py(py),
-                f.aux1.into_py(py),
-                f.ratio0.into_py(py),
+                f.kind.into_py_any(py)?,
+                f.flags.into_py_any(py)?,
+                f.reserved.into_py_any(py)?,
+                f.symbol_id.into_py_any(py)?,
+                f.seq.into_py_any(py)?,
+                f.exch_ts_ns.into_py_any(py)?,
+                f.local_ts_ns.into_py_any(py)?,
+                f.price0.into_py_any(py)?,
+                f.price1.into_py_any(py)?,
+                f.qty0.into_py_any(py)?,
+                f.qty1.into_py_any(py)?,
+                f.aux0.into_py_any(py)?,
+                f.aux1.into_py_any(py)?,
+                f.ratio0.into_py_any(py)?,
             ],
-        );
-        Ok(Some(tuple.into_py(py)))
+        )?;
+        Ok(Some(tuple.into_any().unbind()))
     }
 
     /// Current write cursor position (next seq to be assigned).

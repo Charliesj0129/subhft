@@ -40,13 +40,9 @@ const FEAT_FIELDS: usize = 16;
 
 #[pyclass]
 pub struct ShmSnapshotTable {
-    #[allow(dead_code)]
     mmap: MmapMut,
     max_symbols: usize,
-    base: *mut u8,
 }
-
-unsafe impl Send for ShmSnapshotTable {}
 
 #[pymethods]
 impl ShmSnapshotTable {
@@ -57,7 +53,10 @@ impl ShmSnapshotTable {
     /// * `create` — if true, create + zero-init; if false, open existing
     #[new]
     pub fn new(name: String, max_symbols: usize, create: bool) -> PyResult<Self> {
-        let size = HEADER_SIZE + max_symbols * SLOT_SIZE;
+        let size = max_symbols
+            .checked_mul(SLOT_SIZE)
+            .and_then(|slots| slots.checked_add(HEADER_SIZE))
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("max_symbols is too large"))?;
 
         let path = if name.starts_with('/') {
             name
@@ -73,6 +72,11 @@ impl ShmSnapshotTable {
 
         if create {
             file.set_len(size as u64)?;
+        }
+        if file.metadata()?.len() < size as u64 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "shared memory is smaller than the requested capacity",
+            ));
         }
 
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
@@ -90,11 +94,7 @@ impl ShmSnapshotTable {
             }
         }
 
-        Ok(ShmSnapshotTable {
-            mmap,
-            max_symbols,
-            base,
-        })
+        Ok(ShmSnapshotTable { mmap, max_symbols })
     }
 
     /// Write a snapshot slot (single-writer, seqlock protocol).
@@ -133,7 +133,9 @@ impl ShmSnapshotTable {
         }
 
         unsafe {
-            let slot_base = self.base.add(HEADER_SIZE + slot_idx * SLOT_SIZE);
+            // Derive pointers from the owned mapping for this borrow only.
+            let base = self.mmap.as_mut_ptr();
+            let slot_base = base.add(HEADER_SIZE + slot_idx * SLOT_SIZE);
             let ver_ptr = slot_base.add(SLOT_VERSION_OFF) as *mut u64;
 
             // Seqlock: read current version, write odd (in-progress)
@@ -165,7 +167,7 @@ impl ShmSnapshotTable {
             std::ptr::write_volatile(ver_ptr, new_ver.wrapping_add(1)); // even = done
 
             // Bump global version
-            let gv_ptr = (self.base as *mut u64).add(2);
+            let gv_ptr = base.cast::<u64>().add(2);
             let gv = std::ptr::read_volatile(gv_ptr);
             std::ptr::write_volatile(gv_ptr, gv.wrapping_add(1));
         }
@@ -191,7 +193,7 @@ impl ShmSnapshotTable {
         }
 
         unsafe {
-            let slot_base = self.base.add(HEADER_SIZE + slot_idx * SLOT_SIZE);
+            let slot_base = self.mmap.as_ptr().add(HEADER_SIZE + slot_idx * SLOT_SIZE);
             let ver_ptr = slot_base.add(SLOT_VERSION_OFF) as *const u64;
 
             for _ in 0..16 {
@@ -244,7 +246,7 @@ impl ShmSnapshotTable {
     /// Read the global version counter (monotonically increasing).
     pub fn global_version(&self) -> u64 {
         unsafe {
-            let gv_ptr = (self.base as *const u64).add(2);
+            let gv_ptr = self.mmap.as_ptr().cast::<u64>().add(2);
             std::ptr::read_volatile(gv_ptr)
         }
     }

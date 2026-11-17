@@ -12,9 +12,10 @@
 
 use std::collections::HashMap;
 
-use ndarray::Array2;
+use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyReadonlyArray1};
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 
 const FEATURE_COUNT: usize = 16;
 type FeatureArray = [i64; FEATURE_COUNT];
@@ -266,18 +267,18 @@ impl SymbolFusedState {
 
 /// Convert Vec<[i64; 2]> to a numpy (N, 2) i64 array.
 #[inline]
-fn levels_to_numpy(py: Python<'_>, levels: &[[i64; 2]]) -> PyObject {
+fn levels_to_numpy(py: Python<'_>, levels: &[[i64; 2]]) -> Py<PyAny> {
     let n = levels.len();
     if n == 0 {
         let arr = Array2::<i64>::zeros((0, 2));
-        return arr.into_pyarray_bound(py).into();
+        return arr.into_pyarray(py).into();
     }
     let mut arr = Array2::<i64>::zeros((n, 2));
     for (i, row) in levels.iter().enumerate() {
         arr[[i, 0]] = row[0];
         arr[[i, 1]] = row[1];
     }
-    arr.into_pyarray_bound(py).into()
+    arr.into_pyarray(py).into()
 }
 
 /// Extract f64 slice from either numpy array (zero-copy) or Python sequence (fallback).
@@ -332,7 +333,7 @@ impl RustNormalizerFeatureFusedV1 {
         ask_volumes: &Bound<'_, PyAny>,
         scale: i64,
         tick_size_scaled: i64,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Py<PyAny>> {
         let _ = tick_size_scaled;
 
         let bp = extract_f64_vec(bid_prices)?;
@@ -416,7 +417,7 @@ impl RustNormalizerFeatureFusedV1 {
         let asks_np = levels_to_numpy(py, &state.book.asks);
 
         // Return book stats + feature values as a single tuple
-        Ok((
+        (
             bids_np,
             asks_np,
             state.book.best_bid,
@@ -430,7 +431,7 @@ impl RustNormalizerFeatureFusedV1 {
             state.book.top_imbalance,
             features,
         )
-            .into_py(py))
+            .into_py_any(py)
     }
 
     /// Reset state for a single symbol.
