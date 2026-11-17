@@ -8,19 +8,27 @@ description: "Read-only inventory of git worktrees and branches (dirty files, me
 ## Run
 
 ```bash
-bash .agent/skills/worktree-inventory/scripts/inventory.sh
+bash /home/charlie/hft_platform/.agent/skills/worktree-inventory/scripts/inventory.sh
 ```
 
-## Classify each worktree
+It inventories `~/hft_platform` unless a repo path is passed as `$1`.
+
+## Classes (the script assigns them; checked in this order)
 
 | 類別 | 條件 | 建議 |
 |---|---|---|
-| A 可移除 | dirty=0, merged=yes, ahead=0 or no upstream, ignored < 10 MB | print `git worktree remove <path>` |
-| B 需 Charlie 看 | unmerged, unpushed commits, or ignored data >= 10 MB | list why |
-| C 保留 | dirty, last commit within 3 days, or `~/hft_platform` itself | keep |
+| GONE | directory missing (prunable) | `git worktree prune` (metadata only) |
+| C 保留 | `~/hft_platform`, dirty > 0, or last commit within 3 days | keep |
+| A 可移除 | merged (`yes` ancestor, or `squash` = its PR merged on GitHub), no unpushed work, ignored data excl. `.venv` < 10 MB | script prints the `worktree remove` line |
+| B 需 Charlie 看 | everything else | list why |
 
 `git worktree remove` deletes ignored files in that tree (`.env`, data, outputs),
-which is why ignored size moves a tree to B.
+so ignored data (excluding `.venv`) of 10 MB or more makes a tree B. `.venv`
+directories are uv hard links: their apparent size frees little; never add them up.
+Branch lines `squash-merged` are safe for `branch -D` only because their PR merged;
+`unmerged` branches are only counted, never suggested.
+
+Report: counts per class, the A and GONE commands, and the B rows with reasons.
 
 ## Never
 

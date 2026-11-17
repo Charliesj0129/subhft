@@ -27,6 +27,27 @@ def ci(checks: list) -> tuple[str, list]:
     return ("GREEN", []) if checks else ("NONE", [])
 
 
+CODEX = ("src/", "rust_core/", "config/", ".claude/hooks/", ".claude/settings.json")
+PROTECTED = (".gitignore", "pyproject.toml", ".importlinter", "scripts/check_discipline.py",
+             ".pre-commit-config.yaml", "docker-compose.production.yml", "docker-compose.prod.locked.yml",
+             "src/hft_platform/contracts/", "src/hft_platform/events.py", "src/hft_platform/core/timebase.py",
+             "src/hft_platform/core/pricing.py", "src/hft_platform/migrations/clickhouse/",
+             "config/symbols.yaml", "config/base/brokers/", "research/experiments/", "tests/golden/")
+
+
+def gate(number: int) -> str:
+    r = subprocess.run(["gh", "pr", "diff", str(number), "--name-only"], capture_output=True, text=True)
+    if r.returncode:
+        return "?"
+    files = r.stdout.split()
+    tags = []
+    if any(f.startswith(CODEX) for f in files):
+        tags.append("codex")
+    if any(f.startswith(PROTECTED) for f in files):
+        tags.append("protected")
+    return "+".join(tags) or "ok"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--merged-since", help="YYYY-MM-DD")
@@ -48,10 +69,13 @@ def main() -> None:
         print(f"| {p['number']} | {p['headRefName']}{draft} | {state} | {p['mergeable']} | {', '.join(bad[:4])} |")
         if state == "GREEN" and p["mergeable"] == "MERGEABLE" and not p["isDraft"]:
             ready.append(p)
-    print(f"\nopen={len(rows)} green_and_mergeable={len(ready)}")
+    unknown = [p["number"] for p in rows if ci(p.get("statusCheckRollup") or [])[0] == "GREEN"
+               and p["mergeable"] == "UNKNOWN" and not p["isDraft"]]
+    print(f"\nopen={len(rows)} green_and_mergeable={len(ready)} green_mergeable_unknown={unknown}")
     verb = "mer" + "ge"  # spelled apart so the codex_review_gate hook does not read this file's source as a command
+    print("gate | command")
     for p in ready:
-        print(f"! gh pr {verb} {p['number']} --squash --match-head-commit {p['headRefOid']}")
+        print(f"{gate(p['number'])} | ! gh pr {verb} {p['number']} --squash --match-head-commit {p['headRefOid']}")
 
 
 if __name__ == "__main__":

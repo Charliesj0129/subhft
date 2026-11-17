@@ -34,8 +34,22 @@ for l in sys.stdin:
   m=re.search(r"\"event\": ?\"([^\"]{1,80})",l)
   ev=m.group(1) if m else re.sub(r"[0-9:\-T.,Z]+","",l)[:60]
   c[(lv,ev.strip())]+=1
-for (lv,e),n in c.most_common(15): print(f"{n:6d} {lv:8s} {e}")' | red
-echo "== risk state hints (count)"
+err=[(k,n) for k,n in c.most_common() if k[0] in ("error","critical")]
+warn=[(k,n) for k,n in c.most_common() if k[0]=="warning"]
+print("-- all ERROR/CRITICAL classes:", len(err))
+for (lv,e),n in err: print(f"{n:6d} {lv:8s} {e}")
+print("-- top 5 WARNING classes of", len(warn))
+for (lv,e),n in warn[:5]: print(f"{n:6d} {lv:8s} {e}")' | red
+echo "== StormGuard current state (last transition in window)"
+docker logs --since "${H}h" hft-engine 2>&1 | grep '"StormGuard Transition"' | tail -1 \
+ | python3 -c 'import sys,json
+l=sys.stdin.read().strip()
+try:
+  d=json.loads(l[l.index("{"):]); print("state="+d.get("new","?"), "since="+d.get("timestamp","?"), "reason="+str(d.get("reason",""))[:80])
+except Exception: print("no transition in window (state unknown from logs)")'
+echo "== reduce-only reasons (last)"
+docker logs --since "${H}h" hft-engine 2>&1 | grep -E 'platform_reduce_only_reason_(active|cleared)' | tail -1 | cut -c1-200
+echo "== risk state hints (string counts, not state)"
 docker logs --since "${H}h" hft-engine 2>&1 | grep -oE 'HALT|REDUCE_ONLY|StormGuard[A-Za-z]*|kill_switch[a-z_]*' | sort | uniq -c | head
 echo "== deploy ledger tail"
 tail -n 3 ~/deploy_ledger.tsv 2>/dev/null | cut -c1-200 | red

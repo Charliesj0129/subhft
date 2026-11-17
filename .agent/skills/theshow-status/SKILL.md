@@ -29,13 +29,19 @@ credentials, or account IDs into the reply.
 | 磁碟 | 使用% | >85% 標記 |
 | 告警 firing | 名稱 | none = OK |
 | 近 N 小時告警 | 名稱與樣本數 | |
-| ERROR/WARN | 前 5 類與次數 | 只列類別，不貼整段 log |
+| StormGuard 現況 | script 的 `state=` 行 | NORMAL 以外要寫出 reason |
+| ERROR | 全部類別與次數 | 只列類別，不貼整段 log |
+| WARN | 前 5 類 | |
 | ledger 最後部署 | 日期 + 說明 | |
 
 End with one line: `[VERDICT] 正常 / 需注意 / 異常`, always, even when escalating:
 
 - 異常: a critical alert firing, a container not Up, or RestartCount rose.
-- 需注意: only warning alerts firing, disk 85-90%, or unexplained ERROR classes.
+- 需注意: only warning alerts firing, StormGuard not NORMAL, disk 85-90%, or any
+  ERROR class at all (this page explains none; list them and escalate).
+
+Restarts: RestartCount counts only Docker auto-restarts. Compare `started=` with the
+ledger's last deploy time: started after ledger = a restart nobody recorded.
 - 正常: none of the above.
 
 Reading the numbers: alert "samples" are `ALERTS` series points, not fire counts.
