@@ -387,6 +387,11 @@ def _normalize_contract_row(c: Any, exchange: str, kind: str) -> dict[str, Any]:
         "strike": getattr(c, "strike_price", None) or getattr(c, "strike", None),
         "right": right,
     }
+    if kind == "future":
+        # The option strike window is centred on the nearest TXF future's ``reference``
+        # (``pick_underlying_price``). Futures only: an option's ``reference`` is its premium,
+        # the wrong number to centre on, and ~50k option rows would bloat the hourly cache.
+        payload["reference"] = getattr(c, "reference", None)
     return {k: v for k, v in payload.items() if v is not None}
 
 
@@ -540,6 +545,13 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
     # Could not derive — fall back to contract.code
     actual = getattr(contract, "code", None)
     return actual if actual else config_code
+
+
+def _without_reference(row: dict[str, Any]) -> dict[str, Any]:
+    """The contract row as the symbol rebuild sees it: only futures carry ``reference``, so only they are copied."""
+    if "reference" not in row:
+        return row
+    return {k: v for k, v in row.items() if k != "reference"}
 
 
 class ContractsRuntime:
@@ -1205,8 +1217,13 @@ class ContractsRuntime:
 
             _t_build = time.monotonic()
             # Same "still trading" as the universe roll (core/front_month.py).
+            # The cache above keeps the futures ``reference`` for the connection pool's options roll and the operator
+            # CLI, which move subscriptions on purpose. This rebuild does not: nothing here follows a re-centred
+            # option window with a resubscribe (the ``diff`` policy reads the contract-code delta, and
+            # ``_resubscribe_all`` only unsubscribes symbols still in ``client.symbols``), so centring on a moving
+            # reference would leave ``client.symbols`` naming strikes the broker is not serving.
             contract_index = ContractIndex(
-                contracts=raw_contracts,
+                contracts=[_without_reference(c) for c in raw_contracts],
                 as_of=taifex_delivery_cutoff(timebase.now_ns()),
             )
             list_path = Path(Path(self._client.config_path).parent / "symbols.list")

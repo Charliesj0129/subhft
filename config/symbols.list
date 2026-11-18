@@ -30,10 +30,9 @@ TMF@front exchange=FUT tags=futures|front_month|tmf
 TMF@next exchange=FUT tags=futures|next_month|tmf
 EXF@front exchange=FUT tags=futures|front_month|exf
 
-# TXO option chain: 5 expiries (covers nearest weekly + monthly), ATM ± 26 strikes, both C+P
-# Each expiry expands to (2*26+1) strikes * 2 rights = 106 codes → 5 expiries = 530 codes
-OPT@TXO@near@ATM+/-26 exchange=OPT tags=options|near_month|atm
-OPT@TXO@next@ATM+/-26 exchange=OPT tags=options|next_month|atm
-OPT@TXO@far@ATM+/-26 exchange=OPT tags=options|far_month|atm
-OPT@TXO@far_plus_1@ATM+/-26 exchange=OPT tags=options|far_plus_1|atm
-OPT@TXO@far_plus_2@ATM+/-26 exchange=OPT tags=options|far_plus_2|atm
+# TXO option chain: the nearest weekly expiry (Wednesday or Friday weekly, never the monthly) and the current month,
+# ATM +/- 50 strikes, both C+P. Each expiry expands to (2*50+1) strikes * 2 rights = 202 codes -> 404 option codes.
+# Budget: 404 + 50 stocks + 8 futures = 462 codes <= 4 quote connections x 120 (DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN).
+# The window is centred on the nearest TXF future's reference (pick_underlying_price), not on the median strike.
+OPT@TXO_WEEKLY@near@ATM+/-50 exchange=OPT tags=options|near_week|atm
+OPT@TXO@near@ATM+/-50 exchange=OPT tags=options|near_month|atm
