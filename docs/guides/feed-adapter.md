@@ -1,6 +1,6 @@
 # Feed Adapter Guide (Multi-Broker)
 
-Feed Adapter 負責把 Broker 行情轉成平台標準事件，並提供重連/回補機制。支援多 Broker 架構（Shioaji / Fubon）。
+Feed Adapter 負責把 Broker 行情轉成平台標準事件，並提供重連/回補機制。Bootstrap 可選擇 Shioaji 或 Fubon；Fubon 目前尚未達到上線條件，見下方狀態。
 
 ## 1) 模組結構
 
@@ -31,32 +31,23 @@ src/hft_platform/feed_adapter/
 
 ## 1b) Broker 選擇
 
-透過 `HFT_BROKER` 環境變數或 `config/base/main.yaml` 中的 `broker:` key 選擇 broker：
+Bootstrap 透過 `HFT_BROKER` 環境變數選擇 broker：
 
 ```bash
 # 環境變數方式
 HFT_BROKER=shioaji  # 預設
-HFT_BROKER=fubon    # 切換至 Fubon
-
-# YAML 方式
-# config/base/main.yaml
-broker: shioaji
+HFT_BROKER=fubon    # 選擇 Fubon；目前未達上線條件
 ```
 
-Registry pattern：每個 broker 的 `__init__.py` 會自動向 `broker_registry.py` 註冊工廠。Bootstrap 依據 `HFT_BROKER` 值觸發 import。
+Bootstrap 在 `src/hft_platform/services/bootstrap.py` 依 broker 選擇並延遲匯入 facade；目前這條路徑不透過 `broker_registry.py` 自動註冊工廠。
 
 ## 1c) Fubon 設定
 
-Fubon broker 需安裝 `fubon-neo` SDK：
+**狀態：HOLD，勿用於實盤。** `FubonClientFacade` 目前使用合約及訂閱的 stub；行情籃子訂閱和成交 callback 未在此 facade 接通，snapshot 介面固定回傳空列表。單獨存在的元件不代表端到端資料流已可用。實作位置見 `src/hft_platform/feed_adapter/fubon/facade.py`。
 
-```bash
-pip install fubon-neo
-```
+專案設定指出 SDK `fubon-neo` 須由券商提供的來源另行安裝；公開 lock 不涵蓋該 SDK。`session_runtime.py` 登入時讀取 `HFT_FUBON_API_KEY`、`HFT_FUBON_PASSWORD` 與 `HFT_FUBON_CERT_PATH`；未設定憑證路徑時傳入空字串，實際憑證要求須向券商確認。facade 從 `HFT_FUBON_ACCOUNT` 取得預設帳號識別。機密只應透過環境提供，不應寫入文件或版控。
 
-必要環境變數：
-- `HFT_FUBON_CERT_PATH`：Fubon API 憑證檔路徑
-- `HFT_FUBON_ACCOUNT`：交易帳號
-- `HFT_FUBON_PASSWORD`：帳號密碼（建議使用 secret manager）
+解除 HOLD 前，需接通並驗證行情訂閱、snapshot、合約管理及委託／成交 callback，完成缺 SDK 時拒絕啟動、broker protocol conformance 和端到端資料流測試，並依專案 release gate 完成驗收。實盤切換另需明確授權。
 
 ## 2) Symbols 與訂閱
 來源：`config/symbols.list`
@@ -83,6 +74,7 @@ SYMBOLS_CONFIG=config/symbols.yaml
 - `SHIOAJI_PERSON_ID` / `SHIOAJI_CA_PATH` / `SHIOAJI_CA_PASSWORD`（CA 選用）
 
 ### Fubon
+- `HFT_FUBON_API_KEY`（API key）
 - `HFT_FUBON_CERT_PATH`（API 憑證路徑）
 - `HFT_FUBON_ACCOUNT`（交易帳號）
 - `HFT_FUBON_PASSWORD`（帳號密碼）

@@ -114,35 +114,11 @@ export SHIOAJI_CA_PASSWORD=...
 export SHIOAJI_ACTIVATE_CA=1
 ```
 
-## 5. Fubon 券商部署
+## 5. Fubon 券商狀態
 
-平台支援 Shioaji 與 Fubon 兩個券商。選擇 Fubon 需設定 `HFT_BROKER=fubon` 並提供 Fubon 憑證：
+**HOLD：Fubon 尚未達到上線條件，勿用於實盤部署。** 目前 bootstrap 可以選擇 Fubon facade，但該 facade 的合約及訂閱仍使用 stub，行情籃子訂閱與委託／成交 callback 尚未接通，snapshot 介面固定回傳空列表。單獨的 Fubon 元件及 mock 測試不代表整體資料流已驗收。
 
-```bash
-export HFT_BROKER=fubon
-export HFT_FUBON_CERT_PATH=/path/to/cert.pfx
-export HFT_FUBON_ACCOUNT=your_account
-export HFT_FUBON_PASSWORD=your_password
-export HFT_MODE=live
-uv run hft run live
-```
-
-**Single Runtime 限制**同樣適用於 Fubon：每個容器只能運行一個 broker session（見 3.1.1 節）。
-
-### 5.1 Docker Compose with Fubon
-
-```bash
-# 設定 .env
-export HFT_BROKER=fubon
-export HFT_FUBON_CERT_PATH=/path/to/cert.pfx
-export HFT_FUBON_ACCOUNT=your_account
-export HFT_FUBON_PASSWORD=your_password
-export HFT_MODE=live
-
-# 啟動堆疊
-docker compose up -d clickhouse redis
-docker compose up -d --build hft-engine
-```
+接通並驗證完整資料流、缺 SDK 時的 fail-closed 行為、broker protocol conformance 與 release gates 後，才能重新評估部署；實盤切換仍需明確授權。現況與 SDK 說明見 `docs/guides/feed-adapter.md`，程式依據見 `src/hft_platform/feed_adapter/fubon/facade.py`。
 
 ## 6. Production Overlay
 ```bash
