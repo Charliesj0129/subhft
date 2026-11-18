@@ -20,6 +20,7 @@ from hft_platform.gateway.dedup import IdempotencyStore
 from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService
+from tests.waiting import await_until
 
 from .conftest import (
     MockOrderAdapter,
@@ -141,9 +142,9 @@ class TestChaosRiskException:
         channel.submit_nowait(make_intent(0, idempotency_key="fail-a"))
         channel.submit_nowait(make_intent(1, idempotency_key="fail-b"))
 
-        # Run gateway in a task, then cancel after a short wait
+        # Run gateway in a task, then cancel once both intents have reached the risk engine
         task = asyncio.create_task(svc.run())
-        await asyncio.sleep(0.2)
+        await await_until(lambda: risk.evaluate_count >= 2, message="gateway never evaluated both intents")
         task.cancel()
         try:
             await task
@@ -151,6 +152,7 @@ class TestChaosRiskException:
             pass
 
         # Gateway processed both without crashing (they raised, but run() caught them)
+        assert risk.evaluate_count == 2
         assert svc.running is False
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 from pathlib import Path
+from typing import get_args
 
 import numpy as np
 import pytest
@@ -99,8 +100,9 @@ def test_screen_result_dataclass_frozen_slots() -> None:
 
 
 def test_screen_result_verdict_domain_documented() -> None:
-    for v in ("pass", "kill", "unknown"):
-        ScreenResult(
+    assert get_args(screener.Verdict) == ("pass", "kill", "unknown")
+    for v in get_args(screener.Verdict):
+        result = ScreenResult(
             alpha_id="x",
             verdict=v,
             ic_mean=0.0,
@@ -110,6 +112,7 @@ def test_screen_result_verdict_domain_documented() -> None:
             reason="",
             duration_s=0.0,
         )
+        assert result.verdict == v
 
 
 # ---------------------------------------------------------------------------
