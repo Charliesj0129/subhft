@@ -20,11 +20,18 @@ def _rules() -> dict[str, dict]:
 
 def test_storm_guard_halt_route_repeats_slower_than_the_critical_default():
     routes = _routes()
-    halt_idx = next(i for i, r in enumerate(routes) if r.get("match", {}).get("alertname") == "StormGuardHalt")
+    # The latched-state route matches StormGuardHalt and the kill-switch pair with one regex
+    # (2026-11-11: the pair repeated every 15 min through a deliberate 3.4 h kill switch).
+    halt_idx = next(
+        i
+        for i, r in enumerate(routes)
+        if any("StormGuardHalt|KillSwitchActive|KillSwitchFlattenBlocked" in m for m in r.get("matchers", []))
+    )
     critical_idx = next(i for i, r in enumerate(routes) if r.get("match", {}).get("severity") == "critical")
 
     assert halt_idx < critical_idx  # first match wins; after the critical route it is dead config
     assert routes[halt_idx]["repeat_interval"] == "4h"
+    assert routes[halt_idx]["mute_time_intervals"] == ["taipei_off_hours"]
     assert routes[critical_idx]["repeat_interval"] == "15m"
     assert routes[halt_idx]["continue"] is False
 

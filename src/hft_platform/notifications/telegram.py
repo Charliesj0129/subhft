@@ -164,7 +164,8 @@ class TelegramSender:
                 async with self._session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status == 200:
                         self._last_send_ts = time.monotonic()
-                        logger.debug("telegram.sent", chat_id=self._chat_id, critical=critical)
+                        # The chat id is an account identifier: never log it.
+                        logger.debug("telegram.sent", critical=critical)
                         return True
 
                     body = await resp.text()
@@ -196,18 +197,23 @@ class TelegramSender:
                     except Exception:  # noqa: BLE001
                         pass
                     self._session = None
+                # str() of a timeout (aiohttp ClientTimeout -> TimeoutError) is
+                # empty, so always log the type and fall back to repr().
+                exc_type = type(exc).__name__
+                exc_text = str(exc) or repr(exc)
                 if critical and attempt < max_attempts - 1:
                     delay = self._RETRY_BACKOFF_S * (2**attempt)
                     logger.warning(
                         "telegram.retry_on_exception",
                         attempt=attempt + 1,
                         max_attempts=max_attempts,
-                        exc=str(exc),
+                        exc_type=exc_type,
+                        exc=exc_text,
                         delay_s=delay,
                     )
                     await asyncio.sleep(delay)
                     continue
-                logger.warning("telegram.send_exception", exc=str(exc))
+                logger.warning("telegram.send_exception", exc_type=exc_type, exc=exc_text)
                 return False
 
         return False  # exhausted all retries

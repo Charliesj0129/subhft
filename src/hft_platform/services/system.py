@@ -1181,6 +1181,11 @@ class HFTSystem:
                 # alive, and a watchdog that relogs in a session nobody uses
                 # would spend the account's session allowance for nothing.
                 self._start_service("order_session_watchdog", self._order_session_watchdog())
+                # The pre-open warmup asks for the same guarded relogin when its
+                # probe windows keep failing; it never reaches the broker itself.
+                warmup = getattr(self.registry, "order_session_warmup", None)
+                if warmup is not None:
+                    warmup.on_exhausted = self._reconnect_order_session
 
                 # ── Checkpoint Writer (after recovery, before trading) ──
                 if self._recovery_halted:
@@ -1692,6 +1697,18 @@ class HFTSystem:
         if failures < threshold:
             return "healthy"
 
+        return await self._reconnect_order_session("order_session_not_established", failures)
+
+    async def _reconnect_order_session(self, reason: str, failures: int = 0) -> str:
+        """Relogin the order session through the guarded ``reconnect`` path.
+
+        Shared by the watchdog (orders kept dying) and the pre-open warmup
+        (its probe windows kept failing, ``OrderSessionWarmup.on_exhausted``).
+        Returns what it did.
+        """
+        from hft_platform.observability.metrics import MetricsRegistry  # noqa: PLC0415
+
+        metrics = MetricsRegistry.get()
         reconnect = getattr(self.order_client, "reconnect", None)
         if reconnect is None:
             # A broker facade with no reconnect (sim/no-op clients). Say so
@@ -1700,7 +1717,7 @@ class HFTSystem:
             logger.error("order_session_down_but_client_cannot_reconnect", consecutive_session_errors=failures)
             return "cannot_reconnect"
 
-        logger.warning("order_session_reconnect_attempt", consecutive_session_errors=failures, threshold=threshold)
+        logger.warning("order_session_reconnect_attempt", reason=reason, consecutive_session_errors=failures)
         loop = asyncio.get_running_loop()
         # force=False on purpose: the orchestrator's cooldown, backoff and
         # process-wide login slot are what stop a persistently dead session
@@ -1708,7 +1725,7 @@ class HFTSystem:
         # allowance and earns everything a 451.
         ok = await loop.run_in_executor(
             None,
-            lambda: reconnect(reason="order_session_not_established", force=False),
+            lambda: reconnect(reason=reason, force=False),
         )
         if not ok:
             metrics.order_session_reconnect_total.labels(result="fail").inc()
