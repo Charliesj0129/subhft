@@ -52,7 +52,7 @@ def test_extract_market_data_values_length_matches_columns():
 
 
 def test_extract_defaults_for_missing_instrument_fields():
-    from hft_platform.recorder.worker import _extract_market_data_values
+    from hft_platform.recorder.worker import MARKET_DATA_COLUMNS, _extract_market_data_values
 
     row = {
         "symbol": "TXFC0",
@@ -71,12 +71,12 @@ def test_extract_defaults_for_missing_instrument_fields():
     }
     values = _extract_market_data_values(row)
     assert values is not None
-    # Last 5 values are instrument fields with defaults
-    assert values[-5] == ""  # instrument_type
-    assert values[-4] == ""  # underlying
-    assert values[-3] == 0  # strike_scaled
-    assert values[-2] == ""  # option_right
-    assert values[-1] == datetime.date(1970, 1, 1)  # expiry
+    # Instrument fields are looked up by name: new columns are appended after them
+    assert values[MARKET_DATA_COLUMNS.index("instrument_type")] == ""
+    assert values[MARKET_DATA_COLUMNS.index("underlying")] == ""
+    assert values[MARKET_DATA_COLUMNS.index("strike_scaled")] == 0
+    assert values[MARKET_DATA_COLUMNS.index("option_right")] == ""
+    assert values[MARKET_DATA_COLUMNS.index("expiry")] == datetime.date(1970, 1, 1)
 
 
 def test_format_market_data_length_matches_loader_cols():
@@ -130,9 +130,9 @@ def test_format_market_data_defaults_for_missing_instrument_fields():
     _cols, data = format_market_data([row])
     assert len(data) == 1
     row_data = data[0]
-    # Last 5 values are instrument fields with defaults
-    assert row_data[-5] == ""  # instrument_type
-    assert row_data[-4] == ""  # underlying
-    assert row_data[-3] == 0  # strike_scaled
-    assert row_data[-2] == ""  # option_right
-    assert row_data[-1] == datetime.date(1970, 1, 1)  # expiry
+    # Instrument fields are looked up by name: new columns are appended after them
+    assert row_data[_cols.index("instrument_type")] == ""
+    assert row_data[_cols.index("underlying")] == ""
+    assert row_data[_cols.index("strike_scaled")] == 0
+    assert row_data[_cols.index("option_right")] == ""
+    assert row_data[_cols.index("expiry")] == datetime.date(1970, 1, 1)

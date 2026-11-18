@@ -50,6 +50,10 @@ MARKET_DATA_COLUMNS = [
     "strike_scaled",
     "option_right",
     "expiry",
+    # Tick integrity fields (added 2026-10-06)
+    "total_volume",
+    "is_simtrade",
+    "is_odd_lot",
 ]
 
 # L7 (loop_v1): canonical 7-column audit chain appended to ORDER_COLUMNS and
@@ -195,6 +199,9 @@ def _extract_market_data_values(row) -> list | None:
                 int(get("strike_scaled", 0)),
                 get("option_right", ""),
                 _to_date(get("expiry", "1970-01-01")),
+                int(get("total_volume", 0) or 0),
+                int(get("is_simtrade", 0) or 0),
+                int(get("is_odd_lot", 0) or 0),
             ]
         return [
             getattr(row, "symbol", None),
@@ -216,6 +223,9 @@ def _extract_market_data_values(row) -> list | None:
             int(getattr(row, "strike_scaled", 0)),
             getattr(row, "option_right", ""),
             _to_date(getattr(row, "expiry", "1970-01-01")),
+            int(getattr(row, "total_volume", 0) or 0),
+            int(getattr(row, "is_simtrade", 0) or 0),
+            int(getattr(row, "is_odd_lot", 0) or 0),
         ]
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
