@@ -207,6 +207,33 @@ fenced pure-ASCII diagram (<= 80 columns) using real identifiers from the
 source; for a defect, mark where the path dies (`X`, `(never reached)`).
 Do not draw what one sentence already says.
 
+## Explaining concepts (ASCII first)
+
+Use ASCII to visualize content when explaining concepts. Prose describing a
+flow, a state machine, or a before/after is harder to check than a drawing of
+it, and on a money-facing path an explanation nobody can check is a defect.
+
+| When the thing has this shape | Draw it as |
+|---|---|
+| Data / control flow, pipeline stage | boxes + `->` arrows (see Architecture above) |
+| State machine, FSM, latch, breaker | states + labelled transitions; **mark the edge that cannot be taken** |
+| Before / after of a fix | two blocks labelled `BEFORE:` and `AFTER:` |
+| Timeline, sequence, race, deadlock | time axis with `\|` ticks, events underneath |
+| Queue / buffer / packet / struct layout | a slot or field ruler |
+| Tiers, routing, comparisons | a markdown table, never a paragraph |
+
+Rules:
+
+- **Pure ASCII.** Portable across terminals, greppable, and diffable; box
+  characters are none of those.
+- **Fenced**, and <= 80 columns.
+- **Real identifiers only.** Label boxes with the actual module, class, or
+  metric name. A diagram whose names do not match the source is worse than no
+  diagram, because it will be trusted.
+- **Mark the defect.** When explaining a bug, the drawing must show where the
+  path dies -- an `X`, a `(never reached)`, a dashed edge.
+- Do not draw what one sentence already says.
+
 ## Where to look (open when the situation arises)
 
 | Situation | Read |
@@ -249,6 +276,33 @@ files / commands run / not verified / blockers); empty sections say `(none)`.
 Executor self-reports are context, not evidence: the orchestrator verifies
 before anything reaches the user. Two failed delegations on one task: stop and
 ask. Unattended routines are read-only; escalating one needs an ADR first.
+
+### Executor output format
+
+Four sections, in this order, as tables. A prose report lets a failure hide
+inside a sentence:
+
+```
+## Changed files
+| path | why (one line) |
+|------|----------------|
+
+## Commands run
+| command | result | note |
+|---------|--------|------|
+<paste verbatim output for every row that is not PASS>
+
+## Not verified
+| check | why it could not run here |
+|-------|---------------------------|
+
+## Blockers or deviations from packet
+| what | which packet line it departs from |
+|------|-----------------------------------|
+```
+
+Empty sections stay, with `(none)` -- a missing section is indistinguishable
+from a forgotten one. Result words are literal: `PASS`, `FAILED`, `NOT RUN`.
 
 ## Research governance
 
