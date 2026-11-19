@@ -47,11 +47,6 @@ def _governor(*, already_quarantined: bool = False) -> MagicMock:
     return governor
 
 
-# --------------------------------------------------------------------------- #
-# The channel                                                                  #
-# --------------------------------------------------------------------------- #
-
-
 def test_publish_then_pending_round_trips_the_request(tmp_path):
     _publish(tmp_path, reason="containment_2026_09_03")
     found = quarantine_requests.pending(tmp_path)
@@ -91,11 +86,6 @@ def test_an_old_request_is_expired(tmp_path):
 
     assert quarantine_requests.is_expired(aged) is True
     assert quarantine_requests.is_expired(request) is False
-
-
-# --------------------------------------------------------------------------- #
-# The engine-side consumer                                                     #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
@@ -160,7 +150,7 @@ async def test_a_scan_failure_does_not_kill_the_supervisor(tmp_path, monkeypatch
 
     monkeypatch.setattr(quarantine_requests, "pending", _boom)
 
-    await system._consume_strategy_quarantine_requests()  # must not raise
+    await system._consume_strategy_quarantine_requests()
 
     governor.quarantine_async.assert_not_awaited()
 
@@ -182,7 +172,7 @@ def test_consume_is_idempotent(tmp_path):
     request = quarantine_requests.pending(tmp_path)[0]
 
     quarantine_requests.consume(request)
-    quarantine_requests.consume(request)  # must not raise
+    quarantine_requests.consume(request)
 
     assert quarantine_requests.pending(tmp_path) == []
 

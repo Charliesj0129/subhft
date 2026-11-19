@@ -26,11 +26,6 @@ def _fmt(price: int) -> str:
     return f"{price // PLATFORM_SCALE:,}"
 
 
-# ---------------------------------------------------------------------------
-# SR-01
-# ---------------------------------------------------------------------------
-
-
 def find_large_trade_levels(
     trades: list[LargeTrade],
     min_volume: int = 20,
@@ -55,11 +50,6 @@ def find_large_trade_levels(
     return levels
 
 
-# ---------------------------------------------------------------------------
-# SR-02
-# ---------------------------------------------------------------------------
-
-
 def find_double_bottoms_tops(
     bars: list[Bar5m],
     tolerance: int = 50_000,
@@ -80,15 +70,12 @@ def find_double_bottoms_tops(
     levels: list[PriceLevel] = []
     n = len(bars)
 
-    # Double bottoms: find pair (i, j) where j >= i + 2,
-    # lows within tolerance, and a higher low exists strictly between them.
     for i in range(n - 2):
         for j in range(i + 2, n):
             low_i = bars[i].low
             low_j = bars[j].low
             if abs(low_i - low_j) > tolerance:
                 continue
-            # There must be at least one bar between i and j with a higher low
             middle_lows = [bars[k].low for k in range(i + 1, j)]
             if not middle_lows:
                 continue
@@ -104,8 +91,6 @@ def find_double_bottoms_tops(
                 )
             )
 
-    # Double tops: find pair (i, j) where j >= i + 2,
-    # highs within tolerance, and a lower high exists strictly between them.
     for i in range(n - 2):
         for j in range(i + 2, n):
             high_i = bars[i].high
@@ -130,11 +115,6 @@ def find_double_bottoms_tops(
     return levels
 
 
-# ---------------------------------------------------------------------------
-# SR-03
-# ---------------------------------------------------------------------------
-
-
 def find_round_numbers(low: int, high: int) -> list[PriceLevel]:
     """SR-03 — Identify psychologically significant round-number price levels.
 
@@ -149,19 +129,16 @@ def find_round_numbers(low: int, high: int) -> list[PriceLevel]:
     Returns:
         Deduplicated PriceLevel list sorted ascending by price.
     """
-    # Tier definitions: (step_points, importance)
     tiers: list[tuple[int, int]] = [
         (1000, 3),
         (500, 2),
         (100, 1),
     ]
 
-    # price → best importance found so far
     best: dict[int, int] = {}
 
     for step_pts, importance in tiers:
         step_scaled = step_pts * PLATFORM_SCALE
-        # First multiple of step_scaled that is >= low
         start = ((low + step_scaled - 1) // step_scaled) * step_scaled
         price = start
         while price <= high:
@@ -178,11 +155,6 @@ def find_round_numbers(low: int, high: int) -> list[PriceLevel]:
         for p, importance in sorted(best.items())
     ]
     return levels
-
-
-# ---------------------------------------------------------------------------
-# SR-04
-# ---------------------------------------------------------------------------
 
 
 def find_session_extremes(sd: SessionData) -> list[PriceLevel]:
@@ -205,11 +177,6 @@ def find_session_extremes(sd: SessionData) -> list[PriceLevel]:
         reason=f"{sd.session}盤低點 {_fmt(sd.low)}",
     )
     return [high_level, low_level]
-
-
-# ---------------------------------------------------------------------------
-# SR-05
-# ---------------------------------------------------------------------------
 
 
 def find_volume_at_price(
@@ -258,11 +225,6 @@ def find_volume_at_price(
     return result
 
 
-# ---------------------------------------------------------------------------
-# SR-06
-# ---------------------------------------------------------------------------
-
-
 def find_failed_breakouts(
     bars: list[Bar5m],
     large_trades: list[LargeTrade],
@@ -288,8 +250,7 @@ def find_failed_breakouts(
     if len(bars) < 3:
         return []
 
-    # Build trade index by price (±tolerance) for fast lookup
-    trade_tolerance = 100 * PLATFORM_SCALE  # 100 pts
+    trade_tolerance = 100 * PLATFORM_SCALE
 
     def _has_trade_near(target_price: int, direction: str) -> bool:
         for t in large_trades:
@@ -302,7 +263,6 @@ def find_failed_breakouts(
     for i in range(len(bars) - 2):
         prev, curr, nxt = bars[i], bars[i + 1], bars[i + 2]
 
-        # Failed high breakout → resistance
         if curr.high > prev.high:
             reversal_close = curr.open - min_reversal_pts
             if nxt.close < reversal_close and _has_trade_near(curr.high, "sell"):
@@ -314,7 +274,6 @@ def find_failed_breakouts(
                     )
                 )
 
-        # Failed low breakout → support
         if curr.low < prev.low:
             reversal_close = curr.open + min_reversal_pts
             if nxt.close > reversal_close and _has_trade_near(curr.low, "buy"):

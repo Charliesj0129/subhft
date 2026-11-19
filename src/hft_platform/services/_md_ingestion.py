@@ -17,10 +17,6 @@ from hft_platform.feature.engine import (
     QUALITY_FLAG_STATE_RESET,
 )
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 _MD_PRICE_FIELDS = (
     "close",
     "price",
@@ -43,11 +39,6 @@ _FEATURE_QUALITY_FLAG_LABELS = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Feed state
-# ---------------------------------------------------------------------------
-
-
 class FeedState(Enum):
     INIT = "INIT"
     CONNECTING = "CONNECTING"
@@ -55,11 +46,6 @@ class FeedState(Enum):
     CONNECTED = "CONNECTED"
     DISCONNECTED = "DISCONNECTED"
     RECOVERING = "RECOVERING"
-
-
-# ---------------------------------------------------------------------------
-# Utility helpers
-# ---------------------------------------------------------------------------
 
 
 def env_int(name: str, default: int) -> int:
@@ -86,11 +72,6 @@ def get_trace_sampler():
         return _get()
     except Exception:
         return None
-
-
-# ---------------------------------------------------------------------------
-# Payload inspection / extraction
-# ---------------------------------------------------------------------------
 
 
 def looks_like_md(obj: object) -> bool:

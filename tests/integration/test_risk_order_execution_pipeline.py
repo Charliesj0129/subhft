@@ -231,7 +231,7 @@ async def test_risk_respects_symbol_scale(tmp_path, monkeypatch):
             symbol="AAA",
             intent_type=IntentType.NEW,
             side=Side.BUY,
-            price=150,  # 1.5 with scale=100
+            price=150,
             qty=2,
             tif=TIF.LIMIT,
             timestamp_ns=time.time_ns(),
@@ -246,7 +246,7 @@ async def test_risk_respects_symbol_scale(tmp_path, monkeypatch):
             symbol="AAA",
             intent_type=IntentType.NEW,
             side=Side.BUY,
-            price=100,  # 1.0 with scale=100
+            price=100,
             qty=2,
             tif=TIF.LIMIT,
             timestamp_ns=time.time_ns(),

@@ -41,7 +41,6 @@ _THRESHOLDS = {"mean_net_edge_pts_per_trade_min": 10.0}
 class TestEdgePerRoundTripGate:
     def test_passes_when_edge_exceeds_floor(self) -> None:
         gate = EdgePerRoundTripGate()
-        # 60 trips, total net 720 pts -> 12 pts/trip
         daily = [_row(pnl=60.0, trips=5) for _ in range(12)]
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
@@ -51,7 +50,6 @@ class TestEdgePerRoundTripGate:
 
     def test_fails_when_edge_below_floor(self) -> None:
         gate = EdgePerRoundTripGate()
-        # 100 trips, total net 500 pts -> 5 pts/trip
         daily = [_row(pnl=50.0, trips=10) for _ in range(10)]
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
@@ -59,12 +57,11 @@ class TestEdgePerRoundTripGate:
         assert out.metrics["mean_net_edge_pts_per_trade"] == 5.0
 
     def test_fails_at_exactly_the_floor_strict_inequality(self) -> None:
-        # Goal §5: "> 10", not ">= 10". Edge of exactly 10 should fail.
         gate = EdgePerRoundTripGate()
         daily = [_row(pnl=100.0, trips=10) for _ in range(1)]
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
-        assert out.passed is False  # 10.0 == floor, fails strict >
+        assert out.passed is False
         assert out.metrics["mean_net_edge_pts_per_trade"] == 10.0
 
     def test_fails_when_trips_zero_but_fills_present(self) -> None:
@@ -81,8 +78,6 @@ class TestEdgePerRoundTripGate:
         gate = EdgePerRoundTripGate()
         r = _FakeResult(daily_pnl=[_row(pnl=0.0, trips=0, fills=0)])
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
-        # No fills, no trips, no PnL — there is no edge to evaluate.
-        # The min_sample_size gate is the right place to fail this.
         assert out.passed is True
         assert "no activity" in out.details.lower()
 
@@ -109,7 +104,6 @@ class TestEdgePerRoundTripGate:
         daily = [_row(pnl=600.0, trips=50)]
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds={"mean_net_edge_pts_per_trade_min": 20.0})
-        # 600/50 = 12, < 20 floor
         assert out.passed is False
         assert out.metrics["mean_net_edge_pts_per_trade"] == 12.0
         assert out.metrics["threshold_pts"] == 20.0

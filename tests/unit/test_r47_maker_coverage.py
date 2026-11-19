@@ -19,11 +19,6 @@ from hft_platform.events import FeatureUpdateEvent, GapEvent, LOBStatsEvent, Tic
 _PRICE_SCALE = 10000
 
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_lob_stats(
     symbol="TMFD6",
     mid_price_x2=2000_0000,
@@ -55,7 +50,6 @@ def _make_feature_event(
 ):
     """Create a FeatureUpdateEvent with enough values for R47 indices."""
     if values is None:
-        # 22 features: indices 0-21 used by R47
         values = tuple([0] * 22)
     return FeatureUpdateEvent(
         symbol=symbol,
@@ -140,7 +134,6 @@ def strategy():
         max_pos=2,
     )
     strat.symbols = {"TMFD6"}
-    # Set up a mock context with a factory that returns OrderIntent objects
     ctx = MagicMock()
     ctx.positions = {}
     ctx.strategy_id = "r47_maker"
@@ -148,11 +141,6 @@ def strategy():
     strat.ctx = ctx
     strat._generated_intents = []
     return strat
-
-
-# ---------------------------------------------------------------------------
-# Tests: _PEState (Permutation Entropy)
-# ---------------------------------------------------------------------------
 
 
 class TestPEState:
@@ -166,14 +154,14 @@ class TestPEState:
         assert pe.h == 1.0
         assert pe.warmed_up is False
         h = pe.update(1.0)
-        assert h == 1.0  # Not enough samples yet
+        assert h == 1.0
 
     def test_warmup_needs_d_values(self):
         """Lines 90-91: Need d values before computing pattern."""
         from hft_platform.strategies.r47_maker import _PEState
 
         pe = _PEState(d=4, window=100)
-        for i in range(3):  # d-1 values
+        for i in range(3):
             h = pe.update(float(i))
         assert pe.warmed_up is False
 
@@ -191,12 +179,10 @@ class TestPEState:
         from hft_platform.strategies.r47_maker import _PEState
 
         pe = _PEState(d=4, window=50)
-        # Feed monotonically increasing values — should produce low entropy
         for i in range(60):
             pe.update(float(i))
         assert pe.warmed_up is True
         h = pe.h
-        # Monotonic sequence produces only one pattern → low entropy
         assert 0.0 <= h <= 1.0
 
     def test_random_input_higher_entropy(self):
@@ -215,7 +201,7 @@ class TestPEState:
         """Lines 98-103: When deque is full, oldest pattern is removed."""
         from hft_platform.strategies.r47_maker import _PEState
 
-        pe = _PEState(d=4, window=30)  # pat_win = 30 - 4 + 1 = 27
+        pe = _PEState(d=4, window=30)
         for i in range(50):
             pe.update(float(i % 7))
         assert pe.warmed_up is True
@@ -232,7 +218,7 @@ class TestPEState:
             idx = _PEState._rank_to_id(list(perm))
             assert 0 <= idx < 24
             seen.add(idx)
-        assert len(seen) == 24  # All 24 patterns mapped uniquely
+        assert len(seen) == 24
 
     def test_rank_to_id_with_ties(self):
         """Tied values produce a deterministic pattern."""
@@ -241,11 +227,6 @@ class TestPEState:
         idx = _PEState._rank_to_id([1.0, 1.0, 1.0, 1.0])
         assert isinstance(idx, int)
         assert 0 <= idx < 24
-
-
-# ---------------------------------------------------------------------------
-# Tests: _QueueState (Queue Survival)
-# ---------------------------------------------------------------------------
 
 
 class TestQueueState:
@@ -257,7 +238,7 @@ class TestQueueState:
 
         qs = _QueueState(ema_alpha=0.05)
         p_bid, p_ask = qs.update(100, 100)
-        assert p_bid == 0.5  # default
+        assert p_bid == 0.5
         assert p_ask == 0.5
         assert qs.warmed_up is False
 
@@ -267,7 +248,7 @@ class TestQueueState:
 
         qs = _QueueState(ema_alpha=0.1)
         qs.update(100, 100)
-        qs.update(120, 100)  # +20 on bid
+        qs.update(120, 100)
         assert qs._lambda_bid > 1.0
 
     def test_negative_delta_updates_mu(self):
@@ -276,7 +257,7 @@ class TestQueueState:
 
         qs = _QueueState(ema_alpha=0.1)
         qs.update(100, 100)
-        qs.update(80, 100)  # -20 on bid
+        qs.update(80, 100)
         assert qs._mu_bid > 1.0
 
     def test_ask_positive_delta(self):
@@ -285,7 +266,7 @@ class TestQueueState:
 
         qs = _QueueState(ema_alpha=0.1)
         qs.update(100, 100)
-        qs.update(100, 130)  # +30 on ask
+        qs.update(100, 130)
         assert qs._lambda_ask > 1.0
 
     def test_ask_negative_delta(self):
@@ -294,7 +275,7 @@ class TestQueueState:
 
         qs = _QueueState(ema_alpha=0.1)
         qs.update(100, 100)
-        qs.update(100, 70)  # -30 on ask
+        qs.update(100, 70)
         assert qs._mu_ask > 1.0
 
     def test_warmup_after_50_updates(self):
@@ -324,14 +305,9 @@ class TestQueueState:
         qs.update(100, 100)
         lam_bid_before = qs._lambda_bid
         mu_bid_before = qs._mu_bid
-        qs.update(100, 100)  # No change
+        qs.update(100, 100)
         assert qs._lambda_bid == lam_bid_before
         assert qs._mu_bid == mu_bid_before
-
-
-# ---------------------------------------------------------------------------
-# Tests: _MFGState (MFG Inventory Proxy)
-# ---------------------------------------------------------------------------
 
 
 class TestMFGState:
@@ -386,13 +362,8 @@ class TestMFGState:
         from hft_platform.strategies.r47_maker import _MFGState
 
         mfg = _MFGState(ema_alpha=0.5)
-        mfg.update_tick(1, 100)  # Large volume
+        mfg.update_tick(1, 100)
         assert mfg._signed_flow_ema > 0
-
-
-# ---------------------------------------------------------------------------
-# Tests: R47MakerStrategy event handlers
-# ---------------------------------------------------------------------------
 
 
 class TestR47OnTick:
@@ -425,7 +396,6 @@ class TestR47OnFeatures:
     def test_on_features_none_values_returns(self, strategy):
         """Line 481: None values early return."""
         event = _make_feature_event(values=None)
-        # Manually set values to None since dataclass may not accept None
         object.__setattr__(event, "values", None)
         strategy.on_features(event)
         assert "TMFD6" not in strategy._feature_cache
@@ -447,9 +417,8 @@ class TestR47OnFeatures:
 
     def test_on_features_updates_pe(self, strategy):
         """Lines 497-500: PE state updated with QI imbalance."""
-        # Index 10 = L1_IMBALANCE_PPM
         values = list([0] * 22)
-        values[10] = 500_000  # 0.5 QI
+        values[10] = 500_000
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
         pe = strategy._get_pe("TMFD6")
@@ -458,8 +427,8 @@ class TestR47OnFeatures:
     def test_on_features_updates_queue(self, strategy):
         """Lines 503-507: Queue state updated with L1 quantities."""
         values = list([0] * 22)
-        values[8] = 50  # L1_BID_QTY
-        values[9] = 100  # L1_ASK_QTY
+        values[8] = 50
+        values[9] = 100
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
         qs = strategy._get_queue("TMFD6")
@@ -468,36 +437,32 @@ class TestR47OnFeatures:
     def test_on_features_d2_suppression_flags(self, strategy):  # noqa: no-assert
         """Lines 515-523: D2 sets suppression flags when queue depleted."""
         qs = strategy._get_queue("TMFD6")
-        # Warm up the queue state
         qs._warmed_up = True
-        qs._p_depl_bid = 0.9  # Above default 0.7 threshold
+        qs._p_depl_bid = 0.9
         qs._p_depl_ask = 0.9
 
         values = list([0] * 22)
-        values[8] = 10  # bid_qty
-        values[9] = 10  # ask_qty
+        values[8] = 10
+        values[9] = 10
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
-        # After update, suppression flags should be set based on new depletion probs
 
     def test_on_features_d4_qi_widen_ask(self, strategy):
         """Lines 528-539: QI > threshold widens ask."""
         values = list([0] * 22)
-        values[8] = 100  # bid_qty high (buying pressure)
-        values[9] = 10  # ask_qty low
+        values[8] = 100
+        values[9] = 10
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
-        # qi = (100-10)/110 ≈ 0.82 > 0.1 threshold → widen ask
         assert strategy._qi_widen_ask == strategy._qi_widen_ticks
 
     def test_on_features_d4_qi_widen_bid(self, strategy):
         """Lines 537-538: QI < -threshold widens bid."""
         values = list([0] * 22)
-        values[8] = 10  # bid_qty low (selling pressure)
-        values[9] = 100  # ask_qty high
+        values[8] = 10
+        values[9] = 100
         event = _make_feature_event(values=tuple(values))
         strategy.on_features(event)
-        # qi = (10-100)/110 ≈ -0.82 < -0.1 threshold → widen bid
         assert strategy._qi_widen_bid == strategy._qi_widen_ticks
 
 
@@ -548,7 +513,6 @@ class TestR47OnFill:
         fill = _make_fill(fill_id="DUP_001")
         strategy.on_fill(fill)
         assert strategy._local_pos["TMFD6"] == 1
-        # Second identical fill should be skipped
         strategy.on_fill(fill)
         assert strategy._local_pos["TMFD6"] == 1
 
@@ -558,7 +522,6 @@ class TestR47OnFill:
         for i in range(10):
             fill = _make_fill(fill_id=f"F{i:03d}", side=Side.BUY)
             strategy.on_fill(fill)
-        # Should have evicted some entries
         assert len(strategy._seen_fill_ids) <= 10
 
     def test_on_fill_empty_fill_id_not_deduped(self, strategy):
@@ -566,7 +529,6 @@ class TestR47OnFill:
         fill = _make_fill(fill_id="")
         strategy.on_fill(fill)
         strategy.on_fill(fill)
-        # Both fills should count (no dedup on empty id)
         assert strategy._local_pos["TMFD6"] == 2
 
 
@@ -675,7 +637,6 @@ class TestR47OnRiskFeedback:
             side=None,
         )
         strategy.on_risk_feedback(fb)
-        # Must NOT decrement — this is the safe failure mode (quoting freezes)
         assert strategy._pending_buy["TMFD6"] == 1
         assert strategy._pending_sell["TMFD6"] == 1
 
@@ -730,11 +691,6 @@ class TestR47OnGap:
         assert len(strategy._active_sell_oid) == 0
 
 
-# ---------------------------------------------------------------------------
-# Tests: R47 on_stats quoting logic
-# ---------------------------------------------------------------------------
-
-
 class TestR47OnStats:
     """Test on_stats and _generate_quotes (lines 699-819)."""
 
@@ -747,7 +703,6 @@ class TestR47OnStats:
     def test_on_stats_none_mid_skips(self, strategy):
         """mid_price_x2=None gets auto-computed by __post_init__. Use mock to force None."""
         event = _make_lob_stats(mid_price_x2=0, spread_scaled=6_0000)
-        # Force mid_price_x2 to None after construction
         object.__setattr__(event, "mid_price_x2", None)
         strategy.on_stats(event)
         assert strategy._quotes_sent == 0
@@ -766,7 +721,6 @@ class TestR47OnStats:
 
     def test_on_stats_spread_below_threshold_blocked(self, strategy):
         """Lines 714-716: spread < threshold suppresses all quotes."""
-        # threshold is 5 pts = 50000 scaled
         event = _make_lob_stats(spread_scaled=3_0000)
         strategy.on_stats(event)
         assert strategy._spread_blocked == 1
@@ -775,7 +729,7 @@ class TestR47OnStats:
     def test_on_stats_toxicity_above_threshold_blocked(self, strategy):
         """Lines 720-724: high toxicity suppresses quotes."""
         values = list([0] * 22)
-        values[21] = 800  # toxicity > 700
+        values[21] = 800
         strategy._feature_cache["TMFD6"] = tuple(values)
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
@@ -786,7 +740,7 @@ class TestR47OnStats:
         """Lines 728-735: PE below danger threshold suppresses quotes."""
         pe = strategy._get_pe("TMFD6")
         pe._warmup_done = True
-        pe._h = 0.3  # Below 0.55 danger threshold
+        pe._h = 0.3
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
         assert strategy._pe_blocked == 1
@@ -800,14 +754,13 @@ class TestR47OnStats:
             imbalance=0.0,
         )
         strategy.on_stats(event)
-        assert strategy._quotes_sent == 2  # buy + sell
+        assert strategy._quotes_sent == 2
 
     def test_on_stats_suppress_bid_skips_buy(self, strategy):
         """Lines 807: suppress_bid prevents buy quote."""
         strategy._suppress_bid = True
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
-        # Only sell should be sent
         assert strategy._quotes_sent == 1
 
     def test_on_stats_suppress_ask_skips_sell(self, strategy):
@@ -818,34 +771,32 @@ class TestR47OnStats:
 
     def test_on_stats_max_pos_prevents_buy(self, strategy):
         """Lines 794: pos >= max_pos blocks buy."""
-        strategy._local_pos["TMFD6"] = 2  # max_pos = 2
+        strategy._local_pos["TMFD6"] = 2
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
-        # Only sell should be sent
         assert strategy._quotes_sent == 1
 
     def test_on_stats_max_pos_prevents_sell(self, strategy):
         """Lines 795: pos <= -max_pos blocks sell."""
-        strategy._local_pos["TMFD6"] = -2  # max_pos = 2
+        strategy._local_pos["TMFD6"] = -2
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
         assert strategy._quotes_sent == 1
 
     def test_on_stats_pending_buy_prevents_new_buy(self, strategy):
         """Lines 794: pending_buy fills remaining capacity."""
-        strategy._pending_buy["TMFD6"] = 2  # max_pos = 2
+        strategy._pending_buy["TMFD6"] = 2
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
-        assert strategy._quotes_sent == 1  # only sell
+        assert strategy._quotes_sent == 1
 
     def test_on_stats_price_gate_prevents_requote(self, strategy):
         """Lines 784-785: same price does not generate new order."""
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
         quotes_first = strategy._quotes_sent
-        # Second call at same prices should not generate new quotes
         strategy.on_stats(event)
-        assert strategy._quotes_sent == quotes_first  # No additional quotes
+        assert strategy._quotes_sent == quotes_first
 
     def test_on_stats_cancel_before_requote(self, strategy):
         """Lines 798-805: F2 cancel stale ROD before requoting."""
@@ -853,13 +804,7 @@ class TestR47OnStats:
         strategy._active_sell_oid["TMFD6"] = "OLD_SELL"
         event = _make_lob_stats(spread_scaled=6_0000)
         strategy.on_stats(event)
-        # After first quote, verify active OIDs were processed
         assert strategy._quotes_sent >= 1
-
-
-# ---------------------------------------------------------------------------
-# Tests: _compute_mfg_widening
-# ---------------------------------------------------------------------------
 
 
 class TestComputeMFGWidening:
@@ -877,7 +822,7 @@ class TestComputeMFGWidening:
 
         mfg = _MFGState()
         mfg._warmed_up = True
-        mfg._capitulation_z = 1.0  # Below 2.0 threshold
+        mfg._capitulation_z = 1.0
         bid_w, ask_w = strategy._compute_mfg_widening(mfg, 6_0000)
         assert bid_w == 0 and ask_w == 0
 
@@ -888,7 +833,7 @@ class TestComputeMFGWidening:
         mfg = _MFGState(ema_alpha=0.5)
         mfg._warmed_up = True
         mfg._capitulation_z = 3.0
-        mfg._signed_flow_ema = 10.0  # positive → flow_direction = +1
+        mfg._signed_flow_ema = 10.0
         bid_w, ask_w = strategy._compute_mfg_widening(mfg, 6_0000)
         assert bid_w == 0
         assert ask_w > 0
@@ -900,7 +845,7 @@ class TestComputeMFGWidening:
         mfg = _MFGState(ema_alpha=0.5)
         mfg._warmed_up = True
         mfg._capitulation_z = 3.0
-        mfg._signed_flow_ema = -10.0  # negative → flow_direction = -1
+        mfg._signed_flow_ema = -10.0
         bid_w, ask_w = strategy._compute_mfg_widening(mfg, 6_0000)
         assert bid_w > 0
         assert ask_w == 0
@@ -912,7 +857,7 @@ class TestComputeMFGWidening:
         mfg = _MFGState()
         mfg._warmed_up = True
         mfg._capitulation_z = 3.0
-        mfg._signed_flow_ema = 0.0  # flow_direction = 0
+        mfg._signed_flow_ema = 0.0
         bid_w, ask_w = strategy._compute_mfg_widening(mfg, 6_0000)
         assert bid_w == 0 and ask_w == 0
 
@@ -922,17 +867,12 @@ class TestComputeMFGWidening:
 
         mfg = _MFGState()
         mfg._warmed_up = True
-        mfg._capitulation_z = 100.0  # Very high z → mult capped at 3
+        mfg._capitulation_z = 100.0
         mfg._signed_flow_ema = 10.0
         bid_w, ask_w = strategy._compute_mfg_widening(mfg, 6_0000)
         tick_size = max(1, 6_0000 * 50 // 100)
         max_widen = tick_size * 3
         assert ask_w == max_widen
-
-
-# ---------------------------------------------------------------------------
-# Tests: cross-instrument execution
-# ---------------------------------------------------------------------------
 
 
 class TestCrossInstrument:
@@ -947,11 +887,6 @@ class TestCrossInstrument:
         """Line 466: trade_symbol overrides."""
         strategy._trade_symbol = "TMFD6"
         assert strategy._exec_symbol("TXFD6") == "TMFD6"
-
-
-# ---------------------------------------------------------------------------
-# Tests: seed_local_pos and _local_position
-# ---------------------------------------------------------------------------
 
 
 class TestLocalPosition:
@@ -989,11 +924,6 @@ class TestLocalPosition:
         assert pos == -1
 
 
-# ---------------------------------------------------------------------------
-# Tests: PE width multiplier in _generate_quotes
-# ---------------------------------------------------------------------------
-
-
 class TestPEWidthMultiplier:
     """Test line 761: PE intermediate structure doubles quote width."""
 
@@ -1005,7 +935,6 @@ class TestPEWidthMultiplier:
         event = _make_lob_stats(spread_scaled=6_0000)
         initial_quotes = strategy._quotes_sent
         strategy.on_stats(event)
-        # Quotes are wider but still generated
         assert strategy._quotes_sent > initial_quotes
 
     def test_pe_width_mult_normal_when_high_entropy(self, strategy):
@@ -1018,18 +947,12 @@ class TestPEWidthMultiplier:
         assert strategy._quotes_sent == 2
 
 
-# ---------------------------------------------------------------------------
-# Tests: _log_stats (coverage line 835-852)
-# ---------------------------------------------------------------------------
-
-
 class TestLogStats:
     def test_log_stats_at_interval(self, strategy):
         """Lines 818-819: logging triggered every _LOG_INTERVAL."""
         from hft_platform.strategies.r47_maker import _LOG_INTERVAL
 
-        strategy._stats_count = _LOG_INTERVAL  # Next on_stats triggers log at count+1
+        strategy._stats_count = _LOG_INTERVAL
         event = _make_lob_stats(spread_scaled=6_0000)
-        # Should not raise
         strategy.on_stats(event)
         assert strategy._stats_count == _LOG_INTERVAL + 1

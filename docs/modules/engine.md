@@ -81,3 +81,12 @@ async for event in bus.consume():   # Per-consumer async generator
 2. **GapEvent ts**: Uses `now_ns()` (current time), NOT the missed events' timestamps
 3. **Strategies must re-sync on GapEvent** (e.g., re-request LOB snapshot)
 4. **Consumer signal cleanup**: Per-consumer `asyncio.Event` auto-unregistered on generator close; crash without cleanup = minor leak
+
+## Event notification ownership
+
+In event mode, each `RingBufferBus.consume` iterator registers its own
+`asyncio.Event` and clears that event after waking. This lets a slow consumer
+clear its notification without clearing the notification of another consumer.
+`RingBufferBus._notify` sets every registered event on the configured
+notification interval. The ring cursor determines when an event is ready and
+how much data a lagging consumer has missed.

@@ -72,6 +72,5 @@ def test_force_false_does_not_require_force_reason(tmp_path: Path) -> None:
     """force=False should work fine with no force_reason (default)."""
     config = _base_config(tmp_path, force=False)
     result = promote_alpha(config)
-    # Gates will fail, but no ValueError should be raised
     assert not result.approved
     assert not result.forced

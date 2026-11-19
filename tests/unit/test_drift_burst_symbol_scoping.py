@@ -32,11 +32,6 @@ def _system() -> HFTSystem:
     return system
 
 
-# --------------------------------------------------------------------------- #
-# Reference-symbol latch                                                       #
-# --------------------------------------------------------------------------- #
-
-
 def test_drift_burst_symbol_latch_survives_book_iteration_order():
     """A reordered dict must not move the reference instrument."""
     system = _system()
@@ -45,7 +40,6 @@ def test_drift_burst_symbol_latch_survives_book_iteration_order():
     assert system._drift_burst_book(lob) is lob.books["TXFH6"]
     assert system._drift_burst_symbol == "TXFH6"
 
-    # Same symbols, different insertion order — the latch must hold.
     lob.books = {"TMFH6": _book(199_000_00), "TXFH6": _book(200_100_00)}
     assert system._drift_burst_book(lob) is lob.books["TXFH6"]
     assert system._drift_burst_symbol == "TXFH6"
@@ -57,7 +51,7 @@ def test_drift_burst_reference_symbol_repicked_when_evicted():
     lob = SimpleNamespace(books={"TXFH6": _book(200_000_00), "TMFH6": _book(199_000_00)})
     system._drift_burst_book(lob)
 
-    del lob.books["TXFH6"]  # evicted by the LOB engine's TTL sweep
+    del lob.books["TXFH6"]
     assert system._drift_burst_book(lob) is lob.books["TMFH6"]
     assert system._drift_burst_symbol == "TMFH6"
 
@@ -67,7 +61,7 @@ def test_drift_burst_reference_symbol_repicked_when_mid_goes_invalid():
     lob = SimpleNamespace(books={"TXFH6": _book(200_000_00), "TMFH6": _book(199_000_00)})
     system._drift_burst_book(lob)
 
-    lob.books["TXFH6"] = _book(0)  # one-sided / empty book
+    lob.books["TXFH6"] = _book(0)
     assert system._drift_burst_book(lob) is lob.books["TMFH6"]
     assert system._drift_burst_symbol == "TMFH6"
 
@@ -98,11 +92,6 @@ def test_drift_burst_book_returns_none_when_books_are_empty():
     assert system._drift_burst_book(SimpleNamespace(books={})) is None
 
 
-# --------------------------------------------------------------------------- #
-# Reference-symbol *selection* (the latch fixed rotation, not choice)          #
-# --------------------------------------------------------------------------- #
-
-
 def test_drift_burst_reference_prefers_the_tightest_spread_over_dict_order():
     """Latching held one symbol, but it was still whichever iterated first.
 
@@ -113,8 +102,8 @@ def test_drift_burst_reference_prefers_the_tightest_spread_over_dict_order():
     system = _system()
     lob = SimpleNamespace(
         books={
-            "EXFH6": _book(200_000_00, spread=487_500),  # 48.75 pt, first in dict
-            "TXFH6": _book(200_000_00, spread=10_000),  # 1 pt, front month
+            "EXFH6": _book(200_000_00, spread=487_500),
+            "TXFH6": _book(200_000_00, spread=10_000),
         }
     )
 
@@ -127,8 +116,8 @@ def test_drift_burst_reference_compares_spread_relative_to_price():
     system = _system()
     lob = SimpleNamespace(
         books={
-            "CHEAP": _book(1_000_00, spread=500),  # 0.5% of mid
-            "RICH": _book(200_000_00, spread=20_000),  # 0.1% of mid
+            "CHEAP": _book(1_000_00, spread=500),
+            "RICH": _book(200_000_00, spread=20_000),
         }
     )
 
@@ -176,11 +165,6 @@ def test_drift_burst_reference_log_carries_the_chosen_spread():
     assert events[0]["spread_scaled"] == 10_000
 
 
-# --------------------------------------------------------------------------- #
-# Detector symbol scoping                                                      #
-# --------------------------------------------------------------------------- #
-
-
 def test_drift_burst_detector_resets_when_reference_symbol_changes():
     """A window built from one contract must not carry into the next."""
     detector = DriftBurstDetector(window_size=10, burst_threshold=3.0)
@@ -191,7 +175,6 @@ def test_drift_burst_detector_resets_when_reference_symbol_changes():
     detector.evaluate(mid_price_x2=40_000_00, ts=11_000_000, symbol="TMFH6")
 
     assert detector._symbol == "TMFH6"
-    # Fresh window: only the first post-reset sample seeded _last_mid_x2.
     assert detector._count == 0
     assert detector._drift_sum == 0.0
 
@@ -221,8 +204,6 @@ def test_drift_burst_log_includes_symbol():
     detector = DriftBurstDetector(window_size=10, burst_threshold=0.5, min_bpv=0.0)
 
     with structlog.testing.capture_logs() as logs:
-        # A steady one-directional ramp drives |T| past a deliberately low
-        # threshold without needing a synthetic jump.
         for i in range(60):
             detector.evaluate(
                 mid_price_x2=200_000_00 + i * 200,
@@ -234,11 +215,6 @@ def test_drift_burst_log_includes_symbol():
     bursts = [e for e in logs if e.get("event") == "drift_burst_detected"]
     assert bursts, "expected at least one burst from a monotonic ramp"
     assert bursts[0]["symbol"] == "TXFH6"
-
-
-# --------------------------------------------------------------------------- #
-# StormGuard passes the symbol through                                         #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("symbol", ["TXFH6", "TMFH6"])

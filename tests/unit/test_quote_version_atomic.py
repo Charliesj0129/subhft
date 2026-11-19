@@ -48,7 +48,6 @@ def test_get_quote_version_snapshots_attribute_once():
         def _supports_quote_v1(self) -> bool:
             return True
 
-        # The read-count is the observable contract: a single snapshot.
         @property
         def _quote_version(self) -> str:
             reads.append(self._quote_version_storage)
@@ -56,9 +55,6 @@ def test_get_quote_version_snapshots_attribute_once():
 
     client = _Client()
     orch = ReconnectOrchestrator(client)  # type: ignore[arg-type]
-    # The shioaji QuoteVersion enum may not be available in the test env,
-    # which raises after the second read — that's still evidence of the
-    # race. Swallow the AttributeError and check read count.
     try:
         orch.get_quote_version()
     except AttributeError:
@@ -68,7 +64,6 @@ def test_get_quote_version_snapshots_attribute_once():
 
 def test_quote_version_lock_exists_and_is_lock_like():
     stub = _make_client_stub("v0")
-    # Must be usable as a context manager.
     assert hasattr(stub._quote_version_lock, "acquire")
     assert hasattr(stub._quote_version_lock, "release")
     with stub._quote_version_lock:

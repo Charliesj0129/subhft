@@ -26,7 +26,7 @@ class TestOrphanedFillDLQ:
             fill = MagicMock(symbol=f"sym{i}")
             dlq.add(fill)
 
-        assert dlq.count == 3  # Bounded to max_size
+        assert dlq.count == 3
 
     def test_drain_returns_all_items(self):
         dlq = OrphanedFillDLQ(max_size=100)
@@ -37,7 +37,7 @@ class TestOrphanedFillDLQ:
         items = dlq.drain()
 
         assert len(items) == 3
-        assert dlq.count == 0  # Empty after drain
+        assert dlq.count == 0
 
     def test_drain_empty_returns_empty_list(self):
         dlq = OrphanedFillDLQ()
@@ -67,7 +67,7 @@ class TestOrphanedFillDLQ:
         assert len(resolved) == 1
         assert resolved[0].strategy_id == "strat_a"
         assert len(still_orphaned) == 1
-        assert dlq.count == 1  # Only unresolved remain
+        assert dlq.count == 1
 
     def test_retry_all_resolved(self):
         dlq = OrphanedFillDLQ(max_size=100)
@@ -129,20 +129,16 @@ class TestOverflowEvictionPersistence:
         overflow_path = str(tmp_path / "dlq_overflow.jsonl")
         dlq = OrphanedFillDLQ(max_size=2, persist_path=persist_path)
 
-        # Add 3 fills → first one is evicted
         dlq.add(_make_fill("EVICTED", "E1"))
         dlq.add(_make_fill("KEPT1", "K1"))
         dlq.add(_make_fill("KEPT2", "K2"))
         assert dlq.count == 2
 
-        # Graceful shutdown
         dlq.persist()
 
-        # Reload into new DLQ (larger so it can hold all)
         dlq2 = OrphanedFillDLQ(max_size=100, persist_path=persist_path)
         dlq2.load()
 
-        # The evicted fill MUST be recovered
         all_fills = dlq2.drain()
         symbols = {f.symbol for f in all_fills}
         assert "EVICTED" in symbols, "Evicted fill was permanently lost"
@@ -153,7 +149,6 @@ class TestOverflowEvictionPersistence:
         persist_path = str(tmp_path / "dlq.jsonl")
         dlq = OrphanedFillDLQ(max_size=2, persist_path=persist_path)
 
-        # Add 5 fills → 3 evicted, only last 2 in memory
         for i in range(5):
             dlq.add(_make_fill(f"SYM{i}", f"ORD{i}"))
         assert dlq.count == 2
@@ -165,7 +160,6 @@ class TestOverflowEvictionPersistence:
 
         all_fills = dlq2.drain()
         symbols = {f.symbol for f in all_fills}
-        # All 5 should be recoverable (3 evicted + 2 in-memory)
         for i in range(5):
             assert f"SYM{i}" in symbols, f"SYM{i} lost"
 
@@ -185,7 +179,7 @@ class TestPersistDoesNotDropFillsSilently:
     @staticmethod
     def _unserializable(symbol: str, order_id: str) -> FillEvent:
         fill = _make_fill(symbol, order_id)
-        fill.price = 2**70  # orjson rejects integers beyond 64 bits
+        fill.price = 2**70
         return fill
 
     def test_persist_reports_an_unserializable_fill_instead_of_dropping_it(self, tmp_path):
@@ -229,7 +223,7 @@ class TestPersistDoesNotDropFillsSilently:
         dlq = OrphanedFillDLQ(max_size=1, persist_path=path)
         dlq.add(self._unserializable("BAD", "B1"))
 
-        dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> _persist_single(BAD)
+        dlq.add(_make_fill("GOOD", "G1"))
 
         with open(path + ".unserializable") as f:
             assert "B1" in f.read()
@@ -283,7 +277,7 @@ class TestPersistDoesNotDropFillsSilently:
         with patch("hft_platform.execution.fill_dlq.MetricsRegistry") as registry:
             registry.get.return_value.fill_dlq_persist_failed_total.inc.side_effect = RuntimeError("registry gone")
             registry.get.return_value.fill_dlq_overflow_total.inc.return_value = None
-            dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD; quarantine raises internally
+            dlq.add(_make_fill("GOOD", "G1"))
 
         assert [fill.symbol for fill in dlq.drain()] == ["GOOD"]
 
@@ -293,7 +287,7 @@ class TestPersistDoesNotDropFillsSilently:
         sidecar = path + ".unserializable"
         dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
         dlq.add(self._unserializable("BAD", "B1"))
-        os.mkdir(sidecar)  # open(sidecar, "a") now raises IsADirectoryError, an OSError
+        os.mkdir(sidecar)
 
         dlq.persist()
         os.rmdir(sidecar)
@@ -320,7 +314,7 @@ class TestPersistDoesNotDropFillsSilently:
         dlq.add(self._unserializable("BAD", "B1"))
 
         with patch("hft_platform.execution.fill_dlq.os.fsync") as fsync:
-            dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> _persist_single fails -> quarantine
+            dlq.add(_make_fill("GOOD", "G1"))
 
         fsync.assert_not_called()
         with open(str(tmp_path / "dlq.jsonl") + ".unserializable") as f:
@@ -332,7 +326,7 @@ class TestPersistDoesNotDropFillsSilently:
         sidecar = path + ".unserializable"
         dlq = OrphanedFillDLQ(max_size=1, persist_path=path)
         dlq.add(self._unserializable("BAD", "B1"))
-        dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> flush-only quarantine
+        dlq.add(_make_fill("GOOD", "G1"))
         synced_inodes: list[int] = []
         real_fsync = os.fsync
 
@@ -351,7 +345,7 @@ class TestPersistDoesNotDropFillsSilently:
         sidecar = path + ".unserializable"
         dlq = OrphanedFillDLQ(max_size=1, persist_path=path)
         dlq.add(self._unserializable("BAD", "B1"))
-        dlq.add(_make_fill("GOOD", "G1"))  # evicts BAD -> flush-only quarantine
+        dlq.add(_make_fill("GOOD", "G1"))
         real_fsync = os.fsync
         sidecar_syncs: list[bool] = []
 
@@ -365,7 +359,7 @@ class TestPersistDoesNotDropFillsSilently:
         with patch("hft_platform.execution.fill_dlq.os.fsync", _fsync):
             dlq.persist()
 
-        assert len(sidecar_syncs) == 2  # the failed sync, then a durable rewrite
+        assert len(sidecar_syncs) == 2
         with open(sidecar) as f:
             assert "B1" in f.read()
 
@@ -379,7 +373,7 @@ class TestPersistDoesNotDropFillsSilently:
         dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
         dlq.load()
         dlq.add(self._unserializable("BAD", "B1"))
-        os.mkdir(path + ".unserializable")  # the sidecar can never be opened
+        os.mkdir(path + ".unserializable")
 
         written, failed = dlq.persist()
 
@@ -422,7 +416,7 @@ class TestPersistDoesNotDropFillsSilently:
         old_bytes = open(path, "rb").read()
         dlq = OrphanedFillDLQ(max_size=10, persist_path=path)
         dlq.load()
-        dlq.add(_make_fill("NEW", "N1"))  # makes the would-be new main file differ from the old one
+        dlq.add(_make_fill("NEW", "N1"))
         dlq.add(self._unserializable("BAD", "B1"))
         os.mkdir(path + ".unserializable")
 
@@ -490,7 +484,7 @@ class TestPersistDoesNotDropFillsSilently:
             dlq.persist()
 
         assert events.index("dirsync") < events.index("rename")
-        assert events.count("dirsync") >= 2  # sidecar creation, then the main file's own rename
+        assert events.count("dirsync") >= 2
 
     def test_persist_keeps_the_main_file_when_the_directory_sync_fails(self, tmp_path):
         path = str(tmp_path / "dlq.jsonl")

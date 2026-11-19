@@ -20,9 +20,9 @@ logger = get_logger("recorder.batcher")
 class BackpressurePolicy:
     """Backpressure handling when buffer is full."""
 
-    DROP_OLDEST = "drop_oldest"  # Drop oldest entries to make room
-    DROP_NEWEST = "drop_newest"  # Reject new entries
-    BLOCK = "block"  # Block until space available (not recommended for HFT)
+    DROP_OLDEST = "drop_oldest"
+    DROP_NEWEST = "drop_newest"
+    BLOCK = "block"
 
 
 class ColumnarBuffer:
@@ -51,7 +51,6 @@ class ColumnarBuffer:
     def append_row(self, row_dict: dict[str, Any]) -> None:
         """Append a single row dict to columnar storage."""
         if self._column_names is None:
-            # Fix column order from first row
             self._column_names = list(row_dict.keys())
             for col in self._column_names:
                 self._columns[col] = []
@@ -78,7 +77,7 @@ class ColumnarBuffer:
     def set_schema(self, column_names: list[str]) -> None:
         """Pre-set column schema (used with schema extractors)."""
         if self._column_names is not None and self._row_count > 0:
-            return  # Already has data, don't reset
+            return
         self._column_names = list(column_names)
         self._columns = {col: [] for col in self._column_names}
 
@@ -133,13 +132,11 @@ class GlobalMemoryGuard:
     lowest-priority batchers drop first.
     """
 
-    # Priority: higher = more important. Fills/orders must never be evicted
-    # for market data — financial integrity outranks tick completeness.
     DEFAULT_PRIORITIES: dict[str, int] = {
         "hft.fills": 110,
         "hft.orders": 105,
         "hft.market_data": 100,
-        "hft.risk_log": 50,  # Also matches hft.logs
+        "hft.risk_log": 50,
         "hft.logs": 50,
         "hft.backtest_runs": 30,
         "hft.latency_spans": 10,
@@ -234,7 +231,6 @@ class GlobalMemoryGuard:
                 if available <= 0:
                     continue
                 drop = min(excess, available)
-                # Defer eviction: batcher applies under its own lock
                 batcher._pending_eviction_count += drop
                 batcher.dropped_count += drop
                 self._total_rows = max(0, self._total_rows - drop)
@@ -265,7 +261,6 @@ class Batcher:
     Implements backpressure handling to prevent unbounded memory growth.
     """
 
-    # Maximum buffer size before backpressure kicks in
     DEFAULT_MAX_BUFFER_SIZE = 10000
 
     def _new_buffer(self) -> ColumnarBuffer:
@@ -293,25 +288,16 @@ class Batcher:
         self.flush_interval_ms = flush_interval_ms
         self.writer = writer
 
-        # Backpressure configuration
         self.max_buffer_size = max_buffer_size or int(
             os.getenv("HFT_BATCHER_MAX_BUFFER", str(self.DEFAULT_MAX_BUFFER_SIZE))
         )
         self.backpressure_policy = backpressure_policy
 
-        # CC-1: Columnar buffers with CC-2 double-buffer swap
         self._active = self._new_buffer()
         self._standby = self._new_buffer()
-        # Monotonic, not wall clock: this value is only ever used to measure the
-        # age of the buffer. recorder/wal.py already times its own durations with
-        # a monotonic clock; the batcher was the one place in the durability path
-        # where an NTP step or a manual clock correction moved a *duration*. A
-        # backward step stalls check_flush() for exactly as long as the step,
-        # holding rows that the flush interval says should already be on disk.
         self.last_flush_monotonic_ns = timebase.monotonic_ns()
         self.lock = asyncio.Lock()
 
-        # CC-5: Schema extractor
         self._extractor = extractor
         self._extractor_columns = list(extractor_columns) if extractor_columns else None
         if self._extractor_columns:
@@ -330,7 +316,6 @@ class Batcher:
             "off",
         }
 
-        # EC-4: Timestamp sort
         self._sort_ts_enabled = os.getenv("HFT_BATCHER_SORT_TS", "1").lower() not in {
             "0",
             "false",
@@ -338,28 +323,19 @@ class Batcher:
             "off",
         }
         self._sort_min_rows = int(os.getenv("HFT_BATCHER_SORT_MIN_ROWS", "50"))
-        # Only sort market_data by default
         self._sort_ts_tables = {"hft.market_data"}
 
-        # EC-1: Global memory guard
         self._memory_guard = memory_guard
 
-        # EC-5: Health tracker
         self._health_tracker = health_tracker
 
-        # Metrics for monitoring backpressure events
         self.dropped_count = 0
         self.total_count = 0
 
-        # Reinject circuit breaker: stop re-injecting after N consecutive failures
         self._reinject_consecutive_failures = 0
         self._reinject_max_failures = int(os.getenv("HFT_BATCHER_REINJECT_MAX", "3"))
 
-        # Deferred eviction from GlobalMemoryGuard (C3 fix)
         self._pending_eviction_count: int = 0
-
-        # Legacy compat: buffer property
-        # (tests may access batcher.buffer directly)
 
     @property
     def buffer(self) -> list[dict[str, Any]]:
@@ -398,7 +374,7 @@ class Batcher:
                     return result
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
-                pass  # Fall through to generic
+                pass
         return self._serialize_row(row)
 
     def _add_to_active(self, extracted: dict[str, Any] | list[Any]) -> None:
@@ -427,7 +403,6 @@ class Batcher:
             self._apply_pending_eviction_locked()
             self.total_count += 1
 
-            # EC-1: Check global memory budget
             if self._memory_guard is not None:
                 allowed = self._memory_guard.check_budget(self.table_name, 1)
                 if allowed <= 0:
@@ -436,11 +411,10 @@ class Batcher:
                         self._health_tracker.record_event("drop", table=self.table_name, count=1)
                     return
 
-            # Local backpressure
             if self._active.row_count >= self.max_buffer_size:
                 self._apply_backpressure_locked(1)
                 if self._active.row_count >= self.max_buffer_size:
-                    return  # DROP_NEWEST
+                    return
 
             self._add_to_active(extracted)
             if self._memory_guard is not None:
@@ -467,7 +441,6 @@ class Batcher:
             self._apply_pending_eviction_locked()
             self.total_count += len(extracted_list)
 
-            # EC-1: Check global memory budget
             if self._memory_guard is not None:
                 allowed = self._memory_guard.check_budget(self.table_name, len(extracted_list))
                 if allowed < len(extracted_list):
@@ -547,12 +520,10 @@ class Batcher:
         if self._active.row_count == 0:
             return None
 
-        # Swap active <-> standby (pointer swap under lock)
         flush_buf = self._active
         next_active = self._standby if self._standby.row_count == 0 else self._new_buffer()
         self._active = next_active
         self._standby = flush_buf
-        # Clear active for new writes (keeps schema)
         self._active.clear()
         self.last_flush_monotonic_ns = timebase.monotonic_ns()
         if self._memory_guard is not None:
@@ -644,7 +615,7 @@ class Batcher:
                 wal_ok = self._wal_emergency_dump(flush_buf)
                 if not wal_ok:
                     await self._reinject_failed_buffer(flush_buf)
-                    flush_buf.clear()  # Release standby reference to prevent memory leak
+                    flush_buf.clear()
                     return
             except ConnectionError as e:
                 logger.error(
@@ -671,20 +642,18 @@ class Batcher:
                     await self._reinject_failed_buffer(flush_buf)
                     flush_buf.clear()
                     return
-        # Successful write (or WAL fallback succeeded) — reset reinject counter
         self._reinject_consecutive_failures = 0
         row_count = flush_buf.row_count
         flush_buf.clear()
-        # Record flush metrics (must never raise — wrap defensively)
         if row_count > 0:
             try:
-                from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+                from hft_platform.observability.metrics import MetricsRegistry
 
                 m = MetricsRegistry.get()
                 m.recorder_batches_flushed_total.labels(table=self.table_name).inc()
                 m.recorder_rows_flushed_total.labels(table=self.table_name).inc(row_count)
-            except Exception:  # noqa: BLE001
-                pass  # Metrics must never break the recording path
+            except Exception:
+                pass
 
     async def _reinject_failed_buffer(self, flush_buf: ColumnarBuffer) -> None:
         """Re-inject failed flush buffer rows back into active for retry.
@@ -707,7 +676,7 @@ class Batcher:
                 msg="PERMANENT DATA LOSS — reinject limit exceeded, dropping rows",
             )
             try:
-                from hft_platform.observability.metrics import MetricsRegistry  # lazy import to avoid circular deps
+                from hft_platform.observability.metrics import MetricsRegistry
 
                 MetricsRegistry.get().recorder_reinject_circuit_breaker_drops_total.labels(table=self.table_name).inc(
                     flush_buf.row_count

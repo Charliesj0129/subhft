@@ -94,8 +94,6 @@ def adapter(tmp_config):
         order_queue=q,
         broker_client=client,
     )
-    # Replace slots-based helpers with mocks so tests can configure them.
-    # Defaults: all checks pass, shadow disabled, adapter not running.
     oa.per_symbol_rate_limiter = MagicMock()
     oa.per_symbol_rate_limiter.check.return_value = PerSymbolRateResult.OK
     oa.strategy_cb_mgr = MagicMock()
@@ -106,8 +104,6 @@ def adapter(tmp_config):
     oa.rate_limiter.check.return_value = True
     oa.shadow_sink = MagicMock()
     oa.shadow_sink.enabled = False
-    # A guard that refuses an intent before any broker call books it here, not
-    # on the DLQ -- nothing left the platform, so there is nothing to replay.
     oa._record_local_reject = MagicMock()
     return oa
 
@@ -192,9 +188,6 @@ async def test_pre_dispatch_deadline_expired_sends_feedback_and_dlq(adapter):
     assert feedback.was_approved is False
 
 
-# --- 1. Per-symbol rate limit HARD -> DLQ ---
-
-
 @pytest.mark.asyncio
 async def test_per_symbol_rate_limit_hard_rejects_to_dlq(adapter):
     """Per-symbol hard rate limit refuses the intent with RATE_LIMIT."""
@@ -207,9 +200,6 @@ async def test_per_symbol_rate_limit_hard_rejects_to_dlq(adapter):
     assert call_kwargs["reason"].value == "rate_limit"
     assert "Per-symbol" in call_kwargs["error_message"]
     adapter._dlq.add.assert_not_awaited()
-
-
-# --- 2. Per-strategy circuit breaker -> DLQ ---
 
 
 @pytest.mark.asyncio
@@ -226,9 +216,6 @@ async def test_per_strategy_circuit_breaker_rejects_to_dlq(adapter):
     adapter._dlq.add.assert_not_awaited()
 
 
-# --- 3. Global circuit breaker -> DLQ ---
-
-
 @pytest.mark.asyncio
 async def test_global_circuit_breaker_rejects_to_dlq(adapter):
     """Global circuit breaker open refuses the intent with CIRCUIT_BREAKER."""
@@ -243,9 +230,6 @@ async def test_global_circuit_breaker_rejects_to_dlq(adapter):
     adapter._dlq.add.assert_not_awaited()
 
 
-# --- 4. Global rate limit -> DLQ ---
-
-
 @pytest.mark.asyncio
 async def test_global_rate_limit_rejects_to_dlq(adapter):
     """Global rate limit exceeded refuses the intent with RATE_LIMIT."""
@@ -257,9 +241,6 @@ async def test_global_rate_limit_rejects_to_dlq(adapter):
     call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "rate_limit"
     adapter._dlq.add.assert_not_awaited()
-
-
-# --- 5. Shadow mode intercept (no DLQ) ---
 
 
 @pytest.mark.asyncio
@@ -299,13 +280,9 @@ async def test_shadow_mode_sends_terminal_feedback_to_release_strategy_pending(a
     assert feedback.was_approved is False
 
 
-# --- 6. Client validation failure -> DLQ ---
-
-
 @pytest.mark.asyncio
 async def test_client_validation_failure_rejects_to_dlq(adapter):
     """Client missing required methods refuses the intent with VALIDATION_ERROR."""
-    # Remove place_order to fail validation for NEW intent
     del adapter.client.place_order
     cmd = make_cmd(intent_type=IntentType.NEW)
 
@@ -314,9 +291,6 @@ async def test_client_validation_failure_rejects_to_dlq(adapter):
     call_kwargs = _refusal(adapter)
     assert call_kwargs["reason"].value == "validation_error"
     adapter._dlq.add.assert_not_awaited()
-
-
-# --- 7. Expired deadline skipped in run loop ---
 
 
 @pytest.mark.asyncio
@@ -347,11 +321,7 @@ async def test_expired_deadline_skipped_in_run(adapter):
 
     await run_with_timeout()
 
-    # execute should NOT have been called since deadline expired
     assert not execute_called
-
-
-# --- 8. NEW order dispatched successfully (not running) ---
 
 
 @pytest.mark.asyncio
@@ -368,9 +338,6 @@ async def test_new_order_dispatch_not_running(adapter):
     assert adapter._dispatch_to_api.await_count == 1
 
 
-# --- 9. CANCEL order dispatched (not running) ---
-
-
 @pytest.mark.asyncio
 async def test_cancel_order_dispatch_not_running(adapter):
     """CANCEL order dispatched directly when adapter is not running."""
@@ -382,9 +349,6 @@ async def test_cancel_order_dispatch_not_running(adapter):
 
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
     assert adapter._dispatch_to_api.await_count == 1
-
-
-# --- 10. AMEND order dispatched (not running) ---
 
 
 @pytest.mark.asyncio
@@ -400,9 +364,6 @@ async def test_amend_order_dispatch_not_running(adapter):
     assert adapter._dispatch_to_api.await_count == 1
 
 
-# --- 11. Per-symbol rate limit HARD DLQ fields ---
-
-
 @pytest.mark.asyncio
 async def test_per_symbol_hard_rate_limit_dlq_fields(adapter):
     """A per-symbol HARD refusal records the right symbol and strategy."""
@@ -415,9 +376,6 @@ async def test_per_symbol_hard_rate_limit_dlq_fields(adapter):
     assert call_kwargs["symbol"] == "2454"
     assert call_kwargs["strategy_id"] == "mm1"
     assert call_kwargs["reason"].value == "rate_limit"
-
-
-# --- 12. Multiple rejections in sequence ---
 
 
 @pytest.mark.asyncio
@@ -438,9 +396,6 @@ async def test_multiple_rejections_in_sequence(adapter):
     adapter._dlq.add.assert_not_awaited()
 
 
-# --- 13. DLQ error handling (DLQ.add raises) ---
-
-
 @pytest.mark.asyncio
 async def test_dlq_add_error_propagates(adapter):
     """A dead-letter write failure is not swallowed.
@@ -458,23 +413,15 @@ async def test_dlq_add_error_propagates(adapter):
         await adapter._add_to_dlq(cmd.intent, RejectionReason.CONNECTION_ERROR, "api_failure")
 
 
-# --- 14. _validate_client for NEW (needs place_order + get_exchange) ---
-
-
 @pytest.mark.asyncio
 async def test_validate_client_new_requires_place_order_and_get_exchange(adapter):
     """NEW intent requires client to have place_order and get_exchange."""
     intent_new = make_cmd(intent_type=IntentType.NEW).intent
 
-    # With both methods present - should pass
     assert adapter._validate_client(intent_new) is True
 
-    # Remove get_exchange - should fail
     del adapter.client.get_exchange
     assert adapter._validate_client(intent_new) is False
-
-
-# --- 15. _validate_client for CANCEL (needs cancel_order) ---
 
 
 @pytest.mark.asyncio
@@ -482,15 +429,10 @@ async def test_validate_client_cancel_requires_cancel_order(adapter):
     """CANCEL intent requires client to have cancel_order."""
     intent_cancel = make_cmd(intent_type=IntentType.CANCEL).intent
 
-    # With cancel_order present - should pass
     assert adapter._validate_client(intent_cancel) is True
 
-    # Remove cancel_order - should fail
     del adapter.client.cancel_order
     assert adapter._validate_client(intent_cancel) is False
-
-
-# --- 16. Running adapter enqueues to API queue ---
 
 
 @pytest.mark.asyncio
@@ -506,9 +448,6 @@ async def test_running_adapter_enqueues_to_api_queue(adapter):
     assert queued is cmd
 
 
-# --- 17. StormGuard HALT blocks order ---
-
-
 @pytest.mark.asyncio
 async def test_storm_guard_halt_rejects_to_dlq(adapter):
     """Order with storm_guard_state=HALT is refused before any other check."""
@@ -521,11 +460,7 @@ async def test_storm_guard_halt_rejects_to_dlq(adapter):
     assert call_kwargs["reason"].value == "stormguard_halt"
     assert "StormGuard HALT" in call_kwargs["error_message"]
     adapter._dlq.add.assert_not_awaited()
-    # Confirm no other checks ran (per-symbol rate limiter never called)
     adapter.per_symbol_rate_limiter.check.assert_not_called()
-
-
-# --- 18. StormGuard HALT allows halt_flatten orders ---
 
 
 @pytest.mark.asyncio
@@ -556,7 +491,6 @@ async def test_storm_guard_halt_allows_halt_flatten_force_flat_order(adapter):
 
     await adapter.execute(cmd)
 
-    # Should NOT be DLQ'd — should be dispatched (FORCE_FLAT bypasses HALT)
     adapter._dlq.add.assert_not_awaited()
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
 
@@ -589,12 +523,8 @@ async def test_storm_guard_halt_blocks_new_with_halt_flatten_reason(adapter):
 
     await adapter.execute(cmd)
 
-    # Should be refused — NEW with reason=halt_flatten is no longer a bypass
     assert _refusal(adapter)["reason"].value == "stormguard_halt"
     adapter._dispatch_to_api.assert_not_awaited()
-
-
-# --- 19. StormGuard HALT allows CANCEL orders ---
 
 
 @pytest.mark.asyncio
@@ -612,9 +542,6 @@ async def test_storm_guard_halt_allows_cancel_order(adapter):
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
 
 
-# --- 20. StormGuard HALT allows FORCE_FLAT orders ---
-
-
 @pytest.mark.asyncio
 async def test_storm_guard_halt_allows_force_flat_order(adapter):
     """FORCE_FLAT orders bypass StormGuard HALT (Constitution: safety orders always allowed)."""
@@ -629,9 +556,6 @@ async def test_storm_guard_halt_allows_force_flat_order(adapter):
     adapter._dispatch_to_api.assert_awaited_once_with(cmd)
 
 
-# --- 21. StormGuard HALT still blocks NEW orders ---
-
-
 @pytest.mark.asyncio
 async def test_storm_guard_halt_blocks_new_order(adapter):
     """NEW orders are still blocked during HALT (not exempt)."""
@@ -642,9 +566,6 @@ async def test_storm_guard_halt_blocks_new_order(adapter):
 
     call_kwargs = _refusal(adapter)
     assert "StormGuard HALT" in call_kwargs["error_message"]
-
-
-# --- 22. StormGuard HALT still blocks AMEND orders ---
 
 
 @pytest.mark.asyncio
@@ -660,9 +581,6 @@ async def test_storm_guard_halt_blocks_amend_order(adapter):
     assert "StormGuard HALT" in call_kwargs["error_message"]
 
 
-# --- 23. API queue full refuses the order + metric ---
-
-
 @pytest.mark.asyncio
 async def test_api_queue_full_routes_to_dlq(adapter):
     """When the API queue is full, the order is refused with a reject metric.
@@ -671,9 +589,8 @@ async def test_api_queue_full_routes_to_dlq(adapter):
     was dispatched, so it is booked as a refusal rather than dead-lettered.
     """
     cmd = make_cmd()
-    # Make the API queue full
     adapter._api_queue = asyncio.Queue(maxsize=1)
-    adapter._api_queue.put_nowait(make_cmd())  # fill it
+    adapter._api_queue.put_nowait(make_cmd())
 
     adapter.running = False
     await adapter._enqueue_api(cmd)
@@ -684,17 +601,12 @@ async def test_api_queue_full_routes_to_dlq(adapter):
     adapter.metrics.order_reject_total.inc.assert_called()
 
 
-# --- CANCEL target not found -> order_reject_total incremented ---
-
-
 @pytest.mark.asyncio
 async def test_cancel_target_not_found_increments_reject_metric(adapter):
     """When CANCEL target is absent from live_orders, order_reject_total must be incremented."""
     from unittest.mock import MagicMock
 
-    # Empty live_orders so target lookup always misses
     adapter.live_orders = {}
-    # order_id_resolver returns a key that won't exist in live_orders
     adapter.order_id_resolver = MagicMock()
     adapter.order_id_resolver.resolve_order_key.return_value = "missing_key"
 
@@ -707,11 +619,7 @@ async def test_cancel_target_not_found_increments_reject_metric(adapter):
     assert reject_count_after == reject_count_before + 1, (
         "order_reject_total.inc() must be called once when CANCEL target is not found"
     )
-    # Broker cancel_order must NOT be called
     adapter.client.cancel_order.assert_not_called()
-
-
-# --- AMEND target not found -> order_reject_total incremented ---
 
 
 @pytest.mark.asyncio
@@ -719,9 +627,7 @@ async def test_amend_target_not_found_increments_reject_metric(adapter):
     """When AMEND target is absent from live_orders, order_reject_total must be incremented."""
     from unittest.mock import MagicMock
 
-    # Empty live_orders so target lookup always misses
     adapter.live_orders = {}
-    # order_id_resolver returns a key that won't exist in live_orders
     adapter.order_id_resolver = MagicMock()
     adapter.order_id_resolver.resolve_order_key.return_value = "missing_key"
 
@@ -734,11 +640,7 @@ async def test_amend_target_not_found_increments_reject_metric(adapter):
     assert reject_count_after == reject_count_before + 1, (
         "order_reject_total.inc() must be called once when AMEND target is not found"
     )
-    # Broker update_order must NOT be called
     adapter.client.update_order.assert_not_called()
-
-
-# --- Kill switch: the exit and the cancels it sends pass a live kill-switch HALT ---
 
 
 def _kill_switch_halted_guard():
@@ -752,7 +654,6 @@ def _kill_switch_halted_guard():
 
 def _as_command(intent: OrderIntent) -> OrderCommand:
     now = timebase.now_ns()
-    # Stamped NORMAL: the live guard, not the stamp, is what holds HALT here.
     return OrderCommand(
         cmd_id=7,
         intent=intent,

@@ -102,7 +102,6 @@ def _param(name: str, default: Any = "<empty>") -> dict[str, Any]:
 
 
 def test_new_optional_param_is_additive_ground_truth_account_balance() -> None:
-    # The documented 1.2.9 -> 1.3.3 delta: account_balance gained optional account.
     old = _snapshot(methods=_method("Shioaji", "account_balance", [_param("self")]))
     new = _snapshot(methods=_method("Shioaji", "account_balance", [_param("self"), _param("account", default="None")]))
     records = _classify(old, new)
@@ -154,10 +153,6 @@ def test_solace_backend_removal_is_breaking_via_arity_shim() -> None:
 
 
 def test_removed_accessor_class_is_behavioral_not_outage() -> None:
-    # The adapter reaches Quote via the api.quote accessor (client.py:_quote_api),
-    # not by constructing Quote() by name. 1.5.3 folds Quote into Shioaji but
-    # keeps api.quote as a property returning _QuoteProxy, so the class symbol
-    # vanishing is a review item, NOT a silent outage. VERIFIED on installed 1.5.3.
     old = _snapshot(methods=_method("Quote", "subscribe", [_param("self"), _param("contract")]))
     new = _snapshot(methods={"Quote": {"_present": False}})
     records = _classify(old, new)
@@ -169,8 +164,6 @@ def test_removed_accessor_class_is_behavioral_not_outage() -> None:
 
 
 def test_removed_constructed_class_is_breaking() -> None:
-    # A class the adapter constructs by name (an order ctor) vanishing IS a hard
-    # break — there is no instance-accessor compat path for it.
     old = _snapshot(methods=_method("StockOrder", "__init__", [_param("self")]))
     new = _snapshot(methods={"StockOrder": {"_present": False}})
     records = _classify(old, new)

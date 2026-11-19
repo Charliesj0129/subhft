@@ -67,7 +67,7 @@ class TestPhantomIntentReuseABA:
         phantom entries preserved as separate per-occurrence records."""
         adapter = _make_adapter(tmp_config)
         i1 = _intent(intent_id=42)
-        i2 = _intent(intent_id=42)  # same key, second submission
+        i2 = _intent(intent_id=42)
         with adapter._phantom_lock:
             adapter._register_phantom(i1)
             adapter._register_phantom(i2)
@@ -86,14 +86,12 @@ class TestPhantomIntentReuseABA:
             adapter._register_phantom(i1)
             adapter._register_phantom(i2)
 
-        # First fill resolves first occurrence — second occurrence stays.
         fill1 = MagicMock(symbol="TMFD6", side=Side.BUY)
         strategy1 = adapter.resolve_phantom_fill(fill1)
         assert strategy1 == "S1"
         assert "S1:42" in adapter._phantom_records
         assert len(adapter._phantom_records["S1:42"]) == 1
 
-        # Second fill resolves the remaining occurrence — key is now empty.
         fill2 = MagicMock(symbol="TMFD6", side=Side.BUY)
         strategy2 = adapter.resolve_phantom_fill(fill2)
         assert strategy2 == "S1"
@@ -158,7 +156,6 @@ class TestPhantomIntentReuseABA:
             adapter._register_phantom(i1)
             adapter._register_phantom(i2)
         assert adapter._phantom_intents["S1:42"] is i2
-        # Legacy ts also matches the latest entry's ts.
         last = adapter._phantom_records["S1:42"][-1]
         assert adapter._phantom_order_keys["S1:42"] == (last.monotonic_ts, last.symbol)
 
@@ -167,7 +164,6 @@ class TestPhantomIntentReuseABA:
         entries under one key still consume 2 of the budget."""
         adapter = _make_adapter(tmp_config)
         adapter._phantom_order_max = 4
-        # Register 6 phantom occurrences (3 keys × 2 each, all stale).
         import time as _time
 
         old_ts = _time.monotonic() - 7200.0
@@ -182,7 +178,6 @@ class TestPhantomIntentReuseABA:
                 ]
             assert adapter._phantom_record_count() == 6
             removed = adapter._evict_stale_phantom_records(max_age_s=3600.0)
-        # All 6 are stale (>1h), so the eviction sweep clears all 6.
         assert removed == 6
         assert adapter._phantom_record_count() == 0
 
@@ -199,7 +194,7 @@ class TestPhantomIntentReuseABA:
                 while not stop.is_set():
                     with adapter._phantom_lock:
                         adapter._register_phantom(_intent(intent_id=42))
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         def resolver():
@@ -207,7 +202,7 @@ class TestPhantomIntentReuseABA:
                 fill = MagicMock(symbol="TMFD6", side=Side.BUY)
                 while not stop.is_set():
                     adapter.resolve_phantom_fill(fill)
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         w = threading.Thread(target=writer, daemon=True)

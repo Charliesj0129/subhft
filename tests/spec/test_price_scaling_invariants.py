@@ -62,7 +62,6 @@ def test_symbol_metadata_invalid_tick_size_fallback(tick_size):
 def test_price_codec_roundtrip_preserves_scaled_value(value):
     codec = PriceCodec(FixedPriceScaleProvider(scale=100))
     roundtrip = codec.scale("AAA", codec.descale("AAA", value))
-    # Float rounding can cause off-by-one at scale boundaries; allow 1 tick.
     assert abs(roundtrip - value) <= 1
 
 

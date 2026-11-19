@@ -9,12 +9,7 @@ from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
 
-# ---------------------------------------------------------------------------
-# Shared mocks
-# ---------------------------------------------------------------------------
 class _Depth:
-    # hftbacktest returns float prices (descaled by x10000 from platform convention).
-    # E.g., platform price 100_000_000 (10000.0000 NTD x10000) → hbt float 10000.0
     best_bid = 1.0
     best_ask = 1.001
 
@@ -79,9 +74,6 @@ def _patch(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 def test_mid_price_x2_is_integer(monkeypatch):
     """get_mid_price_x2() returns int, not float."""
     _patch(monkeypatch)
@@ -92,7 +84,6 @@ def test_mid_price_x2_is_integer(monkeypatch):
     )
     result = adapter.get_mid_price_x2()
     assert isinstance(result, int)
-    # hbt float 1.0 * 10000 = 10000, hbt float 1.001 * 10000 = 10010 → sum = 20010
     assert result == 20010
 
 
@@ -119,10 +110,8 @@ def test_equity_uses_mid_price_x2(monkeypatch):
         equity_sample_ns=1,
     )
     adapter._reset_equity_buffers()
-    # With position=0, equity = balance + 0 * mid = balance
     adapter._maybe_record_equity_point(100, 10000, 10010)
     assert adapter._equity_count == 1
-    # balance is initial_balance (1_000_000.0 default)
     assert adapter._equity_val_buf[0] == pytest.approx(1_000_000.0)
 
 
@@ -172,8 +161,8 @@ def test_bridge_payload_has_scaled_fields():
     assert "bid_px" in payload
     assert "ask_px" in payload
     assert "current_mid" in payload
-    assert payload["bid_px"] == 50000 / 10000  # 5.0
-    assert payload["ask_px"] == 50100 / 10000  # 5.01
+    assert payload["bid_px"] == 50000 / 10000
+    assert payload["ask_px"] == 50100 / 10000
     assert payload["current_mid"] == (5.0 + 5.01) / 2.0
 
 

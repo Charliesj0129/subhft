@@ -26,8 +26,8 @@ class TriggerCondition:
 
     __slots__ = ("direction", "threshold")
 
-    direction: str  # "GE" | "LE"
-    threshold: int  # scaled int x10000
+    direction: str
+    threshold: int
 
     @classmethod
     def GE(cls, threshold: int) -> "TriggerCondition":
@@ -64,7 +64,6 @@ class TriggerExecutor:
     _DEFAULT_MAX = 100
 
     def __init__(self, max_triggers: int = _DEFAULT_MAX) -> None:
-        # _triggers maps trigger_id -> (symbol, condition, intent)
         self._triggers: dict[str, tuple[str, TriggerCondition, "OrderIntent"]] = {}
         self._max_triggers: int = max_triggers
 

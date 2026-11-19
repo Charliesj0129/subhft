@@ -54,7 +54,6 @@ def _process_one(meta_path: Path, *, dry_run: bool) -> str:
     changed = False
 
     if current in VALID_PROVENANCE:
-        # Already conforming — only backfill fingerprint if missing.
         if "data_fingerprint" not in meta:
             data_file = meta_path.parent / meta.get("data_file", meta_path.stem.rstrip(".meta"))
             if data_file.exists():
@@ -62,7 +61,6 @@ def _process_one(meta_path: Path, *, dry_run: bool) -> str:
                 changed = True
         return "ok_changed" if changed else "ok"
 
-    # Non-conforming: stash legacy tag, set provenance.
     if current:
         meta.setdefault(LEGACY_KIND_FIELD, current)
     meta["source_type"] = "real"

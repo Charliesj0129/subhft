@@ -74,7 +74,7 @@ class TestReducingOrdersSurviveHalt:
             strategy_id="S1",
             symbol="TXFE6",
             intent_type=IntentType.NEW,
-            side=Side.BUY,  # buying back a short → reduces
+            side=Side.BUY,
             price=1_800_000,
             qty=1,
         )
@@ -92,7 +92,7 @@ class TestReducingOrdersSurviveHalt:
             strategy_id="S1",
             symbol="TXFE6",
             intent_type=IntentType.NEW,
-            side=Side.SELL,  # deeper short → opening
+            side=Side.SELL,
             price=1_800_000,
             qty=1,
         )
@@ -223,7 +223,6 @@ class TestHaltAlertReportsTheLimitThatFired:
 
         async def drive():
             engine._check_daily_loss_halt()
-            # the notify is scheduled as a task; let it run
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 

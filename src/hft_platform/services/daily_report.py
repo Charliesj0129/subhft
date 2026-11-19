@@ -7,7 +7,7 @@ via NotificationDispatcher, and writes an evidence summary via AutonomyEvidenceW
 from __future__ import annotations
 
 import asyncio
-import datetime  # date-label-ok
+import datetime
 import resource
 from typing import Any
 
@@ -51,10 +51,6 @@ class DailyReportService:
         self._storm_guard = storm_guard
         self._loop: asyncio.AbstractEventLoop | None = None
 
-    # ------------------------------------------------------------------
-    # Phase callback (registered with SessionGovernor)
-    # ------------------------------------------------------------------
-
     def on_phase_transition(self, track: str, old_phase: Any, new_phase: Any) -> None:
         """SessionGovernor phase callback — only acts on CLOSED.
 
@@ -70,27 +66,21 @@ class DailyReportService:
             old_phase=str(old_phase),
         )
 
-        # Fire-and-forget the async report in the running event loop
         loop = self._loop
         try:
             if loop is None:
                 loop = asyncio.get_running_loop()
             spawn_retained(self.on_session_closed(track), name="daily_report_session_closed", loop=loop, track=track)
         except RuntimeError:
-            # No running loop — run synchronously (e.g. in tests)
             _loop = asyncio.new_event_loop()
             try:
                 _loop.run_until_complete(self.on_session_closed(track))
             finally:
                 _loop.close()
 
-    # ------------------------------------------------------------------
-    # Core report generation
-    # ------------------------------------------------------------------
-
     async def on_session_closed(self, track: str) -> None:
         """Generate and send the daily report."""
-        date_str = datetime.date.today().isoformat()  # date-label-ok
+        date_str = datetime.date.today().isoformat()
 
         pnl_ntd = self._get_realized_pnl_ntd()
         aggregates = self._query_daily_aggregates(date_str)
@@ -100,7 +90,6 @@ class DailyReportService:
         storm_state = getattr(self._storm_guard, "state", None)
         storm_guard_state = getattr(storm_state, "name", None) or str(storm_state)
 
-        # TCA section
         tca_section = ""
         try:
             from hft_platform.tca.analyzer import (
@@ -115,10 +104,9 @@ class DailyReportService:
             tca_analyzer = TCAAnalyzer(self._ch_client, point_value_map=pv_map, symbol_to_product=sym_map)
             tca_reports = tca_analyzer.daily_report(date_str)
             tca_section = tca_gen.format_telegram_section(tca_reports)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("daily_report_tca_section_failed", exc_info=True)
 
-        # PnL section
         pnl_section = ""
         try:
             from hft_platform.ops.daily_pnl_report import DailyPnlSection
@@ -126,12 +114,12 @@ class DailyReportService:
             pnl_gen = DailyPnlSection()
             pnl_section = pnl_gen.format_telegram_section(
                 realized_pnl_ntd=pnl_ntd,
-                unrealized_pnl_ntd=0,  # TODO: requires mid_prices dict (not available here)
+                unrealized_pnl_ntd=0,
                 trade_count=aggregates.get("buys", 0) + aggregates.get("sells", 0),
                 fill_count=aggregates.get("fills", 0),
             )
             logger.info("daily_report.pnl_section_stub_fields", unrealized_pnl_ntd=0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("daily_report_pnl_section_failed", exc_info=True)
 
         report_kwargs: dict[str, Any] = {
@@ -142,8 +130,8 @@ class DailyReportService:
             "fills": aggregates["fills"],
             "position_status": position_status,
             "reconciliation_status": "OK",
-            "latency_p95_ms": 0.0,  # STUB: requires LatencyRecorder injection
-            "reconnect_count": 0,  # STUB: requires ReconnectOrchestrator injection
+            "latency_p95_ms": 0.0,
+            "reconnect_count": 0,
             "storm_guard_state": storm_guard_state,
             "memory_gb": memory_gb,
             "memory_max_gb": memory_max_gb,
@@ -152,19 +140,17 @@ class DailyReportService:
         try:
             await self._notification_dispatcher.notify_daily_report(**report_kwargs)
             logger.info("daily_report.sent", date_str=date_str, pnl_ntd=pnl_ntd)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("daily_report.send_failed", error=str(exc))
 
-        # Send TCA + PnL supplement as a follow-up message
         try:
             await self._notification_dispatcher.notify_tca_pnl_supplement(
                 tca_section=tca_section,
                 pnl_section=pnl_section,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("daily_report.supplement_send_failed", error=str(exc))
 
-        # Write evidence summary
         try:
             summary = {
                 "date": date_str,
@@ -178,19 +164,15 @@ class DailyReportService:
             }
             self._evidence_writer.write_daily_summary(summary)
             logger.info("daily_report.evidence_written", date_str=date_str)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("daily_report.evidence_write_failed", error=str(exc))
-
-    # ------------------------------------------------------------------
-    # ClickHouse query
-    # ------------------------------------------------------------------
 
     def _get_realized_pnl_ntd(self) -> int:
         """Get realized PnL in NTD from PositionStore (scaled int / 10000)."""
         try:
             total_pnl_scaled = self._position_store.total_pnl
             return total_pnl_scaled // _PLATFORM_PRICE_SCALE
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("daily_report.pnl_from_position_store_failed", error=str(exc))
             return 0
 
@@ -226,13 +208,9 @@ class DailyReportService:
                 "fills": int(row[2] or 0),
                 "total_fee_scaled": int(row[3] or 0),
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("daily_report.ch_query_failed", error=str(exc))
             return zeroed
-
-    # ------------------------------------------------------------------
-    # Position status
-    # ------------------------------------------------------------------
 
     def _get_position_status(self) -> str:
         """Return 'flat' or 'N open' based on current positions."""
@@ -242,12 +220,8 @@ class DailyReportService:
             if not non_zero:
                 return "flat"
             return f"{len(non_zero)} open"
-        except Exception:  # noqa: BLE001
+        except Exception:
             return "unknown"
-
-    # ------------------------------------------------------------------
-    # Memory usage
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _get_memory_usage() -> tuple[float, float]:
@@ -259,19 +233,17 @@ class DailyReportService:
         max_gb = 0.0
         try:
             usage = resource.getrusage(resource.RUSAGE_SELF)
-            # ru_maxrss is in KB on Linux
             max_gb = usage.ru_maxrss / (1024 * 1024)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
-        current_gb = max_gb  # fallback if /proc read fails
+        current_gb = max_gb
         try:
             with open("/proc/self/status") as f:
                 for line in f:
                     if line.startswith("VmRSS:"):
-                        # Format: "VmRSS:    123456 kB"
                         kb = int(line.split()[1])
                         current_gb = kb / (1024 * 1024)
                         break
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return (round(current_gb, 2), round(max_gb, 2))

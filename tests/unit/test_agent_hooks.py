@@ -26,8 +26,6 @@ def run_hook(script: str, event: dict, cwd: Path, env: dict | None = None) -> su
     )
 
 
-# --- scope_guard -------------------------------------------------------------
-
 MARKER = {"id": "d1", "allowed": ["src/foo/*.py", "tests/unit/test_foo.py"], "orchestrator_bypass": True}
 
 
@@ -61,11 +59,8 @@ def test_scope_guard_allows_everything_when_no_delegation_window(tmp_path):
 
 def test_scope_guard_lets_orchestrator_bypass(tmp_path):
     _setup_delegation(tmp_path)
-    ev = {"tool_name": "Edit", "tool_input": {"file_path": "docs/other.md"}}  # no agent_type = main session
+    ev = {"tool_name": "Edit", "tool_input": {"file_path": "docs/other.md"}}
     assert run_hook("scope_guard.py", ev, tmp_path).returncode == 0
-
-
-# --- git_guard ---------------------------------------------------------------
 
 
 def test_git_guard_blocks_subagent_git_commit(tmp_path):
@@ -84,7 +79,7 @@ def test_git_guard_allows_subagent_readonly_git(tmp_path):
 
 
 def test_git_guard_ignores_main_session_git(tmp_path):
-    ev = {"tool_name": "Bash", "tool_input": {"command": "git commit -m ok"}}  # no agent_type
+    ev = {"tool_name": "Bash", "tool_input": {"command": "git commit -m ok"}}
     assert run_hook("git_guard.py", ev, tmp_path).returncode == 0
 
 
@@ -96,7 +91,6 @@ def test_git_guard_blocks_subagent_stash_drop_but_allows_stash_list(tmp_path):
 
 
 def test_git_guard_ignores_git_mentions_inside_quoted_arguments(tmp_path):
-    # Reviewer F1: grep/echo text mentioning git must not be parsed as git commands
     for cmd in (
         'grep -rn "git push" docs/',
         'echo "this is a non-git command about git execution"',
@@ -108,7 +102,6 @@ def test_git_guard_ignores_git_mentions_inside_quoted_arguments(tmp_path):
 
 
 def test_git_guard_allows_readonly_git_with_global_options(tmp_path):
-    # Reviewer F3: git -C <path> / git -c k=v read-only forms are permitted
     for cmd in (
         "git -C /home/charlie/hft_platform show 1e8619d1 --stat",
         "git -c core.pager=cat log -1",
@@ -128,7 +121,6 @@ def test_git_guard_blocks_mutation_behind_global_options_and_chains(tmp_path):
 
 
 def test_scope_guard_blocks_subagent_rewriting_runtime_markers(tmp_path):
-    # Reviewer F2: the guarded party must not be able to rewrite the guard's marker
     _setup_delegation(tmp_path)
     for target in (".agent/runtime/active-packet.json", ".agent/runtime/commit-allowlist.json"):
         ev = {"agent_type": "hft-executor", "tool_name": "Write", "tool_input": {"file_path": target}}
@@ -137,7 +129,6 @@ def test_scope_guard_blocks_subagent_rewriting_runtime_markers(tmp_path):
 
 
 def test_scope_guard_blocks_scratchpad_traversal_escape(tmp_path):
-    # Reviewer F4: /tmp/claude-.../../../ escape must not bypass the window
     _setup_delegation(tmp_path)
     ev = {
         "agent_type": "hft-executor",
@@ -158,7 +149,6 @@ def test_scope_guard_allows_real_scratchpad_paths(tmp_path):
 
 
 def test_scope_guard_exact_file_pattern_does_not_grant_prefix_siblings(tmp_path):
-    # Reviewer F6: allowlisted tests/unit/test_foo.py must not grant test_foo.py.orig
     _setup_delegation(tmp_path)
     for target in ("tests/unit/test_foo.py.orig", "src/foobar_other.py"):
         ev = {"agent_type": "hft-executor", "tool_name": "Write", "tool_input": {"file_path": target}}
@@ -167,7 +157,6 @@ def test_scope_guard_exact_file_pattern_does_not_grant_prefix_siblings(tmp_path)
 
 
 def test_scope_guard_blocks_absolute_path_outside_allowlist(tmp_path):
-    # Reviewer F8: the harness sends ABSOLUTE paths; relpath branch must still block
     _setup_delegation(tmp_path)
     ev = {
         "agent_type": "hft-executor",
@@ -187,22 +176,17 @@ def test_scope_guard_allows_absolute_path_inside_allowlist(tmp_path):
     assert run_hook("scope_guard.py", ev, tmp_path).returncode == 0
 
 
-# --- discipline_feedback -----------------------------------------------------
-
-
 def test_discipline_feedback_skips_non_platform_files(tmp_path):
     ev = {"tool_name": "Edit", "tool_input": {"file_path": str(tmp_path / "docs/note.md")}}
     assert run_hook("discipline_feedback.py", ev, tmp_path).returncode == 0
 
 
 def test_discipline_feedback_fails_open_when_checker_missing(tmp_path):
-    # tmp cwd has no scripts/check_discipline.py -> advisory hook must not block
     ev = {"tool_name": "Edit", "tool_input": {"file_path": str(tmp_path / "src/hft_platform/x.py")}}
     assert run_hook("discipline_feedback.py", ev, tmp_path).returncode == 0
 
 
 def test_discipline_feedback_relays_checker_findings(tmp_path):
-    # Reviewer F8: positive path — a failing checker must surface as exit-2 feedback
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts/check_discipline.py").write_text(
         "import sys\nprint('CRITICAL: datetime.now in hot path')\nsys.exit(1)\n"
@@ -210,9 +194,6 @@ def test_discipline_feedback_relays_checker_findings(tmp_path):
     ev = {"tool_name": "Edit", "tool_input": {"file_path": str(tmp_path / "src/hft_platform/x.py")}}
     r = run_hook("discipline_feedback.py", ev, tmp_path)
     assert r.returncode == 2 and "datetime.now" in r.stderr
-
-
-# --- commit_audit ------------------------------------------------------------
 
 
 def _git_repo_with_commit(tmp_path, files):
@@ -251,7 +232,6 @@ def test_commit_audit_silent_without_marker(tmp_path):
 
 
 def test_commit_audit_silent_when_head_matches_allowlist(tmp_path):
-    # Reviewer F8: the within-allowlist quiet path
     _git_repo_with_commit(tmp_path, ["a.md", "b.md"])
     rt = tmp_path / ".agent/runtime"
     rt.mkdir(parents=True)
@@ -259,13 +239,6 @@ def test_commit_audit_silent_when_head_matches_allowlist(tmp_path):
     ev = {"tool_name": "Bash", "tool_input": {"command": "git commit -m c1"}}
     assert run_hook("commit_audit.py", ev, tmp_path).returncode == 0
 
-
-# --- codex_review_gate -------------------------------------------------------
-#
-# The gate this exercises replaced one whose credit rested on a stamp written at
-# review *launch*. Measured over the 25 report directories that existed on
-# 2026-08-29: the native reviewer had died in 9 of them, 24 carried a
-# `needs-attention` verdict, and every single one opened the gate.
 
 GIT_ID = ["-c", "user.email=t@t", "-c", "user.name=t"]
 
@@ -481,8 +454,6 @@ def test_review_gate_blocks_after_the_reviewed_commit_is_amended(tmp_path):
     _run_git(repo, "commit", "-q", "--amend", "-m", "work amended")
     amended = _run_git(repo, "rev-parse", "HEAD")
     assert amended != head, "premise broken: the amend was expected to change the head OID"
-    # The stub reports the NEW head and the command pins it, so the pin and the
-    # live head agree and the only thing left to refuse is the missing review.
     r = _merge(repo, tmp_path / "reports", head=amended)
     assert r.returncode == 2 and "no completed Codex review" in r.stderr
 
@@ -586,22 +557,11 @@ def test_review_gate_ignores_a_merge_mentioned_inside_a_quoted_argument(tmp_path
     assert r.returncode == 0, r.stderr
 
 
-# --- attestation producer ----------------------------------------------------
-#
-# `dual-review.sh` and its waiter live in ~/.claude/bin, outside this repository
-# and outside its CI. The rules they apply live here so they are tested; these
-# cover the two reviewers' completion contracts, which differ because the two
-# commands differ: /codex:review renders free-form prose, /codex:adversarial-review
-# renders against schemas/review-output.schema.json.
-
-
 def _attestation_module():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("review_attestation", HOOKS / "review_attestation.py")
     mod = importlib.util.module_from_spec(spec)
-    # dataclasses resolves annotations through sys.modules[cls.__module__], so the
-    # module must be registered before it executes or @dataclass raises.
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
@@ -679,9 +639,6 @@ def test_attestation_marks_a_usage_limited_adversarial_reviewer_incomplete(tmp_p
     assert a["complete"] is False
 
 
-# The provider's own abort line, verbatim from
-# 20260829-144619-review-gate-r2/adversarial.err. The URLs are trimmed; the
-# prefix is the part the verifier matches on.
 ERR_ABORTED = (
     "[codex] Command completed: /bin/bash -lc 'git rev-parse --show-toplevel' (exit 0)\n"
     "[codex] Codex error: You've hit your usage limit. Upgrade to Pro, visit "
@@ -689,8 +646,6 @@ ERR_ABORTED = (
     "[codex] Turn failed.\n"
 )
 ERR_CLEAN = "[codex] Review output captured.\n[codex] Reviewer finished.\n[codex] Turn completed.\n"
-# What a reviewer aborted mid-investigation actually renders: the schema
-# validated, so a verdict exists, over a body that reached no findings.
 ADV_TRUNCATED_APPROVE = (
     "# Codex Adversarial Review\n\nTarget: branch diff against origin/main\nVerdict: approve\n\n"
     "I\u2019m applying the repository\u2019s task-intake and strict-review procedures.\n\nNo material findings.\n"
@@ -857,9 +812,6 @@ def test_review_gate_blocks_a_pr_head_that_is_not_present_locally(tmp_path):
         {
             "tool_name": "Bash",
             "cwd": str(repo),
-            # --match-head-commit is now mandatory for a merge, so it is pinned
-            # here to the same absent OID: this test is about a head that cannot
-            # be inspected, not about the pin being missing.
             "tool_input": {"command": f"gh pr merge 460 --squash --match-head-commit {absent}"},
         },
         repo,
@@ -901,7 +853,6 @@ def test_review_gate_survives_origin_main_advancing_after_the_review(tmp_path):
     repo, head = _gated_repo(tmp_path)
     _report(tmp_path / "reports", repo, head)
 
-    # main advances with an unrelated commit, exactly as CI does on every run
     main_tip = _run_git(repo, "rev-parse", "origin/main")
     _run_git(repo, "branch", "-f", "tmp-main", main_tip)
     _run_git(repo, "checkout", "-q", "tmp-main")
@@ -939,12 +890,6 @@ def test_review_gate_blocks_an_attestation_with_no_recorded_base(tmp_path):
     (d / "ATTESTATION.json").write_text(json.dumps(att))
     r = _merge(repo, tmp_path / "reports")
     assert r.returncode == 2 and "no reviewed base" in r.stderr
-
-
-# --- regressions for the 2026-08-29 dual review ------------------------------
-#
-# Every case below was reported by one or both Codex reviewers against the first
-# three commits of this branch, and reproduced before being fixed.
 
 
 def test_review_gate_blocks_a_narrowed_review_that_reuses_the_same_file(tmp_path):
@@ -1048,9 +993,6 @@ def test_review_gate_gates_changes_to_its_own_enforcement_code(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()
     assert _merge(repo, reports).returncode == 2
-
-
-# --- regressions for the 2026-08-29 adversarial review ------------------------
 
 
 def test_git_guard_blocks_a_mutation_behind_a_valued_wrapper_option(tmp_path):
@@ -1217,9 +1159,9 @@ def test_review_gate_ignores_an_unreadable_segment_that_only_names_merge_base(tm
 def test_review_gate_ignores_an_unreadable_segment_that_does_not_name_both_gh_and_merge(tmp_path):
     """Each word alone is not enough: both `gh` and `merge` must be present."""
     for cmd in (
-        "xargs gh pr view 7",  # names gh, not merge
-        "xargs git merge main",  # names merge, not gh
-        "xargs gh pr view 7 --json mergeable",  # `mergeable` is not the word `merge`
+        "xargs gh pr view 7",
+        "xargs git merge main",
+        "xargs gh pr view 7 --json mergeable",
     ):
         r = run_hook(
             "codex_review_gate.py",
@@ -1227,9 +1169,6 @@ def test_review_gate_ignores_an_unreadable_segment_that_does_not_name_both_gh_an
             tmp_path,
         )
         assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
-
-
-# --- Adversarial review r5: five paths that published or mutated unseen -------
 
 
 def test_git_guard_blocks_a_mutation_hidden_in_a_shell_c_payload(tmp_path):
@@ -1285,13 +1224,8 @@ def test_the_file_that_activates_the_hooks_is_gated_source(tmp_path):
     assert ".claude/settings.json".startswith(review_attestation.GATED_PREFIXES)
     assert ".claude/hooks/" in review_attestation.GATED_PREFIXES
     assert not "docs/notes.md".startswith(review_attestation.GATED_PREFIXES)
-    # The git hook that lived under `scripts/git-hooks/` is gone, so the prefix no
-    # longer names anything the gate protects.
     assert "scripts/git-hooks/" not in review_attestation.GATED_PREFIXES
     assert not "scripts/git-hooks/anything".startswith(review_attestation.GATED_PREFIXES)
-
-
-# --- Adversarial review r6: four more, found after the r5 round ---------------
 
 
 def test_git_guard_blocks_a_mutation_hidden_in_an_env_split_string(tmp_path):
@@ -1357,7 +1291,6 @@ def test_git_guard_blocks_a_mutation_behind_a_shell_c_separator(tmp_path):
         r = run_hook("git_guard.py", ev, tmp_path)
         assert r.returncode == 2, f"not blocked: {cmd}\n{r.stderr}"
 
-    # A separator with nothing after it is unreadable, and unreadable blocks.
     ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": "bash -c --"}}
     assert run_hook("git_guard.py", ev, tmp_path).returncode == 2
 
@@ -1372,9 +1305,7 @@ def test_a_newer_blocking_review_is_not_outvoted_by_an_older_approval(tmp_path):
     """
     repo, head = _gated_repo(tmp_path)
     reports = tmp_path / "reports"
-    # Older: a clean approval of this exact head.
     _report(reports, repo, head, name="20260101-000000-old-approval", verdict="approve")
-    # Newer: the same head, same diff, now with an unacknowledged high finding.
     _report(
         reports,
         repo,
@@ -1387,15 +1318,6 @@ def test_a_newer_blocking_review_is_not_outvoted_by_an_older_approval(tmp_path):
     assert r.returncode == 2, f"the older approval outvoted the newer blocking review\n{r.stderr}"
     assert "new-blocking" in r.stderr, r.stderr
 
-
-# --- loop and conditional bodies ---------------------------------------------
-#
-# `_segments` splits on `;`, so the body of `for ...; do git ...; done` starts
-# with the reserved word `do`, not with the program. The parser read that as a
-# git command it could not attribute, and both hooks fail closed on those: a
-# read-only loop was denied as "unreadable", while the same command outside the
-# loop passed. Session transcripts showed it as the largest single source of
-# denials for either hook.
 
 _LOOP_READONLY = (
     "for c in 6b241e64b 309aa6bf4; do git merge-base --is-ancestor $c HEAD && echo yes; done",
@@ -1536,8 +1458,6 @@ def test_git_guard_keeps_redirections_whole_when_splitting_on_the_background_ope
         ev = {"agent_type": "hft-executor", "tool_name": "Bash", "tool_input": {"command": cmd}}
         r = run_hook("git_guard.py", ev, tmp_path)
         assert r.returncode == 0, f"falsely blocked: {cmd!r} -> {r.stderr}"
-    # The price of not cutting on `&`: git behind a background operator is unreadable
-    # to the hook, so even two reads are refused. Run them with `;` or `&&` instead.
     ev = {
         "agent_type": "hft-executor",
         "tool_name": "Bash",
@@ -1586,7 +1506,6 @@ def test_git_guard_blocks_a_mutation_whose_quoted_argument_contains_an_ampersand
         ("git -C /tmp/R\\&D reset --hard", "git reset"),
         ('git -C "/tmp/R\\"&D" reset --hard', "git reset"),
         ("bash -c 'git -C \"/tmp/R&D\" branch -D old'", "git branch"),
-        # A backslash is literal inside single quotes, so the first string ends at `a\\`.
         ("git log --grep 'a\\' & git reset --hard '\\'", "git reset"),
     ):
         r = _guard(tmp_path, cmd)
@@ -1650,7 +1569,6 @@ def test_git_guard_reads_a_backslash_as_an_escape_inside_dollar_single_quotes(tm
     for cmd in (
         "git -C $'a\\'b&c' reset --hard",
         "git log --grep $'a\\'b' & git reset --hard",
-        # An escaped dollar sign does not start the `$'` form: the string ends at `a\`.
         "git log --grep \\$'a\\' & git reset --hard '\\'",
     ):
         r = _guard(tmp_path, cmd)
@@ -1747,7 +1665,6 @@ def test_hooks_leave_a_quoted_ampersand_in_a_harmless_command_alone(tmp_path):
         'git log --grep "R&D" -3',
         "git -C '/tmp/R&D' status --short",
         "git status --short 2>&1 &",
-        # A redirection, not an operator: bash writes `note reset --hard` to a file named git.
         "echo note >&git reset --hard",
         "echo note &>git reset --hard",
     ):

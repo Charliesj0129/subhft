@@ -14,10 +14,6 @@ import yaml
 
 from hft_platform.events import BidAskEvent, TickEvent
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_normalizer(tmp_path, symbols=None, monkeypatch=None):
     """Build a MarketDataNormalizer with Rust disabled and optional symbols config."""
@@ -35,7 +31,6 @@ def _make_normalizer(tmp_path, symbols=None, monkeypatch=None):
 
     with patch("hft_platform.feed_adapter.normalizer.MetricsRegistry") as mock_mr:
         mock_mr.get.return_value = None
-        # Disable all Rust paths at module level
         with (
             patch("hft_platform.feed_adapter.normalizer._RUST_ENABLED", False),
             patch("hft_platform.feed_adapter.normalizer._RUST_FORCE", False),
@@ -78,11 +73,6 @@ def _make_normalizer_with_synthetic(tmp_path, monkeypatch):
             norm.metrics = None
             norm._fused = None
         return norm
-
-
-# ===================================================================
-# SymbolMetadata tests
-# ===================================================================
 
 
 class TestSymbolMetadata:
@@ -201,7 +191,6 @@ class TestSymbolMetadata:
         meta = SymbolMetadata(str(cfg))
         assert meta.price_scale("A") == 100
 
-        # No change => no reload
         assert meta.reload_if_changed() is False
 
     def test_missing_config_file(self, tmp_path):
@@ -240,11 +229,6 @@ class TestSymbolMetadata:
         assert meta.order_params("MISSING") == {}
 
 
-# ===================================================================
-# normalize_tick tests
-# ===================================================================
-
-
 class TestNormalizeTick:
     """Tests for MarketDataNormalizer.normalize_tick."""
 
@@ -254,7 +238,7 @@ class TestNormalizeTick:
         payload = {"code": "2330", "close": 100.0, "volume": 5, "ts": 1_000_000_000}
         result = norm.normalize_tick(payload)
         assert isinstance(result, TickEvent)
-        assert result.price == 1_000_000  # 100.0 * 10000
+        assert result.price == 1_000_000
         assert result.volume == 5
         assert result.symbol == "2330"
 
@@ -273,7 +257,7 @@ class TestNormalizeTick:
 
         result = norm.normalize_tick(FakeTick())
         assert isinstance(result, TickEvent)
-        assert result.price == 505_000  # 50.5 * 10000
+        assert result.price == 505_000
 
     def test_missing_symbol_returns_none(self, tmp_path, monkeypatch):
         """Payload without code returns None."""
@@ -314,10 +298,9 @@ class TestNormalizeTick:
     def test_scale_factor_applied(self, tmp_path, monkeypatch):
         """Different symbol scale factors produce correct scaled prices."""
         norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
-        # 2454 has tick_size 0.5, scale would be derived as 10000 from price_scale
         result = norm.normalize_tick({"code": "2454", "close": 200.0, "volume": 1, "ts": 0})
         assert isinstance(result, TickEvent)
-        assert result.price == 2_000_000  # 200.0 * 10000
+        assert result.price == 2_000_000
 
     def test_seq_increments(self, tmp_path, monkeypatch):
         """Sequence numbers increment across calls."""
@@ -326,11 +309,6 @@ class TestNormalizeTick:
         r2 = norm.normalize_tick({"code": "2330", "close": 101.0, "volume": 1, "ts": 0})
         assert isinstance(r1, TickEvent) and isinstance(r2, TickEvent)
         assert r2.meta.seq > r1.meta.seq
-
-
-# ===================================================================
-# normalize_bidask tests
-# ===================================================================
 
 
 class TestNormalizeBidAsk:
@@ -352,7 +330,6 @@ class TestNormalizeBidAsk:
         assert result.symbol == "2330"
         assert len(result.bids) == 5
         assert len(result.asks) == 5
-        # First bid price should be 100.0 * 10000 = 1_000_000
         assert result.bids[0][0] == 1_000_000
 
     def test_empty_book_both_sides(self, tmp_path, monkeypatch):
@@ -416,7 +393,6 @@ class TestNormalizeBidAsk:
         }
         result = norm.normalize_bidask(payload)
         assert isinstance(result, BidAskEvent)
-        # Zero-price levels should be filtered (price && volume check in list comp)
         assert len(result.bids) == 1
         assert len(result.asks) == 1
 
@@ -448,11 +424,6 @@ class TestNormalizeBidAsk:
         result = norm.normalize_bidask(FakeBidAsk())
         assert isinstance(result, BidAskEvent)
         assert result.symbol == "2330"
-
-
-# ===================================================================
-# Synthetic side generation tests
-# ===================================================================
 
 
 class TestSyntheticSide:
@@ -495,11 +466,6 @@ class TestSyntheticSide:
         assert new_asks is asks
 
 
-# ===================================================================
-# Timestamp clamping tests
-# ===================================================================
-
-
 class TestTimestampClamping:
     """Tests for _clamp_future_ts and _validate_and_sync_timestamp."""
 
@@ -509,9 +475,9 @@ class TestTimestampClamping:
 
         original_max = norm_mod._TS_MAX_FUTURE_NS
         try:
-            norm_mod._TS_MAX_FUTURE_NS = 1_000_000_000  # 1 second
+            norm_mod._TS_MAX_FUTURE_NS = 1_000_000_000
             now = 10_000_000_000
-            exch_ts = now + 5_000_000_000  # 5s in future
+            exch_ts = now + 5_000_000_000
             result = norm_mod._clamp_future_ts(exch_ts, now, "tick", "2330")
             assert result == now
         finally:
@@ -523,9 +489,9 @@ class TestTimestampClamping:
 
         original_max = norm_mod._TS_MAX_FUTURE_NS
         try:
-            norm_mod._TS_MAX_FUTURE_NS = 5_000_000_000  # 5 seconds
+            norm_mod._TS_MAX_FUTURE_NS = 5_000_000_000
             now = 10_000_000_000
-            exch_ts = now + 100_000_000  # 100ms in future
+            exch_ts = now + 100_000_000
             result = norm_mod._clamp_future_ts(exch_ts, now, "tick", "2330")
             assert result == exch_ts
         finally:
@@ -535,14 +501,9 @@ class TestTimestampClamping:
         """local_ts is bumped to exch_ts when local_ts < exch_ts."""
         norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
         exch_ts = 10_000_000_000
-        local_ts = 5_000_000_000  # before exch
+        local_ts = 5_000_000_000
         new_exch, new_local = norm._validate_and_sync_timestamp(exch_ts, local_ts, "tick", "2330")
         assert new_local >= new_exch
-
-
-# ===================================================================
-# _get_scale and caching tests
-# ===================================================================
 
 
 class TestGetScale:
@@ -569,11 +530,6 @@ class TestGetScale:
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         assert norm._get_scale("XXXX") == SymbolMetadata.DEFAULT_SCALE
-
-
-# ===================================================================
-# normalize_snapshot tests
-# ===================================================================
 
 
 class TestNormalizeSnapshot:

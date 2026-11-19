@@ -81,7 +81,6 @@ def test_policy_auto_degrade_on_storm():
     """NORMAL → DEGRADE auto-transition on StormGuard STORM."""
     policy = GatewayPolicy()
     assert policy.mode == GatewayPolicyMode.NORMAL
-    # Calling gate with STORM triggers auto-degrade
     policy.gate(_make_intent(IntentType.NEW), StormGuardState.STORM)
     assert policy.mode == GatewayPolicyMode.DEGRADE
 
@@ -127,14 +126,11 @@ def test_policy_startup_holdoff_blocks_new(monkeypatch):
     """
     monkeypatch.setenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "300")
     policy = GatewayPolicy()
-    # During holdoff: NEW blocked
     ok, reason = policy.gate(_make_intent(IntentType.NEW), StormGuardState.NORMAL)
     assert ok is False
     assert reason == "STARTUP_HOLDOFF"
-    # During holdoff: CANCEL still allowed
     ok, _ = policy.gate(_make_intent(IntentType.CANCEL), StormGuardState.NORMAL)
     assert ok is True
-    # During holdoff: FORCE_FLAT still allowed
     ok, _ = policy.gate(_make_intent(IntentType.FORCE_FLAT), StormGuardState.NORMAL)
     assert ok is True
 
@@ -145,7 +141,7 @@ def test_policy_startup_holdoff_expires(monkeypatch):
     policy = GatewayPolicy()
     import time
 
-    time.sleep(0.01)  # 10ms — well past 1ms holdoff
+    time.sleep(0.01)
     ok, reason = policy.gate(_make_intent(IntentType.NEW), StormGuardState.NORMAL)
     assert ok is True
     assert reason == "OK"

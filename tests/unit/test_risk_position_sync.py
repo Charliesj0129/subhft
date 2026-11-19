@@ -49,9 +49,9 @@ class TestRiskPositionSyncerGetAllReturnsCopy:
         syncer.update(discrepancies=[], broker_map={"2330": 100})
 
         positions = syncer.get_all_broker_positions()
-        positions["2330"] = 999  # mutate the copy
+        positions["2330"] = 999
 
-        assert syncer.get_broker_qty("2330") == 100  # original unchanged
+        assert syncer.get_broker_qty("2330") == 100
 
 
 class TestRiskPositionSyncerThreadSafety:

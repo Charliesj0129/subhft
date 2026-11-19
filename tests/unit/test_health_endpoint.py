@@ -31,7 +31,6 @@ def _make_mock_system(
     sg.state = StormGuardState(storm_state)
     system.storm_guard = sg
 
-    # Mock broker clients
     md_client = MagicMock()
     md_client.logged_in = broker_logged_in
     system.md_client = md_client
@@ -40,7 +39,6 @@ def _make_mock_system(
     order_client.logged_in = broker_logged_in
     system.order_client = order_client
 
-    # Mock tasks (include 'risk')
     tasks = {}
     for name in ("md", "strat", "order", "recorder", "risk"):
         t = MagicMock()
@@ -48,18 +46,14 @@ def _make_mock_system(
         tasks[name] = t
     system.tasks = tasks
 
-    # Mock md_service
     system.md_service = MagicMock()
     system.md_service.running = md_running
 
-    # Mock recorder
     recorder = MagicMock()
     recorder.healthy = recorder_healthy
-    # Remove last_write_ok to avoid MagicMock auto-creating it
     del recorder.last_write_ok
     system.recorder = recorder
 
-    # Mock queues with maxsize
     for qname in ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue"):
         q = MagicMock()
         q.maxsize = 1000
@@ -204,7 +198,6 @@ class TestHealthServerReadiness:
     def test_gateway_checked_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_GATEWAY_ENABLED", "1")
         system = _make_mock_system()
-        # Gateway-mode should not require standalone risk task.
         gateway_task = MagicMock()
         gateway_task.done.return_value = False
         system.tasks["gateway"] = gateway_task
@@ -224,7 +217,6 @@ class TestHealthServerReadiness:
 
     def test_optional_exec_tasks_reported(self) -> None:
         system = _make_mock_system()
-        # Add exec_router task
         exec_task = MagicMock()
         exec_task.done.return_value = False
         system.tasks["exec_router"] = exec_task
@@ -263,7 +255,6 @@ class TestHealthServerStatus:
     def test_status_degraded_includes_events(self) -> None:
         system = _make_mock_system(md_running=False)
         server = HealthServer(system=system)
-        # First call records degradation
         server._build_status()
         status = server._build_status()
         assert status["status"] == "degraded"
@@ -313,9 +304,8 @@ class TestHealthServerHTTP:
     async def test_healthz_returns_200(self) -> None:
         system = _make_mock_system()
         server = HealthServer(system=system)
-        server._port = 0  # Let OS pick a free port
+        server._port = 0
 
-        # Start server
         srv = await asyncio.start_server(server._handle_connection, "127.0.0.1", 0)
         addr = srv.sockets[0].getsockname()
         port = addr[1]
@@ -438,7 +428,6 @@ class TestHealthServerHTTP:
 
             response_str = response.decode("utf-8")
             assert "200 OK" in response_str
-            # Parse the JSON body
             body_start = response_str.index("\r\n\r\n") + 4
             body = json.loads(response_str[body_start:])
             assert body["status"] == "ready"
@@ -483,7 +472,7 @@ class TestHealthServerLifecycle:
 
     def test_stop_without_server_is_safe(self) -> None:
         server = HealthServer()
-        server.stop()  # Should not raise
+        server.stop()
         assert server._server is None
 
     def test_port_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:

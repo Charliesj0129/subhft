@@ -25,9 +25,6 @@ from research.backtest._npz_format import (
     detect_npz_format,
 )
 
-
-# hftbacktest event_dtype, declared inline so the test is independent of
-# whether hftbacktest is importable in the test environment.
 _EVENT_DTYPE = np.dtype(
     [
         ("ev", "<u8"),
@@ -44,7 +41,7 @@ _EVENT_DTYPE = np.dtype(
 
 def _write_event_npz(path: Path, n: int = 4) -> None:
     arr = np.zeros(n, dtype=_EVENT_DTYPE)
-    arr["ev"] = 3489660929  # DEPTH | EXCH | LOCAL | SELL — verified value
+    arr["ev"] = 3489660929
     arr["exch_ts"] = np.arange(n, dtype=np.int64) * 1_000_000
     arr["local_ts"] = arr["exch_ts"]
     arr["px"] = 36000.0 + np.arange(n)
@@ -66,11 +63,6 @@ def _write_meta(path: Path, depth_levels: int) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Case 1: HFTBT_EVENT_L5 (CK export with sidecar)
-# ---------------------------------------------------------------------------
-
-
 def test_l2_hftbt_npz_with_l5_sidecar_detects_event_l5(tmp_path: Path) -> None:
     npz = tmp_path / "TMFD6_2026-04-14_l2.hftbt.npz"
     _write_event_npz(npz)
@@ -88,21 +80,11 @@ def test_l2_hftbt_npz_without_sidecar_downgrades_to_l1(tmp_path: Path) -> None:
     assert detect_npz_format(npz) is NpzFormat.HFTBT_EVENT_L1
 
 
-# ---------------------------------------------------------------------------
-# Case 2: HFTBT_EVENT_L1 (legacy ensure_hftbt_npz output)
-# ---------------------------------------------------------------------------
-
-
 def test_hftbt_npz_detects_event_l1(tmp_path: Path) -> None:
     npz = tmp_path / "hftbt.npz"
     _write_event_npz(npz)
 
     assert detect_npz_format(npz) is NpzFormat.HFTBT_EVENT_L1
-
-
-# ---------------------------------------------------------------------------
-# Case 3: LEGACY_RESEARCH
-# ---------------------------------------------------------------------------
 
 
 def test_ticks_npy_detects_legacy_research(tmp_path: Path) -> None:
@@ -129,18 +111,11 @@ def test_legacy_research_detection_does_not_require_existence(tmp_path: Path) ->
     assert detect_npz_format(nonexistent) is NpzFormat.LEGACY_RESEARCH
 
 
-# ---------------------------------------------------------------------------
-# Case 4: UNKNOWN
-# ---------------------------------------------------------------------------
-
-
 def test_arbitrary_npz_without_event_fields_detects_unknown(tmp_path: Path) -> None:
     npz = tmp_path / "random.hftbt.npz"
     arr = np.zeros(4, dtype=[("foo", "<i8"), ("bar", "<f8")])
     np.savez_compressed(npz, data=arr)
 
-    # Arbitrary structured dtype lacking the event_dtype fields; classified
-    # as L1 candidate by name but downgraded to UNKNOWN by dtype check.
     assert detect_npz_format(npz) is NpzFormat.UNKNOWN
 
 
@@ -157,11 +132,6 @@ def test_missing_file_detects_unknown(tmp_path: Path) -> None:
     npz = tmp_path / "TMFD6_2026-04-14_l2.hftbt.npz"
 
     assert detect_npz_format(npz) is NpzFormat.UNKNOWN
-
-
-# ---------------------------------------------------------------------------
-# Case 5: assert_format mismatch error
-# ---------------------------------------------------------------------------
 
 
 def test_assert_format_raises_on_mismatch(tmp_path: Path) -> None:
@@ -184,5 +154,4 @@ def test_assert_format_passes_on_match(tmp_path: Path) -> None:
     _write_event_npz(npz)
     _write_meta(npz, depth_levels=5)
 
-    # Should not raise
     assert_format(npz, NpzFormat.HFTBT_EVENT_L5)

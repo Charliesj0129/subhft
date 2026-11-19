@@ -159,12 +159,12 @@ class TestCanaryEvaluate:
                 "drawdown_contribution": 0.001,
                 "execution_error_rate": 0.0,
                 "sessions_live": 12,
-                "sharpe_live": 1.5,  # >= 1.5 * 0.8 = 1.2
+                "sharpe_live": 1.5,
             },
         )
         assert status.state == "escalated"
         assert "0.02" in status.reason
-        assert "0.05" in status.reason  # next tier
+        assert "0.05" in status.reason
 
     def test_hold_when_sharpe_too_low(self, tmp_path: Path):
         promo_dir = tmp_path / "promos"
@@ -181,7 +181,7 @@ class TestCanaryEvaluate:
                 "drawdown_contribution": 0.001,
                 "execution_error_rate": 0.0,
                 "sessions_live": 15,
-                "sharpe_live": 1.0,  # < 2.0 * 0.8 = 1.6
+                "sharpe_live": 1.0,
             },
         )
         assert status.state == "canary"
@@ -240,7 +240,7 @@ class TestCanaryApplyDecision:
         monitor.apply_decision(status)
 
         updated = yaml.safe_load(yaml_path.read_text())
-        assert updated["weight"] == 0.05  # next tier after 0.02
+        assert updated["weight"] == 0.05
 
     def test_apply_graduation(self, tmp_path: Path):
         promo_dir = tmp_path / "promos"
@@ -258,7 +258,7 @@ class TestCanaryApplyDecision:
 
         updated = yaml.safe_load(yaml_path.read_text())
         assert updated["weight"] == 0.10
-        assert "rollback" not in updated  # removed on graduation
+        assert "rollback" not in updated
 
     def test_apply_hold_is_noop(self, tmp_path: Path):
         promo_dir = tmp_path / "promos"
@@ -285,7 +285,6 @@ class TestCanaryApplyDecision:
             reason="test",
             checks={},
         )
-        # Should not raise
         monitor.apply_decision(status)
         assert list(tmp_path.rglob("*.yaml")) == []
 

@@ -24,10 +24,6 @@ from hft_platform.feature.registry import (
     default_feature_registry,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _stats(
     symbol: str = "TXFD6",
@@ -62,11 +58,6 @@ def _make_profile(
     )
 
 
-# ---------------------------------------------------------------------------
-# FeatureEngine __init__ variants
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureEngineInit:
     def test_default_init(self) -> None:
         eng = FeatureEngine()
@@ -87,7 +78,7 @@ class TestFeatureEngineInit:
     def test_init_emit_events_false(self) -> None:
         eng = FeatureEngine(emit_events=False)
         result = eng.process_lob_stats(_stats())
-        assert result is None  # no event emitted
+        assert result is None
 
     def test_init_emit_events_true(self) -> None:
         eng = FeatureEngine(emit_events=True)
@@ -123,17 +114,11 @@ class TestFeatureEngineInit:
         assert params["ema_window"] == 4
 
 
-# ---------------------------------------------------------------------------
-# FeatureProfile apply/reject
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureEngineProfile:
     def test_apply_profile_sets_ema_alpha(self) -> None:
         eng = FeatureEngine()
         profile = _make_profile(params={"ema_window": 4})
         eng.apply_profile(profile)
-        # ema_alpha = 2/(4+1) = 0.4
         assert eng._ema_alpha == pytest.approx(0.4)
 
     def test_apply_profile_ofi_disabled(self) -> None:
@@ -171,11 +156,6 @@ class TestFeatureEngineProfile:
         assert eng.profile_params() == {}
 
 
-# ---------------------------------------------------------------------------
-# runtime_status
-# ---------------------------------------------------------------------------
-
-
 class TestRuntimeStatus:
     def test_runtime_status_keys(self) -> None:
         eng = FeatureEngine()
@@ -196,11 +176,6 @@ class TestRuntimeStatus:
         assert eng.runtime_status()["tracked_symbols"] == 1
         eng.process_lob_stats(_stats(symbol="SYM_B"))
         assert eng.runtime_status()["tracked_symbols"] == 2
-
-
-# ---------------------------------------------------------------------------
-# reset_all
-# ---------------------------------------------------------------------------
 
 
 class TestResetAll:
@@ -224,11 +199,6 @@ class TestResetAll:
         assert evt.quality_flags & QUALITY_FLAG_STATE_RESET
 
 
-# ---------------------------------------------------------------------------
-# _StatsTupleProxy
-# ---------------------------------------------------------------------------
-
-
 class TestStatsTupleProxy:
     def test_all_properties(self) -> None:
         t = ("lobstats", "TXFD6", 123456, 400000000, 10000, 0.5, 200000000, 200010000, 50, 30)
@@ -244,18 +214,11 @@ class TestStatsTupleProxy:
         assert proxy.ask_depth == 30
 
 
-# ---------------------------------------------------------------------------
-# warmup_ready_mask
-# ---------------------------------------------------------------------------
-
-
 class TestWarmupReadyMask:
     def test_first_tick_partial_warmup(self) -> None:
         eng = FeatureEngine(emit_events=True)
         evt = eng.process_lob_stats(_stats())
         assert evt is not None
-        # On first tick (warm_count=1), features with warmup_min_events=1 are ready,
-        # features with warmup_min_events=2 (OFI, EMA) are NOT
         fs = build_default_lob_feature_set_v1()
         for i, spec in enumerate(fs.features):
             bit = (evt.warmup_ready_mask >> i) & 1
@@ -269,15 +232,9 @@ class TestWarmupReadyMask:
         eng.process_lob_stats(_stats(ts=1))
         evt = eng.process_lob_stats(_stats(ts=2))
         assert evt is not None
-        # All v1 features have warmup_min_events <= 2
         fs = build_default_lob_feature_set_v1()
         expected_mask = (1 << len(fs.features)) - 1
         assert evt.warmup_ready_mask == expected_mask
-
-
-# ---------------------------------------------------------------------------
-# OFI disabled via profile
-# ---------------------------------------------------------------------------
 
 
 class TestOfiDisabledProfile:
@@ -290,11 +247,6 @@ class TestOfiDisabledProfile:
         assert evt.get("ofi_l1_raw") == 0
         assert evt.get("ofi_l1_cum") == 0
         assert evt.get("ofi_l1_ema8") == 0
-
-
-# ---------------------------------------------------------------------------
-# get_feature_view
-# ---------------------------------------------------------------------------
 
 
 class TestGetFeatureView:
@@ -320,11 +272,6 @@ class TestGetFeatureView:
         assert view["feature_profile_id"] == "test-profile"
 
 
-# ---------------------------------------------------------------------------
-# has_symbol
-# ---------------------------------------------------------------------------
-
-
 class TestHasSymbol:
     def test_false_before_processing(self) -> None:
         eng = FeatureEngine()
@@ -340,11 +287,6 @@ class TestHasSymbol:
         eng.process_lob_stats(_stats())
         eng.reset_symbol("TXFD6")
         assert eng.has_symbol("TXFD6") is False
-
-
-# ---------------------------------------------------------------------------
-# Multi-symbol tracking
-# ---------------------------------------------------------------------------
 
 
 class TestMultiSymbol:
@@ -364,11 +306,6 @@ class TestMultiSymbol:
         assert eng.has_symbol("B")
 
 
-# ---------------------------------------------------------------------------
-# FeatureEngine quality flags — manual injection
-# ---------------------------------------------------------------------------
-
-
 class TestQualityFlagsManual:
     def test_quality_flags_next_injected(self) -> None:
         eng = FeatureEngine()
@@ -377,15 +314,9 @@ class TestQualityFlagsManual:
         assert evt is not None
         assert evt.quality_flags & QUALITY_FLAG_GAP
         assert evt.quality_flags & QUALITY_FLAG_STALE_INPUT
-        # Consumed after one tick (ts must be >= previous to avoid OUT_OF_ORDER)
         evt2 = eng.process_lob_stats(_stats(ts=2))
         assert evt2 is not None
         assert evt2.quality_flags == 0
-
-
-# ---------------------------------------------------------------------------
-# FeatureRegistry
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureRegistry:
@@ -456,11 +387,6 @@ class TestFeatureRegistry:
         fs1 = FeatureSet("x", 1, ())
         reg = FeatureRegistry.from_sets([fs1])
         assert reg.get_default() is fs1
-
-
-# ---------------------------------------------------------------------------
-# FeatureSet properties
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureSet:

@@ -55,9 +55,6 @@ class ForceFlatResidualGate:
         trade_pnl = _to_float_list(getattr(result, "trade_pnl", None))
         n_trips = len(trade_pnl)
 
-        # No trips → no denominator → advisory PASS (the candidate has
-        # no matched edge to defend; let upstream sample-size gates
-        # handle the empty case).
         if n_trips == 0:
             return SubGateResult(
                 name=self.name,
@@ -71,7 +68,6 @@ class ForceFlatResidualGate:
                 details="no trade pnl — advisory skip",
             )
 
-        # No force-flat residual → automatic PASS regardless of threshold.
         if abs_residual == 0:
             return SubGateResult(
                 name=self.name,
@@ -88,8 +84,6 @@ class ForceFlatResidualGate:
         ff_trips_upper = min(abs_residual, n_trips)
         ff_share_pct = 100.0 * ff_trips_upper / n_trips
 
-        # Threshold absent → advisory metrics only, PASS by default
-        # (loose-profile semantics consistent with other sub-gates).
         if max_share is None:
             return SubGateResult(
                 name=self.name,

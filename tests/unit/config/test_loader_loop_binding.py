@@ -84,11 +84,7 @@ def loop_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-# -- _assert_strategy_enabled -------------------------------------------------
-
-
 def test_assert_strategy_enabled_passes_when_enabled(loop_workspace: Path):
-    # Returns None on success; assert that explicitly.
     assert _assert_strategy_enabled("R47_MAKER_TMF") is None
 
 
@@ -106,9 +102,6 @@ def test_assert_strategy_enabled_rejects_no_registry(tmp_path: Path, monkeypatch
     monkeypatch.chdir(tmp_path)
     with pytest.raises(LoopBindingError, match="strategies registry not found"):
         _assert_strategy_enabled("R47_MAKER_TMF")
-
-
-# -- _bind_loop ---------------------------------------------------------------
 
 
 def test_bind_loop_overrides_strategy(loop_workspace: Path):
@@ -162,9 +155,6 @@ def test_bind_loop_disabled_strategy_blocks_binding(loop_workspace: Path):
         _bind_loop(settings)
 
 
-# -- resolve_active_strategy --------------------------------------------------
-
-
 def test_resolve_active_strategy_returns_dict(loop_workspace: Path):
     settings = {"strategy": {"id": "X", "module": "m", "class": "C"}}
     assert resolve_active_strategy(settings) == {"id": "X", "module": "m", "class": "C"}
@@ -175,9 +165,6 @@ def test_resolve_active_strategy_handles_missing():
     assert resolve_active_strategy({"strategy": None}) == {}
 
 
-# -- load_settings end-to-end -------------------------------------------------
-
-
 def test_load_settings_resolves_loop_from_main_yaml(loop_workspace: Path):
     settings, _ = load_settings()
     assert settings["loop_id"] == "r47_tmf_v1"
@@ -186,7 +173,6 @@ def test_load_settings_resolves_loop_from_main_yaml(loop_workspace: Path):
 
 
 def test_load_settings_hft_loop_env_var(loop_workspace: Path, monkeypatch):
-    # Strip loop_id from main.yaml so env var alone drives the binding.
     (loop_workspace / "config" / "base" / "main.yaml").write_text(
         yaml.safe_dump(
             {
@@ -214,7 +200,6 @@ def test_load_settings_strict_rejects_unknown_top_level(loop_workspace: Path):
 
 
 def test_load_settings_cli_loop_override(loop_workspace: Path):
-    # Default loop is r47_tmf_v1. CLI override to a freshly-written loop.
     second = loop_workspace / "config" / "loops" / "alt_loop.yaml"
     second.write_text(
         yaml.safe_dump(

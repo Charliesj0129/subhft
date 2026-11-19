@@ -16,16 +16,12 @@ use pyo3::prelude::*;
 pub fn coerce_ns_int(ts: i64) -> i64 {
     let abs_ts = ts.unsigned_abs();
     if abs_ts < 100_000_000_000 {
-        // < 1e11: seconds
         ts * 1_000_000_000
     } else if abs_ts < 100_000_000_000_000 {
-        // < 1e14: milliseconds
         ts * 1_000_000
     } else if abs_ts < 100_000_000_000_000_000 {
-        // < 1e17: microseconds
         ts * 1_000
     } else {
-        // nanoseconds
         ts
     }
 }

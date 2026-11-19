@@ -96,7 +96,6 @@ def test_refuse_helper_passes_with_loop_id_in_shadow(monkeypatch):
 
     monkeypatch.setenv("HFT_RUNTIME_ROLE", "engine")
     monkeypatch.setenv("HFT_ORDER_MODE", "shadow")
-    # Returns None on success; assert that explicitly.
     assert _refuse_non_sim_without_loop({"loop_id": "r47_tmf_v1"}) is None
 
 
@@ -113,7 +112,6 @@ def test_refuse_helper_skips_non_engine_roles(monkeypatch):
 
     monkeypatch.setenv("HFT_RUNTIME_ROLE", "research")
     monkeypatch.setenv("HFT_ORDER_MODE", "live")
-    # research role is exempt; returns None.
     assert _refuse_non_sim_without_loop({}) is None
 
 

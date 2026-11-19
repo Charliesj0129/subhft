@@ -1,10 +1,3 @@
-# DEPRECATED: Use hft_platform.feed_adapter.shioaji.client instead.
-# This module is kept for backward compatibility and will be removed in a future release.
-#
-# All public symbols are re-exported from the canonical location so that
-# existing ``from hft_platform.feed_adapter.shioaji_client import X`` and
-# ``patch("hft_platform.feed_adapter.shioaji_client.sj")`` continue to work.
-
 from hft_platform.feed_adapter.shioaji.client import (  # noqa: F401
     _ROUTE_MISS_COUNT,
     _ROUTE_MISS_FALLBACK_MODE,

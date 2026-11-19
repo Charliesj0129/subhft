@@ -55,7 +55,7 @@ from research.candidate_loop.primitives import (
 from research.candidate_loop.schema import Window
 from research.candidate_loop.validator import ValidCandidate
 
-MIN_IC_ROWS = 32  # below this a day's IC is statistical noise
+MIN_IC_ROWS = 32
 
 
 @dataclass(frozen=True)
@@ -94,9 +94,6 @@ def load_evaluator_config(path: Path) -> EvaluatorConfig:
     )
 
 
-# ---------------------------------------------------------------------------
-# Building blocks (unit-tested directly).
-# ---------------------------------------------------------------------------
 
 
 def shift_label(label0: np.ndarray, local_ts: np.ndarray, delta_ns: int) -> np.ndarray:
@@ -126,7 +123,7 @@ def discretize_with_hysteresis(z: np.ndarray, sigma: float) -> tuple[np.ndarray,
     zs = z.tolist()
     for i in range(n):
         zi = zs[i]
-        if zi == zi:  # NaN holds
+        if zi == zi:
             if zi > sigma:
                 new = 1
             elif zi < -sigma:
@@ -160,18 +157,15 @@ def _rank_ic(signal: np.ndarray, label: np.ndarray) -> float:
     return 0.0 if math.isnan(value) else value
 
 
-# ---------------------------------------------------------------------------
-# Per-day evaluation.
-# ---------------------------------------------------------------------------
 
 
 @dataclass
 class DayEval:
     day: str
     symbol: str
-    skipped_reason: str = ""  # 'dir_dirty' | 'empty_panel' | '' (used)
+    skipped_reason: str = ""
     n_valid: int = 0
-    counts_for_stats: bool = False  # n_valid >= min_valid_rows_per_day
+    counts_for_stats: bool = False
     signal_std: float = 0.0
     ic: float = 0.0
     rank_ic: float = 0.0
@@ -214,7 +208,7 @@ def evaluate_day(valid: ValidCandidate, panel: Panel, cfg: EvaluatorConfig) -> D
         signal_gated = signal
 
     label = future_mid_return(cols, horizon)
-    label_pts = label * cols["mid"]  # forward mid move in points
+    label_pts = label * cols["mid"]
 
     finite_both = np.isfinite(signal) & np.isfinite(label)
     in_mask = np.isfinite(signal_gated) & np.isfinite(label)
@@ -235,7 +229,6 @@ def evaluate_day(valid: ValidCandidate, panel: Panel, cfg: EvaluatorConfig) -> D
         if int(np.count_nonzero(out_mask)) >= MIN_IC_ROWS:
             result.regime_ic_out = _pearson_ic(signal[out_mask], label[out_mask])
 
-    # Canonical wide/tight spread split (r33 pattern) within the in-regime rows.
     spreads_in = cols["spread_ticks"][in_mask]
     finite_spread = np.isfinite(spreads_in)
     if int(np.count_nonzero(finite_spread)) > 0:
@@ -246,19 +239,16 @@ def evaluate_day(valid: ValidCandidate, panel: Panel, cfg: EvaluatorConfig) -> D
         result.wide_ic = _pearson_ic(signal_gated[wide], label[wide])
         result.median_spread_pts = med_spread_ticks * tick_size
 
-    # Latency stress: label re-anchored at t + δ.
     for delta_ms in cfg.latency_shifts_ms:
         lab_d = shift_label(label, local_ts, delta_ms * 1_000_000)
         mask_d = np.isfinite(signal_gated) & np.isfinite(lab_d)
         result.latency_ics[delta_ms] = _pearson_ic(signal_gated[mask_d], lab_d[mask_d])
 
-    # Horizon decay.
     for mult in cfg.horizon_decay_multipliers:
         lab_m = future_mid_return(cols, scale_window(horizon, mult))
         mask_m = np.isfinite(signal_gated) & np.isfinite(lab_m)
         result.decay_ics[mult] = _pearson_ic(signal_gated[mask_m], lab_m[mask_m])
 
-    # 5-bucket mean forward move (points) by signal quantile.
     nb = cfg.bucket_count
     result.bucket_sums_pts = np.zeros(nb)
     result.bucket_counts = np.zeros(nb, dtype=np.int64)
@@ -271,7 +261,6 @@ def evaluate_day(valid: ValidCandidate, panel: Panel, cfg: EvaluatorConfig) -> D
             result.bucket_sums_pts[b] = float(np.sum(lab_pts_in[sel]))
             result.bucket_counts[b] = int(np.count_nonzero(sel))
 
-    # taifex_v1 cost proxy: sign-of-zscore positions with hysteresis.
     z = rolling_zscore(signal_gated, local_ts, parse_canonical_window(cfg.cost_proxy_zscore_window))
     positions, flip_idx = discretize_with_hysteresis(z, cfg.hysteresis_sigma)
     result.flips = int(flip_idx.size)
@@ -284,7 +273,6 @@ def evaluate_day(valid: ValidCandidate, panel: Panel, cfg: EvaluatorConfig) -> D
         depth = np.where(positions[flip_idx] > 0, cols["bid_qty_1"][flip_idx], cols["ask_qty_1"][flip_idx])
         result.flip_depth = depth.astype(np.float64)
 
-    # ms-equivalent of the declared horizon (decay halflife reporting).
     if horizon.kind == "time":
         result.horizon_ms_estimate = horizon.duration_ns / 1e6
     elif local_ts.size > 1:
@@ -293,9 +281,6 @@ def evaluate_day(valid: ValidCandidate, panel: Panel, cfg: EvaluatorConfig) -> D
     return result
 
 
-# ---------------------------------------------------------------------------
-# Split aggregation.
-# ---------------------------------------------------------------------------
 
 
 def aggregate_split(
@@ -322,7 +307,6 @@ def aggregate_split(
     n_used = max(len(used), 1)
     std_zero_fraction = float(sum(1 for d in used if d.signal_std <= cfg.signal_std_epsilon)) / n_used if used else 1.0
 
-    # Buckets pooled across days.
     nb = cfg.bucket_count
     bucket_sums = np.zeros(nb)
     bucket_counts = np.zeros(nb, dtype=np.int64)
@@ -342,7 +326,6 @@ def aggregate_split(
         bucket_spread_pts = 0.0
         bucket_monotonicity = 0.0
 
-    # one_day_concentration: max single-day share of total |bucket spread|.
     day_contrib = []
     for d in stat_days:
         if d.bucket_counts.size == nb and int(d.bucket_counts.sum()) > 0:
@@ -354,9 +337,8 @@ def aggregate_split(
     if total_contrib > 0.0:
         one_day_concentration = max(day_contrib) / total_contrib
     else:
-        one_day_concentration = 1.0  # fail-closed: no spread evidence at all
+        one_day_concentration = 1.0
 
-    # Latency scores: signed retention vs δ=0.
     latency_means = {
         delta: float(np.mean([d.latency_ics.get(delta, 0.0) for d in stat_days])) if stat_days else 0.0
         for delta in cfg.latency_shifts_ms
@@ -364,7 +346,6 @@ def aggregate_split(
     ic0 = latency_means.get(0, 0.0)
     latency_scores = {delta: (latency_means[delta] / ic0 if ic0 != 0.0 else 0.0) for delta in cfg.latency_shifts_ms}
 
-    # Horizon decay halflife (ms-equivalent of the declared horizon).
     decay_means = {
         mult: float(np.mean([d.decay_ics.get(mult, 0.0) for d in stat_days])) if stat_days else 0.0
         for mult in cfg.horizon_decay_multipliers
@@ -378,7 +359,6 @@ def aggregate_split(
                 halflife_ms = horizon_ms * mult
                 break
 
-    # Regime stability: tight/wide spread IC sign agreement.
     regime_pairs = [(d.tight_ic, d.wide_ic) for d in stat_days if d.tight_ic != 0.0 or d.wide_ic != 0.0]
     regime_stability = (
         float(sum(1 for t, w in regime_pairs if np.sign(t) == np.sign(w))) / len(regime_pairs) if regime_pairs else 0.0
@@ -387,7 +367,6 @@ def aggregate_split(
     tight_mean = float(np.mean([d.tight_ic for d in stat_days])) if stat_days else 0.0
     wide_mean = float(np.mean([d.wide_ic for d in stat_days])) if stat_days else 0.0
 
-    # taifex_v1 taker cost proxy.
     total_flips = sum(d.flips for d in used)
     gross_sum = float(sum(d.gross_pts_sum for d in used))
     gross_count = sum(d.gross_pts_count for d in used)

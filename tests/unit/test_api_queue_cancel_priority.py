@@ -43,7 +43,6 @@ def _make_adapter(tmp_config: str, queue_size: int = 2) -> OrderAdapter:
         broker_client=client,
     )
     adapter.shadow_sink.enabled = False
-    # Force the api_queue to a tiny capacity for the test.
     adapter._api_queue = asyncio.Queue(maxsize=queue_size)
     return adapter
 
@@ -75,12 +74,10 @@ async def test_cancel_preempts_new_on_queue_full(tmp_config: str):
     new2 = _mk_cmd(IntentType.NEW, 2)
     cancel = _mk_cmd(IntentType.CANCEL, 99, target_order_id="broker_id_xyz")
 
-    # Fill the queue with NEWs
     assert await adapter._enqueue_api(new1) is True
     assert await adapter._enqueue_api(new2) is True
     assert adapter._api_queue.qsize() == 2
 
-    # CANCEL should preempt a NEW (not fall through to DLQ).
     ok = await adapter._enqueue_api(cancel)
     assert ok is True, "CANCEL must not be dropped when a NEW is evictable"
 
@@ -89,7 +86,7 @@ async def test_cancel_preempts_new_on_queue_full(tmp_config: str):
         remaining.append(adapter._api_queue.get_nowait())
     remaining_types = [cmd.intent.intent_type for cmd in remaining]
     assert IntentType.CANCEL in remaining_types
-    assert remaining_types.count(IntentType.NEW) == 1  # exactly one NEW evicted
+    assert remaining_types.count(IntentType.NEW) == 1
 
 
 @pytest.mark.asyncio
@@ -99,6 +96,5 @@ async def test_cancel_dlqs_if_no_new_to_evict(tmp_config: str):
     cancel_new = _mk_cmd(IntentType.CANCEL, 51, target_order_id="new")
 
     assert await adapter._enqueue_api(cancel_existing) is True
-    # No NEW present to evict — CANCEL falls through to DLQ.
     ok = await adapter._enqueue_api(cancel_new)
     assert ok is False

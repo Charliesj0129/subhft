@@ -66,15 +66,10 @@ from research.registry.schemas import (
 
 logger = get_logger("alpha.c60_tmfd6_r47_minimal_inst_rt")
 
-# TMFD6 instrument constants (immutable per contract specs).
-_TMF_POINT_VALUE_NTD = 10          # NTD per pt on TMF (vs TXF 200)
-_TMF_INST_RT_COST_PTS = 1.5        # shared-context.yaml#cost_model.TMF (inst est.)
-_TMF_RETAIL_RT_COST_PTS = 4.0      # retail reference (feedback_taifex_fee_structure)
+_TMF_POINT_VALUE_NTD = 10
+_TMF_INST_RT_COST_PTS = 1.5
+_TMF_RETAIL_RT_COST_PTS = 4.0
 
-# Three of the four R47 signal layers are hard-disabled. The D4 QI skew layer
-# is retained (deployed TMFD6 config), but is gated via QueueImbalance on the
-# top-of-book snapshot only — it is NOT |pos|-modulated. Test asserts the
-# three-layer absence.
 _DISABLED_SIGNAL_LAYERS_MOST = (
     "_update_pe",
     "_update_queue",
@@ -85,9 +80,6 @@ _DISABLED_SIGNAL_LAYERS_MOST = (
 )
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,9 +122,6 @@ class C60Params:
     enable_mfg_layer: bool = False
 
 
-# ----------------------------------------------------------------------------
-# TmfD6SoloMakerMinimal — MakerEngine-compatible strategy
-# ----------------------------------------------------------------------------
 
 
 class TmfD6SoloMakerMinimal:
@@ -173,7 +162,6 @@ class TmfD6SoloMakerMinimal:
         self._quotes_posted = 0
         self._active_symbol = active_symbol
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def position(self) -> int:
@@ -207,7 +195,6 @@ class TmfD6SoloMakerMinimal:
     def active_symbol(self) -> str:
         return self._active_symbol
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -233,8 +220,6 @@ class TmfD6SoloMakerMinimal:
             self._spread_blocked += 1
             return [Hold()]
 
-        # L2 D4 QI skew (deployed layer). Computed on top-of-book snapshot;
-        # NOT |pos|-modulated. Returns (widen_bid_ticks, widen_ask_ticks).
         widen_bid_ticks, widen_ask_ticks = self._compute_qi_skew(tick)
         if widen_bid_ticks or widen_ask_ticks:
             self._qi_widen_events += 1
@@ -243,23 +228,20 @@ class TmfD6SoloMakerMinimal:
         pos = self._position
         max_pos = params.max_pos
 
-        # Fixed inventory skew (scaled-integer, R47 best practice).
         skew = (pos * params.inventory_skew_tenths * scale) // 10
-        tick_size = scale  # 1 pt == scale scaled-units
+        tick_size = scale
         bid_quote = tick.bid_price - skew - widen_bid_ticks * tick_size
         ask_quote = tick.ask_price - skew + widen_ask_ticks * tick_size
 
         bid_moved = bid_quote != self._last_bid
         ask_moved = ask_quote != self._last_ask
 
-        # Buy side: only if inventory not at +max_pos cap.
         if pos < max_pos and bid_moved:
             actions.append(PostQuote(side="buy", price=bid_quote, qty=1))
             self._last_bid = bid_quote
             self._quotes_posted += 1
         elif pos >= max_pos:
             self._max_pos_blocked += 1
-        # Sell side: only if inventory not at -max_pos cap.
         if pos > -max_pos and ask_moved:
             actions.append(PostQuote(side="sell", price=ask_quote, qty=1))
             self._last_ask = ask_quote
@@ -282,7 +264,6 @@ class TmfD6SoloMakerMinimal:
         total_qty = tick.bid_qty + tick.ask_qty
         if total_qty <= 0:
             return 0, 0
-        # float math allowed (research module; not live hot-path).
         imbalance = (tick.bid_qty - tick.ask_qty) / total_qty
         threshold = params.qi_skew_threshold
         widen = params.qi_skew_widen_ticks
@@ -317,9 +298,6 @@ class TmfD6SoloMakerMinimal:
         self._quotes_posted = 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C60Alpha:

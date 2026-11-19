@@ -93,7 +93,6 @@ class FamilyBoundStrategy:
         self.symbols.add(change.new_ref.display())
 
     def handle_event(self, event) -> None:
-        # Family-declared strategies MUST fail loud until bound.
         if self.families and not self.symbols:
             return
         if hasattr(event, "symbol") and self.symbols:
@@ -118,22 +117,15 @@ class FamilyBindingRegistry:
 
     def register(self, strategy: FamilyBoundStrategy) -> None:
         self._strategies.append(strategy)
-        # Seed current bindings.
         for family in strategy.families:
             ref = self._resolver.resolve_family(family)
             if ref is not None:
                 strategy.symbols.add(ref.display())
-        # Wire rebind hook so swap_snapshot keeps strategy in sync.
         self._resolver.add_hook(strategy.on_rebind)
 
     def dispatch(self, event) -> None:
         for strategy in self._strategies:
             strategy.handle_event(event)
-
-
-# ---------------------------------------------------------------------------
-# 1. Warm start: resolver has a snapshot before strategy registers.
-# ---------------------------------------------------------------------------
 
 
 def test_warm_start_binds_immediately() -> None:
@@ -152,23 +144,14 @@ def test_warm_start_binds_immediately() -> None:
     )
     registry.register(strat)
 
-    # Strategy is ready before any event arrives.
     assert strat.symbols == {"TMFE6"}
 
-    # The actual broker callback code flows through.
     registry.dispatch(_bidask("TMFE6"))
     assert strat.received == ["TMFE6"]
 
 
-# ---------------------------------------------------------------------------
-# 2. Cold start: resolver snapshot empty at registration, filled later
-#    (simulates Bug 12 `docker compose restart` race). Event must NOT
-#    silent-drop; hook must populate symbols before the first event.
-# ---------------------------------------------------------------------------
-
-
 def test_cold_start_hook_populates_before_first_event() -> None:
-    resolver = ContractFamilyResolver()  # empty snapshot
+    resolver = ContractFamilyResolver()
     registry = FamilyBindingRegistry(resolver)
     strat = FamilyBoundStrategy(
         "r47_poc",
@@ -176,10 +159,8 @@ def test_cold_start_hook_populates_before_first_event() -> None:
     )
     registry.register(strat)
 
-    # Cold state: no symbols bound yet.
     assert strat.symbols == set()
 
-    # Simulate broker post-connect: snapshot lands with real bindings.
     resolver.swap_snapshot(
         build_snapshot_from_calendar(
             {"TMF": [_tmf(5), _tmf(6)]},
@@ -188,10 +169,8 @@ def test_cold_start_hook_populates_before_first_event() -> None:
         )
     )
 
-    # Hook has run: strategy now knows its broker callback code.
     assert strat.symbols == {"TMFE6"}
 
-    # First post-connect event arrives — and is NOT silent-dropped.
     registry.dispatch(_bidask("TMFE6"))
     assert strat.received == ["TMFE6"]
 
@@ -210,18 +189,12 @@ def test_cold_start_event_before_snapshot_still_fails_loud() -> None:
     )
     registry.register(strat)
 
-    # Event arrives BEFORE snapshot swap — filtered out as expected.
     registry.dispatch(_bidask("TMFE6"))
     assert strat.received == [], (
         "Events before snapshot-swap are filtered. Integration: MD service "
         "MUST swap_snapshot before subscribing to broker so first tick has "
         "a binding in place."
     )
-
-
-# ---------------------------------------------------------------------------
-# 3. Rollover: snapshot swap rebinds the strategy atomically.
-# ---------------------------------------------------------------------------
 
 
 def test_rollover_rebinds_strategy_symbols() -> None:
@@ -241,7 +214,6 @@ def test_rollover_rebinds_strategy_symbols() -> None:
     registry.register(strat)
     assert strat.symbols == {"TMFE6"}
 
-    # Rollover: May expires, June becomes R1.
     resolver.swap_snapshot(
         build_snapshot_from_calendar(
             {"TMF": [_tmf(6), _tmf(7)]},
@@ -250,21 +222,11 @@ def test_rollover_rebinds_strategy_symbols() -> None:
         )
     )
 
-    # Strategy's symbols atomically rebinds to June's code.
     assert strat.symbols == {"TMFF6"}
 
-    # Events for the old expiry are now filtered; events for the new expiry flow.
     registry.dispatch(_bidask("TMFE6"))
     registry.dispatch(_bidask("TMFF6"))
     assert strat.received == ["TMFF6"]
-
-
-# ---------------------------------------------------------------------------
-# 4. Bug 12 impossibility by construction — a property test asserting the
-#    invariant: for every family a strategy subscribes to, after the resolver
-#    has a non-empty snapshot, strategy.symbols contains that family's
-#    current concrete display.
-# ---------------------------------------------------------------------------
 
 
 def test_invariant_strategy_symbols_mirrors_resolver_for_subscribed_families() -> None:
@@ -298,13 +260,6 @@ def test_invariant_strategy_symbols_mirrors_resolver_for_subscribed_families() -
             assert ref.display() in strat.symbols
 
 
-# ---------------------------------------------------------------------------
-# 5. Hot-path overhead: measure the binding-path dispatch vs a raw str dict
-#    lookup. The family mechanism adds zero per-event cost (binding is
-#    resolved at subscribe time and cached in strategy.symbols).
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.benchmark
 def test_family_dispatch_overhead_is_negligible() -> None:
     resolver = ContractFamilyResolver()
@@ -331,10 +286,6 @@ def test_family_dispatch_overhead_is_negligible() -> None:
     elapsed_ns = time.perf_counter_ns() - t0
 
     per_event_ns = elapsed_ns / n
-    # Generous bound: this PoC dispatches via a Python list walk + set-in check.
-    # Production StrategyRunner has more machinery; the point is that
-    # *family resolution itself* adds no per-event cost — resolution already
-    # happened at registration/rebind time.
     assert per_event_ns < 10_000, (
         f"family-bound dispatch took {per_event_ns:.0f} ns/event — "
         f"expected sub-10µs since resolution is one-time at bind"
@@ -343,28 +294,18 @@ def test_family_dispatch_overhead_is_negligible() -> None:
     assert len(strat.received) == n
 
 
-# ---------------------------------------------------------------------------
-# 6. Interop: a resolver can be driven from any expiry-calendar source.
-#    This is what the Shioaji adapter will do once integrated — pull contract
-#    delivery_month fields, build FutureRefs, swap_snapshot. Fubon will
-#    build FutureRefs from our own expiry calendar (no SDK delivery_month).
-# ---------------------------------------------------------------------------
-
-
 def test_adapter_agnostic_interop() -> None:
     """Simulate two adapters producing the same snapshot shape from different
     data sources — demonstrating the resolver is broker-agnostic.
     """
 
     def shioaji_like_refs() -> list[FutureRef]:
-        # Shioaji exposes delivery_month per Contract — derive FutureRef from that.
         return [
             FutureRef("TMF", date(2026, 5, 21)),
             FutureRef("TMF", date(2026, 6, 17)),
         ]
 
     def fubon_like_refs() -> list[FutureRef]:
-        # Fubon SDK has no delivery_month — we pass our own TAIFEX calendar.
         return [
             FutureRef("TMF", date(2026, 5, 21)),
             FutureRef("TMF", date(2026, 6, 17)),
@@ -379,20 +320,9 @@ def test_adapter_agnostic_interop() -> None:
         assert snap.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)).display() == "TMFE6"
 
 
-# ---------------------------------------------------------------------------
-# 7. Robustness: an unknown family queried on the resolver returns None —
-#    consumers must be defensive about bindings that haven't landed yet.
-# ---------------------------------------------------------------------------
-
-
 def test_unknown_family_returns_none_not_raises() -> None:
     resolver = ContractFamilyResolver()
     assert resolver.resolve_family(ContractFamily(Product.FUTURE, "NONEXISTENT", FamilyCode.R1)) is None
-
-
-# ---------------------------------------------------------------------------
-# Helper retained for future expansion; currently unused.
-# ---------------------------------------------------------------------------
 
 
 def _display_codes(refs: Iterable[FutureRef]) -> list[str]:

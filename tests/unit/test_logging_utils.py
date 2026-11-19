@@ -38,12 +38,6 @@ def test_logger_renders_traceback_when_exc_info_true():
     assert '"exc_info": true' not in out, "raw `exc_info: true` token leaked — format_exc_info should consume it"
 
 
-# Bug #31 — JWT/Bearer scrubber regression tests
-# Symptom: account_gateway.py:66 logged `error=str(exc)` containing a Shioaji JWT
-# (header.payload.signature). credential_scrubber only inspected KEY names, so the
-# token flowed through into JSONRenderer output. Fix: scrub JWT and Bearer patterns
-# from string VALUES regardless of key name.
-
 _FAKE_JWT = (
     "eyJhbGciOiJIUzI1NiJ9"
     ".eyJwZXJzb25faWQiOiJUMDAwMDAwMDAwIiwic2ltdWxhdGlvbiI6dHJ1ZX0"
@@ -102,8 +96,6 @@ def test_full_pipeline_does_not_leak_jwt_in_rendered_output():
     with redirect_stderr(buf):
         logger.error("rpc_call_failed", error=f"shioaji RPC blew up: {_FAKE_JWT}")
     out = buf.getvalue()
-    # Absence assertions alone pass on an empty capture, so prove the line was
-    # actually emitted before concluding anything about what it omits.
     assert out.strip(), "nothing was logged; the leak assertions below would be vacuous"
     assert "eyJ" not in out, f"JWT body leaked in JSON output: {out!r}"
     assert "person_id" not in out, "JWT payload fragment leaked"

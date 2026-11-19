@@ -147,7 +147,6 @@ def gateway_service(
     policy: GatewayPolicy,
 ) -> GatewayService:
     """Fully wired GatewayService for load testing."""
-    # Disable metrics to avoid Prometheus registry collisions in tests
     os.environ["HFT_GATEWAY_METRICS"] = "0"
     svc = GatewayService(
         channel=channel,

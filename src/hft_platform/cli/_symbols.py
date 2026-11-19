@@ -8,10 +8,6 @@ import sys
 
 from ._utils import _print_issues
 
-# Loop_v1 L2: subscription-limit defaults are loop-aware.
-# A bound loop (--loop r47_tmf_v1) caps the subscription universe at the
-# live-minimal size; legacy multi-broker, multi-symbol research runs keep the
-# 480 ceiling (4 conn × 120 codes).
 _MAX_SUBS_LOOP = 8
 _MAX_SUBS_LEGACY = 480
 
@@ -78,7 +74,6 @@ def cmd_resolve_symbols(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-# Backward-compat alias: old monolithic cli.py had this as a standalone helper.
 _resolve_symbols_shioaji = cmd_resolve_symbols
 
 
@@ -93,7 +88,6 @@ def cmd_symbols_build(args: argparse.Namespace) -> None:
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     if contract_index is not None:
-        # An operator build must not guess where the option window goes; see ContractIndex.require_underlying.
         contract_index.require_underlying = True
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))
@@ -120,7 +114,6 @@ def cmd_symbols_preview(args: argparse.Namespace) -> None:
 
     contract_index = None if args.no_contracts else load_contract_cache(args.contracts, args.metrics)
     if contract_index is not None:
-        # An operator build must not guess where the option window goes; see ContractIndex.require_underlying.
         contract_index.require_underlying = True
     result = build_symbols(args.list_path, contract_index)
     validation = validate_symbols(result.symbols, contract_index, max_subscriptions=_resolve_max_subscriptions(args))

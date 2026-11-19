@@ -11,10 +11,10 @@ use std::collections::HashMap;
 pub struct RustExposureStore {
     global_max: i64,
     max_symbols: usize,
-    // Flat map: (account, strategy_id, symbol) -> notional
+
     exposure: HashMap<(String, String, String), i64>,
     global_notional: i64,
-    // Per-strategy limits: strategy_id -> max_notional_scaled
+
     limits: HashMap<String, i64>,
 }
 
@@ -56,19 +56,16 @@ impl RustExposureStore {
         price: i64,
         qty: i64,
     ) -> (bool, u8) {
-        // CANCEL always passes
         if intent_type == 2 {
             return (true, 0);
         }
 
         let notional = price * qty;
 
-        // Global check
         if self.global_max > 0 && self.global_notional + notional > self.global_max {
             return (false, 1);
         }
 
-        // Per-strategy limit — aggregate across all symbols for this (account, strategy)
         if let Some(&limit) = self.limits.get(strategy_id) {
             if limit > 0 {
                 let strategy_total: i64 = self
@@ -83,7 +80,6 @@ impl RustExposureStore {
             }
         }
 
-        // Symbol cardinality bound
         let key = (
             account.to_string(),
             strategy_id.to_string(),
@@ -91,14 +87,12 @@ impl RustExposureStore {
         );
         let is_new = !self.exposure.contains_key(&key);
         if is_new && self.exposure.len() >= self.max_symbols {
-            // Evict zero entries
             self.exposure.retain(|_, v| *v != 0);
             if self.exposure.len() >= self.max_symbols {
                 return (false, 3);
             }
         }
 
-        // Commit
         self.global_notional += notional;
         let entry = self.exposure.entry(key).or_insert(0);
         *entry += notional;

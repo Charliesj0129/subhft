@@ -45,7 +45,6 @@ class TestDailyPnlSection:
             trade_count=1,
             fill_count=1,
         )
-        # U+1F4C8 = chart with upwards trend
         assert "\U0001f4c8" in msg
 
     def test_format_negative_total_uses_down_icon(self) -> None:
@@ -56,7 +55,6 @@ class TestDailyPnlSection:
             trade_count=1,
             fill_count=1,
         )
-        # U+1F4C9 = chart with downwards trend
         assert "\U0001f4c9" in msg
 
     def test_format_zero_total_uses_up_icon(self) -> None:
@@ -77,7 +75,6 @@ class TestDailyPnlSection:
             trade_count=5,
             fill_count=5,
         )
-        # total = 5000
         assert "5,000" in msg
 
     def test_format_fill_count_present(self) -> None:

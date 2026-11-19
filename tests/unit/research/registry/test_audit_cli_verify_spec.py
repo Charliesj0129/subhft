@@ -69,8 +69,6 @@ class TestVerifySpecSingle:
 
     def test_fresh_template_reports_all_set_and_pass(self, _alphas: Path) -> None:
         _seed(_alphas, "fresh")
-        # Substitute the placeholder strategy_name to a real value first
-        # so it doesn't trip the placeholder detector.
         path = _alphas / "fresh" / "spec.yaml"
         body = path.read_text().replace("exemplar_txfd6_demo", "fresh")
         _write(path, body)
@@ -81,7 +79,6 @@ class TestVerifySpecSingle:
         assert "spec_check: PASS" in out
 
     def test_detects_placeholder_in_template_strategy_name(self, _alphas: Path) -> None:
-        # Unmodified template -> strategy_name == exemplar_txfd6_demo -> placeholder.
         _seed(_alphas, "raw_template")
         out = audit_cli.verify_spec("raw_template", root=_alphas)
         assert "[TODO] strategy_name" in out
@@ -124,9 +121,6 @@ class TestVerifySpecAll:
         captured = capsys.readouterr().out
         assert "from_main" in captured
         assert "summary" in captured
-
-
-# --- Round 37: shape line surfaces classify_strategy_shape ----------
 
 
 STRADDLE_SRC = Path("research/alphas/_templates/spec.straddle.yaml")

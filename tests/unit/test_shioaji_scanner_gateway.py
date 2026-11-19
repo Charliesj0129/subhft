@@ -159,7 +159,7 @@ class TestScannerGateway:
         gw = ScannerGateway(client)
 
         sdk = MagicMock()
-        sdk.constant.ScannerType = SimpleNamespace()  # no attributes
+        sdk.constant.ScannerType = SimpleNamespace()
         with patch.object(ScannerGateway, "_sdk", return_value=sdk):
             result = gw.scan("VolumeRank")
 
@@ -208,7 +208,7 @@ class TestScannerGateway:
 
     def test_resolve_scanner_type_missing_constant_returns_none(self) -> None:
         sdk = MagicMock()
-        sdk.constant = SimpleNamespace()  # no ScannerType
+        sdk.constant = SimpleNamespace()
         assert ScannerGateway._resolve_scanner_type(sdk, "VolumeRank") is None
 
     def test_slots(self) -> None:

@@ -15,10 +15,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_symbols_config() -> tuple[tempfile.TemporaryDirectory, Path]:
     tmp = tempfile.TemporaryDirectory()
@@ -36,7 +32,7 @@ def _make_service(**kwargs):
         "HFT_FEATURE_ENGINE_ENABLED": "0",
         "SYMBOLS_CONFIG": str(cfg),
         "HFT_MONITOR_LIVE_ENABLED": "0",
-        "HFT_MD_LATENCY_SAMPLE_EVERY": "1",  # always sample
+        "HFT_MD_LATENCY_SAMPLE_EVERY": "1",
     }
 
     bus = MagicMock(spec=RingBufferBus)
@@ -49,13 +45,8 @@ def _make_service(**kwargs):
 
     with patch.dict(os.environ, env):
         svc = MarketDataService(bus, raw_queue, client, **kwargs)
-    svc._tmp = tmp  # keep alive
+    svc._tmp = tmp
     return svc, bus
-
-
-# ---------------------------------------------------------------------------
-# 1. _VALID_STAGES allowlist
-# ---------------------------------------------------------------------------
 
 
 class TestValidStagesContainLobStages:
@@ -68,11 +59,6 @@ class TestValidStagesContainLobStages:
         from hft_platform.observability.latency import _VALID_STAGES
 
         assert "lob_process" in _VALID_STAGES
-
-
-# ---------------------------------------------------------------------------
-# 2. MetricsRegistry has lob_only_latency_ns
-# ---------------------------------------------------------------------------
 
 
 class TestMetricsRegistryLobOnlyHistogram:
@@ -89,11 +75,6 @@ class TestMetricsRegistryLobOnlyHistogram:
 
         registry = MetricsRegistry()
         assert isinstance(registry.lob_only_latency_ns, Histogram)
-
-
-# ---------------------------------------------------------------------------
-# 3. LatencyRecorder records lob_only and lob_process stages
-# ---------------------------------------------------------------------------
 
 
 class TestLatencyRecorderLobStages:
@@ -171,11 +152,6 @@ class TestLatencyRecorderLobStages:
         combined_histogram.observe.assert_called_once_with(6000)
 
 
-# ---------------------------------------------------------------------------
-# 4. _process_raw records lob_only_latency_ns via metrics_registry
-# ---------------------------------------------------------------------------
-
-
 class TestProcessRawLobOnlyMetric:
     def test_lob_only_latency_observed_on_process_raw(self) -> None:
         """_process_raw must call lob_only_latency_ns.observe() independently."""
@@ -190,13 +166,11 @@ class TestProcessRawLobOnlyMetric:
         svc.lob.process_event = MagicMock(return_value=None)
         svc.feature_engine = None
 
-        # Wire a mock metrics_registry with a lob_only_latency_ns histogram
         mock_histogram = MagicMock()
         mock_registry = MagicMock()
         mock_registry.lob_only_latency_ns = mock_histogram
         svc.metrics_registry = mock_registry
 
-        # Force sampling on every call
         svc._md_latency_counter = 0
         svc._md_latency_sample_every = 1
         svc._lob_only_latency_metric_child = None
@@ -204,7 +178,6 @@ class TestProcessRawLobOnlyMetric:
         raw = {"code": "2330", "close": 500.0, "volume": 100}
         svc._process_raw(raw)
 
-        # lob_only_latency_ns.observe() must have been called exactly once
         assert mock_histogram.observe.call_count == 1
         observed_val = mock_histogram.observe.call_args[0][0]
         assert observed_val >= 0, "lob_only duration must be non-negative"
@@ -225,7 +198,6 @@ class TestProcessRawLobOnlyMetric:
         observed_only: list[int] = []
         observed_combined: list[int] = []
 
-        # Intercept latency recorder
         mock_latency = MagicMock()
 
         def record_side_effect(stage, duration, **_kw):
@@ -267,21 +239,13 @@ class TestProcessRawLobOnlyMetric:
         mock_registry.lob_only_latency_ns = mock_histogram
         svc.metrics_registry = mock_registry
 
-        # Set counter so the sample condition is NOT met this call:
-        # counter starts at 0, sample_every = 4 → counter becomes 1 after inc, 1 % 4 != 0
         svc._md_latency_counter = 0
         svc._md_latency_sample_every = 4
 
         raw = {"code": "2330", "close": 500.0, "volume": 100}
         svc._process_raw(raw)
 
-        # The counter is incremented to 1 before the check, 1 % 4 != 0 → no observe
         mock_histogram.observe.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# 5. feature_plane_latency sampling aligned with _md_latency_sample_every
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureLatencySamplingAlignment:
@@ -303,20 +267,17 @@ class TestFeatureLatencySamplingAlignment:
         svc.lob = MagicMock()
         svc.lob.process_event = MagicMock(return_value=mock_stats)
 
-        # Enable feature engine with mock
         mock_fe = MagicMock()
         mock_fe.process_lob_stats = MagicMock(return_value=None)
         mock_fe.feature_set_id = MagicMock(return_value="lob_shared_v3")
         svc.feature_engine = mock_fe
         svc._fe_process_lob_update = None
 
-        # Wire metrics
         mock_feature_hist = MagicMock()
         mock_registry = MagicMock()
         mock_registry.feature_plane_latency_ns = mock_feature_hist
         svc.metrics_registry = mock_registry
 
-        # Force sampling on every call via md_latency counter
         svc._md_latency_counter = 0
         svc._md_latency_sample_every = 1
         svc._feature_latency_metric_child = mock_feature_hist
@@ -324,7 +285,6 @@ class TestFeatureLatencySamplingAlignment:
         raw = {"bid_price": [5000000], "ask_price": [5001000], "bid_volume": [10]}
         svc._process_raw(raw)
 
-        # feature_plane_latency_ns must have been observed
         assert mock_feature_hist.observe.call_count >= 1, (
             "feature_plane_latency_ns.observe() must be called when md_latency counter aligns"
         )

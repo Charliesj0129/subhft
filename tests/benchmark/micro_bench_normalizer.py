@@ -2,7 +2,6 @@ import timeit
 
 import numpy as np
 
-# Mock Data (Shioaji style)
 payload = {
     "code": "2330",
     "ts": 1600000000000000,
@@ -35,28 +34,20 @@ def pure_python_impl(payload):
     bp = payload.get("bid_price", [])
     bv = payload.get("bid_volume", [])
 
-    # List comprehension is often faster for small N (5)
     bids = []
     for p, v in zip(bp, bv):
         if p > 0:
             bids.append([int(p * SCALE), int(v)])
 
-    # If we need numpy array at the end for LOB Engine:
-    # return np.array(bids, dtype=np.int64)
-    # BUT LOB Engine uses Numpy? Yes.
-    # So we must return numpy array.
-    # Checking cost of np.array(list_of_lists)
     if not bids:
         return np.empty((0, 2), dtype=np.int64)
     return np.array(bids, dtype=np.int64)
 
 
 def pure_python_impl_optimized(payload):
-    # Avoid zip overhead?
     bp = payload.get("bid_price", [])
     bv = payload.get("bid_volume", [])
 
-    # Presize? No, just loop.
     bids = [[int(p * SCALE), int(v)] for p, v in zip(bp, bv) if p > 0]
 
     return np.array(bids, dtype=np.int64)

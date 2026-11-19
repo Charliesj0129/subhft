@@ -44,7 +44,7 @@ class TestMetricsRegistryLock:
             try:
                 barrier.wait(timeout=5)
                 instances[idx] = MetricsRegistry.get()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]

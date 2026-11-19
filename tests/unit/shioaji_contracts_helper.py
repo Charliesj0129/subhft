@@ -60,5 +60,5 @@ class Sdk179ContractsApi:
         return self._loaded
 
     @property
-    def Contracts(self) -> Any:  # noqa: N802 - SDK attribute name
+    def Contracts(self) -> Any:
         return self._loaded if self._clock() >= self._load_at_s else self._empty

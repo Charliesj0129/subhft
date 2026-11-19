@@ -88,7 +88,7 @@ def _bind_loop(settings: Dict[str, Any]) -> Dict[str, Any]:
 
 
 DEFAULT_SETTINGS: Dict[str, Any] = {
-    "mode": "sim",  # sim | live | replay
+    "mode": "sim",
     "symbols": ["2330"],
     "strategy": {
         "id": "simple_mm_demo",
@@ -184,17 +184,12 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
     """
     cli_overrides = cli_overrides or {}
 
-    # 1. Base Settings
     settings = _load_yaml(DEFAULT_YAML_PATH)
     if not settings:
-        # Fallback if file missing (e.g. initial setup)
         settings = deepcopy(DEFAULT_SETTINGS)
 
-    # applied_defaults represents the 'base' state before runtime overrides
     applied_defaults = deepcopy(settings)
 
-    # 2. Env Specific Settings (sim/live)
-    # Determine mode from Base -> Env Var
     mode = os.getenv("HFT_MODE", settings.get("mode", "sim"))
 
     env_yaml_path = f"config/env/{mode}/main.yaml"
@@ -202,7 +197,6 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
         env_settings = _load_yaml(env_yaml_path)
         settings = _merge(settings, env_settings)
 
-    # Optional env overlay (dev/staging/prod) without changing mode
     env_name = os.getenv("HFT_ENV")
     if env_name:
         env_overlay_path = f"config/env/{env_name}/main.yaml"
@@ -210,9 +204,6 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
             env_settings = _load_yaml(env_overlay_path)
             settings = _merge(settings, env_settings)
         else:
-            # Bug #33 root cause: silently skipping a missing overlay meant
-            # typos (e.g. HFT_ENV=prrod) fell back to base without warning,
-            # so operators never discovered their prod risk limits weren't loaded.
             logger.warning(
                 "env_overlay_not_found",
                 env=env_name,
@@ -220,33 +211,24 @@ def load_settings(cli_overrides: Dict[str, Any] | None = None) -> Tuple[Dict[str
             )
         settings["env"] = env_name
 
-    # 3. Local Developer Overrides (settings.py - Python power)
     settings_py = _load_settings_py("config/settings.py")
     settings = _merge(settings, settings_py)
 
-    # 4. Environment Variables
     env_vars = _env_overrides()
     settings = _merge(settings, env_vars)
 
-    # 5. CLI Overrides
     settings = _merge(settings, cli_overrides)
 
-    # Ensure mode reflects CLI override (highest priority) or env var
     if "mode" in cli_overrides:
         settings["mode"] = cli_overrides["mode"]
     elif os.getenv("HFT_MODE"):
         settings["mode"] = mode
 
-    # 5b. Loop binding (loop_v1). HFT_LOOP env var also routes here so Docker
-    # entrypoints can opt in without YAML edits. Must run BEFORE validation
-    # so strict mode sees the resolved strategy block.
     env_loop = os.getenv("HFT_LOOP")
     if env_loop and not settings.get("loop_id"):
         settings["loop_id"] = env_loop
     settings = _bind_loop(settings)
 
-    # 6. Validate merged config (fail-fast unless bypassed). Strict mode is
-    # forced whenever a loop_id is bound or HFT_CONFIG_STRICT=1.
     skip_validation = (
         cli_overrides.get("skip_config_validation", False) or os.getenv("HFT_SKIP_CONFIG_VALIDATION", "0") == "1"
     )

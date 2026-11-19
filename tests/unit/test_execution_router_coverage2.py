@@ -156,9 +156,6 @@ async def _run_router_one_tick(router, timeout: float = 0.1) -> None:
         await task
 
 
-# ── _create_task_with_error_handling: InvalidStateError ──────────────────
-
-
 @pytest.mark.asyncio
 async def test_create_task_error_handling_invalid_state():
     """_on_task_done callback handles InvalidStateError gracefully."""
@@ -170,12 +167,7 @@ async def test_create_task_error_handling_invalid_state():
     task = _create_task_with_error_handling(ok_coro(), name="test_invalid_state")
     result = await task
     assert result == 42
-    # Task is done; calling exception() on a done task with result raises InvalidStateError
-    # The callback should have handled it
     assert task.done()
-
-
-# ── _load_fill_dedup: empty line in file ─────────────────────────────────
 
 
 def test_load_fill_dedup_skips_empty_lines(tmp_path, monkeypatch):
@@ -204,8 +196,8 @@ def test_load_fill_dedup_skips_non_string_entries(tmp_path, monkeypatch):
     dedup_path = tmp_path / "fill_dedup.jsonl"
     lines = [
         orjson.dumps("valid_key") + b"\n",
-        orjson.dumps(12345) + b"\n",  # int, not string
-        orjson.dumps("") + b"\n",  # empty string
+        orjson.dumps(12345) + b"\n",
+        orjson.dumps("") + b"\n",
         orjson.dumps("another_key") + b"\n",
     ]
     dedup_path.write_bytes(b"".join(lines))
@@ -214,9 +206,6 @@ def test_load_fill_dedup_skips_non_string_entries(tmp_path, monkeypatch):
     assert "valid_key" in router._seen_fill_ids
     assert "another_key" in router._seen_fill_ids
     assert len(router._seen_fill_ids) == 2
-
-
-# ── persist_fill_dedup: inner exception with tmp file cleanup ────────────
 
 
 def test_persist_fill_dedup_inner_exception_cleans_tmp(tmp_path, monkeypatch):
@@ -229,14 +218,10 @@ def test_persist_fill_dedup_inner_exception_cleans_tmp(tmp_path, monkeypatch):
     with patch("os.fsync", side_effect=OSError("fsync failed")):
         router.persist_fill_dedup()
 
-    # Temp file should not remain; original file may or may not exist
     import glob
 
     tmp_files = glob.glob(str(tmp_path / "*.tmp"))
     assert len(tmp_files) == 0
-
-
-# ── _backfill_order_id_map: payload wrapper ──────────────────────────────
 
 
 def test_backfill_order_id_map_payload_wrapper():
@@ -279,9 +264,6 @@ def test_backfill_order_id_map_nested_order_status():
     assert "DEEP_SEQNO" in router.normalizer.order_id_resolver.order_id_map
 
 
-# ── run() fill path: on_fill_async ───────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_fill_uses_on_fill_async_when_available():
     """run() prefers on_fill_async over on_fill for async position stores."""
@@ -302,15 +284,12 @@ async def test_run_fill_uses_on_fill_async_when_available():
     router.position_store.on_fill_async.assert_called_once()
 
 
-# ── run() fill path: no publish_many_nowait fallback ─────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_fill_publishes_individually_without_publish_many():
     """run() publishes delta and fill individually when publish_many_nowait is absent."""
     metrics = _stub_metrics()
     router = _make_router(metrics)
-    router.bus.publish_many_nowait = None  # Remove bulk publish
+    router.bus.publish_many_nowait = None
 
     fill = _make_fill_event()
     with patch.object(router.normalizer, "normalize_fill", return_value=fill):
@@ -318,11 +297,7 @@ async def test_run_fill_publishes_individually_without_publish_many():
         router.raw_queue.put_nowait(raw)
         await _run_router_one_tick(router)
 
-    # Should have called publish_nowait twice (delta + fill)
     assert router.bus.publish_nowait.call_count >= 2
-
-
-# ── run() fill recording: recorder queue full + WAL fallback ─────────────
 
 
 @pytest.mark.asyncio
@@ -354,9 +329,6 @@ async def test_run_fill_recording_queue_full_wal_fallback():
     wal_writer.write.assert_called()
 
 
-# ── run() fill: risk engine PnL notification ─────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_fill_notifies_risk_engine_pnl():
     """Fill processing notifies risk engine of PnL delta."""
@@ -366,7 +338,6 @@ async def test_run_fill_notifies_risk_engine_pnl():
 
     router = _make_router(metrics, risk_engine=risk_engine)
 
-    # Set up position store with pre-existing position
     pre_pos = MagicMock()
     pre_pos.realized_pnl_scaled = 100000
     router.position_store.positions = {"acct1:strat1:2330": pre_pos}
@@ -381,9 +352,6 @@ async def test_run_fill_notifies_risk_engine_pnl():
         await _run_router_one_tick(router)
 
     risk_engine.notify_fill_pnl.assert_called_once_with("strat1", 100000)
-
-
-# ── run() order: non-terminal status skips handler ───────────────────────
 
 
 @pytest.mark.asyncio
@@ -407,15 +375,12 @@ async def test_run_order_non_terminal_skips_handler():
     handler.assert_not_called()
 
 
-# ── run() DLQ retry trigger ──────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_triggers_dlq_retry_at_interval():
     """run() triggers DLQ retry after processing N events."""
     metrics = _stub_metrics()
     router = _make_router(metrics)
-    router._dlq_retry_interval = 1  # Trigger after every event
+    router._dlq_retry_interval = 1
 
     fill = _make_fill_event()
     with (
@@ -427,9 +392,6 @@ async def test_run_triggers_dlq_retry_at_interval():
         await _run_router_one_tick(router)
 
     mock_retry.assert_called()
-
-
-# ── stop() drain: fill with risk engine PnL ──────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -458,9 +420,6 @@ async def test_stop_drain_fill_notifies_risk_engine_pnl():
     risk_engine.notify_fill_pnl.assert_called_once_with("strat1", 100000)
 
 
-# ── stop() drain: fill unmappable in recorder path ───────────────────────
-
-
 @pytest.mark.asyncio
 async def test_stop_drain_fill_unmappable():
     """Shutdown drain handles unmappable fill (map returns None)."""
@@ -481,9 +440,6 @@ async def test_stop_drain_fill_unmappable():
         drained = await router.stop(drain_timeout_s=1.0)
 
     assert drained == 1
-
-
-# ── stop() drain: recorder queue full + WAL fallback ─────────────────────
 
 
 @pytest.mark.asyncio
@@ -519,9 +475,6 @@ async def test_stop_drain_fill_recorder_full_wal_fallback():
     wal_writer.write.assert_called()
 
 
-# ── stop() drain: no recorder_queue does WAL fallback ────────────────────
-
-
 @pytest.mark.asyncio
 async def test_stop_drain_fill_no_recorder_queue_wal_fallback():
     """Shutdown drain writes to WAL when no recorder_queue configured."""
@@ -545,9 +498,6 @@ async def test_stop_drain_fill_no_recorder_queue_wal_fallback():
     assert drained == 1
     await asyncio.sleep(0.05)
     wal_writer.write.assert_called()
-
-
-# ── _retry_orphaned_fills: full DLQ retry with PnL + recorder ───────────
 
 
 @pytest.mark.asyncio
@@ -599,7 +549,7 @@ async def test_retry_orphaned_fills_duplicate_skipped():
     router = _make_router(metrics)
 
     fill = _make_fill_event(fill_id="DUP_FILL")
-    router._seen_fill_ids["DUP_FILL"] = None  # Already seen
+    router._seen_fill_ids["DUP_FILL"] = None
 
     mock_dlq = MagicMock()
     mock_dlq.count = 1
@@ -672,7 +622,7 @@ async def test_retry_orphaned_fills_no_on_fill_skips():
     """DLQ retry skips fills when position_store has no on_fill methods."""
     metrics = _stub_metrics()
     router = _make_router(metrics)
-    router.position_store = MagicMock(spec=[])  # No on_fill or on_fill_async
+    router.position_store = MagicMock(spec=[])
 
     fill = _make_fill_event(fill_id="DLQ_NOFILL", strategy_id="strat1")
 
@@ -683,7 +633,6 @@ async def test_retry_orphaned_fills_no_on_fill_skips():
     with patch("hft_platform.execution.fill_dlq.get_orphaned_fill_dlq", return_value=mock_dlq):
         await router._retry_orphaned_fills()
 
-    # Should not crash; fill is skipped
     assert True
 
 
@@ -721,9 +670,6 @@ async def test_retry_orphaned_fills_empty_dlq():
     mock_dlq.retry.assert_not_called()
 
 
-# ── _wal_fallback_write: callback failure ────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_wal_fallback_write_callback_logs_error():
     """WAL fallback done callback logs error on async failure."""
@@ -735,7 +681,6 @@ async def test_wal_fallback_write_callback_logs_error():
     router._wal_fallback_write("fills", {"test": "data"})
 
     await asyncio.sleep(0.05)
-    # The callback should have run and logged the error; no crash
     assert True
 
 
@@ -745,14 +690,9 @@ def test_wal_fallback_write_ensure_future_exception():
     wal_writer = MagicMock()
     router = _make_router(metrics, wal_writer=wal_writer)
 
-    # Simulate ensure_future failing (no running event loop)
     with patch("asyncio.ensure_future", side_effect=RuntimeError("no loop")):
         router._wal_fallback_write("fills", {"test": "data"})
-    # Should not raise
     assert True
-
-
-# ── _synthesize_dedup_key ────────────────────────────────────────────────
 
 
 def test_synthesize_dedup_key_generates_deterministic_key():
@@ -767,9 +707,6 @@ def test_synthesize_dedup_key_generates_deterministic_key():
     assert fill.order_id in key1
 
 
-# ── run() fill: duplicate fill skipped ───────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_duplicate_fill_skipped():
     """Duplicate fill is detected and skipped."""
@@ -777,7 +714,7 @@ async def test_run_duplicate_fill_skipped():
     router = _make_router(metrics)
 
     fill = _make_fill_event(fill_id="DUP_RUN")
-    router._seen_fill_ids["DUP_RUN"] = None  # Pre-register
+    router._seen_fill_ids["DUP_RUN"] = None
 
     with patch.object(router.normalizer, "normalize_fill", return_value=fill):
         raw = RawExecEvent(topic="deal", data={}, ingest_ts_ns=timebase.now_ns())
@@ -786,9 +723,6 @@ async def test_run_duplicate_fill_skipped():
 
     metrics.duplicate_fill_total.inc.assert_called()
     router.position_store.on_fill.assert_not_called()
-
-
-# ── stop() drain: publish_many_nowait fallback in shutdown ───────────────
 
 
 @pytest.mark.asyncio
@@ -809,9 +743,6 @@ async def test_stop_drain_fill_no_publish_many():
 
     assert drained == 1
     assert router.bus.publish_nowait.call_count >= 2
-
-
-# ── recover_fill_gaps ────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -866,7 +797,7 @@ async def test_recover_fill_gaps_skips_dedup():
     router = _make_router(metrics)
 
     fill = _make_fill_event(fill_id="DEDUP_REC")
-    router._seen_fill_ids["DEDUP_REC"] = None  # Pre-register
+    router._seen_fill_ids["DEDUP_REC"] = None
 
     mock_dlq = MagicMock()
     mock_dlq.count = 1
@@ -905,9 +836,6 @@ async def test_recover_fill_gaps_with_unresolved():
     assert result["resolved"] == 0
 
 
-# ── _retry_orphaned_fills: _resolve inner function ───────────────────────
-
-
 @pytest.mark.asyncio
 async def test_retry_orphaned_fills_invokes_resolve_chain():
     """DLQ retry uses normalizer._resolve_strategy_id in its resolver."""
@@ -919,12 +847,8 @@ async def test_retry_orphaned_fills_invokes_resolve_chain():
     mock_dlq = MagicMock()
     mock_dlq.count = 1
 
-    # The retry() method should invoke the _resolve function which calls
-    # normalizer._resolve_strategy_id
     def mock_retry(resolve_fn):
-        # Call the resolve function to exercise the inner _resolve code
         result = resolve_fn(fill)
-        # The normalizer will return something based on its resolver chain
         return ([fill], []) if result and result != "UNKNOWN" else ([], [fill])
 
     mock_dlq.retry = mock_retry
@@ -932,11 +856,7 @@ async def test_retry_orphaned_fills_invokes_resolve_chain():
     with patch("hft_platform.execution.fill_dlq.get_orphaned_fill_dlq", return_value=mock_dlq):
         await router._retry_orphaned_fills()
 
-    # The resolve function was called (exercising lines 692-700)
     assert True
-
-
-# ── _wal_fallback_write: WAL writer success path ────────────────────────
 
 
 @pytest.mark.asyncio
@@ -951,11 +871,7 @@ async def test_wal_fallback_write_success():
     await asyncio.sleep(0.05)
 
     wal_writer.write.assert_called_once()
-    # No error logged
     assert True
-
-
-# ── run() order: normalize returns None ──────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -973,11 +889,7 @@ async def test_run_order_normalize_returns_none():
         router.raw_queue.put_nowait(raw)
         await _run_router_one_tick(router)
 
-    # No crash, terminal handler not called
     assert True
-
-
-# ── stop() drain: order normalize returns None ───────────────────────────
 
 
 @pytest.mark.asyncio

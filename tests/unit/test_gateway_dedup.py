@@ -28,17 +28,17 @@ def test_dedup_reserved_not_yet_committed():
     """check_or_reserve before commit returns the un-committed record on second call."""
     store = IdempotencyStore(window_size=100, persist_enabled=False)
     first = store.check_or_reserve("in-flight")
-    assert first is None  # Miss — slot reserved
+    assert first is None
 
     second = store.check_or_reserve("in-flight")
-    assert second is not None  # Hit — reserved slot
-    assert second.approved is None  # Not yet committed
+    assert second is not None
+    assert second.approved is None
 
 
 def test_dedup_empty_key_is_no_op():
     store = IdempotencyStore(window_size=100, persist_enabled=False)
     assert store.check_or_reserve("") is None
-    store.commit("", True, "OK", 1)  # Should not raise
+    store.commit("", True, "OK", 1)
     assert store.size() == 0
 
 
@@ -58,12 +58,9 @@ def test_dedup_window_evicts_oldest():
         store.check_or_reserve(f"k{i}")
     assert store.size() == 3
 
-    # Add 4th — oldest (k0) should be evicted
     store.check_or_reserve("k3")
     assert store.size() == 3
-    # k0 should be gone
     result = store.check_or_reserve("k0")
-    # After eviction, k0 is a new miss, not a hit
     assert result is None or (result is not None and result.approved is None)
 
 
@@ -77,7 +74,6 @@ def test_dedup_persist_and_load_roundtrip():
         store.commit("k2", approved=False, reason_code="HALT", cmd_id=0)
         store.persist()
 
-        # Load into fresh store
         store2 = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store2.load()
         assert store2.size() == 2
@@ -99,11 +95,8 @@ def test_dedup_persist_disabled():
         store = IdempotencyStore(window_size=10, persist_enabled=False, persist_path=path)
         store.check_or_reserve("k1")
         store.commit("k1", True, "OK", 1)
-        store.persist()  # Should be no-op
+        store.persist()
         assert not os.path.exists(path)
-
-
-# ── Additional coverage tests ──────────────────────────────────────────────────
 
 
 def test_dedup_commit_without_prior_reserve_creates_record():
@@ -123,12 +116,11 @@ def test_dedup_load_skips_malformed_json_lines():
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "dedup.jsonl")
         with open(path, "wb") as f:
-            # Write a valid line, a malformed line, and a blank line
             import json
 
             f.write(json.dumps({"key": "good", "approved": True, "reason_code": "OK", "cmd_id": 1}).encode() + b"\n")
             f.write(b"NOT_VALID_JSON!!!\n")
-            f.write(b"\n")  # blank line
+            f.write(b"\n")
             f.write(
                 json.dumps({"key": "also-good", "approved": False, "reason_code": "X", "cmd_id": 2}).encode() + b"\n"
             )
@@ -171,7 +163,6 @@ def test_dedup_load_skips_records_with_empty_key():
             )
         store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store.load()
-        # Empty key records must be skipped
         assert store.size() == 1
 
 
@@ -191,7 +182,7 @@ def test_dedup_load_when_persist_disabled_does_nothing():
 def test_dedup_load_when_file_does_not_exist():
     """load() is a no-op when the persist file does not exist."""
     store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path="/nonexistent/path/no_file.jsonl")
-    store.load()  # Should not raise
+    store.load()
     assert store.size() == 0
 
 
@@ -200,7 +191,6 @@ def test_dedup_env_vars_control_window_size(monkeypatch):
     monkeypatch.setenv("HFT_DEDUP_WINDOW_SIZE", "5")
     store = IdempotencyStore(persist_enabled=False)
     assert store._window_size == 5
-    # Fill exactly 5, then add 6th to trigger eviction
     for i in range(5):
         store.check_or_reserve(f"env-key-{i}")
     assert store.size() == 5
@@ -229,13 +219,10 @@ def test_dedup_lru_promoted_key_survives_eviction():
     store.check_or_reserve("k0")
     store.check_or_reserve("k1")
     store.check_or_reserve("k2")
-    # Access k0 to promote it to most-recently-used
     hit = store.check_or_reserve("k0")
-    assert hit is not None  # k0 was already reserved → hit
-    # Add k3 — LRU (k1) should be evicted, k0 should survive
+    assert hit is not None
     store.check_or_reserve("k3")
     assert store.size() == 3
-    # k0 should still be present (was promoted)
     k0_result = store.check_or_reserve("k0")
     assert k0_result is not None
 
@@ -255,7 +242,6 @@ def test_dedup_commit_typed_with_mock_rust_store():
     store._rust_store = mock
     store.commit_typed("rust-key", True, "OK", 55)
     assert mock.calls == [("rust-key", True, "OK", 55)]
-    # Python store should not have been updated
     assert store.size() == 0
 
 
@@ -293,7 +279,7 @@ def test_dedup_check_or_reserve_typed_hit_approved_none():
 
     class _MockRust:
         def check_or_reserve(self, key):
-            return (True, 2, "", 0)  # approved=2 → None
+            return (True, 2, "", 0)
 
     store = IdempotencyStore(window_size=100, persist_enabled=False)
     store._rust_store = _MockRust()
@@ -319,7 +305,6 @@ def test_dedup_load_enforces_window_size():
     """load() must evict oldest entries when file has more records than window_size."""
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "dedup.jsonl")
-        # Write 5 records
         import json
 
         with open(path, "wb") as f:
@@ -328,22 +313,16 @@ def test_dedup_load_enforces_window_size():
                     json.dumps({"key": f"k{i}", "approved": True, "reason_code": "OK", "cmd_id": i}).encode() + b"\n"
                 )
 
-        # Load into a store with window_size=3 — should evict oldest 2
         store = IdempotencyStore(window_size=3, persist_enabled=True, persist_path=path)
         store.load()
         assert store.size() == 3
-        # Oldest entries (k0, k1) should have been evicted
-        assert store.check_or_reserve("k0") is None  # evicted → new miss
-        assert store.check_or_reserve("k1") is None  # evicted → new miss
-        # Newest entries (k2, k3, k4) should survive — but k0/k1 misses added them,
-        # so check k2 before those insertions happen. We already called check on k0/k1
-        # which added them as new reservations; check k4 which was never touched.
-        # Re-create to verify without the side-effect of the checks above.
+        assert store.check_or_reserve("k0") is None
+        assert store.check_or_reserve("k1") is None
         store2 = IdempotencyStore(window_size=3, persist_enabled=True, persist_path=path)
         store2.load()
         assert store2.size() == 3
         rec = store2.check_or_reserve("k4")
-        assert rec is not None  # k4 survived (newest)
+        assert rec is not None
         assert rec.approved is True
 
 
@@ -356,32 +335,23 @@ def test_dedup_persist_uses_snapshot_not_live_records():
             store.check_or_reserve(f"k{i}")
             store.commit(f"k{i}", approved=True, reason_code="OK", cmd_id=i)
 
-        # Intercept the snapshot moment: patch list() to simulate a mutation
-        # happening concurrently. The snapshot must already be taken, so the
-        # subsequent mutation of _records should not affect the persisted output.
         original_persist = store.persist.__func__ if hasattr(store.persist, "__func__") else None
         store.persist()
 
-        # Mutate after persist — should not affect what was written
         store.commit("k99", approved=False, reason_code="LATE", cmd_id=99)
 
-        # Reload and check that only the 5 original records were persisted
         store2 = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
         store2.load()
         assert store2.size() == 5
         for i in range(5):
             rec = store2.check_or_reserve(f"k{i}")
             assert rec is not None and rec.approved is True and rec.cmd_id == i
-        # k99 was added after persist() — must not be in the file
         assert store2.check_or_reserve("k99") is None
 
 
 def test_dedup_persist_cleans_up_temp_file_on_write_error():
     """persist() cleans up the temp file when the write fails mid-way."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Use a path in a read-only-like scenario: place the persist path
-        # inside a nonexistent nested dir to trigger an os.rename failure.
-        # Instead, mock fdopen to raise.
         import unittest.mock as mock
 
         path = os.path.join(tmpdir, "dedup.jsonl")
@@ -392,12 +362,10 @@ def test_dedup_persist_cleans_up_temp_file_on_write_error():
         original_fdopen = os.fdopen
 
         def raise_on_fdopen(fd, *args, **kwargs):
-            os.close(fd)  # avoid fd leak
+            os.close(fd)
             raise OSError("simulated write failure")
 
         with mock.patch("os.fdopen", side_effect=raise_on_fdopen):
-            # Should not raise — exception is caught and logged
             store.persist()
 
-        # File should not exist since rename never happened
         assert not os.path.exists(path)

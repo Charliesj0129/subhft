@@ -47,7 +47,6 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         bus.publish.reset_mock()
         many_mock = MagicMock()
         bus.publish_many_nowait = many_mock
-        # Update the cached ref (DEC-10 caches bus methods at init)
         service._bus_publish_many_nowait = many_mock
         service._publish_many_nowait(["a", "b"])
         many_mock.assert_called_once_with(["a", "b"])
@@ -78,7 +77,6 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         service = MarketDataService(object(), self.raw_queue, self.client)
         initial_state = service.state
         await service._publish("evt")
-        # Publish with no publish_fn (bus is a plain object) must not change state
         assert service.state == initial_state
 
     async def test_publish_awaits_coroutine(self):
@@ -299,7 +297,6 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         service = MarketDataService(self.bus, self.raw_queue, self.client, recorder_queue=queue)
         meta = MetaData(seq=4, source_ts=4_000, local_ts=5_000)
         event = TickEvent(meta=meta, symbol="2330", price=10000, volume=1)
-        # Patch the cached mapper ref directly (service caches _map_event_to_record at init)
         service._map_event_to_record = MagicMock(side_effect=RuntimeError("boom"))
         service._record_direct_event(event)
         self.assertTrue(queue.empty())
@@ -447,7 +444,6 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.service.reconnect_hours = ""
         self.service.reconnect_hours_2 = ""
         tz_cst = dt.timezone(dt.timedelta(hours=8))
-        # 2026-02-03 is a Tuesday — should NOT match {"mon"}
         now = dt.datetime(2026, 2, 3, 12, 0, tzinfo=tz_cst)
         with (
             patch("hft_platform.services.market_data.dt.datetime") as mock_dt,
@@ -464,9 +460,6 @@ class TestMarketDataServiceExtended(unittest.IsolatedAsyncioTestCase):
         self.service.reconnect_hours_2 = ""
         self.service._reconnect_tzinfo = tz_cst
         now = dt.datetime(2026, 2, 3, 10, 0, tzinfo=tz_cst)
-        # ``_within_reconnect_window`` lives in the mixin module, so the clock must
-        # be frozen there — patching market_data.timebase silently uses the real
-        # clock, which makes this test pass or fail by time of day.
         with (
             patch("hft_platform.services._md_reconnect.timebase") as mock_tb,
             patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}),

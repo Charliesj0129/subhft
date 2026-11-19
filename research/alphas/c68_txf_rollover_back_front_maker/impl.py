@@ -52,12 +52,10 @@ from research.registry.schemas import (
 
 logger = get_logger("alpha.c68_txf_rollover_back_front_maker")
 
-# TXF instrument constants (TXF family; back-month contract = same pt value).
 _TXF_POINT_VALUE_NTD = 200
 _TXF_INST_RT_COST_PTS = 1.5
 _TXF_RETAIL_RT_COST_PTS = 3.0
 
-# R47-minimal: all four signal layers disabled (TXFD6 precedent via C33).
 _DISABLED_SIGNAL_LAYERS = (
     "_update_pe",
     "_update_queue",
@@ -69,7 +67,6 @@ _DISABLED_SIGNAL_LAYERS = (
     "compute_qi_skew",
 )
 
-# Canonical rollover window (N trading days inclusive, ending at expiry).
 _ROLLOVER_WINDOW_CANONICAL_DAYS = 3
 
 
@@ -88,9 +85,6 @@ def is_in_rollover_window(
     return rollover_start <= session_date <= rollover_end
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,9 +123,6 @@ class C68Params:
     enable_qi_layer: bool = False
 
 
-# ----------------------------------------------------------------------------
-# TxfRolloverBackFrontMaker — MakerEngine-compatible strategy
-# ----------------------------------------------------------------------------
 
 
 class TxfRolloverBackFrontMaker:
@@ -178,7 +169,6 @@ class TxfRolloverBackFrontMaker:
         self._active_symbol = active_symbol
         self._current_session_date: _date | None = None
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def position(self) -> int:
@@ -238,7 +228,6 @@ class TxfRolloverBackFrontMaker:
             p.rollover_window_end_date,
         )
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -251,7 +240,6 @@ class TxfRolloverBackFrontMaker:
     def _on_bidask(
         self, tick: TickData
     ) -> list[PostQuote | CancelQuote | Hold]:
-        # Calendar gate FIRST — no quoting outside rollover window.
         if not self._rollover_gate_pass():
             self._rollover_gate_blocked += 1
             return [Hold()]
@@ -273,7 +261,6 @@ class TxfRolloverBackFrontMaker:
         pos = self._position
         max_pos = params.max_pos
 
-        # Linear inventory skew (R47 best practice, NOT |pos|-gated).
         skew = (pos * params.inventory_skew_tenths * scale) // 10
         bid_quote = tick.bid_price - skew
         ask_quote = tick.ask_price - skew
@@ -281,14 +268,12 @@ class TxfRolloverBackFrontMaker:
         bid_moved = bid_quote != self._last_bid
         ask_moved = ask_quote != self._last_ask
 
-        # Buy side: only if inventory not at +max_pos cap.
         if pos < max_pos and bid_moved:
             actions.append(PostQuote(side="buy", price=bid_quote, qty=1))
             self._last_bid = bid_quote
             self._quotes_posted += 1
         elif pos >= max_pos:
             self._max_pos_blocked += 1
-        # Sell side: only if inventory not at -max_pos cap.
         if pos > -max_pos and ask_moved:
             actions.append(PostQuote(side="sell", price=ask_quote, qty=1))
             self._last_ask = ask_quote
@@ -338,9 +323,6 @@ class TxfRolloverBackFrontMaker:
         self._current_session_date = None
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C68Alpha:

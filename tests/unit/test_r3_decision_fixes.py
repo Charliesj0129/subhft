@@ -11,10 +11,6 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Fix A: typed-intent identity extraction (R3-3)
-# ---------------------------------------------------------------------------
-
 
 class TestTypedIntentIdentity:
     """Verify _typed_intent_identity handles both tuples and OrderIntent objects."""
@@ -22,7 +18,6 @@ class TestTypedIntentIdentity:
     def test_extracts_from_typed_tuple(self):
         from hft_platform.strategy.runner import _typed_intent_identity
 
-        # typed_intent_v1: (tag, intent_id, strategy_id, symbol, intent_type, side, ...)
         intent = ("typed_intent_v1", 42, "strat_r47", "TXFD6", 0, 1, 200000, 1, 0)
         iid, sid, sym, side = _typed_intent_identity(intent)
 
@@ -50,22 +45,20 @@ class TestTypedIntentIdentity:
     def test_handles_short_tuple_gracefully(self):
         from hft_platform.strategy.runner import _typed_intent_identity
 
-        # 4 elements: tag + intent_id + strategy_id + symbol (minimum for tuple path)
         intent = ("typed_intent_v1", 1, "s", "X")
         iid, sid, sym, side = _typed_intent_identity(intent)
 
         assert iid == 1
         assert sid == "s"
         assert sym == "X"
-        assert side is None  # only 4 elements, no side at index 5
+        assert side is None
 
     def test_handles_non_typed_tuple(self):
         from hft_platform.strategy.runner import _typed_intent_identity
 
-        intent = ("tick", 123456, "TXFD6")  # not a typed_intent_v1
+        intent = ("tick", 123456, "TXFD6")
         iid, sid, sym, side = _typed_intent_identity(intent)
 
-        # Falls through to getattr path, tuple has no named attrs
         assert iid == 0
         assert sid == ""
 
@@ -73,7 +66,6 @@ class TestTypedIntentIdentity:
         """Verify the OLD behavior (getattr on tuple) returns defaults."""
         intent = ("typed_intent_v1", 42, "strat_r47", "TXFD6", 0, 1)
 
-        # This is what the OLD code did — always returns default
         assert getattr(intent, "strategy_id", "") == ""
         assert getattr(intent, "intent_id", 0) == 0
         assert getattr(intent, "symbol", "") == ""
@@ -89,11 +81,6 @@ class TestTypedIntentIdentity:
         assert sid == "strat_r47"
         assert sym == "TXFD6"
         assert side == 1
-
-
-# ---------------------------------------------------------------------------
-# Fix B: OrderAdapter dispatch-failure rejection feedback (R3-2)
-# ---------------------------------------------------------------------------
 
 
 class TestOrderAdapterRejectionSink:
@@ -133,7 +120,6 @@ class TestOrderAdapterRejectionSink:
             order_queue=asyncio.Queue(),
             broker_client=MagicMock(),
         )
-        # No sink set — should not raise
         intent = MagicMock(strategy_id="s", symbol="X", side=None)
         adapter._send_dispatch_rejection(intent, "test")
 
@@ -151,9 +137,7 @@ class TestOrderAdapterRejectionSink:
 
         intent = MagicMock(strategy_id="s", symbol="X", side=None, intent_id=0)
 
-        # Fill sink
         sink.put_nowait("dummy")
-        # Should not raise, should increment metric
         adapter._send_dispatch_rejection(intent, "test")
 
         adapter.metrics.rejection_sink_overflow_total.inc.assert_called_once()
@@ -172,11 +156,6 @@ class TestOrderAdapterRejectionSink:
         assert adapter._rejection_sink is sink
 
 
-# ---------------------------------------------------------------------------
-# Fix C: RiskEngine DLQ rejection overflow logging (R3-1)
-# ---------------------------------------------------------------------------
-
-
 class TestRiskDLQRejectionOverflowLogging:
     """Verify _send_dlq_rejection logs on sink overflow."""
 
@@ -186,7 +165,6 @@ class TestRiskDLQRejectionOverflowLogging:
         engine = RiskEngine.__new__(RiskEngine)
         engine.metrics = MagicMock()
 
-        # Create a full sink
         sink = asyncio.Queue(maxsize=1)
         sink.put_nowait("dummy")
         engine._rejection_sink = sink
@@ -223,7 +201,7 @@ class TestRiskDLQRejectionOverflowLogging:
         cmd.intent.intent_id = 5
         cmd.intent.strategy_id = "strat_b"
         cmd.intent.symbol = "TXFD6"
-        cmd.intent.side = 0  # BUY
+        cmd.intent.side = 0
 
         engine._send_dlq_rejection(cmd, "dlq_storm_cleared")
 
@@ -240,5 +218,4 @@ class TestRiskDLQRejectionOverflowLogging:
         cmd = MagicMock()
         cmd.intent = MagicMock(strategy_id="s", symbol="X")
 
-        # Should not raise
         engine._send_dlq_rejection(cmd, "test")

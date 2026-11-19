@@ -41,8 +41,6 @@ from hft_platform.gateway.exposure import ExposureLimitError, ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService, _bool_env, _int_env, _obs_policy
 
-# ── Helpers ────────────────────────────────────────────────────────────────
-
 
 def _make_intent(
     intent_id: int = 1,
@@ -135,9 +133,6 @@ def _build_service(
     return svc, api_q
 
 
-# ── Module-level helpers ──────────────────────────────────────────────────
-
-
 def test_bool_env_various_inputs():
     """_bool_env handles None, bool, and string inputs."""
     assert _bool_env(None, default=True) is True
@@ -194,14 +189,10 @@ def test_obs_policy_falls_back_to_hft_obs_policy(monkeypatch):
     assert isinstance(result, str)
 
 
-# ── _emit_reject ──────────────────────────────────────────────────────────
-
-
 def test_emit_reject_disabled_metrics():
     """_emit_reject returns immediately when metrics disabled."""
     svc, _ = _build_service(metrics_enabled=False)
     svc._emit_reject("SOME_REASON")
-    # No crash; metrics never touched
     assert not svc._metrics_enabled
 
 
@@ -210,11 +201,8 @@ def test_emit_reject_sampling_skips_emission():
     svc, _ = _build_service()
     svc._gateway_reject_sample_every = 3
     svc._gateway_reject_counter = 0
-    # After first call: counter=1, 1%3 != 0 -> skip
     svc._emit_reject("TEST_REASON")
-    # After second call: counter=2, 2%3 != 0 -> skip
     svc._emit_reject("TEST_REASON")
-    # After third call: counter=0, 0%3 == 0 -> emit
     svc._emit_reject("TEST_REASON")
     assert svc._gateway_reject_counter == 0
 
@@ -226,7 +214,6 @@ def test_emit_reject_metrics_none_refreshes():
     svc._gateway_reject_sample_every = 1
     svc._gateway_reject_counter = 0
     svc._emit_reject("TEST")
-    # Should not raise
     assert True
 
 
@@ -240,11 +227,7 @@ def test_emit_reject_exception_handled():
     svc._metrics = mock_metrics
     svc._metrics_owner_id = id(mock_metrics)
     svc._emit_reject("CRASH_REASON")
-    # Should not raise
     assert True
-
-
-# ── _record_latency ──────────────────────────────────────────────────────
 
 
 def test_record_latency_disabled_metrics():
@@ -259,7 +242,6 @@ def test_record_latency_sampling_skips():
     svc, _ = _build_service()
     svc._gateway_latency_sample_every = 2
     svc._gateway_latency_counter = 0
-    # First call: counter becomes 1, 1%2 != 0
     svc._record_latency(time.perf_counter_ns())
     assert svc._gateway_latency_counter == 1
 
@@ -283,9 +265,6 @@ def test_record_latency_exception_handled():
     svc._gateway_dispatch_latency_metric.observe.side_effect = RuntimeError("observe fail")
     svc._record_latency(time.perf_counter_ns())
     assert True
-
-
-# ── _update_channel_depth_metric ─────────────────────────────────────────
 
 
 def test_update_channel_depth_disabled_metrics():
@@ -328,9 +307,6 @@ def test_update_channel_depth_exception_handled():
     assert True
 
 
-# ── _inc_dedup_hit_metric ─────────────────────────────────────────────────
-
-
 def test_inc_dedup_hit_metric_disabled():
     """_inc_dedup_hit_metric returns when metrics disabled."""
     svc, _ = _build_service(metrics_enabled=False)
@@ -368,9 +344,6 @@ def test_inc_dedup_hit_metric_exception_handled():
     assert True
 
 
-# ── _refresh_metrics_registry: metrics=None branch ──────────────────────
-
-
 def test_refresh_metrics_registry_sets_none_when_get_returns_none(monkeypatch):
     """When MetricsRegistry.get() returns None, all metrics are set to None."""
     svc, _ = _build_service()
@@ -386,9 +359,6 @@ def test_refresh_metrics_registry_sets_none_when_get_returns_none(monkeypatch):
     assert svc._gateway_dlq_metric is None
     assert svc._gateway_exposure_metric is None
     assert svc._gateway_dedup_hits_metric is None
-
-
-# ── _emit_trace: exception path ──────────────────────────────────────────
 
 
 def test_emit_trace_exception_suppressed():
@@ -409,17 +379,13 @@ def test_emit_trace_none_sampler_skips():
     assert True
 
 
-# ── _metrics_or_refresh: owner_id mismatch ───────────────────────────────
-
-
 def test_metrics_or_refresh_mismatch_triggers_refresh():
     """When metrics owner_id changes, _metrics_or_refresh re-fetches registry."""
     svc, _ = _build_service()
     old_metrics = MagicMock()
     svc._metrics = old_metrics
-    svc._metrics_owner_id = id(old_metrics) + 999  # Force mismatch
+    svc._metrics_owner_id = id(old_metrics) + 999
     result = svc._metrics_or_refresh()
-    # Should have refreshed (result may be None or new metrics)
     assert True
 
 
@@ -428,11 +394,7 @@ def test_metrics_or_refresh_none_refreshes():
     svc, _ = _build_service()
     svc._metrics = None
     result = svc._metrics_or_refresh()
-    # Should attempt refresh
     assert True
-
-
-# ── _leader_lease_tick: exception sets inactive ──────────────────────────
 
 
 @pytest.mark.asyncio
@@ -455,9 +417,6 @@ async def test_leader_lease_tick_none_lease_sets_active():
     assert svc._leader_is_active is True
 
 
-# ── _leader_lease_loop: exception handling ───────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_leader_lease_loop_tick_exception_continues():
     """_leader_lease_loop catches tick exceptions and continues."""
@@ -477,16 +436,12 @@ async def test_leader_lease_loop_tick_exception_continues():
     svc.running = True
     svc._leader_lease_refresh_s = 0.01
 
-    # Run the loop briefly; it should handle the first tick exception
     async def stop_after_delay():
         await asyncio.sleep(0.05)
         svc.running = False
 
     await asyncio.gather(svc._leader_lease_loop(), stop_after_delay())
     assert call_count[0] >= 1
-
-
-# ── run() lease task non-cancel exception during cleanup ─────────────────
 
 
 @pytest.mark.asyncio
@@ -507,9 +462,6 @@ async def test_run_lease_task_noncancellerror_during_cleanup():
         await task
 
     assert svc.running is False
-
-
-# ── Exposure check: ExposureLimitError path ──────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -541,9 +493,6 @@ async def test_exposure_limit_error_rejects_intent():
     assert fb.reason_code == "EXPOSURE_SYMBOL_LIMIT"
 
 
-# ── Exposure rejection (not ExposureLimitError) ─────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_exposure_check_rejection_commits_dedup():
     """Exposure check failure commits dedup as rejected."""
@@ -564,9 +513,6 @@ async def test_exposure_check_rejection_commits_dedup():
     assert rec.approved is False
 
 
-# ── set_halt / set_normal ────────────────────────────────────────────────
-
-
 def test_set_halt_propagates_to_policy():
     """set_halt() calls policy.set_halt()."""
     svc, _ = _build_service()
@@ -580,9 +526,6 @@ def test_set_normal_resets_policy():
     svc.set_halt()
     svc.set_normal()
     assert svc._policy.mode.value in ("NORMAL", "normal", 0)
-
-
-# ── get_health ───────────────────────────────────────────────────────────
 
 
 def test_get_health_returns_dict():
@@ -599,18 +542,12 @@ def test_get_health_returns_dict():
     assert "leader_active" in health
 
 
-# ── set_rejection_sink ───────────────────────────────────────────────────
-
-
 def test_set_rejection_sink():
     """set_rejection_sink wires the rejection feedback queue."""
     svc, _ = _build_service()
     new_sink = asyncio.Queue(maxsize=16)
     svc.set_rejection_sink(new_sink)
     assert svc._rejection_sink is new_sink
-
-
-# ── _send_rejection_feedback: sink full metric path ──────────────────────
 
 
 def test_send_rejection_feedback_sink_full_increments_metric():
@@ -629,16 +566,12 @@ def test_send_rejection_feedback_sink_full_increments_metric():
     mock_metrics.rejection_sink_overflow_total.inc.assert_called()
 
 
-# ── Committed dedup hit returns early ────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_committed_dedup_hit_returns_cached_decision():
     """Committed dedup entry returns early without re-processing."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, api_q = _build_service(channel=ch)
 
-    # Pre-commit a dedup entry
     svc._dedup.check_or_reserve("committed-key")
     svc._dedup.commit("committed-key", True, "OK", 42)
 
@@ -647,12 +580,8 @@ async def test_committed_dedup_hit_returns_cached_decision():
     await svc._process_envelope(envelope)
 
     assert svc._dedup_hits == 1
-    # No dispatch or rejection since it's a cached hit
     assert svc._dispatched == 0
     assert svc._rejected == 0
-
-
-# ── _is_dispatch_leader with lease ───────────────────────────────────────
 
 
 def test_is_dispatch_leader_no_lease_returns_true():

@@ -76,9 +76,7 @@ class TestTupleEventsProduceATraceId:
         event[ts_index] = 1_787_329_000_000_000_000
         source_ts_ns, trace_id = runner._extract_event_trace(tuple(event))
 
-        # The event itself still carries no id -- that part is unchanged.
         assert trace_id == ""
-        # ...but the tag is now retained, so the intent can build one.
         assert runner._current_trace_tag == tag
         runner._current_source_ts_ns = source_ts_ns
         runner._current_trace_id = trace_id
@@ -102,7 +100,7 @@ class TestTupleEventsProduceATraceId:
         runner._current_source_ts_ns, runner._current_trace_id = runner._extract_event_trace(event)
         bid = _make(runner, side=1)
         ask = _make(runner, side=2)
-        assert bid.trace_id  # two empty strings are also "equal" -- pin non-empty first
+        assert bid.trace_id
         assert bid.trace_id == ask.trace_id
         assert bid.intent_id != ask.intent_id
 
@@ -213,7 +211,6 @@ class TestTheTypedFastPathCarriesItToo:
         )
         intent = _make(runner)
         assert intent[0] == "typed_intent_v1"
-        # index 13 is trace_id in the typed_intent_v1 layout
         assert intent[13] == "tick:TMFI6:1787329000000000000:1"
 
 

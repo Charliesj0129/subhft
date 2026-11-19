@@ -28,40 +28,32 @@ except ImportError:
 pytestmark = pytest.mark.skipif(not HAS_DEPS, reason="numba/hftbacktest not installed")
 
 
-# ---------------------------------------------------------------------------
-# HawkesTracker — detailed update/decay coverage
-# ---------------------------------------------------------------------------
-
-
 class TestHawkesTrackerUpdate:
     """Cover lines 21-31: update with dt_ns > 0, event vs non-event paths."""
 
     def test_update_with_event_increases_intensity(self):
         """Line 30: is_event causes intensity += alpha."""
         ht = HawkesTracker(mu=1.0, alpha=0.5, beta=10.0)
-        ht.update(1_000_000_000, False)  # bootstrap last_ts
-        ht.update(1_000_100_000, True)  # small dt, event
+        ht.update(1_000_000_000, False)
+        ht.update(1_000_100_000, True)
         assert ht.intensity > 1.0
 
     def test_update_without_event_decays_only(self):
         """Lines 27-28: no event, only exponential decay applied."""
         ht = HawkesTracker(mu=1.0, alpha=2.0, beta=10.0)
         ht.update(1_000_000_000, False)
-        ht.update(1_000_100_000, True)  # boost intensity
+        ht.update(1_000_100_000, True)
         boosted = ht.intensity
-        ht.update(1_000_200_000, False)  # decay only
+        ht.update(1_000_200_000, False)
         assert ht.intensity < boosted
 
     def test_update_decay_formula_exponential(self):
         """Lines 27-28: verify exponential decay computation."""
         ht = HawkesTracker(mu=0.0, alpha=1.0, beta=1.0)
-        # Bootstrap first call
         ht.update(1_000_000_000, False)
-        # Trigger event to boost intensity
         ht.update(1_000_000_001, True)
         boosted = ht.intensity
         assert boosted > 0
-        # After 1 second decay should reduce toward mu=0
         ht.update(2_000_000_001, False)
         assert ht.intensity < boosted
 
@@ -71,7 +63,7 @@ class TestHawkesTrackerUpdate:
         ht.update(5_000_000_000, False)
         ht.update(5_000_000_001, True)
         before = ht.intensity
-        ht.update(5_000_000_001, True)  # same ts
+        ht.update(5_000_000_001, True)
         assert ht.intensity == before
 
     def test_update_first_call_early_return(self):
@@ -80,12 +72,7 @@ class TestHawkesTrackerUpdate:
         assert ht.last_ts == 0
         ht.update(100_000_000, True)
         assert ht.last_ts == 100_000_000
-        assert ht.intensity == 2.0  # unchanged (mu)
-
-
-# ---------------------------------------------------------------------------
-# PropagatorTracker — update/add_event/decay coverage
-# ---------------------------------------------------------------------------
+        assert ht.intensity == 2.0
 
 
 class TestPropagatorTrackerUpdate:
@@ -95,11 +82,11 @@ class TestPropagatorTrackerUpdate:
         """Lines 58-59: each component decays by exp(-beta[k] * dt)."""
         pt = PropagatorTracker()
         pt.update(0)
-        pt.update(1_000_000_000)  # bootstrap
+        pt.update(1_000_000_000)
         pt.add_event(1.0, 10.0)
         before = pt.total_impact
         assert before > 0
-        pt.update(2_000_000_000)  # 1s decay
+        pt.update(2_000_000_000)
         assert pt.total_impact < before
 
     def test_update_first_call_sets_last_ts(self):
@@ -117,7 +104,7 @@ class TestPropagatorTrackerUpdate:
         pt.update(1_000_000_000)
         pt.add_event(1.0, 5.0)
         before = pt.total_impact
-        pt.update(1_000_000_000)  # same ts
+        pt.update(1_000_000_000)
         assert pt.total_impact == before
 
 
@@ -144,8 +131,7 @@ class TestPropagatorTrackerAddEvent:
         """Line 64: impact = sign * log(1 + qty)."""
         pt = PropagatorTracker()
         pt.add_event(1.0, 9.0)
-        expected_raw = math.log(1.0 + 9.0)  # log(10)
-        # total = sum(weights * raw) = 1.0 * raw (weights sum to 1)
+        expected_raw = math.log(1.0 + 9.0)
         assert abs(pt.total_impact - expected_raw) < 1e-9
 
 
@@ -161,12 +147,6 @@ class TestPropagatorTrackerRecalc:
         assert abs(pt.total_impact - manual) < 1e-12
 
 
-# NOTE: TestStrategyMainLoop removed — strategy() uses numba jitclass objects
-# (HawkesTracker, PropagatorTracker) internally, which cannot be mocked.
-# The jitclass instances are created inside strategy() and the function
-# passes them to numba-compiled code that validates _numba_type_ attributes.
-
-
 class TestHawkesTrackerDecayCoverage:
     """Additional decay tests to cover intermediate branches."""
 
@@ -175,10 +155,9 @@ class TestHawkesTrackerDecayCoverage:
         ht = HawkesTracker(mu=0.5, alpha=1.0, beta=5.0)
         ht.update(0, False)
         for i in range(1, 20):
-            ht.update(i * 1_000_000, True)  # 1ms apart, events
+            ht.update(i * 1_000_000, True)
         peak = ht.intensity
-        assert peak > 5.0  # substantially above mu
-        # Wait 10 seconds
+        assert peak > 5.0
         ht.update(10_000_000_000, False)
         assert abs(ht.intensity - 0.5) < 0.01
 
@@ -187,7 +166,6 @@ class TestHawkesTrackerDecayCoverage:
         ht = HawkesTracker(mu=3.0, alpha=0.1, beta=100.0)
         ht.update(0, False)
         ht.update(1_000_000, True)
-        # Fast decay
         ht.update(100_000_000_000, False)
         assert ht.intensity >= 3.0 - 1e-6
 
@@ -202,10 +180,8 @@ class TestPropagatorTrackerDecayCoverage:
         pt.update(1_000_000_000)
         pt.add_event(1.0, 100.0)
         c_before = [pt.components[k] for k in range(K_PROPAGATOR)]
-        # Small time step: fast component decays more than slow
-        pt.update(1_010_000_000)  # 10ms
+        pt.update(1_010_000_000)
         c_after = [pt.components[k] for k in range(K_PROPAGATOR)]
-        # Component 0 (beta=100) should decay fastest
         decay_0 = 1.0 - c_after[0] / c_before[0]
         decay_2 = 1.0 - c_after[2] / c_before[2]
         assert decay_0 > decay_2

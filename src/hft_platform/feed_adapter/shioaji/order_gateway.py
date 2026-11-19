@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 logger = get_logger("feed_adapter.order_gateway")
 
 
-# ``OrderStatus`` values of an order that can still trade.
 _OPEN_ORDER_STATUSES = frozenset({"PendingSubmit", "PreSubmitted", "Submitted", "PartFilled"})
 
 
@@ -92,8 +91,6 @@ class OrderGateway:
 
     @staticmethod
     def _sdk() -> Any | None:
-        # Keep test patching backward compatible by reading SDK handle
-        # from shioaji_client module-level symbol.
         try:
             from hft_platform.feed_adapter import shioaji_client as client_module
 
@@ -136,10 +133,6 @@ class OrderGateway:
         act = sdk.constant.Action.Buy if action == "Buy" else sdk.constant.Action.Sell
 
         if not product_type:
-            # The untyped branch below builds a stock-priced ``sj.Order``; on a
-            # futures/options contract the SDK rejects it with "FuturesPriceType
-            # must be FuturesPriceType enum or string" on every order
-            # (2026-11-09). Let the broker's contract say what it is.
             product_type = _contract_product_type(contract)
             if product_type:
                 logger.warning(
@@ -415,7 +408,7 @@ class OrderGateway:
             api.usage()
             client._record_api_latency("warm_session", start_ns, ok=True)
             return True
-        except Exception as exc:  # noqa: BLE001 — broker SDK; the caller retries
+        except Exception as exc:
             client._record_api_latency("warm_session", start_ns, ok=False)
             logger.warning("order_session_warm_probe_failed", error=str(exc))
             return False
@@ -431,7 +424,7 @@ class OrderGateway:
         """
         api = self._client.api
         if not api:
-            return []  # mock mode: there is no broker that could hold an order
+            return []
         if not hasattr(api, "update_status") or not hasattr(api, "list_trades"):
             raise RuntimeError("Shioaji API missing update_status/list_trades")
         accounts = [

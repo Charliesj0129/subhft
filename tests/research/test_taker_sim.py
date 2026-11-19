@@ -72,7 +72,6 @@ def _day(tmp_path: Path, name: str, bids: np.ndarray, spread: float = 1.0, ts: n
 
 
 def _rising(n: int = 60) -> np.ndarray:
-    # bid 100 for rows 0-9, 101 for 10-19, ...; ask is one point above.
     return 100.0 + (np.arange(n) // 10)
 
 
@@ -86,11 +85,11 @@ def test_long_fills_at_the_ask_and_closes_at_the_bid(tmp_path):
     path = _day(tmp_path, "d1", _rising())
     day = _sim(ScriptedAlpha({4: 1.0})).run_day(DAY1, path)
 
-    assert [(f.qty, f.price_pts) for f in day.fills] == [(1, 101.0)]  # bought at the ask, not the 100.5 mid
+    assert [(f.qty, f.price_pts) for f in day.fills] == [(1, 101.0)]
     assert day.residual_qty == 1
-    assert day.close_price_pts == 105.0  # last bid
+    assert day.close_price_pts == 105.0
     assert day.gross_pts == pytest.approx(105.0 - 101.0)
-    assert day.n_contracts == 2  # the entry plus the closing sale
+    assert day.n_contracts == 2
 
 
 def test_short_fills_at_the_bid_and_closes_at_the_ask(tmp_path):
@@ -99,7 +98,7 @@ def test_short_fills_at_the_bid_and_closes_at_the_ask(tmp_path):
 
     assert [(f.qty, f.price_pts) for f in day.fills] == [(-1, 100.0)]
     assert day.residual_qty == -1
-    assert day.close_price_pts == 106.0  # last ask
+    assert day.close_price_pts == 106.0
     assert day.gross_pts == pytest.approx(100.0 - 106.0)
 
 
@@ -110,7 +109,7 @@ def test_round_trip_pays_the_spread_that_mid_to_mid_ignores(tmp_path):
 
     assert [(f.qty, f.price_pts) for f in day.fills] == [(1, 102.0), (-1, 100.0)]
     assert day.residual_qty == 0
-    assert day.gross_pts == pytest.approx(-2.0)  # mid-to-mid on the same trades books 0.0
+    assert day.gross_pts == pytest.approx(-2.0)
 
 
 def test_cost_is_charged_per_contract_by_the_cost_profile(tmp_path):
@@ -118,15 +117,13 @@ def test_cost_is_charged_per_contract_by_the_cost_profile(tmp_path):
     path = _day(tmp_path, "d1", np.full(40, 100.0))
     day = _sim(ScriptedAlpha({4: 1.0, 5: 1.0}), cost_model=cost).run_day(DAY1, path)
 
-    assert day.n_contracts == 4  # two bought, two closed
+    assert day.n_contracts == 4
     assert day.cost_pts == pytest.approx(4 * 0.75)
     assert day.net_pts == pytest.approx(day.gross_pts - 3.0)
 
 
 def test_latency_moves_the_fill_to_the_later_book(tmp_path):
     path = _day(tmp_path, "d1", _rising())
-    # The signal arrives on row 9 (bid 100, ask 101); with 1.5 s each way the order reaches the
-    # exchange after row 10, where the ask is 102.
     fast = _sim(ScriptedAlpha({9: 1.0}), latency_us=1000).run_day(DAY1, path)
     slow = _sim(ScriptedAlpha({9: 1.0}), latency_us=1_500_000).run_day(DAY1, path)
 
@@ -144,8 +141,6 @@ def test_target_is_clipped_to_max_position(tmp_path):
 
 def test_only_one_order_is_in_flight(tmp_path):
     path = _day(tmp_path, "d1", np.full(30, 100.0))
-    # Steps on consecutive rows while each order takes 2.5 s to come back: the second step waits
-    # for the first order instead of stacking a second one, then sends the difference.
     day = _sim(ScriptedAlpha({3: 1.0, 4: 1.0}), latency_us=1_250_000).run_day(DAY1, path)
 
     assert sum(f.qty for f in day.fills) == 2
@@ -170,7 +165,6 @@ def test_days_are_independent_and_dated(tmp_path):
 
     assert result.method == METHOD_ID
     assert [r["date"] for r in result.daily_rows()] == ["2026-04-14", "2026-04-15"]
-    # reset() restarts the script, so day 2 trades too, and it starts flat
     assert result.days[1].fills[0].qty == 1
     assert result.total_net_pts == pytest.approx(sum(d.net_pts for d in result.days))
     assert result.sharpe == pytest.approx(daily_sharpe(result.daily_net_pts))
@@ -213,7 +207,7 @@ def _bound_bridge() -> tuple[_TakerOrderBridge, _FakeHbt]:
 
 def test_cash_moving_without_a_fill_fails_closed():
     bridge, hbt = _bound_bridge()
-    hbt.state = SimpleNamespace(position=0.0, balance=-0.5)  # a fee: exchange fees must be off
+    hbt.state = SimpleNamespace(position=0.0, balance=-0.5)
     with pytest.raises(TakerSimError, match="without a position change"):
         bridge._collect_fill(1)
 
@@ -255,19 +249,15 @@ def test_position_follows_the_native_runner_ladder_when_orders_fill(tmp_path):
     alpha = ScriptedAlpha(script)
     day = _sim(alpha, max_position=3).run_day(DAY1, path)
 
-    # The signals the alpha actually returned, one per book event (a row can arrive as more
-    # than one event, so this is not one per row).
     signals = np.asarray([script.get(i, 0.0) for i in range(alpha.calls)])
     ladder = _signals_to_positions(signals, 0.3, 3)
-    # Orders (1 ms each way) settle before the next event, and a fill is booked on the event
-    # after it, so the booked position equals the ladder one event earlier.
     assert day.residual_qty == int(ladder[-2])
     assert sum(f.qty for f in day.fills) == day.residual_qty
 
 
 def test_one_sided_book_holds_the_order_until_both_sides_quote(tmp_path):
     rows = np.zeros(30, dtype=_DTYPE)
-    rows["bid_px"][10:] = 100.0  # no bid for the first ten rows
+    rows["bid_px"][10:] = 100.0
     rows["ask_px"] = np.where(np.arange(30) < 10, 105.0, 101.0)
     rows["bid_qty"] = 5.0
     rows["ask_qty"] = 5.0
@@ -277,8 +267,6 @@ def test_one_sided_book_holds_the_order_until_both_sides_quote(tmp_path):
 
     day = _sim(ScriptedAlpha({4: 1.0})).run_day(DAY1, path)
 
-    # The adapter emits no book event until both sides quote, so a day that opens one-sided
-    # (as a split day can) never trades against the lone 105 offer.
     assert [(f.qty, f.price_pts) for f in day.fills] == [(1, 101.0)]
 
 
@@ -287,9 +275,9 @@ def test_rows_carry_the_sub_gate_fields(tmp_path):
     row = _sim(ScriptedAlpha({4: 1.0})).run_day(DAY1, path).to_row()
 
     assert row["pnl_pts"] == row["net_pts"]
-    assert row["fills"] == 2  # the entry and the closing sale
+    assert row["fills"] == 2
     assert row["residual_mtm_pts"] == 0.0
-    assert row["events_sha256"] == events_sha256(path)  # names the day as a Gate C holdout
+    assert row["events_sha256"] == events_sha256(path)
 
 
 def _taipei_ns(text: str) -> int:
@@ -303,11 +291,11 @@ def _blocks(stamps: list[str], rows_each: int = 10) -> np.ndarray:
 
 def test_split_assigns_night_sessions_to_the_next_trading_day(tmp_path):
     stamps = [
-        "2026-04-13T15:30:00",  # Monday night -> Tuesday 04-14
-        "2026-04-14T09:00:00",  # Tuesday day session -> 04-14
-        "2026-04-14T15:30:00",  # Tuesday night -> Wednesday 04-15
-        "2026-04-17T23:00:00",  # Friday night -> Monday 04-20
-        "2026-04-18T02:00:00",  # after midnight on Saturday -> Monday 04-20
+        "2026-04-13T15:30:00",
+        "2026-04-14T09:00:00",
+        "2026-04-14T15:30:00",
+        "2026-04-17T23:00:00",
+        "2026-04-18T02:00:00",
     ]
     ts = _blocks(stamps)
     path = _day(tmp_path, "multi", np.full(ts.size, 100.0), ts=ts)
@@ -323,8 +311,8 @@ def test_split_assigns_night_sessions_to_the_next_trading_day(tmp_path):
     for _, part in days:
         with np.load(part) as npz:
             sizes.append(len(npz["data"]))
-    assert sum(sizes) == total  # no event dropped or duplicated
-    assert sizes[0] == 2 * sizes[1]  # 04-14 holds two of the five blocks
+    assert sum(sizes) == total
+    assert sizes[0] == 2 * sizes[1]
 
 
 def test_split_rejects_unordered_timestamps(tmp_path):
@@ -335,7 +323,7 @@ def test_split_rejects_unordered_timestamps(tmp_path):
 
 
 def test_split_rejects_dates_outside_the_calendar(tmp_path):
-    path = _day(tmp_path, "epoch", np.full(20, 100.0))  # 1970 timestamps
+    path = _day(tmp_path, "epoch", np.full(20, 100.0))
     with pytest.raises(TakerSimError, match="outside"):
         split_trading_days(path, str(tmp_path))
 
@@ -346,7 +334,7 @@ def test_simulate_files_runs_every_trading_day(tmp_path):
     result = simulate_files(_sim(ScriptedAlpha({4: 1.0})), [path])
 
     assert [r["date"] for r in result.daily_rows()] == ["2026-04-14", "2026-04-15", "2026-04-16"]
-    assert all(d.n_contracts == 2 for d in result.days)  # each day enters once and closes once
+    assert all(d.n_contracts == 2 for d in result.days)
 
 
 def test_simulate_files_rejects_a_day_split_across_files(tmp_path):
@@ -357,7 +345,6 @@ def test_simulate_files_rejects_a_day_split_across_files(tmp_path):
 
 
 def test_daily_sharpe_of_a_constant_daily_pnl_is_zero_not_float_noise() -> None:
-    # np.std([1.1] * 30) is ~2e-16, not 0: dividing by it reported a Sharpe near 1e17.
     assert daily_sharpe([1.1] * 30) == 0.0
     assert daily_sharpe([0.1] * 7) == 0.0
     assert daily_sharpe([3.0] * 30) == 0.0
@@ -365,11 +352,11 @@ def test_daily_sharpe_of_a_constant_daily_pnl_is_zero_not_float_noise() -> None:
 
 def test_a_fill_after_the_last_two_sided_book_is_booked_at_feed_end():
     bridge, hbt = _bound_bridge()
-    hbt.state = SimpleNamespace(position=-1.0, balance=100.0)  # filled after the last book callback
+    hbt.state = SimpleNamespace(position=-1.0, balance=100.0)
 
     bridge.on_feed_end(7)
 
     assert [(f.ts_ns, f.qty, f.price_pts) for f in bridge.fills] == [(7, -1, 100.0)]
     assert bridge.exch_position == -1
-    bridge.on_feed_end(8)  # nothing new: no second fill
+    bridge.on_feed_end(8)
     assert len(bridge.fills) == 1

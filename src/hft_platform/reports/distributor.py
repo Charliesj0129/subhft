@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover
 try:
     import aiohttp
 except ImportError:  # pragma: no cover
-    aiohttp = None  # noqa: F841
+    aiohttp = None
 
 logger = structlog.get_logger(__name__)
 
@@ -31,11 +31,6 @@ __all__ = ["load_channels", "ReportSender", "Distributor"]
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/sendMessage"
 _TELEGRAM_PHOTO_API = "https://api.telegram.org/bot{token}/sendPhoto"
-
-
-# ---------------------------------------------------------------------------
-# Channel loading
-# ---------------------------------------------------------------------------
 
 
 def load_channels() -> list[ChannelConfig]:
@@ -66,11 +61,6 @@ def load_channels() -> list[ChannelConfig]:
         channels.append(ChannelConfig(name="free", chat_id=free_id, tier="free", enabled=free_enabled))
 
     return channels
-
-
-# ---------------------------------------------------------------------------
-# ReportSender
-# ---------------------------------------------------------------------------
 
 
 class ReportSender:
@@ -109,7 +99,7 @@ class ReportSender:
 
     def __init__(self, bot_token: str = "") -> None:
         self._token: str = bot_token or os.environ.get("HFT_TELEGRAM_BOT_TOKEN", "")
-        self._session: object | None = None  # aiohttp.ClientSession or None
+        self._session: object | None = None
 
     async def send(
         self,
@@ -141,7 +131,7 @@ class ReportSender:
 
                         data = json.loads(body) if isinstance(body, str) else body
                         retry_after = float(data.get("parameters", {}).get("retry_after", 5))
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     logger.warning("report_sender.rate_limited", attempt=attempt, retry_after=retry_after)
                     await asyncio.sleep(retry_after)
@@ -153,9 +143,8 @@ class ReportSender:
                     continue
                 logger.error("report_sender.client_error", status=status, chat_id=chat_id)
                 return False
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 backoff = 2**attempt
-                # Sanitize exception message to avoid leaking bot token from URL
                 exc_msg = str(exc)
                 if "api.telegram.org/bot" in exc_msg:
                     exc_msg = type(exc).__name__
@@ -232,7 +221,7 @@ class ReportSender:
 
                         parsed = json.loads(body) if isinstance(body, str) else body
                         retry_after = float(parsed.get("parameters", {}).get("retry_after", 5))
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     logger.warning("report_sender.photo_rate_limited", attempt=attempt, retry_after=retry_after)
                     await asyncio.sleep(retry_after)
@@ -244,7 +233,7 @@ class ReportSender:
                     continue
                 logger.error("report_sender.photo_client_error", status=status, chat_id=chat_id)
                 return False
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 backoff = 2**attempt
                 exc_msg = str(exc)
                 if "api.telegram.org/bot" in exc_msg:
@@ -285,11 +274,6 @@ class ReportSender:
         if self._session is not None and hasattr(self._session, "close"):
             await self._session.close()  # type: ignore[misc]
             self._session = None
-
-
-# ---------------------------------------------------------------------------
-# Distributor
-# ---------------------------------------------------------------------------
 
 
 class Distributor:

@@ -34,10 +34,6 @@ from hft_platform.feature.engine import (
 )
 from hft_platform.strategy.base import QUALITY_FLAGS_CORRUPT, BaseStrategy
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_feature_event(
     symbol: str = "TXFD6",
@@ -65,11 +61,6 @@ def _make_gap_event(missed: int = 50) -> GapEvent:
 
 def _make_intent(intent_id: int = 1, price: int = 100, qty: int = 1) -> OrderIntent:
     return OrderIntent(intent_id, "s1", "2330", IntentType.NEW, Side.BUY, price, qty, TIF.ROD, None, 0)
-
-
-# ===========================================================================
-# Fix 1: Bug #5 — quality_flags check
-# ===========================================================================
 
 
 class TestQualityFlagsCorruptMask:
@@ -126,15 +117,12 @@ class TestR47MakerOnFeaturesQualityFlags:
         from hft_platform.strategies.r47_maker import R47MakerStrategy
 
         strat = R47MakerStrategy(strategy_id="r47", symbols=["TXFD6"], max_pos=1)
-        # First: cache a clean feature
         clean_event = _make_feature_event(quality_flags=0, values=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
         strat.on_features(clean_event)
         assert "TXFD6" in strat._feature_cache
 
-        # Now send OOO-flagged event with different values
         bad_event = _make_feature_event(quality_flags=QUALITY_FLAG_OUT_OF_ORDER, values=(99, 99))
         strat.on_features(bad_event)
-        # Cache should still have old values, not updated
         assert strat._feature_cache["TXFD6"] == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 
     def test_on_features_accepts_partial_flags(self) -> None:
@@ -170,11 +158,6 @@ class TestOpMMOnFeaturesQualityFlags:
         assert strat._feature_cache["TXFD6"] == (7, 8)
 
 
-# ===========================================================================
-# Fix 2: Bug #7 — DLQ expiry sends rejection feedback
-# ===========================================================================
-
-
 class TestDlqExpirySendsRejectionFeedback:
     """DLQ expiry/overflow/clear paths send RiskFeedback to _rejection_sink."""
 
@@ -206,7 +189,7 @@ class TestDlqExpirySendsRejectionFeedback:
 
     def test_deadline_expiry_sends_rejection_feedback(self, engine) -> None:
         cmd = engine.create_command(_make_intent(1))
-        cmd.deadline_ns = time.monotonic_ns() - 1  # already expired
+        cmd.deadline_ns = time.monotonic_ns() - 1
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
         engine._drain_order_dlq()
@@ -221,7 +204,6 @@ class TestDlqExpirySendsRejectionFeedback:
         engine._order_dlq.append((cmd1, time.monotonic_ns()))
         engine._order_dlq.append((cmd2, time.monotonic_ns()))
 
-        # Force STORM state
         engine.storm_guard.state = StormGuardState.STORM
 
         engine._drain_order_dlq()
@@ -235,11 +217,9 @@ class TestDlqExpirySendsRejectionFeedback:
     def test_overflow_eviction_sends_rejection_feedback(self, engine) -> None:
         """When DLQ exceeds max size, evicted entry sends feedback."""
         engine._ORDER_DLQ_MAX = 1
-        # Fill DLQ with one entry
         cmd_old = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd_old, time.monotonic_ns()))
 
-        # Now simulate what happens when another cmd is added (overflow)
         cmd_new = engine.create_command(_make_intent(2))
         engine._order_dlq.append((cmd_new, time.monotonic_ns()))
         if len(engine._order_dlq) > engine._ORDER_DLQ_MAX:
@@ -251,11 +231,6 @@ class TestDlqExpirySendsRejectionFeedback:
         assert fb.reason_code == "dlq_overflow_evicted"
 
 
-# ===========================================================================
-# Fix 3: Bug #6 — OrderAdapter dedup rollback on dispatch failure
-# ===========================================================================
-
-
 class TestDedupReleaseOnDispatchFailure:
     """IdempotencyStore.release removes entry allowing resubmission."""
 
@@ -263,38 +238,29 @@ class TestDedupReleaseOnDispatchFailure:
         from hft_platform.gateway.dedup import IdempotencyStore
 
         store = IdempotencyStore(persist_enabled=False)
-        # Reserve and commit
         store.check_or_reserve("key1")
         store.commit("key1", True, "enqueued", 1)
 
-        # Before release: duplicate detected
         existing = store.check_or_reserve("key1")
         assert existing is not None
         assert existing.approved is True
 
-        # Release
         store.release("key1")
 
-        # After release: key is fresh
         result = store.check_or_reserve("key1")
-        assert result is None  # None means new/reserved
+        assert result is None
 
     def test_release_noop_for_empty_key(self) -> None:  # noqa: no-assert
         from hft_platform.gateway.dedup import IdempotencyStore
 
         store = IdempotencyStore(persist_enabled=False)
-        store.release("")  # should not raise
+        store.release("")
 
     def test_release_noop_for_missing_key(self) -> None:  # noqa: no-assert
         from hft_platform.gateway.dedup import IdempotencyStore
 
         store = IdempotencyStore(persist_enabled=False)
-        store.release("nonexistent")  # should not raise
-
-
-# ===========================================================================
-# Fix 4: Bug #2 — GapEvent strategy recovery
-# ===========================================================================
+        store.release("nonexistent")
 
 
 class TestR47MakerOnGapResetsState:
@@ -304,7 +270,6 @@ class TestR47MakerOnGapResetsState:
         from hft_platform.strategies.r47_maker import R47MakerStrategy
 
         strat = R47MakerStrategy(strategy_id="r47", symbols=["TXFD6"], max_pos=1)
-        # Populate caches
         strat._feature_cache["TXFD6"] = (1, 2, 3)
         strat._last_bid["TXFD6"] = 100
         strat._last_ask["TXFD6"] = 101
@@ -320,7 +285,6 @@ class TestR47MakerOnGapResetsState:
         from hft_platform.strategies.r47_maker import R47MakerStrategy
 
         strat = R47MakerStrategy(strategy_id="r47", symbols=["TXFD6"], max_pos=1)
-        # Create some state
         strat._get_pe("TXFD6")
         strat._get_queue("TXFD6")
         strat._get_mfg("TXFD6")
@@ -370,11 +334,6 @@ class TestOpMMOnGapResetsState:
         assert strat._ask_oid is None
 
 
-# ===========================================================================
-# Fix 5: Bug #9 — _consumer_seq tracks actual position
-# ===========================================================================
-
-
 class TestConsumerSeqTracksActualPosition:
     """StrategyRunner._consumer_seq increments per event, not from bus.cursor."""
 
@@ -402,7 +361,7 @@ class TestConsumerSeqTracksActualPosition:
         from hft_platform.strategy.runner import StrategyRunner
 
         bus = MagicMock()
-        bus.cursor = 100  # Global write cursor is high
+        bus.cursor = 100
         events = [
             SimpleNamespace(symbol="TXFD6", ts=0),
             SimpleNamespace(symbol="TXFD6", ts=0),
@@ -428,8 +387,6 @@ class TestConsumerSeqTracksActualPosition:
         except asyncio.CancelledError:
             pass
 
-        # _consumer_seq should reflect events processed, not bus.cursor
-        # Initial seed = bus.cursor (100), then +1 per event = 103
         assert runner._consumer_seq == 103
 
     @pytest.mark.asyncio
@@ -458,5 +415,4 @@ class TestConsumerSeqTracksActualPosition:
         except asyncio.CancelledError:
             pass
 
-        # Seeded at 50, consumed 1 event = 51
         assert runner._consumer_seq == 51

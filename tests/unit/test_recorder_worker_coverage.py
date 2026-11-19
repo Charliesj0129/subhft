@@ -40,8 +40,6 @@ from hft_platform.recorder.worker import (
     _values_to_dict,
 )
 
-# -- Shared helpers -----------------------------------------------------------
-
 
 def _make_worker(env_override: dict | None = None):
     """Create a RecorderService with mocked DataWriter. Returns (worker, mock_writer)."""
@@ -57,9 +55,6 @@ def _make_worker(env_override: dict | None = None):
         with patch.dict(os.environ, env, clear=False):
             queue = asyncio.Queue()
             return RecorderService(queue), mock_inst
-
-
-# -- _to_date conversion -----------------------------------------------------
 
 
 class TestToDate:
@@ -86,9 +81,6 @@ class TestToDate:
     def test_returns_epoch_for_invalid_date_string(self) -> None:
         result = _to_date("not-a-date")
         assert result == date(1970, 1, 1)
-
-
-# -- Extractor: market data --------------------------------------------------
 
 
 class TestExtractMarketData:
@@ -149,9 +141,6 @@ class TestExtractMarketData:
         assert set(MARKET_DATA_COLUMNS).issubset(result.keys())
 
 
-# -- Extractor: orders --------------------------------------------------------
-
-
 class TestExtractOrder:
     def test_extract_from_dict(self) -> None:
         row = {
@@ -171,8 +160,6 @@ class TestExtractOrder:
         row = {"order_id": "O2", "action": "SELL", "quantity": 5}
         values = _extract_order_values(row)
         assert values is not None
-        # ORDER_COLUMNS layout: 0=order_id, 1=client_order_id, 2=strategy_id,
-        # 3=symbol, 4=side, 5=price_scaled, 6=qty, 7=status, ...
         assert values[4] == "SELL"
         assert values[6] == 5
 
@@ -207,9 +194,6 @@ class TestExtractOrder:
         result = _extract_order(row)
         assert result is not None
         assert result["order_id"] == "O1"
-
-
-# -- Extractor: fills ---------------------------------------------------------
 
 
 class TestExtractFill:
@@ -263,7 +247,7 @@ class TestExtractFill:
         )
         values = _extract_fill_values(obj)
         assert values is not None
-        assert values[9] == 200000000  # price via _getattr_scaled
+        assert values[9] == 200000000
 
     def test_extract_from_object_with_scaled_suffix(self) -> None:
         """Test _getattr_scaled fallback to <field>_scaled."""
@@ -305,9 +289,6 @@ class TestExtractFill:
         assert result["fill_id"] == "F1"
 
 
-# -- _getattr_scaled fallback -------------------------------------------------
-
-
 class TestGetAttrScaled:
     def test_returns_plain_field_when_present(self) -> None:
         obj = SimpleNamespace(price=5000)
@@ -325,9 +306,6 @@ class TestGetAttrScaled:
         """_getattr_scaled returns 0 (not None) when plain field is 0."""
         obj = SimpleNamespace(fee=0)
         assert _getattr_scaled(obj, "fee") == 0
-
-
-# -- _extract_pnl_snapshot_values ---------------------------------------------
 
 
 class TestExtractPnlSnapshot:
@@ -355,9 +333,6 @@ class TestExtractPnlSnapshot:
         assert result is None
 
 
-# -- _values_to_dict ----------------------------------------------------------
-
-
 class TestValuesToDict:
     def test_returns_dict_from_values(self) -> None:
         result = _values_to_dict(["a", "b"], [1, 2])
@@ -366,9 +341,6 @@ class TestValuesToDict:
     def test_returns_none_for_none_values(self) -> None:
         result = _values_to_dict(["a"], None)
         assert result is None
-
-
-# -- RecorderService: unknown topic drops -------------------------------------
 
 
 class TestUnknownTopicDrop:
@@ -405,9 +377,6 @@ class TestUnknownTopicDrop:
             pass
 
         assert worker._unknown_topic_drops == 0
-
-
-# -- RecorderService: WAL-first data routing ----------------------------------
 
 
 class TestWalFirstDataRouting:
@@ -497,9 +466,6 @@ class TestWalFirstDataRouting:
         assert call_args[0][1] == [{"order_id": "O1"}]
 
 
-# -- RecorderService: processing exception path -------------------------------
-
-
 class TestProcessingException:
     @pytest.mark.asyncio
     async def test_processing_exception_increments_error_counter(self) -> None:
@@ -520,9 +486,6 @@ class TestProcessingException:
 
         assert worker._process_errors >= 1
         assert worker.healthy is False
-
-
-# -- RecorderService._drain_queue_into_batchers --------------------------------
 
 
 class TestDrainQueue:
@@ -604,9 +567,6 @@ class TestDrainQueue:
         assert call_args[0][1] == data
 
 
-# -- RecorderService._shutdown_flush -------------------------------------------
-
-
 class TestShutdownFlush:
     @pytest.mark.asyncio
     async def test_shutdown_flush_handles_batcher_exception(self) -> None:
@@ -674,9 +634,6 @@ class TestShutdownFlush:
         assert call_count >= 2
 
 
-# -- RecorderService: WAL-first write failure ----------------------------------
-
-
 class TestWalFirstWriteFailure:
     @pytest.mark.asyncio
     async def test_wal_first_write_failure_records_data_loss(self) -> None:
@@ -717,17 +674,11 @@ class TestWalFirstWriteFailure:
         assert worker.healthy is False
 
 
-# -- RecorderService: get_health -----------------------------------------------
-
-
 class TestGetHealth:
     def test_get_health_returns_dict(self) -> None:
         worker, _ = _make_worker()
         health = worker.get_health()
         assert isinstance(health, dict)
-
-
-# -- RecorderService: normal topic routing ------------------------------------
 
 
 class TestNormalTopicRouting:

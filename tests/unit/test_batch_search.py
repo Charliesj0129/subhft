@@ -50,7 +50,6 @@ class TestBatchArxivSearcher:
             searcher = BatchArxivSearcher(rate_limit_s=0.0, max_per_query=10)
             results = searcher.search_multi(["query1", "query2"], dry_run=True)
 
-        # Should only have one result even though two queries
         assert len(results) == 1
         assert results[0]["arxiv_id"] == "2408.03594"
 
@@ -117,7 +116,6 @@ class TestBatchArxivSearcher:
         assert results[0]["status"] == "new"
         assert results[0]["ref"] is not None
 
-        # Verify index was saved
         saved_index = json.loads(index_path.read_text())
         assert len(saved_index) == 1
 
@@ -172,7 +170,6 @@ class TestBatchArxivSearcher:
         assert len(results) == 1
         assert results[0]["status"] == "would_add"
 
-        # Index should still be empty
         saved_index = json.loads(index_path.read_text())
         assert len(saved_index) == 0
 

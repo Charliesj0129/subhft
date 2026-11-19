@@ -39,9 +39,6 @@ def _make_event(bids: list[list[int]], asks: list[list[int]]) -> BidAskEvent:
     )
 
 
-# --- Registry ---
-
-
 def test_v2_feature_set_has_22_features() -> None:
     fs = build_default_lob_feature_set_v2()
     assert len(fs.features) == 22
@@ -77,9 +74,6 @@ def test_v1_still_accessible() -> None:
 
 def test_feature_set_version_is_v3() -> None:
     assert FEATURE_SET_VERSION == "lob_shared_v3"
-
-
-# --- FeatureEngine v2 tuple ---
 
 
 def test_v2_engine_produces_22_features() -> None:
@@ -122,9 +116,6 @@ def test_v2_first_16_match_v1() -> None:
         assert v1[i] == v2[i], f"index {i}: v1={v1[i]} != v2={v2[i]}"
 
 
-# --- ISS behavior ---
-
-
 def test_iss_zero_during_warmup() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
     event = _make_event(
@@ -143,7 +134,7 @@ def test_iss_nonzero_after_warmup_with_correlated_data() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
     mid = 100_0000
     for i in range(600):
-        mid += 100  # trending price
+        mid += 100
         bb = mid - 5000
         ba = mid + 5000
         event = _make_event(
@@ -154,11 +145,7 @@ def test_iss_nonzero_after_warmup_with_correlated_data() -> None:
         engine.process_lob_update(event, stats)
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
-    # ISS at index 19 may or may not be nonzero depending on OFI/return correlation, but should be finite
     assert isinstance(vals[19], int)
-
-
-# --- MLDM behavior ---
 
 
 def test_mldm_zero_with_no_event() -> None:
@@ -174,7 +161,6 @@ def test_mldm_zero_with_no_event() -> None:
 
 def test_mldm_responds_to_deep_book_changes() -> None:
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
-    # Warmup with stable book
     for i in range(150):
         event = _make_event(
             [[100_0000, 50], [99_0000, 30], [98_0000, 20], [97_0000, 10], [96_0000, 5]],
@@ -182,7 +168,6 @@ def test_mldm_responds_to_deep_book_changes() -> None:
         )
         stats = _make_stats("TEST", 100_0000, 101_0000, 50, 50, ts=1000 + i)
         engine.process_lob_update(event, stats)
-    # Now grow bid depth at L2-L5
     for i in range(50):
         deep_qty = 30 + 5 * i
         event = _make_event(
@@ -199,7 +184,6 @@ def test_mldm_responds_to_deep_book_changes() -> None:
 def test_mldm_bbo_shift_guard() -> None:
     """When BBO price changes, MLDM deep_net should be zeroed."""
     engine = FeatureEngine(feature_set_id="lob_shared_v2", kernel_backend="python")
-    # Feed stable book
     for i in range(200):
         event = _make_event(
             [[100_0000, 50], [99_0000, 30], [98_0000, 20], [97_0000, 10], [96_0000, 5]],
@@ -208,7 +192,6 @@ def test_mldm_bbo_shift_guard() -> None:
         stats = _make_stats("TEST", 100_0000, 101_0000, 50, 50, ts=1000 + i)
         engine.process_lob_update(event, stats)
     val_before = engine.get_feature_tuple("TEST")[20]
-    # BBO shift: bid moves from 100 to 101
     event_shifted = _make_event(
         [[101_0000, 200], [100_0000, 300], [99_0000, 200], [98_0000, 100], [97_0000, 50]],
         [[102_0000, 50], [103_0000, 30], [104_0000, 20], [105_0000, 10], [106_0000, 5]],
@@ -216,7 +199,6 @@ def test_mldm_bbo_shift_guard() -> None:
     stats_shifted = _make_stats("TEST", 101_0000, 102_0000, 200, 50, ts=1201)
     engine.process_lob_update(event_shifted, stats_shifted)
     val_after = engine.get_feature_tuple("TEST")[20]
-    # After BBO shift, MLDM should not spike from the level-shift artifact
     assert abs(val_after) <= abs(val_before) + 100, (
         f"MLDM should be guarded on BBO shift: before={val_before}, after={val_after}"
     )
@@ -232,9 +214,6 @@ def test_mldm_thin_book_guard() -> None:
     vals = engine.get_feature_tuple("TEST")
     assert vals is not None
     assert vals[20] == 0
-
-
-# --- Feature access ---
 
 
 def test_get_feature_by_id_iss() -> None:
@@ -261,9 +240,6 @@ def test_get_feature_by_id_mldm() -> None:
     mldm = engine.get_feature("TEST", "deep_depth_momentum_x1000")
     assert mldm is not None
     assert isinstance(mldm, int)
-
-
-# --- v3 registry ---
 
 
 def test_v3_registry_has_27_features() -> None:

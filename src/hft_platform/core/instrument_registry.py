@@ -110,7 +110,6 @@ class InstrumentProfile:
     lot_size: int = 1
     """TAIFEX: 1 lot = 1 contract.  TWSE: 1 lot = 1000 shares."""
 
-    # Options-only fields — None for non-option instruments
     strike_scaled: int | None = None
     """Strike price scaled x10000."""
 
@@ -119,10 +118,6 @@ class InstrumentProfile:
     expiry: date | None = None
     """Contract expiry date."""
 
-
-# ---------------------------------------------------------------------------
-# InstrumentRegistry
-# ---------------------------------------------------------------------------
 
 _log = structlog.get_logger(__name__)
 
@@ -150,13 +145,9 @@ class InstrumentRegistry:
 
     def __init__(self, max_instruments: int = 5000) -> None:
         self._profiles: dict[str, InstrumentProfile] = {}
-        self._sources: dict[str, str] = {}  # symbol -> "static" | "dynamic"
+        self._sources: dict[str, str] = {}
         self._by_underlying: dict[str, list[str]] = {}
         self._max: int = max_instruments
-
-    # ------------------------------------------------------------------
-    # Public write API
-    # ------------------------------------------------------------------
 
     def register(
         self,
@@ -223,10 +214,6 @@ class InstrumentRegistry:
         for profile in profiles:
             self.register(profile, source="static")
 
-    # ------------------------------------------------------------------
-    # Public read API
-    # ------------------------------------------------------------------
-
     def get(self, symbol: str) -> InstrumentProfile:
         """Return profile for *symbol*, raising :class:`KeyError` if absent."""
         return self._profiles[symbol]
@@ -253,10 +240,6 @@ class InstrumentRegistry:
         """Number of registered profiles."""
         return len(self._profiles)
 
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
     def _remove(self, symbol: str) -> None:
         """Remove *symbol* from all internal collections."""
         profile = self._profiles.pop(symbol, None)
@@ -276,15 +259,6 @@ class InstrumentRegistry:
 
         Raises :class:`InstrumentLimitError` if nothing could be evicted.
         """
-        # Trading date from the platform timebase, not ``date.today()``.
-        # ``date.today()`` reads the SYSTEM-local date; every expiry in this
-        # registry is a Taiwan trading date. Production containers set
-        # TZ=Asia/Taipei so the two coincide there, but CI runners and
-        # non-Docker dev hosts default to UTC, where for the 8 hours of the TW
-        # morning the UTC date is still TW-yesterday. A contract that expired
-        # at the end of the previous TW day then fails the strict
-        # ``expiry < as_of`` check, is not evicted, and this raises
-        # InstrumentLimitError while genuinely-expired space sits unreclaimed.
         evicted = self.evict_expired(as_of=_trading_date_today())
         if evicted == 0:
             raise InstrumentLimitError(

@@ -6,19 +6,13 @@ cli.py -> cli/ package refactor.
 
 from __future__ import annotations
 
-# Backward-compat: tests patch these at "hft_platform.cli" scope
-import subprocess as subprocess  # noqa: F401
+import subprocess as subprocess
 import sys
 from pathlib import Path
 
-from hft_platform.config.loader import load_settings as load_settings  # noqa: F401
+from hft_platform.config.loader import load_settings as load_settings
 from hft_platform.utils.logging import configure_logging
 
-# ---------------------------------------------------------------------------
-# Backward-compatible re-exports so that existing test imports like
-#   ``from hft_platform.cli import cmd_check, cmd_init, cmd_run``
-# keep working.
-# ---------------------------------------------------------------------------
 from ._alpha import (  # noqa: F401
     cmd_alpha_ab_compare,
     cmd_alpha_canary_evaluate,
@@ -59,7 +53,7 @@ from ._run import (  # noqa: F401
     cmd_wizard,
 )
 from ._symbols import (  # noqa: F401
-    _resolve_symbols_shioaji,  # noqa: F401
+    _resolve_symbols_shioaji,
     cmd_resolve_symbols,
     cmd_symbols_build,
     cmd_symbols_preview,
@@ -81,9 +75,6 @@ def _ensure_project_root_on_path() -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     _ensure_project_root_on_path()
-    # Reduce default thread stack from 8 MB to 2 MB.
-    # Most platform threads are I/O waiters; 2 MB is sufficient.
-    # Does NOT affect Shioaji SDK C++ threads (they set their own stack size).
     import os
     import threading
 

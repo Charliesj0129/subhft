@@ -62,4 +62,4 @@ def test_make_batch_search_splits_queries_on_semicolons_as_data(
 def test_make_batch_search_without_a_query_exits_2(fake_py: Path, queries: str | None) -> None:
     result = _make(fake_py, queries)
     assert result.returncode == 2
-    assert "-m" not in result.stdout.splitlines()  # the interpreter was never invoked
+    assert "-m" not in result.stdout.splitlines()

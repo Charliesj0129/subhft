@@ -1,4 +1,3 @@
-# src/hft_platform/risk/liquidity_gate.py
 """Spread-based liquidity gate — rejects orders when spread exceeds threshold."""
 
 from __future__ import annotations

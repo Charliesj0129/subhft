@@ -47,49 +47,24 @@ Severity = Literal["error", "warn", "info"]
 Status = Literal["pass", "fail", "unavailable"]
 Verdict = Literal["CLEAN", "DEGRADED", "BROKEN"]
 
-# TAIFEX session windows as minutes-from-Taipei-midnight. Day 08:45-13:45,
-# night 15:00-05:00 (crossing midnight).
 DAY_SESSION_OPEN_MINUTE = 8 * 60 + 45
 DAY_SESSION_CLOSE_MINUTE = 13 * 60 + 45
 NIGHT_SESSION_OPEN_MINUTE = 15 * 60
 NIGHT_SESSION_CLOSE_MINUTE = 5 * 60
 
-# Post-repair measurement put 99.1% of the previously-shifted days inside a real
-# session window, so ~1% out-of-window is normal (pre-open auction prints, clock
-# skew). A genuine whole-day timestamp shift lands far above this.
 SESSION_WINDOW_OUTSIDE_MAX_RATIO = 0.03
 
-# Causality tolerance: an exchange timestamp later than the ingest timestamp is
-# physically impossible. 1s absorbs host/broker clock skew.
 CAUSALITY_TOLERANCE_NS = 1_000_000_000
 
-# Coverage classification thresholds, relative to a *local* baseline. The symbol
-# universe and daily volume both change legitimately over a multi-month corpus
-# (observed: ~100 -> 368 -> 357 -> 296), so a single global baseline would condemn
-# whole eras as degraded. The baseline is the median of a centred window of
-# populated days, which re-bases itself across a genuine universe step.
 COVERAGE_BASELINE_WINDOW_DAYS = 11
 COVERAGE_CLEAN_ROW_RATIO = 0.50
 COVERAGE_CLEAN_SYMBOL_RATIO = 0.90
 COVERAGE_DEGRADED_SYMBOL_RATIO = 0.50
 COVERAGE_DEGRADED_ROW_RATIO = 0.10
 
-# A day-over-day change in the count of distinct symbols is reported as a universe
-# *step* only when it clears both an absolute and a relative floor. Subscribed
-# symbols range from tens to >500 across this corpus, so an absolute floor alone
-# fired on half of all sessions.
-#
-# Known limitation, stated rather than tuned away: monthly contract rollover churns
-# the symbol set every day, at the same magnitude as a small pool-config change. A
-# ~3% step such as the documented 368 -> 357 is therefore below the noise floor and
-# is NOT detectable from counts; only large steps (357 -> 296 and bigger) surface
-# here. Use the per-day symbol counts in the coverage profile for finer questions.
 UNIVERSE_STEP_MIN_DELTA = 5
 UNIVERSE_STEP_MIN_RATIO = 0.15
 
-# A partition missing from the local archive is merely "behind" while the upstream copy
-# still exists. Once the upstream TTL fires it is unrecoverable, so a missing partition
-# inside this horizon escalates from warn to error.
 ARCHIVE_SYNC_URGENT_HORIZON_DAYS = 30
 
 QUERY_SETTINGS: dict[str, Any] = {"max_memory_usage": 2_500_000_000, "max_threads": 2}
@@ -127,53 +102,28 @@ class MonthFieldStats:
     directed_ticks: int
 
 
-# ---------------------------------------------------------------------------
-# Source-layer statistics. The day aggregate above cannot see these defects, each
-# needs its own grouping, so each has a small row type and a dedicated query.
-# ---------------------------------------------------------------------------
 
-# Hourly delivery multiplicity = rows / distinct content keys. A clean hour sits at
-# 1.00-1.03 (real same-microsecond fills collapse to one key); the 2026-01-27..02-26
-# delivery duplication sits at exactly 2.0 and 2026-04-28..06-01 at about 4.0, so 1.3
-# separates them from clean with a wide margin on both sides. Hours with fewer rows
-# than the floor are too noisy to judge.
 CONTENT_DUP_HOUR_MULTIPLICITY_MAX = 1.3
 CONTENT_DUP_MIN_HOUR_ROWS = 1_000
-# An hour must also carry this share of its (day, row type) to be judged. The 14:00 hour
-# (equity after-hours fixed-price session, ~0.1% of a day) republishes frozen snapshots
-# and reads 1.7-1.9x on *every* clean day; delivery duplication hits the busy hours.
 CONTENT_DUP_MIN_HOUR_SHARE = 0.01
 CONTENT_DUP_HEAVY_DAY_RATE = 0.10
 
-# ``ingest_ts == exch_ts`` means the local clock was behind the exchange and the
-# normalizer clamped the arrival time. Above 0.30 the arrival-latency distribution is
-# visibly truncated; above 0.60 it is mostly fiction.
 CLAMP_WARN_RATIO = 0.30
 CLAMP_SEVERE_RATIO = 0.60
 CLAMP_MIN_ROWS = 10_000
 
-# A near-month futures series is quoted at 8 Hz whether or not it trades, so a silent
-# minute is a recording gap, not a quiet market. Gaps over GAP_COUNT_SECONDS are summed.
 GAP_MAX_SECONDS = 60
 GAP_CUMULATIVE_MAX_SECONDS = 600
 GAP_COUNT_SECONDS = 10
 GAP_MIN_SERIES_ROWS = 20_000
 GAP_FAMILIES = ("TXF", "MXF", "TMF")
 
-# Rows dated on a day the exchange was closed, after the previous night session ended.
 NON_TRADING_DAY_NIGHT_END_MINUTE = NIGHT_SESSION_CLOSE_MINUTE
-# A closed day with fewer rows than this is a close-time straggler (1-28 rows on 25 Saturdays),
-# not recording on a holiday; it is listed in the detail but does not fail the check.
 NON_TRADING_DAY_MIN_ROWS = 1_000
 
-# The chain is "centred" when its strikes span the futures price +/- this many points.
 CHAIN_ATM_HALF_WIDTH_POINTS = 500.0
 CHAIN_MIN_EXPIRY_ROWS = 50_000
 
-# Day-session contracts recorded vs the exchange's own tick file. The reference is single-leg
-# contracts only; the official daily volume also counts spread legs (about 0.5% of TX), so a
-# complete, de-duplicated recording sits just under 1.00. Below the floor data is missing; above
-# the ceiling something is still delivered twice.
 OFFICIAL_RATIO_MIN = 0.96
 OFFICIAL_RATIO_MAX = 1.02
 OFFICIAL_MIN_CONTRACTS = 2_000
@@ -355,9 +305,6 @@ def canonical_sha256(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-# ---------------------------------------------------------------------------
-# Pure evaluators -- no ClickHouse required.
-# ---------------------------------------------------------------------------
 
 
 def evaluate_causality(days: Sequence[DayStats]) -> CheckResult:
@@ -1112,7 +1059,6 @@ def evaluate_official_volume_reconciliation(rows: Sequence[OfficialVolumeRow] | 
             "official_volume_reconciliation", "warn", "unavailable", "no official reference data supplied", detail
         )
     candidates = [row for row in rows if row.official >= OFFICIAL_MIN_CONTRACTS]
-    # A day with no recorded ticks is a coverage gap (other checks own that), not a volume mismatch.
     judged = [row for row in candidates if row.raw > 0]
     detail["no_local_rows"] = sorted({row.day for row in candidates if row.raw == 0})
     if not judged:
@@ -1220,9 +1166,6 @@ def build_report(
     )
 
 
-# ---------------------------------------------------------------------------
-# ClickHouse access
-# ---------------------------------------------------------------------------
 
 
 _DAY_EXPR = "toDate(fromUnixTimestamp64Nano(ingest_ts), 'Asia/Taipei')"
@@ -1402,7 +1345,6 @@ _INGEST_RANGE = """
 _EXCH_SECOND_OF_DAY_EXPR = "((intDiv(exch_ts, 1000000000) + 28800) % 86400)"
 _FUTURES_FAMILY_PREDICATE = " OR ".join(f"symbol LIKE '{family}%'" for family in GAP_FAMILIES)
 
-# Content key = everything an event is, minus the delivery-specific ``ingest_ts``/``seq_no``.
 CONTENT_DUP_QUERY = f"""
     SELECT
         {_DAY_EXPR} AS day,
@@ -1435,12 +1377,6 @@ CLAMP_QUERY = f"""
     ORDER BY day, grp
 """
 
-# Gaps are measured between distinct active seconds, which keeps the window function over
-# at most ~65k rows per series-day instead of several hundred thousand quote rows. A night
-# session is split at midnight into ``night_pm`` (from 15:00) and ``night_am`` (until 05:00)
-# because grouping is by calendar day; leaving them as one series would report the 10 idle
-# daytime hours between them as a gap. The day is the *exchange* date: grouping by ingest date
-# let one quote stamped 23:59:59.99 and ingested just after midnight open a fake 15 h gap.
 GAP_QUERY = f"""
     SELECT
         day, symbol, sess,
@@ -1490,9 +1426,6 @@ EXCH_DATE_QUERY = f"""
     ORDER BY exch_date
 """
 
-# TXO symbols are ``TXO`` + 5-digit strike + month/right code + year digit, e.g.
-# ``TXO39600C7``. ``strike_scaled`` is x10,000 (not the x1,000,000 price scale) and is empty
-# before 2026-08, so the strike falls back to the symbol.
 CHAIN_QUERY = f"""
     SELECT
         {_DAY_EXPR} AS day,
@@ -1795,9 +1728,6 @@ def run_audit(
     )
 
 
-# ---------------------------------------------------------------------------
-# Report persistence and provenance stamping
-# ---------------------------------------------------------------------------
 
 
 def render_markdown(report: QualityReport) -> str:

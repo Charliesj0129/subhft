@@ -53,11 +53,9 @@ class TestPlaybookClickhouseDown:
         q: asyncio.Queue[dict] = asyncio.Queue(maxsize=1)
         await q.put({"tick": 1})
 
-        # Second put_nowait should raise QueueFull, never block
         with pytest.raises(asyncio.QueueFull):
             q.put_nowait({"tick": 2})
 
-        # Queue still has the first item
         item = q.get_nowait()
         assert item["tick"] == 1
 
@@ -65,7 +63,6 @@ class TestPlaybookClickhouseDown:
     async def test_wal_disk_pressure_skips_gracefully(self, wal_writer) -> None:
         """When disk_full is True, WAL write returns False without crashing."""
         wal_writer._disk_full = True
-        # Prevent _check_disk_space from doing a fresh check that would clear the flag
         wal_writer._disk_check_interval_s = 999_999
 
         result = await wal_writer.write("market_data", [{"price": 1001000}])

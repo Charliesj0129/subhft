@@ -91,11 +91,6 @@ def _with_pending(adapter: OrderAdapter) -> OrderAdapter:
     return adapter
 
 
-# --------------------------------------------------------------------------- #
-# The peek                                                                     #
-# --------------------------------------------------------------------------- #
-
-
 def test_peek_resolves_the_strategy_from_the_pending_index(tmp_config):
     adapter = _with_pending(_adapter(tmp_config))
 
@@ -150,11 +145,6 @@ def test_strict_mode_refuses_an_ambiguous_peek(tmp_config):
     asyncio.run(adapter._register_pending_fill("OTHER:2", _SYMBOL, Side.BUY, "000002"))
 
     assert adapter.peek_strategy_from_pending(_SYMBOL, "Buy") is None
-
-
-# --------------------------------------------------------------------------- #
-# The _on_exec gate                                                            #
-# --------------------------------------------------------------------------- #
 
 
 def _system(adapter: OrderAdapter):
@@ -215,28 +205,6 @@ def test_order_topic_attribution_leaves_the_fill_resolvable(tmp_config):
     )
 
 
-# --------------------------------------------------------------------------- #
-# The real order-topic payload shape                                           #
-# --------------------------------------------------------------------------- #
-# Measured on THESHOW 2026-09-04, immediately after the fix above shipped:
-# hft.orders took 5 new rows and every one was still strategy_id='UNKNOWN'
-# with an empty client_order_id. The gate fix was correct and still produced
-# nothing, because the block reads `action` and the symbol off the payload
-# ROOT -- which is the *deal* topic's shape.
-#
-# The order topic nests them, exactly as normalize_order reads them
-# (execution/normalizer.py:257 `d.get("contract")`, :273 `order.get("action")`):
-#
-#   deal :  {"code": "TMFI6", "action": "Buy", ...}          <- flat
-#   order:  {"contract": {"code": "TMFI6"},                  <- nested
-#            "order":    {"action": "Buy", "ordno": ...},
-#            "status":   {...}}
-#
-# So `_action` was None on every real order callback and both attribution
-# branches were skipped in silence. The tests above passed only because they
-# were written with the flat shape.
-
-
 def _real_order_payload() -> dict:
     """The shape shioaji actually delivers on the order topic."""
     return {
@@ -282,9 +250,6 @@ def test_nested_order_payload_still_leaves_the_fill_resolvable(tmp_config):
     deal = {"payload": {"code": _SYMBOL, "action": "Buy"}}
     system._on_exec("deal", deal)
 
-    # Assert the ACK resolved too, or this passes trivially against code that
-    # never enters the block at all -- which is how the flat-shape tests above
-    # stayed green through a 100 % production attribution failure.
     assert ack.get("_resolved_strategy_id") == _STRATEGY
     assert deal.get("_resolved_strategy_id") == _STRATEGY
 
@@ -320,6 +285,4 @@ def test_nested_sell_payload_does_not_match_a_buy_pending(tmp_config):
 
     assert sell.get("_resolved_strategy_id") is None, "a SELL ACK took the BUY pending slot"
     assert sell.get("_resolved_order_key") is None
-    # The BUY must still resolve, or the assertions above pass merely because
-    # the nested read is broken rather than because the side is respected.
     assert buy.get("_resolved_strategy_id") == _STRATEGY

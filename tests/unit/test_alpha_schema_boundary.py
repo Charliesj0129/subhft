@@ -33,8 +33,6 @@ _PRODUCTION_CONSUMERS = (
     "src/hft_platform/alpha/promotion.py",
 )
 
-# Captured before the ownership migration from real protocol-4 pickles whose
-# globals resolve through research.registry.schemas.
 _LEGACY_MANIFEST_PICKLE = (
     "gASVzQEAAAAAAACMGXJlc2VhcmNoLnJlZ2lzdHJ5LnNjaGVtYXOUjA1BbHBoYU1hbmlm"
     "ZXN0lJOUKYGUfZQojAhhbHBoYV9pZJSMDWxlZ2FjeS1waWNrbGWUjApoeXBvdGhlc2lz"

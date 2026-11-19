@@ -126,8 +126,6 @@ _INT_COLUMNS = frozenset(
     }
 )
 _FLOAT_PREFIXES = ("ic", "rank_ic", "sign_", "bucket_", "horizon_", "day_stability", "one_day", "regime_", "turnover", "gross_", "required_", "cost_survival", "maker_fill", "maker_required", "maker_cost_survival", "latency_", "final_score")
-# CH Date columns: the jsonl fallback serializes dates as ISO strings
-# (json.dumps default=str), so the replay path must coerce them back.
 _DATE_COLUMNS = frozenset({"split_start", "split_end"})
 _DATE_EPOCH = date(1970, 1, 1)
 
@@ -186,7 +184,6 @@ class ResultWriter:
         self.fallback_path = run_dir / "_results_fallback.jsonl"
         self._fallback_keys: set[str] | None = None
 
-    # -- public API ---------------------------------------------------------
 
     def write_candidate_row(self, row: dict[str, Any]) -> str:
         """Append one alpha_candidates status row; returns 'ch'|'jsonl'|'duplicate'."""
@@ -204,7 +201,6 @@ class ResultWriter:
         precheck = f"SELECT count() FROM {RESULTS_TABLE} WHERE result_id = %(id)s"
         return self._write(RESULTS_TABLE, RESULT_COLUMNS, row, key, precheck, {"id": row["result_id"]})
 
-    # -- sinks ----------------------------------------------------------------
 
     def _write(
         self,
@@ -219,7 +215,6 @@ class ResultWriter:
             outcome = self._try_ch(table, columns, row, precheck_sql, precheck_params)
             if outcome in ("ch", "duplicate"):
                 return outcome
-            # CH failed -> fall through to jsonl.
         return self._try_jsonl(table, row, key)
 
     def _try_ch(

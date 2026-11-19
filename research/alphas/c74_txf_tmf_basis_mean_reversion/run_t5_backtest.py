@@ -64,7 +64,6 @@ def _compute_trip_pnl_ntd(trip: dict) -> float:
         basis_delta_pts = entry - exit_
     else:
         basis_delta_pts = exit_ - entry
-    # Basis units are in pts of TXF-equivalent. 1 TXF contract * basis_delta.
     pnl_ntd = basis_delta_pts * _TXF_POINT_VALUE_NTD
     return pnl_ntd
 
@@ -90,7 +89,6 @@ def _apply_cost_per_trip(pnl_ntd: float, combined_rt_pts: float, taker_close: bo
     """
     total_cost_ntd = combined_rt_pts * _TXF_POINT_VALUE_NTD
     if taker_close:
-        # Additional spread+adverse cost estimate: TXF 2pt + TMF 1pt = 3pt TXF-equivalent
         total_cost_ntd += 3.0 * _TXF_POINT_VALUE_NTD
     return pnl_ntd - total_cost_ntd
 
@@ -109,7 +107,6 @@ def _fetch_joint_events(
         events = source.load_day(sym, date_str)
         stream = [(e.exch_ts, sym, e) for e in events]
         streams.append(stream)
-    # Merge via heapq.merge
     merged = heapq.merge(*streams, key=lambda x: x[0])
     return [(sym, tick) for _, sym, tick in merged]
 
@@ -122,11 +119,9 @@ def _run_one_config(
     strat = TxfTmfBasisMeanReversion(params=params)
     daily_summaries: list[dict] = []
     all_trips: list[dict] = []
-    # Session sigma tracker per day
     session_sigmas: list[float] = []
 
     for d in dates:
-        # Reset stats each session to avoid cross-day drift (approximation)
         strat.reset()
         events = _fetch_joint_events(source, d)
         if not events:
@@ -147,13 +142,11 @@ def _run_one_config(
             "exits_stop_loss": strat.exits_stop_loss,
             "session_end_sigma_pts": day_sigma,
         })
-        # Tag each trip with its session and sigma
         for t in day_trips:
             t["session_date"] = d
             t["session_end_sigma_pts"] = day_sigma
         all_trips.extend(day_trips)
 
-    # Compute per-trip PnL (gross)
     for t in all_trips:
         t["gross_pnl_ntd"] = _compute_trip_pnl_ntd(t)
         t["net_pnl_ntd_inst"] = _apply_cost_per_trip(
@@ -191,13 +184,11 @@ def _summarize_trips(run: dict) -> dict:
     net = [t["net_pnl_ntd_inst"] for t in trips]
     n_days = max(run["n_days"], 1)
 
-    # Per-trip distribution stats
     pct = sorted(net)
     def _pct(p: float) -> float:
         idx = max(0, min(n - 1, int(p * n)))
         return pct[idx]
 
-    # Cost sensitivity (combined RT pts)
     cost_sens = {}
     for rt in _RT_SCENARIOS_PT_COMBINED:
         scenario_nets = [
@@ -213,7 +204,6 @@ def _summarize_trips(run: dict) -> dict:
             "mean_per_trip": round(total / n, 1),
         }
 
-    # Direction split
     short_trips = [t for t in trips if t["side"] == "short_basis"]
     long_trips = [t for t in trips if t["side"] == "long_basis"]
     short_mean = (
@@ -225,7 +215,6 @@ def _summarize_trips(run: dict) -> dict:
         if long_trips else 0.0
     )
 
-    # 2x2 direction x session-sigma-quartile grid
     sorted_by_sig = sorted(
         trips, key=lambda t: t.get("session_end_sigma_pts", 0)
     )
@@ -248,19 +237,16 @@ def _summarize_trips(run: dict) -> dict:
         else:
             grid_summary[k] = {"n": 0, "mean_ntd": 0.0, "total_ntd": 0.0}
 
-    # Exit reasons
     exits_reversion = sum(1 for t in trips if t.get("exit_reason") == "reversion")
     exits_timeout = sum(1 for t in trips if t.get("exit_reason") == "timeout")
     exits_stop_loss = sum(1 for t in trips if t.get("exit_reason") == "stop_loss")
 
-    # Days-positive from per-trip (group by session_date)
     days_pnl: dict[str, float] = {}
     for t in trips:
         d = t.get("session_date", "unknown")
         days_pnl[d] = days_pnl.get(d, 0.0) + t["net_pnl_ntd_inst"]
     days_positive = sum(1 for v in days_pnl.values() if v > 0)
 
-    # Daily PnL series for Sharpe
     daily_pnls = sorted(days_pnl.items())
     daily_net_list = [v for _, v in daily_pnls]
     if len(daily_net_list) >= 2:
@@ -274,7 +260,6 @@ def _summarize_trips(run: dict) -> dict:
         stdev_daily = 0.0
         sharpe = 0.0
 
-    # Stale filter hits (sum over days)
     stale_total = sum(d["stale_filter_hits"] for d in run["daily"])
     stop_loss_rate = exits_stop_loss / n if n else 0.0
 
@@ -348,7 +333,6 @@ def main() -> int:
     source = ClickHouseSource(password=os.environ["CLICKHOUSE_PASSWORD"])
     source.health_check()
 
-    # Get joint dates
     txf_dates = set(source.available_dates("TXFD6"))
     tmf_dates = set(source.available_dates("TMFD6"))
     joint = sorted(txf_dates & tmf_dates)
@@ -362,7 +346,6 @@ def main() -> int:
         range=(dates[0], dates[-1]),
     )
 
-    # Parameter sweeps
     sweeps = []
     for window_sec in [300, 1800, 3600]:
         for entry_sig in [1.5, 2.0, 2.5]:
@@ -372,7 +355,6 @@ def main() -> int:
     for window_sec, entry_sig in sweeps:
         key = f"win{window_sec}_ent{entry_sig}"
         logger.info("run_start", key=key)
-        # Need smaller warmup for short windows
         min_samples = min(120, window_sec // 3)
         params = C74Params(
             window_seconds=window_sec,
@@ -393,7 +375,6 @@ def main() -> int:
             sharpe=summary.get("sharpe_daily_annualized", 0),
         )
 
-    # Find best by ntd_per_day at inst RT (w/ positive Sharpe preference)
     best_key = None
     best_score = float("-inf")
     for key, c in configs.items():
@@ -401,7 +382,6 @@ def main() -> int:
         if s.get("n_trips", 0) == 0:
             continue
         score = s["trip_pnl_net_inst_ntd"]["ntd_per_day"]
-        # Require at least 3 trips for meaningful score
         if s["n_trips"] < 3:
             continue
         if score > best_score:

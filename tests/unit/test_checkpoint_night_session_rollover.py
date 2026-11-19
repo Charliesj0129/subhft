@@ -42,7 +42,6 @@ def _mk_store():
     store.snapshot_positions_with_recovery.return_value = ({}, {})
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = 0
-    # load_recovery should be a no-op that counts invocations
     store.load_recovery = MagicMock()
     return store
 
@@ -72,11 +71,6 @@ def _write_checkpoint(path: str, trading_date: str) -> None:
     writer.write_checkpoint()
 
 
-# ---------------------------------------------------------------------------
-# Part A — _taifex_trading_date boundaries (existing behavior documentation)
-# ---------------------------------------------------------------------------
-
-
 def test_taifex_trading_date_at_0459_returns_previous_day():
     """04:59 CST: we are still inside the overnight session → D-1."""
     fake_now = datetime(2026, 4, 17, 4, 59, tzinfo=_TZ_TPE)
@@ -89,11 +83,6 @@ def test_taifex_trading_date_at_0501_returns_current_day():
     fake_now = datetime(2026, 4, 17, 5, 1, tzinfo=_TZ_TPE)
     with patch("hft_platform.execution.checkpoint.timebase.now_s", return_value=fake_now.timestamp()):
         assert _taifex_trading_date() == "20260417"
-
-
-# ---------------------------------------------------------------------------
-# Part B — recover() must use TAIFEX trading-date (the actual Bug 15 fix)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -112,8 +101,6 @@ async def test_recover_accepts_night_session_checkpoint_written_before_rollover(
         position_store=store,
         checkpoint_path=ckpt_path,
     )
-    # Simulate a broker that's unavailable, so acceptance MUST come from the
-    # checkpoint path (no broker fallback masking the bug).
     verifier._fetch_broker_positions = AsyncMock(side_effect=RuntimeError("broker offline"))  # type: ignore[method-assign]
 
     fake_now = datetime(2026, 4, 17, 4, 59, 30, tzinfo=_TZ_TPE)
@@ -147,7 +134,6 @@ async def test_recover_accepts_checkpoint_across_0500_boundary_with_broker_toler
         position_store=store,
         checkpoint_path=ckpt_path,
     )
-    # Broker reports the same position (independent confirmation).
     verifier._fetch_broker_positions = AsyncMock(return_value={"TMFD6": -1})  # type: ignore[method-assign]
 
     fake_now = datetime(2026, 4, 17, 5, 1, 0, tzinfo=_TZ_TPE)
@@ -157,8 +143,6 @@ async def test_recover_accepts_checkpoint_across_0500_boundary_with_broker_toler
     ):
         result = await verifier.recover()
 
-    # The legitimate checkpoint must NOT be discarded; dual-source recovery
-    # (checkpoint + broker) is the expected outcome.
     assert result.source == "dual", (
         f"Expected dual-source recovery with ±1d tolerance; got {result.source!r}. "
         "Legitimate rollover-window checkpoint was silently discarded."

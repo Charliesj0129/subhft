@@ -31,7 +31,6 @@ def test_record_trial_dedupes_on_trial_id_and_stage(tmp_path):
     assert first is True
     assert second is False
 
-    # A new stage for the same trial_id is a new row (not a dedupe hit).
     third = ledger.record_trial(
         trial_id=trial_id,
         search_run_id="run1",
@@ -65,7 +64,6 @@ def test_record_compile_failure_produces_compile_stage_row(tmp_path):
     assert rows[0]["status"] == "error"
     assert rows[0]["failure_reason"] == "SyntaxError: unexpected end"
 
-    # Recording the identical compile failure again is a dedupe no-op.
     again = ledger.record_compile_failure(
         expression="bad_expr(",
         dataset_fingerprint="fp1",
@@ -113,7 +111,6 @@ def test_resume_after_restart_does_not_double_count(tmp_path):
         trial_id=trial_id, search_run_id="run1", candidate_id=candidate_id, stage="search", status="passed", metrics={}
     )
 
-    # Simulate a process restart: a brand-new instance pointed at the same file.
     ledger2 = TrialLedger(path=path)
     result = ledger2.record_trial(
         trial_id=trial_id, search_run_id="run1", candidate_id=candidate_id, stage="search", status="passed", metrics={}

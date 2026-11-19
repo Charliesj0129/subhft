@@ -79,7 +79,6 @@ async def test_complete_json_from_session_decodes_openrouter_payload() -> None:
     assert call["json"]["messages"] == [{"role": "user", "content": "prompt"}]
     assert call["json"]["response_format"] == {"type": "json_object"}
     assert call["headers"]["Authorization"] == "Bearer test-key"
-    # timeout may be float or aiohttp.ClientTimeout — check total value
     timeout = call["timeout"]
     total = getattr(timeout, "total", timeout)
     assert total == 30.0

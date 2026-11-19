@@ -131,7 +131,7 @@ def test_refresh_keeps_the_cache_when_the_sdk_walk_lost_two_roots(tmp_path: Path
         SimpleNamespace(code="TMFL6", root="TMF", delivery_date="2026/12/16", name="TMF"),
     ]
 
-    def _iter(category):  # noqa: ANN001, ANN202 — test double for the SDK walk
+    def _iter(category):
         return walked if category is client.api.Contracts.Futures else []
 
     with patch.object(ShioajiClient, "__init__", lambda self, *a, **kw: None):

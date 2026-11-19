@@ -29,7 +29,6 @@ from structlog import get_logger
 
 logger = get_logger("feed_adapter.solace_env")
 
-# Attribute names on ``shioaji.config`` that govern Solace reconnect.
 SOLACE_RECONNECT_PARAMS: tuple[str, ...] = (
     "SOL_CONNECT_TIMEOUT_MS",
     "SOL_RECONNECT_RETRIES",

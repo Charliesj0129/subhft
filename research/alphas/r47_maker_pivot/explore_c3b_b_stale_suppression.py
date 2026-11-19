@@ -31,7 +31,6 @@ os.environ.setdefault("HFT_STRICT_PRICE_MODE", "0")
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-# Suppress logging
 import structlog
 structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(50))
 import logging
@@ -40,14 +39,11 @@ logging.disable(logging.WARNING)
 from hftbacktest import BacktestAsset, HashMapMarketDepthBacktest
 from hftbacktest.order import GTC, LIMIT
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 TICK_SIZE = 1.0
 LOT_SIZE = 1.0
 POINT_VALUE_NTD = 10
 PRICE_SCALE = 10_000
-ELAPSE_NS = 100_000_000  # 100ms
+ELAPSE_NS = 100_000_000
 
 DATA_DIR = _REPO_ROOT / "research" / "data" / "raw" / "txfd6"
 DATA_FILES = sorted(DATA_DIR.glob("TXFD6_2026-0*_l2.hftbt.npz"))
@@ -68,7 +64,7 @@ def _load_r47_class():
 @dataclass
 class DayResult:
     date: str
-    mode: str  # "baseline" or "c3b_b"
+    mode: str
     total_pnl_pts: float
     total_fills: int
     total_steps: int
@@ -103,8 +99,6 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
         max_pos=3,
     )
 
-    # For baseline mode, we reset _last_bid/ask_price to 0 each step in the
-    # main loop so the stale suppression condition (price == last_price) never fires.
 
     asset = (
         BacktestAsset()
@@ -175,7 +169,6 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
 
         ts_ns = int(hbt.current_timestamp)
 
-        # Track fills via position change
         cur_pos = int(hbt.position(0))
         if cur_pos != prev_pos:
             fill_count += abs(cur_pos - prev_pos)
@@ -183,7 +176,6 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
 
         positions["TXFD6"] = cur_pos
 
-        # Build events and dispatch
         bid_qty = int(getattr(dp, "best_bid_qty", 0) or 0)
         ask_qty = int(getattr(dp, "best_ask_qty", 0) or 0)
         bid_scaled = int(round(best_bid * PRICE_SCALE))
@@ -214,16 +206,13 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
         )
 
         captured_intents.clear()
-        # Baseline mode: reset last prices so stale suppression never fires
         if not stale_suppression:
             strategy._last_bid_price = 0
             strategy._last_ask_price = 0
         strategy.handle_event(ctx, feature_event)
         strategy.handle_event(ctx, lob_event)
 
-        # --- Order management: baseline vs c3b_b ---
         if not stale_suppression:
-            # BASELINE: Cancel all, resubmit everything from intents
             if active_buy_id is not None:
                 hbt.cancel(0, active_buy_id, False)
                 active_buy_id = None
@@ -249,8 +238,6 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
                     active_sell_id = order_id
                     active_sell_price = price_rounded
         else:
-            # C3b-B: Only cancel+resubmit when price changes.
-            # If no intent emitted for a side (stale suppression), keep existing order.
             buy_intent = None
             sell_intent = None
             for intent in captured_intents:
@@ -261,7 +248,6 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
                 elif intent.side == Side.SELL:
                     sell_intent = intent
 
-            # If strategy emitted no intents at all (gate blocked), cancel everything
             if not captured_intents:
                 if active_buy_id is not None:
                     hbt.cancel(0, active_buy_id, False)
@@ -273,20 +259,16 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
                     active_sell_price = 0.0
                 hbt.clear_inactive_orders(0)
             else:
-                # Handle buy side
                 if buy_intent is not None:
                     price_native = buy_intent.price / PRICE_SCALE
                     price_rounded = round(price_native / TICK_SIZE) * TICK_SIZE
-                    # New price -> cancel old, submit new
                     if active_buy_id is not None:
                         hbt.cancel(0, active_buy_id, False)
                     order_id += 1
                     hbt.submit_buy_order(0, order_id, price_rounded, float(buy_intent.qty), GTC, LIMIT, False)
                     active_buy_id = order_id
                     active_buy_price = price_rounded
-                # else: no buy intent = stale suppression fired, keep existing order
 
-                # Handle sell side
                 if sell_intent is not None:
                     price_native = sell_intent.price / PRICE_SCALE
                     price_rounded = round(price_native / TICK_SIZE) * TICK_SIZE
@@ -296,21 +278,15 @@ def run_day(data_path: Path, stale_suppression: bool) -> DayResult:
                     hbt.submit_sell_order(0, order_id, price_rounded, float(sell_intent.qty), GTC, LIMIT, False)
                     active_sell_id = order_id
                     active_sell_price = price_rounded
-                # else: no sell intent = stale suppression fired, keep existing order
 
                 hbt.clear_inactive_orders(0)
 
-                # Check if our resting orders were filled (order no longer active)
-                # hftbacktest handles this internally — if order was filled, it's gone
-                # We just need to make sure we don't hold stale active_*_id references
-                # This is handled by position tracking above
 
         step_count += 1
 
     hbt.close()
     elapsed = time.monotonic() - t0
 
-    # Final PnL
     sv = hbt.state_values(0)
     final_pos = int(hbt.position(0))
     mid = (best_bid + best_ask) / 2.0 if best_bid > 0 and best_ask > 0 else 0.0
@@ -344,13 +320,11 @@ def main():
         date_str = data_path.stem.replace("TXFD6_", "").replace("_l2.hftbt", "")
         print(f"\n[{i+1}/{len(DATA_FILES)}] {date_str}")
 
-        # Run baseline (no stale suppression)
         print(f"  Running BASELINE...", end=" ", flush=True)
         baseline = run_day(data_path, stale_suppression=False)
         print(f"PnL={baseline.total_pnl_pts:+.1f} fills={baseline.total_fills} t={baseline.elapsed_s}s")
         baseline_results.append(baseline)
 
-        # Run treatment (with stale suppression)
         print(f"  Running C3b-B...", end=" ", flush=True)
         treatment = run_day(data_path, stale_suppression=True)
         print(f"PnL={treatment.total_pnl_pts:+.1f} fills={treatment.total_fills} "
@@ -361,7 +335,6 @@ def main():
         delta_fills = treatment.total_fills - baseline.total_fills
         print(f"  Delta: PnL={delta_pnl:+.1f} fills={delta_fills:+d}")
 
-    # Summary
     print(f"\n{'='*80}")
     print("SUMMARY")
     print(f"{'='*80}")
@@ -385,7 +358,6 @@ def main():
         pnl_change = (total_treatment_pnl - total_baseline_pnl) / abs(total_baseline_pnl) * 100
         print(f"PnL change: {pnl_change:+.1f}%")
 
-    # Per-day comparison table
     print(f"\n{'Date':<12} {'Base PnL':>10} {'C3b PnL':>10} {'Delta':>10} "
           f"{'Base Fills':>11} {'C3b Fills':>10} {'Stale Skip':>11}")
     print("-" * 85)
@@ -394,7 +366,6 @@ def main():
         print(f"{b.date:<12} {b.total_pnl_pts:>+10.1f} {t.total_pnl_pts:>+10.1f} {delta:>+10.1f} "
               f"{b.total_fills:>11d} {t.total_fills:>10d} {t.stale_suppressed:>11d}")
 
-    # Save results
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "experiment": "C3b-B Stale Quote Suppression",

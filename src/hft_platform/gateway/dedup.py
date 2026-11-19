@@ -19,7 +19,6 @@ from structlog import get_logger
 
 logger = get_logger("gateway.dedup")
 
-# Lazy import for Rust dedup store
 _RustDedupStore = None
 _rust_dedup_loaded = False
 
@@ -67,7 +66,7 @@ class IdempotencyRecord:
     """Stored decision for a given idempotency_key."""
 
     key: str
-    approved: Optional[bool] = None  # None = reserved (in-flight)
+    approved: Optional[bool] = None
     reason_code: str = ""
     cmd_id: int = 0
 
@@ -100,7 +99,6 @@ class IdempotencyStore:
             else os.getenv("HFT_DEDUP_PERSIST_PATH", ".state/dedup_window.jsonl")
         )
         self._records: OrderedDict[str, IdempotencyRecord] = OrderedDict()
-        # Rust fast-path (HFT_DEDUP_RUST=1)
         self._rust_store = self._init_rust_store()
 
     def _init_rust_store(self):
@@ -117,8 +115,6 @@ class IdempotencyStore:
             logger.warning("RustDedupStore init failed", error=str(exc))
             return None
 
-    # ── Public API ────────────────────────────────────────────────────────
-
     def check_or_reserve(self, key: str) -> Optional[IdempotencyRecord]:
         """Check for existing record; reserve slot if new.
 
@@ -130,16 +126,13 @@ class IdempotencyStore:
             return None
 
         if key in self._records:
-            # LRU: move to end
             self._records.move_to_end(key)
             return self._records[key]
 
-        # New key: reserve slot
         rec = IdempotencyRecord(key=key)
         self._records[key] = rec
         self._records.move_to_end(key)
 
-        # Evict oldest if over window
         if len(self._records) > self._window_size:
             self._records.popitem(last=False)
 
@@ -157,7 +150,7 @@ class IdempotencyStore:
                     reason_code=reason,
                     cmd_id=cmd_id,
                 )
-            return None  # miss — reserved in Rust
+            return None
         return self.check_or_reserve(key)
 
     def commit(
@@ -192,7 +185,6 @@ class IdempotencyStore:
             rec.reason_code = reason_code
             rec.cmd_id = cmd_id
         else:
-            # Commit without prior reserve (tolerated)
             self._records[key] = IdempotencyRecord(key=key, approved=approved, reason_code=reason_code, cmd_id=cmd_id)
 
     def commit_typed(
@@ -221,7 +213,7 @@ class IdempotencyStore:
         if rs is not None and hasattr(rs, "release"):
             try:
                 rs.release(key)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     def persist(self) -> None:
@@ -234,15 +226,11 @@ class IdempotencyStore:
         """
         if not self._persist_enabled:
             return
-        # Snapshot to avoid RuntimeError if event loop mutates _records
-        # during thread-pool execution. list() is atomic under CPython GIL.
         records_snapshot = list(self._records.values())
         try:
             persist_dir = os.path.dirname(self._persist_path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
-            # M2 (2026-04-25): finally-cleanup so SIGKILL between fsync and
-            # rename does not leak orphan ``.tmp`` files.
             try:
                 with os.fdopen(fd, "wb") as f:
                     for rec in records_snapshot:
@@ -292,8 +280,6 @@ class IdempotencyStore:
                     except Exception as exc:
                         logger.debug("operation_fallback", error=str(exc))
                         continue
-            # Enforce window size: evict oldest entries if file had more than
-            # window_size records (e.g. window was shrunk between restarts).
             while len(self._records) > self._window_size:
                 self._records.popitem(last=False)
             logger.info("IdempotencyStore loaded", count=loaded)

@@ -53,10 +53,6 @@ def _env_float(key: str, default: float) -> float:
 class ShioajiClientConfig:
     """Immutable configuration for ShioajiClient, parsed from env + dict."""
 
-    # --- Subscription ---
-    # Per-connection cap is in *codes* (each code = 2 broker topics, see
-    # ``feed_adapter/shioaji/limits.py``). Default sourced from the shared
-    # constant so any future cap revisit only touches one file.
     max_subscriptions: int = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
     contracts_timeout: int = 10000
     fetch_contract: bool = True
@@ -67,38 +63,27 @@ class ShioajiClientConfig:
     resubscribe_cooldown: float = 1.5
     resubscribe_delay_s: float = 0.5
 
-    # --- CA / Certificate ---
     activate_ca: bool = False
     ca_path: str | None = None
     ca_password: str | None = None
 
-    # --- Simulation ---
     simulation: bool = False
 
-    # --- Quote dispatch ---
     quote_dispatch_async: bool = True
     quote_dispatch_queue_size: int = 8192
     quote_dispatch_batch_max: int = 32
     quote_dispatch_metrics_every: int = 128
 
-    # --- Reconnect / Login ---
     reconnect_backoff_s: float = 30.0
     reconnect_backoff_max_s: float = 600.0
     login_timeout_s: float = 20.0
-    # A login that fetches contracts needs materially longer than one that does
-    # not: ``contracts_timeout`` alone is 10 s, on top of the login handshake and
-    # the contract download/parse. At 20 s the morning contract-fetching login
-    # timed out every single trading day, abandoning a worker inside the SDK.
     login_contract_timeout_s: float = 60.0
-    # Grace period to let an abandoned worker leave the SDK before refusing a
-    # new call outright.
     sdk_busy_grace_s: float = 2.0
     reconnect_timeout_s: float = 45.0
     reconnect_subscribe_timeout_s: float = 30.0
     login_retry_max: int = 1
     reconnect_stagger_timeout_s: float = 60.0
 
-    # --- API cache ---
     api_cache_max_size: int = 1000
     positions_cache_ttl_s: float = 1.5
     usage_cache_ttl_s: float = 5.0
@@ -107,63 +92,50 @@ class ShioajiClientConfig:
     profit_cache_ttl_s: float = 10.0
     positions_detail_cache_ttl_s: float = 10.0
 
-    # --- Quote version ---
     quote_version_mode: str = "auto"
     quote_version_strict: bool = False
     quote_version: str = "v1"
 
-    # --- Quote schema guard ---
     quote_schema_guard: bool = True
     quote_schema_guard_strict: bool = True
     quote_schema_mismatch_log_every: int = 100
 
-    # --- Quote watchdog ---
     quote_watchdog_interval_s: float = 5.0
     quote_no_data_s: float = 30.0
     quote_watchdog_skip_off_hours: bool = True
     quote_off_hours_log_interval_s: float = 60.0
     quote_pending_stall_warn_s: float = 120.0
 
-    # --- Quote flap ---
     quote_force_relogin_s: float = 15.0
     quote_flap_window_s: float = 60.0
     quote_flap_threshold: int = 5
     quote_flap_cooldown_s: float = 300.0
 
-    # --- Quote event retry ---
     quote_event_retry_s: float = 5.0
 
-    # --- Rate limiter ---
     api_soft_cap: int = 20
     api_hard_cap: int = 25
     api_window_s: int = 5
 
-    # --- Session refresh ---
     session_refresh_interval_s: float = 86400.0
     session_refresh_check_interval_s: float = 3600.0
     session_refresh_holiday_aware: bool = True
     session_refresh_verify_timeout_s: float = 10.0
-    # Cross-facade staggering: jitter spreads the refresh wake-ups, the gap
-    # spaces whatever still overlaps once the login slot serialises them.
     session_refresh_jitter_frac: float = 0.15
     session_refresh_stagger_gap_s: float = 5.0
     session_refresh_stagger_timeout_s: float = 120.0
 
-    # --- Market open ---
     market_open_grace_s: float = 60.0
 
-    # --- Contract retry / refresh ---
     contract_retry_s: float = 60.0
     contract_refresh_s: float = 86400.0
     contract_cache_path: str = "config/contracts.json"
     contract_refresh_resubscribe_policy: str = "diff"
     contract_refresh_status_path: str = "outputs/contract_refresh_status.json"
 
-    # --- Session lock ---
     session_lock_enabled: bool = True
     session_lock_path: str = ".wal/.locks/shioaji_session_default.lock"
 
-    # --- Config path ---
     config_path: str = "config/base/symbols.yaml"
 
 
@@ -191,10 +163,6 @@ def session_lock_id() -> str:
     return "default"
 
 
-# A deliberately expensive derivation rather than a bare digest, so the name stays
-# irreversible even for a key with less entropy than an API key should have. 600k
-# iterations is OWASP's PBKDF2-SHA256 figure; the ~0.1 s it costs is paid once per process
-# (the cache holds nothing the process environment does not already hold).
 _LOCK_ID_SALT = b"hft_platform.shioaji.session_lock.v1"
 _LOCK_ID_ITERATIONS = 600_000
 
@@ -221,7 +189,6 @@ def load_shioaji_config(
     """
     settings = settings or {}
 
-    # --- CA ---
     if "activate_ca" in settings:
         activate_ca = _as_bool(settings.get("activate_ca"))
     else:
@@ -234,36 +201,30 @@ def load_shioaji_config(
         if env_key:
             ca_password = os.getenv(str(env_key))
 
-    # --- Simulation ---
     sim_override = settings.get("simulation") if "simulation" in settings else None
     if sim_override is None:
         is_sim = os.getenv("HFT_MODE", "real") == "sim"
     else:
         is_sim = _as_bool(sim_override)
 
-    # Deactivate CA in simulation mode.
     if is_sim:
         activate_ca = False
 
-    # --- Config path ---
     resolved_config_path = config_path
     if resolved_config_path is None:
         from hft_platform.config.symbols_path import resolve_symbols_config_path
 
         resolved_config_path = resolve_symbols_config_path()
 
-    # --- Quote version ---
     quote_version_mode = os.getenv("HFT_QUOTE_VERSION", "auto").strip().lower()
     if quote_version_mode not in {"v0", "v1", "auto"}:
         quote_version_mode = "auto"
     quote_version = "v1" if quote_version_mode in {"v1", "auto"} else "v0"
 
-    # --- Session lock ---
     lock_id = session_lock_id()
     lock_dir = os.getenv("HFT_SHIOAJI_SESSION_LOCK_DIR", ".wal/.locks")
     session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}.lock")
 
-    # --- Contract refresh status ---
     contract_refresh_status_path = os.getenv("HFT_CONTRACT_REFRESH_STATUS_PATH", "outputs/contract_refresh_status.json")
     contract_refresh_resubscribe_policy = (
         os.getenv("HFT_CONTRACT_REFRESH_RESUBSCRIBE_POLICY", "diff").strip().lower() or "diff"

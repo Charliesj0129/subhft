@@ -125,7 +125,6 @@ class TestAuditCliRendersEdge:
         assert "FAIL" in out
 
     def test_show_displays_na_when_no_edge_metric(self, _isolated) -> None:
-        # Record without the edge_per_round_trip gate.
         sub_gate_audit.record_sub_gate_run(
             run_id="r26_show_na",
             strategy_name="demo",

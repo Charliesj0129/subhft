@@ -19,7 +19,6 @@ import uuid
 
 import pytest
 
-# Skip entire module if ClickHouse driver not available
 clickhouse_connect = pytest.importorskip("clickhouse_connect")
 
 
@@ -38,7 +37,6 @@ def ch_client():
     port = int(os.getenv("HFT_CLICKHOUSE_PORT", "9000"))
     try:
         client = clickhouse_connect.get_client(host=host, port=port, username="default", password="")
-        # Verify connection
         client.query("SELECT 1")
         return client
     except Exception as e:
@@ -91,12 +89,10 @@ class TestDataFlowVerification:
         writer = WALWriter(temp_wal_dir)
         test_data = [generate_test_tick("TEST_SYM", 1000000, i) for i in range(10)]
 
-        # Write synchronously
         ts = int(time.time_ns())
         filename = f"{temp_wal_dir}/market_data_{ts}.jsonl"
         writer._write_sync_atomic(filename, test_data)
 
-        # Verify file exists and contents
         assert os.path.exists(filename), "WAL file should exist"
 
         read_data = []
@@ -120,7 +116,6 @@ class TestDataFlowVerification:
 
         await writer.write("market_data", test_data)
 
-        # Verify file was created
         files = list(os.listdir(temp_wal_dir))
         wal_files = [f for f in files if f.startswith("market_data_") and f.endswith(".jsonl")]
         assert len(wal_files) == 1, "Should have one WAL file"
@@ -132,12 +127,10 @@ class TestDataFlowVerification:
         from hft_platform.events import TickEvent, TickMeta
         from hft_platform.recorder.mapper import map_event_to_record
 
-        # Create mock metadata
         metadata = MagicMock()
         metadata.exchange.return_value = "TSE"
-        metadata.price_scale.return_value = 100  # 2 decimal places
+        metadata.price_scale.return_value = 100
 
-        # Create test event
         meta = TickMeta(source_ts=time.time_ns(), local_ts=time.time_ns(), seq=1)
         event = TickEvent(symbol="TEST", price=1000, volume=100, meta=meta)
 
@@ -153,21 +146,20 @@ class TestDataFlowVerification:
         test_symbol = f"FLOW_TEST_{int(time.time())}"
         ts = time.time_ns()
 
-        # Insert test record with scaled prices
         data = [
             [
-                test_symbol,  # symbol
-                "TEST",  # exchange
-                "Tick",  # type
-                ts,  # exch_ts
-                ts,  # ingest_ts
-                1234567,  # price_scaled (Int64)
-                100,  # volume (Int64)
-                [1234000],  # bids_price (Array(Int64))
-                [50],  # bids_vol
-                [1235000],  # asks_price (Array(Int64))
-                [50],  # asks_vol
-                1,  # seq_no
+                test_symbol,
+                "TEST",
+                "Tick",
+                ts,
+                ts,
+                1234567,
+                100,
+                [1234000],
+                [50],
+                [1235000],
+                [50],
+                1,
             ]
         ]
         cols = [
@@ -187,7 +179,6 @@ class TestDataFlowVerification:
 
         ch_client.insert("hft.market_data", data, column_names=cols)
 
-        # Query back
         result = ch_client.query(
             f"SELECT price_scaled, bids_price, asks_price FROM hft.market_data WHERE symbol = '{test_symbol}'"
         )
@@ -198,7 +189,6 @@ class TestDataFlowVerification:
         assert row[1] == [1234000], "bids_price array should match"
         assert row[2] == [1235000], "asks_price array should match"
 
-        # Cleanup
         ch_client.command(f"ALTER TABLE hft.market_data DELETE WHERE symbol = '{test_symbol}'")
 
     def test_orders_table_accepts_scaled_prices(self, ch_client):
@@ -208,15 +198,15 @@ class TestDataFlowVerification:
 
         data = [
             [
-                test_order_id,  # order_id
-                "test_strategy",  # strategy_id
-                "TEST_SYM",  # symbol
-                "BUY",  # side
-                1000000,  # price_scaled
-                10,  # qty
-                "NEW",  # status
-                ts,  # ingest_ts
-                250,  # latency_us (Int64)
+                test_order_id,
+                "test_strategy",
+                "TEST_SYM",
+                "BUY",
+                1000000,
+                10,
+                "NEW",
+                ts,
+                250,
             ]
         ]
         cols = ["order_id", "strategy_id", "symbol", "side", "price_scaled", "qty", "status", "ingest_ts", "latency_us"]
@@ -229,7 +219,6 @@ class TestDataFlowVerification:
         assert result.result_rows[0][0] == 1000000
         assert result.result_rows[0][1] == 250
 
-        # Cleanup
         ch_client.command(f"ALTER TABLE hft.orders DELETE WHERE order_id = '{test_order_id}'")
 
 
@@ -274,16 +263,14 @@ class TestBackpressureHandling:
         batcher = Batcher(
             table_name="test",
             flush_limit=100,
-            max_buffer_size=50,  # Small buffer for testing
+            max_buffer_size=50,
             backpressure_policy=BackpressurePolicy.DROP_OLDEST,
             writer=mock_writer,
         )
 
-        # Add more items than buffer size
         for i in range(100):
             await batcher.add({"id": i, "data": "test"})
 
-        # Buffer should not exceed max_buffer_size
         assert len(batcher.buffer) <= batcher.max_buffer_size
         assert batcher.dropped_count > 0, "Should have dropped some entries"
 
@@ -292,12 +279,10 @@ class TestBackpressureHandling:
         """Test bounded queue rejects when full."""
         queue: asyncio.Queue = asyncio.Queue(maxsize=5)
 
-        # Fill queue
         for i in range(5):
             await queue.put(i)
 
         assert queue.full()
 
-        # Try to put without blocking should raise
         with pytest.raises(asyncio.QueueFull):
             queue.put_nowait(99)

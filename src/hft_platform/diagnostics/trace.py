@@ -51,9 +51,6 @@ class DecisionTraceSampler:
         self._write_record(stage=stage, trace_id=trace_id, payload=payload)
 
     def emit_always(self, *, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
-        # L5: order-bearing events (every OrderIntent → RiskDecision → dispatch)
-        # bypass sample_every so the trace chain is always complete. Still
-        # respects ``enabled`` so the global toggle works the same way.
         if not self.enabled:
             return
         self._write_record(stage=stage, trace_id=trace_id, payload=payload)
@@ -77,8 +74,7 @@ class DecisionTraceSampler:
                     path = self._rollover_path(path)
                 with path.open("a", encoding="utf-8") as f:
                     f.write(line)
-        except Exception as _exc:  # noqa: BLE001
-            # diagnostics must never break hot path
+        except Exception as _exc:
             return
 
     def _current_path(self) -> Path:

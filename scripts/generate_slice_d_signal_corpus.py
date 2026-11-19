@@ -44,9 +44,6 @@ from pathlib import Path
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Constants -- all deterministic; no env / clock reads.
-# ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS_BASE_REL = Path("research/experiments/_slice_d_fixtures")
@@ -58,8 +55,6 @@ RUN_ID_PREFIX = "2026-05-05_seed42_"
 DETERMINISTIC_TIMESTAMP = "2026-05-05T00:00:00+00:00"
 CONFIG_HASH = "synthetic_seed42"
 
-# Latent-factor mix to pin pairwise corr at 0.81 (a^2 / (a^2 + b^2) = 0.81).
-# a=0.9, b=sqrt(1 - 0.81)=sqrt(0.19) gives unit variance and corr=0.81 exactly.
 LATENT_WEIGHT = 0.9
 IID_WEIGHT = float(np.sqrt(1.0 - LATENT_WEIGHT**2))
 
@@ -71,12 +66,10 @@ R47_FAMILY: tuple[str, ...] = (
 )
 
 ALL_ALPHAS: tuple[str, ...] = (
-    # R47 family (latent factor)
     "c60_tmfd6_r47_minimal_inst_rt",
     "c63_txfd6_r47_tight_spread",
     "c72_tmfd6_queue_position_aware",
     "r47_maker_pivot",
-    # Independent (alphabetical, manifest-bearing)
     "c14_txf_frontmonth_native_maker",
     "c17_tmf_frontmonth_native_maker",
     "c1_revalidation_txfd6_chavez_casillas_adaptive",
@@ -90,11 +83,8 @@ ALL_ALPHAS: tuple[str, ...] = (
     "r52_amhp_dynamic_spread",
 )
 
-CORPUS_BYTE_BUDGET = 2 * 1024 * 1024  # 2 MB total budget per plan T7b.
+CORPUS_BYTE_BUDGET = 2 * 1024 * 1024
 
-# ---------------------------------------------------------------------------
-# Helpers.
-# ---------------------------------------------------------------------------
 
 
 def _build_signal(
@@ -129,10 +119,8 @@ def _write_run(*, alpha_id: str, signal: np.ndarray) -> dict[str, str]:
     backtest_rel = run_dir_rel / "backtest_report.json"
     meta_rel = run_dir_rel / "meta.json"
 
-    # signals.npy -- deterministic float32 array; allow_pickle=False per project rules.
     np.save(REPO_ROOT / signals_rel, signal, allow_pickle=False)
 
-    # Stub scorecard / backtest report (empty dict, schema-permitted).
     (REPO_ROOT / scorecard_rel).write_text(json.dumps({}, indent=2, sort_keys=True))
     (REPO_ROOT / backtest_rel).write_text(json.dumps({}, indent=2, sort_keys=True))
 
@@ -185,9 +173,6 @@ def _verify_with_tracker() -> dict[str, np.ndarray]:
     return tracker.latest_signals_by_alpha()
 
 
-# ---------------------------------------------------------------------------
-# Entrypoint.
-# ---------------------------------------------------------------------------
 
 
 def main() -> int:
@@ -196,19 +181,13 @@ def main() -> int:
         return 2
 
     rng = np.random.default_rng(SEED)
-    # Latent factor must be drawn FIRST so the consumption order across runs
-    # is identical regardless of which alphas we iterate over later.
     latent = rng.standard_normal(SIGNAL_LENGTH).astype(np.float32)
 
-    # Iterate in a stable order so per-alpha rng draws are deterministic.
     written: list[dict[str, str]] = []
     for alpha_id in sorted(ALL_ALPHAS):
         signal = _build_signal(alpha_id=alpha_id, latent=latent, rng=rng)
         written.append(_write_run(alpha_id=alpha_id, signal=signal))
 
-    # ----------------------------------------------------------------------
-    # Self-check: byte budget, dtype, ExperimentTracker round-trip, R47 corr.
-    # ----------------------------------------------------------------------
     total_bytes = _total_signal_bytes()
     print(f"signals.npy total bytes: {total_bytes} (budget {CORPUS_BYTE_BUDGET})")
     if total_bytes > CORPUS_BYTE_BUDGET:
@@ -225,7 +204,6 @@ def main() -> int:
         print(f"FATAL: tracker missing alphas: {missing}", file=sys.stderr)
         return 5
 
-    # Empirical corr table for the R47 quartet.
     print("\nR47-family pairwise Pearson correlations:")
     family = list(R47_FAMILY)
     rho_anchor = _empirical_corr(sigs["r47_maker_pivot"], sigs["c60_tmfd6_r47_minimal_inst_rt"])
@@ -233,8 +211,6 @@ def main() -> int:
         for aj in family[i + 1 :]:
             print(f"  {ai}  <->  {aj} : rho = {_empirical_corr(sigs[ai], sigs[aj]):+.4f}")
 
-    # Anchor correlation must land in [0.78, 0.84] so DoD-D3 reliably finds
-    # the cluster at threshold 0.7.
     if not (0.78 <= rho_anchor <= 0.84):
         print(
             f"FATAL: anchor corr r47_maker_pivot vs c60 = {rho_anchor:.4f} outside [0.78, 0.84]",
@@ -242,7 +218,6 @@ def main() -> int:
         )
         return 6
 
-    # Sanity: any non-R47 vs R47 should be near-zero (loose bound; report only).
     non_r47 = [a for a in ALL_ALPHAS if a not in R47_FAMILY]
     cross_abs: list[float] = []
     for nr in non_r47:

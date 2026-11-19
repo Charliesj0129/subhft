@@ -21,20 +21,13 @@ impl AlphaDepthSlope {
     }
 
     pub fn calculate(&mut self, lob: &LimitOrderBook) -> f64 {
-        // Compute depth slope similar to Python implementation
-        // We need top N levels. Let's use 10 levels for regressions.
-
         let depth_levels = 10;
 
-        // Helper to compute slope
-        // Returns slope of (level_idx vs log(volume))
         let bid_slope = Self::compute_side_slope(&lob.bids, depth_levels, true);
         let ask_slope = Self::compute_side_slope(&lob.asks, depth_levels, false);
 
-        // Raw Signal
         let raw_signal = bid_slope - ask_slope;
 
-        // EWMA Smoothing
         if !self.initialized {
             self.ewma_signal = raw_signal;
             self.initialized = true;
@@ -52,12 +45,6 @@ impl AlphaDepthSlope {
         n_levels: usize,
         reverse: bool,
     ) -> f64 {
-        // Collect volumes for top N levels
-        // Bids are reverse sorted (highest price first), Asks are sorted (lowest price first)
-        // But BTreeMap is always sorted by key (price).
-        // So for Bids (high prices), we need iter().rev()
-        // For Asks (low prices), we need iter()
-
         let volumes: Vec<f64> = if reverse {
             book.iter().rev().take(n_levels).map(|(_, v)| *v).collect()
         } else {
@@ -68,10 +55,6 @@ impl AlphaDepthSlope {
         if n < 2 {
             return 0.0;
         }
-
-        // Linear Regression: Level (x) vs Log(Volume) (y)
-        // x = 1, 2, ..., n
-        // y = log(v + 1)
 
         let mut sum_x = 0.0;
         let mut sum_y = 0.0;

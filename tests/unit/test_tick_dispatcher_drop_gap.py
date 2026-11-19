@@ -31,18 +31,16 @@ def test_on_drop_callback_fires_when_queue_full():
     )
     dispatcher.set_on_drop_callback(lambda: calls.append(1))
 
-    # Force queue-backed path, bypass worker thread so the single slot
-    # stays occupied after the first enqueue.
     dispatcher._deque = None
     dispatcher._use_deque = False
     import queue as _queue
 
     dispatcher._queue = _queue.Queue(maxsize=1)
-    dispatcher._running = True  # skip start_worker spawning a thread
+    dispatcher._running = True
 
     dispatcher.enqueue_tick("a")
-    dispatcher.enqueue_tick("b")  # expected to drop
-    dispatcher.enqueue_tick("c")  # expected to drop
+    dispatcher.enqueue_tick("b")
+    dispatcher.enqueue_tick("c")
 
     assert dispatcher.dropped == 2
     assert len(calls) == 2
@@ -68,7 +66,6 @@ def test_on_drop_callback_exceptions_do_not_propagate():
     dispatcher._running = True
 
     dispatcher.enqueue_tick("a")
-    # Must not raise despite the callback raising.
     dispatcher.enqueue_tick("b")
     assert dispatcher.dropped == 1
 
@@ -88,5 +85,5 @@ def test_no_callback_is_safe():
     dispatcher._running = True
 
     dispatcher.enqueue_tick("a")
-    dispatcher.enqueue_tick("b")  # drop, no callback — must not crash
+    dispatcher.enqueue_tick("b")
     assert dispatcher.dropped == 1

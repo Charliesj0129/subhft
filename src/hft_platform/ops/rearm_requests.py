@@ -90,11 +90,6 @@ def publish(base_dir: Path, *, strategy_id: str, quarantine_token: str, request_
         "quarantine_token": quarantine_token,
         "requested_at_ns": timebase.now_ns(),
     }
-    # Write to a hidden temp name first so a partial file is never visible under
-    # a name the scanner looks at, then publish with os.link -- which fails
-    # atomically with FileExistsError if the id is already taken. `replace`
-    # would silently overwrite, and a duplicate id means something upstream is
-    # wrong, not something to paper over.
     tmp_path = directory / f".{request_id}.{os.getpid()}.tmp"
     fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     try:
@@ -133,8 +128,6 @@ def pending(base_dir: Path) -> list[RearmRequest]:
         if not (isinstance(strategy_id, str) and strategy_id):
             continue
         if not (isinstance(token, str) and token):
-            # No token means the engine cannot tell which quarantine this
-            # targets. Fail closed: never treat it as authorizing anything.
             logger.warning("rearm_request_without_token", path=str(entry), strategy_id=strategy_id)
             continue
         found.append(RearmRequest(entry, request_id, strategy_id, token))

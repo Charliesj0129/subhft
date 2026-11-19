@@ -24,9 +24,6 @@ _SRC = _ROOT / "src" / "hft_platform"
 _DYNAMIC_IMPORTERS = frozenset({"import_module", "__import__", "find_spec"})
 _SYS_PATH_EDITS = frozenset({"insert", "append", "extend"})
 
-# (importer, imported) -> why it is still allowed. Research-v2 C5 moved the
-# `hft alpha` research subcommands behind ``python -m research alpha`` and Gate
-# C's runtime into research-side injection; these are the deliberate edges left.
 _ALLOWED: dict[tuple[str, str], str] = {
     ("src/hft_platform/alpha/_validation_helpers.py", "sys.path"): (
         "puts the project root on sys.path so an alpha impl.py can be loaded"

@@ -76,10 +76,6 @@ def _extract_futures(
        lookup path.
     """
     if api is None:
-        # Silence here cost two months of dead bindings: the pool object the
-        # platform passes as ``md_client`` had no ``.api``, so this returned an
-        # empty calendar with no trace at all. An unreachable contract table is
-        # a failure, not a quiet no-op.
         logger.warning(
             "shioaji_family_populator_no_api",
             note="broker client exposed no .api handle; family bindings not refreshed",
@@ -96,7 +92,7 @@ def _extract_futures(
         return {}, {}
     try:
         groups = contract_category_groups(futures)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("shioaji_family_populator_roots_failed", error=str(exc))
         return {}, {}
 
@@ -114,24 +110,13 @@ def _extract_futures(
             )
             if expiry is None:
                 continue
-            # 1.7 ``FuturesInfo`` has no ``category`` (or ``symbol``), so every
-            # contract lands under root "" and the calendar collapses to one
-            # bogus family (prod 2026-10-27: 2 bindings instead of 735). Fall
-            # back to the root encoded in the contract code itself.
             contract_root = str(root) or _root_from_code(code)
             if not contract_root:
                 rootless += 1
                 continue
             ref = FutureRef(root=contract_root, expiry=expiry)
             out.setdefault(contract_root, []).append(ref)
-            # native_hint key is the canonical display form. A later
-            # ``FutureRef`` rebound to R1 keeps the same display string,
-            # so OrderAdapter can look the Contract up via ``ref.display()``
-            # without caring about family code.
             native_hints[ref.display()] = contract
-            # Also map the broker-side code directly (may equal display
-            # for Shioaji, but keeps the door open for codes that diverge
-            # from our canonical form).
             if code:
                 native_hints.setdefault(code, contract)
     if rootless:
@@ -178,9 +163,6 @@ def _install_snapshot(
             delivery_cutoff=cutoff.isoformat(),
         )
     else:
-        # Zero bindings means every strategy keeps whatever symbols its config
-        # named — including expiries that rolled off months ago. That is the
-        # failure this module exists to prevent, so it must not log as routine.
         logger.warning(
             "shioaji_family_populator_no_bindings",
             roots=sorted(calendars.keys()),
@@ -235,8 +217,6 @@ class ShioajiFamilyPopulator:
 
     def __init__(self, resolver: ContractFamilyResolver) -> None:
         self._resolver = resolver
-        # One tuple, assigned whole, so a reader never sees one connect's
-        # calendars paired with another connect's native hints.
         self._table: tuple[dict[str, list[FutureRef]], dict[str, object]] = ({}, {})
         self._expiries: frozenset[date] = frozenset()
         self._cutoff: date | None = None
@@ -268,14 +248,14 @@ class ShioajiFamilyPopulator:
         """
         prev = self._cutoff
         if prev is None:
-            return 0  # nothing read yet; the first connect installs the table
+            return 0
         snapshot_ns = timebase.now_ns() if now_ns is None else now_ns
         cutoff = taifex_delivery_cutoff(snapshot_ns)
         if cutoff <= prev:
             return 0
         self._cutoff = cutoff
         if not any(prev <= expiry < cutoff for expiry in self._expiries):
-            return 0  # nothing delivered in between: the snapshot would rebuild identically
+            return 0
         calendars, native_hints = self._table
         before = self._resolver.snapshot.family_map
         snapshot = build_snapshot_from_calendar(
@@ -293,9 +273,6 @@ class ShioajiFamilyPopulator:
                 new_ref=(change.new_ref.display() if change.new_ref is not None else None),
                 delivery_cutoff=cutoff.isoformat(),
             )
-        # ``swap_snapshot`` reports a family that lost its binding as no change
-        # at all, so a strategy on it would keep the settled contract silently.
-        # There is no next month to rebind it to; say so.
         unbound = sorted(str(family) for family in before if family not in snapshot.family_map)
         if unbound:
             logger.warning(
@@ -316,5 +293,5 @@ class ShioajiFamilyPopulator:
             await asyncio.sleep(interval_s)
             try:
                 self.roll_if_due()
-            except Exception as exc:  # noqa: BLE001 - one bad pass must not end the clock
+            except Exception as exc:
                 logger.warning("contract_family_roll_check_failed", error=str(exc))

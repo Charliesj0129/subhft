@@ -19,10 +19,6 @@ from hft_platform.notifications.templates import (
     render_weekly_summary,
 )
 
-# ---------------------------------------------------------------------------
-# render_halt
-# ---------------------------------------------------------------------------
-
 
 class TestRenderHalt:
     def test_reason_present(self) -> None:
@@ -40,11 +36,6 @@ class TestRenderHalt:
     def test_red_icon(self) -> None:
         result = render_halt("test")
         assert "🔴" in result
-
-
-# ---------------------------------------------------------------------------
-# render_daily_loss
-# ---------------------------------------------------------------------------
 
 
 class TestRenderDailyLoss:
@@ -67,11 +58,6 @@ class TestRenderDailyLoss:
     def test_zero_pnl(self) -> None:
         result = render_daily_loss(0, -100000)
         assert "0" in result
-
-
-# ---------------------------------------------------------------------------
-# render_daily_report
-# ---------------------------------------------------------------------------
 
 
 class TestRenderDailyReport:
@@ -134,11 +120,6 @@ class TestRenderDailyReport:
         assert "3" in result
 
 
-# ---------------------------------------------------------------------------
-# render_stormguard_change
-# ---------------------------------------------------------------------------
-
-
 class TestRenderStormguardChange:
     def test_old_state_present(self) -> None:
         result = render_stormguard_change("NORMAL", "HALT", "feed gap 35s")
@@ -161,11 +142,6 @@ class TestRenderStormguardChange:
         assert "🟡" in result
 
 
-# ---------------------------------------------------------------------------
-# render_pre_market_pass
-# ---------------------------------------------------------------------------
-
-
 class TestRenderPreMarketPass:
     def test_pass_keyword(self) -> None:
         assert "PASS" in render_pre_market_pass()
@@ -176,11 +152,6 @@ class TestRenderPreMarketPass:
     def test_start_time_mentioned(self) -> None:
         result = render_pre_market_pass()
         assert "08:45" in result
-
-
-# ---------------------------------------------------------------------------
-# render_pre_market_fail
-# ---------------------------------------------------------------------------
 
 
 class TestRenderPreMarketFail:
@@ -201,11 +172,6 @@ class TestRenderPreMarketFail:
         result = render_pre_market_fail(checks)
         for check in checks:
             assert check in result
-
-
-# ---------------------------------------------------------------------------
-# render_reconciliation_mismatch
-# ---------------------------------------------------------------------------
 
 
 class TestRenderReconciliationMismatch:
@@ -230,11 +196,6 @@ class TestRenderReconciliationMismatch:
         assert "⚠️" in result
 
 
-# ---------------------------------------------------------------------------
-# render_reconnect_alert
-# ---------------------------------------------------------------------------
-
-
 class TestRenderReconnectAlert:
     def test_count_present(self) -> None:
         result = render_reconnect_alert(3, "OK")
@@ -247,11 +208,6 @@ class TestRenderReconnectAlert:
     def test_yellow_icon(self) -> None:
         result = render_reconnect_alert(1, "OK")
         assert "🟡" in result
-
-
-# ---------------------------------------------------------------------------
-# render_process_restart
-# ---------------------------------------------------------------------------
 
 
 class TestRenderProcessRestart:
@@ -270,11 +226,6 @@ class TestRenderProcessRestart:
     def test_yellow_icon(self) -> None:
         result = render_process_restart(1, 3)
         assert "🟡" in result
-
-
-# ---------------------------------------------------------------------------
-# render_weekly_summary
-# ---------------------------------------------------------------------------
 
 
 class TestRenderWeeklySummary:

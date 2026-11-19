@@ -94,13 +94,11 @@ class TestPlaybookFeedGap:
         guard._storm_cooldown_s = 0.0
         guard._de_escalate_threshold = 1
 
-        # Escalate to STORM
         guard.update(feed_gap_s=35.0)
         assert guard.state == StormGuardState.STORM
 
         _advance_time(1.0)
 
-        # Clear conditions
         state = guard.update(latency_us=0, feed_gap_s=0.0)
         assert state == StormGuardState.NORMAL
         assert guard.is_safe()

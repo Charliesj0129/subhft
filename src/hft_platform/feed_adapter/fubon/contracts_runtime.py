@@ -23,10 +23,8 @@ from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.contracts_runtime")
 
-# Fubon market codes.
 FUBON_EXCHANGES: frozenset[str] = frozenset({"TSE", "OTC", "ESB", "TIB", "TAIFEX"})
 
-# Symbol format: 1-20 alphanumeric characters.
 _SYMBOL_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9]{1,20}$")
 
 
@@ -54,7 +52,6 @@ class FubonContractsRuntime:
         self._symbol_list: list[dict[str, Any]] = []
         self._last_reload_ns: int = 0
 
-        # Resolve initial config: explicit config takes priority over file path.
         self._symbols_config: dict[str, Any] | list[dict[str, Any]] | None
         if symbols_config is not None:
             self._symbols_config = symbols_config
@@ -64,10 +61,6 @@ class FubonContractsRuntime:
             self._symbols_config = None
 
         self._apply_config(self._symbols_config)
-
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
 
     @property
     def symbols(self) -> list[dict[str, Any]]:
@@ -125,10 +118,6 @@ class FubonContractsRuntime:
             "exchange_map_size": len(self._code_exchange_map),
         }
 
-    # ------------------------------------------------------------------ #
-    # Internal helpers
-    # ------------------------------------------------------------------ #
-
     def _apply_config(self, config: dict[str, Any] | list[dict[str, Any]] | None) -> None:
         """Parse config into symbol list and exchange map."""
         symbols = self._normalize_config(config)
@@ -145,7 +134,6 @@ class FubonContractsRuntime:
             return []
         if isinstance(config, list):
             return list(config)
-        # dict form: expect a "symbols" key containing a list
         raw = config.get("symbols", [])
         if isinstance(raw, list):
             return list(raw)
@@ -165,7 +153,7 @@ class FubonContractsRuntime:
     @staticmethod
     def _load_yaml(path: str) -> dict[str, Any] | list[dict[str, Any]]:
         """Lazy-load YAML file. Returns parsed content or empty dict on error."""
-        import yaml  # noqa: PLC0415 — lazy import per convention
+        import yaml
 
         try:
             text = Path(path).read_text(encoding="utf-8")

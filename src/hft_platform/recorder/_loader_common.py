@@ -15,9 +15,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("wal_loader")
 
-# ---------------------------------------------------------------------------
-# JSON codec: prefer orjson, fallback to stdlib json
-# ---------------------------------------------------------------------------
 try:
     import orjson
 
@@ -31,9 +28,6 @@ except ImportError:
     _dumps = json.dumps
     _loads = json.loads
 
-# ---------------------------------------------------------------------------
-# ClickHouse price scale constant
-# ---------------------------------------------------------------------------
 PRICE_SCALE: int = 1_000_000
 
 
@@ -44,16 +38,10 @@ def _to_scaled(val: float | int | None) -> int:
     return int(round(float(val) * PRICE_SCALE))
 
 
-# ---------------------------------------------------------------------------
-# Retry defaults
-# ---------------------------------------------------------------------------
 DEFAULT_INSERT_MAX_RETRIES: int = 3
 DEFAULT_INSERT_BASE_DELAY_S: float = 0.5
 DEFAULT_INSERT_MAX_BACKOFF_S: float = 5.0
 
-# ---------------------------------------------------------------------------
-# Timestamp validation
-# ---------------------------------------------------------------------------
 try:
     _TS_MAX_FUTURE_NS: int = int(float(os.getenv("HFT_TS_MAX_FUTURE_S", "5")) * 1e9)
 except Exception as _exc:

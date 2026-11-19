@@ -53,8 +53,6 @@ DEFAULT_LOOP_ID = "r47_tmf_v1"
 DEFAULT_STRATEGY_ID = "R47_MAKER_TMF"
 DEFAULT_PHASE = os.environ.get("HFT_STABILIZATION_PHASE", "sim")
 
-# Prometheus textfile-collector standard write directory; override via
-# --prom-file or HFT_REPLAY_PROM_FILE for non-Linux deployments.
 DEFAULT_PROM_FILE = os.environ.get(
     "HFT_REPLAY_PROM_FILE",
     "/var/lib/node_exporter/textfile_collector/hft_replay_match.prom",

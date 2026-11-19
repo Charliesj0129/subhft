@@ -97,18 +97,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[alert-test] Time: {_now_iso()}")
     print()
 
-    # Step 1: Send test alert
     print("[alert-test] Step 1: Sending test alert...")
     sent = _send_test_alert(args.alertmanager_url)
     if not sent:
         print(f"\n[alert-test] RESULT: {STATUS_FAIL} — could not send test alert")
         return 1
 
-    # Step 2: Wait for propagation
     print("[alert-test] Step 2: Waiting 2s for propagation...")
     time.sleep(2)
 
-    # Step 3: Verify alert
     print("[alert-test] Step 3: Verifying alert delivery...")
     verified = _verify_alert(args.alertmanager_url)
 

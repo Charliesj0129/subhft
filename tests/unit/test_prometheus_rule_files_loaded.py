@@ -28,11 +28,8 @@ MONITORING = ROOT / "config" / "monitoring"
 PROMETHEUS_YML = MONITORING / "prometheus.yml"
 COMPOSE_YML = ROOT / "docker-compose.yml"
 
-# A quoted PromQL string (label values such as instance="host:9090" contain colons that are not series names).
 _QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'|`[^`]*`')
-# A range or subquery selector (``[5m]``, ``[15m:15s]``): its colon is a step, not a series name.
 _RANGE = re.compile(r"\[[^\]]*\]")
-# By convention a PromQL identifier that contains a colon is a recording-rule output.
 _RECORDED_SERIES = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)+")
 
 
@@ -113,7 +110,6 @@ def test_every_rule_file_in_the_monitoring_tree_is_loaded_by_prometheus():
 
 @pytest.mark.parametrize("entry", _rule_files_entries())
 def test_every_rule_files_entry_reaches_a_file_through_a_mount(entry: str):
-    # A rule_files path that matches nothing is not an error in Prometheus; it silently loads nothing.
     assert _resolve(entry, _prometheus_mounts()), (
         f"rule_files entry {entry!r} matches no file through the prometheus service's mounts in docker-compose.yml"
     )

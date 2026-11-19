@@ -21,10 +21,6 @@ from hft_platform.contracts.strategy import (
     StormGuardState,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_intent(
     *,
@@ -89,11 +85,6 @@ def _make_risk_engine(tmp_path, *, storm_state: StormGuardState = StormGuardStat
         return engine
 
 
-# ---------------------------------------------------------------------------
-# 1. Field propagation: intent -> decision
-# ---------------------------------------------------------------------------
-
-
 class TestIntentToDecision:
     def test_decision_contains_same_intent_object(self, tmp_path):
         """RiskDecision.intent is the same object as the input intent."""
@@ -108,11 +99,6 @@ class TestIntentToDecision:
         decision = engine.evaluate(intent)
         if decision.approved:
             assert decision.reason_code == "OK"
-
-
-# ---------------------------------------------------------------------------
-# 2. Field propagation: decision -> command
-# ---------------------------------------------------------------------------
 
 
 class TestDecisionToCommand:
@@ -140,24 +126,13 @@ class TestDecisionToCommand:
         assert cmd.intent.ttl_ns == 999
 
 
-# ---------------------------------------------------------------------------
-# 3. CANCEL bypasses validators
-# ---------------------------------------------------------------------------
-
-
 class TestCancelBypass:
     def test_cancel_bypasses_storm_guard_halt(self, tmp_path):
         """CANCEL intent is allowed even in HALT state."""
         engine = _make_risk_engine(tmp_path, storm_state=StormGuardState.HALT)
         intent = _make_intent(intent_type=IntentType.CANCEL)
         decision = engine.evaluate(intent)
-        # StormGuard HALT allows CANCEL
         assert decision.reason_code != "STORMGUARD_HALT"
-
-
-# ---------------------------------------------------------------------------
-# 4. HALT blocks NEW
-# ---------------------------------------------------------------------------
 
 
 class TestHaltBlocksNew:
@@ -173,11 +148,6 @@ class TestHaltBlocksNew:
         intent = _make_intent(intent_type=IntentType.CANCEL)
         decision = engine.evaluate(intent)
         assert decision.reason_code != "STORMGUARD_HALT"
-
-
-# ---------------------------------------------------------------------------
-# 5. cmd_id monotonicity
-# ---------------------------------------------------------------------------
 
 
 class TestCmdIdMonotonicity:
@@ -196,11 +166,6 @@ class TestCmdIdMonotonicity:
             assert ids[i] > ids[i - 1], f"cmd_id not monotonic: {ids}"
 
 
-# ---------------------------------------------------------------------------
-# 6. Deadline is in the future
-# ---------------------------------------------------------------------------
-
-
 class TestDeadlineFuture:
     def test_deadline_greater_than_created(self, tmp_path):
         import time
@@ -211,15 +176,8 @@ class TestDeadlineFuture:
         assert decision.approved
         mono_before = time.monotonic_ns()
         cmd = engine.create_command(decision.intent)
-        # deadline_ns is monotonic-based; created_ns is wall-clock-based.
-        # Verify deadline is in the future relative to its own timebase.
         assert cmd.deadline_ns > mono_before
         assert cmd.created_ns > 0
-
-
-# ---------------------------------------------------------------------------
-# 7. storm_guard_state propagated to command
-# ---------------------------------------------------------------------------
 
 
 class TestStormGuardPropagation:
@@ -240,11 +198,6 @@ class TestStormGuardPropagation:
             assert cmd.storm_guard_state == StormGuardState.WARM
 
 
-# ---------------------------------------------------------------------------
-# 8. Idempotency key and TTL preserved
-# ---------------------------------------------------------------------------
-
-
 class TestIdempotencyAndTtl:
     def test_idempotency_key_preserved(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
@@ -257,11 +210,6 @@ class TestIdempotencyAndTtl:
         intent = _make_intent(ttl_ns=500_000_000)
         decision = engine.evaluate(intent)
         assert decision.intent.ttl_ns == 500_000_000
-
-
-# ---------------------------------------------------------------------------
-# 9. Core fields preserved through lifecycle
-# ---------------------------------------------------------------------------
 
 
 class TestCoreFieldsPreserved:
@@ -285,11 +233,6 @@ class TestCoreFieldsPreserved:
         assert cmd.intent.qty == 3
 
 
-# ---------------------------------------------------------------------------
-# 10. Float price rejection
-# ---------------------------------------------------------------------------
-
-
 class TestFloatPriceRejection:
     def test_float_price_rejected(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
@@ -304,11 +247,6 @@ class TestFloatPriceRejection:
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "FLOAT_PRICE"
-
-
-# ---------------------------------------------------------------------------
-# 11. Reason code semantics
-# ---------------------------------------------------------------------------
 
 
 class TestReasonCodeSemantics:
@@ -327,10 +265,6 @@ class TestReasonCodeSemantics:
         assert decision.reason_code != "OK"
         assert len(decision.reason_code) > 0
 
-
-# ---------------------------------------------------------------------------
-# 12. Hypothesis property tests
-# ---------------------------------------------------------------------------
 
 try:
     from hypothesis import given, settings

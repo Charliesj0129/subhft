@@ -89,7 +89,6 @@ def strategy():
         qi_skew_threshold=1.0,
         qi_widen_ticks=1,
         max_pos=1,
-        # D1 parameter under test
         stale_quote_max_ticks=3,
     )
     s.symbols = {"TMFE6"}
@@ -105,12 +104,9 @@ class TestReconcileStaleQuotesUnderGateBlock:
         """
         ctx = _ctx()
 
-        # Seed prior state: previous quote at 37754 (BUY), broker SUBMITTED arrived.
         strategy._last_bid["TMFE6"] = 3_7754_0000
         strategy._active_buy_oid["TMFE6"] = "v004N"
 
-        # Current market: mid at 37759, spread 3 pts (below gate). Distance
-        # from _last_bid = 37759 - 37754 = 5 pts > stale_quote_max_ticks=3.
         ev = _lob_stats(
             mid_price_x2=3_7759_0000 * 2,
             spread_scaled=3_0000,
@@ -122,7 +118,6 @@ class TestReconcileStaleQuotesUnderGateBlock:
         from hft_platform.contracts.strategy import IntentType
 
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
-        # Expect at least one CANCEL intent targeting v004N.
         assert len(cancels) >= 1, (
             f"D1: stale BUY cancel must fire when spread gate blocks; got {len(intents)} intents, none were CANCEL"
         )
@@ -134,7 +129,6 @@ class TestReconcileStaleQuotesUnderGateBlock:
         strategy._last_ask["TMFE6"] = 3_7720_0000
         strategy._active_sell_oid["TMFE6"] = "v005c"
 
-        # Current market: mid at 37714, 6 pts below our stale ask, spread 3.
         ev = _lob_stats(
             mid_price_x2=3_7714_0000 * 2,
             spread_scaled=3_0000,
@@ -155,7 +149,6 @@ class TestReconcileStaleQuotesUnderGateBlock:
         strategy._last_bid["TMFE6"] = 3_7758_0000
         strategy._active_buy_oid["TMFE6"] = "v007P"
 
-        # mid=37759, distance = 1 pt, within stale_quote_max_ticks=3.
         ev = _lob_stats(
             mid_price_x2=3_7759_0000 * 2,
             spread_scaled=3_0000,
@@ -202,7 +195,6 @@ class TestReconcileStaleQuotesUnderGateBlock:
         strategy._last_ask["TMFE6"] = 3_7720_0000
         strategy._active_sell_oid["TMFE6"] = "v005c"
 
-        # Mid at 37759, spread 3 → both sides stale, gate blocks new placements.
         ev = _lob_stats(
             mid_price_x2=3_7759_0000 * 2,
             spread_scaled=3_0000,
@@ -214,7 +206,6 @@ class TestReconcileStaleQuotesUnderGateBlock:
         from hft_platform.contracts.strategy import IntentType
 
         cancels = [i for i in intents if getattr(i, "intent_type", None) == IntentType.CANCEL]
-        # Both sides should have cancel dispatched.
         assert len(cancels) == 2, (
             f"D1: expected 2 cancels (both sides stale), got {len(cancels)}. "
             f"All intents: {[str(getattr(i, 'intent_type', '?')) for i in intents]}"
@@ -241,8 +232,6 @@ class TestReconcileStaleQuotesNoneGuard:
             mid_price_x2=None,
             spread_scaled=3_0000,
         )
-        # Direct call: must not raise even when on_stats guard is bypassed.
-        # Function returns None on the early-return guard.
         assert strategy._reconcile_stale_quotes(ev) is None
 
     def test_reconcile_stale_quotes_returns_on_none_spread(self, strategy):

@@ -13,10 +13,6 @@ from hft_platform.execution.checkpoint import (
     _taifex_trading_date,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_store(positions=None, recovery=None):
     store = MagicMock()
@@ -40,11 +36,6 @@ def _make_store(positions=None, recovery=None):
     return store
 
 
-# ---------------------------------------------------------------------------
-# _taifex_trading_date
-# ---------------------------------------------------------------------------
-
-
 class TestTaifexTradingDate:
     def test_returns_string_format(self):
         result = _taifex_trading_date()
@@ -57,7 +48,6 @@ class TestTaifexTradingDate:
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        # 2026-04-16 03:00 Taipei -> should return 20260415
         tpe = ZoneInfo("Asia/Taipei")
         dt = datetime(2026, 4, 16, 3, 0, 0, tzinfo=tpe)
         mock_timebase.now_s.return_value = dt.timestamp()
@@ -75,11 +65,6 @@ class TestTaifexTradingDate:
         mock_timebase.now_s.return_value = dt.timestamp()
         result = _taifex_trading_date()
         assert result == "20260416"
-
-
-# ---------------------------------------------------------------------------
-# PositionCheckpointWriter.write_checkpoint
-# ---------------------------------------------------------------------------
 
 
 class TestWriteCheckpoint:
@@ -156,11 +141,6 @@ class TestWriteCheckpoint:
         assert data["positions"]["acc:strat:NEG"]["unknown_basis"] is True
 
 
-# ---------------------------------------------------------------------------
-# PositionCheckpointWriter.load_checkpoint
-# ---------------------------------------------------------------------------
-
-
 class TestLoadCheckpoint:
     def test_load_valid_checkpoint(self, tmp_path):
         ckpt_path = str(tmp_path / "ckpt.json")
@@ -206,11 +186,6 @@ class TestLoadCheckpoint:
         assert not stale.exists()
 
 
-# ---------------------------------------------------------------------------
-# PositionCheckpointWriter.clear_checkpoint
-# ---------------------------------------------------------------------------
-
-
 class TestClearCheckpoint:
     def test_clear_existing_file(self, tmp_path):
         ckpt_path = str(tmp_path / "ckpt.json")
@@ -225,14 +200,8 @@ class TestClearCheckpoint:
         assert result is False
 
     def test_clear_uses_default_path(self):
-        # Should not raise; just verifies it resolves a path
         result = PositionCheckpointWriter.clear_checkpoint(None)
         assert isinstance(result, bool)
-
-
-# ---------------------------------------------------------------------------
-# PositionCheckpointWriter.run async loop
-# ---------------------------------------------------------------------------
 
 
 class TestCheckpointRunLoop:

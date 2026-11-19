@@ -34,7 +34,6 @@ class TestFastTypedRingBufferConstruction:
 
     def test_initial_cursor(self) -> None:
         ring = rust_core.FastTypedRingBuffer(8)
-        # cursor starts at 1 (seq=0 means "no data")
         assert ring.cursor() == 1
 
 
@@ -79,7 +78,6 @@ class TestPublishAndGet:
 
         frame = ring.get(seq)
         assert frame is not None
-        # Unpack 14-element tuple
         (
             kind,
             flags,
@@ -134,8 +132,8 @@ class TestPublishAndGet:
         for i, seq in enumerate(seqs):
             frame = ring.get(seq)
             assert frame is not None
-            assert frame[0] == i + 1  # kind
-            assert frame[3] == i  # symbol_id
+            assert frame[0] == i + 1
+            assert frame[3] == i
 
 
 class TestCursorAdvancement:
@@ -156,14 +154,11 @@ class TestOverwrite:
     def test_old_frames_return_none(self) -> None:
         cap = 4
         ring = rust_core.FastTypedRingBuffer(cap)
-        # Publish cap + 2 frames so seq 1 and 2 are overwritten
         for i in range(cap + 2):
             ring.publish(1, 0, i, 0, 0, 0, 0, 0, 0, 0, 0, 0.0)
 
-        # seq 1 and 2 should be gone
         assert ring.get(1) is None
         assert ring.get(2) is None
-        # seq 3..6 should be present
         for seq in range(3, cap + 3):
             assert ring.get(seq) is not None, f"seq {seq} should be present"
 
@@ -184,9 +179,7 @@ class TestInvalidSeq:
     def test_too_new_returns_none(self) -> None:
         ring = rust_core.FastTypedRingBuffer(8)
         ring.publish(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0)
-        # seq 2 has not been published yet
         assert ring.get(2) is None
-        # far future
         assert ring.get(999) is None
 
 
@@ -230,12 +223,10 @@ class TestBulkPublish:
 
         assert ring.cursor() == total + 1
 
-        # Last `cap` frames should be retrievable
         first_valid = total + 1 - cap
         for seq in range(first_valid, total + 1):
             frame = ring.get(seq)
             assert frame is not None, f"seq {seq} should be present"
-            assert frame[4] == seq  # seq field in tuple
+            assert frame[4] == seq
 
-        # Frames before first_valid should be gone
         assert ring.get(first_valid - 1) is None

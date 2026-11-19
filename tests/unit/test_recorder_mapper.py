@@ -85,7 +85,6 @@ def test_map_order_and_fill(tmp_path):
     assert row["client_order_id"] == "S1:42"
     assert row["price_scaled"] == 1_000_000
     assert row["status"] == "SUBMITTED"
-    # RC-1: instrument_type and oc_type added to orders
     assert "instrument_type" in row
     assert "oc_type" in row
     assert row["oc_type"] == ""
@@ -108,17 +107,15 @@ def test_map_order_and_fill(tmp_path):
     topic, row = map_event_to_record(fill, metadata)
     assert topic == "fills"
     assert row["price_scaled"] == 1_200_000
-    assert row["fee_scaled"] == 100  # raw int, not price-scaled (fee is NTD, not instrument price)
+    assert row["fee_scaled"] == 100
     assert row["tax_scaled"] == 0
-    # Verify new hft.fills field names
-    assert row["ts_exchange"] == 110  # from match_ts_ns
-    assert row["ts_local"] == 100  # from ingest_ts_ns
-    assert row["broker_order_id"] == "O1"  # from order_id
+    assert row["ts_exchange"] == 110
+    assert row["ts_local"] == 100
+    assert row["broker_order_id"] == "O1"
     assert row["client_order_id"] == "S1:42"
     assert row["source"] == "shioaji"
-    assert "order_id" not in row  # old field removed
-    assert "match_ts" not in row  # old field removed
-    # RC-1: instrument_type and oc_type added to fills
+    assert "order_id" not in row
+    assert "match_ts" not in row
     assert "instrument_type" in row
     assert "oc_type" in row
     assert row["oc_type"] == ""
@@ -151,14 +148,14 @@ def test_fill_tca_prices_share_the_scale_of_price_scaled(tmp_path):
         symbol="AAA",
         side=Side.BUY,
         qty=1,
-        price=12000,  # x10000 -> 1.2
+        price=12000,
         fee=0,
         tax=0,
         ingest_ts_ns=100,
         match_ts_ns=110,
         client_order_id="S1:43",
-        decision_price=11900,  # x10000 -> 1.19
-        arrival_price=11950,  # x10000 -> 1.195
+        decision_price=11900,
+        arrival_price=11950,
     )
     topic, row = map_event_to_record(fill, metadata)
     assert topic == "fills"
@@ -166,7 +163,6 @@ def test_fill_tca_prices_share_the_scale_of_price_scaled(tmp_path):
     assert row["decision_price"] == 1_190_000
     assert row["arrival_price"] == 1_195_000
 
-    # The TCA arithmetic must now produce a sane basis-point figure.
     exec_cost_bps = (row["price_scaled"] - row["arrival_price"]) / row["price_scaled"] * 10_000
     assert 0 < exec_cost_bps < 100, exec_cost_bps
 

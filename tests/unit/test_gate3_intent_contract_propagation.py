@@ -24,8 +24,6 @@ def _runner():
     r._intent_seq = 0
     r._current_source_ts_ns = 0
     r._current_trace_id = ""
-    # Slots added with the tuple-event trace-id fix; __new__ bypasses __init__,
-    # and an unset slot on a __slots__ class raises rather than defaulting.
     r._current_trace_tag = ""
     r._current_event_seq = 0
     r._current_contract = None
@@ -119,8 +117,6 @@ class TestCurrentContractTrackedFromEvent:
         runner = _runner()
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
 
-        # Reproduce the part of process_event that matters for this test —
-        # we do not need the full dispatch machinery.
         event = TickEvent(
             meta=MetaData(seq=1, source_ts=0, local_ts=0, topic="tick"),
             symbol="TMFE6",
@@ -152,7 +148,7 @@ class TestTypedTuplePathUnaffected:
         runner = _runner()
         runner._typed_intent_fastpath = True
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
-        runner._current_contract = ref  # not propagated to tuples
+        runner._current_contract = ref
 
         tup = runner._intent_factory(
             strategy_id="r47",
@@ -164,6 +160,5 @@ class TestTypedTuplePathUnaffected:
             intent_type=IntentType.NEW,
         )
         assert isinstance(tup, tuple)
-        # Production format carries 18 positional fields (see runner.py:_intent_factory)
         assert len(tup) == 18
         assert tup[0] == "typed_intent_v1"

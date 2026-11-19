@@ -60,8 +60,6 @@ def test_handler_for_maps_a_parsed_command_to_its_body(argv: list[str], body: st
 
 @pytest.fixture(autouse=True)
 def _no_global_logging_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    # main() calls configure_logging(); its cache_logger_on_first_use=True would
-    # blind capture_logs for later tests on the worker (tests/unit/conftest.py:module_log_sink).
     monkeypatch.setattr("hft_platform.utils.logging.configure_logging", lambda *a, **k: None)
 
 
@@ -112,6 +110,5 @@ def test_hft_alpha_research_subcommand_runs_end_to_end_in_a_child_process(tmp_pa
         [sys.executable, "-c", probe], cwd=tmp_path, capture_output=True, text=True, check=False, timeout=25
     )
 
-    # The child ran research code although cwd is outside the checkout: the forward set its PYTHONPATH.
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout)["run_dir"] == str(missing)

@@ -13,10 +13,6 @@ from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.system import HFTSystem
 
-# ---------------------------------------------------------------------------
-# Helpers (mirror test_system_lifecycle.py patterns)
-# ---------------------------------------------------------------------------
-
 
 class _Runner:
     def __init__(self) -> None:
@@ -104,11 +100,6 @@ def _make_order_intent(
     )
 
 
-# ---------------------------------------------------------------------------
-# Supervision — crash detection and restart
-# ---------------------------------------------------------------------------
-
-
 class TestSupervisionCrashDetection:
     """Supervision detects crashed/failed service tasks and restarts them."""
 
@@ -121,7 +112,6 @@ class TestSupervisionCrashDetection:
             coro.close()
 
         system._start_service = MagicMock(side_effect=_close_coro)
-        # Simulate detecting a crashed task and attempting restart
         system._try_restart_service("md", "MarketDataService", system.md_service.run)
 
         assert system._start_service.call_count == 1
@@ -155,12 +145,11 @@ class TestSupervisionCrashDetection:
         from hft_platform.core import timebase
 
         system = _make_system()
-        # Simulate a live task with sufficient uptime
         mock_task = MagicMock()
         mock_task.done.return_value = False
         system._task_restart_attempts["md"] = 3
         system._task_restart_until_s["md"] = 999999.0
-        system._task_started_at["md"] = timebase.now_s() - 120  # 120s uptime > 60s threshold
+        system._task_started_at["md"] = timebase.now_s() - 120
 
         system._reset_restart_backoff_if_healthy("md", mock_task)
 
@@ -195,11 +184,6 @@ class TestSupervisionCrashDetection:
 
         system._start_service = MagicMock(side_effect=_close_coro)
 
-        # _try_restart_service calls now_s() twice per invocation:
-        # once for backoff check, once for _task_started_at.
-        # Call 1: now=0.0 (check), 0.0 (started_at) → proceeds, sets until=0.0+base
-        # Call 2: now=base+0.1 (check), base+0.1 (started_at) → proceeds
-        # Call 3: now=base*3+0.2 (check), base*3+0.2 (started_at) → proceeds
         times = iter(
             [
                 0.0,
@@ -219,11 +203,6 @@ class TestSupervisionCrashDetection:
         assert system._start_service.call_count == 3
 
 
-# ---------------------------------------------------------------------------
-# HALT enforcement
-# ---------------------------------------------------------------------------
-
-
 class TestHALTEnforcement:
     """HALT state blocks new OrderIntent progression; cancels remain allowed."""
 
@@ -233,16 +212,13 @@ class TestHALTEnforcement:
         system = _make_system()
         system.running = True
 
-        # Put a few intents into the order queue
         for _ in range(3):
             await system.order_queue.put(_make_order_intent())
         assert system.order_queue.qsize() == 3
 
-        # Trigger HALT
         system.storm_guard.trigger_halt("test_halt")
         assert system.storm_guard.state == StormGuardState.HALT
 
-        # Simulate the drain logic from _supervise (extracted inline)
         drained = 0
         while not system.order_queue.empty():
             try:
@@ -263,7 +239,6 @@ class TestHALTEnforcement:
         system.order_adapter.running = True
 
         system.storm_guard.trigger_halt("test")
-        # Simulate the HALT enforcement from _supervise
         HFTSystem._set_service_running(system.order_adapter, False)
 
         assert system.order_adapter.running is False
@@ -271,8 +246,6 @@ class TestHALTEnforcement:
     @pytest.mark.asyncio
     async def test_cancel_intent_type_exists_during_halt(self):
         """Cancel intents are a valid IntentType that the system recognizes."""
-        # Per Constitution: "Cancel actions remain allowed in HALT"
-        # The cancel intent is IntentType.CANCEL which is distinct from NEW/AMEND
         cancel_intent = _make_order_intent(intent_type=IntentType.CANCEL)
         assert cancel_intent.intent_type == IntentType.CANCEL
         assert cancel_intent.intent_type != IntentType.NEW
@@ -283,12 +256,10 @@ class TestHALTEnforcement:
         system = _make_system()
         system.running = True
 
-        # Enter HALT
         system.storm_guard.trigger_halt("crash")
         HFTSystem._set_service_running(system.order_adapter, False)
         assert system.order_adapter.running is False
 
-        # Recover to NORMAL
         system.storm_guard.state = StormGuardState.NORMAL
         HFTSystem._set_service_running(system.order_adapter, True)
         assert system.order_adapter.running is True
@@ -300,11 +271,9 @@ class TestHALTEnforcement:
         system.running = True
         system.storm_guard.trigger_halt("test")
 
-        # Place intent after HALT
         intent = _make_order_intent()
         await system.order_queue.put(intent)
 
-        # Drain (as _supervise does)
         drained = 0
         while not system.order_queue.empty():
             try:
@@ -323,16 +292,13 @@ class TestHALTEnforcement:
         system = _make_system()
         system.running = True
 
-        # Populate risk_queue with pending intents (not yet evaluated by RiskEngine)
         for _ in range(4):
             await system.risk_queue.put(_make_order_intent())
         assert system.risk_queue.qsize() == 4
 
-        # Trigger HALT
         system.storm_guard.trigger_halt("test_risk_queue_drain")
         assert system.storm_guard.state == StormGuardState.HALT
 
-        # Simulate the risk_queue drain from _supervise (added alongside order_queue drain)
         risk_drained = 0
         while not system.risk_queue.empty():
             try:
@@ -351,7 +317,6 @@ class TestHALTEnforcement:
         system = _make_system()
         system.running = True
 
-        # Both queues have items
         for _ in range(2):
             await system.risk_queue.put(_make_order_intent())
         for _ in range(3):
@@ -361,7 +326,6 @@ class TestHALTEnforcement:
 
         drain_order: list[str] = []
 
-        # Drain risk_queue first
         while not system.risk_queue.empty():
             try:
                 system.risk_queue.get_nowait()
@@ -370,7 +334,6 @@ class TestHALTEnforcement:
             except asyncio.QueueEmpty:
                 break
 
-        # Then drain order_queue
         while not system.order_queue.empty():
             try:
                 system.order_queue.get_nowait()
@@ -379,15 +342,9 @@ class TestHALTEnforcement:
             except asyncio.QueueEmpty:
                 break
 
-        # All risk items come before all order items
         assert drain_order == ["risk", "risk", "order", "order", "order"]
         assert system.risk_queue.empty()
         assert system.order_queue.empty()
-
-
-# ---------------------------------------------------------------------------
-# Feed gap / StormGuard
-# ---------------------------------------------------------------------------
 
 
 class TestFeedGapStormGuard:
@@ -442,11 +399,9 @@ class TestFeedGapStormGuard:
 
         with patch("hft_platform.risk.storm_guard.MetricsRegistry") as mock_metrics_cls:
             mock_metrics_cls.get.return_value = mock_metrics
-            # First: push to WARM
             sg.update(latency_us=6_000)
             assert sg.state == StormGuardState.WARM
 
-            # Then: escalate to STORM
             sg.update(latency_us=25_000)
             assert sg.state == StormGuardState.STORM
 
@@ -465,21 +420,15 @@ class TestFeedGapStormGuard:
         assert gaps["2317"] == 1.2
 
 
-# ---------------------------------------------------------------------------
-# Loop lag monitoring
-# ---------------------------------------------------------------------------
-
-
 class TestLoopLagMonitoring:
     """Loop lag detection and reporting in _supervise."""
 
     @pytest.mark.asyncio
     async def test_loop_lag_calculation(self):
         """Lag is computed as actual_elapsed - expected_interval."""
-        # The formula in _supervise: lag_s = max(0.0, now_tick - last_tick - interval_s)
         interval_s = 1.0
         last_tick = 100.0
-        now_tick = 101.5  # 0.5s of lag
+        now_tick = 101.5
         lag_s = max(0.0, now_tick - last_tick - interval_s)
         assert abs(lag_s - 0.5) < 1e-9
 
@@ -497,26 +446,16 @@ class TestLoopLagMonitoring:
         """Lag is clamped to zero (never negative)."""
         interval_s = 1.0
         last_tick = 100.0
-        now_tick = 100.8  # faster than expected
+        now_tick = 100.8
         lag_s = max(0.0, now_tick - last_tick - interval_s)
         assert lag_s == 0.0
 
     @pytest.mark.asyncio
     async def test_lag_converted_to_latency_us_for_storm_guard(self):
         """Lag in seconds is converted to microseconds for StormGuard input."""
-        lag_s = 0.025  # 25ms
+        lag_s = 0.025
         latency_us = int(lag_s * 1_000_000)
         assert latency_us == 25_000
-
-
-# ---------------------------------------------------------------------------
-# Drawdown helper
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# _set_service_running helper
-# ---------------------------------------------------------------------------
 
 
 class TestSetServiceRunning:
@@ -533,18 +472,8 @@ class TestSetServiceRunning:
         assert not hasattr(svc, "running")
 
 
-# ---------------------------------------------------------------------------
-# Utility — run a failing task outside event loop context
-# ---------------------------------------------------------------------------
-
-
 async def _run_failing_task(loop):
     raise RuntimeError("boom")
-
-
-# ---------------------------------------------------------------------------
-# AutonomyMonitor in supervised services
-# ---------------------------------------------------------------------------
 
 
 class TestAutonomyMonitorSupervised:
@@ -568,7 +497,6 @@ class TestAutonomyMonitorSupervised:
         names = [name for name, _, _ in supervised]
         assert "autonomy_monitor" in names
 
-        # Confirm the coro_factory is the run method
         entry = next((t for t in supervised if t[0] == "autonomy_monitor"), None)
         assert entry is not None
         name, component, coro_factory = entry

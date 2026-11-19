@@ -88,9 +88,7 @@ class TestDiscoverSpecs:
     def test_finds_candidate_specs_under_root(self, tmp_path: Path) -> None:
         for name in ("c01", "c02"):
             _write(tmp_path / name / "spec.yaml", _valid_spec_dict())
-        # candidate without a spec — should be skipped silently
         (tmp_path / "c03").mkdir()
-        # non-directory entry — should be ignored
         (tmp_path / "stray.txt").write_text("noise", encoding="utf-8")
         found = spec_check.discover_specs(tmp_path)
         assert [p.parent.name for p in found] == ["c01", "c02"]
@@ -138,8 +136,6 @@ class TestMain:
         out = capsys.readouterr().out
         assert "c01" in out
         assert "c02" in out
-        # The good one prints [ok], the bad one prints [FAIL] + the
-        # specific missing field — one pass surfaces every gap.
         assert "[ok]" in out
         assert "[FAIL]" in out
         assert "hypothesis" in out
@@ -151,7 +147,6 @@ class TestMain:
         assert rc == 0
 
     def test_all_flag_empty_root_exits_one(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        # Silent zero would mask a wiring break (e.g. wrong --root).
         rc = spec_check.main(["--all", "--root", str(tmp_path)])
         assert rc == 1
         assert "no spec.yaml" in capsys.readouterr().out

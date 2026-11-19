@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
-# Skip module if rust_core is unavailable.
 rc = pytest.importorskip("hft_platform.rust_core")
 
 from hft_platform.engine.event_bus import RingBufferBus
@@ -29,13 +28,9 @@ from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMet
 
 from .conftest import DEFAULT_TS_NS
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_PRICE = 500.0  # float price as the broker SDK would deliver
+_PRICE = 500.0
 _SCALE = 10_000
-_EXPECTED_PRICE = int(_PRICE * _SCALE)  # 5_000_000
+_EXPECTED_PRICE = int(_PRICE * _SCALE)
 
 
 def _make_symbols_yaml(tmp_path, *, use_code_key: bool = True) -> str:
@@ -93,11 +88,6 @@ def _make_lob_stats_event(symbol: str = "2330") -> LOBStatsEvent:
     )
 
 
-# ---------------------------------------------------------------------------
-# TestChain — individual transform steps
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.e2e_chain
 class TestChain:
     """Verify each transform step in the market data pipeline."""
@@ -125,7 +115,6 @@ class TestChain:
         assert isinstance(result, BidAskEvent), f"Expected BidAskEvent, got {type(result)}"
         assert result.bids.shape == (5, 2), f"Expected (5,2), got {result.bids.shape}"
         assert result.bids.dtype == np.int64, f"Expected int64, got {result.bids.dtype}"
-        # First bid price == 500 * 10_000
         assert result.bids[0, 0] == _EXPECTED_PRICE, f"Expected {_EXPECTED_PRICE}, got {result.bids[0, 0]}"
 
     def test_lob_engine_stats_computation(self, tmp_path) -> None:
@@ -168,11 +157,6 @@ class TestChain:
         assert feature_engine.has_symbol("2330"), "FeatureEngine should track symbol '2330' after 5 updates"
 
 
-# ---------------------------------------------------------------------------
-# TestIntegration — async MarketDataService wiring
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.e2e_integration
 class TestIntegration:
     """Verify MarketDataService async wiring with mocked broker client."""
@@ -199,7 +183,6 @@ class TestIntegration:
         with patch("hft_platform.services.market_data.MetricsRegistry") as mock_reg_cls:
             mock_reg = MagicMock()
             mock_reg_cls.get.return_value = mock_reg
-            # Stub out all metric attributes accessed in __init__ / run
             mock_reg.feed_events_total.labels.return_value = MagicMock()
             mock_reg.raw_queue_depth = MagicMock()
             mock_reg.raw_queue_dropped_total = MagicMock()
@@ -219,13 +202,10 @@ class TestIntegration:
 
         task = asyncio.create_task(svc.run())
         try:
-            # Give service time to reach the queue-read loop
             await asyncio.sleep(0.05)
 
-            # Inject a raw tick tuple (exchange, payload)
             await raw_queue.put((None, _raw_tick()))
 
-            # Collect events from bus
             events: list = []
             deadline = asyncio.get_event_loop().time() + 2.0
             async for event in bus.consume(start_cursor=-1):
@@ -344,7 +324,6 @@ class TestIntegration:
 
             await raw_queue.put((None, _raw_tick()))
 
-            # Wait for recorder_queue to receive something
             record = None
             try:
                 record = await asyncio.wait_for(recorder_queue.get(), timeout=2.0)

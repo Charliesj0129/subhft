@@ -29,7 +29,6 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
 
             worker = RecorderService(queue)
             worker.recover_wal = AsyncMock()
-            # Keep a reference to mock so tests can inspect it
             worker._mock_writer = mock_writer_inst
             return worker
 
@@ -66,9 +65,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             worker = RecorderService(queue)
             worker.recover_wal = AsyncMock()
 
-            # Put a non-dict item (e.g., a plain string)
             await queue.put("not_a_dict")
-            # Then a valid item so we know the loop continued
             await queue.put({"topic": "market_data", "data": {"price": 100}})
 
             task = asyncio.create_task(worker.run())
@@ -80,7 +77,6 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        # Queue should be fully drained (task_done called for each item)
         assert queue._unfinished_tasks == 0, f"Expected 0 unfinished tasks, got {queue._unfinished_tasks}"
 
     async def test_batcher_exception_does_not_crash_recorder(self):
@@ -104,15 +100,12 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             worker = RecorderService(queue)
             worker.recover_wal = AsyncMock()
 
-            # Patch one batcher to raise on add
             faulty_batcher = MagicMock()
             faulty_batcher.add = AsyncMock(side_effect=RuntimeError("batcher exploded"))
             worker.batchers["market_data"] = faulty_batcher
 
-            # Items that will trigger the faulty batcher
             await queue.put({"topic": "market_data", "data": {"price": 100}})
             await queue.put({"topic": "market_data", "data": {"price": 101}})
-            # Third item: valid topic that won't raise (unknown topic, just gets dropped)
             await queue.put({"topic": "market_data", "data": {"price": 102}})
 
             task = asyncio.create_task(worker.run())
@@ -124,9 +117,7 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        # All 3 items must have had task_done() called
         assert queue._unfinished_tasks == 0, f"Expected 0 unfinished tasks, got {queue._unfinished_tasks}"
-        # Error counter should have been incremented for each failure
         assert worker._process_errors >= 2, f"Expected at least 2 process errors, got {worker._process_errors}"
 
     async def test_task_done_called_even_on_exception(self):
@@ -150,7 +141,6 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             worker = RecorderService(queue)
             worker.recover_wal = AsyncMock()
 
-            # Patch batcher to raise
             boom_batcher = MagicMock()
             boom_batcher.add = AsyncMock(side_effect=ValueError("boom"))
             worker.batchers["market_data"] = boom_batcher
@@ -166,7 +156,6 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-        # queue.join() would hang if task_done() was not called
         assert queue._unfinished_tasks == 0, "task_done() was not called after exception — queue.join() would hang"
 
     async def test_cancelled_error_propagates_for_shutdown(self):
@@ -187,7 +176,6 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             worker = RecorderService(queue)
 
             task = asyncio.create_task(worker.run())
-            # Give the loop a moment to start waiting on the queue
             await asyncio.sleep(0.05)
             task.cancel()
 
@@ -197,7 +185,5 @@ class TestRecorderMainLoopGuard(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 cancelled_correctly = True
 
-        # After cancellation the worker should have stopped running
         assert not worker.running, "worker.running should be False after shutdown"
-        # The task should have completed (not hung)
         assert task.done(), "Task should be done after cancellation"

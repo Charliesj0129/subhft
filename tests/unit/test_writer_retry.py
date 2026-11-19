@@ -10,7 +10,6 @@ class TestDataWriterRetry(unittest.TestCase):
     """Test DataWriter connection retry with exponential backoff."""
 
     def setUp(self):
-        # Disable ClickHouse by default
         self.env_patcher = patch.dict(
             "os.environ",
             {
@@ -37,13 +36,12 @@ class TestDataWriterRetry(unittest.TestCase):
     def test_compute_backoff_delay_exponential(self):
         """Test backoff delay increases exponentially."""
         writer = DataWriter()
-        writer._jitter_factor = 0.0  # Disable jitter for predictable testing
+        writer._jitter_factor = 0.0
 
         delay_0 = writer._compute_backoff_delay(0)
         delay_1 = writer._compute_backoff_delay(1)
         delay_2 = writer._compute_backoff_delay(2)
 
-        # With base_delay=0.1, expect: 0.1, 0.2, 0.4
         self.assertAlmostEqual(delay_0, 0.1, places=2)
         self.assertAlmostEqual(delay_1, 0.2, places=2)
         self.assertAlmostEqual(delay_2, 0.4, places=2)
@@ -63,7 +61,6 @@ class TestDataWriterRetry(unittest.TestCase):
         writer._jitter_factor = 0.5
 
         delays = [writer._compute_backoff_delay(0) for _ in range(10)]
-        # With jitter, delays should vary
         self.assertGreater(max(delays) - min(delays), 0.01)
 
     def test_compute_backoff_delay_minimum(self):
@@ -97,7 +94,7 @@ class TestDataWriterRetry(unittest.TestCase):
         mock_ch.get_client.side_effect = [
             ConnectionError("Connection refused"),
             ConnectionError("Connection refused"),
-            MagicMock(),  # Success on third attempt
+            MagicMock(),
         ]
 
         with patch.dict(
@@ -111,7 +108,6 @@ class TestDataWriterRetry(unittest.TestCase):
             writer = DataWriter()
             with patch.object(writer, "_start_heartbeat_thread"), patch.object(writer, "_init_schema"):
                 writer.connect()
-            # Stop heartbeat thread to prevent additional sleeps
             writer._heartbeat_running = False
 
         self.assertTrue(writer.connected)

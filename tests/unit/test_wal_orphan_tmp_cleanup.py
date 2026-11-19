@@ -42,9 +42,9 @@ def _make_orphan(d, name: str, age_s: float, size: int = 1024) -> str:
 
 def test_sweep_removes_old_orphan_tmpfiles(wal_dir) -> None:
     """Files matching tmp*.tmp older than max_age_s must be unlinked."""
-    p1 = _make_orphan(wal_dir, "tmpabcd1234.tmp", age_s=600)  # 10 minutes old
-    p2 = _make_orphan(wal_dir, "tmpzzzz9999.tmp", age_s=86400)  # 1 day old
-    p3 = _make_orphan(wal_dir, "tmpfresh001.tmp", age_s=10)  # 10 seconds — keep
+    p1 = _make_orphan(wal_dir, "tmpabcd1234.tmp", age_s=600)
+    p2 = _make_orphan(wal_dir, "tmpzzzz9999.tmp", age_s=86400)
+    p3 = _make_orphan(wal_dir, "tmpfresh001.tmp", age_s=10)
 
     cleaned = _sweep_wal_orphan_tmpfiles(str(wal_dir), max_age_s=300.0)
 
@@ -60,8 +60,8 @@ def test_sweep_ignores_non_matching_filenames(wal_dir) -> None:
         _make_orphan(wal_dir, "batch_1234567890_99.jsonl", age_s=86400),
         _make_orphan(wal_dir, "manifest.txt.bak", age_s=86400),
         _make_orphan(wal_dir, "data_1234.json", age_s=86400),
-        _make_orphan(wal_dir, "tmp_no_suffix", age_s=86400),  # missing .tmp suffix
-        _make_orphan(wal_dir, "prefix_tmp.tmp", age_s=86400),  # wrong prefix
+        _make_orphan(wal_dir, "tmp_no_suffix", age_s=86400),
+        _make_orphan(wal_dir, "prefix_tmp.tmp", age_s=86400),
     ]
     target = _make_orphan(wal_dir, "tmpXYZ.tmp", age_s=86400)
 
@@ -84,7 +84,7 @@ def test_sweep_with_default_max_age(wal_dir) -> None:
     p_just_over = _make_orphan(wal_dir, "tmpover.tmp", age_s=301)
     p_just_under = _make_orphan(wal_dir, "tmpunder.tmp", age_s=299)
 
-    cleaned = _sweep_wal_orphan_tmpfiles(str(wal_dir))  # default 300
+    cleaned = _sweep_wal_orphan_tmpfiles(str(wal_dir))
 
     assert cleaned == 1
     assert not os.path.exists(p_just_over)

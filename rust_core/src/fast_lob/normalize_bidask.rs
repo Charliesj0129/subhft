@@ -141,7 +141,6 @@ pub fn normalize_bidask_tuple_with_synth(
 
     let tick_offset = tick_size_scaled.max(1) * synthetic_ticks.max(1);
 
-    // Determine effective bids/asks after potential synthesis
     let (eff_bids, eff_best_bid, eff_bid_top_vol, eff_bid_depth) = if !has_bids && has_asks {
         let synth_price = (best_ask - tick_offset).max(1);
         let synth = PyArray2::<i64>::zeros_bound(py, [1, 2], false);

@@ -42,7 +42,6 @@ class TestHaltReaction:
         monitor._storm_guard.state = StormGuardState.HALT
         decisions1 = monitor._evaluate()
         assert len(decisions1) == 1
-        # Simulate that the execution set _halt_reacted
         monitor._halt_reacted = True
         decisions2 = monitor._evaluate()
         assert len(decisions2) == 0
@@ -67,9 +66,7 @@ class TestCooldown:
         monitor._platform_inputs.reduce_only_reasons.return_value = ["rss_unhealthy"]
         decisions1 = monitor._evaluate()
         assert len(decisions1) == 1
-        # Apply cooldowns
         monitor._apply_cooldowns(decisions1)
-        # Second evaluation should be blocked by cooldown
         decisions2 = monitor._evaluate()
         assert len(decisions2) == 0
 
@@ -80,12 +77,11 @@ class TestBrokerDisconnect:
         broker.is_connected = MagicMock(return_value=False)
         monitor = _make_monitor(broker_client=broker)
 
-        # Simulate disconnect detected at first check
         monitor._broker_was_connected = False
-        monitor._broker_disconnect_since_ns = 0  # long time ago
+        monitor._broker_disconnect_since_ns = 0
 
         decisions: list[MonitorDecision] = []
-        now_ns = 999_999_999_999  # large enough to exceed 300s threshold
+        now_ns = 999_999_999_999
         monitor._check_broker_disconnect(decisions, now_ns)
         assert len(decisions) == 1
         assert decisions[0].reason == "broker_unavailable"
@@ -104,11 +100,10 @@ class TestBrokerDisconnect:
         broker.is_connected = MagicMock(return_value=False)
         monitor = _make_monitor(broker_client=broker)
         monitor._platform_degrade.reduce_only_active = True
-        # Already disconnected since t=0; now_ns is well past the 300s threshold
         monitor._broker_was_connected = False
         monitor._broker_disconnect_since_ns = 0
 
-        now_ns = 999_999_999_999  # >> 300_000_000_000 threshold
+        now_ns = 999_999_999_999
         with patch("hft_platform.ops.autonomy_monitor.timebase") as mock_tb:
             mock_tb.now_ns.return_value = now_ns
             decisions = monitor._evaluate()
@@ -127,9 +122,8 @@ class TestHaltFlattenRetry:
         monitor = _make_monitor(position_flattener=flattener)
         monitor._storm_guard.state = StormGuardState.HALT
 
-        # Advance time by 1 hour between evaluations so backoff gate never blocks
         base_ns = 1_000_000_000_000
-        tick_ns = 3_600_000_000_000  # 1 hour in ns
+        tick_ns = 3_600_000_000_000
         call_count = 0
         with patch("hft_platform.ops.autonomy_monitor.timebase") as mock_tb:
             mock_tb.now_ns.return_value = base_ns
@@ -140,7 +134,6 @@ class TestHaltFlattenRetry:
                     await monitor._execute(decisions)
                     call_count += 1
 
-        # Should have attempted exactly 3 times (max retries), then stopped
         assert flattener.flatten_all.call_count == 3
         assert call_count == 3
         assert monitor._halt_flatten_attempts == 3
@@ -153,7 +146,7 @@ class TestHaltFlattenRetry:
         monitor._storm_guard.state = StormGuardState.HALT
 
         base_ns = 1_000_000_000_000
-        tick_ns = 3_600_000_000_000  # 1 hour in ns
+        tick_ns = 3_600_000_000_000
         with patch("hft_platform.ops.autonomy_monitor.timebase") as mock_tb:
             for i in range(3):
                 mock_tb.now_ns.return_value = base_ns + i * tick_ns
@@ -167,17 +160,14 @@ class TestHaltFlattenRetry:
     @patch("hft_platform.ops.autonomy_monitor.timebase")
     def test_halt_reacted_reset_requires_cooldown(self, mock_tb: MagicMock) -> None:
         monitor = _make_monitor()
-        # Simulate a completed HALT reaction at t=100s
         monitor._halt_reacted = True
         monitor._halt_reacted_ns = 100_000_000_000
 
-        # At t=130s (30s later), switch to NORMAL — should NOT reset
         mock_tb.now_ns.return_value = 130_000_000_000
         monitor._storm_guard.state = StormGuardState.NORMAL
         monitor._evaluate()
         assert monitor._halt_reacted is True
 
-        # At t=161s (61s after reacted), switch to NORMAL — should reset
         mock_tb.now_ns.return_value = 161_000_000_000
         monitor._evaluate()
         assert monitor._halt_reacted is False
@@ -192,25 +182,21 @@ class TestHaltFlattenRetry:
         monitor = _make_monitor(position_flattener=flattener)
         monitor._storm_guard.state = StormGuardState.HALT
 
-        current_time = 1_000_000_000_000  # 1000s in ns
+        current_time = 1_000_000_000_000
 
-        # Attempt 1: immediate (no backoff yet, _halt_next_retry_ns == 0)
         mock_tb.now_ns.return_value = current_time
         decisions = monitor._evaluate()
         assert len(decisions) == 1
         await monitor._execute(decisions)
         assert flattener.flatten_all.call_count == 1
-        # _halt_next_retry_ns should be set to current + 5s
         assert monitor._halt_next_retry_ns > current_time
 
-        # Too early for retry (only 3s later)
         current_time += 3_000_000_000
         mock_tb.now_ns.return_value = current_time
         decisions = monitor._evaluate()
-        assert len(decisions) == 0  # blocked by backoff
+        assert len(decisions) == 0
 
-        # After 5s total, retry allowed (6s since attempt 1)
-        current_time += 3_000_000_000  # total 6s from attempt 1
+        current_time += 3_000_000_000
         mock_tb.now_ns.return_value = current_time
         decisions = monitor._evaluate()
         assert len(decisions) == 1
@@ -220,25 +206,20 @@ class TestHaltFlattenRetry:
     @patch("hft_platform.ops.autonomy_monitor.timebase")
     def test_halt_oscillation_no_double_flatten(self, mock_tb: MagicMock) -> None:
         monitor = _make_monitor(position_flattener=AsyncMock())
-        # First HALT at t=100s
         mock_tb.now_ns.return_value = 100_000_000_000
         monitor._storm_guard.state = StormGuardState.HALT
         decisions1 = monitor._evaluate()
         assert len(decisions1) == 1
         assert decisions1[0].action == "flatten_all"
 
-        # Simulate successful flatten
         monitor._halt_reacted = True
         monitor._halt_reacted_ns = 100_000_000_000
 
-        # Oscillate to WARM at t=110s (only 10s later)
         mock_tb.now_ns.return_value = 110_000_000_000
         monitor._storm_guard.state = StormGuardState.WARM
         monitor._evaluate()
-        # Should NOT have reset due to cooldown
         assert monitor._halt_reacted is True
 
-        # Back to HALT at t=120s — should NOT produce flatten decision
         mock_tb.now_ns.return_value = 120_000_000_000
         monitor._storm_guard.state = StormGuardState.HALT
         decisions2 = monitor._evaluate()
@@ -262,10 +243,6 @@ class TestTheEvidenceWriteDoesNotRunOnTheEventLoop:
         import threading
 
         monitor = _make_monitor()
-        # A real writer, with only the blocking leaf replaced: the point under
-        # test is that ``record_transition_async``'s hand-off actually leaves
-        # this thread, so a mock standing in for that method would assert
-        # nothing.
         writer = AutonomyEvidenceWriter(tmp_path)
         seen: dict[str, int] = {}
 
@@ -332,6 +309,4 @@ class TestTheEvidenceWriteDoesNotRunOnTheEventLoop:
             t.cancel()
 
         asyncio.run(_run())
-        # Inline, the loop thread would be inside Lock.acquire for the whole
-        # 0.15 s and this counter could not advance past its first tick.
         assert ticks > 5, f"the loop only advanced {ticks} times; it was blocked"

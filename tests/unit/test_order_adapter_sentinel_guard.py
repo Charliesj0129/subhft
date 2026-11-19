@@ -137,11 +137,6 @@ def _mock_metrics(adapter: OrderAdapter) -> MagicMock:
     return metrics_mock
 
 
-# ---------------------------------------------------------------------------
-# Test 1: CANCEL with _PENDING_SENTINEL must NOT call cancel_order
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancel_with_pending_sentinel_does_not_call_broker(tmp_config):
     """CANCEL targeting a _PENDING_SENTINEL order must skip broker cancel_order."""
@@ -149,7 +144,6 @@ async def test_cancel_with_pending_sentinel_does_not_call_broker(tmp_config):
     adapter = _make_adapter(tmp_config, client)
     metrics = _mock_metrics(adapter)
 
-    # Place sentinel for target order key "strat1:99"
     adapter.live_orders["strat1:99"] = _PENDING_SENTINEL
 
     intent = _make_intent(IntentType.CANCEL, strategy_id="strat1", target_order_id="99")
@@ -159,11 +153,6 @@ async def test_cancel_with_pending_sentinel_does_not_call_broker(tmp_config):
 
     client.cancel_order.assert_not_called()
     metrics.order_reject_total.inc.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Test 2: AMEND with _PENDING_SENTINEL must NOT call update_order
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -182,11 +171,6 @@ async def test_amend_with_pending_sentinel_does_not_call_broker(tmp_config):
 
     client.update_order.assert_not_called()
     metrics.order_reject_total.inc.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Test 3: CANCEL with a real trade object still calls cancel_order
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -209,11 +193,6 @@ async def test_cancel_with_real_trade_calls_broker(tmp_config):
     metrics.order_reject_total.inc.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Test 4: CANCEL with _TERMINAL_BEFORE_REGISTERED must NOT call cancel_order
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancel_with_terminal_before_registered_does_not_call_broker(tmp_config):
     """CANCEL targeting _TERMINAL_BEFORE_REGISTERED must skip broker cancel_order."""
@@ -230,11 +209,6 @@ async def test_cancel_with_terminal_before_registered_does_not_call_broker(tmp_c
 
     client.cancel_order.assert_not_called()
     metrics.order_reject_total.inc.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Test 5: AMEND with _TERMINAL_BEFORE_REGISTERED must NOT call update_order
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -255,19 +229,12 @@ async def test_amend_with_terminal_before_registered_does_not_call_broker(tmp_co
     metrics.order_reject_total.inc.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# Test 6: CANCEL missing target (None) still increments reject counter
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancel_missing_target_increments_reject(tmp_config):
     """CANCEL with no matching live order (None) must increment order_reject_total."""
     client = _make_client()
     adapter = _make_adapter(tmp_config, client)
     metrics = _mock_metrics(adapter)
-
-    # No entry in live_orders for strat1:99
 
     intent = _make_intent(IntentType.CANCEL, strategy_id="strat1", target_order_id="99")
     cmd = _make_cmd(intent)

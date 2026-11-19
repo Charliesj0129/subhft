@@ -34,9 +34,6 @@ def wal_writer(tmp_path: Path, _mock_metrics: MagicMock) -> WALWriter:
     return WALWriter(str(tmp_path))
 
 
-# ---------- Test 1: valid JSONL round-trip ----------
-
-
 @pytest.mark.asyncio
 async def test_write_creates_valid_jsonl_file(tmp_path: Path, wal_writer: WALWriter) -> None:
     """Write data via WALWriter, read back and verify each line is valid JSON."""
@@ -61,14 +58,11 @@ async def test_write_creates_valid_jsonl_file(tmp_path: Path, wal_writer: WALWri
         assert parsed["qty"] == data[i]["qty"]
 
 
-# ---------- Test 2: disk pressure skips write ----------
-
-
 @pytest.mark.asyncio
 async def test_disk_pressure_skips_write(tmp_path: Path, wal_writer: WALWriter) -> None:
     """When disk is full and check interval hasn't elapsed, write returns False."""
     wal_writer._disk_full = True
-    wal_writer._last_disk_check_ts = time.monotonic()  # recent check, won't re-check
+    wal_writer._last_disk_check_ts = time.monotonic()
 
     result = await wal_writer.write("orders", [{"order_id": "O1"}])
     assert result is False
@@ -78,18 +72,14 @@ async def test_disk_pressure_skips_write(tmp_path: Path, wal_writer: WALWriter) 
     assert wal_writer._disk_full_count == 1
 
 
-# ---------- Test 3: disk pressure recovery ----------
-
-
 def test_disk_pressure_recovery(tmp_path: Path, wal_writer: WALWriter) -> None:
     """After disk was full, if statvfs shows enough space, _disk_full resets."""
     wal_writer._disk_full = True
-    wal_writer._last_disk_check_ts = 0.0  # force re-check
+    wal_writer._last_disk_check_ts = 0.0
 
-    # Mock statvfs to report plenty of space
     mock_stat = MagicMock()
-    mock_stat.f_bavail = 1_000_000  # blocks available
-    mock_stat.f_frsize = 4096  # block size => ~3.8 GB available
+    mock_stat.f_bavail = 1_000_000
+    mock_stat.f_frsize = 4096
 
     with patch("os.statvfs", return_value=mock_stat):
         ok = wal_writer._check_disk_space()
@@ -98,12 +88,8 @@ def test_disk_pressure_recovery(tmp_path: Path, wal_writer: WALWriter) -> None:
     assert wal_writer._disk_full is False
 
 
-# ---------- Test 4: atomic write cleans up tmp on failure ----------
-
-
 def test_atomic_write_cleans_up_on_fsync_failure(tmp_path: Path, _mock_metrics: MagicMock) -> None:
     """If an IOError occurs during write, no .tmp file should remain."""
-    # Re-enable fsync so _maybe_fsync_file actually calls os.fsync
     with patch.dict(os.environ, {"HFT_WAL_FILE_FSYNC": "1"}):
         writer = WALWriter(str(tmp_path))
 
@@ -117,11 +103,7 @@ def test_atomic_write_cleans_up_on_fsync_failure(tmp_path: Path, _mock_metrics: 
     tmp_files = list(tmp_path.glob("*.tmp"))
     assert len(tmp_files) == 0, "Temp file must be cleaned up after failure"
 
-    # The final .jsonl should also not exist (rename never happened)
     assert not (tmp_path / "test_table_123.jsonl").exists()
-
-
-# ---------- Test 5: async write success ----------
 
 
 @pytest.mark.asyncio
@@ -140,9 +122,6 @@ async def test_write_async_success(tmp_path: Path, wal_writer: WALWriter) -> Non
     assert content["price"] == 5500000
 
 
-# ---------- Test 6: disk check interval caching ----------
-
-
 def test_disk_check_interval_caching(tmp_path: Path, wal_writer: WALWriter) -> None:
     """After first check, second check within interval returns cached result
     without calling statvfs again."""
@@ -151,12 +130,10 @@ def test_disk_check_interval_caching(tmp_path: Path, wal_writer: WALWriter) -> N
     mock_stat.f_frsize = 4096
 
     with patch("os.statvfs", return_value=mock_stat) as patched_statvfs:
-        # First call — should invoke statvfs (last_disk_check_ts == 0)
         result1 = wal_writer._check_disk_space()
         assert result1 is True
         assert patched_statvfs.call_count == 1
 
-        # Second call within interval — should use cached result
         result2 = wal_writer._check_disk_space()
         assert result2 is True
         assert patched_statvfs.call_count == 1, "statvfs should not be called again within the check interval"

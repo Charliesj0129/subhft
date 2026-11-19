@@ -9,9 +9,6 @@ from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
 
-# ---------------------------------------------------------------------------
-# Test fixtures (shared mock infrastructure)
-# ---------------------------------------------------------------------------
 class _Depth:
     best_bid = 10000
     best_ask = 10010
@@ -27,10 +24,10 @@ class _Hbt:
 
     def wait_next_feed(self, *_a, **_kw):
         if self._calls >= self._max_calls:
-            return 1  # end
+            return 1
         self._calls += 1
         self.current_timestamp += 1_000_000
-        return 2  # feed available (modern)
+        return 2
 
     def depth(self, *_a, **_kw):
         return _Depth()
@@ -86,9 +83,6 @@ def _patch(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 def test_fill_log_is_numpy_soa(monkeypatch):
     """Fill storage uses pre-allocated numpy arrays, not list[dict]."""
     _patch(monkeypatch)
@@ -130,7 +124,6 @@ def test_fill_log_capacity_overflow_handled(monkeypatch):
         asset_symbol="X",
         data="d",
     )
-    # Force small capacity for test
     adapter._fill_ts_ns = np.zeros(2, dtype=np.int64)
     adapter._fill_delta = np.zeros(2, dtype=np.int32)
     adapter._fill_position_after = np.zeros(2, dtype=np.int32)
@@ -156,7 +149,6 @@ def test_fill_stats_vectorized(monkeypatch):
     )
     adapter._total_buy_fills = 3
     adapter._total_sell_fills = 1
-    # 4 fills
     for i in range(4):
         delta = 1 if i < 3 else -1
         adapter._record_fill(i * 1_000_000_000, delta, i + 1, 20000 + i * 10)
@@ -178,12 +170,10 @@ def test_fill_stats_adverse_selection(monkeypatch):
         data="d",
     )
     adapter._total_buy_fills = 2
-    # Buy at mid_x2=20000, next mid_x2=19990 (price dropped → adverse for buyer)
     adapter._record_fill(0, 1, 1, 20000)
     adapter._record_fill(1_000_000, 1, 2, 19990)
 
     stats = adapter.fill_stats
-    # adverse for buy = -(19990-20000)/2 = 5.0
     assert stats["adverse_selection_mean"] == pytest.approx(5.0)
 
 

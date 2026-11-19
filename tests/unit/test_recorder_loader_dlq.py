@@ -23,10 +23,6 @@ from hft_platform.recorder._loader_dlq import (
     write_to_dlq,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 def _make_svc(tmp_path) -> Any:
     """Build a minimal mock WALLoaderService-like object."""
@@ -40,13 +36,13 @@ def _make_svc(tmp_path) -> Any:
     svc._dlq_retention_days = 7
     svc._corrupt_retention_days = 7
     svc._archive_retention_days = 30
-    svc._dlq_cleanup_interval_s = 0  # always run in tests
+    svc._dlq_cleanup_interval_s = 0
     svc._dlq_archive_path = None
     svc._last_dlq_cleanup_ts = 0.0
     svc._last_corrupt_cleanup_ts = 0.0
     svc._last_archive_cleanup_ts = 0.0
     svc._last_wal_check_ts = 0.0
-    svc._wal_check_interval_s = 0  # always run in tests
+    svc._wal_check_interval_s = 0
     svc._wal_size_critical_mb = 500
     svc._wal_size_warning_mb = 100
     svc._processed_files_total = 0
@@ -64,11 +60,6 @@ def _make_old_file(directory: str, filename: str, content: str, age_s: float = 8
     past = time.time() - age_s
     os.utime(fpath, (past, past))
     return fpath
-
-
-# ---------------------------------------------------------------------------
-# write_to_dlq
-# ---------------------------------------------------------------------------
 
 
 class TestWriteToDlq:
@@ -111,23 +102,15 @@ class TestWriteToDlq:
         svc = _make_svc(tmp_path)
         svc.metrics = MagicMock()
         svc.metrics.dlq_size_total.labels.side_effect = RuntimeError("bad")
-        # Should not propagate
         write_to_dlq(svc, "market_data", [{}], "err")
         assert len(os.listdir(svc.dlq_dir)) == 1
 
     def test_write_error_is_logged_not_raised(self, tmp_path):
         svc = _make_svc(tmp_path)
-        # Simulate open() failure after makedirs succeeds
         os.makedirs(svc.dlq_dir, exist_ok=True)
         with patch("builtins.open", side_effect=OSError("disk full")):
-            # write_to_dlq catches exceptions internally
-            write_to_dlq(svc, "market_data", [{}], "err")  # should not raise
+            write_to_dlq(svc, "market_data", [{}], "err")
         assert len(os.listdir(svc.dlq_dir)) == 0
-
-
-# ---------------------------------------------------------------------------
-# replay_dlq
-# ---------------------------------------------------------------------------
 
 
 class TestReplayDlq:
@@ -150,7 +133,6 @@ class TestReplayDlq:
         os.makedirs(svc.archive_dir)
 
         rows = [{"symbol": "X", "price": 100}]
-        # Write a proper DLQ file manually
         meta = json.dumps({"_dlq_meta": True, "table": "market_data", "error": "e", "timestamp": 1, "row_count": 1})
         content = meta + "\n" + json.dumps(rows[0]) + "\n"
         fname = "market_data_1000.jsonl"
@@ -161,7 +143,6 @@ class TestReplayDlq:
         assert result["replayed"] == 1
         assert result["skipped"] == 0
         assert result["failed"] == 0
-        # File still in dlq (dry run - not moved)
         assert os.path.exists(os.path.join(svc.dlq_dir, fname))
 
     def test_successful_replay_moves_to_archive(self, tmp_path):
@@ -196,7 +177,6 @@ class TestReplayDlq:
         result = replay_dlq(svc)
         assert result["failed"] == 1
         assert fname in result["errors"]
-        # File stays in DLQ
         assert os.path.exists(os.path.join(svc.dlq_dir, fname))
 
     def test_empty_file_is_skipped_and_archived(self, tmp_path):
@@ -204,7 +184,6 @@ class TestReplayDlq:
         os.makedirs(svc.dlq_dir)
         os.makedirs(svc.archive_dir)
 
-        # File with only meta line, no data rows
         meta = json.dumps({"_dlq_meta": True, "table": "market_data", "error": "e", "timestamp": 4, "row_count": 0})
         fname = "market_data_4000.jsonl"
         with open(os.path.join(svc.dlq_dir, fname), "w") as f:
@@ -219,8 +198,6 @@ class TestReplayDlq:
         svc = _make_svc(tmp_path)
         os.makedirs(svc.dlq_dir)
 
-        # A filename that produces an empty base → parse_table_from_filename returns "unknown"
-        # e.g. "_9999.jsonl" → split by "_" removes last part → base = "" → "unknown"
         fname = "_9999.jsonl"
         with open(os.path.join(svc.dlq_dir, fname), "w") as f:
             f.write(json.dumps({"data": 1}) + "\n")
@@ -232,9 +209,8 @@ class TestReplayDlq:
         svc = _make_svc(tmp_path)
         os.makedirs(svc.dlq_dir)
         os.makedirs(svc.archive_dir)
-        svc.ch_client = None  # force no-client path for simple test
+        svc.ch_client = None
 
-        # Create 3 files
         for i in range(3):
             with open(os.path.join(svc.dlq_dir, f"market_data_{i}.jsonl"), "w") as f:
                 f.write("{}\n")
@@ -254,21 +230,15 @@ class TestReplayDlq:
             f.write(json.dumps({"symbol": "X"}) + "\n")
 
         svc.insert_batch = MagicMock(return_value=True)
-        # Should not raise; corrupt lines are skipped
         result = replay_dlq(svc)
         assert result["replayed"] + result["skipped"] + result["failed"] >= 0
-
-
-# ---------------------------------------------------------------------------
-# cleanup_old_dlq_files
-# ---------------------------------------------------------------------------
 
 
 class TestCleanupOldDlqFiles:
     def test_skips_if_interval_not_elapsed(self, tmp_path):
         svc = _make_svc(tmp_path)
         svc._dlq_cleanup_interval_s = 9999
-        svc._last_dlq_cleanup_ts = time.time()  # just ran
+        svc._last_dlq_cleanup_ts = time.time()
         os.makedirs(svc.dlq_dir)
         _make_old_file(svc.dlq_dir, "market_data_1.jsonl", "{}")
 
@@ -298,7 +268,6 @@ class TestCleanupOldDlqFiles:
     def test_skips_recent_files(self, tmp_path):
         svc = _make_svc(tmp_path)
         os.makedirs(svc.dlq_dir)
-        # File modified NOW — should not be deleted
         fname = "market_data_recent.jsonl"
         fpath = os.path.join(svc.dlq_dir, fname)
         with open(fpath, "w") as f:
@@ -309,8 +278,7 @@ class TestCleanupOldDlqFiles:
 
     def test_noop_when_dlq_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
-        # dlq_dir does not exist
-        cleanup_old_dlq_files(svc)  # should not raise
+        cleanup_old_dlq_files(svc)
         assert not os.path.exists(svc.dlq_dir)
 
     def test_increments_metrics_after_cleanup(self, tmp_path):
@@ -321,11 +289,6 @@ class TestCleanupOldDlqFiles:
 
         cleanup_old_dlq_files(svc)
         svc.metrics.dlq_size_total.labels.assert_called_once_with(source="cleanup")
-
-
-# ---------------------------------------------------------------------------
-# cleanup_old_corrupt_files
-# ---------------------------------------------------------------------------
 
 
 class TestCleanupOldCorruptFiles:
@@ -359,19 +322,14 @@ class TestCleanupOldCorruptFiles:
 
     def test_noop_when_corrupt_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
-        cleanup_old_corrupt_files(svc)  # should not raise
+        cleanup_old_corrupt_files(svc)
         assert not os.path.exists(svc.corrupt_dir)
-
-
-# ---------------------------------------------------------------------------
-# cleanup_old_archive_files
-# ---------------------------------------------------------------------------
 
 
 class TestCleanupOldArchiveFiles:
     def test_deletes_old_archive_jsonl_files(self, tmp_path):
         svc = _make_svc(tmp_path)
-        svc._archive_retention_days = 7  # 7 days retention; our file is 10 days old
+        svc._archive_retention_days = 7
         os.makedirs(svc.archive_dir)
         fpath = _make_old_file(svc.archive_dir, "market_data_old.jsonl", "{}")
 
@@ -384,12 +342,11 @@ class TestCleanupOldArchiveFiles:
         fpath = _make_old_file(svc.archive_dir, "readme.txt", "hello")
 
         cleanup_old_archive_files(svc)
-        # Non-jsonl files should not be touched
         assert os.path.exists(fpath)
 
     def test_noop_when_archive_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
-        cleanup_old_archive_files(svc)  # should not raise
+        cleanup_old_archive_files(svc)
         assert not os.path.exists(svc.archive_dir)
 
     def test_skips_if_interval_not_elapsed(self, tmp_path):
@@ -403,15 +360,10 @@ class TestCleanupOldArchiveFiles:
         assert os.path.exists(fpath)
 
 
-# ---------------------------------------------------------------------------
-# check_wal_accumulation
-# ---------------------------------------------------------------------------
-
-
 class TestCheckWalAccumulation:
     def test_noop_when_wal_dir_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
-        check_wal_accumulation(svc)  # should not raise
+        check_wal_accumulation(svc)
         assert not os.path.exists(svc.wal_dir)
 
     def test_skips_if_interval_not_elapsed(self, tmp_path):
@@ -420,14 +372,13 @@ class TestCheckWalAccumulation:
         last_ts = time.time()
         svc._last_wal_check_ts = last_ts
         os.makedirs(svc.wal_dir)
-        check_wal_accumulation(svc)  # should return early
+        check_wal_accumulation(svc)
         assert svc._last_wal_check_ts == last_ts
 
     def test_sets_metrics_when_present(self, tmp_path):
         svc = _make_svc(tmp_path)
         os.makedirs(svc.wal_dir)
 
-        # Create two WAL files
         for name in ("market_data_1.jsonl", "market_data_2.jsonl"):
             with open(os.path.join(svc.wal_dir, name), "w") as f:
                 f.write('{"x": 1}\n')
@@ -446,21 +397,19 @@ class TestCheckWalAccumulation:
         os.makedirs(svc.wal_dir)
         with open(os.path.join(svc.wal_dir, "market_data_1.jsonl"), "w") as f:
             f.write("{}\n")
-        check_wal_accumulation(svc)  # should not raise
+        check_wal_accumulation(svc)
         assert svc._last_wal_check_ts > 0
 
     def test_ignores_non_jsonl_files_in_wal_dir(self, tmp_path):
         svc = _make_svc(tmp_path)
         os.makedirs(svc.wal_dir)
 
-        # A non-jsonl file should be ignored
         with open(os.path.join(svc.wal_dir, "readme.txt"), "w") as f:
             f.write("hello")
 
         svc.metrics = MagicMock()
         check_wal_accumulation(svc)
 
-        # file_count should be 0 (only .jsonl counted)
         svc.metrics.wal_file_count.set.assert_called_with(0)
 
     def test_empty_wal_dir_sets_zero_metrics(self, tmp_path):
@@ -469,11 +418,6 @@ class TestCheckWalAccumulation:
         svc.metrics = MagicMock()
         check_wal_accumulation(svc)
         svc.metrics.wal_file_count.set.assert_called_with(0)
-
-
-# ---------------------------------------------------------------------------
-# quarantine_corrupt_file
-# ---------------------------------------------------------------------------
 
 
 class TestQuarantineCorruptFile:
@@ -508,8 +452,6 @@ class TestQuarantineCorruptFile:
 
     def test_handles_move_error_gracefully(self, tmp_path):
         svc = _make_svc(tmp_path)
-        # fpath does not exist → shutil.move will fail
         quarantine_corrupt_file(svc, "/nonexistent/path/bad.jsonl", "bad.jsonl", "reason")
-        # Should not raise; corrupt_dir is created but file is not present
         assert os.path.isdir(svc.corrupt_dir)
         assert not os.path.exists(os.path.join(svc.corrupt_dir, "bad.jsonl"))

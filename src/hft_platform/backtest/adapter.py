@@ -49,7 +49,6 @@ logger = get_logger("hbt_adapter")
 _FILL_CAPACITY = 10_000
 _EQUITY_CAPACITY = 100_000
 
-# Backward-compat aliases for test monkeypatching
 _detect_wait_status_mode = detect_wait_status_mode
 _resolve_qty = resolve_qty
 _call_if_exists = call_if_exists
@@ -118,7 +117,6 @@ class HftBacktestAdapter:
         self._total_buy_fills = 0
         self._total_sell_fills = 0
 
-        # WU-02: SoA fill log
         self._fill_ts_ns = np.zeros(_FILL_CAPACITY, dtype=np.int64)
         self._fill_delta = np.zeros(_FILL_CAPACITY, dtype=np.int32)
         self._fill_position_after = np.zeros(_FILL_CAPACITY, dtype=np.int32)
@@ -129,12 +127,10 @@ class HftBacktestAdapter:
         self._next_equity_sample_ns = 0
         self._last_known_balance = float(initial_balance)
 
-        # WU-03: Pre-allocated equity buffers
         self._equity_ts_buf = np.zeros(_EQUITY_CAPACITY, dtype=np.int64)
         self._equity_val_buf = np.zeros(_EQUITY_CAPACITY, dtype=np.float64)
         self._equity_count: int = 0
 
-        # Risk evaluator (opt-in)
         _REJECT_CAPACITY = 256
         self._reject_ts_ns = np.zeros(_REJECT_CAPACITY, dtype=np.int64)
         self._reject_reasons: list[str] = []
@@ -180,12 +176,6 @@ class HftBacktestAdapter:
         if latency_model_lower == "intporderlatency" and latency_data_path:
             asset_builder = call_if_exists(asset_builder, "intp_order_latency", latency_data_path)
         else:
-            # hftbacktest's constant_order_latency does not support per-action-type
-            # latencies (place vs modify vs cancel). When modify_latency_us or
-            # cancel_latency_us are provided, we use the maximum of all three as a
-            # conservative approximation so that no action type underestimates its
-            # real round-trip time.  A warning is emitted so researchers are aware
-            # of this approximation and can account for it in their analysis.
             _mod = self.modify_latency_us
             _can = self.cancel_latency_us
             if _mod > 0 or _can > 0:
@@ -208,7 +198,6 @@ class HftBacktestAdapter:
             lat_ns = effective_latency_us * 1000
             asset_builder = call_if_exists(asset_builder, "constant_order_latency", lat_ns, lat_ns)
 
-        # Resolve queue_model if auto
         if queue_model == "auto":
             if instrument is None:
                 raise ValueError(

@@ -21,10 +21,6 @@ import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 
-# ---------------------------------------------------------------------------
-# Helpers / stubs (mirror tests/unit/test_runner_queue_full.py)
-# ---------------------------------------------------------------------------
-
 
 def _make_bus(events=None):
     bus = MagicMock()
@@ -71,25 +67,15 @@ def _make_intent(strategy_id: str = "strat_a", intent_id: int = 1) -> OrderInten
 
 
 def _make_event(symbol: str = "TMFD6", ts: int = 0):
-    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are
-    # always considered fresh by the runner's stale-event guard.
     return SimpleNamespace(symbol=symbol, ts=ts)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
 def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
-    # Force Python-only circuit breaker for deterministic assertions
     monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
-    # Disable the typed-intent fastpath so we drive the standard
-    # ``self._risk_submit(intent)`` branch with our MagicMock submit hook.
     monkeypatch.setenv("HFT_TYPED_INTENT_CHANNEL", "0")
 
 
@@ -123,11 +109,6 @@ def make_runner(mock_metrics):
     return _factory
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_runner_does_not_record_intents_when_disabled(make_runner, monkeypatch):
     """With ``HFT_INTENT_RECORDER_ENABLED`` unset, the recorder queue stays empty."""
@@ -137,7 +118,6 @@ async def test_runner_does_not_record_intents_when_disabled(make_runner, monkeyp
     risk_queue = MagicMock(spec=["put_nowait"])
     runner = make_runner(risk_queue=risk_queue, recorder_queue=rec_q)
 
-    # Sanity: the runner must have cached the disabled flag.
     assert runner._intent_recorder_enabled is False
 
     strat = _FakeStrategy(sid="r47_disabled")
@@ -174,7 +154,7 @@ async def test_runner_records_intent_after_successful_submit(make_runner, monkey
     envelope = rec_q.get_nowait()
     assert envelope["topic"] == "intents"
     data = envelope["data"]
-    assert data["intent"] is intent  # carry-by-reference; Batcher serializes later
+    assert data["intent"] is intent
     assert isinstance(data["ingest_ts"], int)
     assert data["ingest_ts"] > 0
 
@@ -184,7 +164,6 @@ async def test_runner_silent_drop_on_recorder_queue_full(make_runner, mock_metri
     """A full recorder queue MUST silently drop and bump the metric."""
     monkeypatch.setenv("HFT_INTENT_RECORDER_ENABLED", "1")
 
-    # Capacity-1 queue, pre-fill it so the runner's put_nowait hits QueueFull.
     rec_q: asyncio.Queue = asyncio.Queue(maxsize=1)
     rec_q.put_nowait("filler")
 
@@ -195,12 +174,8 @@ async def test_runner_silent_drop_on_recorder_queue_full(make_runner, mock_metri
     strat._return_value = [_make_intent("r47_drop", intent_id=99)]
     runner.register(strat)
 
-    # Must NOT raise.
     await runner.process_event(_make_event())
 
-    # Risk submit succeeded.
     risk_queue.put_nowait.assert_called_once()
-    # Queue still capped at 1 — our envelope was silently dropped.
     assert rec_q.qsize() == 1
-    # Drop counter incremented exactly once.
     mock_metrics.recorder_intent_drop_total.inc.assert_called_once()

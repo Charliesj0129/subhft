@@ -20,7 +20,7 @@ def _get_metrics() -> Any:
         from hft_platform.observability.metrics import MetricsRegistry
 
         return MetricsRegistry.get()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -36,7 +36,6 @@ class ShadowOrderSink:
             self._enabled = os.getenv("HFT_ORDER_SHADOW_MODE", "0") == "1"
         self._counter = 0
         self._writer = writer
-        # Set shadow_mode_active gauge
         metrics = _get_metrics()
         if metrics and hasattr(metrics, "shadow_mode_active"):
             metrics.shadow_mode_active.set(1 if self._enabled else 0)
@@ -67,11 +66,7 @@ class ShadowOrderSink:
             "intent_id": str(intent.intent_id),
             "shadow": True,
         }
-        # DEBUG level: shadow-intercept fires once per intent (~8 k/day for R47).
-        # The `shadow_orders_total` Prometheus counter below is the liveness signal;
-        # per-intent logging is only needed for DLQ/forensic replay.
         logger.debug("Shadow order captured", **record)
-        # Emit Prometheus metrics
         metrics = _get_metrics()
         if metrics and hasattr(metrics, "shadow_orders_total"):
             side_str = str(intent.side.name if hasattr(intent.side, "name") else intent.side)

@@ -14,17 +14,14 @@ from research.candidate_loop.governor.signals import (
     n_target_for,
 )
 
-CFG_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "config" / "research" / "candidate_loop" / "governor_v1.yaml"
-)
+CFG_PATH = Path(__file__).resolve().parents[4] / "config" / "research" / "candidate_loop" / "governor_v1.yaml"
 
 
 def _summary() -> dict:
     return {
         "run_id": "smoke_001",
         "per_family": {
-            "trade_flow": {  # alive → amplify
+            "trade_flow": {
                 "candidates": 20,
                 "survival_rate": 0.10,
                 "ic_distribution_survivors": {"p10": 0.02, "p50": 0.114, "p90": 0.20},
@@ -33,12 +30,10 @@ def _summary() -> dict:
                 "maker_rescuable_count": 2,
                 "duplicate_rate": 0.05,
                 "reduced_day_coverage_count": 7,
-                "near_misses": [
-                    {"alpha_id": "a1", "failed_gate": "cost_proxy_taker", "margin": -0.03}
-                ],
+                "near_misses": [{"alpha_id": "a1", "failed_gate": "cost_proxy_taker", "margin": -0.03}],
                 "common_failure_patterns": [],
             },
-            "microprice": {  # dead, no rescue → retire
+            "microprice": {
                 "candidates": 20,
                 "survival_rate": 0.0,
                 "ic_distribution_survivors": {"p10": 0.0, "p50": 0.0, "p90": 0.0},
@@ -50,7 +45,7 @@ def _summary() -> dict:
                 "near_misses": [],
                 "common_failure_patterns": [],
             },
-            "depth_delta": {  # weak, no rescue → deprioritize
+            "depth_delta": {
                 "candidates": 20,
                 "survival_rate": 0.03,
                 "ic_distribution_survivors": {"p10": 0.0, "p50": 0.01, "p90": 0.02},
@@ -62,7 +57,7 @@ def _summary() -> dict:
                 "near_misses": [],
                 "common_failure_patterns": [],
             },
-            "spread_regime": {  # middling, no rescue → maintain
+            "spread_regime": {
                 "candidates": 20,
                 "survival_rate": 0.08,
                 "ic_distribution_survivors": {"p10": 0.0, "p50": 0.02, "p90": 0.03},

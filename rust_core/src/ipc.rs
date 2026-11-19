@@ -2,7 +2,7 @@ use memmap2::MmapMut;
 use pyo3::prelude::*;
 use std::fs::OpenOptions;
 
-const HEADER_SIZE: usize = 128; // 64B WriteCursor + 64B ReadCursor (padded)
+const HEADER_SIZE: usize = 128;
 const SLOT_SIZE: usize = 64;
 
 #[pyclass]
@@ -40,15 +40,13 @@ impl ShmRingBuffer {
 
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
 
-        // Pointers
         let header_ptr = mmap.as_mut_ptr() as *mut u64;
         let buffer_ptr = unsafe { mmap.as_mut_ptr().add(HEADER_SIZE) };
 
-        // Zero header if create
         if create {
             unsafe {
-                std::ptr::write_volatile(header_ptr.add(0), 0); // write
-                std::ptr::write_volatile(header_ptr.add(1), 0); // read
+                std::ptr::write_volatile(header_ptr.add(0), 0);
+                std::ptr::write_volatile(header_ptr.add(1), 0);
             }
         }
 
@@ -74,11 +72,9 @@ impl ShmRingBuffer {
 
             let dest = self.buffer_ptr.add(offset);
 
-            // Fast copy
             let len = data.len().min(SLOT_SIZE);
             std::ptr::copy_nonoverlapping(data.as_ptr(), dest, len);
 
-            // Bump cursor
             std::ptr::write_volatile(self.header_ptr.add(0), write_cursor + 1);
             Ok(true)
         }
@@ -102,10 +98,8 @@ impl ShmRingBuffer {
             let src = self.buffer_ptr.add(offset);
             let bytes = std::slice::from_raw_parts(src, SLOT_SIZE);
 
-            // Create Python Bytes (overhead here, but this is proof of concept)
             let pystruct = pyo3::types::PyBytes::new_bound(py, bytes);
 
-            // Bump cursor
             std::ptr::write_volatile(self.header_ptr.add(1), read_cursor + 1);
 
             Ok(Some(pystruct))

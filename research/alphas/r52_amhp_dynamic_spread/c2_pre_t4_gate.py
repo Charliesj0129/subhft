@@ -41,48 +41,34 @@ from research.backtest.maker_engine import ClickHouseSource, TickData
 
 logger = structlog.get_logger("r52_amhp.c2_gate")
 
-# ----------------------------------------------------------------------------
-# Constants — mirror R1 T5 baseline
-# ----------------------------------------------------------------------------
 
-_PRICE_SCALE = 1_000_000   # CK source scale
+_PRICE_SCALE = 1_000_000
 _NS_PER_SEC = 1_000_000_000
 
-# Profile v2026-04-24_measured asymmetric Shioaji
 _LATENCY_PLACE_NS = 395_000_000
 _LATENCY_CANCEL_NS = 59_000_000
 
-# R47 baseline parameters (modulator off)
 _BASE_SPREAD_PTS = 5
 _MAX_POS = 3
 
-# R47 R1 anchor numbers — we must reproduce within 5%
 _R47_R1_TOTAL_PNL_PTS = -17_910.0
 _R47_R1_FILLS = 11_172
 
-# C1 R1 anchor (for context only — Q-D compares against R47, not C1)
 _C1_R1_TOTAL_PNL_PTS = -11_514.0
 
-# Window for rolling Hawkes ρ̂ estimator
-_HAWKES_WINDOW_SEC = 300       # 5 minutes
-_HAWKES_REFIT_INTERVAL_NS = 5 * _NS_PER_SEC   # refit ρ̂ every 5 seconds (event time)
-_HAWKES_SUBWINDOW_SEC = 10     # 30 sub-windows in 5-min main window for VMR estimate
+_HAWKES_WINDOW_SEC = 300
+_HAWKES_REFIT_INTERVAL_NS = 5 * _NS_PER_SEC
+_HAWKES_SUBWINDOW_SEC = 10
 
-# Newton-Raphson convergence (used by MLE recovery test only)
 _MLE_MAX_ITER = 60
 _MLE_TOL = 1e-6
 
-# τ sweep for Q-D
 _TAU_SWEEP = (0.70, 0.75, 0.80, 0.85, 0.90, 0.95)
 
-# Regime split
 _JAN_FEB_END = "2026-02-28"
 _MAR_START = "2026-03-01"
 
 
-# ----------------------------------------------------------------------------
-# OnlineHawkesMLE — closed-form exp-Hawkes MLE on a sliding window
-# ----------------------------------------------------------------------------
 
 
 @dataclass
@@ -92,7 +78,7 @@ class HawkesMLEState:
     mu: float
     alpha: float
     beta: float
-    rho_hat: float       # alpha / beta clipped to [0, 0.99]
+    rho_hat: float
     n_events: int
     fit_ok: bool
 
@@ -120,7 +106,6 @@ def _exp_hawkes_loglik(
     if n == 0 or beta <= 0 or mu <= 0 or alpha < 0:
         return -np.inf
 
-    # Recursive A_i for sum-exp self-excitation.
     a_i = np.zeros(n)
     for i in range(1, n):
         dt = times[i] - times[i - 1]
@@ -131,7 +116,6 @@ def _exp_hawkes_loglik(
         return -np.inf
 
     sum_log = float(np.sum(np.log(lam_at_events)))
-    # Integral: μ · (t_end - t_start) + (α/β) Σ (1 - exp(-β (t_end - t_j)))
     integral_excite = (alpha / beta) * float(
         np.sum(1.0 - np.exp(-beta * (t_end - times)))
     )
@@ -170,7 +154,6 @@ def _fit_exp_hawkes_window(
         mu = math.exp(theta[0])
         alpha = math.exp(theta[1])
         beta = math.exp(theta[2])
-        # ρ̂ < 1 soft constraint via clipping inside the likelihood.
         if alpha >= beta * 0.99:
             return 1e10
         ll = _exp_hawkes_loglik(mu, alpha, beta, times_sec, t_start, t_end)
@@ -178,7 +161,6 @@ def _fit_exp_hawkes_window(
             return 1e10
         return -ll
 
-    # Try a few starts so we don't get stuck on plateaus.
     starts = [
         (init_mu, init_alpha, init_beta),
         (1.0, 0.4, 1.0),
@@ -238,11 +220,11 @@ class OnlineHawkesMLE:
         "_window_sec",
         "_subwindow_sec",
         "_refit_every_ns",
-        "_buf",                   # deque[int] trade timestamps in ns
+        "_buf",
         "_last_fit_ns",
         "_rho_hat",
         "_n_events",
-        "_rho_samples_minute",    # dict[int_minute_bucket, float]
+        "_rho_samples_minute",
     )
 
     def __init__(
@@ -263,7 +245,6 @@ class OnlineHawkesMLE:
 
     def add_trade(self, ts_ns: int) -> None:
         self._buf.append(ts_ns)
-        # Trim out-of-window events from the LEFT.  popleft is O(1) amortized.
         cutoff_ns = ts_ns - self._window_sec * _NS_PER_SEC
         while self._buf and self._buf[0] < cutoff_ns:
             self._buf.popleft()
@@ -314,7 +295,6 @@ def _vmr_rho_hat(
     if n_sub < 5:
         return 0.0
     counts = np.zeros(n_sub, dtype=np.int32)
-    # Single linear pass: bin each event into its sub-window.
     for t in buf:
         idx = (t - start_ns) // sub_ns
         if 0 <= idx < n_sub:
@@ -325,7 +305,7 @@ def _vmr_rho_hat(
     var = float(counts.var(ddof=0))
     vmr = var / mean
     if vmr <= 1.0:
-        return 0.0   # below Poisson — no clustering signal
+        return 0.0
     rho = 1.0 - 1.0 / math.sqrt(vmr)
     if rho < 0.0:
         return 0.0
@@ -334,9 +314,6 @@ def _vmr_rho_hat(
     return float(rho)
 
 
-# ----------------------------------------------------------------------------
-# Synthetic recovery test — validates MLE accuracy
-# ----------------------------------------------------------------------------
 
 
 def synthetic_recovery_test(
@@ -346,7 +323,7 @@ def synthetic_recovery_test(
     beta_true: float = 1.0,
     duration_sec: float = 1000.0,
     seed: int = 20260425,
-    tolerance: float = 0.10,   # relax to 0.10 for finite-window noise
+    tolerance: float = 0.10,
 ) -> dict[str, Any]:
     """Generate an exp-Hawkes process via Ogata thinning + fit MLE.
 
@@ -356,14 +333,12 @@ def synthetic_recovery_test(
     times: list[float] = []
     t = 0.0
     while t < duration_sec:
-        # Upper bound: μ + α * (current excitation).
         if not times:
             lam_bar = mu_true
         else:
             lam_bar = mu_true + alpha_true * sum(
                 math.exp(-beta_true * (t - tj)) for tj in times[-30:]
             )
-        # Draw next candidate.
         u = rng.random()
         if lam_bar <= 0:
             break
@@ -371,7 +346,6 @@ def synthetic_recovery_test(
         t = t + dt
         if t >= duration_sec:
             break
-        # Accept with prob lam(t)/lam_bar.
         if not times:
             lam_t = mu_true
         else:
@@ -398,9 +372,6 @@ def synthetic_recovery_test(
     }
 
 
-# ----------------------------------------------------------------------------
-# R47 baseline replay with per-fill ρ̂ instrumentation
-# ----------------------------------------------------------------------------
 
 
 @dataclass
@@ -409,15 +380,15 @@ class FillRecord:
 
     date: str
     ts_ns: int
-    side: str             # "buy" | "sell"
+    side: str
     price_x1e6: int
     mid_x1e6: float
     spread_pts: int
     half_spread_pts: float
-    pair_pnl_pts: float   # round-trip PnL (only set on closing leg; 0 on opening leg)
+    pair_pnl_pts: float
     is_close: bool
     rho_hat: float
-    minute_bucket: int    # ts_ns // (60s)
+    minute_bucket: int
 
 
 @dataclass
@@ -425,7 +396,7 @@ class DayResult:
     date: str
     fills: list[FillRecord] = field(default_factory=list)
     gross_pnl_pts: float = 0.0
-    net_pnl_pts: float = 0.0   # post-cost
+    net_pnl_pts: float = 0.0
     n_fills: int = 0
     n_trips: int = 0
     rho_minute_max: dict[int, float] = field(default_factory=dict)
@@ -471,7 +442,6 @@ def _replay_one_day(
 
     pending: list[tuple[int, str, QueuePosition | None]] = []
 
-    # FIFO queues for round-trip PnL accounting.
     fifo_buys: list[FillRecord] = []
     fifo_sells: list[FillRecord] = []
 
@@ -499,7 +469,6 @@ def _replay_one_day(
         _apply_pending(event.exch_ts)
 
         if event.is_trade:
-            # Update Hawkes estimator on signed trade.
             direction = _infer_direction(event.trade_price, last_bid, last_ask)
             if direction != 0:
                 hawkes.add_trade(event.exch_ts)
@@ -509,7 +478,6 @@ def _replay_one_day(
             if rho_hat > prev:
                 res.rho_minute_max[minute_bucket] = rho_hat
 
-            # Fill check vs trade.
             mid_x1e6 = (cur_bid + cur_ask) / 2.0 if (cur_bid > 0 and cur_ask > 0) else 0.0
             spread_pts = (cur_ask - cur_bid) // _PRICE_SCALE if (cur_bid > 0 and cur_ask > 0) else 0
             half_spread_pts = spread_pts / 2.0 if spread_pts > 0 else 0.0
@@ -533,12 +501,11 @@ def _replay_one_day(
                         minute_bucket=int(minute_bucket),
                     )
                     if fifo_sells:
-                        # Close: pair this BUY against earliest SELL.
                         opening = fifo_sells.pop(0)
                         sell_price_pts = opening.price_x1e6 / _PRICE_SCALE
                         buy_price_pts = buy_order.price / _PRICE_SCALE
                         pair_gross = sell_price_pts - buy_price_pts
-                        rec.pair_pnl_pts = pair_gross  # gross only, cost subtracted later
+                        rec.pair_pnl_pts = pair_gross
                         rec.is_close = True
                         res.gross_pnl_pts += pair_gross
                         res.n_trips += 1
@@ -584,7 +551,6 @@ def _replay_one_day(
                     sell_order = None
             continue
 
-        # bidask event.
         cur_bid = event.bid_price
         cur_ask = event.ask_price
         cur_bid_v = event.bid_qty
@@ -595,16 +561,11 @@ def _replay_one_day(
         if cur_ask <= cur_bid:
             continue
 
-        # Drop quotes that no longer match best bid/ask (the engine assumes
-        # passive maker; if best moves, our outstanding orders are stale).
         if buy_order is not None and buy_order.price != cur_bid:
             buy_order = None
         if sell_order is not None and sell_order.price != cur_ask:
             sell_order = None
 
-        # Refresh ρ̂ at quote moments too — even with no new trade ρ̂ may have
-        # advanced (the buf is unchanged, but we advance fit clock).  This
-        # keeps minute-bucket coverage continuous.
         rho_hat = hawkes.maybe_refit(event.exch_ts)
         minute_bucket = event.exch_ts // (60 * _NS_PER_SEC)
         prev = res.rho_minute_max.get(minute_bucket, 0.0)
@@ -615,7 +576,6 @@ def _replay_one_day(
         if spread_pts < base_spread_x:
             continue
 
-        # Quote both sides at best bid / best ask (R47 floor maker).
         if position < _MAX_POS:
             qp = fill_model.post_quote("buy", cur_bid, cur_bid_v)
             pending.append((event.exch_ts + _LATENCY_PLACE_NS, "place_buy", qp))
@@ -628,9 +588,6 @@ def _replay_one_day(
     return res
 
 
-# ----------------------------------------------------------------------------
-# Tests
-# ----------------------------------------------------------------------------
 
 
 def run_QA(closing_pair_pnls: np.ndarray) -> dict[str, Any]:
@@ -697,9 +654,8 @@ def run_QC(closing_records: list[FillRecord]) -> dict[str, Any]:
     if not closing_records:
         return {"pass": False, "n": 0, "reason": "no closing records"}
     rhos = np.array([r.rho_hat for r in closing_records])
-    pnls = np.array([r.pair_pnl_pts - 4.0 for r in closing_records])  # net per RT
+    pnls = np.array([r.pair_pnl_pts - 4.0 for r in closing_records])
 
-    # Quintile via numpy quantiles.
     q1, q2, q3, q4 = np.percentile(rhos, [20, 40, 60, 80])
     bins = np.zeros(len(rhos), dtype=int)
     bins[rhos > q1] = 1
@@ -718,11 +674,11 @@ def run_QC(closing_records: list[FillRecord]) -> dict[str, Any]:
             means.append(float("nan"))
             counts.append(0)
 
-    bottom = means[0]   # lowest ρ̂
-    top = means[4]      # highest ρ̂
-    spread = top - bottom        # NEGATIVE expected (higher ρ̂ → worse)
+    bottom = means[0]
+    top = means[4]
+    spread = top - bottom
     abs_spread = abs(spread)
-    correct_sign = (spread <= 0.0)   # high ρ̂ → worse PnL
+    correct_sign = (spread <= 0.0)
     pass_ = (abs_spread >= 1.0) and correct_sign
     return {
         "n": len(closing_records),
@@ -767,8 +723,7 @@ def run_QD_and_extensions(
     """
     cost_rt = 4.0
 
-    # Flatten all pairs across days.
-    pairs: list[tuple[str, FillRecord]] = []  # (date, closing_record)
+    pairs: list[tuple[str, FillRecord]] = []
     for d in days:
         for f in d.fills:
             if f.is_close:
@@ -779,7 +734,6 @@ def run_QD_and_extensions(
 
     cells = []
     for tau in _TAU_SWEEP:
-        # Surviving pairs (gate inactive at close time) and suppressed pairs.
         surv_dates: dict[str, list[float]] = {}
         supp_count = 0
         for d, rec in pairs:
@@ -787,7 +741,6 @@ def run_QD_and_extensions(
                 supp_count += 1
                 continue
             surv_dates.setdefault(d, []).append(rec.pair_pnl_pts - cost_rt)
-        # Per-day net PnL.
         day_pnl = {d: float(sum(v)) for d, v in surv_dates.items()}
         total = float(sum(day_pnl.values()))
         n_surviving = sum(len(v) for v in surv_dates.values())
@@ -801,39 +754,27 @@ def run_QD_and_extensions(
             "n_fill_days": sum(1 for v in day_pnl.values() if abs(v) > 1e-6),
         })
 
-    # Best cell = max total_residual.
     best_idx = int(np.argmax([c["total_residual_pnl_pts"] for c in cells]))
     best = cells[best_idx]
 
-    # --- Q-D verdict: best-cell residual > R47 baseline (-17,910) ---
-    # Note: task #1 spec used "-11,514" (C1 baseline). We compare against the
-    # *correct* C2 reference, which is R47 (the base-maker C2 wraps), so use
-    # -17,910. We report both for transparency.
     qd_pass = best["total_residual_pnl_pts"] > _R47_R1_TOTAL_PNL_PTS
 
-    # --- Q-D-regime: Jan AND Mar both improve over R47 baseline split ---
-    # Compute R47 baseline Jan/Mar split.
     r47_jan_total = sum(d.net_pnl_pts for d in days if _date_in_jan(d.date))
     r47_mar_total = sum(d.net_pnl_pts for d in days if _date_in_mar(d.date))
     best_jan = sum(p for d, p in best["per_day_pnl_pts"].items() if _date_in_jan(d))
     best_mar = sum(p for d, p in best["per_day_pnl_pts"].items() if _date_in_mar(d))
     qd_regime_pass = (best_jan >= r47_jan_total) and (best_mar >= r47_mar_total)
-    # Tighter: spec said both must be ≥ 0 OR both better than R47 baseline split
-    # — disjunction kept.
     qd_regime_pass = (
         (best_jan >= 0 and best_mar >= 0)
         or (best_jan >= r47_jan_total and best_mar >= r47_mar_total)
     )
 
-    # --- Q-D-A1strict: max_winning_day / Σ winning_days ≤ 25% ---
     winning_pnls = [v for v in best["per_day_pnl_pts"].values() if v > 0]
     sum_win = float(sum(winning_pnls)) if winning_pnls else 0.0
     max_win = float(max(winning_pnls)) if winning_pnls else 0.0
     max_day_pct = (max_win / sum_win * 100.0) if sum_win > 0 else 0.0
     qd_a1_pass = (sum_win > 0) and (max_day_pct <= 25.0)
 
-    # --- Q-meta: gate active fraction of minutes ≤ 30% ---
-    # Use rho_minute_max from each day.
     total_min = 0
     fired_min = 0
     tau_best = best["tau"]
@@ -869,16 +810,12 @@ def run_QD_and_extensions(
     }
 
 
-# ----------------------------------------------------------------------------
-# Driver
-# ----------------------------------------------------------------------------
 
 
 def main() -> int:
     overall_t0 = time.time()
     logger.info("c2_pre_t4_gate_start")
 
-    # Run synthetic recovery test for OnlineHawkesMLE (T4 binding contract item).
     syn_t0 = time.time()
     syn = synthetic_recovery_test()
     syn["wall_sec"] = round(time.time() - syn_t0, 2)
@@ -892,7 +829,6 @@ def main() -> int:
     ck = ClickHouseSource()
     ck.health_check()
 
-    # Get available CK dates that fall in the R1 window.
     sql_dates = (
         "SELECT DISTINCT toString(toDate(fromUnixTimestamp64Nano(exch_ts))) AS d "
         "FROM hft.market_data WHERE symbol='TMFD6' AND "
@@ -943,7 +879,6 @@ def main() -> int:
             wall_sec=elapsed,
         )
 
-    # Aggregate.
     total_fills = sum(d.n_fills for d in days)
     total_gross = sum(d.gross_pnl_pts for d in days)
     total_net = sum(d.net_pnl_pts for d in days)
@@ -958,7 +893,6 @@ def main() -> int:
         anchor_r47_fills=_R47_R1_FILLS,
     )
 
-    # Anchor parity check.
     pnl_drift_pct = (
         100.0 * abs(total_net - _R47_R1_TOTAL_PNL_PTS) / abs(_R47_R1_TOTAL_PNL_PTS)
     )
@@ -972,24 +906,13 @@ def main() -> int:
         fills_drift_pct=round(fills_drift_pct, 2),
         anchor_pass=anchor_pass,
     )
-    # TODO(F5+t3-§10.2): future pre-T4 gate scripts must hard-exit here when
-    # anchor_pass is False — record-and-continue causes Q-A through Q-meta to
-    # run on a non-comparable harness, mixing baselines. Pattern:
-    #   if not anchor_pass:
-    #       _write_partial_summary(out_path, anchor_only=True)
-    #       sys.exit(1)
-    # Kept as record-and-continue here only because R52-R2-C2 already used
-    # the resulting tests as F4 / F2-empirical-tail intel via team-lead
-    # explicit Option-B direction (2026-04-25).
 
-    # Q-A
     pair_pnls_pts = np.array([
         f.pair_pnl_pts for d in days for f in d.fills if f.is_close
     ])
     qa = run_QA(pair_pnls_pts)
     logger.info("QA_done", **{k: v for k, v in qa.items() if k != "n"})
 
-    # Q-B (per-day rho minute samples, tau=0.85)
     rho_per_day: dict[str, dict[int, float]] = {d.date: d.rho_minute_max for d in days}
     qb = run_QB(rho_per_day, tau=0.85)
     logger.info(
@@ -998,7 +921,6 @@ def main() -> int:
         pass_=qb["pass"],
     )
 
-    # Q-C (closing records only)
     closing_records = [f for d in days for f in d.fills if f.is_close]
     qc = run_QC(closing_records)
     logger.info(
@@ -1009,7 +931,6 @@ def main() -> int:
         pass_=qc.get("pass"),
     )
 
-    # Q-D + extensions
     qd = run_QD_and_extensions(days)
     logger.info(
         "QD_done",
@@ -1022,7 +943,6 @@ def main() -> int:
         qmeta_pass=qd["qmeta_pass"],
     )
 
-    # Verdict tally.
     verdict = {
         "Q-A": qa["pass"],
         "Q-B": qb["pass"],
@@ -1035,7 +955,6 @@ def main() -> int:
     all_pass = all(verdict.values())
     logger.info("verdict", **{k: v for k, v in verdict.items()}, all_pass=all_pass)
 
-    # Persist JSON.
     out_dir = Path("outputs/r52_amhp_dynamic_spread")
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
@@ -1102,7 +1021,6 @@ def main() -> int:
     out_path.write_text(json.dumps(summary, indent=2, default=str))
     logger.info("c2_pre_t4_gate_done", output=str(out_path), all_pass=all_pass)
 
-    # Stdout final block.
     sys.stdout.write(json.dumps({
         "synthetic_recovery": syn,
         "anchor_pass": anchor_pass,

@@ -56,10 +56,8 @@ def test_pre_recorder_session_emits_negative_one_sentinel(mod):
         "first_divergence_idx": None,
     }
     out = mod._format_prom(report, loop_id="r47_tmf_v1", strategy_id="R47_MAKER_TMF", phase="sim")
-    # match_pct=None should serialize to -1 sentinel.
     assert "} -1.0000" in out
     assert 'eligibility="pre_recorder"' in out
-    # first_divergence_idx None should serialize to -1.
     assert "hft_replay_first_divergence_idx" in out
     lines = [line for line in out.splitlines() if line.startswith("hft_replay_first_divergence_idx{")]
     assert lines
@@ -78,7 +76,7 @@ def test_divergence_count_is_replay_minus_live(mod):
     out = mod._format_prom(report, loop_id="r47_tmf_v1", strategy_id="R47_MAKER_TMF", phase="shadow")
     div_lines = [line for line in out.splitlines() if line.startswith("hft_replay_divergence_count{")]
     assert len(div_lines) == 1
-    assert div_lines[0].rstrip().endswith(" -5")  # 95 - 100
+    assert div_lines[0].rstrip().endswith(" -5")
 
 
 def test_n_intents_emits_both_sources(mod):
@@ -142,8 +140,6 @@ def test_settings_for_uses_loop_and_strategy(mod):
     s = mod._settings_for("r47_tmf_v1", "R47_MAKER_TMF")
     assert s["loop_id"] == "r47_tmf_v1"
     assert s["strategy"]["id"] == "R47_MAKER_TMF"
-    # Default module/class must point at the production R47 strategy unless
-    # the operator overrides via env.
     assert "r47_maker" in s["strategy"]["module"]
     assert s["strategy"]["class"] == "R47MakerStrategy"
 
@@ -153,8 +149,6 @@ def test_write_prom_atomic_replace(mod, tmp_path: Path):
     mod._write_prom("hft_replay_match_pct{} 99.0\n", str(target))
     assert target.exists()
     assert "hft_replay_match_pct" in target.read_text()
-    # Re-write to confirm idempotency / replace semantics.
     mod._write_prom("hft_replay_match_pct{} 100.0\n", str(target))
     assert "100.0" in target.read_text()
-    # No leftover .tmp file from atomic replace.
     assert not (target.parent / "hft_replay.prom.tmp").exists()

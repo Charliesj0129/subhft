@@ -47,65 +47,47 @@ from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
 logger = get_logger("alpha.r52_amhp_dynamic_spread")
 
-# Feature indices (lob_shared_v3) — same as R47 baseline
 _IDX_BEST_BID = 0
 _IDX_BEST_ASK = 1
 _IDX_L1_BID_QTY = 8
 _IDX_L1_ASK_QTY = 9
 _IDX_L1_IMBALANCE_PPM = 10
 
-_PRICE_SCALE = 10_000          # x10000 scaled int (TMFD6 contract scale)
+_PRICE_SCALE = 10_000
 _NS_PER_SEC = 1_000_000_000
 
-# Layer-1 spread floor — never quote below this.  Cited from T1 §3 (anchored to
-# `feedback_taifex_fee_structure.md`: TMF retail RT 4 pt + 1 pt buffer).
 _BASE_SPREAD_PTS = 5
 _BASE_SPREAD_SCALED = _BASE_SPREAD_PTS * _PRICE_SCALE
 
-# Layer-2 modulator coefficients (pre-registered — to be re-fit by kill_flag
-# telemetry on the 31d window during T5 backtest; literature-prior defaults).
-_ALPHA_RHO = 1.6                # per T1 §3 multiplier table (calm 1.0 → tense 2.2)
+_ALPHA_RHO = 1.6
 _ALPHA_IIR = 0.9
-_RHO_LOW = 0.55                 # multiplier inactive below
+_RHO_LOW = 0.55
 _RHO_TENSE = 0.75
-_RHO_CRITICAL = 0.85            # AMHP §6.4 criticality alarm
+_RHO_CRITICAL = 0.85
 _IIR_TENSE = 0.45
 _IIR_CRITICAL = 0.70
-_MULT_CAP = 3.0                 # T1 §3 — critical regime upper bound
+_MULT_CAP = 3.0
 
-# Layer-2 multi-scale decay rates (β_k per T1 §6.1 table).  half_life = ln2/β.
-_BETA_MS = math.log(2.0) / 0.10                # ~100 ms half-life
-_BETA_MIN = math.log(2.0) / 60.0               # ~1 min half-life
-_BETA_HR = math.log(2.0) / 3600.0              # ~1 hr half-life
+_BETA_MS = math.log(2.0) / 0.10
+_BETA_MIN = math.log(2.0) / 60.0
+_BETA_HR = math.log(2.0) / 3600.0
 
-# Excitation amplitudes (scaled at the exponential basis); fit in update path.
-# Defaults sized so per-scale ρ_k = α_k/β_k ≈ 0.20, giving aggregate ρ̂ ≈ 0.60.
-# (β_ms = 6.93, β_min = 0.0116, β_hr = 0.000193 → α_ms = 1.386, α_min = 0.00231,
-#  α_hr = 0.0000385.)  This keeps the model in the stable subcritical regime
-#  while having all three scales contribute non-trivially to ρ̂.
 _ALPHA_K_DEFAULT = (
     0.20 * _BETA_MS,
     0.20 * _BETA_MIN,
     0.20 * _BETA_HR,
 )
 
-# Asymmetric panic-sell prior (T1 §6.3 — α_sell_sell ≈ 1.3–1.8 × α_buy_buy).
 _ASYM_R_DEFAULT = 1.5
 
-# Active-size attenuation when ρ̂ enters tense / critical regimes (T1 §3).
-_SIZE_TENSE = 1                 # already 1 lot at max_pos=3 in baseline
+_SIZE_TENSE = 1
 _SIZE_CRIT = 1
 
-# Minimum samples required before the AMHP estimator is considered warmed-up.
 _AMHP_WARMUP_TRADES = 200
 
-# Kill-flag telemetry buckets (per-fill, per-minute, per-day).
 _LOG_INTERVAL = 500
 
 
-# =============================================================================
-# Multi-scale Hawkes / AMHP online estimator
-# =============================================================================
 
 
 class _AMHPState:
@@ -124,31 +106,23 @@ class _AMHPState:
     """
 
     __slots__ = (
-        # decay rates (constant)
         "_betas",
-        # per-side excitation amplitudes — alpha_k_buy, alpha_k_sell, sized at fit
         "_alpha_k_buy",
         "_alpha_k_sell",
-        # asymmetric self-excitation ratio R = alpha_sell_sell / alpha_buy_buy
         "_asym_R",
-        # per-scale, per-side intensity λ_k_side
         "_lam_buy",
         "_lam_sell",
-        # last update timestamp (ns)
         "_last_ns",
-        # state-dependent baseline μ components — set externally per day
         "_mu_0",
         "_mu_lob",
         "_mu_dist",
         "_mu_io",
         "_mu_us",
-        # current covariate values
         "_lob_imb_z",
         "_dist_to_limit_z",
         "_io_z",
         "_us_overnight",
         "_us_window_active",
-        # warmup counter
         "_n_trades",
         "_warmed_up",
     )
@@ -165,15 +139,12 @@ class _AMHPState:
         self._alpha_k_sell = [a * asym_R for a in alpha_k_init]
         self._asym_R = asym_R
 
-        # Initialise intensities at the baseline μ_0 split evenly across scales.
-        # This lets ρ̂ start near sum(α_k)/β_k under default priors instead of 0.
         self._lam_buy = [mu_0 / 3.0] * 3
         self._lam_sell = [mu_0 / 3.0] * 3
 
         self._last_ns: int = 0
 
         self._mu_0 = mu_0
-        # Linearised state-dependent μ coefficients — load-bearing T2 flag #1.
         self._mu_lob = 0.0
         self._mu_dist = 0.0
         self._mu_io = 0.0
@@ -188,7 +159,6 @@ class _AMHPState:
         self._n_trades = 0
         self._warmed_up = False
 
-    # ------------------------------------------------------------------ μ(t)
 
     def set_day_covariates(
         self,
@@ -229,10 +199,8 @@ class _AMHPState:
         mu += self._mu_io * self._io_z
         if self._us_window_active:
             mu += self._mu_us * self._us_overnight
-        # μ must be non-negative for a counting process; floor at small ε.
         return mu if mu > 1e-6 else 1e-6
 
-    # --------------------------------------------------------------- update
 
     def _decay(self, dt_ns: int) -> None:
         """Exponential decay all per-scale intensities by Δt."""
@@ -255,18 +223,15 @@ class _AMHPState:
         if self._n_trades >= _AMHP_WARMUP_TRADES:
             self._warmed_up = True
 
-        # Cross- and self-excitation per side (asymmetric per T1 §6.3).
         if direction > 0:
             for k in range(3):
                 self._lam_buy[k] += self._alpha_k_buy[k]
-                # Cross-excitation buy → sell at a fraction of the self term.
                 self._lam_sell[k] += 0.5 * self._alpha_k_buy[k]
         else:
             for k in range(3):
                 self._lam_sell[k] += self._alpha_k_sell[k]
                 self._lam_buy[k] += 0.5 * self._alpha_k_sell[k]
 
-    # ----------------------------------------------------- derived signals
 
     def lambda_buy(self) -> float:
         return self._mu_t() + self._lam_buy[0] + self._lam_buy[1] + self._lam_buy[2]
@@ -310,9 +275,6 @@ class _AMHPState:
         return self._n_trades
 
 
-# =============================================================================
-# AlphaProtocol surface (signal layer, registry-discoverable)
-# =============================================================================
 
 
 class AmhpDynamicSpreadAlpha:
@@ -340,9 +302,9 @@ class AmhpDynamicSpreadAlpha:
                 " + alpha_iir * |IIR|)); quote iff observed_spread >= spread_target"
             ),
             paper_refs=(
-                "AMHP-2024",                 # user-supplied "六、AMHP" + "七、應用場景"
-                "1105.3115",                 # Gueant-Lehalle-Tapia inventory risk
-                "2403.02572",                # Lokin-Yu fill probabilities
+                "AMHP-2024",
+                "1105.3115",
+                "2403.02572",
             ),
             data_fields=(
                 "trade_direction",
@@ -351,10 +313,10 @@ class AmhpDynamicSpreadAlpha:
                 "lob_imbalance_ppm",
                 "best_bid",
                 "best_ask",
-                "foreign_io_zscore",        # daily snapshot
-                "us_overnight_return",       # daily reference (session open ±30 min)
+                "foreign_io_zscore",
+                "us_overnight_return",
             ),
-            complexity="O(1)",                # per-trade update; O(K=3) per scale
+            complexity="O(1)",
             status=AlphaStatus.PROTOTYPE,
             tier=AlphaTier.TIER_1,
             rust_module=None,
@@ -389,9 +351,6 @@ class AmhpDynamicSpreadAlpha:
         return self._state
 
 
-# =============================================================================
-# Telemetry containers for kill-flag instrumentation
-# =============================================================================
 
 
 class _KillFlagCounters:
@@ -402,12 +361,12 @@ class _KillFlagCounters:
         "fills",
         "fill_pnl_pts_total",
         "fill_count",
-        "modulator_gain_acc",       # K3 — Σ (per-fill spread captured) above R47 floor
-        "fills_with_modulator",     # K3 — denominator (fills where multiplier > 1.0)
+        "modulator_gain_acc",
+        "fills_with_modulator",
         "rho_hat_minute_samples",
-        "rho_hat_critical_minutes",  # K5 — minutes with ρ̂ > 0.85
-        "fills_per_day",            # day → fill count (for K1 distinct fill days)
-        "pnl_per_day_pts",          # day → cumulative pt PnL (for K1 max_day, winning_days)
+        "rho_hat_critical_minutes",
+        "fills_per_day",
+        "pnl_per_day_pts",
     )
 
     def __init__(self) -> None:
@@ -422,9 +381,6 @@ class _KillFlagCounters:
         self.pnl_per_day_pts: dict[str, float] = {}
 
 
-# =============================================================================
-# Strategy — three-layer dynamic-spread maker
-# =============================================================================
 
 
 class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
@@ -439,7 +395,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
     def __init__(
         self,
         strategy_id: str = "r52_amhp_dynamic_spread",
-        # AMHP modulator
         base_spread_pts: int = _BASE_SPREAD_PTS,
         alpha_rho: float = _ALPHA_RHO,
         alpha_iir: float = _ALPHA_IIR,
@@ -450,18 +405,15 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
         iir_critical: float = _IIR_CRITICAL,
         mult_cap: float = _MULT_CAP,
         asym_R: float = _ASYM_R_DEFAULT,
-        # Day-level covariate coefficients (load-bearing — DA T2 flag #1)
         gamma_lob: float = 0.0,
         gamma_dist: float = 0.0,
         gamma_io: float = 0.0,
         gamma_us: float = 0.0,
-        # Inherited R47 knobs — keep validated D1–D4 defaults
-        # (PE disabled, queue-cancel disabled, MFG disabled per T1 §3 L2)
-        pe_danger_threshold: float = 0.0,        # 0 disables PE block
-        queue_cancel_threshold: float = 1.1,     # > 1 disables queue suppression
-        mfg_skew_z_threshold: float = 99.0,      # high → MFG skew effectively off
-        spread_threshold_pts: int = _BASE_SPREAD_PTS,  # R47 cost-floor
-        max_pos: int = 3,                        # R47 structural property
+        pe_danger_threshold: float = 0.0,
+        queue_cancel_threshold: float = 1.1,
+        mfg_skew_z_threshold: float = 99.0,
+        spread_threshold_pts: int = _BASE_SPREAD_PTS,
+        max_pos: int = 3,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -474,7 +426,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             **kwargs,
         )
 
-        # AMHP estimator state — one per symbol
         self._amhp_states: dict[str, _AMHPState] = {}
 
         self._base_spread_pts = base_spread_pts
@@ -496,7 +447,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             "us": gamma_us,
         }
 
-        # Kill-flag telemetry
         self._tel = _KillFlagCounters()
         self._last_minute_bucket_ns: int = 0
         self._stats_seen = 0
@@ -514,7 +464,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             gamma_us=gamma_us,
         )
 
-    # ------------------------------------------------------------- AMHP state
 
     def _get_amhp(self, symbol: str) -> _AMHPState:
         st = self._amhp_states.get(symbol)
@@ -550,11 +499,9 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             us_window_active=us_window_active,
         )
 
-    # ---------------------------------------------------------- event handlers
 
     def on_tick(self, event: TickEvent) -> None:
         """Update AMHP intensity on each signed trade."""
-        # Preserve R47 MFG side-effect (no-op since mfg_skew_z_threshold=99)
         super().on_tick(event)
         symbol = event.symbol
         direction = getattr(event, "trade_direction", 0)
@@ -589,7 +536,7 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             amhp = self._get_amhp(symbol)
             amhp.set_day_covariates(
                 lob_imb_z=lob_z,
-                dist_to_limit_z=amhp._dist_to_limit_z,  # preserved
+                dist_to_limit_z=amhp._dist_to_limit_z,
                 io_z=amhp._io_z,
                 us_overnight=amhp._us_overnight,
                 us_window_active=amhp._us_window_active,
@@ -600,7 +547,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
         symbol = event.symbol
         self._stats_seen += 1
 
-        # Validity guard
         if (
             event.mid_price_x2 is None
             or event.spread_scaled is None
@@ -611,20 +557,15 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
 
         amhp = self._get_amhp(symbol)
 
-        # ---- L2: derive modulator from AMHP signals ----
         if amhp.warmed_up:
             rho_hat = amhp.rho_hat()
             iir_abs = abs(amhp.iir())
         else:
-            # Pre-warmup: act like R47 baseline at the cost-floor.
             rho_hat = 0.0
             iir_abs = 0.0
 
         multiplier = self._compute_multiplier(rho_hat, iir_abs)
 
-        # ---- L1: spread floor enforcement ----
-        # spread_target_scaled = max(BASE, BASE * multiplier).  Note: multiplier
-        # >= 1.0 by construction; HARD floor at BASE prevents narrowing below.
         spread_target_scaled = max(
             self._base_spread_scaled,
             int(self._base_spread_scaled * multiplier),
@@ -634,9 +575,8 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             self._spread_blocked += 1
             self._record_minute_rho(amhp, ts_ns=self._event_ts_ns(event),
                                      rho_hat=rho_hat)
-            return  # quote suppressed — observed spread below dynamic target
+            return
 
-        # ---- L3: quote generation (R47 baseline math) ----
         mid_price_x2 = event.mid_price_x2
         spread_scaled = event.spread_scaled
         imbalance = event.imbalance
@@ -650,8 +590,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
         skew_x2 = -(pos * tick_size_scaled * 2) // 5
         fair_value_x2 = micro_price_x2 + skew_x2
 
-        # Use spread_target_scaled as the floor for half-spread; if observed
-        # spread is wider, capture the wider half via R47 baseline width logic.
         target_half_scaled = max(1, spread_target_scaled // 2)
         observed_half_scaled = max(1, spread_scaled // 2)
         half_spread_scaled = max(target_half_scaled, observed_half_scaled)
@@ -659,7 +597,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
         bid_price_scaled = (fair_value_x2 - half_spread_scaled * 2) // 2
         ask_price_scaled = (fair_value_x2 + half_spread_scaled * 2) // 2
 
-        # Active-size attenuation under tense / critical regimes
         qty = self._size_for_regime(rho_hat, iir_abs)
         max_pos = self._max_pos
 
@@ -689,11 +626,9 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
                 spread_blocked=self._spread_blocked,
             )
 
-    # ---------------------------------------------------------- L2 helpers
 
     def _compute_multiplier(self, rho_hat: float, iir_abs: float) -> float:
         """Compute spread multiplier g(rho_hat, |IIR|) bounded by mult_cap."""
-        # T1 §3 L1 spec.  Critical regime overrides at full cap.
         if rho_hat >= self._rho_critical or iir_abs >= self._iir_critical:
             return self._mult_cap
         excess_rho = max(0.0, rho_hat - self._rho_low)
@@ -712,7 +647,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             return _SIZE_TENSE
         return 1
 
-    # ------------------------------------------------------ telemetry K1/K3/K5
 
     def _record_minute_rho(
         self,
@@ -764,7 +698,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
             self._tel.modulator_gain_acc += gain
             self._tel.fills_with_modulator += 1
 
-    # ------------------------------------------------- public telemetry view
 
     def kill_flag_telemetry(self) -> dict[str, Any]:
         """Return per-strategy kill-flag accumulators consumed by the T5
@@ -814,7 +747,6 @@ class R52AmhpDynamicSpreadStrategy(R47MakerStrategy):
         }
 
 
-# Required by registry / impl loaders.
 ALPHA_CLASS = AmhpDynamicSpreadAlpha
 STRATEGY_CLASS = R52AmhpDynamicSpreadStrategy
 

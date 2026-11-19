@@ -36,14 +36,9 @@ __all__ = [
 
 log = structlog.get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# 1. BiasReasoner
-# ---------------------------------------------------------------------------
 
-# Buffer for proximity grouping in LevelReasoner (5 points = 50,000 scaled)
 _LEVEL_PROXIMITY = 50_000
 
-# Minimum gap to declare directional bias (avoid noise)
 _BIAS_GAP = 0.10
 
 
@@ -63,7 +58,6 @@ class BiasReasoner:
         """Evaluate bias from FactReport using weighted evidence chain."""
         evidences = self._collect_evidences(fr)
 
-        # Aggregate
         bull_weight = 0.0
         bear_weight = 0.0
         total_weight = 0.0
@@ -95,11 +89,10 @@ class BiasReasoner:
             summary=summary,
         )
 
-    def _collect_evidences(self, fr: FactReport) -> list[Evidence]:  # noqa: C901
+    def _collect_evidences(self, fr: FactReport) -> list[Evidence]:
         """Collect all 8 evidence sources from the FactReport."""
         evidences: list[Evidence] = []
 
-        # 1. flow.session_ud (weight 0.20)
         ud = fr.flow.session_ud
         evidences.append(
             Evidence(
@@ -110,7 +103,6 @@ class BiasReasoner:
             )
         )
 
-        # 2. flow.eod_drift (weight 0.15)
         drift = fr.flow.eod_drift
         evidences.append(
             Evidence(
@@ -121,10 +113,8 @@ class BiasReasoner:
             )
         )
 
-        # 3. flow.sustained_runs (weight 0.15)
         evidences.append(self._eval_sustained_runs(fr))
 
-        # 4. chips.net_ratio (weight 0.20)
         nr = fr.chips.net_ratio
         evidences.append(
             Evidence(
@@ -135,10 +125,8 @@ class BiasReasoner:
             )
         )
 
-        # 5. segments.closing (weight 0.10)
         evidences.append(self._eval_closing_segment(fr))
 
-        # 6. cross_day.trend (weight 0.10)
         trend = fr.cross_day.trend_direction
         direction = {"up": "bull", "down": "bear"}.get(trend, "neutral")
         evidences.append(
@@ -150,10 +138,8 @@ class BiasReasoner:
             )
         )
 
-        # 7. cross_day.flow_reversal (weight 0.05)
         evidences.append(self._eval_flow_reversal(fr))
 
-        # 8. structure.failed_breakouts (weight 0.05)
         evidences.append(self._eval_failed_breakouts(fr))
 
         return evidences
@@ -234,11 +220,6 @@ class BiasReasoner:
         return f"{bias_label} ({pct}%): {detail}"
 
 
-# ---------------------------------------------------------------------------
-# 2. LevelReasoner
-# ---------------------------------------------------------------------------
-
-
 class LevelReasoner:
     """Collect, merge, and classify price levels with confluence scoring."""
 
@@ -246,7 +227,6 @@ class LevelReasoner:
         """Collect all PriceLevels, group by proximity, classify, and filter."""
         raw_levels: list[PriceLevel] = []
 
-        # Structure sources
         raw_levels.extend(fr.structure.double_bottoms)
         raw_levels.extend(fr.structure.double_tops)
         raw_levels.extend(fr.structure.failed_breakouts)
@@ -254,10 +234,8 @@ class LevelReasoner:
         raw_levels.append(fr.structure.session_high)
         raw_levels.append(fr.structure.session_low)
 
-        # Chip sources: VAP peaks
         raw_levels.extend(fr.chips.vap_peaks)
 
-        # Chip sources: clusters → PriceLevel
         for cluster in fr.chips.clusters:
             strength = min(1.0, cluster.trade_count / 10.0)
             raw_levels.append(
@@ -268,14 +246,12 @@ class LevelReasoner:
                 )
             )
 
-        # Group by proximity
         groups = self._group_by_proximity(raw_levels, _LEVEL_PROXIMITY)
 
         close = fr.session_data.close
 
         enriched: list[EnrichedLevel] = []
         for group in groups:
-            # Merge: price = weighted avg by strength, strength = max
             total_s = sum(lv.strength for lv in group)
             if total_s > 0:
                 price = int(sum(lv.price * lv.strength for lv in group) / total_s)
@@ -285,7 +261,6 @@ class LevelReasoner:
             sources = [lv.reason for lv in group]
             confluence = len(group)
 
-            # Classify side
             if price > close + _LEVEL_PROXIMITY:
                 side = "resistance"
             elif price < close - _LEVEL_PROXIMITY:
@@ -303,12 +278,10 @@ class LevelReasoner:
                 )
             )
 
-        # Filter: confluence >= 2 OR (confluence == 1 AND strength >= 0.7)
         filtered = [
             lv for lv in enriched if lv.confluence_count >= 2 or (lv.confluence_count == 1 and lv.strength >= 0.7)
         ]
 
-        # Sort by strength descending within each side
         filtered.sort(key=lambda lv: (-_side_order(lv.side), -lv.strength))
 
         return filtered
@@ -326,7 +299,6 @@ class LevelReasoner:
         groups: list[list[PriceLevel]] = [[sorted_levels[0]]]
 
         for lv in sorted_levels[1:]:
-            # Compare with the first element of the current group (anchor)
             if abs(lv.price - groups[-1][0].price) <= proximity:
                 groups[-1].append(lv)
             else:
@@ -338,11 +310,6 @@ class LevelReasoner:
 def _side_order(side: str) -> int:
     """Sort order: support first, then pivot, then resistance."""
     return {"support": 0, "pivot": 1, "resistance": 2}.get(side, 3)
-
-
-# ---------------------------------------------------------------------------
-# 3. ScenarioReasoner
-# ---------------------------------------------------------------------------
 
 
 class ScenarioReasoner:
@@ -361,7 +328,6 @@ class ScenarioReasoner:
         supports = [lv for lv in levels if lv.side == "support"]
         resistances = [lv for lv in levels if lv.side == "resistance"]
 
-        # S1/R1 helpers
         s1 = supports[0].price if supports else None
         r1 = resistances[0].price if resistances else None
         close = fr.session_data.close
@@ -370,7 +336,6 @@ class ScenarioReasoner:
         prev_high = fr.cross_day.prev_days[0].high if fr.cross_day.prev_days else close + atr
         prev_close = fr.cross_day.prev_days[0].close if fr.cross_day.prev_days else close
 
-        # 1. break_below: support exists + bias != "bullish"
         if supports and bias.bias != "bullish":
             target = min(prev_low, s1 - atr) if s1 is not None else prev_low
             stop = s1 + atr // 2 if s1 is not None else close + atr // 2
@@ -386,7 +351,6 @@ class ScenarioReasoner:
                 )
             )
 
-        # 2. hold_bounce: support exists + any bull evidence
         has_bull_ev = any(ev.direction == "bull" for ev in bias.evidences)
         if supports and has_bull_ev:
             target = r1 if r1 is not None else prev_high
@@ -403,7 +367,6 @@ class ScenarioReasoner:
                 )
             )
 
-        # 3. trend_continue: cross_day trend >= 2 days same + bias concordant
         trend = fr.cross_day.trend_direction
         trend_days = len(fr.cross_day.prev_days)
         bias_concordant = (trend == "up" and bias.bias == "bullish") or (trend == "down" and bias.bias == "bearish")
@@ -426,7 +389,6 @@ class ScenarioReasoner:
                 )
             )
 
-        # 4. gap_fill: |open - prev_close| / prev_close >= 0.003
         open_price = fr.session_data.open
         if prev_close > 0:
             gap_ratio = abs(open_price - prev_close) / prev_close
@@ -450,7 +412,6 @@ class ScenarioReasoner:
                 )
             )
 
-        # 5. range_bound: range_atr_ratio < 0.7 + bias neutral
         if fr.volatility.range_atr_ratio < 0.7 and bias.bias == "neutral":
             high = fr.session_data.high
             low = fr.session_data.low
@@ -482,11 +443,6 @@ def _trend_label(trend: str) -> str:
     return "上漲" if trend == "up" else "下跌"
 
 
-# ---------------------------------------------------------------------------
-# 4. NarrativeReasoner
-# ---------------------------------------------------------------------------
-
-
 class NarrativeReasoner:
     """Generate time-segment narrative with turning points and conclusion."""
 
@@ -500,7 +456,6 @@ class NarrativeReasoner:
             paragraph = self._segment_paragraph(seg)
             storyline.append(paragraph)
 
-            # Detect turning points
             if prev_side is not None and prev_side != seg.dominant_side:
                 if (prev_side == "bull" and seg.dominant_side == "bear") or (
                     prev_side == "bear" and seg.dominant_side == "bull"
@@ -528,7 +483,6 @@ class NarrativeReasoner:
         Accepts a SegmentFact positionally (the first arg after self in the
         outer method) or via **kwargs for testing flexibility.
         """
-        # Accept SegmentFact directly
         from hft_platform.reports.models import SegmentFact
 
         if isinstance(seg, SegmentFact):
@@ -536,7 +490,6 @@ class NarrativeReasoner:
         else:
             raise TypeError("Expected SegmentFact")
 
-        # Dominant description
         if s.dominant_side == "bull":
             dominant_desc = "多方主導"
         elif s.dominant_side == "bear":
@@ -544,7 +497,6 @@ class NarrativeReasoner:
         else:
             dominant_desc = "多空拉鋸"
 
-        # Volume description
         vol_pct = s.volume_pct
         if vol_pct > 0.35:
             vol_desc = f"佔全場 {vol_pct:.0%}（量能集中）"
@@ -553,7 +505,6 @@ class NarrativeReasoner:
         else:
             vol_desc = f"佔全場 {vol_pct:.0%}"
 
-        # Large trade note
         large_total = s.large_buy_count + s.large_sell_count
         if large_total > 0:
             large_note = f"大單 {large_total} 筆（買 {s.large_buy_count}/賣 {s.large_sell_count}）"
@@ -596,11 +547,6 @@ def _vol_comment(pct: float) -> str:
     if pct < 0.15:
         return "萎縮"
     return "正常"
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
 
 
 def reason_all(fr: FactReport) -> ReasoningReport:

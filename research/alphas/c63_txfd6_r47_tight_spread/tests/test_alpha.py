@@ -39,7 +39,7 @@ from research.backtest.maker_engine import (
 )
 from research.registry.schemas import AlphaProtocol
 
-_SCALE = 1_000_000  # CK convention
+_SCALE = 1_000_000
 
 
 def _bidask(
@@ -76,9 +76,6 @@ def _trade(price_pts: int, volume: int = 1, ts_ns: int | None = None) -> TickDat
     )
 
 
-# ----------------------------------------------------------------------------
-# Spread-gate boundary — C63 signature: threshold=3, NOT C33's 5
-# ----------------------------------------------------------------------------
 
 
 def test_spread_threshold_default_is_3_not_5() -> None:
@@ -137,13 +134,10 @@ def test_spread_gate_admits_at_sp6() -> None:
 def test_spread_gate_counter_advances_on_block() -> None:
     maker = TxfD6R47TightSpreadMaker()
     maker.on_tick(_bidask(17500, 17501))
-    maker.on_tick(_bidask(17501, 17502))  # diff levels, avoid price-move gate
+    maker.on_tick(_bidask(17501, 17502))
     assert maker.spread_blocked == 2
 
 
-# ----------------------------------------------------------------------------
-# Scaled-int price arithmetic
-# ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -172,9 +166,6 @@ def test_posts_at_scaled_int_prices(
         assert isinstance(a.price, int)
 
 
-# ----------------------------------------------------------------------------
-# R47-minimal: ALL signal layers disabled (attribute absence)
-# ----------------------------------------------------------------------------
 
 
 def test_no_signal_layer_methods_exposed() -> None:
@@ -216,9 +207,6 @@ def test_impl_does_not_import_r47_signal_state_classes() -> None:
         )
 
 
-# ----------------------------------------------------------------------------
-# Max-pos gate (canonical mp=3, same as C33)
-# ----------------------------------------------------------------------------
 
 
 def test_max_pos_default_is_3_canonical() -> None:
@@ -276,9 +264,6 @@ def test_max_pos_blocked_counter_advances() -> None:
     assert maker.max_pos_blocked >= 1
 
 
-# ----------------------------------------------------------------------------
-# Inventory skew (LINEAR in pos; NOT |pos|-gated -> no C22-class meta-kill)
-# ----------------------------------------------------------------------------
 
 
 def test_inventory_skew_none_at_pos_zero() -> None:
@@ -295,7 +280,6 @@ def test_inventory_skew_lowers_both_quotes_when_long() -> None:
     params = C63Params(max_pos=3, inventory_skew_tenths=2)
     maker = TxfD6R47TightSpreadMaker(params=params)
     maker.on_fill("buy", 17_500 * _SCALE, 17500.5)
-    # skew = 1 * 2 * scale // 10 = 200_000 (0.2 pt)
     actions = maker.on_tick(_bidask(17500, 17503))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
     assert posts["buy"] == 17500 * _SCALE - 200_000
@@ -317,19 +301,14 @@ def test_inventory_skew_scales_linearly_with_pos() -> None:
     """Skew is LINEAR in pos (not |pos|-thresholded -> no C22-class kill)."""
     params = C63Params(max_pos=5, inventory_skew_tenths=2)
     maker = TxfD6R47TightSpreadMaker(params=params)
-    # Drive pos to +3
     for _ in range(3):
         maker.on_fill("buy", 17_500 * _SCALE, 17500.5)
-    # Skew should be 3 * 2 * scale // 10 = 600_000 (3x the pos=1 value)
     actions = maker.on_tick(_bidask(17500, 17506))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
     assert posts["buy"] == 17500 * _SCALE - 600_000
     assert posts["sell"] == 17506 * _SCALE - 600_000
 
 
-# ----------------------------------------------------------------------------
-# Price-movement gate (ROD anti-stack)
-# ----------------------------------------------------------------------------
 
 
 def test_does_not_restack_same_price() -> None:
@@ -349,16 +328,12 @@ def test_reposts_when_price_moves() -> None:
     assert len([a for a in second if isinstance(a, PostQuote)]) == 2
 
 
-# ----------------------------------------------------------------------------
-# Bid/ask execution (no mid)
-# ----------------------------------------------------------------------------
 
 
 def test_posts_at_best_bid_not_mid() -> None:
     maker = TxfD6R47TightSpreadMaker()
     actions = maker.on_tick(_bidask(17500, 17503))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # Mid = 17501.5 * _SCALE = 17_501_500_000
     assert posts["buy"] == 17500 * _SCALE
     assert posts["buy"] != 17_501_500_000
 
@@ -370,9 +345,6 @@ def test_posts_at_best_ask_not_mid() -> None:
     assert posts["sell"] == 17503 * _SCALE
 
 
-# ----------------------------------------------------------------------------
-# TXFD6 point value & inst RT citation
-# ----------------------------------------------------------------------------
 
 
 def test_txf_point_value_is_200_ntd() -> None:
@@ -394,15 +366,11 @@ def test_tight_threshold_economic_viability() -> None:
     """sp=3 (threshold) gross = 3 pt > inst RT 1.5 pt -> structurally viable."""
     params = C63Params()
     assert params.spread_threshold_pts >= _TXF_INST_RT_COST_PTS
-    # gross at threshold floor
     gross_at_threshold = float(params.spread_threshold_pts)
     margin = gross_at_threshold - _TXF_INST_RT_COST_PTS
-    assert margin >= 1.0  # at least 1 pt structural margin
+    assert margin >= 1.0
 
 
-# ----------------------------------------------------------------------------
-# Monotonic time ordering
-# ----------------------------------------------------------------------------
 
 
 def test_monotonic_timestamp_ordering_preserved() -> None:
@@ -417,9 +385,6 @@ def test_monotonic_timestamp_ordering_preserved() -> None:
     assert t1 < EPOCH_THRESHOLD_NS
 
 
-# ----------------------------------------------------------------------------
-# Degenerate books
-# ----------------------------------------------------------------------------
 
 
 def test_trade_event_returns_hold() -> None:
@@ -430,7 +395,7 @@ def test_trade_event_returns_hold() -> None:
 
 def test_rejects_crossed_book() -> None:
     maker = TxfD6R47TightSpreadMaker()
-    actions = maker.on_tick(_bidask(17505, 17504))  # crossed
+    actions = maker.on_tick(_bidask(17505, 17504))
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
@@ -451,16 +416,12 @@ def test_rejects_zero_priced_book() -> None:
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
-# ----------------------------------------------------------------------------
-# Gap / reset
-# ----------------------------------------------------------------------------
 
 
 def test_on_gap_clears_transient_quote_state() -> None:
     maker = TxfD6R47TightSpreadMaker()
     maker.on_tick(_bidask(17500, 17503))
     maker.on_gap()
-    # After gap, same prices can post again (price-gate cleared).
     actions = maker.on_tick(_bidask(17500, 17503))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert len(posts) == 2
@@ -486,9 +447,6 @@ def test_reset_clears_position_and_quotes() -> None:
     assert maker.quotes_posted == 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol conformance
-# ----------------------------------------------------------------------------
 
 
 def test_c63_alpha_conforms_to_alpha_protocol() -> None:
@@ -521,7 +479,6 @@ def test_c63_hypothesis_cites_r47_minimal() -> None:
 def test_c63_hypothesis_cites_tight_threshold() -> None:
     alpha = C63Alpha()
     h = alpha.manifest.hypothesis
-    # Must document the lever change explicitly
     assert "3" in h and "5" in h
 
 
@@ -539,9 +496,6 @@ def test_c63_reset_clears_position() -> None:
     assert alpha.maker.position == 0
 
 
-# ----------------------------------------------------------------------------
-# Cycle tracking / position accounting
-# ----------------------------------------------------------------------------
 
 
 def test_position_decreases_on_sell_fill() -> None:
@@ -561,7 +515,6 @@ def test_position_resets_last_quote_on_fill() -> None:
     first = maker.on_tick(_bidask(17500, 17503))
     assert len([a for a in first if isinstance(a, PostQuote)]) == 2
     maker.on_fill("buy", 17_500 * _SCALE, 17500.5)
-    # Same book -- buy side should repost since last_bid cleared on fill.
     second = maker.on_tick(_bidask(17500, 17503))
     buy_posts = [
         a for a in second if isinstance(a, PostQuote) and a.side == "buy"
@@ -569,23 +522,18 @@ def test_position_resets_last_quote_on_fill() -> None:
     assert len(buy_posts) == 1
 
 
-# ----------------------------------------------------------------------------
-# C33 distinction — C63's single-lever variant signature
-# ----------------------------------------------------------------------------
 
 
 def test_c63_differs_from_c33_only_in_spread_threshold() -> None:
     """C63 MUST be structurally identical to C33 except threshold=3 vs 5."""
     params = C63Params()
-    # Match C33 on non-lever params (see c33_txfd6_solo_passive_maker impl)
-    assert params.max_pos == 3                 # (C33 research operating mp=3)
-    assert params.inventory_skew_tenths == 2   # (C33 matches)
+    assert params.max_pos == 3
+    assert params.inventory_skew_tenths == 2
     assert params.enable_pe_layer is False
     assert params.enable_queue_layer is False
     assert params.enable_mfg_layer is False
-    assert params.enable_qi_layer is False     # C33 precedent for TXFD6
-    # Differ only on the lever:
-    assert params.spread_threshold_pts == 3    # (C33 is 5)
+    assert params.enable_qi_layer is False
+    assert params.spread_threshold_pts == 3
 
 
 def test_c63_manifest_paper_refs_include_c33_precedent() -> None:

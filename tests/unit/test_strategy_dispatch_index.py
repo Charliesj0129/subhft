@@ -47,12 +47,9 @@ class TestStrategyDispatchIndex:
         runner._positions_dirty = True
         runner._current_source_ts_ns = 0
         runner._current_trace_id = ""
-        # Slots added with the tuple-event trace-id fix. __new__ bypasses
-        # __init__ and an unset slot on a __slots__ class raises rather than
-        # defaulting, and _extract_event_trace reads the counter (+= 1).
         runner._current_trace_tag = ""
         runner._current_event_seq = 0
-        runner._stale_event_threshold_ns = 500 * 1_000_000  # 500ms
+        runner._stale_event_threshold_ns = 500 * 1_000_000
         runner._stale_event_skip_total = 0
         runner._stale_event_metric = None
         runner._strategy_metrics_sample_every = 1
@@ -76,7 +73,7 @@ class TestStrategyDispatchIndex:
         runner.track_gate = None
         runner.strategy_governor = None
         runner.running = False
-        runner._timeout_ns = 50_000_000  # 50ms
+        runner._timeout_ns = 50_000_000
         runner._timeout_strikes_limit = 3
         runner._timeout_recover_ns = 60_000_000_000
         runner._timeout_consecutive = {}
@@ -111,7 +108,7 @@ class TestStrategyDispatchIndex:
     def test_index_built_correctly(self):
         s1 = self._make_strategy("strat_a")
         s2 = self._make_strategy("strat_b")
-        s3 = self._make_strategy("strat_a")  # duplicate ID
+        s3 = self._make_strategy("strat_a")
         runner = self._make_runner([s1, s2, s3])
 
         assert runner._strat_index["strat_a"] == [0, 2]
@@ -122,7 +119,6 @@ class TestStrategyDispatchIndex:
         s2 = self._make_strategy("strat_b")
         runner = self._make_runner([s1, s2])
 
-        # Manually clear and rebuild
         runner._strat_index = {}
         runner._rebuild_executors()
 
@@ -144,7 +140,6 @@ class TestStrategyDispatchIndex:
 
         await runner.process_event(event)
 
-        # strat_b should be called, strat_a should NOT
         s2.handle_event.assert_called_once()
         s1.handle_event.assert_not_called()
 
@@ -155,7 +150,7 @@ class TestStrategyDispatchIndex:
         runner = self._make_runner([s1, s2])
 
         event = MagicMock()
-        event.strategy_id = None  # broadcast
+        event.strategy_id = None
         event.symbol = "SYM1"
         event.meta = None
         event.local_ts = time.time_ns()
@@ -179,6 +174,4 @@ class TestStrategyDispatchIndex:
 
         await runner.process_event(event)
 
-        # Falls through to full list iteration, but strategy_id check filters it out
-        # strat_a won't be called because target_strat_id doesn't match
         s1.handle_event.assert_not_called()

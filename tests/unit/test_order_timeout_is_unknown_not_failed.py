@@ -87,7 +87,7 @@ def _adapter(tmp_config: str, place_order: Any) -> OrderAdapter:
     adapter._add_to_dlq = AsyncMock()
     adapter._audit_writer = MagicMock()
     adapter.set_rejection_sink(asyncio.Queue(maxsize=64))
-    adapter._api_timeout_s = 0.05  # the broker above answers only after it
+    adapter._api_timeout_s = 0.05
     return adapter
 
 
@@ -190,7 +190,7 @@ async def test_a_ttl_release_then_a_late_not_sent_answer_is_booked_once(tmp_conf
 
     broker.release.set()
     await asyncio.wait_for(late_seen.wait(), timeout=5.0)
-    await asyncio.sleep(0)  # let a (wrongly) spawned DLQ task run
+    await asyncio.sleep(0)
 
     assert _dlq_reasons(adapter) == [RejectionReason.OUTCOME_UNRESOLVED]
     adapter.metrics.order_reject_total.inc.assert_called_once()
@@ -214,8 +214,6 @@ def _intent(intent_type: IntentType) -> OrderIntent:
     ("intent_type", "op"), [(IntentType.FORCE_FLAT, "place_order"), (IntentType.AMEND, "update_order")]
 )
 async def test_a_timed_out_flatten_or_amend_is_still_a_failure(tmp_config, intent_type, op):
-    # Review of dc21fd6da: only a NEW is booked again later (phantom, late
-    # reporter, TTL sweep); a FORCE_FLAT or AMEND timeout must count here.
     broker = _LateBroker({"order": {"ordno": "A1"}})
     adapter = _adapter(tmp_config, broker)
 
@@ -246,7 +244,7 @@ async def test_a_failed_dlq_add_is_logged(tmp_config):
 async def test_a_timed_out_order_answered_with_a_trade_is_not_dead_lettered(tmp_config):
     broker = _LateBroker({"order": {"ordno": "A1B2C", "seqno": "000123"}})
     adapter = _adapter(tmp_config, broker)
-    adapter._bind_late_trade = AsyncMock()  # what is done with it is pinned elsewhere
+    adapter._bind_late_trade = AsyncMock()
     await adapter._dispatch_to_api(_command())
 
     broker.release.set()
@@ -291,11 +289,6 @@ async def test_a_late_trade_records_its_real_duration_and_broker_stamp(tmp_confi
     late = [c for c in log.warning.call_args_list if c.args and c.args[0] == "place_order_late_result"]
     assert late and late[0].kwargs["order_datetime"] == "2026-11-02 09:13:05.123000"
     assert late[0].kwargs["sent_at_ns"] > 0
-
-
-# --------------------------------------------------------------------------- #
-# The DLQ counts by reason, every reason born at 0                             #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.fixture()

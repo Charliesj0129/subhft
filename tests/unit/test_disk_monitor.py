@@ -60,15 +60,13 @@ def test_hook_called_on_transition():
 
         mon.register_hook(hook)
 
-        # Write a file to push WAL above 0.001 MB
         with open(os.path.join(tmpdir, "test.jsonl"), "wb") as f:
-            f.write(b"x" * 2000)  # ~2 KB
+            f.write(b"x" * 2000)
 
         mon.start()
-        transition_event.wait(timeout=0.5)  # event-based: wait until hook fires
+        transition_event.wait(timeout=0.5)
         mon.stop()
 
-        # Should have transitioned to at least WARN
         assert any(new >= DiskPressureLevel.WARN for _, new in transitions)
 
 
@@ -86,12 +84,11 @@ def test_wal_dir_size_ignores_manifest_sidecar_subdirectory():
         os.makedirs(sidecar)
         for name in ("manifest.txt.bak", "tmp_abc.tmp"):
             with open(os.path.join(sidecar, name), "wb") as f:
-                f.write(b"x" * (4 * 1024 * 1024))  # 4 MB each — past halt_mb if counted
+                f.write(b"x" * (4 * 1024 * 1024))
 
         assert mon._wal_dir_size_mb() < 1.0
         assert mon._compute_level(mon._wal_dir_size_mb()) == DiskPressureLevel.OK
 
-        # A real pending WAL batch in the root still counts.
         with open(os.path.join(tmpdir, "batch_1.jsonl"), "wb") as f:
             f.write(b"x" * (4 * 1024 * 1024))
         assert mon._compute_level(mon._wal_dir_size_mb()) == DiskPressureLevel.HALT

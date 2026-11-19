@@ -28,10 +28,6 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASE_SYMBOLS_YAML = REPO_ROOT / "config" / "base" / "symbols.yaml"
 
-# The 2026-Q2 TAIFEX rollover window: D6 = April-2026 (just expired),
-# E6 = May-2026 (front month as of 2026-04-27). Cover all three TAIFEX
-# futures families (TMF/TXF/MXF) so a metadata-resolution miss on any
-# product type cannot produce the PRICE_EXCEEDS_CAP regression.
 ROLLOVER_FUTURES = ("TMFE6", "TMFD6", "TXFE6", "TXFD6", "MXFE6", "MXFD6")
 
 

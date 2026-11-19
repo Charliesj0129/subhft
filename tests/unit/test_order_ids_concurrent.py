@@ -32,10 +32,8 @@ def test_resolve_candidate_survives_concurrent_mutation():
     def reader():
         try:
             while not stop.is_set():
-                # Use a prefix that exists so the iteration path is
-                # actually entered (not short-circuited by the direct get).
                 resolver.resolve_order_key_candidate("ord_100_fill_suffix")
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     def writer():
@@ -45,7 +43,6 @@ def test_resolve_candidate_survives_concurrent_mutation():
             order_map[key] = f"SW:i{i}"
             i += 1
             if i % 17 == 0:
-                # Random deletion to force dict resizing.
                 victim = f"ord_{i - 500}"
                 order_map.pop(victim, None)
 
@@ -54,7 +51,6 @@ def test_resolve_candidate_survives_concurrent_mutation():
     r.start()
     w.start()
     try:
-        # Let them thrash briefly then stop.
         stop.wait(0.5)
     finally:
         stop.set()

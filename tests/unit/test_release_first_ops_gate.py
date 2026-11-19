@@ -191,8 +191,6 @@ def test_main_fails_on_release_converge_tracked_boundary_violation(monkeypatch, 
     assert payload["steps"][1]["unexpected_tracked_changes"]
 
 
-# --- the gate trusts what each step reports, not a second attempt ----------------------------------------------
-
 _REPORTS = {
     "release_converge_no_clean": (
         "scripts/release_converge.py",
@@ -278,11 +276,10 @@ def test_step_that_exits_zero_but_does_not_report_pass_fails_the_gate(
     assert rc == 2
     assert report["result"] == {"overall": "fail", "recommendation": "block"}
     last = report["steps"][-1]
-    assert last["step"] == bad_step  # the gate stopped here
+    assert last["step"] == bad_step
     assert last["returncode"] == 98
     assert last["report_violation"] is True
     assert "step report is not pass" in last["stderr"]
-    # The reason names what the gate read and where it looked, in the row's stderr and in its tail.
     assert f"overall={read_as!r}" in last["stderr"]
     assert f"report={last['report_path'] or '(no report found)'}" in last["stderr"]
     assert last["stderr_tail"] == last["stderr"]
@@ -321,8 +318,7 @@ def test_step_commands_use_one_interpreter_and_have_no_second_attempt(tmp_path: 
     for command in commands:
         assert "||" not in command, command
         assert "2>/dev/null" not in command, command
-        assert command.startswith(shlex.quote(sys.executable)), command  # no .venv in tmp_path: the running interpreter
-        # The running interpreter's own path may be called python3 (a bare ``python3 -m pytest``): look at the rest.
+        assert command.startswith(shlex.quote(sys.executable)), command
         assert command[len(shlex.quote(sys.executable)) :].count("python3") == 0, command
 
 
@@ -376,4 +372,4 @@ def test_failing_step_is_not_rerun_and_keeps_its_own_stderr(monkeypatch, tmp_pat
     assert failed["step"] == "release_converge_no_clean"
     assert failed["returncode"] == 2
     assert "ORIGINAL FAILURE: scripts/release_converge.py" in failed["stderr"]
-    assert len(log.read_text().splitlines()) == 1  # exactly one attempt
+    assert len(log.read_text().splitlines()) == 1

@@ -24,11 +24,7 @@ from hft_platform.ops.evidence import AutonomyEvidenceWriter
 from hft_platform.ops.platform_degrade import PlatformDegradeController
 from hft_platform.ops.runtime_state_store import locked_state
 
-# Long enough that a blocking implementation cannot finish inside it, short
-# enough to stay well under the lock's own 2 s deadline so the write still
-# succeeds and the test asserts responsiveness, not failure.
 HOLD_S = 0.35
-# The loop is polled every 5 ms; a blocked loop records one giant gap instead.
 TICK_S = 0.005
 MAX_STALL_S = 0.15
 
@@ -112,7 +108,7 @@ async def test_reduce_only_takes_effect_before_the_write_is_awaited(tmp_path):
     holder = _hold_the_lock(tmp_path / "runtime_state.json", HOLD_S)
 
     task = asyncio.create_task(controller.enter_reduce_only_async(reason="margin_critical"))
-    await asyncio.sleep(0)  # one loop turn: past the sync half, into the await
+    await asyncio.sleep(0)
 
     assert controller.reduce_only_active is True
     assert not task.done(), "premise: the write is still in flight behind the held lock"
@@ -165,7 +161,7 @@ async def test_auto_recovery_does_not_stall_the_loop(tmp_path):
     await controller.enter_reduce_only_async(reason="feed_reconnect_pending")
 
     now = 10**12
-    await controller.check_auto_recovery_async(current_reasons=[], now_ns=now)  # starts cooldown
+    await controller.check_auto_recovery_async(current_reasons=[], now_ns=now)
     later = now + int((controller._auto_recovery_cooldown_s + 1) * 1e9)
 
     worst, recovered = await _loop_stall_while(controller.check_auto_recovery_async(current_reasons=[], now_ns=later))
@@ -211,7 +207,7 @@ async def test_manual_rearm_takes_effect_before_the_write_is_awaited(tmp_path):
     holder = _hold_the_lock(tmp_path / "runtime_state.json", HOLD_S)
 
     task = asyncio.create_task(controller.force_clear_async(reason="manual_rearm_gate"))
-    await asyncio.sleep(0)  # one loop turn: past the sync half, into the await
+    await asyncio.sleep(0)
 
     assert controller.reduce_only_active is False
     assert not task.done(), "premise: the write is still in flight behind the held lock"
@@ -242,7 +238,6 @@ async def test_manual_rearm_never_opens_risk_while_a_reason_is_still_firing(tmp_
         controller.force_clear_async(reason="manual_rearm_gate", current_reasons=["queue_depth_exceeded"])
     )
 
-    # Sample allow_open on every loop turn for the whole life of the write.
     opened = False
     while not task.done():
         await asyncio.sleep(0)

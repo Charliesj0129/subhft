@@ -36,7 +36,6 @@ from research.data_pipeline import (
 
 TAIPEI = ZoneInfo("Asia/Taipei")
 
-# 2026-04-02 was an XTAI session; 2026-04-03 and 2026-04-06 were not.
 SESSIONS = frozenset({"2026-04-01", "2026-04-02", "2026-04-07"})
 
 
@@ -57,21 +56,12 @@ def _tick(ts: int, price: int = 32_800_500_000, volume: int = 3) -> tuple[object
 def _april_third_shape() -> list[tuple[object, ...]]:
     """The real 2026-04-03 shape: a legitimate night tail, then out-of-session ticks."""
     rows: list[tuple[object, ...]] = []
-    # Night session of trading day 2026-04-02, running past midnight to 05:00.
     for minute in (0, 30, 240, 299):
         rows.append(_bidask(_ts("2026-04-03", minute // 60, minute % 60)))
         rows.append(_tick(_ts("2026-04-03", minute // 60, minute % 60)))
-    # Contamination: ticks after the night close, on a date the exchange was shut.
-    # 06:00-08:44 falls between the session windows; 08:45-12:59 falls inside the day
-    # window but on a non-session date. Both must go.
     for hour, minute in ((6, 0), (7, 30), (8, 44), (8, 45), (10, 0), (12, 59)):
         rows.append(_tick(_ts("2026-04-03", hour, minute)))
     return rows
-
-
-# ---------------------------------------------------------------------------
-# Session filtering -- the defect this change closes
-# ---------------------------------------------------------------------------
 
 
 def test_out_of_session_ticks_are_excluded_from_l2_export() -> None:
@@ -138,11 +128,6 @@ def test_taipei_offset_matches_zoneinfo_for_a_corpus_date() -> None:
         assert int(offset.total_seconds()) * 1_000_000_000 == TAIPEI_UTC_OFFSET_NS
 
 
-# ---------------------------------------------------------------------------
-# Existing defences -- pinned so they cannot regress
-# ---------------------------------------------------------------------------
-
-
 def test_empty_and_one_sided_books_produce_no_depth_events() -> None:
     ts = _ts("2026-04-02", 9, 0)
     rows: list[tuple[object, ...]] = [
@@ -168,11 +153,6 @@ def test_zero_price_or_zero_volume_ticks_are_dropped() -> None:
     assert float(ticks[0]["qty"]) == 7.0
 
 
-# ---------------------------------------------------------------------------
-# Export wiring: the summary and sidecar must state what the session rule removed
-# ---------------------------------------------------------------------------
-
-
 def _stub_export(monkeypatch: Any, rows: list[tuple[object, ...]]) -> None:
     monkeypatch.setattr(data_pipeline, "_get_client", lambda *a, **k: object())
     monkeypatch.setattr(data_pipeline, "_discover_symbol_dates", lambda *a, **k: [("2026-04-03", len(rows))])
@@ -195,9 +175,7 @@ def _export(tmp_path: Path, **kwargs: Any) -> dict[str, Any]:
     )
 
 
-def test_export_records_the_session_rule_and_filtered_count_in_the_sidecar(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
+def test_export_records_the_session_rule_and_filtered_count_in_the_sidecar(monkeypatch: Any, tmp_path: Path) -> None:
     _stub_export(monkeypatch, _april_third_shape())
     summary = _export(tmp_path)
 
@@ -240,18 +218,11 @@ def test_allow_non_session_relaxes_only_the_calendar_half(monkeypatch: Any, tmp_
     assert summary["outputs"][0]["session_filtered_rows"] == 3, "the clock windows still apply"
 
 
-# ---------------------------------------------------------------------------
-# Archive sync check
-# ---------------------------------------------------------------------------
-
-
 def _inventory(*entries: tuple[str, int, str | None]) -> dict[str, object]:
     return {
         "schema": "hft_archive_inventory.v1",
         "generated_at": "2026-08-07T00:00:00+00:00",
-        "partitions": [
-            {"partition": name, "rows": rows, "ttl_expiry": ttl} for name, rows, ttl in entries
-        ],
+        "partitions": [{"partition": name, "rows": rows, "ttl_expiry": ttl} for name, rows, ttl in entries],
     }
 
 

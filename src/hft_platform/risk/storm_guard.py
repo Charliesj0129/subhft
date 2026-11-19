@@ -17,8 +17,6 @@ logger = get_logger("risk.storm_guard")
 
 __all__ = ["StormGuard", "StormGuardState", "RiskThresholds", "halt_reason_label"]
 
-# Distinct ``stormguard_halt_reason`` labels a process may create. trigger_halt
-# reasons come from ~20 call sites; anything past the cap is "other".
 _HALT_REASON_LABEL_CAP = 32
 _HALT_REASON_LABEL_MAX_LEN = 48
 _halt_reason_labels_seen: set[str] = set()
@@ -42,124 +40,21 @@ def halt_reason_label(reason: str) -> str:
 
 @dataclass(slots=True)
 class RiskThresholds:
-    # No PnL input. StormGuard grades platform health -- loop lag, order RTT,
-    # feed gap, component failure, book toxicity -- and nothing else. Money is
-    # judged in one place, ``DailyLossLimitValidator``, as the trading day's net
-    # change. The drawdown ladder that used to sit here (-50/-100/-200 bps of a
-    # 200,000 NTD reference, i.e. 1,000/2,000/4,000 NTD given back from the
-    # day's realised peak) was a second definition of the same loss: it put
-    # R47 in STORM on 2026-10-22 16:03Z while the day was 1,270 NTD up, and
-    # its HALT rung sat below the 15,000 NTD daily limit the operator set.
-
-    # Event-loop congestion. The supervisor is the only producer. It used to
-    # pass ``lag_s * 1e6`` -- its own tick period minus the sleep, which is loop
-    # congestion PLUS the supervisor's own work. Measured on THESHOW over 22 h
-    # on 2026-08-22, the supervisor's body was **89.3%** of that composite
-    # (``supervisor_tick_duration_ms`` mean 4.93 ms vs
-    # ``event_loop_probe_lag_ms`` mean 0.59 ms), so the breaker was armed on a
-    # number that mostly measured the supervisor timing itself. It now reads the
-    # idle probe, which reports only time the loop was unavailable to any
-    # callback. Reference distribution for that signal: 99.895% of samples
-    # <= 10 ms, exactly one sample in (500, 1000] ms, nothing above 1 s.
     latency_warm_us: int = 5_000
     latency_storm_us: int = 20_000
 
-    # Order round-trip to the broker — a different quantity two orders of
-    # magnitude larger. This used to say THESHOW had no order-RTT samples at
-    # all; that was wrong. ``OrderAdapter`` has always timed the broker SDK call
-    # itself and published it as ``pipeline_latency_ns{stage="api_place_order"}``
-    # -- measured 2026-08-22 over 22 h, unsampled: n=7, mean 34.1 ms, 6 samples
-    # in (10, 50] ms and 1 in (50, 100] ms, consistent with the Gate-C profile's
-    # ``submit_ack_latency_ms=36.0``. What was missing was the wiring, not the
-    # measurement; ``StormGuard.observe_order_rtt_us`` now receives it.
-    #
-    # ARMED 2026-08-24. The n=7 production sample above is not a distribution,
-    # so the thresholds come from the one direct probe of this exact quantity:
-    # ``r47_maker_shioaji_p95_v2026-04-24_measured`` in
-    # ``config/research/latency_profiles.yaml`` — n=300, live TAIFEX night
-    # session, TMFE6, zero errors. Its ``place_order`` wall-time decomposition
-    # is the same clock this breaker reads (``pipeline_latency_ns``
-    # ``{stage="api_place_order"}``): P50=27.4, P95=92.7, P99=185.4 ms, with a
-    # bootstrap 95% CI on P95 of [77.6, 110.2] ms. The 2026-08-22 production
-    # samples (mean 34.1 ms, 6 of 7 in (10, 50] ms) sit inside that.
-    #
-    # Two facts set the gap between the pair. First, ``update()`` consumes
-    # ``_drain_order_rtt_peak_us`` — the PEAK since the last tick, not a
-    # quantile — so one slow order decides the state, and a percentile-tight
-    # threshold would trip constantly. Second, the two states cost very
-    # different things: WARM blocks nothing (``_validate_locked`` gates only
-    # HALT and STORM), while STORM is reduce-only for NEW/AMEND, i.e. it stops
-    # the maker quoting.
-    #
-    # Because the input is a peak, neither threshold may sit at a percentile of
-    # the sample distribution. P99=185.4 ms with a handful of orders per window
-    # puts a 200 ms line inside the healthy peak, and a breaker that sits in
-    # WARM all session is the RC-4 failure again: indistinguishable from one
-    # with nothing to do.
-    #
-    # WARM = 500 ms: 2.7x the live P99, and above the P95 of the *whole*
-    # quote-activation path (394.5 ms). One place_order call alone taking
-    # longer than a normal end-to-end quote activation is abnormal by any
-    # reading of the probe. STORM = 1000 ms: 5.4x P99, just under the worst
-    # quote-activation sample recorded (1156.8 ms). A single place_order call
-    # taking a full second is not a slow broker, it is one that is not
-    # answering — and only then is it worth stopping the maker quoting.
-    #
-    # Override per host with ``HFT_STORMGUARD_ORDER_RTT_WARM_US`` /
-    # ``..._STORM_US``; 0 disarms either side independently.
-    # 2026-10-03: widened 500/1000 ms -> 1500/2500 ms by the operator. The
-    # 500/1000 ms pair was sized off the April P99 (185 ms); live tail p99 over
-    # traffic windows is now 1.7-2.3 s, so the breaker escalated ~100x/day on
-    # a broker that was merely slow, and R47 sat reduce-only. The paragraph
-    # above explains the original sizing and is kept for history.
-    #
-    # 2026-11-02: STORM side DISARMED by default (0). Its readings are capped
-    # at ``HFT_API_TIMEOUT_S`` (3 s), so it can only tell "slower than 2.5 s"
-    # from "not slower", and it then holds 300 s after the stall is over: on
-    # the 11-02 day session the broker answered 116 of 120 timed-out orders
-    # (late, 5-30 s) and this rule kept R47 reduce-only for 19.6% of the
-    # session. ``broker_backpressure_silence_us`` below replaces it: it blocks
-    # new risk exactly while a call is waiting and releases on the answer. The
-    # count/window/dwell rule is kept and can be re-armed by setting
-    # ``order_rtt_storm_us`` (YAML ``global_defaults`` or env). WARM stays: it
-    # blocks nothing and keeps the slow-answer signal visible.
-    order_rtt_warm_us: int = 1_500_000  # 1500 ms
-    order_rtt_storm_us: int = 0  # disarmed; see above
-    # 2026-10-24: STORM needs ``order_rtt_storm_count`` orders at or above
-    # ``order_rtt_storm_us`` within ``order_rtt_storm_window_s``, and holds
-    # until ``order_rtt_storm_dwell_s`` pass with none. Widening the threshold
-    # on 10-03 did not stop the flapping: of the 496 STORM entries from 10-04
-    # to 10-23 (audit.guardrail_log), 335 read 3000-3100 ms, which is
-    # ``HFT_API_TIMEOUT_S=3.0`` -- one broker call that timed out, entering
-    # STORM for ~85 s and leaving it until the next one. No threshold can
-    # filter a timeout, so one sample no longer decides; a single slow order
-    # still reaches WARM, which blocks nothing.
+    order_rtt_warm_us: int = 1_500_000
+    order_rtt_storm_us: int = 0
     order_rtt_storm_count: int = 3
-    order_rtt_storm_window_s: float = 60.0  # precision-time
-    order_rtt_storm_dwell_s: float = 300.0  # precision-time
+    order_rtt_storm_window_s: float = 60.0
+    order_rtt_storm_dwell_s: float = 300.0
 
-    feed_gap_storm_s: float = 1.0  # precision-time (triggers STORM, not HALT)
+    feed_gap_storm_s: float = 1.0
 
-    # Broker back-pressure (2026-11-02). ``OrderAdapter`` tracks its own
-    # outstanding broker calls (``order/broker_stall.py``); "silence" is how
-    # long the oldest call sent after the last answer has been waiting. The
-    # broker serialises our calls, so while one waits every new order joins
-    # its queue. While silence >= ``broker_backpressure_silence_us``, a NEW or
-    # AMEND that does not reduce a position is refused with
-    # ``BROKER_BACKPRESSURE`` -- at RiskEngine and again just before dispatch.
-    # This is NOT a StormGuard state: no transition, no cooldown, released on
-    # the first answer. A replay of THESHOW's logged NEW spans put it at
-    # 0.3-2.0% of a session against 1.7-19.6% for the order-RTT STORM rule.
-    # 0 disarms it.
-    broker_backpressure_silence_us: int = 1_000_000  # 1 s
-    # A silence this long is not a slow broker but one that is not answering:
-    # enter STORM through the normal state machine (cooldown, de-escalation).
-    # 0 disarms it.
-    broker_stall_storm_us: int = 10_000_000  # 10 s
+    broker_backpressure_silence_us: int = 1_000_000
+    broker_stall_storm_us: int = 10_000_000
 
 
-# Keys ``StormGuard.reload_thresholds`` reads from the risk config
-# (``strategy_limits.yaml`` ``global_defaults``, or a ``risk`` section).
 _INT_US_KEYS: tuple[str, ...] = (
     "latency_warm_us",
     "latency_storm_us",
@@ -189,20 +84,8 @@ class StormGuard:
         "_storm_cooldown_s",
         "_halt_cooldown_s",
         "_halt_entry_ts",
-        # P4 (2026-04-28): WARM de-escalation cooldown. Previously the
-        # ``cooldown_ok`` branch in ``update()`` fell through to ``True`` for
-        # WARM, so WARM->NORMAL was gated only by ``_de_escalate_threshold``
-        # consecutive clears (~5s at 1Hz update cadence). Production logs on
-        # 2026-04-28 showed three EXFE6 NORMAL<->WARM flap cycles with WARM
-        # durations of ~5s, despite the de-escalation log line claiming
-        # ``cooldown_s=30.0``. This pair of slots adds explicit WARM cooldown.
         "_warm_entry_ts",
         "_warm_cooldown_s",
-        # P4 (2026-04-28): toxicity hysteresis band. ``update_with_lob`` enters
-        # WARM at toxicity>``_warm_toxicity_entry`` (default 0.5) but, while
-        # already in WARM, re-arms ``_warm_entry_ts`` while toxicity stays
-        # above ``_warm_toxicity_exit`` (default 0.4). Combined with
-        # ``_warm_cooldown_s`` this prevents borderline-toxicity oscillation.
         "_warm_toxicity_entry",
         "_warm_toxicity_exit",
         "_de_escalate_threshold",
@@ -224,58 +107,20 @@ class StormGuard:
         "_warm_deescalation_ts",
         "_warm_reescalation_cooldown_s",
         "_reconciliation_hold",
-        # Blocks HALT de-escalation while the daily loss limit is latched.
-        # ``update()`` derives its target state from latency/feed-gap health
-        # only, so "we stopped for the day" is a reason it cannot see.
         "_daily_loss_hold",
-        # Blocks HALT de-escalation while the emergency kill-switch latch is
-        # the reason for the halt. Same shape, same reason as the two above:
-        # ``update()`` sees latency/feed-gap health, and "an operator or a
-        # startup safety gate refused this process" is not among them.
         "_kill_switch_hold",
-        # Blocks HALT de-escalation while any durable manual latch
-        # (``risk/manual_latches.py``) is present on disk. Same shape again;
-        # the difference from the holds above is who may clear it: only the
-        # operator, by removing the latch file. A restart cannot.
         "_manual_latch_hold",
-        # P0-I4: engine loop reference bound via ``bind_loop()`` by HFTSystem.run().
-        # Used by ``_fire_halt_callback`` to dispatch coroutine halt callbacks from
-        # non-asyncio threads (e.g. bootstrap lease-refresh daemon).
         "_loop",
-        # P1 fix: list of transition side-effect records produced inside the
-        # state lock and flushed via ``_emit_pending_transition`` afterwards
-        # so Prometheus metric / audit locks never nest with ``_state_lock``.
         "_pending_transition_emit",
-        # H1: dispatch tickets recorded across ``begin_dispatch`` /
-        # ``end_dispatch``. ``trigger_halt`` flips ``halted`` on every
-        # outstanding ticket atomically under ``_state_lock`` so an
-        # in-flight broker call can detect a transition that happened
-        # mid-await and emit a defensive cancel.
         "_inflight_dispatch_tickets",
         "_next_ticket_id",
-        # Largest broker order round-trip seen since the last ``update()``.
-        # Written by the order path, drained by ``update()`` -- see
-        # ``observe_order_rtt_us`` for why it is not evaluated where it is
-        # measured.
         "_order_rtt_peak_us",
-        # ``time.monotonic()`` of the last ``order_rtt_storm_count`` orders at
-        # or above the STORM threshold (a deque bounded at that count), whether
-        # one arrived since the last ``update()``, and whether the order-RTT
-        # STORM they started is on.
         "_order_rtt_slow_ts",
         "_order_rtt_slow_fresh",
         "_order_rtt_storm_on",
-        # Why the current HALT was entered. ``update()`` can no longer compute
-        # HALT, so ``_target_state_reason`` never names one; this does.
         "_halt_reason",
-        # ``stormguard_halt_reason`` label currently set to 1, so leaving HALT
-        # can clear exactly that one. Touched only by _emit_pending_transition,
-        # under _halt_label_lock: trigger_halt runs on any thread, and two
-        # interleaved HALT emits could each leave their label at 1.
         "_halt_reason_label",
         "_halt_label_lock",
-        # ``() -> int`` nanoseconds the broker order path has been silent
-        # (``OrderAdapter.broker_silence_ns``); None until the adapter is wired.
         "_broker_stall_provider",
     )
 
@@ -289,92 +134,59 @@ class StormGuard:
     ):
         self.state = StormGuardState.NORMAL
         self.thresholds = thresholds or RiskThresholds()
-        # Before _apply_env_overrides: it publishes the latency inputs' armed
-        # state, which needs the registry, and resizes the slow-order window.
         self.metrics = MetricsRegistry.get()
-        self._order_rtt_slow_ts: deque[float] = deque(maxlen=1)  # precision-time
+        self._order_rtt_slow_ts: deque[float] = deque(maxlen=1)
         self._order_rtt_slow_fresh: bool = False
         self._order_rtt_storm_on: bool = False
         self._broker_stall_provider: Callable[[], int] | None = None
         self._apply_env_overrides()
         self.last_state_change = time.monotonic()
         self._de_escalate_count: int = 0
-        self._storm_entry_ts: float = 0.0  # precision-time
-        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))  # precision-time
-        self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))  # precision-time
-        self._halt_entry_ts: float = 0.0  # precision-time
-        # P4 (2026-04-28): WARM cooldown — see __slots__ comment for context.
-        # Default 30s mirrors the storm cooldown so the misleading legacy log
-        # message ("cooldown_s=30.0") becomes truthful for WARM by default.
-        self._warm_entry_ts: float = 0.0  # precision-time
-        self._warm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_WARM_COOLDOWN_S", "30"))  # precision-time
-        # P4 (2026-04-28): toxicity hysteresis band — entry strictly above
-        # ``_warm_toxicity_entry`` (default 0.5), exit only when toxicity
-        # falls strictly below ``_warm_toxicity_exit`` (default 0.4) AND the
-        # WARM cooldown elapses. Both knobs are floats: toxicity is a
-        # research metric, not money/quantity (see "alpha float exception"
-        # in 25-architecture-governance.md §11), so float is acceptable here.
+        self._storm_entry_ts: float = 0.0
+        self._storm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "30"))
+        self._halt_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "60"))
+        self._halt_entry_ts: float = 0.0
+        self._warm_entry_ts: float = 0.0
+        self._warm_cooldown_s: float = float(os.getenv("HFT_STORMGUARD_WARM_COOLDOWN_S", "30"))
         self._warm_toxicity_entry: float = float(os.getenv("HFT_STORMGUARD_WARM_TOXICITY_ENTRY", "0.5"))
         self._warm_toxicity_exit: float = float(os.getenv("HFT_STORMGUARD_WARM_TOXICITY_EXIT", "0.4"))
         self._de_escalate_threshold: int = int(os.getenv("HFT_STORMGUARD_DE_ESCALATE_N", "5"))
         self._on_halt_callback = on_halt_callback
         self._drift_burst_detector = drift_burst_detector
         self._state_lock = threading.Lock()
-        self._session_active: bool = True  # default: active (safe)
-        # Per-strategy HALT exemption: named strategies may bypass HALT/STORM blocking.
-        # All other risk checks (position limits, exposure, etc.) still apply.
+        self._session_active: bool = True
         env_exempt = os.getenv("HFT_STORMGUARD_HALT_EXEMPT_STRATEGIES", "")
         env_set = frozenset(s.strip() for s in env_exempt.split(",") if s.strip()) if env_exempt else frozenset()
         self._halt_exempt_strategies: frozenset[str] = halt_exempt_strategies or env_set
-        # Bug 21 (2026-04-17): allow reducing orders through HALT/STORM even when
-        # strategy is not on exempt list. Prevents deadlock where strategy stuck
-        # with open position can't cover because StormGuard is blocking.
         self._position_provider: Callable[[str, str], int] | None = position_provider
         self._feature_failure_active: bool = False
         self._feature_failure_storm_ts: float = 0.0
         self._norm_failure_active: bool = False
         self._norm_failure_storm_ts: float = 0.0
-        self._feed_gap_deescalation_ts: float = 0.0  # noqa: monotonic timestamp
-        self._feed_gap_reescalation_cooldown_s: float = float(  # noqa: duration
+        self._feed_gap_deescalation_ts: float = 0.0
+        self._feed_gap_reescalation_cooldown_s: float = float(
             os.getenv("HFT_STORMGUARD_FEED_GAP_REESCALATION_COOLDOWN_S", "120")
         )
         self._latency_deescalation_ts: float = 0.0
         self._latency_reescalation_cooldown_s: float = float(
             os.getenv("HFT_STORMGUARD_LATENCY_REESCALATION_COOLDOWN_S", "120")
         )
-        # WARM re-escalation cooldown: suppresses repeated DriftBurst WARM
-        # escalations immediately after WARM→NORMAL de-escalation. Prevents
-        # 58/58 flip-flop observed when drift-burst toxicity oscillates near 0.5.
         self._warm_deescalation_ts: float = 0.0
         self._warm_reescalation_cooldown_s: float = float(
             os.getenv("HFT_STORMGUARD_WARM_REESCALATION_COOLDOWN_S", "300")
         )
-        # Reconciliation hold: when True, HALT de-escalation is blocked until
-        # ReconciliationService confirms drift is resolved.
         self._reconciliation_hold: bool = False
         self._daily_loss_hold: bool = False
         self._kill_switch_hold: bool = False
         self._manual_latch_hold: bool = False
-        # P0-I4: engine loop reference; bound by HFTSystem.run() via ``bind_loop``.
-        # When ``None``, ``_fire_halt_callback`` falls back to a best-effort
-        # ``asyncio.get_running_loop()`` lookup (safe on the loop thread itself).
         self._loop: asyncio.AbstractEventLoop | None = None
-        # P1 fix: transition side-effect queue flushed outside _state_lock.
         self._pending_transition_emit: list[dict[str, Any]] = []
-        # H1: in-flight dispatch tickets (ticket_id -> {halted: bool}).
-        # Populated by ``begin_dispatch`` and drained by ``end_dispatch``.
-        # ``trigger_halt`` marks every outstanding ticket as ``halted=True``
-        # under ``_state_lock`` so callers can issue a defensive cancel.
         self._inflight_dispatch_tickets: dict[int, dict[str, Any]] = {}
         self._next_ticket_id: int = 0
         self._order_rtt_peak_us: int = 0
         self._halt_reason: str = ""
         self._halt_reason_label: str = ""
         self._halt_label_lock = threading.Lock()
-        #: Reason string for the state ``_evaluate_target_state`` last computed,
-        #: refreshed every ``update()`` rather than only on a transition. The
-        #: transition log records why STORM was *entered*; a gate needs to know
-        #: what is holding it *now*, which can be a different input entirely.
         self._target_state_reason: str = ""
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -429,7 +241,7 @@ class StormGuard:
             parsed["order_rtt_storm_count"] = max(1, int(risk_cfg["order_rtt_storm_count"]))
         for key in ("order_rtt_storm_window_s", "order_rtt_storm_dwell_s", "feed_gap_storm_s"):
             if key in risk_cfg:
-                parsed[key] = float(risk_cfg[key])  # precision-ok
+                parsed[key] = float(risk_cfg[key])
         with self._state_lock:
             for key, value in parsed.items():
                 setattr(self.thresholds, key, value)
@@ -437,9 +249,7 @@ class StormGuard:
         logger.info("StormGuard thresholds reloaded")
 
     def _apply_env_overrides(self) -> None:
-        # Canonical env var (preferred)
         feed_gap_storm = os.getenv("HFT_STORMGUARD_FEED_GAP_STORM_S")
-        # Deprecated alias (kept for backward compatibility)
         feed_gap_halt = os.getenv("HFT_STORMGUARD_FEED_GAP_HALT_S")
 
         if feed_gap_halt and not feed_gap_storm:
@@ -452,7 +262,7 @@ class StormGuard:
 
         if feed_gap_storm:
             try:
-                self.thresholds.feed_gap_storm_s = float(feed_gap_storm)  # precision-time
+                self.thresholds.feed_gap_storm_s = float(feed_gap_storm)
             except ValueError:
                 logger.warning(
                     "Invalid feed gap storm threshold",
@@ -486,12 +296,6 @@ class StormGuard:
             try:
                 setattr(self.thresholds, attr, int(raw))
             except ValueError:
-                # Keep the measured default rather than guessing a threshold
-                # for a risk breaker out of an unparseable value. This used to
-                # say "stays unarmed", which was true only while the default
-                # was 0; now that the default is armed from the n=300 probe,
-                # honouring an unparseable override would *disarm* a live
-                # breaker — the opposite of failing closed.
                 logger.warning(
                     "Invalid order-RTT threshold; keeping the built-in default",
                     var=var,
@@ -511,8 +315,6 @@ class StormGuard:
                 value = cast(raw)
             except ValueError:
                 value = None
-            # A count must be >= 1; a window or dwell of 0 is meaningful
-            # (dwell 0 ends the STORM on the first quiet tick).
             if value is None or value < (1 if attr == "order_rtt_storm_count" else 0):
                 logger.warning(
                     "Invalid order-RTT STORM setting; keeping the built-in default",
@@ -527,16 +329,6 @@ class StormGuard:
             self._order_rtt_slow_ts = deque(self._order_rtt_slow_ts, maxlen=count)
 
         self._report_latency_input_health()
-
-    # ------------------------------------------------------------------
-    # Latency input health (2026-08-13)
-    # ------------------------------------------------------------------
-    #
-    # THESHOW ran the loop-lag input at 5 s WARM / 10 s STORM against a
-    # distribution with p99.9 ~9 ms: ~1000x of headroom, so that branch of the
-    # breaker had never fired and never could in practice — and nothing said so.
-    # Same failure family as the zero-sample metrics: a breaker that cannot fire
-    # reads exactly like a breaker with nothing to do.
 
     def _order_rtt_armed(self) -> bool:
         return self.thresholds.order_rtt_warm_us > 0 or self.thresholds.order_rtt_storm_us > 0
@@ -589,13 +381,10 @@ class StormGuard:
                 1 if (self.thresholds.latency_warm_us > 0 or self.thresholds.latency_storm_us > 0) else 0
             )
             gauge.labels(input="order_rtt").set(1 if self._order_rtt_armed() else 0)
-            # Touch both max series so "no samples yet" (0) stays distinguishable
-            # from "series absent" — the distinction whose loss is what let three
-            # zero-sample metrics read as healthy for two days.
             max_gauge = self.metrics.stormguard_latency_input_max_us
             for name in ("loop_lag", "order_rtt"):
                 max_gauge.labels(input=name).inc(0)
-        except Exception:  # noqa: BLE001 - observability must never break the breaker
+        except Exception:
             pass
 
     def observe_order_rtt_us(self, rtt_us: int) -> None:
@@ -673,13 +462,13 @@ class StormGuard:
             gauge = self.metrics.stormguard_latency_input_max_us.labels(input=input_name)
             if value_us > gauge._value.get():
                 gauge.set(value_us)
-        except Exception:  # noqa: BLE001 - observability must never break the breaker
+        except Exception:
             pass
 
     def _evaluate_target_state(
         self,
         latency_us: int,
-        feed_gap_s: float,  # precision-time (not a price; seconds, float acceptable)
+        feed_gap_s: float,
         order_rtt_us: int = 0,
         order_rtt_storm: bool = False,
         broker_silence_us: int = 0,
@@ -709,9 +498,6 @@ class StormGuard:
             )
         if feed_gap_s >= t.feed_gap_storm_s and self._session_active:
             return StormGuardState.STORM, f"Feed Gap {feed_gap_s:.3f}s"
-        # Component failure holds STORM regardless of the latency WARM thresholds.
-        # Must be checked before WARM returns so that STORM persists even when
-        # latency is in the WARM range (not STORM range).
         norm_fail = self._norm_failure_active
         feat_fail = self._feature_failure_active
         if norm_fail or feat_fail:
@@ -730,7 +516,7 @@ class StormGuard:
         self,
         *,
         latency_us: int = 0,
-        feed_gap_s: float = 0.0,  # precision-ok
+        feed_gap_s: float = 0.0,
         order_rtt_us: int = 0,
     ) -> StormGuardState:
         """
@@ -745,12 +531,8 @@ class StormGuard:
                 ``observe_order_rtt_us`` since the last call is drained here and
                 used when it is larger.
         """
-        # An explicit round trip is one more observation, counted toward the
-        # slow-order window like any other.
         if order_rtt_us > 0:
             self.observe_order_rtt_us(order_rtt_us)
-        # Drain unconditionally: leaving a peak behind would let it surface at
-        # an unrelated later tick.
         peak_rtt_us = self._drain_order_rtt_peak_us()
         if peak_rtt_us > order_rtt_us:
             order_rtt_us = peak_rtt_us
@@ -763,15 +545,11 @@ class StormGuard:
         )
         self._target_state_reason = reason
 
-        # Transition Logic (with hysteresis protection for de-escalation)
         fire_callback = False
         current_state: StormGuardState = self.state
         with self._state_lock:
             now = time.monotonic()
             if new_state > self.state:
-                # Re-escalation suppression: after de-escalating from STORM,
-                # suppress re-triggers for a cooldown period to prevent flapping
-                # (observed: 75 transitions/6hr in production for feed gap).
                 _suppress = False
                 if (
                     reason.startswith("Feed Gap")
@@ -786,15 +564,9 @@ class StormGuard:
                 ):
                     _suppress = True
                 if _suppress:
-                    pass  # suppress — stay at current state
+                    pass
                 else:
-                    # Escalation: always instant (safety-first)
                     self._de_escalate_count = 0
-                    # P4 (2026-04-28): record WARM entry timestamp on the
-                    # NORMAL->WARM (or any-lower->WARM) boundary so de-escalation
-                    # can enforce ``_warm_cooldown_s``. Previously this slot
-                    # did not exist and WARM->NORMAL fired after only the
-                    # ``_de_escalate_threshold`` clears (~5s at 1Hz cadence).
                     if new_state >= StormGuardState.WARM and self.state < StormGuardState.WARM:
                         self._warm_entry_ts = now
                     if new_state >= StormGuardState.STORM and self.state < StormGuardState.STORM:
@@ -803,9 +575,6 @@ class StormGuard:
                         self._halt_entry_ts = now
                     _, fire_callback = self._transition(new_state, reason)
             elif new_state < self.state:
-                # Reconciliation hold: block de-escalation from HALT while
-                # position drift is unresolved (prevents auto-recovery that
-                # leaves the system trading with stale positions).
                 if self.state == StormGuardState.HALT and self._reconciliation_hold:
                     self._de_escalate_count = 0
                     logger.warning(
@@ -815,18 +584,6 @@ class StormGuard:
                     )
                     current_state = self.state
                     return current_state
-                # Daily-loss hold: the same shape as the reconciliation hold,
-                # for the same reason. ``_evaluate_target_state`` sees only
-                # latency/feed-gap health, so once the daily loss limit
-                # latches, a market-clean tick computes NORMAL and de-escalates
-                # -- and ``RiskEngine._check_daily_loss_halt`` immediately
-                # re-halts from the still-latched validator flag. Observed in
-                # production 2026-08-21: 26 escalations / 25 de-escalations in
-                # 27 minutes, ~65 s per cycle, which is a square wave rather
-                # than a latch. The hold is set and cleared by the risk engine
-                # from ``DailyLossLimitValidator.halt_triggered``, so it clears
-                # at the 05:00 reset or an operator force-reset -- never from a
-                # quiet market.
                 if self.state == StormGuardState.HALT and self._daily_loss_hold:
                     self._de_escalate_count = 0
                     logger.warning(
@@ -836,14 +593,6 @@ class StormGuard:
                     )
                     current_state = self.state
                     return current_state
-                # Kill-switch hold: third instance of the same shape. Without
-                # it ``trigger_halt("KILL_SWITCH_FILE: ...")`` is not a latch --
-                # a quiet market computes NORMAL, the cooldown elapses, HALT
-                # de-escalates, and the next supervise tick re-reads the file
-                # and re-halts. That square wave leaves a dispatch window open
-                # once per cycle while the operator believes the engine is
-                # stopped, which is the same failure the daily-loss hold above
-                # was added for on 2026-08-21.
                 if self.state == StormGuardState.HALT and self._kill_switch_hold:
                     self._de_escalate_count = 0
                     logger.warning(
@@ -853,9 +602,6 @@ class StormGuard:
                     )
                     current_state = self.state
                     return current_state
-                # Manual-latch hold: a durable latch (daily loss,
-                # reconciliation mismatch) is on disk. Only the operator
-                # removes it, so only the operator ends this HALT.
                 if self.state == StormGuardState.HALT and self._manual_latch_hold:
                     self._de_escalate_count = 0
                     logger.warning(
@@ -865,12 +611,6 @@ class StormGuard:
                     )
                     current_state = self.state
                     return current_state
-                # De-escalation from any elevated state requires cooldown + N consecutive clears.
-                # P4 (2026-04-28): WARM now has its own cooldown gate. Previously the
-                # WARM branch fell through to ``cooldown_ok = True`` so de-escalation was
-                # gated only by ``_de_escalate_threshold`` consecutive clears (~5s at 1Hz),
-                # while the legacy log line printed ``cooldown_s=30.0`` — misleading
-                # operators into believing 30s cooldown was enforced when it was not.
                 if self.state == StormGuardState.HALT:
                     cooldown_s_for_log = self._halt_cooldown_s
                     cooldown_ok = (now - self._halt_entry_ts) >= self._halt_cooldown_s
@@ -879,11 +619,6 @@ class StormGuard:
                     cooldown_ok = (now - self._storm_entry_ts) >= self._storm_cooldown_s
                 elif self.state >= StormGuardState.WARM:
                     cooldown_s_for_log = self._warm_cooldown_s
-                    # If ``_warm_entry_ts`` is 0.0 (never set, e.g. legacy state
-                    # restored before P4), treat as immediate cooldown elapsed
-                    # to preserve original behaviour rather than locking WARM
-                    # forever; new WARM entries always set the timestamp so
-                    # this only matters during the upgrade window.
                     cooldown_ok = self._warm_entry_ts == 0.0 or (now - self._warm_entry_ts) >= self._warm_cooldown_s
                 else:
                     cooldown_s_for_log = 0.0
@@ -894,18 +629,12 @@ class StormGuard:
                     if self._de_escalate_count >= self._de_escalate_threshold:
                         old_for_log = self.state
                         self._de_escalate_count = 0
-                        # Record de-escalation from STORM for re-escalation cooldown
                         if old_for_log >= StormGuardState.STORM:
                             self._feed_gap_deescalation_ts = now
                             self._latency_deescalation_ts = now
-                        # Record WARM→lower de-escalation for drift-burst re-escalation cooldown
                         if old_for_log == StormGuardState.WARM and new_state < StormGuardState.WARM:
                             self._warm_deescalation_ts = now
-                        # Reset entry timestamps so the next escalation gets a fresh cooldown.
                         self._storm_entry_ts = 0.0
-                        # P4: also reset WARM entry timestamp; mirrors the
-                        # storm reset and prevents stale comparisons when
-                        # state subsequently re-enters WARM.
                         self._warm_entry_ts = 0.0
                         _, fire_callback = self._transition(new_state, "Recovery")
                         logger.info(
@@ -923,8 +652,6 @@ class StormGuard:
 
             current_state = self.state
 
-        # P1 fix: flush metrics + audit outside _state_lock to avoid nested
-        # lock ordering with the Prometheus scraper thread.
         self._emit_pending_transition()
 
         if fire_callback:
@@ -958,33 +685,18 @@ class StormGuard:
         Returns:
             Current StormGuardState after potential escalation.
         """
-        # Crossed book (spread < 0) or empty book (mid_price_x2 <= 0) indicates
-        # data corruption or exchange anomaly. Escalate to STORM immediately.
         if spread_scaled < 0:
             with self._state_lock:
                 if self.state < StormGuardState.STORM:
-                    # Stamp the cooldown, as every OTHER storm-entry site in
-                    # this file does. ``_transition`` only sets ``state`` and
-                    # ``last_state_change``; it does not maintain the
-                    # hysteresis fields. Without these two lines
-                    # ``_storm_entry_ts`` stayed at its 0.0 initial value (or
-                    # the 0.0 the de-escalation path resets it to), so
-                    # ``cooldown_ok = (now - 0.0) >= 30`` was trivially true on
-                    # the next tick and STORM could clear after ~5 clean
-                    # observations instead of ~35 s. A book that oscillates in
-                    # and out of crossed is exactly what the cooldown exists to
-                    # ride out.
                     self._storm_entry_ts = time.monotonic()
                     self._de_escalate_count = 0
                     self._transition(
                         StormGuardState.STORM,
                         f"Crossed book: spread_scaled={spread_scaled}",
                     )
-            # P1 fix: flush metrics + audit outside _state_lock (crossed-book path).
             self._emit_pending_transition()
             return self.state
         if mid_price_x2 <= 0:
-            # Empty/invalid book — skip DriftBurst to avoid feeding invalid data
             return self.state
 
         detector = self._drift_burst_detector
@@ -993,13 +705,6 @@ class StormGuard:
 
         result = detector.evaluate(mid_price_x2, spread_scaled, imbalance, ts, symbol)
 
-        # Publish the breaker's *input*, not just its output. Without this the
-        # only evidence a drift burst ever happened was an INFO log, so nobody
-        # could see how close toxicity runs to the WARM entry threshold — and
-        # since toxicity is a sigmoid of the t-statistic that equals exactly
-        # 0.5 at the burst threshold, "WARM at 0.501" is indistinguishable from
-        # a mis-set threshold without the series. Called from the periodic
-        # monitor loop, not per tick.
         try:
             _sym = symbol or "unknown"
             self.metrics.stormguard_toxicity_score.labels(symbol=self.metrics.cap_symbol(_sym)).set(
@@ -1010,61 +715,28 @@ class StormGuard:
                 self.metrics.drift_burst_detected_total.labels(
                     symbol=self.metrics.cap_symbol(_sym), toxicity_type=_tox_type
                 ).inc()
-        except Exception:  # noqa: BLE001 - metrics must never break the breaker
+        except Exception:
             pass
 
-        # Determine escalation target from toxicity signal.
-        # Only escalate, never de-escalate (additive safety).
-        # P4 (2026-04-28): WARM entry uses ``_warm_toxicity_entry`` (default
-        # 0.5); when already in WARM the hold band runs from
-        # ``_warm_toxicity_exit`` (default 0.4) up to the entry threshold.
-        # Toxicity scores in the hold band do not initiate a new WARM but
-        # also do not let an existing WARM die — they re-arm
-        # ``_warm_entry_ts`` so update()'s de-escalation cannot fire while
-        # toxicity remains elevated. Production 2026-04-28 flap saw scores
-        # of 0.503/0.509/0.514 hovering just above 0.5 — the band rules out
-        # the oscillation.
-        #
-        # Capped at WARM (CAUTION), 2026-10-23. Toxicity is a research signal
-        # about the book, not evidence about the platform or the account; it
-        # used to reach STORM above 0.8 and HALT above 0.9 on its own, which let
-        # a market statistic stop the maker. WARM blocks nothing in
-        # ``_validate_locked``: it is visible on the mode gauge and the audit
-        # log, and strategies may read it.
         target: StormGuardState | None
         reason = ""
         if result.toxicity_score > self._warm_toxicity_entry:
             target = StormGuardState.WARM
             reason = f"DriftBurst WARM: toxicity={result.toxicity_score:.3f}"
         elif self.state == StormGuardState.WARM and result.toxicity_score > self._warm_toxicity_exit:
-            # Hold-band: not high enough to (re-)enter WARM but high enough
-            # to keep an existing WARM alive. ``target = None`` skips the
-            # escalation branches and lands in the hold-band re-arm below.
             target = None
         else:
             return self.state
 
-        # Only escalate — never de-escalate from drift burst
         fire_callback = False
         with self._state_lock:
             now = time.monotonic()
             if target is None:
-                # P4: hysteresis hold-band re-arm. Re-set ``_warm_entry_ts``
-                # so update()'s de-escalation does not fire WARM->NORMAL
-                # while toxicity is still above the exit threshold. This
-                # only applies while currently in WARM (guarded by the
-                # outer elif above).
                 if self.state == StormGuardState.WARM:
                     self._warm_entry_ts = now
                 current_state = self.state
-                # P1 fix: flush metrics + audit outside _state_lock.
-                # We don't transition here, so no pending entries — but
-                # call is a no-op when empty.
                 self._emit_pending_transition()
                 return current_state
-            # WARM re-escalation cooldown: suppress if we recently de-escalated
-            # from WARM. Prevents 58/58 flip-flop when toxicity oscillates near
-            # the 0.5 boundary.
             if (
                 target == StormGuardState.WARM
                 and self.state < StormGuardState.WARM
@@ -1074,10 +746,6 @@ class StormGuard:
                 return self.state
             if target > self.state:
                 self._de_escalate_count = 0
-                # P4 (2026-04-28): mirror update()'s WARM-entry timestamp so
-                # WARM cooldown is enforced regardless of which entry path
-                # (latency/feed-gap via update() vs. drift-burst
-                # toxicity via update_with_lob()) raised the alarm.
                 self._warm_entry_ts = now
                 _, fire_callback = self._transition(target, reason)
                 logger.info(
@@ -1088,14 +756,10 @@ class StormGuard:
                     burst_detected=result.burst_detected,
                 )
             elif target == StormGuardState.WARM and self.state == StormGuardState.WARM:
-                # P4: already in WARM and toxicity still above ENTRY
-                # threshold — pin ``_warm_entry_ts`` so de-escalation does
-                # not fire while the alarm itself is still active.
                 self._warm_entry_ts = now
 
             current_state = self.state
 
-        # P1 fix: flush metrics + audit outside _state_lock (drift-burst path).
         self._emit_pending_transition()
 
         if fire_callback:
@@ -1126,7 +790,6 @@ class StormGuard:
 
         logger.warning("StormGuard Transition", old=old_state.name, new=new_state.name, reason=reason)
 
-        # P1 fix: record intent to emit metrics/audit OUTSIDE the lock.
         self._pending_transition_emit.append(
             {
                 "old_state_int": int(old_state),
@@ -1137,8 +800,6 @@ class StormGuard:
             }
         )
 
-        # Signal caller to fire callback OUTSIDE the lock
-        # Only fire on *entry* to HALT, not re-entry (prevents infinite recursion)
         should_fire = (
             new_state == StormGuardState.HALT
             and old_state != StormGuardState.HALT
@@ -1155,9 +816,6 @@ class StormGuard:
         Called by every path that invokes ``_transition`` after releasing the
         state lock. Safe to call when no pending entries exist (no-op).
         """
-        # Pop under a tiny local swap to avoid losing entries if we are racing
-        # with another emitter (which should not happen — this function is
-        # single-threaded-caller by convention).
         if not self._pending_transition_emit:
             return
         pending = self._pending_transition_emit
@@ -1168,8 +826,6 @@ class StormGuard:
             old_state_int = entry["old_state_int"]
             direction = "escalation" if new_state_int > old_state_int else "de_escalation"
 
-            # Update Metric — log at WARNING if metrics fail during a state
-            # transition so operators know observability is degraded (INFRA-011).
             try:
                 self.metrics.stormguard_mode.labels(strategy="system").set(new_state_int)
             except Exception as exc:
@@ -1193,19 +849,12 @@ class StormGuard:
             except Exception as exc:
                 logger.warning("stormguard_metric_update_failed", metric="transitions", error=str(exc))
 
-            # Same event, labelled by target state. The direction-only counter
-            # cannot distinguish three WARM excursions from three HALTs, which
-            # is the difference between a normal volatile session and a day the
-            # platform stopped trading. Added alongside rather than as a label
-            # on the existing counter so current dashboards keep working.
             if direction == "escalation":
                 try:
                     self.metrics.stormguard_escalations_total.labels(to_state=StormGuardState(new_state_int).name).inc()
                 except Exception as exc:
                     logger.warning("stormguard_metric_update_failed", metric="escalations", error=str(exc))
 
-            # Audit guardrail transition (may block on asyncio.Queue.put_nowait;
-            # still safer outside the state lock).
             try:
                 from hft_platform.recorder.audit import get_audit_writer
 
@@ -1244,16 +893,11 @@ class StormGuard:
         if not asyncio.iscoroutine(result):
             return
 
-        # Prefer the explicitly bound loop (safe from any thread); fall back to
-        # get_running_loop() when we are ourselves on the engine loop thread.
         loop = self._loop
         if loop is None:
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
-                # No bound loop and not running inside one — close the coroutine
-                # explicitly so the interpreter does not emit an unawaited-coroutine
-                # warning, and surface that observability is degraded.
                 result.close()
                 logger.warning("halt_callback_coroutine_no_loop")
                 return
@@ -1262,7 +906,6 @@ class StormGuard:
             future = asyncio.run_coroutine_threadsafe(result, loop)
             future.add_done_callback(self._halt_callback_done)
         except RuntimeError as exc:
-            # Loop is closed or otherwise unusable; close the coroutine cleanly.
             result.close()
             logger.warning("halt_callback_schedule_failed", error=str(exc))
 
@@ -1290,7 +933,6 @@ class StormGuard:
                 self._target_state_reason = reason
                 self._transition(StormGuardState.STORM, reason)
 
-        # P1 fix: flush metrics + audit outside _state_lock.
         self._emit_pending_transition()
 
     def trigger_halt(self, reason: str) -> None:
@@ -1315,11 +957,9 @@ class StormGuard:
             self._de_escalate_count = 0
             _, fire_callback = self._transition(StormGuardState.HALT, reason)
             self._halt_reason = reason
-            # H1: notify in-flight dispatches of the transition.
             for ticket in self._inflight_dispatch_tickets.values():
                 ticket["halted"] = True
 
-        # P1 fix: flush metrics + audit outside _state_lock.
         self._emit_pending_transition()
 
         if fire_callback:
@@ -1356,7 +996,7 @@ class StormGuard:
             return 0
         try:
             return max(0, int(provider()))
-        except Exception:  # noqa: BLE001 - a broken probe must not block orders or the breaker
+        except Exception:
             return 0
 
     def backpressure_blocks(self, intent: OrderIntent) -> bool:
@@ -1381,8 +1021,8 @@ class StormGuard:
 
     def _publish_broker_silence(self, silence_us: int) -> None:
         try:
-            self.metrics.order_broker_silence_seconds.set(silence_us / 1_000_000)  # precision-time
-        except Exception:  # noqa: BLE001 - observability must never break the breaker
+            self.metrics.order_broker_silence_seconds.set(silence_us / 1_000_000)
+        except Exception:
             logger.debug("broker_silence_publish_failed", exc_info=True)
 
     def _validate_locked(self, intent: OrderIntent) -> tuple[bool, str]:
@@ -1508,7 +1148,7 @@ class StormGuard:
             return False
         try:
             current = int(provider(intent.symbol, intent.strategy_id) or 0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
         if current == 0:
             return False
@@ -1541,7 +1181,6 @@ class StormGuard:
                     StormGuardState.STORM,
                     f"FeatureEngine consecutive failures: {count}",
                 )
-        # P1 fix: flush transition metrics + audit outside _state_lock.
         self._emit_pending_transition()
         try:
             self.metrics.feature_engine_escalation_total.inc()
@@ -1552,7 +1191,7 @@ class StormGuard:
             consecutive_failures=count,
         )
 
-    _FEATURE_RECOVERY_HOLD_S: float = float(os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5"))  # noqa: precision-ok (duration, not financial)
+    _FEATURE_RECOVERY_HOLD_S: float = float(os.getenv("HFT_STORMGUARD_FEATURE_RECOVERY_HOLD_S", "5"))
 
     def report_feature_recovery(self) -> None:
         """Clear feature-failure flag after FeatureEngine recovers.
@@ -1570,7 +1209,6 @@ class StormGuard:
         with self._state_lock:
             if not self._feature_failure_active:
                 return
-            # Anti-flap: hold STORM for a minimum period
             elapsed = time.monotonic() - self._feature_failure_storm_ts
             if elapsed < self._FEATURE_RECOVERY_HOLD_S:
                 logger.debug(
@@ -1580,8 +1218,6 @@ class StormGuard:
                 )
                 return
             self._feature_failure_active = False
-            # Don't transition — let update() handle de-escalation so that
-            # other active STORM conditions (latency, feed gap) are respected.
         logger.info("feature_engine_recovered_flag_cleared")
 
     def report_norm_failure(self, count: int) -> None:
@@ -1600,7 +1236,6 @@ class StormGuard:
                     StormGuardState.STORM,
                     f"Normalizer consecutive failures: {count}",
                 )
-        # P1 fix: flush transition metrics + audit outside _state_lock.
         self._emit_pending_transition()
         try:
             self.metrics.norm_engine_escalation_total.inc()
@@ -1764,10 +1399,9 @@ class StormGuard:
         with self._state_lock:
             old = self._kill_switch_hold
             self._kill_switch_hold = hold
-        # Exported on every call (the supervisor calls this each tick), so the gauge cannot drift from the hold.
         try:
             self.metrics.kill_switch_active.set(1 if hold else 0)
-        except Exception as exc:  # noqa: BLE001 - metrics must never break the halt path
+        except Exception as exc:
             logger.warning("kill_switch_gauge_failed", error=str(exc))
         if old != hold:
             logger.warning(

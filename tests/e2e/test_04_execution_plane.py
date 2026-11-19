@@ -39,20 +39,11 @@ from tests.e2e.conftest import (
     wait_for_predicate,
 )
 
-# ---------------------------------------------------------------------------
-# Patches
-# ---------------------------------------------------------------------------
-
 _METRICS_PATCH = "hft_platform.order.adapter.MetricsRegistry"
 _LATENCY_PATCH = "hft_platform.order.adapter.LatencyRecorder"
 _EXEC_METRICS_PATCH = "hft_platform.execution.normalizer.MetricsRegistry"
 _POS_METRICS_PATCH = "hft_platform.execution.positions.MetricsRegistry"
 _ROUTER_METRICS_PATCH = "hft_platform.execution.router.MetricsRegistry"
-
-
-# ---------------------------------------------------------------------------
-# Minimal broker codec stub
-# ---------------------------------------------------------------------------
 
 
 class _StubBrokerCodec:
@@ -68,11 +59,6 @@ class _StubBrokerCodec:
 
     def encode_price_type(self, price_type: str) -> str:
         return price_type or "LMT"
-
-
-# ---------------------------------------------------------------------------
-# Helper: build OrderAdapter (not running — direct-dispatch mode)
-# ---------------------------------------------------------------------------
 
 
 def _make_adapter(
@@ -113,11 +99,6 @@ def _make_adapter(
     return adapter
 
 
-# ---------------------------------------------------------------------------
-# TestChain — synchronous chain tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.e2e_chain
 class TestChain:
     def test_order_adapter_calls_broker(self, e2e_adapter_yaml: str) -> None:
@@ -135,7 +116,6 @@ class TestChain:
         )
         cmd = make_command(intent=intent)
 
-        # execute() is async — run it directly (adapter.running=False → _dispatch_to_api)
         asyncio.run(adapter.execute(cmd))
 
         assert len(broker_api.placed_orders) == 1
@@ -158,7 +138,7 @@ class TestChain:
             data={
                 "seqno": "SEQ001",
                 "full_code": DEFAULT_SYMBOL,
-                "price": 500,  # raw float-like int from broker
+                "price": 500,
                 "quantity": 2,
                 "action": "Buy",
                 "ordno": "ord-001",
@@ -184,7 +164,6 @@ class TestChain:
         with patch(_POS_METRICS_PATCH) as m:
             m.get.return_value = mock_metrics
             store = PositionStore()
-        # Force Python path
         store._rust_tracker = None
         store.metrics = mock_metrics
 
@@ -240,11 +219,6 @@ class TestChain:
         assert pos.realized_pnl_scaled != 0
 
 
-# ---------------------------------------------------------------------------
-# TestIntegration — async pipeline tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.e2e_integration
 class TestIntegration:
     @pytest.mark.asyncio
@@ -264,12 +238,10 @@ class TestIntegration:
         raw_exec_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
         bus_events: list = []
 
-        # --- Bus mock ---
         mock_bus = MagicMock()
         mock_bus.publish_many_nowait = lambda events: bus_events.extend(events)
         mock_bus.publish_nowait = lambda ev: bus_events.append(ev)
 
-        # --- Metrics mocks ---
         mock_metrics = MagicMock()
         mock_metrics.order_actions_total.labels.return_value = MagicMock()
         mock_metrics.order_reject_total = MagicMock()
@@ -331,7 +303,6 @@ class TestIntegration:
             )
             router.metrics = mock_metrics
 
-        # --- Inject order command ---
         intent = make_intent(
             strategy_id="s1",
             symbol=DEFAULT_SYMBOL,
@@ -345,7 +316,6 @@ class TestIntegration:
         )
         await order_queue.put(cmd)
 
-        # --- Run adapter task briefly ---
         adapter_task = asyncio.create_task(adapter.run())
         await wait_for_predicate(lambda: len(broker_api.placed_orders) >= 1, timeout=2.0)
         adapter_task.cancel()
@@ -356,7 +326,6 @@ class TestIntegration:
 
         assert len(broker_api.placed_orders) == 1
 
-        # --- Inject raw fill ---
         raw_fill = RawExecEvent(
             topic="deal",
             data={
@@ -374,7 +343,6 @@ class TestIntegration:
         )
         await raw_exec_queue.put(raw_fill)
 
-        # --- Run router for one iteration ---
         router_task = asyncio.create_task(router.run())
         await wait_for_predicate(
             lambda: any(isinstance(e, FillEvent) for e in bus_events),
@@ -398,7 +366,6 @@ class TestIntegration:
         broker_api = InMemoryBrokerAPI()
         adapter = _make_adapter(e2e_adapter_yaml, broker_api)
 
-        # Place a new order
         intent_new = make_intent(
             intent_id=1,
             strategy_id="s1",
@@ -413,8 +380,6 @@ class TestIntegration:
 
         assert len(broker_api.placed_orders) == 1
 
-        # The trade returned by place_order is stored in live_orders
-        # For cancellation we can call cancel_order directly via client
         trade = broker_api.placed_orders[0]
         result = broker_api.cancel_order(trade)
 
@@ -439,11 +404,9 @@ class TestIntegration:
         )
         cmd = make_command(intent=intent)
 
-        # Should not raise even though broker rejects
         try:
             await adapter.execute(cmd)
         except Exception as exc:
             pytest.fail(f"execute() raised unexpectedly: {exc}")
 
-        # Order was rejected by broker, so not in placed_orders
         assert len(broker_api.placed_orders) == 0

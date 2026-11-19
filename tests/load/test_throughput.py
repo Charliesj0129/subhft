@@ -21,7 +21,7 @@ class TestGatewayThroughput:
     """Throughput benchmark for the GatewayService hot path."""
 
     INTENT_COUNT = 10_000
-    MIN_THROUGHPUT = 5_000  # intents/sec
+    MIN_THROUGHPUT = 5_000
 
     @pytest.mark.asyncio
     async def test_throughput_exceeds_5k_per_sec(
@@ -32,16 +32,13 @@ class TestGatewayThroughput:
         mock_risk_engine: MockRiskEngine,
     ) -> None:
         """Push 10k intents and verify >5k/sec throughput."""
-        # Pre-generate intents to avoid timing allocation overhead
         intents = [make_intent(i) for i in range(self.INTENT_COUNT)]
 
-        # Submit all intents to the channel
         for intent in intents:
             channel.submit_nowait(intent)
 
         assert channel.qsize() == self.INTENT_COUNT
 
-        # Process all envelopes through the gateway
         t0 = time.perf_counter()
         processed = 0
         for _ in range(self.INTENT_COUNT):
@@ -53,7 +50,6 @@ class TestGatewayThroughput:
 
         throughput = processed / elapsed if elapsed > 0 else float("inf")
 
-        # Assertions
         assert processed == self.INTENT_COUNT
         assert mock_risk_engine.evaluate_count == self.INTENT_COUNT
         assert mock_adapter._api_queue.qsize() == self.INTENT_COUNT

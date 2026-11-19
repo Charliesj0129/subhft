@@ -14,11 +14,6 @@ from hft_platform.analytics.queries import (
 DATE = "2026-03-31"
 
 
-# ---------------------------------------------------------------------------
-# query_daily_pnl
-# ---------------------------------------------------------------------------
-
-
 def test_query_daily_pnl_returns_structured_data():
     client = MagicMock()
     client.execute.return_value = [("strat1", "TXFD6", 10, 50, 125.5)]
@@ -70,11 +65,6 @@ def test_query_daily_pnl_contains_fills_table_reference():
     assert "hft.fills" in sql
 
 
-# ---------------------------------------------------------------------------
-# query_slippage_distribution
-# ---------------------------------------------------------------------------
-
-
 def test_query_slippage_distribution_returns_structured_data():
     client = MagicMock()
     client.execute.return_value = [("TXFD6", 100, 0.5, 1.2)]
@@ -115,11 +105,6 @@ def test_query_slippage_distribution_multiple_rows():
     assert result[0]["symbol"] == "TXFD6"
     assert result[1]["symbol"] == "2330"
     assert result[1]["p95_ticks"] == 2.0
-
-
-# ---------------------------------------------------------------------------
-# query_fill_quality
-# ---------------------------------------------------------------------------
 
 
 def test_query_fill_quality_returns_structured_data():
@@ -170,11 +155,6 @@ def test_query_fill_quality_contains_slippage_records_table():
     query_fill_quality(client, DATE)
     sql = client.execute.call_args[0][0]
     assert "hft.slippage_records" in sql
-
-
-# ---------------------------------------------------------------------------
-# query_liquidity_gate_stats
-# ---------------------------------------------------------------------------
 
 
 def test_query_liquidity_gate_stats_returns_structured_data():

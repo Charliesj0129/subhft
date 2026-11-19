@@ -59,9 +59,6 @@ def _position_provider(positions: dict[tuple[str, str], int]):
     return _fn
 
 
-# ---------------------------------------------------------------------------
-# 1. The reduces_position() predicate itself
-# ---------------------------------------------------------------------------
 class TestReducesPositionPredicate:
     def _mk(self, pos: int) -> RiskValidator:
         positions = {("TMFE6", "R47"): pos}
@@ -139,9 +136,6 @@ class TestReducesPositionPredicate:
         assert v.reduces_position(_make_intent(side=Side.BUY, qty=1)) is False
 
 
-# ---------------------------------------------------------------------------
-# 2. DailyLossLimitValidator — SOFT_LIMIT, DAILY_LOSS_LIMIT
-# ---------------------------------------------------------------------------
 def _ntd(amount_ntd: int) -> int:
     """NTD -> PnL accumulator units (see test_intraday_pnl_watermark._ntd)."""
     return amount_ntd * 10_000
@@ -166,23 +160,22 @@ class TestDailyLossLimitCoverBypass:
     def test_loss_gate_blocks_opener_still(self):
         """Sanity: an opener is still blocked once the day is past the soft limit."""
         v = self._make_validator(position=0)
-        v.record_pnl("R47", _ntd(280))  # +280 NTD gain establishes peak
+        v.record_pnl("R47", _ntd(280))
         v.update_unrealized(_ntd(0))
-        v.check(_make_intent(side=Side.BUY, qty=1))  # update peak via check
-        v.update_unrealized(_ntd(-2120))  # -2120 NTD unrealized => drawdown huge
+        v.check(_make_intent(side=Side.BUY, qty=1))
+        v.update_unrealized(_ntd(-2120))
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert not ok, "Opener must still be blocked — loss protection required"
         assert "SOFT_LIMIT" in reason
 
     def test_loss_gate_allows_cover_when_short(self):
         """Bug 21: cover order for short position must bypass the loss gate."""
-        v = self._make_validator(position=-1)  # R47 is short 1 lot
+        v = self._make_validator(position=-1)
         v.record_pnl("R47", _ntd(280))
         v.update_unrealized(_ntd(0))
-        v.check(_make_intent(side=Side.BUY, qty=1))  # prime peak
-        v.update_unrealized(_ntd(-2120))  # large unrealized loss
+        v.check(_make_intent(side=Side.BUY, qty=1))
+        v.update_unrealized(_ntd(-2120))
 
-        # Cover BUY must be allowed
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert ok, f"Cover order must bypass the loss gate, got: {reason}"
         assert reason in ("OK", "REDUCE_ONLY_BYPASS")
@@ -212,7 +205,7 @@ class TestDailyLossLimitCoverBypass:
     def test_soft_limit_allows_cover(self):
         """SOFT_LIMIT must also allow covers (Bug 21 extended)."""
         v = self._make_validator(position=-1)
-        v.record_pnl("R47", _ntd(-600))  # -600 NTD realized → soft limit breached
+        v.record_pnl("R47", _ntd(-600))
         v.update_unrealized(_ntd(0))
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert ok, f"Cover under SOFT_LIMIT must bypass, got: {reason}"
@@ -220,7 +213,7 @@ class TestDailyLossLimitCoverBypass:
     def test_daily_loss_limit_allows_cover(self):
         """Hard DAILY_LOSS_LIMIT_EXCEEDED must also allow covers."""
         v = self._make_validator(position=-1)
-        v.record_pnl("R47", _ntd(-9000))  # -9000 NTD, past the -8000 hard limit
+        v.record_pnl("R47", _ntd(-9000))
         v.update_unrealized(_ntd(0))
         ok, reason = v.check(_make_intent(side=Side.BUY, qty=1))
         assert ok, f"Cover under DAILY_LOSS_LIMIT must bypass, got: {reason}"
@@ -233,13 +226,10 @@ class TestDailyLossLimitCoverBypass:
         assert not ok
 
 
-# ---------------------------------------------------------------------------
-# 3. MaxNotionalValidator — cover bypass
-# ---------------------------------------------------------------------------
 class TestMaxNotionalCoverBypass:
     def _make(self, position: int = 0):
         cfg = {
-            "global_defaults": {"max_notional": 100},  # tiny cap to force rejection
+            "global_defaults": {"max_notional": 100},
             "strategies": {},
         }
         positions = {("TMFE6", "R47"): position}
@@ -247,7 +237,7 @@ class TestMaxNotionalCoverBypass:
 
     def test_blocks_opener(self):
         v = self._make(position=0)
-        ok, _ = v.check(_make_intent(price=374780000, qty=1))  # huge notional
+        ok, _ = v.check(_make_intent(price=374780000, qty=1))
         assert not ok
 
     def test_allows_cover_short(self):
@@ -261,9 +251,6 @@ class TestMaxNotionalCoverBypass:
         assert not ok
 
 
-# ---------------------------------------------------------------------------
-# 4. PerSymbolNotionalValidator — cover bypass
-# ---------------------------------------------------------------------------
 class TestStormGuardReduceOnly:
     """Bug 21: StormGuard HALT/STORM must allow cover orders through."""
 
@@ -337,22 +324,6 @@ class TestPerSymbolNotionalCoverBypass:
         assert ok, f"Cover under per-symbol notional cap must bypass, got: {reason}"
 
 
-# ---------------------------------------------------------------------------
-# 6. PositionLimit cover bypass  (2026-09-04 TMFI6 -5 lot deadlock)
-# ---------------------------------------------------------------------------
-# The Bug 21 round concluded PositionLimit "is intrinsically safe (checks
-# resulting_qty) and needs no change". That holds only while the position is
-# inside its cap. Once it is outside -- reached live on 2026-09-04 when
-# concurrent resting quotes filled together -- every intent projects to an
-# abs() still above the cap, so the gate rejects the cover orders as well and
-# the strategy can never walk back to flat.
-#
-#   position TMFI6 = -5, max_position_lots = 1
-#
-#     BUY 1 (cover) -> resulting = -4 -> abs(-4) > 1 -> REJECT   X
-#     SELL 1 (open) -> resulting = -6 -> abs(-6) > 1 -> REJECT   (correct)
-#
-#   measured: 21x "POSITION_LIMIT_EXCEEDED: abs(-4) > 1", position_age 3561s
 class TestPositionLimitCoverBypass:
     def _make(self, position: int, max_lots: int = 1):
         cfg = {"global_defaults": {"max_position_lots": max_lots}}

@@ -16,10 +16,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("feed_adapter.quote_runtime")
 
-# How many watchdog iterations may fail inside the decay window before the
-# thread gives up. One transient failure is a broker hiccup and must not cost
-# the facade its stall detection; a run of them means the watchdog itself is
-# stuck, and ending it fail-closed is what ShioajiWatchdogThreadDown alerts on.
 _WATCHDOG_MAX_CONSECUTIVE_ERRORS = 5
 
 
@@ -34,7 +30,7 @@ class QuotePendingState:
 
     pending: bool
     reason: str | None
-    ts: float  # wall-clock epoch from timebase.now_s()
+    ts: float
 
 
 @dataclass(frozen=True)
@@ -79,11 +75,6 @@ class QuoteEventHandler:
     def __init__(self) -> None:
         self._pending_reason: str | None = None
         self._pending_ts: float = 0.0
-        # Guards the (_pending_reason, _pending_ts) pair so readers never
-        # observe a half-updated handler. Also used by QuoteRuntime to mirror
-        # handler state onto ShioajiClient fields atomically — hence RLock:
-        # QuoteRuntime.mark_pending acquires the lock and then calls
-        # handler.mark_pending which would re-acquire it on a plain Lock.
         self._pending_lock: threading.RLock = threading.RLock()
 
     @property
@@ -101,7 +92,6 @@ class QuoteEventHandler:
         ts = current_ts if current_ts is not None else timebase.now_s()
         with self._pending_lock:
             if self._pending_reason == reason:
-                # Already pending for the same reason — no-op
                 return QuotePendingState(pending=True, reason=reason, ts=self._pending_ts)
             self._pending_reason = reason
             self._pending_ts = ts
@@ -119,7 +109,6 @@ class QuoteEventHandler:
 
     @property
     def is_pending(self) -> bool:
-        # Single attribute read — GIL-atomic, no lock needed.
         return self._pending_reason is not None
 
     @property
@@ -150,31 +139,21 @@ class QuoteRuntime:
     __slots__ = (
         "_client",
         "_event_handler",
-        # D1 (2026-04-25): per-symbol retry state with exponential backoff +
-        # max-attempts cap. Replaces the pre-fix unbounded 60 s retry loop
-        # that burned 22 TXO codes for 24 h+ in production.
         "_retry_attempts",
         "_retry_next_ts",
         "_permanently_failed",
         "_retry_state_lock",
     )
 
-    # D1: backoff schedule in seconds. Beyond the schedule, the cap (3600 s)
-    # repeats indefinitely until max-attempts trips.
     _RETRY_BACKOFF_SCHEDULE_S: tuple[float, ...] = (60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0)
 
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
         self._event_handler = QuoteEventHandler()
-        # D1: per-symbol retry state.
         self._retry_attempts: dict[str, int] = {}
         self._retry_next_ts: dict[str, float] = {}
         self._permanently_failed: set[str] = set()
         self._retry_state_lock = threading.Lock()
-
-    # ------------------------------------------------------------------ #
-    # D1: subscription retry state helpers
-    # ------------------------------------------------------------------ #
 
     def _retry_max_attempts(self) -> int:
         return int(os.getenv("HFT_SUB_RETRY_MAX_ATTEMPTS", "10"))
@@ -204,7 +183,6 @@ class QuoteRuntime:
                     reason = "ok"
                 else:
                     reason = "skip_backoff"
-        # Metric outside lock to keep critical section minimal.
         self._bump_retry_metric(code, reason)
         return reason == "ok", reason
 
@@ -220,7 +198,6 @@ class QuoteRuntime:
         attempts: int = 0
         with self._retry_state_lock:
             if code in self._permanently_failed:
-                # Defensive — should not be retried after permanent.
                 attempts = self._retry_attempts.get(code, max_attempts)
             else:
                 attempts = self._retry_attempts.get(code, 0) + 1
@@ -229,7 +206,6 @@ class QuoteRuntime:
                 if attempts >= max_attempts:
                     self._permanently_failed.add(code)
                     became_permanent = True
-        # Metric updates outside lock.
         self._set_attempts_gauge(code, attempts)
         if became_permanent:
             self._bump_permanent_metric(code)
@@ -249,10 +225,6 @@ class QuoteRuntime:
             self._permanently_failed.discard(code)
         self._set_attempts_gauge(code, 0)
 
-    # ------------------------------------------------------------------ #
-    # D1: metric helpers (defensive — metrics may be absent on test stubs)
-    # ------------------------------------------------------------------ #
-
     def _bump_retry_metric(self, code: str, result: str) -> None:
         metrics = getattr(self._client, "metrics", None)
         if metrics is None:
@@ -263,7 +235,7 @@ class QuoteRuntime:
         try:
             sym = metrics.cap_symbol(code) if hasattr(metrics, "cap_symbol") else code
             counter.labels(symbol=sym, result=result).inc()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _bump_permanent_metric(self, code: str) -> None:
@@ -276,7 +248,7 @@ class QuoteRuntime:
         try:
             sym = metrics.cap_symbol(code) if hasattr(metrics, "cap_symbol") else code
             counter.labels(symbol=sym).inc()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def _set_attempts_gauge(self, code: str, attempts: int) -> None:
@@ -289,12 +261,8 @@ class QuoteRuntime:
         try:
             sym = metrics.cap_symbol(code) if hasattr(metrics, "cap_symbol") else code
             gauge.labels(symbol=sym).set(attempts)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
-
-    # ------------------------------------------------------------------ #
-    # Pending state management via QuoteEventHandler
-    # ------------------------------------------------------------------ #
 
     def mark_pending(self, reason: str) -> QuotePendingState:
         """Mark the quote feed as pending and return the new state delta.
@@ -304,9 +272,6 @@ class QuoteRuntime:
         ``_pending_quote_resubscribe`` / ``_pending_quote_reason`` /
         ``_pending_quote_ts`` never see a torn triple (P0-D2).
         """
-        # Compute ts outside the lock to minimise its duration; handler
-        # takes the lock again internally but that's a cheap reentrant-free
-        # sequence of ordinary attribute writes.
         with self._event_handler.pending_lock:
             delta = self._event_handler.mark_pending(reason)
             c = self._client
@@ -330,10 +295,6 @@ class QuoteRuntime:
     def is_pending(self) -> bool:
         return self._event_handler.is_pending
 
-    # ------------------------------------------------------------------ #
-    # Quote schema validation (Phase-2: owned here, not in ShioajiClient)
-    # ------------------------------------------------------------------ #
-
     def validate_quote_schema(self, *args: Any, **kwargs: Any) -> tuple[bool, str]:
         """Best-effort schema guard for quote callbacks.
 
@@ -353,8 +314,6 @@ class QuoteRuntime:
 
         if args:
             first = args[0]
-            # v0-style callbacks typically begin with a topic string.
-            # Shioaji 1.5.6 Exchange passes isinstance(str) but is not iterable.
             if type(first) is str and ("/" in first or ":" in first):
                 return False, "topic_string_arg_v0_shape"
 
@@ -381,7 +340,6 @@ class QuoteRuntime:
                 return False, "dict_payload_unrecognized"
             return True, "dict_payload_relaxed"
 
-        # v1 callbacks commonly pass typed objects with code/bid/ask/tick fields
         if hasattr(payload, "code") or hasattr(payload, "Code"):
             return True, "object_with_code"
         if hasattr(payload, "bid_price") or hasattr(payload, "ask_price"):
@@ -392,10 +350,6 @@ class QuoteRuntime:
         if c._quote_schema_guard_strict:
             return False, "object_unrecognized"
         return True, "object_relaxed"
-
-    # ------------------------------------------------------------------ #
-    # Quote callback registration (Phase-2: owned here, not in ShioajiClient)
-    # ------------------------------------------------------------------ #
 
     def register_quote_callbacks(self) -> bool:
         """Register quote callbacks based on active quote version.
@@ -412,8 +366,6 @@ class QuoteRuntime:
             logger.warning("Quote API unavailable; callback registration deferred")
             return False
 
-        # Local import avoids circular dependency at module load time;
-        # by call time both modules are fully initialised.
         from hft_platform.feed_adapter.shioaji.client import dispatch_tick_cb
 
         supports_v1 = c._supports_quote_v1()
@@ -494,10 +446,6 @@ class QuoteRuntime:
 
         return ok
 
-    # ------------------------------------------------------------------ #
-    # Quote watchdog (Phase-2: owned here, not in ShioajiClient)
-    # ------------------------------------------------------------------ #
-
     def start_quote_watchdog(self) -> None:
         """Start background watchdog that detects quote feed stalls.
 
@@ -515,32 +463,7 @@ class QuoteRuntime:
         )
 
         def _watch() -> None:
-            # `c.logged_in` is deliberately NOT the loop condition. A session
-            # refresh clears it before re-logging in (session_runtime.py), and
-            # the 5 s watchdog interval is shorter than the ~6 s login, so this
-            # thread reliably woke inside that window and exited. It is only
-            # restarted from inside `if c.logged_in:` on the refresh path, so a
-            # failed re-login left the facade with no stall detection at all —
-            # the same way its session-refresh thread was lost on 2026-07-25,
-            # when one facade went silent for 24 h carrying 74 symbols.
             was_logged_out = False
-            # One bad iteration must not end the thread. The try below used to
-            # wrap the whole loop, so a single exception -- a transient
-            # "Already mutably borrowed" out of the shioaji 1.5.x Rust core, seen
-            # on the live engine 2026-09-07T17:47:26Z -- ran the finally, cleared
-            # _quote_watchdog_running, and left the facade with no stall detection
-            # at all. That is the failure the comment above already describes: a
-            # facade silent for 24 h carrying 74 symbols. It survived that time
-            # only because a reconnect happened to follow 70 ms later and restart
-            # the thread; nothing in the design guarantees one does.
-            #
-            # Errors are counted with a decay rather than reset on a clean pass,
-            # because the loop body leaves by ``continue`` on five ordinary paths
-            # and a reset statement after it would be skipped by all of them.
-            # Isolated hiccups therefore age out; only a genuinely stuck watchdog
-            # -- _WATCHDOG_MAX_CONSECUTIVE_ERRORS failures inside the decay
-            # window -- still ends the thread, fail-closed, for
-            # ShioajiWatchdogThreadDown to alert on.
             was_logged_out = False
             consecutive_errors = 0
             last_error_mono = 0.0
@@ -552,14 +475,9 @@ class QuoteRuntime:
                         if not c._quote_watchdog_running:
                             break
                         if not c.logged_in:
-                            # Re-login belongs to the session-refresh thread. Stall
-                            # detection here would only queue resubscribes that
-                            # cannot succeed while the facade has no session.
                             was_logged_out = True
                             continue
                         if was_logged_out:
-                            # The refresh path has just re-subscribed. Do not count
-                            # the logged-out gap as a quote stall.
                             was_logged_out = False
                             c._last_quote_data_ts = timebase.now_s()
                             continue
@@ -568,7 +486,6 @@ class QuoteRuntime:
                         if last <= 0:
                             continue
                         gap = timebase.now_s() - last
-                        # Use relaxed threshold during market open grace period (C4)
                         threshold = c._quote_no_data_s
                         if c._is_market_open_grace_period():
                             threshold = max(threshold, c._market_open_grace_s)
@@ -618,7 +535,7 @@ class QuoteRuntime:
                             c._ensure_callbacks(c.tick_callback)
                             c._resubscribe_all()
                         c._last_quote_data_ts = timebase.now_s()
-                    except Exception as exc:  # noqa: BLE001 - one iteration must not end the thread
+                    except Exception as exc:
                         now_mono = time.monotonic()
                         if now_mono - last_error_mono > error_decay_s:
                             consecutive_errors = 0
@@ -653,10 +570,6 @@ class QuoteRuntime:
             daemon=True,
         )
         c._quote_watchdog_thread.start()
-
-    # ------------------------------------------------------------------ #
-    # Quote recovery / retry lifecycle (Phase-5: moved from client)
-    # ------------------------------------------------------------------ #
 
     def allow_quote_recovery(self, reason: str) -> bool:
         c = self._client
@@ -772,12 +685,9 @@ class QuoteRuntime:
         delay = c._quote_force_relogin_s
         if delay <= 0:
             return
-        # Use _reconnect_lock (not bool flag) to prevent concurrent relogin.
-        # Bool check-then-set is not atomic — two threads can both read False
-        # and enter login simultaneously, crashing Shioaji SDK (2026-04-15).
         if not c._reconnect_lock.acquire(blocking=False):
             return
-        c._reconnect_lock.release()  # release immediately; re-acquire inside thread
+        c._reconnect_lock.release()
         if c._pending_quote_relogining:
             return
         c._pending_quote_relogining = True
@@ -817,7 +727,6 @@ class QuoteRuntime:
 
     def start_forced_relogin(self, reason: str) -> None:
         c = self._client
-        # Use _reconnect_lock to prevent concurrent relogin (same fix as above).
         if not c._reconnect_lock.acquire(blocking=False):
             return
         c._reconnect_lock.release()
@@ -899,7 +808,6 @@ class QuoteRuntime:
         """
         c = self._client
         now = timebase.now_s()
-        # Use our local handler's lock — always available via QuoteRuntime.
         lock = self._event_handler.pending_lock
         with lock:
             if not c._pending_quote_resubscribe or c._pending_quote_reason != reason:
@@ -949,14 +857,6 @@ class QuoteRuntime:
         delay = max(0.0, c._resubscribe_delay_s)
 
         def _do_resubscribe() -> None:
-            # ``result`` is what this thread actually achieved, not that it ran.
-            # Before this was recorded, the scheduled path -- the one every
-            # event_4/event_12/event_13 takes -- produced no metric at all:
-            # feed_resubscribe_total only ever moved for the explicit
-            # ``resubscribe()`` entry point, so an operator reading the counter
-            # saw 5 "ok" against 1433 event_4 triggers and had no way to tell
-            # whether the 1433 had been serviced. It also logged "completed"
-            # when ``tick_callback`` was None, i.e. having done nothing.
             result = "skip"
             try:
                 if delay > 0:
@@ -970,8 +870,6 @@ class QuoteRuntime:
                 else:
                     logger.warning("Resubscribe skipped: no tick callback registered", reason=reason)
             except Exception as exc:
-                # This runs on a daemon thread, so an escaping exception reached
-                # only threading.excepthook and left no operational trace.
                 result = "error"
                 logger.error("Scheduled resubscribe failed", reason=reason, error=str(exc))
             finally:
@@ -1009,7 +907,7 @@ class QuoteRuntime:
                     self._client.metrics.shioaji_session_down_total.inc()
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
-        except Exception as exc:  # noqa: BLE001 - must never raise into the SDK
+        except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
 
     def on_quote_event(self, resp_code: int, event_code: int, info: str, event: str) -> None:
@@ -1094,8 +992,6 @@ class QuoteRuntime:
                 if quote_api is None or not hasattr(quote_api, "subscribe"):
                     logger.warning("Subscription retry waiting for quote API availability")
                     continue
-                # Check capacity before retrying — if at limit, stop the loop
-                # to avoid infinite retries against a permanent broker limit.
                 if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                     logger.warning(
                         "Subscription retry aborted: at capacity",
@@ -1105,19 +1001,6 @@ class QuoteRuntime:
                         codes=[s.get("code") for s in list(c._failed_sub_symbols)[:10]],
                     )
                     break
-                # L2: drain in place via ``popleft`` and conditionally
-                # re-``append`` on failure. The previous pattern built a
-                # ``remaining`` list and reassigned ``c._failed_sub_symbols
-                # = remaining``, which lost any concurrent ``append`` from
-                # ``subscription_manager.py:112`` (event loop) that landed
-                # on the OLD list between snapshot and reassign. Drain +
-                # append-back keeps everything on the same deque object,
-                # and each individual deque op is GIL-atomic.
-                #
-                # Bound the work per pass to the size at entry so a
-                # peer-thread append during this pass does not livelock
-                # the loop here — those new entries are picked up on the
-                # next interval tick.
                 pending = len(c._failed_sub_symbols)
                 now = timebase.now_s()
                 for _ in range(pending):
@@ -1133,26 +1016,19 @@ class QuoteRuntime:
                     if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                         c._failed_sub_symbols.append(sym)
                         continue
-                    # D1: per-symbol backoff + max-attempts gate.
                     code = sym.get("code") or ""
                     allowed, reason = self._should_attempt_subscription(code, now)
                     if not allowed:
                         if reason == "skip_permanent":
-                            # Drop permanently — never re-append.
                             continue
-                        # skip_backoff: retain in queue for next interval.
                         c._failed_sub_symbols.append(sym)
                         continue
                     if c._subscribe_symbol(sym, cb):
                         if code:
                             c.subscribed_codes.add(code)
                         c.subscribed_count = len(c.subscribed_codes)
-                        # D1: success clears retry state for this symbol.
                         self._record_subscription_success(code)
                         logger.info("Subscription retry succeeded", code=code)
-                        # Bug 12: trigger alias propagation so strategies re-resolve
-                        # symbols when subscribe succeeds after the initial
-                        # connect sequence finished.
                         _cb_alias = getattr(c, "on_alias_map_updated", None)
                         if _cb_alias is not None:
                             try:
@@ -1160,16 +1036,12 @@ class QuoteRuntime:
                             except Exception as exc:
                                 logger.warning("on_alias_map_updated_failed", error=str(exc))
                     else:
-                        # D1: record failure → may move to _permanently_failed
-                        # after HFT_SUB_RETRY_MAX_ATTEMPTS. Permanent symbols
-                        # are NOT re-appended to _failed_sub_symbols.
                         permanent = self._record_subscription_failure(code, now)
                         if not permanent:
                             c._failed_sub_symbols.append(sym)
                 if not c._failed_sub_symbols:
                     logger.info("All failed subscriptions resolved")
                     break
-                # If all remaining failures are due to capacity, stop retrying
                 if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
                     logger.warning(
                         "Subscription retry stopped: capacity reached",
@@ -1193,10 +1065,6 @@ class QuoteRuntime:
         )
         c._sub_retry_thread.start()
 
-    # ------------------------------------------------------------------ #
-    # Legacy pass-through helpers
-    # ------------------------------------------------------------------ #
-
     def resubscribe(self) -> bool:
         return bool(self._client.resubscribe())
 
@@ -1204,10 +1072,6 @@ class QuoteRuntime:
         return bool(self._client._allow_quote_recovery(reason))
 
     def snapshot(self) -> QuoteRuntimeSnapshot:
-        # Read the (_resubscribe, _reason, _ts) triple under the pending_lock
-        # so the returned snapshot is internally consistent (P0-D2). The
-        # callbacks_registered flag is a single bool (GIL-atomic) and not
-        # part of the triple, so reading it outside the lock is acceptable.
         c = self._client
         with self._event_handler.pending_lock:
             resubscribe = bool(getattr(c, "_pending_quote_resubscribe", False))

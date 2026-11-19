@@ -32,12 +32,6 @@ _AUTO_RECOVERABLE_REASONS: frozenset[str] = frozenset(
         "reconciliation_drift",
         "reconciliation_unverifiable",
         "rss_unhealthy",
-        # The reasons below are all level-based in platform_inputs.reduce_only_reasons:
-        # re-emitted each tick only while the live probe still observes the failure.
-        # Without auto-recovery they latch indefinitely after a transient blip and
-        # the docker-exec rearm CLI cannot reach _shared_controller to clear them.
-        # `recorder_data_loss` is intentionally excluded: autonomy_monitor routes it
-        # to trigger_halt (data-integrity gate, manual reconciliation required).
         "queue_depth_exceeded",
         "redis_unhealthy",
         "wal_backlog_unhealthy",
@@ -70,7 +64,6 @@ class PlatformDegradeController:
         self._reference_positions: dict[str, int] = {}
         self._reference_close_reservations: dict[str, int] = {}
         self._active_reasons: set[str] = set()
-        # Rate-limit repeated "reason_added" log (break RSS→log feedback loop)
         self._reason_last_log_ns: dict[str, int] = {}
         self._reason_log_interval_ns: int = int(
             float(os.getenv("HFT_REDUCE_ONLY_LOG_INTERVAL_S", "60")) * 1_000_000_000
@@ -130,11 +123,6 @@ class PlatformDegradeController:
 
     def _enter_reduce_only_locally(self, reason: str) -> tuple[AutonomyTransition, Callable[[], None] | None]:
         """Apply the transition in memory; return it plus its pending write."""
-        # A manual reason that arrives while an auto-recoverable one already
-        # holds reduce-only is a new transition, not a repeat: it must be
-        # persisted, or the latch lives in memory only and a restart boots NORMAL.
-        # The likely path is recorder DEGRADED (``clickhouse_unhealthy``, auto)
-        # escalating to DATA_LOSS (``recorder_data_loss``, manual).
         escalates_to_manual = (
             self.reduce_only_active
             and self.last_transition is not None
@@ -144,7 +132,6 @@ class PlatformDegradeController:
         )
         self._active_reasons.add(reason)
         if self.reduce_only_active and self.last_transition is not None and not escalates_to_manual:
-            # Rate-limit repeated log to break RSS→log→heap feedback loop
             now_ns = time.monotonic_ns()
             last_ns = self._reason_last_log_ns.get(reason, 0)
             if now_ns - last_ns >= self._reason_log_interval_ns:
@@ -159,8 +146,6 @@ class PlatformDegradeController:
         transition = AutonomyTransition.enter_platform_reduce_only(
             reason,
             from_mode=AutonomyMode.NORMAL if not self.reduce_only_active else AutonomyMode.PLATFORM_REDUCE_ONLY,
-            # Auto-recoverable reasons self-clear; persisting a manual-rearm flag
-            # for them is what created the self-perpetuating phantom latch.
             manual_rearm_required=reason not in _AUTO_RECOVERABLE_REASONS,
         )
         self.reduce_only_active = True
@@ -301,7 +286,6 @@ class PlatformDegradeController:
             _t, write = self._enter_reduce_only_locally(active)
             if write is not None:
                 relatch.append(write)
-        # Everything above ran without suspending. Only the records are offloaded.
         if persist is not None:
             await asyncio.to_thread(persist)
         for write in relatch:
@@ -312,8 +296,6 @@ class PlatformDegradeController:
         """Apply the operator override in memory; return the deferred record."""
         if not self.reduce_only_active:
             return None, None
-        # Drop reasons before exit so observability reflects the manual
-        # override path rather than a phantom remaining condition.
         cleared_reasons = sorted(self._active_reasons)
         self._active_reasons.clear()
         self._reason_last_log_ns.clear()
@@ -333,7 +315,6 @@ class PlatformDegradeController:
         if not self.reduce_only_active or not self._auto_recovery_enabled:
             return False
 
-        # Sync: remove auto-recoverable reasons that inputs no longer report
         input_reason_set = set(current_reasons)
         auto_recoverable_active = self._active_reasons & _AUTO_RECOVERABLE_REASONS
         cleared = auto_recoverable_active - input_reason_set
@@ -343,7 +324,6 @@ class PlatformDegradeController:
                 "auto_recovery_reasons_cleared", cleared=sorted(cleared), remaining=sorted(self._active_reasons)
             )
 
-        # Sync: re-add auto-recoverable reasons that are re-firing in inputs
         re_fired = (input_reason_set & _AUTO_RECOVERABLE_REASONS) - self._active_reasons
         if re_fired:
             self._active_reasons |= re_fired
@@ -352,18 +332,15 @@ class PlatformDegradeController:
                 "auto_recovery_reasons_refired", refired=sorted(re_fired), active_reasons=sorted(self._active_reasons)
             )
 
-        # If ANY non-auto-recoverable reason remains, block auto-recovery
         non_recoverable = self._active_reasons - _AUTO_RECOVERABLE_REASONS
         if non_recoverable:
             self._recovery_started_ns = 0
             return False
 
-        # If any active reason remains (auto-recoverable but still firing), reset
         if self._active_reasons:
             self._recovery_started_ns = 0
             return False
 
-        # All reasons cleared — run cooldown timer
         if self._recovery_started_ns == 0:
             self._recovery_started_ns = now_ns
             logger.info("auto_recovery_cooldown_started", cooldown_s=self._auto_recovery_cooldown_s)
@@ -393,7 +370,6 @@ class PlatformDegradeController:
         if not self.reduce_only_active or not self._auto_recovery_enabled:
             return False
 
-        # Sync: remove auto-recoverable reasons that inputs no longer report
         input_reason_set = set(current_reasons)
         auto_recoverable_active = self._active_reasons & _AUTO_RECOVERABLE_REASONS
         cleared = auto_recoverable_active - input_reason_set
@@ -403,7 +379,6 @@ class PlatformDegradeController:
                 "auto_recovery_reasons_cleared", cleared=sorted(cleared), remaining=sorted(self._active_reasons)
             )
 
-        # Sync: re-add auto-recoverable reasons that are re-firing in inputs
         re_fired = (input_reason_set & _AUTO_RECOVERABLE_REASONS) - self._active_reasons
         if re_fired:
             self._active_reasons |= re_fired
@@ -412,18 +387,15 @@ class PlatformDegradeController:
                 "auto_recovery_reasons_refired", refired=sorted(re_fired), active_reasons=sorted(self._active_reasons)
             )
 
-        # If ANY non-auto-recoverable reason remains, block auto-recovery
         non_recoverable = self._active_reasons - _AUTO_RECOVERABLE_REASONS
         if non_recoverable:
             self._recovery_started_ns = 0
             return False
 
-        # If any active reason remains (auto-recoverable but still firing), reset
         if self._active_reasons:
             self._recovery_started_ns = 0
             return False
 
-        # All reasons cleared — run cooldown timer
         if self._recovery_started_ns == 0:
             self._recovery_started_ns = now_ns
             logger.info("auto_recovery_cooldown_started", cooldown_s=self._auto_recovery_cooldown_s)
@@ -467,8 +439,6 @@ class PlatformDegradeController:
             local_qty = int(local_map.get(symbol, 0))
             reference_positions[symbol] = broker_qty if broker_qty != 0 else local_qty
         self._reference_positions = reference_positions
-        # Preserve existing close reservations for symbols still present.
-        # Only clear reservations for symbols no longer in reference positions.
         old_reservations = self._reference_close_reservations
         self._reference_close_reservations = {
             sym: qty for sym, qty in old_reservations.items() if sym in reference_positions
@@ -579,7 +549,6 @@ def _restore_manual_rearm_state(controller: "PlatformDegradeController") -> None
                 reason=reason,
                 note="auto-recoverable reason should never require manual rearm; clearing stale flag",
             )
-            # Lock-free: singleton construction already holds the registry lock.
             gate.clear_platform_flag()
             return
         controller.enter_reduce_only(reason=reason)

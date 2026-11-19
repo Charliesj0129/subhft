@@ -2,15 +2,12 @@
 
 from hft_platform.monitor._renderer import format_contract_name, truncate_display
 
-# ---- truncate_display ---- #
-
 
 def test_ascii_no_truncation():
     assert truncate_display("hello", 10) == "hello"
 
 
 def test_cjk_fits():
-    # 4 CJK chars (8 cols) + "06" (2 cols) = 10 cols, fits in max_width=10
     assert truncate_display("\u81fa\u80a1\u671f\u8ca806", 10) == "\u81fa\u80a1\u671f\u8ca806"
 
 
@@ -26,9 +23,6 @@ def test_empty_string():
 def test_short_max():
     result = truncate_display("\u81fa\u80a1", 3)
     assert result.endswith("\u2026")
-
-
-# ---- format_contract_name ---- #
 
 
 def test_txf_d6():

@@ -43,9 +43,6 @@ def _promotion(d: bool = True, e: bool = True, f: bool = True, run_id: str | Non
     ]
 
 
-# --- derive_status ------------------------------------------------------------
-
-
 def test_derive_status_without_events_is_none() -> None:
     assert derive_status([]) is None
 
@@ -57,7 +54,6 @@ def test_derive_status_without_events_is_none() -> None:
         (_validation(), AlphaStatus.GATE_C),
         (_validation() + _promotion(), AlphaStatus.GATE_E),
         (_validation() + _promotion(d=False, e=True), AlphaStatus.GATE_C),
-        # gate_f has no status; a failed gate_e is not hidden by a later gate_f pass.
         (_validation() + _promotion(e=False, f=True), AlphaStatus.GATE_D),
         ([_ev("gate_a", False)], AlphaStatus.DRAFT),
     ],
@@ -71,12 +67,10 @@ def test_derive_status_a_later_failed_lower_stage_drops_the_status() -> None:
 
 
 def test_derive_status_a_newer_lower_stage_run_supersedes_an_older_higher_pass() -> None:
-    # Gate D passed on run 1's scorecard; run 2 passed Gate C again but was not promoted.
     assert derive_status(_validation() + _promotion() + _validation()) is AlphaStatus.GATE_C
 
 
 def test_derive_status_a_late_promotion_of_an_older_run_does_not_count_for_a_newer_one() -> None:
-    # r1 and r2 both pass A-C; a promotion of r1's scorecard is appended afterwards.
     events = _validation(run_id="r1") + _validation(run_id="r2") + _promotion(run_id="r1")
     assert derive_status(events) is AlphaStatus.GATE_C
 
@@ -114,16 +108,12 @@ def test_derive_status_kill_is_sticky() -> None:
     assert derive_status(events) is AlphaStatus.KILLED
 
 
-# --- effective_status -----------------------------------------------------------
-
-
 def test_effective_status_without_events_keeps_the_declared_status() -> None:
     result = effective_status(AlphaStatus.GATE_C, [])
     assert (result.status, result.source) == (AlphaStatus.GATE_C, StatusSource.MANIFEST)
 
 
 def test_effective_status_ledger_overrides_a_legacy_rewritten_status() -> None:
-    # A legacy run rewrote impl.py to GATE_C; the first governed run failed Gate A.
     result = effective_status(AlphaStatus.GATE_C, [_ev("gate_a", False)])
     assert (result.status, result.source) == (AlphaStatus.DRAFT, StatusSource.LEDGER)
 
@@ -137,9 +127,6 @@ def test_effective_status_keeps_a_manual_status_over_a_ladder_status(declared) -
 def test_effective_status_ledger_kill_wins_over_production() -> None:
     result = effective_status(AlphaStatus.PRODUCTION, _validation(c_passed=False, verdict="KILL"))
     assert (result.status, result.source) == (AlphaStatus.KILLED, StatusSource.LEDGER)
-
-
-# --- ledger reading -------------------------------------------------------------
 
 
 def _ledger(root: Path, events: list[dict]) -> Path:
@@ -181,9 +168,6 @@ def test_ledger_events_by_alpha_malformed_ledger_raises(tmp_path: Path) -> None:
         fh.write("not json\n")
     with pytest.raises(ValueError, match="not JSON"):
         ledger_events_by_alpha(tmp_path)
-
-
-# --- readers --------------------------------------------------------------------
 
 
 def _alpha(status: AlphaStatus) -> types.SimpleNamespace:

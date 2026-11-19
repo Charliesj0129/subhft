@@ -95,7 +95,6 @@ def test_adapter_queue_model_auto_loads_profile(tmp_path):
         instrument="TMFD6",
         calibration_profile_path=profile_path,
     )
-    # Adapter must expose the resolved queue model name AND calibration profile id
     assert "PowerProbQueueModel" in adapter.queue_model
     assert "1.5" in adapter.queue_model
     assert adapter.calibration_profile_id == "TMFD6_2026-04-20"

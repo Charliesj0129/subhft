@@ -72,8 +72,6 @@ class AlertmanagerBridge:
         self._sender: TelegramSender = sender if sender is not None else TelegramSender(enabled=True)
         self._server: asyncio.Server | None = None
 
-    # -- HTTP protocol handler -----------------------------------------------
-
     async def _handle_connection(
         self,
         reader: asyncio.StreamReader,
@@ -97,7 +95,7 @@ class AlertmanagerBridge:
                     except (ValueError, IndexError):
                         pass
 
-            _MAX_BODY = 1_048_576  # 1 MB
+            _MAX_BODY = 1_048_576
             body = b""
             if content_length > _MAX_BODY:
                 await self._send_response(writer, 413, b'{"error":"payload_too_large"}')
@@ -118,13 +116,13 @@ class AlertmanagerBridge:
             logger.exception("alertmanager_bridge_handle_error")
             try:
                 await self._send_response(writer, 500, b'{"error":"internal_server_error"}')
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         finally:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     async def _handle_webhook(self, body: bytes, writer: asyncio.StreamWriter) -> None:
@@ -140,10 +138,6 @@ class AlertmanagerBridge:
             alerts = payload.get("alerts", [])
             is_critical = any(a.get("labels", {}).get("severity") == "critical" for a in alerts)
             sent = await self._sender.send(msg, critical=is_critical)
-            # Emit alertname/severity/status so post-hoc audits can identify
-            # which rule(s) drove a telegram burst without re-deriving from
-            # firing-time correlation. Sorted+deduped to keep log line bounded
-            # even on grouped alerts.
             alertnames = sorted({a.get("labels", {}).get("alertname", "?") for a in alerts})
             severities = sorted({a.get("labels", {}).get("severity", "?") for a in alerts})
             statuses = sorted({a.get("status", "?") for a in alerts})
@@ -177,8 +171,6 @@ class AlertmanagerBridge:
         )
         writer.write(header.encode("utf-8") + body)
         await writer.drain()
-
-    # -- Lifecycle -----------------------------------------------------------
 
     async def run(self) -> None:
         """Start the bridge HTTP server and serve until cancelled."""

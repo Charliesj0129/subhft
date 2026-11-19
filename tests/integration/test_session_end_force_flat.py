@@ -39,7 +39,7 @@ TRACK = "futures_day"
 
 def _build_runner_with_track(track_phase: SessionPhase) -> tuple[StrategyRunner, asyncio.Queue, TrackGate]:
     """Build a minimal StrategyRunner suitable for FORCE_FLAT exercising."""
-    bus = SimpleNamespace()  # never consumed in this test
+    bus = SimpleNamespace()
     risk_queue: asyncio.Queue = asyncio.Queue()
     runner = StrategyRunner(bus, risk_queue, lob_engine=None, position_store=None)
     runner.strategies = []
@@ -78,10 +78,8 @@ async def test_force_flat_drains_residual_long_through_risk_queue():
     runner.register(bridge)
     _attach_position_store(runner, net_qty=1)
 
-    # Trigger the new consumer-side hook (mirrors phase-callback dispatch).
     await runner.dispatch_session_end_force_flat(track_name=TRACK)
 
-    # One FORCE_FLAT intent must reach the risk queue.
     intent = await asyncio.wait_for(risk_queue.get(), timeout=1.0)
     assert intent.intent_type == IntentType.FORCE_FLAT
     assert intent.side == Side.SELL
@@ -90,7 +88,6 @@ async def test_force_flat_drains_residual_long_through_risk_queue():
     assert intent.strategy_id == "maker_test"
     assert intent.price_type == "MKT"
     assert intent.reason == "session_end_force_flat"
-    # Risk queue should be empty after the single drain.
     assert risk_queue.empty()
 
 
@@ -125,7 +122,7 @@ async def test_force_flat_flat_position_emits_no_intent():
 
     await runner.dispatch_session_end_force_flat(track_name=TRACK)
 
-    await asyncio.sleep(0)  # let any pending coroutine yield
+    await asyncio.sleep(0)
     assert risk_queue.empty()
 
 
@@ -146,7 +143,6 @@ async def test_force_flat_passes_phase_filter_for_force_flat_intent():
 
     await runner.dispatch_session_end_force_flat(track_name=TRACK)
 
-    # Use the same static filter the production runner uses on each event.
     pending = []
     while not risk_queue.empty():
         pending.append(risk_queue.get_nowait())
@@ -169,7 +165,6 @@ async def test_non_maker_strategies_ignored_by_session_end_dispatch():
     runner.register(mm)
     _attach_position_store(runner, net_qty=0)
 
-    # Should not raise.
     await runner.dispatch_session_end_force_flat(track_name=TRACK)
 
     await asyncio.sleep(0)
@@ -202,13 +197,10 @@ async def test_force_flat_via_session_governor_transition_track():
     runner.register(bridge)
     _attach_position_store(runner, net_qty=2)
 
-    # Construct a governor with no position_flattener (avoid broker-side path)
-    # and inject the same TrackGate the runner uses so phase reads agree.
     governor = SessionGovernor(evidence_writer=None, position_flattener=None)
     governor._track_gate = track_gate  # type: ignore[attr-defined]
     governor._tracks[TRACK] = SimpleNamespace(symbols={SYMBOL})  # type: ignore[attr-defined]
 
-    # The exact wiring bootstrap.py installs (mirrored verbatim).
     dispatched_tasks: list[asyncio.Task] = []
 
     def _force_flat_phase_callback(track_name, _old, new_phase):
@@ -219,16 +211,13 @@ async def test_force_flat_via_session_governor_transition_track():
 
     governor.register_phase_callback(_force_flat_phase_callback)
 
-    # Drive the canonical transition — NOT the direct dispatch.
     governor.transition_track(TRACK, SessionPhase.FORCE_FLAT)
 
-    # Let the scheduled dispatch task run to completion.
     assert dispatched_tasks, "phase callback never scheduled a dispatch task"
     await asyncio.gather(*dispatched_tasks)
 
-    # FORCE_FLAT intent must have landed on risk_queue via the wired path.
     intent = await asyncio.wait_for(risk_queue.get(), timeout=1.0)
     assert intent.intent_type == IntentType.FORCE_FLAT
     assert intent.symbol == SYMBOL
     assert intent.strategy_id == "maker_test"
-    assert intent.qty == 2  # absolute size of the residual
+    assert intent.qty == 2

@@ -16,10 +16,6 @@ import pytest
 
 from hft_platform.recorder.writer import DataWriter, WriterDoubleFaultError
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def writer(tmp_path):
@@ -27,11 +23,6 @@ def writer(tmp_path):
     with patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False):
         w = DataWriter(ch_host="localhost", ch_port=8123, wal_dir=str(tmp_path / "wal"))
     return w
-
-
-# ---------------------------------------------------------------------------
-# __init__ and env var parsing
-# ---------------------------------------------------------------------------
 
 
 def test_deprecated_disable_clickhouse_env(tmp_path):
@@ -77,19 +68,9 @@ def test_env_port_override_http(tmp_path):
     assert "interface" not in w.ch_params
 
 
-# ---------------------------------------------------------------------------
-# _is_native_interface_unsupported_error
-# ---------------------------------------------------------------------------
-
-
 def test_native_interface_error_detection():
     assert DataWriter._is_native_interface_unsupported_error(RuntimeError("unrecognized client type native something"))
     assert not DataWriter._is_native_interface_unsupported_error(RuntimeError("connection refused"))
-
-
-# ---------------------------------------------------------------------------
-# _maybe_fallback_clickhouse_interface
-# ---------------------------------------------------------------------------
 
 
 def test_fallback_interface_on_native_error(writer):
@@ -119,21 +100,11 @@ def test_no_fallback_on_unrelated_error(writer):
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# _compute_backoff_delay
-# ---------------------------------------------------------------------------
-
-
 def test_compute_backoff_delay(writer):
     d0 = writer._compute_backoff_delay(0)
-    assert d0 >= 0.1  # minimum floor
+    assert d0 >= 0.1
     d5 = writer._compute_backoff_delay(5)
-    assert d5 <= writer._max_backoff_s * 2  # bounded
-
-
-# ---------------------------------------------------------------------------
-# connect: ClickHouse disabled
-# ---------------------------------------------------------------------------
+    assert d5 <= writer._max_backoff_s * 2
 
 
 def test_connect_disabled(writer):
@@ -141,11 +112,6 @@ def test_connect_disabled(writer):
     writer.ch_enabled = False
     writer.connect()
     assert not writer.connected
-
-
-# ---------------------------------------------------------------------------
-# _should_log_insert_success
-# ---------------------------------------------------------------------------
 
 
 def test_should_log_insert_success_flag(writer):
@@ -166,11 +132,6 @@ def test_should_log_insert_success_disabled(writer):
     assert writer._should_log_insert_success(1) is False
 
 
-# ---------------------------------------------------------------------------
-# _iter_row_chunks / _iter_columnar_chunks
-# ---------------------------------------------------------------------------
-
-
 def test_iter_row_chunks_no_chunking(writer):
     writer._ch_insert_chunk_rows = 0
     data = [{"a": 1}, {"a": 2}]
@@ -183,7 +144,7 @@ def test_iter_row_chunks_with_chunking(writer):
     writer._ch_insert_chunk_rows = 2
     data = [{"a": i} for i in range(5)]
     chunks = writer._iter_row_chunks(data)
-    assert len(chunks) == 3  # 2+2+1
+    assert len(chunks) == 3
 
 
 def test_iter_columnar_chunks_no_chunking(writer):
@@ -197,12 +158,7 @@ def test_iter_columnar_chunks_with_chunking(writer):
     writer._ch_insert_chunk_rows = 2
     cols = [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]
     chunks = writer._iter_columnar_chunks(cols, 5)
-    assert len(chunks) == 3  # 2+2+1
-
-
-# ---------------------------------------------------------------------------
-# _transpose_columnar_rows / _columnar_to_row_dicts
-# ---------------------------------------------------------------------------
+    assert len(chunks) == 3
 
 
 def test_transpose_columnar_rows():
@@ -225,11 +181,6 @@ def test_columnar_to_row_dicts_empty():
     assert DataWriter._columnar_to_row_dicts([], [], 0) == []
 
 
-# ---------------------------------------------------------------------------
-# _sanitize_timestamps
-# ---------------------------------------------------------------------------
-
-
 def test_sanitize_timestamps_no_filter(writer):
     """When _ts_max_future_ns is 0, no rows are dropped."""
     writer._ts_max_future_ns = 0
@@ -248,7 +199,7 @@ def test_sanitize_timestamps_ingest_before_exch(writer):
 
 def test_sanitize_timestamps_future_dropped(writer):
     """Far-future timestamps are dropped."""
-    writer._ts_max_future_ns = 1_000_000_000  # 1s
+    writer._ts_max_future_ns = 1_000_000_000
     far_future = time.time_ns() + 999_000_000_000_000
     data = [{"exch_ts": far_future, "ingest_ts": far_future}]
     result = writer._sanitize_timestamps("test", data)
@@ -260,11 +211,6 @@ def test_sanitize_timestamps_empty(writer):
     assert result == []
 
 
-# ---------------------------------------------------------------------------
-# _sanitize_columnar
-# ---------------------------------------------------------------------------
-
-
 def test_sanitize_columnar_no_ts_columns(writer):
     cols = [["a", "b"]]
     result_cols, count = writer._sanitize_columnar("test", ["name"], cols, 2)
@@ -273,10 +219,10 @@ def test_sanitize_columnar_no_ts_columns(writer):
 
 def test_sanitize_columnar_corrects_ingest(writer):
     writer._ts_max_future_ns = 0
-    cols = [[200, 300], [100, 300]]  # exch_ts, ingest_ts; first row ingest < exch
+    cols = [[200, 300], [100, 300]]
     result_cols, count = writer._sanitize_columnar("test", ["exch_ts", "ingest_ts"], cols, 2)
     assert count == 2
-    assert result_cols[1][0] == 200  # Corrected
+    assert result_cols[1][0] == 200
 
 
 def test_sanitize_columnar_drops_future(writer):
@@ -292,29 +238,18 @@ def test_sanitize_columnar_empty(writer):
     assert count == 0
 
 
-# ---------------------------------------------------------------------------
-# get_status
-# ---------------------------------------------------------------------------
-
-
 def test_get_status(writer):
     status = writer.get_status()
     assert "ch_enabled" in status
     assert "connected" in status
     assert "wal_only_mode" in status
-    assert status["wal_only_mode"] is True  # Not connected
-
-
-# ---------------------------------------------------------------------------
-# write: row-dict interface with WAL fallback
-# ---------------------------------------------------------------------------
+    assert status["wal_only_mode"] is True
 
 
 @pytest.mark.asyncio
 async def test_write_empty_data(writer):
     """write() is a no-op for empty data."""
     await writer.write("test", [])
-    # Should not raise
 
 
 @pytest.mark.asyncio
@@ -324,7 +259,6 @@ async def test_write_wal_fallback_success(writer):
     writer.ch_enabled = False
     data = [{"exch_ts": 100, "val": 1}]
     await writer.write("test", data)
-    # Should not raise; WAL write succeeds
 
 
 @pytest.mark.asyncio
@@ -342,11 +276,6 @@ async def test_write_columnar_wal_fallback(writer):
     await writer.write_columnar("test", ["a", "b"], cols, 1)
 
 
-# ---------------------------------------------------------------------------
-# _do_heartbeat_check
-# ---------------------------------------------------------------------------
-
-
 def test_heartbeat_check_no_client(writer):
     writer.ch_client = None
     assert writer._do_heartbeat_check() is False
@@ -358,27 +287,15 @@ def test_heartbeat_check_exception(writer):
     assert writer._do_heartbeat_check() is False
 
 
-# ---------------------------------------------------------------------------
-# _schedule_reconnect
-# ---------------------------------------------------------------------------
-
-
 def test_schedule_reconnect_disabled(writer):  # noqa: no-assert
     writer.ch_enabled = False
     writer._schedule_reconnect("test")
-    # Should be a no-op
 
 
 def test_schedule_reconnect_rate_limited(writer):  # noqa: no-assert
     writer.ch_enabled = True
-    writer._last_reconnect_ts = time.time() + 9999  # Far future
+    writer._last_reconnect_ts = time.time() + 9999
     writer._schedule_reconnect("test")
-    # Should be rate-limited
-
-
-# ---------------------------------------------------------------------------
-# _get_table_lock
-# ---------------------------------------------------------------------------
 
 
 def test_get_table_lock_caching(writer):
@@ -393,20 +310,10 @@ def test_get_table_lock_different_tables(writer):
     assert lock1 is not lock2
 
 
-# ---------------------------------------------------------------------------
-# set_health_tracker
-# ---------------------------------------------------------------------------
-
-
 def test_set_health_tracker(writer):
     tracker = MagicMock()
     writer.set_health_tracker(tracker)
     assert writer._health_tracker is tracker
-
-
-# ---------------------------------------------------------------------------
-# _init_schema
-# ---------------------------------------------------------------------------
 
 
 def test_init_schema_failure(writer):
@@ -424,19 +331,13 @@ def test_init_schema_view_repair_failure(writer):
     with patch("hft_platform.recorder.writer.apply_schema"):
         with patch("hft_platform.recorder.writer.ensure_price_scaled_views", side_effect=RuntimeError("view fail")):
             writer._init_schema()
-    assert writer._schema_initialized is True  # Schema still OK
-
-
-# ---------------------------------------------------------------------------
-# shutdown
-# ---------------------------------------------------------------------------
+    assert writer._schema_initialized is True
 
 
 @pytest.mark.asyncio
 async def test_shutdown_no_inflight(writer):
     """shutdown completes quickly when no in-flight inserts."""
     await writer.shutdown()
-    # Should not raise
 
 
 @pytest.mark.asyncio
@@ -452,11 +353,6 @@ async def test_shutdown_with_wal_batch_writer(writer):
     writer._wal_batch_writer = mock_bw
     await writer.shutdown()
     mock_bw.stop.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# WriterDoubleFaultError
-# ---------------------------------------------------------------------------
 
 
 def test_writer_double_fault_error():

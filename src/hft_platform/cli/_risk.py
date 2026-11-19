@@ -9,8 +9,6 @@ from hft_platform.risk import kill_switch, manual_latches
 
 logger = get_logger(__name__)
 
-# The latch itself lives in hft_platform.risk.kill_switch so the engine's own
-# startup gate and this operator surface cannot drift on path or record shape.
 _DEFAULT_KILL_SWITCH_PATH = kill_switch.DEFAULT_PATH
 _get_kill_switch_path = kill_switch.kill_switch_path
 
@@ -28,7 +26,6 @@ def _actor() -> str:
 def cmd_risk_resume(args):
     """Release the kill switch. Must quote the token ``hft risk status`` printed."""
     path = kill_switch.active_path() or _get_kill_switch_path()
-    # No explicit path: a latch left at the legacy location is removed too.
     try:
         released = kill_switch.release(token=args.token, reason=args.reason, actor=_actor())
     except ValueError as exc:

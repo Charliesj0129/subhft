@@ -46,14 +46,14 @@ def test_intent_factory_rejects_under_scaled_new_order(tmp_path):
     )
     metadata = SymbolMetadata(config_path=str(cfg))
     runner = _make_runner_with_metadata(metadata)
-    runner._typed_intent_fastpath = False  # test non-tuple path for clear attribute access
+    runner._typed_intent_fastpath = False
 
     with pytest.raises(ValueError, match="under-scaled"):
         runner._intent_factory(
             strategy_id="s1",
             symbol="2330",
             side=Side.BUY,
-            price=505,  # should have been 5_050_000
+            price=505,
             qty=1,
             tif=TIF.LIMIT,
             intent_type=IntentType.NEW,
@@ -109,7 +109,6 @@ def test_intent_factory_skips_guard_when_no_metadata(tmp_path):
     runner = _make_runner_with_metadata(metadata)
     runner._typed_intent_fastpath = False
 
-    # No metadata for 'UNKNOWN' → guard is inactive, intent passes.
     intent = runner._intent_factory(
         strategy_id="s1",
         symbol="UNKNOWN",

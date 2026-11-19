@@ -73,16 +73,13 @@ def resolve_trading_date(session: str, *, now: datetime | None = None) -> str:
     if now is None:
         now = datetime.now(_TZ)
     elif now.tzinfo is None:
-        # Treat naive datetime as Asia/Taipei wall-clock
         now = now.replace(tzinfo=_TZ)
 
-    # Convert to Taipei local time so hour comparison is correct
     local_now = now.astimezone(_TZ)
 
     if session == "day":
         return local_now.strftime("%Y-%m-%d")
 
-    # Night session: opened at 15:00 Taipei time
     if local_now.hour >= 15:
         return local_now.strftime("%Y-%m-%d")
     else:
@@ -183,7 +180,7 @@ async def build_hybrid_report_async(
         client = OpenRouterClient(model=os.environ.get("HFT_LLM_MODEL", ""))
         decision = await LLMReportReasoner(client=client).generate(dossier)
         hybrid_composed = _compose_report(fact_report, reasoning_report, llm_decision=decision)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning(
             "build_hybrid_report_llm_fallback",
             session=session,
@@ -245,7 +242,6 @@ async def run_pipeline(
         _log.info("report_pipeline_dry_run_complete")
         return
 
-    # Stage 5: distribute
     from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
 
     channels = load_channels()

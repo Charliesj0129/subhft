@@ -13,11 +13,6 @@ def _make_bootstrapper(settings=None):
     return SystemBootstrapper(settings or {})
 
 
-# ---------------------------------------------------------------------------
-# _get_redis_lease_params
-# ---------------------------------------------------------------------------
-
-
 def test_get_redis_lease_params_defaults(monkeypatch):
     monkeypatch.delenv("HFT_REDIS_HOST", raising=False)
     monkeypatch.delenv("REDIS_HOST", raising=False)
@@ -86,11 +81,6 @@ def test_get_redis_lease_params_ttl_minimum(monkeypatch):
     assert params["ttl_s"] == 30
 
 
-# ---------------------------------------------------------------------------
-# _lease_is_stale
-# ---------------------------------------------------------------------------
-
-
 def test_lease_is_stale_missing():
     from hft_platform.services.bootstrap import SystemBootstrapper
 
@@ -121,11 +111,6 @@ def test_lease_is_stale_no_takeover_positive_ttl():
     assert SystemBootstrapper._lease_is_stale(100, 0) is False
 
 
-# ---------------------------------------------------------------------------
-# _read_int_resp
-# ---------------------------------------------------------------------------
-
-
 def test_read_int_resp_int():
     from hft_platform.services.bootstrap import SystemBootstrapper
 
@@ -150,11 +135,6 @@ def test_read_int_resp_bad():
     assert SystemBootstrapper._read_int_resp("abc", default=-99) == -99
 
 
-# ---------------------------------------------------------------------------
-# _record_lease_metric
-# ---------------------------------------------------------------------------
-
-
 def test_record_lease_metric_no_registry():
     from hft_platform.services.bootstrap import SystemBootstrapper
 
@@ -162,7 +142,6 @@ def test_record_lease_metric_no_registry():
         "hft_platform.observability.metrics.MetricsRegistry.get", side_effect=Exception("no metrics")
     ) as get_metrics:
         SystemBootstrapper._record_lease_metric("preflight", "acquired")
-    # Registry lookup was attempted but failed — no metric recorded, no exception raised
     assert get_metrics.call_count == 1, "MetricsRegistry.get should have been called once"
 
 
@@ -176,11 +155,6 @@ def test_record_lease_metric_with_registry():
         m.feed_session_lease_ops_total.labels.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# _check_session_ownership
-# ---------------------------------------------------------------------------
-
-
 def test_check_session_ownership_non_engine_role():
     b = _make_bootstrapper()
     result = b._check_session_ownership("monitor")
@@ -192,11 +166,6 @@ def test_check_session_ownership_connection_failure():
     with patch("socket.create_connection", side_effect=ConnectionRefusedError("refused")):
         result = b._check_session_ownership("engine")
     assert result is False
-
-
-# ---------------------------------------------------------------------------
-# _stop_lease_refresh_thread
-# ---------------------------------------------------------------------------
 
 
 def test_stop_lease_refresh_thread_no_thread():
@@ -224,11 +193,6 @@ def test_stop_lease_refresh_thread_alive():
     assert b._lease_refresh_thread is None
 
 
-# ---------------------------------------------------------------------------
-# teardown
-# ---------------------------------------------------------------------------
-
-
 def test_teardown_non_engine_role():
     b = _make_bootstrapper()
     b._last_role = "monitor"
@@ -243,14 +207,8 @@ def test_teardown_engine_role_connection_failure():
     b._stop_lease_refresh_thread = MagicMock()
     with patch("socket.create_connection", side_effect=ConnectionRefusedError("refused")):
         b.teardown()
-    # Teardown must complete gracefully: stop thread called and role unchanged
     assert b._stop_lease_refresh_thread.call_count == 1, "_stop_lease_refresh_thread must be called once"
     assert b._last_role == "engine", "_last_role must remain unchanged after teardown"
-
-
-# ---------------------------------------------------------------------------
-# _build_broker_clients
-# ---------------------------------------------------------------------------
 
 
 def test_build_broker_clients_non_engine_role():
@@ -296,11 +254,6 @@ def test_build_broker_clients_order_simulation_env(monkeypatch):
     assert isinstance(md, _RoleGuardedNoopClient)
 
 
-# ---------------------------------------------------------------------------
-# _RoleGuardedNoopClient
-# ---------------------------------------------------------------------------
-
-
 def test_role_guarded_noop_client_methods():
     from hft_platform.services.bootstrap import _RoleGuardedNoopClient
 
@@ -322,11 +275,6 @@ def test_role_guarded_noop_client_methods():
     assert c.logged_in is False
     c.shutdown()
     assert c.logged_in is False
-
-
-# ---------------------------------------------------------------------------
-# _resolve_broker_id
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_broker_id_shioaji(monkeypatch):
@@ -351,22 +299,12 @@ def test_resolve_broker_id_unknown(monkeypatch):
         SystemBootstrapper._resolve_broker_id()
 
 
-# ---------------------------------------------------------------------------
-# Queue size defaults
-# ---------------------------------------------------------------------------
-
-
 def test_queue_size_defaults():
     from hft_platform.services.bootstrap import SystemBootstrapper
 
     assert SystemBootstrapper.DEFAULT_RAW_QUEUE_SIZE == 65536
     assert SystemBootstrapper.DEFAULT_RISK_QUEUE_SIZE == 4096
     assert SystemBootstrapper.DEFAULT_RECORDER_QUEUE_SIZE == 16384
-
-
-# ---------------------------------------------------------------------------
-# _encode_resp / _read_resp
-# ---------------------------------------------------------------------------
 
 
 def test_encode_resp():

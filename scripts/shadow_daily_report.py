@@ -21,7 +21,6 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-# Default point values per symbol (NTD per 1 point)
 DEFAULT_POINT_VALUES: dict[str, int] = {"TMF": 10, "MXF": 50}
 
 
@@ -48,7 +47,6 @@ def compute_simulated_pnl(
     if not orders:
         return 0
 
-    # Open position stacks per symbol: list of {"price": int, "qty": int}
     positions: dict[str, list[dict]] = {}
     realized_pnl = 0
     slippage = slippage_ticks * tick_size
@@ -60,7 +58,6 @@ def compute_simulated_pnl(
         qty = order.get("qty", 1)
         pv = point_values.get(symbol, 10)
 
-        # Apply slippage: buyer pays more, seller receives less
         if side == "BUY":
             fill_price = mid + slippage
         elif side == "SELL":
@@ -77,7 +74,6 @@ def compute_simulated_pnl(
         elif side == "SELL" and pos:
             entry = pos.pop(0)
             matched_qty = min(qty, entry["qty"])
-            # PnL = (exit_price - entry_price) * qty * point_value / scale_factor
             pnl_scaled = (fill_price - entry["price"]) * matched_qty
             realized_pnl += pnl_scaled * pv // 10000
 
@@ -129,7 +125,6 @@ async def query_shadow_orders(target_date: str) -> list[dict]:
                 "qty": r[5],
                 "intent_type": r[6],
                 "intent_id": r[7],
-                # Use order price as mid_price proxy since shadow orders capture intent price
                 "mid_price": r[4],
             }
             for r in rows
@@ -225,7 +220,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Skip on non-trading days unless date is explicitly provided
     if args.date == str(date.today()):
         try:
             from hft_platform.core.market_calendar import get_calendar
@@ -235,7 +229,7 @@ def main() -> None:
                 logger.info("not_trading_day_skipping", date=args.date)
                 sys.exit(0)
         except Exception:
-            pass  # Market calendar unavailable — proceed anyway
+            pass
 
     asyncio.run(run_analysis(target_date=args.date, dry_run=args.dry_run))
 

@@ -15,7 +15,7 @@ class FeatureProfile:
     schema_version: int | None = None
     params: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
-    state: str = "active"  # active|shadow|disabled
+    state: str = "active"
     owner: str = ""
     notes: str = ""
 

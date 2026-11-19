@@ -44,36 +44,14 @@ _METRIC_SUBSCRIBED = None
 _METRIC_LOGGED_IN = None
 _METRIC_LAST_DATA_AGE = None
 _METRIC_CONN_STATE = None
-# P1-d (2026-04-27): pool-level health rollup. Live signal showed 3 of 4
-# conns at state=2 with last_data_age 14,875s while only conn 3 carried
-# the entire 119-symbol load — if conn 3 dies the feed is silent. The
-# per-conn metrics above told us about each conn but no single signal
-# said "the pool itself is degraded" so dashboards / alerts had to roll
-# up themselves. This gauge does the rollup at source.
 _METRIC_POOL_DEGRADED = None
 _METRIC_POOL_DEGRADED_FRACTION = None
-# Every per-connection gauge above is written from update_metrics() and nowhere
-# else, and its caller swallows exceptions (services/system.py). A throwing
-# publisher therefore freezes all of them at their last value, and a frozen
-# hft_quote_conn_last_data_age_s below the alert threshold means
-# QuoteFacadeDataStalled — the only per-shard signal — silently stops firing.
-# These counters make the publisher's own liveness observable.
 _METRIC_PUBLISHED = None
 _METRIC_PUBLISH_ERRORS = None
-# Every outcome of ``roll_universe``, including the refusals. A roll that never
-# fires and a roll that is refused every hour look identical from the
-# subscription count alone, and only one of them is safe.
 _METRIC_UNIVERSE_ROLL = None
-# Which file the running universe came from (one child per source, the current
-# one at 1). ``canonical`` means the hand-kept ``symbols.yaml`` -- the fallback
-# that held expired month codes on 2026-11-02 -- so it is alerted on.
 _METRIC_UNIVERSE_SOURCE = None
-# Wall-clock seconds of the last rebuild that passed ``validate_universe``,
-# whether or not it was adopted. A roll that keeps failing stops advancing it.
 _METRIC_UNIVERSE_LAST_VALID = None
 
-#: Every ``roll_universe`` result label. Pre-created at 0 so ``increase()``
-#: sees the first failure (a child born at 1 has no increase).
 UNIVERSE_ROLL_RESULTS = (
     "deferred_session",
     "no_contracts",
@@ -85,9 +63,6 @@ UNIVERSE_ROLL_RESULTS = (
     "fallback_last_good",
     "fallback_canonical",
 )
-#: Where the running universe was read from. ``list`` = rebuilt from
-#: ``symbols.list`` against the contract cache and validated; ``last_good`` =
-#: the last such universe, kept on disk; ``canonical`` = ``symbols.yaml``.
 UNIVERSE_SOURCES = ("list", "last_good", "canonical")
 
 
@@ -159,18 +134,8 @@ _SHIOAJI_MAX_CONNECTIONS = 5
 _MAX_QUOTE_CONNECTIONS = _SHIOAJI_MAX_CONNECTIONS - 1
 _MAX_SUBSCRIPTIONS_PER_CONN = DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 
-# Default path for runtime-refreshed snapshot (TXO chain auto-rotation output).
-# This MUST never collide with the canonical INPUT file pointed to by
-# ``SYMBOLS_CONFIG`` — overwriting the canonical file destroys hand-curated
-# metadata (product_type/tick_size/price_scale/point_value) and was the
-# 2026-04-27 root cause of B2 metadata gap (``config/symbols.yaml`` truncated
-# from 1868 → 370 lines, see commit log near this comment).
 _DEFAULT_RUNTIME_SNAPSHOT_PATH = "data/live_with_options.yaml"
 
-# The last universe that was rebuilt from ``symbols.list`` and passed
-# ``validate_universe``, with the delivery date of every code in it. A boot whose
-# own roll fails starts from this instead of the canonical ``symbols.yaml``,
-# which nothing keeps current (2026-11-02: it still listed the April months).
 _DEFAULT_LAST_GOOD_UNIVERSE_PATH = "data/universe_last_good.yaml"
 
 
@@ -240,7 +205,6 @@ def _resolve_runtime_snapshot_path(symbols_input_path: str | None = None) -> str
     if not symbols_input_path or not _paths_collide(symbols_input_path, snapshot):
         return snapshot
 
-    # Stage 1: try the default sidecar.
     if snapshot != _DEFAULT_RUNTIME_SNAPSHOT_PATH and not _paths_collide(
         symbols_input_path, _DEFAULT_RUNTIME_SNAPSHOT_PATH
     ):
@@ -253,7 +217,6 @@ def _resolve_runtime_snapshot_path(symbols_input_path: str | None = None) -> str
         )
         return _DEFAULT_RUNTIME_SNAPSHOT_PATH
 
-    # Stage 2: derive a sidecar adjacent to the input itself.
     sidecar = _derive_sidecar_path(symbols_input_path)
     if not _paths_collide(symbols_input_path, sidecar):
         logger.error(
@@ -265,11 +228,6 @@ def _resolve_runtime_snapshot_path(symbols_input_path: str | None = None) -> str
         )
         return sidecar
 
-    # Stage 3: refuse — every candidate collides with the input. This is
-    # only reachable if the operator's canonical file is literally named
-    # ``<x>.runtime.yaml`` AND ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` points at
-    # the same file. Demand explicit operator action rather than
-    # silently overwriting hand-curated metadata.
     raise RuntimeError(
         "Symbols input path collides with every snapshot output candidate "
         f"(input={symbols_input_path!r}, requested={snapshot!r}, "
@@ -314,12 +272,9 @@ class QuoteConnectionPool:
         "_per_facade_timeout_s",
         "_user_callback",
         "_symbols_input_path",
-        # Universe roll: the listener that keeps metadata in step, and whether
-        # this pool has adopted a universe other than the canonical file's.
         "_universe_listener",
         "_universe_rolled",
         "_universe_source",
-        # P1-d: pool-degraded alert state
         "_pool_degraded_since_mono",
         "_pool_degraded_alerted",
         "_metrics_publish_failed",
@@ -348,29 +303,16 @@ class QuoteConnectionPool:
         self._feature_engine: Any = None
         self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "10"))
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
-        # Pre-open lead for facade reconnects — see ``reconnect_allowed``.
-        # Default 15 min matches the lead the old HFT_RECONNECT_HOURS day window
-        # provided (08:30 for an 08:45 open).
         self._reconnect_pre_open_lead_s = float(os.getenv("HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S", "900"))
         self._user_callback: Callable[..., Any] | None = None
-        # Fired with the adopted universe after a roll — see set_universe_listener.
         self._universe_listener: Callable[[list[dict[str, Any]]], None] | None = None
         self._universe_rolled: bool = False
-        # See UNIVERSE_SOURCES. Boot reads the canonical file; a successful
-        # roll (or a last-good fallback) replaces it.
         self._universe_source: str = "canonical"
         self._per_facade_timeout_s = float(os.getenv("HFT_PER_FACADE_TIMEOUT_S", "15"))
-        # P1-d: alert when >50%% of conns have been non-CONNECTED for >Ns.
-        # Default 5min so a brief reconnect storm does not trigger;
-        # configurable via HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S.
         self._pool_degraded_since_mono: float = 0.0
         self._pool_degraded_alerted: bool = False
         self._metrics_publish_failed: bool = False
         self._pool_degraded_alert_after_s = float(os.getenv("HFT_QUOTE_POOL_DEGRADED_ALERT_AFTER_S", "300"))
-        # Remember the canonical input path so the auto-refresh writer can
-        # detect (and refuse) self-clobber when an operator misconfigures
-        # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` (or legacy callers still expect
-        # the writer to honour ``SYMBOLS_CONFIG``).
         self._symbols_input_path: str = str(symbols_path)
 
         with open(symbols_path, "r") as f:
@@ -394,9 +336,6 @@ class QuoteConnectionPool:
         if unassigned:
             unassigned.sort(key=lambda s: (str(s.get("product_type") or ""), str(s.get("code") or "")))
             for i, sym in enumerate(unassigned):
-                # Record the assignment on the entry itself: ``roll_universe``
-                # reads placement back off ``_all_symbols`` to keep a code on
-                # the connection it is already subscribed on.
                 sym["group"] = i % num_conns
                 groups[i % num_conns].append(sym)
             logger.info(
@@ -449,8 +388,6 @@ class QuoteConnectionPool:
         for group_id in range(self._num_conns):
             per_conn_cfg = dict(self._config)
             per_conn_cfg["activate_ca"] = False
-            # Shioaji 1.5.6 resolves quote subscriptions through each session's
-            # own Contracts registry; skipping it produced a 90/0/0/0 pool.
             per_conn_cfg["fetch_contract"] = "1"
             per_conn_cfg["session_lock_suffix"] = f"_conn{group_id}"
             per_conn_cfg["max_subscriptions"] = _clamp_max_subscriptions(per_conn_cfg)
@@ -458,15 +395,12 @@ class QuoteConnectionPool:
                 config_path=self._shard_paths[group_id],
                 shioaji_config=per_conn_cfg,
             )
-            # Inject conn_id onto the inner client so subscription_manager log
-            # emitters can bind it without reaching back into the pool.
             try:
                 facade._client.conn_id = str(group_id)  # type: ignore[attr-defined]
             except Exception:  # pragma: no cover — facade shape guarded by tests
                 pass
             self._clients.append(facade)
 
-            # Read shard YAML to extract symbol codes for the slot
             shard_path = self._shard_paths[group_id]
             symbol_codes: set[str] = set()
             try:
@@ -538,7 +472,6 @@ class QuoteConnectionPool:
             except Exception as exc:
                 log.error("Subscribe failed", error=str(exc))
 
-        # Auto-start options expiry refresh if enabled
         if os.getenv("HFT_OPTIONS_AUTO_REFRESH", "1").lower() not in {"0", "false", "no", "off"}:
             self.start_options_refresh_thread(cb=cb)
 
@@ -577,7 +510,6 @@ class QuoteConnectionPool:
                 else:
                     slot.reconnect_failures += 1
                     slot.state = FacadeState.DISCONNECTED
-                    # Extract error detail from underlying client
                     _client = getattr(slot.facade, "_client", None)
                     _err = getattr(_client, "_last_reconnect_error", None) or getattr(
                         _client, "_last_login_error", None
@@ -587,12 +519,11 @@ class QuoteConnectionPool:
                         error=str(_err) if _err else "unknown (backoff guard or silent failure)",
                         consecutive_failures=slot.reconnect_failures,
                     )
-                    # Alert on sustained failures (first alert at threshold, then every N)
                     _alert_every = int(os.environ.get("HFT_RECONNECT_ALERT_EVERY", "5"))
                     if slot.reconnect_failures == _alert_every or (
                         slot.reconnect_failures > _alert_every and slot.reconnect_failures % _alert_every == 0
                     ):
-                        _self = self  # noqa: F841 — keep reference for structlog
+                        _self = self
                         logger.critical(
                             "reconnect_sustained_failure_alert",
                             conn_id=slot.conn_id,
@@ -623,11 +554,6 @@ class QuoteConnectionPool:
         LOB/FE mutations are safe here.
         """
         self._apply_pending_resets()
-        # Two gates with different evidence behind them. A feed gap only proves
-        # a broken connection while the session is open, so the gap-driven
-        # trigger is held to the session proper; a DISCONNECTED slot is proof
-        # on its own and keeps the pre-open lead. ``or`` short-circuits so an
-        # open session costs the same single calendar lookup as before.
         session_open = self.session_open_now()
         check_facade_health(
             self._slots,
@@ -728,7 +654,6 @@ class QuoteConnectionPool:
             logger.warning("schedule_reconnect_unknown_conn_id", conn_id=conn_id)
             return
         if not slot.begin_reconnect():
-            # Another thread already owns the reconnect slot.
             return
         logger.warning("facade_reconnect_scheduled", conn_id=conn_id)
 
@@ -967,22 +892,13 @@ class QuoteConnectionPool:
         membership-test) cannot tear with a concurrent writer.
         """
         result: set[str] = set()
-        # Snapshot the client list once: the pool's reconnect path can
-        # rebuild ``self._clients`` mid-iteration.
         clients_snapshot = list(self._clients)
         for client in clients_snapshot:
             codes = getattr(client, "subscribed_codes", None)
             if isinstance(codes, (set, frozenset)):
-                # Snapshot each per-client set too, so a concurrent writer
-                # on the underlying facade cannot mutate while we copy.
                 try:
                     result.update(set(codes))
                 except RuntimeError:
-                    # set changed size during iteration on the underlying
-                    # facade — skip this slice; the partial union still
-                    # over-approximates "subscribed" which is the safer
-                    # direction (false-positive subscription preserves the
-                    # outage signal; false-negative would mask it).
                     continue
         return result
 
@@ -1006,9 +922,6 @@ class QuoteConnectionPool:
                 try:
                     result.update(dict(mapping))
                 except RuntimeError:
-                    # dict changed size during iteration on the underlying
-                    # facade — skip this slice; the partial union is safe
-                    # because every present mapping is itself authoritative.
                     continue
         return result
 
@@ -1037,7 +950,6 @@ class QuoteConnectionPool:
             if _METRIC_PUBLISH_ERRORS is not None:
                 _METRIC_PUBLISH_ERRORS.inc()
             if not self._metrics_publish_failed:
-                # Log the transition only; this runs on every metrics tick.
                 self._metrics_publish_failed = True
                 logger.error("quote_pool_metrics_publish_failed", error=str(exc))
             return
@@ -1078,53 +990,21 @@ class QuoteConnectionPool:
                 _METRIC_CONN_STATE.labels(conn_id=cid).set(int(slot.state))
             if slot.state != FacadeState.CONNECTED:
                 n_unhealthy += 1
-                # DEGRADED is the pure staleness state; RECOVERING and
-                # DISCONNECTED both mean the connection itself is in
-                # trouble. FacadeState is ordered by severity, so one
-                # comparison separates "no data arrived" from "the link
-                # is down" -- see the alert gate below for why that
-                # distinction decides whether this is evidence at all.
                 if slot.state >= FacadeState.RECOVERING:
                     n_hard_down += 1
-        # P1-d: pool-level rollup
         fraction = (n_unhealthy / n_slots) if n_slots > 0 else 0.0
         if _METRIC_POOL_DEGRADED_FRACTION is not None:
             _METRIC_POOL_DEGRADED_FRACTION.set(fraction)
-        # A stale feed is only evidence of a fault while the market is open.
-        # This is the same split ``check_facade_health`` already applies to the
-        # gap-driven reconnect trigger ("a feed gap only proves a broken
-        # connection while the session is open; a DISCONNECTED slot is proof on
-        # its own"), which this rollup never applied to its own alert.
-        #
-        # Every TAIFEX close therefore read as a pool outage: all four slots
-        # aged into DEGRADED with no ticks to refresh them, and 300s later the
-        # CRITICAL fired. Measured 2026-08-31..2026-09-07 -- 20 of 20 firings
-        # were closes, at 05:50Z (day close 13:45 CST), 06:39Z (odd-lot close)
-        # and 21:05Z (night close 05:00 CST) to the second, and Prometheus
-        # ``hft_quote_conn_state`` shows every slot at 1/DEGRADED and none ever
-        # at 3/DISCONNECTED across those windows. A detector that fires on the
-        # ordinary end of every session cannot report the outage that hides in
-        # it.
-        #
-        # Outside a session only a slot that is actually down counts, so a real
-        # pool failure at 05:05 CST still alerts. ``session_open_now`` covers
-        # both TAIFEX sessions (day 08:45-13:45, night 15:00-05:00) and is
-        # evaluated only once a majority is already unhealthy, so the healthy
-        # tick costs no calendar lookup.
         majority_unhealthy = n_slots > 0 and (2 * n_unhealthy) > n_slots
         if majority_unhealthy and not self.session_open_now():
             majority_unhealthy = (2 * n_hard_down) > n_slots
         if majority_unhealthy:
             if self._pool_degraded_since_mono == 0.0:
-                # First tick of the degradation window — start the timer.
                 self._pool_degraded_since_mono = now
             elif (
                 not self._pool_degraded_alerted
                 and (now - self._pool_degraded_since_mono) >= self._pool_degraded_alert_after_s
             ):
-                # We have been majority-degraded for long enough — fire
-                # the CRITICAL log exactly once until we recover. Keep the
-                # gauge raised for the entire window.
                 self._pool_degraded_alerted = True
                 logger.critical(
                     "quote_pool_degraded",
@@ -1139,7 +1019,6 @@ class QuoteConnectionPool:
             if _METRIC_POOL_DEGRADED is not None:
                 _METRIC_POOL_DEGRADED.set(1.0 if self._pool_degraded_alerted else 0.0)
         else:
-            # Recovery: clear timer + alert state, drop the gauge.
             if self._pool_degraded_alerted:
                 logger.warning(
                     "quote_pool_degraded_cleared",
@@ -1151,8 +1030,6 @@ class QuoteConnectionPool:
             self._pool_degraded_alerted = False
             if _METRIC_POOL_DEGRADED is not None:
                 _METRIC_POOL_DEGRADED.set(0.0)
-
-    # ── Options auto-refresh ─────────────────────────────────────────────
 
     def _load_options_from_cache(self) -> list[dict[str, Any]]:
         """Load TXO option contracts from the local contract cache.
@@ -1173,7 +1050,6 @@ class QuoteConnectionPool:
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
             pass
 
-        # Fallback: query Shioaji API directly
         for c in self._clients:
             if not c.logged_in or not getattr(c._client, "api", None):
                 continue
@@ -1264,10 +1140,6 @@ class QuoteConnectionPool:
                 logger.warning("options_refresh_no_contracts")
                 return False
 
-            # Find nearest non-expired expiry. Drop dates < today so a stale
-            # broker contract cache (containing already-expired chains) cannot
-            # bait the auto-refresh into mass-subscribing dead options.
-            # Cache uses 'YYYY/MM/DD' or 'YYYY-MM-DD'; parse before comparing.
             from datetime import date as _date
 
             today = _date.today()
@@ -1305,11 +1177,8 @@ class QuoteConnectionPool:
 
             nearest = [c for c in opts if str(c.get("delivery_date", "")) == nearest_date]
 
-            # Optional ATM filtering via HFT_OPTIONS_STRIKE_RANGE
-            strike_range = int(os.getenv("HFT_OPTIONS_STRIKE_RANGE", "0"))  # 0 = all
+            strike_range = int(os.getenv("HFT_OPTIONS_STRIKE_RANGE", "0"))
             if strike_range > 0:
-                # Centre on the underlying future, never on option premiums: an option contract's
-                # ``reference`` is its own premium. No underlying price -> keep the current chain.
                 from hft_platform.config._symbols_expansion import pick_underlying_price
 
                 atm, atm_source = pick_underlying_price("TXO", nearest, self._contract_index())
@@ -1341,9 +1210,6 @@ class QuoteConnectionPool:
                 key=lambda c: float(c.get("strike", 0)),
             )
 
-            # Preserve group 0 (non-option symbols) and spread option strike pairs
-            # across the remaining quote connections. Each strike keeps its call/put
-            # pair on the same group so individual groups stay mixed and balanced.
             base_symbols = [s for s in self._all_symbols if s.get("group", 0) == 0]
             try:
                 symbols, trimmed = self._build_option_symbols(base_symbols, calls, puts)
@@ -1351,7 +1217,6 @@ class QuoteConnectionPool:
                 logger.error("options_refresh_group_overflow", error=str(exc))
                 return False
 
-            # Validate connection limits
             for g in range(self._num_conns):
                 count = sum(1 for s in symbols if s.get("group") == g)
                 if count > _MAX_SUBSCRIPTIONS_PER_CONN:
@@ -1363,17 +1228,8 @@ class QuoteConnectionPool:
                     )
                     return False
 
-            # Write the auto-refreshed snapshot to a sidecar path — never to
-            # the canonical input file. ``_resolve_runtime_snapshot_path`` honours
-            # ``HFT_SYMBOLS_RUNTIME_SNAPSHOT`` and refuses to clobber the
-            # canonical INPUT (``self._symbols_input_path``) even if an operator
-            # accidentally points it there. See module-level docstring on
-            # ``_DEFAULT_RUNTIME_SNAPSHOT_PATH`` for the 2026-04-27 incident
-            # context (B2 metadata gap).
             out_path = _resolve_runtime_snapshot_path(self._symbols_input_path)
             try:
-                # Ensure parent dir exists (default sidecar lives under
-                # gitignored ``data/`` which may not exist on a fresh clone).
                 parent = os.path.dirname(out_path)
                 if parent:
                     os.makedirs(parent, exist_ok=True)
@@ -1393,7 +1249,6 @@ class QuoteConnectionPool:
             self._options_expiry = nearest_date
             self._all_symbols = symbols
 
-            # Rebuild shard files and reload each connection's config
             groups: dict[int, list[dict[str, Any]]] = {i: [] for i in range(self._num_conns)}
             for sym in symbols:
                 g = sym.get("group", 0)
@@ -1406,19 +1261,15 @@ class QuoteConnectionPool:
                     with open(shard_path, "w") as f:
                         yaml.safe_dump({"symbols": groups[group_id]}, f, sort_keys=False)
 
-            # Update FacadeSlot symbol sets to reflect new option symbols
             for group_id in range(self._num_conns):
                 if group_id < len(self._slots):
                     new_codes = {str(s.get("code", "")) for s in groups.get(group_id, []) if s.get("code")}
                     self._slots[group_id].symbols = new_codes
 
-            # Reload config and resubscribe each connection (with callback wrapper).
-            # Unsubscribe old symbols first to prevent broker-side subscription leak.
             active_cb = self._user_callback
             resubscribed = 0
             for i, facade in enumerate(self._clients):
                 try:
-                    # Unsubscribe old symbols before reloading config
                     if facade.logged_in:
                         sub_mgr = facade._client._subscriptions()
                         old_codes = set(facade._client.subscribed_codes)
@@ -1430,10 +1281,6 @@ class QuoteConnectionPool:
                                 except Exception:
                                     pass
                     facade._client._load_config()
-                    # Reset local subscription counters so subscribe_basket() doesn't
-                    # immediately hit the MAX_SUBSCRIPTIONS guard on the second call.
-                    # Mirrors what _resubscribe_all() does in subscription_manager.py.
-                    # D2: in-place clear preserves object identity for peer readers.
                     facade._client.subscribed_codes.clear()
                     facade._client.subscribed_count = 0
                     if facade.logged_in and active_cb is not None:
@@ -1456,10 +1303,6 @@ class QuoteConnectionPool:
                 resubscribed=resubscribed,
             )
             return True
-
-    # ------------------------------------------------------------------ #
-    # Universe roll: follow ``symbols.list`` when a contract settles
-    # ------------------------------------------------------------------ #
 
     @property
     def universe_rolled(self) -> bool:
@@ -1555,8 +1398,6 @@ class QuoteConnectionPool:
                 if isinstance(row, dict)
             ]
             if len({delivery for _code, delivery in pairs if delivery is not None}) < 2:
-                # A weekly series (``MX1``, ``MX2``...) lists one delivery date
-                # under its own root; the monthly rule does not describe it.
                 continue
             reason = front_month_disagreement(root, pairs, now_ns=now_ns)
             if reason is not None:
@@ -1608,11 +1449,6 @@ class QuoteConnectionPool:
         if live is None:
             live = any(getattr(facade, "logged_in", False) for facade in self._clients)
 
-        # A live roll changes subscriptions on four facades at once. Outside a
-        # session (and outside the pre-open lead) that costs nothing; inside
-        # one it would churn the book mid-trade. ``reconnect_allowed`` covers
-        # both windows and fails open, so an unanswerable calendar defers the
-        # roll rather than running it at a bad time.
         in_session = bool(live and self.reconnect_allowed())
         roll_now_ns = now_ns if now_ns is not None else timebase.now_ns()
         cutoff = taifex_delivery_cutoff(roll_now_ns)
@@ -1620,12 +1456,9 @@ class QuoteConnectionPool:
         with self._refresh_lock:
             try:
                 index = self._contract_index()
-            except Exception as exc:  # noqa: BLE001 — cache missing/corrupt must not kill the caller
+            except Exception as exc:
                 logger.warning("universe_roll_contract_cache_unreadable", error=str(exc))
                 return self._roll_failed("no_contracts", live=live, in_session=in_session, cutoff=cutoff)
-            # ``@front`` must mean what ``validate_universe`` means by
-            # "still trading" (core/front_month.py), or every delivery day
-            # from 13:30 to midnight builds a universe it then refuses.
             index.as_of = cutoff
 
             list_path = self._symbols_list_path()
@@ -1673,8 +1506,6 @@ class QuoteConnectionPool:
             if not plan.changed:
                 logger.debug("universe_roll_no_change", symbols=len(build_result.symbols))
                 if self._universe_source != "list":
-                    # The running universe equals a validated rebuild: it is
-                    # current, whatever file it was read from.
                     self._set_universe_source("list")
                 self._write_last_good_universe(build_result.symbols, deliveries, cutoff=cutoff)
                 self._bump_universe_roll_metric("no_change")
@@ -1705,7 +1536,7 @@ class QuoteConnectionPool:
         universe to keep, only the canonical file, so it tries the last good
         one first.
         """
-        del in_session  # a refusal is counted the same inside a session or outside it
+        del in_session
         self._bump_universe_roll_metric(result)
         if live:
             return False
@@ -1739,13 +1570,9 @@ class QuoteConnectionPool:
                 deliveries[str(code)] = dt.date.fromisoformat(str(raw))
         except FileNotFoundError:
             return self._stay_on_canonical(reason=reason, why="no last-good universe on disk", path=path)
-        except Exception as exc:  # noqa: BLE001 — a corrupt snapshot must not kill boot
+        except Exception as exc:
             return self._stay_on_canonical(reason=reason, why=f"last-good universe unreadable: {exc}", path=path)
 
-        # A weekly option series settles every few days, so a snapshot only a
-        # day old already holds settled codes. Drop those (they are what
-        # validate_universe would refuse) and keep the rest: a front month that
-        # settled is replaced by the ``@next`` entry the same snapshot holds.
         live_symbols = [
             entry
             for entry in symbols
@@ -1822,7 +1649,6 @@ class QuoteConnectionPool:
     def _last_good_universe_path(self) -> str:
         path = os.getenv("HFT_UNIVERSE_LAST_GOOD_PATH", _DEFAULT_LAST_GOOD_UNIVERSE_PATH)
         if _paths_collide(path, self._symbols_input_path):
-            # Never write over the canonical input (2026-04-27 B2).
             stem, _ext = os.path.splitext(self._symbols_input_path)
             path = f"{stem}.last_good.yaml"
         return path
@@ -1849,7 +1675,7 @@ class QuoteConnectionPool:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, path)
-        except Exception as exc:  # noqa: BLE001 — the snapshot is a fallback, not the state
+        except Exception as exc:
             logger.warning("universe_last_good_write_failed", path=path, error=str(exc))
             try:
                 os.unlink(tmp)
@@ -1865,7 +1691,7 @@ class QuoteConnectionPool:
         try:
             for name in UNIVERSE_SOURCES:
                 gauge.labels(source=name).set(1 if name == source else 0)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
 
     @staticmethod
@@ -1876,7 +1702,7 @@ class QuoteConnectionPool:
             return
         try:
             gauge.set(timebase.now_s())
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
 
     @property
@@ -1907,7 +1733,7 @@ class QuoteConnectionPool:
         if listener is not None:
             try:
                 listener(list(new_symbols))
-            except Exception as exc:  # noqa: BLE001 — a listener must not fail the roll
+            except Exception as exc:
                 logger.warning("universe_roll_listener_failed", error=str(exc))
 
         resubscribed = 0
@@ -1915,7 +1741,7 @@ class QuoteConnectionPool:
             for conn_id, facade in enumerate(self._clients):
                 try:
                     resubscribed += self._apply_universe_to_facade(conn_id, facade, plan)
-                except Exception as exc:  # noqa: BLE001 — one facade must not abort the roll
+                except Exception as exc:
                     logger.error("universe_roll_facade_failed", conn_id=conn_id, error=str(exc))
 
         logger.info(
@@ -1949,8 +1775,6 @@ class QuoteConnectionPool:
             return
         from hft_platform.observability.metrics import MetricsRegistry
 
-        # Never construct the registry here: its __init__ unregisters every
-        # custom collector.
         registry = getattr(MetricsRegistry, "_instance", None)
         counter = getattr(registry, "feed_subscription_permanent_failures_total", None)
         if counter is None:
@@ -1960,7 +1784,7 @@ class QuoteConnectionPool:
                 counter.remove(code)
             except KeyError:
                 continue
-            except Exception as exc:  # noqa: BLE001 — metrics must not fail a roll
+            except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
 
     def _apply_universe_to_facade(self, conn_id: int, facade: Any, plan: Any) -> int:
@@ -1970,7 +1794,6 @@ class QuoteConnectionPool:
         contract to adopt an unrelated month is exactly the churn this avoids.
         """
         if not getattr(facade, "logged_in", False):
-            # Its shard file is already rewritten; the reconnect path reads it.
             return 0
 
         client = facade._client
@@ -1983,7 +1806,7 @@ class QuoteConnectionPool:
             if code in removed and code in client.subscribed_codes:
                 try:
                     sub_mgr._unsubscribe_symbol(sym)
-                except Exception as exc:  # noqa: BLE001 — a delisted code often refuses
+                except Exception as exc:
                     logger.debug("universe_roll_unsubscribe_failed", conn_id=conn_id, code=code, error=str(exc))
                 client.subscribed_codes.discard(code)
         client.subscribed_count = len(client.subscribed_codes)
@@ -2007,7 +1830,7 @@ class QuoteConnectionPool:
         client.subscribed_count = len(client.subscribed_codes)
         try:
             client._refresh_quote_routes()
-        except Exception as exc:  # noqa: BLE001 — routing refresh is best effort
+        except Exception as exc:
             logger.debug("universe_roll_route_refresh_failed", conn_id=conn_id, error=str(exc))
 
         logger.info(
@@ -2034,7 +1857,7 @@ class QuoteConnectionPool:
             await asyncio.sleep(interval_s)
             try:
                 await asyncio.to_thread(self.roll_universe)
-            except Exception as exc:  # noqa: BLE001 — the clock outlives any single failure
+            except Exception as exc:
                 logger.warning("universe_roll_clock_failed", error=str(exc))
 
     def _write_universe_snapshot(self, symbols: list[dict[str, Any]], *, cutoff: dt.date) -> None:
@@ -2050,7 +1873,7 @@ class QuoteConnectionPool:
                 fh.write(f"# Source list: {self._symbols_list_path()}\n")
                 fh.write(f"# Delivery cutoff: {cutoff.isoformat()}\n\n")
                 yaml.safe_dump({"symbols": symbols}, fh, sort_keys=False, allow_unicode=True)
-        except Exception as exc:  # noqa: BLE001 — the snapshot is a record, not the state
+        except Exception as exc:
             logger.warning("universe_roll_snapshot_write_failed", error=str(exc))
 
     @staticmethod
@@ -2061,7 +1884,7 @@ class QuoteConnectionPool:
             return
         try:
             counter.labels(result=result).inc()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
 
     def start_options_refresh_thread(
@@ -2086,9 +1909,8 @@ class QuoteConnectionPool:
         self._refresh_stop_event.clear()
 
         def _loop() -> None:
-            # Initial refresh on startup — wait for login to complete
             if self._refresh_stop_event.wait(timeout=30):
-                return  # stop requested during initial wait
+                return
             try:
                 self.refresh_options_symbols()
             except Exception as exc:
@@ -2096,7 +1918,6 @@ class QuoteConnectionPool:
 
             next_check = time.monotonic() + interval_s
             while not self._refresh_stop_event.is_set():
-                # Sleep in short increments via event wait for responsive shutdown
                 self._refresh_stop_event.wait(timeout=60)
                 if self._refresh_stop_event.is_set():
                     break

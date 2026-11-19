@@ -144,7 +144,6 @@ def _run_status(args: argparse.Namespace) -> int:
 def _run_replay(args: argparse.Namespace) -> int:
     max_files = int(args.max_files) if args.max_files else None
     if bool(args.dry_run):
-        # Dry-run should not require importing loader/clickhouse deps.
         dlq_dir = Path(args.wal_dir) / "dlq"
         files = sorted(dlq_dir.glob("*.jsonl")) if dlq_dir.exists() else []
         if isinstance(max_files, int) and max_files > 0:

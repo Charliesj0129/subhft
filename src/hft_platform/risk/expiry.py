@@ -24,11 +24,9 @@ from hft_platform.core.market_calendar import taifex_monthly_delivery_date
 
 _NS_PER_DAY = 86_400 * 1_000_000_000
 _NS_PER_MINUTE = 60 * 1_000_000_000
-# Taipei is UTC+8 with no daylight saving.
 _TAIPEI_OFFSET_NS = 8 * 3600 * 1_000_000_000
 _EPOCH = dt.date(1970, 1, 1)
 
-# Default cutoff: 13:00 Taipei, 30 minutes before the last trading session ends.
 DEFAULT_EXPIRY_CUTOFF_MINUTE = 13 * 60
 
 
@@ -63,7 +61,6 @@ def monthly_delivery_date(symbol: str, base_year: int) -> dt.date | None:
     return taifex_monthly_delivery_date(ref.expiry.year, ref.expiry.month)
 
 
-# Returned by ``expiry_window_ns`` for anything with no monthly delivery date.
 NEVER_NS = 2**63 - 1
 
 

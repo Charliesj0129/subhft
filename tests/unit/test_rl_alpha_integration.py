@@ -7,7 +7,6 @@ from hft_platform.alpha.experiments import ExperimentTracker
 from research.registry.alpha_registry import AlphaRegistry
 from research.registry.schemas import AlphaManifest, AlphaStatus, AlphaTier
 
-# research.rl was archived; skip this module if not present.
 rl_adapter = pytest.importorskip("research.rl.alpha_adapter")
 rl_lifecycle = pytest.importorskip("research.rl.lifecycle")
 rl_features = pytest.importorskip("research.rl.registry_features")

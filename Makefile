@@ -1,6 +1,3 @@
-# HFT Platform Makefile
-# Unified CLI for development, testing, and CI
-
 -include .env
 export
 
@@ -8,12 +5,7 @@ export
 
 PY ?= uv run python
 
-# Default target
 .DEFAULT_GOAL := help
-
-# ============================================================================
-# Development
-# ============================================================================
 
 dev: ## Install dev dependencies
 	uv sync --dev
@@ -24,14 +16,6 @@ build-rust: ## Build Rust extension with maturin
 feature-parity: build-rust ## Run cross-path feature parity gate (Python/Rust/hftbacktest)
 	uv run python -m hft_platform.cli feature parity --require-rust
 
-# ============================================================================
-# Testing
-# ============================================================================
-
-# Sharded across cores (see test-unit-ci for why). -q rather than -v: with
-# workers interleaving output, per-test lines arrive out of order and are more
-# noise than signal — use `make test-file` / `make test-node` when you want to
-# watch an individual test.
 test: ## Run unit tests
 	uv run pytest tests/unit -q --tb=short -n auto --dist worksteal
 
@@ -56,10 +40,6 @@ coverage: ## Run tests with coverage (70% minimum)
 coverage-html: ## Generate HTML coverage report
 	uv run pytest tests/unit --cov-report=html:htmlcov
 	@echo "Coverage report: htmlcov/index.html"
-
-# ============================================================================
-# Code Quality
-# ============================================================================
 
 arch-gate: ## Run architecture conformance gate
 	$(PY) scripts/arch_conformance_gate.py
@@ -86,8 +66,6 @@ test-node: ## Run one pytest node without repository-wide coverage gate
 	@test -n "$(NODE)" || (echo "Usage: make test-node NODE=tests/unit/test_x.py::test_y" && exit 1)
 	uv run pytest --no-cov $(NODE) -q
 
-# VERSIONS is overridable because the hardcoded list is why this was never
-# re-run: `make shioaji-watch` prints the exact invocation for whatever is new.
 SHIOAJI_VERSIONS ?= 1.2.9 1.3.3 1.5.3 1.5.5 1.5.6 1.5.7 1.7.0 1.7.1 1.7.2 1.7.3 1.7.4
 
 shioaji-watch: ## List PyPI shioaji releases newer than the pin (exit 1 if any awaits a decision)
@@ -111,7 +89,7 @@ shioaji-guard: ## Run only the shioaji surface regression guard (no coverage gat
 test-collection-check: ## Verify zero test collection errors
 	$(PY) scripts/check_test_collection.py
 
-lint: ## Run ruff linter
+lint: code-policy ## Run source policy and Ruff
 	uv run ruff check src/ tests/
 
 lint-fix: ## Run ruff linter with auto-fix
@@ -155,11 +133,11 @@ git-bundle-backup: ## Verified git bundle backup to DEST (existing dir OUTSIDE t
 	@test -n "$(DEST)" || { echo "DEST=<existing dir outside the repo> is required"; exit 2; }
 	$(PY) scripts/git_bundle_backup.py --dest "$(DEST)"
 
-check: lint typecheck discipline float-gate dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
+.PHONY: code-policy
+code-policy: ## Enforce the source comment and lint bypass policy
+	$(PY) -m scripts.check_code_policy --base "$${CODE_POLICY_BASE:-origin/main}"
 
-# ============================================================================
-# Benchmarks
-# ============================================================================
+check: lint typecheck discipline float-gate dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
 
 latency-gate-ci: ## Run latency regression benchmarks (CI)
 	uv run pytest tests/bench/ -m bench -v --tb=short
@@ -191,12 +169,7 @@ benchmark-compare: ## Compare current benchmarks against baseline
 		--current benchmark.json \
 		--threshold 0.10
 
-# ============================================================================
-# Docker / Services
-# ============================================================================
-
 start: ## Start services with Docker Compose (default)
-	# P2-d (2026-04-27): export GIT_SHA + BUILD_TS for docker-compose build args
 	HFT_GIT_SHA=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
 		HFT_BUILD_TS=$$(date -u +%Y-%m-%dT%H:%M:%SZ) \
 		docker compose up -d --build
@@ -224,10 +197,6 @@ logs: ## Show hft-engine logs (Docker Compose)
 swarm-logs: ## Show hft-engine service logs (Swarm)
 	docker service logs -f hft_hft-engine
 
-# ============================================================================
-# Cleanup
-# ============================================================================
-
 clean: ## Clean build artifacts and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
@@ -242,11 +211,7 @@ clean-rust: ## Clean Rust build artifacts
 
 clean-all: clean clean-rust ## Clean everything
 
-# ============================================================================
-# CI Simulation
-# ============================================================================
-
-ci: format-check lint typecheck dependency-boundary test-hygiene-check coverage ## Run full CI pipeline locally
+ci: format-check check coverage ## Run full CI pipeline locally
 
 .PHONY: test-unit-ci coverage-branch-gate coverage-domain coverage-markdown test-integration-ci test-clickhouse-writer-smoke
 .PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
@@ -254,13 +219,6 @@ ci: format-check lint typecheck dependency-boundary test-hygiene-check coverage 
 .PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
 .PHONY: render-incident-timeline-json render-incident-timeline-md
 
-# -n auto --dist worksteal: the unit suite is ~14.4k tests and was the whole CI
-# critical path at ~20 min wall / 34 s setup. Sharding it across the runner's
-# cores takes it to ~3 min with identical coverage (87.9%), because the work is
-# CPU-bound and process-isolated. worksteal (not the default loadscheduling)
-# keeps every worker busy to the end instead of leaving one shard straggling.
-# pytest-cov combines the per-worker data files itself, so the branch and
-# domain coverage gates below are unaffected.
 test-unit-ci: ## Run unit tests in CI mode and emit coverage.xml
 	uv run pytest tests/unit -q -n auto --dist worksteal --cov=src/hft_platform --cov-report=term-missing --cov-report=xml --timeout=10 -p no:hypothesis -p no:faulthandler
 
@@ -324,10 +282,6 @@ security-audit: ## Dependency security scan with pip-audit fallback to pip check
 
 latency-audit: ## Validate alpha scorecards declare latency profile + pass Gate D 80% tolerance
 	uv run python -m hft_platform.alpha.latency_audit --strict
-
-# ============================================================================
-# Failure Simulation / Drill Targets
-# ============================================================================
 
 rebuild-symbols-yaml: ## Regenerate config/symbols.yaml from current contracts cache (run after contract roll)
 	@# Pool-mode engines never auto-rebuild symbols.yaml (Fix 1, 2026-05-23):
@@ -499,7 +453,6 @@ canary-evaluate: ## Evaluate post-deploy metrics against canary baseline
 canary-auto: ## One-shot canary gate: snapshot + wait 5min + evaluate
 	$(PY) scripts/code_canary_gate.py auto --window-s 300
 
-
 reliability-monthly-pack: ## Generate monthly reliability review pack (soak/backlog/drift/disk/drill/query-guard/feature-canary/callback-latency)
 	$(PY) scripts/reliability_review_pack.py --project-root . --soak-dir outputs/soak_reports --deploy-dir outputs/deploy_guard --query-guard-dir outputs/query_guard --feature-canary-dir outputs/feature_canary --callback-latency-dir outputs/callback_latency --output-dir outputs/reliability/monthly --month "$${MONTH:-$(shell date +%Y-%m)}" --disk-path . --disk-path .wal --min-query-guard-runs "$${QUERY_GUARD_MIN_RUNS:-1}" --min-query-guard-suite-runs "$${QUERY_GUARD_MIN_SUITE_RUNS:-1}" --min-feature-canary-runs "$${FEATURE_CANARY_MIN_RUNS:-1}" --min-callback-latency-runs "$${CALLBACK_LATENCY_MIN_RUNS:-1}" $(if $(filter 1,$(RUN_DRILL)),--run-drill-suite,) --allow-warn-exit-zero
 
@@ -576,10 +529,6 @@ history-repair: ## Repair fragmented historical parquet exports and resample to 
 		exit 2; \
 	fi
 	$(PY) scripts/repair_history_resample.py $(foreach f,$(INPUTS),--input $(f)) --out "$(OUT)" $(ARGS)
-
-# ============================================================================
-# Research Factory
-# ============================================================================
 
 research-audit: ## Audit research pipeline contract and write report
 	$(PY) -m research.factory audit
@@ -733,7 +682,6 @@ research-hftbacktest: ## Run HftNativeRunner (hftbacktest taker path) on one or 
 	fi
 	$(PY) -m research.backtest.hft_native_runner --alpha "$(ALPHA)" --data $(DATA_PATH) $(ARGS)
 
-
 research-batch-correlation: ## Batch compute pool correlations across all alpha scorecards
 	$(PY) -m hft_platform alpha batch-correlation $(ARGS)
 
@@ -779,13 +727,6 @@ hotpath-profile: ## Profile per-stage latency: normalizer → LOB → feature �
 quarterly-health-check: ## Run quarterly infrastructure health check
 	uv run python scripts/quarterly_health_check.py
 
-# ============================================================================
-# Loop_v1 — Stabilization (L11)
-# ============================================================================
-
-# Daily live-vs-replay diff. Defaults to today; override with SESSION=YYYY-MM-DD.
-# FIXTURE must be supplied (or pass SKIP_REPLAY=1 to re-export from existing report).
-# PHASE controls the phase label (sim|shadow|live); used by replay_parity_alert.yml.
 SESSION ?= $(shell date +%F)
 PHASE ?= $(or $(HFT_STABILIZATION_PHASE),sim)
 FIXTURE ?=
@@ -802,10 +743,6 @@ daily-replay-diff: ## Run daily replay parity diff and export Prometheus textfil
 		$(if $(FIXTURE),--fixture $(FIXTURE),) \
 		$(if $(SKIP_REPLAY),--skip-replay,) \
 		$(EXTRA_ARGS)
-
-# ============================================================================
-# Help
-# ============================================================================
 
 help: ## Show this help message
 	@echo "HFT Platform Development Commands"

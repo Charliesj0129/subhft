@@ -6,7 +6,6 @@ from typing import List
 print("Starting Import...", flush=True)
 
 
-# Basic Mocks for missing infrastructure
 @dataclass
 class MockStrategy:
     strategy_id: str = "test_strat"
@@ -14,13 +13,11 @@ class MockStrategy:
     symbols: List[str] = None
 
     def on_book(self, ctx, event):
-        # Place order logic
         print(f"[Strategy] on_book: Can place order here. Price: {event.get('close')}")
-        # Test: Place Limit Order at current price
         intent = ctx.place_order(
             symbol=event["symbol"],
-            side=1,  # Buy
-            price=event.get("close") / 10000.0,  # Pass float, expect scaling
+            side=1,
+            price=event.get("close") / 10000.0,
             qty=1,
         )
         return [intent]
@@ -37,7 +34,6 @@ class MockStrategy:
 async def test_baseline():
     print("=== System Baseline Verification ===")
 
-    # 1. Setup Components
     print("Importing StrategyRunner...", flush=True)
     from hft_platform.strategy.runner import StrategyRunner
 
@@ -47,7 +43,6 @@ async def test_baseline():
 
     print("Imports Done.", flush=True)
 
-    # Mock Bus
     class MockBus:
         def __init__(self):
             self.queue = asyncio.Queue()
@@ -64,37 +59,30 @@ async def test_baseline():
 
     class MockLOB:
         def get_book_snapshot(self, symbol):
-            return {"bids": [], "asks": []}  # Empty snapshot
+            return {"bids": [], "asks": []}
 
     print("Initializing StrategyRunner...", flush=True)
     runner = StrategyRunner(bus, risk_queue, lob_engine=MockLOB(), config_path="tests/manual/empty_strat.yaml")
     print("Runner Initialized.", flush=True)
 
-    # Patch Strategy
     strat = MockStrategy(symbols=["2330"])
-    # Determine how to register mock strategy since runner uses registry
-    # We can perform direct injection
     runner.strategies = [strat]
 
     print("[1] Components Initialized.")
 
-    # 2. Inject Market Data (Dict)
-    # Scale: 100.0 -> 1,000,000
     tick = {
         "type": "Tick",
         "topic": "market_data",
         "symbol": "2330",
-        "close": 1_000_000,  # Scaled int
+        "close": 1_000_000,
         "volume": 5,
         "ts": time.time_ns(),
     }
 
     print(f"[2] Injecting Tick: {tick}")
 
-    # Run process_event manually to test dispatch
     await runner.process_event(tick)
 
-    # 3. Verify OrderIntent
     if not risk_queue.empty():
         intent = await risk_queue.get()
         print(f"[3] Risk Queue received Intent: {intent}")
@@ -105,8 +93,6 @@ async def test_baseline():
         print("    -> FAIL: No intent generated")
         return
 
-    # 4. Inject Fill Event
-    # Construct FillEvent directly
     fill = FillEvent(
         fill_id="f1",
         account_id="sim",
@@ -124,7 +110,6 @@ async def test_baseline():
 
     print(f"[4] Injecting Fill: {fill}")
     await runner.process_event(fill)
-    # Output should show [Strategy] on_fill
 
     print("=== Verification Complete ===")
 

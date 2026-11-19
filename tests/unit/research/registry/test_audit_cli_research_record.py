@@ -130,13 +130,12 @@ class TestResearchRecord:
         assert "mean_net_edge_pts_per_trade=12.0" in out
 
     def test_blockers_listed_when_failed(self, _isolated) -> None:
-        _record(edge=8.0)  # below floor -> edge blocker
+        _record(edge=8.0)
         out = audit_cli.research_record("r1")
         assert "NOT-READY" in out
-        assert "edge" in out  # blocker name surfaces
+        assert "edge" in out
 
     def test_propped_flag_in_record(self, _isolated) -> None:
-        # net>0 but realized<=0 -> §3 residual-propped edge.
         _record(inventory=(-3.0, 15.0, 12.0))
         out = audit_cli.research_record("r1")
         assert "residual_propped (§3): **PROPPED**" in out
@@ -147,7 +146,7 @@ class TestResearchRecord:
         assert "residual_propped (§3): clean" in out
 
     def test_residual_line_omitted_when_gate_absent(self, _isolated) -> None:
-        _record()  # no inventory_mtm gate
+        _record()
         out = audit_cli.research_record("r1")
         assert "residual_propped" not in out
 

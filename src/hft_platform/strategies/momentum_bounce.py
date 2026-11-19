@@ -39,7 +39,7 @@ logger = get_logger("strategy.momentum_bounce")
 
 _DEFAULT_TRAILING_STOP_PTS = 6
 _DEFAULT_STOP_LOSS_PTS = 10
-_DEFAULT_MAX_HOLD_NS = 900_000_000_000  # 15 min
+_DEFAULT_MAX_HOLD_NS = 900_000_000_000
 
 
 class MomentumBounceStrategy(CascadeBounceStrategy):
@@ -53,10 +53,6 @@ class MomentumBounceStrategy(CascadeBounceStrategy):
         trailing_stop_pts: int = _DEFAULT_TRAILING_STOP_PTS,
         stop_loss_pts: int = _DEFAULT_STOP_LOSS_PTS,
         max_hold_ns: int = _DEFAULT_MAX_HOLD_NS,
-        # Explicit forwarding of CBS typed params (was: **kwargs: object splat,
-        # which let wrong-type values reach CBS.__init__ and raise TypeError at
-        # runtime — the strategy never reached handle_event). Keep these in sync
-        # with CascadeBounceStrategy.__init__.
         lookback_ns: int = _DEFAULT_LOOKBACK_NS,
         trigger_sigma: float = _DEFAULT_TRIGGER_SIGMA,
         take_profit_pts: int = _DEFAULT_TAKE_PROFIT_PTS,
@@ -121,7 +117,6 @@ class MomentumBounceStrategy(CascadeBounceStrategy):
         if abs(diff_x2) < self._trigger_sigma * local_vol_pts * _MID_X2_POINT_SCALE:
             return
 
-        # MOMENTUM: trade WITH the move (flipped from CBS)
         direction = 1 if diff_x2 > 0 else -1
         if direction > 0:
             side = Side.BUY
@@ -171,7 +166,6 @@ class MomentumBounceStrategy(CascadeBounceStrategy):
             self._pending_force_close[symbol] = False
             self._awaiting_exit_order[symbol] = False
             self._peak_pnl_scaled[symbol] = 0
-            # No passive TP — momentum holds until trailing stop or time exit
             self._state[symbol] = "positioned"
             return
 
@@ -195,11 +189,9 @@ class MomentumBounceStrategy(CascadeBounceStrategy):
         pnl_scaled = self._direction[symbol] * (mark_price - entry_price)
         elapsed_ns = now_ns - self._entry_ts_ns[symbol]
 
-        # Update peak PnL high-water mark
         if pnl_scaled > self._peak_pnl_scaled[symbol]:
             self._peak_pnl_scaled[symbol] = pnl_scaled
 
-        # Exit conditions
         hard_sl = pnl_scaled <= -(self._stop_loss_pts * _PTS_SCALE)
         trailing = (
             self._peak_pnl_scaled[symbol] > 0
@@ -220,7 +212,6 @@ class MomentumBounceStrategy(CascadeBounceStrategy):
             elapsed_s=elapsed_ns / 1e9,
         )
 
-        # If a passive order is live, cancel it first then IOC exit
         if self._exit_order_id[symbol]:
             self.cancel(symbol, self._exit_order_id[symbol])
             self._pending_force_close[symbol] = True

@@ -50,7 +50,7 @@ def test_shadow_mode_with_sim_orders_passes():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        result = validate_shadow_lock()  # Should not raise
+        result = validate_shadow_lock()
     assert result is None
 
 
@@ -59,20 +59,18 @@ def test_no_shadow_mode_skips_check():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        result = validate_shadow_lock()  # Should not raise
+        result = validate_shadow_lock()
     assert result is None
 
 
 def test_shadow_mode_unset_skips_check():
-    # When HFT_ORDER_SHADOW_MODE is not set at all, should also pass
     env = {"HFT_ORDER_MODE": "live", "HFT_MODE": "real"}
-    # Remove HFT_ORDER_SHADOW_MODE if present
     patched_env = {k: v for k, v in os.environ.items() if k != "HFT_ORDER_SHADOW_MODE"}
     patched_env.update(env)
     with patch.dict(os.environ, patched_env, clear=True):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        result = validate_shadow_lock()  # Should not raise
+        result = validate_shadow_lock()
     assert result is None
 
 
@@ -94,7 +92,7 @@ def test_yaml_shadow_enabled_with_sim_orders_passes():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        result = validate_shadow_lock(settings)  # Should not raise
+        result = validate_shadow_lock(settings)
     assert result is None
 
 
@@ -105,5 +103,5 @@ def test_yaml_shadow_disabled_with_live_orders_passes():
     with patch.dict(os.environ, env, clear=False):
         from hft_platform.services.bootstrap import validate_shadow_lock
 
-        result = validate_shadow_lock(settings)  # Should not raise
+        result = validate_shadow_lock(settings)
     assert result is None

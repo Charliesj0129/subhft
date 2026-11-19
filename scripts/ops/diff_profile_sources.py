@@ -26,27 +26,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PIPELINE_PY = REPO_ROOT / "research" / "pipeline.py"
 PROFILE_YAML = REPO_ROOT / "config" / "research" / "profiles" / "vm_ul6_strict.yaml"
 
-# Mapping argparse-key -> YAML lookup path (dotted) for keys that are expected
-# to coexist in both sources today.  Anything *not* listed here is considered
-# pipeline-only (an argparse override with no YAML counterpart) and is reported
-# as ``yaml=<missing>``.
 KEY_TO_YAML_PATH: dict[str, str] = {
     "min_sharpe_oos_gate_d": "thresholds.taker.sharpe_oos_min",
-    "max_abs_drawdown_gate_d": "thresholds.taker.max_drawdown_pct",  # note unit drift below
+    "max_abs_drawdown_gate_d": "thresholds.taker.max_drawdown_pct",
     "max_correlation_gate_d": "thresholds.taker.max_correlation",
 }
 
-# Some keys differ in unit (fraction in dict vs percent in YAML).  This map
-# normalizes them for comparison so we report semantic drift, not unit drift.
 UNIT_CONVERSIONS: dict[str, callable] = {
-    "max_abs_drawdown_gate_d": lambda v: float(v) * 100.0,  # 0.10 -> 10.0
+    "max_abs_drawdown_gate_d": lambda v: float(v) * 100.0,
 }
 
 
 def _load_pipeline_overrides() -> dict[str, Any]:
     src = PIPELINE_PY.read_text(encoding="utf-8")
-    # Parse the dict literal between ``_VM_UL6_PROFILE_OVERRIDES`` and the
-    # next blank line.  Use ast.literal_eval on a sliced string.
     import ast
     import re
 
@@ -55,7 +47,6 @@ def _load_pipeline_overrides() -> dict[str, Any]:
         src,
     )
     if not match:
-        # Dict already removed (post-Stage-2.3) — return empty.
         return {}
     return ast.literal_eval(match.group(1))
 

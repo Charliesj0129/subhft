@@ -85,16 +85,12 @@ def _results() -> list[dict]:
         return base
 
     return [
-        # maker-rescuable: taker failed, maker passed (single-gate near miss)
         row("resc", "train", gates_failed=["cost_proxy_taker"], cost_survival_score=0.25),
         row("resc", "validation", gates_failed=["cost_proxy_taker"]),
-        # dead under any execution
         row("dead", "train", gates_failed=["cost_proxy_taker", "cost_proxy_maker"]),
         row("dead", "validation", gates_failed=["cost_proxy_taker", "cost_proxy_maker"]),
-        # survivor with reduced trade-flow coverage
         row("win1", "train", effective_day_count=27),
         row("win1", "validation", ic=0.08),
-        # TEST-SPLIT rows that must never leak (absurd sentinel values)
         row("win1", "test", ic=999.0),
         row("resc", "test", gates_failed=[]),
     ]
@@ -122,15 +118,12 @@ class TestTestSplitExclusion:
 
     def test_test_split_rows_do_not_leak_into_any_stat(self, summary: dict) -> None:
         fam = summary["per_family"]["microprice"]
-        # The test row carried ic=999.0; survivor IC distribution must not see it.
         assert fam["ic_distribution_survivors"]["p90"] < 1.0
-        # The test row for 'resc' had empty gates_failed; survival still counts
-        # only the train-gate survivor (win1).
         assert fam["survival_rate"] == pytest.approx(0.25)
 
     def test_fetch_sql_hardcodes_split_filter(self) -> None:
         assert "split IN ('train','validation')" in FETCH_RESULTS_SQL
-        assert "%(split" not in FETCH_RESULTS_SQL  # no parameter can widen it
+        assert "%(split" not in FETCH_RESULTS_SQL
         assert "test" not in FETCH_RESULTS_SQL
 
 
@@ -144,10 +137,10 @@ class TestTotalsAndFamilies:
     def test_family_rates(self, summary: dict) -> None:
         fam = summary["per_family"]["microprice"]
         assert fam["invalid_formula_rate"] == pytest.approx(0.25)
-        assert fam["cost_failure_rate"] == pytest.approx(0.5)  # resc + dead
-        assert fam["maker_cost_failure_rate"] == pytest.approx(0.25)  # dead only
-        assert fam["maker_rescuable_count"] == 1  # resc
-        assert fam["reduced_day_coverage_count"] == 1  # win1 27 < 40
+        assert fam["cost_failure_rate"] == pytest.approx(0.5)
+        assert fam["maker_cost_failure_rate"] == pytest.approx(0.25)
+        assert fam["maker_rescuable_count"] == 1
+        assert fam["reduced_day_coverage_count"] == 1
         assert fam["death_reason_distribution"] == {"COST_KILLED": 2, "FORMULA_PARSE_ERROR": 1}
         assert fam["status_funnel"]["SHORTLISTED"] == 1
 
@@ -158,7 +151,7 @@ class TestTotalsAndFamilies:
         assert "resc" in near
         assert near["resc"]["failed_gate"] == "cost_proxy_taker"
         assert near["resc"]["margin"] == pytest.approx(0.25 - 0.3)
-        assert "dead" not in near  # two gates failed -> not a near miss
+        assert "dead" not in near
 
     def test_terminal_lists_and_tally(self, summary: dict) -> None:
         assert summary["shortlisted"] == [{"alpha_id": "win1", "family": "microprice", "final_score": 1.7}]

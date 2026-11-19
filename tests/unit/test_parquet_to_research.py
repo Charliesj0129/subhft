@@ -7,7 +7,6 @@ import json
 import numpy as np
 import pytest
 
-# Import under test
 from research.tools.legacy.parquet_to_research import (
     _RESEARCH_DTYPE,
     DefectStats,
@@ -20,9 +19,6 @@ from research.tools.legacy.parquet_to_research import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Minimal DataFrame stub (avoids pandas dependency in tests)
-# ---------------------------------------------------------------------------
 class _Row:
     """Simple row object mimicking pandas namedtuple row.
 
@@ -34,7 +30,6 @@ class _Row:
         self.__dict__.update(kwargs)
 
     def __getattr__(self, name):
-        # Only called for names NOT in __dict__
         raise AttributeError(name)
 
 
@@ -46,9 +41,6 @@ def _stub_itertuples(df_stub):
     return iter(df_stub)
 
 
-# ---------------------------------------------------------------------------
-# _col_val / _col_val_str
-# ---------------------------------------------------------------------------
 class TestColVal:
     def test_col_val_missing_col(self):
         row = _Row(a=1.0)
@@ -71,9 +63,6 @@ class TestColVal:
         assert _col_val_str(row, "missing", "default") == "default"
 
 
-# ---------------------------------------------------------------------------
-# detect_columns
-# ---------------------------------------------------------------------------
 class TestDetectColumns:
     def test_detects_standard_columns(self):
         cols = ["symbol", "exch_ts", "type", "bid_price", "ask_price", "bid_qty", "ask_qty", "price", "volume"]
@@ -96,9 +85,6 @@ class TestDetectColumns:
             detect_columns(["symbol", "bid_price"])
 
 
-# ---------------------------------------------------------------------------
-# convert_symbol — BidAsk repair rules
-# ---------------------------------------------------------------------------
 class TestConvertSymbolBidAsk:
     """Test defect repair rules for BidAsk events."""
 
@@ -179,7 +165,6 @@ class TestConvertSymbolBidAsk:
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.bid_recovered == 1
         assert len(research_rows) == 2
-        # Second row bid should be forward-filled from first row
         assert research_rows[1][2] == pytest.approx(50.0)
 
     def test_ask_zero_bid_positive_recovers(self):
@@ -241,7 +226,7 @@ class TestConvertSymbolBidAsk:
             )
         ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
-        assert research_rows[0][7] == 999_000_000_000  # local_ts = exch_ts
+        assert research_rows[0][7] == 999_000_000_000
 
 
 class TestConvertSymbolTick:
@@ -283,7 +268,7 @@ class TestConvertSymbolTick:
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.tick_defect_dropped == 0
         tick_row = research_rows[1]
-        assert tick_row[6] == pytest.approx(100.0)  # volume
+        assert tick_row[6] == pytest.approx(100.0)
 
     def test_tick_price_zero_volume_positive_ffill(self):
         rows = [
@@ -320,9 +305,8 @@ class TestConvertSymbolTick:
         ]
         _, research_rows, stats = _call_convert(rows, self._BASE_COLUMNS)
         assert stats.tick_price_ffill == 1
-        # ffill: last trade was 50.5
         tick_row = research_rows[2]
-        assert tick_row[4] == pytest.approx(50.5)  # mid_price = ffill price
+        assert tick_row[4] == pytest.approx(50.5)
 
     def test_tick_price_zero_volume_zero_dropped(self):
         rows = [
@@ -342,9 +326,6 @@ class TestConvertSymbolTick:
         assert stats.tick_defect_dropped == 1
 
 
-# ---------------------------------------------------------------------------
-# File writers
-# ---------------------------------------------------------------------------
 class TestWriters:
     def test_write_research_npy(self, tmp_path):
         rows = [(1.0, 2.0, 99.0, 101.0, 100.0, 20.0, 5.0, 1_000_000_000)]
@@ -376,14 +357,10 @@ class TestWriters:
         assert meta["rows"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Helper: call convert_symbol with stub row list
-# ---------------------------------------------------------------------------
 def _call_convert(rows, columns, price_scale=1, limit=None):
     """Call convert_symbol using the _Row stub objects directly."""
     import research.tools.legacy.parquet_to_research as mod
 
-    # Build a minimal "DataFrame" object with itertuples
     class StubDF:
         def itertuples(self, index=False):
             return iter(rows)

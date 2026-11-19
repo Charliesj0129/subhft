@@ -11,10 +11,6 @@ import pytest
 
 from hft_platform.ops.session_governor import SessionPhase, TrackGate
 
-# ---------------------------------------------------------------------------
-# Helpers / stubs
-# ---------------------------------------------------------------------------
-
 
 def _make_bus(events=None):
     bus = MagicMock()
@@ -55,17 +51,15 @@ def _make_strategy(sid="strat_a", symbols=None, enabled=True):
 
 
 def _make_event(symbol="TSMC", ts=0):
-    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are always fresh
     return SimpleNamespace(symbol=symbol, ts=ts)
 
 
-# Disable strategy registry auto-load and disable fail-fast compat
 @pytest.fixture(autouse=True)
 def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
-    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")  # use Python circuit
-    monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")  # no hard fail
+    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
+    monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
 
 
 @pytest.fixture(autouse=True)
@@ -98,11 +92,6 @@ def runner_factory():
         return runner, bus, rq
 
     return _make
-
-
-# ---------------------------------------------------------------------------
-# Tests: constructor branches
-# ---------------------------------------------------------------------------
 
 
 def test_constructor_defaults(runner_factory):
@@ -144,11 +133,6 @@ def test_constructor_with_feature_engine(runner_factory):
     assert runner.feature_engine is fe
 
 
-# ---------------------------------------------------------------------------
-# Tests: register()
-# ---------------------------------------------------------------------------
-
-
 def test_register_strategy(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy("my_strat")
@@ -187,11 +171,6 @@ def test_register_compat_warning_non_fatal(runner_factory):
     assert strat in runner.strategies
 
 
-# ---------------------------------------------------------------------------
-# Tests: _scale_price
-# ---------------------------------------------------------------------------
-
-
 def test_scale_price_int(runner_factory):
     runner, _, _ = runner_factory()
     result = runner._scale_price("TSMC", 100_0000)
@@ -202,11 +181,6 @@ def test_scale_price_decimal(runner_factory):
     runner, _, _ = runner_factory()
     result = runner._scale_price("TSMC", Decimal("500"))
     assert isinstance(result, int)
-
-
-# ---------------------------------------------------------------------------
-# Tests: _intent_factory
-# ---------------------------------------------------------------------------
 
 
 def test_intent_factory_returns_order_intent(runner_factory):
@@ -249,11 +223,6 @@ def test_intent_factory_uses_current_ts(runner_factory):
     assert intent.source_ts_ns == 999_000_000
 
 
-# ---------------------------------------------------------------------------
-# Tests: _build_positions_by_strategy
-# ---------------------------------------------------------------------------
-
-
 def test_build_positions_no_store(runner_factory):
     runner, _, _ = runner_factory()
     result = runner._build_positions_by_strategy()
@@ -275,7 +244,7 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
     rust_tracker = MagicMock()
     rust_tracker.get_positions_by_strategy.side_effect = RuntimeError("fail")
     pos_store._rust_tracker = rust_tracker
-    del pos_store.snapshot_positions_with_recovery  # force older snapshot path
+    del pos_store.snapshot_positions_with_recovery
     pos_store.positions = {}
     runner, _, _ = runner_factory(position_store=pos_store)
     result = runner._build_positions_by_strategy()
@@ -285,8 +254,8 @@ def test_build_positions_rust_tracker_fallback(runner_factory):
 def test_build_positions_from_dict_key(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
-    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
-    del pos_store.snapshot_positions  # force Python fallback path
+    del pos_store.snapshot_positions_with_recovery
+    del pos_store.snapshot_positions
 
     class _Pos:
         net_qty = 5
@@ -301,8 +270,8 @@ def test_build_positions_from_dict_key(runner_factory):
 def test_build_positions_from_dict_object_value(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
-    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
-    del pos_store.snapshot_positions  # force Python fallback path
+    del pos_store.snapshot_positions_with_recovery
+    del pos_store.snapshot_positions
     pos = MagicMock()
     pos.strategy_id = "strat_b"
     pos.symbol = "2330"
@@ -317,17 +286,12 @@ def test_build_positions_from_dict_object_value(runner_factory):
 def test_build_positions_fallback_wildcard(runner_factory):
     pos_store = MagicMock()
     del pos_store._rust_tracker
-    del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
-    del pos_store.snapshot_positions  # force Python fallback path
+    del pos_store.snapshot_positions_with_recovery
+    del pos_store.snapshot_positions
     pos_store.positions = {"unknown_key": 99}
     runner, _, _ = runner_factory(position_store=pos_store)
     result = runner._build_positions_by_strategy()
     assert "*" in result
-
-
-# ---------------------------------------------------------------------------
-# Tests: process_event
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -417,7 +381,7 @@ async def test_process_event_strategy_exception_triggers_circuit(runner_factory)
 
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
+    runner._rust_circuit = None
     runner._circuit_threshold = 1
     event = _make_event()
     await runner.process_event(event)
@@ -429,12 +393,12 @@ async def test_process_event_halted_strategy_skipped(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy(enabled=False)
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
+    runner._rust_circuit = None
     runner._circuit_states["strat_a"] = "halted"
     from hft_platform.core import timebase
 
     runner._circuit_halted_at_ns["strat_a"] = timebase.now_ns()
-    runner._circuit_cooldown_ns = int(3600 * 1e9)  # 1 hour
+    runner._circuit_cooldown_ns = int(3600 * 1e9)
     event = _make_event()
     await runner.process_event(event)
     assert len(strat._calls) == 0
@@ -445,10 +409,10 @@ async def test_process_event_circuit_recovery_cooldown(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy(enabled=False)
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
+    runner._rust_circuit = None
     runner._circuit_states["strat_a"] = "halted"
-    runner._circuit_halted_at_ns["strat_a"] = 1  # epoch + 1ns
-    runner._circuit_cooldown_ns = int(1e9)  # 1 second; definitely elapsed
+    runner._circuit_halted_at_ns["strat_a"] = 1
+    runner._circuit_cooldown_ns = int(1e9)
     event = _make_event()
     await runner.process_event(event)
     assert strat.enabled is True
@@ -459,7 +423,7 @@ async def test_process_event_degraded_recovery(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy()
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
+    runner._rust_circuit = None
     runner._circuit_states["strat_a"] = "degraded"
     runner._circuit_recovery_threshold = 1
     event = _make_event()
@@ -477,12 +441,8 @@ async def test_process_event_circuit_degraded_transition(runner_factory):
 
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
+    runner._rust_circuit = None
     runner._circuit_threshold = 4
-    # After quarantine governor (DECISION-08), the first exception quarantines the
-    # strategy and subsequent events are skipped (no circuit-breaker recording).
-    # So only 1 failure is registered — not enough for degraded (half_threshold=2).
-    # Disable quarantine to exercise the pure circuit-breaker path.
     runner.strategy_governor = None
     for _ in range(2):
         await runner.process_event(_make_event())
@@ -495,7 +455,7 @@ async def test_process_event_delta_source_invalidates_positions(runner_factory):
     runner._positions_dirty = False
     event = SimpleNamespace(delta_source="fill", symbol="TSMC", ts=0)
     await runner.process_event(event)
-    assert runner._positions_dirty is False  # was rebuilt
+    assert runner._positions_dirty is False
 
 
 @pytest.mark.asyncio
@@ -509,11 +469,6 @@ async def test_process_event_targeted_dispatch(runner_factory):
     await runner.process_event(event)
     assert len(strat_a._calls) == 1
     assert len(strat_b._calls) == 0
-
-
-# ---------------------------------------------------------------------------
-# Tests: _emit_trace
-# ---------------------------------------------------------------------------
 
 
 def test_emit_trace_no_sampler(runner_factory):
@@ -540,11 +495,6 @@ def test_emit_trace_sampler_raises(runner_factory):
     sampler.emit.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# Tests: _extract_event_trace
-# ---------------------------------------------------------------------------
-
-
 def test_extract_event_trace_with_meta(runner_factory):
     runner, _, _ = runner_factory()
     meta = SimpleNamespace(local_ts=500_000, seq=42, topic="tick")
@@ -568,18 +518,12 @@ def test_extract_event_trace_no_ts(runner_factory):
     assert ts > 0
 
 
-# ---------------------------------------------------------------------------
-# Tests: run() async loop
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_run_processes_finite_events(runner_factory):
     events = [_make_event("A"), _make_event("B")]
     bus = _make_bus(events)
     runner, _, _ = runner_factory(bus=bus)
     await asyncio.wait_for(runner.run(), timeout=5.0)
-    # After processing all events the runner exits cleanly — bus was consumed
     bus.consume.assert_called_once()
 
 
@@ -599,11 +543,6 @@ async def test_run_flush_on_cancel(runner_factory):
     assert events_gen_exhausted
 
 
-# ---------------------------------------------------------------------------
-# Tests: obs_policy helper
-# ---------------------------------------------------------------------------
-
-
 def test_obs_policy_valid_values(monkeypatch):
     from hft_platform.strategy.runner import _obs_policy
 
@@ -619,21 +558,11 @@ def test_obs_policy_invalid(monkeypatch):
     assert _obs_policy() == ""
 
 
-# ---------------------------------------------------------------------------
-# Tests: invalidate_positions
-# ---------------------------------------------------------------------------
-
-
 def test_invalidate_positions(runner_factory):
     runner, _, _ = runner_factory()
     runner._positions_dirty = False
     runner.invalidate_positions()
     assert runner._positions_dirty is True
-
-
-# ---------------------------------------------------------------------------
-# Tests: _flush_pending_strategy_metrics
-# ---------------------------------------------------------------------------
 
 
 def test_flush_pending_no_metrics(runner_factory):
@@ -642,11 +571,6 @@ def test_flush_pending_no_metrics(runner_factory):
     runner._strategy_pending_intents["s"] = 5
     runner._flush_pending_strategy_metrics()
     assert runner._strategy_pending_intents.get("s", 0) == 0
-
-
-# ---------------------------------------------------------------------------
-# Tests: tuple guard allows known typed ring events
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -685,17 +609,11 @@ async def test_tuple_guard_rejects_empty_tuple(runner_factory):
         assert mock_ext.call_count == 0, "empty tuple should be rejected by guard"
 
 
-# ---------------------------------------------------------------------------
-# Tests: rejection feedback on risk_queue full
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_rejection_sink_receives_feedback_on_queue_full(runner_factory):
     """When risk_queue is full, a RiskFeedback with reason_code='risk_queue_full' is sent."""
     from hft_platform.contracts.strategy import IntentType, OrderIntent, RiskFeedback, Side
 
-    # Build a risk queue that always raises QueueFull
     rq = MagicMock(spec=["put_nowait"])
     rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
 
@@ -703,7 +621,6 @@ async def test_rejection_sink_receives_feedback_on_queue_full(runner_factory):
     runner._rejection_sink = asyncio.Queue(maxsize=10)
     runner._typed_intent_fastpath = False
 
-    # Create a minimal OrderIntent
     intent = OrderIntent(
         intent_id=42,
         strategy_id="strat_x",
@@ -714,11 +631,9 @@ async def test_rejection_sink_receives_feedback_on_queue_full(runner_factory):
         intent_type=IntentType.NEW,
     )
 
-    # Directly invoke the submit path so QueueFull fires
     strat = _make_strategy("strat_x", symbols=["TSMC"])
     runner.register(strat)
 
-    # Patch the strategy's handle_event to return the intent
     strat._return_value = [intent]
 
     event = _make_event(symbol="TSMC")
@@ -743,7 +658,6 @@ async def test_rejection_sink_none_does_not_raise_on_queue_full(runner_factory):
     rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
 
     runner, bus, _ = runner_factory(rq=rq)
-    # _rejection_sink stays None (default)
     runner._typed_intent_fastpath = False
 
     intent = OrderIntent(
@@ -762,7 +676,6 @@ async def test_rejection_sink_none_does_not_raise_on_queue_full(runner_factory):
 
     event = _make_event(symbol="TSMC")
     runner.running = True
-    # Should not raise
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
         await runner.process_event(event)
 
@@ -774,12 +687,10 @@ async def test_rejection_sink_overflow_increments_metric(runner_factory, _patch_
     """When rejection_sink is full (maxsize=1), the second overflow must increment rejection_sink_overflow_total."""
     from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 
-    # risk_queue always full → triggers the rejection_sink path
     rq = MagicMock(spec=["put_nowait"])
     rq.put_nowait = MagicMock(side_effect=asyncio.QueueFull())
 
     runner, bus, _ = runner_factory(rq=rq)
-    # rejection_sink with maxsize=1: first write succeeds, second overflows
     runner._rejection_sink = asyncio.Queue(maxsize=1)
     runner._typed_intent_fastpath = False
 
@@ -800,11 +711,9 @@ async def test_rejection_sink_overflow_increments_metric(runner_factory, _patch_
     event = _make_event(symbol="TSMC")
     runner.running = True
 
-    # First call fills rejection_sink (no overflow)
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
         await runner.process_event(event)
 
-    # Second call overflows rejection_sink
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
         await runner.process_event(event)
 
@@ -844,7 +753,6 @@ async def test_storm_guard_halt_triggered_on_risk_queue_full(runner_factory):
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
         await runner.process_event(event)
 
-    # Gradual degradation: first queue-full triggers STORM, not HALT
     mock_storm_guard.trigger_storm.assert_called_once_with("risk_queue_full")
     mock_storm_guard.trigger_halt.assert_not_called()
 
@@ -859,7 +767,6 @@ async def test_storm_guard_not_triggered_when_none(runner_factory):
 
     runner, bus, _ = runner_factory(rq=rq)
     runner._typed_intent_fastpath = False
-    # _storm_guard stays None (default)
 
     intent = OrderIntent(
         intent_id=51,
@@ -877,16 +784,10 @@ async def test_storm_guard_not_triggered_when_none(runner_factory):
 
     event = _make_event(symbol="TSMC")
     runner.running = True
-    # Should not raise and _storm_guard stays None
     with patch.object(runner, "_extract_event_trace", return_value=(0, "")):
         await runner.process_event(event)
 
     assert runner._storm_guard is None
-
-
-# ---------------------------------------------------------------------------
-# Tests: circuit breaker Prometheus metric emission
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -901,8 +802,8 @@ async def test_circuit_breaker_emits_degraded_metric(runner_factory, _patch_metr
     strat = _ErrStrat("strat_a")
     runner.register(strat)
     runner._rust_circuit = None
-    runner._circuit_threshold = 4  # half_threshold = 2 → degraded after 2 failures
-    runner.strategy_governor = None  # disable quarantine
+    runner._circuit_threshold = 4
+    runner.strategy_governor = None
 
     gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
 
@@ -926,7 +827,7 @@ async def test_circuit_breaker_emits_halted_metric(runner_factory, _patch_metric
     strat = _ErrStrat("strat_a")
     runner.register(strat)
     runner._rust_circuit = None
-    runner._circuit_threshold = 2  # half_threshold=1, halted after 2
+    runner._circuit_threshold = 2
     runner.strategy_governor = None
 
     gauge_mock = _patch_metrics.circuit_breaker_state.labels.return_value
@@ -973,20 +874,13 @@ async def test_circuit_breaker_metric_suppresses_exceptions(runner_factory, _pat
     runner._circuit_threshold = 2
     runner.strategy_governor = None
 
-    # Make the metric gauge raise
     _patch_metrics.circuit_breaker_state.labels.side_effect = RuntimeError("metric_boom")
 
-    # Should not raise — exception swallowed
     for _ in range(2):
         await runner.process_event(_make_event())
 
 
-# ---------------------------------------------------------------------------
-# Tests: _run_rejection_consumer()
-# ---------------------------------------------------------------------------
-
-
-def _make_risk_feedback(strategy_id: str = "strat_a") -> "RiskFeedback":  # noqa: F821
+def _make_risk_feedback(strategy_id: str = "strat_a") -> "RiskFeedback":
     from hft_platform.contracts.strategy import RiskFeedback
 
     return RiskFeedback(
@@ -1012,9 +906,8 @@ async def test_rejection_consumer_routes_feedback_to_strategy(runner_factory):
     feedback = _make_risk_feedback("strat_a")
     await q.put(feedback)
 
-    # Run the consumer briefly; it will process the one item then block waiting for more.
     consumer_task = asyncio.create_task(runner._run_rejection_consumer())
-    await q.join()  # wait until the single item is processed
+    await q.join()
     consumer_task.cancel()
     try:
         await consumer_task
@@ -1043,7 +936,6 @@ async def test_rejection_consumer_unknown_strategy_continues(runner_factory):
     except asyncio.CancelledError:
         pass
 
-    # No exception raised; queue drained cleanly.
     assert q.empty()
 
 
@@ -1058,7 +950,6 @@ async def test_rejection_consumer_strategy_exception_continues(runner_factory):
     q: asyncio.Queue = asyncio.Queue()
     runner._rejection_queue = q
 
-    # Put two feedbacks; second should still be processed after the first raises.
     feedback1 = _make_risk_feedback("strat_a")
     feedback2 = _make_risk_feedback("strat_a")
     await q.put(feedback1)
@@ -1081,5 +972,4 @@ async def test_rejection_consumer_none_queue_returns_immediately(runner_factory)
     runner, _, _ = runner_factory()
     assert runner._rejection_queue is None
 
-    # Should complete without blocking or raising.
     await runner._run_rejection_consumer()

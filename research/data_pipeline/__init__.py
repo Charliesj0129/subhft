@@ -63,15 +63,9 @@ def _dotenv_value(key: str, *, env_path: Path = Path(".env")) -> str:
     return ""
 
 
-# Asia/Taipei has been a fixed UTC+8 with no DST since 1980, and this corpus starts in
-# 2026, so the offset is applied as integer arithmetic rather than constructing a
-# timezone-aware datetime per row. ``test_taipei_offset_matches_zoneinfo_for_a_corpus_date``
-# pins that assumption against ``zoneinfo``.
 TAIPEI_UTC_OFFSET_NS = 8 * 3600 * 1_000_000_000
 _NS_PER_DAY = 86_400_000_000_000
 _NS_PER_MINUTE = 60_000_000_000
-# Not `datetime.date`: this module already uses `date` as a parameter and loop variable
-# throughout, so importing the class here would shadow it.
 _EPOCH_DAY = datetime(1970, 1, 1, tzinfo=UTC).date()
 _DAY_STRING_CACHE: dict[int, str] = {}
 
@@ -361,11 +355,7 @@ def _write_day_outputs(
     np.savez_compressed(str(l2_path), data=events)
     np.save(str(tick_path), ticks)
     created_at = datetime.now(UTC).isoformat()
-    # Advisory provenance: record which source-quality audit this artifact was built
-    # under. Never blocks the export; an absent audit is stamped as "unstamped".
     quality_stamp = quality.stamp_payload(quality_report, requested_from=date, requested_to=date)
-    # What the session rule excluded is recorded in the artifact rather than left
-    # silent, on the same principle as the source-quality stamp above.
     session_provenance = {
         "session_filtered_rows": int(session_filtered_rows),
         "session_rule": session_rule,
@@ -478,8 +468,6 @@ def export_l2_ticks(
             try:
                 rows, session_filtered = filter_session_rows(_fetch_day_rows(client, symbol, date), sessions)
                 if not rows:
-                    # Every row on this date was published outside a session. Reporting it
-                    # as a skip rather than an error keeps a genuine export failure legible.
                     summary["outputs"].append(
                         {
                             "symbol": symbol,

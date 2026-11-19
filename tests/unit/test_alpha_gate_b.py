@@ -46,7 +46,6 @@ class TestRunGateBAlphaIdValidation:
             run_gate_b("Abc", tmp_path)
 
     def test_accepts_valid_alpha_id(self, tmp_path: Path):
-        # Should not raise — will proceed to subprocess call
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
             report = run_gate_b("valid_alpha_id", tmp_path)

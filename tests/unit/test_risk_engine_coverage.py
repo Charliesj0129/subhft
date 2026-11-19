@@ -26,10 +26,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.risk.engine import RiskEngine, _cap_error_type, _obs_policy
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def risk_config(tmp_path):
@@ -77,11 +73,6 @@ def _make_intent(**kwargs):
     return OrderIntent(**defaults)
 
 
-# ---------------------------------------------------------------------------
-# _cap_error_type
-# ---------------------------------------------------------------------------
-
-
 def test_cap_error_type_known():
     assert _cap_error_type(ValueError("x")) == "ValueError"
 
@@ -97,11 +88,6 @@ def test_cap_error_type_timeout():
     assert _cap_error_type(TimeoutError("x")) == "TimeoutError"
 
 
-# ---------------------------------------------------------------------------
-# _obs_policy
-# ---------------------------------------------------------------------------
-
-
 def test_obs_policy_minimal():
     with patch.dict(os.environ, {"HFT_RISK_OBS_POLICY": "minimal"}):
         assert _obs_policy() == "minimal"
@@ -115,20 +101,13 @@ def test_obs_policy_debug():
 def test_obs_policy_balanced():
     with patch.dict(os.environ, {"HFT_OBS_POLICY": "balanced"}, clear=False):
         with patch.dict(os.environ, {"HFT_RISK_OBS_POLICY": ""}, clear=False):
-            # When risk-specific is empty, falls back to HFT_OBS_POLICY
             result = _obs_policy()
-            # Result depends on env; just ensure it returns a string
             assert isinstance(result, str)
 
 
 def test_obs_policy_unknown():
     with patch.dict(os.environ, {"HFT_RISK_OBS_POLICY": "something_invalid"}):
         assert _obs_policy() == ""
-
-
-# ---------------------------------------------------------------------------
-# _bool_env
-# ---------------------------------------------------------------------------
 
 
 def test_bool_env_none():
@@ -150,11 +129,6 @@ def test_bool_env_strings():
     assert RiskEngine._bool_env("OFF") is False
 
 
-# ---------------------------------------------------------------------------
-# _parse_sample_every
-# ---------------------------------------------------------------------------
-
-
 def test_parse_sample_every_valid():
     with patch.dict(os.environ, {"TEST_SAMPLE": "5"}):
         assert RiskEngine._parse_sample_every("TEST_SAMPLE", default=1) == 5
@@ -168,11 +142,6 @@ def test_parse_sample_every_invalid():
 def test_parse_sample_every_zero_clamped():
     with patch.dict(os.environ, {"TEST_SAMPLE": "0"}):
         assert RiskEngine._parse_sample_every("TEST_SAMPLE", default=1) == 1
-
-
-# ---------------------------------------------------------------------------
-# position provider: object-based access
-# ---------------------------------------------------------------------------
 
 
 def test_position_provider_with_callable(risk_config):
@@ -210,11 +179,6 @@ def test_position_provider_none(engine):
     assert result == 0
 
 
-# ---------------------------------------------------------------------------
-# evaluate: float price rejection
-# ---------------------------------------------------------------------------
-
-
 def test_evaluate_rejects_float_price(engine):
     intent = _make_intent(price=100.5)
     decision = engine.evaluate(intent)
@@ -222,15 +186,9 @@ def test_evaluate_rejects_float_price(engine):
     assert decision.reason_code == "FLOAT_PRICE"
 
 
-# ---------------------------------------------------------------------------
-# reload_config
-# ---------------------------------------------------------------------------
-
-
 def test_reload_config_success(engine, risk_config):
     """reload_config reads new yaml and updates validators."""
     engine.reload_config()
-    # Should not raise; validators get updated config
     assert engine.config is not None
 
 
@@ -238,18 +196,11 @@ def test_reload_config_failure(engine, tmp_path):
     """reload_config handles missing file gracefully."""
     engine.config_path = str(tmp_path / "nonexistent.yaml")
     engine.reload_config()
-    # Should log error but not raise
-    assert engine.config is not None  # Old config preserved
-
-
-# ---------------------------------------------------------------------------
-# on_config_reload
-# ---------------------------------------------------------------------------
+    assert engine.config is not None
 
 
 def test_on_config_reload_clears_caches(engine):
     """on_config_reload clears validator caches."""
-    # Add a fake cache attribute to a validator
     if engine.validators:
         engine.validators[0]._test_cache = {"key": "val"}
     new_config = {
@@ -260,19 +211,13 @@ def test_on_config_reload_clears_caches(engine):
     assert engine.config == new_config
     if engine.validators:
         cache = getattr(engine.validators[0], "_test_cache", None)
-        # Cache should be cleared
         assert cache is None or cache == {}
-
-
-# ---------------------------------------------------------------------------
-# _emit_reject_metric edge cases
-# ---------------------------------------------------------------------------
 
 
 def test_emit_reject_metric_no_metrics(engine):
     engine._reject_metric_counter = 7
     engine.metrics = None
-    engine._emit_reject_metric("s1", "REASON")  # Should not raise
+    engine._emit_reject_metric("s1", "REASON")
     assert engine._reject_metric_counter == 7
 
 
@@ -281,11 +226,9 @@ def test_emit_reject_metric_sampling(engine):
     engine._reject_metric_sample_every = 2
     engine._reject_metric_counter = 0
     engine._reject_metric_cache.clear()
-    # First call increments counter to 1, mod 2 != 0, so skips
     engine._emit_reject_metric("s1", "TEST")
     assert engine._reject_metric_counter == 1
     assert engine._reject_metric_cache == {}
-    # Second call would emit
     engine._emit_reject_metric("s1", "TEST")
     assert engine._reject_metric_counter == 0
     assert ("s1", "TEST") in engine._reject_metric_cache
@@ -295,15 +238,9 @@ def test_emit_reject_metric_cache_owner_change(engine):
     """When MetricsRegistry changes identity, cache is cleared."""
     engine._reject_metric_sample_every = 1
     engine._reject_metric_counter = 0
-    engine._reject_metric_cache_owner_id = -1  # Force mismatch
+    engine._reject_metric_cache_owner_id = -1
     engine._emit_reject_metric("s1", "TEST")
-    # Cache should be re-initialized with current owner
     assert engine._reject_metric_cache_owner_id == id(engine.metrics)
-
-
-# ---------------------------------------------------------------------------
-# create_command and monotonic_cmd_id
-# ---------------------------------------------------------------------------
 
 
 def test_create_command_increments_cmd_id(engine):
@@ -330,17 +267,10 @@ def test_monotonic_cmd_id_with_lock(risk_config):
     assert eng.monotonic_cmd_id >= 1
 
 
-# ---------------------------------------------------------------------------
-# _is_halt_exempt
-# ---------------------------------------------------------------------------
-
-
 def test_is_halt_exempt_uses_is_halt_exempt_method(engine):
     """_is_halt_exempt delegates to storm_guard.is_halt_exempt when present."""
     sg = engine.storm_guard
-    # StormGuard.is_halt_exempt is already defined as a real method
     assert callable(getattr(sg, "is_halt_exempt", None))
-    # Non-exempt strategy returns False
     result = engine._is_halt_exempt("unknown_strat")
     assert result is False
 
@@ -348,20 +278,13 @@ def test_is_halt_exempt_uses_is_halt_exempt_method(engine):
 def test_is_halt_exempt_via_frozen_set(engine):
     sg = engine.storm_guard
     sg._halt_exempt_strategies = frozenset({"safe"})
-    # Use the real method which checks the frozen set
     assert engine._is_halt_exempt("safe") is True
     assert engine._is_halt_exempt("other") is False
-
-
-# ---------------------------------------------------------------------------
-# notify_fill_pnl and update_unrealized_pnl
-# ---------------------------------------------------------------------------
 
 
 def test_notify_fill_pnl(engine):
     """notify_fill_pnl forwards to DailyLossLimitValidator."""
     engine.notify_fill_pnl("s1", -50000)
-    # Should not raise; verify validator got updated by checking attributes
     for v in engine.validators:
         if hasattr(v, "_accumulated_loss"):
             assert "s1" in v._accumulated_loss
@@ -374,21 +297,11 @@ def test_update_unrealized_pnl(engine):
     assert daily_loss._unrealized_pnl == -100000
 
 
-# ---------------------------------------------------------------------------
-# _check_daily_loss_halt: already in HALT
-# ---------------------------------------------------------------------------
-
-
 def test_check_daily_loss_halt_already_halted(engine):
     engine.storm_guard.state = StormGuardState.HALT
     with patch.object(type(engine.storm_guard), "trigger_halt") as trigger_halt:
         engine._check_daily_loss_halt()
     trigger_halt.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# DLQ drain paths
-# ---------------------------------------------------------------------------
 
 
 def test_drain_order_dlq_empty(engine):
@@ -412,10 +325,9 @@ def test_drain_order_dlq_ttl_expired(engine):
     """Expired DLQ entries are drained and rejected."""
     intent = _make_intent()
     cmd = engine.create_command(intent)
-    # Enqueue with a very old timestamp (expired)
     old_ns = time.monotonic_ns() - 999_000_000_000
     engine._order_dlq.append((cmd, old_ns))
-    engine._dlq_ttl_ns = 1  # 1 nanosecond TTL
+    engine._dlq_ttl_ns = 1
     engine._rejection_sink = asyncio.Queue(maxsize=100)
     engine._drain_order_dlq()
     assert len(engine._order_dlq) == 0
@@ -425,9 +337,9 @@ def test_drain_order_dlq_deadline_expired(engine):
     """DLQ entries with expired deadline are rejected."""
     intent = _make_intent()
     cmd = engine.create_command(intent)
-    cmd.deadline_ns = 1  # Already expired
+    cmd.deadline_ns = 1
     engine._order_dlq.append((cmd, time.monotonic_ns()))
-    engine._dlq_ttl_ns = 999_000_000_000  # Very long TTL
+    engine._dlq_ttl_ns = 999_000_000_000
     engine._rejection_sink = asyncio.Queue(maxsize=100)
     engine._drain_order_dlq()
     assert len(engine._order_dlq) == 0
@@ -448,7 +360,7 @@ def test_drain_order_dlq_successful_replay(engine):
 def test_drain_order_dlq_queue_still_full(engine):
     """DLQ drain stops when order_queue is full."""
     q_out = asyncio.Queue(maxsize=1)
-    q_out.put_nowait("filler")  # Fill the queue
+    q_out.put_nowait("filler")
     engine.order_queue = q_out
     intent = _make_intent()
     cmd = engine.create_command(intent)
@@ -456,13 +368,7 @@ def test_drain_order_dlq_queue_still_full(engine):
     engine._dlq_ttl_ns = 999_000_000_000
     engine._rejection_sink = asyncio.Queue(maxsize=100)
     engine._drain_order_dlq()
-    # Entry stays in DLQ since queue is full
     assert len(engine._order_dlq) == 1
-
-
-# ---------------------------------------------------------------------------
-# _revalidate_for_dlq
-# ---------------------------------------------------------------------------
 
 
 def test_revalidate_for_dlq_cancel_always_passes(engine):
@@ -479,15 +385,10 @@ def test_revalidate_for_dlq_force_flat_always_passes(engine):
 
 def test_revalidate_for_dlq_rejected(engine):
     """When validators reject, revalidate returns False."""
-    intent = _make_intent(price=0)  # Zero price triggers price band rejection
+    intent = _make_intent(price=0)
     cmd = engine.create_command(intent)
     result = engine._revalidate_for_dlq(cmd)
     assert result is False
-
-
-# ---------------------------------------------------------------------------
-# _send_dlq_rejection
-# ---------------------------------------------------------------------------
 
 
 def test_send_dlq_rejection_no_sink(engine):
@@ -512,11 +413,6 @@ def test_send_dlq_rejection_sink_full(engine):
     engine.metrics.rejection_sink_overflow_total.inc.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# DLQ: revalidation failure path in drain
-# ---------------------------------------------------------------------------
-
-
 def test_drain_order_dlq_revalidation_failed(engine):
     """DLQ entries that fail revalidation are rejected."""
     intent = _make_intent(price=0)
@@ -528,11 +424,6 @@ def test_drain_order_dlq_revalidation_failed(engine):
     assert len(engine._order_dlq) == 0
 
 
-# ---------------------------------------------------------------------------
-# Order queue full escalation paths
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_run_order_queue_full_triggers_storm(risk_config):
     """When order queue is full, storm is triggered."""
@@ -541,7 +432,7 @@ async def test_run_order_queue_full_triggers_storm(risk_config):
     q_out.put_nowait("filler")
     eng = RiskEngine(risk_config, q_in, q_out)
     eng._rejection_sink = asyncio.Queue(maxsize=100)
-    eng._dlq_drain_interval = 999  # Prevent drain during test
+    eng._dlq_drain_interval = 999
 
     intent = _make_intent()
     q_in.put_nowait(intent)
@@ -554,13 +445,7 @@ async def test_run_order_queue_full_triggers_storm(risk_config):
         await task
     except asyncio.CancelledError:
         pass
-    # Order should be in DLQ
     assert len(eng._order_dlq) >= 1
-
-
-# ---------------------------------------------------------------------------
-# DLQ overflow eviction
-# ---------------------------------------------------------------------------
 
 
 def test_dlq_overflow_eviction(engine):
@@ -574,26 +459,17 @@ def test_dlq_overflow_eviction(engine):
         cmd = engine.create_command(intent)
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-    # Now the DLQ is full. The engine code in run() does manual eviction before
-    # appending; let's test that logic directly
     intent = _make_intent(intent_id=99)
     cmd = engine.create_command(intent)
 
-    # Simulate the eviction logic from run()
     if len(engine._order_dlq) >= engine._ORDER_DLQ_MAX:
         evicted_cmd, _ = engine._order_dlq.popleft()
         engine._send_dlq_rejection(evicted_cmd, "dlq_overflow_evicted")
     engine._order_dlq.append((cmd, time.monotonic_ns()))
 
     assert len(engine._order_dlq) == 2
-    # Newest entry should be last
     last_cmd, _ = engine._order_dlq[-1]
     assert last_cmd.intent.intent_id == 99
-
-
-# ---------------------------------------------------------------------------
-# _emit_trace
-# ---------------------------------------------------------------------------
 
 
 def test_emit_trace_no_sampler(engine):
@@ -606,7 +482,6 @@ def test_emit_trace_with_sampler(engine):
     sampler = MagicMock()
     engine._trace_sampler = sampler
     engine._emit_trace("test_stage", _make_intent(), {"key": "val"})
-    # L5: order-bearing risk traces use emit_always (bypasses sample_every).
     sampler.emit_always.assert_called_once()
 
 
@@ -616,11 +491,6 @@ def test_emit_trace_sampler_exception(engine):
     engine._trace_sampler = sampler
     engine._emit_trace("test_stage", _make_intent(), {"key": "val"})
     sampler.emit_always.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# greeks_validator integration
-# ---------------------------------------------------------------------------
 
 
 def test_evaluate_greeks_validator_reject(engine):
@@ -642,11 +512,6 @@ def test_evaluate_greeks_validator_pass(engine):
     intent = _make_intent()
     decision = engine.evaluate(intent)
     assert decision.approved
-
-
-# ---------------------------------------------------------------------------
-# _audit_risk_decision error path
-# ---------------------------------------------------------------------------
 
 
 def test_audit_risk_decision_import_error(engine):

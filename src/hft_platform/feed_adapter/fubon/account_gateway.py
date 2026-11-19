@@ -23,10 +23,6 @@ class FubonAccountGateway:
         self._account = account
         self.log = logger
 
-    # ------------------------------------------------------------------ #
-    # Low-level SDK wrappers (unchanged)
-    # ------------------------------------------------------------------ #
-
     def get_inventories(self) -> list[Any]:
         """Get stock inventories.
 
@@ -83,10 +79,6 @@ class FubonAccountGateway:
             self.log.error("fubon_get_settlements_failed", error=str(exc))
             raise
 
-    # ------------------------------------------------------------------ #
-    # BrokerProtocol-aligned methods
-    # ------------------------------------------------------------------ #
-
     def get_positions(self) -> list[Any] | None:
         """Get positions (BrokerProtocol-aligned).
 
@@ -99,9 +91,6 @@ class FubonAccountGateway:
             return self.get_inventories()
         except Exception as exc:
             self.log.error("fubon_get_positions_failed", error=str(exc))
-            # Protocol: None = broker state unknown; [] = confirmed empty.
-            # Failure must return None so reconciliation doesn't treat
-            # "broker unreachable" as "confirmed no positions".
             return None
 
     def get_account_balance(self, account: Any = None) -> Any:

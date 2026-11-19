@@ -81,7 +81,7 @@ def _invoke_sub_gates(
     return advisory, blocking
 
 
-def _invoke_sub_gates_with_verdict(  # noqa: C901 - branchy dispatch; refactor tracked as follow-up
+def _invoke_sub_gates_with_verdict(
     *,
     strategy_type: str,
     result_payload: dict,
@@ -141,23 +141,16 @@ def _invoke_sub_gates_with_verdict(  # noqa: C901 - branchy dispatch; refactor t
     if "trade_pnl" in result_payload:
         try:
             object.__setattr__(result, "trade_pnl", list(result_payload["trade_pnl"]))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     if "replay_parity_report" in result_payload:
-        # Slice C: passthrough so ReplayParityGate can read the precomputed
-        # report. Task 11 will attach the report directly on BacktestResult
-        # at construction; until then this lets test fixtures inject it.
         try:
             object.__setattr__(result, "replay_parity_report", result_payload["replay_parity_report"])
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     blocking_names: set[str] = set(getattr(profile, "blocking_sub_gates", ()) or ())
 
-    # Punch-list (2026-05-29): expose strict-profile state to sub-gates via the
-    # thresholds dict so they can fail-closed on missing evidence / legacy
-    # scorecard shape / insufficient sample.  Loose-profile semantics
-    # (advisory PASS) are preserved when the flag is False.
     is_strict = bool(getattr(profile, "is_strict", False))
     eval_thresholds: dict = {**thresholds, "_is_strict_profile": is_strict}
 
@@ -184,7 +177,7 @@ def _invoke_sub_gates_with_verdict(  # noqa: C901 - branchy dispatch; refactor t
                 "metrics": sub.metrics,
                 "details": sub.details,
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             entry = {
                 "name": str(getattr(gate, "name", "unknown")),
                 "passed": None,
@@ -217,17 +210,11 @@ def _invoke_sub_gates_with_verdict(  # noqa: C901 - branchy dispatch; refactor t
             "failing": blocking_failing,
             "names": blocking_seen,
             "profile": profile.name,
-            # Goal §4: sub-threshold runs must NOT be collapsed into a
-            # generic KILL; triage_status is read off the verdict.
             "triage_status": triage_status,
             "triage_reasons": triage_reasons,
             "verdict": verdict.to_dict(),
         }
 
-    # Goal §4 / §9 traceability: when the audit flag is on, emit one JSONL
-    # row per invocation so every Gate-C decision is replayable later.
-    # Failure of the writer must never break the validation path —
-    # swallow all exceptions and log.
     if os.getenv("HFT_SUB_GATE_AUDIT_ENABLED", "0") == "1":
         try:
             from hft_platform.alpha import sub_gate_audit
@@ -247,13 +234,12 @@ def _invoke_sub_gates_with_verdict(  # noqa: C901 - branchy dispatch; refactor t
                     blocking=blocking,
                     spec_provenance=prov,
                 )
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("sub_gate_audit emit failed", exc_info=True)
 
     return advisory, blocking, verdict
 
 
-# Sub-gate results Gate D re-reads from the persisted scorecard.
 _GATE_D_AUDIT_SUB_GATES = ("inventory_mtm", "cost_uncertainty")
 
 
@@ -323,8 +309,6 @@ def _invoke_sub_gates_advisory(
     return advisory
 
 
-# Threshold keys whose direction is known: for these the stricter of the run's
-# value and the profile's wins, so a profile can only tighten a gate.
 _HIGHER_IS_STRICTER = frozenset(
     {
         "sharpe_is_min",
@@ -629,9 +613,6 @@ def _resolve_maker_latency_profile(
     return profile, None
 
 
-# The mid-to-mid runner (``HftNativeRunner``) sends no orders: it values a signal ladder
-# mid-to-mid and never pays the spread. Its numbers are screening only and are labelled
-# with this id; Gate C's PnL checks read the fill-priced taker backtest instead.
 SCREENING_METHOD_ID = "mid_to_mid_screening_v1"
 
 
@@ -758,7 +739,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     instrument = getattr(alpha.manifest, "instrument", "")
 
     if strategy_type == "maker":
-        # --- Maker path: CK-direct backtest ---
         from hft_platform.alpha.latency_profiles import resolve_profile
 
         maker_runtime = runtime.load_maker_runtime()
@@ -773,11 +753,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         if missing:
             return _maker_protocol_error_report(alpha_id, maker_strategy, missing)
 
-        # Resolve latency_profile metadata string -> LatencyProfile injected into
-        # MakerEngine. A missing or unresolvable profile makes the run INVALID
-        # rather than falling back to instant-RTT, which produced fills no real
-        # broker round trip could. See
-        # docs/incidents/2026-04-24-r47-backtest-credibility-audit.md.
         latency_profile_name = getattr(alpha.manifest, "latency_profile", "") or ""
         latency_profile, latency_failure = _resolve_maker_latency_profile(
             latency_profile_name, resolve_profile, LatencyProfile
@@ -799,9 +774,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         qf = float(getattr(config, "queue_fraction", 0.5))
         fill_model = QueueDepletionFill(queue_fraction=qf)
 
-        # ADR-004: a `<ROOT>_frontmonth` instrument is one series rolled across
-        # contract months by the pre-registered roll protocol. A protocol or
-        # calendar that cannot be used makes the run INVALID.
         schedule = None
         if instrument.endswith(_ROLLED_SUFFIX):
             build_schedule = getattr(maker_runtime, "rolled_schedule", None)
@@ -822,8 +794,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         )
 
         if schedule is not None:
-            # A scheduled segment without events (a missing month) would
-            # shrink the series to fewer contracts, so it is INVALID too.
             try:
                 result = engine.run_rolled(strategy=maker_strategy, schedule=schedule, pipeline_mode="strict")
             except ValueError as exc:
@@ -838,7 +808,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             )
         roll = _roll_details(schedule)
 
-        # --- Maker Gate C: evaluate using maker_scorecard + gate_thresholds ---
         maker_thresholds = _merge_profile_thresholds(
             _load_maker_thresholds(root), config.profile, strategy_type="maker"
         )
@@ -850,7 +819,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         pnl_per_fill = scorecard_data.get("pnl_per_fill", 0)
         total_fills = scorecard_data.get("total_fills", 0)
 
-        # Gate C maker checks
         maker_check_entries = _maker_core_checks(
             sharpe_is=result.sharpe_is,
             winning_day_pct=winning_day_pct,
@@ -861,7 +829,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         )
         maker_checks = {e["name"].removeprefix("gate_c."): bool(e["passed"]) for e in maker_check_entries}
 
-        # --- Sub-gates (Plan C Task C10 + Slice A profile blocking) ---
         daily_pnl = getattr(result, "daily_pnl", None)
         maker_sub_gates, maker_blocking, maker_verdict = _invoke_sub_gates_with_verdict(
             strategy_type="maker",
@@ -892,14 +859,11 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
 
         maker_passed = maker_verdict.passed
 
-        # Compute scorecard (reuse existing function with maker data)
         tracker = ExperimentTracker(base_dir=experiments_base)
         latest_signals = getattr(tracker, "latest_signals_by_alpha", None)
         pool_signals = latest_signals() if callable(latest_signals) else {}
         pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
         data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
-        # MakerEngine has no OOS split and writes a constant sharpe_oos; record
-        # it as not measured instead of as a zero Sharpe.
         scorecard = compute_scorecard(
             {
                 "signals": result.signals,
@@ -979,7 +943,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         report.details["experiment_meta_path"] = str(meta_path)
         return report, result.run_id, result.config_hash, str(scorecard_path), str(meta_path)
     else:
-        # --- Taker path: mid-to-mid screening runner, then the fill-priced TakerSim ---
         from hft_platform.alpha.latency_profiles import resolve_profile
 
         latency_failure = _check_taker_latency_profile(str(config.latency_profile_id or ""), resolve_profile)
@@ -996,9 +959,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
 
         taker_runtime = runtime.load_taker_runtime()
         TakerEngine = taker_runtime.taker_engine
-        # The per-instrument cost profile. Missing (unknown instrument): the screening
-        # trips stay gross and the fill-priced check is ERROR; we never default to a
-        # stand-in cost model (goal 限制 §4).
         _cost_model = None
         try:
             _cost_model = taker_runtime.load_cost_profile(instrument)
@@ -1026,13 +986,10 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         backtest_engine_key = str(config.backtest_engine).lower()
         if backtest_engine_key == "research":
             raise ValueError("backtest_engine='research' 已於 v1.1 移除。請使用 'hftbacktest_v2'。")
-        # auto-convert research.npy -> hftbt.npz (idempotent). The runner reads
-        # the npz, so the RunStamp hashes it alongside the input.
         hftbt_paths = [str(p) for p in (ensure_hftbt_npz(dp) for dp in resolved_data_paths) if p]
         runner: Any = HftNativeRunner(alpha, backtest_cfg)
         base_result = runner.run()
 
-        # Enrich taker result with provenance (only if result is a dataclass instance)
         import dataclasses as _dc
 
         if _dc.is_dataclass(base_result) and not isinstance(base_result, type):
@@ -1126,8 +1083,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         wf_check = check_entry("gate_c.walk_forward", Outcome.NOT_APPLICABLE, details="enable_walk_forward=false") | {
             "blocking": False
         }
-    # Legacy report flag: "did not block". A check the config switched off
-    # reads True here; its outcome is in ``gate_c_checks``.
     wf_gate_passed = bool(wf_check["passed"]) or not wf_check.get("blocking", True)
 
     stress_eval = _evaluate_stress_backtest(
@@ -1143,7 +1098,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         base_result=result,
         runner_cls=_runner_cls,
     )
-    # Trend contamination check (detrended IC)
     _mid = getattr(result, "mid_prices", None)
     if _mid is not None and hasattr(_mid, "size") and _mid.size > 0:
         trend_check = _evaluate_trend_contamination(
@@ -1167,8 +1121,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         strategy_type="taker",
     )
     taker_thresholds.update(_search_record(root, alpha_id))
-    # PnL is priced by the exchange model's fills (``gate_c.sharpe_oos``). The mid-to-mid
-    # screening Sharpe still has to clear the same floor, but it can never satisfy Gate C alone.
     fill_entry, fill_details, fill_rows = _fill_backtest_eval(
         taker_runtime.run_taker_sim,
         alpha=alpha,
@@ -1192,8 +1144,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
     pool_signals = latest_signals() if callable(latest_signals) else {}
     pool_signals = {k: v for k, v in dict(pool_signals).items() if str(k) != str(alpha_id)}
     data_meta_path = _resolve_first_data_meta_path(resolved_data_paths)
-    # Gate D reads ``sharpe_oos`` from this scorecard, so it carries the fill-priced value
-    # (None when fills could not be priced, which Gate D fails).
     scorecard = compute_scorecard(
         {
             "signals": result.signals,
@@ -1251,10 +1201,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
         trend_entry,
     ]
 
-    # --- Sub-gates (Plan C Task C10 + Slice A profile blocking) ---
-    # Day-axis sub-gates read one dated row per trading day from the fill-priced
-    # backtest. The screening runner's equity curve is per tick and mid-to-mid, so
-    # it never feeds them; with no fill rows those gates report ERROR.
     _eq = getattr(result, "equity_curve", None)
     _daily_rows = _dated_daily_rows(fill_rows)
     _daily_payload: dict[str, Any] = (
@@ -1301,7 +1247,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "sharpe_oos": fill_details.get("sharpe_oos"),
             "pnl_method": fill_details.get("method"),
             "fill_backtest": fill_details,
-            # Mid-to-mid runner numbers: screening only, never Gate C's PnL.
             "screening": {
                 "method": SCREENING_METHOD_ID,
                 "sharpe_is": result.sharpe_is,
@@ -1314,7 +1259,6 @@ def run_gate_c(  # noqa: C901 - existing complexity 17; refactor tracked as foll
             "max_drawdown": result.max_drawdown,
             "capacity_estimate": result.capacity_estimate,
             "regime_metrics": result.regime_metrics,
-            # Thresholds actually applied (run defaults tightened by the profile).
             "applied_thresholds": dict(taker_thresholds),
             "criteria": {
                 "min_sharpe_oos": config.min_sharpe_oos,

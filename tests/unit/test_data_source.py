@@ -9,8 +9,6 @@ import pytest
 
 from hft_platform.monitor._types import RowView
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
 
 def _unique_shm_name() -> str:
     return f"test_ds_{os.getpid()}_{int(time.monotonic_ns())}"
@@ -68,9 +66,6 @@ class _FakeCHSource:
         return 0.0
 
 
-# ── CHDataSource ─────────────────────────────────────────────────────────────
-
-
 class TestCHDataSource:
     def test_delegates_to_poller(self) -> None:
         from hft_platform.monitor._data_source import CHDataSource
@@ -97,9 +92,6 @@ class TestCHDataSource:
         assert result[0].symbol == "2330"
 
 
-# ── ShmDataSource ────────────────────────────────────────────────────────────
-
-
 class TestShmDataSource:
     def test_shm_data_source_poll_reads_snapshots(self, _cleanup_shm: list[str]) -> None:
         from hft_platform.ipc.shm_snapshot import ShmSnapshotWriter, _symbol_hash
@@ -117,19 +109,16 @@ class TestShmDataSource:
         ds = ShmDataSource(shm_name=name, max_symbols=4, symbols=("2330",))
         assert ds.connected is True
 
-        # First poll — should return data
         result = ds.poll({"2330": 0})
         rows = result.get("2330", [])
         assert len(rows) == 1
         assert rows[0].symbol == "2330"
         assert rows[0].ingest_ts == 5000
 
-        # Second poll with same cursor — version unchanged, should skip
         result = ds.poll({"2330": 0})
         rows = result.get("2330", [])
         assert len(rows) == 0
 
-        # Write new data, poll again
         writer.publish(0, 6000, sym_hash, lob, feat)
         result = ds.poll({"2330": 0})
         rows = result.get("2330", [])
@@ -164,7 +153,6 @@ class TestShmDataSource:
         _cleanup_shm.append(name)
 
         writer = ShmSnapshotWriter(name, max_symbols=4)
-        # best_bid=2100000 (x10000 = 210.0 NTD), best_ask=2105000 (x10000 = 210.5 NTD)
         sym_hash = _symbol_hash("2330")
         lob = [2100000, 2105000, 0, 0, 0, 0, 10, 20, 0]
         feat = [0] * 16
@@ -174,12 +162,8 @@ class TestShmDataSource:
         result = ds.poll({"2330": 0})
         row = result["2330"][0]
 
-        # CH scale = x1000000, platform scale = x10000, conversion = *100
-        assert row.bids_price[0] == 2100000 * 100  # 210_000_000
-        assert row.asks_price[0] == 2105000 * 100  # 210_500_000
-
-
-# ── HybridDataSource ────────────────────────────────────────────────────────
+        assert row.bids_price[0] == 2100000 * 100
+        assert row.asks_price[0] == 2105000 * 100
 
 
 class TestHybridDataSource:
@@ -190,7 +174,6 @@ class TestHybridDataSource:
         name = _unique_shm_name()
         _cleanup_shm.append(name)
 
-        # Setup SHM with data
         writer = ShmSnapshotWriter(name, max_symbols=4)
         sym_hash = _symbol_hash("2330")
         lob = [1000, 2000, 0, 0, 0, 0, 10, 20, 0]
@@ -208,12 +191,10 @@ class TestHybridDataSource:
         assert hybrid.connected is True
         assert hybrid.mode_label == "SHM+CH"
 
-        # poll → SHM
         result = hybrid.poll({"2330": 0})
         assert "2330" in result
         assert len(result["2330"]) == 1
 
-        # fetch_recent_valid → CH
         rows = hybrid.fetch_recent_valid("2330", 10)
         assert len(rows) == 1
         assert rows[0].symbol == "2330"
@@ -221,7 +202,6 @@ class TestHybridDataSource:
     def test_hybrid_graceful_degradation_ch_only(self) -> None:
         from hft_platform.monitor._data_source import CHDataSource, HybridDataSource, ShmDataSource
 
-        # SHM fails
         shm = ShmDataSource(shm_name="nonexistent_xyz_abc", max_symbols=4, symbols=("2330",))
         ch = _FakeCHSource()
         ch._poll_result = {"2330": [RowView("2330", 100, [100], [200], [10], [20], 100, 1)]}
@@ -229,7 +209,6 @@ class TestHybridDataSource:
         hybrid = HybridDataSource(shm, CHDataSource(ch))
         hybrid.connect()
 
-        # SHM not connected → falls back to CH for poll
         assert hybrid.connected is True
         assert hybrid.mode_label == "CH"
         result = hybrid.poll({"2330": 0})
@@ -254,7 +233,6 @@ class TestHybridDataSource:
         assert hybrid.connected is True
         assert hybrid.mode_label == "SHM"
 
-        # fetch_recent_valid returns empty (CH down)
         rows = hybrid.fetch_recent_valid("2330", 10)
         assert rows == []
 
@@ -305,7 +283,6 @@ class TestHybridDataSource:
         monkeypatch.setattr(engine_mod, "get_session_info", lambda *a, **kw: (True, "", "Day"))
         monkeypatch.setattr(engine_mod, "get_session_start", lambda *a, **kw: None)
 
-        # Force ShmDataSource to always fail connecting (simulates no SHM segment available)
         class _FailingShmDataSource:
             def __init__(self, **kw):
                 self._connected = False
@@ -328,7 +305,6 @@ class TestHybridDataSource:
         engine.initialize()
 
         assert engine.state != MonitorState.ERROR
-        # Should have created CHDataSource (auto fallback since no SHM)
         from hft_platform.monitor._data_source import CHDataSource
 
         assert isinstance(engine._data_source, CHDataSource)

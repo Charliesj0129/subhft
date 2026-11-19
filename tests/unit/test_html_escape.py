@@ -16,10 +16,6 @@ from hft_platform.notifications.templates import (
     render_stormguard_change,
 )
 
-# ---------------------------------------------------------------------------
-# R2-3: alertmanager_bridge
-# ---------------------------------------------------------------------------
-
 
 def test_alertmanager_escapes_angle_brackets() -> None:
     """Payload with <script> in summary must be escaped in output."""
@@ -55,7 +51,6 @@ def test_alertmanager_escapes_name_and_severity() -> None:
     result = format_alert_message(payload)
     assert "Alert&lt;X&gt;" in result
     assert "crit&lt;ical&gt;" in result
-    # Intentional <b> tags must remain
     assert "<b>" in result
     assert "</b>" in result
 
@@ -77,12 +72,7 @@ def test_alertmanager_escapes_description() -> None:
     result = format_alert_message(payload)
     assert "&gt;" in result
     assert "&amp;" in result
-    assert ">" not in result.split("</b>")[1]  # no bare > after bold tag
-
-
-# ---------------------------------------------------------------------------
-# R2-4: templates
-# ---------------------------------------------------------------------------
+    assert ">" not in result.split("</b>")[1]
 
 
 def test_halt_reason_escapes_html() -> None:

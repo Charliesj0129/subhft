@@ -59,7 +59,6 @@ try:
 except Exception as exc:  # pragma: no cover
     raise SystemExit(f"shioaji not available: {exc}") from exc
 
-# Reuse the audited probe core verbatim — do not reimplement order safety.
 _PROBE_DIR = Path(__file__).resolve().parent
 if str(_PROBE_DIR) not in sys.path:
     sys.path.insert(0, str(_PROBE_DIR))
@@ -81,9 +80,6 @@ from hft_platform.events import BidAskEvent, TickEvent  # noqa: E402
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer  # noqa: E402
 
 
-# --------------------------------------------------------------------------- #
-# Safety: refuse anything that isn't a credentialed simulation session.
-# --------------------------------------------------------------------------- #
 def _assert_sim_only() -> None:
     live_ca = sorted(k for k in os.environ if k.startswith("SHIOAJI_CA"))
     if live_ca:
@@ -95,9 +91,6 @@ def _assert_sim_only() -> None:
         raise SystemExit("Missing SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY (simulation creds) in env.")
 
 
-# --------------------------------------------------------------------------- #
-# Real-payload Decimal parity tracker.
-# --------------------------------------------------------------------------- #
 class _ParityTracker:
     """Pipes real 1.5.3 callback payloads through the normalizer and records
     whether Decimal prices land as positive scaled ints, plus fallback / error
@@ -208,16 +201,10 @@ def _counter(child: Any) -> float:
         return 0.0
 
 
-# --------------------------------------------------------------------------- #
-# /proc-based resource sampler (dependency-free on Linux/WSL).
-# --------------------------------------------------------------------------- #
 class _ResourceSampler(threading.Thread):
     def __init__(self, interval_s: float) -> None:
         super().__init__(daemon=True)
         self._interval = interval_s
-        # NB: must NOT be named ``_stop`` — that shadows ``threading.Thread._stop``
-        # (a CPython-internal method ``join()`` invokes), which makes ``join()``
-        # raise ``TypeError: 'Event' object is not callable``.
         self._stop_evt = threading.Event()
         self.t_s: list[float] = []
         self.rss_kb: list[int] = []
@@ -272,9 +259,6 @@ class _ResourceSampler(threading.Thread):
         }
 
 
-# --------------------------------------------------------------------------- #
-# Latency: place -> wait-ordno -> update(price) -> cancel, all measured.
-# --------------------------------------------------------------------------- #
 def _resolve_probe_price(
     api: Any, contract: Any, side: str, offset_ticks: int, price_mode: str
 ) -> float | int | None:
@@ -329,9 +313,6 @@ def _probe_place_update_cancel(
     if not _ordno_ready(trade):
         return (place_us, submitted_ack_us, None, None, trade)
 
-    # Modify: nudge one tick to measure the update_order ack the bulk probe never
-    # captured. In ``fixed`` mode the limit rests at the band edge, so nudge it
-    # TOWARD mid (still far from any fill) to stay inside the daily price band.
     if price_mode == "fixed":
         new_price = price + 1 if side == "Buy" else max(1, price - 1)
     else:
@@ -467,7 +448,6 @@ def main() -> int:
     _assert_sim_only()
 
     api = sj.Shioaji(simulation=True)
-    # Defensive: confirm the constructed session is actually simulation.
     if getattr(api, "simulation", True) is False:
         raise SystemExit("REFUSING: Shioaji session did not resolve to simulation=True.")
 
@@ -477,9 +457,6 @@ def main() -> int:
         contracts_timeout=60000,
     )
 
-    # Silence the SDK's default order-state stdout print — it echoes broker_id /
-    # account_id. The probe reads ``trade.status`` directly, so a no-op order
-    # callback is safe and keeps account identifiers out of logs.
     try:
         api.set_order_callback(lambda *_a, **_k: None)
     except Exception:  # noqa: BLE001
@@ -497,7 +474,6 @@ def main() -> int:
     normalizer, cfg_path = _build_normalizer(basket)
     tracker = _ParityTracker(normalizer)
 
-    # Reconnect-event observation.
     reconnect_events: list[dict[str, Any]] = []
 
     def _on_event(resp_code: Any, event_code: Any, info: Any, event: Any) -> None:
@@ -508,7 +484,6 @@ def main() -> int:
         except Exception:  # noqa: BLE001
             pass
 
-    # Register all four v1 callbacks + the event callback through the proxy.
     quote = api.quote
     registered: list[str] = []
     for setter, handler in (
@@ -526,7 +501,6 @@ def main() -> int:
         ev_setter(_on_event)
         registered.append("set_event_callback")
 
-    # Subscribe basket, version v1.
     v1 = sj.constant.QuoteVersion.v1
     if stock is not None:
         quote.subscribe(stock, quote_type=sj.constant.QuoteType.Tick, version=v1)
@@ -548,7 +522,6 @@ def main() -> int:
     i = loop["cycles"]
     fills_aborted = loop["fills_aborted"]
 
-    # Reconnect timing (observational).
     codes = reconnect_events
     reconnecting = next((e for e in codes if e["event_code"] == 12), None)
     reconnected = next((e for e in codes if e["event_code"] == 13), None)
@@ -571,7 +544,7 @@ def main() -> int:
         return {"p50_ms": s.p50_us / 1000, "p95_ms": s.p95_us / 1000, "p99_ms": s.p99_us / 1000, "max_ms": s.max_us / 1000, "n": s.count, "errors": s.errors}
 
     report = {
-        "meta": {  # NB: no credentials, ever.
+        "meta": {
             "sdk_version": sj.__version__,
             "mode": "sim",
             "stock": args.stock,
@@ -613,7 +586,6 @@ def main() -> int:
     out_path.write_text(json.dumps(report, indent=2, default=str))
     Path(cfg_path).unlink(missing_ok=True)
 
-    # Draft latency_profiles.yaml block (sim is a FLOOR; live ≈10× sim).
     draft = _draft_profile_block(sj.__version__, place_stats, modify_stats, cancel_stats)
     draft_path = out_path.with_suffix(".profile.yaml")
     draft_path.write_text(draft)

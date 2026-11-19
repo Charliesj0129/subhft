@@ -15,10 +15,6 @@ def _reset_cost_cache():
     _mod._cache = {}
 
 
-# Index-futures tax is 0.002% of notional on BOTH sides: price x 0.00002 points per side,
-# modelled at a 50,000 reference = 1.0 pt for TXF, MXF and TMF alike. The earlier file charged
-# TXF 1.2 / TMF 0.7 pt (tax treated as sell-only), which made TMF 1.0 pt per side too cheap.
-# Commission defaults to the high end of the broker range (NTD/side: TXF 100, MXF 50, TMF 20).
 OLD_COST_PER_SIDE_PTS = {"TXF": 1.5, "TMF": 2.0}
 
 

@@ -48,10 +48,6 @@ class RiskPositionSyncer:
         self._discrepancies: list[object] = []
         self.last_sync_ts: float = 0.0
 
-    # ------------------------------------------------------------------
-    # Write path (called from reconciliation / position sync worker)
-    # ------------------------------------------------------------------
-
     def update(
         self,
         discrepancies: list[object],
@@ -77,10 +73,6 @@ class RiskPositionSyncer:
             discrepancies=len(discrepancies),
             ts_ns=ts,
         )
-
-    # ------------------------------------------------------------------
-    # Read path (called from risk validators)
-    # ------------------------------------------------------------------
 
     def get_broker_qty(self, symbol: str) -> int | None:
         """Return the broker-reported net quantity for *symbol*, or ``None``."""

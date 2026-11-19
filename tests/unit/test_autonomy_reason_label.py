@@ -31,15 +31,12 @@ class TestReasonCodeForMetrics:
         assert _reason_code_for_metrics("") == "unknown"
 
     def test_reason_with_special_chars_normalized_then_checked(self) -> None:
-        # "pnl-soft-limit" normalizes to "pnl_soft_limit" which IS in the known set
         assert _reason_code_for_metrics("pnl-soft-limit") == "pnl_soft_limit"
 
     def test_reason_normalized_but_not_in_set_maps_to_unknown(self) -> None:
-        # "random-reason" normalizes to "random_reason" which is NOT in the known set
         assert _reason_code_for_metrics("random-reason") == "unknown"
 
     def test_uppercase_reason_normalized_and_matched(self) -> None:
-        # "MANUAL_OPERATOR" normalizes to "manual_operator" which IS in the known set
         assert _reason_code_for_metrics("MANUAL_OPERATOR") == "manual_operator"
 
     def test_unknown_literal_in_allowed_set(self) -> None:

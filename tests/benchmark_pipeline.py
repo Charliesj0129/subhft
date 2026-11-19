@@ -7,11 +7,10 @@ from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
 
 async def benchmark_pipeline():
-    bus = RingBufferBus(size=200000)  # Increased size for benchmark
+    bus = RingBufferBus(size=200000)
     lob = LOBEngine()
     norm = MarketDataNormalizer()
 
-    # Mock event
     raw_event = {"code": "2330", "ts": time.time_ns(), "close": 1000.0, "volume": 5, "tick_type": 1}
 
     count = 100000

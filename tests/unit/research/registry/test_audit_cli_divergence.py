@@ -168,12 +168,7 @@ class TestAuditCliDivergence:
             ),
         )
         out = audit_cli.divergence()
-        # Top 3 by count: feature_mismatch=5, unknown=4, latency_shift=3.
         assert "feature_mismatch=5,unknown=4,latency_shift=3" in out
-        # The two lower-count buckets must NOT appear in the top_categories cell.
-        # (Could legitimately appear elsewhere, but in a single-row table they
-        # wouldn't.)  Assert by checking the rendered row line does not include
-        # them.
         rendered = [ln for ln in out.split("\n") if ln.startswith("d_many")]
         assert rendered, out
         assert "data_mismatch=1" not in rendered[0]

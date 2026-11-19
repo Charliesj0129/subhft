@@ -27,18 +27,16 @@ def service(tmp_path):
 
 
 def test_weekend_rollover_reconnect_once(service):
-    # Allow reconnect window unconditionally
     service.reconnect_days = set()
     service.reconnect_hours = ""
     service.reconnect_hours_2 = ""
 
     tz = service._reconnect_tzinfo
-    now = dt.datetime(2026, 2, 2, 9, 0, tzinfo=tz)  # Monday
-    last = dt.datetime(2026, 1, 31, 5, 0, tzinfo=tz)  # Saturday
+    now = dt.datetime(2026, 2, 2, 9, 0, tzinfo=tz)
+    last = dt.datetime(2026, 1, 31, 5, 0, tzinfo=tz)
     service.last_event_ts = last.timestamp()
 
     with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
         mock_tb.now_s.return_value = now.timestamp()
         assert service._should_rollover_reconnect() is True
-        # Same day should not trigger again
         assert service._should_rollover_reconnect() is False

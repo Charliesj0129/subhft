@@ -41,7 +41,7 @@ from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.c14_txf_frontmonth_maker")
 
-_PRICE_SCALE = 10_000  # live runtime convention
+_PRICE_SCALE = 10_000
 _LOG_INTERVAL = 500
 
 
@@ -53,19 +53,16 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
     """
 
     __slots__ = (
-        # parameters
         "_max_pos",
         "_spread_threshold_pts",
         "_inventory_skew_tenths",
         "_shadow_mode",
         "_symbols_set",
-        # runtime state
         "_local_pos",
         "_pending_buy",
         "_pending_sell",
         "_last_bid",
         "_last_ask",
-        # counters
         "_stats_count",
         "_spread_blocked",
         "_quotes_posted",
@@ -101,18 +98,10 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
             symbols=sorted(self._symbols_set),
         )
 
-    # ---- Hot-path event handlers ------------------------------------------
-
     def on_tick(self, event: TickEvent) -> None:  # pragma: no cover — trades aren't quote driver
-        # Trade events are not needed for quoting in the minimal-layer
-        # R47 configuration (all signal layers disabled). Present only so
-        # the BaseStrategy dispatch contract is satisfied.
         return
 
     def on_book_update(self, event: BidAskEvent) -> None:  # pragma: no cover
-        # LOBStatsEvent is richer and always arrives after BidAskEvent in
-        # the canonical runtime pipeline; defer all decision logic to
-        # on_stats() to match the research artifact's on_tick semantics.
         return
 
     def on_stats(self, event: LOBStatsEvent) -> None:
@@ -120,7 +109,6 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
         symbol = event.symbol
         self._stats_count += 1
 
-        # Basic validity guards — match research strategy defensive behaviour.
         if (
             event.mid_price_x2 is None
             or event.spread_scaled is None
@@ -131,7 +119,6 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
         ):
             return
 
-        # L1 spread gate (cost viability). Uses x10000 units.
         spread_threshold_scaled = self._spread_threshold_pts * _PRICE_SCALE
         if event.spread_scaled < spread_threshold_scaled:
             self._spread_blocked += 1
@@ -143,20 +130,12 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
         pending_b = self._pending_buy.get(symbol, 0)
         pending_s = self._pending_sell.get(symbol, 0)
 
-        # Fixed inventory skew (R47: 0.2 ticks/contract; 1 tick = _PRICE_SCALE)
         skew = (pos * self._inventory_skew_tenths * _PRICE_SCALE) // 10
         bid_quote = best_bid - skew
         ask_quote = best_ask - skew
 
-        # Price-movement gate prevents ROD stack-up.
         bid_moved = bid_quote != self._last_bid.get(symbol, -1)
         ask_moved = ask_quote != self._last_ask.get(symbol, -1)
-
-        # Shadow-mode: still emit OrderIntents — the system routes them
-        # through HFT_ORDER_SHADOW_MODE=1 gate, which suppresses dispatch
-        # at the broker boundary. We do NOT skip intent emission here
-        # because the gate exists precisely so execution-path code paths
-        # get exercised end-to-end during shadow.
 
         if bid_moved and (pos + pending_b) < self._max_pos:
             self.buy(symbol, bid_quote, 1)
@@ -169,7 +148,6 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
             self._last_ask[symbol] = ask_quote
             self._quotes_posted += 1
 
-        # Periodic structured log (not per-tick).
         if self._stats_count % _LOG_INTERVAL == 1:
             logger.info(
                 "c14_stats",
@@ -183,14 +161,11 @@ class C14TxfFrontMonthMakerStrategy(BaseStrategy):
                 now_ns=_now_ns(),
             )
 
-    # ---- Fill / order / gap / risk feedback --------------------------------
-
     def on_fill(self, event: FillEvent) -> None:
         symbol = event.symbol
         if event.side == Side.BUY:
             self._local_pos[symbol] = self._local_pos.get(symbol, 0) + event.qty
             self._pending_buy[symbol] = max(0, self._pending_buy.get(symbol, 0) - event.qty)
-            # Allow requote at the next bid level after a fill
             self._last_bid.pop(symbol, None)
         elif event.side == Side.SELL:
             self._local_pos[symbol] = self._local_pos.get(symbol, 0) - event.qty

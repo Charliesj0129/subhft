@@ -27,10 +27,6 @@ from hft_platform.order.deadletter import (
     RejectionReason,
 )
 
-# ---------------------------------------------------------------------------
-# Dead Letter Queue
-# ---------------------------------------------------------------------------
-
 
 class TestDeadLetterEntry:
     def test_entry_fields(self):
@@ -41,7 +37,7 @@ class TestDeadLetterEntry:
             strategy_id="strat_a",
             symbol="2330",
             side="BUY",
-            price=5000000,  # scaled x10000
+            price=5000000,
             qty=10,
             reason=RejectionReason.RATE_LIMIT.value,
             error_message="rate exceeded",
@@ -134,7 +130,6 @@ class TestDeadLetterQueue:
         stats = await dlq.get_stats()
         assert stats["buffer_size"] == 0
         assert stats["total_flushed"] == 1
-        # Verify file on disk
         files = list(dlq_dir.glob("dlq_*.jsonl"))
         assert len(files) == 1
 
@@ -143,14 +138,11 @@ class TestDeadLetterQueue:
         """When flush fails, oldest entries are dropped to stay within bounds."""
         dlq = DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"), max_buffer_size=3)
 
-        # Patch _flush_locked to simulate flush failure (buffer not cleared)
         original_flush = dlq._flush_locked
 
         async def failing_flush():
-            # Don't actually flush; leave buffer full
             return 0
 
-        # Add entries up to the limit so flush triggers
         for i in range(3):
             await dlq.add(
                 order_id=f"O{i}",
@@ -163,7 +155,6 @@ class TestDeadLetterQueue:
                 error_message="err",
             )
 
-        # Now patch flush to fail and add one more entry
         dlq._flush_locked = failing_flush  # type: ignore[assignment]
         await dlq.add(
             order_id="O_overflow",
@@ -177,7 +168,6 @@ class TestDeadLetterQueue:
         )
 
         stats = await dlq.get_stats()
-        # Buffer should not exceed max_buffer_size
         assert stats["buffer_size"] <= dlq.max_buffer_size
 
     @pytest.mark.asyncio
@@ -195,7 +185,6 @@ class TestDeadLetterQueue:
                 reason=RejectionReason.VALIDATION_ERROR,
                 error_message="bad",
             )
-        # Auto-flush should have triggered
         stats = await dlq.get_stats()
         assert stats["total_flushed"] == 3
         assert stats["buffer_size"] == 0
@@ -257,11 +246,6 @@ class TestDeadLetterQueue:
         assert entries[0].reason == "deadline_exceeded"
 
 
-# ---------------------------------------------------------------------------
-# Circuit Breaker
-# ---------------------------------------------------------------------------
-
-
 class TestCircuitBreaker:
     def test_starts_closed(self):
         cb = CircuitBreaker(threshold=3, timeout_s=60)
@@ -286,7 +270,6 @@ class TestCircuitBreaker:
         cb.record_failure()
         assert cb.is_open() is True
 
-        # Simulate cooldown by setting open_until to the past (monotonic clock)
         import time
 
         cb.open_until = time.monotonic() - 1
@@ -313,7 +296,6 @@ class TestStrategyCircuitBreakerManager:
         b1 = mgr.get_breaker("strat_a")
         b2 = mgr.get_breaker("strat_b")
         assert b1 is not b2
-        # Same strategy returns same breaker
         assert mgr.get_breaker("strat_a") is b1
 
     def test_is_open_delegates(self):
@@ -349,17 +331,10 @@ class TestStrategyCircuitBreakerManager:
         )
         mgr.get_breaker("s1")
         mgr.get_breaker("s2")
-        # Record failures so eviction cannot remove them
         mgr.record_failure("s1")
         mgr.record_failure("s2")
-        # Third strategy exceeds limit; returns temporary breaker
         b3 = mgr.get_breaker("s3")
-        assert b3.threshold == 1  # temporary open breaker
-
-
-# ---------------------------------------------------------------------------
-# Rate Limiter
-# ---------------------------------------------------------------------------
+        assert b3.threshold == 1
 
 
 class TestRateLimiter:
@@ -375,11 +350,9 @@ class TestRateLimiter:
 
     def test_allows_after_window_expires(self):
         rl = RateLimiter(soft_cap=5, hard_cap=3, window_s=1)
-        # Add timestamps that are expired
         old = timebase.now_s() - 2
         rl.rate_window.extend([old, old, old])
         assert rl.check() is True
-        # Expired entries should be evicted
         assert len(rl.rate_window) == 0
 
     def test_record_appends_timestamp(self):
@@ -391,7 +364,6 @@ class TestRateLimiter:
         rl = RateLimiter(soft_cap=2, hard_cap=10, window_s=10)
         now = timebase.now_s()
         rl.rate_window.extend([now, now])
-        # At soft cap, check still returns True
         assert rl.check() is True
 
     def test_update_changes_limits(self):
@@ -399,7 +371,7 @@ class TestRateLimiter:
         rl.update(hard_cap=2, window_s=5)
         assert rl.hard_cap == 2
         assert rl.window_s == 5
-        assert rl.soft_cap == 5  # unchanged
+        assert rl.soft_cap == 5
 
 
 class TestPerSymbolRateLimiter:
@@ -427,7 +399,6 @@ class TestPerSymbolRateLimiter:
 
     def test_window_expiry_resets(self):
         rl = PerSymbolRateLimiter(soft_limit=3, hard_limit=5, window_s=1.0)
-        # Insert old timestamps
         rl._windows["2330"] = deque([timebase.now_s() - 2.0] * 5)
         assert rl.check("2330") == PerSymbolRateResult.OK
 
@@ -435,7 +406,6 @@ class TestPerSymbolRateLimiter:
         rl = PerSymbolRateLimiter(soft_limit=2, hard_limit=3, window_s=10.0)
         for _ in range(3):
             rl.record("2330")
-        # 2330 at hard limit, but 2317 is clean
         assert rl.check("2330") == PerSymbolRateResult.HARD
         assert rl.check("2317") == PerSymbolRateResult.OK
 
@@ -443,7 +413,7 @@ class TestPerSymbolRateLimiter:
         rl = PerSymbolRateLimiter(soft_limit=5, hard_limit=10, window_s=10.0, max_symbols=2)
         rl.record("SYM1")
         rl.record("SYM2")
-        rl.record("SYM3")  # should be silently dropped
+        rl.record("SYM3")
         assert "SYM3" not in rl._windows
 
     def test_record_increments_call_count(self):

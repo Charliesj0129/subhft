@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("feed_adapter.market_info_gateway")
 
-# Cache TTLs in seconds
 _CREDIT_CACHE_TTL_S = 60.0
 _SHORT_STOCK_CACHE_TTL_S = 60.0
 _PUNISH_CACHE_TTL_S = 300.0

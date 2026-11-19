@@ -97,7 +97,6 @@ class TestSessionPhaseDetection:
         except Exception:
             tz = dt.timezone(dt.timedelta(hours=8))
 
-        # Set close time far in the past so now > close
         close_time = dt.datetime(2020, 1, 1, 13, 30, tzinfo=tz)
         mock_cal.get_session_close.return_value = close_time
         mgr._calendar = mock_cal
@@ -130,7 +129,6 @@ class TestSessionHookExecution:
         mgr = SessionHookManager()
         cb = MagicMock(side_effect=ValueError("boom"))
         hooks = [("failing_hook", cb)]
-        # Should not raise — errors in hooks are swallowed to protect the session
         await mgr._fire_hooks(hooks, "test")
         cb.assert_called_once()
 
@@ -143,7 +141,6 @@ class TestSessionHookExecution:
             await asyncio.sleep(0.05)
 
         hooks = [("slow_hook", slow_hook)]
-        # Should not raise — timeouts in hooks are swallowed to protect the session
         await mgr._fire_hooks(hooks, "test")
         assert mgr._hook_timeout_s == 0.01
 
@@ -170,7 +167,6 @@ class TestSessionHookManagerRunLoop:
     async def test_run_disabled_returns_immediately(self) -> None:
         mgr = SessionHookManager()
         assert mgr.enabled is False
-        # Should return without blocking
         await mgr.run()
 
     @pytest.mark.asyncio
@@ -178,16 +174,16 @@ class TestSessionHookManagerRunLoop:
         """Verify that a PRE_MARKET -> MARKET_OPEN transition fires pre_market hooks."""
         mgr = SessionHookManager()
         mgr._enabled = True
-        mgr._poll_interval_s = 0.01  # fast poll for test
+        mgr._poll_interval_s = 0.01
 
         pre_hook = MagicMock()
         mgr.register_pre_market("test_pre", pre_hook)
 
         phases = iter(
             [
-                SessionPhase.PRE_MARKET,  # initial detection
-                SessionPhase.PRE_MARKET,  # first poll: no change
-                SessionPhase.MARKET_OPEN,  # second poll: transition!
+                SessionPhase.PRE_MARKET,
+                SessionPhase.PRE_MARKET,
+                SessionPhase.MARKET_OPEN,
             ]
         )
 
@@ -214,8 +210,8 @@ class TestSessionHookManagerRunLoop:
 
         phases = iter(
             [
-                SessionPhase.MARKET_OPEN,  # initial
-                SessionPhase.POST_MARKET,  # transition
+                SessionPhase.MARKET_OPEN,
+                SessionPhase.POST_MARKET,
             ]
         )
 

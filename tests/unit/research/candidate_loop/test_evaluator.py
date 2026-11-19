@@ -75,7 +75,7 @@ def _planted_panel(
     """Panel where book_imbalance(1) == x/2 and next-event mid return == x/1000."""
     rng = np.random.default_rng(seed)
     x = rng.uniform(-0.9, 0.9, size=n)
-    local_ts = np.arange(n, dtype=np.int64) * 1_000_000  # 1ms grid
+    local_ts = np.arange(n, dtype=np.int64) * 1_000_000
     returns = 0.001 * (x if planted else rng.uniform(-0.9, 0.9, size=n))
     mid = np.empty(n)
     mid[0] = 100.0
@@ -146,8 +146,6 @@ class TestEvaluateDay:
         assert abs(d.ic) < 0.2
 
     def test_one_event_horizon_dies_at_one_ms_latency(self) -> None:
-        # 1ms grid + 1-event horizon: re-anchoring at t+1ms consumes the whole
-        # horizon, so the shifted label is uncorrelated with the signal.
         d = evaluate_day(_candidate(), _planted_panel(), _cfg())
         assert d.latency_ics[0] > 0.9
         assert abs(d.latency_ics[1]) < 0.3
@@ -180,7 +178,7 @@ class TestEvaluateDay:
         d = evaluate_day(cand, panel, _cfg())
         full = evaluate_day(_candidate(), panel, _cfg())
         assert d.n_valid < full.n_valid
-        assert d.regime_ic_out > 0.5  # planted signal also predicts out-of-regime
+        assert d.regime_ic_out > 0.5
 
     def test_cost_proxy_produces_flips_with_depth_and_ts(self) -> None:
         d = evaluate_day(_candidate(), _planted_panel(), _cfg())
@@ -220,7 +218,7 @@ class TestAggregateSplit:
     def test_wrong_expected_sign_zeroes_consistency(self) -> None:
         metrics = aggregate_split(self._days(), expected_sign="negative", cfg=_cfg(), cost_per_side_pts=1.5)
         assert metrics["sign_consistency"] == 0.0
-        assert metrics["day_stability"] == 1.0  # literal positive-IC fraction
+        assert metrics["day_stability"] == 1.0
 
     def test_skipped_days_reduce_effective_count(self) -> None:
         days = self._days(3)
@@ -235,7 +233,7 @@ class TestAggregateSplit:
             expected_sign="positive",
             cfg=_cfg(),
             cost_per_side_pts=1.5,
-            q_hat=QHatTable(),  # empty table -> fallback p=0.5 everywhere
+            q_hat=QHatTable(),
             q_hat_symbol="TXFD6",
         )
         assert metrics["maker_cost_assumption_version"] == "taifex_maker_qhat_v1"

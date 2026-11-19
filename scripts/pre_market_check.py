@@ -29,9 +29,6 @@ from pathlib import Path
 
 import structlog
 
-# ---------------------------------------------------------------------------
-# Platform imports — guarded so tests can mock easily
-# ---------------------------------------------------------------------------
 try:
     from hft_platform.core import timebase  # noqa: F401 — validates import
     from hft_platform.core.market_calendar import get_calendar
@@ -52,19 +49,13 @@ except ImportError:  # pragma: no cover
 
 logger = structlog.get_logger("scripts.pre_market_check")
 
-# ---------------------------------------------------------------------------
-# Shioaji SDK — optional; guarded import so platform can run without it
-# ---------------------------------------------------------------------------
 try:
     import shioaji as sj
 except ImportError:  # pragma: no cover
     sj = None  # type: ignore[assignment]
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-DISK_WARN_PCT = 80  # percent used threshold
+DISK_WARN_PCT = 80
 RAM_MIN_GB = 2.0
 CPU_MAX_PCT = 80.0
 BROKER_TIMEOUT_S = 30
@@ -77,9 +68,6 @@ _LOGS_DIR = _REPO_ROOT / "logs"
 _DATA_DIR = _REPO_ROOT / "data"
 
 
-# ---------------------------------------------------------------------------
-# Individual check functions — each returns (ok: bool, detail: str)
-# ---------------------------------------------------------------------------
 
 
 def check_broker_connectivity() -> tuple[bool, str]:
@@ -125,13 +113,11 @@ def check_broker_connectivity() -> tuple[bool, str]:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("broker_check.activate_ca_failed", error=str(exc))
 
-        # Fetch one contract to validate connectivity
         try:
             api_obj.Contracts.update()
         except Exception:  # noqa: BLE001
-            pass  # Non-fatal — connectivity is proven by login
+            pass
 
-        # Check margin
         margin: int = 0
         try:
             accounts = api_obj.list_accounts()
@@ -265,13 +251,11 @@ def check_disk_space(
     else:
         dirs_to_check = [Path(d) for d in directories]
 
-    # Deduplicate by mount point (resolves symlinks)
     seen_mounts: set[str] = set()
     results: list[str] = []
     failed: list[str] = []
 
     for directory in dirs_to_check:
-        # Use parent if dir doesn't exist (still valid mount point check)
         check_path = directory if directory.exists() else directory.parent
         try:
             usage = shutil.disk_usage(str(check_path))
@@ -314,7 +298,6 @@ def check_reconciliation(
     Returns:
         (True, detail) on success; (False, reason) on failure.
     """
-    # Check table existence first
     def _query(q: str) -> tuple[str | None, str | None]:
         params: dict[str, str] = {"query": q}
         if password:
@@ -331,7 +314,6 @@ def check_reconciliation(
         "SELECT count() FROM system.tables WHERE database='hft' AND name='reconciliation'"
     )
     if err is not None:
-        # ClickHouse unreachable — treat as first run PASS (check_clickhouse covers outage)
         return True, "ClickHouse unreachable — skip reconciliation check"
 
     try:
@@ -342,7 +324,6 @@ def check_reconciliation(
     if table_count == 0:
         return True, "hft.reconciliation table does not exist (first run — skipping)"
 
-    # Query yesterday's reconciliation status
     result, err2 = _query(
         "SELECT status FROM hft.reconciliation "
         "WHERE toDate(session_date) = yesterday() "
@@ -372,7 +353,6 @@ def check_system_resources() -> tuple[bool, str]:
     issues: list[str] = []
     details: list[str] = []
 
-    # RAM check
     try:
         vm = psutil.virtual_memory()
         available_gb = vm.available / (1024**3)
@@ -382,7 +362,6 @@ def check_system_resources() -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001
         issues.append(f"RAM check failed: {exc}")
 
-    # CPU check (non-blocking 0.5s interval)
     try:
         cpu_pct = psutil.cpu_percent(interval=0.5)
         details.append(f"CPU={cpu_pct:.1f}%")
@@ -397,9 +376,6 @@ def check_system_resources() -> tuple[bool, str]:
     return True, detail_str
 
 
-# ---------------------------------------------------------------------------
-# Notification helper
-# ---------------------------------------------------------------------------
 
 
 async def _send_notifications(
@@ -432,9 +408,6 @@ async def _send_notifications(
         await sender.close()
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -466,9 +439,6 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    # ------------------------------------------------------------------
-    # Trading day guard
-    # ------------------------------------------------------------------
     if get_calendar is not None:
         try:
             cal = get_calendar()
@@ -479,9 +449,6 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             logger.warning("pre_market_check.calendar_check_failed", error=str(exc))
 
-    # ------------------------------------------------------------------
-    # Define checks
-    # ------------------------------------------------------------------
     checks: list[tuple[str, object]] = [
         ("broker_connectivity", lambda: check_broker_connectivity()),
         ("clickhouse", lambda: check_clickhouse(args.clickhouse_url, args.clickhouse_password)),
@@ -494,9 +461,6 @@ def main(argv: list[str] | None = None) -> int:
     results: list[tuple[str, bool, str]] = []
     failed_names: list[str] = []
 
-    # ------------------------------------------------------------------
-    # Run checks
-    # ------------------------------------------------------------------
     print("")
     print("=" * 72)
     print("  PRE-MARKET HEALTH CHECK")
@@ -524,9 +488,6 @@ def main(argv: list[str] | None = None) -> int:
             detail=detail,
         )
 
-    # ------------------------------------------------------------------
-    # Summary
-    # ------------------------------------------------------------------
     print("-" * 72)
     pass_count = sum(1 for _, ok, _ in results if ok)
     fail_count = len(failed_names)
@@ -541,9 +502,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print("")
 
-    # ------------------------------------------------------------------
-    # Notifications
-    # ------------------------------------------------------------------
     asyncio.run(
         _send_notifications(
             passed=all_passed,

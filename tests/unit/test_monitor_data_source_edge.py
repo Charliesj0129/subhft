@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from hft_platform.monitor._types import RowView
 
-# ── Shared stub classes ──────────────────────────────────────────────────────
-
 
 class _StubPoller:
     """Minimal stub implementing the poller interface for CHDataSource."""
@@ -122,9 +120,6 @@ def _row(
     return RowView(symbol, ts, [price], [price + 1000], [10], [20], price, 1)
 
 
-# ── HybridDataSource ───────────────────────────────────────────────────────
-
-
 class TestHybridDataSource:
     def _make_shm_stub(self, *, connected: bool = True, poll_result=None, poll_raises: bool = False):
         """Create a minimal ShmDataSource-like stub."""
@@ -204,7 +199,7 @@ class TestHybridDataSource:
         hybrid.connect()
         result = hybrid.poll({"2330": 0})
 
-        assert result["2330"][0].ingest_ts == 9000  # SHM data, not CH
+        assert result["2330"][0].ingest_ts == 9000
 
     def test_poll_falls_back_to_ch_on_shm_error(self) -> None:
         from hft_platform.monitor._data_source import CHDataSource, HybridDataSource
@@ -220,7 +215,7 @@ class TestHybridDataSource:
 
         result = hybrid.poll({"2330": 0})
         assert result["2330"][0].ingest_ts == 2000
-        assert hybrid.mode_label == "CH"  # degraded
+        assert hybrid.mode_label == "CH"
 
     def test_poll_returns_empty_when_both_down(self) -> None:
         from hft_platform.monitor._data_source import CHDataSource, HybridDataSource
@@ -267,7 +262,6 @@ class TestHybridDataSource:
         hybrid.connect()
         assert hybrid.mode_label == "SHM"
 
-        # Reconnect CH
         assert hybrid.try_reconnect() is True
         assert hybrid.mode_label == "SHM+CH"
 
@@ -284,9 +278,6 @@ class TestHybridDataSource:
         assert hybrid.retry_count == 5
         assert hybrid.last_error == "connection refused"
         assert hybrid.remaining_backoff_seconds() == 0.0
-
-
-# ── RedisHybridSource ──────────────────────────────────────────────────────
 
 
 class TestRedisHybridSource:
@@ -387,7 +378,7 @@ class TestRedisHybridSource:
         hybrid.connect()
 
         rows = hybrid.fetch_recent_valid("2330", 10)
-        assert rows[0].ingest_ts == 2  # CH preferred
+        assert rows[0].ingest_ts == 2
 
     def test_fetch_recent_valid_falls_back_to_redis(self) -> None:
         from hft_platform.monitor._data_source import CHDataSource, RedisHybridSource
@@ -423,7 +414,6 @@ class TestRedisHybridSource:
         hybrid.connect()
         assert hybrid.mode_label == "--"
 
-        # Redis still fails on reconnect (fail_connect=True), but CH reconnects
         result = hybrid.try_reconnect()
         assert result is True
         assert hybrid.mode_label == "CH"
@@ -438,7 +428,6 @@ class TestRedisHybridSource:
         hybrid.connect()
         assert hybrid.mode_label == "CH"
 
-        # Now Redis recovers
         redis._fail_connect = False
         hybrid.try_reconnect()
         assert hybrid.mode_label == "REDIS+CH"

@@ -31,7 +31,6 @@ def guard():
 @pytest.fixture
 def service(guard):
     client = MagicMock()
-    # Broker consistently reports 1 lot of TMFD6
     client.get_positions.return_value = [
         SimpleNamespace(code="TMFD6", quantity=1, direction="Long"),
     ]
@@ -47,34 +46,28 @@ def service(guard):
         },
         storm_guard=guard,
     )
-    # Speed up auto-correct: trigger after 3 observations (not 5)
     svc._auto_correct_after = 3
-    svc._critical_drift_debounce = 1  # trigger HALT on first observation
+    svc._critical_drift_debounce = 1
     return svc
 
 
 @pytest.mark.asyncio
 async def test_auto_correct_adopts_broker_position(service, guard):
     """After sufficient drift observations, auto-correct adopts broker state."""
-    # Observation 1: triggers HALT + reconciliation hold
     await service.sync_portfolio()
     assert guard.state == StormGuardState.HALT
     assert guard.reconciliation_hold is True
     assert service._halt_triggered is True
 
-    # Observations 2-3: critical drift persists during HALT
     await service.sync_portfolio()
     assert service._critical_drift_streak == 2
 
-    # Observation 3 (streak=3 >= auto_correct_after=3): auto-correct fires
     await service.sync_portfolio()
 
-    # After auto-correct: drift state is reset, hold is released
     assert service._halt_triggered is False
     assert service._critical_drift_streak == 0
     assert guard.reconciliation_hold is False
 
-    # The position should now be loaded into the store
     recovery = getattr(service.store, "_recovery_positions", {})
     tmfd6_entry = None
     for key, data in recovery.items():
@@ -84,13 +77,12 @@ async def test_auto_correct_adopts_broker_position(service, guard):
             break
     assert tmfd6_entry is not None
     qty = tmfd6_entry.get("net_qty") if isinstance(tmfd6_entry, dict) else tmfd6_entry.net_qty
-    assert qty == 1  # adopted from broker
+    assert qty == 1
 
 
 @pytest.mark.asyncio
 async def test_auto_correct_only_when_local_is_zero(service, guard):
     """Auto-correct only fires when local=0 (phantom order scenario)."""
-    # Give local a position that differs from broker (local=2, broker=1)
     service.store.load_recovery(
         account_id="default",
         symbol="TMFD6",
@@ -101,33 +93,26 @@ async def test_auto_correct_only_when_local_is_zero(service, guard):
         strategy_id="r47",
     )
 
-    # Trigger HALT (streak 1)
     await service.sync_portfolio()
     assert guard.state == StormGuardState.HALT
 
-    # Observations 2-4 (past auto_correct_after=3)
     for _ in range(3):
         await service.sync_portfolio()
 
-    # Auto-correct should NOT fire because local != 0
-    # The halt_triggered should still be True (drift persists)
     assert service._halt_triggered is True
 
 
 @pytest.mark.asyncio
 async def test_auto_correct_respects_futures_max_qty(service, guard):
     """Auto-correct respects max qty threshold for futures."""
-    # Broker has 5 lots — exceeds default max of 2
     service.client.get_positions.return_value = [
         SimpleNamespace(code="TXFD6", quantity=5, direction="Long"),
     ]
     service._auto_correct_futures_max_qty = 2
 
-    # Run enough observations
     for _ in range(5):
         await service.sync_portfolio()
 
-    # Should NOT auto-correct because 5 > 2
     assert service._halt_triggered is True
 
 
@@ -147,7 +132,6 @@ async def test_auto_correct_disabled_by_env(guard):
     for _ in range(5):
         await svc.sync_portfolio()
 
-    # HALT was triggered but auto-correct never fires
     assert svc._halt_triggered is True
     assert svc._critical_drift_streak == 5
 
@@ -155,15 +139,12 @@ async def test_auto_correct_disabled_by_env(guard):
 @pytest.mark.asyncio
 async def test_reconciliation_hold_released_on_drift_resolved(service, guard):
     """When drift resolves naturally, reconciliation hold is released."""
-    # Trigger HALT
     await service.sync_portfolio()
     assert guard.reconciliation_hold is True
 
-    # Now broker reports 0 (position closed) — same as local
     service.client.get_positions.return_value = []
     await service.sync_portfolio()
 
-    # No discrepancies — hold should be released
     assert guard.reconciliation_hold is False
     assert service._halt_triggered is False
 
@@ -182,9 +163,9 @@ def test_filter_auto_correctable_either_side_zero():
 
     result = ReconciliationService._filter_auto_correctable(svc, discrepancies)
     symbols = [d.symbol for d in result]
-    assert "TMFD6" in symbols  # local=0, qty=1 <= 2
-    assert "TXFD6" not in symbols  # both non-zero
-    assert "2330" in symbols  # local=0, qty=5 <= 10
+    assert "TMFD6" in symbols
+    assert "TXFD6" not in symbols
+    assert "2330" in symbols
 
 
 def test_filter_auto_correctable_broker_zero_direction():
@@ -194,19 +175,16 @@ def test_filter_auto_correctable_broker_zero_direction():
     svc._auto_correct_stock_max_qty = 10
 
     discrepancies = [
-        # Expired option: local=1, broker=0
         PositionDiscrepancy("TX438500D6", local_qty=1, broker_qty=0, diff=1, is_futures=True),
-        # Large position mismatch: local=5, broker=0 — exceeds threshold
         PositionDiscrepancy("TXFE6", local_qty=5, broker_qty=0, diff=5, is_futures=True),
-        # Stock: local=3, broker=0 — within stock threshold
         PositionDiscrepancy("2330", local_qty=3, broker_qty=0, diff=3, is_futures=False),
     ]
 
     result = ReconciliationService._filter_auto_correctable(svc, discrepancies)
     symbols = [d.symbol for d in result]
-    assert "TX438500D6" in symbols  # broker=0, local=1 <= 2
-    assert "TXFE6" not in symbols  # broker=0 but local=5 > 2 (futures max)
-    assert "2330" in symbols  # broker=0, local=3 <= 10 (stock max)
+    assert "TX438500D6" in symbols
+    assert "TXFE6" not in symbols
+    assert "2330" in symbols
 
 
 def test_filter_auto_correctable_both_nonzero_rejected():
@@ -228,10 +206,8 @@ def test_filter_auto_correctable_both_nonzero_rejected():
 async def test_auto_correct_clears_phantom_local_position(guard):
     """Auto-correct clears phantom local position when broker reports 0."""
     client = MagicMock()
-    # Broker reports NO positions (option expired)
     client.get_positions.return_value = []
     store = PositionStore()
-    # Seed a phantom local position (from expired option loaded at startup)
     store.load_recovery(
         account_id="default",
         symbol="TX438500D6",
@@ -243,22 +219,17 @@ async def test_auto_correct_clears_phantom_local_position(guard):
     svc = ReconciliationService(client, store, {}, storm_guard=guard)
     svc._auto_correct_after = 2
     svc._critical_drift_debounce = 1
-    # Need at least 2 broker-zero observations before discrepancy detection kicks in
     svc.broker_zero_debounce_observations = 1
 
-    # Observation 1: triggers HALT
     await svc.sync_portfolio()
     assert guard.state == StormGuardState.HALT
     assert svc._halt_triggered is True
 
-    # Observation 2 (streak=2 >= auto_correct_after=2): auto-correct fires
     await svc.sync_portfolio()
 
-    # After auto-correct: phantom cleared, HALT resolved
     assert svc._halt_triggered is False
     assert guard.reconciliation_hold is False
 
-    # Verify position was cleared from store
     snapshot = store.snapshot_positions()
     for _k, pos in snapshot.items():
         assert pos.symbol != "TX438500D6", "Phantom position should be cleared"
@@ -268,14 +239,11 @@ async def test_auto_correct_clears_phantom_local_position(guard):
 async def test_non_platform_symbol_auto_resolved(guard):
     """Non-platform symbols with broker=0 are resolved immediately without HALT."""
     client = MagicMock()
-    # Broker reports NO positions (option expired)
     client.get_positions.return_value = []
-    # Platform manages TMFR1 and TXFR1 only
     client.subscribed_codes = {"TMFR1", "TXFR1", "TMFE6", "TXFE6"}
     client.alias_to_actual = {"TMFR1": "TMFE6", "TXFR1": "TXFE6"}
 
     store = PositionStore()
-    # Seed a phantom position for a NON-platform symbol (manual trade)
     store.load_recovery(
         account_id="default",
         symbol="TX438500D6",
@@ -292,13 +260,11 @@ async def test_non_platform_symbol_auto_resolved(guard):
     )
     svc.broker_zero_debounce_observations = 1
 
-    # Single sync should auto-resolve the non-platform phantom WITHOUT triggering HALT
     await svc.sync_portfolio()
 
     assert guard.state != StormGuardState.HALT, "Non-platform phantom should not trigger HALT"
     assert svc._halt_triggered is False
 
-    # Verify phantom was cleared
     snapshot = store.snapshot_positions()
     for _k, pos in snapshot.items():
         assert pos.symbol != "TX438500D6"
@@ -316,7 +282,6 @@ class TestClearSymbolPositions:
             avg_price_scaled=100_0000,
             strategy_id="manual",
         )
-        # Simulate merging into positions via direct assignment
         from hft_platform.execution.positions import Position
 
         store.positions["default:manual:TX438500D6"] = Position(
@@ -326,7 +291,6 @@ class TestClearSymbolPositions:
             net_qty=1,
             avg_price_scaled=100_0000,
         )
-        # Also have an unrelated position
         store.positions["default:r47:TMFE6"] = Position(
             account_id="default",
             strategy_id="r47",
@@ -338,7 +302,7 @@ class TestClearSymbolPositions:
         cleared = store.clear_symbol_positions("TX438500D6")
         assert cleared == 1
         assert "default:manual:TX438500D6" not in store.positions
-        assert "default:r47:TMFE6" in store.positions  # unrelated position preserved
+        assert "default:r47:TMFE6" in store.positions
 
     def test_clears_recovery_entries(self):
         store = PositionStore()

@@ -78,14 +78,10 @@ class TestForcedPromotionResearchOnly:
         payload = yaml.safe_load(Path(result.promotion_config_path).read_text())
         assert payload["forced"] is True
         assert payload["live_promotion_eligible"] is False
-        # Even though promote_alpha returned approved=True via override,
-        # the on-disk artifact must NOT advertise itself as live-eligible.
         assert payload["enabled"] is False
         assert payload["weight"] == 0.0
 
     def test_non_forced_failed_promotion_writes_no_artifact(self, tmp_path: Path) -> None:
-        # Sanity check: a NON-forced run with failing gates does not write a
-        # promotion config at all (existing behavior preserved).
         config = _config(tmp_path, force=False)
         result = promote_alpha(config)
         assert not result.approved

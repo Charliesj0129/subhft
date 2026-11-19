@@ -19,10 +19,6 @@ from hft_platform.config._symbols_types import (
     SymbolBuildResult,
 )
 
-# ---------------------------------------------------------------------------
-# _coerce_numeric
-# ---------------------------------------------------------------------------
-
 
 class TestCoerceNumeric:
     def test_none_returns_none(self) -> None:
@@ -41,11 +37,6 @@ class TestCoerceNumeric:
         assert _coerce_numeric("abc") is None
 
 
-# ---------------------------------------------------------------------------
-# resolve_metric
-# ---------------------------------------------------------------------------
-
-
 class TestResolveMetric:
     def _contract(self, **kwargs: Any) -> dict[str, Any]:
         return {"code": "SYM", **kwargs}
@@ -53,7 +44,6 @@ class TestResolveMetric:
     def test_dte_from_far_future_delivery(self) -> None:
         contract = self._contract(delivery_date="20990101")
         result = resolve_metric(contract, {}, "dte")
-        # Far future — DTE should be positive and large
         assert result is not None
         assert result > 10000
 
@@ -101,7 +91,6 @@ class TestResolveMetric:
 
     def test_metric_alias_resolution(self) -> None:
         contract = self._contract()
-        # "open_interest" is an alias for "oi"
         metrics = {"SYM": {"open_interest": 7500}}
         result = resolve_metric(contract, metrics, "oi")
         assert result == pytest.approx(7500.0)
@@ -147,11 +136,6 @@ class TestResolveMetric:
         contract = self._contract(strike_price=200)
         result = resolve_metric(contract, {}, "moneyness", reference=400.0)
         assert result == pytest.approx(0.5)
-
-
-# ---------------------------------------------------------------------------
-# _has_exclude_flag
-# ---------------------------------------------------------------------------
 
 
 class TestHasExcludeFlag:
@@ -207,11 +191,6 @@ class TestHasExcludeFlag:
         assert _has_exclude_flag(metrics, {"halted"}) is False
 
 
-# ---------------------------------------------------------------------------
-# filters_active
-# ---------------------------------------------------------------------------
-
-
 class TestFiltersActive:
     def test_empty_filters_inactive(self) -> None:
         assert filters_active(FilterSpec()) is False
@@ -257,11 +236,6 @@ class TestFiltersActive:
         assert filters_active(f) is True
 
 
-# ---------------------------------------------------------------------------
-# apply_filters
-# ---------------------------------------------------------------------------
-
-
 def _make_result() -> SymbolBuildResult:
     return SymbolBuildResult()
 
@@ -298,7 +272,7 @@ class TestApplyFiltersBool:
 
     def test_bool_filter_missing_metric_excludes(self) -> None:
         contracts = [{"code": "A"}, {"code": "B"}]
-        metrics: dict[str, Any] = {"A": {"tradable": True}}  # B has no tradable
+        metrics: dict[str, Any] = {"A": {"tradable": True}}
         index = ContractIndex(contracts=contracts, metrics_by_code=metrics)
         f = FilterSpec(bools={"tradable": True})
         result = _make_result()
@@ -362,7 +336,6 @@ class TestApplyFiltersNumeric:
 
     def test_numeric_missing_metric_adds_error_when_all_missing(self) -> None:
         contracts = [{"code": "A"}, {"code": "B"}]
-        # No metrics provided for oi
         index = ContractIndex(contracts=contracts, metrics_by_code={})
         f = FilterSpec(numeric_min={"oi": 100.0})
         result = _make_result()
@@ -394,20 +367,19 @@ class TestApplyFiltersTopN:
 class TestApplyFiltersExcludeDte:
     def test_exclude_dte_filters_near_expiry(self) -> None:
         contracts = [
-            {"code": "A", "delivery_date": "20990101"},  # far future
-            {"code": "B", "delivery_date": "20260101"},  # past / near
+            {"code": "A", "delivery_date": "20990101"},
+            {"code": "B", "delivery_date": "20260101"},
         ]
         index = ContractIndex(contracts=contracts, metrics_by_code={})
-        f = FilterSpec(exclude_dte_max=10000)  # exclude anything with DTE <= 10000
+        f = FilterSpec(exclude_dte_max=10000)
         result = _make_result()
         out = apply_filters(contracts, f, result, index, "ctx")
-        # B has DTE < 10000 → excluded; A has very large DTE → kept
         codes = [c["code"] for c in out]
         assert "A" in codes
         assert "B" not in codes
 
     def test_exclude_dte_missing_expiry_excludes_contract(self) -> None:
-        contracts = [{"code": "A"}]  # no delivery_date
+        contracts = [{"code": "A"}]
         index = ContractIndex(contracts=contracts, metrics_by_code={})
         f = FilterSpec(exclude_dte_max=30)
         result = _make_result()

@@ -439,7 +439,6 @@ def _repair_group(grp: pl.DataFrame, cfg: RepairConfig) -> tuple[pl.DataFrame, d
         high_out[i] = max(open_out[i], close_out[i])
         low_out[i] = min(open_out[i], close_out[i])
 
-    # Ensure observed rows are complete too.
     for arr in (open_out, high_out, low_out):
         missing = ~np.isfinite(arr)
         arr[missing] = close_out[missing]

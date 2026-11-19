@@ -198,8 +198,6 @@ class TestRecordSubGateRun:
         assert only_r1[0]["triage_status"] == "killed"
 
     def test_recovers_dedupe_cache_across_processes_via_warm(self, _isolated_jsonl: Path) -> None:
-        # Simulate a fresh process by clearing the cache after the first write;
-        # the second write should still dedupe by reading the file.
         record_sub_gate_run(
             run_id="r1",
             strategy_name="r47",
@@ -221,9 +219,6 @@ class TestRecordSubGateRun:
         )
         assert ok is False
         assert len(_isolated_jsonl.read_text().splitlines()) == 1
-
-
-# --- Round 17: spec provenance threading (goal §4) ------------------
 
 
 class TestSpecProvenance:
@@ -273,8 +268,6 @@ class TestSpecProvenance:
         ]
 
     def test_provenance_carries_timeframe_and_holding_period(self) -> None:
-        # Round 72: end-to-end — a spec-derived provenance dict carrying the
-        # two additive §3 fields lands them on the row's spec_provenance.
         prov = {
             "data_range": "2026-Q1",
             "cost_model_id": "x+1bp/2bp/1pts",
@@ -296,8 +289,6 @@ class TestSpecProvenance:
         assert row["spec_provenance"]["holding_period"] == "intraday <2h"
 
     def test_provenance_without_timeframe_keeps_triple_shape(self) -> None:
-        # Back-compatible: a row whose provenance predates the extension has
-        # no timeframe / holding_period keys.
         row = sub_gate_audit.build_record(
             run_id="r1",
             strategy_name="x",

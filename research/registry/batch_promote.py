@@ -76,19 +76,16 @@ class BatchPromoter:
         tracker = ExperimentTracker(base_dir=self._experiments_dir)
         runs = tracker.list_runs()
 
-        # Latest run per alpha (list_runs returns newest first)
         latest: dict[str, Any] = {}
         for run in runs:
             if run.alpha_id in latest:
                 continue
             latest[run.alpha_id] = run
 
-        # Filter to requested alpha_ids if specified
         if alpha_ids:
             target_set = set(alpha_ids)
             latest = {k: v for k, v in latest.items() if k in target_set}
 
-        # Pre-filter by scorecard availability and sort by Sharpe
         candidates: list[tuple[str, Any, dict[str, Any]]] = []
         for alpha_id, run in latest.items():
             scorecard_path = Path(run.scorecard_path)

@@ -31,9 +31,6 @@ def _pyproject(tmp_path: Any, requirement: str) -> Any:
     return path
 
 
-# --------------------------------------------------------------------------- #
-# Reading the pin
-# --------------------------------------------------------------------------- #
 def test_the_pin_is_read_through_the_extras_marker(tmp_path: Any) -> None:
     """``shioaji[speed]==1.5.6`` pins 1.5.6 — the extras are part of the name."""
     assert watch.read_pin(_pyproject(tmp_path, "shioaji[speed]==1.5.6")) == "1.5.6"
@@ -49,9 +46,6 @@ def test_a_missing_shioaji_requirement_refuses_rather_than_defaulting(tmp_path: 
         watch.read_pin(_pyproject(tmp_path, "numpy==2.0.0"))
 
 
-# --------------------------------------------------------------------------- #
-# What is newer
-# --------------------------------------------------------------------------- #
 def test_a_patch_release_on_the_pinned_line_is_reported(tmp_path: Any) -> None:
     """1.5.6 -> 1.5.7 is the case dependabot's blanket ignore silently hides."""
     found = watch.newer_releases("1.5.6", ["1.5.5", "1.5.6", "1.5.7"])
@@ -99,9 +93,6 @@ def test_a_yanked_file_alongside_a_live_one_still_leaves_the_release_installable
     assert watch.releases_from_payload(payload) == ["1.5.7"]
 
 
-# --------------------------------------------------------------------------- #
-# Ordering and assessment state
-# --------------------------------------------------------------------------- #
 def test_the_patch_on_the_pinned_line_is_listed_before_a_newer_feature_line() -> None:
     """Adoptability, not severity: the patch is the row an operator can act on."""
     found = watch.newer_releases("1.5.6", ["1.7.3", "1.7.0", "1.5.7", "2.0.0"])
@@ -118,8 +109,6 @@ def test_the_report_counts_only_uncaptured_releases_as_unassessed(monkeypatch: A
     monkeypatch.setattr(watch, "_captured_versions", lambda: {"1.5.7"})
     report = watch.build_report("1.5.6", watch.newer_releases("1.5.6", ["1.5.7", "1.7.0"]))
     assert report["counts"]["unassessed"] == 1
-    # With no ledger passed, the captured release is undecided rather than settled --
-    # a surface is evidence, not a decision. See test_release_decisions.py.
     assert report["counts"]["undecided"] == 1
     assert report["counts"]["needs_action"] == 2
 
@@ -140,11 +129,6 @@ def test_no_newer_release_reports_that_plainly(monkeypatch: Any) -> None:
     assert "no newer release on PyPI." in text
 
 
-# --------------------------------------------------------------------------- #
-# The CLI contract a scheduled job depends on
-# --------------------------------------------------------------------------- #
-# The ledger and the day are inputs of ``watch``. These tests state both, so they read neither the shipped
-# ledger (whose deferrals expire) nor the clock: a test of the CLI contract must not turn red because a date passed.
 _DEFERRED_UNTIL = date(2026, 10, 28)
 
 
@@ -190,7 +174,7 @@ def test_strict_mode_exits_nonzero_once_a_deferral_has_come_due(tmp_path: Any, m
 
     argv = _watch_inputs(tmp_path, monkeypatch, captured={"1.5.7"})
 
-    assert cli.main([*argv, "--today", _DEFERRED_UNTIL.isoformat()]) == 0  # the last day still counts
+    assert cli.main([*argv, "--today", _DEFERRED_UNTIL.isoformat()]) == 0
     assert cli.main([*argv, "--today", "2026-10-29"]) == 1
     assert "EXPIRED" in capsys.readouterr().out
 
@@ -210,7 +194,7 @@ def test_the_day_defaults_to_the_real_date_when_today_is_not_given(tmp_path: Any
 
     cli.main(argv)
 
-    assert seen == {"today": None}  # None: build_report asks the clock itself
+    assert seen == {"today": None}
 
 
 @pytest.mark.parametrize("text", ["15/10/2026", "2026-10-29T12:00:00", "2026-13-01", "2026-10", "tomorrow", ""])
@@ -254,9 +238,6 @@ def test_watch_never_calls_the_network_when_given_a_releases_file(tmp_path: Any,
     assert cli.main(["watch", "--releases-json", str(releases)]) == 0
 
 
-# --------------------------------------------------------------------------- #
-# The dependabot rule this watcher exists alongside
-# --------------------------------------------------------------------------- #
 def _shioaji_ignore() -> dict[str, Any]:
     import yaml
 

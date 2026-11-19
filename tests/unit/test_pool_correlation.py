@@ -30,7 +30,6 @@ class TestLoadPoolSignalsFromExperiments:
         """Loads signals from scorecard.json files."""
         runs = tmp_path / "experiments" / "runs"
 
-        # Create run with scorecard + meta
         run_dir = runs / "20260101T000000Z_abc123"
         run_dir.mkdir(parents=True)
         (run_dir / "meta.json").write_text(json.dumps({"alpha_id": "alpha_a"}))
@@ -66,13 +65,11 @@ class TestLoadPoolSignalsFromExperiments:
         """When multiple runs exist for same alpha, latest wins."""
         runs = tmp_path / "experiments" / "runs"
 
-        # Older run
         run1 = runs / "20260101T000000Z_old"
         run1.mkdir(parents=True)
         (run1 / "meta.json").write_text(json.dumps({"alpha_id": "alpha_a"}))
         (run1 / "scorecard.json").write_text(json.dumps({"signals": [0.1]}))
 
-        # Newer run
         run2 = runs / "20260102T000000Z_new"
         run2.mkdir(parents=True)
         (run2 / "meta.json").write_text(json.dumps({"alpha_id": "alpha_a"}))

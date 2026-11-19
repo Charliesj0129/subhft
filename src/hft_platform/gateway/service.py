@@ -87,11 +87,11 @@ class GatewayService:
     def __init__(
         self,
         channel: LocalIntentChannel,
-        risk_engine: Any,  # deferred: RiskEngine lives in hft_platform.risk — avoids circular import
-        order_adapter: Any,  # deferred: OrderAdapter lives in hft_platform.execution — avoids circular import
+        risk_engine: Any,
+        order_adapter: Any,
         exposure_store: ExposureStore,
         dedup_store: IdempotencyStore,
-        storm_guard: Any,  # deferred: StormGuard lives in hft_platform.risk — avoids circular import
+        storm_guard: Any,
         policy: GatewayPolicy,
         leader_lease: Any | None = None,
         rejection_sink: asyncio.Queue | None = None,
@@ -104,8 +104,6 @@ class GatewayService:
         self._storm_guard = storm_guard
         self._policy = policy
         self._rejection_sink: asyncio.Queue | None = rejection_sink
-        # Wire channel TTL expiry callback so strategy gets RiskFeedback
-        # even when the envelope is dropped at the channel level (Bug #5b).
         if hasattr(channel, "set_on_ttl_expired"):
             channel.set_on_ttl_expired(self._on_channel_ttl_expired)
         self.running = False
@@ -132,7 +130,7 @@ class GatewayService:
 
                 lease_path = os.getenv("HFT_GATEWAY_LEADER_LEASE_PATH", ".state/gateway_leader.lock")
                 self._leader_lease = FileLeaderLease(lease_path=lease_path)
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 self._leader_lease = None
         try:
             self._leader_lease_refresh_s = max(0.05, float(os.getenv("HFT_GATEWAY_LEADER_LEASE_REFRESH_S", "0.5")))
@@ -170,8 +168,6 @@ class GatewayService:
         )
         self._metrics_enabled = _bool_env(os.getenv("HFT_GATEWAY_METRICS", "1"), default=self._metrics_enabled)
         self._refresh_metrics_registry()
-
-    # ── Main loop ─────────────────────────────────────────────────────────
 
     async def _exposure_expiry_loop(self) -> None:
         """Periodically expire stale per-order exposure reservations."""
@@ -244,7 +240,6 @@ class GatewayService:
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
                     pass
-            # Persist dedup state on clean shutdown (async-safe: run in thread)
             try:
                 await asyncio.to_thread(self._dedup.persist)
             except Exception as exc:
@@ -261,7 +256,6 @@ class GatewayService:
         intent_type_value = int(intent.intent_type)
         t0 = time.perf_counter_ns()
 
-        # Step 1: Dedup check
         if key:
             if is_typed_view and hasattr(self._dedup, "check_or_reserve_typed"):
                 existing = self._dedup.check_or_reserve_typed(key)
@@ -271,7 +265,6 @@ class GatewayService:
             existing = None
         if existing is not None:
             if existing.approved is not None:
-                # Committed dedup hit — return cached decision
                 self._dedup_hits += 1
                 self._inc_dedup_hit_metric()
                 self._emit_trace(
@@ -291,9 +284,6 @@ class GatewayService:
                     reason=existing.reason_code,
                 )
                 return
-            # Bug #7: Reserved but not yet committed (in-flight duplicate).
-            # Reject to prevent race where two envelopes with the same key
-            # both proceed through the pipeline and double-commit.
             self._dedup_hits += 1
             self._inc_dedup_hit_metric()
             logger.warning(
@@ -307,7 +297,6 @@ class GatewayService:
             self._record_latency(t0)
             return
 
-        # Step 1b: Per-intent TTL check (mirrors RiskEngine.run() line 409)
         _ttl_ns = getattr(intent, "ttl_ns", 0)
         _ts_ns = getattr(intent, "timestamp_ns", 0)
         if _ttl_ns > 0 and _ts_ns > 0:
@@ -332,12 +321,9 @@ class GatewayService:
                 self._record_latency(t0)
                 return
 
-        # Step 2: Policy gate (pass strategy_id for halt-exempt awareness)
         sg_state = self._storm_guard.state
         _strategy_id = str(getattr(intent, "strategy_id", ""))
         if is_typed_view and hasattr(self._policy, "gate_typed"):
-            # Bug 22: pass symbol/side/qty so typed fast-path also enables
-            # reduce-only bypass in HALT/DEGRADE (same as slow path via gate()).
             allowed, reason = self._policy.gate_typed(
                 intent_type_value,
                 sg_state,
@@ -365,11 +351,8 @@ class GatewayService:
             self._record_latency(t0)
             return
 
-        # Step 3: Exposure check. ``ExposureKey.from_intent`` derives the
-        # canonical symbol from ``intent.contract.display()`` when set
-        # (Gate 3) so bucketing is stable across structured/legacy intents.
         exp_key = ExposureKey.from_intent(intent, account="default")
-        _order_key = key  # idempotency_key — used for per-order exposure tracking
+        _order_key = key
         _target_order_key = getattr(intent, "target_order_id", "") or ""
         if intent_type_value not in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
             try:
@@ -389,8 +372,6 @@ class GatewayService:
                         order_key=_order_key,
                     )
             except ExposureLimitError as exc:
-                # Symbol-cardinality hard limit reached; reject and commit dedup so
-                # the same key is not retried in a busy-loop (CE2-12).
                 self._rejected += 1
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, False, "EXPOSURE_SYMBOL_LIMIT", 0)
@@ -431,14 +412,12 @@ class GatewayService:
                 self._record_latency(t0)
                 return
 
-        # Step 4: Risk evaluate (synchronous, CPU-only)
         try:
             if typed_frame is not None and hasattr(self._risk_engine, "evaluate_typed_frame"):
                 decision = self._risk_engine.evaluate_typed_frame(typed_frame, intent_view=intent)
             else:
                 decision = self._risk_engine.evaluate(intent)
         except Exception:
-            # Release exposure reserved in step 3 before re-raising
             if intent_type_value != int(IntentType.CANCEL):
                 if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
                     self._exposure.release_exposure_typed(
@@ -449,8 +428,6 @@ class GatewayService:
                     )
                 else:
                     self._exposure.release_exposure(exp_key, intent)
-            # CF-1: Release dedup slot reserved in step 1 so the same
-            # idempotency_key can be retried after a transient error.
             if key:
                 if is_typed_view and hasattr(self._dedup, "release_typed"):
                     self._dedup.release_typed(key)
@@ -486,18 +463,11 @@ class GatewayService:
             self._update_channel_depth_metric()
             return
 
-        # Step 5: Create command
         if decision.approved:
             if typed_frame is not None and hasattr(self._risk_engine, "create_command_from_typed_frame"):
-                # Materialize only after passing policy/exposure/risk checks.
                 cmd = self._risk_engine.create_command_from_typed_frame(typed_frame, intent_view=intent)
             else:
                 cmd = self._risk_engine.create_command(decision.intent)
-            # Step 6: Hand the command to the order gate (``OrderAdapter.execute``).
-            # It used to go straight onto ``_api_queue``, which skipped every
-            # guard ``execute`` runs -- platform reduce-only, the circuit
-            # breakers, the rate limits, the order-mode check -- so with the
-            # gateway on those controls existed on one path only.
             try:
                 accepted = await self._order_adapter.execute(cmd)
             except Exception:
@@ -510,9 +480,6 @@ class GatewayService:
                 raise
             if accepted:
                 self._dispatched += 1
-                # Exposure is held post-dispatch until fill/cancel/TTL expiry.
-                # Per-order tracking + periodic expire_stale_orders() prevents leaks.
-                # Commit dedup as approved only after successful dispatch
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, True, "OK", int(cmd.cmd_id))
                 else:
@@ -527,9 +494,6 @@ class GatewayService:
                     },
                 )
             else:
-                # The gate refused it and has already booked the refusal and,
-                # for a NEW, fed it back to the strategy; feeding back again
-                # here would release the strategy's pending slot twice.
                 self._rejected += 1
                 if is_typed_view and hasattr(self._dedup, "commit_typed"):
                     self._dedup.commit_typed(key, False, "ORDER_GATE_REJECT", 0)
@@ -554,7 +518,6 @@ class GatewayService:
                 getattr(intent, "trace_id", ""),
                 {"reason": decision.reason_code, "stage": "risk", "ack_token": envelope.ack_token},
             )
-            # Release exposure on rejection (was reserved in step 3)
             if intent_type_value != int(IntentType.CANCEL):
                 if is_typed_view and hasattr(self._exposure, "release_exposure_typed"):
                     self._exposure.release_exposure_typed(
@@ -576,8 +539,6 @@ class GatewayService:
 
         self._record_latency(t0)
         self._update_channel_depth_metric()
-
-    # ── Rejection feedback ──────────────────────────────────────────────
 
     def _release_exposure(
         self,
@@ -628,7 +589,7 @@ class GatewayService:
                 metrics = self._metrics_or_refresh()
                 if metrics is not None:
                     metrics.rejection_sink_overflow_total.inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     def set_rejection_sink(self, sink: asyncio.Queue | None) -> None:
@@ -643,7 +604,6 @@ class GatewayService:
         """
         intent = getattr(envelope, "intent", None)
         if intent is None:
-            # TypedIntentEnvelope — extract from payload tuple
             payload = getattr(envelope, "payload", None)
             if payload and len(payload) >= 15:
                 self._send_rejection_feedback_fields(
@@ -686,10 +646,8 @@ class GatewayService:
                 metrics = self._metrics_or_refresh()
                 if metrics is not None:
                     metrics.rejection_sink_overflow_total.inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
-
-    # ── Policy control ───────────────────────────────────────────────────
 
     def set_halt(self) -> None:
         """Propagate HALT from supervisor to gateway policy."""
@@ -698,8 +656,6 @@ class GatewayService:
     def set_normal(self) -> None:
         """Reset gateway policy to NORMAL (manual recovery after HALT)."""
         self._policy.set_normal()
-
-    # ── Health ────────────────────────────────────────────────────────────
 
     def get_health(self) -> dict:
         """Return basic health snapshot (used by system.py supervisor)."""
@@ -713,8 +669,6 @@ class GatewayService:
             "leader_active": self._is_dispatch_leader(),
         }
 
-    # ── Private helpers ───────────────────────────────────────────────────
-
     def _emit_reject(self, reason: str) -> None:
         if not self._metrics_enabled:
             return
@@ -725,16 +679,13 @@ class GatewayService:
             metrics = self._metrics_or_refresh()
             if metrics is None:
                 return
-            # Bounded label: see ``cap_reject_reason``. Same rejection strings as
-            # the risk counter -- fixing one and leaving the twin is how the
-            # first copy got missed.
             code = cap_reject_reason(reason)
             child = self._gateway_reject_metric_cache.get(code)
             if child is None:
                 child = metrics.gateway_reject_total.labels(reason=code)
                 self._gateway_reject_metric_cache[code] = child
             child.inc()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("metrics_emit_failed", stage="emit_reject", error=str(exc))
 
     def _record_latency(self, t0: int) -> None:
@@ -750,7 +701,7 @@ class GatewayService:
             metric = self._gateway_dispatch_latency_metric or metrics.gateway_dispatch_latency_ns
             self._gateway_dispatch_latency_metric = metric
             metric.observe(time.perf_counter_ns() - t0)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("metrics_emit_failed", stage="record_latency", error=str(exc))
 
     def _update_channel_depth_metric(self) -> None:
@@ -772,7 +723,7 @@ class GatewayService:
             exposure_metric = self._gateway_exposure_metric or metrics.gateway_exposure_global_notional_scaled
             self._gateway_exposure_metric = exposure_metric
             exposure_metric.set(self._exposure.global_notional)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("metrics_emit_failed", stage="channel_depth", error=str(exc))
 
     def _refresh_metrics_registry(self) -> None:

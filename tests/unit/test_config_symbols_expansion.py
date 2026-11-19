@@ -34,10 +34,6 @@ from hft_platform.config._symbols_types import (
     SymbolBuildResult,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_result() -> SymbolBuildResult:
     return SymbolBuildResult()
@@ -86,11 +82,6 @@ def _make_contract_index(contracts: list[dict]) -> ContractIndex:
     return ContractIndex(contracts=contracts)
 
 
-# ---------------------------------------------------------------------------
-# _default_exchange_for_code
-# ---------------------------------------------------------------------------
-
-
 class TestDefaultExchangeForCode:
     def test_digit_code_returns_tse(self):
         assert _default_exchange_for_code("2330") == "TSE"
@@ -99,20 +90,13 @@ class TestDefaultExchangeForCode:
         assert _default_exchange_for_code("TX") == "FUT"
 
     def test_mixed_code_returns_fut(self):
-        # starts with letter → not all digits
         assert _default_exchange_for_code("TXF123") == "FUT"
 
     def test_single_digit_returns_tse(self):
         assert _default_exchange_for_code("0") == "TSE"
 
     def test_empty_string_returns_fut(self):
-        # empty string is not all digits
         assert _default_exchange_for_code("") == "FUT"
-
-
-# ---------------------------------------------------------------------------
-# _normalize_option_right
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeOptionRight:
@@ -147,11 +131,6 @@ class TestNormalizeOptionRight:
         assert _normalize_option_right("Call") == "C"
 
 
-# ---------------------------------------------------------------------------
-# _parse_selector
-# ---------------------------------------------------------------------------
-
-
 class TestParseSelector:
     def test_atm_no_offset(self):
         mode, offset = _parse_selector("ATM")
@@ -179,7 +158,6 @@ class TestParseSelector:
         assert offset == 2
 
     def test_atm_plus_minus_unicode(self):
-        # Using the PLUS_MINUS unicode character
         mode, offset = _parse_selector(f"ATM{PLUS_MINUS}2")
         assert mode == "ATM"
         assert offset == 2
@@ -203,11 +181,6 @@ class TestParseSelector:
         mode, offset = _parse_selector("otm+3")
         assert mode == "OTM"
         assert offset == 3
-
-
-# ---------------------------------------------------------------------------
-# pick_underlying_price
-# ---------------------------------------------------------------------------
 
 
 def _txo_chain(**extra: object) -> list[dict]:
@@ -255,11 +228,6 @@ class TestPickUnderlyingPrice:
         idx = _make_contract_index(chain + futures)
 
         assert pick_underlying_price("ABC", chain, idx)[0] is None
-
-
-# ---------------------------------------------------------------------------
-# build_entry
-# ---------------------------------------------------------------------------
 
 
 class TestBuildEntry:
@@ -350,7 +318,6 @@ class TestBuildEntry:
     def test_no_tags_field_when_empty(self):
         result = _make_result()
         entry = build_entry("TX", {}, None, result, extra_tags=[])
-        # tags field only present if non-empty
         if "tags" in entry:
             assert entry["tags"] == []
 
@@ -359,13 +326,7 @@ class TestBuildEntry:
         contract = {"exchange": "TAIFEX"}
         entry = build_entry("TX", {}, contract, result)
         assert entry["exchange"] == "TAIFEX"
-        # No warning when exchange is found
         assert not result.warnings
-
-
-# ---------------------------------------------------------------------------
-# _group_by_expiry
-# ---------------------------------------------------------------------------
 
 
 class TestGroupByExpiry:
@@ -377,7 +338,6 @@ class TestGroupByExpiry:
         ]
         groups = _group_by_expiry(contracts)
         assert len(groups) == 2
-        # First group is earlier expiry
         codes_first = {c["code"] for c in groups[0]}
         assert "TXF1" in codes_first
         assert "TXF3" in codes_first
@@ -403,11 +363,6 @@ class TestGroupByExpiry:
         assert len(groups) == 1
 
 
-# ---------------------------------------------------------------------------
-# _expand_synthetic
-# ---------------------------------------------------------------------------
-
-
 class TestExpandSynthetic:
     def test_generates_correct_count(self):
         result = _make_result()
@@ -426,8 +381,6 @@ class TestExpandSynthetic:
         assert result.symbols[0]["code"] == "STRESS0001"
 
     def test_default_exchange_is_fut_for_alpha_code(self):
-        # build_entry sees "SYNTH0001" (alpha), applies _default_exchange_for_code → "FUT";
-        # setdefault("exchange", "SIM") does nothing since exchange is already set
         result = _make_result()
         _expand_synthetic("synth", 1, {}, result)
         assert result.symbols[0]["exchange"] == "FUT"
@@ -457,11 +410,6 @@ class TestExpandSynthetic:
         attrs = {"account": "test_account"}
         _expand_synthetic("synth", 1, attrs, result)
         assert result.symbols[0]["account"] == "test_account"
-
-
-# ---------------------------------------------------------------------------
-# _expand_futures
-# ---------------------------------------------------------------------------
 
 
 class TestExpandFutures:
@@ -522,9 +470,6 @@ class TestExpandFutures:
         assert len(result.errors) >= 1
 
     def test_out_of_range_month_produces_warning(self):
-        # Only 2 contracts = only front and next (index 0, 1). "far" (idx=2) is out of range.
-        # Behavior: skip with warning so the build succeeds against subset broker caches
-        # (e.g. far months not yet listed by the exchange).
         contracts = [
             _make_futures_contract("TXFD7", root="TX", delivery_date=20270301),
             _make_futures_contract("TXFG7", root="TX", delivery_date=20270401),
@@ -578,7 +523,6 @@ class TestExpandFutures:
         assert result.symbols[0]["exchange"] == "FUT"
 
     def test_roll_mode_stays_on_front_when_dte_high(self):
-        # delivery_date far in future → DTE > 5 → stay on front
         result = _make_result()
         idx = self._make_index()
         filters = FilterSpec(roll=True)
@@ -587,9 +531,8 @@ class TestExpandFutures:
         assert result.symbols[0]["code"] == "TXFD7"
 
     def test_roll_mode_moves_to_next_when_dte_low(self):
-        # delivery_date in the past → DTE ≤ 5 → roll to next month
         contracts = [
-            _make_futures_contract("TXFD7", root="TX", delivery_date=20200101),  # expired
+            _make_futures_contract("TXFD7", root="TX", delivery_date=20200101),
             _make_futures_contract("TXFG7", root="TX", delivery_date=20270401),
         ]
         result = _make_result()
@@ -606,11 +549,6 @@ class TestExpandFutures:
         _expand_futures("TX", "front", {}, idx, result, filters)
         assert len(result.symbols) == 1
         assert result.symbols[0]["code"] == "TXFG7"
-
-
-# ---------------------------------------------------------------------------
-# _expand_options
-# ---------------------------------------------------------------------------
 
 
 class TestExpandOptions:
@@ -654,7 +592,6 @@ class TestExpandOptions:
         result = _make_result()
         idx = self._make_index()
         _expand_options("TXO", "front", "ATM+1", {}, idx, result)
-        # ATM=18000, offset=1 → strikes 17750 to 18250 (3 strikes × C+P = 6 contracts)
         assert len(result.symbols) == 6
 
     def test_otm_selects_call_above_and_put_below(self):
@@ -662,10 +599,8 @@ class TestExpandOptions:
         idx = self._make_index()
         _expand_options("TXO", "front", "OTM+1", {}, idx, result)
         codes = {s["code"] for s in result.symbols}
-        # OTM calls: 18250; OTM puts: 17750
         assert "TXO18250C7" in codes
         assert "TXO17750P7" in codes
-        # ATM strike should NOT be selected as OTM
         assert "TXO18000C7" not in codes
         assert "TXO18000P7" not in codes
 
@@ -691,8 +626,6 @@ class TestExpandOptions:
     def test_out_of_range_month_produces_warning(self):
         result = _make_result()
         idx = self._make_index()
-        # Only front month in index, "far" (idx=2) out of range.
-        # Behavior: skip with warning so the build succeeds against subset broker caches.
         _expand_options("TXO", "far", "ATM", {}, idx, result)
         assert len(result.errors) == 0
         assert any("unavailable" in w for w in result.warnings)
@@ -705,7 +638,6 @@ class TestExpandOptions:
         assert "Unknown option selector" in result.errors[0]
 
     def test_reference_fallback_to_median_strike(self):
-        # Contracts without reference_price → median strike used
         strikes = [17000.0, 18000.0, 19000.0]
         contracts: list[dict] = []
         for k in strikes:
@@ -765,7 +697,6 @@ class TestExpandOptions:
         assert "NOT centred" in result.warnings[0]
 
     def test_option_premium_reference_no_longer_steers_the_window(self):
-        # reference on an option record is its premium; 120 would have picked the lowest strike.
         idx = _make_contract_index(self._skewed_chain(reference=120.0))
         result = _make_result()
 
@@ -779,7 +710,6 @@ class TestExpandOptions:
         idx = self._make_index()
         _expand_options("TXO", "front", "OTM+2", {}, idx, result)
         codes = {s["code"] for s in result.symbols}
-        # OTM calls: 18250, 18500; OTM puts: 17750, 17500
         assert "TXO18250C7" in codes
         assert "TXO18500C7" in codes
         assert "TXO17750P7" in codes
@@ -793,8 +723,6 @@ class TestExpandOptions:
             assert "options" in sym["tags"]
 
     def test_exchange_set_on_symbols(self):
-        # build_entry defaults alpha codes to "FUT", setdefault("OPT") has no effect;
-        # contracts without an explicit exchange field get defaulted by build_entry
         result = _make_result()
         idx = self._make_index()
         _expand_options("TXO", "front", "ATM", {}, idx, result)
@@ -802,10 +730,6 @@ class TestExpandOptions:
             assert "exchange" in sym
 
     def test_empty_selector_result_produces_error(self):
-        # OTM+100 with only 5 strikes on each side at most → ATM is at 18000 (index 2 of 5)
-        # OTM+100 would try to go 100 steps beyond the available strikes
-        # For indices that are in-range, we get some; this tests the "no strikes match" logic
-        # Use a selector that's valid but produces no contracts matching
         strikes = [18000.0]
         contracts = [
             _make_option_contract(
@@ -817,15 +741,9 @@ class TestExpandOptions:
         ]
         result = _make_result()
         idx = _make_contract_index(contracts)
-        # OTM+1 with only one strike means no OTM strikes exist → empty set
         _expand_options("TXO", "front", "OTM+1", {}, idx, result)
         assert len(result.errors) >= 1
         assert "empty set" in result.errors[0]
-
-
-# ---------------------------------------------------------------------------
-# expand_spec (top-level dispatch)
-# ---------------------------------------------------------------------------
 
 
 class TestExpandSpec:
@@ -862,8 +780,6 @@ class TestExpandSpec:
             )
         return _make_contract_index(contracts)
 
-    # Literal (no @) specs
-
     def test_literal_spec_known_code(self):
         contracts = [{"code": "2330", "exchange": "TSE", "name": "TSMC"}]
         result = _make_result()
@@ -882,11 +798,8 @@ class TestExpandSpec:
         result = _make_result()
         idx = self._make_futures_index()
         expand_spec("UNKNOWN", {}, idx, result)
-        # Code not in by_code but still added as-is
         assert len(result.symbols) == 1
         assert result.symbols[0]["code"] == "UNKNOWN"
-
-    # FUT@ specs
 
     def test_fut_at_spec_expands_front(self):
         result = _make_result()
@@ -912,11 +825,8 @@ class TestExpandSpec:
         result = _make_result()
         idx = self._make_futures_index()
         expand_spec("FUT@TX@roll", {}, idx, result)
-        # roll with far future delivery date → stays on front
         assert len(result.symbols) == 1
         assert result.symbols[0]["code"] == "TXFD7"
-
-    # OPT@ specs
 
     def test_opt_at_spec_expands_atm(self):
         result = _make_result()
@@ -946,13 +856,10 @@ class TestExpandSpec:
         assert "missing root" in result.errors[0]
 
     def test_opt_defaults_to_near_and_atm(self):
-        # OPT@TXO without month or selector → defaults to near/ATM
         result = _make_result()
         idx = self._make_options_index()
         expand_spec("OPT@TXO", {}, idx, result)
         assert len(result.symbols) >= 2
-
-    # SYNTH@ specs
 
     def test_synth_at_spec_creates_symbols(self):
         result = _make_result()
@@ -976,8 +883,6 @@ class TestExpandSpec:
         assert len(result.errors) >= 1
         assert "Invalid synthetic count" in result.errors[0]
 
-    # Implicit futures (root@month, no FUT prefix)
-
     def test_implicit_futures_spec(self):
         result = _make_result()
         idx = self._make_futures_index()
@@ -989,18 +894,14 @@ class TestExpandSpec:
         result = _make_result()
         idx = self._make_futures_index()
         expand_spec("TX@roll", {}, idx, result)
-        # roll with far-future delivery → stays on front
         assert len(result.symbols) == 1
 
     def test_unknown_at_spec_with_single_part_produces_error(self):
         result = _make_result()
-        # "@" present but splitting by "@" gives only one non-empty part
-        # e.g. "@" alone → parts empty
         expand_spec("@", {}, None, result)
         assert len(result.errors) >= 1
 
     def test_empty_at_spec_produces_error(self):
-        # "@@@" → all parts empty after filtering
         result = _make_result()
         expand_spec("@@@", {}, None, result)
         assert len(result.errors) >= 1
@@ -1013,14 +914,9 @@ class TestExpandSpec:
         assert result.symbols[0]["code"] == "TXFG7"
 
     def test_filter_token_parsed_in_fut_spec(self):
-        # FUT@TX@front@oi>=100 — filter token parsed without error
-        # No metrics so contract will be dropped (OI not found for 100% contracts)
-        # But no parse error should occur
         result = _make_result()
         idx = self._make_futures_index()
         expand_spec("FUT@TX@front@oi>=100", {}, idx, result)
-        # Might produce metrics error, but no parse error — errors list contains
-        # only metrics-related errors, not parse errors
         parse_errors = [e for e in result.errors if "parse" in e.lower() or "syntax" in e.lower()]
         assert len(parse_errors) == 0
 
@@ -1028,5 +924,4 @@ class TestExpandSpec:
         result = _make_result()
         idx = self._make_options_index()
         expand_spec("OPT@TXO@front@ATM+1", {}, idx, result)
-        # ATM+1 → 3 strikes × C+P = 6
         assert len(result.symbols) == 6

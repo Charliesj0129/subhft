@@ -71,7 +71,6 @@ def test_circuit_failure_recorded_on_drop():
     assert submitted == 1
     assert dropped == 2
 
-    # Simulate circuit failure recording
     if dropped > 0:
         sid = "s1"
         failures = failure_counts.get(sid, 0) + 1
@@ -87,7 +86,7 @@ def test_all_intents_succeed_no_failure():
 
     for intent in intents:
         try:
-            pass  # simulate success
+            pass
             submitted += 1
         except asyncio.QueueFull:
             dropped += 1

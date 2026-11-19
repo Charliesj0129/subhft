@@ -60,7 +60,6 @@ class TestAuditCliBackfillSpecs:
         _mkdir(_alphas, "kept", with_spec=True)
         _mkdir(_alphas, "needs_one")
         out = audit_cli.backfill_specs(template=TEMPLATE_SRC, root=_alphas, apply=True)
-        # 'kept' must not appear in the actions list — it had a spec already.
         assert "kept" not in out.split("missing spec.yaml:")[-1]
         assert (_alphas / "needs_one" / "spec.yaml").is_file()
 
@@ -85,7 +84,6 @@ class TestAuditCliBackfillSpecs:
         _mkdir(_alphas, "legacy_d")
         _mkdir(_alphas, "legacy_e")
         out = audit_cli.backfill_specs(template=TEMPLATE_SRC, root=_alphas, apply=True)
-        # Fresh template + name substitution leaves a passing spec.
         assert "2 pass / 0 spec_check FAIL" in out
 
     def test_main_dispatches_backfill_specs(self, _alphas: Path, capsys) -> None:

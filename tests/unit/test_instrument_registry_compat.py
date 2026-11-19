@@ -128,5 +128,5 @@ class TestSymbolMetadataCompat:
         )
         meta.registry.register(dynamic_profile, source="dynamic")
         meta.reload()
-        assert meta.registry.contains("DYN1")  # dynamic preserved
-        assert meta.registry.contains("TXFC0")  # static re-loaded
+        assert meta.registry.contains("DYN1")
+        assert meta.registry.contains("TXFC0")

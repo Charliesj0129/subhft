@@ -37,7 +37,6 @@ from hft_platform.feature.registry import (
 )
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 
-# Canonical synthetic book scale: 0.1 * 10_000 (matches feed_adapter conventions).
 _SELFTEST_TICK = 1_000
 _SELFTEST_SYMBOL = "PARITYR1"
 
@@ -89,7 +88,6 @@ class FrameResult:
     warmup_ready_mask: int
 
 
-# A path result is the per-frame outputs, indexed positionally with the input frames.
 PathResult = list[FrameResult]
 
 
@@ -147,9 +145,6 @@ class ParityReport:
             raise AssertionError(self.format())
 
 
-# ---------------------------------------------------------------------------
-# Compute-path runners
-# ---------------------------------------------------------------------------
 def _run_engine(
     frames: Sequence[LobInputFrame],
     *,
@@ -170,12 +165,11 @@ def _run_engine(
     out: PathResult = []
     for seq, frame in enumerate(frames):
         if frame.is_reset:
-            # Simulate a gap-triggered reset of both planes (criterion 1).
             fe.reset_symbol(frame.symbol)
             book = lob.books.pop(frame.symbol, None)
-            if book is not None and lob._last_symbol == frame.symbol:  # noqa: SLF001
-                lob._last_symbol = None  # noqa: SLF001
-                lob._last_book = None  # noqa: SLF001
+            if book is not None and lob._last_symbol == frame.symbol:
+                lob._last_symbol = None
+                lob._last_book = None
         bidask = frame.to_bidask_event(seq)
         stats = lob.process_event(bidask)
         if not isinstance(stats, LOBStatsEvent):
@@ -216,9 +210,6 @@ def run_hftbacktest_shared(frames: Sequence[LobInputFrame]) -> PathResult:
     return _run_engine(frames, backend="python", wire_lob_feature_attr=True)
 
 
-# ---------------------------------------------------------------------------
-# Comparison
-# ---------------------------------------------------------------------------
 def compare_paths(
     results_by_name: dict[str, PathResult],
     *,
@@ -315,9 +306,6 @@ class RecordingFeatureSink:
         )
 
 
-# ---------------------------------------------------------------------------
-# Synthetic self-test (shared by the unit test and the `hft feature parity` CLI)
-# ---------------------------------------------------------------------------
 def _selftest_book(best_bid: int, best_ask: int, bid_qty: int, ask_qty: int) -> tuple[np.ndarray, np.ndarray]:
     bids = np.array(
         [[best_bid - i * _SELFTEST_TICK, max(1, bid_qty - i * 3)] for i in range(5)],
@@ -339,19 +327,19 @@ def build_synthetic_frames(symbol: str = _SELFTEST_SYMBOL) -> list[LobInputFrame
     frames: list[LobInputFrame] = []
     base_bid = 1_000_000
     ts = 1_000
-    for i in range(40):  # warmup ramp + steady book with moving top-of-book
+    for i in range(40):
         bb = base_bid + (i % 6) * _SELFTEST_TICK
         ba = bb + 2 * _SELFTEST_TICK
         bids, asks = _selftest_book(bb, ba, 50 + i, 40 + (i % 7))
         frames.append(LobInputFrame(symbol, ts, bids, asks))
         ts += 125
-    for _ in range(5):  # one-sided thin ask book
+    for _ in range(5):
         bb = base_bid + 3 * _SELFTEST_TICK
         ba = bb + _SELFTEST_TICK
         bids, asks = _selftest_book(bb, ba, 80, 1)
         frames.append(LobInputFrame(symbol, ts, bids, asks))
         ts += 125
-    bb = base_bid + 2 * _SELFTEST_TICK  # gap-triggered reset, then re-warm
+    bb = base_bid + 2 * _SELFTEST_TICK
     bids, asks = _selftest_book(bb, bb + 2 * _SELFTEST_TICK, 60, 55)
     frames.append(LobInputFrame(symbol, ts, bids, asks, is_reset=True))
     ts += 125

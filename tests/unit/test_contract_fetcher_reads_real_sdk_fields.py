@@ -27,7 +27,6 @@ REPO = Path(__file__).resolve().parents[2]
 FETCHER = REPO / "src/hft_platform/feed_adapter/contract_fetcher.py"
 GOLDEN = REPO / "tests/golden/shioaji_sdk/surface_1.5.6.json"
 
-# Not read off the broker Contract: supplied by the caller / derived locally.
 _NOT_SDK_FIELDS = {"right"}
 
 

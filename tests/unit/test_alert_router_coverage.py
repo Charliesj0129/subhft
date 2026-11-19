@@ -58,11 +58,6 @@ def router(mock_telegram, mock_webhook, tmp_path):
     )
 
 
-# ---------------------------------------------------------------------------
-# _load_silence_rules — from YAML file (lines 64, 69-81)
-# ---------------------------------------------------------------------------
-
-
 class TestLoadSilenceRules:
     def test_loads_silence_rules_from_yaml(self, mock_telegram, tmp_path):
         """Load silence rules from a valid YAML config."""
@@ -136,11 +131,6 @@ class TestLoadSilenceRules:
         assert len(router._silence_rules) == 0
 
 
-# ---------------------------------------------------------------------------
-# remove_silence — returns bool (lines 91-93)
-# ---------------------------------------------------------------------------
-
-
 class TestRemoveSilence:
     def test_remove_nonexistent_returns_false(self, router):
         assert router.remove_silence("nonexistent") is False
@@ -159,11 +149,6 @@ class TestRemoveSilence:
         assert router.remove_silence("s-1") is True
 
 
-# ---------------------------------------------------------------------------
-# emit — CRITICAL without webhook (line 141->143)
-# ---------------------------------------------------------------------------
-
-
 class TestEmitCriticalNoWebhook:
     @pytest.mark.asyncio
     async def test_critical_without_webhook(self, mock_telegram, tmp_path):
@@ -178,11 +163,6 @@ class TestEmitCriticalNoWebhook:
         alert = _make_alert(severity=AlertSeverity.CRITICAL)
         await router.emit(alert)
         mock_telegram.send.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# flush_info_batch — more than 10 items (lines 165-170)
-# ---------------------------------------------------------------------------
 
 
 class TestFlushInfoBatchTruncation:
@@ -203,11 +183,6 @@ class TestFlushInfoBatchTruncation:
         assert "5 more" in msg
 
 
-# ---------------------------------------------------------------------------
-# acknowledge — delegation to escalation tracker (lines 176-178)
-# ---------------------------------------------------------------------------
-
-
 class TestAcknowledge:
     def test_acknowledge_tracked_alert(self, router):
         alert = _make_alert(severity=AlertSeverity.CRITICAL, alert_id="c-1")
@@ -220,11 +195,6 @@ class TestAcknowledge:
         assert result is False
 
 
-# ---------------------------------------------------------------------------
-# tick — periodic maintenance (lines 190-210)
-# ---------------------------------------------------------------------------
-
-
 class TestTick:
     @pytest.mark.asyncio
     async def test_tick_flushes_info_batch(self, router, mock_telegram):
@@ -234,13 +204,11 @@ class TestTick:
         assert mock_telegram.send.await_count == 0
 
         await router.tick(now_ns=2_000_000_000_000_000_000)
-        # INFO batch should have been flushed
         mock_telegram.send.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_tick_with_aggregator_summaries(self, router, mock_telegram):
         """tick() sends suppression summaries from aggregator."""
-        # Simulate dedup: same dedup_key, different alert_ids
         a1 = _make_alert(dedup_key="dup", ts_ns=1_000_000_000_000_000_000, severity=AlertSeverity.WARN)
         a2 = _make_alert(
             dedup_key="dup", ts_ns=1_000_000_000_000_000_001, alert_id="a-002", severity=AlertSeverity.WARN
@@ -248,29 +216,20 @@ class TestTick:
         await router.emit(a1)
         await router.emit(a2)
 
-        # Flush expired with far-future time
         await router.tick(now_ns=9_999_999_999_999_999_999)
 
     @pytest.mark.asyncio
     async def test_tick_fires_due_escalations(self, router, mock_telegram, mock_webhook):
         """tick() re-sends alerts that are due for escalation."""
-        # Track an alert with a very old timestamp so escalation is immediately due
         alert = _make_alert(
             severity=AlertSeverity.CRITICAL,
             alert_id="esc-1",
-            ts_ns=100_000_000_000,  # Very old timestamp
+            ts_ns=100_000_000_000,
         )
         router._escalation.track(alert)
 
-        # Call tick with a far-future time so the escalation interval is exceeded
         await router.tick(now_ns=999_999_999_999_999_999)
-        # Should have sent via _send_critical (telegram + webhook)
         assert mock_telegram.send.await_count >= 1
-
-
-# ---------------------------------------------------------------------------
-# _format_alert — static method (lines 146-161)
-# ---------------------------------------------------------------------------
 
 
 class TestFormatAlert:

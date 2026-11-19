@@ -43,7 +43,6 @@ logger = get_logger("quarantine_requests")
 
 REQUEST_SUFFIX = ".json"
 
-#: Requests older than this are retired without being applied.
 DEFAULT_MAX_AGE_S = 86_400.0
 
 
@@ -94,7 +93,7 @@ def pending(base_dir: Path) -> list[QuarantineRequest]:
     for entry in sorted(directory.glob(f"*{REQUEST_SUFFIX}")):
         try:
             payload: Any = json.loads(entry.read_text(encoding="utf-8"))
-        except Exception as exc:  # noqa: BLE001 - unreadable request is operator-visible
+        except Exception as exc:
             logger.warning("quarantine_request_unreadable", path=str(entry), error=str(exc))
             continue
         if not isinstance(payload, dict):

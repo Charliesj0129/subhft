@@ -91,11 +91,6 @@ def _outcomes(adapter: OrderAdapter) -> list[str]:
     return [c.kwargs["outcome"] for c in adapter.metrics.phantom_bound_total.labels.call_args_list]
 
 
-# --------------------------------------------------------------------------- #
-# A fill that outlives the phantom TTL                                         #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.asyncio
 async def test_a_fill_after_the_phantom_ttl_is_claimed_by_its_strategy(tmp_config):
     adapter = _adapter(tmp_config)
@@ -158,11 +153,6 @@ def test_the_expired_ledger_is_bounded(tmp_config):
         adapter._get_expired_phantoms().append((0.0, f"{_STRATEGY}:{i}", "TMFJ6", 1))
 
     assert len(adapter._get_expired_phantoms()) == adapter_module._EXPIRED_PHANTOM_MAX
-
-
-# --------------------------------------------------------------------------- #
-# A cancel by broker id that beats the Trade                                   #
-# --------------------------------------------------------------------------- #
 
 
 def _cancel(target: str) -> OrderCommand:

@@ -19,10 +19,6 @@ from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _FILL_SEQ = 0
 
 
@@ -79,11 +75,6 @@ def _isolate_fill_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 2_000_000)
 
 
-# ===========================================================================
-# 1. Fill -> Normalize -> Position flow
-# ===========================================================================
-
-
 class TestFillNormalizePositionFlow:
     """End-to-end: raw deal event -> normalize_fill -> PositionStore.on_fill -> PositionDelta."""
 
@@ -111,7 +102,6 @@ class TestFillNormalizePositionFlow:
         assert fill is not None
         assert fill.strategy_id == "strat1"
         assert fill.symbol == "2330"
-        # Price should be scaled integer (100.5 * 10000 = 1_005_000)
         assert fill.price == 1_005_000
 
         delta = store.on_fill(fill)
@@ -126,7 +116,6 @@ class TestFillNormalizePositionFlow:
         monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
         normalizer = ExecutionNormalizer()
 
-        # Open at 500.25 -> 5_002_500
         raw_buy = RawExecEvent(
             topic="deal",
             data={
@@ -149,7 +138,6 @@ class TestFillNormalizePositionFlow:
         delta_open = store.on_fill(fill_buy)
         assert delta_open.avg_price == 5_002_500
 
-        # Close at 501.50 -> 5_015_000
         raw_sell = RawExecEvent(
             topic="deal",
             data={
@@ -170,7 +158,6 @@ class TestFillNormalizePositionFlow:
         assert fill_sell.price == 5_015_000
 
         delta_close = store.on_fill(fill_sell)
-        # PnL = (5_015_000 - 5_002_500) * 5 = 62_500
         assert delta_close.realized_pnl == 62_500
         assert delta_close.net_qty == 0
 
@@ -179,18 +166,9 @@ class TestFillNormalizePositionFlow:
         monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
         normalizer = ExecutionNormalizer()
 
-        # Non-dict data
         raw = RawExecEvent(topic="deal", data="not-a-dict", ingest_ts_ns=time.time_ns())
         result = normalizer.normalize_fill(raw)
-        # Should not crash; returns None or a FillEvent with defaults
-        # The normalizer uses getattr fallback, so it may return a fill with 0 qty
-        # Either None or zero-qty fill is acceptable graceful handling
         assert result is None or result.qty == 0
-
-
-# ===========================================================================
-# 2. Position Store
-# ===========================================================================
 
 
 class TestPositionStoreSingleFill:
@@ -223,33 +201,24 @@ class TestPositionDrawdown:
         assert store.get_drawdown_pct() == 0.0
 
     def test_drawdown_after_profit_then_loss(self, store):
-        # Profitable trade: buy 10 @ 500, sell 10 @ 530
-        # Peak must exceed cold-start threshold (2_000_000) for drawdown to be reported.
         store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000, strategy_id="s1"))
         store.on_fill(_make_fill(Side.SELL, qty=10, price=530_0000, strategy_id="s1"))
-        # realized_pnl = (530-500)*10 = 300_0000 = 3_000_000
         assert store.total_pnl == 300_0000
-        assert store.get_drawdown_pct() == 0.0  # at peak
+        assert store.get_drawdown_pct() == 0.0
 
-        # Losing trade: buy 10 @ 540, sell 10 @ 510
         store.on_fill(_make_fill(Side.BUY, qty=10, price=540_0000, strategy_id="s1"))
         store.on_fill(_make_fill(Side.SELL, qty=10, price=510_0000, strategy_id="s1"))
-        # realized_pnl now = 300_0000 + (510-540)*10 = 300_0000 - 300_0000 = 0
         assert store.total_pnl == 0
-        # Drawdown = (peak - current) / peak = (300_0000 - 0) / 300_0000 = 1.0
         assert store.get_drawdown_pct() == pytest.approx(1.0)
 
     def test_drawdown_partial(self, store):
-        # Win: buy 10 @ 500, sell 10 @ 520 -> pnl = 200_0000
         store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000, strategy_id="s1"))
         store.on_fill(_make_fill(Side.SELL, qty=10, price=520_0000, strategy_id="s1"))
         assert store.total_pnl == 200_0000
 
-        # Lose half: buy 10 @ 520, sell 10 @ 510 -> pnl delta = -100_0000
         store.on_fill(_make_fill(Side.BUY, qty=10, price=520_0000, strategy_id="s1"))
         store.on_fill(_make_fill(Side.SELL, qty=10, price=510_0000, strategy_id="s1"))
         assert store.total_pnl == 100_0000
-        # Drawdown = (200_0000 - 100_0000) / 200_0000 = 0.5
         assert store.get_drawdown_pct() == pytest.approx(0.5)
 
 
@@ -257,24 +226,18 @@ class TestPositionMultiFillLifecycle:
     """Open -> partial close -> full close lifecycle."""
 
     def test_open_partial_close_full_close(self, store):
-        # Open long 10 @ 500
         d1 = store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000))
         assert d1.net_qty == 10
         assert d1.avg_price == 500_0000
         assert d1.realized_pnl == 0
 
-        # Partial close: sell 3 @ 520
         d2 = store.on_fill(_make_fill(Side.SELL, qty=3, price=520_0000))
         assert d2.net_qty == 7
-        assert d2.avg_price == 500_0000  # avg unchanged on partial close
-        # PnL = (520_0000 - 500_0000) * 3 = 60_0000
+        assert d2.avg_price == 500_0000
         assert d2.realized_pnl == 60_0000
 
-        # Full close: sell remaining 7 @ 510
         d3 = store.on_fill(_make_fill(Side.SELL, qty=7, price=510_0000))
         assert d3.net_qty == 0
-        # Additional PnL = (510_0000 - 500_0000) * 7 = 70_0000
-        # Total = 60_0000 + 70_0000 = 130_0000
         assert d3.realized_pnl == 130_0000
 
 
@@ -284,38 +247,28 @@ class TestPositionRealizedPnl:
     def test_long_profit(self, store):
         store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000))
         delta = store.on_fill(_make_fill(Side.SELL, qty=10, price=510_0000))
-        # (510 - 500) * 10 * 10000 = 100_0000
         assert delta.realized_pnl == 100_0000
 
     def test_long_loss(self, store):
         store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000))
         delta = store.on_fill(_make_fill(Side.SELL, qty=10, price=490_0000))
-        # (490 - 500) * 10 * 10000 = -100_0000
         assert delta.realized_pnl == -100_0000
 
     def test_short_profit(self, store):
         store.on_fill(_make_fill(Side.SELL, qty=10, price=600_0000))
         delta = store.on_fill(_make_fill(Side.BUY, qty=10, price=590_0000))
-        # (600 - 590) * 10 * 10000 = 100_0000
         assert delta.realized_pnl == 100_0000
 
     def test_short_loss(self, store):
         store.on_fill(_make_fill(Side.SELL, qty=10, price=600_0000))
         delta = store.on_fill(_make_fill(Side.BUY, qty=10, price=610_0000))
-        # (600 - 610) * 10 * 10000 = -100_0000
         assert delta.realized_pnl == -100_0000
 
     def test_fees_do_not_affect_realized_pnl(self, store):
         """Fees are tracked separately from realized PnL."""
         store.on_fill(_make_fill(Side.BUY, qty=10, price=500_0000, fee=1000, tax=500))
         delta = store.on_fill(_make_fill(Side.SELL, qty=10, price=510_0000, fee=1000, tax=500))
-        # PnL ignores fees
         assert delta.realized_pnl == 100_0000
-
-
-# ===========================================================================
-# 3. Router
-# ===========================================================================
 
 
 class TestExecutionRouterFillRouting:
@@ -361,10 +314,8 @@ class TestExecutionRouterFillRouting:
         )
         await raw_queue.put(raw)
 
-        # Run router for one iteration then stop
         async def _run_one():
             router.running = True
-            # Process one event then stop
             task = asyncio.create_task(router.run())
             await asyncio.sleep(0.05)
             router.running = False
@@ -376,9 +327,7 @@ class TestExecutionRouterFillRouting:
 
         await _run_one()
 
-        # Bus should have been called with PositionDelta and FillEvent
         assert bus.publish_many_nowait.called or bus.publish_nowait is not None
-        # Position store should have the position
         assert len(position_store.positions) == 1
         key = list(position_store.positions.keys())[0]
         pos = position_store.positions[key]
@@ -408,7 +357,6 @@ class TestExecutionRouterFillRouting:
             terminal_handler=terminal_handler,
         )
 
-        # Filled order should trigger terminal handler (status >= 3)
         raw = RawExecEvent(
             topic="order",
             data={
@@ -434,7 +382,6 @@ class TestExecutionRouterFillRouting:
 
         await _run_one()
 
-        # Terminal handler should have been called for FILLED status
         assert terminal_handler.called
 
     @pytest.mark.asyncio
@@ -456,7 +403,7 @@ class TestExecutionRouterFillRouting:
         router = ExecutionRouter(
             bus=bus,
             raw_queue=raw_queue,
-            order_id_map={},  # Empty map -> UNKNOWN strategy
+            order_id_map={},
             position_store=position_store,
             terminal_handler=terminal_handler,
         )
@@ -490,7 +437,6 @@ class TestExecutionRouterFillRouting:
 
         await _run_one()
 
-        # Position store should be empty since orphan goes to DLQ
         assert len(position_store.positions) == 0
 
     @pytest.mark.asyncio
@@ -517,7 +463,6 @@ class TestExecutionRouterFillRouting:
             terminal_handler=terminal_handler,
         )
 
-        # Unknown topic
         raw = RawExecEvent(
             topic="unknown_topic",
             data={"something": "irrelevant"},
@@ -538,7 +483,6 @@ class TestExecutionRouterFillRouting:
 
         await _run_one()
 
-        # Router should survive; no positions created, no bus publishes for unknown topic
         assert len(position_store.positions) == 0
         assert not bus.publish_many_nowait.called
 
@@ -566,11 +510,9 @@ class TestExecutionRouterFillRouting:
             terminal_handler=terminal_handler,
         )
 
-        # Malformed: data is None
         raw = RawExecEvent(topic="deal", data=None, ingest_ts_ns=time.time_ns())
         await raw_queue.put(raw)
 
-        # Then a valid event to prove router survived
         raw_valid = RawExecEvent(
             topic="deal",
             data={
@@ -601,5 +543,4 @@ class TestExecutionRouterFillRouting:
 
         await _run_two()
 
-        # Router should have survived the malformed event and processed the valid one
         assert len(position_store.positions) == 1

@@ -55,8 +55,8 @@ class TestTtlExpiry:
     async def test_expired_intent_rejected_by_ttl(self, engine: RiskEngine) -> None:
         """Intent with ttl_ns=1ms but timestamp 10ms old is rejected without evaluate()."""
         now_ns = 1_000_000_000
-        ttl_ns = 1_000_000  # 1ms
-        ts_ns = now_ns - 10_000_000  # 10ms ago — expired
+        ttl_ns = 1_000_000
+        ts_ns = now_ns - 10_000_000
 
         intent = _make_intent(intent_id=1, ttl_ns=ttl_ns, timestamp_ns=ts_ns)
         engine.intent_queue.put_nowait(intent)
@@ -71,15 +71,14 @@ class TestTtlExpiry:
         except asyncio.CancelledError:
             pass
 
-        # Intent was rejected — nothing in order_queue
         assert engine.order_queue.empty()
 
     @pytest.mark.asyncio
     async def test_fresh_intent_passes_ttl_check(self, engine: RiskEngine) -> None:
         """Intent with ttl_ns=1s and recent timestamp passes through to evaluate()."""
         now_ns = 1_000_000_000_000
-        ttl_ns = 1_000_000_000  # 1s
-        ts_ns = now_ns - 1_000_000  # 1ms ago — fresh
+        ttl_ns = 1_000_000_000
+        ts_ns = now_ns - 1_000_000
 
         intent = _make_intent(intent_id=2, ttl_ns=ttl_ns, timestamp_ns=ts_ns)
         engine.intent_queue.put_nowait(intent)
@@ -94,13 +93,11 @@ class TestTtlExpiry:
         except asyncio.CancelledError:
             pass
 
-        # Intent passed TTL check and was approved — must appear in order_queue
         assert not engine.order_queue.empty()
 
     @pytest.mark.asyncio
     async def test_zero_ttl_means_no_expiry(self, engine: RiskEngine) -> None:
         """Intent with ttl_ns=0 always passes regardless of age (backward compat)."""
-        # timestamp very old, ttl=0 → never expire
         intent = _make_intent(intent_id=3, ttl_ns=0, timestamp_ns=1)
         engine.intent_queue.put_nowait(intent)
 
@@ -113,15 +110,14 @@ class TestTtlExpiry:
         except asyncio.CancelledError:
             pass
 
-        # ttl=0 skips expiry check → approved and forwarded
         assert not engine.order_queue.empty()
 
     @pytest.mark.asyncio
     async def test_ttl_rejection_sends_feedback(self, engine: RiskEngine) -> None:
         """Expired intent sends RiskFeedback with reason_code=TTL_EXPIRED to rejection_sink."""
         now_ns = 2_000_000_000
-        ttl_ns = 1_000_000  # 1ms
-        ts_ns = now_ns - 10_000_000  # 10ms ago — expired
+        ttl_ns = 1_000_000
+        ts_ns = now_ns - 10_000_000
 
         intent = _make_intent(intent_id=42, ttl_ns=ttl_ns, timestamp_ns=ts_ns)
         engine.intent_queue.put_nowait(intent)
@@ -159,11 +155,10 @@ class TestStrategyRunnerDefaultTtl:
 
     def test_default_ttl_propagated_to_typed_intent(self) -> None:
         """_intent_factory uses _default_intent_ttl_ns at tuple position [15]."""
-        expected_ttl_ns = 3000 * 1_000_000  # 3000 ms
+        expected_ttl_ns = 3000 * 1_000_000
         runner = self._make_runner(ttl_ms="3000")
         assert runner._default_intent_ttl_ns == expected_ttl_ns
 
-        # Force typed fastpath on
         runner._typed_intent_fastpath = True
         intent_tuple = runner._intent_factory(
             strategy_id="s1",
@@ -183,11 +178,10 @@ class TestStrategyRunnerDefaultTtl:
 
     def test_default_ttl_propagated_to_order_intent(self) -> None:
         """_intent_factory uses _default_intent_ttl_ns on the OrderIntent path."""
-        expected_ttl_ns = 2000 * 1_000_000  # 2000 ms
+        expected_ttl_ns = 2000 * 1_000_000
         runner = self._make_runner(ttl_ms="2000")
         assert runner._default_intent_ttl_ns == expected_ttl_ns
 
-        # Force non-fastpath (OrderIntent object)
         runner._typed_intent_fastpath = False
         intent = runner._intent_factory(
             strategy_id="s1",

@@ -100,9 +100,7 @@ class TestSlotsCreatedOnCreateFacades:
         pool, path = _make_pool(num_conns=2)
         try:
             pool.create_facades()
-            # Group 0 has 2330, 2317
             assert pool._slots[0].symbols == {"2330", "2317"}
-            # Group 1 has TXFD6
             assert pool._slots[1].symbols == {"TXFD6"}
         finally:
             pool.cleanup_shards()
@@ -146,11 +144,10 @@ class TestGetHealthyFeedGapS:
             pool.create_facades()
             for slot in pool._slots:
                 slot.state = FacadeState.CONNECTED
-            # Make slot 0 have a larger gap by setting last_data_mono in the past
             pool._slots[0].last_data_mono = time.monotonic() - 5.0
             pool._slots[1].last_data_mono = time.monotonic() - 1.0
             gap = pool.get_healthy_feed_gap_s()
-            assert gap >= 4.5  # slot 0 gap should be ~5s
+            assert gap >= 4.5
             assert gap < 6.0
         finally:
             pool.cleanup_shards()
@@ -162,14 +159,12 @@ class TestGetHealthyFeedGapS:
         pool, path = _make_pool(num_conns=2)
         try:
             pool.create_facades()
-            # Slot 0 is DEGRADED with huge gap — should be excluded
             pool._slots[0].state = FacadeState.DEGRADED
             pool._slots[0].last_data_mono = time.monotonic() - 100.0
-            # Slot 1 is CONNECTED with small gap
             pool._slots[1].state = FacadeState.CONNECTED
             pool._slots[1].last_data_mono = time.monotonic() - 0.5
             gap = pool.get_healthy_feed_gap_s()
-            assert gap < 2.0  # Only slot 1's gap counts
+            assert gap < 2.0
         finally:
             pool.cleanup_shards()
             os.unlink(path)
@@ -186,10 +181,8 @@ class TestReconnectPerFacade:
             pool.create_facades()
             for slot in pool._slots:
                 slot.state = FacadeState.CONNECTED
-            # Both CONNECTED — reconnect should be a no-op, return True
             result = pool.reconnect(reason="test")
             assert result is True
-            # Neither facade's reconnect() should have been called
             for slot in pool._slots:
                 slot.facade.reconnect.assert_not_called()
         finally:
@@ -206,9 +199,7 @@ class TestReconnectPerFacade:
             pool._slots[1].state = FacadeState.DISCONNECTED
             result = pool.reconnect(reason="test")
             assert result is True
-            # Slot 0 (CONNECTED) should NOT have been reconnected
             pool._slots[0].facade.reconnect.assert_not_called()
-            # Slot 1 (DISCONNECTED) should have been reconnected
             pool._slots[1].facade.reconnect.assert_called_once()
             assert pool._slots[1].state == FacadeState.CONNECTED
             assert pool._slots[1].reconnect_failures == 0
@@ -278,7 +269,6 @@ class TestScheduleReconnect:
             pool.create_facades()
             pool._slots[0].state = FacadeState.DEGRADED
             pool._schedule_reconnect("0")
-            # Wait for background thread to complete
             import threading
 
             for t in threading.enumerate():
@@ -299,7 +289,6 @@ class TestScheduleReconnect:
             pool._slots[0].state = FacadeState.RECOVERING
             before_mono = pool._slots[0].last_reconnect_mono
             pool._schedule_reconnect("0")
-            # Should not have updated the timestamp
             assert pool._slots[0].last_reconnect_mono == before_mono
         finally:
             pool.cleanup_shards()
@@ -331,7 +320,6 @@ class TestNotifyWarmupReset:
         pool, path = _make_pool(num_conns=2)
         try:
             pool.create_facades()
-            # Should not raise when lob/feature_engine are None
             pool._notify_warmup_reset("0")
             assert pool._clients is not None
         finally:
@@ -357,13 +345,11 @@ class TestSubscribeAllWrapper:
             for slot in pool._slots:
                 slot.facade.subscribe_basket = capture_subscribe
 
-            # Disable options refresh for test
             with patch.dict(os.environ, {"HFT_OPTIONS_AUTO_REFRESH": "0"}):
                 pool.subscribe_all(lambda: "original")
 
             assert len(captured_cbs) == 2
 
-            # Set last_data_mono to the past and call the wrapper
             pool._slots[0].last_data_mono = time.monotonic() - 100.0
             before = pool._slots[0].last_data_mono
             captured_cbs[0]()

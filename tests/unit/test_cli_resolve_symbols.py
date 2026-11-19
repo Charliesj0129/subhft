@@ -19,7 +19,6 @@ class TestCmdResolveSymbolsBrokerDispatch:
         """With HFT_BROKER=shioaji and shioaji not installed, exit gracefully."""
         monkeypatch.setenv("HFT_BROKER", "shioaji")
 
-        # Patch _resolve_symbols_shioaji to simulate ImportError → sys.exit(1)
         def _shioaji_import_fail(_args: object) -> None:
             raise SystemExit(1)
 
@@ -34,7 +33,6 @@ class TestCmdResolveSymbolsBrokerDispatch:
         monkeypatch.setenv("HFT_BROKER", "fubon")
         from hft_platform.cli import cmd_resolve_symbols
 
-        # Should NOT raise or exit
         assert cmd_resolve_symbols(_make_args()) is None
 
     def test_unknown_broker_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -48,7 +46,6 @@ class TestCmdResolveSymbolsBrokerDispatch:
     def test_default_broker_is_shioaji(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When HFT_BROKER is not set, defaults to shioaji."""
         monkeypatch.delenv("HFT_BROKER", raising=False)
-        # Patch _resolve_symbols_shioaji to verify it's called
         with mock.patch("hft_platform.cli._symbols._resolve_symbols_shioaji") as mock_shioaji:
             from hft_platform.cli import cmd_resolve_symbols
 

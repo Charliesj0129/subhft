@@ -36,10 +36,6 @@ from pathlib import Path
 
 KNOWN_DRIFT_FILE = Path(".agent/agent-docs-known-drift.txt")
 
-# A backtick token is treated as a repo path claim only when it is plainly
-# path-shaped: safe charset, and anchored at a known repo root (or an exact
-# well-known top-level file). Everything else (code, globs, placeholders,
-# relative mentions) is ignored rather than guessed at.
 _PATH_CHARSET = re.compile(r"^[A-Za-z0-9_.\-/]+$")
 _PATH_ROOTS = (
     ".agent/",
@@ -92,7 +88,6 @@ def extract_path_tokens(text: str) -> list[str]:
     tokens: list[str] = []
     for raw in _BACKTICK_TOKEN.findall(text):
         token = raw.strip().rstrip(".,;:")
-        # `file.py:32` style line refs: keep the path part only.
         if ":" in token:
             token = token.split(":", 1)[0]
         if not token or not _PATH_CHARSET.match(token):

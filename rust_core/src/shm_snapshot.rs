@@ -23,15 +23,13 @@ use std::fs::OpenOptions;
 
 const HEADER_SIZE: usize = 128;
 const SLOT_SIZE: usize = 256;
-const MAGIC: u64 = 0x0048_4654_534E_4150; // "HFT_SNAP" (truncated)
+const MAGIC: u64 = 0x0048_4654_534E_4150;
 
-// Offsets within a slot (in bytes)
 const SLOT_VERSION_OFF: usize = 0;
 const SLOT_TS_OFF: usize = 8;
 const SLOT_HASH_OFF: usize = 16;
-const SLOT_LOB_OFF: usize = 24; // 9 × i64 = 72B
-const SLOT_FEAT_OFF: usize = 96; // 16 × i64 = 128B
-                                 // total used: 96 + 128 = 224B, padding to 256B
+const SLOT_LOB_OFF: usize = 24;
+const SLOT_FEAT_OFF: usize = 96;
 
 /// Number of i64 LOB fields per slot.
 const LOB_FIELDS: usize = 9;
@@ -80,13 +78,11 @@ impl ShmSnapshotTable {
 
         if create {
             unsafe {
-                // Zero everything
                 std::ptr::write_bytes(base, 0, size);
-                // Write magic + max_symbols
+
                 let hdr = base as *mut u64;
                 std::ptr::write_volatile(hdr, MAGIC);
                 std::ptr::write_volatile(hdr.add(1), max_symbols as u64);
-                // global_version starts at 0
             }
         }
 
@@ -136,35 +132,27 @@ impl ShmSnapshotTable {
             let slot_base = self.base.add(HEADER_SIZE + slot_idx * SLOT_SIZE);
             let ver_ptr = slot_base.add(SLOT_VERSION_OFF) as *mut u64;
 
-            // Seqlock: read current version, write odd (in-progress)
             let cur_ver = std::ptr::read_volatile(ver_ptr);
-            let new_ver = cur_ver.wrapping_add(1); // odd = writing
+            let new_ver = cur_ver.wrapping_add(1);
             std::ptr::write_volatile(ver_ptr, new_ver);
 
-            // Store fence: ensure version is visible before data write
             std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
 
-            // Write ts_ns
             let ts_ptr = slot_base.add(SLOT_TS_OFF) as *mut i64;
             std::ptr::write_volatile(ts_ptr, ts_ns);
 
-            // Write symbol_hash
             let hash_ptr = slot_base.add(SLOT_HASH_OFF) as *mut u64;
             std::ptr::write_volatile(hash_ptr, symbol_hash);
 
-            // Write LOB fields
             let lob_ptr = slot_base.add(SLOT_LOB_OFF) as *mut i64;
             std::ptr::copy_nonoverlapping(lob_fields.as_ptr(), lob_ptr, LOB_FIELDS);
 
-            // Write features
             let feat_ptr = slot_base.add(SLOT_FEAT_OFF) as *mut i64;
             std::ptr::copy_nonoverlapping(features.as_ptr(), feat_ptr, FEAT_FIELDS);
 
-            // Store fence + bump to even (stable)
             std::sync::atomic::fence(std::sync::atomic::Ordering::Release);
-            std::ptr::write_volatile(ver_ptr, new_ver.wrapping_add(1)); // even = done
+            std::ptr::write_volatile(ver_ptr, new_ver.wrapping_add(1));
 
-            // Bump global version
             let gv_ptr = (self.base as *mut u64).add(2);
             let gv = std::ptr::read_volatile(gv_ptr);
             std::ptr::write_volatile(gv_ptr, gv.wrapping_add(1));
@@ -197,21 +185,17 @@ impl ShmSnapshotTable {
             for _ in 0..16 {
                 let v1 = std::ptr::read_volatile(ver_ptr);
 
-                // Never written
                 if v1 == 0 {
                     return Ok(None);
                 }
 
-                // Odd version = write in progress, spin
                 if v1 & 1 != 0 {
                     std::hint::spin_loop();
                     continue;
                 }
 
-                // Load fence: ensure we see data written before version bump
                 std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
 
-                // Read data
                 let ts_ns = std::ptr::read_volatile(slot_base.add(SLOT_TS_OFF) as *const i64);
                 let symbol_hash =
                     std::ptr::read_volatile(slot_base.add(SLOT_HASH_OFF) as *const u64);
@@ -224,7 +208,6 @@ impl ShmSnapshotTable {
                 let feat_src = slot_base.add(SLOT_FEAT_OFF) as *const i64;
                 std::ptr::copy_nonoverlapping(feat_src, features.as_mut_ptr(), FEAT_FIELDS);
 
-                // Re-check version (seqlock validation)
                 std::sync::atomic::fence(std::sync::atomic::Ordering::Acquire);
                 let v2 = std::ptr::read_volatile(ver_ptr);
 
@@ -232,11 +215,9 @@ impl ShmSnapshotTable {
                     return Ok(Some((v1, ts_ns, symbol_hash, lob_fields, features)));
                 }
 
-                // Version changed — retry
                 std::hint::spin_loop();
             }
 
-            // All retries exhausted — return None (treat as unavailable)
             Ok(None)
         }
     }

@@ -91,8 +91,6 @@ class TestDlqDrainPreservesCoversOnHalt:
 
         engine._drain_order_dlq()
 
-        # Cover should be preserved in DLQ or drained to order_queue.
-        # Opener should be cleared.
         remaining_cmds = [c.cmd_id for c, _ in engine._order_dlq]
         drained_cmds = []
         while not engine.order_queue.empty():

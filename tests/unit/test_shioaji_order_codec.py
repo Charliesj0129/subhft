@@ -13,9 +13,6 @@ def codec() -> ShioajiOrderCodec:
     return ShioajiOrderCodec()
 
 
-# --- Side encoding ---
-
-
 class TestEncodeSide:
     def test_buy(self, codec: ShioajiOrderCodec) -> None:
         assert codec.encode_side(Side.BUY) == "Buy"
@@ -26,9 +23,6 @@ class TestEncodeSide:
     def test_invalid_raises(self, codec: ShioajiOrderCodec) -> None:
         with pytest.raises(ValueError, match="Unknown side"):
             codec.encode_side(999)  # type: ignore[arg-type]
-
-
-# --- TIF encoding ---
 
 
 class TestEncodeTif:
@@ -47,9 +41,6 @@ class TestEncodeTif:
     def test_invalid_raises(self, codec: ShioajiOrderCodec) -> None:
         with pytest.raises(ValueError, match="Unknown TIF"):
             codec.encode_tif(999)  # type: ignore[arg-type]
-
-
-# --- Price type encoding ---
 
 
 class TestEncodePriceType:
@@ -76,9 +67,6 @@ class TestEncodePriceType:
     def test_empty_raises(self, codec: ShioajiOrderCodec) -> None:
         with pytest.raises(ValueError, match="Unknown price_type"):
             codec.encode_price_type("")
-
-
-# --- Slots ---
 
 
 class TestSlots:

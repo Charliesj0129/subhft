@@ -111,7 +111,6 @@ def main() -> int:
         return int(_alpha_main(sys.argv[2:]))
 
     if cmd == _SCAFFOLD_CMD:
-        # Remove "scaffold" so alpha_scaffold's positional arg is alpha_id at [1].
         sys.argv.pop(1)
         from research.tools.alpha_scaffold import main as _scaffold_main
 
@@ -149,8 +148,6 @@ def main() -> int:
         return int(_maint_main())
 
     if cmd in _BATCH_CMDS:
-        # batch_search parses argv[1:] as queries; without the pop the command
-        # name itself became the first query.
         sys.argv.pop(1)
         from research.tools.batch_search import main as _batch_main
 

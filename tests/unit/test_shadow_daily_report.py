@@ -14,8 +14,6 @@ def test_compute_simulated_pnl_round_trip():
     point_values = {"TMF": 10}
     pnl = compute_simulated_pnl(orders, point_values, slippage_ticks=1, tick_size=1)
     assert isinstance(pnl, int)
-    # Buy at mid+1tick = 200_0001, sell at mid-1tick = 200_9999
-    # PnL = (200_9999 - 200_0001) * 1 / 10000 * 10 = ~10 NTD minus 2 ticks slippage
     assert pnl > 0, f"Expected positive PnL for round trip with rising price, got {pnl}"
 
 
@@ -51,8 +49,6 @@ def test_compute_simulated_pnl_loss():
     point_values = {"TMF": 10}
     pnl = compute_simulated_pnl(orders, point_values, slippage_ticks=1, tick_size=1)
     assert isinstance(pnl, int)
-    # Buy at 200_0001, sell at 198_9999
-    # PnL = (198_9999 - 200_0001) * 1 / 10000 * 10 = negative
     assert pnl < 0, f"Expected negative PnL for round trip with falling price, got {pnl}"
 
 
@@ -72,7 +68,6 @@ def test_compute_simulated_pnl_mxf_point_value():
 
     pnl_tmf = compute_simulated_pnl(orders_tmf, point_values, slippage_ticks=0, tick_size=0)
     pnl_mxf = compute_simulated_pnl(orders_mxf, point_values, slippage_ticks=0, tick_size=0)
-    # MXF should be 5x the PnL of TMF for same price move
     assert pnl_mxf == 5 * pnl_tmf, f"MXF PnL {pnl_mxf} should be 5x TMF PnL {pnl_tmf}"
 
 

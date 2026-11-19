@@ -25,10 +25,6 @@ from hft_platform.alpha._gate_a import (
 )
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_structured_npy(path: Path, fields: list[tuple[str, str]], n: int = 8) -> Path:
     """Create a structured .npy file with given dtype fields."""
@@ -53,11 +49,6 @@ def _simple_manifest(**kwargs):
     }
     defaults.update(kwargs)
     return types.SimpleNamespace(**defaults)
-
-
-# ---------------------------------------------------------------------------
-# _field_available
-# ---------------------------------------------------------------------------
 
 
 class TestFieldAvailable:
@@ -99,11 +90,6 @@ class TestFieldAvailable:
         assert not _field_available("bid_px", set())
 
 
-# ---------------------------------------------------------------------------
-# _load_data_fields
-# ---------------------------------------------------------------------------
-
-
 class TestLoadDataFields:
     def test_loads_npy_structured(self, tmp_path: Path):
         path = _make_structured_npy(
@@ -132,11 +118,6 @@ class TestLoadDataFields:
         np.savez(path, other=np.zeros(5))
         fields = _load_data_fields(str(path))
         assert fields == set()
-
-
-# ---------------------------------------------------------------------------
-# _check_hftbacktest_v2_data_format
-# ---------------------------------------------------------------------------
 
 
 class TestCheckHftbacktestV2DataFormat:
@@ -188,8 +169,6 @@ class TestCheckHftbacktestV2DataFormat:
         arr = np.zeros(5, dtype=[("exch_ts", "i8"), ("local_ts", "i8"), ("ev", "i4"), ("px", "i8")])
         np.savez(path, data=arr)
         errors = _check_hftbacktest_v2_data_format(str(path))
-        # May still have errors about first event not being DEPTH_SNAPSHOT_EVENT,
-        # but no structural errors should be present.
         structural = [e for e in errors if "int64" in e or "structured" in e or "Missing" in e]
         assert structural == []
 
@@ -198,11 +177,6 @@ class TestCheckHftbacktestV2DataFormat:
         path.write_bytes(b"not a numpy file")
         errors = _check_hftbacktest_v2_data_format(str(path))
         assert any("Failed to load" in e for e in errors)
-
-
-# ---------------------------------------------------------------------------
-# _load_paper_index / _resolve_paper_ref
-# ---------------------------------------------------------------------------
 
 
 class TestPaperIndex:
@@ -256,11 +230,6 @@ class TestPaperIndex:
         index = {"120": "not_a_dict", "121": {"arxiv_id": "123", "alphas": []}}
         key, row = _resolve_paper_ref("123", index)
         assert key == "121"
-
-
-# ---------------------------------------------------------------------------
-# _load_dataset_metadata / _validate_dataset_metadata
-# ---------------------------------------------------------------------------
 
 
 class TestDatasetMetadata:
@@ -405,11 +374,6 @@ class TestDatasetMetadata:
         assert "schema_version_not_int" in problems
 
 
-# ---------------------------------------------------------------------------
-# run_gate_a — integration-style tests
-# ---------------------------------------------------------------------------
-
-
 class TestRunGateA:
     def test_passes_basic(self, tmp_path: Path):
         path = _make_structured_npy(
@@ -488,7 +452,6 @@ class TestRunGateA:
 
     def test_paper_ref_unresolved_blocks(self, tmp_path: Path):
         path = _make_structured_npy(tmp_path / "feed.npy", [("px", "i8")])
-        # Create empty paper index
         idx_path = tmp_path / "research" / "knowledge" / "paper_index.json"
         idx_path.parent.mkdir(parents=True)
         idx_path.write_text("{}")
@@ -579,7 +542,6 @@ class TestRunGateA:
             enforce_data_governance=True,
         )
         report = run_gate_a(manifest, [str(path)], config=cfg)
-        # V2 format errors are advisory (non-blocking in Gate A)
         assert "invalid_data_formats" in report.details["data_governance"]
 
     def test_complexity_with_spaces_accepted(self, tmp_path: Path):

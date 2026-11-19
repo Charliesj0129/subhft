@@ -52,10 +52,6 @@ def classify_equity_source(
         return "real"
     if n_fills is not None and int(n_fills) == 0:
         return "real_no_trade"
-    # Constant equity with unknown / non-zero fills: treat as real to avoid
-    # falsely rejecting strategies whose P&L happened to be exactly flat
-    # on a tick boundary; the runner will downgrade to real_no_trade when
-    # it can prove zero fills.
     return "real"
 
 
@@ -109,7 +105,7 @@ def _extract_from_stats(hbt: Any, asset_id: int) -> EquitySeries | None:
             stats_obj = stats_fn(*args)
         except TypeError:
             continue
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             return None
         from_stats = _extract_from_named_fields(stats_obj)
         if from_stats is not None:
@@ -171,11 +167,11 @@ def _coerce_1d_array(value: Any, dtype: Any) -> np.ndarray | None:
         return None
     try:
         arr = np.asarray(value)
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return None
     if arr.ndim != 1 or arr.size == 0:
         return None
     try:
         return arr.astype(dtype, copy=False)
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return None

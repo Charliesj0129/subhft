@@ -24,10 +24,6 @@ from hft_platform.execution.positions import Position, PositionStore
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# ---------------------------------------------------------------------------
-# Fixtures (mirror tests/unit/test_position_store_unit.py)
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _disable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -63,7 +59,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
         None,
     )
     s = PositionStore()
-    # Hard-disable any rust tracker that may have leaked in.
     s._rust_tracker = None
     return s
 
@@ -97,24 +92,6 @@ def _make_fill(
     )
 
 
-# Common writer driver: mutates `positions` from a background thread to
-# induce dict-iteration races.  Aggressively add+pop keys under
-# `_fill_lock` so the dict size oscillates: this is the only way to
-# trigger CPython's "dictionary changed size during iteration"
-# RuntimeError in an unprotected reader.
-#
-# Strategy: keep a working set of N entries, repeatedly delete one and
-# add another DIFFERENT key.  Each individual mutation can land between
-# two `__next__` calls of an unprotected `for k in dict.items()` loop in
-# the reader — CPython detects size-change deltas and raises RuntimeError.
-#
-# Both the writer and its readers are bounded by ``_RACE_BUDGET_S`` as well as
-# by ``iterations``. The iteration count alone is a bet on how fast the machine
-# is: at 50 000 rounds these loops ran ~2 s idle but blew the 10 s pytest
-# timeout under a parallel run (2026-07-26). A race test only needs *many
-# interleavings*, and a wall-clock budget delivers those on any machine while
-# being incapable of timing the suite out. The iteration cap stays as the
-# early-exit for fast machines.
 _RACE_BUDGET_S = 2.0
 
 
@@ -127,7 +104,6 @@ def _writer_loop(
     errors: list[BaseException] = []
     deadline = time.monotonic() + _RACE_BUDGET_S if deadline is None else deadline
     try:
-        # Pre-fill working set so reader iteration is non-trivial.
         with store._fill_lock:
             for j in range(50):
                 key0 = f"acct1:strat1:WS{j}"
@@ -137,8 +113,6 @@ def _writer_loop(
             if stop.is_set() or time.monotonic() >= deadline:
                 break
             try:
-                # One mutation per acquire so reader has many windows to
-                # observe a size change.
                 old_key = f"acct1:strat1:WS{counter % 50}"
                 new_sym = f"WX{counter}"
                 new_key = f"acct1:strat1:{new_sym}"
@@ -149,17 +123,12 @@ def _writer_loop(
                     store.positions.pop(new_key, None)
                     store.positions[old_key] = Position("acct1", "strat1", f"WS{counter % 50}", net_qty=1)
                 counter += 1
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
                 break
     finally:
         stop.set()
     return errors
-
-
-# ---------------------------------------------------------------------------
-# R3-1 — MtMCalculator.calculate must not race on store.positions iteration
-# ---------------------------------------------------------------------------
 
 
 class TestR3_1_MtMCalculator:
@@ -171,7 +140,6 @@ class TestR3_1_MtMCalculator:
         size mid-iteration and triggers RuntimeError.
         GREEN after fix: snapshot_positions() returns isolated dict copy.
         """
-        # Pre-seed a couple of positions so first reads hit something.
         for sym in ("S0", "S1"):
             store.on_fill(_make_fill(symbol=sym, side=Side.BUY, fill_id=f"seed-{sym}"))
 
@@ -206,11 +174,6 @@ class TestR3_1_MtMCalculator:
         assert not writer_errors, f"writer crashed: {writer_errors!r}"
 
 
-# ---------------------------------------------------------------------------
-# R3-2 — _build_positions_by_strategy fallback dict(raw) must hold lock
-# ---------------------------------------------------------------------------
-
-
 class TestR3_2_BuildPositionsByStrategyFallback:
     def _runner_source(self) -> str:
         return (_REPO_ROOT / "src/hft_platform/strategy/runner.py").read_text()
@@ -227,9 +190,6 @@ class TestR3_2_BuildPositionsByStrategyFallback:
         wrap mandatory.
         """
         src = self._runner_source()
-        # Find the fallback block: after `if hasattr(... "snapshot_positions"):`
-        # the else: branch contains `raw = getattr(... "positions", None)`
-        # then `raw = dict(raw)`.
         m = re.search(
             r'if hasattr\(self\.position_store, "snapshot_positions"\):'
             r".*?"
@@ -239,8 +199,6 @@ class TestR3_2_BuildPositionsByStrategyFallback:
         )
         assert m is not None, "fallback `raw = dict(raw)` block not found"
         block = m.group(0)
-        # The dict-copy site MUST be inside a `with ... _fill_lock` block.
-        # Look for the pattern in the fallback branch.
         assert "_fill_lock" in block, f"fallback `raw = dict(raw)` block is not guarded by _fill_lock: {block!r}"
 
     def test_fallback_dict_copy_runs_without_error(self, store: PositionStore) -> None:
@@ -279,7 +237,6 @@ class TestR3_2_BuildPositionsByStrategyFallback:
                     "acct1:strat1:X": Position("acct1", "strat1", "X", net_qty=2),
                 }
                 self._rust_tracker = None
-                # No _fill_lock attribute, no snapshot_positions method.
                 self._recovery_positions = {}
 
         from hft_platform.strategy.runner import StrategyRunner
@@ -289,11 +246,6 @@ class TestR3_2_BuildPositionsByStrategyFallback:
         runner._position_key_cache = {}
         result = runner._build_positions_by_strategy()
         assert result == {"strat1": {"X": 2}}
-
-
-# ---------------------------------------------------------------------------
-# R3-3 — _recovery_positions iteration must be snapshotted under lock
-# ---------------------------------------------------------------------------
 
 
 class TestR3_3_RecoveryPositionsRead:
@@ -309,8 +261,6 @@ class TestR3_3_RecoveryPositionsRead:
         runner.position_store = store
         runner._position_key_cache = {}
 
-        # Pre-seed _recovery_positions with many entries; writer keeps adding
-        # via on_fill_recovery_position so reader observes a moving target.
         for i in range(20):
             store._recovery_positions[f"acct1:strat1:S{i}"] = {
                 "net_qty": 1,
@@ -328,7 +278,6 @@ class TestR3_3_RecoveryPositionsRead:
                     if stop.is_set():
                         break
                     key = f"acct1:strat1:R{i % 100}"
-                    # Mutate under lock the same way on_fill does.
                     with store._fill_lock:
                         store._recovery_positions[key] = {
                             "net_qty": (i % 5) + 1,
@@ -337,11 +286,10 @@ class TestR3_3_RecoveryPositionsRead:
                             "strategy_id": "strat1",
                         }
                         if i % 7 == 0 and store._recovery_positions:
-                            # Pop a random key (mirrors on_fill behaviour).
                             for k in list(store._recovery_positions):
                                 store._recovery_positions.pop(k, None)
                                 break
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 writer_errors.append(exc)
             finally:
                 stop.set()
@@ -365,16 +313,10 @@ class TestR3_3_RecoveryPositionsRead:
         assert not writer_errors, f"writer crashed: {writer_errors!r}"
 
 
-# ---------------------------------------------------------------------------
-# R3-4 — _get_symbol_net_qty must snapshot positions under lock
-# ---------------------------------------------------------------------------
-
-
 class TestR3_4_GetSymbolNetQty:
     def test_get_symbol_net_qty_does_not_race(self, store: PositionStore) -> None:
         from hft_platform.strategy.runner import _get_symbol_net_qty
 
-        # Pre-seed.
         for sym in ("S0", "S1"):
             store.on_fill(_make_fill(symbol=sym, fill_id=f"seed-{sym}"))
 
@@ -403,11 +345,6 @@ class TestR3_4_GetSymbolNetQty:
         assert not writer_errors, f"writer crashed: {writer_errors!r}"
 
 
-# ---------------------------------------------------------------------------
-# R3-5 — Router _pre_realized snapshot reads must hold _fill_lock
-# ---------------------------------------------------------------------------
-
-
 class TestR3_5_RouterPreRealizedSnapshot:
     """Source-level audit: the router's three fill paths (live, shutdown drain,
     DLQ retry) take their pre-fill realized PnL from ``_realized_before``, and
@@ -426,20 +363,13 @@ class TestR3_5_RouterPreRealizedSnapshot:
 
     def test_pre_realized_reads_are_lock_guarded(self) -> None:
         router = self._source("src/hft_platform/execution/router.py")
-        # The three fill paths share one helper.
         assert len(re.findall(r"self\._realized_before\((?:fill_event|fill)\)", router)) >= 3
         helper = self._method(router, "_realized_before")
         assert "realized_before_fill" in helper
-        # The test-double fallback reads under the lock when the double has one.
         assert "with fill_lock:" in helper
 
         store_method = self._method(self._source("src/hft_platform/execution/positions.py"), "realized_before_fill")
         assert "with self._fill_lock:" in store_method
-
-
-# ---------------------------------------------------------------------------
-# R3-6 — get_drawdown_pct must read peak/total under lock to avoid torn pair
-# ---------------------------------------------------------------------------
 
 
 class TestR3_6_GetDrawdownPct:
@@ -473,8 +403,8 @@ class TestR3_6_GetDrawdownPct:
         store._peak_equity_scaled = 20_000_000_000
         store._total_realized_pnl_scaled = 1
         regimes = [
-            (20_000_000_000, 20_000_000_000),  # dd=0.0
-            (20_000_000_000, 1),  # dd ~= 1.0
+            (20_000_000_000, 20_000_000_000),
+            (20_000_000_000, 1),
         ]
         valid_dds = {
             0.0,
@@ -493,7 +423,7 @@ class TestR3_6_GetDrawdownPct:
                     with store._fill_lock:
                         store._peak_equity_scaled = p
                         store._total_realized_pnl_scaled = c
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 writer_errors.append(exc)
             finally:
                 stop.set()
@@ -510,27 +440,11 @@ class TestR3_6_GetDrawdownPct:
             stop.set()
             t.join(timeout=5.0)
 
-        # Every observation must be a valid regime dd, OR exactly 0.0
-        # (cold-start guard at start) — not some intermediate torn value.
         invalid = [dd for dd in observations if not any(abs(dd - v) < 1e-9 for v in valid_dds)]
         assert not invalid, (
             f"observed {len(invalid)} torn dd values not in regime set {valid_dds}: first 5={invalid[:5]!r}"
         )
         assert not writer_errors, f"writer crashed: {writer_errors!r}"
-
-
-# ---------------------------------------------------------------------------
-# R3-3 hole — atomic snapshot of positions + recovery
-#
-# Codex stop-time review (2026-04-25) caught: _build_positions_by_strategy
-# takes the positions snapshot and the recovery snapshot in TWO separate
-# _fill_lock acquisitions. _seed_from_recovery (positions.py:347-379) runs
-# inside the writer's critical section and atomically pops a recovery
-# entry into self.positions. If a writer interleaves between the reader's
-# two lock acquisitions, the entry vanishes from BOTH snapshots: it was
-# popped from recovery AFTER the positions snapshot (so missing there)
-# but the recovery snapshot was taken AFTER the pop (so missing there too).
-# Fix: snapshot_positions_with_recovery() returns both under one lock.
 
 
 class TestSnapshotPositionsWithRecoveryAtomic:
@@ -548,7 +462,6 @@ class TestSnapshotPositionsWithRecoveryAtomic:
         or entirely after the reader's snapshot — the entry appears in
         exactly one of the two views, never neither.
         """
-        # Seed recovery with a known entry.
         store._recovery_positions["acct1:strat1:RECOV"] = {
             "account_id": "acct1",
             "strategy_id": "strat1",
@@ -559,18 +472,13 @@ class TestSnapshotPositionsWithRecoveryAtomic:
             "fees_scaled": 0,
         }
 
-        # The new public API must exist and atomically snapshot both.
         positions_snap, recovery_snap = store.snapshot_positions_with_recovery()
-        # Pre-write: should appear in recovery, not in positions.
         assert "acct1:strat1:RECOV" not in positions_snap
         assert "acct1:strat1:RECOV" in recovery_snap
 
-        # Now drive a fill that triggers _seed_from_recovery.
         fill = _make_fill(symbol="RECOV", qty=7, price=1000_0000)
         store.on_fill(fill)
 
-        # After the seed, recovery must be empty and positions must contain
-        # the merged key.
         positions_snap2, recovery_snap2 = store.snapshot_positions_with_recovery()
         assert "acct1:strat1:RECOV" in positions_snap2
         assert "acct1:strat1:RECOV" not in recovery_snap2
@@ -585,5 +493,4 @@ class TestSnapshotPositionsWithRecoveryAtomic:
         }
         _, recovery_snap = store.snapshot_positions_with_recovery()
         recovery_snap["acct1:strat1:ISO"]["net_qty"] = 999
-        # Original must be unaffected.
         assert store._recovery_positions["acct1:strat1:ISO"]["net_qty"] == 3

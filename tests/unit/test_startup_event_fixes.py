@@ -8,10 +8,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _patch_env(tmp_path, monkeypatch):
@@ -32,11 +28,6 @@ def _patch_metrics():
         with patch("hft_platform.strategy.runner.LatencyRecorder") as lr:
             lr.get.return_value = MagicMock()
             yield m
-
-
-# ---------------------------------------------------------------------------
-# Fix 1: StrategyRunner replays from start_cursor
-# ---------------------------------------------------------------------------
 
 
 def _make_bus_with_events(events):
@@ -97,9 +88,8 @@ class TestStrategyRunnerStartCursor:
         ]
         bus = _make_bus_with_events(events)
         runner = _make_runner(bus=bus)
-        runner.set_start_cursor(5)  # cursor before events were published
+        runner.set_start_cursor(5)
 
-        # Run with a timeout so it doesn't hang
         run_task = asyncio.create_task(runner.run())
         await asyncio.sleep(0.05)
         run_task.cancel()
@@ -108,7 +98,6 @@ class TestStrategyRunnerStartCursor:
         except asyncio.CancelledError:
             pass
 
-        # Verify start_cursor was passed to bus.consume
         assert bus._captured_kwargs.get("start_cursor") == 5
         assert bus._captured_kwargs.get("consumer_name") == "strategy_runner"
 
@@ -137,7 +126,6 @@ class TestStrategyRunnerStartCursor:
         events = [SimpleNamespace(symbol="TSMC", ts=0)]
         bus = _make_bus_with_events(events)
         runner = _make_runner(bus=bus)
-        # Do NOT set start_cursor
 
         run_task = asyncio.create_task(runner.run())
         await asyncio.sleep(0.05)
@@ -148,11 +136,6 @@ class TestStrategyRunnerStartCursor:
             pass
 
         assert bus._captured_kwargs.get("start_cursor") is None
-
-
-# ---------------------------------------------------------------------------
-# Fix 2: exec callback buffers when not running
-# ---------------------------------------------------------------------------
 
 
 class TestExecCallbackBuffersWhenNotRunning:
@@ -177,7 +160,6 @@ class TestExecCallbackBuffersWhenNotRunning:
         from hft_platform.services.system import HFTSystem
 
         sys_obj = self._make_system()
-        # Call _on_exec as unbound method with our fake system
         HFTSystem._on_exec(sys_obj, "deal", {"payload": {"price": 100}})
 
         assert len(sys_obj._exec_overflow_buf) == 1
@@ -193,7 +175,6 @@ class TestExecCallbackBuffersWhenNotRunning:
         sys_obj = self._make_system()
         sys_obj._exec_overflow_buf = collections.deque(maxlen=2)
         sys_obj._EXEC_OVERFLOW_MAX = 2
-        # Fill the buffer
         sys_obj._exec_overflow_buf.append("dummy1")
         sys_obj._exec_overflow_buf.append("dummy2")
 
@@ -201,7 +182,6 @@ class TestExecCallbackBuffersWhenNotRunning:
 
         assert sys_obj._exec_startup_overflow_lost is True
         assert sys_obj._exec_overflow_evicted == 1
-        # Buffer should still be at max (not grown)
         assert len(sys_obj._exec_overflow_buf) == 2
 
     def test_exec_callback_normal_when_running(self):
@@ -215,15 +195,8 @@ class TestExecCallbackBuffersWhenNotRunning:
 
         HFTSystem._on_exec(sys_obj, "order", {"state": "filled", "payload": {}})
 
-        # Should have called loop.call_soon_threadsafe
         sys_obj.loop.call_soon_threadsafe.assert_called_once()
-        # Buffer should be empty since it went through the normal path
         assert len(sys_obj._exec_overflow_buf) == 0
-
-
-# ---------------------------------------------------------------------------
-# Fix 3: startup fill backfill runs before recon/strategy
-# ---------------------------------------------------------------------------
 
 
 class _AsyncRunner:
@@ -246,10 +219,6 @@ class TestStartupFillBackfill:
 
         monkeypatch.setenv("HFT_CHECKPOINT_ENABLED", "0")
         monkeypatch.setenv("HFT_PNL_EXPORTER_ENABLED", "0")
-        # Disable the loop-stall watchdog: with the threshold <= 0 ``start()`` is
-        # a no-op (LoopStallWatchdog._enabled is False), so run() never spawns the
-        # daemon thread that would otherwise os._exit() the pytest process after
-        # the threshold — the stubbed stop_async() below never stops it.
         monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
         events: list[str] = []
 
@@ -271,33 +240,20 @@ class TestStartupFillBackfill:
             running=False,
             loop=None,
             _exec_startup_overflow_lost=False,
-            # run() consults this before starting the checkpoint writer: a
-            # startup recovery halt must not arm anything that overwrites the
-            # checkpoint it halted on.
             _recovery_halted=False,
             _md_record_direct=True,
             _fill_record_direct=True,
             _order_record_direct=True,
             _on_sighup=lambda: None,
             _on_exec=lambda *_args, **_kwargs: None,
-            # run() constructs the stall watchdog via this staticmethod; the
-            # SimpleNamespace stub must expose it the same way the real class does.
             _env_float=HFTSystem._env_float,
             _start_service=_start_service,
-            # run() also starts the loop-lag probe alongside the supervisor.
             _probe_event_loop_lag=MagicMock(return_value=asyncio.sleep(0)),
-            # run() starts the order-session watchdog with the rest of the
-            # order path when orders are enabled.
             _order_session_watchdog=MagicMock(return_value=asyncio.sleep(0)),
             _supervise=MagicMock(return_value=asyncio.sleep(0)),
-            # run() restores the daily-loss state and applies the durable
-            # manual latches before anything can dispatch.
             _restore_daily_loss_state=lambda: None,
             _apply_manual_latches=lambda _latches: None,
-            # ...and binds the checkpoint identity to the logged-in account
-            # before recovery reads the checkpoint.
             _bind_checkpoint_identity=lambda: True,
-            # ...and writes the BOOT guardrail row before both.
             _audit_engine_start=HFTSystem._audit_engine_start,
             stop_async=MagicMock(return_value=asyncio.sleep(0)),
             evidence_writer=MagicMock(record_transition=MagicMock()),
@@ -346,11 +302,6 @@ class TestStartupFillBackfill:
         assert events.index("startup_fill_backfill") < events.index("recon")
 
 
-# ---------------------------------------------------------------------------
-# Fix 4: audit log_order called in OrderAdapter dispatch
-# ---------------------------------------------------------------------------
-
-
 class TestOrderDispatchAudit:
     def test_set_audit_writer_stores_writer(self):
         """set_audit_writer injects the audit writer."""
@@ -375,7 +326,6 @@ class TestOrderDispatchAudit:
 
         adapter = self._make_adapter()
         assert adapter._audit_writer is None
-        # Should not raise
         adapter._audit_log_order({"event": "dispatched"})
 
     def test_audit_log_order_swallows_exception(self):  # noqa: no-assert
@@ -386,7 +336,6 @@ class TestOrderDispatchAudit:
         writer.log_order.side_effect = RuntimeError("audit broken")
         adapter.set_audit_writer(writer)
 
-        # Should not raise
         adapter._audit_log_order({"event": "dispatched"})
 
     @pytest.mark.asyncio
@@ -398,7 +347,6 @@ class TestOrderDispatchAudit:
         writer = MagicMock()
         adapter.set_audit_writer(writer)
 
-        # Create a minimal NEW order command
         intent = MagicMock(spec=OrderIntent)
         intent.intent_type = IntentType.NEW
         intent.strategy_id = "strat1"
@@ -418,7 +366,6 @@ class TestOrderDispatchAudit:
         cmd.decision_price = 5000000
         cmd.intent = intent
 
-        # Mock broker codec and client
         adapter._broker_codec = MagicMock()
         adapter._broker_codec.encode_side.return_value = "Buy"
         adapter._broker_codec.encode_tif.return_value = "ROD"
@@ -442,7 +389,6 @@ class TestOrderDispatchAudit:
 
         await adapter._dispatch_to_api(cmd)
 
-        # Verify audit was called
         assert writer.log_order.called
         call_data = writer.log_order.call_args[0][0]
         assert call_data["event"] == "dispatched"

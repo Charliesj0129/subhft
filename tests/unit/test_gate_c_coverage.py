@@ -20,10 +20,6 @@ import numpy as np
 
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
-# ---------------------------------------------------------------------------
-# GateReport basic tests (lines 48-51, 53-58)
-# ---------------------------------------------------------------------------
-
 
 def test_gate_report_creation():
     report = GateReport(gate="Gate C", passed=True, details={"key": "value"})
@@ -37,11 +33,6 @@ def test_gate_report_asdict():
     d = asdict(report)
     assert d["gate"] == "Gate C"
     assert d["passed"] is False
-
-
-# ---------------------------------------------------------------------------
-# ValidationConfig defaults and overrides (lines 60-61, 66, 69-80, 83)
-# ---------------------------------------------------------------------------
 
 
 def test_validation_config_defaults():
@@ -72,11 +63,6 @@ def test_validation_config_overrides():
     assert cfg.wf_n_splits == 3
 
 
-# ---------------------------------------------------------------------------
-# Test correction method logic in isolation (lines 90, 93, 95-100, 116, 118)
-# ---------------------------------------------------------------------------
-
-
 def test_bonferroni_correction_logic():
     """Validate bonferroni correction formula: adj = p * n_tests, threshold = alpha / n_tests."""
     raw_pvalues = [0.01, 0.04, 0.08]
@@ -104,11 +90,6 @@ def test_no_correction_logic():
     assert bh_adj_pvals == raw_pvalues
 
 
-# ---------------------------------------------------------------------------
-# Test core_passed logic (lines 140, 159-160)
-# ---------------------------------------------------------------------------
-
-
 def test_core_metrics_passed_logic():
     """Test the core_passed check: sharpe_oos >= min, drawdown >= -abs(max), turnover >= min."""
     cfg = ValidationConfig(
@@ -119,7 +100,6 @@ def test_core_metrics_passed_logic():
         min_turnover=0.01,
     )
 
-    # Pass case
     result = types.SimpleNamespace(sharpe_oos=0.8, max_drawdown=-0.1, turnover=0.05)
     core_passed = (
         result.sharpe_oos >= cfg.min_sharpe_oos
@@ -128,7 +108,6 @@ def test_core_metrics_passed_logic():
     )
     assert core_passed is True
 
-    # Fail: low sharpe
     result2 = types.SimpleNamespace(sharpe_oos=0.3, max_drawdown=-0.1, turnover=0.05)
     core_passed2 = (
         result2.sharpe_oos >= cfg.min_sharpe_oos
@@ -137,7 +116,6 @@ def test_core_metrics_passed_logic():
     )
     assert core_passed2 is False
 
-    # Fail: deep drawdown
     result3 = types.SimpleNamespace(sharpe_oos=0.8, max_drawdown=-0.5, turnover=0.05)
     core_passed3 = (
         result3.sharpe_oos >= cfg.min_sharpe_oos
@@ -145,11 +123,6 @@ def test_core_metrics_passed_logic():
         and result3.turnover >= cfg.min_turnover
     )
     assert core_passed3 is False
-
-
-# ---------------------------------------------------------------------------
-# Test maker_checks logic (lines 83, 90)
-# ---------------------------------------------------------------------------
 
 
 def test_maker_checks_logic():
@@ -184,11 +157,6 @@ def test_maker_checks_fail_low_sharpe():
     maker_thresholds = {"sharpe_is_min": 0.5}
     result = types.SimpleNamespace(sharpe_is=0.2)
     assert (result.sharpe_is >= maker_thresholds.get("sharpe_is_min", 0.5)) is False
-
-
-# ---------------------------------------------------------------------------
-# data_ul_advisory logic (lines 187, 197-201, 207)
-# ---------------------------------------------------------------------------
 
 
 def test_data_ul_advisory_low():
@@ -231,14 +199,8 @@ def test_data_ul_advisory_none():
     assert warn is True
 
 
-# ---------------------------------------------------------------------------
-# Walk-forward gating logic (lines 226-227)
-# ---------------------------------------------------------------------------
-
-
 def test_walk_forward_gate_logic():
     """Test walk-forward gate pass/fail conditions."""
-    # Pass case
     wf_result = types.SimpleNamespace(
         fold_consistency_pct=0.8,
         fold_sharpe_min=0.1,
@@ -255,7 +217,6 @@ def test_walk_forward_gate_logic():
     )
     assert wf_gate_passed is True
 
-    # Fail: low consistency
     wf_result_fail = types.SimpleNamespace(
         fold_consistency_pct=0.4,
         fold_sharpe_min=0.1,
@@ -267,11 +228,6 @@ def test_walk_forward_gate_logic():
         and float(wf_result_fail.fold_sharpe_min) >= float(config.wf_min_fold_sharpe_min)
     )
     assert wf_gate_failed is False
-
-
-# ---------------------------------------------------------------------------
-# Trend contamination logic (line 289)
-# ---------------------------------------------------------------------------
 
 
 def test_trend_contamination_skipped_when_mid_prices_unavailable():

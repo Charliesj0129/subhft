@@ -14,7 +14,6 @@ class _Writer:
         self.calls.append((table, list(data)))
 
     async def write_columnar(self, table, cols, data, count):
-        # Reconstruct row dicts for backward-compat assertions
         rows = []
         for i in range(count):
             rows.append({cols[j]: data[j][i] for j in range(len(cols))})

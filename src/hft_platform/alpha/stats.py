@@ -33,11 +33,6 @@ IC_DEGENERATE_PTP = 1e-12
 SHARPE_DEGENERATE_STD = 1e-12
 
 
-# ---------------------------------------------------------------------------
-# Sharpe: plain, probabilistic, expected maximum, deflated
-# ---------------------------------------------------------------------------
-
-
 def sharpe_ratio(values: Sequence[float] | np.ndarray, *, annualization: float = 1.0) -> float:
     """``mean / std * sqrt(annualization)`` of *values*, population std; 0 when undefined.
 
@@ -162,11 +157,6 @@ def sample_skew_kurtosis(values: Sequence[float] | np.ndarray) -> tuple[float, f
     return float(np.mean(centered**3)) / m2**1.5, float(np.mean(centered**4)) / m2**2
 
 
-# ---------------------------------------------------------------------------
-# Multiple testing
-# ---------------------------------------------------------------------------
-
-
 class BHResult(NamedTuple):
     """Benjamini-Hochberg outcome, both arrays in the input order."""
 
@@ -237,11 +227,6 @@ def effective_test_count(signals: Sequence[Sequence[float]] | np.ndarray) -> int
     contributions = (eigenvalues >= 1.0).astype(np.float64) + (eigenvalues - np.floor(eigenvalues))
     estimate = int(math.ceil(float(np.sum(contributions)) - 1e-12))
     return max(1, min(standardized.shape[0], estimate))
-
-
-# ---------------------------------------------------------------------------
-# Resampling
-# ---------------------------------------------------------------------------
 
 
 def day_bootstrap(
@@ -358,11 +343,6 @@ def cluster_bootstrap_mean(
         sample = np.concatenate([grouped[item] for item in selected])
         means[index] = float(np.mean(sample))
     return float(np.quantile(means, 0.05)), float(np.mean(means <= 0.0))
-
-
-# ---------------------------------------------------------------------------
-# Information coefficient
-# ---------------------------------------------------------------------------
 
 
 def _finite_pairs(

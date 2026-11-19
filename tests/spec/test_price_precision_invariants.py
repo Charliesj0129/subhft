@@ -19,11 +19,6 @@ except ImportError:
 SCALE = 10_000
 
 
-# ---------------------------------------------------------------------------
-# Tests: round-trip integrity
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
 class TestPricePrecisionInvariants:
     """Property-based tests proving integer-only scaling is safe while
@@ -50,21 +45,13 @@ class TestPricePrecisionInvariants:
         proving why the platform forbids float in financial paths.
         We collect failures and assert the integer path always works.
         """
-        # Float path (potentially lossy)
         float_result = int(price_scaled / SCALE * SCALE)
 
-        # Integer path (always exact)
         int_result = (price_scaled // SCALE) * SCALE + (price_scaled % SCALE)
 
-        # Integer path MUST always be exact
         assert int_result == price_scaled, f"Integer path failed for {price_scaled} — this should never happen"
 
-        # We do NOT assert float_result == price_scaled because it can fail.
-        # Instead, if it does fail, we note it (the property still passes).
-        # The point: integer-only is reliable, float is not.
         if float_result != price_scaled:
-            # This is expected for certain values — the test passes regardless.
-            # The invariant being tested is that the INTEGER path is always safe.
             pass
 
     @given(
@@ -90,9 +77,9 @@ class TestPricePrecisionInvariants:
         No precision is lost regardless of price magnitude.
         """
         entry = price
-        exit_price = price + 1  # 1 tick profit
+        exit_price = price + 1
         pnl = (exit_price - entry) * qty
-        assert pnl == qty  # exactly 1 scaled unit * qty
+        assert pnl == qty
 
     @given(
         a=st.integers(min_value=1, max_value=10**9),
@@ -119,15 +106,12 @@ class TestPricePrecisionInvariants:
         """Descaling for display (float division) must never be used to
         reconstruct the scaled value. This test verifies that naively
         rescaling a displayed float can produce a different integer."""
-        displayed = price_scaled / SCALE  # float for display
+        displayed = price_scaled / SCALE
         naive_rescale = int(displayed * SCALE)
 
-        # The integer source of truth is always preserved
-        assert price_scaled == price_scaled  # trivially true: source survives
+        assert price_scaled == price_scaled
 
-        # Document that naive rescale can drift (not asserting equality)
-        # This is the reason the Precision Law exists.
-        _ = naive_rescale  # used only to demonstrate the pattern
+        _ = naive_rescale
 
 
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
@@ -147,12 +131,7 @@ class TestFloatCorruptionEvidence:
         float_result = int(price_scaled / SCALE * SCALE)
         int_result = (price_scaled // SCALE) * SCALE + (price_scaled % SCALE)
 
-        # Integer path is always correct
         assert int_result == price_scaled
-
-        # Float path: we document behavior (may or may not fail depending on
-        # platform, but the RISK of failure is the point).
-        # The test passes regardless — it's documenting the invariant.
 
     @given(
         numerator=st.integers(min_value=1, max_value=10**15),
@@ -163,9 +142,7 @@ class TestFloatCorruptionEvidence:
         """Python's // operator performs floor division, which is deterministic
         and does not depend on floating-point hardware."""
         result = numerator // denominator
-        # Floor division property: result * denominator <= numerator
         assert result * denominator <= numerator
-        # And the next integer up would exceed it
         assert (result + 1) * denominator > numerator
 
     @given(
@@ -179,7 +156,6 @@ class TestFloatCorruptionEvidence:
         Unlike floats where a == b can be unreliable for computed values,
         integer equality is always correct.
         """
-        # Compute via different paths
         diff = price_a - price_b
         if diff > 0:
             assert price_a > price_b

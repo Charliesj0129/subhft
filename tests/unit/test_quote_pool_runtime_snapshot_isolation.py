@@ -35,10 +35,6 @@ from hft_platform.feed_adapter.shioaji.quote_connection_pool import (
     _resolve_runtime_snapshot_path,
 )
 
-# ---------------------------------------------------------------------------
-# Pure path resolver tests (no pool, no broker)
-# ---------------------------------------------------------------------------
-
 
 class TestResolveRuntimeSnapshotPath:
     def test_default_path_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,9 +76,6 @@ class TestResolveRuntimeSnapshotPath:
         same file the resolver would default to (``data/live_with_options.yaml``).
         The resolver MUST pick a path different from the input — falling
         back to the default would re-clobber the canonical file."""
-        # Simulate the collision: input == _DEFAULT_RUNTIME_SNAPSHOT_PATH.
-        # Use a tmp file to keep realpath deterministic, then point the
-        # default constant at it for the duration of the test.
         canonical = tmp_path / "live_with_options.yaml"
         canonical.write_text("symbols: []\n", encoding="utf-8")
         monkeypatch.setattr(qcp_mod, "_DEFAULT_RUNTIME_SNAPSHOT_PATH", str(canonical))
@@ -94,8 +87,6 @@ class TestResolveRuntimeSnapshotPath:
             "P2 #9: resolver returned the input path as the snapshot output — "
             "would self-clobber the canonical symbols file"
         )
-        # The default branch must not silently re-clobber, so resolver
-        # must escalate to the sidecar derived from the input.
         assert resolved == _derive_sidecar_path(str(canonical))
 
     def test_resolve_runtime_snapshot_path_double_collision_raises(
@@ -107,21 +98,12 @@ class TestResolveRuntimeSnapshotPath:
         canonical = tmp_path / "symbols.yaml"
         canonical.write_text("symbols: []\n", encoding="utf-8")
 
-        # Force env + default to point at the canonical file.
         monkeypatch.setattr(qcp_mod, "_DEFAULT_RUNTIME_SNAPSHOT_PATH", str(canonical))
         monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", str(canonical))
-        # Force the derived sidecar to also resolve to the canonical file
-        # (in real life this requires an unrealistic operator setup; we
-        # simulate it via monkeypatch to exercise the safety branch).
         monkeypatch.setattr(qcp_mod, "_derive_sidecar_path", lambda _p: str(canonical))
 
         with pytest.raises(RuntimeError, match="HFT_SYMBOLS_RUNTIME_SNAPSHOT"):
             _resolve_runtime_snapshot_path(str(canonical))
-
-
-# ---------------------------------------------------------------------------
-# End-to-end test through ``refresh_options_symbols``
-# ---------------------------------------------------------------------------
 
 
 class TestRefreshDoesNotOverwriteCanonical:
@@ -139,7 +121,6 @@ class TestRefreshDoesNotOverwriteCanonical:
             encoding="utf-8",
         )
         pool = QuoteConnectionPool(str(canonical), {}, num_conns=num_conns)
-        # Pretend we're in steady state with one client per group.
         pool._clients = [mock.MagicMock() for _ in range(num_conns)]
         for c in pool._clients:
             c.logged_in = False
@@ -164,7 +145,7 @@ class TestRefreshDoesNotOverwriteCanonical:
                     "code": f"TXO{s}D9",
                     "right": "C",
                     "strike": str(s),
-                    "delivery_date": "2099/12/15",  # far future, always active
+                    "delivery_date": "2099/12/15",
                     "reference": "20500",
                 }
             )
@@ -181,11 +162,9 @@ class TestRefreshDoesNotOverwriteCanonical:
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             assert pool.refresh_options_symbols() is True
 
-        # Canonical untouched.
         assert canonical_path.read_bytes() == canonical_before, (
             "QuoteConnectionPool overwrote the canonical input file — fix-rc4 regression"
         )
-        # Snapshot got written.
         assert snapshot_path.is_file()
         snapshot_text = snapshot_path.read_text(encoding="utf-8")
         assert "Auto-refreshed by QuoteConnectionPool" in snapshot_text
@@ -198,7 +177,6 @@ class TestRefreshDoesNotOverwriteCanonical:
         canonical_path = Path(pool._symbols_input_path)
         canonical_before = canonical_path.read_bytes()
 
-        # Try to point the snapshot at the canonical file.
         monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", str(canonical_path))
 
         opts = [
@@ -220,7 +198,6 @@ class TestRefreshDoesNotOverwriteCanonical:
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             pool.refresh_options_symbols()
 
-        # Canonical input untouched even though env tried to clobber it.
         assert canonical_path.read_bytes() == canonical_before, "self-clobber guard failed — canonical was overwritten"
 
     def test_legacy_symbols_config_env_does_not_overwrite_canonical(
@@ -255,5 +232,4 @@ class TestRefreshDoesNotOverwriteCanonical:
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             pool.refresh_options_symbols()
 
-        # Canonical untouched — proves SYMBOLS_CONFIG no longer drives output.
         assert canonical_path.read_bytes() == canonical_before

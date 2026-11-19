@@ -26,10 +26,6 @@ from hft_platform.ops.platform_inputs import (
     _read_rss_bytes,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers to build a default PlatformDegradeInputs
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _mid_session(monkeypatch: pytest.MonkeyPatch):
@@ -76,10 +72,6 @@ def _make_inputs(
 ) -> PlatformDegradeInputs:
     md_service = MagicMock()
     md_service.get_max_feed_gap_s.return_value = feed_gap
-    # _feed_gap_s prefers get_active_feed_gap_s when present; mirror feed_gap
-    # by default so legacy tests configured via the `feed_gap` kwarg still
-    # observe their value.  Tests that need divergence (active vs max) override
-    # md_service.get_active_feed_gap_s.return_value explicitly.
     md_service.get_active_feed_gap_s.return_value = feed_gap
     md_service._pending_reconnect_since = pending_since
     md_service._quote_flap_events = quote_flap_events
@@ -87,8 +79,8 @@ def _make_inputs(
     md_service._quote_flap_window_s = quote_flap_window_s
 
     recorder = MagicMock()
-    recorder.wal_backlog_files = None  # removed attr; default to no property
-    del recorder.wal_backlog_files  # force AttributeError on attr access
+    recorder.wal_backlog_files = None
+    del recorder.wal_backlog_files
 
     if wal_backlog is not None:
         recorder.wal_backlog_files = wal_backlog
@@ -120,11 +112,6 @@ def _make_inputs(
     return inp
 
 
-# ---------------------------------------------------------------------------
-# Construction and defaults
-# ---------------------------------------------------------------------------
-
-
 class TestConstruction:
     def test_default_threshold_values(self) -> None:
         inp = _make_inputs()
@@ -145,11 +132,6 @@ class TestConstruction:
             tb.now_s.return_value = 0.0
             reasons = inp.reduce_only_reasons()
         assert reasons == []
-
-
-# ---------------------------------------------------------------------------
-# configure_thresholds
-# ---------------------------------------------------------------------------
 
 
 class TestConfigureThresholds:
@@ -184,11 +166,6 @@ class TestConfigureThresholds:
         assert isinstance(inp.reconnect_flap_budget, int)
 
 
-# ---------------------------------------------------------------------------
-# bind_runtime_probes
-# ---------------------------------------------------------------------------
-
-
 class TestBindRuntimeProbes:
     def test_sets_redis_client_and_healthcheck(self) -> None:
         inp = _make_inputs()
@@ -205,18 +182,11 @@ class TestBindRuntimeProbes:
         assert inp.redis_healthcheck is None
 
 
-# ---------------------------------------------------------------------------
-# _feed_gap_s
-# ---------------------------------------------------------------------------
-
-
 class TestFeedGapS:
     def test_returns_zero_when_no_get_max_feed_gap_s(self) -> None:
         inp = _make_inputs()
-        del inp.md_service.get_max_feed_gap_s  # remove attr
+        del inp.md_service.get_max_feed_gap_s
         inp.md_service.get_max_feed_gap_s = None  # type: ignore[assignment]
-        # Also disable the new active-aware accessor so we exercise the
-        # legacy "no gap source available" branch.
         inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 0.0
 
@@ -270,7 +240,6 @@ class TestFeedGapS:
 
         now = _time.time()
         inp = _make_inputs(feed_gap=2000.0)
-        # Active gap above the 600s default threshold → still must trigger.
         inp.md_service.get_active_feed_gap_s.return_value = 800.0
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
@@ -280,7 +249,6 @@ class TestFeedGapS:
     def test_falls_back_to_max_feed_gap_when_active_method_missing(self) -> None:
         """Backwards-compat: if md_service lacks get_active_feed_gap_s, use the max."""
         inp = _make_inputs(feed_gap=150.0)
-        # Remove the new method to simulate older md_service
         inp.md_service.get_active_feed_gap_s = None  # type: ignore[assignment]
         assert inp._feed_gap_s() == 150.0
 
@@ -304,20 +272,11 @@ class TestFeedGapS:
 
         now = _time.time()
         inp = _make_inputs(feed_gap=0.5)
-        # Simulate the latched-set md_service: max gap remains 0.5 because
-        # TXFE6 / MXFE6 still flow normally, but the active-aware accessor
-        # returns 2000s reflecting TMFE6's silent failure (still in the
-        # ever-active set).
         inp.md_service.get_active_feed_gap_s.return_value = 2000.0
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
             reasons = inp.reduce_only_reasons()
         assert "feed_reconnect_unhealthy" in reasons
-
-
-# ---------------------------------------------------------------------------
-# _quote_flap_budget_exceeded
-# ---------------------------------------------------------------------------
 
 
 class TestQuoteFlapBudgetExceeded:
@@ -364,11 +323,6 @@ class TestQuoteFlapBudgetExceeded:
         assert inp._quote_flap_budget_exceeded() is True
 
 
-# ---------------------------------------------------------------------------
-# _redis_is_healthy
-# ---------------------------------------------------------------------------
-
-
 class TestRedisIsHealthy:
     def test_returns_none_when_neither_healthcheck_nor_client(self) -> None:
         inp = _make_inputs()
@@ -402,11 +356,6 @@ class TestRedisIsHealthy:
         assert inp._redis_is_healthy() is False
 
 
-# ---------------------------------------------------------------------------
-# _wal_backlog_files
-# ---------------------------------------------------------------------------
-
-
 class TestWalBacklogFiles:
     def test_reads_direct_attr(self) -> None:
         inp = _make_inputs(wal_backlog=42.0)
@@ -414,7 +363,7 @@ class TestWalBacklogFiles:
 
     def _recorder_no_attr(self) -> MagicMock:
         """A recorder MagicMock that does NOT have wal_backlog_files attr."""
-        recorder = MagicMock(spec=[])  # empty spec → hasattr returns False for anything
+        recorder = MagicMock(spec=[])
         recorder.get_health = MagicMock()
         return recorder
 
@@ -445,11 +394,6 @@ class TestWalBacklogFiles:
         assert inp._wal_backlog_files() is None
 
 
-# ---------------------------------------------------------------------------
-# _recorder_state
-# ---------------------------------------------------------------------------
-
-
 class TestRecorderState:
     def test_returns_empty_when_no_get_health(self) -> None:
         inp = _make_inputs()
@@ -472,11 +416,6 @@ class TestRecorderState:
         assert inp._recorder_state() == ""
 
 
-# ---------------------------------------------------------------------------
-# reduce_only_reasons — individual trigger conditions
-# ---------------------------------------------------------------------------
-
-
 class TestReduceOnlyReasons:
     def _now(self) -> float:
         import time
@@ -493,7 +432,7 @@ class TestReduceOnlyReasons:
 
     def test_pending_reconnect_triggers_reason(self) -> None:
         now = self._now()
-        inp = _make_inputs(pending_since=now - 120.0)  # 120s ago > 60s threshold
+        inp = _make_inputs(pending_since=now - 120.0)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
             reasons = inp.reduce_only_reasons()
@@ -501,7 +440,7 @@ class TestReduceOnlyReasons:
 
     def test_pending_reconnect_not_triggered_within_threshold(self) -> None:
         now = self._now()
-        inp = _make_inputs(pending_since=now - 10.0)  # only 10s ago
+        inp = _make_inputs(pending_since=now - 10.0)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
             reasons = inp.reduce_only_reasons()
@@ -512,7 +451,7 @@ class TestReduceOnlyReasons:
         _shut(monkeypatch)
         now = self._now()
         inp = _make_inputs(
-            pending_since=now - 120.0,  # 120s > 60s threshold
+            pending_since=now - 120.0,
         )
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
@@ -523,7 +462,7 @@ class TestReduceOnlyReasons:
         """Inside a session, a reconnect pending past the threshold must fire."""
         now = self._now()
         inp = _make_inputs(
-            pending_since=now - 120.0,  # 120s > 60s threshold
+            pending_since=now - 120.0,
         )
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = now
@@ -561,7 +500,7 @@ class TestReduceOnlyReasons:
         assert "queue_depth_exceeded" in reasons
 
     def test_rss_triggers_reason(self) -> None:
-        inp = _make_inputs(rss_bytes=3 * 1024 * 1024 * 1024)  # 3 GB > 2048 MB
+        inp = _make_inputs(rss_bytes=3 * 1024 * 1024 * 1024)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = self._now()
             reasons = inp.reduce_only_reasons()
@@ -583,7 +522,7 @@ class TestReduceOnlyReasons:
         assert "redis_unhealthy" in reasons
 
     def test_wal_backlog_triggers_reason(self) -> None:
-        inp = _make_inputs(wal_backlog=250.0)  # > 200 threshold
+        inp = _make_inputs(wal_backlog=250.0)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = self._now()
             reasons = inp.reduce_only_reasons()
@@ -621,7 +560,6 @@ class TestReduceOnlyReasons:
         assert "clickhouse_unhealthy" not in reasons
 
     def test_no_duplicate_reasons(self) -> None:
-        # Trigger feed gap twice; result must deduplicate
         inp = _make_inputs(feed_gap=500.0)
         with patch("hft_platform.ops.platform_inputs.timebase") as tb:
             tb.now_s.return_value = self._now()
@@ -643,7 +581,7 @@ class TestRecorderDataLossBootGrace:
 
     def test_data_loss_suppressed_within_boot_grace(self) -> None:
         inp = _make_inputs(recorder_state="DATA_LOSS")
-        inp.recorder_data_loss_boot_grace_s = 60.0  # _boot_ts_s is fresh
+        inp.recorder_data_loss_boot_grace_s = 60.0
         reasons = inp.reduce_only_reasons()
         assert "recorder_data_loss" not in reasons
         assert "clickhouse_unhealthy" not in reasons
@@ -655,8 +593,6 @@ class TestRecorderDataLossBootGrace:
         assert "recorder_data_loss" in inp.reduce_only_reasons()
 
     def test_degraded_state_not_affected_by_grace(self) -> None:
-        # Grace applies only to the DATA_LOSS HALT reason; clickhouse_unhealthy
-        # stays immediate (it is auto-recoverable, so no latch risk).
         inp = _make_inputs(recorder_state="DEGRADED")
         inp.recorder_data_loss_boot_grace_s = 60.0
         assert "clickhouse_unhealthy" in inp.reduce_only_reasons()
@@ -675,14 +611,8 @@ class TestRecorderDataLossBootGrace:
         assert inp.recorder_data_loss_boot_grace_s == 45.0
 
 
-# ---------------------------------------------------------------------------
-# _read_rss_bytes (module-level helper)
-# ---------------------------------------------------------------------------
-
-
 class TestReadRssBytes:
     def test_returns_integer(self) -> None:
-        # Real /proc/self/status exists on Linux; check basic contract
         result = _read_rss_bytes()
         assert isinstance(result, int)
         assert result >= 0
@@ -691,11 +621,6 @@ class TestReadRssBytes:
         with patch("builtins.open", side_effect=OSError("no file")):
             result = _read_rss_bytes()
         assert result == 0
-
-
-# ---------------------------------------------------------------------------
-# _metric_sample_value (module-level helper)
-# ---------------------------------------------------------------------------
 
 
 class TestMetricSampleValue:
@@ -756,15 +681,10 @@ class TestMetricSampleValue:
         assert result == 7.0
 
 
-# ---------------------------------------------------------------------------
-# Gateway queue monitoring (intent_channel + api_queue)
-# ---------------------------------------------------------------------------
-
-
 class TestGatewayQueueMonitoring:
     def test_intent_channel_backpressure_triggers_degrade(self) -> None:
         """intent_channel depth exceeding threshold must trigger queue_depth_exceeded."""
-        inp = _make_inputs(queue_size=0)  # all legacy queues at 0
+        inp = _make_inputs(queue_size=0)
         intent_ch = _make_queue(6000)
         inp.intent_channel = intent_ch
         reasons = inp.reduce_only_reasons()

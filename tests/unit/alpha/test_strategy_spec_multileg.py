@@ -223,7 +223,6 @@ class TestGreeksExposure:
     def test_optional_when_no_options(self) -> None:
         spec = _baseline()
         spec["legs"] = _futures_pair_legs()
-        # No greeks_exposure: legal because no leg carries option payload.
         assert validate_spec(spec) == []
 
 
@@ -231,7 +230,7 @@ class TestClassifyShape:
     def test_strangle_two_strikes_same_expiry(self) -> None:
         spec = _baseline()
         legs = _straddle_legs()
-        legs[1]["option"]["strike"] = 18500.0  # call=18000, put=18500 -> strangle
+        legs[1]["option"]["strike"] = 18500.0
         spec["legs"] = legs
         spec["greeks_exposure"] = _greeks_block()
         assert classify_strategy_shape(spec) == "strangle"

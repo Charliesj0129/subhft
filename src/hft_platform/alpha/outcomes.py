@@ -48,8 +48,6 @@ class Verdict(StrEnum):
     INVALID = "INVALID"
 
 
-# Outcomes that can never carry ``passed=True``. NOT_APPLICABLE may carry
-# either value: legacy loose-profile gates report a skip as ``passed=True``.
 _NOT_PASSED = frozenset({Outcome.FAIL, Outcome.INSUFFICIENT_SAMPLE, Outcome.ERROR})
 
 

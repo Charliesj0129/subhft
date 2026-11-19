@@ -41,7 +41,6 @@ class FileClaimRegistry:
         self._claim_dir = claim_dir
         if self._enabled:
             os.makedirs(claim_dir, exist_ok=True)
-        # Map filename → open file descriptor (held for lock lifetime)
         self._held_fds: dict[str, int] = {}
 
     def try_claim(self, filename: str) -> bool:
@@ -64,7 +63,6 @@ class FileClaimRegistry:
             self._held_fds[filename] = fd
             return True
         except BlockingIOError:
-            # Another process holds the lock
             os.close(fd)
             return False
         except OSError as exc:
@@ -116,13 +114,11 @@ class FileClaimRegistry:
                     fd = os.open(claim_path, os.O_WRONLY)
                     try:
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        # No live holder — stale claim; remove it
                         fcntl.flock(fd, fcntl.LOCK_UN)
                         os.close(fd)
                         os.unlink(claim_path)
                         recovered += 1
                     except BlockingIOError:
-                        # Live process holds it
                         os.close(fd)
                     except OSError:
                         os.close(fd)

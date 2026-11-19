@@ -22,35 +22,22 @@ from research.alphas.r52_amhp_dynamic_spread.impl import (
     _AMHPState,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers (monotonic ns clock, factory fixtures)
-# ---------------------------------------------------------------------------
-
 
 def _ns(seconds: float) -> int:
     """Monotonic integer ns from a seconds offset.  No datetime.now."""
     return int(seconds * _NS_PER_SEC)
 
 
-# ---------------------------------------------------------------------------
-# Tests: _AMHPState construction & initial state
-# ---------------------------------------------------------------------------
-
-
 class TestAMHPStateInit:
     def test_initial_intensities_are_split_baseline(self) -> None:
         st = _AMHPState(mu_0=1.5)
-        # λ_buy ≈ 0.5 per scale (mu_0 / 3) before any trade
         for k in range(3):
             assert pytest.approx(0.5, rel=1e-9) == st._lam_buy[k]
             assert pytest.approx(0.5, rel=1e-9) == st._lam_sell[k]
 
     def test_decay_rates_are_correct_half_lives(self) -> None:
-        # ms half-life = 100 ms → β = ln(2)/0.1 ≈ 6.9314
         assert pytest.approx(math.log(2) / 0.10, rel=1e-9) == _BETA_MS
-        # min half-life = 60 s
         assert pytest.approx(math.log(2) / 60.0, rel=1e-9) == _BETA_MIN
-        # hr half-life = 3600 s
         assert pytest.approx(math.log(2) / 3600.0, rel=1e-9) == _BETA_HR
 
     def test_warmup_flag_false_initially(self) -> None:
@@ -61,16 +48,8 @@ class TestAMHPStateInit:
     def test_asym_R_default_matches_panic_sell_prior(self) -> None:
         """T1 §6.3 — α_sell_sell ≈ 1.3–1.8× α_buy_buy (use 1.5 default)."""
         st = _AMHPState()
-        # α_sell_k / α_buy_k must equal asym_R for each scale
         for k in range(3):
-            assert pytest.approx(st.asym_R, rel=1e-9) == (
-                st._alpha_k_sell[k] / st._alpha_k_buy[k]
-            )
-
-
-# ---------------------------------------------------------------------------
-# Tests: trade update path
-# ---------------------------------------------------------------------------
+            assert pytest.approx(st.asym_R, rel=1e-9) == (st._alpha_k_sell[k] / st._alpha_k_buy[k])
 
 
 class TestAMHPUpdateTrade:
@@ -93,16 +72,8 @@ class TestAMHPUpdateTrade:
         st = _AMHPState()
         st.update_trade(_ns(0.0), direction=+1)
         lb_at_0 = st.lambda_buy()
-        # 1 second later — ms-scale should have decayed essentially to baseline
-        st.update_trade(_ns(1.0), direction=0)  # no-op trade, but advances clock
-        # Still no decay because direction=0 is a noop in this impl. Force decay
-        # by issuing another trade after Δt=10s.  ms-scale scale is half-life
-        # 100 ms → at 10 s, decayed by a factor of 2^-100 ≈ 0.
+        st.update_trade(_ns(1.0), direction=0)
         st.update_trade(_ns(10.0), direction=+1)
-        # The ms-scale component λ_ms decayed essentially to zero before the
-        # second event added α_ms again — net λ_ms(after) ≈ α_ms.
-        # Min/hr scales still hold most of their first-event contribution.
-        # Sanity: λ_buy must remain finite and positive.
         assert st.lambda_buy() > 0.0
         assert math.isfinite(st.lambda_buy())
 
@@ -118,16 +89,10 @@ class TestAMHPUpdateTrade:
         assert st.warmed_up is True
 
 
-# ---------------------------------------------------------------------------
-# Tests: derived signals (rho_hat, IIR)
-# ---------------------------------------------------------------------------
-
-
 class TestAMHPDerivedSignals:
     def test_rho_hat_in_subcritical_range(self) -> None:
         st = _AMHPState()
         rho = st.rho_hat()
-        # Default parameters give ρ̂ < 1 (stability requirement).
         assert 0.0 < rho < 1.0
 
     def test_iir_zero_at_baseline(self) -> None:
@@ -137,8 +102,6 @@ class TestAMHPDerivedSignals:
     def test_iir_positive_after_buy_trade(self) -> None:
         st = _AMHPState()
         st.update_trade(_ns(0.0), direction=+1)
-        # buy trade lifts λ_buy *more* than λ_sell (cross-excitation = 0.5 of self).
-        # IIR should be > 0.
         assert st.iir() > 0.0
 
     def test_iir_negative_after_sell_trade(self) -> None:
@@ -158,13 +121,7 @@ class TestAMHPDerivedSignals:
         st = _AMHPState()
         per_scale = st.rho_hat_per_scale()
         agg = st.rho_hat()
-        # Aggregate = sum of per-scale (within float tolerance).
         assert pytest.approx(agg, rel=1e-9) == sum(per_scale)
-
-
-# ---------------------------------------------------------------------------
-# Tests: state-dependent baseline μ(t)
-# ---------------------------------------------------------------------------
 
 
 class TestStateDependentBaseline:
@@ -182,24 +139,17 @@ class TestStateDependentBaseline:
         st = _AMHPState(mu_0=1.5)
         st.set_mu_coefficients(gamma_us=0.7)
         st.set_day_covariates(us_overnight=-0.01, us_window_active=False)
-        # Outside the ±30 min open window, US overnight is *not* applied.
         assert pytest.approx(1.5, rel=1e-9) == st._mu_t()
         st.set_day_covariates(us_overnight=-0.01, us_window_active=True)
-        # Inside the window, contribution is gamma_us * us_overnight = -0.007
         assert pytest.approx(1.5 + 0.7 * -0.01, rel=1e-9) == st._mu_t()
 
     def test_mu_floored_above_zero(self) -> None:
         """μ(t) must remain non-negative even with a strong negative covariate."""
         st = _AMHPState(mu_0=0.5)
         st.set_mu_coefficients(gamma_io=-1.0)
-        st.set_day_covariates(io_z=10.0)  # would push μ to -9.5 without floor
+        st.set_day_covariates(io_z=10.0)
         v = st._mu_t()
         assert v > 0.0
-
-
-# ---------------------------------------------------------------------------
-# Tests: AlphaProtocol surface
-# ---------------------------------------------------------------------------
 
 
 class TestAlphaProtocolSurface:
@@ -216,7 +166,6 @@ class TestAlphaProtocolSurface:
         alpha = AmhpDynamicSpreadAlpha()
         sig = alpha.update(_ns(0.0), +1)
         assert -1.0 <= sig <= 1.0
-        # buy lifts IIR > 0 in this sequence
         assert sig > 0.0
 
     def test_reset_clears_state(self) -> None:

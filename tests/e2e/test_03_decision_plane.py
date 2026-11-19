@@ -30,10 +30,6 @@ from tests.e2e.conftest import (
     make_lob_stats,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _AUDIT_PATCH = "hft_platform.recorder.audit.get_audit_writer"
 _METRICS_PATCH = "hft_platform.risk.engine.MetricsRegistry"
 _LATENCY_PATCH = "hft_platform.risk.engine.LatencyRecorder"
@@ -55,11 +51,6 @@ def _make_risk_engine(config_path: str, intent_queue=None, order_queue=None, sto
     )
 
 
-# ---------------------------------------------------------------------------
-# Stub strategy
-# ---------------------------------------------------------------------------
-
-
 class _StubStrategy(BaseStrategy):
     """Minimal strategy that emits one BUY intent on every on_stats call."""
 
@@ -79,11 +70,6 @@ class _StubStrategy(BaseStrategy):
         self._generated_intents.append(intent)
 
 
-# ===========================================================================
-# TestChain
-# ===========================================================================
-
-
 @pytest.mark.e2e_chain
 class TestChain:
     def test_strategy_emits_intent(self, e2e_symbols_yaml: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,8 +79,6 @@ class TestChain:
         strategy = _StubStrategy(strategy_id="test_strategy", symbols=[DEFAULT_SYMBOL])
         event = make_lob_stats(symbol=DEFAULT_SYMBOL, best_bid=DEFAULT_PRICE - 10_000)
 
-        # handle_event requires a StrategyContext — call on_stats directly to
-        # unit-test the signal logic in isolation.
         strategy._generated_intents.clear()
         strategy.on_stats(event)
 
@@ -166,8 +150,6 @@ class TestChain:
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
-        # max_notional: 1 → notional_scaled = 1 * scale(10000) = 10000
-        # intent notional = 100*10000 * 100 = 100_000_000 > 10000, must reject
         tight_yaml = tmp_path / "tight_limits.yaml"
         tight_yaml.write_text(
             """\
@@ -190,11 +172,6 @@ global_defaults:
             decision = engine.evaluate(intent)
 
         assert decision.approved is False
-
-
-# ===========================================================================
-# TestIntegration
-# ===========================================================================
 
 
 @pytest.mark.e2e_integration
@@ -299,8 +276,6 @@ global_defaults:
 
         order_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
-        # Build a fake order adapter whose order gate (execute) accepts every
-        # command onto _api_queue, as the real adapter does once its guards pass
         fake_adapter = MagicMock()
         fake_adapter._api_queue = order_queue
         fake_adapter._supports_typed_command_ingress = False

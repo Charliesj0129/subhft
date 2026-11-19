@@ -32,7 +32,6 @@ class TestCompositeScore:
             "indexed",
             True,
         )
-        # field_score maxes at 1.0
         assert s1 <= 2.0
 
 
@@ -108,7 +107,6 @@ class TestHypothesisQueue:
         queue_path = tmp_path / "hypothesis_queue.json"
         queue = HypothesisQueue(queue_path=queue_path)
 
-        # Manually add hypotheses
         queue._hypotheses = [
             Hypothesis(
                 paper_ref="1",
@@ -237,7 +235,6 @@ class TestHypothesisQueue:
         queue = HypothesisQueue(queue_path=queue_path)
         queue.ingest_from_index(paper_index_path=index_path)
 
-        # Reload from disk
         queue2 = HypothesisQueue(queue_path=queue_path)
         assert len(queue2.all_hypotheses()) == 1
         assert queue2.all_hypotheses()[0].paper_ref == "120"

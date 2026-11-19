@@ -73,14 +73,12 @@ def test_redis_poller_fetches_recent_and_new_rows(monkeypatch: pytest.MonkeyPatc
     poller._client = _FakeRedisClient(
         {
             ("LRANGE", "monitor:l1:ring:TMFC6", "0", "1"): [_row("TMFC6", 2), _row("TMFC6", 1)],
-            # MGET now includes heartbeat key as first element
             (
                 "MGET",
                 "monitor:l1:heartbeat",
                 "monitor:l1:latest:TMFC6",
                 "monitor:l1:latest:2330",
             ): [_hb(100_000_000_000), _row("TMFC6", 3), None],
-            # LRANGE via pipeline
             ("LRANGE", "monitor:l1:ring:TMFC6", "0", "3"): [
                 _row("TMFC6", 3),
                 _row("TMFC6", 2),
@@ -106,7 +104,7 @@ def test_poll_empty_cursors_returns_empty() -> None:
 def test_poll_raises_connection_error_on_failure() -> None:
     poller = RedisPoller(host="127.0.0.1", port=6379, symbols=("X",), max_retries=3)
     fake = _FakeRedisClient()
-    fake.responses = {}  # no responses → will raise
+    fake.responses = {}
     poller._client = fake
     with pytest.raises(ConnectionError, match="Redis poll failed"):
         poller.poll({"X": 0})
@@ -117,13 +115,11 @@ def test_try_reconnect_increments_retry() -> None:
     poller = RedisPoller(host="127.0.0.1", port=6379, symbols=(), max_retries=3)
     fake = _FakeRedisClient()
     poller._client = fake
-    # Simulate a disconnect
     poller._retry_count = 1
     poller._next_retry_at = 0.0
-    # connect succeeds
     result = poller.try_reconnect()
     assert result is True
-    assert poller.retry_count == 0  # reset on success
+    assert poller.retry_count == 0
 
 
 def test_try_reconnect_raises_after_max_retries() -> None:
@@ -141,29 +137,26 @@ def test_backoff_seconds_exponential() -> None:
     poller._retry_count = 3
     assert poller.get_backoff_seconds() == 8.0
     poller._retry_count = 10
-    assert poller.get_backoff_seconds() == 30.0  # capped
+    assert poller.get_backoff_seconds() == 30.0
 
 
 def test_decode_row_missing_field_raises() -> None:
-    bad_json = json.dumps({"ingest_ts": 1})  # missing "symbol"
+    bad_json = json.dumps({"ingest_ts": 1})
     with pytest.raises(KeyError):
         RedisPoller._decode_row(bad_json)
-
-
-# ---------- Unit 7: heartbeat, malformed JSON, reconnect cycle ---------- #
 
 
 def test_heartbeat_fresh(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("hft_platform.core.timebase.now_ns", lambda: 100_000_000_000)
     poller = RedisPoller(host="127.0.0.1", port=6379, symbols=("X",))
-    poller._parse_heartbeat(_hb(100_000_000_000 - 5_000_000_000))  # 5s old
+    poller._parse_heartbeat(_hb(100_000_000_000 - 5_000_000_000))
     assert poller.heartbeat_stale is False
 
 
 def test_heartbeat_stale(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("hft_platform.core.timebase.now_ns", lambda: 100_000_000_000)
     poller = RedisPoller(host="127.0.0.1", port=6379, symbols=("X",))
-    poller._parse_heartbeat(_hb(100_000_000_000 - 20_000_000_000))  # 20s old
+    poller._parse_heartbeat(_hb(100_000_000_000 - 20_000_000_000))
     assert poller.heartbeat_stale is True
 
 
@@ -201,16 +194,13 @@ def test_reconnect_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _FakeRedisClient()
     poller._client = fake
 
-    # Simulate disconnect
     poller._register_disconnect("test disconnect")
     assert poller.retry_count == 1
     assert fake.connected is False
     assert poller.remaining_backoff_seconds() > 0
 
-    # Skip backoff by resetting next_retry_at
     poller._next_retry_at = 0.0
 
-    # Reconnect succeeds
     result = poller.try_reconnect()
     assert result is True
     assert poller.retry_count == 0
@@ -245,9 +235,7 @@ def test_key_caching() -> None:
         symbols=("A", "B"),
         key_prefix="m:l1",
     )
-    # Pre-computed for known symbols
     assert poller._latest_key("A") == "m:l1:latest:A"
     assert poller._ring_key("B") == "m:l1:ring:B"
-    # Lazy cache for unknown symbol
     assert poller._latest_key("C") == "m:l1:latest:C"
     assert "C" in poller._latest_keys_cache

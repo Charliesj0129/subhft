@@ -47,7 +47,6 @@ def test_check_session_ownership_conflict_does_not_override(monkeypatch):
 
     class _DummySock:
         def __init__(self):
-            # GET -> "other-owner", TTL -> 120
             self._stream = io.BytesIO(b"$11\r\nother-owner\r\n:120\r\n")
             self.sent: list[bytes] = []
 
@@ -94,7 +93,6 @@ def test_check_session_ownership_cleans_stale_owner_and_acquires(monkeypatch):
 
     class _DummySock:
         def __init__(self):
-            # GET -> owner, TTL -> -1(stale), GET verify owner, DEL -> :1, GET -> nil, SETEX -> +OK
             self._stream = io.BytesIO(b"$11\r\nother-owner\r\n:-1\r\n$11\r\nother-owner\r\n:1\r\n$-1\r\n+OK\r\n")
             self.sent: list[bytes] = []
 
@@ -130,19 +128,15 @@ def test_resp_module_level_helpers():
     encoded = _encode_resp("SETEX", "mykey", "60", "myval")
     assert encoded == b"*4\r\n$5\r\nSETEX\r\n$5\r\nmykey\r\n$2\r\n60\r\n$5\r\nmyval\r\n"
 
-    # Simple status reply
     ok_stream = io.BytesIO(b"+OK\r\n")
     assert _read_resp(ok_stream) == "OK"
 
-    # Integer reply
     int_stream = io.BytesIO(b":42\r\n")
     assert _read_resp(int_stream) == 42
 
-    # Bulk string reply
     bulk_stream = io.BytesIO(b"$5\r\nhello\r\n")
     assert _read_resp(bulk_stream) == "hello"
 
-    # Null bulk string
     null_stream = io.BytesIO(b"$-1\r\n")
     assert _read_resp(null_stream) is None
 

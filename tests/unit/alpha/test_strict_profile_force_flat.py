@@ -42,23 +42,18 @@ class TestForceFlatResidualInStrictProfile:
         assert float(taker_th["force_flat_trip_share_max_pct"]) == pytest.approx(30.0)
 
     def test_thresholds_match_goal_floor(self, strict_profile) -> None:
-        # 限制 §3: net edge > 10 pts/trade cannot be relaxed; the
-        # force-flat cap is part of that floor's defence so it must
-        # not exceed 50 %.  This guards future drift.
         for st in ("maker", "taker"):
             th = strict_profile.thresholds_for(strategy_type=st)
             assert th["force_flat_trip_share_max_pct"] <= 50.0, st
 
     def test_gate_consumes_strict_thresholds(self, strict_profile) -> None:
-        # End-to-end: load threshold from YAML, hand it to the gate,
-        # confirm a 40 % force-flat candidate FAILs under strict.
         ensure_builtin_sub_gates_registered()
         gate = ForceFlatResidualGate()
         taker_th = strict_profile.thresholds_for(strategy_type="taker")
 
         class _R:
             trade_pnl = [1.0] * 10
-            abs_residual_qty = 4  # 40 % share
+            abs_residual_qty = 4
             mark_method = "force_flat_last_mid"
 
         out = gate.evaluate(_R(), config=None, thresholds=taker_th)
@@ -66,8 +61,6 @@ class TestForceFlatResidualInStrictProfile:
         assert out.metrics["force_flat_trip_share_pct"] == pytest.approx(40.0)
 
     def test_gate_passes_under_strict_for_clean_run(self, strict_profile) -> None:
-        # Mirror of the above: a candidate with no force-flat residual
-        # passes under the same strict threshold.
         gate = ForceFlatResidualGate()
         taker_th = strict_profile.thresholds_for(strategy_type="taker")
 
@@ -80,8 +73,6 @@ class TestForceFlatResidualInStrictProfile:
         assert out.passed is True
 
     def test_registry_registration_anchored_by_profile_load(self) -> None:
-        # load_profile validates blocking_sub_gates against the registry;
-        # a successful load here is itself evidence the gate is registered.
         load_profile(STRICT_PATH)
         names = {g.name for g in get_registered_sub_gates()}
         assert "force_flat_residual" in names

@@ -8,10 +8,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# SymbolMetadata tests
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture()
 def sym_yaml(tmp_path):
@@ -59,7 +55,7 @@ def test_symbol_metadata_price_scale_from_tick_size(sym_yaml):
 
     sm = SymbolMetadata(sym_yaml)
     scale = sm.price_scale("2330")
-    assert scale == 100  # 1/0.01 = 100
+    assert scale == 100
 
 
 def test_symbol_metadata_price_scale_default(sym_yaml):
@@ -156,7 +152,7 @@ def test_symbol_metadata_exchange(sym_yaml):
 
     sm = SymbolMetadata(sym_yaml)
     assert sm.exchange("TSMC") == "TSE"
-    assert sm.exchange("TSMC") == "TSE"  # cached
+    assert sm.exchange("TSMC") == "TSE"
 
 
 def test_symbol_metadata_exchange_unknown(sym_yaml):
@@ -218,11 +214,6 @@ symbols:
     assert "beta" in sm.tags_by_symbol.get("A", set())
     assert "gamma" in sm.tags_by_symbol.get("A", set())
     assert "delta" in sm.tags_by_symbol.get("B", set())
-
-
-# ---------------------------------------------------------------------------
-# _clamp_future_ts tests
-# ---------------------------------------------------------------------------
 
 
 def test_clamp_future_ts_no_max():
@@ -288,11 +279,6 @@ def test_clamp_future_ts_zero_exch():
         assert result == 0
 
 
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def normalizer(sym_yaml):
     from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
@@ -343,7 +329,6 @@ def _make_bidask_obj(code="TSMC", bid=499.9, ask=500.1, ts=None):
 def test_normalizer_normalize_tick_basic(normalizer):
     tick = _make_tick_obj("TSMC", price=500.0)
     result = normalizer.normalize_tick(tick)
-    # normalize_tick returns TickEvent | tuple | None; verify correct type is returned
     assert result is not None
     assert isinstance(result, tuple) or hasattr(result, "price")
 
@@ -376,7 +361,6 @@ def test_normalizer_normalize_snapshot_basic(normalizer):
         result = normalizer.normalize_snapshot(ba)
     except Exception:
         result = None
-    # normalize_snapshot returns BidAskEvent | tuple | None; if not None verify it has bids/asks
     assert result is None or isinstance(result, tuple) or (hasattr(result, "bids") and hasattr(result, "asks"))
 
 
@@ -401,11 +385,6 @@ def test_normalizer_get_scale_caches(normalizer):
     assert normalizer._last_symbol == "TSMC"
     scale2 = normalizer._get_scale("TSMC")
     assert scale2 == 10000
-
-
-# ---------------------------------------------------------------------------
-# SymbolMetadata product_type via exchange inference
-# ---------------------------------------------------------------------------
 
 
 def test_product_type_index_exchange(tmp_path):

@@ -29,8 +29,6 @@ from hft_platform.config._symbols_types import (
 )
 from hft_platform.config.symbols import build_symbols
 
-# Taipei 2026-08-20 06:00 — after the night close, before the day pre-open.
-# UTC is still 2026-08-19 here, which is what made the two clocks disagree.
 ROLL_WINDOW_UTC = dt.datetime(2026, 8, 19, 22, 0, tzinfo=dt.UTC)
 EXPIRED_DELIVERY_DATE = "2026/08/19"
 
@@ -155,5 +153,4 @@ def test_builder_output_passes_the_connect_gate_it_feeds(frozen_roll_window: Non
     def _lookup(_exchange: str, code: str, _ptype: object) -> object:
         return SimpleNamespace(code=code, delivery_date=delivery_by_code[code])
 
-    # Same instant, the gate's own clock: it must accept the whole universe.
     assert_no_stale_subscriptions(subscribed, _lookup, today=exchange_today())

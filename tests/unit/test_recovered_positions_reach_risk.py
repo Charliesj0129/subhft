@@ -65,11 +65,11 @@ def test_snapshot_open_positions_includes_an_untraded_recovered_lot(store):
 
     assert key == "recovery:acc:R47:TMFJ6"
     assert (pos.symbol, pos.net_qty, pos.avg_price_scaled, pos.strategy_id) == ("TMFJ6", 1, 47_426 * SCALE, "R47")
-    assert store.snapshot_positions() == {}  # the old view, unchanged
+    assert store.snapshot_positions() == {}
 
 
 def test_mtm_values_a_recovered_lot(store):
-    _recover(store)  # long 1 @ 47,426, mid 46,601: -825 pt x 10 NTD
+    _recover(store)
     snap = MarkToMarketCalculator(store, lambda _s: (BID + ASK) // 2, lambda _s: 10).snapshot()
 
     assert snap.total_scaled == (46_601 - 47_426) * 10 * SCALE
@@ -131,7 +131,7 @@ def test_an_unknown_basis_skips_only_the_position_loss_trigger():
         multiplier=lambda _s: 10,
         tick_size=lambda _s: SCALE,
     )
-    short_unknown = [OpenPosition("", "TMFK6", -1, -1)]  # -1 would read as a 46,602 pt loss
+    short_unknown = [OpenPosition("", "TMFK6", -1, -1)]
 
     assert ctrl.plan(now_ns=_tpe(2026, 10, 16, 10, 0), positions=short_unknown, daily_halt=False, **common) == []
     [halted] = ctrl.plan(now_ns=_tpe(2026, 10, 16, 10, 1), positions=short_unknown, daily_halt=True, **common)

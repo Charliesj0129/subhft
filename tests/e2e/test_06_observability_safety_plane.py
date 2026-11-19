@@ -22,18 +22,9 @@ import pytest
 from hft_platform.contracts.strategy import IntentType, StormGuardState
 from tests.e2e.conftest import make_intent
 
-# ---------------------------------------------------------------------------
-# Patch targets (matching Decision Plane test_03 pattern)
-# ---------------------------------------------------------------------------
-
 _AUDIT_PATCH = "hft_platform.recorder.audit.get_audit_writer"
 _METRICS_PATCH = "hft_platform.risk.engine.MetricsRegistry"
 _LATENCY_PATCH = "hft_platform.risk.engine.LatencyRecorder"
-
-
-# ---------------------------------------------------------------------------
-# Helper: build RiskEngine with Rust disabled
-# ---------------------------------------------------------------------------
 
 
 def _make_risk_engine(config_path: str, storm_guard=None):
@@ -45,11 +36,6 @@ def _make_risk_engine(config_path: str, storm_guard=None):
         order_queue=asyncio.Queue(maxsize=64),
         storm_guard=storm_guard,
     )
-
-
-# ===========================================================================
-# TestChain
-# ===========================================================================
 
 
 @pytest.mark.e2e_chain
@@ -139,11 +125,6 @@ class TestChain:
         assert after == before + 1
 
 
-# ===========================================================================
-# TestIntegration
-# ===========================================================================
-
-
 @pytest.mark.e2e_integration
 @pytest.mark.asyncio
 class TestIntegration:
@@ -163,17 +144,14 @@ class TestIntegration:
 
         task = asyncio.create_task(_crashing_task())
 
-        # Wait for the task to finish (crash)
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
         except (RuntimeError, asyncio.TimeoutError):
             pass
 
-        # Ensure the task did crash and event was set
         await asyncio.wait_for(asyncio.sleep(0), timeout=0.1)
         assert crashed.is_set()
 
-        # Supervisor reacts by triggering halt
         sg.trigger_halt("service_crash")
         assert sg.state == StormGuardState.HALT
 
@@ -181,7 +159,6 @@ class TestIntegration:
         """During HALT, CANCEL intents must be preserved and NEW intents dropped."""
         risk_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
-        # Put 2 NEW intents and 1 CANCEL intent
         new_1 = make_intent(intent_id=1, intent_type=IntentType.NEW)
         new_2 = make_intent(intent_id=2, intent_type=IntentType.NEW)
         cancel = make_intent(intent_id=3, intent_type=IntentType.CANCEL)
@@ -190,7 +167,6 @@ class TestIntegration:
         await risk_queue.put(new_2)
         await risk_queue.put(cancel)
 
-        # Simulate HALT drain logic: drain queue, keep only CANCEL/FORCE_FLAT
         preserved = []
         dropped_count = 0
         while not risk_queue.empty():
@@ -212,7 +188,6 @@ class TestIntegration:
             thresholds = RiskThresholds(feed_gap_storm_s=0.5)
             sg = StormGuard(thresholds=thresholds)
 
-        # Trigger large feed gap — well above threshold
         result_state = sg.update(latency_us=0, feed_gap_s=10.0)
 
         assert result_state >= StormGuardState.STORM
@@ -224,7 +199,6 @@ class TestIntegration:
         registry = MetricsRegistry()
         queue: asyncio.Queue = asyncio.Queue(maxsize=64)
 
-        # Put 5 items in the queue
         for i in range(5):
             await queue.put(i)
 

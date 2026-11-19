@@ -65,8 +65,6 @@ def run_day(path: Path, spr: int, mp: int, qm: float, pq: bool, lat: int, qct: f
         feat=FeatureUpdateEvent(symbol=SYMBOL,ts=ts,local_ts=ts,seq=0,feature_set_id='lob_shared_v3',
             schema_version=3,changed_mask=0xFFFFFFFF,warmup_ready_mask=0xFFFFFFFF,quality_flags=0,
             feature_ids=fids,values=tuple(v))
-        # Reset pending counters — backtest harness manages orders externally,
-        # so strategy's internal pending tracking would block after first quote.
         strat._pending_buy.clear(); strat._pending_sell.clear()
         strat._last_bid.clear(); strat._last_ask.clear()
         cap.clear(); strat.handle_event(ctx,feat); strat.handle_event(ctx,lob)
@@ -114,7 +112,7 @@ def main():
     p.add_argument("--spr", type=int, required=True)
     p.add_argument("--mp", type=int, required=True)
     p.add_argument("--qm", type=float, required=True)
-    p.add_argument("--pq", type=int, required=True)  # 1=True, 0=False
+    p.add_argument("--pq", type=int, required=True)
     p.add_argument("--lat", type=int, default=36_000_000)
     p.add_argument("--qct", type=float, default=1.0)
     args = p.parse_args()

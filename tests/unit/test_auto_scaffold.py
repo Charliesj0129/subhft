@@ -38,7 +38,6 @@ class TestAutoScaffoldPipeline:
 
         assert len(results) == 2
         assert all(r["status"] == "would_scaffold" for r in results)
-        # Queue entries should NOT be marked as scaffolded
         assert all(h.status == "pending" for h in queue.all_hypotheses())
 
     def test_already_exists_marks_scaffolded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,7 +45,6 @@ class TestAutoScaffoldPipeline:
 
         queue = self._make_queue_with_hypotheses(tmp_path, count=1)
 
-        # Create existing alpha dir
         alphas_dir = tmp_path / "alphas"
         alphas_dir.mkdir()
         (alphas_dir / "test_alpha_0").mkdir()
@@ -57,7 +55,6 @@ class TestAutoScaffoldPipeline:
 
         assert len(results) == 1
         assert results[0]["status"] == "already_exists"
-        # Should still mark as scaffolded
         reloaded = HypothesisQueue(queue_path=tmp_path / "hypothesis_queue.json")
         assert reloaded.all_hypotheses()[0].status == "scaffolded"
 
@@ -113,7 +110,7 @@ class TestAutoScaffoldPipeline:
                 hypothesis="H",
                 formula="F",
                 data_fields=(),
-                suggested_alpha_id="",  # empty
+                suggested_alpha_id="",
                 composite_score=1.0,
                 status="pending",
             )

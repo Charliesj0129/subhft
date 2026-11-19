@@ -78,7 +78,6 @@ class TestHaltStatusLogKind:
         """De-escalation clears the episode, so the next HALT is an error again."""
         _run_halt(system, duration_s=600.0)
 
-        # What the de-escalation branch does when StormGuard leaves HALT.
         system._halt_episode_start_mono = None
 
         assert system._halt_status_log_kind(5_000.0) == "entry"
@@ -113,7 +112,7 @@ class TestStormGuardStateReason:
         guard.metrics = metrics
 
         guard.trigger_halt("DAILY_LOSS_LIMIT_EXCEEDED")
-        guard.update()  # a clean health tick must not blank the HALT's reason
+        guard.update()
 
         assert guard.state is StormGuardState.HALT
         assert guard.state_reason == "DAILY_LOSS_LIMIT_EXCEEDED"

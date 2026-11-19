@@ -251,8 +251,6 @@ def test_feed_subscription_permanently_failed_alerts_on_emitted_metric():
         "Alert must key off the counter that quote_runtime actually emits at "
         f"permanent failure. Current expression: {expr!r}"
     )
-    # House invariant (same as FeedGapCritical / ShioajiCrashSignatureDetected):
-    # gate on trading hours so off-hours Shioaji restart loops do not page.
     assert "market_trading_hours_active == 1" in expr, (
         "FeedSubscriptionPermanentlyFailed must gate on the trading-hours gauge "
         f"so weekend/holiday restart noise does not page Telegram. Current: {expr!r}"
@@ -317,11 +315,6 @@ def test_feed_resubscribe_alert_fires_on_the_error_outcome_only():
 
 PROMETHEUS_PATH = Path(__file__).resolve().parents[2] / "config" / "monitoring" / "prometheus.yml"
 
-# Metrics that ONLY the wal-loader container sets. The engine registers them
-# too -- they live in the shared MetricsRegistry -- but nothing in the engine
-# process ever calls `.set()` on them, so the engine scrape reports a constant
-# 0. An alert reading one of these against the engine job is not merely blind,
-# it looks permanently healthy.
 _WAL_LOADER_ONLY_METRICS = (
     "dlq_size_total",
     "wal_directory_bytes",
@@ -561,7 +554,6 @@ def test_slo_feed_alert_is_gated_on_the_trading_session():
 
 SLO_RECORDING_RULES_PATH = RULES_PATH.with_name("slo_recording_rules.yaml")
 
-# slo:order_success:ratio_rate<N>m < <threshold>  and on() (sum(increase(order_reject_total[<N>m])) >= <floor>)
 _ORDER_SLO_RATIO = re.compile(r"slo:order_success:ratio_rate(\d+)m\s*<\s*([0-9.]+)")
 _ORDER_SLO_FLOOR = re.compile(r"sum\(increase\(order_reject_total\[(\d+)m\]\)\)\s*>=\s*(\d+)")
 
@@ -625,5 +617,5 @@ def test_slo_order_success_30m_recording_rule_is_defined_and_idle_safe():
     expr = rule["expr"]
     assert "rate(order_actions_total[30m])" in expr and "rate(order_reject_total[30m])" in expr, expr
     assert "[5m]" not in expr, expr
-    assert expr.count("or vector(0)") == 3, expr  # actions (numerator), actions and rejects (denominator)
+    assert expr.count("or vector(0)") == 3, expr
     assert "clamp_min(" in expr, expr

@@ -8,10 +8,6 @@ import pytest
 
 from hft_platform.execution.positions import Position, PositionStore
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _disable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,16 +45,9 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
     return s
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestMarkToMarket:
     def test_long_position_profit(self, store: PositionStore) -> None:
         """Long position gains when mid price rises above avg price."""
-        # avg_price=200_0000 (200.0000 points), mid=201_0000 (201.0000 points)
-        # unrealized = (201_0000 - 200_0000) * 1 = 1_0000
         pos = Position("acct1", "strat1", "2330")
         pos.net_qty = 1
         pos.avg_price_scaled = 200_0000
@@ -70,8 +59,6 @@ class TestMarkToMarket:
 
     def test_short_position_loss(self, store: PositionStore) -> None:
         """Short position loses when mid price rises above avg price."""
-        # avg_price=200_0000, mid=201_0000, net_qty=-1
-        # unrealized = (201_0000 - 200_0000) * -1 = -1_0000
         pos = Position("acct1", "strat1", "2330")
         pos.net_qty = -1
         pos.avg_price_scaled = 200_0000
@@ -89,13 +76,11 @@ class TestMarkToMarket:
 
     def test_multiple_symbols_summed(self, store: PositionStore) -> None:
         """Unrealized PnL is summed across all positions."""
-        # Symbol A: long 2, avg=100_0000, mid=102_0000 → gain = 2 * 2_0000 = 4_0000
         pos_a = Position("acct1", "strat1", "SYMA")
         pos_a.net_qty = 2
         pos_a.avg_price_scaled = 100_0000
         store.positions["acct1:strat1:SYMA"] = pos_a
 
-        # Symbol B: short 1, avg=200_0000, mid=198_0000 → gain = (198_0000-200_0000)*-1 = 2_0000
         pos_b = Position("acct1", "strat1", "SYMB")
         pos_b.net_qty = -1
         pos_b.avg_price_scaled = 200_0000
@@ -103,8 +88,6 @@ class TestMarkToMarket:
 
         result = store.mark_to_market({"SYMA": 102_0000, "SYMB": 198_0000})
 
-        # SYMA: (102_0000 - 100_0000) * 2 = 4_0000
-        # SYMB: (198_0000 - 200_0000) * -1 = 2_0000
         assert result == 6_0000
 
     def test_missing_price_skipped(self, store: PositionStore) -> None:
@@ -114,7 +97,6 @@ class TestMarkToMarket:
         pos.avg_price_scaled = 200_0000
         store.positions["acct1:strat1:2330"] = pos
 
-        # Provide no price for "2330"
         result = store.mark_to_market({})
 
         assert result == 0
@@ -142,7 +124,6 @@ class TestMarkToMarket:
         pos_b.avg_price_scaled = 50_0000
         store.positions["acct1:strat1:UNPRICED"] = pos_b
 
-        # Only price for PRICED symbol: gain = (105_0000 - 100_0000) * 1 = 5_0000
         result = store.mark_to_market({"PRICED": 105_0000})
 
         assert result == 5_0000
@@ -162,12 +143,12 @@ class TestMarkToMarket:
         """Positions with avg_price_scaled=-1 sentinel (unknown cost basis) are excluded from MtM."""
         pos = Position("acct1", "strat1", "TXFD6")
         pos.net_qty = 1
-        pos.avg_price_scaled = -1  # broker-only recovery sentinel
+        pos.avg_price_scaled = -1
         store.positions["acct1:strat1:TXFD6"] = pos
 
         result = store.mark_to_market({"TXFD6": 200_0000})
 
-        assert result == 0  # must NOT produce (200_0000 - (-1)) * 1 = astronomical value
+        assert result == 0
 
     def test_sentinel_avg_price_skipped_in_recovery(self, store: PositionStore) -> None:
         """Recovery positions with avg_price_scaled=-1 sentinel are excluded from MtM."""

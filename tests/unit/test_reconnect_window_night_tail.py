@@ -42,7 +42,6 @@ from hft_platform.services._md_reconnect import (
 
 TPE = ZoneInfo("Asia/Taipei")
 
-#: The production window set on THESHOW.
 DAY_WINDOW = "08:30-13:35"
 NIGHT_WINDOW = "14:55-05:05"
 WEEKDAYS = {"mon", "tue", "wed", "thu", "fri"}
@@ -70,7 +69,6 @@ def _tpe(y: int, m: int, d: int, hh: int, mm: int = 0) -> dt.datetime:
     return dt.datetime(y, m, d, hh, mm, tzinfo=TPE)
 
 
-# 2026-09-18 is a Friday; its night session runs to 05:00 on Saturday the 19th.
 FRI = (2026, 9, 18)
 SAT = (2026, 9, 19)
 SUN = (2026, 9, 20)

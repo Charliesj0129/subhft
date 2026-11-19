@@ -82,7 +82,6 @@ def test_the_expiry_window_is_the_delivery_date_from_the_cutoff_only():
     assert end == _tpe(2026, 10, 22, 0, 0)
     assert not expiry_cutoff_passed("TMFJ6", _tpe(2026, 10, 21, 12, 59), 780)
     assert expiry_cutoff_passed("TMFJ6", _tpe(2026, 10, 21, 13, 0), 780)
-    # Settled contracts are not in the window: there is no market to act in.
     assert not expiry_cutoff_passed("TMFJ6", _tpe(2026, 10, 22, 9, 0), 780)
     assert not expiry_cutoff_passed("TMFK6", _tpe(2026, 10, 21, 13, 10), 780)
 
@@ -105,7 +104,7 @@ def test_a_reducing_order_and_the_safety_intents_still_pass():
     long_one = _validator(position=1)
     with mock.patch("hft_platform.core.timebase.now_ns", return_value=_tpe(2026, 10, 21, 13, 10)):
         assert long_one.check(_intent(side=Side.SELL)) == (True, "REDUCE_ONLY_BYPASS")
-        assert long_one.check(_intent(side=Side.BUY))[0] is False  # adding to it
+        assert long_one.check(_intent(side=Side.BUY))[0] is False
         assert long_one.check(_intent(kind=IntentType.FORCE_FLAT)) == (True, "OK")
         assert long_one.check(_intent(kind=IntentType.CANCEL)) == (True, "OK")
 

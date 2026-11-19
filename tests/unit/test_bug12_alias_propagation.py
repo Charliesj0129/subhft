@@ -52,16 +52,13 @@ def test_propagate_is_idempotent_and_fires_hooks_only_on_growth():
     hook = MagicMock()
     inst = _make_md_service_shim(sm, client, post_connect_hooks=[hook])
 
-    # First call propagates and fires hook (map grew from 0 → 1)
     inst._propagate_alias_map(trigger="pre_subscribe")
     assert sm.alias_to_actual == {"TMFR1": "TMFE6"}
     assert hook.call_count == 1
 
-    # Second call with no new aliases: no hook re-fire
     inst._propagate_alias_map(trigger="post_subscribe")
     assert hook.call_count == 1
 
-    # Late alias (retry thread style): hook fires again
     client.alias_to_actual["TXFR1"] = "TXFE6"
     inst._propagate_alias_map(trigger="retry")
     assert sm.alias_to_actual == {"TMFR1": "TMFE6", "TXFR1": "TXFE6"}
@@ -83,7 +80,7 @@ def test_eager_resolve_calls_contracts_runtime():
     runtime = MagicMock()
     runtime.resolve_symbol_aliases.return_value = {"TMFR1": "TMFE6"}
     client = SimpleNamespace(
-        alias_to_actual={"TMFR1": "TMFE6"},  # contracts_runtime would have updated this
+        alias_to_actual={"TMFR1": "TMFE6"},
         contracts_runtime=runtime,
     )
     inst = _make_md_service_shim(sm, client)
@@ -97,14 +94,14 @@ def test_eager_resolve_swallows_runtime_errors():  # noqa: no-assert
     runtime.resolve_symbol_aliases.side_effect = RuntimeError("contract cache cold")
     client = SimpleNamespace(alias_to_actual={}, contracts_runtime=runtime)
     inst = _make_md_service_shim(sm, client)
-    inst._resolve_aliases_eager()  # must not raise
+    inst._resolve_aliases_eager()
 
 
 def test_eager_resolve_without_runtime_is_noop():  # noqa: no-assert
     sm = _FakeSymbolMetadata()
     client = SimpleNamespace(alias_to_actual={})
     inst = _make_md_service_shim(sm, client)
-    inst._resolve_aliases_eager()  # must not raise
+    inst._resolve_aliases_eager()
 
 
 def test_retry_thread_callback_populates_late_aliases():
@@ -117,38 +114,16 @@ def test_retry_thread_callback_populates_late_aliases():
     hook = MagicMock()
     inst = _make_md_service_shim(sm, client, post_connect_hooks=[hook])
 
-    # Connect finished with no aliases (deferred)
     inst._propagate_alias_map(trigger="post_subscribe")
     assert hook.call_count == 0
 
-    # Retry thread installs the callback
     client.on_alias_map_updated = lambda: inst._propagate_alias_map(trigger="retry")
 
-    # Retry thread succeeds: alias now populated + callback invoked
     client.alias_to_actual["TMFR1"] = "TMFE6"
     client.on_alias_map_updated()
 
     assert sm.alias_to_actual == {"TMFR1": "TMFE6"}
     assert hook.call_count == 1
-
-
-# ---------------------------------------------------------------------------
-# Full-pipeline regression (2026-04-18)
-#
-# Prior tests exercised ``_propagate_alias_map`` and ``_resolve_aliases_eager``
-# in isolation. They pass even if StrategyRunner / BaseStrategy never see the
-# updated alias because they do not drive ``BaseStrategy.handle_event``.
-#
-# The tests below chain the full sequence that broke during Bug 12:
-#   1. SymbolMetadata cold (``alias_to_actual == {}``).
-#   2. Strategy registered with raw config symbol (``{"TMFR1"}``).
-#   3. Eager resolve populates the alias on SymbolMetadata.
-#   4. Post-connect hook ``StrategyRunner.resolve_symbol_aliases`` rewrites
-#      ``strategy.symbols`` to ``{"TMFE6"}``.
-#   5. A ``BidAskEvent`` with ``symbol="TMFE6"`` reaches ``handle_event``
-#      and is *not* silent-dropped by the symbol filter at
-#      ``BaseStrategy.handle_event`` (``strategy/base.py:274``).
-# ---------------------------------------------------------------------------
 
 
 def _make_symbol_metadata_with_entries(tmp_path):
@@ -246,18 +221,13 @@ def test_cold_restart_alias_propagation_end_to_end(tmp_path):
     strat = _EventRecordingStrategy("test_bug12_full", {"TMFR1"})
     runner = _make_runner_shim(sm, [strat])
 
-    # Simulate ``MarketDataService._propagate_alias_map`` after eager resolve
-    # has populated ``client.alias_to_actual``.
     sm.set_alias_map({"TMFR1": "TMFE6"})
     assert sm.alias_to_actual == {"TMFR1": "TMFE6"}
 
-    # Simulate the post-connect hook.
     runner.resolve_symbol_aliases()
 
-    # Invariant: strategy.symbols now keys on the broker callback code.
     assert strat.symbols == {"TMFE6"}, f"alias propagation failed: strategy.symbols={strat.symbols}"
 
-    # An event with the broker callback code reaches handle_event — not dropped.
     event = _make_bidask_event("TMFE6")
     strat.handle_event(ctx=None, event=event)
     assert strat.received_symbols == ["TMFE6"]
@@ -302,11 +272,9 @@ def test_late_alias_update_rewrites_strategy_symbols(tmp_path):
     strat = _EventRecordingStrategy("test_bug12_late", {"TMFR1"})
     runner = _make_runner_shim(sm, [strat])
 
-    # Initial resolve with empty alias is a no-op (guarded inside runner).
     runner.resolve_symbol_aliases()
     assert strat.symbols == {"TMFR1"}
 
-    # Retry thread finally fills the alias; hook re-fires.
     sm.set_alias_map({"TMFR1": "TMFE6"})
     runner.resolve_symbol_aliases()
 

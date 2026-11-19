@@ -73,7 +73,6 @@ def load_latency_profile(profile_id: str, profiles_path: Path | None = None) -> 
             f"Latency profile {profile_id!r} is missing required fields: {sorted(missing)}"
         )
 
-    # Coerce numeric types for safety
     profile["submit_ack_latency_ms"] = float(profile["submit_ack_latency_ms"])
     profile["modify_ack_latency_ms"] = float(profile["modify_ack_latency_ms"])
     profile["cancel_ack_latency_ms"] = float(profile["cancel_ack_latency_ms"])

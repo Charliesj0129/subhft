@@ -64,18 +64,12 @@ class FubonClient:
         self._on_deal_cb: Callable[..., Any] | None = None
         self._symbols: list[str] = []
 
-        # Sub-components start with sdk=None (graceful degradation).
-        # Re-initialised with a real SDK handle after login().
         self._order_gateway: FubonOrderGateway = FubonOrderGateway(sdk=None)
         self._account_gateway: FubonAccountGateway = FubonAccountGateway(sdk=None)
         self._quote_runtime: FubonQuoteRuntime = FubonQuoteRuntime(sdk=None)
 
         if not self._api_key:
             logger.warning("HFT_FUBON_API_KEY not set; login will fail")
-
-    # ------------------------------------------------------------------ #
-    # Properties
-    # ------------------------------------------------------------------ #
 
     @property
     def logged_in(self) -> bool:
@@ -84,10 +78,6 @@ class FubonClient:
     @property
     def api(self) -> Any:
         return self._api
-
-    # ------------------------------------------------------------------ #
-    # Session lifecycle
-    # ------------------------------------------------------------------ #
 
     def login(self, *args: Any, **kwargs: Any) -> bool:
         """Create FubonSDK, authenticate, and wire sub-components."""
@@ -105,7 +95,6 @@ class FubonClient:
             self._api = sdk
             self._logged_in = True
 
-            # Re-wire gateways with the live SDK handle.
             self._order_gateway = FubonOrderGateway(sdk=sdk)
             self._account_gateway = FubonAccountGateway(sdk=sdk)
             self._quote_runtime = FubonQuoteRuntime(sdk=sdk)
@@ -135,10 +124,6 @@ class FubonClient:
         """Graceful shutdown — delegates to close()."""
         self.close(logout=logout)
 
-    # ------------------------------------------------------------------ #
-    # Quote / subscription
-    # ------------------------------------------------------------------ #
-
     def subscribe_basket(self, cb: Callable[..., Any]) -> None:
         """Register *cb* as both tick and bidask handler, then subscribe."""
         self._quote_runtime.register_quote_callbacks(cb, cb)
@@ -153,7 +138,6 @@ class FubonClient:
         """Stop current subscriptions and re-subscribe to stored symbols."""
         self._quote_runtime.stop()
         if self._symbols:
-            # Re-create runtime with current SDK to get a fresh state.
             self._quote_runtime = FubonQuoteRuntime(sdk=self._api)
             self._quote_runtime.subscribe(self._symbols)
         return True
@@ -161,10 +145,6 @@ class FubonClient:
     def reload_symbols(self) -> None:
         """Reload symbol list (no-op until contracts_runtime is available)."""
         logger.warning("fubon_reload_symbols: not yet implemented")
-
-    # ------------------------------------------------------------------ #
-    # Execution callbacks
-    # ------------------------------------------------------------------ #
 
     def set_execution_callbacks(
         self,
@@ -175,10 +155,6 @@ class FubonClient:
         self._on_order_cb = on_order
         self._on_deal_cb = on_deal
         logger.info("fubon_execution_callbacks_set")
-
-    # ------------------------------------------------------------------ #
-    # Order operations
-    # ------------------------------------------------------------------ #
 
     def place_order(self, *args: Any, **kwargs: Any) -> Any:
         """Delegate to FubonOrderGateway.place_order."""
@@ -196,10 +172,6 @@ class FubonClient:
     ) -> Any:
         """Delegate to FubonOrderGateway.update_order."""
         return self._order_gateway.update_order(trade, price=price, qty=qty)
-
-    # ------------------------------------------------------------------ #
-    # Account queries
-    # ------------------------------------------------------------------ #
 
     def get_positions(self) -> list[Any]:
         """Delegate to FubonAccountGateway.get_inventories."""
@@ -225,10 +197,6 @@ class FubonClient:
     def list_position_detail(self, account: Any = None) -> Any:
         """Return empty list (placeholder until position detail API is wired)."""
         return []
-
-    # ------------------------------------------------------------------ #
-    # Contract helpers
-    # ------------------------------------------------------------------ #
 
     def get_exchange(self, symbol: str) -> str:
         """Return exchange string (placeholder until contracts_runtime)."""

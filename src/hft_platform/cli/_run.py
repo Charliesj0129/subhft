@@ -97,19 +97,15 @@ def cmd_run(args: argparse.Namespace) -> None:
             )
         )
 
-    # Live/Sim share the same runtime pipeline; sim runs with Shioaji stub.
     from hft_platform.main import HFTSystem
     from hft_platform.observability.metrics import MetricsRegistry
     from hft_platform.observability.metrics_server import start_resilient_metrics_server
 
-    MetricsRegistry.get()  # fully populate REGISTRY before scrape thread starts
+    MetricsRegistry.get()
     _prom_port = settings.get("prometheus_port", 9090)
     start_resilient_metrics_server(_prom_port)
     print(f"Prometheus metrics started on :{_prom_port}")
 
-    # Before any SDK object exists (HFTSystem builds the broker client): the SDK
-    # prints session events, which carry the login person ID, to fd 1. This is
-    # the `python -m hft_platform run` path the Dockerfile CMD uses.
     from hft_platform.utils.sdk_stdout import isolate_sdk_stdout
 
     isolate_sdk_stdout()
@@ -118,7 +114,6 @@ def cmd_run(args: argparse.Namespace) -> None:
     try:
         asyncio.run(system.run())
     except KeyboardInterrupt:
-        # stdout is /dev/null after isolate_sdk_stdout(); keep this notice visible.
         print("Interrupted, shutting down...", file=sys.stderr)
 
 
@@ -145,17 +140,11 @@ def _resolve_default_mode() -> str:
 
 
 def _enforce_loop_trace_policy(settings: Dict[str, Any]) -> None:
-    # L5: a bound loop_id requires complete order-bearing trace chains.
-    # The loop YAML must declare ``trace_policy: order_path_100pct``; we
-    # then force ``HFT_DIAG_TRACE_ENABLED=1`` so the sampler opens its
-    # ``enabled`` gate (default 0 per DecisionTraceSampler.from_env).
     loop_id = settings.get("loop_id")
     if not loop_id:
         return
     loop_path = os.path.join("config", "loops", f"{loop_id}.yaml")
     if not os.path.exists(loop_path):
-        # _bind_loop already raises LoopBindingError before we get here when
-        # called from cmd_run; this branch is defensive against direct callers.
         return
     import yaml
 

@@ -79,17 +79,14 @@ def test_warm_reescalation_suppressed_within_cooldown():
     """After WARM→NORMAL de-escalation, next WARM request within cooldown is suppressed."""
     sg, det = _make_sg(cooldown_s=0.0, de_n=1, warm_cd=300.0)
 
-    # 1. Escalate to WARM
     det.set(score=0.55)
     sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")
     assert sg.state == StormGuardState.WARM
 
-    # 2. De-escalate to NORMAL via update() with clean inputs (1 clear since de_n=1)
     sg.update(latency_us=0, feed_gap_s=0.0)
     assert sg.state == StormGuardState.NORMAL
     assert sg._warm_deescalation_ts > 0
 
-    # 3. DriftBurst fires again immediately → should be suppressed by cooldown
     det.set(score=0.52)
     state = sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")
     assert state == StormGuardState.NORMAL, "WARM re-escalation should be suppressed within cooldown"
@@ -97,7 +94,7 @@ def test_warm_reescalation_suppressed_within_cooldown():
 
 def test_warm_reescalation_allowed_after_cooldown():
     """After cooldown elapses, WARM escalation resumes."""
-    sg, det = _make_sg(cooldown_s=0.0, de_n=1, warm_cd=0.01)  # 10ms cooldown
+    sg, det = _make_sg(cooldown_s=0.0, de_n=1, warm_cd=0.01)
 
     det.set(score=0.55)
     sg.update_with_lob(mid_price_x2=1000, spread_scaled=10, symbol="TMFE6")

@@ -16,12 +16,10 @@ def test_supervise_uses_run_in_executor_for_system_metrics():
 
     source = inspect.getsource(HFTSystem._supervise)
 
-    # The direct sync call must not be present
     assert "metrics.update_system_metrics()" not in source, (
         "_supervise() must not call update_system_metrics() synchronously on the event loop"
     )
 
-    # The executor-offloaded form must be present
     assert "run_in_executor" in source, "_supervise() should use run_in_executor to offload blocking psutil calls"
 
 
@@ -32,7 +30,6 @@ def test_supervise_passes_update_system_metrics_to_executor():
     source = inspect.getsource(HFTSystem._supervise)
 
     assert "update_system_metrics" in source, "_supervise() must still invoke update_system_metrics (via executor)"
-    # Ensure the awaited executor pattern is present
     assert "await" in source, "_supervise() must await the executor future"
 
 

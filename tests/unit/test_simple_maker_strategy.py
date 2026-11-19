@@ -40,7 +40,7 @@ def test_holds_when_spread_below_threshold():
 
 def test_respects_max_position():
     s = SimpleMakerStrategy(spread_threshold_pts=1, max_pos=1)
-    s._position = 1  # already at max long
+    s._position = 1
     tick = TickData(
         exch_ts=1,
         bid_price=100_000_000,
@@ -53,7 +53,6 @@ def test_respects_max_position():
         scale=1_000_000,
     )
     actions = s.on_tick(tick)
-    # Should only have sell quote (buy blocked by max_pos)
     assert not any(isinstance(a, PostQuote) and a.side == "buy" for a in actions)
     assert any(isinstance(a, PostQuote) and a.side == "sell" for a in actions)
 

@@ -19,8 +19,8 @@ SPLIT_NAMES = ("train", "validation", "test")
 
 @dataclass(frozen=True)
 class DaySymbol:
-    day: str  # 'YYYY-MM-DD'
-    symbol: str  # e.g. 'TXFD6'
+    day: str
+    symbol: str
 
 
 @dataclass(frozen=True)

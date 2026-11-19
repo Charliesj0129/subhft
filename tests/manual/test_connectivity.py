@@ -4,7 +4,6 @@ import time
 from pathlib import Path
 
 
-# Manual .env loader
 def load_env():
     env_path = Path(".env")
     if not env_path.exists():
@@ -23,7 +22,6 @@ def load_env():
     return True
 
 
-# Add src to path
 sys.path.append(str(Path.cwd() / "src"))
 
 try:
@@ -57,7 +55,6 @@ def run_connectivity_test():
         return
 
     print("📜 Fetching Contracts (Stocks)...")
-    # Fetch a common stock to verify data
     target_code = "2330"
     contract = None
     try:
@@ -65,13 +62,10 @@ def run_connectivity_test():
         print(f"✅ Found Contract: {contract.name} ({contract.code})")
     except Exception as e:
         print(f"❌ Failed to find contract {target_code}: {e}")
-        # Try fetching all? No, likely just empty cache if first run.
-        # Shioaji usually fetches contracts on login if fetch_contract=True (default)
         return
 
     print("📡 Subscribing to Ticks & BidAsk...")
 
-    # Counter
     tick_count = 0
     bidask_count = 0
 

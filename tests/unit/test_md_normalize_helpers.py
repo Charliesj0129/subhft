@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-# Guard the import — the module depends on shioaji.signatures which may not be available.
 with patch(
     "hft_platform.feed_adapter.shioaji.signatures.detect_crash_signature",
     return_value=None,
@@ -20,12 +19,8 @@ with patch(
     )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 DEFAULT_SYMBOL = "2330"
-DEFAULT_PRICE = 5_000_000  # scaled x10000
+DEFAULT_PRICE = 5_000_000
 
 
 class _FakeMD:
@@ -62,11 +57,6 @@ def _bidask_dict(
 ) -> dict[str, Any]:
     """Return a minimal bidask-like dict with scaled prices."""
     return {"code": symbol, "bid_price": bid, "ask_price": ask}
-
-
-# ===================================================================
-# _looks_like_md
-# ===================================================================
 
 
 class TestLooksLikeMd:
@@ -150,11 +140,6 @@ class TestLooksLikeMd:
         assert _looks_like_md(obj) is False
 
 
-# ===================================================================
-# _unwrap_md
-# ===================================================================
-
-
 class TestUnwrapMd:
     def test_none_returns_none(self) -> None:
         assert _unwrap_md(None) is None
@@ -202,11 +187,6 @@ class TestUnwrapMd:
         ba = _FakeMD(code=DEFAULT_SYMBOL, bid_price=DEFAULT_PRICE)
         outer = _FakeMD(tick=non_md, bidask=ba)
         assert _unwrap_md(outer) is ba
-
-
-# ===================================================================
-# _summarize_md
-# ===================================================================
 
 
 class TestSummarizeMd:
@@ -261,11 +241,6 @@ class TestSummarizeMd:
         obj = _FakeMD(bidask=inner, code=DEFAULT_SYMBOL)
         result = _summarize_md(obj)
         assert result["nested"]["bidask"] == "_FakeMD"
-
-
-# ===================================================================
-# _try_fast_extract_callback_payload
-# ===================================================================
 
 
 class TestTryFastExtractCallbackPayload:
@@ -368,17 +343,12 @@ class TestTryFastExtractCallbackPayload:
         assert exchange is exch_obj
 
 
-# ===================================================================
-# _record_shioaji_crash_signature
-# ===================================================================
-
-
 class TestRecordShioajiCrashSignature:
     def test_no_metrics_registry_noop(self) -> None:
         svc = _make_svc()
         svc.metrics_registry = None
         _record_shioaji_crash_signature(svc, "error text", context="test")
-        assert svc.metrics_registry is None  # unchanged
+        assert svc.metrics_registry is None
 
     @patch(
         "hft_platform.services._md_normalize.detect_crash_signature",
@@ -412,11 +382,11 @@ class TestRecordShioajiCrashSignature:
         svc = _make_svc()
         svc.metrics_registry = MagicMock()
         svc.metrics_registry.shioaji_crash_signature_total.labels.side_effect = RuntimeError("oops")
-        _record_shioaji_crash_signature(svc, "error", context="test")  # must not raise
+        _record_shioaji_crash_signature(svc, "error", context="test")
         assert svc.metrics_registry is not None
 
     def test_no_crash_signature_attr_noop(self) -> None:
         svc = _make_svc()
-        svc.metrics_registry = MagicMock(spec=[])  # no attrs at all
-        _record_shioaji_crash_signature(svc, "text", context="test")  # must not raise
+        svc.metrics_registry = MagicMock(spec=[])
+        _record_shioaji_crash_signature(svc, "text", context="test")
         assert svc.metrics_registry is not None

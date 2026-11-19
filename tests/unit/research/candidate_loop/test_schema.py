@@ -34,7 +34,7 @@ class TestAlphaId:
     def test_alpha_id_is_16_hex_chars(self) -> None:
         alpha_id = compute_alpha_id(_candidate())
         assert len(alpha_id) == 16
-        int(alpha_id, 16)  # raises if not hex
+        int(alpha_id, 16)
 
     def test_alpha_id_deterministic_for_identical_content(self) -> None:
         assert compute_alpha_id(_candidate()) == compute_alpha_id(_candidate())

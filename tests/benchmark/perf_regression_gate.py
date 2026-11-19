@@ -250,7 +250,6 @@ async def _run_real_ck_columnar_once(rows: int = 2000) -> float:
             t0 = time.perf_counter()
             await writer.connect_async()
             t1 = time.perf_counter()
-            # connect_async includes schema init; benchmark insert separately.
             _ = t1 - t0
             symbols = [f"CK_PERF_{i % 8}" for i in range(rows)]
             now_ns = time.time_ns()
@@ -564,7 +563,6 @@ def bench_risk_gateway_typed_ratio_heavy() -> float:
 
 def bench_research_backtest(rows: int = 40_000) -> float:
     rng = np.random.default_rng(7)
-    # Use canonical field names required by ensure_hftbt_npz
     _DTYPE = [("bid_px", "f8"), ("ask_px", "f8"), ("bid_qty", "f8"), ("ask_qty", "f8"), ("volume", "f8")]
     arr = np.zeros(rows, dtype=_DTYPE)
     mid = 100 + np.cumsum(rng.normal(0, 0.02, size=rows))
@@ -586,13 +584,9 @@ def bench_research_backtest(rows: int = 40_000) -> float:
     with TemporaryDirectory(prefix="perfgate_bt_") as tmp_dir:
         npy_path = os.path.join(tmp_dir, "research.npy")
         np.save(npy_path, arr)
-        # Pre-convert to hftbt.npz so ensure_hftbt_npz hits the fast path
-        # and the timed section measures scorecard/run logic, not I/O conversion.
         from research.backtest.hft_native_runner import ensure_hftbt_npz
 
         hbt_path = ensure_hftbt_npz(npy_path)
-        # Pre-split using uncompressed savez so the timed section is not dominated
-        # by zlib compression I/O (which varies wildly across CI runners).
         data = np.load(hbt_path, allow_pickle=False)
         split_arr = np.asarray(data["data"]) if hasattr(data, "keys") else np.asarray(data)
         if hasattr(data, "close"):
@@ -861,7 +855,6 @@ def _feature_ref_values(
 
 def bench_feature_engine_parity_mismatch_rate(n: int = 8_000) -> float:
     rng = np.random.default_rng(20260224)
-    # _feature_ref_values reproduces the 16 v1 features; the engine's default schema is v3.
     eng = FeatureEngine(emit_events=True, feature_set_id="lob_shared_v1")
     ref = _FeatureRefState()
     bid = 1_000_000
@@ -920,10 +913,6 @@ def bench_feature_engine_lob_update_rust(iters: int = 80_000) -> float:
 
 
 def bench_feature_engine_python_vs_rust_parity_mismatch_rate(n: int = 8_000) -> float:
-    # The Rust kernel implements the 16 v1 features only and zero-pads the rest of a
-    # v2/v3 schema (see FeatureEngine's rust_feature_backend_v1_gap warning), so parity
-    # is measured on the feature set it computes. Against the default v3 schema every
-    # frame differs by construction and the gate could never pass.
     py_eng = FeatureEngine(emit_events=True, kernel_backend="python", feature_set_id="lob_shared_v1")
     rust_eng = FeatureEngine(emit_events=True, kernel_backend="rust", feature_set_id="lob_shared_v1")
     if rust_eng.kernel_backend() != "rust":
@@ -974,7 +963,6 @@ def _bench_shioaji_callback_soak_metrics(
         local_clients.append(c)
         shio_mod._registry_register(c)
         shio_mod._registry_rebind_codes(c, [code])
-    # One wildcard fallback client to keep fallback path exercised but bounded.
     wildcard = _RouteClient("wild")
     wildcard.allow_symbol_fallback = True  # type: ignore[attr-defined]
     shio_mod._registry_register(wildcard)
@@ -1305,7 +1293,6 @@ def main() -> int:
         limit = float(baseline[limit_key])
         value = float(results[metric_key])
         std = float(stdevs[metric_key])
-        # T4: Add 3-sigma variance buffer to avoid flaky failures from measurement noise
         effective_limit = limit + sigma_buf * std
         if value > effective_limit:
             failures.append(

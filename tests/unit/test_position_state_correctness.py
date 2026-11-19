@@ -55,8 +55,6 @@ class TestPortfolioAggregateIncludesRecovery:
         )
         store._total_realized_pnl_scaled = -50_000
 
-        # pnl_delta == 0 is the *normal* opening-fill path: Position.update only
-        # moves realized_pnl_scaled when a position closes.
         store._update_portfolio_aggregates(pnl_delta=0)
 
         assert store._total_realized_pnl_scaled == -50_000
@@ -162,9 +160,6 @@ class TestCheckpointSnapshotsBothViewsAtomically:
 
         def snapshot_then_pop() -> dict:
             result = real_snapshot()
-            # The window: recovery entry moves into positions after the
-            # positions view was taken. A second, unlocked read of
-            # _recovery_positions would now miss it too.
             rdata = store._recovery_positions.pop(recovery_key)
             store.positions[recovery_key] = type(
                 "P",
@@ -270,8 +265,6 @@ class TestEvictionForgetsEveryStore:
         assert "ACC:S1:TXFE6" not in store.positions
         assert store._evicted_realized_pnl_scaled == banked
 
-        # Reopening the same key takes the O(n) recompute branch, because
-        # Position.update only moves realized_pnl_scaled on a close.
         store.on_fill(_fill("TXFE6", price=1_800_000))
         assert store.total_pnl == banked
 

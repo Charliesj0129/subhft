@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(not HAS_DEPS, reason="numba/hftbacktest not inst
 @pytest.mark.skipif(not HAS_DEPS, reason="numba/hftbacktest not installed")
 def test_import_mm_hawkes():
     """Should not raise when dependencies are available."""
-    from hft_platform.strategies.mm_hawkes import strategy  # noqa: F401
+    from hft_platform.strategies.mm_hawkes import strategy
 
     assert strategy is not None
 

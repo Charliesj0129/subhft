@@ -7,11 +7,6 @@ from unittest.mock import MagicMock, patch
 
 from hft_platform.services._md_observability import MarketDataObservabilityMixin
 
-# ---------------------------------------------------------------------------
-# Helpers / Stub
-# ---------------------------------------------------------------------------
-
-# Quality flag bit values (from feature.engine)
 QUALITY_FLAG_GAP = 1
 QUALITY_FLAG_STATE_RESET = 2
 QUALITY_FLAG_STALE_INPUT = 4
@@ -29,21 +24,17 @@ def _make_stub(**overrides: Any) -> MarketDataObservabilityMixin:
             self._trace_sampler = None
             self._feature_shadow_engine = None
 
-            # Latency / metrics counters
             self._feature_latency_counter = 0
             self._feature_metrics_counter = 0
             self._feature_latency_sample_every = 1
             self._feature_metrics_sample_every = 1
             self._feature_latency_metric_child = None
 
-            # Child metric caches
             self._feature_update_metric_children: dict = {}
             self._feature_quality_flag_metric_children: dict = {}
 
-            # Cached feature set id
             self._feature_set_id_cached = "lob_shared_v3"
 
-            # Shadow parity attrs
             self._feature_shadow_counter = 0
             self._feature_shadow_sample_every = 1
             self._feature_shadow_abs_tolerance = 1e-6
@@ -88,15 +79,9 @@ def _make_feature_update(
     return fu
 
 
-# ---------------------------------------------------------------------------
-# _emit_trace
-# ---------------------------------------------------------------------------
-
-
 class TestEmitTrace:
     def test_no_op_when_sampler_is_none(self):
         stub = _make_stub()
-        # Should not raise
         stub._emit_trace("stage", "tid", {"key": "val"})
         assert stub._trace_sampler is None
 
@@ -110,7 +95,6 @@ class TestEmitTrace:
         sampler = MagicMock()
         sampler.emit.side_effect = RuntimeError("boom")
         stub = _make_stub(_trace_sampler=sampler)
-        # Should not raise
         stub._emit_trace("stage", "id", {})
         sampler.emit.assert_called_once()
 
@@ -123,20 +107,14 @@ class TestEmitTrace:
         assert kwargs["trace_id"] == ""
 
 
-# ---------------------------------------------------------------------------
-# _record_shioaji_crash_signature
-# ---------------------------------------------------------------------------
-
-
 class TestRecordShioajiCrashSignature:
     def test_no_op_when_no_metrics_registry(self):
         stub = _make_stub()
-        # Should not raise
         stub._record_shioaji_crash_signature("Connection reset by peer", context="reconnect")
         assert stub.metrics_registry is None
 
     def test_no_op_when_registry_lacks_attribute(self):
-        registry = MagicMock(spec=[])  # no attributes
+        registry = MagicMock(spec=[])
         stub = _make_stub(metrics_registry=registry)
         stub._record_shioaji_crash_signature("some text", context="ctx")
         assert registry.method_calls == []
@@ -159,11 +137,6 @@ class TestRecordShioajiCrashSignature:
         registry.shioaji_crash_signature_total.labels.return_value.inc.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# _record_feature_metrics
-# ---------------------------------------------------------------------------
-
-
 class TestRecordFeatureMetrics:
     def test_increments_both_counters(self):
         stub = _make_stub()
@@ -175,7 +148,6 @@ class TestRecordFeatureMetrics:
         stub = _make_stub()
         stub._feature_latency_sample_every = 1
         stub._feature_metrics_sample_every = 1
-        # Should not raise without a registry
         stub._record_feature_metrics(_make_tick_event(), _make_feature_update(), 0)
         assert stub._feature_latency_counter == 1
         assert stub._feature_metrics_counter == 1
@@ -195,7 +167,7 @@ class TestRecordFeatureMetrics:
         registry.feature_plane_latency_ns = latency_metric
         stub = _make_stub(metrics_registry=registry)
         stub._feature_latency_sample_every = 10
-        stub._feature_latency_counter = 0  # counter will be 1 after call, not divisible by 10
+        stub._feature_latency_counter = 0
         stub._record_feature_metrics(_make_tick_event(), _make_feature_update(), 0)
         latency_metric.observe.assert_not_called()
 
@@ -218,7 +190,6 @@ class TestRecordFeatureMetrics:
         fu = _make_feature_update(feature_set_id="lob_shared_v3")
         stub._record_feature_metrics(_make_tick_event(), fu, 0)
         stub._record_feature_metrics(_make_tick_event(), fu, 0)
-        # labels() should only be called once (cached on second call)
         assert registry.feature_plane_updates_total.labels.call_count == 1
 
     def test_quality_flags_emitted_for_set_bits(self):
@@ -229,10 +200,8 @@ class TestRecordFeatureMetrics:
         registry.feature_quality_flags_total.labels.return_value = flag_child
         stub = _make_stub(metrics_registry=registry)
         stub._feature_metrics_sample_every = 1
-        # Set GAP (bit 1) and STALE_INPUT (bit 4) flags
         fu = _make_feature_update(quality_flags=QUALITY_FLAG_GAP | QUALITY_FLAG_STALE_INPUT)
         stub._record_feature_metrics(_make_tick_event(), fu, 0)
-        # Two quality flag labels should be emitted
         assert registry.feature_quality_flags_total.labels.call_count == 2
         labels_calls = [c.kwargs["flag"] for c in registry.feature_quality_flags_total.labels.call_args_list]
         assert "gap" in labels_calls
@@ -246,11 +215,6 @@ class TestRecordFeatureMetrics:
         fu = _make_feature_update(quality_flags=0)
         stub._record_feature_metrics(_make_tick_event(), fu, 0)
         registry.feature_quality_flags_total.labels.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# _emit_feature_shadow_check_metric
-# ---------------------------------------------------------------------------
 
 
 class TestEmitFeatureShadowCheckMetric:
@@ -287,11 +251,6 @@ class TestEmitFeatureShadowCheckMetric:
         assert child.inc.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# _emit_feature_shadow_mismatch_metric
-# ---------------------------------------------------------------------------
-
-
 class TestEmitFeatureShadowMismatchMetric:
     def test_no_op_when_no_registry(self):
         stub = _make_stub()
@@ -326,25 +285,19 @@ class TestEmitFeatureShadowMismatchMetric:
         assert child.inc.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# _maybe_run_feature_shadow_parity
-# ---------------------------------------------------------------------------
-
-
 class TestMaybeRunFeatureShadowParity:
     def test_no_op_when_shadow_engine_is_none(self):
         stub = _make_stub()
         assert stub._feature_shadow_engine is None
         event = _make_tick_event()
         stub._maybe_run_feature_shadow_parity(event, _make_stats(), 0, None)
-        # counter must remain 0
         assert stub._feature_shadow_counter == 0
 
     def test_increments_shadow_counter(self):
         shadow = MagicMock()
         shadow.process_lob_update = MagicMock(return_value=None)
         stub = _make_stub(_feature_shadow_engine=shadow)
-        stub._feature_shadow_sample_every = 100  # skip compare
+        stub._feature_shadow_sample_every = 100
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, None)
         assert stub._feature_shadow_counter == 1
 
@@ -355,7 +308,7 @@ class TestMaybeRunFeatureShadowParity:
         shadow = MagicMock()
         shadow.process_lob_update = MagicMock(return_value=None)
         stub = _make_stub(metrics_registry=registry, _feature_shadow_engine=shadow)
-        stub._feature_shadow_sample_every = 1  # compare every tick
+        stub._feature_shadow_sample_every = 1
         fu = _make_feature_update(values=(1.0,), feature_ids=("f1",))
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, fu)
         child.inc.assert_called()
@@ -413,7 +366,6 @@ class TestMaybeRunFeatureShadowParity:
         stub._feature_shadow_sample_every = 1
         primary_fu = _make_feature_update(values=(1.0,), feature_ids=("f1",))
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, primary_fu)
-        # Mismatch metrics emitted for each primary feature id
         registry.feature_shadow_parity_mismatch_total.labels.assert_called()
 
     def test_skips_compare_outside_sample_boundary(self):
@@ -421,9 +373,8 @@ class TestMaybeRunFeatureShadowParity:
         shadow_fu = _make_feature_update(values=(999,), feature_ids=("f1",))
         shadow.process_lob_update = MagicMock(return_value=shadow_fu)
         stub = _make_stub(_feature_shadow_engine=shadow)
-        stub._feature_shadow_sample_every = 100  # very infrequent
+        stub._feature_shadow_sample_every = 100
         primary_fu = _make_feature_update(values=(1,), feature_ids=("f1",))
-        # counter starts at 0, after call it is 1, which is not divisible by 100
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, primary_fu)
         assert stub._feature_shadow_mismatch_counter == 0
 
@@ -433,17 +384,14 @@ class TestMaybeRunFeatureShadowParity:
         stub = _make_stub(_feature_shadow_engine=shadow)
         stub._feature_shadow_sample_every = 1
         primary_fu = _make_feature_update()
-        # Should not raise
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, primary_fu)
         assert stub._feature_shadow_counter == 1
 
     def test_no_op_when_primary_values_none(self):
         shadow = MagicMock()
         shadow.process_lob_update = MagicMock(return_value=None)
-        # Shadow has no get_feature_view either
         shadow.get_feature_view = MagicMock(return_value=None)
         stub = _make_stub(_feature_shadow_engine=shadow)
         stub._feature_shadow_sample_every = 1
-        # Primary update is also None, and no feature engine to fall back to
         stub._maybe_run_feature_shadow_parity(_make_tick_event(), _make_stats(), 0, None)
         assert stub._feature_shadow_mismatch_counter == 0

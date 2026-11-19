@@ -20,8 +20,6 @@ import sys
 
 from structlog import get_logger
 
-# Imported for its side effect: it points structlog's default logger at stderr.
-# Without it, the warnings below would be written to the fd this module closes.
 import hft_platform.utils.logging  # noqa: F401
 
 logger = get_logger("sdk_stdout")
@@ -44,7 +42,6 @@ def isolate_sdk_stdout() -> str:
     try:
         sys.stdout.flush()
     except (OSError, ValueError):
-        # A closed (ValueError) or broken (OSError) stdout must not stop the fd-1 redirect below.
         pass
     devnull = os.open(os.devnull, os.O_WRONLY)
     try:

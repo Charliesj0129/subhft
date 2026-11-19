@@ -62,7 +62,7 @@ class TestTheEarlyDump:
         wd.beat()
 
         clock.advance(31.0)
-        assert wd.check_once() is False  # short of the kill threshold
+        assert wd.check_once() is False
         assert fired == []
 
         err = capsys.readouterr().err
@@ -79,8 +79,6 @@ class TestTheEarlyDump:
         clock.advance(5.0)
         wd.check_once()
 
-        # Count the stderr header: the dumped stack quotes the very source
-        # line that emits it, so the bare token appears inside the dump too.
         assert capsys.readouterr().err.count(_WARN_HEADER) == 1
 
     def test_a_recovery_rearms_the_dump(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -91,7 +89,7 @@ class TestTheEarlyDump:
 
         clock.advance(20.0)
         wd.check_once()
-        wd.beat()  # recovered
+        wd.beat()
         clock.advance(20.0)
         wd.check_once()
 
@@ -176,7 +174,7 @@ class TestCaptureStacks:
     def test_the_loop_thread_is_named_from_its_own_beat(self) -> None:
         clock = _Clock()
         wd, _ = _make(clock)
-        wd.beat()  # beat() runs on this thread, so this thread is "the loop"
+        wd.beat()
 
         dump = wd.capture_stacks()
 
@@ -213,7 +211,6 @@ class TestCaptureStacks:
             helper.join(timeout=2.0)
 
         assert f"thread {helper.ident} (parked-helper):" in dump
-        # One line for the helper, not a full stack.
         helper_lines = [ln for ln in dump.split("\n") if f"thread {helper.ident} (parked-helper):" in ln]
         assert len(helper_lines) == 1
 

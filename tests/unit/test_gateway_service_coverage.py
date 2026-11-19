@@ -46,8 +46,6 @@ from hft_platform.gateway.exposure import ExposureStore
 from hft_platform.gateway.policy import GatewayPolicy
 from hft_platform.gateway.service import GatewayService, _get_trace_sampler
 
-# ── Helpers ────────────────────────────────────────────────────────────────
-
 
 def _queue_gate(api_queue):
     """Stand-in for ``OrderAdapter.execute``: enqueue, False when the queue is full."""
@@ -136,7 +134,6 @@ def _build_service(
     storm_guard.state = StormGuardState.NORMAL
 
     policy = GatewayPolicy()
-    # Disable startup holdoff for tests
     policy._startup_holdoff_until = 0.0
 
     svc = GatewayService(
@@ -161,9 +158,6 @@ async def _run_svc_one_tick(svc: GatewayService, timeout: float = 0.1) -> None:
         await task
 
 
-# ── _get_trace_sampler import failure (lines 68-70) ────────────────────────
-
-
 def test_get_trace_sampler_returns_none_on_import_error():
     """_get_trace_sampler returns None when diagnostics.trace import fails."""
     with patch.dict("sys.modules", {"hft_platform.diagnostics.trace": None}):
@@ -180,9 +174,6 @@ def test_get_trace_sampler_returns_none_on_exception():
     assert result is None
 
 
-# ── HA leader lease init exception (lines 134-135) ────────────────────────
-
-
 def test_init_ha_leader_lease_import_exception_silenced(monkeypatch):
     """When HA is enabled but FileLeaderLease import fails, lease stays None."""
     monkeypatch.setenv("HFT_GATEWAY_HA_ENABLED", "1")
@@ -192,11 +183,7 @@ def test_init_ha_leader_lease_import_exception_silenced(monkeypatch):
         create=True,
     ):
         svc, _ = _build_service(leader_lease=None)
-    # Service created successfully despite import failure
     assert svc is not None
-
-
-# ── exposure_expiry_loop (lines 182-189) ───────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -209,10 +196,8 @@ async def test_exposure_expiry_loop_calls_expire_stale(monkeypatch):
     exposure.global_notional = 0
     svc, _ = _build_service(channel=ch, exposure_store=exposure)
 
-    # Directly test the loop with a patched sleep interval
     svc.running = True
 
-    # Run a single iteration by stopping after first sleep
     call_count = [0]
     original_sleep = asyncio.sleep
 
@@ -252,11 +237,7 @@ async def test_exposure_expiry_loop_handles_exception(monkeypatch):
     with patch("hft_platform.gateway.service.asyncio.sleep", side_effect=short_sleep):
         await svc._exposure_expiry_loop()
 
-    # Must not have crashed; expire was called
     exposure.expire_stale_orders.assert_called()
-
-
-# ── run() channel.receive() fallback (line 205) ───────────────────────────
 
 
 @pytest.mark.asyncio
@@ -267,11 +248,10 @@ async def test_run_fallback_to_channel_receive():
 
     intent = _make_intent(1, "fallback-key")
 
-    # Mock the channel so receive_raw is not callable (None), forcing fallback
     class FallbackChannel:
         def __init__(self, real_ch):
             self._ch = real_ch
-            self.receive_raw = None  # Not callable -> fallback
+            self.receive_raw = None
 
         async def receive(self):
             return await self._ch.receive()
@@ -296,9 +276,6 @@ async def test_run_fallback_to_channel_receive():
     assert svc._dispatched >= 1
 
 
-# ── run() cleanup: expiry_task exception, lease_task exception (lines 226-250) ─
-
-
 @pytest.mark.asyncio
 async def test_run_cleanup_expiry_task_cancelled():
     """Expiry task is cancelled during shutdown cleanup."""
@@ -321,7 +298,6 @@ async def test_run_cleanup_lease_release_exception():
     mock_lease = MagicMock()
     mock_lease.is_leader.return_value = True
     mock_lease.tick.return_value = True
-    # release() throws a non-cancel exception (line 243-245)
     mock_lease.release.side_effect = OSError("release failed")
 
     ch = LocalIntentChannel(maxsize=8, ttl_ms=0)
@@ -333,7 +309,6 @@ async def test_run_cleanup_lease_release_exception():
     with suppress(asyncio.CancelledError):
         await task
 
-    # Service cleaned up despite release() exception (lines 243-245 covered)
     assert svc.running is False
     mock_lease.release.assert_called()
 
@@ -345,7 +320,6 @@ async def test_run_dedup_persist_on_shutdown_failure():
     dedup = IdempotencyStore(persist_enabled=False)
     svc, _ = _build_service(channel=ch, dedup=dedup)
 
-    # Override persist to raise — simulates disk write failure
     original_persist = dedup.persist
     dedup.persist = lambda: (_ for _ in ()).throw(RuntimeError("persist failed"))
 
@@ -355,11 +329,7 @@ async def test_run_dedup_persist_on_shutdown_failure():
     with suppress(asyncio.CancelledError):
         await task
 
-    # Service exited cleanly despite persist failure
     assert svc.running is False
-
-
-# ── _process_envelope: in-flight dedup rejection (lines 296-307) ──────────
 
 
 @pytest.mark.asyncio
@@ -369,24 +339,18 @@ async def test_inflight_dedup_rejects_second_envelope():
     rejection_sink = asyncio.Queue(maxsize=64)
     svc, api_q = _build_service(channel=ch, approve=True, rejection_sink=rejection_sink)
 
-    # Reserve a slot manually without committing (simulates in-flight)
     svc._dedup.check_or_reserve("inflight-key")
 
-    # Now submit intent with same key
     intent = _make_intent(1, "inflight-key")
     envelope = IntentEnvelope(intent=intent, enqueued_ns=0, ack_token="tok-inflight")
     await svc._process_envelope(envelope)
 
     assert svc._rejected == 1
     assert svc._dedup_hits == 1
-    # Rejection feedback sent
     assert rejection_sink.qsize() == 1
     fb = rejection_sink.get_nowait()
     assert isinstance(fb, RiskFeedback)
     assert fb.reason_code == "DEDUP_IN_FLIGHT"
-
-
-# ── TTL-expired intent path (lines 313-332) ──────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -396,24 +360,21 @@ async def test_ttl_expired_intent_rejected():
     rejection_sink = asyncio.Queue(maxsize=64)
     svc, api_q = _build_service(channel=ch, approve=True, rejection_sink=rejection_sink)
 
-    # Create intent with TTL that already expired
-    old_ts = timebase.now_ns() - 1_000_000_000  # 1 second ago
+    old_ts = timebase.now_ns() - 1_000_000_000
     intent = _make_intent(
         1,
         "ttl-key",
-        ttl_ns=100_000_000,  # 100ms TTL
+        ttl_ns=100_000_000,
         timestamp_ns=old_ts,
     )
     envelope = IntentEnvelope(intent=intent, enqueued_ns=0, ack_token="tok-ttl")
     await svc._process_envelope(envelope)
 
     assert svc._rejected == 1
-    # Dedup committed as rejected
     rec = svc._dedup.check_or_reserve("ttl-key")
     assert rec is not None
     assert rec.approved is False
     assert rec.reason_code == "TTL_EXPIRED"
-    # Rejection feedback sent
     assert rejection_sink.qsize() == 1
     fb = rejection_sink.get_nowait()
     assert fb.reason_code == "TTL_EXPIRED"
@@ -429,7 +390,7 @@ async def test_ttl_expired_no_key_still_rejected():
     old_ts = timebase.now_ns() - 1_000_000_000
     intent = _make_intent(
         1,
-        "",  # empty key
+        "",
         ttl_ns=100_000_000,
         timestamp_ns=old_ts,
     )
@@ -437,9 +398,6 @@ async def test_ttl_expired_no_key_still_rejected():
     await svc._process_envelope(envelope)
 
     assert svc._rejected == 1
-
-
-# ── Policy gate: typed path for dedup commit (line 348) ───────────────────
 
 
 @pytest.mark.asyncio
@@ -461,16 +419,12 @@ async def test_policy_rejection_commits_dedup_for_typed_view():
     assert "HALT" in rec.reason_code
 
 
-# ── Risk evaluate exception releases exposure + dedup (lines 440, 452) ────
-
-
 @pytest.mark.asyncio
 async def test_evaluate_exception_releases_exposure_and_dedup():
     """Risk evaluate() exception releases exposure and dedup slot."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, api_q = _build_service(channel=ch, approve=True)
 
-    # Make evaluate throw
     svc._risk_engine.evaluate.side_effect = RuntimeError("risk engine crash")
 
     intent = _make_intent(1, "eval-err-key")
@@ -479,12 +433,8 @@ async def test_evaluate_exception_releases_exposure_and_dedup():
     with pytest.raises(RuntimeError, match="risk engine crash"):
         await svc._process_envelope(envelope)
 
-    # Dedup slot released
     rec = svc._dedup.check_or_reserve("eval-err-key")
-    assert rec is None  # slot was released, so check_or_reserve reserves a new one
-
-
-# ── NOT_LEADER rejection releases exposure (lines 460, 471) ──────────────
+    assert rec is None
 
 
 @pytest.mark.asyncio
@@ -497,8 +447,8 @@ async def test_not_leader_releases_exposure():
         approve=True,
         rejection_sink=rejection_sink,
     )
-    svc._leader_lease = MagicMock()  # non-None
-    svc._leader_is_active = False  # not leader
+    svc._leader_lease = MagicMock()
+    svc._leader_is_active = False
 
     intent = _make_intent(1, "not-leader-key")
     envelope = IntentEnvelope(intent=intent, enqueued_ns=0, ack_token="tok-nolead")
@@ -509,13 +459,9 @@ async def test_not_leader_releases_exposure():
     assert rec is not None
     assert rec.approved is False
     assert rec.reason_code == "NOT_LEADER"
-    # Feedback sent
     assert rejection_sink.qsize() == 1
     fb = rejection_sink.get_nowait()
     assert fb.reason_code == "NOT_LEADER"
-
-
-# ── Risk rejection releases exposure on non-CANCEL (lines 573, 585) ──────
 
 
 @pytest.mark.asyncio
@@ -545,9 +491,6 @@ async def test_risk_rejection_skips_exposure_release_for_cancel():
     assert svc._rejected == 1
 
 
-# ── Queue full with exposure release (line 543) ──────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_order_gate_refusal_commits_dedup_without_gateway_feedback():
     """An order-gate refusal commits dedup as rejected; the gate, not the gateway, sends feedback."""
@@ -565,9 +508,6 @@ async def test_order_gate_refusal_commits_dedup_without_gateway_feedback():
     assert rec.approved is False
     assert rec.reason_code == "ORDER_GATE_REJECT"
     assert rejection_sink.qsize() == 0
-
-
-# ── _on_channel_ttl_expired (lines 645-659) ──────────────────────────────
 
 
 def test_on_channel_ttl_expired_with_intent():
@@ -593,24 +533,23 @@ def test_on_channel_ttl_expired_with_typed_envelope():
     rejection_sink = asyncio.Queue(maxsize=64)
     svc, _ = _build_service(channel=ch, rejection_sink=rejection_sink)
 
-    # Build a TypedIntentEnvelope with payload tuple of sufficient length
     payload = (
         "typed_intent_v1",
-        42,  # intent_id
-        "strat_typed",  # strategy_id
-        "TSE:2330",  # symbol
-        int(IntentType.NEW),  # intent_type
-        int(Side.BUY),  # side
-        1_000_000,  # price
-        1,  # qty
-        int(TIF.LIMIT),  # tif
-        "",  # target_order_id
-        0,  # timestamp_ns
-        0,  # source_ts_ns
-        "",  # reason
-        "",  # trace_id
-        "typed-ttl-key",  # idempotency_key
-        0,  # ttl_ns
+        42,
+        "strat_typed",
+        "TSE:2330",
+        int(IntentType.NEW),
+        int(Side.BUY),
+        1_000_000,
+        1,
+        int(TIF.LIMIT),
+        "",
+        0,
+        0,
+        "",
+        "",
+        "typed-ttl-key",
+        0,
     )
     envelope = TypedIntentEnvelope(payload=payload, enqueued_ns=0, ack_token="tok-typed-ttl")
     svc._on_channel_ttl_expired(envelope)
@@ -629,21 +568,17 @@ def test_on_channel_ttl_expired_no_intent_no_payload():
     rejection_sink = asyncio.Queue(maxsize=64)
     svc, _ = _build_service(channel=ch, rejection_sink=rejection_sink)
 
-    # Object with neither intent nor payload
     envelope = MagicMock(spec=[])
     svc._on_channel_ttl_expired(envelope)
 
     assert rejection_sink.qsize() == 0
 
 
-# ── _send_rejection_feedback_fields (lines 632-633) ──────────────────────
-
-
 def test_send_rejection_feedback_fields_overflow_increments_metric():
     """_send_rejection_feedback_fields increments overflow metric when sink is full."""
     ch = LocalIntentChannel(maxsize=8, ttl_ms=0)
     rejection_sink = asyncio.Queue(maxsize=1)
-    rejection_sink.put_nowait(MagicMock())  # prefill
+    rejection_sink.put_nowait(MagicMock())
     svc, _ = _build_service(channel=ch, rejection_sink=rejection_sink)
 
     mock_metrics = MagicMock()
@@ -668,7 +603,6 @@ def test_send_rejection_feedback_fields_no_sink():
     svc, _ = _build_service(channel=ch)
     svc._rejection_sink = None
 
-    # Must not raise
     svc._send_rejection_feedback_fields(
         intent_id=1,
         strategy_id="s1",
@@ -689,16 +623,13 @@ def test_send_rejection_feedback_fields_invalid_side():
         intent_id=1,
         strategy_id="s1",
         symbol="TSE:2330",
-        side=999,  # invalid Side value
+        side=999,
         reason_code="INVALID_SIDE",
     )
 
     assert rejection_sink.qsize() == 1
     fb = rejection_sink.get_nowait()
-    assert fb.side is None  # invalid side defaults to None
-
-
-# ── _refresh_metrics_registry exception path ─────────────────────────────
+    assert fb.side is None
 
 
 def test_refresh_metrics_registry_exception_clears_all(monkeypatch):
@@ -721,9 +652,6 @@ def test_refresh_metrics_registry_exception_clears_all(monkeypatch):
     assert svc._gateway_depth_metric is None
 
 
-# ── HALT allows CANCEL intents ───────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_halt_allows_cancel_intents():
     """HALT blocks NEW but allows CANCEL intents through policy gate."""
@@ -736,12 +664,8 @@ async def test_halt_allows_cancel_intents():
     envelope = IntentEnvelope(intent=intent, enqueued_ns=0, ack_token="tok-halt-cancel")
     await svc._process_envelope(envelope)
 
-    # CANCEL passes policy gate in HALT state
     assert api_q.qsize() == 1
     assert svc._dispatched == 1
-
-
-# ── FORCE_FLAT bypasses exposure check ───────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -756,9 +680,6 @@ async def test_force_flat_bypasses_exposure():
 
     assert svc._dispatched == 1
     assert api_q.qsize() == 1
-
-
-# ── Successful dispatch commits dedup as approved ────────────────────────
 
 
 @pytest.mark.asyncio

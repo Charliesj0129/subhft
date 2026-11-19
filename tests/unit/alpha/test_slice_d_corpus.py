@@ -48,7 +48,7 @@ R47_FAMILY = (
     "c72_tmfd6_queue_position_aware",
 )
 NON_R47 = tuple(sorted(EXPECTED_ALPHAS - set(R47_FAMILY)))
-CORPUS_BYTE_BUDGET = 2 * 1024 * 1024  # 2 MB plan budget.
+CORPUS_BYTE_BUDGET = 2 * 1024 * 1024
 
 
 @pytest.fixture(scope="module")
@@ -106,9 +106,6 @@ def test_corpus_byte_size_under_budget() -> None:
 
 
 def test_corpus_signal_dtype_is_float32_on_disk() -> None:
-    # latest_signals_by_alpha() upcasts to float64; verify the on-disk dtype
-    # directly to confirm the storage budget is honoured (float64 would double
-    # the size).
     runs_dir = CORPUS_BASE / "runs"
     npy_files = list(runs_dir.rglob("signals.npy"))
     assert len(npy_files) == 15, f"expected 15 signals.npy files, got {len(npy_files)}"

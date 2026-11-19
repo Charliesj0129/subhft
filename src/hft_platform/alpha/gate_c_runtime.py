@@ -16,8 +16,6 @@ class GateCMakerRuntime:
     clickhouse_source: type[Any]
     latency_profile: type[Any]
     maker_engine: type[Any]
-    # (instrument, ck_source) -> the rolled schedule for a ``<ROOT>_frontmonth``
-    # instrument (ADR-004). None: this runtime cannot run a rolled series.
     rolled_schedule: Callable[[str, Any], Any] | None = None
 
 
@@ -27,9 +25,6 @@ class GateCTakerRuntime:
 
     load_cost_profile: Callable[[str], Any]
     taker_engine: type[Any]
-    # (alpha, backtest config, hftbt event paths, cost model) -> a result with dated
-    # ``days``/``daily_rows()``, ``n_is_days(split)``, ``sharpe_split(split)`` and ``method``:
-    # the fill-priced taker backtest Gate C's PnL checks read. None: Gate C cannot price fills.
     run_taker_sim: Callable[[Any, Any, list[str], Any], Any] | None = None
 
 

@@ -109,8 +109,6 @@ class TestBlockingTriageStatus:
         )
 
     def _payload(self, *, fills: int, days: int) -> dict:
-        # Robust shape on every axis except sample-size, so only
-        # min_sample_size can fail.
         p = dict(_R47_FINGERPRINT)
         p["n_fills"] = fills
         p["n_trading_days"] = days
@@ -118,7 +116,6 @@ class TestBlockingTriageStatus:
         return p
 
     def test_status_sample_promising_when_close_to_threshold(self) -> None:
-        # 240/300 = 0.80, 50/60 = 0.83 → promising
         prof = self._profile(("min_sample_size",))
         _, blocking = _invoke_sub_gates(
             strategy_type="maker",
@@ -154,10 +151,6 @@ class TestBlockingTriageStatus:
         assert blocking["triage_status"] == "sample_inconclusive"
 
     def test_failure_on_short_sample_is_needs_more_days_not_killed(self) -> None:
-        # min_sample_size fails AND single_day_dominance fails (R47
-        # fingerprint has 2325 of 2253 from one day). Under verdict rules v1
-        # a FAIL measured on a sample below the floor is underpowered, so the
-        # run needs more days; it is not a KILL.
         prof = ValidationProfile(
             name="test_strict",
             is_strict=True,

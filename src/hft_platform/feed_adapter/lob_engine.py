@@ -26,7 +26,6 @@ _METRICS_ENABLED = os.getenv("HFT_METRICS_ENABLED", "0").lower() not in {"0", "f
 _METRICS_BATCH = max(1, int(os.getenv("HFT_METRICS_BATCH", "4096")))
 _METRICS_ASYNC = os.getenv("HFT_METRICS_ASYNC", "1").lower() not in {"0", "false", "no", "off"}
 _STATS_MODE = os.getenv("HFT_LOB_STATS_MODE", "event").lower()
-# HFT_STATS_TUPLE=1 is a convenience alias for HFT_LOB_STATS_MODE=tuple
 _STATS_TUPLE_ENV = os.getenv("HFT_STATS_TUPLE", "0") == "1"
 _STATS_TUPLE = _STATS_MODE in {"tuple", "raw"} or _STATS_TUPLE_ENV
 _STATS_NONE = _STATS_MODE in {"none", "off", "disabled"}
@@ -96,7 +95,6 @@ class BookState:
         self.symbol = symbol
         self.lock = Lock() if _LOCKS_ENABLED else _NoopLock()
 
-        # Shape: List[List[int]] or np.ndarray (N,2)
         self.bids: list[list[int]] | np.ndarray = []
         self.asks: list[list[int]] | np.ndarray = []
 
@@ -104,7 +102,6 @@ class BookState:
         self.local_ts: int = 0
         self.version: int = 0
 
-        # Stats (mid_price_x2 = best_bid + best_ask, avoids division)
         self.mid_price_x2: int = 0
         self.spread: int = 0
         self.imbalance: float = 0.0
@@ -114,11 +111,8 @@ class BookState:
         self.ask_depth_total: int = 0
         self.normalizer_seq: int = 0
 
-        # _cached_stats retained as a slot placeholder; no longer used at runtime
-        # (get_stats() now creates a new LOBStatsEvent per tick to avoid shared-ref corruption).
         self._cached_stats: Any = None
 
-        # Rust-accelerated book state (opt-in)
         self._rust_state: Any = None
         if _RUST_BOOK_STATE_ENABLED and _RustBookState is not None:
             try:
@@ -130,9 +124,7 @@ class BookState:
         """Atomic update (Snapshot style full-replace for Top-N streams)."""
         with self.lock:
             if exch_ts > 0 and exch_ts < self.exch_ts:
-                # Late packet — skip stale data
                 return
-            # DATA-007: Preserve valid timestamp when new update has ts=0.
             if exch_ts == 0 and self.exch_ts > 0:
                 exch_ts = self.exch_ts
 
@@ -152,13 +144,12 @@ class BookState:
             if _LOCAL_TS_ENABLED:
                 self.local_ts = timebase.now_ns()
 
-            # Assign directly (allow numpy arrays for zero-copy stats computation)
             if isinstance(bids, np.ndarray):
                 self.bids = bids if bids.size > 0 else []
             elif bids:
                 self.bids = bids
             else:
-                self.bids = []  # Ensure cleared if empty
+                self.bids = []
 
             if isinstance(asks, np.ndarray):
                 self.asks = asks if asks.size > 0 else []
@@ -168,16 +159,12 @@ class BookState:
                 self.asks = []
 
             if not _STATS_NONE:
-                # Rust fast path: delegate entire recompute to RustBookState
                 rs = self._rust_state
                 if rs is not None and isinstance(self.bids, np.ndarray) and isinstance(self.asks, np.ndarray):
                     try:
                         bids_2d = self.bids.reshape(-1, 2) if self.bids.ndim == 1 else self.bids
                         asks_2d = self.asks.reshape(-1, 2) if self.asks.ndim == 1 else self.asks
                         rs.apply_update(bids_2d, asks_2d, exch_ts)
-                        # Crossed-book guard: Shioaji can emit best_bid > best_ask
-                        # during auction transitions. Zero out stats to prevent
-                        # negative spread propagating into FeatureEngine EMA state.
                         if rs.spread < 0:
                             self.mid_price_x2 = 0
                             self.spread = 0
@@ -206,7 +193,6 @@ class BookState:
 
     def _recompute(self):
         """Vectorized stats computation."""
-        # Rust fast path for numpy arrays
         if (
             _RUST_ENABLED
             and _RUST_COMPUTE_STATS
@@ -239,7 +225,6 @@ class BookState:
             except Exception as exc:
                 logger.debug("rust_compute_stats_fallback", symbol=self.symbol, error=str(exc))
 
-        # 1. Depth (Pure Python Sum)
         if isinstance(self.bids, np.ndarray):
             if self.bids.size > 0:
                 self.bid_depth_total = int(self.bids[:, 1].sum())
@@ -276,16 +261,10 @@ class BookState:
             best_ask = 0
             ask_vol_top = 0
 
-        # 2. Price Stats
-        # Guard against crossed book (best_bid > best_ask), which Shioaji can
-        # temporarily emit during auction transitions. Treat as invalid — same
-        # as the else branch — to prevent negative spread propagating into
-        # FeatureEngine EMA state.
         if best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
             self.mid_price_x2 = best_bid + best_ask
             self.spread = best_ask - best_bid
 
-            # Imbalance (Top 1)
             total_top = bid_vol_top + ask_vol_top
             if total_top > 0:
                 self.imbalance = (bid_vol_top - ask_vol_top) / total_top
@@ -308,12 +287,6 @@ class BookState:
             else:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
-            # Always create a new LOBStatsEvent per tick.
-            # Previously the same object was mutated in-place and returned; multiple
-            # consumers (StrategyRunner, RecorderService, FeatureEngine) held the same
-            # reference, so the next tick's mutation corrupted data still being read.
-            # A slotted dataclass with only primitive fields is cheap to allocate;
-            # correctness outweighs the minor allocation cost here.
             return LOBStatsEvent(
                 symbol=self.symbol,
                 ts=self.exch_ts,
@@ -329,9 +302,6 @@ class BookState:
             )
 
     def get_stats_tuple(self) -> tuple:
-        # Read the Python fields, never ``_rust_state``: only ``apply_update``
-        # feeds the Rust state, while ``apply_update_with_stats*``, the fused
-        # bypass and ``update_tick`` do not, so it can hold the boot snapshot.
         with self.lock:
             if isinstance(self.bids, np.ndarray):
                 best_bid = int(self.bids[0, 0]) if self.bids.size > 0 else 0
@@ -344,11 +314,11 @@ class BookState:
                 best_ask = int(self.asks[0][0]) if self.asks else 0
 
             return (
-                "lobstats",  # [0] tag for runner tuple guard
+                "lobstats",
                 self.symbol,
                 self.exch_ts,
-                self.mid_price_x2,  # Integer (best_bid + best_ask)
-                self.spread,  # Integer (best_ask - best_bid)
+                self.mid_price_x2,
+                self.spread,
                 self.imbalance,
                 best_bid,
                 best_ask,
@@ -455,10 +425,8 @@ class LOBEngine:
         self.books: Dict[str, BookState] = {}
         self.feature_engine: Any = None
         self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
-        # Prometheus label cardinality guard (INFRA-05)
         self._metrics_max_label_symbols: int = int(os.getenv("HFT_METRICS_MAX_LABEL_SYMBOLS", "200"))
         self._metrics_known_symbols: set[str] = set()
-        # Global lock removed!
         self.metrics = MetricsRegistry.get()
         self._metrics_enabled = _METRICS_ENABLED and self.metrics is not None
         self._metrics_batch = _METRICS_BATCH
@@ -472,10 +440,6 @@ class LOBEngine:
         _evict_ttl_s = int(os.getenv("HFT_LOB_SYMBOL_TTL_S", "3600"))
         self._eviction_ttl_ns: int = _evict_ttl_s * 1_000_000_000
         self._eviction_last_run_ns: int = 0
-        # Ingress invariant (Hemorrhage #5, 2026-04-18). When a symbol enters
-        # the LOB that is not known in SymbolMetadata, we log once and bump
-        # unknown_symbol_ingress_total. Strict mode (env=1) additionally
-        # refuses to allocate a book — default is permissive.
         self._symbol_metadata: Any = None
         self._strict_ingress: bool = os.getenv("HFT_LOB_STRICT_INGRESS", "0") == "1"
         self._unknown_symbol_warned: set[str] = set()
@@ -569,7 +533,6 @@ class LOBEngine:
         if self._eviction_ttl_ns <= 0:
             return 0
         now_ns = timebase.now_ns()
-        # Rate-limit: run at most once per minute
         if now_ns - self._eviction_last_run_ns < 60_000_000_000:
             return 0
         self._eviction_last_run_ns = now_ns
@@ -578,21 +541,19 @@ class LOBEngine:
         for sym in stale:
             del self.books[sym]
         if stale:
-            # Clear single-entry cache if evicted symbol was cached
             if self._last_symbol in stale:
                 self._last_symbol = None
                 self._last_book = None
             logger.info(
                 "lob_stale_symbols_evicted",
                 count=len(stale),
-                symbols=stale[:5],  # log at most 5 for brevity
+                symbols=stale[:5],
             )
         return len(stale)
 
     def _record_lob_metrics(self, symbol: str, is_snapshot: bool):
         if not self._is_metrics_enabled():
             return
-        # Guard Prometheus label cardinality (INFRA-05)
         if symbol not in self._metrics_known_symbols:
             if len(self._metrics_known_symbols) >= self._metrics_max_label_symbols:
                 symbol = "_other"
@@ -621,10 +582,6 @@ class LOBEngine:
         if symbol == self._last_symbol and self._last_book is not None:
             return self._last_book
         if symbol not in self.books:
-            # Ingress invariant: detect symbols not declared in SymbolMetadata.
-            # Permissive by default so strange symbols still flow; strict mode
-            # (HFT_LOB_STRICT_INGRESS=1) refuses to allocate a book so downstream
-            # planes fail fast instead of silently using the default price scale.
             if not self._is_symbol_known(symbol):
                 if symbol not in self._unknown_symbol_warned:
                     self._unknown_symbol_warned.add(symbol)
@@ -672,15 +629,12 @@ class LOBEngine:
             return
         try:
             counter.labels(plane="lob").inc()
-        except Exception:  # noqa: BLE001 — metrics must never crash hot path
+        except Exception:
             pass
 
     def process_event(self, event: Union[BidAskEvent, TickEvent, tuple]) -> Optional[LOBStatsEvent | tuple]:
         metrics_enabled = self._is_metrics_enabled()
-        # Dispatch by exact type (avoid isinstance MRO walk). Event dataclasses
-        # are frozen+slots with no subclasses — `type(x) is C` is correct.
         et = type(event)
-        # Tuple fast-path (avoid event object creation)
         if et is tuple and event:
             tuple_event = cast(tuple[Any, ...], event)
             if tuple_event[0] == "bidask":
@@ -732,16 +686,12 @@ class LOBEngine:
                 book.update_tick(price, volume, exch_ts)
                 return None
 
-        # Typed dispatch (exact-type; subclasses never created for these)
         if et is BidAskEvent:
             bidask_event = cast(BidAskEvent, event)
             book = self.get_book(bidask_event.symbol)
             if book is None:
                 return None
-            # Propagate normalizer seq for downstream ordering (Bug #10 fix)
             book.normalizer_seq = bidask_event.meta.seq
-            # Fused bypass: normalizer already computed stats in a single Rust call;
-            # skip redundant apply_update + _recompute and directly set book fields.
             if _FUSED_BYPASS and bidask_event.fused_stats is not None:
                 fs = bidask_event.fused_stats
                 exch_ts = bidask_event.meta.source_ts
@@ -785,7 +735,6 @@ class LOBEngine:
             if book is None:
                 return None
             book.update_tick(tick_event.price, tick_event.volume, tick_event.meta.source_ts)
-            # return book.get_stats() # Optional: emit stats on tick?
             return None
 
         return None
@@ -801,11 +750,6 @@ class LOBEngine:
             lock_ctx = _NoopLock()
 
         with lock_ctx:
-            # Convert Numpy to list of dicts for compatibility
-            # Or just simple top level?
-            # BaseStrategy.get_l1 usually expects something.
-
-            # Safely handle empty arrays
             if isinstance(book.bids, np.ndarray):
                 best_bid = int(book.bids[0][0]) if book.bids.size > 0 else 0
             else:
@@ -821,12 +765,10 @@ class LOBEngine:
                 "timestamp": book.exch_ts,
                 "best_bid": best_bid,
                 "best_ask": best_ask,
-                # Backward-compatible float fields (scaled units)
                 "mid_price": book.mid_price_x2 / 2.0,
                 "spread": float(book.spread),
-                # Strict integer fields
-                "mid_price_x2": book.mid_price_x2,  # Scaled integer (best_bid + best_ask)
-                "spread_scaled": book.spread,  # Scaled integer (best_ask - best_bid)
+                "mid_price_x2": book.mid_price_x2,
+                "spread_scaled": book.spread,
             }
 
     def get_l1_scaled(self, symbol: str) -> Optional[tuple[int, int, int, int, int, int, int]]:
@@ -842,8 +784,6 @@ class LOBEngine:
         book = self.books[symbol]
 
         lock_ctx = book.lock if _READ_LOCKS_ENABLED else _NoopLock()
-        # Python fields only, as in ``BookState.get_stats_tuple``: the Rust state
-        # misses every update that does not go through ``apply_update``.
         with lock_ctx:
             if isinstance(book.bids, np.ndarray):
                 best_bid = int(book.bids[0, 0]) if book.bids.size > 0 else 0

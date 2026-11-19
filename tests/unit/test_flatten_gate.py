@@ -36,7 +36,6 @@ class TestFlattenGate:
         assert claimed.status == FlattenStatus.PROCESSING
         assert claimed.scope == "strategy"
         assert claimed.scope_id == "mm1"
-        # File on disk should also reflect PROCESSING
         on_disk = gate.read_request()
         assert on_disk is not None
         assert on_disk.status == FlattenStatus.PROCESSING
@@ -68,9 +67,7 @@ class TestFlattenGate:
         assert req.error == "broker_timeout"
 
     def test_claim_returns_none_if_not_pending(self, gate: FlattenGate) -> None:
-        # No file at all
         assert gate.claim() is None
-        # Already processing
         gate.submit(scope="all", deadline_s=120)
         gate.claim()
         assert gate.claim() is None
@@ -104,7 +101,6 @@ class TestFlattenGate:
         t_write.join(timeout=5)
 
         assert not errors, f"Concurrent read/write errors: {errors}"
-        # All successful reads should return valid requests (or None during brief rename)
         for req in results:
             if req is not None:
                 assert req.scope == "all"

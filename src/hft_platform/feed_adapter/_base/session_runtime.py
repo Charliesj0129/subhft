@@ -62,10 +62,6 @@ class BaseBrokerSessionRuntime(abc.ABC):
         self._login_retry_max: int = login_retry_max
         self._backoff_base_s: float = backoff_base_s
 
-    # ------------------------------------------------------------------ #
-    # Abstract hooks — broker-specific
-    # ------------------------------------------------------------------ #
-
     @abc.abstractmethod
     def _do_login(self, **credentials: Any) -> bool:
         """Perform the broker-specific login call.
@@ -101,10 +97,6 @@ class BaseBrokerSessionRuntime(abc.ABC):
         explicit values are not configured.
         """
 
-    # ------------------------------------------------------------------ #
-    # Properties
-    # ------------------------------------------------------------------ #
-
     @property
     def is_logged_in(self) -> bool:
         """Return ``True`` if the session is currently authenticated."""
@@ -114,10 +106,6 @@ class BaseBrokerSessionRuntime(abc.ABC):
     def last_login_error(self) -> str | None:
         """Return the last login error message, or ``None``."""
         return self._last_login_error
-
-    # ------------------------------------------------------------------ #
-    # Login with retry (shared backoff FSM)
-    # ------------------------------------------------------------------ #
 
     def login_with_retry(
         self,
@@ -170,10 +158,6 @@ class BaseBrokerSessionRuntime(abc.ABC):
         )
         return False
 
-    # ------------------------------------------------------------------ #
-    # Reconnect with cooldown guard
-    # ------------------------------------------------------------------ #
-
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
         """Reconnect the broker session, respecting a cooldown guard.
 
@@ -198,18 +182,10 @@ class BaseBrokerSessionRuntime(abc.ABC):
         logger.info("broker_reconnect_start", reason=reason, force=force)
         return self._do_reconnect(reason=reason, force=force)
 
-    # ------------------------------------------------------------------ #
-    # Logout
-    # ------------------------------------------------------------------ #
-
     def logout(self) -> None:
         """Logout from the broker session."""
         self._do_logout()
         self._logged_in = False
-
-    # ------------------------------------------------------------------ #
-    # Snapshot
-    # ------------------------------------------------------------------ #
 
     def snapshot(self) -> dict[str, Any]:
         """Return a dict describing the current session state."""

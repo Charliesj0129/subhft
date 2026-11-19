@@ -23,11 +23,6 @@ def _strict_profile() -> ValidationProfile:
     return ValidationProfile(name="test", is_strict=True, thresholds={}, blocking_sub_gates=("sharpe_threshold",))
 
 
-# ---------------------------------------------------------------------------
-# Unit tests for _verify_gate_c_passed
-# ---------------------------------------------------------------------------
-
-
 def _write_scorecard(directory: Path) -> Path:
     """Write a minimal valid scorecard.json and return its path."""
     sc = {
@@ -60,10 +55,8 @@ def test_verify_gate_c_passes_when_gate_c_true(tmp_path: Path) -> None:
     sc_path = _write_scorecard(tmp_path)
     _write_meta(tmp_path, gate_c=True)
 
-    # Must not raise
     result = _verify_gate_c_passed(sc_path)
 
-    # Gate C passed — function returns None (no exception, no side effects)
     assert result is None
 
 
@@ -75,13 +68,10 @@ def test_verify_gate_c_warns_and_proceeds_when_no_meta(tmp_path: Path, capsys: p
     logging bridge).
     """
     sc_path = _write_scorecard(tmp_path)
-    # No meta.json written
 
-    # Must not raise
     _verify_gate_c_passed(sc_path)
 
     captured = capsys.readouterr()
-    # structlog emits the event key in the rendered output
     assert "gate_c_verification_skipped_no_meta" in captured.err or "meta.json" in captured.err, (
         f"Expected a warning about missing meta.json in stderr; got: {captured.err!r}"
     )
@@ -94,11 +84,6 @@ def test_verify_gate_c_raises_when_gate_status_missing(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Gate C has not passed"):
         _verify_gate_c_passed(sc_path)
-
-
-# ---------------------------------------------------------------------------
-# Integration: promote_alpha propagates the Gate C error
-# ---------------------------------------------------------------------------
 
 
 def test_promote_alpha_raises_when_gate_c_false(tmp_path: Path) -> None:

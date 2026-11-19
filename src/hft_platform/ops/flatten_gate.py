@@ -35,7 +35,7 @@ class FlattenStatus(enum.Enum):
 
 @dataclass(slots=True)
 class FlattenRequest:
-    scope: str  # "all", "strategy", "track"
+    scope: str
     scope_id: str | None
     deadline_s: int
     status: FlattenStatus

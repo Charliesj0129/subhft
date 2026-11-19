@@ -100,7 +100,6 @@ def test_format_action_includes_alpha_names() -> None:
     }
     label, _ = _format_action(ss, pos=3, neg=0, total=3, warmup_ticks=64)
     assert "BUY" in label
-    # Should contain alpha short name or "all" when all aligned
     assert "all" in label or "ALP" in label
 
 
@@ -108,7 +107,7 @@ def test_row_flash_for_recent_events() -> None:
     """Phase 4: recent events produce bold row style."""
     ss = _symbol_state()
     now_ns = 10_000_000_000
-    ss.last_event_ns = now_ns - 1_000_000_000  # 1s ago
+    ss.last_event_ns = now_ns - 1_000_000_000
     style = _get_row_style(ss, MonitorState.LIVE, now_ns)
     assert style.bold is True
 
@@ -126,7 +125,6 @@ def test_source_badge_shown_in_header() -> None:
     header = build_header(ctx)
     assert "src: REDIS+CH" in header.plain
 
-    # Empty source_label should not show badge
     ctx_no_src = HeaderContext(
         state=MonitorState.LIVE,
         session_display="Day Session",
@@ -154,7 +152,6 @@ def test_heartbeat_indicator_in_header() -> None:
     assert "poll #42" in header.plain
     assert "0s ago" in header.plain
 
-    # No heartbeat when poll_count is 0
     ctx_no_poll = HeaderContext(
         state=MonitorState.LIVE,
         session_display="Day Session",
@@ -175,7 +172,6 @@ def test_delta_column_shows_price_change() -> None:
     config = MonitorConfig(symbols=(ss.symbol,), warmup_ticks=64)
 
     table = build_table([ss], config, MonitorState.LIVE, alpha_cols=list(ss.symbol.alpha_ids))
-    # Table should have a Δ column
     col_names = [c.header for c in table.columns]
     assert "\u0394" in col_names
 
@@ -188,32 +184,27 @@ def test_collapsed_closed_section() -> None:
 
     config = MonitorConfig(symbols=(ws,), warmup_ticks=64)
 
-    # Collapsed: should show summary row
     table_collapsed = build_table(
         [active, closed], config, MonitorState.LIVE, alpha_cols=["alpha_1"], closed_collapsed=True
     )
     row_count_collapsed = table_collapsed.row_count
-    # 1 active row + 1 collapsed summary row = 2
     assert row_count_collapsed == 2
 
-    # Expanded: should show all rows
     table_expanded = build_table(
         [active, closed], config, MonitorState.LIVE, alpha_cols=["alpha_1"], closed_collapsed=False
     )
     row_count_expanded = table_expanded.row_count
-    assert row_count_expanded == 2  # 1 active + 1 closed shown
+    assert row_count_expanded == 2
 
 
 def test_price_sparkline_in_table() -> None:
     """S7: table uses price sparkline instead of composite sparkline."""
     ss = _symbol_state()
     ss.last_price = 210.0
-    # Fill price sparkline with data
     for i in range(10):
         ss.price_sparkline_append(200.0 + float(i))
 
     config = MonitorConfig(symbols=(ss.symbol,), warmup_ticks=64)
     table = build_table([ss], config, MonitorState.LIVE, alpha_cols=list(ss.symbol.alpha_ids))
-    # Spark column should exist
     col_names = [c.header for c in table.columns]
     assert "Spark" in col_names

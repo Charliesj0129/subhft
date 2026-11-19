@@ -34,11 +34,6 @@ async def _wait_for_file(path: str, timeout_s: float = 5.0, interval_s: float = 
         await asyncio.sleep(interval_s)
 
 
-# ---------------------------------------------------------------------------
-# Issue #1: Fill dedup persist/load
-# ---------------------------------------------------------------------------
-
-
 class TestFillDedupPersistence:
     """Verify _seen_fill_ids survives process restart."""
 
@@ -54,7 +49,6 @@ class TestFillDedupPersistence:
 
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
             if pre_seed is not None:
-                # Write a pre-existing file to simulate prior persist
                 import orjson
 
                 os.makedirs(os.path.dirname(persist_path), exist_ok=True)
@@ -112,9 +106,7 @@ class TestFillDedupPersistence:
         router1._seen_fill_ids["dup_2"] = None
         router1.persist_fill_dedup()
 
-        # Simulate restart: create new router that loads from same path
         router2, _ = self._make_router(tmp_path, pre_seed=None)
-        # File already exists from persist above
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": path}):
             router2._fill_dedup_persist_path = path
             router2._load_fill_dedup()
@@ -160,10 +152,6 @@ class TestFillDedupPersistence:
 
         await router.stop(drain_timeout_s=1.0)
 
-        # The checkpoint is handed to the default executor, so "the fill was
-        # registered" and "the dedup window is recoverable" are two different
-        # instants. Waiting makes this a durability check rather than a race
-        # against a thread pool.
         await router.flush_fill_dedup()
         assert os.path.exists(persist_path)
 
@@ -171,11 +159,6 @@ class TestFillDedupPersistence:
             restarted, _ = self._make_router(tmp_path)
 
         assert "F_RESTART" in restarted._seen_fill_ids
-
-
-# ---------------------------------------------------------------------------
-# Issue #2: Fill DLQ persist/load + overflow metric
-# ---------------------------------------------------------------------------
 
 
 class TestFillDLQPersistence:
@@ -194,7 +177,6 @@ class TestFillDLQPersistence:
                 fill = MagicMock(symbol=f"sym{i}", order_id=f"ord{i}")
                 dlq.add(fill)
 
-        # Overflow should fire on 4th and 5th adds (when size == max_size before append)
         assert metrics.fill_dlq_overflow_total.inc.call_count == 2
 
     def test_persist_and_load_roundtrip(self, tmp_path):
@@ -224,7 +206,6 @@ class TestFillDLQPersistence:
 
         assert os.path.exists(persist_path)
 
-        # Load into fresh DLQ
         dlq2 = OrphanedFillDLQ(max_size=100, persist_path=persist_path)
         dlq2.load()
 
@@ -239,21 +220,15 @@ class TestFillDLQPersistence:
 
     def test_persist_empty_removes_file(self, tmp_path):
         persist_path = str(tmp_path / "dlq.jsonl")
-        # Create a dummy file
         with open(persist_path, "w") as f:
             f.write("dummy\n")
 
         from hft_platform.execution.fill_dlq import OrphanedFillDLQ
 
         dlq = OrphanedFillDLQ(max_size=100, persist_path=persist_path)
-        dlq.persist()  # Empty queue
+        dlq.persist()
 
         assert not os.path.exists(persist_path)
-
-
-# ---------------------------------------------------------------------------
-# Issue #3: order_id_map persist/load
-# ---------------------------------------------------------------------------
 
 
 class TestOrderIdMapPersistence:
@@ -271,8 +246,6 @@ class TestOrderIdMapPersistence:
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
             now_ns = timebase.now_ns()
             with open(persist_path, "wb") as f:
-                # H3: pre-seed with the new schema (k, v, t_ns, s) so the
-                # loader does not drop entries as legacy/stale.
                 for k, v in pre_seed.items():
                     f.write(orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
 
@@ -297,9 +270,6 @@ class TestOrderIdMapPersistence:
         with open(path, "rb") as f:
             rows = [orjson.loads(line.strip()) for line in f if line.strip()]
         assert len(rows) == 2
-        # H3: every persisted row carries t_ns + state. The defensive branch
-        # in persist_order_id_map() stamps an unmetered entry as live with
-        # the current timestamp so downstream load can apply TTL filtering.
         first = rows[0]
         assert first["k"] == "broker_123"
         assert first["v"] == "strat_a:intent_1"
@@ -341,12 +311,6 @@ class TestOrderIdMapPersistence:
 
         await adapter._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
 
-        # _maybe_persist_order_id_map uses run_in_executor (fire-and-forget), so
-        # the write lands on a worker thread at an unknown time. A single fixed
-        # sleep is a race, not a wait: on 2026-08-21 this test failed under
-        # xdist on a loaded CI runner while passing in 0.64s locally. Poll to a
-        # deadline instead, which finishes as soon as the executor has flushed
-        # and only spends the full budget when something is genuinely wrong.
         await _wait_for_file(persist_path)
         assert os.path.exists(persist_path)
 
@@ -355,11 +319,6 @@ class TestOrderIdMapPersistence:
 
         assert restarted.order_id_map["ORD_RESTART"] == "R47:101"
         assert restarted.order_id_map["SEQ_RESTART"] == "R47:101"
-
-
-# ---------------------------------------------------------------------------
-# Issue #4: Startup race overflow halt flag
-# ---------------------------------------------------------------------------
 
 
 class TestStartupRaceOverflowHalt:
@@ -376,11 +335,9 @@ class TestStartupRaceOverflowHalt:
         evicted = 0
         startup_overflow_lost = False
 
-        # Fill buffer to capacity
         overflow_buf.append("event1")
         overflow_buf.append("event2")
 
-        # Simulate the broker-thread overflow branch (system.py:1075-1091)
         if len(overflow_buf) >= overflow_max:
             evicted += 1
             startup_overflow_lost = True
@@ -402,11 +359,6 @@ class TestStartupRaceOverflowHalt:
         assert startup_overflow_lost is False
 
 
-# ---------------------------------------------------------------------------
-# Issue #5: Audit drop metric
-# ---------------------------------------------------------------------------
-
-
 class TestAuditDropMetric:
     """Verify audit drops are exposed as Prometheus metric."""
 
@@ -424,7 +376,6 @@ class TestAuditDropMetric:
             writer = AuditWriter(queue_size=1)
             await writer.start()
             try:
-                # Force overflow to zero-capacity so drops happen immediately after queue full.
                 for name in writer._overflow:
                     writer._overflow[name] = collections.deque(maxlen=0)
 
@@ -432,8 +383,8 @@ class TestAuditDropMetric:
                 with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:
                     mock_reg.get.return_value = metrics_mock
 
-                    writer.log_order({"cmd_id": 1})  # fills queue
-                    writer.log_order({"cmd_id": 2})  # should trigger drop + metric
+                    writer.log_order({"cmd_id": 1})
+                    writer.log_order({"cmd_id": 2})
 
                 assert writer._dropped["audit.orders_log"] >= 1
                 metrics_mock.audit_dropped_total.labels.assert_called_with(table="audit.orders_log")
@@ -442,11 +393,6 @@ class TestAuditDropMetric:
 
         _asyncio.run(_inner())
         reset_audit_writer()
-
-
-# ---------------------------------------------------------------------------
-# Issue #6: Recorder DATA_LOSS escalation to HALT
-# ---------------------------------------------------------------------------
 
 
 class TestRecorderDataLossEscalation:
@@ -462,7 +408,6 @@ class TestRecorderDataLossEscalation:
         inputs._redis_is_healthy = MagicMock(return_value=True)
         inputs.wal_backlog_files_threshold = 0
 
-        # Test the differentiation directly
         recorder_state = "DATA_LOSS"
         reasons: list[str] = []
         if recorder_state == "DATA_LOSS":
@@ -487,9 +432,8 @@ class TestRecorderDataLossEscalation:
         from hft_platform.ops.autonomy_monitor import AutonomyMonitor
 
         storm_guard = MagicMock()
-        # StormGuard not in HALT initially (so _evaluate doesn't take the HALT early-return)
         storm_guard.state = MagicMock()
-        storm_guard.state.__eq__ = lambda self, other: False  # != HALT
+        storm_guard.state.__eq__ = lambda self, other: False
 
         platform_inputs = MagicMock()
         platform_inputs.reduce_only_reasons.return_value = ["recorder_data_loss"]
@@ -509,11 +453,6 @@ class TestRecorderDataLossEscalation:
         assert any(d.action == "trigger_halt" for d in decisions)
 
 
-# ---------------------------------------------------------------------------
-# Issue #7: Deferred terminal overflow metric
-# ---------------------------------------------------------------------------
-
-
 class TestDeferredTerminalOverflowMetric:
     """Verify deferred terminal deque overflow is tracked."""
 
@@ -526,7 +465,6 @@ class TestDeferredTerminalOverflowMetric:
             order_queue=asyncio.Queue(),
             broker_client=MagicMock(),
         )
-        # Shrink deque for testing
         adapter._deferred_terminals = collections.deque(maxlen=2)
         adapter._pending_order_keys = {"strat_a:intent_1"}
         adapter.live_orders = {}
@@ -536,19 +474,12 @@ class TestDeferredTerminalOverflowMetric:
         adapter.order_id_resolver = MagicMock()
         adapter.order_id_resolver.resolve_order_key.return_value = "strat_a:unknown"
 
-        # Fill to capacity
         await adapter.on_terminal_state("strat_a", "oid_1")
         await adapter.on_terminal_state("strat_a", "oid_2")
 
-        # This should trigger overflow detection
         await adapter.on_terminal_state("strat_a", "oid_3")
 
         metrics.deferred_terminal_overflow_total.inc.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Fill dedup checkpoint: offload, serialisation, trailing edge, clock
-# ---------------------------------------------------------------------------
 
 
 class TestFillDedupCheckpointDurability:
@@ -584,13 +515,10 @@ class TestFillDedupCheckpointDurability:
         router, persist_path = self._make_router(tmp_path)
         router._seen_fill_ids["FILL_OLD"] = None
 
-        # Stand in for a checkpoint that is already writing.
         router._fill_dedup_io_lock.acquire()
         writer = threading.Thread(target=router.persist_fill_dedup)
         writer.start()
         try:
-            # Bounded wait: it must NOT finish, because it cannot read the
-            # window while the lock is held.
             writer.join(timeout=0.05)
             assert writer.is_alive()
             assert not os.path.exists(persist_path)
@@ -619,11 +547,9 @@ class TestFillDedupCheckpointDurability:
         await router.flush_fill_dedup()
         assert b"FILL_FIRST" in open(persist_path, "rb").read()
 
-        # Second fill lands inside the throttle window: the write is skipped.
         router._register_fill_dedup_key("FILL_INSIDE_WINDOW")
         assert b"FILL_INSIDE_WINDOW" not in open(persist_path, "rb").read()
 
-        # The trailing edge must carry it to disk on its own.
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             if b"FILL_INSIDE_WINDOW" in open(persist_path, "rb").read():
@@ -659,7 +585,7 @@ class TestFillDedupCheckpointDurability:
             "0.0 means 'at boot' on a monotonic clock, not 'long ago'"
         )
 
-        router._fill_dedup_persist_interval_s = 86400.0  # longer than a new host's uptime
+        router._fill_dedup_persist_interval_s = 86400.0
         router._seen_fill_ids["FILL_BOOT"] = None
         router._maybe_persist_fill_dedup()
 

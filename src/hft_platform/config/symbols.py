@@ -52,17 +52,11 @@ from hft_platform.config._symbols_types import (
     parse_date_key,
 )
 
-# Re-export private-module names that were previously module-level here.
-# This keeps ``from hft_platform.config.symbols import X`` working for all
-# known call-sites (cli.py, contracts_runtime.py, wizard.py, tests).
-
 __all__ = [
-    # Types / dataclasses
     "SymbolBuildResult",
     "ContractIndex",
     "FilterSpec",
     "ContractCacheRegressionError",
-    # Constants
     "DEFAULT_LIST_PATH",
     "DEFAULT_OUTPUT_PATH",
     "DEFAULT_CONTRACT_CACHE",
@@ -74,7 +68,6 @@ __all__ = [
     "FILTER_BOOL_KEYS",
     "FILTER_LIST_KEYS",
     "METRIC_ALIASES",
-    # Functions
     "derive_root",
     "parse_date_key",
     "expiry_key",
@@ -90,11 +83,6 @@ __all__ = [
     "preview_lines",
     "fetch_contracts_from_broker",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Parsing orchestrator (kept here because it wires parsing + expansion)
-# ---------------------------------------------------------------------------
 
 
 def _resolve_include(path: str, raw: str) -> str:

@@ -59,7 +59,6 @@ def gateway(_mock_env, mock_sj) -> OrderGateway:
         client.api = mock_api
         client.metrics = MagicMock()
 
-        # Set up contract lookup
         mock_contract = MagicMock()
         mock_contract.code = "2330"
         mock_api.Contracts.Stocks.TSE = {"2330": mock_contract}
@@ -73,11 +72,6 @@ def gateway(_mock_env, mock_sj) -> OrderGateway:
 
 def _get_api(gw: OrderGateway) -> MagicMock:
     return gw._client.api
-
-
-# ---------------------------------------------------------------------------
-# place_order tests
-# ---------------------------------------------------------------------------
 
 
 class TestPlaceOrderBlocking:
@@ -99,7 +93,6 @@ class TestPlaceOrderBlocking:
 
         assert result == {"status": "ok"}
         call_args = api.place_order.call_args
-        # Should NOT pass timeout or cb kwargs
         assert "timeout" not in call_args.kwargs
         assert "cb" not in call_args.kwargs
 
@@ -190,7 +183,6 @@ class TestPlaceOrderNonBlocking:
         api = _get_api(gateway)
         api.place_order.return_value = None
 
-        # Should not raise; latency is recorded via _record_api_latency internally
         result = gateway.place_order(
             contract_code="2330",
             exchange="TSE",
@@ -203,11 +195,6 @@ class TestPlaceOrderNonBlocking:
         )
         assert result is None
         api.place_order.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# cancel_order tests
-# ---------------------------------------------------------------------------
 
 
 class TestCancelOrder:
@@ -242,11 +229,6 @@ class TestCancelOrder:
         call_args = api.cancel_order.call_args
         assert call_args.kwargs.get("timeout") == 0
         assert call_args.kwargs.get("cb") is my_cb
-
-
-# ---------------------------------------------------------------------------
-# update_order tests
-# ---------------------------------------------------------------------------
 
 
 class TestUpdateOrder:
@@ -307,11 +289,6 @@ class TestUpdateOrder:
     def test_update_no_price_no_qty_returns_none(self, gateway: OrderGateway) -> None:
         result = gateway.update_order(MagicMock())
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# 1.5.6 pre-login account property regression (full-engine boot crash 2026-07-19)
-# ---------------------------------------------------------------------------
 
 
 class _FakeAuthError(Exception):

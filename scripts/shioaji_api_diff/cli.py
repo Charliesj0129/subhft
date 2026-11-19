@@ -96,10 +96,6 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     pin = watch_mod.read_pin()
     ledger_pin, decisions = decisions_mod.load_decisions(args.ledger)
     if ledger_pin != pin:
-        # Every verdict in the ledger was reached relative to ledger_pin. If the
-        # requirement moved, none of them describe the upgrade in front of us --
-        # and silently reporting them against the new pin would be worse than
-        # reporting nothing.
         raise SystemExit(
             f"decision ledger is written against shioaji=={ledger_pin} but pyproject.toml pins "
             f"{pin}; rewrite docs/runbooks/shioaji-release-decisions.yaml against the new pin"

@@ -60,11 +60,8 @@ SESSION_GOVERNOR_YAML = REPO / "config/base/session_governor.yaml"
 TAIPEI = ZoneInfo("Asia/Taipei")
 ROOTS = ("TMF", "TXF", "MXF")
 STEP = dt.timedelta(minutes=15)
-# The pre-open lead the pool's reconnect window uses (HFT_FACADE_RECONNECT_PRE_OPEN_LEAD_S default).
 PRE_OPEN_LEAD = dt.timedelta(seconds=900)
 
-# The futures lines of config/symbols.list, verbatim. The test below fails if
-# they drift, so the drill always rolls the list production rolls.
 FUTURES_LIST_LINES = [
     "TXF@front exchange=FUT tags=futures|front_month|txf",
     "TXF@next exchange=FUT tags=futures|next_month|txf",
@@ -128,12 +125,10 @@ class _Futures:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self._by_root: dict[str, list[SimpleNamespace]] = {}
         for row in rows:
-            # 1.7.9 ``FuturesInfo``: ``code``, ``root``, ``delivery_date`` as a date;
-            # no ``category`` and no ``symbol``.
             info = SimpleNamespace(code=row["code"], root=row["root"], delivery_date=_delivery(row), name=row["name"])
             self._by_root.setdefault(row["root"], []).append(info)
 
-    def keys(self):  # noqa: ANN201 — mirrors the SDK mapping
+    def keys(self):
         return self._by_root.keys()
 
     def __getitem__(self, root: str) -> list[SimpleNamespace]:
@@ -215,18 +210,14 @@ def test_universe_follows_the_front_month_across_a_settlement(
     pool = drill_pool()
     history = _drive(pool, monkeypatch, _steps(start, end))
 
-    # Every adopted universe is free of settled contracts at the moment it is adopted.
     for local, universe, adopted in history:
         if adopted:
             stale = sorted(code for code in universe if _settled(code, _ns(local)))
             assert stale == [], f"{local:%m-%d %H:%M} adopted a settled contract: {stale}"
 
-    # Before the delivery-day final close the settling month is subscribed.
     before = [universe for local, universe, _ in history if local.date() < start.date() + dt.timedelta(days=1)]
     assert before and all(f"TMF{settling}" in universe for universe in before)
 
-    # By the next day's pre-open the universe holds every root's new front month
-    # and nothing settled. On main this happens in the 05:00-08:30 window.
     final_local, final_universe, _ = history[-1]
     final_ns = _ns(final_local)
     for root in ROOTS:
@@ -321,8 +312,6 @@ def _third_wednesday(day: dt.date) -> dt.date:
 
 _MONTH_ROWS = [r for r in _rows() if not _is_alias(r["code"])]
 _ON_WEDNESDAY = [r["code"] for r in _MONTH_ROWS if _delivery(r) == _third_wednesday(_delivery(r))]
-# 2027-09-15 is the Mid-Autumn Festival: the broker lists every September-2027
-# contract as delivering on Thursday 09-16.
 _HOLIDAY_SHIFTED = [r["code"] for r in _MONTH_ROWS if _delivery(r) != _third_wednesday(_delivery(r))]
 
 
@@ -345,15 +334,6 @@ def test_order_path_expiry_window_follows_a_holiday_shifted_delivery(code: str) 
     expected = dt.datetime.combine(delivery, dt.time(13, 0), tzinfo=TAIPEI)
     assert _expiry_window_start(code, delivery) == _ns(expected)
 
-
-# --------------------------------------------------------------------------- #
-# The next three settlements from today, every day CI runs                     #
-# --------------------------------------------------------------------------- #
-#
-# The recorded fixture covers 2026-11 and 2026-12. The rule below rebuilds a
-# listing in the same row shape for whatever months come next, so the drill
-# keeps crossing a real upcoming settlement (holidays included, from the XTAI
-# calendar) instead of going stale with its fixture.
 
 _MONTH_LETTERS = "ABCDEFGHIJKL"
 _NAMES = {"TMF": "微型臺指期貨", "TXF": "臺股期貨", "MXF": "小型臺指期貨"}
@@ -420,7 +400,6 @@ def test_synthesized_listing_has_the_recorded_row_shape() -> None:
     recorded = {tuple(sorted(r)) for r in _rows()}
     synthesized = {tuple(sorted(r)) for r in _listing_from(dt.date(2026, 11, 3))}
     assert synthesized == recorded
-    # On the recorded day the rule reproduces the recorded listing exactly.
     assert sorted((r["code"], r["delivery_date"]) for r in _listing_from(dt.date(2026, 11, 3))) == sorted(
         (r["code"], r["delivery_date"]) for r in _rows()
     )

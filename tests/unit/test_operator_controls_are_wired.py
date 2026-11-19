@@ -47,11 +47,6 @@ def _isolated_latches(tmp_path, monkeypatch):
     monkeypatch.setenv(manual_latches.DIR_ENV, str(tmp_path / ".state" / "manual_latches"))
 
 
-# ---------------------------------------------------------------------------
-# Telegram /stop
-# ---------------------------------------------------------------------------
-
-
 def _update(chat_id: int):
     replies: list[str] = []
 
@@ -80,7 +75,6 @@ class TestTelegramStop:
 
         path = kill_switch.active_path()
         assert path is not None
-        # The engine's supervise tick reads the reason through this helper.
         assert system_module._read_kill_switch_reason(path) == "TELEGRAM: spread blew out"
         assert kill_switch.read_payload()["actor"] == "telegram"
         [reply] = replies
@@ -153,11 +147,6 @@ class TestTelegramStop:
         assert "stop" in registered
 
 
-# ---------------------------------------------------------------------------
-# Releases quote the token of the stop they clear
-# ---------------------------------------------------------------------------
-
-
 class TestReleaseNamesTheStop:
     def test_a_halt_written_after_the_operator_read_status_is_not_released(self):
         kill_switch.activate("operator drill", actor="cli")
@@ -178,11 +167,6 @@ class TestReleaseNamesTheStop:
         assert (entry["actor"], entry["reason"]) == ("cli:op", "drill over")
         assert list(entry["removed"].values())[0]["reason"] == "operator drill"
         assert kill_switch.is_active() is False
-
-
-# ---------------------------------------------------------------------------
-# hft ops flatten
-# ---------------------------------------------------------------------------
 
 
 class _Queue:
@@ -241,7 +225,7 @@ class TestOperatorFlatten:
         assert intent.reason == "loss_exit:operator_flatten"
         assert gate.read_request().status == FlattenStatus.PROCESSING
 
-        positions.clear()  # the IOC filled
+        positions.clear()
         _tick(system)
 
         req = gate.read_request()
@@ -253,7 +237,7 @@ class TestOperatorFlatten:
         gate.submit(scope="all", deadline_s=5)
         _tick(system)
 
-        positions["a"] = _pos("R47_MAKER_TMF", "TMFK6", 1)  # one of two lots filled
+        positions["a"] = _pos("R47_MAKER_TMF", "TMFK6", 1)
         _tick(system, NOW + 6_000_000_000)
 
         req = gate.read_request()
@@ -270,7 +254,7 @@ class TestOperatorFlatten:
         with mock.patch("hft_platform.ops.flatten_gate.time.monotonic_ns", return_value=123):
             gate.submit(scope="strategy", scope_id="R47_MAKER_TMF", deadline_s=60)
         positions.clear()
-        _tick(system)  # the first request finishes; the file holds the second
+        _tick(system)
 
         req = gate.read_request()
         assert (req.status, req.scope, req.initiated_ns) == (FlattenStatus.PENDING, "strategy", 123)
@@ -314,7 +298,7 @@ class TestOperatorFlatten:
 
     def test_a_request_left_processing_by_a_dead_engine_is_failed_not_left_waiting(self, gate):
         gate.submit(scope="all", deadline_s=60)
-        gate.claim()  # the previous process claimed it and died
+        gate.claim()
         system = _system(gate, {"a": _pos("R47_MAKER_TMF", "TMFK6", 1)})
 
         _tick(system)
@@ -353,11 +337,11 @@ class TestFlattenCancelsWorkingOrders:
         assert [(c.target_order_id, c.symbol) for c in cancels] == [("R47_MAKER_TMF:17", "TMFK6")]
         assert cancels[0].reason == "loss_exit:operator_flatten:cancel"
 
-        positions.clear()  # the IOC filled; the quote is still resting
+        positions.clear()
         _tick(system)
         assert gate.read_request().status == FlattenStatus.PROCESSING
 
-        del live["R47_MAKER_TMF:17"]  # the broker confirmed the cancel
+        del live["R47_MAKER_TMF:17"]
         _tick(system)
         req = gate.read_request()
         assert (req.status, req.fully_closed, req.failed_symbols) == (FlattenStatus.COMPLETED, 1, [])
@@ -365,7 +349,7 @@ class TestFlattenCancelsWorkingOrders:
     def test_an_order_not_yet_acknowledged_holds_completion(self, gate):
         positions = {"k": _pos("R47_MAKER_TMF", "TMFK6", 1)}
         system = _system(gate, positions)
-        live: dict = {"R47_MAKER_TMF:19": object()}  # sent, no contract known yet
+        live: dict = {"R47_MAKER_TMF:19": object()}
         system.order_adapter = SimpleNamespace(live_orders=live)
         gate.submit(scope="all", deadline_s=60)
         _tick(system)
@@ -406,11 +390,6 @@ class TestFlattenCancelsWorkingOrders:
         positions.clear()
         _tick(system)
         assert gate.read_request().status == FlattenStatus.COMPLETED
-
-
-# ---------------------------------------------------------------------------
-# A release and a new stop cannot interleave
-# ---------------------------------------------------------------------------
 
 
 def _during_audit(module, write):
@@ -478,11 +457,6 @@ class TestReleaseIsSerializedWithNewStops:
         assert gate_.snapshot()["platform"]["reason"] == "disk_full"
 
 
-# ---------------------------------------------------------------------------
-# Review follow-ups (Codex adversarial review of B0-B6, 2026-10-24)
-# ---------------------------------------------------------------------------
-
-
 class TestPlatformTokenNamesOneIncident:
     def test_a_stale_rearm_does_not_clear_a_second_latch_with_the_same_reason(self, tmp_path):
         from hft_platform.ops import manual_rearm
@@ -499,7 +473,7 @@ class TestPlatformTokenNamesOneIncident:
         _latch()
         first_token = gate_.platform_token()
         gate_.rearm_platform(token=first_token, reason="wal replayed", actor="cli:op")
-        _latch()  # the same failure again, a second incident
+        _latch()
 
         with pytest.raises(ValueError, match="does not match"):
             gate_.rearm_platform(token=first_token, reason="retried command", actor="cli:op")
@@ -551,9 +525,6 @@ class TestFlattenOutcomeIsHonest:
         _tick(system)
         positions.clear()
 
-        # The CLI (another process: a thread here) submits request B just after
-        # the engine has read request A to answer it. The 50 ms join bounds how
-        # long an unserialized submit needs to land; under the lock it waits.
         real_read = FlattenGate.read_request
         started: list[threading.Thread] = []
 

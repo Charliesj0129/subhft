@@ -34,8 +34,6 @@ def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def lock_id() -> Callable[[], str]:
-    # Imported here, not at module level, so that on a tree without the helper the
-    # client-level test at the bottom still runs and fails on its assertion.
     from hft_platform.feed_adapter.shioaji._config import session_lock_id
 
     return session_lock_id

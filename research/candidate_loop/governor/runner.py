@@ -112,9 +112,6 @@ def generate_from_briefs(
         for brief_path in sorted(steering_dir.glob("*.md")):
             text = brief_path.read_text(encoding="utf-8")
             brief = parse_brief(text)
-            # A human approves a specific file; its frontmatter family must match
-            # the filename, or the approval intent and the generated family could
-            # silently diverge. Fail closed on mismatch.
             if brief.family != brief_path.stem:
                 raise ValueError(
                     f"{brief_path}: brief family {brief.family!r} does not match "

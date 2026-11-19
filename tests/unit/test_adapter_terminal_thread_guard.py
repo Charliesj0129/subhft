@@ -19,7 +19,6 @@ from hft_platform.order.adapter import OrderAdapter
 def _make_adapter() -> OrderAdapter:
     """Build a bare adapter without invoking the (heavy) load_config path."""
     adapter = OrderAdapter.__new__(OrderAdapter)
-    # Minimal slots needed for the helpers under test.
     import collections
 
     adapter._engine_thread_id = None
@@ -45,16 +44,14 @@ def test_first_call_pins_engine_thread():
 def test_same_thread_reuse_does_not_raise():
     adapter = _make_adapter()
     adapter._record_recent_terminal("k1", reason="filled")
-    # Subsequent calls on the same thread must continue to work.
     adapter._mark_cancel_inflight("k2")
     adapter._clear_cancel_inflight("k2")
     assert adapter._is_recently_terminal("k1") is True
-    adapter._prune_cancel_inflight()  # no raise
+    adapter._prune_cancel_inflight()
 
 
 def test_cross_thread_call_raises_runtime_error():
     adapter = _make_adapter()
-    # Pin the engine thread on the main thread.
     adapter._record_recent_terminal("k1", reason="filled")
 
     captured: dict[str, BaseException | None] = {"err": None}
@@ -62,7 +59,7 @@ def test_cross_thread_call_raises_runtime_error():
     def _other_thread() -> None:
         try:
             adapter._mark_cancel_inflight("intruder")
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             captured["err"] = exc
 
     t = threading.Thread(target=_other_thread)
@@ -86,7 +83,6 @@ def test_cross_thread_call_raises_runtime_error():
 )
 def test_each_guarded_method_rejects_other_thread(method_name, args):
     adapter = _make_adapter()
-    # Pin engine thread by a no-op call.
     adapter._mark_cancel_inflight("__seed__")
     adapter._clear_cancel_inflight("__seed__")
 
@@ -95,7 +91,7 @@ def test_each_guarded_method_rejects_other_thread(method_name, args):
     def _other_thread() -> None:
         try:
             getattr(adapter, method_name)(*args)
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             captured["err"] = exc
 
     t = threading.Thread(target=_other_thread)

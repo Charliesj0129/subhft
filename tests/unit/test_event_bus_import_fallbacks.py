@@ -29,12 +29,6 @@ def _restore_event_bus():
     importlib.reload(_event_bus_mod)
 
 
-# ---------------------------------------------------------------------------
-# Lines 40-46: outer except — BOTH imports fail, all factories set to None.
-# This also implicitly covers lines 32-34 (inner except) on the way down.
-# ---------------------------------------------------------------------------
-
-
 class TestRustImportOuterFallback:
     """Cover lines 32-34, 40-46: both rust_core imports fail."""
 
@@ -42,7 +36,6 @@ class TestRustImportOuterFallback:
         saved_hft = sys.modules.get("hft_platform.rust_core")
         saved_bare = sys.modules.get("rust_core")
         try:
-            # Poison both import paths so importlib.import_module raises
             sys.modules["hft_platform.rust_core"] = None  # type: ignore[assignment]
             sys.modules["rust_core"] = None  # type: ignore[assignment]
             mod = _reload_event_bus()
@@ -63,12 +56,6 @@ class TestRustImportOuterFallback:
             _restore_event_bus()
 
 
-# ---------------------------------------------------------------------------
-# Lines 32-34: inner except — hft_platform.rust_core fails, tries bare
-# rust_core.  We poison only hft_platform.rust_core.
-# ---------------------------------------------------------------------------
-
-
 class TestRustImportInnerFallback:
     """Cover lines 32-34: first import fails, second may succeed."""
 
@@ -77,8 +64,6 @@ class TestRustImportInnerFallback:
         try:
             sys.modules["hft_platform.rust_core"] = None  # type: ignore[assignment]
             mod = _reload_event_bus()
-            # Either bare rust_core succeeded (line 34) or outer except fired (40-46)
-            # Both paths are valid coverage gains.
             assert mod._rust_core is not None or mod._RUST_RING_FACTORY is None
         finally:
             if saved is not None:
@@ -86,12 +71,6 @@ class TestRustImportInnerFallback:
             else:
                 sys.modules.pop("hft_platform.rust_core", None)
             _restore_event_bus()
-
-
-# ---------------------------------------------------------------------------
-# Lines 51-58: FastTypedRingBuffer fallback when HFT_BUS_MODE=rust_typed
-# but the attribute is missing from rust_core.
-# ---------------------------------------------------------------------------
 
 
 class TestFastTypedRingBufferFallback:

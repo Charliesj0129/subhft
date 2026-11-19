@@ -8,10 +8,6 @@ from unittest.mock import MagicMock, patch
 
 from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_batcher(writer, table_name: str = "hft.test_table") -> Batcher:
     GlobalMemoryGuard.reset()
@@ -21,11 +17,6 @@ def _make_batcher(writer, table_name: str = "hft.test_table") -> Batcher:
 def _fill_buffer(batcher: Batcher, rows: list[dict[str, Any]]) -> None:
     for row in rows:
         batcher._active.append_row(row)
-
-
-# ---------------------------------------------------------------------------
-# fsync durability tests
-# ---------------------------------------------------------------------------
 
 
 class TestEmergencyWalFsync:
@@ -90,7 +81,6 @@ class TestEmergencyWalFsync:
         """No file is written for an empty buffer — fsync must not be called."""
         writer = MagicMock()
         batcher = _make_batcher(writer)
-        # active buffer has 0 rows
 
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("os.fsync") as mock_fsync:
@@ -108,7 +98,6 @@ class TestEmergencyWalFsync:
 
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("os.fsync", side_effect=OSError("fsync failed")):
-                # Must not raise — the method MUST NOT raise per its contract
                 result = batcher._wal_emergency_dump(batcher._active)
 
         assert result is False

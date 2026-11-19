@@ -115,16 +115,12 @@ def run_drill(*, target: str, dry_run: bool, output_dir: Path) -> dict[str, Any]
 
     log.info("original_sha=%s rollback_sha=%s target=%s dry_run=%s", original_sha, rollback_sha, target, dry_run)
 
-    # Step 1: Deploy rollback SHA
     rollback_ok = _run_deploy(rollback_sha, dry_run=dry_run)
 
-    # Step 2: Health check after rollback
     health_ok = _check_health(dry_run=dry_run) if rollback_ok else False
 
-    # Step 3: Restore original SHA
     restore_ok = _run_deploy(original_sha, dry_run=dry_run) if rollback_ok else False
 
-    # Step 4: Health check after restore
     restore_health = _check_health(dry_run=dry_run) if restore_ok else False
 
     duration_s = round(time.monotonic() - t0, 2)

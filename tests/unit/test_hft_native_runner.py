@@ -20,7 +20,6 @@ from research.backtest.hft_native_runner import (
 )
 from research.backtest.types import BacktestConfig
 
-# Standard research.npy dtype (from synth_lob_gen._DTYPE)
 _RESEARCH_DTYPE = np.dtype(
     [
         ("bid_qty", "f8"),
@@ -35,12 +34,8 @@ _RESEARCH_DTYPE = np.dtype(
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers to create synthetic event arrays (mimics event_dtype)
-# ---------------------------------------------------------------------------
 def _make_event_array(n: int = 100) -> np.ndarray:
     """Create a minimal synthetic array that _split_npz can load."""
-    # Use simple float64 2D array as stand-in; _split_npz only needs indexing
     dt = np.dtype(
         [
             ("ev", "i8"),
@@ -54,7 +49,7 @@ def _make_event_array(n: int = 100) -> np.ndarray:
         ]
     )
     arr = np.zeros(n, dtype=dt)
-    arr["exch_ts"] = np.arange(n) * 1_000_000  # 1ms steps
+    arr["exch_ts"] = np.arange(n) * 1_000_000
     arr["local_ts"] = arr["exch_ts"]
     arr["px"] = 100.0 + np.sin(np.arange(n) * 0.1) * 0.5
     arr["qty"] = 10.0
@@ -65,9 +60,6 @@ def _save_event_npz(arr: np.ndarray, path: str) -> None:
     np.savez_compressed(path, data=arr)
 
 
-# ---------------------------------------------------------------------------
-# _resolve_hftbt_path
-# ---------------------------------------------------------------------------
 class TestResolveHftbtPath:
     def test_returns_none_when_not_found(self, tmp_path):
         assert _resolve_hftbt_path(str(tmp_path / "research.npy")) is None
@@ -189,9 +181,6 @@ class TestGovernedBundlePairing:
             _resolve_hftbt_path(str(primary))
 
 
-# ---------------------------------------------------------------------------
-# has_hftbt_data
-# ---------------------------------------------------------------------------
 class TestHasHftbtData:
     def test_false_when_no_hftbt(self, tmp_path):
         paths = [str(tmp_path / "research.npy")]
@@ -211,9 +200,6 @@ class TestHasHftbtData:
         assert has_hftbt_data([]) is False
 
 
-# ---------------------------------------------------------------------------
-# _split_npz
-# ---------------------------------------------------------------------------
 class TestSplitNpz:
     def test_splits_70_30(self, tmp_path):
         arr = _make_event_array(100)
@@ -267,9 +253,6 @@ class TestSplitNpz:
                     pass
 
 
-# ---------------------------------------------------------------------------
-# _signals_to_positions
-# ---------------------------------------------------------------------------
 class TestSignalsToPositions:
     def test_above_threshold_accumulates(self):
         signals = np.array([0.0, 0.5, 0.5, 0.5])
@@ -296,21 +279,17 @@ class TestSignalsToPositions:
         assert len(pos) == 0
 
 
-# ---------------------------------------------------------------------------
-# _forward_returns
-# ---------------------------------------------------------------------------
 class TestForwardReturns:
     def test_basic(self):
         prices = np.array([100.0, 101.0, 100.5, 102.0])
         fwd = _forward_returns(prices)
         assert fwd.shape == prices.shape
-        assert fwd[0] == pytest.approx(0.01)  # (101-100)/100
-        assert fwd[-1] == pytest.approx(0.0)  # last is zero
+        assert fwd[0] == pytest.approx(0.01)
+        assert fwd[-1] == pytest.approx(0.0)
 
     def test_zero_price_no_nan(self):
         prices = np.array([0.0, 100.0, 101.0])
         fwd = _forward_returns(prices)
-        # Division by zero handled: result should be 0.0 not nan
         assert np.isfinite(fwd[0])
 
     def test_single_price(self):
@@ -318,9 +297,6 @@ class TestForwardReturns:
         np.testing.assert_array_equal(fwd, [0.0])
 
 
-# ---------------------------------------------------------------------------
-# HftNativeRunner — import failure graceful degradation
-# ---------------------------------------------------------------------------
 class TestHftNativeRunnerImportError:
     def test_raises_when_hftbacktest_unavailable(self, tmp_path):
         """If hftbacktest not installed, run() raises ImportError."""
@@ -332,7 +308,6 @@ class TestHftNativeRunnerImportError:
 
         runner = HftNativeRunner(alpha, config)
 
-        # Patch both availability flags to False
         with (
             patch("research.backtest.hft_native_runner._ADAPTER_AVAILABLE", False),
             patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", False),
@@ -341,9 +316,6 @@ class TestHftNativeRunnerImportError:
                 runner.run()
 
 
-# ---------------------------------------------------------------------------
-# HftNativeRunner — empty data path returns zero result
-# ---------------------------------------------------------------------------
 class TestHftNativeRunnerEmpty:
     def test_returns_zero_result_when_no_data_paths(self):
         """With no data paths at all, runner returns a zero-valued BacktestResult."""
@@ -362,7 +334,7 @@ class TestHftNativeRunnerEmpty:
 
         assert result.sharpe_is == pytest.approx(0.0)
         assert result.sharpe_oos == pytest.approx(0.0)
-        assert result.run_id != ""  # has a UUID
+        assert result.run_id != ""
 
     def test_run_raises_when_a_data_path_is_missing(self, tmp_path):
         """A missing input fails the run instead of becoming a zero result a gate would judge."""
@@ -387,16 +359,11 @@ class TestHftNativeRunnerEmpty:
         assert has_hftbt_data(paths) is False
 
 
-# ---------------------------------------------------------------------------
-# Validation.py integration — _has_hftbt_data helper
-# ---------------------------------------------------------------------------
 class TestValidationHasHftbtData:
     def test_helper_in_validation(self, tmp_path):
         from hft_platform.alpha.validation import _has_hftbt_data
 
-        # No file
         assert _has_hftbt_data([str(tmp_path / "x.npy")]) is False
-        # Create sibling
         (tmp_path / "hftbt.npz").touch()
         assert _has_hftbt_data([str(tmp_path / "x.npy")]) is True
 
@@ -411,11 +378,6 @@ class TestValidationHasHftbtData:
 
         cfg = ValidationConfig(alpha_id="test", data_paths=[], use_hft_native=False)
         assert cfg.use_hft_native is False
-
-
-# ---------------------------------------------------------------------------
-# ensure_hftbt_npz
-# ---------------------------------------------------------------------------
 
 
 def _make_research_npy(path: str, n: int = 100, *, include_local_ts: bool = True, zero_prices: bool = False) -> None:
@@ -505,7 +467,6 @@ class TestEnsureHftbtNpz:
         npy = str(tmp_path / "research.npy")
         n = 10
         _make_research_npy(npy, n=n)
-        # volume=0 so no trade events → exactly 2*n events
         arr = np.load(npy)
         arr["volume"] = 0.0
         np.save(npy, arr)
@@ -515,20 +476,20 @@ class TestEnsureHftbtNpz:
             except ImportError:
                 pytest.skip("hftbacktest not installed")
         events = np.load(out, allow_pickle=False)["data"]
-        assert len(events) == 2 * n  # bid + ask only
+        assert len(events) == 2 * n
 
     def test_trade_event_generated_when_volume_positive(self, tmp_path):
         """Rows with volume > 0 generate an extra TRADE_EVENT."""
         npy = str(tmp_path / "research.npy")
         n = 10
-        _make_research_npy(npy, n=n)  # volume=2.0 by default
+        _make_research_npy(npy, n=n)
         with patch("research.backtest.hft_native_runner._HFTBT_AVAILABLE", True):
             try:
                 out = ensure_hftbt_npz(npy)
             except ImportError:
                 pytest.skip("hftbacktest not installed")
         events = np.load(out, allow_pickle=False)["data"]
-        assert len(events) == 3 * n  # bid + ask + trade
+        assert len(events) == 3 * n
 
     def test_zero_price_rows_skipped(self, tmp_path):
         """Rows with bid_px=0 and ask_px=0 are skipped entirely."""
@@ -544,7 +505,6 @@ class TestEnsureHftbtNpz:
 
     def test_fallback_ts_when_no_local_ts_field(self, tmp_path):
         """When local_ts field is absent, uses 0,1ms,2ms... fallback timestamps."""
-        # Build array without local_ts
         no_ts_dt = np.dtype(
             [
                 ("bid_qty", "f8"),
@@ -571,14 +531,10 @@ class TestEnsureHftbtNpz:
                 pytest.skip("hftbacktest not installed")
         events = np.load(out, allow_pickle=False)["data"]
         assert len(events) > 0
-        # Timestamps should be monotonically non-decreasing
         ts_field = "local_ts" if "local_ts" in events.dtype.names else "exch_ts"
         assert np.all(np.diff(events[ts_field]) >= 0)
 
 
-# ---------------------------------------------------------------------------
-# Broker RTT injection — effective_broker_rtt_ms
-# ---------------------------------------------------------------------------
 class TestBrokerRTTInjection:
     def test_effective_rtt_uses_worst_case_cancel(self):
         """When cancel_ack_latency_ms > submit_ack_latency_ms, effective latency uses cancel value."""

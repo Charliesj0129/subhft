@@ -27,7 +27,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.execution_callbacks")
 
-# Default price scale factor (x10000).
 PRICE_SCALE: int = 10_000
 
 
@@ -99,9 +98,6 @@ class FubonExecutionCallbackAdapter:
         self._on_deal: Callable[[dict[str, Any]], None] | None = None
         self.log = logger
 
-        # Pre-allocated translation buffers (Allocator Law).
-        # Values are overwritten on each callback -- the *same dict object*
-        # is reused every time to avoid per-event heap allocation.
         self._order_buffer: dict[str, Any] = {
             "order_id": "",
             "symbol": "",
@@ -122,10 +118,6 @@ class FubonExecutionCallbackAdapter:
             "ts_ns": 0,
         }
 
-    # ------------------------------------------------------------------ #
-    # Callback registration
-    # ------------------------------------------------------------------ #
-
     def register(
         self,
         on_order: Callable[[dict[str, Any]], None],
@@ -140,7 +132,6 @@ class FubonExecutionCallbackAdapter:
         self._on_order = on_order
         self._on_deal = on_deal
 
-        # Attempt SDK-level callback registration.
         if hasattr(self._sdk, "set_order_callback"):
             self._sdk.set_order_callback(self._on_sdk_order)
             self.log.info("fubon_exec_cb.sdk_order_callback_wired")
@@ -150,10 +141,6 @@ class FubonExecutionCallbackAdapter:
             self.log.info("fubon_exec_cb.sdk_deal_callback_wired")
 
         self.log.info("fubon_exec_cb.registered")
-
-    # ------------------------------------------------------------------ #
-    # SDK callbacks — translate Fubon → canonical
-    # ------------------------------------------------------------------ #
 
     def _on_sdk_order(self, raw: Any) -> None:
         """Translate a Fubon order update to canonical format and forward."""
@@ -170,12 +157,6 @@ class FubonExecutionCallbackAdapter:
             buf["strategy_id"] = str(_get(raw, "user_def", ""))
             buf["ts_ns"] = timebase.now_ns()
 
-            # Pass shallow copy to avoid buffer reuse race: downstream handler
-            # may schedule async work, and _order_buffer can be overwritten by
-            # the next callback before async processing completes. Execution
-            # callbacks are low-frequency (~100 fills/day), so copy cost is
-            # negligible. The pre-allocated buffer itself avoids allocation in
-            # the population phase (lines 157-164).
             self._on_order(dict(buf))
         except Exception as exc:
             self.log.error("fubon_exec_cb.order_error", error=str(exc))
@@ -194,12 +175,6 @@ class FubonExecutionCallbackAdapter:
             buf["strategy_id"] = str(_get(raw, "user_def", ""))
             buf["ts_ns"] = timebase.now_ns()
 
-            # Pass shallow copy to avoid buffer reuse race: downstream handler
-            # may schedule async work, and _deal_buffer can be overwritten by
-            # the next callback before async processing completes. Execution
-            # callbacks are low-frequency (~100 fills/day), so copy cost is
-            # negligible. The pre-allocated buffer itself avoids allocation in
-            # the population phase (lines 176-182).
             self._on_deal(dict(buf))
         except Exception as exc:
             self.log.error("fubon_exec_cb.deal_error", error=str(exc))

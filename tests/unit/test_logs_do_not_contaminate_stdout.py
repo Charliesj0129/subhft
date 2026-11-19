@@ -35,9 +35,6 @@ print(json.dumps({"payload": "the only thing on stdout"}))
 
 
 def _run_probe() -> subprocess.CompletedProcess[str]:
-    # A subprocess is the honest test: capsys and caplog both intercept the
-    # streams this contract is about, so an in-process check could pass while
-    # the real command still interleaved.
     return subprocess.run(
         [sys.executable, "-c", CHILD],
         capture_output=True,
@@ -50,8 +47,6 @@ def _run_probe() -> subprocess.CompletedProcess[str]:
 def test_stdout_stays_parseable_json_while_logging_at_debug() -> None:
     result = _run_probe()
 
-    # The whole stream, not "from the first brace" -- that accommodation is
-    # what let the bug survive.
     assert json.loads(result.stdout) == {"payload": "the only thing on stdout"}
 
 
@@ -64,8 +59,6 @@ def test_log_records_are_written_to_stderr() -> None:
         if line.startswith("{"):
             events.append(json.loads(line).get("event"))
 
-    # Losing the logs entirely would also make stdout parse, so assert they
-    # arrived on the other stream rather than merely that stdout is clean.
     for expected in ("noisy_debug_event", "noisy_info_event", "noisy_warning_event", "noisy_error_event"):
         assert expected in events, f"{expected} missing from stderr: {result.stderr!r}"
 
@@ -88,8 +81,6 @@ def test_configure_logging_binds_both_sinks_to_stderr() -> None:
     assert "stream=sys.stderr" in src
     assert "stream=sys.stdout" not in src
 
-    # The sink resolves sys.stderr per write; binding it once would pin a
-    # test's redirect buffer for the rest of the process.
     factory_src = inspect.getsource(hft_logging._CurrentStderr)
     assert "sys.stderr.write" in factory_src
 

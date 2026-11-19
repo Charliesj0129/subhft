@@ -42,7 +42,6 @@ def _load_generator(monkeypatch: pytest.MonkeyPatch) -> Any:
     spec = importlib.util.spec_from_file_location("generate_locked_compose_env_file_under_test", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    # setitem, not assignment: the module must not outlive the test and leak into a later one in the same worker.
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     return module
@@ -66,5 +65,5 @@ def test_generator_resolution_keeps_env_file_values_out_of_its_output(
 
     assert _VALUE not in output
     assert _KEY not in output
-    assert "dummy.env" in output  # the entry is still there, as a path to a file the deploy host provides
-    assert "read_only: true" in output  # the overlay was merged too, as in the real two-file command
+    assert "dummy.env" in output
+    assert "read_only: true" in output

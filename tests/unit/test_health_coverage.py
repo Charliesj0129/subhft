@@ -17,10 +17,6 @@ from hft_platform.observability.health import (
     _json_dumps,
 )
 
-# ---------------------------------------------------------------------------
-# _json_dumps
-# ---------------------------------------------------------------------------
-
 
 def test_json_dumps_basic():
     result = _json_dumps({"status": "ok"})
@@ -32,11 +28,6 @@ def test_json_dumps_with_special_types():
     """Handles non-JSON-native types via default=str."""
     result = _json_dumps({"ts": 123456789})
     assert isinstance(result, bytes)
-
-
-# ---------------------------------------------------------------------------
-# DegradationTracker
-# ---------------------------------------------------------------------------
 
 
 class TestDegradationTracker:
@@ -60,12 +51,7 @@ class TestDegradationTracker:
         tracker.record("r1", {})
         r = tracker.recent
         r.clear()
-        assert len(tracker.recent) == 1  # Original unaffected
-
-
-# ---------------------------------------------------------------------------
-# HealthServer: _check_readiness
-# ---------------------------------------------------------------------------
+        assert len(tracker.recent) == 1
 
 
 class TestCheckReadiness:
@@ -95,7 +81,6 @@ class TestCheckReadiness:
         )
         server = HealthServer(system=system)
         status, checks = server._check_readiness()
-        # No broker → unavailable
         assert status == "unavailable"
 
     def test_system_running_brokers_logged_in(self):
@@ -113,7 +98,7 @@ class TestCheckReadiness:
         )
         server = HealthServer(system=system)
         status, checks = server._check_readiness()
-        assert status == "unavailable"  # Critical tasks dead
+        assert status == "unavailable"
 
     def test_storm_guard_halt(self):
         from hft_platform.risk.storm_guard import StormGuardState
@@ -136,7 +121,6 @@ class TestCheckReadiness:
         from hft_platform.risk.storm_guard import StormGuardState
 
         sg = SimpleNamespace(state=StormGuardState.WARM)
-        # Create mock tasks that are not done
         mock_task = MagicMock()
         mock_task.done.return_value = False
         tasks = {name: mock_task for name in ["md", "strat", "order", "recorder", "risk"]}
@@ -163,7 +147,7 @@ class TestCheckReadiness:
             order_client=SimpleNamespace(logged_in=True),
             storm_guard=None,
             tasks=tasks,
-            md_service=SimpleNamespace(running=False),  # Feed down
+            md_service=SimpleNamespace(running=False),
             recorder=None,
         )
         server = HealthServer(system=system)
@@ -181,7 +165,7 @@ class TestCheckReadiness:
             storm_guard=None,
             tasks=tasks,
             md_service=SimpleNamespace(running=True),
-            recorder=SimpleNamespace(healthy=None, last_write_ok=1),  # Very old
+            recorder=SimpleNamespace(healthy=None, last_write_ok=1),
         )
         server = HealthServer(system=system)
         status, checks = server._check_readiness()
@@ -284,11 +268,6 @@ class TestCheckReadiness:
         assert status == "ready"
 
 
-# ---------------------------------------------------------------------------
-# HealthServer: _build_status
-# ---------------------------------------------------------------------------
-
-
 class TestBuildStatus:
     def test_build_status_no_system(self):
         server = HealthServer(system=None)
@@ -322,14 +301,9 @@ class TestBuildStatus:
         assert "degradation_events" in result
 
 
-# ---------------------------------------------------------------------------
-# HealthServer: stop
-# ---------------------------------------------------------------------------
-
-
 def test_health_server_stop_no_server():  # noqa: no-assert
     server = HealthServer()
-    server.stop()  # No-op
+    server.stop()
 
 
 def test_health_server_stop_with_server():

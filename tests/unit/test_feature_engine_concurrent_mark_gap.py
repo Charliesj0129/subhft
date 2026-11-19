@@ -72,7 +72,6 @@ def test_mark_gap_all_concurrent_with_process_lob_update_no_exceptions() -> None
     Post-fix: lock serialises iteration vs. insertion → no exceptions.
     """
     eng = FeatureEngine()
-    # Pre-seed some symbols so iterators have work to do.
     for i in range(50):
         eng.process_lob_stats(_stats(f"S{i:03d}", ts=i + 1))
 
@@ -83,20 +82,18 @@ def test_mark_gap_all_concurrent_with_process_lob_update_no_exceptions() -> None
         try:
             while not stop.is_set():
                 eng.mark_gap_all()
-        except BaseException as exc:  # noqa: BLE001 — want to catch RuntimeError too
+        except BaseException as exc:
             errors.append(exc)
 
     def event_loop_emulator() -> None:
         try:
             i = 1000
             while not stop.is_set():
-                # Mix of new-symbol inserts (mutates _states) and updates.
                 eng.process_lob_stats(_stats(f"N{i % 200}", ts=i + 1))
-                # Periodic reset to exercise pop paths.
                 if i % 137 == 0:
                     eng.reset_symbol(f"N{(i - 50) % 200}")
                 i += 1
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=gap_caller, daemon=True, name=f"broker-{i}") for i in range(4)]
@@ -137,22 +134,17 @@ def test_mark_gap_all_does_not_lose_gap_bits_under_concurrency() -> None:
             while not stop.is_set():
                 eng.mark_gap_all()
                 gap_calls[0] += 1
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     t = threading.Thread(target=gap_caller, daemon=True)
     t.start()
     try:
-        # Drive ticks for ~50ms so many gap calls happen between each tick.
         seen_gap = 0
         for i in range(200):
             evt = eng.process_lob_stats(_stats("X1", ts=2 + i))
             if evt is not None and (evt.quality_flags & QUALITY_FLAG_GAP):
                 seen_gap += 1
-        # Most ticks should observe a GAP bit since the gap caller is
-        # hammering on a hot loop. Even with adversarial scheduling we expect
-        # >50% to pick it up. The strict assertion is that we observed the
-        # GAP bit at all (proves it isn't silently dropped) AND no errors.
         assert not errors, f"Concurrent access raised: {errors[0]!r}"
         assert seen_gap > 0, (
             "No tick observed QUALITY_FLAG_GAP despite the broker-thread "
@@ -208,7 +200,7 @@ def test_state_dicts_remain_consistent_after_concurrent_reset() -> None:
         try:
             while not stop.is_set():
                 eng.mark_gap_all()
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     t = threading.Thread(target=gap_loop, daemon=True)
@@ -218,8 +210,6 @@ def test_state_dicts_remain_consistent_after_concurrent_reset() -> None:
             eng.reset_symbol("R1")
             evt = eng.process_lob_stats(_stats("R1", ts=10 + i))
             assert evt is not None
-            # GAP and STATE_RESET may both be present; we don't assert
-            # ordering, just that we got a valid event with no exception.
         assert not errors, f"Concurrent reset/gap raised: {errors[0]!r}"
     finally:
         stop.set()
@@ -233,19 +223,15 @@ def test_evict_stale_symbols_does_not_deadlock_with_state_lock() -> None:
     non-reentrant by design so the snapshot+release pattern is required.
     """
     eng = FeatureEngine()
-    # Seed some symbols and force their last_update_ns far in the past.
     for i in range(5):
         eng.process_lob_stats(_stats(f"E{i}", ts=i + 1))
-    # Force eviction-ready state.
     very_old = 1
     for sym in list(eng._last_update_ns.keys()):
         eng._last_update_ns[sym] = very_old
-    eng._eviction_last_run_ns = 0  # bypass rate limit
-    eng._eviction_ttl_ns = 1_000_000  # 1ms TTL → everything is stale
+    eng._eviction_last_run_ns = 0
+    eng._eviction_ttl_ns = 1_000_000
     n = eng.evict_stale_symbols()
     assert n >= 1
-    # Idempotent: nothing left to evict (within rate-limit window second
-    # call returns 0 due to throttle, but should not raise).
     assert eng.evict_stale_symbols() == 0
 
 
@@ -263,14 +249,14 @@ def test_runtime_status_is_thread_safe() -> None:
             while not stop.is_set():
                 eng.process_lob_stats(_stats(f"T{i % 100}", ts=i + 1))
                 i += 1
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     def reader() -> None:
         try:
             while not stop.is_set():
                 _ = eng.runtime_status()
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [

@@ -31,10 +31,6 @@ from hft_platform.services.bootstrap import (
     wait_for_readiness,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_bootstrapper(settings: dict | None = None) -> SystemBootstrapper:
     return SystemBootstrapper(settings or {})
@@ -63,11 +59,6 @@ class _FakeSock:
 
     def sendall(self, data: bytes):
         self.sent.append(data)
-
-
-# ===================================================================
-# A. Fixtures for full build() tests
-# ===================================================================
 
 
 @pytest.fixture()
@@ -128,11 +119,6 @@ def _build_with_mocks(
         return bootstrapper.build()
 
 
-# ===================================================================
-# B. _check_session_ownership -- AUTH password path (line 394)
-# ===================================================================
-
-
 class TestSessionOwnershipAuth:
     """Redis AUTH is issued when password is set."""
 
@@ -145,7 +131,6 @@ class TestSessionOwnershipAuth:
         monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.1")
         monkeypatch.delenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", raising=False)
 
-        # AUTH -> +OK, GET -> $-1 (empty), SETEX -> +OK
         sock = _FakeSock(b"+OK\r\n$-1\r\n+OK\r\n")
         bs = _make_bootstrapper()
 
@@ -153,14 +138,8 @@ class TestSessionOwnershipAuth:
             result = bs._check_session_ownership("engine")
 
         assert result is True
-        # Verify AUTH was sent
         auth_sent = any(b"AUTH" in cmd for cmd in sock.sent)
         assert auth_sent, "AUTH command was not sent to Redis"
-
-
-# ===================================================================
-# C. _check_session_ownership -- stale cleanup failed path (line 421)
-# ===================================================================
 
 
 class TestStaleCleanupFailed:
@@ -175,17 +154,9 @@ class TestStaleCleanupFailed:
         monkeypatch.delenv("REDIS_PASS", raising=False)
         monkeypatch.setenv("HFT_FEED_SESSION_OWNER_TTL_S", "60")
         monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.1")
-        # Enable stale takeover
         monkeypatch.setenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", "120")
 
-        # GET -> "other", TTL -> -1 (stale), GET -> "different" (owner changed!), fall through
-        # After stale_cleanup failed, continues to conflict path:
-        #   conflict tries MetricsRegistry -> raise ImportError (line 436-437)
-        stream = (
-            b"$5\r\nother\r\n"  # GET owner -> "other"
-            b":-1\r\n"  # TTL -> -1 (stale)
-            b"$9\r\ndifferent\r\n"  # GET verify -> "different" (owner changed)
-        )
+        stream = b"$5\r\nother\r\n:-1\r\n$9\r\ndifferent\r\n"
         sock = _FakeSock(stream)
         bs = _make_bootstrapper()
 
@@ -199,11 +170,6 @@ class TestStaleCleanupFailed:
             result = bs._check_session_ownership("engine")
 
         assert result is False
-
-
-# ===================================================================
-# D. _check_session_ownership -- ImportError in conflict metrics (lines 436-437)
-# ===================================================================
 
 
 class TestConflictMetricsImportError:
@@ -220,7 +186,6 @@ class TestConflictMetricsImportError:
         monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.1")
         monkeypatch.delenv("HFT_FEED_SESSION_STALE_TAKEOVER_TTL_S", raising=False)
 
-        # GET -> "other", TTL -> 120 (not stale, no takeover)
         stream = b"$5\r\nother\r\n:120\r\n"
         sock = _FakeSock(stream)
         bs = _make_bootstrapper()
@@ -235,11 +200,6 @@ class TestConflictMetricsImportError:
             result = bs._check_session_ownership("engine")
 
         assert result is False
-
-
-# ===================================================================
-# E. Lease refresh thread inner paths (lines 465-506)
-# ===================================================================
 
 
 class TestLeaseRefreshInnerLoop:
@@ -260,7 +220,6 @@ class TestLeaseRefreshInnerLoop:
         bs = _make_bootstrapper()
         done = threading.Event()
 
-        # AUTH -> +OK, GET -> $-1 (empty = reacquire), SETEX -> +OK
         sock = _FakeSock(b"+OK\r\n$-1\r\n+OK\r\n")
         call_count = 0
 
@@ -302,7 +261,6 @@ class TestLeaseRefreshInnerLoop:
         bs._on_lease_lost = lambda reason: halt_calls.append(reason)
         done = threading.Event()
 
-        # GET -> "intruder" (not our id), TTL -> 200
         sock = _FakeSock(b"$8\r\nintruder\r\n:200\r\n")
         call_count = 0
 
@@ -315,7 +273,6 @@ class TestLeaseRefreshInnerLoop:
                 raise ConnectionRefusedError("stop")
             return sock
 
-        # Capture real sleep before patching to avoid recursion
         _real_sleep = time.sleep
 
         def _fast_sleep(d):
@@ -352,7 +309,6 @@ class TestLeaseRefreshInnerLoop:
         bs._on_lease_lost = MagicMock(side_effect=RuntimeError("callback boom"))
         done = threading.Event()
 
-        # GET -> "intruder" (not our id), TTL -> 200
         sock = _FakeSock(b"$8\r\nintruder\r\n:200\r\n")
         call_count = 0
 
@@ -399,7 +355,6 @@ class TestLeaseRefreshInnerLoop:
         bs = _make_bootstrapper()
         done = threading.Event()
 
-        # GET -> $-1 (null = empty), SETEX -> +OK
         sock = _FakeSock(b"$-1\r\n+OK\r\n")
         call_count = 0
 
@@ -439,7 +394,6 @@ class TestLeaseRefreshInnerLoop:
         bs = _make_bootstrapper()
         done = threading.Event()
 
-        # GET -> "me:1" (our id), SETEX -> +OK
         sock = _FakeSock(b"$4\r\nme:1\r\n+OK\r\n")
         call_count = 0
 
@@ -510,11 +464,6 @@ class TestLeaseRefreshInnerLoop:
         assert bs._lease_refresh_running is False
 
 
-# ===================================================================
-# F. Teardown AUTH path (line 541)
-# ===================================================================
-
-
 class TestTeardownAuth:
     """Teardown sends AUTH when Redis password is set."""
 
@@ -526,7 +475,6 @@ class TestTeardownAuth:
         monkeypatch.setenv("HFT_FEED_SESSION_OWNER_TTL_S", "60")
         monkeypatch.setenv("HFT_FEED_SESSION_PREFLIGHT_TIMEOUT_S", "0.1")
 
-        # AUTH -> +OK, GET -> "me:1" (our id), DEL -> :1
         sock = _FakeSock(b"+OK\r\n$4\r\nme:1\r\n:1\r\n")
         bs = _make_bootstrapper()
         bs._last_role = "engine"
@@ -538,11 +486,6 @@ class TestTeardownAuth:
         assert auth_sent, "AUTH was not sent during teardown"
         del_sent = any(b"DEL" in cmd for cmd in sock.sent)
         assert del_sent, "DEL was not sent during teardown"
-
-
-# ===================================================================
-# G. build() -- non-engine, non-maintenance role warning (line 627)
-# ===================================================================
 
 
 class TestBuildNonEngineRoleWarning:
@@ -563,14 +506,8 @@ class TestBuildNonEngineRoleWarning:
         monkeypatch.delenv("HFT_ORDER_SHADOW_MODE", raising=False)
 
         registry = _build_with_mocks()
-        # monitor role uses _RoleGuardedNoopClient
         assert hasattr(registry.md_client, "runtime_role")
         assert registry.md_client.runtime_role == "monitor"
-
-
-# ===================================================================
-# H. build() -- lease refresh started on successful ownership (lines 636-637)
-# ===================================================================
 
 
 class TestBuildLeaseRefreshStarted:
@@ -602,11 +539,6 @@ class TestBuildLeaseRefreshStarted:
         assert registry is not None
 
 
-# ===================================================================
-# I. build() -- DriftBurstDetector wiring (lines 687-695)
-# ===================================================================
-
-
 class TestDriftBurstDetectorWiring:
     """DriftBurstDetector is created when env var is set."""
 
@@ -634,11 +566,6 @@ class TestDriftBurstDetectorWiring:
 
         mock_cls.assert_called_once_with(window_size=200, burst_threshold=5.0)
         assert registry is not None
-
-
-# ===================================================================
-# J. build() -- FeatureEngine profile/rollout wiring (lines 747-820)
-# ===================================================================
 
 
 class TestFeatureEngineProfileWiring:
@@ -911,7 +838,6 @@ class TestFeatureEngineProfileWiring:
         ):
             registry = _build_with_mocks()
 
-        # Build succeeds despite metrics failure
         assert registry.feature_profile is mock_profile
 
     @pytest.mark.usefixtures("_mock_services")
@@ -934,7 +860,7 @@ class TestFeatureEngineProfileWiring:
         mock_assignment.active_profile_id = "missing-prof"
 
         mock_registry = MagicMock()
-        mock_registry.get_active_for_set.return_value = None  # No profile found
+        mock_registry.get_active_for_set.return_value = None
 
         mock_rollout_ctrl = MagicMock()
         mock_rollout_ctrl.get.return_value = mock_assignment
@@ -956,11 +882,6 @@ class TestFeatureEngineProfileWiring:
         assert registry.feature_rollout_assignment is mock_assignment
 
 
-# ===================================================================
-# K. build() -- WAL writer init failure (lines 830-831)
-# ===================================================================
-
-
 class TestWalWriterInitFailure:
     """WAL writer failure doesn't block build()."""
 
@@ -973,11 +894,6 @@ class TestWalWriterInitFailure:
             registry = _build_with_mocks()
 
         assert registry is not None
-
-
-# ===================================================================
-# L. build() -- shadow mode YAML config propagation (lines 874-876)
-# ===================================================================
 
 
 class TestShadowYamlConfig:
@@ -1021,7 +937,6 @@ class TestShadowYamlConfig:
         settings = {"shadow": {"enabled": True}}
         bs = SystemBootstrapper(settings)
 
-        # Prepare the mock OrderAdapter with shadow_sink.enabled = False
         mock_shadow_sink = MagicMock()
         mock_shadow_sink.enabled = False
 
@@ -1032,13 +947,7 @@ class TestShadowYamlConfig:
             mock_oa_cls.return_value.shadow_sink = mock_shadow_sink
             registry = bs.build()
 
-        # The bootstrap code should have set shadow_sink.enabled = True
         assert mock_shadow_sink.enabled is True
-
-
-# ===================================================================
-# M. build() -- fee calculator file not found path (lines 894-904)
-# ===================================================================
 
 
 class TestFeeCalculatorMissingFile:
@@ -1087,11 +996,6 @@ class TestFeeCalculatorMissingFile:
         assert registry is not None
 
 
-# ===================================================================
-# N. _env_float / _env_int -- edge cases
-# ===================================================================
-
-
 def test_env_float_valid_value(monkeypatch):
     monkeypatch.setenv("HFT_TEST_BS_FLOAT", "3.7")
     result = _env_float("HFT_TEST_BS_FLOAT", 1.0, 0.1)
@@ -1134,11 +1038,6 @@ def test_env_int_invalid_uses_default(monkeypatch):
     assert result == 7
 
 
-# ===================================================================
-# O. validate_order_mode_safety -- additional branch
-# ===================================================================
-
-
 def test_validate_order_mode_safety_live_without_confirm(monkeypatch):
     """live order mode + real mode but no HFT_LIVE_CONFIRM raises SystemExit."""
     monkeypatch.setenv("HFT_MODE", "real")
@@ -1156,11 +1055,6 @@ def test_validate_order_mode_safety_sim_mode_passes(monkeypatch):
     assert result is None
 
 
-# ===================================================================
-# P. log_shadow_config_summary
-# ===================================================================
-
-
 def test_log_shadow_config_summary_with_settings(monkeypatch):
     monkeypatch.setenv("HFT_ORDER_SHADOW_MODE", "1")
     monkeypatch.setenv("HFT_ORDER_MODE", "sim")
@@ -1173,11 +1067,6 @@ def test_log_shadow_config_summary_none_settings(monkeypatch):
     monkeypatch.setenv("HFT_ORDER_MODE", "sim")
     result = log_shadow_config_summary(settings=None)
     assert result is None
-
-
-# ===================================================================
-# Q. build_platform_degrade_inputs
-# ===================================================================
 
 
 def test_build_platform_degrade_inputs_returns_instance():
@@ -1215,11 +1104,6 @@ def test_build_platform_degrade_inputs_metrics_failure():
         )
 
     assert result is not None
-
-
-# ===================================================================
-# R. Feature profile with shadow state records metric (lines 782-800)
-# ===================================================================
 
 
 class TestFeatureProfileShadowMetric:
@@ -1266,18 +1150,12 @@ class TestFeatureProfileShadowMetric:
         ):
             registry = _build_with_mocks()
 
-        # Verify shadow action was recorded
         mock_metrics.feature_profile_activations_total.labels.assert_called_with(
             feature_set="lob_shared_v3",
             profile_id="shadow-prof",
             action="shadow",
         )
         assert registry.feature_profile is mock_profile
-
-
-# ===================================================================
-# S. Feature rollout assignment disabled records metric (lines 804-817)
-# ===================================================================
 
 
 class TestFeatureRolloutDisabledMetric:
@@ -1296,7 +1174,6 @@ class TestFeatureRolloutDisabledMetric:
         monkeypatch.delenv("HFT_DAILY_REPORT_ENABLED", raising=False)
         monkeypatch.delenv("HFT_ORDER_SHADOW_MODE", raising=False)
 
-        # Assignment active, but no profile found -> goes to elif branch (line 804)
         mock_assignment = MagicMock()
         mock_assignment.state = "active"
         mock_assignment.feature_set_id = "lob_shared_v3"
@@ -1328,7 +1205,6 @@ class TestFeatureRolloutDisabledMetric:
         ):
             registry = _build_with_mocks()
 
-        # Rollout state metric should be recorded
         mock_metrics.feature_profile_rollout_state.labels.assert_called()
         assert registry.feature_profile is None
 
@@ -1378,11 +1254,6 @@ class TestFeatureRolloutDisabledMetric:
         assert registry.feature_profile is None
 
 
-# ===================================================================
-# T. Feature profile wiring -- outer exception handler (lines 818-820)
-# ===================================================================
-
-
 class TestFeatureProfileOuterException:
     """Outer exception handler in feature profile wiring catches any unexpected error."""
 
@@ -1400,7 +1271,6 @@ class TestFeatureProfileOuterException:
         monkeypatch.delenv("HFT_ORDER_SHADOW_MODE", raising=False)
 
         mock_registry = MagicMock()
-        # Trigger unexpected error in the profile wiring block
         mock_registry.get_active_for_set.side_effect = RuntimeError("unexpected")
 
         mock_rollout_ctrl = MagicMock()
@@ -1419,13 +1289,7 @@ class TestFeatureProfileOuterException:
         ):
             registry = _build_with_mocks()
 
-        # Build completes despite RuntimeError -- profile is None
         assert registry.feature_profile is None
-
-
-# ===================================================================
-# U. Fee calculator missing YAML with startup_warnings_total metric (lines 895-904)
-# ===================================================================
 
 
 class TestFeeCalculatorMetric:
@@ -1452,14 +1316,8 @@ class TestFeeCalculatorMetric:
         ):
             registry = _build_with_mocks()
 
-        # startup_warnings_total.labels(component="fee_calculator").inc() was called
         mock_metrics.startup_warnings_total.labels.assert_called_with(component="fee_calculator")
         assert registry is not None
-
-
-# ===================================================================
-# V. Gateway service wiring (lines 955-974, 1001)
-# ===================================================================
 
 
 class TestGatewayServiceWiring:
@@ -1493,13 +1351,7 @@ class TestGatewayServiceWiring:
         mock_channel_cls.assert_called_once()
         mock_gw_cls.assert_called_once()
         mock_dedup_cls.return_value.load.assert_called_once()
-        # Verify rejection sink was wired to gateway service
         mock_gw_cls.return_value.set_rejection_sink.assert_called_once()
-
-
-# ===================================================================
-# W. Phase 3 queue init failure (lines 992-993)
-# ===================================================================
 
 
 class TestPhase3QueueInitFailure:
@@ -1510,14 +1362,8 @@ class TestPhase3QueueInitFailure:
         """When asyncio.Queue maxsize parse fails, build continues (lines 992-993)."""
         monkeypatch.setenv("HFT_REJECTION_QUEUE_SIZE", "not_a_number")
 
-        # This will cause int() to fail inside the try block
         registry = _build_with_mocks()
         assert registry is not None
-
-
-# ===================================================================
-# X. Preflight symbol consistency check (lines 1009-1027)
-# ===================================================================
 
 
 class TestPreflightSymbolConsistency:
@@ -1537,7 +1383,6 @@ class TestPreflightSymbolConsistency:
         monkeypatch.delenv("HFT_DAILY_REPORT_ENABLED", raising=False)
         monkeypatch.delenv("HFT_ORDER_SHADOW_MODE", raising=False)
 
-        # Make _post_connect_hooks a real list so append works
         hooks_list: list = []
         with patch("hft_platform.services.bootstrap.MarketDataService") as mock_md_cls:
             mock_md_cls.return_value._post_connect_hooks = hooks_list
@@ -1545,25 +1390,20 @@ class TestPreflightSymbolConsistency:
             with patch.object(bs, "_check_session_ownership", return_value=False):
                 registry = bs.build()
 
-        # Build registers hooks via append -- hooks_list should have entries
         assert len(hooks_list) >= 2
 
-        # Set up mock md_client with subscribed_codes and alias_to_actual
         md_client = registry.md_client
         md_client.subscribed_codes = {"TXFD6"}
         md_client.alias_to_actual = {"TXFR1": "TXFD6"}
 
-        # Set up strategy_runner with a strategy that has a missing symbol
         mock_strategy = MagicMock()
         mock_strategy.strategy_id = "test_strat"
-        mock_strategy.symbols = {"TXFD6", "TMFD6"}  # TMFD6 not subscribed
+        mock_strategy.symbols = {"TXFD6", "TMFD6"}
         registry.strategy_runner.strategies = [mock_strategy]
 
-        # Call the preflight hook (second in list: first is resolve_symbol_aliases)
         preflight_hook = hooks_list[1]
-        preflight_hook()  # Should log error about TMFD6 missing
+        preflight_hook()
 
-        # No crash -- hook runs correctly
         assert True
 
     @pytest.mark.usefixtures("_mock_services")
@@ -1597,13 +1437,8 @@ class TestPreflightSymbolConsistency:
         registry.strategy_runner.strategies = [mock_strategy]
 
         preflight_hook = hooks_list[1]
-        preflight_hook()  # Should log debug -- all symbols present
+        preflight_hook()
         assert True
-
-
-# ===================================================================
-# Y. Alias map propagation to OrderAdapter (lines 1037-1039)
-# ===================================================================
 
 
 class TestAliasMapPropagation:
@@ -1630,23 +1465,12 @@ class TestAliasMapPropagation:
             with patch.object(bs, "_check_session_ownership", return_value=False):
                 registry = bs.build()
 
-        # Simulate alias_to_actual on md_client
         registry.md_client.alias_to_actual = {"TMFR1": "TMFE6", "TXFR1": "TXFD6"}
 
-        # Select the hook by name, not by position. Hook registration order is
-        # deliberately meaningful (the liveness gauge has to run after the
-        # family populators rebind), so it changes; an index into the list
-        # silently retargets this test at a different hook when it does.
         alias_hook = next(h for h in hooks_list if getattr(h, "__name__", "") == "_propagate_alias_to_order_adapter")
         alias_hook()
 
-        # Verify OrderAdapter.set_alias_map was called
         registry.order_adapter.set_alias_map.assert_called_once_with({"TMFR1": "TMFE6", "TXFR1": "TXFD6"})
-
-
-# ===================================================================
-# Z. SessionGovernor wiring (lines 1062-1084)
-# ===================================================================
 
 
 class TestSessionGovernorWiring:
@@ -1702,11 +1526,6 @@ class TestSessionGovernorWiring:
         assert registry.session_governor is None
 
 
-# ===================================================================
-# AA. AutonomyMonitor wiring (lines 1089-1103)
-# ===================================================================
-
-
 class TestAutonomyMonitorWiring:
     """Verify AutonomyMonitor is created when env var is set."""
 
@@ -1756,11 +1575,6 @@ class TestAutonomyMonitorWiring:
         assert registry.autonomy_monitor is None
 
 
-# ===================================================================
-# AB. DailyReportService wiring (lines 1108-1179)
-# ===================================================================
-
-
 class TestDailyReportServiceWiring:
     """Verify DailyReportService creation and notification wiring."""
 
@@ -1771,7 +1585,6 @@ class TestDailyReportServiceWiring:
         monkeypatch.setenv("HFT_ORDER_MODE", "sim")
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
         monkeypatch.setenv("HFT_DAILY_REPORT_ENABLED", "1")
-        # SessionGovernor must be enabled so get_shared_autonomy_evidence_writer is imported
         monkeypatch.setenv("HFT_SESSION_GOVERNOR_ENABLED", "1")
         monkeypatch.delenv("HFT_BROKER", raising=False)
         monkeypatch.delenv("HFT_GATEWAY_ENABLED", raising=False)
@@ -1784,7 +1597,7 @@ class TestDailyReportServiceWiring:
         mock_sender = MagicMock()
         mock_gov = MagicMock()
         mock_gov.track_gate = MagicMock()
-        mock_gov._notification_dispatcher = None  # triggers dispatcher creation path
+        mock_gov._notification_dispatcher = None
 
         with (
             patch("hft_platform.services.daily_report.DailyReportService", return_value=mock_daily_svc),
@@ -1814,7 +1627,7 @@ class TestDailyReportServiceWiring:
 
         mock_gov = MagicMock()
         mock_gov.track_gate = MagicMock()
-        mock_gov._notification_dispatcher = None  # no dispatcher on governor
+        mock_gov._notification_dispatcher = None
 
         with (
             patch(
@@ -1898,7 +1711,6 @@ class TestDailyReportServiceWiring:
 
         assert registry.daily_report_service is mock_daily_svc
         assert registry.autonomy_monitor is mock_autonomy
-        # AutonomyMonitor dispatcher was wired
         assert mock_autonomy._notification_dispatcher is mock_dispatcher
 
     @pytest.mark.usefixtures("_mock_services")
@@ -1932,15 +1744,8 @@ class TestDailyReportServiceWiring:
         ):
             registry = _build_with_mocks()
 
-        # Phase callback registered. Two callbacks now register: the FORCE_FLAT
-        # dispatcher (punch-list 2026-05-29) and the daily-report svc transition hook.
         registered = [c.args[0] for c in mock_gov.register_phase_callback.call_args_list]
         assert mock_daily_svc.on_phase_transition in registered
-
-
-# ===================================================================
-# AC. Config snapshot build failure (lines 1199-1201)
-# ===================================================================
 
 
 class TestConfigSnapshotFailure:
@@ -1958,11 +1763,6 @@ class TestConfigSnapshotFailure:
         assert registry is not None
 
 
-# ===================================================================
-# AD. Alertmanager bridge failure (lines 1210-1211)
-# ===================================================================
-
-
 class TestAlertmanagerBridgeFailure:
     """Alertmanager bridge init failure is caught gracefully."""
 
@@ -1976,11 +1776,6 @@ class TestAlertmanagerBridgeFailure:
             registry = _build_with_mocks()
 
         assert registry is not None
-
-
-# ===================================================================
-# AE. wait_for_readiness timeout path (lines 1291-1299)
-# ===================================================================
 
 
 class TestWaitForReadinessTimeout:
@@ -2005,7 +1800,6 @@ class TestWaitForReadinessTimeout:
             nonlocal _call_count
             _call_count += 1
             if _call_count > 5:
-                # Force time to exceed deadline by patching monotonic
                 return
 
         with (
@@ -2014,11 +1808,6 @@ class TestWaitForReadinessTimeout:
         ):
             with pytest.raises(RuntimeError, match="System not ready"):
                 await wait_for_readiness(object(), timeout_s=0.01)
-
-
-# ===================================================================
-# AF. _get_mid_price inner function (lines 855-858)
-# ===================================================================
 
 
 class TestGetMidPriceFunction:
@@ -2042,20 +1831,13 @@ class TestGetMidPriceFunction:
         with patch.object(bs, "_check_session_ownership", return_value=False):
             registry = bs.build()
 
-        # The _get_mid_price function is passed as mid_price_fn to OrderAdapter.
-        # We can extract it from the OrderAdapter constructor call args.
         oa_cls = registry.order_adapter
-        # Since OrderAdapter is mocked, we need to get the mid_price_fn from the constructor call
 
-        # Actually, let's test the behavior more directly.
-        # The closure references md_service.lob.books -- set that up on the mock.
         mock_book = MagicMock()
-        mock_book.mid_price_x2 = 200000  # 100000 in x10000 scale
+        mock_book.mid_price_x2 = 200000
         registry.md_service.lob.books = {"TXFD6": mock_book}
 
-        # Get the mid_price_fn from the OrderAdapter mock call
         order_adapter_mock_cls = type(registry.order_adapter)
-        # Since the adapter is a MagicMock, we just verify the kwarg was passed
         assert registry.order_adapter is not None
 
     @pytest.mark.usefixtures("_mock_services")
@@ -2072,7 +1854,6 @@ class TestGetMidPriceFunction:
         monkeypatch.delenv("HFT_DAILY_REPORT_ENABLED", raising=False)
         monkeypatch.delenv("HFT_ORDER_SHADOW_MODE", raising=False)
 
-        # Capture the mid_price_fn by intercepting the OrderAdapter constructor
         captured_fn = {}
 
         def _capture_oa(*args, **kwargs):
@@ -2089,7 +1870,6 @@ class TestGetMidPriceFunction:
         mid_price_fn = captured_fn.get("fn")
         assert mid_price_fn is not None
 
-        # Set up MarketDataService mock's lob.books to return None for missing symbol
         registry.md_service.lob.books = {}
 
         result = mid_price_fn("UNKNOWN_SYMBOL")
@@ -2125,7 +1905,7 @@ class TestGetMidPriceFunction:
         mid_price_fn = captured_fn["fn"]
 
         mock_book = MagicMock()
-        mock_book.mid_price_x2 = 3000000  # 1500000 in x10000 scale
+        mock_book.mid_price_x2 = 3000000
         registry.md_service.lob.books = {"TXFD6": mock_book}
 
         result = mid_price_fn("TXFD6")
@@ -2168,17 +1948,6 @@ class TestGetMidPriceFunction:
         assert result == 0
 
 
-# ===================================================================
-# AG. Publish sink wiring (REMOVED 2026-04-25 — dead path)
-# ===================================================================
-# The former ``_publish_queue`` + ``set_publish_sink`` wiring was removed
-# under P2 because the runner never propagated the sink into per-strategy
-# ``StrategyContext`` instances, so the wired queue was unconsumed and would
-# silently drop after 64 events. Bootstrap no longer calls
-# ``set_publish_sink`` and the runner no longer exposes it. The test that
-# asserted the wiring is therefore obsolete and has been removed.
-
-
 class TestPublishSinkWiring:
     """Negative regression: confirm the dead publish-sink wiring is gone."""
 
@@ -2188,13 +1957,7 @@ class TestPublishSinkWiring:
         runner has no such method anymore. Asserting the mock was not called
         prevents a future re-introduction of the dead path."""
         registry = _build_with_mocks()
-        # The mock would record any call regardless of method existence.
         assert not registry.strategy_runner.set_publish_sink.called
-
-
-# ===================================================================
-# AH. LOB + FeatureEngine reset targets (lines 1214-1218)
-# ===================================================================
 
 
 class TestResetTargetsWiring:

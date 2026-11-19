@@ -203,7 +203,7 @@ class TestUniverseDrift:
         """A Saturday holds only the Friday night-session tail; including it fakes two steps."""
         days = [
             _day("2026-03-06", symbols=98),
-            _day("2026-03-07", symbols=48),  # Saturday spillover
+            _day("2026-03-07", symbols=48),
             _day("2026-03-09", symbols=98),
         ]
         sessions = ["2026-03-06", "2026-03-09"]
@@ -273,7 +273,7 @@ class TestStamp:
         assert stamp["source_quality_verdict"] == "unstamped"
 
     def test_stamp_is_unstamped_when_report_range_does_not_cover_dataset(self) -> None:
-        report = _report(_clean_days())  # covers 2026-03-02 .. 2026-03-06
+        report = _report(_clean_days())
 
         stamp = quality.stamp_payload(report, requested_from="2026-03-02", requested_to="2026-07-29")
 
@@ -344,10 +344,7 @@ class TestReportPersistence:
         older = _report(_clean_days())
         newer = _report([_day("2026-03-02", causality_violations=1)])
         json_path, md_path = quality.write_report(older, tmp_path)
-        # Force a distinct, later filename rather than relying on wall-clock spacing.
-        (tmp_path / "29991231T235959_source_audit.json").write_text(
-            json.dumps(newer.to_payload()), encoding="utf-8"
-        )
+        (tmp_path / "29991231T235959_source_audit.json").write_text(json.dumps(newer.to_payload()), encoding="utf-8")
 
         loaded = quality.load_latest_report(tmp_path)
 
@@ -906,7 +903,7 @@ class TestOfficialVolumeFetch:
         ts = 1_790_000_000_000_000_000
         ticks = []
         for index in range(30):
-            ticks += [(ts + index * 10**9, 21_000_000_000 + index, 2)] * 2  # every trade delivered twice
+            ticks += [(ts + index * 10**9, 21_000_000_000 + index, 2)] * 2
         client = _TickClient([[str(a), str(b), str(c)] for a, b, c in ticks])
 
         rows = quality.fetch_official_volume(client, "2026-10-01", "2026-10-31", self._root(tmp_path))

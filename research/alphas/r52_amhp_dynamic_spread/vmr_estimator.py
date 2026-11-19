@@ -69,7 +69,7 @@ def vmr_rho_hat(
     var = float(counts.var(ddof=0))
     vmr = var / mean
     if vmr <= 1.0:
-        return 0.0   # below Poisson — no clustering signal
+        return 0.0
     rho = 1.0 - 1.0 / math.sqrt(vmr)
     if rho < 0.0:
         return 0.0

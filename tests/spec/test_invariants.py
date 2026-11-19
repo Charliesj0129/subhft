@@ -13,9 +13,8 @@ try:
 except ImportError:
     HYPOTHESIS_AVAILABLE = False
 
-# Mock st for Fallback to run basic check if hypothesis missing
 if not HYPOTHESIS_AVAILABLE:
-    # Minimal stub to allow file to be parsed and run a single case
+
     def given(*args, **kwargs):
         def decorator(f):
             def wrapper():
@@ -66,19 +65,15 @@ def test_position_conservation(ops):
     """
     store = PositionStore()
 
-    # Track expected per symbol
     expected = {}
 
     for symbol, delta, price in ops:
         if delta == 0:
             continue
 
-        # Action
         side = Side.BUY if delta > 0 else Side.SELL
         qty = abs(delta)
 
-        # Construct FillEvent
-        # Need match_ts_ns, etc.
         import time
 
         fill = FillEvent(
@@ -89,7 +84,7 @@ def test_position_conservation(ops):
             symbol=symbol,
             side=side,
             qty=qty,
-            price=int(price),  # Fixed point?
+            price=int(price),
             fee=0,
             tax=0,
             ingest_ts_ns=time.time_ns(),
@@ -97,11 +92,8 @@ def test_position_conservation(ops):
         )
         store.on_fill(fill)
 
-        # Oracle logic
         expected[symbol] = expected.get(symbol, 0) + delta
 
-    # Assert
-    # PositionStore stores positions in dict: key = acc:strat:sym
     for sym, val in expected.items():
         key = f"a1:s1:{sym}"
         if key in store.positions:
@@ -140,7 +132,6 @@ def test_manual_invariant_check():
 )
 def test_lob_stats_invariants(base_price, spread, bid_steps, ask_steps):
     if not HYPOTHESIS_AVAILABLE:
-        # Fallback to a deterministic example.
         base_price = 1000
         spread = 5
         bid_steps = [1, 1]

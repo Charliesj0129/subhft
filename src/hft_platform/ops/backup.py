@@ -23,15 +23,10 @@ logger = get_logger("ops.backup")
 _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
 _BACKUP_NAME_RE = re.compile(r"^daily_(\d{8})$")
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
-# system.backups.name is the full destination expression: Disk('backup_local', 'daily_YYYYMMDD/')
 _DISK_NAME_RE = re.compile(r"'(daily_\d{8})/'\)$")
 
-# A backup is a full copy of the hft database. It now takes longer than any
-# sane HTTP read timeout (559 s on 2026-10-20), so it runs ASYNC and is polled.
 _DEFAULT_BACKUP_TIMEOUT_S = 3600.0
 _DEFAULT_POLL_INTERVAL_S = 5.0
-# Free space that must remain after the backup: far above the WAL's own
-# disk-full breaker (HFT_WAL_DISK_MIN_MB, 500 MB) so a backup never trips it.
 _DEFAULT_MIN_FREE_AFTER_BYTES = 10 * 1024**3
 
 
@@ -87,7 +82,6 @@ class BackupManager:
     ) -> None:
         _cfg = get_ch_config()
         self._ch_host = ch_host or _cfg["host"]
-        # Uses HTTP port (clickhouse-connect); env default matches platform convention
         self._ch_port = ch_port or int(os.getenv("HFT_CLICKHOUSE_PORT", "8123"))
         self._ch_user = ch_user or _cfg["username"]
         self._ch_password = ch_password if ch_password is not None else _cfg["password"]
@@ -100,8 +94,8 @@ class BackupManager:
         self._min_free_after_bytes = min_free_after_bytes
 
     def _client(self) -> Any:
-        assert self._ch_host is not None  # guaranteed by __init__
-        assert self._ch_user is not None  # guaranteed by __init__
+        assert self._ch_host is not None
+        assert self._ch_user is not None
         return _get_ch_client(self._ch_host, self._ch_port, self._ch_user, self._ch_password)
 
     def _get_metrics(self) -> Any:
@@ -110,7 +104,7 @@ class BackupManager:
                 from hft_platform.observability.metrics import MetricsRegistry
 
                 self._metrics = MetricsRegistry.get()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         return self._metrics
 
@@ -127,9 +121,6 @@ class BackupManager:
         try:
             self._check_disk_registered()
             self._abort_stale_backups()
-            # Retention runs before the backup, not after it: when it ran after,
-            # every failed or timed-out backup also skipped retention, and the
-            # backups that piled up filled the disk (THESHOW, 2026-10-21).
             self._make_room()
             self._execute_backup(backup_name)
             self._verify_backup(backup_name)
@@ -137,12 +128,10 @@ class BackupManager:
             duration_s = time.monotonic() - start
             self._report_success(backup_name, duration_s)
             return True
-        except Exception as exc:  # noqa: BLE001 - any failure (a client timeout too) is reported, never propagated unseen
+        except Exception as exc:
             duration_s = time.monotonic() - start
             self._report_failure(backup_name, exc, duration_s)
             return False
-
-    # ── Pre-flight checks ───────────────────────────────────────
 
     def _check_disk_registered(self) -> None:
         """Verify backup_local disk is registered in ClickHouse."""
@@ -162,8 +151,6 @@ class BackupManager:
             logger.warning("Stale backup in progress, aborting", stale_backups=rows)
             raise BackupError(f"Found {len(rows)} in-progress backup(s): {rows}")
 
-    # ── Core operations ─────────────────────────────────────────
-
     def _execute_backup(self, backup_name: str) -> None:
         """Execute BACKUP DATABASE hft TO Disk('backup_local', ...)."""
         if not _BACKUP_NAME_RE.match(backup_name):
@@ -172,9 +159,6 @@ class BackupManager:
         sql = f"BACKUP DATABASE hft TO Disk('backup_local', '{backup_name}/') ASYNC"
         logger.info("Executing backup", backup_name=backup_name, sql=sql)
         client.command(sql)
-        # ASYNC returns at once; the backup's own row in system.backups is the
-        # progress signal. _abort_stale_backups guaranteed no other backup was
-        # running, so the newest row for this name is the one just started.
         disk_name = f"Disk('backup_local', '{backup_name}/')"
         deadline = time.monotonic() + self._backup_timeout_s
         while True:
@@ -214,8 +198,6 @@ class BackupManager:
 
         backup_root = Path(self._backup_dir)
         for name, statuses in sorted(history.items()):
-            # A name that ever reached BACKUP_CREATED holds a good backup even if
-            # a later rerun under the same name failed (BACKUP_ALREADY_EXISTS).
             if "BACKUP_FAILED" in statuses and "BACKUP_CREATED" not in statuses:
                 debris = backup_root / name
                 if debris.is_dir():
@@ -239,7 +221,6 @@ class BackupManager:
     def _verify_backup(self, backup_name: str) -> None:
         """Verify backup completed successfully."""
         client = self._client()
-        # system.backups.name is the full Disk(...) expression, not just the backup name
         disk_name = f"Disk('backup_local', '{backup_name}/')"
         rows = client.query(
             "SELECT status, error FROM system.backups WHERE name = {name:String} ORDER BY start_time DESC LIMIT 1",
@@ -249,16 +230,8 @@ class BackupManager:
             raise BackupError(f"No backup entry found in system.backups for '{backup_name}'")
         status, error = rows[0]
         if status != "BACKUP_CREATED":
-            # The first line names the ClickHouse error; the rest is a server stack trace.
             raise BackupError(f"Backup '{backup_name}' status is '{status}': {str(error).split(chr(10), 1)[0]}")
 
-        # system.backups status is the authoritative success signal from
-        # ClickHouse itself. The filesystem size check below is best-effort
-        # observability only — the ClickHouse container (backup writer) and
-        # this process (hft-engine container) can run as different UIDs, so
-        # a partially-unreadable directory tree silently under-counts to 0
-        # (pathlib's rglob skips unreadable subdirs without raising) rather
-        # than reflecting a real empty/failed backup. Never fail on this.
         try:
             backup_path = Path(self._backup_dir) / backup_name
             size = self._backup_size_bytes(backup_name) if backup_path.exists() else 0
@@ -295,8 +268,6 @@ class BackupManager:
 
     def _run_archive_hook(self, backup_name: str) -> None:
         """Override point for cold archival. No-op by default."""
-
-    # ── Reporting ───────────────────────────────────────────────
 
     def _backup_size_bytes(self, backup_name: str) -> int:
         backup_path = Path(self._backup_dir) / backup_name
@@ -344,7 +315,6 @@ class BackupManager:
             )
 
     def _report_failure(self, backup_name: str, error: Exception, duration_s: float) -> None:
-        # Find last success date
         last_success = "unknown"
         backup_root = Path(self._backup_dir)
         if backup_root.exists():
@@ -377,8 +347,6 @@ class BackupManager:
                     last_success_date=last_success,
                 )
             )
-
-    # ── Restore operations ──────────────────────────────────────
 
     def restore(self, backup_name: str, target_db: str = "hft") -> None:
         """Restore full database from backup."""
@@ -435,9 +403,6 @@ class BackupManager:
                 if not _IDENTIFIER_RE.match(table):
                     logger.warning("Skipping table with invalid identifier", table=table)
                     continue
-                # table validated via _IDENTIFIER_RE.match above; temp_db
-                # validated by ValueError guard; ClickHouse rejects unknown
-                # identifiers with a hard error.
                 orig = client.query(f"SELECT count() FROM hft.{table}").result_rows[0][0]  # nosec B608
                 restored = client.query(f"SELECT count() FROM {temp_db}.{table}").result_rows[0][0]  # nosec B608
                 results[table] = (orig, restored)
@@ -451,7 +416,7 @@ class BackupManager:
         finally:
             try:
                 client.command(f"DROP DATABASE IF EXISTS {temp_db}")
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning("Failed to drop temp DB", temp_db=temp_db)
 
     def list_backups(self) -> list[dict[str, Any]]:

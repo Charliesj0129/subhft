@@ -64,7 +64,6 @@ def test_feature_engine_changed_mask_and_reset_flag():
     first = eng.process_lob_stats(_stats(ts=10), local_ts_ns=10)
     second = eng.process_lob_stats(_stats(ts=11), local_ts_ns=11)
     assert first is not None and second is not None
-    # same inputs except timestamps => feature values unchanged
     assert second.changed_mask == 0
 
     eng.reset_symbol("2330")
@@ -98,21 +97,18 @@ def test_feature_engine_process_lob_update_uses_l1_qty_and_computes_ofi_sequence
     assert u1.get("l1_ask_qty") == 20
     assert u1.get("ofi_l1_raw") == 0
 
-    # Same prices, bid qty up (+5), ask qty down (-5) -> OFI raw positive
     e2 = _bidask(symbol, 2, 1000000, 15, 1001000, 15)
     s2 = LOBStatsEvent(
         symbol=symbol, ts=2, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=110, ask_depth=190
     )
     u2 = eng.process_lob_update(e2, s2, local_ts_ns=2)
     assert u2 is not None
-    # b_flow = +5; a_flow = -5 => ofi = 10
     assert u2.get("ofi_l1_raw") == 10
     assert u2.get("ofi_l1_cum") == 10
     assert u2.get("ofi_l1_ema8") != 0
     assert u2.get("depth_imbalance_ema8_ppm") is not None
     assert u2.get("spread_ema8_scaled") == 1000
 
-    # Bid price up -> b_flow uses current bid qty, ask unchanged qty delta=0
     e3 = _bidask(symbol, 3, 1000100, 12, 1001000, 15)
     s3 = LOBStatsEvent(
         symbol=symbol, ts=3, imbalance=0.0, best_bid=1000100, best_ask=1001000, bid_depth=120, ask_depth=190
@@ -127,14 +123,12 @@ def test_feature_engine_out_of_order_flag():
     eng = FeatureEngine()
     eng.process_lob_stats(_stats(ts=10), local_ts_ns=10)
     evt = eng.process_lob_stats(_stats(ts=9), local_ts_ns=9)
-    # OOO events are now skipped (return None) to prevent stale data overwriting state
     assert evt is None
 
 
 def test_ooo_event_does_not_overwrite_state():
     """OOO event must not overwrite prev state — values, seq, ts must remain from the newer tick."""
     eng = FeatureEngine()
-    # First tick: ts=100, specific prices
     s1 = _stats(ts=100, bid=1000000, ask=1002000, bq=50, aq=60)
     evt1 = eng.process_lob_stats(s1, local_ts_ns=100)
     assert evt1 is not None
@@ -142,19 +136,16 @@ def test_ooo_event_does_not_overwrite_state():
     prev_seq = evt1.seq
     prev_ts = evt1.ts
 
-    # Second tick: ts=50 (OOO — older than first), different prices
     s2 = _stats(ts=50, bid=900000, ask=910000, bq=10, aq=20)
     evt2 = eng.process_lob_stats(s2, local_ts_ns=50)
-    assert evt2 is None  # must be skipped
+    assert evt2 is None
 
-    # State must still reflect the first (newer) tick
     state = eng._states.get("2330")
     assert state is not None
     assert state.source_ts_ns == 100
     assert state.seq == prev_seq
     assert state.values == prev_values
 
-    # Subsequent in-order tick must work normally
     s3 = _stats(ts=200, bid=1010000, ask=1012000, bq=55, aq=65)
     evt3 = eng.process_lob_stats(s3, local_ts_ns=200)
     assert evt3 is not None
@@ -168,25 +159,21 @@ def test_ooo_event_does_not_corrupt_kernel_state():
     allowing stale data to corrupt rolling state even though output was suppressed.
     """
     eng = FeatureEngine()
-    # Warm up with 3 in-order ticks to establish stable EMA state
     eng.process_lob_stats(_stats(ts=10, bid=1000000, ask=1001000, bq=50, aq=60), local_ts_ns=10)
     eng.process_lob_stats(_stats(ts=20, bid=1000000, ask=1001000, bq=50, aq=60), local_ts_ns=20)
     evt_pre = eng.process_lob_stats(_stats(ts=30, bid=1000000, ask=1001000, bq=50, aq=60), local_ts_ns=30)
     assert evt_pre is not None
 
-    # Snapshot kernel state before OOO
     ks = eng._lob_kernel_states.get("2330")
     assert ks is not None
     spread_ema_before = ks.spread_ema8
     prev_bid_before = ks.prev_best_bid
     prev_ask_before = ks.prev_best_ask
 
-    # Inject OOO tick with WILDLY different prices (ts=5, much older)
     ooo = _stats(ts=5, bid=500000, ask=900000, bq=1, aq=1)
     evt_ooo = eng.process_lob_stats(ooo, local_ts_ns=5)
-    assert evt_ooo is None  # must be suppressed
+    assert evt_ooo is None
 
-    # Kernel state must be UNCHANGED — no EMA/OFI contamination
     assert ks.spread_ema8 == spread_ema_before, f"spread_ema8 corrupted: {ks.spread_ema8} != {spread_ema_before}"
     assert ks.prev_best_bid == prev_bid_before, f"prev_best_bid corrupted: {ks.prev_best_bid} != {prev_bid_before}"
     assert ks.prev_best_ask == prev_ask_before, f"prev_best_ask corrupted: {ks.prev_best_ask} != {prev_ask_before}"
@@ -195,7 +182,6 @@ def test_ooo_event_does_not_corrupt_kernel_state():
 def test_normalizer_seq_flows_through_lob_to_feature():
     """normalizer_seq from LOBStatsEvent must be stored in _FeatureState and used for OOO detection."""
     eng = FeatureEngine()
-    # First event with normalizer_seq=100
     s1 = LOBStatsEvent(
         symbol="2330",
         ts=1000,
@@ -211,7 +197,6 @@ def test_normalizer_seq_flows_through_lob_to_feature():
     state = eng._states["2330"]
     assert state.normalizer_seq == 100
 
-    # Second event with higher ts BUT lower normalizer_seq → OOO by seq
     s2 = LOBStatsEvent(
         symbol="2330",
         ts=2000,
@@ -223,10 +208,9 @@ def test_normalizer_seq_flows_through_lob_to_feature():
         normalizer_seq=50,
     )
     evt2 = eng.process_lob_stats(s2, local_ts_ns=2000)
-    assert evt2 is None  # OOO detected via normalizer_seq
-    assert state.normalizer_seq == 100  # unchanged
+    assert evt2 is None
+    assert state.normalizer_seq == 100
 
-    # Third event with higher normalizer_seq → accepted
     s3 = LOBStatsEvent(
         symbol="2330",
         ts=3000,
@@ -245,13 +229,11 @@ def test_normalizer_seq_flows_through_lob_to_feature():
 def test_crossed_book_emits_partial_flag():
     """Crossed/empty book (mid_price_x2=0) must emit FeatureUpdateEvent with PARTIAL flag and prev values."""
     eng = FeatureEngine()
-    # First: normal event to establish state
     s1 = _stats(ts=100, bid=1000000, ask=1001000, bq=50, aq=60)
     evt1 = eng.process_lob_stats(s1, local_ts_ns=100)
     assert evt1 is not None
     prev_values = evt1.values
 
-    # Second: crossed book (mid_price_x2=0)
     s2 = LOBStatsEvent(
         symbol="2330",
         ts=200,
@@ -270,11 +252,9 @@ def test_crossed_book_emits_partial_flag():
     assert evt2.changed_mask == 0, "no features changed (stale re-emit)"
     assert evt2.ts == 200, "timestamp must advance"
 
-    # Verify state advanced (seq increased)
     state = eng._states["2330"]
     assert state.source_ts_ns == 200
 
-    # Third: normal event should still work
     s3 = _stats(ts=300, bid=1010000, ask=1012000, bq=55, aq=65)
     evt3 = eng.process_lob_stats(s3, local_ts_ns=300)
     assert evt3 is not None
@@ -299,9 +279,6 @@ def test_crossed_book_no_prev_returns_none():
     assert evt is None
 
 
-# --- Sprint 1 additional tests ---
-
-
 def test_stateless_features_from_lob_stats_event():
     eng = FeatureEngine()
     stats = _stats(bid=1000000, ask=1001000, bq=100, aq=200)
@@ -316,7 +293,6 @@ def test_stateless_features_from_lob_stats_event():
 
 def test_depth_imbalance_ppm_bid_heavy():
     eng = FeatureEngine()
-    # bid=300, ask=100 -> (300-100)/(300+100)*1e6 = 200/400*1e6 = 500_000
     eng.process_lob_stats(_stats(bq=300, aq=100))
     val = eng.get_feature("2330", "depth_imbalance_ppm")
     assert val is not None
@@ -325,7 +301,6 @@ def test_depth_imbalance_ppm_bid_heavy():
 
 def test_depth_imbalance_ppm_balanced():
     eng = FeatureEngine()
-    # bid==ask -> 0
     eng.process_lob_stats(_stats(bq=100, aq=100))
     val = eng.get_feature("2330", "depth_imbalance_ppm")
     assert val == 0
@@ -333,25 +308,21 @@ def test_depth_imbalance_ppm_balanced():
 
 def test_microprice_x2_weighted():
     eng = FeatureEngine()
-    # Use l1 qty from BidAskEvent: bid=10, ask=10 => microprice = mid
     symbol = "2330"
     e = _bidask(symbol, 1, 1000000, 10, 1001000, 10)
     s = LOBStatsEvent(
         symbol=symbol, ts=1, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=100, ask_depth=100
     )
     eng.process_lob_update(e, s)
-    # equal weights -> microprice_x2 == mid_price_x2 == 2001000
     assert eng.get_feature(symbol, "microprice_x2") == 2001000
 
 
 def test_microprice_x2_zero_depth_fallback():
     eng = FeatureEngine()
-    # No l1 qty info (stats_only mode with bid_depth=0, ask_depth=0)
     stats = LOBStatsEvent(
         symbol="2330", ts=1, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=0, ask_depth=0
     )
     eng.process_lob_stats(stats)
-    # Falls back to mid_price_x2
     mid_x2 = eng.get_feature("2330", "mid_price_x2")
     micro_x2 = eng.get_feature("2330", "microprice_x2")
     assert micro_x2 == mid_x2
@@ -360,7 +331,6 @@ def test_microprice_x2_zero_depth_fallback():
 def test_get_feature_by_index():
     eng = FeatureEngine()
     eng.process_lob_stats(_stats(bid=1000000, ask=1001000))
-    # index 0 = best_bid per feature set v1
     fs = build_default_lob_feature_set_v1()
     best_bid_idx = feature_id_to_index(fs, "best_bid")
     val = eng.get_feature_by_index("2330", best_bid_idx)
@@ -370,9 +340,7 @@ def test_get_feature_by_index():
 def test_get_feature_by_index_out_of_range():
     eng = FeatureEngine()
     eng.process_lob_stats(_stats())
-    # Out-of-range index returns None
     assert eng.get_feature_by_index("2330", 9999) is None
-    # Negative index returns None
     assert eng.get_feature_by_index("2330", -1) is None
 
 
@@ -381,13 +349,11 @@ def test_get_feature_tuple_length():
     eng.process_lob_stats(_stats())
     tpl = eng.get_feature_tuple("2330")
     assert tpl is not None
-    # Default is v3 — verify count matches registry definition
     from hft_platform.feature.registry import build_default_lob_feature_set_v3
 
     fs = build_default_lob_feature_set_v3()
     assert len(tpl) == len(fs.features)
 
-    # v1 explicit: 16 features
     eng_v1 = FeatureEngine(feature_set_id="lob_shared_v1")
     eng_v1.process_lob_stats(_stats())
     tpl_v1 = eng_v1.get_feature_tuple("2330")
@@ -408,7 +374,6 @@ def test_reset_clears_values():
     eng.process_lob_stats(_stats(ts=1))
     assert eng.get_feature("2330", "best_bid") is not None
     eng.reset_symbol("2330")
-    # After reset, state is gone until next update
     assert eng.get_feature("2330", "best_bid") is None
     assert eng.get_feature_tuple("2330") is None
 
@@ -550,7 +515,6 @@ def test_feature_engine_reference_parity_random_sequence():
         )
         got = eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         assert got is not None
-        # Compare v1 features (first 16) — v2 features (ISS/MLDM) appended after
         assert got.values[:16] == _ref_values(ref, evt, stats)
 
 
@@ -606,17 +570,14 @@ def test_feature_engine_tuple_multi_tick_sequence():
     """Verify that a multi-tick sequence via tuple input produces correct OFI accumulation."""
     eng = FeatureEngine()
 
-    # Tick 1: initial
     t1 = _stats_tuple(ts=1, bid=1000000, ask=1001000, bq=10, aq=20)
     u1 = eng.process_lob_update(None, t1, local_ts_ns=1)
     assert u1 is not None
-    assert u1.get("ofi_l1_raw") == 0  # First tick, no OFI
+    assert u1.get("ofi_l1_raw") == 0
 
-    # Tick 2: same prices, bid qty up, ask qty down
     t2 = _stats_tuple(ts=2, bid=1000000, ask=1001000, bq=15, aq=15)
     u2 = eng.process_lob_update(None, t2, local_ts_ns=2)
     assert u2 is not None
-    # b_flow = 15-10 = 5; a_flow = 15-20 = -5; ofi = 5-(-5) = 10
     assert u2.get("ofi_l1_raw") == 10
     assert u2.get("ofi_l1_cum") == 10
 
@@ -625,21 +586,18 @@ def test_feature_state_in_place_mutation():
     """Verify that _FeatureState is pre-allocated once and mutated in-place on subsequent ticks."""
     eng = FeatureEngine()
 
-    # First tick creates the state
     eng.process_lob_update(None, _stats(ts=1), local_ts_ns=1)
     state1 = eng._states.get("2330")
     assert state1 is not None
     state1_id = id(state1)
 
-    # Second tick should reuse the same _FeatureState object
     eng.process_lob_update(None, _stats(ts=2, bid=1000100, ask=1001100), local_ts_ns=2)
     state2 = eng._states.get("2330")
     assert state2 is not None
-    assert id(state2) == state1_id  # Same object, mutated in-place
+    assert id(state2) == state1_id
     assert state2.seq == 2
     assert state2.source_ts_ns == 2
 
-    # Third tick: still same object
     eng.process_lob_update(None, _stats(ts=3, bid=1000200, ask=1001200), local_ts_ns=3)
     state3 = eng._states.get("2330")
     assert id(state3) == state1_id
@@ -655,11 +613,10 @@ def test_feature_state_fresh_after_reset():
     assert state_before.warm_count == 2
 
     eng.reset_symbol("2330")
-    assert "2330" not in eng._states  # State cleared
+    assert "2330" not in eng._states
 
     eng.process_lob_update(None, _stats(ts=3), local_ts_ns=3)
     state_after = eng._states["2330"]
-    # After reset, warm_count restarts at 1
     assert state_after.warm_count == 1
     assert state_after.seq == 3
 
@@ -693,12 +650,7 @@ def test_feature_engine_rust_backend_parity_when_available():
         p = py_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
         assert p is not None and r is not None
-        # Rust kernel produces v1 (16 features); Python produces v2 (21).
-        # Compare first 16 for parity.
         assert r.values[:16] == p.values[:16]
-
-
-# --- v2 features tests ---
 
 
 def test_v2_feature_set_has_22_features():
@@ -716,14 +668,12 @@ def test_v2_feature_set_has_22_features():
 
 def test_v2_ofi_depth_norm_basic():
     """ofi_depth_norm_ppm = ofi_ema8 * 1e6 / avg_l1_depth."""
-    eng = FeatureEngine()  # default is v2
+    eng = FeatureEngine()
     sym = "TXFD6"
-    # Tick 1: initialize
     e1 = _bidask(sym, 1, 1000000, 50, 1001000, 50)
     s1 = LOBStatsEvent(symbol=sym, ts=1, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=50, ask_depth=50)
     eng.process_lob_update(e1, s1, local_ts_ns=1)
 
-    # Tick 2: bid qty up by 10 -> positive OFI
     e2 = _bidask(sym, 2, 1000000, 60, 1001000, 50)
     s2 = LOBStatsEvent(symbol=sym, ts=2, imbalance=0.0, best_bid=1000000, best_ask=1001000, bid_depth=60, ask_depth=50)
     eng.process_lob_update(e2, s2, local_ts_ns=2)
@@ -732,11 +682,7 @@ def test_v2_ofi_depth_norm_basic():
     depth_norm = eng.get_feature(sym, "ofi_depth_norm_ppm")
     assert ofi_ema is not None
     assert depth_norm is not None
-    # Depth norm uses float ofi_ema8 internally (not the rounded int).
-    # Just verify sign and order of magnitude.
-    assert depth_norm > 0  # positive OFI -> positive normalized OFI
-    # avg_depth = (60+50)/2 = 55. For ofi_raw=10, ema8 alpha=2/9:
-    # ema = 10 * 2/9 ≈ 2.22, depth_norm ≈ 2.22 * 1e6 / 55 ≈ 40404
+    assert depth_norm > 0
     assert 30_000 < depth_norm < 60_000
 
 
@@ -764,7 +710,6 @@ def test_v2_ret_autocov_needs_warmup():
             ask_depth=50,
         )
         eng.process_lob_stats(s)
-    # After 3 ticks, autocov should be computed
     autocov = eng.get_feature(sym, "ret_autocov_5s_x1e6")
     assert autocov is not None
 
@@ -787,7 +732,7 @@ def test_v2_ret_autocov_oscillating_is_negative():
         eng.process_lob_stats(s)
     autocov = eng.get_feature(sym, "ret_autocov_5s_x1e6")
     assert autocov is not None
-    assert autocov < 0  # Oscillating = negative autocovariance
+    assert autocov < 0
 
 
 def test_v2_ret_autocov_trending_is_positive():
@@ -808,15 +753,14 @@ def test_v2_ret_autocov_trending_is_positive():
         eng.process_lob_stats(s)
     autocov = eng.get_feature(sym, "ret_autocov_5s_x1e6")
     assert autocov is not None
-    assert autocov > 0  # Trending = positive autocovariance
+    assert autocov > 0
 
 
 def test_v2_tob_survival_increases():
     """tob_survival_ms should increase when best price stays the same."""
     eng = FeatureEngine()
     sym = "TXFD6"
-    base_ns = 1_000_000_000  # 1 second in ns
-    # Tick 1 & 2: same price, 500ms apart
+    base_ns = 1_000_000_000
     s1 = LOBStatsEvent(
         symbol=sym,
         ts=base_ns,
@@ -839,7 +783,7 @@ def test_v2_tob_survival_increases():
     eng.process_lob_stats(s2)
     survival = eng.get_feature(sym, "tob_survival_ms")
     assert survival is not None
-    assert survival == 500  # 500ms since last change
+    assert survival == 500
 
 
 def test_v2_tob_survival_resets_on_price_change():
@@ -847,7 +791,6 @@ def test_v2_tob_survival_resets_on_price_change():
     eng = FeatureEngine()
     sym = "TXFD6"
     base_ns = 1_000_000_000
-    # Tick 1: initial
     s1 = LOBStatsEvent(
         symbol=sym,
         ts=base_ns,
@@ -858,7 +801,6 @@ def test_v2_tob_survival_resets_on_price_change():
         ask_depth=50,
     )
     eng.process_lob_stats(s1)
-    # Tick 2: same price, 500ms later
     s2 = LOBStatsEvent(
         symbol=sym,
         ts=base_ns + 500_000_000,
@@ -870,7 +812,6 @@ def test_v2_tob_survival_resets_on_price_change():
     )
     eng.process_lob_stats(s2)
     assert eng.get_feature(sym, "tob_survival_ms") == 500
-    # Tick 3: price changes, 100ms later
     s3 = LOBStatsEvent(
         symbol=sym,
         ts=base_ns + 600_000_000,
@@ -882,7 +823,7 @@ def test_v2_tob_survival_resets_on_price_change():
     )
     eng.process_lob_stats(s3)
     survival = eng.get_feature(sym, "tob_survival_ms")
-    assert survival == 0  # Reset on price change
+    assert survival == 0
 
 
 def test_v2_backward_compat_v1_engine():
@@ -892,7 +833,6 @@ def test_v2_backward_compat_v1_engine():
     tpl = eng.get_feature_tuple("2330")
     assert tpl is not None
     assert len(tpl) == 16
-    # No v2 features accessible
     assert eng.get_feature("2330", "ofi_depth_norm_ppm") is None
 
 
@@ -902,11 +842,9 @@ class TestSymbolCardinalityGuard:
     def test_process_returns_none_when_limit_exceeded(self):
         eng = FeatureEngine()
         eng._max_symbols = 2
-        # Fill to limit
         eng.process_lob_stats(_stats(symbol="SYM_A", ts=1))
         eng.process_lob_stats(_stats(symbol="SYM_B", ts=2))
         assert len(eng._states) == 2
-        # Third symbol should be rejected
         result = eng.process_lob_stats(_stats(symbol="SYM_C", ts=3))
         assert result is None
         assert len(eng._states) == 2
@@ -916,7 +854,6 @@ class TestSymbolCardinalityGuard:
         eng._max_symbols = 2
         eng.process_lob_stats(_stats(symbol="SYM_A", ts=1))
         eng.process_lob_stats(_stats(symbol="SYM_B", ts=2))
-        # Existing symbol should still update
         result = eng.process_lob_stats(_stats(symbol="SYM_A", ts=3))
         assert result is not None
         assert result.symbol == "SYM_A"
@@ -926,7 +863,7 @@ class TestSymbolCardinalityGuard:
         from unittest.mock import MagicMock, patch
 
         eng = FeatureEngine()
-        eng._max_symbols = 0  # reject all new symbols
+        eng._max_symbols = 0
         mock_logger = MagicMock()
         with patch("hft_platform.feature.engine.logger", mock_logger):
             result = eng.process_lob_stats(_stats(symbol="SYM_X", ts=1))
@@ -1049,7 +986,6 @@ class TestLobKernelStateHasNan:
 
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(), local_ts_ns=1)
-        # Corrupt a field that was NOT previously guarded
         ks = eng._lob_kernel_states["2330"]
         assert ks is not None
         ks.iss_ema_ofi = float("nan")
@@ -1069,13 +1005,10 @@ def test_nan_guard_runs_on_rust_fused_path():
     eng = FeatureEngine()
     eng.process_lob_stats(_stats(), local_ts_ns=1)
 
-    # Corrupt kernel state to simulate NaN produced by Rust backend path
     ks = eng._lob_kernel_states.get("2330")
     assert ks is not None, "kernel state should exist after first tick"
     ks.ofi_l1_ema8 = float("nan")
 
-    # Patch at the class level and set the instance backend flag
-    # R8: NaN guard now checks fused output values directly, so inject NaN into the output tuple
     nan_values = list([0] * 27)
     nan_values[0] = float("nan")
     fake_fused = (tuple(nan_values), 0, 0)
@@ -1088,20 +1021,13 @@ def test_nan_guard_runs_on_rust_fused_path():
         eng._kernel_backend = "rust"
         result = eng.process_lob_stats(_stats(ts=2), local_ts_ns=2)
 
-    # Engine must return None (tick skipped) and log the warning
     assert result is None
     mock_logger.warning.assert_called_once()
     call_kwargs = mock_logger.warning.call_args
     assert call_kwargs[0][0] == "feature_nan_detected"
     assert call_kwargs[1].get("backend") == "rust"
 
-    # State for symbol must be cleared by reset_symbol
     assert eng._states.get("2330") is None
-
-
-# ─────────────────────────────────────────────────────────────────────
-# P3-b1: trade_confidence weighting in on_tick
-# ─────────────────────────────────────────────────────────────────────
 
 
 def test_on_tick_weights_signed_volume_by_confidence():
@@ -1136,13 +1062,8 @@ def test_on_tick_clamps_out_of_range_confidence():
     eng.on_tick("2330", price=1000000, volume=100, trade_direction=1, trade_confidence=5000)
     ks = eng._lob_kernel_states["2330"]
 
-    expected = 0.04 * 100.0  # alpha * weighted_signed_vol with weight=1.0
+    expected = 0.04 * 100.0
     assert abs(ks.tox_signed_vol_ema - expected) < 1e-9, f"Expected clamped EMA {expected}, got {ks.tox_signed_vol_ema}"
-
-
-# ─────────────────────────────────────────────────────────────────────
-# P1-b (commit dad6ee40): _compute_values None guard on cardinality reject
-# ─────────────────────────────────────────────────────────────────────
 
 
 def test_process_lob_stats_swallows_compute_values_none_without_typeerror():
@@ -1152,7 +1073,7 @@ def test_process_lob_stats_swallows_compute_values_none_without_typeerror():
     """
     from unittest.mock import MagicMock, patch
 
-    eng = FeatureEngine()  # python backend by default
+    eng = FeatureEngine()
     assert eng._compute_values_none_count == 0
 
     mock_logger = MagicMock()
@@ -1160,19 +1081,12 @@ def test_process_lob_stats_swallows_compute_values_none_without_typeerror():
         patch.object(FeatureEngine, "_compute_values", return_value=None),
         patch("hft_platform.feature.engine.logger", mock_logger),
     ):
-        # Must not raise — previously this leaked None into FeatureUpdateEvent
-        # and raised ``TypeError: 'NoneType' is not iterable``.
         result = eng.process_lob_stats(_stats(), local_ts_ns=2)
 
     assert result is None
     assert eng._compute_values_none_count == 1
     mock_logger.warning.assert_called_once()
     assert mock_logger.warning.call_args[0][0] == "feature_compute_values_none"
-
-
-# ─────────────────────────────────────────────────────────────────────
-# B110 (commit f9b60bcc): kernel reset failure surfaces via counter + log
-# ─────────────────────────────────────────────────────────────────────
 
 
 def test_reset_symbol_increments_kernel_reset_failures_when_kernel_reset_raises():
@@ -1184,7 +1098,6 @@ def test_reset_symbol_increments_kernel_reset_failures_when_kernel_reset_raises(
 
     eng = FeatureEngine()
     eng.process_lob_stats(_stats(), local_ts_ns=1)
-    # Inject a kernel whose .reset() raises.
     bad_kernel = MagicMock()
     bad_kernel.reset.side_effect = RuntimeError("boom")
     eng._rust_kernels["2330"] = bad_kernel
@@ -1192,22 +1105,14 @@ def test_reset_symbol_increments_kernel_reset_failures_when_kernel_reset_raises(
     assert eng._kernel_reset_failures_count == 0
     mock_logger = MagicMock()
     with patch("hft_platform.feature.engine.logger", mock_logger):
-        # Must not propagate — reset_symbol runs on the hot path under
-        # NaN/Inf contamination guard.
         eng.reset_symbol("2330")
 
     assert eng._kernel_reset_failures_count == 1
     bad_kernel.reset.assert_called_once()
     mock_logger.warning.assert_called_once()
     assert mock_logger.warning.call_args[0][0] == "feature_kernel_reset_failed"
-    # Engine still functional after the failure — next tick should produce an event.
     evt = eng.process_lob_stats(_stats(ts=3), local_ts_ns=3)
     assert evt is not None
-
-
-# ─────────────────────────────────────────────────────────────────────
-# L5 swallow (commit 276e6299): _compute_mldm IndexError counter + log
-# ─────────────────────────────────────────────────────────────────────
 
 
 def test_compute_mldm_increments_l5_clear_error_count_on_malformed_levels():
@@ -1221,9 +1126,6 @@ def test_compute_mldm_increments_l5_clear_error_count_on_malformed_levels():
     eng = FeatureEngine()
     ks = _LobKernelState()
     eng._lob_kernel_states["2330"] = ks
-    # bids has length 5 (so n_bid_levels=5 and the inner slicing runs), but
-    # row index 1 is None — `len(None)` raises TypeError, which the
-    # except-Exception block must catch.
     malformed_bids = [[1000, 5], None, [1002, 3], [1003, 4], [1004, 5]]
     malformed_asks = [[1100, 5], [1101, 4], [1102, 3], [1103, 2], [1104, 1]]
     event = MagicMock()
@@ -1233,12 +1135,8 @@ def test_compute_mldm_increments_l5_clear_error_count_on_malformed_levels():
     assert eng._l5_clear_error_count == 0
     mock_logger = MagicMock()
     with patch("hft_platform.feature.engine.logger", mock_logger):
-        # Must return without raising even though bids[1] is malformed.
         result = eng._compute_mldm(ks, event, best_bid=1000, best_ask=1100)
 
-    # Counter incremented at least once (malformed bid path).
     assert eng._l5_clear_error_count >= 1
-    # The warning fires through _log_l5_clear_error helper.
     assert mock_logger.warning.called
-    # Result is a scalar int (signature contract).
     assert isinstance(result, int)

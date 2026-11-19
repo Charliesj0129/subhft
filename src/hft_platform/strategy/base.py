@@ -5,7 +5,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from structlog import get_logger
 
-# Fill/Order Events might be imported from contracts or events
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus
 from hft_platform.contracts.ref import ContractFamily
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, RiskFeedback, Side
@@ -18,15 +17,10 @@ from hft_platform.feature.engine import (
     _StatsTupleProxy,
 )
 
-# Mask of quality flags that indicate corrupted/unreliable feature data.
-# PARTIAL (warmup incomplete) is acceptable — strategies may use partial data.
-# STALE_INPUT is acceptable — features computed from slightly old input.
 QUALITY_FLAGS_CORRUPT = QUALITY_FLAG_GAP | QUALITY_FLAG_STATE_RESET | QUALITY_FLAG_OUT_OF_ORDER
 
 logger = get_logger("strategy")
 
-# When HFT_STRICT_PRICE_MODE=1, float prices raise TypeError instead of warning.
-# Enables CI enforcement of the Precision Law (no float prices in production).
 _STRICT_PRICE = os.getenv("HFT_STRICT_PRICE_MODE", "1") == "1"
 
 
@@ -94,13 +88,11 @@ class StrategyContext:
         target_order_id: Optional[str] = None,
         price_type: str = "LMT",
     ) -> OrderIntent:
-        # Auto-scaling convenience: int = already scaled, Decimal = needs scaling
         if isinstance(price, int):
             scaled_price = price
         elif isinstance(price, Decimal):
             scaled_price = self.scale_price(symbol, price)
         else:
-            # Legacy float support — raise in strict mode, warn otherwise.
             if _STRICT_PRICE:
                 raise TypeError(
                     f"Float price rejected (HFT_STRICT_PRICE_MODE=1): "
@@ -156,7 +148,7 @@ class StrategyContext:
         if stale and self._staleness_counter is not None:
             try:
                 self._staleness_counter.inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         return stale
 
@@ -208,23 +200,13 @@ class BaseStrategy(ABC):
 
         subs = kwargs.get("subscribe_symbols") or kwargs.get("symbols") or []
         self.symbols = set(subs)
-        # Populated by StrategyRegistry from ``contract_families`` in
-        # strategies.yaml and read by StrategyRunner to bind a family to a
-        # concrete month. Declared here because handle_event's dispatch guard
-        # depends on it existing: a strategy that declares a family but has no
-        # binding yet must not be handed the whole bus.
         self.contract_families: tuple[ContractFamily, ...] = ()
         self.enabled = True
 
         self.ctx: Optional[StrategyContext] = None
         self._generated_intents: List[OrderIntent] = []
         self._cancel_inflight_targets: set[str] = set()
-        # Market-data events dropped because a declared contract family has no
-        # concrete binding yet. Non-zero after the boot window means the
-        # resolver never bound the family and the strategy is silent by design.
         self._unbound_dispatch_skipped = 0
-
-    # --- Event Handlers ---
 
     def on_tick(self, event: TickEvent) -> None:
         """Handle Tick Data."""
@@ -272,8 +254,6 @@ class BaseStrategy(ABC):
         """Called when RiskEngine rejects an OrderIntent from this strategy."""
         pass
 
-    # --- Internal Dispatch ---
-
     def handle_event(
         self,
         ctx: StrategyContext,
@@ -282,25 +262,11 @@ class BaseStrategy(ABC):
         self.ctx = ctx
         self._generated_intents.clear()
 
-        # Auto-filter market data by symbol. Fills and orders are exempt: a
-        # strategy cares about its own executions regardless of the symbol
-        # list (e.g. closing a legacy position on a rolled-off month), and the
-        # runner handles targeted private dispatch.
         if hasattr(event, "symbol") and not isinstance(event, (FillEvent, OrderEvent)):
             if self.symbols:
                 if event.symbol not in self.symbols:
                     return []
             elif self.contract_families:
-                # The strategy declared a family scope, but the resolver has
-                # not bound it to a concrete month yet -- the boot window
-                # before the first resolve, or a rebind that resolved to
-                # nothing. An empty set here means "not bound", NOT "every
-                # symbol". Reading it as a wildcard hands a single-instrument
-                # strategy the entire bus, and it then prices an unrelated
-                # instrument on its own tick grid: on 2026-08-23 R47_MAKER_TMF
-                # quoted TXO40900U6 at -20000 (its widening terms are whole
-                # TXF points, larger than the option's whole premium) 2.4 s
-                # before the TMF binding landed. Fail closed until it does.
                 if not self._unbound_dispatch_skipped:
                     logger.warning(
                         "strategy_market_data_skipped_unbound_family",
@@ -335,8 +301,6 @@ class BaseStrategy(ABC):
             self.on_order(event)
 
         return list(self._generated_intents)
-
-    # --- Actions ---
 
     def buy(self, symbol: str, price: int | Decimal, qty: int, tif: TIF = TIF.LIMIT):
         self._place(symbol, Side.BUY, price, qty, tif)

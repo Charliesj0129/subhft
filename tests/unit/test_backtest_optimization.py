@@ -9,11 +9,7 @@ from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
 
-# ---------------------------------------------------------------------------
-# Shared mocks
-# ---------------------------------------------------------------------------
 class _Depth:
-    # hftbacktest returns float prices (descaled by x10000 from platform convention).
     best_bid = 1.0
     best_ask = 1.001
     best_bid_qty = 100
@@ -96,9 +92,6 @@ def _patch(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# 1. Fill log is numpy SoA
-# ---------------------------------------------------------------------------
 def test_fill_log_is_numpy_soa(monkeypatch):
     _patch(monkeypatch)
     a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data="d")
@@ -108,9 +101,6 @@ def test_fill_log_is_numpy_soa(monkeypatch):
     assert a._fill_delta.dtype == np.int32
 
 
-# ---------------------------------------------------------------------------
-# 2. Fill log capacity overflow handled
-# ---------------------------------------------------------------------------
 def test_fill_log_capacity_overflow_handled(monkeypatch):
     _patch(monkeypatch)
     a = hbt_adapter.HftBacktestAdapter(strategy=_BuyStrategy("t"), asset_symbol="X", data="d")
@@ -124,9 +114,6 @@ def test_fill_log_capacity_overflow_handled(monkeypatch):
     assert a._fill_count == 5
 
 
-# ---------------------------------------------------------------------------
-# 3. Equity preallocated no append
-# ---------------------------------------------------------------------------
 def test_equity_preallocated_no_append(monkeypatch):
     _patch(monkeypatch)
     a = hbt_adapter.HftBacktestAdapter(
@@ -142,9 +129,6 @@ def test_equity_preallocated_no_append(monkeypatch):
     assert a._equity_ts_buf[0] == 100
 
 
-# ---------------------------------------------------------------------------
-# 4. Equity timestamps monotonic
-# ---------------------------------------------------------------------------
 def test_equity_timestamps_monotonic(monkeypatch):
     _patch(monkeypatch)
     a = hbt_adapter.HftBacktestAdapter(
@@ -159,9 +143,6 @@ def test_equity_timestamps_monotonic(monkeypatch):
     assert np.all(np.diff(a.equity_timestamps_ns) > 0)
 
 
-# ---------------------------------------------------------------------------
-# 5. LOB event construction (feed)
-# ---------------------------------------------------------------------------
 def test_lob_event_construction_feed(monkeypatch):
     from hft_platform.backtest._hbt_utils import build_lob_event
     from hft_platform.events import LOBStatsEvent
@@ -175,9 +156,6 @@ def test_lob_event_construction_feed(monkeypatch):
     assert feat is None
 
 
-# ---------------------------------------------------------------------------
-# 6. LOB event construction (elapse — same code path via build_lob_event)
-# ---------------------------------------------------------------------------
 def test_lob_event_construction_elapse(monkeypatch):
     from hft_platform.backtest._hbt_utils import build_lob_event
     from hft_platform.events import LOBStatsEvent
@@ -194,9 +172,6 @@ def test_lob_event_construction_elapse(monkeypatch):
     assert event.symbol == "X"
 
 
-# ---------------------------------------------------------------------------
-# 7. mid_price_x2 is integer
-# ---------------------------------------------------------------------------
 def test_mid_price_x2_is_integer(monkeypatch):
     _patch(monkeypatch)
     a = hbt_adapter.HftBacktestAdapter(strategy=_NoopStrategy("t"), asset_symbol="X", data="d")
@@ -205,9 +180,6 @@ def test_mid_price_x2_is_integer(monkeypatch):
     assert x2 == 20010
 
 
-# ---------------------------------------------------------------------------
-# 8. Bridge payload has scaled fields
-# ---------------------------------------------------------------------------
 def test_bridge_payload_has_scaled_fields():
     from hft_platform.events import LOBStatsEvent
     from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge
@@ -233,15 +205,12 @@ def test_bridge_payload_has_scaled_fields():
             ask_depth=10,
         )
     )
-    assert alpha.kw["bid_px"] == 50000 / 10000  # 5.0
-    assert alpha.kw["ask_px"] == 50100 / 10000  # 5.01
+    assert alpha.kw["bid_px"] == 50000 / 10000
+    assert alpha.kw["ask_px"] == 50100 / 10000
     assert "current_mid" in alpha.kw
     assert alpha.kw["current_mid"] == (5.0 + 5.01) / 2.0
 
 
-# ---------------------------------------------------------------------------
-# 9. Signal log uses correct mid_price
-# ---------------------------------------------------------------------------
 def test_signal_log_uses_mid_price():
     from hft_platform.events import LOBStatsEvent
     from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge
@@ -267,12 +236,9 @@ def test_signal_log_uses_mid_price():
     )
     log = bridge.signal_log
     assert len(log) == 1
-    assert log[0][1] == pytest.approx(1.0)  # signal
+    assert log[0][1] == pytest.approx(1.0)
 
 
-# ---------------------------------------------------------------------------
-# 10. signals_to_positions clamp
-# ---------------------------------------------------------------------------
 def test_signals_to_positions_clamp():
     from research.backtest.hft_native_runner import _signals_to_positions
 
@@ -286,9 +252,6 @@ def test_signals_to_positions_clamp():
     assert float(neg_pos[-1]) >= -3.0
 
 
-# ---------------------------------------------------------------------------
-# 11. apply_latency deterministic
-# ---------------------------------------------------------------------------
 def test_apply_latency_deterministic():
     from research.backtest.hft_native_runner import _apply_latency_to_positions
     from research.backtest.types import BacktestConfig
@@ -296,7 +259,6 @@ def test_apply_latency_deterministic():
     cfg = BacktestConfig(data_paths=[], submit_ack_latency_ms=10.0)
     desired = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
 
-    # Create mock data with local_ts field
     dt = np.dtype([("local_ts", np.int64)])
     data = np.zeros(10, dtype=dt)
     data["local_ts"] = np.arange(10) * 1_000_000
@@ -304,13 +266,9 @@ def test_apply_latency_deterministic():
     r1 = _apply_latency_to_positions(data, desired, cfg)
     r2 = _apply_latency_to_positions(data, desired, cfg)
     np.testing.assert_array_equal(r1, r2)
-    # Latency-applied positions must be same length as input
     assert len(r1) == len(desired)
 
 
-# ---------------------------------------------------------------------------
-# 14. Walk-forward fold isolation (via frozen dataclass)
-# ---------------------------------------------------------------------------
 def test_walk_forward_fold_isolation():
     from research.backtest.types import WalkForwardFoldResult
 
@@ -320,15 +278,11 @@ def test_walk_forward_fold_isolation():
     f2 = WalkForwardFoldResult(
         fold_idx=1, train_size=100, test_size=30, sharpe=0.5, ic_mean=0.05, max_drawdown=0.03, turnover=1.5
     )
-    # Frozen: no mutation between folds
     with pytest.raises(AttributeError):
         f1.sharpe = 999  # type: ignore[misc]
     assert f1.sharpe != f2.sharpe
 
 
-# ---------------------------------------------------------------------------
-# 15. Feed/elapse event parity (DRY: both use build_lob_event)
-# ---------------------------------------------------------------------------
 def test_feed_elapse_event_parity(monkeypatch):
     from hft_platform.backtest._hbt_utils import build_lob_event
 
@@ -352,9 +306,6 @@ def test_feed_elapse_event_parity(monkeypatch):
     assert e1.imbalance == e2.imbalance
 
 
-# ---------------------------------------------------------------------------
-# 16. Tick overhead under 100us (SoA + pre-alloc: recording is fast)
-# ---------------------------------------------------------------------------
 def test_tick_overhead_under_100us(monkeypatch):
     """SoA fill recording + equity sampling should be sub-100us."""
     import time
@@ -376,5 +327,4 @@ def test_tick_overhead_under_100us(monkeypatch):
     elapsed_ns = time.perf_counter_ns() - t0
 
     per_tick_us = elapsed_ns / n / 1000.0
-    # Allow generous margin for CI; target is <100us
     assert per_tick_us < 500, f"Per-tick overhead {per_tick_us:.1f}us exceeds 500us threshold"

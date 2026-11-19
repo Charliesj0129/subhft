@@ -40,9 +40,9 @@ from .paths import REPO_ROOT
 
 LEDGER_PATH = REPO_ROOT / "docs" / "runbooks" / "shioaji-release-decisions.yaml"
 
-ADOPT = "ADOPT"  # move the pin -- the diff shows nothing the platform uses breaks
-DEFER = "DEFER"  # not now, and here is the date it comes back
-BLOCKED = "BLOCKED"  # the diff names a platform-breaking change; adapter work first
+ADOPT = "ADOPT"
+DEFER = "DEFER"
+BLOCKED = "BLOCKED"
 VERDICTS = (ADOPT, DEFER, BLOCKED)
 
 CURRENT = "CURRENT"
@@ -76,9 +76,6 @@ class Decision:
 
 
 def _as_date(value: Any, field: str, version: str) -> date:
-    # yaml.safe_load already yields ``datetime.date`` for a bare ISO date; a
-    # quoted one arrives as str. Accept both, reject anything else rather than
-    # coercing -- a date that parses wrongly silently moves a revisit.
     if isinstance(value, date):
         return value
     if isinstance(value, str):
@@ -101,10 +98,6 @@ def _breaking_platform(evidence: Path) -> tuple[int, set[str]]:
 
 
 def _check_against_evidence(decision: Decision, pin: str, repo_root: Path) -> None:
-    # The evidence must describe *the upgrade being decided* -- pin to candidate.
-    # A consecutive hop like 1.7.2 -> 1.7.3 is SAFE on its own while the move
-    # from the pin is BLOCKED, so citing one would let a verdict rest on a diff
-    # nobody would ever perform.
     expected = f"diff_{pin}_to_{decision.version}.json"
     if Path(decision.evidence).name != expected:
         raise DecisionLedgerError(
@@ -140,8 +133,6 @@ def _decision_from_entry(entry: Any, pin: str, repo_root: Path) -> Decision:
 
     unknown = sorted(set(entry) - set(_REQUIRED) - set(_OPTIONAL))
     if unknown:
-        # Not pedantry: a misspelled key is silently dropped by a permissive
-        # loader, and the one that matters (`revisit_after`) fails open.
         raise DecisionLedgerError(f"{version}: unknown key(s) {unknown}")
     missing = sorted(field for field in _REQUIRED if entry.get(field) in (None, ""))
     if missing:

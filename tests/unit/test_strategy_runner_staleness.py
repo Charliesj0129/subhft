@@ -9,17 +9,13 @@ import pytest
 
 from hft_platform.events import LOBStatsEvent
 
-# ---------------------------------------------------------------------------
-# Helpers / stubs
-# ---------------------------------------------------------------------------
-
 
 def _make_bus():
     bus = MagicMock()
 
     async def _gen():
         return
-        yield  # make it an async generator
+        yield
 
     bus.consume.return_value = _gen()
     return bus
@@ -48,11 +44,6 @@ class _FakeStrategy:
     def handle_event(self, ctx, event):
         self._calls.append((ctx, event))
         return []
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -93,20 +84,15 @@ def make_runner(mock_metrics, monkeypatch):
     return _factory
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_stale_event_skipped(make_runner):
     """An event older than threshold is skipped; strategy is not called."""
-    runner, _ = make_runner(threshold_ms="1")  # 1 ms threshold
+    runner, _ = make_runner(threshold_ms="1")
     strat = _FakeStrategy()
     runner.register(strat)
 
-    now_ns = 1_000_000_000_000  # arbitrary now
-    old_event_ns = now_ns - 2_000_000  # 2ms old → stale
+    now_ns = 1_000_000_000_000
+    old_event_ns = now_ns - 2_000_000
 
     with patch("hft_platform.strategy.runner.timebase") as tb:
         tb.now_ns.return_value = now_ns
@@ -118,12 +104,12 @@ async def test_stale_event_skipped(make_runner):
 @pytest.mark.asyncio
 async def test_fresh_event_not_skipped(make_runner):
     """A fresh event (within threshold) is dispatched to strategies normally."""
-    runner, _ = make_runner(threshold_ms="500")  # 500ms threshold
+    runner, _ = make_runner(threshold_ms="500")
     strat = _FakeStrategy()
     runner.register(strat)
 
     now_ns = 1_000_000_000_000
-    fresh_event_ns = now_ns - 100_000  # 0.1ms old → fresh
+    fresh_event_ns = now_ns - 100_000
 
     with patch("hft_platform.strategy.runner.timebase") as tb:
         tb.now_ns.return_value = now_ns
@@ -140,7 +126,7 @@ async def test_staleness_counter_increments(make_runner):
     runner.register(strat)
 
     now_ns = 1_000_000_000_000
-    old_event_ns = now_ns - 5_000_000  # 5ms old
+    old_event_ns = now_ns - 5_000_000
 
     assert runner._stale_event_skip_total == 0
 
@@ -159,7 +145,7 @@ async def test_zero_source_ts_not_skipped(make_runner):
     _extract_event_trace falls back to now_ns() when ts=0, making
     the event always appear fresh.
     """
-    runner, _ = make_runner(threshold_ms="1")  # very tight threshold
+    runner, _ = make_runner(threshold_ms="1")
     strat = _FakeStrategy()
     runner.register(strat)
 
@@ -167,18 +153,15 @@ async def test_zero_source_ts_not_skipped(make_runner):
 
     with patch("hft_platform.strategy.runner.timebase") as tb:
         tb.now_ns.return_value = now_ns
-        # ts=0 → _extract_event_trace returns now_ns → age ≈ 0 → not stale
         await runner.process_event(_make_event(ts_ns=0))
 
-    # The fallback path sets source_ts_ns = now_ns(), so event_age_ns ≈ 0,
-    # which is below threshold.  Strategy must be called.
     assert len(strat._calls) == 1, "Event with ts=0 should not be skipped"
 
 
 @pytest.mark.asyncio
 async def test_threshold_configurable_via_env(tmp_path, monkeypatch, mock_metrics):
     """HFT_STALE_EVENT_THRESHOLD_MS env var controls the staleness threshold."""
-    monkeypatch.setenv("HFT_STALE_EVENT_THRESHOLD_MS", "100")  # 100ms
+    monkeypatch.setenv("HFT_STALE_EVENT_THRESHOLD_MS", "100")
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
     monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
@@ -192,7 +175,6 @@ async def test_threshold_configurable_via_env(tmp_path, monkeypatch, mock_metric
 
             runner = StrategyRunner(_make_bus(), _make_risk_queue())
 
-    # Threshold should be 100ms * 1_000_000 = 100_000_000 ns
     assert runner._stale_event_threshold_ns == 100 * 1_000_000
 
 
@@ -204,7 +186,7 @@ async def test_prometheus_metric_incremented_on_skip(make_runner):
     runner.register(strat)
 
     now_ns = 1_000_000_000_000
-    old_event_ns = now_ns - 5_000_000  # 5ms old
+    old_event_ns = now_ns - 5_000_000
 
     with patch("hft_platform.strategy.runner.timebase") as tb:
         tb.now_ns.return_value = now_ns

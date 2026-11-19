@@ -23,10 +23,6 @@ import pytest
 
 from hft_platform.ops.backup import _BACKUP_NAME_RE, BackupError, BackupManager
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_manager(backup_dir: str = "/tmp/test_backup") -> BackupManager:
     return BackupManager(
@@ -48,7 +44,6 @@ def _mock_client() -> MagicMock:
     - client.insert(...) for inserts
     """
     client = MagicMock()
-    # Default: query returns an object whose .result_rows is an empty list
     query_result = MagicMock()
     query_result.result_rows = []
     client.query.return_value = query_result
@@ -60,11 +55,6 @@ def _patch_client(mgr: BackupManager, client: MagicMock):
     """Patch BackupManager._client at class level for __slots__ compatibility."""
     with patch.object(BackupManager, "_client", return_value=client):
         yield
-
-
-# ---------------------------------------------------------------------------
-# __init__ env var resolution
-# ---------------------------------------------------------------------------
 
 
 def test_init_picks_up_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,11 +102,6 @@ def test_init_explicit_args_override_env(monkeypatch: pytest.MonkeyPatch) -> Non
     assert mgr._retain_days == 30
 
 
-# ---------------------------------------------------------------------------
-# run_daily: disabled
-# ---------------------------------------------------------------------------
-
-
 def test_run_daily_disabled_when_env_not_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_BACKUP_ENABLED", "0")
     mgr = _make_manager()
@@ -129,11 +114,6 @@ def test_run_daily_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     mgr = _make_manager()
     result = mgr.run_daily()
     assert result is False
-
-
-# ---------------------------------------------------------------------------
-# run_daily: success path
-# ---------------------------------------------------------------------------
 
 
 def test_run_daily_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -150,11 +130,6 @@ def test_run_daily_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
     result = mgr.run_daily()
     assert result is True
-
-
-# ---------------------------------------------------------------------------
-# run_daily: failure path
-# ---------------------------------------------------------------------------
 
 
 def test_run_daily_failure_on_check_disk(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -179,15 +154,9 @@ def test_run_daily_failure_on_check_disk(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert "no disk" in str(reported[0][1])
 
 
-# ---------------------------------------------------------------------------
-# _check_disk_registered
-# ---------------------------------------------------------------------------
-
-
 def test_check_disk_registered_raises_when_missing() -> None:
     mgr = _make_manager()
     client = _mock_client()
-    # query().result_rows returns [] → disk not found
     query_result = MagicMock()
     query_result.result_rows = []
     client.query.return_value = query_result
@@ -205,13 +174,8 @@ def test_check_disk_registered_passes_when_found() -> None:
     client.query.return_value = query_result
 
     with _patch_client(mgr, client):
-        mgr._check_disk_registered()  # should not raise
+        mgr._check_disk_registered()
     client.query.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _abort_stale_backups
-# ---------------------------------------------------------------------------
 
 
 def test_abort_stale_backups_raises_when_in_progress() -> None:
@@ -234,13 +198,8 @@ def test_abort_stale_backups_passes_when_clean() -> None:
     client.query.return_value = query_result
 
     with _patch_client(mgr, client):
-        mgr._abort_stale_backups()  # should not raise
+        mgr._abort_stale_backups()
     client.query.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _verify_backup
-# ---------------------------------------------------------------------------
 
 
 def test_verify_backup_raises_when_no_rows() -> None:
@@ -276,7 +235,7 @@ def test_verify_backup_passes_when_path_missing(tmp_path: Path) -> None:
     client.query.return_value = query_result
 
     with _patch_client(mgr, client):
-        mgr._verify_backup("daily_20260329")  # should not raise
+        mgr._verify_backup("daily_20260329")
         assert client.query.called
 
 
@@ -294,11 +253,10 @@ def test_verify_backup_passes_when_dir_visible_but_empty(tmp_path: Path) -> None
     query_result.result_rows = [("BACKUP_CREATED", "")]
     client.query.return_value = query_result
 
-    # Create the directory but leave it empty (or, in production, unreadable)
     (tmp_path / "daily_20260329").mkdir()
 
     with _patch_client(mgr, client):
-        mgr._verify_backup("daily_20260329")  # should not raise
+        mgr._verify_backup("daily_20260329")
 
 
 def test_verify_backup_success(tmp_path: Path) -> None:
@@ -308,19 +266,13 @@ def test_verify_backup_success(tmp_path: Path) -> None:
     query_result.result_rows = [("BACKUP_CREATED", "")]
     client.query.return_value = query_result
 
-    # Create dir with a real file
     backup_dir = tmp_path / "daily_20260329"
     backup_dir.mkdir()
     (backup_dir / "metadata.json").write_bytes(b"x" * 1024)
 
     with _patch_client(mgr, client):
-        mgr._verify_backup("daily_20260329")  # should not raise
+        mgr._verify_backup("daily_20260329")
     assert (tmp_path / "daily_20260329").exists()
-
-
-# ---------------------------------------------------------------------------
-# _cleanup_old_backups
-# ---------------------------------------------------------------------------
 
 
 def test_cleanup_old_backups_removes_stale(tmp_path: Path) -> None:
@@ -330,22 +282,19 @@ def test_cleanup_old_backups_removes_stale(tmp_path: Path) -> None:
     _TZ_TAIPEI = ZoneInfo("Asia/Taipei")
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
 
-    # Create old backup (20 days old relative to our fixed "now")
     old_dir = tmp_path / "daily_20260309"
     old_dir.mkdir()
 
-    # Create recent backup (1 day old)
     recent_dir = tmp_path / "daily_20260328"
     recent_dir.mkdir()
 
-    # Create a non-backup dir that should be ignored
     other_dir = tmp_path / "other_dir"
     other_dir.mkdir()
 
     fixed_now = datetime(2026, 3, 29, tzinfo=_TZ_TAIPEI)
     with patch("hft_platform.ops.backup.datetime") as mock_dt:
         mock_dt.now.return_value = fixed_now
-        mock_dt.strptime.side_effect = datetime.strptime  # preserve strptime
+        mock_dt.strptime.side_effect = datetime.strptime
         mgr._cleanup_old_backups()
 
     assert not old_dir.exists(), "Old backup should be removed"
@@ -357,24 +306,18 @@ def test_cleanup_old_backups_no_dir_is_noop(tmp_path: Path) -> None:
     """Non-existent backup root → _cleanup does nothing."""
     nonexistent = tmp_path / "nonexistent"
     mgr = BackupManager(backup_dir=str(nonexistent), retain_days=7, ch_host="localhost")
-    mgr._cleanup_old_backups()  # should not raise
+    mgr._cleanup_old_backups()
     assert not nonexistent.exists()
-
-
-# ---------------------------------------------------------------------------
-# _report_success / _report_failure
-# ---------------------------------------------------------------------------
 
 
 def test_report_success_no_notifier_no_crash(tmp_path: Path) -> None:
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
 
-    # Create backup dir with a file for size calculation
     backup_dir = tmp_path / "daily_20260329"
     backup_dir.mkdir()
     (backup_dir / "data.bin").write_bytes(b"x" * 512)
 
-    mgr._report_success("daily_20260329", duration_s=1.5)  # should not raise
+    mgr._report_success("daily_20260329", duration_s=1.5)
     assert backup_dir.exists()
 
 
@@ -421,13 +364,11 @@ def test_report_failure_no_notifier_no_crash(tmp_path: Path) -> None:
 def test_report_failure_finds_last_success(tmp_path: Path) -> None:
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
 
-    # Create previous successful backup dirs
     (tmp_path / "daily_20260327").mkdir()
     (tmp_path / "daily_20260328").mkdir()
 
     with patch("hft_platform.ops.backup.logger") as mock_log:
         mgr._report_failure("daily_20260329", BackupError("boom"), duration_s=1.0)
-        # The last_success should be max of existing dates
         call_kwargs = mock_log.warning.call_args[1]
         assert call_kwargs.get("last_success") == "20260328"
 
@@ -462,11 +403,6 @@ def test_report_failure_with_metrics(tmp_path: Path) -> None:
     mgr._report_failure("daily_20260329", BackupError("err"), duration_s=0.7)
 
     mock_metrics.backup_duration_seconds.set.assert_called_once_with(pytest.approx(0.7))
-
-
-# ---------------------------------------------------------------------------
-# restore
-# ---------------------------------------------------------------------------
 
 
 def test_restore_invalid_backup_name_raises() -> None:
@@ -504,11 +440,6 @@ def test_restore_alternate_target_db() -> None:
 
     sql_call = client.command.call_args[0][0]
     assert "AS hft_test" in sql_call
-
-
-# ---------------------------------------------------------------------------
-# restore_table
-# ---------------------------------------------------------------------------
 
 
 def test_restore_table_invalid_name_raises() -> None:
@@ -552,16 +483,10 @@ def test_restore_table_alternate_db() -> None:
     assert "AS hft_test.market_data" in sql_call
 
 
-# ---------------------------------------------------------------------------
-# verify_restore
-# ---------------------------------------------------------------------------
-
-
 def test_verify_restore_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mgr = _make_manager()
     client = _mock_client()
 
-    # query() returns objects with .result_rows
     table_result = MagicMock()
     table_result.result_rows = [("market_data",), ("orders",)]
     orig_md = MagicMock()
@@ -574,11 +499,11 @@ def test_verify_restore_success(monkeypatch: pytest.MonkeyPatch) -> None:
     rest_ord.result_rows = [(500,)]
 
     client.query.side_effect = [
-        table_result,  # SELECT name FROM system.tables
-        orig_md,  # orig count market_data
-        rest_md,  # restored count market_data
-        orig_ord,  # orig count orders
-        rest_ord,  # restored count orders
+        table_result,
+        orig_md,
+        rest_md,
+        orig_ord,
+        rest_ord,
     ]
 
     monkeypatch.setattr(BackupManager, "restore", lambda self, name, target_db: None)
@@ -588,7 +513,6 @@ def test_verify_restore_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert results["market_data"] == (1000, 1000)
     assert results["orders"] == (500, 500)
-    # DROP DATABASE called via command() in finally block
     client.command.assert_called_once()
 
 
@@ -601,7 +525,7 @@ def test_verify_restore_mismatch_raises(monkeypatch: pytest.MonkeyPatch) -> None
     orig_count = MagicMock()
     orig_count.result_rows = [(1000,)]
     rest_count = MagicMock()
-    rest_count.result_rows = [(900,)]  # mismatch!
+    rest_count.result_rows = [(900,)]
 
     client.query.side_effect = [
         table_result,
@@ -631,7 +555,6 @@ def test_verify_restore_drops_temp_db_on_failure(monkeypatch: pytest.MonkeyPatch
 
     client.command.side_effect = _command
 
-    # restore itself raises an error
     monkeypatch.setattr(
         BackupManager,
         "restore",
@@ -642,13 +565,7 @@ def test_verify_restore_drops_temp_db_on_failure(monkeypatch: pytest.MonkeyPatch
         with pytest.raises(BackupError):
             mgr.verify_restore("daily_20260329")
 
-    # DROP should have been called in finally block via command()
     assert any("DROP DATABASE" in c for c in drop_calls)
-
-
-# ---------------------------------------------------------------------------
-# list_backups
-# ---------------------------------------------------------------------------
 
 
 def test_list_backups_empty_dir(tmp_path: Path) -> None:
@@ -666,7 +583,6 @@ def test_list_backups_nonexistent_dir() -> None:
 def test_list_backups_returns_matching_dirs(tmp_path: Path) -> None:
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
 
-    # Create valid backup dirs with files
     b1 = tmp_path / "daily_20260327"
     b1.mkdir()
     (b1 / "meta.json").write_bytes(b"x" * 100)
@@ -675,7 +591,6 @@ def test_list_backups_returns_matching_dirs(tmp_path: Path) -> None:
     b2.mkdir()
     (b2 / "meta.json").write_bytes(b"x" * 200)
 
-    # Non-backup dir should be ignored
     other = tmp_path / "some_other_dir"
     other.mkdir()
 
@@ -696,15 +611,10 @@ def test_list_backups_returns_matching_dirs(tmp_path: Path) -> None:
 def test_list_backups_ignores_files(tmp_path: Path) -> None:
     """Files in backup root are skipped (only dirs counted)."""
     mgr = BackupManager(backup_dir=str(tmp_path), retain_days=7, ch_host="localhost")
-    (tmp_path / "daily_20260327").write_text("not a dir")  # file, not dir
+    (tmp_path / "daily_20260327").write_text("not a dir")
 
     result = mgr.list_backups()
     assert result == []
-
-
-# ---------------------------------------------------------------------------
-# _backup_size_bytes / _count_retained
-# ---------------------------------------------------------------------------
 
 
 def test_backup_size_bytes_nonexistent_returns_zero(tmp_path: Path) -> None:
@@ -740,25 +650,15 @@ def test_count_retained_nonexistent_returns_zero() -> None:
     assert mgr._count_retained() == 0
 
 
-# ---------------------------------------------------------------------------
-# _backup_name_re pattern validation
-# ---------------------------------------------------------------------------
-
-
 def test_backup_name_re_valid() -> None:
     assert _BACKUP_NAME_RE.match("daily_20260329") is not None
     assert _BACKUP_NAME_RE.match("daily_20261231") is not None
 
 
 def test_backup_name_re_invalid() -> None:
-    assert _BACKUP_NAME_RE.match("daily_2026032") is None  # 7 digits
+    assert _BACKUP_NAME_RE.match("daily_2026032") is None
     assert _BACKUP_NAME_RE.match("weekly_20260329") is None
     assert _BACKUP_NAME_RE.match("daily_abcdefgh") is None
-
-
-# ---------------------------------------------------------------------------
-# _execute_backup
-# ---------------------------------------------------------------------------
 
 
 def test_execute_backup_sends_correct_sql() -> None:
@@ -774,12 +674,7 @@ def test_execute_backup_sends_correct_sql() -> None:
     assert "backup_local" in sql_call
 
 
-# ---------------------------------------------------------------------------
-# _run_archive_hook (no-op by default)
-# ---------------------------------------------------------------------------
-
-
 def test_run_archive_hook_is_noop() -> None:
     mgr = _make_manager()
-    result = mgr._run_archive_hook("daily_20260329")  # should not raise, return None
+    result = mgr._run_archive_hook("daily_20260329")
     assert result is None

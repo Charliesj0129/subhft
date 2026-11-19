@@ -16,34 +16,24 @@ from hft_platform.reports.pipeline import (
 TZ = ZoneInfo("Asia/Taipei")
 
 
-# ---------------------------------------------------------------------------
-# resolve_trading_date — naive datetime path (line 77)
-# ---------------------------------------------------------------------------
-
-
 class TestResolveTradingDateNaiveDatetime:
     def test_naive_datetime_treated_as_taipei(self):
         """Naive datetime should be treated as Asia/Taipei."""
-        naive = datetime(2026, 4, 15, 10, 0, 0)  # No tzinfo
+        naive = datetime(2026, 4, 15, 10, 0, 0)
         result = resolve_trading_date("day", now=naive)
         assert result == "2026-04-15"
 
     def test_naive_datetime_night_before_15(self):
         """Naive datetime before 15:00 in night session -> yesterday."""
-        naive = datetime(2026, 4, 15, 3, 0, 0)  # No tzinfo, 03:00
+        naive = datetime(2026, 4, 15, 3, 0, 0)
         result = resolve_trading_date("night", now=naive)
         assert result == "2026-04-14"
 
     def test_naive_datetime_night_after_15(self):
         """Naive datetime after 15:00 in night session -> today."""
-        naive = datetime(2026, 4, 15, 16, 0, 0)  # No tzinfo, 16:00
+        naive = datetime(2026, 4, 15, 16, 0, 0)
         result = resolve_trading_date("night", now=naive)
         assert result == "2026-04-15"
-
-
-# ---------------------------------------------------------------------------
-# HybridReportResult — basic construction
-# ---------------------------------------------------------------------------
 
 
 class TestHybridReportResult:
@@ -55,11 +45,6 @@ class TestHybridReportResult:
     def test_construct_with_error(self):
         result = HybridReportResult(composed=None, dossier=None, decision=None, llm_error="connection failed")
         assert result.llm_error == "connection failed"
-
-
-# ---------------------------------------------------------------------------
-# build_hybrid_report_async — llm disabled / empty session paths
-# ---------------------------------------------------------------------------
 
 
 class TestBuildHybridReportAsync:
@@ -170,11 +155,6 @@ class TestBuildHybridReportAsync:
         assert result.llm_error is None
 
 
-# ---------------------------------------------------------------------------
-# run_pipeline — dry_run and debug paths (lines 224-259)
-# ---------------------------------------------------------------------------
-
-
 class TestRunPipeline:
     @pytest.mark.asyncio
     async def test_run_pipeline_empty_session(self):
@@ -240,11 +220,6 @@ class TestRunPipeline:
             patch.dict("sys.modules", {"hft_platform.reports.distributor": mock_dist_mod}),
         ):
             await run_pipeline("day", "2026-04-15", dry_run=False)
-
-
-# ---------------------------------------------------------------------------
-# main — CLI entry point (lines 270-309)
-# ---------------------------------------------------------------------------
 
 
 class TestMainCLI:

@@ -42,14 +42,11 @@ class TestWalFirstCHHealthGauge(unittest.IsolatedAsyncioTestCase):
                     "hft_platform.observability.metrics.MetricsRegistry.get",
                     return_value=fake_registry,
                 ):
-                    # DiskPressureMonitor/WALBatchWriter/WALFirstWriter are
-                    # imported lazily inside run(); patch at source module.
                     with patch("hft_platform.recorder.disk_monitor.DiskPressureMonitor"):
                         with patch("hft_platform.recorder.wal.WALBatchWriter"):
                             with patch("hft_platform.recorder.wal_first.WALFirstWriter"):
                                 worker = RecorderService(queue)
                                 task = asyncio.create_task(worker.run())
-                                # Give run() enough time to execute the startup block.
                                 await asyncio.sleep(0.05)
                                 worker.running = False
                                 task.cancel()
@@ -58,13 +55,8 @@ class TestWalFirstCHHealthGauge(unittest.IsolatedAsyncioTestCase):
                                 except asyncio.CancelledError:
                                     pass
 
-        # In wal_first mode the writer never connect_async()es, so DataWriter
-        # never fires the gauge setter. The fix must set it to 1 at run()
-        # startup as a healthy no-op signal.
         fake_registry.clickhouse_connection_health.set.assert_called_with(1)
-        # Sanity: this is the wal_first path.
         fake_registry.wal_mode.set.assert_called_with(1)
-        # Sanity: writer.connect_async was NOT called in wal_first mode.
         mock_writer_inst.connect_async.assert_not_called()
 
     async def test_run_does_not_force_ch_health_in_direct_mode(self):
@@ -102,8 +94,6 @@ class TestWalFirstCHHealthGauge(unittest.IsolatedAsyncioTestCase):
                     except asyncio.CancelledError:
                         pass
 
-        # In direct mode the fix must NOT touch the CH gauge at startup; that
-        # is DataWriter.connect_async()'s responsibility.
         set_calls = [call.args for call in fake_registry.clickhouse_connection_health.set.call_args_list]
         assert set_calls == [], (
             f"worker.run() must not set clickhouse_connection_health in direct mode; observed calls: {set_calls}"

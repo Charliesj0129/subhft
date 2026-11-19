@@ -40,7 +40,8 @@ uv run hft run sim
 
 ```bash
 # Run checks before committing
-make lint          # ruff check src/ tests/
+make lint          # Source policy and Ruff
+make code-policy   # source comments and lint bypasses
 make typecheck     # mypy
 make test          # pytest (unit tests)
 make ci            # all of the above
@@ -65,6 +66,8 @@ test(risk): add StormGuard state transition tests
 - Every test must contain at least one `assert`
 
 ### Code Quality Rules
+
+Use the [source code policy](docs/guides/source-code-policy.md) when changing Python, lint configuration, or CI workflows.
 
 - **No `float` for prices** — use scaled integers (x10000)
 - **No `print()`** — use `structlog`

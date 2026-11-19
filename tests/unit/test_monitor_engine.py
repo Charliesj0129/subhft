@@ -147,8 +147,6 @@ def test_engine_marks_stale_and_handles_disconnect(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (True, "", "Day Session"))
     monkeypatch.setattr(engine_mod, "get_session_start", _session_start)
 
-    # S1: poll_and_update now calls now_ns() for heartbeat tracking too,
-    # so we need extra values in the iterator.
     now_values = iter([100, 8_000_000_000, 8_000_000_000, 8_000_000_000, 8_000_000_000, 8_000_000_000])
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: next(now_values))
 
@@ -162,7 +160,6 @@ def test_engine_marks_stale_and_handles_disconnect(monkeypatch: pytest.MonkeyPat
     assert engine.state == MonitorState.STALE
     assert engine._sym_states[0].is_stale is True
 
-    # Replace data source with a fresh fake that raises on poll
     fake_ds2 = _FakeDataSource(replay_rows={"TMFC6": [_row(100)]})
     fake_ds2._connected = True
     engine._data_source = fake_ds2
@@ -250,7 +247,6 @@ def test_engine_navigation_moves_selection(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert engine._selected_idx == 0
     engine.move_selection(1)
-    # Only 1 symbol, clamped to 0
     assert engine._selected_idx == 0
     engine.move_selection(-1)
     assert engine._selected_idx == 0
@@ -280,7 +276,6 @@ def test_engine_initializes_with_redis_source(monkeypatch: pytest.MonkeyPatch) -
 
     assert engine.state == MonitorState.LIVE
     header_ctx = engine.get_header_context()
-    # source="redis" in config → source_label falls through to "Redis"
     assert "redis" in header_ctx.ch_status.lower()
 
 
@@ -304,7 +299,6 @@ def test_engine_sort_mode_cycles(monkeypatch: pytest.MonkeyPatch) -> None:
     engine.cycle_sort_mode()
     assert engine._sort_mode == SORT_COMPOSITE
     engine.cycle_sort_mode()
-    # config order
     assert engine._sort_mode == 2
     engine.cycle_sort_mode()
     assert engine._sort_mode == SORT_OPPORTUNITY
@@ -375,7 +369,6 @@ def test_engine_bootstrap_skips_closed_sessions(monkeypatch: pytest.MonkeyPatch)
 
     fake_ds = _FakeDataSource(replay_rows={}, poll_batches=[])
     monkeypatch.setattr(MonitorEngine, "_create_data_source", lambda self, symbols: fake_ds)
-    # All sessions closed
     monkeypatch.setattr(engine_mod, "get_session_info", lambda *args, **kwargs: (False, "[CLOSED]", "Closed"))
     monkeypatch.setattr(engine_mod, "get_session_start", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 1)
@@ -385,7 +378,6 @@ def test_engine_bootstrap_skips_closed_sessions(monkeypatch: pytest.MonkeyPatch)
     engine._dispatcher = _StubDispatcher()
     engine.initialize()
 
-    # S4: bootstrap should not have been called for closed sessions
     assert len(bootstrap_calls) == 0
 
 
@@ -404,7 +396,6 @@ def test_engine_initializes_with_hybrid_source(monkeypatch: pytest.MonkeyPatch) 
         redis_port=6379,
     )
 
-    # Create a MagicMock that passes isinstance(ds, RedisHybridSource) check
     fake_ds = MagicMock(spec=RedisHybridSource)
     fake_ds.connected = True
     fake_ds.retry_count = 0

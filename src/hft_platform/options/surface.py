@@ -30,10 +30,6 @@ class VolSurface:
         self._grid: dict[tuple[date, int], float] = {}
         self._spline_cache: dict[date, CubicSpline] = {}
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def update(self, strike: float, expiry_date: date, iv: float) -> None:
         """Store *iv* for *(expiry_date, strike)*.
 
@@ -110,10 +106,6 @@ class VolSurface:
         iv_50 = float(np.percentile(arr, 50))
         iv_75 = float(np.percentile(arr, 75))
         return 0.5 * (iv_25 + iv_75) - iv_50
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _sorted_for_expiry(self, expiry_date: date) -> tuple[list[int], list[float]]:
         """Return *(strikes, ivs)* sorted ascending by strike for *expiry_date*."""

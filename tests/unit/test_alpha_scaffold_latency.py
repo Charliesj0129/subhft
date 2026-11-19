@@ -55,7 +55,6 @@ class TestAlphaManifestLatencyDefault:
             "complexity": "O(1)",
         }
         m = AlphaManifest.from_dict(data)
-        # from_dict explicitly checks for presence — None if not in dict
         assert m.latency_profile is None
 
     def test_from_dict_with_latency(self):

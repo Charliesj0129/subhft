@@ -25,10 +25,6 @@ from hft_platform.recorder._loader_batch import (
     insert_batch_for_table,
 )
 
-# ---------------------------------------------------------------------------
-# _to_date (lines 26, 28-31)
-# ---------------------------------------------------------------------------
-
 
 def test_to_date_with_date_object():
     d = date(2026, 4, 16)
@@ -61,11 +57,6 @@ def test_to_date_with_empty_string():
     assert result == date(1970, 1, 1)
 
 
-# ---------------------------------------------------------------------------
-# format_market_data: basic tick (lines 91-92, 94-95)
-# ---------------------------------------------------------------------------
-
-
 def test_format_market_data_basic_tick():
     rows = [
         {
@@ -81,12 +72,7 @@ def test_format_market_data_basic_tick():
     assert "symbol" in cols
     assert len(data) == 1
     assert data[0][0] == "TXFD6"
-    assert data[0][5] == 200000000  # price_scaled
-
-
-# ---------------------------------------------------------------------------
-# format_market_data: bid/ask as nested arrays (lines 91-92, 94-95)
-# ---------------------------------------------------------------------------
+    assert data[0][5] == 200000000
 
 
 def test_format_market_data_nested_bidask():
@@ -101,14 +87,8 @@ def test_format_market_data_nested_bidask():
     ]
     cols, data = format_market_data(rows)
     assert len(data) == 1
-    # bids_price should be scaled
     assert isinstance(data[0][7], list)
     assert len(data[0][7]) == 2
-
-
-# ---------------------------------------------------------------------------
-# format_market_data: float arrays (lines 110-111, 113)
-# ---------------------------------------------------------------------------
 
 
 def test_format_market_data_float_arrays():
@@ -125,13 +105,7 @@ def test_format_market_data_float_arrays():
     ]
     cols, data = format_market_data(rows)
     assert len(data) == 1
-    # float prices should be scaled to int
     assert all(isinstance(p, int) for p in data[0][7])
-
-
-# ---------------------------------------------------------------------------
-# format_market_data: price fallback from mid of bids/asks (lines 117, 121-122, 124-125)
-# ---------------------------------------------------------------------------
 
 
 def test_format_market_data_price_from_best_bid_ask():
@@ -146,7 +120,7 @@ def test_format_market_data_price_from_best_bid_ask():
     ]
     cols, data = format_market_data(rows)
     assert len(data) == 1
-    assert data[0][5] > 0  # price_scaled derived from mid
+    assert data[0][5] > 0
 
 
 def test_format_market_data_price_from_float_price():
@@ -162,11 +136,6 @@ def test_format_market_data_price_from_float_price():
     assert data[0][5] > 0
 
 
-# ---------------------------------------------------------------------------
-# format_market_data: top-of-book only (lines 132, 138, 140)
-# ---------------------------------------------------------------------------
-
-
 def test_format_market_data_top_of_book_only():
     rows = [
         {
@@ -180,13 +149,8 @@ def test_format_market_data_top_of_book_only():
         }
     ]
     cols, data = format_market_data(rows)
-    assert len(data[0][7]) == 1  # single-level bids_price
-    assert len(data[0][9]) == 1  # single-level asks_price
-
-
-# ---------------------------------------------------------------------------
-# format_market_data: one-sided book warning (lines 251-256, 258-259, 261)
-# ---------------------------------------------------------------------------
+    assert len(data[0][7]) == 1
+    assert len(data[0][9]) == 1
 
 
 def test_format_market_data_one_sided_book():
@@ -199,12 +163,7 @@ def test_format_market_data_one_sided_book():
         }
     ]
     cols, data = format_market_data(rows)
-    assert len(data) == 1  # still processes the row
-
-
-# ---------------------------------------------------------------------------
-# format_market_data: timestamp validation (lines 272, 274)
-# ---------------------------------------------------------------------------
+    assert len(data) == 1
 
 
 def test_format_market_data_future_timestamp():
@@ -213,13 +172,12 @@ def test_format_market_data_future_timestamp():
         {
             "symbol": "TEST",
             "type": "tick",
-            "exch_ts": 99_999_999_999_999_999_999,  # way in the future
+            "exch_ts": 99_999_999_999_999_999_999,
             "price_scaled": 100000,
         }
     ]
     cols, data = format_market_data(rows)
     assert len(data) == 1
-    # The ts should be clamped (not the original huge value)
     assert data[0][3] < 99_999_999_999_999_999_999
 
 
@@ -235,12 +193,7 @@ def test_format_market_data_ingest_before_exch():
         }
     ]
     cols, data = format_market_data(rows)
-    assert data[0][4] >= data[0][3]  # ingest_ts >= exch_ts
-
-
-# ---------------------------------------------------------------------------
-# format_market_data: meta fallback (lines 357-362, 364)
-# ---------------------------------------------------------------------------
+    assert data[0][4] >= data[0][3]
 
 
 def test_format_market_data_meta_timestamps():
@@ -253,12 +206,7 @@ def test_format_market_data_meta_timestamps():
         }
     ]
     cols, data = format_market_data(rows)
-    assert data[0][3] == 500  # exch_ts from meta.source_ts
-
-
-# ---------------------------------------------------------------------------
-# format_orders (lines 371, 373, 394-401, 403, 411, 413)
-# ---------------------------------------------------------------------------
+    assert data[0][3] == 500
 
 
 def test_format_orders_basic():
@@ -288,7 +236,7 @@ def test_format_orders_float_price():
         }
     ]
     cols, data = format_orders(rows)
-    assert data[0][5] > 0  # price scaled from float
+    assert data[0][5] > 0
 
 
 def test_format_orders_action_fallback():
@@ -302,11 +250,6 @@ def test_format_orders_action_fallback():
     cols, data = format_orders(rows)
     assert data[0][4] == "SELL"
     assert data[0][6] == 5
-
-
-# ---------------------------------------------------------------------------
-# format_trades (lines 439-441, 443, 456, 458)
-# ---------------------------------------------------------------------------
 
 
 def test_format_trades_basic():
@@ -335,11 +278,6 @@ def test_format_trades_float_price():
     ]
     cols, data = format_trades(rows)
     assert data[0][5] > 0
-
-
-# ---------------------------------------------------------------------------
-# format_fills (lines 479-481)
-# ---------------------------------------------------------------------------
 
 
 def test_format_fills_basic():
@@ -376,13 +314,8 @@ def test_format_fills_fallback_fields():
         }
     ]
     cols, data = format_fills(rows)
-    assert data[0][0] == 3_000  # ts_exchange from match_ts
-    assert data[0][8] == 5  # qty from quantity
-
-
-# ---------------------------------------------------------------------------
-# format_risk_log (lines 357-362, 364)
-# ---------------------------------------------------------------------------
+    assert data[0][0] == 3_000
+    assert data[0][8] == 5
 
 
 def test_format_risk_log_basic():
@@ -414,11 +347,6 @@ def test_format_risk_log_string_context():
     assert data[0][4] == "raw_string_context"
 
 
-# ---------------------------------------------------------------------------
-# format_backtest_runs (lines 394-401, 403)
-# ---------------------------------------------------------------------------
-
-
 def test_format_backtest_runs_basic():
     rows = [
         {
@@ -447,11 +375,6 @@ def test_format_backtest_runs_string_params():
     assert data[0][4] == '{"already": "json"}'
 
 
-# ---------------------------------------------------------------------------
-# format_pnl_snapshots (lines 439-441, 443, 456, 458)
-# ---------------------------------------------------------------------------
-
-
 def test_format_pnl_snapshots_basic():
     rows = [
         {
@@ -476,12 +399,7 @@ def test_format_pnl_snapshots_basic():
 def test_format_pnl_snapshots_missing_fields():
     rows = [{"strategy_id": "s1"}]
     cols, data = format_pnl_snapshots(rows)
-    assert data[0][4] == 0  # net_qty default
-
-
-# ---------------------------------------------------------------------------
-# format_latency_spans (lines 479-481)
-# ---------------------------------------------------------------------------
+    assert data[0][4] == 0
 
 
 def test_format_latency_spans_basic():
@@ -504,11 +422,6 @@ def test_format_latency_spans_ts_fallback():
     rows = [{"ts": 2_000, "stage": "lob"}]
     cols, data = format_latency_spans(rows)
     assert data[0][0] == 2_000
-
-
-# ---------------------------------------------------------------------------
-# insert_batch_for_table (lines 411, 413)
-# ---------------------------------------------------------------------------
 
 
 def test_insert_batch_for_table_unknown_table():

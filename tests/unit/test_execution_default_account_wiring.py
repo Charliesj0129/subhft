@@ -42,8 +42,6 @@ def _fill(seqno: str) -> RawExecEvent:
             "quantity": 1,
             "price": 1.00,
             "ts": 1,
-            # account_id intentionally omitted -- this is the shape that was
-            # being dropped.
         },
         time.time_ns(),
     )
@@ -67,10 +65,10 @@ def test_router_hands_the_broker_account_provider_to_its_normalizer(tmp_path, mo
 def test_account_id_is_resolved_after_login_not_at_construction(tmp_path, monkeypatch) -> None:
     """The session authenticates after the router is built."""
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    session = {"account": ""}  # not logged in yet
+    session = {"account": ""}
     norm = ExecutionNormalizer(default_account_id_provider=lambda: session["account"])
 
-    assert norm.normalize_fill(_fill("F2")) is None  # pre-login: still fail-closed
+    assert norm.normalize_fill(_fill("F2")) is None
 
     session["account"] = "SJ-ACCT-007"
     event = norm.normalize_fill(_fill("F3"))

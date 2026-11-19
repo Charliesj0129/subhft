@@ -214,7 +214,7 @@ def test_run_gate_a_data_meta_requires_provenance_keys(tmp_path: Path):
     np.save(path, arr)
     meta = {
         "dataset_id": "feed",
-        "source_type": "synthetic",  # real data is excused from seed only
+        "source_type": "synthetic",
         "owner": "charlie",
         "schema_version": 1,
         "rows": 8,
@@ -325,11 +325,6 @@ def test_run_gate_a_data_ul_reports_achieved_and_missing_fields_warn_only(tmp_pa
     assert "rng_seed" in data_gov["data_ul_missing_fields"][str(path)]
 
 
-# ---------------------------------------------------------------------------
-# P0: skills/roles governance in Gate A
-# ---------------------------------------------------------------------------
-
-
 def test_gate_a_skills_governance_warning_when_no_skills(tmp_path):
     """Manifest with empty skills_used → Gate A details include a warning."""
     manifest = types.SimpleNamespace(
@@ -372,11 +367,6 @@ def test_gate_a_skills_governance_always_in_details(tmp_path):
     assert "warnings" in sg
 
 
-# ---------------------------------------------------------------------------
-# C7: data_ul ValidationConfig + Gate A data_ul_achieved in details
-# ---------------------------------------------------------------------------
-
-
 def test_gate_a_data_ul_achieved_in_details_when_meta_present(tmp_path: Path):
     """Gate A data_governance.data_ul_achieved reflects achieved UL tier from meta.json."""
     data_root = tmp_path / "research" / "data" / "raw"
@@ -385,7 +375,6 @@ def test_gate_a_data_ul_achieved_in_details_when_meta_present(tmp_path: Path):
     arr = np.zeros(8, dtype=[("best_bid", "i8"), ("best_ask", "i8"), ("qty", "f8")])
     np.save(path, arr)
 
-    # UL4-compliant meta (has regimes_covered but not UL5 fingerprint/lineage)
     meta = {
         "dataset_id": "feed",
         "source_type": "synthetic",
@@ -406,7 +395,6 @@ def test_gate_a_data_ul_achieved_in_details_when_meta_present(tmp_path: Path):
         complexity="O(1)",
         paper_refs=(),
     )
-    # Request UL3 — should be satisfied because meta has UL4 fields
     cfg = ValidationConfig(
         alpha_id="test_alpha",
         data_paths=[str(path)],
@@ -421,7 +409,6 @@ def test_gate_a_data_ul_achieved_in_details_when_meta_present(tmp_path: Path):
     assert "data_ul_achieved" in dg
     assert "data_ul_target" in dg
     assert dg["data_ul_target"] == 3
-    # Achieved should be at least UL3 (meta has all required UL3 fields)
     assert dg["data_ul_achieved"] >= 3
 
 
@@ -433,7 +420,6 @@ def test_gate_a_data_ul_warns_when_target_not_met(tmp_path: Path):
     arr = np.zeros(8, dtype=[("best_bid", "i8"), ("best_ask", "i8"), ("qty", "f8")])
     np.save(path, arr)
 
-    # UL2-only meta — does NOT have UL3 fields
     meta = {
         "dataset_id": "feed",
         "source_type": "real",
@@ -449,7 +435,6 @@ def test_gate_a_data_ul_warns_when_target_not_met(tmp_path: Path):
         complexity="O(1)",
         paper_refs=(),
     )
-    # Request UL5 — meta only meets UL2 → should warn (not block)
     cfg = ValidationConfig(
         alpha_id="test_alpha",
         data_paths=[str(path)],
@@ -461,7 +446,7 @@ def test_gate_a_data_ul_warns_when_target_not_met(tmp_path: Path):
     report = run_gate_a(manifest, [str(path)], config=cfg, root=tmp_path)
 
     dg = report.details["data_governance"]
-    assert len(dg["warnings"]) >= 1  # warn-only, not blocking
+    assert len(dg["warnings"]) >= 1
     assert dg["data_ul_target"] == 5
     assert dg["data_ul_achieved"] is not None
     assert dg["data_ul_achieved"] < 5
@@ -490,11 +475,6 @@ class TestBatchValidate:
         assert "error" in result["results"][0]
 
 
-# ---------------------------------------------------------------------------
-# Pure helper: _compute_oos_returns
-# ---------------------------------------------------------------------------
-
-
 class TestComputeOosReturns:
     def test_too_short_returns_empty(self):
         from hft_platform.alpha.validation import _compute_oos_returns
@@ -505,27 +485,18 @@ class TestComputeOosReturns:
     def test_normal_equity_curve_produces_returns(self):
         from hft_platform.alpha.validation import _compute_oos_returns
 
-        # Rising equity curve
         curve = np.linspace(1.0, 2.0, 100)
         result = _compute_oos_returns(curve, 0.5)
         assert result.size > 0
-        # All returns should be finite and positive for a monotonically rising curve
         assert np.all(np.isfinite(result))
         assert np.all(result >= 0.0)
 
     def test_zero_base_handled_gracefully(self):
         from hft_platform.alpha.validation import _compute_oos_returns
 
-        # Curve with zero in the denominator
         curve = np.array([0.0, 0.0, 1.0, 2.0, 3.0])
         result = _compute_oos_returns(curve, 0.3)
-        # Must not raise; output contains only finite values
         assert np.all(np.isfinite(result))
-
-
-# ---------------------------------------------------------------------------
-# Pure helper: _evaluate_oos_statistical_tests
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateOosStatisticalTests:
@@ -560,11 +531,6 @@ class TestEvaluateOosStatisticalTests:
         tests = result["tests"]
         for key in ("ttest_mean_gt_zero", "wilcoxon_gt_zero", "sign_test_gt_half", "bootstrap_ci_mean"):
             assert key in tests, f"Missing test key: {key}"
-
-
-# ---------------------------------------------------------------------------
-# Pure helper: _extract_stat_test_pvalues / _extract_bds_pvalue
-# ---------------------------------------------------------------------------
 
 
 class TestExtractStatTestPvalues:
@@ -617,11 +583,6 @@ class TestExtractBdsPvalue:
         assert abs(result - 0.15) < 1e-9
 
 
-# ---------------------------------------------------------------------------
-# Pure helper: _optimization_objective
-# ---------------------------------------------------------------------------
-
-
 class TestOptimizationObjective:
     def test_sharpe_oos_mode_returns_sharpe(self):
         from hft_platform.alpha._param_opt import _optimization_objective
@@ -634,13 +595,11 @@ class TestOptimizationObjective:
 
         val_low_turnover = _optimization_objective(1.0, 0.05, 0.5, "ic_first")
         val_high_turnover = _optimization_objective(1.0, 0.05, 5.0, "ic_first")
-        # Higher turnover should give a lower objective
         assert val_low_turnover > val_high_turnover
 
     def test_default_mode_penalizes_drawdown_and_turnover(self):
         from hft_platform.alpha._param_opt import _optimization_objective
 
-        # Same Sharpe, higher drawdown → lower objective
         val_low_dd = _optimization_objective(1.0, 0.05, 0.5, "risk_adjusted")
         val_high_dd = _optimization_objective(1.0, 0.50, 0.5, "risk_adjusted")
         assert val_low_dd > val_high_dd
@@ -653,11 +612,6 @@ class TestOptimizationObjective:
         assert val_low_to > val_high_to
 
 
-# ---------------------------------------------------------------------------
-# Pure helper: _run_bds_independence_test
-# ---------------------------------------------------------------------------
-
-
 class TestRunBdsIndependenceTest:
     def test_too_few_samples_returns_unavailable(self):
         from hft_platform.alpha.validation import _run_bds_independence_test
@@ -666,7 +620,6 @@ class TestRunBdsIndependenceTest:
         result = _run_bds_independence_test(arr=arr, pvalue_threshold=0.05)
         assert result["available"] is False
         assert result["reason"] == "insufficient_samples"
-        # Diagnostic-only: treated as pass
         assert result["pass"] is True
 
     def test_constant_series_returns_unavailable(self):
@@ -688,11 +641,6 @@ class TestRunBdsIndependenceTest:
         assert "pass" in result
 
 
-# ---------------------------------------------------------------------------
-# Pure helper: _bds_correlation_delta
-# ---------------------------------------------------------------------------
-
-
 class TestBdsCorrelationDelta:
     def test_too_short_returns_zero(self):
         from hft_platform.alpha.validation import _bds_correlation_delta
@@ -707,11 +655,6 @@ class TestBdsCorrelationDelta:
         arr = rng.normal(0, 1, size=200)
         result = _bds_correlation_delta(arr, epsilon=0.5)
         assert np.isfinite(result)
-
-
-# ---------------------------------------------------------------------------
-# Pure helper: _check_hftbacktest_v2_data_format
-# ---------------------------------------------------------------------------
 
 
 class TestCheckHftbacktestV2DataFormat:
@@ -734,7 +677,6 @@ class TestCheckHftbacktestV2DataFormat:
         np.savez(str(path), data=arr)
 
         errors = _check_hftbacktest_v2_data_format(str(path))
-        # May have DEPTH_SNAPSHOT_EVENT warning if hftbacktest not installed, but no structural errors
         structural = [e for e in errors if "Missing required field" in e or "not a .npz" in e.lower()]
         assert structural == []
 
@@ -746,11 +688,6 @@ class TestCheckHftbacktestV2DataFormat:
 
         errors = _check_hftbacktest_v2_data_format(str(path))
         assert any("Missing 'data'" in e for e in errors)
-
-
-# ---------------------------------------------------------------------------
-# Pure helper: _field_available
-# ---------------------------------------------------------------------------
 
 
 class TestFieldAvailable:
@@ -778,11 +715,6 @@ class TestFieldAvailable:
         from hft_platform.alpha.validation import _field_available
 
         assert _field_available("some_unknown_field", {"price", "volume"}) is False
-
-
-# ---------------------------------------------------------------------------
-# Pure helper: _dataset_row_count
-# ---------------------------------------------------------------------------
 
 
 class TestDatasetRowCount:

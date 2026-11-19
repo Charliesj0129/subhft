@@ -78,7 +78,6 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
         regime_to_idx = {"trending": 0, "mean_reverting": 1, "volatile": 2}
     regime_names = tuple(regime_to_idx.keys())
 
-    # Pre-allocate scratch buffers once (reused across blocks, Allocator Law)
     max_block = max(config.regime_block_max, 1) + 1
     q_buf = np.empty(max_block, dtype=np.float64)
     mid_buf = np.empty(max_block, dtype=np.float64)
@@ -86,7 +85,6 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
     depth_rng_buf = np.empty(max_block, dtype=np.float64)
     volume_buf = np.empty(max_block, dtype=np.float64)
 
-    # Pre-compute timestamps (avoids per-block np.arange allocation)
     all_ts = np.arange(n_rows, dtype=np.int64) * tick_ns
 
     _directions = np.asarray([-1.0, 1.0], dtype=np.float64)
@@ -100,7 +98,6 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
         end = min(n_rows, i + block)
         block_len = end - i
 
-        # Determine regime-constant parameters
         if regime == "trending":
             spread_mult = 1.0
             vol_scale = 0.8
@@ -111,9 +108,6 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
             spread_mult = 2.0
             vol_scale = 1.6
 
-        # --- Phase 1: Sequential q + base_mid (AR(1) data dependency) ---
-        # Must draw RNG per-tick in original order to preserve determinism.
-        # Per tick draws: eps_q, [volatile: drift_rng], px_noise, spread_rng, depth_rng, volume
         for k in range(block_len):
             eps_q = float(rng.normal(0.0, 0.03))
             if regime == "trending":
@@ -130,36 +124,29 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
             impact = 0.08 * q
             base_mid = max(1.0, base_mid + (impact + px_noise) * tick_size)
 
-            # Store sequential results + RNG draws for vectorized phase 2
             q_buf[k] = q
             mid_buf[k] = base_mid
             spread_rng_buf[k] = float(rng.normal(0.0, 0.08))
             depth_rng_buf[k] = float(rng.normal(0.0, 0.12))
             volume_buf[k] = float(rng.gamma(shape=2.0, scale=4.0 * (1.0 + vol_scale)))
 
-        # --- Phase 2: Vectorized derived-field computation (Cache Law) ---
         q_blk = q_buf[:block_len]
         mid_blk = mid_buf[:block_len]
 
-        # Spread
         spread_noise_blk = 1.0 + np.abs(q_blk) * 0.25 + np.abs(spread_rng_buf[:block_len])
         spread_bps_blk = np.maximum(0.5, spread_mean * spread_mult * spread_noise_blk)
         half_spread_blk = (mid_blk * spread_bps_blk / 10_000.0) / 2.0
 
-        # Prices
         bid_px_blk = np.maximum(0.01, mid_blk - half_spread_blk)
         ask_px_blk = np.maximum(bid_px_blk + 0.0001, mid_blk + half_spread_blk)
 
-        # Depth
         abs_q = np.abs(q_blk)
         total_depth_blk = np.maximum(10.0, 1800.0 * (1.0 + 0.35 * abs_q + np.abs(depth_rng_buf[:block_len])))
         bid_qty_blk = np.maximum(1.0, total_depth_blk * (1.0 + q_blk) / 2.0)
         ask_qty_blk = np.maximum(1.0, total_depth_blk * (1.0 - q_blk) / 2.0)
 
-        # Volume
         vol_blk = np.maximum(1.0, volume_buf[:block_len])
 
-        # --- Block assignment (contiguous write, Cache Law) ---
         arr["bid_qty"][i:end] = bid_qty_blk
         arr["ask_qty"][i:end] = ask_qty_blk
         arr["bid_px"][i:end] = bid_px_blk
@@ -203,11 +190,7 @@ def generate_lob_data(config: SyntheticLOBConfig) -> tuple[np.ndarray, dict[str,
     return arr, meta
 
 
-# ---------------------------------------------------------------------------
-# v2 generator: OU-Hawkes-Markov model (Papers 026, 039, 120, 121, 122, 123)
-# ---------------------------------------------------------------------------
 
-#: Field names accepted in data_fields from a manifest for from_manifest() validation
 _SUPPORTED_FIELDS: frozenset[str] = frozenset(f for f, _ in _DTYPE.descr)
 
 
@@ -222,36 +205,27 @@ class SyntheticLOBConfigV2:
     rng_seed: int = 42
     tick_interval_ms: float = 2.0
 
-    # Ornstein-Uhlenbeck queue imbalance params (Paper 123)
-    # per-regime: (trending, mean_reverting, volatile)
     ou_theta: tuple[float, ...] = (0.02, 0.15, 0.05)
     ou_mu: tuple[float, ...] = (0.15, 0.0, 0.0)
     ou_sigma: tuple[float, ...] = (0.04, 0.025, 0.10)
 
-    # Lévy jump component (Paper 123)
-    jump_rate: float = 0.01  # Poisson rate per tick
-    jump_sigma: float = 0.20  # jump size std dev
+    jump_rate: float = 0.01
+    jump_sigma: float = 0.20
 
-    # Markov regime transition matrix (Paper 039)
-    # Rows = current regime, columns = next regime
     regime_transition: tuple[tuple[float, ...], ...] = (
-        (0.70, 0.20, 0.10),  # from trending
-        (0.15, 0.75, 0.10),  # from mean_reverting
-        (0.10, 0.25, 0.65),  # from volatile
+        (0.70, 0.20, 0.10),
+        (0.15, 0.75, 0.10),
+        (0.10, 0.25, 0.65),
     )
-    regime_min_ticks: int = 50  # minimum ticks before regime can switch
+    regime_min_ticks: int = 50
 
-    # Hawkes self-exciting volume process (Papers 026, 120)
-    # per-regime baseline intensities
     hawkes_baseline: tuple[float, ...] = (8.0, 5.0, 15.0)
-    hawkes_excitation: float = 0.4  # self-excitation weight α_H
-    hawkes_decay: float = 0.05  # exponential decay rate β_H
+    hawkes_excitation: float = 0.4
+    hawkes_decay: float = 0.05
 
-    # Spread resilience after jumps (Paper 121)
     spread_mean_bps: float = 5.0
-    spread_recovery_gamma: float = 0.10  # half-life ≈ 7 ticks
+    spread_recovery_gamma: float = 0.10
 
-    # Price impact (Papers 122, 124)
     price_impact_beta: float = 0.08
 
     generator_version: str = "v2"
@@ -287,37 +261,32 @@ def generate_lob_data_v2(config: SyntheticLOBConfigV2) -> tuple[np.ndarray, dict
     base_mid = 100.0
     tick_size = 0.01
 
-    # Unpack OU params
     ou_theta = tuple(float(v) for v in config.ou_theta)
     ou_mu = tuple(float(v) for v in config.ou_mu)
     ou_sigma = tuple(float(v) for v in config.ou_sigma)
-    dt = 1.0 / 100.0  # normalised time step (τ = 100 ticks)
+    dt = 1.0 / 100.0
 
-    # Markov transition matrix rows → cumulative for sampling
     trans_cumul: list[np.ndarray] = []
     for row in config.regime_transition:
         row_arr = np.asarray(row, dtype=np.float64)
-        row_arr = row_arr / row_arr.sum()  # normalise in case of floating imprecision
+        row_arr = row_arr / row_arr.sum()
         trans_cumul.append(np.cumsum(row_arr))
 
     n_regimes = len(trans_cumul)
     regime_names = ("trending", "mean_reverting", "volatile")[:n_regimes]
 
-    # Hawkes params
     hawkes_baseline = tuple(float(v) for v in config.hawkes_baseline)
     alpha_h = float(config.hawkes_excitation)
     beta_h = float(config.hawkes_decay)
 
-    # Initialise state
-    q = 0.0  # queue imbalance ∈ [-1, 1]
-    regime_idx = 0  # start in trending
+    q = 0.0
+    regime_idx = 0
     ticks_in_regime = 0
     hawkes_intensity = hawkes_baseline[regime_idx]
-    ticks_since_jump = 1000  # large → no residual spread impact at start
+    ticks_since_jump = 1000
     regimes_covered: set[str] = set()
 
     for i in range(n_rows):
-        # --- Markov regime transition (Paper 039) ---
         if ticks_in_regime >= config.regime_min_ticks:
             u = float(rng.uniform())
             cumul = trans_cumul[regime_idx]
@@ -332,14 +301,12 @@ def generate_lob_data_v2(config: SyntheticLOBConfigV2) -> tuple[np.ndarray, dict
         regimes_covered.add(regime_name)
         ticks_in_regime += 1
 
-        # --- OU queue imbalance with Lévy jumps (Paper 123) ---
         theta_r = ou_theta[regime_idx]
         mu_r = ou_mu[regime_idx]
         sigma_r = ou_sigma[regime_idx]
         eps = float(rng.standard_normal())
         dq = theta_r * (mu_r - q) * dt + sigma_r * (dt**0.5) * eps
 
-        # Lévy jump
         jump = 0.0
         if float(rng.uniform()) < config.jump_rate:
             jump = float(rng.normal(0.0, config.jump_sigma))
@@ -350,28 +317,22 @@ def generate_lob_data_v2(config: SyntheticLOBConfigV2) -> tuple[np.ndarray, dict
         q = q + dq + jump
         q = _clip(q, -0.99, 0.99)
 
-        # --- Hawkes volume (Papers 026, 120) ---
-        # λ_t = λ_0 + Σ α_H * exp(-β_H * Δt)
         hawkes_intensity = hawkes_baseline[regime_idx] + (hawkes_intensity - hawkes_baseline[regime_idx]) * (
             1.0 - beta_h
         )
         hawkes_intensity = max(0.5, hawkes_intensity)
-        # New event self-excitation: each tick a "trade" arrives proportional to intensity
         kappa = 2.0
         vol_scale = hawkes_intensity / kappa
         volume = max(1.0, float(rng.gamma(shape=kappa, scale=vol_scale)))
-        # Update intensity for next tick (self-excitation from this event)
         hawkes_intensity += alpha_h * (volume / kappa)
 
-        # --- Price impact (Papers 122, 124) ---
         px_noise = float(rng.normal(0.0, 0.03))
         impact = float(config.price_impact_beta) * q
         base_mid = max(1.0, base_mid + (impact + px_noise) * tick_size)
 
-        # --- Spread with resilience after jump (Paper 121) ---
         spread_extra = 0.0
         if ticks_since_jump < 100:
-            delta_s = abs(jump) * 3.0  # bps impact proportional to jump size
+            delta_s = abs(jump) * 3.0
             spread_extra = delta_s * (1.0 - float(config.spread_recovery_gamma)) ** ticks_since_jump
 
         spread_noise = 1.0 + abs(q) * 0.25 + abs(float(rng.normal(0.0, 0.08)))
@@ -450,9 +411,6 @@ def generate_lob_data_v2(config: SyntheticLOBConfigV2) -> tuple[np.ndarray, dict
     return arr, meta
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def _parse_args() -> argparse.Namespace:
@@ -463,7 +421,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--n-rows", type=int, default=20_000)
     parser.add_argument("--rng-seed", type=int, default=42)
     parser.add_argument("--tick-interval-ms", type=float, default=2.0)
-    # v1-specific args
     parser.add_argument("--regime-block-min", type=int, default=200)
     parser.add_argument("--regime-block-max", type=int, default=500)
     parser.add_argument("--spread-mean-bps", type=float, default=5.0)

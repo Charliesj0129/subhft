@@ -22,7 +22,7 @@ class TestFubonOrderGatewayPlaceOrder:
 
         result = gw.place_order(
             symbol="2330",
-            price=5800000,  # 580.0 * 10000
+            price=5800000,
             qty=1,
             side="Buy",
         )
@@ -81,7 +81,7 @@ class TestFubonOrderGatewayFutopt:
 
         result = gw.place_futopt_order(
             symbol="TXFA4",
-            price=200000000,  # 20000.0 * 10000
+            price=200000000,
             qty=2,
             side="Sell",
             tif="FOK",
@@ -142,7 +142,7 @@ class TestFubonOrderGatewayCancel:
         """Trade object missing order_id attribute should raise TypeError."""
         sdk = MagicMock()
         gw = FubonOrderGateway(sdk)
-        trade = MagicMock(spec=[])  # no attributes
+        trade = MagicMock(spec=[])
 
         with pytest.raises(TypeError, match="cannot extract order_id"):
             gw.cancel_order(trade)
@@ -394,5 +394,5 @@ class TestFubonOrderGatewayBatchPlaceOrders:
         orders = [self._make_order() for _ in range(3)]
         gw.batch_place_orders(orders)
 
-        assert mock_sleep.call_count == 2  # Between orders 0-1 and 1-2
+        assert mock_sleep.call_count == 2
         mock_sleep.assert_called_with(0.067)

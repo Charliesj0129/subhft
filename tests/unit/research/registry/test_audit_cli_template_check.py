@@ -14,8 +14,6 @@ from research.registry import audit_cli
 
 class TestTemplateCheck:
     def test_shipped_templates_pass(self) -> None:
-        # The live templates carry the full §3 field set (guarded in
-        # test_strategy_spec too) — the operator command must agree.
         for _shape, (path, _name) in audit_cli._SHAPE_TEMPLATES.items():
             if not Path(path).is_file():
                 pytest.skip(f"template not present: {path}")
@@ -27,7 +25,6 @@ class TestTemplateCheck:
     def test_drift_reported_when_template_missing_field(self, monkeypatch, tmp_path) -> None:
         import yaml
 
-        # A template that drops risk_control + cost_model.
         bad = tmp_path / "spec.bad.yaml"
         bad.write_text(
             yaml.safe_dump(

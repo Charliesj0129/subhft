@@ -15,10 +15,6 @@ from hft_platform.reports.collector import (
 )
 from hft_platform.reports.models import SessionData
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_collector() -> tuple[DataCollector, MagicMock]:
     """Return a DataCollector with a mocked _execute function."""
@@ -51,20 +47,15 @@ def _make_large_trade_row() -> list[tuple]:
     return [("2026-03-28 09:01:00", 2_000_000_000, 20, 1_990_000_000)]
 
 
-# ---------------------------------------------------------------------------
-# collect_core() — unit tests
-# ---------------------------------------------------------------------------
-
-
 class TestCollectCore:
     def test_returns_session_data(self) -> None:
         """collect_core() returns a SessionData instance."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            _make_ohlcv_row(),  # Q1
-            _make_bar_row(),  # Q2
-            _make_flow_row(),  # Q3
-            _make_large_trade_row(),  # Q4
+            _make_ohlcv_row(),
+            _make_bar_row(),
+            _make_flow_row(),
+            _make_large_trade_row(),
         ]
         result = collector.collect_core("TXFD6", "exch_ts > 0")
         assert isinstance(result, SessionData)
@@ -135,13 +126,11 @@ class TestCollectCore:
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
             _make_ohlcv_row(),
-            [],  # Q2 — empty bars
-            [],  # Q3
-            [],  # Q4
+            [],
+            [],
+            [],
         ]
         result = collector.collect_core("TXFD6", "exch_ts > 0")
-        # Row order: (open_ch, close_ch, low_ch, high_ch, volume, tick_count)
-        # CH open = 2_000_000_000 → platform = 2_000_000_000 // 100 = 20_000_000
         assert result.open == 20_000_000
         assert result.close == 20_500_000
         assert result.low == 19_000_000
@@ -151,10 +140,10 @@ class TestCollectCore:
         """collect_core() handles missing OHLCV data gracefully."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            [],  # Q1 — no data
-            [],  # Q2
-            [],  # Q3
-            [],  # Q4
+            [],
+            [],
+            [],
+            [],
         ]
         result = collector.collect_core("TXFD6", "exch_ts > 0")
         assert result.open == 0
@@ -184,22 +173,17 @@ class TestCollectCore:
         assert "FROM hft.market_data" not in sql
 
 
-# ---------------------------------------------------------------------------
-# collect() — delegation tests
-# ---------------------------------------------------------------------------
-
-
 class TestCollectDelegation:
     def test_collect_executes_6_queries(self) -> None:
         """collect() runs Q1-Q6, i.e. exactly 6 _execute calls."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            _make_ohlcv_row(),  # Q1
-            _make_bar_row(),  # Q2
-            _make_flow_row(),  # Q3
-            _make_large_trade_row(),  # Q4
-            [(1, 500)],  # Q5 spread
-            [(9, 10.0, 8.0)],  # Q6 depth
+            _make_ohlcv_row(),
+            _make_bar_row(),
+            _make_flow_row(),
+            _make_large_trade_row(),
+            [(1, 500)],
+            [(9, 10.0, 8.0)],
         ]
         result = collector.collect("day", "2026-03-28", "TXFD6")
         assert mock_execute.call_count == 6
@@ -300,11 +284,9 @@ class TestCollectDelegation:
             _make_large_trade_row(),
         ]
 
-        # collect_core call
         mock_execute.side_effect = rows[:]
         core = collector.collect_core("TXFD6", "exch_ts > 0", session="day", date="2026-03-28")
 
-        # collect call (same queries + Q5/Q6)
         mock_execute.side_effect = rows[:] + [[], []]
         full = collector.collect("day", "2026-03-28", "TXFD6")
 
@@ -317,11 +299,6 @@ class TestCollectDelegation:
         assert len(core.bars_5m) == len(full.bars_5m)
         assert len(core.flow_5m) == len(full.flow_5m)
         assert len(core.large_trades) == len(full.large_trades)
-
-
-# ---------------------------------------------------------------------------
-# _validate_time_filter() — unit tests
-# ---------------------------------------------------------------------------
 
 
 class TestValidateTimeFilter:
@@ -358,11 +335,6 @@ class TestValidateTimeFilter:
             collector.collect_core("TXFD6", "exch_ts > 0; DELETE FROM hft.market_data")
 
 
-# ---------------------------------------------------------------------------
-# _is_transient() — unit tests
-# ---------------------------------------------------------------------------
-
-
 class TestIsTransient:
     def test_connection_error_is_transient(self) -> None:
         """ConnectionError is treated as transient."""
@@ -391,11 +363,6 @@ class TestIsTransient:
     def test_memory_error_is_not_transient(self) -> None:
         """MemoryError (OOM) is NOT transient."""
         assert not _is_transient(MemoryError("OOM"))
-
-
-# ---------------------------------------------------------------------------
-# _with_retry() — unit tests
-# ---------------------------------------------------------------------------
 
 
 class TestWithRetry:

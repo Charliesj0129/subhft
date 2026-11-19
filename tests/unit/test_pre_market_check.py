@@ -10,19 +10,11 @@ import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Ensure scripts/ directory is importable
-# ---------------------------------------------------------------------------
 _SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import pre_market_check as pmc  # noqa: E402, I001
-
-
-# ---------------------------------------------------------------------------
-# Helper: build a minimal fake psutil virtual_memory namedtuple
-# ---------------------------------------------------------------------------
+import pre_market_check as pmc
 
 
 def _make_vm(available_gb: float, total_gb: float = 16.0) -> MagicMock:
@@ -33,11 +25,6 @@ def _make_vm(available_gb: float, total_gb: float = 16.0) -> MagicMock:
     return vm
 
 
-# ---------------------------------------------------------------------------
-# check_broker_connectivity
-# ---------------------------------------------------------------------------
-
-
 class TestBrokerCheck:
     """Tests for check_broker_connectivity()."""
 
@@ -46,7 +33,6 @@ class TestBrokerCheck:
         api_instance = MagicMock()
         api_instance.login.return_value = None
         api_instance.logout.return_value = None
-        # list_accounts returns a list of account objects with .margin attr
         acct = MagicMock()
         acct.margin = margin
         api_instance.list_accounts.return_value = [acct]
@@ -65,7 +51,6 @@ class TestBrokerCheck:
             "SHIOAJI_SECRET_KEY": "test_secret",
         }
         with patch.dict("os.environ", env), patch.object(pmc, "sj", sj_mock):
-            # SIGALRM not available on some platforms — patch signal to no-op
             with patch("signal.alarm"), patch("signal.signal"):
                 ok, detail = pmc.check_broker_connectivity()
         assert ok is True
@@ -98,11 +83,6 @@ class TestBrokerCheck:
             ok, detail = pmc.check_broker_connectivity()
         assert ok is False
         assert "not installed" in detail
-
-
-# ---------------------------------------------------------------------------
-# check_clickhouse
-# ---------------------------------------------------------------------------
 
 
 class TestClickhouseCheck:
@@ -150,11 +130,6 @@ class TestClickhouseCheck:
         assert "does not exist" in detail
 
 
-# ---------------------------------------------------------------------------
-# check_redis
-# ---------------------------------------------------------------------------
-
-
 class TestRedisCheck:
     """Tests for check_redis()."""
 
@@ -182,11 +157,6 @@ class TestRedisCheck:
             ok, detail = pmc.check_redis(host="localhost", port=6379)
         assert ok is False
         assert "unreachable" in detail.lower()
-
-
-# ---------------------------------------------------------------------------
-# check_disk_space
-# ---------------------------------------------------------------------------
 
 
 class TestDiskSpaceCheck:
@@ -230,11 +200,6 @@ class TestDiskSpaceCheck:
         assert ok is True
 
 
-# ---------------------------------------------------------------------------
-# check_reconciliation
-# ---------------------------------------------------------------------------
-
-
 class TestReconciliationCheck:
     """Tests for check_reconciliation()."""
 
@@ -254,7 +219,6 @@ class TestReconciliationCheck:
 
     def test_reconciliation_no_table_passes(self) -> None:
         """Table doesn't exist (first run) → PASS."""
-        # system.tables returns count=0 (table absent)
         with patch("urllib.request.urlopen", side_effect=self._make_responses("0")):
             ok, detail = pmc.check_reconciliation()
         assert ok is True
@@ -262,7 +226,6 @@ class TestReconciliationCheck:
 
     def test_reconciliation_match_passes(self) -> None:
         """Table exists, yesterday status = MATCH → PASS."""
-        # First query: table count=1; second query: status=MATCH
         with patch("urllib.request.urlopen", side_effect=self._make_responses("1", "MATCH")):
             ok, detail = pmc.check_reconciliation()
         assert ok is True
@@ -280,11 +243,6 @@ class TestReconciliationCheck:
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
             ok, detail = pmc.check_reconciliation()
         assert ok is True
-
-
-# ---------------------------------------------------------------------------
-# check_system_resources
-# ---------------------------------------------------------------------------
 
 
 class TestSystemResourcesCheck:
@@ -326,11 +284,6 @@ class TestSystemResourcesCheck:
             ok, detail = pmc.check_system_resources()
         assert ok is False
         assert "psutil" in detail
-
-
-# ---------------------------------------------------------------------------
-# main() integration — minimal smoke tests
-# ---------------------------------------------------------------------------
 
 
 class TestMain:

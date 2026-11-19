@@ -33,16 +33,9 @@ def _make_store_with_positions(entries: list[tuple[str, str, str, int]]) -> Posi
 
 
 def _make_service(client, store) -> ReconciliationService:
-    # broker_zero_debounce_observations=1 so broker-empty snapshots aren't silently
-    # swallowed on first observation (default=2 would hide the discrepancy).
     return ReconciliationService(
         client, store, {"reconciliation": {"broker_zero_debounce_observations": 1}}, storm_guard=StormGuard()
     )
-
-
-# ---------------------------------------------------------------------------
-# DEBUG breakdown is always logged
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -53,7 +46,6 @@ async def test_per_strategy_breakdown_logged_no_discrepancy():
     exist the drift attribution still fires at WARNING (see below).
     """
     client = MagicMock()
-    # Broker reports 10 of 2330
     client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=10, direction="Action.Buy")]
 
     store = _make_store_with_positions([("acc1", "strat_a", "2330", 10)])
@@ -65,7 +57,6 @@ async def test_per_strategy_breakdown_logged_no_discrepancy():
     debug_messages = [c[0][0] for c in mock_logger.debug.call_args_list]
     assert "Portfolio Sync: Per-strategy position breakdown" in debug_messages
 
-    # Verify the breakdown content has the right strategy
     debug_kwargs = {c[0][0]: c[1] for c in mock_logger.debug.call_args_list if c[0]}
     breakdown_kwargs = debug_kwargs.get("Portfolio Sync: Per-strategy position breakdown", {})
     assert "strat_a" in breakdown_kwargs.get("strategies", [])
@@ -97,16 +88,10 @@ async def test_per_strategy_breakdown_contains_all_strategies():
     assert "strat_b" in strategies
 
 
-# ---------------------------------------------------------------------------
-# WARNING attribution when discrepancies exist
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_drift_attribution_logged_at_warning_when_discrepancy():
     """When discrepancies exist, per-strategy attribution is logged at WARNING."""
     client = MagicMock()
-    # Broker: 2330=5, local: 2330=10 (strat_a=7, strat_b=3)
     client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=5, direction="Action.Buy")]
 
     store = _make_store_with_positions(
@@ -125,7 +110,6 @@ async def test_drift_attribution_logged_at_warning_when_discrepancy():
         f"Expected drift attribution warning, got: {warning_messages}"
     )
 
-    # Validate attribution content includes drifting symbol
     drift_call = next(c for c in mock_logger.warning.call_args_list if c[0][0] == "Per-strategy drift attribution")
     assert "2330" in drift_call[1].get("drifting_symbols", [])
 
@@ -134,7 +118,6 @@ async def test_drift_attribution_logged_at_warning_when_discrepancy():
 async def test_drift_attribution_identifies_contributing_strategies():
     """Attribution includes the specific strategies contributing to drifting symbol."""
     client = MagicMock()
-    # Broker: 2330=0, local: 2330=15 (strat_mm=10, strat_arb=5)
     client.get_positions.return_value = []
 
     store = _make_store_with_positions(
@@ -154,17 +137,11 @@ async def test_drift_attribution_identifies_contributing_strategies():
     )
     assert drift_call is not None, "Expected per-strategy drift attribution WARNING"
     attribution = drift_call[1].get("attribution", {})
-    # Both strategies should appear under the drifting symbol
     assert "2330" in attribution
     assert "strat_mm" in attribution["2330"]
     assert "strat_arb" in attribution["2330"]
     assert attribution["2330"]["strat_mm"] == 10
     assert attribution["2330"]["strat_arb"] == 5
-
-
-# ---------------------------------------------------------------------------
-# No drift attribution warning when positions match
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -183,16 +160,10 @@ async def test_no_attribution_warning_when_no_discrepancy():
     assert "Per-strategy drift attribution" not in warning_messages
 
 
-# ---------------------------------------------------------------------------
-# Only strategies with non-zero qty appear in attribution
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_attribution_excludes_zero_position_strategies():
     """Strategies with zero net_qty for a drifting symbol are excluded from attribution."""
     client = MagicMock()
-    # Broker: 2330=0; local: 2330=5 (strat_a=5, strat_b=0)
     client.get_positions.return_value = []
 
     store = _make_store_with_positions(
@@ -213,6 +184,5 @@ async def test_attribution_excludes_zero_position_strategies():
     assert drift_call is not None
     attribution = drift_call[1].get("attribution", {})
     assert "2330" in attribution
-    # strat_b has qty=0, should NOT appear
     assert "strat_b" not in attribution.get("2330", {})
     assert "strat_a" in attribution.get("2330", {})

@@ -11,10 +11,6 @@ import yaml
 
 from hft_platform.alpha.canary import CanaryMonitor, CanaryStatus
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_canary_yaml(tmp_path: Path, alpha_id: str, weight: float, extra: dict[str, Any] | None = None) -> Path:
     """Write a minimal canary YAML and return its path."""
@@ -47,11 +43,6 @@ def _make_status(alpha_id: str, state: str) -> CanaryStatus:
     )
 
 
-# ---------------------------------------------------------------------------
-# Immutability tests
-# ---------------------------------------------------------------------------
-
-
 class TestApplyDecisionImmutability:
     """Original canary dict returned by _find_canary must not be mutated."""
 
@@ -67,7 +58,6 @@ class TestApplyDecisionImmutability:
         status = _make_status("alpha_rb", "rolled_back")
         monitor.apply_decision(status)
 
-        # original dict must be unchanged
         assert original["weight"] == original_weight_before
         assert original["enabled"] == original_enabled_before
 
@@ -100,11 +90,6 @@ class TestApplyDecisionImmutability:
         assert ("rollback" in original) == original_has_rollback
 
 
-# ---------------------------------------------------------------------------
-# Atomic write tests
-# ---------------------------------------------------------------------------
-
-
 class TestApplyDecisionAtomicWrite:
     """YAML must be written atomically (temp file → rename)."""
 
@@ -118,7 +103,6 @@ class TestApplyDecisionAtomicWrite:
         written = yaml.safe_load(yaml_path.read_text())
         assert written["weight"] == 0.0
         assert written["enabled"] is False
-        # Internal _path key must NOT be persisted
         assert "_path" not in written
 
     def test_escalated_writes_next_tier(self, tmp_path: Path) -> None:
@@ -129,7 +113,6 @@ class TestApplyDecisionAtomicWrite:
         monitor.apply_decision(status)
 
         written = yaml.safe_load(yaml_path.read_text())
-        # 0.02 → next tier is 0.05
         assert written["weight"] == pytest.approx(0.05)
         assert "_path" not in written
 
@@ -191,11 +174,6 @@ class TestApplyDecisionAtomicWrite:
         assert tmp_files == [], f"Temp file not cleaned up: {tmp_files}"
 
 
-# ---------------------------------------------------------------------------
-# No-op / hold state
-# ---------------------------------------------------------------------------
-
-
 class TestApplyDecisionHold:
     def test_hold_state_no_file_change(self, tmp_path: Path) -> None:
         yaml_path = _make_canary_yaml(tmp_path, "alpha_hold", weight=0.02)
@@ -203,7 +181,7 @@ class TestApplyDecisionHold:
 
         mtime_before = yaml_path.stat().st_mtime
 
-        status = _make_status("alpha_hold", "canary")  # hold — no-op
+        status = _make_status("alpha_hold", "canary")
         monitor.apply_decision(status)
 
         assert yaml_path.stat().st_mtime == mtime_before
@@ -212,8 +190,6 @@ class TestApplyDecisionHold:
         monitor = _make_monitor(tmp_path)
         status = _make_status("nonexistent_alpha", "rolled_back")
 
-        # Should not raise; just log a warning
         monitor.apply_decision(status)
 
-        # Unknown alpha — no config was written or modified
         assert list(tmp_path.iterdir()) == []

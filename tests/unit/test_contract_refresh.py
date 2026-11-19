@@ -18,10 +18,6 @@ from unittest.mock import MagicMock, patch
 
 from hft_platform.feed_adapter import shioaji_client as mod
 
-# ---------------------------------------------------------------------------
-# Helpers: build a minimal ShioajiClient without calling __init__
-# ---------------------------------------------------------------------------
-
 
 def _bare_client() -> mod.ShioajiClient:
     """Create a ShioajiClient instance bypassing __init__ (test pattern)."""
@@ -33,8 +29,6 @@ def _bare_client() -> mod.ShioajiClient:
     client.MAX_SUBSCRIPTIONS = 200
     client.subscribed_codes: set[str] = set()
     client.subscribed_count = 0
-    # L2: production type is ``collections.deque``; use the same here so
-    # ``.append`` / ``.popleft`` behave the same.
     from collections import deque
 
     client._failed_sub_symbols: deque = deque()
@@ -45,7 +39,6 @@ def _bare_client() -> mod.ShioajiClient:
     client._contract_cache_path = "config/contracts.json"
     client._contract_refresh_running = False
     client._contract_refresh_thread = None
-    # Required by the retry-loop guards added for Bug-3 fix
     client.logged_in = True
     client._callbacks_registered = True
     client._event_callback_registered = True
@@ -53,21 +46,14 @@ def _bare_client() -> mod.ShioajiClient:
     return client
 
 
-# ---------------------------------------------------------------------------
-# C1: Dead metric incremented on contract-not-found
-# ---------------------------------------------------------------------------
-
-
 def test_dead_metric_incremented():
     """When _get_contract returns None, shioaji_contract_lookup_errors_total is incremented."""
     client = _bare_client()
 
-    # Setup metrics mock with the expected counter attribute
     mock_counter = MagicMock()
     mock_counter.labels.return_value = MagicMock()
     client.metrics.shioaji_contract_lookup_errors_total = mock_counter
 
-    # Patch _get_contract to return None (contract not found)
     with patch.object(client, "_get_contract", return_value=None):
         result = client._subscribe_symbol({"code": "TXO23300B6", "exchange": "TAIFEX"}, cb=MagicMock())
 
@@ -76,23 +62,16 @@ def test_dead_metric_incremented():
     mock_counter.labels.return_value.inc.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# C2: Failed subscription tracking
-# ---------------------------------------------------------------------------
-
-
 def test_failed_sub_tracked():
     """When _subscribe_symbol fails, the symbol is added to _failed_sub_symbols."""
     client = _bare_client()
 
-    # Ensure metrics attribute exists so C1 path doesn't error
     client.metrics.shioaji_contract_lookup_errors_total = MagicMock()
     client.metrics.shioaji_contract_lookup_errors_total.labels.return_value = MagicMock()
 
     sym = {"code": "TXO_BAD", "exchange": "TAIFEX"}
 
     with patch.object(client, "_subscribe_symbol", return_value=False):
-        # Simulate the subscribe_basket failure-tracking logic
         if not client._subscribe_symbol(sym, cb=None):
             client._failed_sub_symbols.append(sym)
 
@@ -101,7 +80,6 @@ def test_failed_sub_tracked():
 
 def test_retry_thread_resolves_symbols(monkeypatch):
     """_start_sub_retry_thread: succeeds on second attempt → _failed_sub_symbols cleared."""
-    # D1 per-symbol backoff schedule starts at 60s; shrink for test wall-clock budget.
     from hft_platform.feed_adapter.shioaji import quote_runtime as _qr
 
     monkeypatch.setattr(_qr.QuoteRuntime, "_RETRY_BACKOFF_SCHEDULE_S", (0.05, 0.05, 0.05))
@@ -115,15 +93,13 @@ def test_retry_thread_resolves_symbols(monkeypatch):
 
     def mock_subscribe(s, cb):
         call_count["n"] += 1
-        return call_count["n"] >= 2  # fail first, succeed second
+        return call_count["n"] >= 2
 
-    # Direct instance assignment so the thread sees it even after any context manager exits
     client._subscribe_symbol = mock_subscribe
-    client._contract_retry_s = 0.05  # very short interval for test speed
+    client._contract_retry_s = 0.05
 
     client._start_sub_retry_thread(cb=MagicMock())
 
-    # Wait for the retry thread to finish (up to 5 seconds on slower CI runners)
     deadline = time.monotonic() + 5.0
     while client._sub_retry_running and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -134,15 +110,10 @@ def test_retry_thread_resolves_symbols(monkeypatch):
     assert "TXO_RETRY" in client.subscribed_codes
 
 
-# ---------------------------------------------------------------------------
-# C3: Contract cache staleness detection
-# ---------------------------------------------------------------------------
-
-
 def test_stale_cache_detected(tmp_path: Path):
     """contracts.json older than refresh_s → _is_contract_cache_stale() returns True."""
     client = _bare_client()
-    client._contract_refresh_s = 3600.0  # 1 hour
+    client._contract_refresh_s = 3600.0
 
     cache_file = tmp_path / "contracts.json"
     import datetime
@@ -157,7 +128,7 @@ def test_stale_cache_detected(tmp_path: Path):
 def test_fresh_cache_not_stale(tmp_path: Path):
     """contracts.json updated 1 hour ago and refresh_s=86400 → not stale."""
     client = _bare_client()
-    client._contract_refresh_s = 86400.0  # 24 hours
+    client._contract_refresh_s = 86400.0
 
     cache_file = tmp_path / "contracts.json"
     import datetime

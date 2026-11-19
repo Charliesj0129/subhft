@@ -198,10 +198,10 @@ mod tests {
             cb.record_failure("s1", 1_000_000_000 * i);
         }
         assert_eq!(cb.get_state("s1"), STATE_HALTED);
-        // Before cooldown
+
         let (reenable, _) = cb.check_cooldown("s1", 10_000_000_000);
         assert!(!reenable);
-        // After cooldown
+
         let (reenable, state) = cb.check_cooldown("s1", 20_000_000_000);
         assert!(reenable);
         assert_eq!(state, STATE_DEGRADED);

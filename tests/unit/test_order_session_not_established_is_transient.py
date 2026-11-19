@@ -32,9 +32,6 @@ import pytest
 
 from hft_platform.order.adapter import OrderAdapter
 
-# Verbatim from the production log. Kept whole rather than trimmed: the point of
-# the regression is that the real string classifies correctly, and a paraphrase
-# would let the same gap reopen unnoticed.
 PRODUCTION_ERROR = (
     "place_order: Shioaji error Session error SolClient send request "
     "api/v1/paper/place_order, code: NotReady, Error ErrorInfo { "
@@ -60,7 +57,6 @@ class TestTheSessionErrorClassifiesAsTransient:
             "SubCode(SessionNotEstablished)",
             "Unable to wait for session to be established",
             "session not established",
-            # The SDK is inconsistent about case; the classifier lowercases.
             "SESSIONNOTESTABLISHED",
         ],
     )
@@ -75,8 +71,6 @@ class TestTheSessionErrorClassifiesAsTransient:
             "Invalid account",
             "insufficient margin",
             "contract not found",
-            # A rejection naming the session must NOT be swept in: the broker
-            # refusing an order is not a session that has yet to come up.
             "order rejected: session closed for this product",
         ],
     )

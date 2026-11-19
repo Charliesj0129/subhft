@@ -16,10 +16,6 @@ from unittest.mock import MagicMock, patch
 
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard, StormGuardState
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_storm_guard(cooldown_s: float = 30.0, de_n: int = 5) -> StormGuard:
     """Create a StormGuard with test-friendly hysteresis params via env vars."""
@@ -37,11 +33,6 @@ def _make_storm_guard(cooldown_s: float = 30.0, de_n: int = 5) -> StormGuard:
     return sg
 
 
-# ---------------------------------------------------------------------------
-# StormGuard tests
-# ---------------------------------------------------------------------------
-
-
 def test_escalation_is_instant():
     """feed_gap above threshold → single update() call → STORM immediately."""
     sg = _make_storm_guard(cooldown_s=30.0, de_n=5)
@@ -54,30 +45,26 @@ def test_escalation_is_instant():
 
 def test_deescalation_requires_n_clears():
     """After STORM, N-1 clear evals keep state STORM; N-th clear triggers NORMAL."""
-    sg = _make_storm_guard(cooldown_s=0.0, de_n=5)  # cooldown=0 so only N matters
+    sg = _make_storm_guard(cooldown_s=0.0, de_n=5)
 
-    # Escalate
     sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
-    # N-1 clear evals: should still be STORM
     for _ in range(4):
         state = sg.update()
         assert state == StormGuardState.STORM, "Should remain STORM before reaching N clears"
 
-    # N-th clear eval: should transition to NORMAL
     state = sg.update()
     assert state == StormGuardState.NORMAL
 
 
 def test_cooldown_blocks_recovery():
     """Even after N clear evals, cooldown not elapsed → stays STORM."""
-    sg = _make_storm_guard(cooldown_s=9999.0, de_n=1)  # huge cooldown
+    sg = _make_storm_guard(cooldown_s=9999.0, de_n=1)
 
     sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
-    # Attempt many clears — cooldown not elapsed so counter always resets
     for _ in range(20):
         state = sg.update()
         assert state == StormGuardState.STORM, "Cooldown should block recovery"
@@ -85,16 +72,14 @@ def test_cooldown_blocks_recovery():
 
 def test_cooldown_elapsed_allows_recovery():
     """After cooldown elapses, N consecutive clears → NORMAL."""
-    sg = _make_storm_guard(cooldown_s=0.001, de_n=3)  # very short cooldown
+    sg = _make_storm_guard(cooldown_s=0.001, de_n=3)
 
     sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
-    # Wait for cooldown
     time.sleep(0.01)
 
-    # Monkeypatch _storm_entry_ts to be far in the past (already done by sleep above)
-    sg._storm_entry_ts = sg._storm_entry_ts - 10.0  # push it further back
+    sg._storm_entry_ts = sg._storm_entry_ts - 10.0
 
     for i in range(3):
         state = sg.update()
@@ -108,16 +93,13 @@ def test_escalation_resets_counter():
     """Partial de-escalation progress is lost when a new escalation occurs."""
     sg = _make_storm_guard(cooldown_s=0.0, de_n=5)
 
-    # Escalate
     sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.1)
     assert sg.state == StormGuardState.STORM
 
-    # Make 3 clear evals (counter = 3)
     for _ in range(3):
         sg.update()
     assert sg._de_escalate_count == 3
 
-    # Escalate again (new feed gap spike) → counter must reset
     sg.update(feed_gap_s=sg.thresholds.feed_gap_storm_s + 0.5)
     assert sg._de_escalate_count == 0
     assert sg.state == StormGuardState.STORM

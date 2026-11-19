@@ -252,7 +252,7 @@ def test_normalize_bidask_tuple_with_synth_no_asks():
         pytest.skip("rust_core.normalize_bidask_tuple_with_synth not available")
 
     scale = 100
-    tick_size_scaled = 1  # 1 tick = 1 unit in scaled space
+    tick_size_scaled = 1
     synthetic_ticks = 1
 
     bid_prices = np.array([100.0, 99.5], dtype=np.float64)
@@ -277,12 +277,12 @@ def test_normalize_bidask_tuple_with_synth_no_asks():
     bids = np.asarray(result[2])
     asks = np.asarray(result[3])
     assert bids.shape[0] == 2
-    assert asks.shape[0] == 1  # synthesized
+    assert asks.shape[0] == 1
 
     best_bid = int(bids[0, 0])
     synth_ask = int(asks[0, 0])
     assert synth_ask == best_bid + tick_size_scaled * synthetic_ticks
-    assert int(asks[0, 1]) == 1  # 1-lot
+    assert int(asks[0, 1]) == 1
 
     synthesized = result[13]
     assert synthesized is True
@@ -317,7 +317,7 @@ def test_normalize_bidask_tuple_with_synth_no_bids():
 
     bids = np.asarray(result[2])
     asks = np.asarray(result[3])
-    assert bids.shape[0] == 1  # synthesized
+    assert bids.shape[0] == 1
     assert asks.shape[0] == 2
 
     best_ask = int(asks[0, 0])
@@ -355,9 +355,8 @@ def test_normalize_bidask_tuple_with_synth_both_sides():
     asks = np.asarray(result[3])
     assert bids.shape[0] == 1
     assert asks.shape[0] == 1
-    assert result[13] is False  # not synthesized
+    assert result[13] is False
 
-    # Stats should match non-synth version
     rs_np = rc.normalize_bidask_tuple_np(
         "2330",
         1700000000,
@@ -367,7 +366,6 @@ def test_normalize_bidask_tuple_with_synth_both_sides():
         ask_vols,
         scale,
     )
-    # Compare stats fields (indices 6..12)
     for i in range(6, 13):
         assert result[i] == pytest.approx(rs_np[i])
 

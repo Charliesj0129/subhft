@@ -76,14 +76,8 @@ def _fill(
     )
 
 
-# ---------------------------------------------------------------------------
-# Recovery merge
-# ---------------------------------------------------------------------------
-
-
 def test_recovery_merge_leaves_another_strategys_lot_in_place():
     store = PositionStore()
-    # Stored under the broker id, so only the suffix fallback can match it.
     store.load_recovery("shioaji", "TMFK6", 1, PX, strategy_id="OTHER")
 
     store.on_fill(_fill(strategy_id="R47"))
@@ -105,16 +99,11 @@ def test_recovery_merge_still_matches_the_same_strategy_across_account_domains()
 def test_recovery_merge_keeps_the_lot_when_the_key_already_has_a_position():
     store = PositionStore()
     store.on_fill(_fill(fill_id="D1"))
-    store.load_recovery("F1", "TMFK6", 1, PX)  # legacy entry, no strategy
+    store.load_recovery("F1", "TMFK6", 1, PX)
 
     store.on_fill(_fill(fill_id="D2"))
 
-    assert store.net_qty_for_symbol("TMFK6") == 3  # 2 traded + 1 still parked
-
-
-# ---------------------------------------------------------------------------
-# One view for every reader
-# ---------------------------------------------------------------------------
+    assert store.net_qty_for_symbol("TMFK6") == 3
 
 
 def test_reconciliation_reads_positions_and_recovery_in_one_snapshot():
@@ -155,10 +144,6 @@ def test_startup_verify_counts_a_parked_recovery_lot_as_local():
     assert verifier._build_local_map() == {"TMFJ6": 1}
 
 
-# ---------------------------------------------------------------------------
-# Checkpoint identity
-# ---------------------------------------------------------------------------
-
 PAPER = checkpoint_identity(broker_id="shioaji", account_id="ACC", order_mode="sim")
 LIVE = checkpoint_identity(broker_id="shioaji", account_id="ACC", order_mode="live")
 
@@ -195,7 +180,7 @@ def test_the_writer_stamps_the_identity_into_the_hashed_body(tmp_path):
 
     data = PositionCheckpointWriter.load_checkpoint(path)
 
-    assert data is not None  # sha256 still verifies with the identity inside
+    assert data is not None
     assert data["identity"] == PAPER
 
 
@@ -241,11 +226,6 @@ async def test_recovery_restores_a_checkpoint_with_the_same_identity(tmp_path):
     await verifier.recover(trading_date="20261023", account_id="ACC")
 
     assert store._peak_equity_scaled == 200_000_000
-
-
-# ---------------------------------------------------------------------------
-# Router: apply, then mark seen; fees reach the daily-loss feed
-# ---------------------------------------------------------------------------
 
 
 def _router(store: Any, normalizer: Any, risk_engine: Any = None) -> ExecutionRouter:
@@ -304,7 +284,7 @@ async def test_a_fill_whose_apply_raised_is_applied_when_replayed():
     normalizer.normalize_fill = MagicMock(return_value=_fill())
     router = _router(store, normalizer)
 
-    await _drain(router, 2)  # the broker replays the same deal
+    await _drain(router, 2)
 
     assert store.net_qty_for_symbol("TMFK6", "R47") == 1
 
@@ -334,6 +314,5 @@ async def test_the_daily_loss_feed_nets_the_fee_off_a_closing_fill():
 
     await _drain(router, 1)
 
-    # +5 points x 10 NTD/point on TMF = 50 NTD gross, minus an 18 NTD fee.
     multiplier = store.metadata.contract_multiplier("TMFK6")
     risk.notify_fill_pnl.assert_called_once_with("R47", 5 * SCALE * multiplier - 18 * SCALE)

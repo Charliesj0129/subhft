@@ -58,7 +58,6 @@ def _quote(ts: int, bid: float, ask: float, qty: float = 1.0) -> list[tuple]:
 
 
 def _clear(ts: int, bid: float, ask: float) -> list[tuple]:
-    # Zero-qty rows retire the previous top-of-book level (per extract logic).
     return [
         (BID_DEPTH, ts, ts, bid, 0.0, 0, 0, 0.0),
         (ASK_DEPTH, ts, ts, ask, 0.0, 0, 0, 0.0),
@@ -84,13 +83,10 @@ def _build_compression_then_break(*, direction: int) -> np.ndarray:
             rows.append(_trade(ts + 1_000_000_000, ask if direction > 0 else bid))
         prev = (bid, ask)
 
-    # Baseline window (0-30m): wide swings -> high realized vol.
     for minute, mid in [(1, 100.0), (5, 130.0), (9, 95.0), (14, 135.0), (18, 90.0), (22, 120.0), (27, 98.0)]:
         push(minute, mid - 0.5, mid + 0.5)
-    # Compression window (30-60m): tiny swings around 110 -> low realized vol.
     for minute, mid in [(31, 110.0), (35, 110.5), (40, 109.5), (45, 110.2), (50, 109.8), (55, 110.1)]:
         push(minute, mid - 0.5, mid + 0.5)
-    # Break window (60-90m): decisive directional move beyond coil range +/- 8pt.
     if direction > 0:
         breaks = [(62, 121.0), (70, 130.0), (78, 134.0), (85, 138.0)]
     else:
@@ -129,32 +125,26 @@ def test_t1b_candidate_has_governed_fixed_spec():
 def test_detects_long_break_out_of_compression_coil():
     bbo, trades = extract_bbo_and_trades(_build_compression_then_break(direction=1))
 
-    events = detect_vol_compression_events(
-        bbo, trades, contract="TXFC6", date="2026-03-03", config=_config()
-    )
+    events = detect_vol_compression_events(bbo, trades, contract="TXFC6", date="2026-03-03", config=_config())
 
     assert len(events) >= 1
     ev = events[0]
     assert ev.regime_type == "T1-B_vol_compression_expansion"
     assert ev.direction == 1
-    # Compression range high carried in the reused opening_range_high field.
     assert ev.opening_range_high <= 111.0
-    assert ev.realized_vol_ratio <= 0.70  # genuine compression
+    assert ev.realized_vol_ratio <= 0.70
 
 
 def test_detects_short_break_out_of_compression_coil():
     bbo, trades = extract_bbo_and_trades(_build_compression_then_break(direction=-1))
 
-    events = detect_vol_compression_events(
-        bbo, trades, contract="TXFC6", date="2026-03-03", config=_config()
-    )
+    events = detect_vol_compression_events(bbo, trades, contract="TXFC6", date="2026-03-03", config=_config())
 
     assert len(events) >= 1
     assert events[0].direction == -1
 
 
 def test_no_event_when_volatility_does_not_compress():
-    # Replace the coil window with continued wide swings -> ratio > 0.70.
     rows: list[tuple] = []
     prev: tuple[float, float] | None = None
 
@@ -167,23 +157,31 @@ def test_no_event_when_volatility_does_not_compress():
         prev = (mid - 0.5, mid + 0.5)
 
     for minute, mid in [
-        (1, 100.0), (6, 130.0), (11, 95.0), (16, 135.0), (21, 90.0), (26, 120.0),
-        (31, 100.0), (37, 132.0), (43, 96.0), (49, 134.0), (55, 92.0),  # still wide
-        (62, 150.0), (70, 160.0), (85, 170.0),
+        (1, 100.0),
+        (6, 130.0),
+        (11, 95.0),
+        (16, 135.0),
+        (21, 90.0),
+        (26, 120.0),
+        (31, 100.0),
+        (37, 132.0),
+        (43, 96.0),
+        (49, 134.0),
+        (55, 92.0),
+        (62, 150.0),
+        (70, 160.0),
+        (85, 170.0),
     ]:
         push(minute, mid)
     bbo, trades = extract_bbo_and_trades(np.array(rows, dtype=HFTBT_DTYPE))
 
-    events = detect_vol_compression_events(
-        bbo, trades, contract="TXFC6", date="2026-03-03", config=_config()
-    )
+    events = detect_vol_compression_events(bbo, trades, contract="TXFC6", date="2026-03-03", config=_config())
 
     assert events == []
 
 
 def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     txf = _build_compression_then_break(direction=1)
-    # TMF book: enter long at ask, exit on bid path; build a clean +N pt move.
     tmf_rows: list[tuple] = []
     prev: tuple[float, float] | None = None
     for minute, mid in [(62, 110.0), (77, 130.0), (92, 132.0)]:
@@ -282,7 +280,6 @@ def test_summarizer_marks_undersized_sample_needs_more_days():
     assert summary["verdict"] == "NEEDS-MORE-DAYS"
     assert summary["hard_gate"]["events_ok"] is False
     assert summary["hard_gate"]["cross_contract_complete"] is False
-    # Edge floor IS reported even on an undersized sample.
     assert summary["edge_floor_cleared"] is True
     assert summary["research_decision"]["status"] == "needs_more_sample"
     assert "min_sample_size" in summary["research_decision"]["evidence"]

@@ -51,11 +51,6 @@ _SRC = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# The property that matters: a bind-mounted edit must move the sha             #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_editing_a_source_file_changes_the_code_sha(tmp_path: Path) -> None:
     """The exact scenario the image sha cannot see: one ``scp``'d file."""
@@ -116,11 +111,6 @@ def test_bytecode_and_data_files_are_not_part_of_the_identity(tmp_path: Path) ->
     assert after.file_count == before.file_count
 
 
-# --------------------------------------------------------------------------- #
-# Reproducible by hand — the point of using git's own object hash              #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git to cross-check the blob hash")
 def test_a_files_component_is_exactly_what_git_hash_object_prints(tmp_path: Path) -> None:
@@ -146,11 +136,6 @@ def test_the_digest_is_sha256_over_sorted_path_and_blob_lines(tmp_path: Path) ->
         expected.update(f"{rel} {blob}\n".encode())
 
     assert compute_code_identity(root).sha == expected.hexdigest()[:12]
-
-
-# --------------------------------------------------------------------------- #
-# It runs during boot, so it may never raise                                   #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
@@ -186,11 +171,6 @@ def test_an_unreadable_file_moves_the_sha_rather_than_vanishing(tmp_path: Path) 
 
     assert after.sha != before
     assert after.file_count == 3, "the file is still counted, just not trusted"
-
-
-# --------------------------------------------------------------------------- #
-# What the process actually reports                                            #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit

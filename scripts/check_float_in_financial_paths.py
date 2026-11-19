@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
 """Float gate for the money-touching packages (Law 4: prices and accounting values are scaled int x10000).
 
-Flags ``: float`` annotations and ``float(`` calls in ``order/``, ``risk/``, ``execution/`` and
-``feed_adapter/normalizer.py``. A flagged line passes only when
-
-* ``scripts/float_gate_exemptions.yaml`` lists it (file + exact code text with the comment removed, at most
-  ``count`` lines, a ``kind`` and a non-empty ``reason``), or
-* it carries ``# precision-ok: <reason>`` with a non-empty reason.
-
-An exemption that matches fewer lines than it claims fails the gate, so the list cannot go stale silently, and a
-new float line fails until somebody writes down why it is fine. This replaces a shell pipeline of 49
-``grep -v`` substrings that were matched against ``file:line:text``: a word in a path or a free-text comment
-(``precision-``, ``normalizer``) exempted a whole line, or a whole file.
+Checks float annotations and conversions in the money-touching packages.
+The checked-in policy lists each accepted use by path, exact code, and count.
 
 Exit codes: 0 clean, 1 findings or a bad exemption file, 2 unreadable input.
 """
@@ -37,7 +28,6 @@ SCAN = (
     "src/hft_platform/feed_adapter/normalizer.py",
 )
 PATTERN = re.compile(r":\s*float\b|float\(")
-MARKER = re.compile(r"#\s*precision-ok\b(?P<rest>.*)$")
 KINDS = frozenset({"not-money", "offline-only", "boundary-conversion", "known-violation"})
 NEEDS_TRACKING = frozenset({"boundary-conversion", "known-violation"})
 
@@ -47,22 +37,19 @@ class Hit:
     path: str
     line: int
     code: str
-    marker: str | None  # reason text of a valid inline marker
-    bare_marker: bool  # ``# precision-ok`` without a reason
 
 
 class InputError(Exception):
     pass
 
 
-def _comments(path: Path) -> dict[int, tuple[int, str]]:
-    """Line number -> (column, text) of the comment on that line, from the tokenizer (strings are not comments)."""
-    found: dict[int, tuple[int, str]] = {}
+def _comment_columns(path: Path) -> dict[int, int]:
+    found: dict[int, int] = {}
     try:
-        with tokenize.open(path) as fh:  # text mode: same newline handling and BOM stripping as scan() below
+        with tokenize.open(path) as fh:
             for tok in tokenize.generate_tokens(fh.readline):
                 if tok.type == tokenize.COMMENT:
-                    found[tok.start[0]] = (tok.start[1], tok.string)
+                    found[tok.start[0]] = tok.start[1]
     except (OSError, UnicodeDecodeError, tokenize.TokenError, SyntaxError) as exc:
         raise InputError(f"cannot tokenize {path}: {exc}") from exc
     return found
@@ -80,28 +67,16 @@ def scan(root: Path, targets: tuple[str, ...] = SCAN) -> list[Hit]:
             raise InputError(f"scan target does not exist: {target}")
         for file in files:
             rel = file.relative_to(root).as_posix()
-            comments = _comments(file)
+            columns = _comment_columns(file)
             try:
-                # Not str.splitlines(): it also breaks on \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029, which the
-                # tokenizer does not, so every later line would be numbered differently from the comments above.
                 with file.open(encoding="utf-8-sig", newline=None) as fh:
                     lines = fh.read().split("\n")
             except (OSError, UnicodeDecodeError) as exc:
                 raise InputError(f"cannot read {rel}: {exc}") from exc
             for number, line in enumerate(lines, 1):
-                comment = comments.get(number)
-                code = (line[: comment[0]] if comment else line).rstrip()
-                if not PATTERN.search(code):
-                    continue
-                marker = None
-                bare = False
-                if comment:
-                    match = MARKER.search(comment[1])
-                    if match:
-                        rest = match.group("rest").strip()
-                        marker = rest[1:].strip() or None if rest.startswith(":") else None
-                        bare = marker is None
-                hits.append(Hit(rel, number, code.strip(), marker, bare))
+                code = line[: columns.get(number)].strip()
+                if PATTERN.search(code):
+                    hits.append(Hit(rel, number, code))
     return hits
 
 
@@ -155,16 +130,13 @@ def check(root: Path, exemptions: Path, targets: tuple[str, ...] = SCAN) -> tupl
     covered: dict[tuple[str, str], int] = defaultdict(int)
 
     for hit in hits:
-        if hit.marker:
-            kinds["inline-marker"] += 1
-            continue
         key = (hit.path, hit.code)
         entry = table.get(key)
         if entry is not None and covered[key] < entry["count"]:
             covered[key] += 1
             kinds[str(entry.get("kind"))] += 1
             continue
-        why = "'# precision-ok' needs ': <reason>'" if hit.bare_marker else "not exempt"
+        why = "not exempt"
         if entry is not None:
             why = f"exemption covers {entry['count']} line(s), this is another one"
         findings.append(f"{hit.path}:{hit.line}: {hit.code}  [{why}]")
@@ -193,8 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         for item in findings:
             print(f"  {item}", file=sys.stderr)
         print(
-            "Use a scaled int, or add '# precision-ok: <reason>' to the line, or list it in "
-            f"{args.exemptions.name} with a reason.",
+            "Use a scaled int for money values. See docs/guides/source-code-policy.md.",
             file=sys.stderr,
         )
     for item in errors:

@@ -57,7 +57,7 @@ def _stub_metrics() -> MagicMock:
 class _StubFillEvent:
     fill_id: str = "FILL_ORPHAN_1"
     order_id: str = "BROKER_v002UNK"
-    strategy_id: str = "UNKNOWN"  # ← the orphan condition
+    strategy_id: str = "UNKNOWN"
     symbol: str = "TMFE6"
     account_id: str = "acct_F002002_6117"
     ingest_ts_ns: int = 1_000_000_000
@@ -80,7 +80,7 @@ def _make_router_with_recorder(metrics: MagicMock) -> tuple[ExecutionRouter, asy
     router = ExecutionRouter(
         bus=bus,
         raw_queue=asyncio.Queue(maxsize=100),
-        order_id_map={},  # empty → forces UNKNOWN if normalizer doesn't resolve
+        order_id_map={},
         position_store=position_store,
         terminal_handler=MagicMock(),
         risk_engine=None,
@@ -88,7 +88,7 @@ def _make_router_with_recorder(metrics: MagicMock) -> tuple[ExecutionRouter, asy
         symbol_metadata=sym_meta,
     )
     router.metrics = metrics
-    router._phantom_resolver = None  # force DLQ path (no phantom resolution)
+    router._phantom_resolver = None
     return router, recorder_q
 
 
@@ -123,7 +123,6 @@ async def test_orphaned_fill_is_recorded_to_clickhouse_queue() -> None:
                 router._run_loop_iteration() if hasattr(router, "_run_loop_iteration") else router.run(), timeout=0.5
             )
 
-        # Cleaner: drive one loop iteration manually
         try:
             router.running = True
             task = asyncio.create_task(router.run())
@@ -137,7 +136,6 @@ async def test_orphaned_fill_is_recorded_to_clickhouse_queue() -> None:
         except (RuntimeError, asyncio.CancelledError):
             pass
 
-    # The orphan fill MUST have been queued to recorder
     assert not recorder_q.empty(), (
         "Orphaned fill (strategy_id=UNKNOWN) was NOT written to recorder_queue. "
         "This is the bug — fills disappear from hft.fills when order_key is unresolved."
@@ -147,6 +145,5 @@ async def test_orphaned_fill_is_recorded_to_clickhouse_queue() -> None:
     assert item["data"]["strategy_id"] == "UNKNOWN"
     assert item["data"]["fill_id"] == fill.fill_id
 
-    # AND the existing DLQ behavior is preserved
     mock_dlq.return_value.add.assert_called_once()
     metrics.orphaned_fill_total.inc.assert_called()

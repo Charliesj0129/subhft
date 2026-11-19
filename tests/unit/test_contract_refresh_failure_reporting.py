@@ -40,11 +40,6 @@ def _clean_login_slot():
     reset_login_slot_for_tests()
 
 
-# --------------------------------------------------------------------------- #
-# _ensure_contracts                                                            #
-# --------------------------------------------------------------------------- #
-
-
 def _client(tmp_path: Path):
     from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
@@ -59,11 +54,11 @@ def test_ensure_contracts_returns_false_when_sdk_call_fails(tmp_path: Path):
     """A raising fetch is a failure even though api.Contracts still exists."""
     c = _client(tmp_path)
     api = MagicMock()
-    api.Contracts = MagicMock()  # login-time contracts are still attached
+    api.Contracts = MagicMock()
     api.fetch_contracts = MagicMock(side_effect=RuntimeError("exclusive access lost"))
     c.api = api
 
-    assert c.contracts_ready is True  # the old return value — always True
+    assert c.contracts_ready is True
     assert c._ensure_contracts() is False
 
 
@@ -93,7 +88,6 @@ def test_ensure_contracts_is_refused_while_a_previous_worker_is_abandoned(tmp_pa
     api.fetch_contracts = MagicMock()
     c.api = api
     c._sdk_busy_grace_s = 0.0
-    # A previous call timed out and its worker is still inside the SDK.
     c._sdk_inflight.record_abandoned("login", threading.Event())
 
     assert c._ensure_contracts() is False
@@ -109,11 +103,6 @@ def test_ensure_contracts_returns_true_on_a_clean_fetch(tmp_path: Path):
 
     assert c._ensure_contracts() is True
     api.fetch_contracts.assert_called_once_with(contract_download=True)
-
-
-# --------------------------------------------------------------------------- #
-# refresh_contracts_and_symbols                                                #
-# --------------------------------------------------------------------------- #
 
 
 def _refresh_client(tmp_path: Path, *, cached_contracts: list[dict] | None = None):

@@ -30,8 +30,6 @@ from hft_platform.core import timebase
 from hft_platform.order.adapter import _GUARD_TIMEOUT, OrderAdapter, _is_typed_order_cmd_frame
 from hft_platform.order.deadletter import RejectionReason
 
-# ── Fixtures ───────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def tmp_config(tmp_path):
@@ -112,9 +110,6 @@ def _make_cmd(
     )
 
 
-# ── _is_typed_order_cmd_frame ──────────────────────────────────────────────
-
-
 def test_is_typed_frame_valid():
     frame = ("typed_order_cmd_v1", 1, 2, 3, 4, "payload")
     assert _is_typed_order_cmd_frame(frame) is True
@@ -141,18 +136,11 @@ def test_is_typed_frame_exactly_six_elements():
     assert _is_typed_order_cmd_frame(frame) is True
 
 
-# ── _get_trace_sampler ImportError ─────────────────────────────────────────
-
-
 def test_get_trace_sampler_import_error_returns_none():
     from hft_platform.order import adapter as adapter_mod
 
     result = adapter_mod._get_trace_sampler()
-    # diagnostics.trace module is present in this env; sampler is returned (not None)
     assert result is not None
-
-
-# ── metadata property setter ───────────────────────────────────────────────
 
 
 def test_metadata_setter_rebuilds_price_codec(tmp_config):
@@ -168,9 +156,6 @@ def test_metadata_setter_rebuilds_price_codec(tmp_config):
         assert adapter._metadata is new_meta
         mock_psp.assert_called_once_with(new_meta)
         mock_pc.assert_called_once()
-
-
-# ── run() loop ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -236,7 +221,7 @@ async def test_run_expired_deadline_skips_execute(tmp_config):
     expired_cmd = OrderCommand(
         cmd_id=cmd.cmd_id,
         intent=cmd.intent,
-        deadline_ns=1,  # already expired
+        deadline_ns=1,
         storm_guard_state=cmd.storm_guard_state,
         created_ns=cmd.created_ns,
     )
@@ -251,9 +236,6 @@ async def test_run_expired_deadline_skips_execute(tmp_config):
         pass
 
     adapter.execute.assert_not_called()
-
-
-# ── drain_and_cancel ───────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -280,9 +262,8 @@ async def test_drain_and_cancel_cancel_timeout(tmp_config):
     """TimeoutError during cancel is caught and logged."""
     adapter = _make_adapter(tmp_config)
 
-    # Use a short sleep that exceeds the drain timeout but doesn't block teardown
     def slow_cancel(trade):
-        _time.sleep(0.05)  # longer than timeout_s=0.01 but short enough for cleanup
+        _time.sleep(0.05)
 
     adapter.client.cancel_order = slow_cancel
 
@@ -290,7 +271,7 @@ async def test_drain_and_cancel_cancel_timeout(tmp_config):
         adapter.live_orders["s1:1"] = {"seq_no": "X"}
 
     result = await adapter.drain_and_cancel(timeout_s=0.01)
-    assert result == 0  # timed out, not cancelled
+    assert result == 0
 
 
 @pytest.mark.asyncio
@@ -318,9 +299,6 @@ async def test_drain_and_cancel_drains_order_queue(tmp_config):
     assert adapter.order_queue.empty()
 
 
-# ── on_terminal_state ──────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_on_terminal_state_removes_live_order(tmp_config):
     adapter = _make_adapter(tmp_config)
@@ -335,12 +313,9 @@ async def test_on_terminal_state_removes_live_order(tmp_config):
 @pytest.mark.asyncio
 async def test_on_terminal_state_missing_key_no_error(tmp_config):
     adapter = _make_adapter(tmp_config)
-    await adapter.on_terminal_state("s1", "nonexistent")  # Must not raise
+    await adapter.on_terminal_state("s1", "nonexistent")
     async with adapter._live_orders_lock:
         assert "s1:nonexistent" not in adapter.live_orders
-
-
-# ── _register_broker_ids ───────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -397,9 +372,6 @@ async def test_register_broker_ids_nested_order(tmp_config):
         assert adapter.order_id_map.get("NESTED_SEQ") == "s1:3"
 
 
-# ── _add_to_dlq exception paths ────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_add_to_dlq_type_error_logged(tmp_config):
     """TypeError from DLQ is caught and logged."""
@@ -407,7 +379,7 @@ async def test_add_to_dlq_type_error_logged(tmp_config):
     adapter._dlq.add.side_effect = TypeError("bad type")
 
     intent = _make_cmd().intent
-    await adapter._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "test")  # Must not raise
+    await adapter._add_to_dlq(intent, RejectionReason.RATE_LIMIT, "test")
     assert adapter._dlq.add.call_count == 1
 
 
@@ -418,11 +390,8 @@ async def test_add_to_dlq_os_error_logged(tmp_config):
     adapter._dlq.add.side_effect = OSError("disk full")
 
     intent = _make_cmd().intent
-    await adapter._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "test")  # Must not raise
+    await adapter._add_to_dlq(intent, RejectionReason.CIRCUIT_BREAKER, "test")
     assert adapter._dlq.add.call_count == 1
-
-
-# ── _validate_client ───────────────────────────────────────────────────────
 
 
 def test_validate_client_new_order_valid(tmp_config):
@@ -466,11 +435,8 @@ def test_validate_client_fallthrough_unknown_type(tmp_config):
     """Unknown intent_type (not NEW/CANCEL/AMEND) returns True."""
     adapter = _make_adapter(tmp_config)
     intent = MagicMock(spec=OrderIntent)
-    intent.intent_type = 99  # not NEW/CANCEL/AMEND
+    intent.intent_type = 99
     assert adapter._validate_client(intent) is True
-
-
-# ── _dispatch_to_api exchange fallback ────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -540,7 +506,7 @@ async def test_dispatch_ca_not_active_rejected(tmp_config):
     client = MagicMock()
     client.get_exchange = MagicMock(return_value="TSE")
     client.place_order = MagicMock(return_value={})
-    client.mode = "live"  # Not simulation
+    client.mode = "live"
     client.activate_ca = True
     client.ca_active = False
 
@@ -593,9 +559,6 @@ async def test_dispatch_broker_error_increments_reject(tmp_config):
     await adapter._dispatch_to_api(cmd)
 
     adapter.metrics.order_reject_total.inc.assert_called()
-
-
-# ── _call_api semaphore timeout ────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -676,9 +639,6 @@ async def test_call_api_success(tmp_config):
     assert result == "success_value"
 
 
-# ── submit_typed_command_nowait ────────────────────────────────────────────
-
-
 def test_submit_typed_command_nowait_invalid_frame(tmp_config):
     """Invalid frame raises ValueError."""
     adapter = _make_adapter(tmp_config)
@@ -701,26 +661,22 @@ def test_submit_typed_command_nowait_not_a_tuple(tmp_config):
         adapter.submit_typed_command_nowait("not a tuple")  # type: ignore[arg-type]
 
 
-# ── _emit_trace ────────────────────────────────────────────────────────────
-
-
 def test_emit_trace_no_sampler(tmp_config):
     adapter = _make_adapter(tmp_config)
     adapter._trace_sampler = None
     intent = _make_cmd().intent
-    adapter._emit_trace("stage", intent, {"k": "v"})  # Must not raise
+    adapter._emit_trace("stage", intent, {"k": "v"})
     assert adapter._trace_sampler is None
 
 
 def test_emit_trace_exception_swallowed(tmp_config):
     adapter = _make_adapter(tmp_config)
     sampler = MagicMock()
-    # L5: order-bearing _emit_trace bypasses sample_every via emit_always.
     sampler.emit_always.side_effect = TypeError("bad")
     adapter._trace_sampler = sampler
     intent = _make_cmd().intent
-    adapter._emit_trace("stage", intent, {})  # Must not raise
-    assert sampler.emit_always.called  # confirms emit_always was attempted before exception
+    adapter._emit_trace("stage", intent, {})
+    assert sampler.emit_always.called
 
 
 def test_emit_trace_with_sampler(tmp_config):
@@ -729,11 +685,7 @@ def test_emit_trace_with_sampler(tmp_config):
     adapter._trace_sampler = sampler
     intent = _make_cmd().intent
     adapter._emit_trace("order_dispatch_start", intent, {"cmd_id": 1, "intent_type": 0})
-    # L5: order-bearing traces use emit_always, not emit.
     sampler.emit_always.assert_called_once()
-
-
-# ── _api_worker exception handler ──────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -750,20 +702,15 @@ async def test_api_worker_continues_after_unexpected_exception(tmp_config):
         call_count += 1
         if call_count == 1:
             raise KeyError("unexpected broker field missing")
-        # second call succeeds silently
 
     adapter._dispatch_to_api = dispatch_side_effect
 
-    # Put commands one at a time with a small gap so they are processed in
-    # separate loop iterations (coalesce window is 0 by default).
     cmd1 = _make_cmd(intent_id=1)
     adapter._api_queue.put_nowait(cmd1)
 
     task = asyncio.create_task(adapter._api_worker())
-    # Allow the first item (which raises) to be processed
     await asyncio.sleep(0.02)
 
-    # Now put second command — worker must still be alive to receive it
     cmd2 = _make_cmd(intent_id=2)
     adapter._api_queue.put_nowait(cmd2)
     await asyncio.sleep(0.02)
@@ -775,12 +722,7 @@ async def test_api_worker_continues_after_unexpected_exception(tmp_config):
     except asyncio.CancelledError:
         pass
 
-    # Worker processed both items (continued after first exception)
     assert call_count == 2
-    # Bug D' hygiene: NEW intents are phantom candidates → _handle_dispatch_exception
-    # does NOT inflate order_reject_total or trip circuit_breaker (the order may
-    # have reached the broker; counting it as a real reject corrupts dashboards).
-    # Phantom-candidate counter IS incremented instead.
     adapter.metrics.order_reject_total.inc.assert_not_called()
     adapter.circuit_breaker.record_failure.assert_not_called()
     adapter.metrics.phantom_order_candidates_total.inc.assert_called()
@@ -810,9 +752,7 @@ async def test_api_worker_materialize_exception_increments_metrics(tmp_config):
     adapter.running = True
     adapter.circuit_breaker = MagicMock()
 
-    # Put a typed frame that will cause _materialize_typed_command to raise
     with patch.object(adapter, "_materialize_typed_command", side_effect=ValueError("bad frame")):
-        # Use a typed frame so _materialize_typed_command is called
         typed_frame = ("typed_order_cmd_v1", 0, 0, 0, 0, None)
         adapter._api_queue.put_nowait(typed_frame)
 

@@ -72,7 +72,7 @@ class TestPlaybookPositionDrift:
 
         assert len(discrepancies) == 1
         assert discrepancies[0].symbol == "2330"
-        assert discrepancies[0].diff == 5  # local - broker
+        assert discrepancies[0].diff == 5
 
     def test_consecutive_drift_triggers_reduce_only(self, controller) -> None:
         """Consecutive non-critical drift observations trigger reduce-only mode."""
@@ -97,7 +97,6 @@ class TestPlaybookPositionDrift:
         """ReconciliationService.grace_failures is configurable and defaults to 10."""
         assert recon_service.grace_failures == 10
 
-        # Override via config
         mock_client = MagicMock()
         mock_position_store = MagicMock()
         mock_position_store.positions = {}

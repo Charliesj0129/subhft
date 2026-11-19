@@ -9,21 +9,11 @@ import pytest
 WEBHOOK_URL = "https://hooks.example.com/test-channel"
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def sender():
     from hft_platform.notifications.webhook import WebhookSender
 
     return WebhookSender(url=WEBHOOK_URL, timeout=5.0)
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -44,14 +34,10 @@ async def test_webhook_send_posts_json() -> None:
     mock_aiohttp.ClientSession = mock_client_session_cls
     mock_aiohttp.ClientTimeout = MagicMock()
 
-    # Patch sys.modules AND reimport webhook so it picks up the mock aiohttp.
-    # This is needed because in full test suite runs, other tests may have
-    # already caused aiohttp stub to be cached differently in sys.modules.
     import importlib
     import sys
 
     with patch.dict(sys.modules, {"aiohttp": mock_aiohttp}):
-        # Re-import webhook module to force fresh aiohttp resolution
         import hft_platform.notifications.webhook as webhook_mod
 
         importlib.reload(webhook_mod)

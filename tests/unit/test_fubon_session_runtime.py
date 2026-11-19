@@ -12,10 +12,6 @@ from hft_platform.feed_adapter.fubon import session_runtime
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSessionRuntime
 from tests.unit.time_stub import sleepless_time
 
-# ------------------------------------------------------------------ #
-# Helpers
-# ------------------------------------------------------------------ #
-
 
 def _make_sdk(
     login_ok: bool = True,
@@ -34,11 +30,6 @@ def _make_sdk(
     return sdk
 
 
-# ------------------------------------------------------------------ #
-# Login success / failure
-# ------------------------------------------------------------------ #
-
-
 class TestLogin:
     def test_login_success(self) -> None:
         sdk = _make_sdk(login_ok=True)
@@ -55,7 +46,7 @@ class TestLogin:
         sdk = _make_sdk()
         rt = FubonSessionRuntime(sdk)
 
-        result = rt.login()  # no creds, no env vars
+        result = rt.login()
 
         assert result is False
         assert rt.is_logged_in is False
@@ -110,11 +101,6 @@ class TestLogin:
         sdk.login.assert_called_once_with("explicit_key", "explicit_pwd", "")
 
 
-# ------------------------------------------------------------------ #
-# Retry logic
-# ------------------------------------------------------------------ #
-
-
 class TestLoginWithRetry:
     def test_retry_succeeds_first_attempt(self) -> None:
         sdk = _make_sdk(login_ok=True)
@@ -127,7 +113,6 @@ class TestLoginWithRetry:
 
     def test_retry_succeeds_on_second_attempt(self) -> None:
         sdk = MagicMock()
-        # First call fails, second succeeds
         sdk.login.side_effect = [
             ConnectionError("fail"),
             SimpleNamespace(data=["ACCT"]),
@@ -163,7 +148,6 @@ class TestLoginWithRetry:
         ):
             rt.login_with_retry(max_retries=4, backoff_base_s=1.0, api_key="k", password="p")
 
-        # 3 sleeps between 4 attempts: 1s, 2s, 4s
         assert sleep_calls == [1.0, 2.0, 4.0]
 
     def test_retry_with_custom_backoff(self) -> None:
@@ -180,11 +164,6 @@ class TestLoginWithRetry:
             rt.login_with_retry(max_retries=3, backoff_base_s=0.5, api_key="k", password="p")
 
         assert sleep_calls == [0.5, 1.0]
-
-
-# ------------------------------------------------------------------ #
-# Reconnect + cooldown
-# ------------------------------------------------------------------ #
 
 
 class TestReconnect:
@@ -207,9 +186,7 @@ class TestReconnect:
         rt = FubonSessionRuntime(sdk, config={"reconnect_cooldown_s": 100.0})
 
         with patch.object(session_runtime, "time", sleepless_time()):
-            # First reconnect succeeds
             assert rt.reconnect(reason="first", force=True) is True
-            # Second reconnect blocked by cooldown
             assert rt.reconnect(reason="second") is False
 
     def test_reconnect_cooldown_bypass_with_force(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,11 +210,6 @@ class TestReconnect:
             assert rt.reconnect(reason="initial") is True
 
 
-# ------------------------------------------------------------------ #
-# Logout
-# ------------------------------------------------------------------ #
-
-
 class TestLogout:
     def test_logout_sets_logged_in_false(self) -> None:
         sdk = _make_sdk(login_ok=True)
@@ -256,14 +228,9 @@ class TestLogout:
         rt = FubonSessionRuntime(sdk)
         rt._logged_in = True
 
-        rt.logout()  # should not raise
+        rt.logout()
 
         assert rt.is_logged_in is False
-
-
-# ------------------------------------------------------------------ #
-# Refresh token
-# ------------------------------------------------------------------ #
 
 
 class TestRefreshToken:
@@ -274,7 +241,7 @@ class TestRefreshToken:
 
         result = rt.refresh_token()
 
-        assert result is False  # login() called without creds/env → fails
+        assert result is False
         sdk.logout.assert_called_once()
 
     def test_refresh_token_with_creds_in_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,11 +256,6 @@ class TestRefreshToken:
 
         assert result is True
         sdk.logout.assert_called_once()
-
-
-# ------------------------------------------------------------------ #
-# State transitions
-# ------------------------------------------------------------------ #
 
 
 class TestStateTransitions:
@@ -313,11 +275,6 @@ class TestStateTransitions:
 
         rt.logout()
         assert rt.is_logged_in is False
-
-
-# ------------------------------------------------------------------ #
-# Snapshot
-# ------------------------------------------------------------------ #
 
 
 class TestSnapshot:

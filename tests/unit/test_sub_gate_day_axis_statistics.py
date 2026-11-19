@@ -71,7 +71,6 @@ def test_winning_day_pct_counts_a_split_day_once() -> None:
         {"date": "2026-05-02", "pnl_pts": -8.0},
     ]
     result = WinningDayPctGate().evaluate(_result(rows), None, {})
-    # Two days, one of them net positive -> 50%. Row-counting gives 1/3 = 33%.
     assert result.metrics["winning_day_pct"] == 50.0
 
 
@@ -79,8 +78,6 @@ def test_max_drawdown_walks_the_day_equity_curve_not_a_fabricated_intraday_path(
     """Rows within a date have no ordering, so they must not create a trough."""
     rows = [
         {"date": "2026-05-01", "pnl_pts": 100.0},
-        # Same day: a -60 row ordered after +40 fabricates a drawdown that the
-        # day (net -20) never had as a separate low point.
         {"date": "2026-05-02", "pnl_pts": 40.0},
         {"date": "2026-05-02", "pnl_pts": -60.0},
         {"date": "2026-05-03", "pnl_pts": 30.0},
@@ -150,6 +147,5 @@ def test_cost_uncertainty_still_drops_non_traded_rows_when_aggregating() -> None
         {"date": "2026-05-03", "pnl_pts": 6.0, "fills": 1},
     ]
     result = CostUncertaintyGate().evaluate(_result(rows), None, {"cost_uncertainty_p95_lower_bound_min_pts": 0.0})
-    # 05-01 and 05-03 traded; 05-02 did not. 05-03 keeps only its filled row.
     assert result.metrics["n_days"] == 2
     assert result.metrics["mean_daily_pnl_pts"] == 8.0

@@ -8,7 +8,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-# Try importing Rust kernels; fall back to Python implementations
 try:
     from hft_platform.rust_core import (
         apply_latency_to_positions as rust_apply_latency,
@@ -46,9 +45,6 @@ def _py_apply_latency(desired: np.ndarray, submit_steps: int) -> np.ndarray:
     return executed
 
 
-# ---------------------------------------------------------------------------
-# Python baseline tests (always run)
-# ---------------------------------------------------------------------------
 class TestPythonBaseline:
     def test_signals_to_positions_empty(self):
         result = py_signals_to_positions(np.array([]), 0.5, 3)
@@ -62,7 +58,7 @@ class TestPythonBaseline:
         assert pos[2] == 2.0
         assert pos[3] == 1.0
         assert pos[4] == 0.0
-        assert pos[5] == 0.0  # holds at 0
+        assert pos[5] == 0.0
 
     def test_signals_to_positions_clamp(self):
         signals = np.ones(10)
@@ -72,7 +68,6 @@ class TestPythonBaseline:
     def test_apply_latency_basic(self):
         desired = np.array([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0])
         executed = _py_apply_latency(desired, 2)
-        # Position change at i=2 arrives at i=4
         assert executed[2] == 0.0
         assert executed[3] == 0.0
         assert executed[4] == 1.0
@@ -85,9 +80,6 @@ class TestPythonBaseline:
         assert len(r1) == len(desired)
 
 
-# ---------------------------------------------------------------------------
-# Rust parity tests (skipped if Rust not built)
-# ---------------------------------------------------------------------------
 @pytest.mark.skipif(not RUST_AVAILABLE, reason="Rust backtest_kernels not built")
 class TestRustParity:
     def test_signals_to_positions_parity(self):

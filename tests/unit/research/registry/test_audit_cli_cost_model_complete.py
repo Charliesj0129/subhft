@@ -66,7 +66,6 @@ class TestCostModelCompleteFunction:
         assert set(missing) == {"latency_profile", "fee_bps", "tax_bps", "slippage_pts"}
 
     def test_none_fee_knob_is_flagged(self, _isolated) -> None:
-        # An unset fee_bps serialises as "None" in the id.
         _record(run_id="nofee", cost_model_id="measured+Nonebp/2.0bp/1.0pts")
         ok, missing = audit_cli.cost_model_complete(_row("nofee"))
         assert ok is False

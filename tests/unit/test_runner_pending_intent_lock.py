@@ -49,9 +49,6 @@ async def test_concurrent_increments_no_lost_writes():
 
     async def _bump() -> None:
         async with runner._get_pending_lock(sid):
-            # Force a yield between read and write to expose any race that
-            # would survive without the lock — if two tasks share the lock
-            # this still serialises correctly.
             current = runner._strategy_pending_intents.get(sid, 0)
             await asyncio.sleep(0)
             runner._strategy_pending_intents[sid] = current + per_task
@@ -78,7 +75,6 @@ async def test_increment_and_drain_serialised():
             runner._strategy_pending_intents[sid] = runner._strategy_pending_intents.get(sid, 0) + 1
 
     async def _drain_once() -> None:
-        # Yield first so some increments race ahead.
         await asyncio.sleep(0)
         async with runner._get_pending_lock(sid):
             value = runner._strategy_pending_intents.get(sid, 0)
@@ -88,11 +84,9 @@ async def test_increment_and_drain_serialised():
                 drained_at.append(value)
 
     await asyncio.gather(_drain_once(), *[_bump() for _ in range(contributors)])
-    # Total = drained + remaining must equal contributors.
     drained_sum = sum(drained_at)
     remaining = runner._strategy_pending_intents.get(sid, 0)
     assert drained_sum + remaining == contributors
-    # int_m.inc must have been called with the same totals as drained_at.
     inc_args = [call.args[0] for call in int_m.inc.call_args_list]
     assert inc_args == drained_at
 
@@ -109,7 +103,6 @@ async def test_setdefault_lock_construction_is_safe_under_race():
         return runner._get_pending_lock(sid)
 
     locks = await asyncio.gather(*[_grab() for _ in range(10)])
-    # All 10 references must point to the same lock instance.
     first = locks[0]
     assert all(lock is first for lock in locks)
     assert runner._pending_intent_locks[sid] is first

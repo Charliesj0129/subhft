@@ -111,11 +111,6 @@ def _arm_sweep(adapter: OrderAdapter) -> None:
     adapter._live_orders_last_sweep_s = 0.0
 
 
-# --------------------------------------------------------------------------- #
-# Adapter: the fill finishes the order                                         #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.asyncio
 async def test_a_full_fill_removes_the_order_from_live_orders(tmp_config):
     adapter = _adapter(tmp_config)
@@ -165,7 +160,7 @@ async def test_the_sweep_skips_the_release_when_the_fill_was_seen_but_the_order_
     sink: asyncio.Queue = asyncio.Queue(maxsize=64)
     adapter.set_rejection_sink(sink)
     key = _register_live(adapter, _intent(), age_s=_TTL_S + 1)
-    adapter._record_fill_ledger(key, 1)  # the fill arrived; completion did not run
+    adapter._record_fill_ledger(key, 1)
     _arm_sweep(adapter)
 
     evicted = await adapter.sweep_stale_live_orders()
@@ -229,7 +224,7 @@ async def test_a_reject_that_trails_the_fill_is_ignored_even_with_a_new_order_in
     key = _register_live(adapter, _intent(intent_id=1))
     adapter.order_id_resolver.order_id_map["ORD1"] = key
     await adapter.on_order_fill(key, 1)
-    adapter._pending_order_keys.add(f"{_SID}:2")  # the next quote is being dispatched
+    adapter._pending_order_keys.add(f"{_SID}:2")
 
     await adapter.on_terminal_state(_SID, "ORD1")
 
@@ -250,15 +245,10 @@ def test_the_fill_ledger_is_bounded(tmp_config):
 
 def test_a_ledger_entry_expires(tmp_config):
     adapter = _adapter(tmp_config)
-    adapter._fill_ledger_ttl_s = -1.0  # every entry is already older than its TTL
+    adapter._fill_ledger_ttl_s = -1.0
     adapter._record_fill_ledger(f"{_SID}:1", 1)
 
     assert adapter.filled_qty_for(f"{_SID}:1") == 0
-
-
-# --------------------------------------------------------------------------- #
-# Router: the reject that follows a fill reports the quantity that traded      #
-# --------------------------------------------------------------------------- #
 
 
 def _order_event(*, status: OrderStatus, filled: int = 0, key: str = f"{_SID}:1") -> OrderEvent:
@@ -294,7 +284,7 @@ def test_a_reject_after_a_fill_reports_nothing_remaining():
     tracker.filled_qty_for.return_value = 1
     router.set_fill_tracker(tracker)
     event = _order_event(status=OrderStatus.FAILED)
-    assert event.remaining_qty == 1  # what Shioaji's payload yields today
+    assert event.remaining_qty == 1
 
     router._apply_fill_ledger(event)
 
@@ -335,15 +325,10 @@ def test_an_order_event_without_a_client_order_id_is_not_looked_up():
     tracker.filled_qty_for.assert_not_called()
 
 
-# --------------------------------------------------------------------------- #
-# End to end: deal -> router -> adapter -> a cancel reject -> R47 pending      #
-# --------------------------------------------------------------------------- #
-
-
 async def _run_router(router: ExecutionRouter, settle_s: float = 0.2) -> None:
     router.running = True
     task = asyncio.create_task(router.run())
-    await asyncio.sleep(settle_s)  # let the loop drain the queue; run() has no one-shot mode
+    await asyncio.sleep(settle_s)
     router.running = False
     task.cancel()
     try:
@@ -426,9 +411,9 @@ async def test_r47_pending_is_released_once_when_a_cancel_is_rejected_after_the_
     assert orders[0].remaining_qty == 0, "the order traded in full; nothing is left to release"
 
     strat = R47MakerStrategy(strategy_id=_SID, max_pos=1)
-    strat._pending_buy["TMFJ6"] = 1  # the live order occupies the slot
+    strat._pending_buy["TMFJ6"] = 1
     strat.on_fill(fills[0])
     assert strat._pending_buy["TMFJ6"] == 0
-    strat._pending_buy["TMFJ6"] = 1  # a NEW order now rests in the slot the fill freed
+    strat._pending_buy["TMFJ6"] = 1
     strat.on_order(orders[0])
     assert strat._pending_buy["TMFJ6"] == 1, "a reject for the filled order must not free the new order's slot"

@@ -9,10 +9,6 @@ import pytest
 
 from hft_platform.services.bootstrap import SystemBootstrapper
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture()
 def _sim_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -51,7 +47,6 @@ def _mock_services():
     for p in patches:
         m = p.start()
         started.append(p)
-        # Extract short name from target, e.g. "hft_platform.services.bootstrap.RingBufferBus" -> "RingBufferBus"
         name = p.attribute
         mocks[name] = m
     yield mocks
@@ -62,17 +57,11 @@ def _mock_services():
 def _build_with_mocks(
     settings: dict | None = None,
     monkeypatch: pytest.MonkeyPatch | None = None,
-) -> "ServiceRegistry":  # noqa: F821
+) -> "ServiceRegistry":
     """Build a ServiceRegistry with all external deps mocked."""
     bootstrapper = SystemBootstrapper(settings if settings is not None else {})
-    # Bypass Redis session ownership check
     with patch.object(bootstrapper, "_check_session_ownership", return_value=False):
         return bootstrapper.build()
-
-
-# ---------------------------------------------------------------------------
-# Build flow — service graph completeness
-# ---------------------------------------------------------------------------
 
 
 class TestBuildServiceGraph:
@@ -144,8 +133,6 @@ class TestBuildServiceGraph:
         monitor = registry.position_stuck_monitor
         assert monitor is not None
 
-        # One short TMFD6 lot carried from 37800 while the mid sits at 37900:
-        # 100 points against, at 10 NTD per point, is -1000 NTD.
         assert monitor._estimate_unrealized_ntd("TMFI6", -1, 378_000_000) == -1000
 
     @pytest.mark.usefixtures("_sim_env")
@@ -193,11 +180,6 @@ class TestBuildServiceGraph:
 
     @pytest.mark.usefixtures("_sim_env", "_mock_services")
     def test_build_wires_startup_verifier_to_durable_checkpoint_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # This test's subject is the *unset-env* default, so it has to opt out
-        # of the autouse ``_isolate_execution_state_paths`` fixture that points
-        # every other test's checkpoint into its tmp dir. Safe here: both the
-        # writer and the verifier are mocked, so the literal path is only ever
-        # inspected as a call kwarg, never opened.
         monkeypatch.delenv("HFT_POSITION_CHECKPOINT_PATH", raising=False)
         with (
             patch("hft_platform.execution.checkpoint.PositionCheckpointWriter") as writer_cls,
@@ -228,11 +210,6 @@ class TestBuildServiceGraph:
         settings: dict = {}
         registry = _build_with_mocks(settings=settings)
         assert settings.get("runtime_role") == "engine"
-
-
-# ---------------------------------------------------------------------------
-# Queue wiring
-# ---------------------------------------------------------------------------
 
 
 class TestQueueWiring:
@@ -271,7 +248,6 @@ class TestQueueWiring:
     def test_raw_queue_passed_to_market_data_service(self, _mock_services: dict) -> None:
         registry = _build_with_mocks()
         md_cls = _mock_services["MarketDataService"]
-        # MarketDataService(bus, raw_queue, md_client, ...) — raw_queue is 2nd positional arg
         call_args = md_cls.call_args
         assert call_args is not None
         assert call_args[0][1] is registry.raw_queue
@@ -282,7 +258,6 @@ class TestQueueWiring:
         risk_cls = _mock_services["RiskEngine"]
         call_args = risk_cls.call_args
         assert call_args is not None
-        # RiskEngine(risk_path, risk_queue, order_queue, price_scale_provider)
         assert call_args[0][1] is registry.risk_queue
 
     @pytest.mark.usefixtures("_sim_env")
@@ -290,9 +265,7 @@ class TestQueueWiring:
         registry = _build_with_mocks()
         risk_cls = _mock_services["RiskEngine"]
         order_cls = _mock_services["OrderAdapter"]
-        # RiskEngine 3rd positional = order_queue
         assert risk_cls.call_args[0][2] is registry.order_queue
-        # OrderAdapter(adapter_path, order_queue, order_client, order_id_map)
         assert order_cls.call_args[0][1] is registry.order_queue
 
     @pytest.mark.usefixtures("_sim_env")
@@ -300,11 +273,6 @@ class TestQueueWiring:
         registry = _build_with_mocks()
         rec_cls = _mock_services["RecorderService"]
         assert rec_cls.call_args[0][0] is registry.recorder_queue
-
-
-# ---------------------------------------------------------------------------
-# Broker client injection
-# ---------------------------------------------------------------------------
 
 
 class TestBrokerInjection:
@@ -317,7 +285,6 @@ class TestBrokerInjection:
         monkeypatch.setenv("HFT_FEATURE_ENGINE_ENABLED", "0")
         registry = _build_with_mocks()
         facade_cls = _mock_services["ShioajiClientFacade"]
-        # engine role: ShioajiClientFacade called twice (md + order)
         assert facade_cls.call_count == 2
         assert registry.broker_id == "shioaji"
 
@@ -370,11 +337,6 @@ class TestBrokerInjection:
         assert registry.md_client.login() is False
 
 
-# ---------------------------------------------------------------------------
-# Health server lifecycle
-# ---------------------------------------------------------------------------
-
-
 class TestHealthServerLifecycle:
     """Verify HealthServer start/stop via HFTSystem (lightweight check)."""
 
@@ -390,13 +352,8 @@ class TestHealthServerLifecycle:
         from hft_platform.observability.health import HealthServer
 
         hs = HealthServer(system=None)
-        hs.stop()  # Should not raise
+        hs.stop()
         assert hs._server is None
-
-
-# ---------------------------------------------------------------------------
-# Error cases
-# ---------------------------------------------------------------------------
 
 
 class TestBuildErrorCases:
@@ -421,11 +378,6 @@ class TestBuildErrorCases:
         monkeypatch.setenv("HFT_BROKER", "")
         with pytest.raises(ValueError, match="Unknown HFT_BROKER"):
             _build_with_mocks()
-
-
-# ---------------------------------------------------------------------------
-# Config loading chain verification
-# ---------------------------------------------------------------------------
 
 
 class TestConfigLoadingChain:
@@ -477,11 +429,6 @@ class TestConfigLoadingChain:
         assert overrides["symbols"] == ["2330", "2317", "2454"]
 
 
-# ---------------------------------------------------------------------------
-# Queue default sizes
-# ---------------------------------------------------------------------------
-
-
 class TestQueueDefaults:
     """Verify default queue size constants."""
 
@@ -501,11 +448,6 @@ class TestQueueDefaults:
         assert SystemBootstrapper.DEFAULT_RAW_EXEC_QUEUE_SIZE == 8192
 
 
-# ---------------------------------------------------------------------------
-# Lease refresh HALT fencing (Issue #3)
-# ---------------------------------------------------------------------------
-
-
 class TestLeaseRefreshHaltFencing:
     """When lease is lost, the callback triggers HALT."""
 
@@ -519,7 +461,6 @@ class TestLeaseRefreshHaltFencing:
         halt_reasons: list[str] = []
         bootstrapper._on_lease_lost = lambda reason: halt_reasons.append(reason)
 
-        # Simulate what the refresh loop does when it detects lost ownership
         bootstrapper._lease_refresh_lost = True
         cb = bootstrapper._on_lease_lost
         cb("SESSION_LEASE_LOST(owner=other)")

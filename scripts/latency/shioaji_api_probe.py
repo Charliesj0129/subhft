@@ -314,7 +314,6 @@ def main() -> None:
             tz = None
         now = datetime.now(tz=tz)
         day = now.date()
-        # Roll back to last weekday if weekend
         while day.weekday() >= 5:
             day -= timedelta(days=1)
         return day.strftime("%Y-%m-%d")
@@ -381,7 +380,6 @@ def main() -> None:
 
         _run_ops(results, order_ops, args.iters, args.warmup, args.sleep)
 
-        # Futures probe (optional)
         fut_prefix = os.getenv("HFT_SHIOAJI_PROBE_FUT_PREFIX", "TXF")
         fut_contract = find_contract_by_code(order_api.Contracts.Futures, args.futures, (fut_prefix, "MXF", "TMF"))
 

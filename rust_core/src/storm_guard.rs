@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 /// Rust-native StormGuard FSM validator for hot-path risk checks.
 #[pyclass]
 pub struct RustStormGuardValidator {
-    state: u8, // 0=NORMAL, 1=WARN, 2=STORM
+    state: u8,
     tick_threshold: u64,
     tick_count: u64,
 }

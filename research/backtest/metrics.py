@@ -16,9 +16,9 @@ class ICChunkState:
     the window only requires computing IC for the *new* chunks.
     """
 
-    ic_values: np.ndarray  # 1-D float64 array of per-chunk IC values
-    n_samples_used: int  # total samples consumed so far
-    chunk_size: int  # chunk width used during computation
+    ic_values: np.ndarray
+    n_samples_used: int
+    chunk_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,6 @@ def compute_ic_incremental(
     fut = fut[:n]
     chunk = max(8, n // max(buckets, 1))
 
-    # If prev_state exists but chunk size changed, we cannot reuse.
     if prev_state is not None and prev_state.chunk_size != chunk:
         prev_state = None
 
@@ -108,7 +107,6 @@ def compute_ic_incremental(
     if n_chunks < 1:
         return 0.0, 0.0, np.asarray([], dtype=np.float64), None
 
-    # Determine how many chunks are already computed.
     start_chunk = 0
     prior_ic: np.ndarray = np.asarray([], dtype=np.float64)
     if prev_state is not None:
@@ -168,20 +166,15 @@ def compute_ic_halflife(signals: np.ndarray, max_lag: int = 50) -> int:
     n_lags = min(max_lag, n // 2 - 1)
     if n_lags < 1:
         return max_lag
-    # Direct autocovariance for the only lags we consume (1..n_lags).
-    # Earlier revision used np.correlate(mode="full"), which materialises
-    # all 2N-1 lags via O(N^2) direct convolution — the wasted work
-    # (factor n/n_lags) hung Gate C runs at N>=28k.
     lag_covs = np.empty(n_lags, dtype=np.float64)
     for k in range(1, n_lags + 1):
         lag_covs[k - 1] = np.dot(centered[:-k], centered[k:])
-    lag_covs /= n  # mean covariance (divide by n, matching np.mean)
+    lag_covs /= n
     acf = lag_covs / var
 
-    # Find first lag where ACF < 0.5
     below = np.where(acf < 0.5)[0]
     if below.size > 0:
-        return int(below[0]) + 1  # +1 because lag indices are 0-based (lag=1 is index 0)
+        return int(below[0]) + 1
     return max_lag
 
 
@@ -297,7 +290,6 @@ def compute_metrics_incremental(
     """
     eq = np.asarray(list(new_equity), dtype=np.float64)
 
-    # Unpack prior accumulators (or zero-initialise).
     _empty = IncrementalMetricsState(
         n=0, sum_ret=0.0, sum_ret_sq=0.0, sum_neg_ret_sq=0.0,
         neg_count=0, peak=0.0, max_dd=0.0, sum_abs_diff=0.0,
@@ -317,7 +309,6 @@ def compute_metrics_incremental(
     last_equity: float | None = ps.last_equity
     ic_state: ICChunkState | None = ps.ic_state
 
-    # Bridge return between prev last equity and first new equity
     if eq.size > 0:
         if last_equity is not None and last_equity != 0.0:
             bridge_ret = (eq[0] - last_equity) / last_equity
@@ -329,7 +320,6 @@ def compute_metrics_incremental(
                     neg_count += 1
                 n_ret += 1
 
-        # Returns within new slice
         if eq.size >= 2:
             base = eq[:-1]
             delta = np.diff(eq)
@@ -343,7 +333,6 @@ def compute_metrics_incremental(
             neg_count += int(neg_rets.size)
             n_ret += int(rets_clean.size)
 
-        # Vectorized max drawdown update across new slice
         if peak > 0:
             peaks = np.maximum(peak, np.maximum.accumulate(eq))
         else:
@@ -355,7 +344,6 @@ def compute_metrics_incremental(
 
         last_equity = float(eq[-1])
 
-    # --- turnover from signals ---
     sig_arr: np.ndarray | None = None
     if new_signals is not None:
         sig_arr = np.asarray(list(new_signals), dtype=np.float64)
@@ -374,7 +362,6 @@ def compute_metrics_incremental(
             diff_count += int(diffs.size)
             last_signal = float(sig_arr[-1])
 
-    # --- IC incremental (compute only new-slice chunks, merge with prior) ---
     ic_mean = 0.0
     ic_std = 0.0
     if sig_arr is not None and new_forward_returns is not None:
@@ -383,7 +370,6 @@ def compute_metrics_incremental(
             sig_arr, fwd_arr, buckets=ic_buckets, prev_state=ic_state,
         )
 
-    # --- derive final metrics ---
     sharpe = 0.0
     sortino = 0.0
     if n_ret >= 2:

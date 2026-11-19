@@ -70,9 +70,6 @@ from review_attestation import GATED_PREFIXES, canonical_range, gated_files, git
 
 OVERRIDE = "CODEX_REVIEW_OVERRIDE"
 
-#: An unreadable segment concerns this gate only if it could be the merge
-#: itself: it names `gh` and `merge` as words of their own. `git merge-base`
-#: inside a shape the parser cannot read is not one.
 _GH_WORD = re.compile(r"(?<![\w.-])gh(?![\w-])")
 _MERGE_WORD = re.compile(r"(?<![\w-])merge(?![\w-])")
 
@@ -132,8 +129,6 @@ def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | Non
     unresolved: list[str] = []
 
     for seg in unattributed_segments(cmd):
-        # Fail closed only where the unread segment could be the merge: a merge
-        # this parser cannot read is exactly the state that must not pass.
         if _GH_WORD.search(seg) and _MERGE_WORD.search(seg):
             unresolved.append(f"unreadable command: {seg}")
 
@@ -141,10 +136,6 @@ def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | Non
         if group != "pr" or sub != "merge":
             continue
         if repo and repo.lower().removesuffix(".git") not in _local_repo_names(event_cwd):
-            # `gh` would act on a repository this checkout is not. The diff hash
-            # can only be recomputed against a local worktree, so a foreign
-            # --repo can never be verified -- and silently resolving the
-            # selector here would attest THIS repository's PR instead.
             unresolved.append(f"gh --repo {repo} (not this repository; cannot verify its review)")
             continue
         matched = _option_value(rest, "--match-head-commit")
@@ -159,7 +150,6 @@ def _targets(cmd: str, event_cwd: str | None) -> tuple[list[tuple[str, str | Non
         if not oid:
             unresolved.append(f"gh pr merge {selector or '(current branch)'}")
         elif oid != matched:
-            # The OID the command pins is not the head GitHub reports now.
             unresolved.append(f"gh pr merge --match-head-commit {matched} but PR head is {oid}")
         else:
             targets.append((oid, event_cwd))
@@ -176,7 +166,7 @@ def main() -> int:
     cwd = event.get("cwd") or os.getcwd()
     try:
         targets, unresolved = _targets(cmd, cwd)
-    except Exception as exc:  # never wedge the session on this gate's own bug
+    except Exception as exc:
         print(f"codex_review_gate: allowing, internal error: {exc}", file=sys.stderr)
         return 0
     if not targets and not unresolved:
@@ -201,10 +191,7 @@ def main() -> int:
             rng = canonical_range(head, cwd=target_cwd)
             if rng is None:
                 if not git("rev-parse", "--verify", "--quiet", "origin/main", cwd=target_cwd):
-                    continue  # no origin/main -> not this project's layout
-                # origin/main exists but the range does not: the object is not in
-                # this checkout. A PR head that was never fetched must not slip
-                # through as "nothing to gate".
+                    continue
                 print(
                     "BLOCKED by codex_review_gate: "
                     f"{head[:8]} is not present locally, so its changes cannot be inspected.\n"
@@ -228,7 +215,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-    except Exception as exc:  # same reason as above: allow rather than wedge
+    except Exception as exc:
         print(f"codex_review_gate: allowing, internal error: {exc}", file=sys.stderr)
         return 0
 

@@ -23,11 +23,6 @@ from hft_platform.feed_adapter.broker_registry import (
 pytestmark = [pytest.mark.integration]
 
 
-# ---------------------------------------------------------------------------
-# Mock helpers
-# ---------------------------------------------------------------------------
-
-
 class _MockMarketDataProvider:
     """Minimal mock satisfying MarketDataProvider protocol shape."""
 
@@ -140,11 +135,6 @@ class _FakeBrokerFactory:
         return md, order
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _clean_registry():
     """Ensure registry is empty before and after each test."""
@@ -153,11 +143,6 @@ def _clean_registry():
     yield
     _BROKER_REGISTRY.clear()
     _BROKER_REGISTRY.update(saved)
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestBrokerRegistration:

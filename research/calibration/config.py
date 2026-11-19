@@ -44,8 +44,6 @@ class CalibrationProfile:
 
 
 def save_calibration_profile(profile: CalibrationProfile, path: Path = DEFAULT_PROFILES_PATH) -> None:
-    # Non-atomic read-modify-write: safe for single-process research CLI invocation only.
-    # Concurrent calls from multiple processes could race and discard one profile.
     path = Path(path)
     existing: dict = {}
     if path.exists():

@@ -9,7 +9,7 @@ numba = pytest.importorskip("numba", reason="numba required for alpha_deep_hawke
 
 
 def test_module_imports():
-    from hft_platform.strategies.alpha import alpha_deep_hawkes  # noqa: F401
+    from hft_platform.strategies.alpha import alpha_deep_hawkes
 
     assert hasattr(alpha_deep_hawkes, "strategy")
     assert callable(alpha_deep_hawkes.strategy)
@@ -41,7 +41,6 @@ def test_lstm_tracker_step_produces_nonneg_intensity():
 
     tracker = LSTMTracker()
     tracker.update(0)
-    # jitclass methods do not support keyword arguments
     tracker.step(1.0, 10.0, 1_000_000_000)
     assert tracker.intensity >= 0.0
 
@@ -55,9 +54,7 @@ def test_lstm_tracker_step_changes_state():
     tracker = LSTMTracker()
     tracker.update(0)
     h_before = tracker.h.copy()
-    # jitclass methods require positional arguments
     tracker.step(1.0, 5.0, 500_000_000)
-    # Hidden state must have been updated
     assert not np.allclose(tracker.h, h_before)
 
 

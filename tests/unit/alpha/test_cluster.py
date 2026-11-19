@@ -38,10 +38,6 @@ from hft_platform.alpha.cluster import (
     cluster_alphas,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers — synthetic matrix payloads (mirror ``pool.compute_pool_matrix``).
-# ---------------------------------------------------------------------------
-
 
 def _make_payload(alpha_ids: list[str], pearson: list[list[float]]) -> dict[str, Any]:
     """Build a synthetic ``compute_pool_matrix``-shaped payload."""
@@ -59,15 +55,9 @@ def _eye_corr(n: int) -> list[list[float]]:
     return np.eye(n, dtype=np.float64).tolist()
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — dataclass shape
-# ---------------------------------------------------------------------------
-
-
 def test_cluster_assignment_dataclass_frozen_slots() -> None:
     assert is_dataclass(ClusterAssignment)
     assert ClusterAssignment.__dataclass_params__.frozen is True
-    # slots=True implies __slots__ on the class (Python 3.10+).
     assert hasattr(ClusterAssignment, "__slots__")
 
     field_names = {f.name for f in fields(ClusterAssignment)}
@@ -77,11 +67,6 @@ def test_cluster_assignment_dataclass_frozen_slots() -> None:
         "cluster_size",
         "max_intra_cluster_corr",
     }
-
-
-# ---------------------------------------------------------------------------
-# Test 2 — empty corpus raises EmptyCorpusError
-# ---------------------------------------------------------------------------
 
 
 def test_empty_corpus_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,11 +87,6 @@ def test_empty_corpus_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         cluster_alphas()
 
 
-# ---------------------------------------------------------------------------
-# Test 3 — single alpha → singleton
-# ---------------------------------------------------------------------------
-
-
 def test_singleton_cluster_id() -> None:
     payload = _make_payload(["alpha_solo"], _eye_corr(1))
     out = cluster._cluster_from_payload(payload, threshold=0.7, metric="pearson")
@@ -116,11 +96,6 @@ def test_singleton_cluster_id() -> None:
     assert only.cluster_id == "singleton_alpha_solo"
     assert only.cluster_size == 1
     assert only.max_intra_cluster_corr == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Test 4 — two uncorrelated alphas → two singletons
-# ---------------------------------------------------------------------------
 
 
 def test_two_uncorrelated_alphas_two_singletons() -> None:
@@ -133,11 +108,6 @@ def test_two_uncorrelated_alphas_two_singletons() -> None:
     for entry in out:
         assert entry.cluster_size == 1
         assert entry.max_intra_cluster_corr == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Test 5 — two correlated alphas → one cluster
-# ---------------------------------------------------------------------------
 
 
 def test_two_correlated_alphas_one_cluster() -> None:
@@ -154,11 +124,6 @@ def test_two_correlated_alphas_one_cluster() -> None:
         assert entry.max_intra_cluster_corr == pytest.approx(0.9)
 
 
-# ---------------------------------------------------------------------------
-# Test 6 — negative correlation still clusters (uses |corr|)
-# ---------------------------------------------------------------------------
-
-
 def test_negative_correlation_clusters() -> None:
     payload = _make_payload(
         ["alpha_a", "alpha_b"],
@@ -169,11 +134,6 @@ def test_negative_correlation_clusters() -> None:
     for entry in out:
         assert entry.cluster_size == 2
         assert entry.max_intra_cluster_corr == pytest.approx(0.9)
-
-
-# ---------------------------------------------------------------------------
-# Test 7 — lex-min naming inside a single cluster
-# ---------------------------------------------------------------------------
 
 
 def test_lexmin_cluster_naming() -> None:
@@ -191,11 +151,6 @@ def test_lexmin_cluster_naming() -> None:
     assert cluster_ids == {"cluster_0"}
     for entry in out:
         assert entry.cluster_size == 3
-
-
-# ---------------------------------------------------------------------------
-# Test 8 — multiple clusters ranked by lex-min alpha
-# ---------------------------------------------------------------------------
 
 
 def test_multiple_clusters_lex_ranked() -> None:
@@ -220,14 +175,8 @@ def test_multiple_clusters_lex_ranked() -> None:
     assert by_id["alpha_c"].max_intra_cluster_corr == pytest.approx(0.85)
 
 
-# ---------------------------------------------------------------------------
-# Test 9 — determinism: 100 reruns produce identical lists
-# ---------------------------------------------------------------------------
-
-
 def test_determinism_100_reruns() -> None:
     """Codex §10 H mitigation — sort alpha_ids before clustering."""
-    # Deliberate non-sorted alpha_ids on input.
     payload = _make_payload(
         ["alpha_z", "alpha_m", "alpha_a", "alpha_b"],
         [
@@ -243,14 +192,8 @@ def test_determinism_100_reruns() -> None:
         assert rerun == baseline
 
 
-# ---------------------------------------------------------------------------
-# Test 10 — metric switch reads spearman_matrix
-# ---------------------------------------------------------------------------
-
-
 def test_metric_spearman_uses_spearman_matrix() -> None:
     """When metric='spearman', spearman_matrix governs (not pearson)."""
-    # Pearson says uncorrelated, Spearman says correlated → spearman wins.
     payload: dict[str, Any] = {
         "alpha_ids": ["alpha_a", "alpha_b"],
         "matrix": _eye_corr(2),
@@ -260,11 +203,6 @@ def test_metric_spearman_uses_spearman_matrix() -> None:
     }
     out = cluster._cluster_from_payload(payload, threshold=0.7, metric="spearman")
     assert {a.cluster_id for a in out} == {"cluster_0"}
-
-
-# ---------------------------------------------------------------------------
-# Test 11 — write_artifact creates the sidecar file
-# ---------------------------------------------------------------------------
 
 
 def test_write_artifact_creates_file(
@@ -281,7 +219,6 @@ def test_write_artifact_creates_file(
         return payload
 
     monkeypatch.setattr(cluster, "compute_pool_matrix", _stub_payload)
-    # Redirect the artifact path into tmp_path.
     artifact_path = tmp_path / "_cluster_assignments.json"
     monkeypatch.setattr(cluster, "_ARTIFACT_PATH", artifact_path)
 
@@ -295,20 +232,12 @@ def test_write_artifact_creates_file(
     data = json.loads(artifact_path.read_text())
     assert isinstance(data, dict)
     assert len(data) == 1
-    # Assert the full computed key, not just the prefix — locks the
-    # threshold/metric/base_dir/corpus hash construction contract.
     only_key = next(iter(data))
     base_dir_hash = hashlib.sha256(b"research/experiments").hexdigest()
     corpus_hash = hashlib.sha256(json.dumps(sorted(payload["alpha_ids"])).encode("utf-8")).hexdigest()
     assert only_key == f"0.7:pearson:{base_dir_hash}:{corpus_hash}"
-    # Persisted payload contains 2 records matching the 2 alphas.
     assert len(data[only_key]) == len(out)
     assert {rec["alpha_id"] for rec in data[only_key]} == {"alpha_a", "alpha_b"}
-
-
-# ---------------------------------------------------------------------------
-# Test 12 — write_artifact merges with existing keys (does not clobber)
-# ---------------------------------------------------------------------------
 
 
 def test_write_artifact_merges_existing(
@@ -328,7 +257,6 @@ def test_write_artifact_merges_existing(
     artifact_path = tmp_path / "_cluster_assignments.json"
     monkeypatch.setattr(cluster, "_ARTIFACT_PATH", artifact_path)
 
-    # Pre-existing payload from a different threshold/metric run.
     pre_existing_key = "0.5:spearman:deadbeef:cafef00d"
     pre_existing_value: list[dict[str, Any]] = [
         {
@@ -349,15 +277,9 @@ def test_write_artifact_merges_existing(
     data = json.loads(artifact_path.read_text())
     assert pre_existing_key in data, "existing key was clobbered"
     assert data[pre_existing_key] == pre_existing_value
-    # And the new key was added.
     new_keys = [k for k in data if k != pre_existing_key]
     assert len(new_keys) == 1
     assert new_keys[0].startswith("0.7:pearson:")
-
-
-# ---------------------------------------------------------------------------
-# Test 13 — degenerate / mismatched correlation matrix → all singletons + warn
-# ---------------------------------------------------------------------------
 
 
 def test_degenerate_matrix_falls_back_to_singletons() -> None:
@@ -373,7 +295,7 @@ def test_degenerate_matrix_falls_back_to_singletons() -> None:
     payload: dict[str, Any] = {
         "alpha_ids": ["alpha_a", "alpha_b", "alpha_c"],
         "matrix": [[1.0]],
-        "pearson_matrix": [[1.0]],  # 1x1 — mismatched against 3 alpha_ids
+        "pearson_matrix": [[1.0]],
         "spearman_matrix": [[1.0]],
         "sample_length": 256,
     }
@@ -381,7 +303,6 @@ def test_degenerate_matrix_falls_back_to_singletons() -> None:
     with structlog.testing.capture_logs() as logs:
         out = cluster._cluster_from_payload(payload, threshold=0.7, metric="pearson")
 
-    # Structural fallback: 3 singletons in lex order.
     assert len(out) == 3
     assert [a.alpha_id for a in out] == ["alpha_a", "alpha_b", "alpha_c"]
     for entry in out:
@@ -389,7 +310,6 @@ def test_degenerate_matrix_falls_back_to_singletons() -> None:
         assert entry.max_intra_cluster_corr == 0.0
         assert entry.cluster_id.startswith("singleton_")
 
-    # Warning event was emitted.
     warning_events = [e for e in logs if e.get("event") == "cluster_degenerate_matrix"]
     assert len(warning_events) == 1
     assert warning_events[0]["log_level"] == "warning"

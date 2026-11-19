@@ -28,7 +28,7 @@ class WebhookSender:
         if not self._url:
             return False
 
-        import aiohttp  # noqa: PLC0415
+        import aiohttp
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -47,6 +47,6 @@ class WebhookSender:
                             status=resp.status,
                         )
                     return ok
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("webhook.send_failed", url=self._url[:50], exc_info=True)
             return False

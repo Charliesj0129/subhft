@@ -409,9 +409,6 @@ def _cleanup_steps(
         )
 
     if cleanup_profile == CLEANUP_PROFILE_MVP_RELEASE:
-        # No ``git clean -fdX`` over research/: the ignored files there are the
-        # only copy of experiment runs, kill ledgers, trial records and the
-        # research datasets, and a release must not delete research evidence.
         if seed_minimal_sample:
             steps.append(
                 {
@@ -511,9 +508,6 @@ def _guard_no_tracked_path_rows(
     return rows, blocked
 
 
-# Cleanup steps that delete a directory version control does not hold: once removed it cannot be recovered
-# (``.wal/`` is the ClickHouse-failure fallback and holds the dlq/ and corrupt/ evidence). The tracked-path guard
-# cannot see these because both directories are ignored, so they need their own opt-in flag.
 UNTRACKED_STATE_STEPS: tuple[tuple[str, str, str], ...] = (
     ("clean_wal", ".wal", "--allow-delete-wal"),
     ("clean_data", "data", "--allow-delete-data"),

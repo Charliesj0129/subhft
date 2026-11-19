@@ -19,10 +19,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Sentinel distinguishing "key absent" from "key present with value None".
-# An asymmetric schema (a field present on exactly one side) is itself a
-# divergence worth surfacing, so absence must compare unequal to any real
-# value — including a literal None.
 _MISSING = object()
 
 
@@ -34,11 +30,6 @@ class ReplayParityReport:
     divergence_histogram: dict[str, int]
     evidence_path: str
     harness_version: str = "slice-c.v1"
-    # Union of every key observed across the compared records. A field that
-    # never appears here was NOT checked by this run — so a 100% match_pct on
-    # a stream missing e.g. ``session_phase`` must not be read as "session
-    # parity verified". Lets the gate report coverage honestly rather than
-    # treating absence as agreement.
     observed_fields: tuple[str, ...] = ()
 
 
@@ -68,12 +59,6 @@ class IntentDiff:
                 if first_div is None:
                     first_div = i
                 continue
-            # Diff the UNION of keys, not just live's. Iterating only `a`
-            # silently ignores any field the replay emits that live lacks
-            # (e.g. a renamed/extra intent field), which would inflate
-            # match_pct and let a divergent strategy pass the parity gate.
-            # The _MISSING sentinel makes a one-sided field compare unequal
-            # to a present value, including None.
             diffs = [k for k in a.keys() | b.keys() if a.get(k, _MISSING) != b.get(k, _MISSING)]
             if not diffs:
                 n_match += 1

@@ -14,14 +14,8 @@ from hft_platform.monitor._data_source import (
     ShmDataSource,
 )
 
-# Patch targets: the imports inside try_reconnect() come from hft_platform.ipc.shm_snapshot
 _READER_CLS = "hft_platform.ipc.shm_snapshot.ShmSnapshotReader"
 _SYM_HASH_FN = "hft_platform.ipc.shm_snapshot._symbol_hash"
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_snap(symbol_hash: int, version: int = 1, ts_ns: int = 1_000_000) -> SimpleNamespace:
@@ -75,11 +69,6 @@ def _make_disconnected_src(
     return src
 
 
-# ---------------------------------------------------------------------------
-# Tests: already-connected source
-# ---------------------------------------------------------------------------
-
-
 class TestTryReconnectWhenAlreadyConnected:
     """Already-connected source should return True immediately without touching SHM."""
 
@@ -113,17 +102,12 @@ class TestTryReconnectWhenAlreadyConnected:
         assert src.retry_count == 0
 
 
-# ---------------------------------------------------------------------------
-# Tests: successful reconnect
-# ---------------------------------------------------------------------------
-
-
 class TestTryReconnectSuccess:
     """Successful reconnect updates all state fields correctly."""
 
     def _src(self) -> ShmDataSource:
         src = _make_disconnected_src(retry_count=2, last_error="old error")
-        src._slot_versions = {0: 5, 1: 3}  # stale versions should be cleared
+        src._slot_versions = {0: 5, 1: 3}
         return src
 
     def test_connected_set_to_true(self) -> None:
@@ -174,7 +158,6 @@ class TestTryReconnectSuccess:
     def test_symbol_to_slot_remapped_to_new_slot(self) -> None:
         src = self._src()
         sym_hash = _symbol_hash_stub("SYM1")
-        # Place symbol in slot 2 (different from any prior mapping)
         reader = _make_reader({2: _make_snap(sym_hash)}, max_symbols=4)
         with (
             patch(_READER_CLS, return_value=reader),
@@ -206,11 +189,6 @@ class TestTryReconnectSuccess:
         ):
             src.try_reconnect()
         assert src.remaining_backoff_seconds() == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Tests: failed reconnect
-# ---------------------------------------------------------------------------
 
 
 class TestTryReconnectFailure:
@@ -246,7 +224,7 @@ class TestTryReconnectFailure:
     def test_multiple_failures_increment_retry_count(self) -> None:
         src = self._src()
         for _ in range(3):
-            src._next_retry_at = 0.0  # bypass backoff guard for each iteration
+            src._next_retry_at = 0.0
             with patch(_READER_CLS, side_effect=OSError("shm not found")):
                 src.try_reconnect()
         assert src.retry_count == 3
@@ -257,11 +235,6 @@ class TestTryReconnectFailure:
         with patch(_READER_CLS, side_effect=RuntimeError("unexpected crash")):
             result = src.try_reconnect()
         assert result is False
-
-
-# ---------------------------------------------------------------------------
-# Tests: backoff behaviour
-# ---------------------------------------------------------------------------
 
 
 class TestBackoffBehavior:
@@ -275,20 +248,18 @@ class TestBackoffBehavior:
         with patch(_READER_CLS, side_effect=OSError("fail")):
             src.try_reconnect()
         backoff = src.remaining_backoff_seconds()
-        # retry_count=1 → backoff = 1.0 * 2^0 = 1.0s
         assert 0.9 <= backoff <= _SHM_BACKOFF_MIN_S + 0.1, f"Expected ~1s backoff, got {backoff:.3f}s"
 
     def test_second_failure_sets_2s_backoff(self) -> None:
-        src = self._src(retry_count=1)  # first failure already counted
+        src = self._src(retry_count=1)
         with patch(_READER_CLS, side_effect=OSError("fail")):
             src.try_reconnect()
-        # retry_count becomes 2 → backoff = 1.0 * 2^1 = 2.0s
         backoff = src.remaining_backoff_seconds()
         expected = _SHM_BACKOFF_MIN_S * (_SHM_BACKOFF_FACTOR**1)
         assert abs(backoff - expected) < 0.1, f"Expected ~{expected}s backoff, got {backoff:.3f}s"
 
     def test_backoff_capped_at_max(self) -> None:
-        src = self._src(retry_count=100)  # large count → would overflow without cap
+        src = self._src(retry_count=100)
         with patch(_READER_CLS, side_effect=OSError("fail")):
             src.try_reconnect()
         backoff = src.remaining_backoff_seconds()
@@ -296,7 +267,6 @@ class TestBackoffBehavior:
 
     def test_try_reconnect_skipped_during_backoff(self) -> None:
         src = self._src()
-        # Pre-set backoff window to far future
         src._next_retry_at = time.monotonic() + 100.0
 
         called = []
@@ -315,21 +285,15 @@ class TestBackoffBehavior:
         src = self._src()
         backoffs: list[float] = []
         for _ in range(4):
-            src._next_retry_at = 0.0  # bypass the gate each time
+            src._next_retry_at = 0.0
             with patch(_READER_CLS, side_effect=OSError("fail")):
                 src.try_reconnect()
             backoffs.append(src.remaining_backoff_seconds())
 
-        # Each backoff must be >= previous (monotonically non-decreasing)
         for i in range(1, len(backoffs)):
             assert backoffs[i] >= backoffs[i - 1] - 0.05, (
                 f"Backoff[{i}]={backoffs[i]:.3f}s < Backoff[{i - 1}]={backoffs[i - 1]:.3f}s"
             )
-
-
-# ---------------------------------------------------------------------------
-# Tests: retry_count resets to zero on success
-# ---------------------------------------------------------------------------
 
 
 class TestReconnectResetsRetryOnSuccess:
@@ -360,7 +324,6 @@ class TestReconnectResetsRetryOnSuccess:
             patch(_SYM_HASH_FN, side_effect=_symbol_hash_stub),
         ):
             src.try_reconnect()
-        # Poll with cursor older than snap.ts_ns → expect 1 row returned
         result = src.poll({"SYM1": 0})
         assert "SYM1" in result
         assert len(result["SYM1"]) == 1

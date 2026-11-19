@@ -41,7 +41,6 @@ def test_count_live_intents_returns_zero_for_empty_rows() -> None:
     client = _FakeCKClient(rows=[])
     n = _count_live_intents(client, date(2026, 4, 21), "ECHO")
     assert n == 0
-    # Verify the partition-aligned predicate was used.
     sql, params = client.calls[0]
     assert "ingest_ts" in sql
     assert params == {"d": "2026-04-21", "s": "ECHO"}
@@ -122,17 +121,6 @@ def test_check_eligibility_ck_failure_falls_back_to_pre_recorder(tmp_path: Path)
     assert "RuntimeError" in result.reason
 
 
-# ---------------------------------------------------------------------------
-# F2 fix coverage — `_default_ck_client` delegates to the canonical CH factory.
-#
-# Background mirrors `tests/unit/alpha/test_audit.py`: this module's
-# `_default_ck_client` had a comment "Mirrors hft_platform.alpha.audit._get_client
-# to keep credential handling consistent" and propagated the same auth-bypass
-# bug. After the fix it must delegate to `infra.ch_client.get_ch_client`.
-# See `docs/runbooks/alpha-factory-dogfood-2026-05-06.md` §F2.
-# ---------------------------------------------------------------------------
-
-
 def test_default_ck_client_delegates_to_canonical_factory(monkeypatch) -> None:
     """`_default_ck_client` must route through `infra.ch_client.get_ch_client`."""
     from typing import Any
@@ -152,20 +140,6 @@ def test_default_ck_client_delegates_to_canonical_factory(monkeypatch) -> None:
 
     assert result is sentinel
     assert len(calls) == 1, f"expected exactly one call to canonical factory, got {len(calls)}"
-
-
-# ---------------------------------------------------------------------------
-# F2-followup coverage — `_default_ck_client` failures must degrade gracefully.
-#
-# Codex adversarial-review (2026-05-07) finding [HIGH]: the F2 switch to the
-# canonical CH factory introduced a regression where connection / auth /
-# import / env-parse failures from ``get_ch_client()`` propagate out of
-# ``check_eligibility`` instead of being caught and converted into an
-# ``IneligiblePreRecorder`` fallback. The fix wraps the default-client
-# construction in its own exception boundary with the
-# ``intent_recorder_client_init_failed:`` reason prefix so operators can
-# distinguish client-init failures from query failures during triage.
-# ---------------------------------------------------------------------------
 
 
 import pytest
@@ -201,7 +175,6 @@ def test_check_eligibility_default_client_init_failure_falls_back_to_pre_recorde
         session_date=date(2026, 5, 7),
         strategy_id="ECHO",
         fixture_path=fp,
-        # ck_client=None forces the default-client path
     )
     assert isinstance(result, IneligiblePreRecorder)
     assert "intent_recorder_client_init_failed" in result.reason

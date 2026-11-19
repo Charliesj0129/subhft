@@ -14,9 +14,7 @@ from pathlib import Path
 from hft_platform.cli._parser import build_parser
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-# "hft alpha validate/promote/canary" lists several subcommands; each one must exist.
 _USAGE = re.compile(r"\bhft alpha ([a-z][a-z0-9-]*(?:/[a-z][a-z0-9-]*)*)")
-# Historical plans record what was run at the time; they are not instructions.
 _EXCLUDED_PREFIXES = ("docs/superpowers/", "docs/archive/")
 
 
@@ -41,7 +39,7 @@ def _tracked_docs() -> list[Path]:
 
 def test_documented_hft_alpha_subcommands_exist():
     known = _alpha_subcommands()
-    assert "promote" in known  # the parser walk found the real alpha subparser
+    assert "promote" in known
 
     unknown: list[str] = []
     for doc in _tracked_docs():

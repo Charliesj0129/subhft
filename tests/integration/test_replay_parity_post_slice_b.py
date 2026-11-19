@@ -112,9 +112,6 @@ def test_dod_b5_r47_synthetic_divergence_still_fails_after_slice_b(
         replayed=replayed.canonical_records(),
     ).compute()
 
-    # Sanity: synthetic R47-OE1 fixture is designed to diverge well below
-    # the 95% threshold. Keep this loose so any small canonicalisation
-    # change in Slice C still leaves the gate firing on real diff data.
     assert report.match_pct < 95.0, report
     headroom = 95.0 - report.match_pct
     print(f"[DoD-B5] R47 fixture match_pct={report.match_pct:.4f} (threshold=95.0, headroom={headroom:.4f}pp)")

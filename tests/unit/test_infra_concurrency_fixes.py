@@ -20,10 +20,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# P0-I1: bootstrap deferred tasks
-# ---------------------------------------------------------------------------
-
 
 class TestBootstrapDeferredTasks:
     """build() must not call asyncio.get_event_loop() in Python 3.12+.
@@ -41,7 +37,6 @@ class TestBootstrapDeferredTasks:
         """ServiceRegistry must expose a ``deferred_tasks`` attribute of list type."""
         from hft_platform.services.registry import ServiceRegistry
 
-        # dataclass field existence check
         fields = {f.name for f in ServiceRegistry.__dataclass_fields__.values()}  # type: ignore[attr-defined]
         assert "deferred_tasks" in fields, (
             "ServiceRegistry must expose a ``deferred_tasks`` field so build() can hand "
@@ -61,7 +56,7 @@ class TestBootstrapDeferredTasks:
         call_counter = {"n": 0}
         _real_get = asyncio.get_event_loop
 
-        def _spy_get_event_loop():  # noqa: ANN202
+        def _spy_get_event_loop():
             call_counter["n"] += 1
             return _real_get()
 
@@ -94,22 +89,13 @@ class TestBootstrapDeferredTasks:
                 except Exception:
                     pytest.skip("build() failed for reasons unrelated to this test")
 
-        # If the fix is applied, build() should not call asyncio.get_event_loop()
-        # (may still call from inside create_task fallbacks for the `bool` helper,
-        # so we check that *no DeprecationWarning about no running loop* fired).
         assert not any(
             "no running event loop" in str(w.message).lower() or "get_event_loop" in str(w.message).lower()
             for w in caught
         ), f"build() must not emit get_event_loop DeprecationWarning; got: {[str(w.message) for w in caught]}"
 
-        # deferred_tasks must exist and be a list
         assert hasattr(registry, "deferred_tasks")
         assert isinstance(registry.deferred_tasks, list)
-
-
-# ---------------------------------------------------------------------------
-# P0-I3: AuditWriter defers queue creation to start()
-# ---------------------------------------------------------------------------
 
 
 class TestAuditWriterDeferredQueueCreation:
@@ -138,8 +124,6 @@ class TestAuditWriterDeferredQueueCreation:
         from hft_platform.recorder.audit import AuditWriter
 
         writer = AuditWriter(queue_size=10)
-        # Queues created pre-start must not be asyncio.Queue instances
-        # (because there is no engine loop yet).
         for _tbl, q in writer._queues.items():
             assert not isinstance(q, asyncio.Queue), (
                 "AuditWriter.__init__ must not create asyncio.Queue — defer to start() which runs on the engine loop."
@@ -159,7 +143,7 @@ class TestAuditWriterDeferredQueueCreation:
         def _log_from_thread():
             try:
                 writer.log_guardrail_transition({"old_state": "NORMAL", "new_state": "HALT"})
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         t = threading.Thread(target=_log_from_thread, daemon=True)
@@ -185,11 +169,6 @@ class TestAuditWriterDeferredQueueCreation:
                 await writer.stop()
 
         assert asyncio.run(_inner())
-
-
-# ---------------------------------------------------------------------------
-# P0-I4: StormGuard halt callback cross-thread safety
-# ---------------------------------------------------------------------------
 
 
 class TestStormGuardHaltCallbackCrossThread:
@@ -236,7 +215,6 @@ class TestStormGuardHaltCallbackCrossThread:
             t = threading.Thread(target=_fire_from_thread, daemon=True)
             t.start()
             t.join(timeout=2.0)
-            # Yield so scheduled coroutine runs on this loop.
             for _ in range(50):
                 if executed.is_set():
                     break
@@ -245,11 +223,6 @@ class TestStormGuardHaltCallbackCrossThread:
             assert executed.is_set(), "coroutine halt-callback did not execute on engine loop"
 
         asyncio.run(_main())
-
-
-# ---------------------------------------------------------------------------
-# P0-I2: WAL batch-write mutual exclusion
-# ---------------------------------------------------------------------------
 
 
 class TestWALBatchWriterMutualExclusion:
@@ -271,7 +244,6 @@ class TestWALBatchWriterMutualExclusion:
                 if concurrent_inside_write["current"] > concurrent_inside_write["max"]:
                     concurrent_inside_write["max"] = concurrent_inside_write["current"]
             try:
-                # Tiny sleep to widen the race window.
                 time.sleep(0.01)
                 return original_write(self, *args, **kwargs)
             finally:
@@ -283,16 +255,13 @@ class TestWALBatchWriterMutualExclusion:
             try:
 
                 async def _run() -> None:
-                    # Prime buffer with rows.
                     for _ in range(10):
                         await writer.add("hft.market_data", [{"x": 1}] * 50)
 
-                    # Invoke flush from multiple tasks concurrently.
                     tasks = [asyncio.create_task(writer.flush()) for _ in range(5)]
                     await asyncio.gather(*tasks)
 
                 asyncio.run(_run())
-                # Let the timer thread get a chance too.
                 time.sleep(0.1)
             finally:
                 writer.stop()
@@ -301,11 +270,6 @@ class TestWALBatchWriterMutualExclusion:
             f"WAL _write_batch_sync was entered by {concurrent_inside_write['max']} threads "
             "concurrently — needs a write lock."
         )
-
-
-# ---------------------------------------------------------------------------
-# P0-I5: _sync_drain_recorder stops WAL timer before temp loop
-# ---------------------------------------------------------------------------
 
 
 class TestSyncDrainRecorderStopsWALTimer:
@@ -320,7 +284,6 @@ class TestSyncDrainRecorderStopsWALTimer:
 
         calls: list[str] = []
 
-        # Fake batch writer records its stop() invocation.
         class _FakeBatchWriter:
             def stop(self) -> None:
                 calls.append("wal_stop")
@@ -346,7 +309,7 @@ class TestSyncDrainRecorderStopsWALTimer:
             async def _shutdown_flush(self) -> None:
                 await _noop_flush()
 
-        system = HFTSystem.__new__(HFTSystem)  # bypass __init__
+        system = HFTSystem.__new__(HFTSystem)
         system.recorder = _FakeRecorder()
         system._sync_drain_recorder()
 
@@ -354,11 +317,6 @@ class TestSyncDrainRecorderStopsWALTimer:
         assert calls.index("wal_stop") < calls.index("drain"), (
             "WAL timer must be stopped BEFORE the temp loop drains the recorder."
         )
-
-
-# ---------------------------------------------------------------------------
-# P1: StormGuard metrics call outside _state_lock
-# ---------------------------------------------------------------------------
 
 
 class TestStormGuardMetricsLockOrdering:
@@ -375,18 +333,16 @@ class TestStormGuardMetricsLockOrdering:
     def test_transitions_metric_inc_called_outside_state_lock(self) -> None:
         from hft_platform.risk.storm_guard import StormGuard
 
-        # Build a fake Counter that records the state-lock state when inc() fires.
         acquired_state_lock_during_inc: dict[str, bool] = {"flag": False}
 
         class _RecordingChild:
             def inc(self, *_args, **_kwargs) -> None:
-                # If we can acquire guard._state_lock non-blocking, we are OUTSIDE the lock.
                 acquired_state_lock_during_inc["flag"] = guard._state_lock.acquire(blocking=False)
                 if acquired_state_lock_during_inc["flag"]:
                     guard._state_lock.release()
 
         class _FakeCounter:
-            def labels(self, **_kwargs):  # noqa: ANN001
+            def labels(self, **_kwargs):
                 return _RecordingChild()
 
         fake_metrics = MagicMock()
@@ -403,11 +359,6 @@ class TestStormGuardMetricsLockOrdering:
             "Move metric emission outside the lock to prevent order-inversion deadlock with "
             "the Prometheus scraper thread."
         )
-
-
-# ---------------------------------------------------------------------------
-# P1: Audit guardrail "sticky-first" overflow policy
-# ---------------------------------------------------------------------------
 
 
 class TestAuditGuardrailStickyOverflow:
@@ -438,7 +389,6 @@ class TestAuditGuardrailStickyOverflow:
             writer = AuditWriter(queue_size=1)
             await writer.start()
             try:
-                # 1 fits in queue; 2 fits in overflow[0]; 3 fits in overflow[1]; 4 must be DROPPED.
                 writer.log_guardrail_transition({"old": "NORMAL", "new": "WARM", "marker": "root_cause"})
                 writer.log_guardrail_transition({"old": "WARM", "new": "STORM", "marker": "middle_1"})
                 writer.log_guardrail_transition({"old": "STORM", "new": "HALT", "marker": "middle_2"})
@@ -472,7 +422,6 @@ class TestAuditGuardrailStickyOverflow:
         writer.log_guardrail_transition({"marker": "root_cause"})
         writer.log_guardrail_transition({"marker": "middle_1"})
         writer.log_guardrail_transition({"marker": "middle_2"})
-        # 4th would overflow the pre-start deque of size 3; must drop NEWEST.
         writer.log_guardrail_transition({"marker": "newest"})
 
         buf = writer._pre_start_buffer["audit.guardrail_log"]
@@ -486,20 +435,14 @@ class TestAuditGuardrailStickyOverflow:
         """Non-guardrail tables: drop counter tracks deque auto-eviction pre-start."""
         from hft_platform.recorder.audit import AuditWriter
 
-        # queue_size=1 + overflow=1 → pre-start buffer maxlen=2.
         monkeypatch.setenv("HFT_AUDIT_OVERFLOW_SIZE", "1")
         writer = AuditWriter(queue_size=1)
-        writer.log_order({"a": 1})  # buf=[1]
-        writer.log_order({"a": 2})  # buf=[1, 2]
-        writer.log_order({"a": 3})  # buf=[2, 3] (1 dropped, counter+=1)
-        writer.log_order({"a": 4})  # buf=[3, 4] (2 dropped, counter+=1)
+        writer.log_order({"a": 1})
+        writer.log_order({"a": 2})
+        writer.log_order({"a": 3})
+        writer.log_order({"a": 4})
 
         assert writer._dropped["audit.orders_log"] == 2
-
-
-# ---------------------------------------------------------------------------
-# P1: main.py awaits detached stop_async task
-# ---------------------------------------------------------------------------
 
 
 class TestSystemStopAsyncTaskTracked:
@@ -511,11 +454,6 @@ class TestSystemStopAsyncTaskTracked:
         from hft_platform.services.system import HFTSystem
 
         system = HFTSystem.__new__(HFTSystem)
-        # Simulate __init__'s attribute creation by accessing the slot / dict.
-        # The attribute is initialised in __init__; in a real run it starts
-        # as None. Here we just verify the attribute NAME is in the system
-        # source so the launcher's `getattr(system, "_stop_async_task", None)`
-        # lookup is not referencing a name that doesn't exist.
         import inspect
 
         src = inspect.getsource(HFTSystem.__init__)
@@ -530,11 +468,6 @@ class TestSystemStopAsyncTaskTracked:
             "HFTSystem.stop() must store the detached stop_async() task "
             "so the launcher can await it before loop teardown."
         )
-
-
-# ---------------------------------------------------------------------------
-# P1: MetricsRegistry scrape-vs-rebuild lock
-# ---------------------------------------------------------------------------
 
 
 class TestMetricsRegistryScrapeLock:

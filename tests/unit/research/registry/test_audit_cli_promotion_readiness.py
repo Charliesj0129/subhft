@@ -164,7 +164,6 @@ class TestPromotionReadinessFunction:
         assert "edge" in blockers
 
     def test_edge_exactly_floor_blocks(self, _isolated) -> None:
-        # Strictly greater than 10 required (goal §5: > 10).
         _record(run_id="at_floor", edge=10.0)
         _, blockers = audit_cli.promotion_readiness(_row("at_floor"))
         assert "edge" in blockers
@@ -190,14 +189,12 @@ class TestPromotionReadinessFunction:
         assert "blocking" in blockers
 
     def test_drawdown_breach_blocks(self, _isolated) -> None:
-        # §6: max_drawdown must stay within 2× avg-monthly net PnL.
         _record(run_id="dd", dd_ratio=3.0)
         ready, blockers = audit_cli.promotion_readiness(_row("dd"))
         assert ready is False
         assert "drawdown" in blockers
 
     def test_drawdown_inf_blocks(self, _isolated) -> None:
-        # inf (no positive monthly baseline) is a breach.
         _record(run_id="dd_inf", dd_ratio=float("inf"))
         _, blockers = audit_cli.promotion_readiness(_row("dd_inf"))
         assert "drawdown" in blockers
@@ -209,15 +206,12 @@ class TestPromotionReadinessFunction:
         assert blockers == []
 
     def test_drawdown_missing_is_not_a_blocker(self, _isolated) -> None:
-        # The monthly_distribution gate needs >=2 months; absence is
-        # inapplicable, not failing (mirrors force-flat).
-        _record(run_id="dd_na")  # no dd_ratio
+        _record(run_id="dd_na")
         ready, blockers = audit_cli.promotion_readiness(_row("dd_na"))
         assert ready is True
         assert not any(b.startswith("drawdown") for b in blockers)
 
     def test_top_month_breach_blocks(self, _isolated) -> None:
-        # §6 單月收益支配性: one month carrying >50% of net PnL blocks.
         _record(run_id="tm", top_month=75.0)
         ready, blockers = audit_cli.promotion_readiness(_row("tm"))
         assert ready is False
@@ -230,13 +224,12 @@ class TestPromotionReadinessFunction:
         assert blockers == []
 
     def test_top_month_missing_is_not_a_blocker(self, _isolated) -> None:
-        _record(run_id="tm_na")  # no top_month
+        _record(run_id="tm_na")
         ready, blockers = audit_cli.promotion_readiness(_row("tm_na"))
         assert ready is True
         assert not any(b.startswith("top_month") for b in blockers)
 
     def test_worst_loss_breach_blocks(self, _isolated) -> None:
-        # §5: one trade carrying >50% of total loss blocks promotion.
         _record(run_id="wl", worst_loss=75.0)
         ready, blockers = audit_cli.promotion_readiness(_row("wl"))
         assert ready is False
@@ -249,13 +242,12 @@ class TestPromotionReadinessFunction:
         assert blockers == []
 
     def test_worst_loss_missing_is_not_a_blocker(self, _isolated) -> None:
-        _record(run_id="wl_na")  # no worst_loss
+        _record(run_id="wl_na")
         ready, blockers = audit_cli.promotion_readiness(_row("wl_na"))
         assert ready is True
         assert not any(b.startswith("worst_loss") for b in blockers)
 
     def test_replay_parity_break_blocks(self, _isolated) -> None:
-        # §7 (限制 §3): backtest↔replay match below 95% floor blocks.
         _record(run_id="rp", replay_match=80.0)
         ready, blockers = audit_cli.promotion_readiness(_row("rp"))
         assert ready is False
@@ -268,13 +260,12 @@ class TestPromotionReadinessFunction:
         assert blockers == []
 
     def test_replay_parity_missing_is_not_a_blocker(self, _isolated) -> None:
-        _record(run_id="rp_na")  # no replay_match
+        _record(run_id="rp_na")
         ready, blockers = audit_cli.promotion_readiness(_row("rp_na"))
         assert ready is True
         assert not any(b.startswith("replay_parity") for b in blockers)
 
     def test_incomplete_cost_model_blocks(self, _isolated) -> None:
-        # §2 / 限制 §3: a declared cost model omitting a knob blocks.
         _record(run_id="cm", cost_model_id="measured+Nonebp/2.0bp/1.0pts")
         ready, blockers = audit_cli.promotion_readiness(_row("cm"))
         assert ready is False
@@ -287,9 +278,7 @@ class TestPromotionReadinessFunction:
         assert blockers == []
 
     def test_absent_cost_model_id_is_not_a_blocker(self, _isolated) -> None:
-        # No spec_provenance at all -> traceability concern, not a promotion
-        # blocker here (mirrors the established missing-not-a-blocker rule).
-        _record(run_id="cm_na")  # no cost_model_id
+        _record(run_id="cm_na")
         ready, blockers = audit_cli.promotion_readiness(_row("cm_na"))
         assert ready is True
         assert not any(b.startswith("cost_model") for b in blockers)
@@ -299,7 +288,6 @@ class TestPromotionReadinessFunction:
         assert audit_cli.triage_reason(_row("cm_tr")) == "blocked_by_audit"
 
     def test_adequate_label_contradicted_by_counts_blocks(self, _isolated) -> None:
-        # Round 79: 'adequate' but n_fills below min_fills -> sample:discrepant.
         _record(run_id="disc", sample_counts=(40.0, 80.0, 25.0, 20.0))
         ready, blockers = audit_cli.promotion_readiness(_row("disc"))
         assert ready is False
@@ -312,8 +300,7 @@ class TestPromotionReadinessFunction:
         assert not any(b.startswith("sample") for b in blockers)
 
     def test_adequate_label_without_counts_is_not_a_blocker(self, _isolated) -> None:
-        # Evidence merely absent -> missing-not-a-blocker (advisory only).
-        _record(run_id="nocounts")  # adequate label, no sample_counts
+        _record(run_id="nocounts")
         ready, blockers = audit_cli.promotion_readiness(_row("nocounts"))
         assert ready is True
         assert not any(b.startswith("sample") for b in blockers)
@@ -329,7 +316,6 @@ class TestPromotionReadinessFunction:
         assert "edge:missing" in blockers
         assert "dominance:missing" in blockers
         assert "sample:missing" in blockers
-        # force-flat missing is intentionally NOT a blocker.
         assert not any(b.startswith("force_flat") for b in blockers)
 
     def test_multiple_blockers_accumulate(self, _isolated) -> None:
@@ -354,9 +340,9 @@ class TestShowSurfacesVerdict:
 
 class TestSummaryCountsReady:
     def test_summary_counts_ready_rows(self, _isolated) -> None:
-        _record(run_id="r1")  # ready
-        _record(run_id="r2")  # ready
-        _record(run_id="r3", edge=4.0)  # not ready
+        _record(run_id="r1")
+        _record(run_id="r2")
+        _record(run_id="r3", edge=4.0)
         out = audit_cli.summary()
         assert "promotion_readiness" in out
         section = out.split("promotion_readiness")[1]

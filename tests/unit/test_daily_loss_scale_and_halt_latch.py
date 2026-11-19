@@ -30,8 +30,6 @@ from hft_platform.execution.positions import Position
 from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 from hft_platform.risk.validators import DailyLossLimitValidator
 
-# One NTD in PnL-accumulator units. The producers have already applied the
-# contract multiplier, so this is ``price_scale`` and nothing else.
 NTD = 10_000
 
 
@@ -86,17 +84,11 @@ def _make_validator(point_value: int = 10, **overrides: object) -> DailyLossLimi
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. Threshold scale
-# ---------------------------------------------------------------------------
-
-
 class TestDailyLossThresholdScale:
     def test_hard_limit_holds_just_under_the_configured_ntd_amount(self):
         v = _make_validator()
         v.record_pnl("R47", _ntd(-4999))
         ok, _ = v.check(_make_intent())
-        # Rejected by SOFT_LIMIT (correctly), but the hard halt must not latch.
         assert v.halt_triggered is False
         assert ok is False
 
@@ -188,7 +180,6 @@ class TestProducerConsumerUnitAgreement:
         v = _make_validator()
         v.record_pnl("R47", pos.realized_pnl_scaled)
         ok, _ = v.check(_make_intent())
-        # 50 NTD is nowhere near the 500 NTD soft limit.
         assert ok is True
         assert v.soft_limit_active is False
         assert v.halt_triggered is False
@@ -208,11 +199,6 @@ class TestProducerConsumerUnitAgreement:
         assert v.halt_triggered is False
 
 
-# ---------------------------------------------------------------------------
-# 2. HALT stays latched
-# ---------------------------------------------------------------------------
-
-
 def _clean_tick(sg: StormGuard) -> StormGuardState:
     """A tick with nothing wrong in the market: no lag, no gap."""
     return sg.update(latency_us=0, feed_gap_s=0.0)
@@ -224,7 +210,6 @@ class TestDailyLossHoldBlocksDeEscalation:
         sg.set_daily_loss_hold(True)
         sg.trigger_halt("DAILY_LOSS_LIMIT_EXCEEDED")
 
-        # More clean ticks than the de-escalation threshold could ever need.
         for _ in range(20):
             _clean_tick(sg)
 
@@ -323,19 +308,11 @@ class TestRiskEngineKeepsTheHoldInSync:
         assert engine.storm_guard.daily_loss_hold is False
 
 
-# ---------------------------------------------------------------------------
-# 4. The latch must not gate its own release
-# ---------------------------------------------------------------------------
-
-
 def _at(iso_utc: str) -> int:
     """Epoch-ns for a UTC timestamp, for driving the 21:00 UTC reset boundary."""
     return int(datetime.fromisoformat(iso_utc).replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)
 
 
-# 2026-08-26 in production: the hard limit latched at 14:24:35Z and the engine
-# was still holding HALT at 09:32Z the following day, 12.5 hours after the
-# 21:00Z boundary that should have released it.
 _BEFORE_BOUNDARY = _at("2026-08-26T14:24:35")
 
 _AFTER_BOUNDARY = _at("2026-08-27T09:32:00")
@@ -393,7 +370,6 @@ class TestTheDailyResetIsReachableWhileHalted:
             v.update_unrealized(0, complete=True)
             assert v.halt_triggered is True
 
-            # Same trading day, an hour later: the stop is for the whole day.
             v.update_unrealized(0, complete=True)
             assert v.halt_triggered is True
 
@@ -428,7 +404,6 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert engine.storm_guard.state == StormGuardState.HALT
             assert engine.storm_guard.daily_loss_hold is True
 
-            # A day of clean ticks cannot talk StormGuard out of the hold.
             for _ in range(30):
                 _clean_tick(engine.storm_guard)
                 engine.update_unrealized_pnl(0, complete=True)
@@ -470,16 +445,13 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert engine.storm_guard.daily_loss_hold is True
             v.update_unrealized(_ntd(-1000), complete=True)
 
-        # No update_unrealized() after the boundary: MtM is dead.
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             engine.roll_daily_loss_boundary()
             engine.roll_daily_loss_boundary()
 
         assert v.halt_triggered is True, "a dead MtM must not buy a release"
         assert engine.storm_guard.daily_loss_hold is True
-        # Yesterday's realized loss is gone -- that part IS a calendar fact.
         assert v._accumulated_loss == {}
-        # The last measured exposure survives; zeroing it would fake a flat book.
         assert v._unrealized_pnl == _ntd(-1000)
 
     def test_the_stop_releases_on_the_first_fresh_pnl_after_the_boundary(self):
@@ -506,7 +478,6 @@ class TestTheDailyResetIsReachableWhileHalted:
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             engine.roll_daily_loss_boundary()
             assert v.halt_triggered is True
-            # MtM comes back with a benign book.
             engine.update_unrealized_pnl(_ntd(-10), complete=True)
             assert v.halt_triggered is False
             engine.roll_daily_loss_boundary()
@@ -530,7 +501,6 @@ class TestTheDailyResetIsReachableWhileHalted:
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             v.roll_daily_boundary()
             assert v.halt_triggered is True
-            # New day, empty accumulator; the open book carries -6,000 from before.
             v.update_unrealized(_ntd(-6000), complete=True)
 
             assert v.halt_triggered is False
@@ -546,9 +516,9 @@ class TestTheDailyResetIsReachableWhileHalted:
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             v.roll_daily_boundary()
-            v.update_unrealized(_ntd(-6000), complete=True)  # the day's opening mark
+            v.update_unrealized(_ntd(-6000), complete=True)
             assert v.halt_triggered is False
-            v.update_unrealized(_ntd(-11_000), complete=True)  # 5,000 more lost today
+            v.update_unrealized(_ntd(-11_000), complete=True)
 
         assert v.halt_triggered is True
         assert v.daily_unrealized() == _ntd(-5000)
@@ -569,7 +539,6 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert v.halt_triggered is True
             boundary_before = v._current_reset_boundary_ns
 
-        # Clock corrected backwards, across the boundary, to the previous day.
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_BEFORE_BOUNDARY):
             v.update_unrealized(0, complete=True)
             v.roll_daily_boundary()
@@ -594,14 +563,12 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert v.halt_triggered is True
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
-            # The unpriced book reports 0, over and over.
             v.update_unrealized(0, complete=False)
             v.update_unrealized(0, complete=False)
 
         assert v.halt_triggered is True, "an unpriced book is not a flat book"
         assert v._halt_release_pending is True
 
-        # Prices come back; the same 0 now means something.
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
             v.update_unrealized(0, complete=True)
         assert v.halt_triggered is False
@@ -623,9 +590,8 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert v.halt_triggered is True
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
-            v.record_pnl("R47", -1)  # the late fill
+            v.record_pnl("R47", -1)
             assert v.halt_triggered is True, "a fill is not a valuation"
-            # And the supervisor can still re-arm afterwards.
             v.roll_daily_boundary()
             assert v.halt_triggered is True
             assert v._halt_release_pending is True
@@ -659,7 +625,6 @@ class TestTheDailyResetIsReachableWhileHalted:
             assert v.halt_triggered is False
 
         with mock.patch("hft_platform.core.timebase.now_ns", return_value=_AFTER_BOUNDARY):
-            # MtM is dead; only the calendar ticks.
             v.roll_daily_boundary()
             assert v._unrealized_pnl == 0, "a stale gain must not survive the day"
             v.record_pnl("R47", _ntd(-5500))

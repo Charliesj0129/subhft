@@ -35,23 +35,18 @@ impl AlphaTransientReprice {
 
         let k = self.window_size;
 
-        // Output array
         let mut signal = Array1::<f64>::zeros(n);
 
-        // Loop from k to n
-        // mid[t] = (bid[t] + ask[t]) / 2
         for t in k..n {
             let mid_now = (bid_p[t] + ask_p[t]) * 0.5;
             let mid_prev = (bid_p[t - k] + ask_p[t - k]) * 0.5;
 
-            // Avoid division by zero if mid_prev is somehow 0 (unlikely for price)
             let val = if mid_prev.abs() > 1e-9 {
                 (mid_now - mid_prev) / mid_prev
             } else {
                 0.0
             };
 
-            // Mean Reversion: invert the return
             signal[t] = -val;
         }
 

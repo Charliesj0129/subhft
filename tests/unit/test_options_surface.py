@@ -46,7 +46,7 @@ def test_surface_stale_iv_excluded():
 
     s = VolSurface()
     d = date(2026, 4, 15)
-    s.update(20000.0, d, 0.005)  # below 0.01 threshold
+    s.update(20000.0, d, 0.005)
     s.update(20500.0, d, 0.20)
     snap = s.snapshot()
     assert (d, 20000) not in snap
@@ -114,7 +114,7 @@ def test_surface_no_extrapolation():
     d = date(2026, 4, 15)
     s.update(19000.0, d, 0.25)
     s.update(20000.0, d, 0.20)
-    result = s.get_iv(18000.0, d)  # outside range
+    result = s.get_iv(18000.0, d)
     assert math.isnan(result)
 
 
@@ -126,7 +126,7 @@ def test_surface_spline_cache_invalidated_on_update():
     d = date(2026, 4, 15)
     for strike, iv in [(19000, 0.25), (19500, 0.22), (20000, 0.20), (20500, 0.21), (21000, 0.24)]:
         s.update(float(strike), d, iv)
-    iv1 = s.get_iv(19750.0, d)  # builds and caches spline
-    s.update(19500.0, d, 0.30)  # should invalidate cache
-    iv2 = s.get_iv(19750.0, d)  # rebuilds spline with new data
-    assert iv1 != iv2  # result should differ with updated IV
+    iv1 = s.get_iv(19750.0, d)
+    s.update(19500.0, d, 0.30)
+    iv2 = s.get_iv(19750.0, d)
+    assert iv1 != iv2

@@ -99,7 +99,7 @@ class TestScorecardAxes:
         assert axes["sample (§4)"] == "MISSING"
 
     def test_inapplicable_axis_marked_na(self, _isolated) -> None:
-        _record(run_id="nona")  # no trade_concentration gate
+        _record(run_id="nona")
         axes = dict((a, vd) for a, _v, vd in audit_cli.scorecard_axes(_row("nona")))
         assert axes["worst_loss<=50 (§5)"] == "n/a"
 

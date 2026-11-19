@@ -30,7 +30,6 @@ def _make_strategy(signal_threshold=0.3, stop_loss_ticks=10, tick_size=1.0, max_
     """Build a Strategy instance with Rust core stubbed out."""
     import sys
 
-    # Stub out hft_platform.rust_core so Strategy can be instantiated
     rust_mock = MagicMock()
     rust_mock.AlphaStrategy = _FakeCore
     sys.modules.setdefault("hft_platform.rust_core", rust_mock)
@@ -46,7 +45,6 @@ def _make_strategy(signal_threshold=0.3, stop_loss_ticks=10, tick_size=1.0, max_
         max_pos=max_pos,
         lot_size=lot_size,
     )
-    # Replace real core with stub
     strat.core = _FakeCore()
     return strat
 
@@ -76,18 +74,11 @@ def _bid_ask_event(symbol="BTCUSD", bids=None, asks=None):
     )
 
 
-# --------------------------------------------------------------------------- #
-# Helper to inject bbo state directly without going through on_book_update
-
-
 def _set_bbo(strat, bid: int, ask: int, entry: int | None = None, pos: int = 0):
     strat.best_bid = bid
     strat.best_ask = ask
     if entry is not None:
         strat._entry_price["BTCUSD"] = entry
-
-
-# --------------------------------------------------------------------------- #
 
 
 class TestLongStopLoss:
@@ -96,20 +87,18 @@ class TestLongStopLoss:
         ctx = _make_ctx(positions={"BTCUSD": 1})
         strat.ctx = ctx
 
-        entry = 1_000_000  # scaled int (price * 10_000 convention from default)
-        stop_dist = 10 * int(1.0 * 10_000)  # = 100_000
-        bid = entry - stop_dist - 1  # one tick below stop
+        entry = 1_000_000
+        stop_dist = 10 * int(1.0 * 10_000)
+        bid = entry - stop_dist - 1
         _set_bbo(strat, bid=bid, ask=bid + 10, entry=entry)
 
         strat._execute_on_signal("BTCUSD", signal=0.0)
 
-        # sell should have been called (close long)
         assert ctx.place_order.called
         call_kwargs = ctx.place_order.call_args.kwargs
         from hft_platform.contracts.strategy import Side
 
         assert call_kwargs["side"] == Side.SELL
-        # Entry price should be cleared
         assert "BTCUSD" not in strat._entry_price
 
     def test_stop_loss_does_not_fire_when_bid_at_threshold(self):
@@ -119,7 +108,7 @@ class TestLongStopLoss:
 
         entry = 1_000_000
         stop_dist = 10 * int(1.0 * 10_000)
-        bid = entry - stop_dist  # exactly at stop (< is strict)
+        bid = entry - stop_dist
         _set_bbo(strat, bid=bid, ask=bid + 10, entry=entry)
 
         strat._execute_on_signal("BTCUSD", signal=0.0)
@@ -130,7 +119,7 @@ class TestLongStopLoss:
         strat = _make_strategy()
         ctx = _make_ctx(positions={"BTCUSD": 1})
         strat.ctx = ctx
-        _set_bbo(strat, bid=100_000, ask=110_000)  # no entry set
+        _set_bbo(strat, bid=100_000, ask=110_000)
 
         strat._execute_on_signal("BTCUSD", signal=0.0)
 
@@ -144,8 +133,8 @@ class TestShortStopLoss:
         strat.ctx = ctx
 
         entry = 1_000_000
-        stop_dist = 5 * int(1.0 * 10_000)  # = 50_000
-        ask = entry + stop_dist + 1  # one tick above stop
+        stop_dist = 5 * int(1.0 * 10_000)
+        ask = entry + stop_dist + 1
         _set_bbo(strat, bid=ask - 10, ask=ask, entry=entry)
 
         strat._execute_on_signal("BTCUSD", signal=0.0)
@@ -164,7 +153,7 @@ class TestShortStopLoss:
 
         entry = 1_000_000
         stop_dist = 5 * int(1.0 * 10_000)
-        ask = entry + stop_dist  # exactly at (> is strict)
+        ask = entry + stop_dist
         _set_bbo(strat, bid=ask - 10, ask=ask, entry=entry)
 
         strat._execute_on_signal("BTCUSD", signal=0.0)
@@ -179,7 +168,7 @@ class TestEntryPriceTracking:
         strat.ctx = ctx
         bid, ask = 1_000_000, 1_010_000
         _set_bbo(strat, bid=bid, ask=ask)
-        strat.core.signal = 0.5  # above threshold
+        strat.core.signal = 0.5
 
         strat._execute_on_signal("BTCUSD", signal=0.5)
 

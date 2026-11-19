@@ -24,8 +24,6 @@ from hft_platform.ops.session_governor import SessionGovernor, SessionPhase, Tra
 
 _LIVE_CONFIG = Path(__file__).resolve().parents[2] / "config" / "base" / "session_governor.yaml"
 
-# TAIFEX futures delivery-month codes: A (Jan) .. L (Dec), followed by a single
-# year digit — TMFH6 is TMF + March + 2026.
 _MONTH_LETTERS = "ABCDEFGHIJKL"
 
 
@@ -98,8 +96,6 @@ class TestRootMembership:
         gate.get_phase("TMFH6")
         gate.register_symbol("TMFH6", "futures_night")
 
-        # TMFI6 resolves through the same root and must not have inherited
-        # futures_night from TMFH6's registration.
         assert gate.symbol_to_track["TMFH6"] == ["futures_day", "futures_night"]
         gate.get_phase("TMFI6")
         assert gate.symbol_to_track["TMFI6"] == ["futures_day"]
@@ -175,7 +171,6 @@ class TestLiveConfigCannotGoStale:
         offenders: list[str] = []
         for track_name, track in self._tracks().items():
             for symbol in track.get("symbols", []):
-                # <3-letter root><month letter><year digit>, e.g. TMFE6.
                 if len(symbol) == 5 and symbol[3] in _MONTH_LETTERS and symbol[4].isdigit():
                     offenders.append(f"{track_name}:{symbol}")
         assert not offenders, (

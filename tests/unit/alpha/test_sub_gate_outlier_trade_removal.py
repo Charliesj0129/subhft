@@ -22,9 +22,6 @@ class TestOutlierTradeRemovalGate:
         assert out.passed is True
 
     def test_fails_when_top_trades_carry_all_edge(self) -> None:
-        # 5 large winners dominate; after dropping top 5% by |value|, residual flips negative.
-        # total = 5*1000 + 195*(-1) = +4805  (positive, passes naive check)
-        # after drop: 190 * (-1) = -190      (negative, sign-flip -> gate rejects)
         gate = OutlierTradeRemovalGate()
         trades = [1000.0] * 5 + [-1.0] * 195
         r = _FakeResult(trade_pnl=trades)

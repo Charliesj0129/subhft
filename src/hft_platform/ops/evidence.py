@@ -29,10 +29,6 @@ class AutonomyEvidenceWriter:
         self.base_dir = Path(base_dir) if base_dir is not None else DEFAULT_AUTONOMY_EVIDENCE_DIR
         self._trading_date: date | None = None
         self._on_transition_callbacks: list[Callable[[dict[str, Any]], None]] = []
-        # Guards the multi-file write in record_transition. Since
-        # ``quarantine_async`` moved the durable write off the event loop this
-        # is load-bearing rather than insurance: the shared singleton writer is
-        # now reached from the loop, from executor threads, and from the CLI.
         self._transition_lock = Lock()
 
     def set_trading_date(self, d: date) -> None:
@@ -67,19 +63,6 @@ class AutonomyEvidenceWriter:
                 "manual_rearm_required": bool(manual_rearm_required),
                 "metadata": dict(metadata or {}),
             }
-            # ORDER MATTERS. runtime_state.json is the safety latch -- the only
-            # thing a restart reads back -- and everything else written here is
-            # audit trail: reconstructible from the latch and the logs, and
-            # fallible in ways the latch is not. A single corrupt
-            # ``summary.json`` (a non-integer ``transition_count`` is enough)
-            # used to raise out of this method *before* the latch was ever
-            # written, leaving the strategy quarantined in memory only. The next
-            # restart then found no latch and resumed a failing strategy with no
-            # operator re-arm -- an unauthenticated re-arm produced by the very
-            # routine that exists to prevent one.
-            #
-            # So: latch first, then audit, and an audit failure is logged rather
-            # than allowed to unwind the latch.
             if manual_rearm_required:
                 self.record_manual_rearm_requirement(
                     scope=scope,
@@ -87,17 +70,6 @@ class AutonomyEvidenceWriter:
                     metadata=metadata,
                 )
             elif self._is_strategy_rearm_ack(record):
-                # A recovery transition must reach runtime_state.json too -- it used
-                # not to, which is why nothing ever wrote the flag back to false and
-                # a stale false was indistinguishable from a fresh authorization.
-                #
-                # But ONLY an explicit, correlated strategy re-arm may do so. Most
-                # false transitions are not recoveries at all: HFTSystem.run()
-                # records `system_start` with manual_rearm_required=False on every
-                # boot, and projecting that would clear a genuine platform latch
-                # that no operator had re-armed -- turning a restart into an
-                # unauthorised HALT release. Fail-closed means a transition that
-                # cannot prove it is a recovery must not clear anything.
                 self._update_runtime_state(record)
 
             self._write_audit_trail(record)
@@ -152,8 +124,6 @@ class AutonomyEvidenceWriter:
             "reason": str(reason),
             "metadata": dict(metadata or {}),
         }
-        # Latch first, note second -- same reason as record_transition: the
-        # markdown is a human convenience and the JSON is the safety state.
         self._update_runtime_state(record)
         self._audit(
             "manual_rearm_requirements.md",
@@ -173,7 +143,7 @@ class AutonomyEvidenceWriter:
         """
         try:
             write()
-        except Exception as exc:  # noqa: BLE001 -- an audit gap must not undo a latch
+        except Exception as exc:
             logger.error("autonomy_evidence_write_failed", artifact=what, error=str(exc))
 
     def _write_audit_trail(self, record: dict[str, Any]) -> None:
@@ -263,11 +233,7 @@ class AutonomyEvidenceWriter:
 
         with locked_state(self.base_dir / "runtime_state.json") as state:
             if scope == "platform":
-                # Only reachable with required=True; see _is_strategy_rearm_ack.
                 platform = state["platform"]
-                # One id per incident: the re-arm token covers it, so a release
-                # quoted for an earlier latch with the same reason cannot clear
-                # this one. Re-recording the latch already held keeps its id.
                 same_incident = (
                     bool(platform.get("manual_rearm_required"))
                     and platform.get("reason") == record["reason"]
@@ -288,26 +254,9 @@ class AutonomyEvidenceWriter:
                         }
                         token = metadata.get("quarantine_token")
                         if isinstance(token, str) and token:
-                            # The operator's re-arm must name this exact token,
-                            # so a request aimed at an earlier quarantine cannot
-                            # clear it.
                             entry["quarantine_token"] = token
                         strategies[strategy_id] = entry
                     else:
-                        # Recovery: drop the flag AND the consumed request, so
-                        # the same request can never be replayed against a later
-                        # quarantine of the same strategy.
-                        #
-                        # Clear only the latch this acknowledgement names. The
-                        # governor's token check guards one process's in-memory
-                        # state, and session ownership is advisory, so two
-                        # engines can overlap: an acknowledgement minted for
-                        # token T1 must not erase a T2 quarantine another
-                        # process persisted in between -- the next restart would
-                        # then hydrate nothing and resume a strategy no operator
-                        # authorized. The ``required`` branch above records the
-                        # token precisely so this branch can compare it, under
-                        # the same lock that is about to write.
                         acked = metadata.get("quarantine_token")
                         acked = acked if isinstance(acked, str) and acked else None
                         persisted_entry = strategies.get(strategy_id)
@@ -315,8 +264,6 @@ class AutonomyEvidenceWriter:
                             persisted_entry.get("quarantine_token") if isinstance(persisted_entry, dict) else None
                         )
                         persisted = persisted if isinstance(persisted, str) and persisted else None
-                        # A latch with no persisted token predates tokens; refusing
-                        # there would make it permanently unclearable.
                         if persisted is not None and acked != persisted:
                             logger.warning(
                                 "stale_strategy_rearm_ack_ignored",

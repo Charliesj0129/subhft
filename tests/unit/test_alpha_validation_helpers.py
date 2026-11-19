@@ -29,13 +29,8 @@ from hft_platform.alpha._validation_helpers import (
     _write_json,
 )
 
-# ---------------------------------------------------------------------------
-# _validate_alpha_id
-# ---------------------------------------------------------------------------
-
 
 def test_validate_alpha_id_valid():
-    # Should not raise — valid lowercase alpha_id with underscore
     result = _validate_alpha_id("ofi_mc")
     assert result is None
 
@@ -61,14 +56,12 @@ def test_validate_alpha_id_empty_raises():
 
 
 def test_validate_alpha_id_too_long_raises():
-    # max 64 chars: 1 start + 63 rest = 64 total
     long_id = "a" * 65
     with pytest.raises(ValueError, match="Invalid alpha_id"):
         _validate_alpha_id(long_id)
 
 
 def test_validate_alpha_id_max_length_allowed():
-    # Exactly 64 chars is valid — should not raise
     max_id = "a" + "b" * 63
     result = _validate_alpha_id(max_id)
     assert result is None
@@ -77,11 +70,6 @@ def test_validate_alpha_id_max_length_allowed():
 def test_validate_alpha_id_non_string_raises():
     with pytest.raises(ValueError, match="Invalid alpha_id"):
         _validate_alpha_id(123)  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# _resolve_data_path
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_data_path_absolute_unchanged(tmp_path):
@@ -93,11 +81,6 @@ def test_resolve_data_path_absolute_unchanged(tmp_path):
 def test_resolve_data_path_relative_joined_to_root(tmp_path):
     result = _resolve_data_path(tmp_path, "data/file.npy")
     assert result == str((tmp_path / "data" / "file.npy").resolve())
-
-
-# ---------------------------------------------------------------------------
-# _resolve_allowed_data_roots
-# ---------------------------------------------------------------------------
 
 
 def _make_validation_config(allowed_data_roots=()) -> "ValidationConfig":
@@ -139,11 +122,6 @@ def test_resolve_allowed_data_roots_skips_blank_entries(tmp_path):
     assert result == []
 
 
-# ---------------------------------------------------------------------------
-# _path_under_any
-# ---------------------------------------------------------------------------
-
-
 def test_path_under_any_exact_match(tmp_path):
     assert _path_under_any(tmp_path, [tmp_path]) is True
 
@@ -160,11 +138,6 @@ def test_path_under_any_outside_all_roots(tmp_path):
 
 def test_path_under_any_empty_roots(tmp_path):
     assert _path_under_any(tmp_path, []) is False
-
-
-# ---------------------------------------------------------------------------
-# _missing_or_blank_metadata_keys
-# ---------------------------------------------------------------------------
 
 
 def test_missing_metadata_key_absent():
@@ -202,11 +175,6 @@ def test_missing_metadata_key_non_empty_list_is_ok():
     assert "fields" not in result
 
 
-# ---------------------------------------------------------------------------
-# _dataset_row_count
-# ---------------------------------------------------------------------------
-
-
 def test_dataset_row_count_1d_npy(tmp_path):
     arr = np.arange(50, dtype=np.float64)
     p = tmp_path / "data.npy"
@@ -240,7 +208,6 @@ def test_dataset_row_count_scalar_npy(tmp_path):
     p = tmp_path / "scalar.npy"
     np.save(str(p), arr)
     count = _dataset_row_count(p)
-    # Scalar arrays: ndim==0, size==1
     assert count == 1
 
 
@@ -249,7 +216,6 @@ def test_dataset_row_count_returns_none_when_arr_operations_fail(tmp_path, monke
     arr = np.arange(10, dtype=np.float64)
     p = tmp_path / "data.npy"
     np.save(str(p), arr)
-    # Patch np.asarray to raise inside the try block
     import hft_platform.alpha._validation_helpers as vh
 
     original_asarray = np.asarray
@@ -260,11 +226,6 @@ def test_dataset_row_count_returns_none_when_arr_operations_fail(tmp_path, monke
     monkeypatch.setattr(vh.np, "asarray", _bad_asarray)
     result = _dataset_row_count(p)
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _has_hftbt_data
-# ---------------------------------------------------------------------------
 
 
 def test_has_hftbt_data_named_hftbt_npz(tmp_path):
@@ -287,11 +248,6 @@ def test_has_hftbt_data_no_match(tmp_path):
 
 def test_has_hftbt_data_empty_list():
     assert _has_hftbt_data([]) is False
-
-
-# ---------------------------------------------------------------------------
-# _load_dataset_metadata
-# ---------------------------------------------------------------------------
 
 
 def test_load_dataset_metadata_finds_meta_json(tmp_path):
@@ -318,7 +274,7 @@ def test_load_dataset_metadata_invalid_json(tmp_path):
 def test_load_dataset_metadata_non_dict_payload(tmp_path):
     data_path = tmp_path / "data.npy"
     meta_path = tmp_path / "data.npy.meta.json"
-    meta_path.write_text(json.dumps([1, 2, 3]))  # list, not dict
+    meta_path.write_text(json.dumps([1, 2, 3]))
     result, found_path, err = _load_dataset_metadata(data_path)
     assert result is None
     assert err == "invalid_format"
@@ -332,21 +288,11 @@ def test_load_dataset_metadata_missing_file(tmp_path):
     assert err == "missing_meta_file"
 
 
-# ---------------------------------------------------------------------------
-# _dataset_metadata_candidates
-# ---------------------------------------------------------------------------
-
-
 def test_dataset_metadata_candidates_returns_four_paths(tmp_path):
     data_path = tmp_path / "data.npy"
     candidates = _dataset_metadata_candidates(data_path)
     assert len(candidates) == 4
     assert all(isinstance(p, Path) for p in candidates)
-
-
-# ---------------------------------------------------------------------------
-# _resolve_first_data_meta_path
-# ---------------------------------------------------------------------------
 
 
 def test_resolve_first_data_meta_path_finds_existing(tmp_path):
@@ -368,11 +314,6 @@ def test_resolve_first_data_meta_path_empty_list():
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# _write_json
-# ---------------------------------------------------------------------------
-
-
 def test_write_json_creates_file_with_content(tmp_path):
     path = tmp_path / "out" / "report.json"
     payload = {"key": "value", "num": 42}
@@ -386,11 +327,6 @@ def test_write_json_creates_parent_dirs(tmp_path):
     path = tmp_path / "a" / "b" / "c" / "report.json"
     _write_json(path, {"x": 1})
     assert path.exists()
-
-
-# ---------------------------------------------------------------------------
-# _pushd
-# ---------------------------------------------------------------------------
 
 
 def test_pushd_changes_and_restores_cwd(tmp_path):
@@ -410,22 +346,12 @@ def test_pushd_restores_cwd_on_exception(tmp_path):
     assert Path.cwd() == original
 
 
-# ---------------------------------------------------------------------------
-# _make_validation_artifact_dir
-# ---------------------------------------------------------------------------
-
-
 def test_make_validation_artifact_dir_creates_dir(tmp_path):
     experiments_base = tmp_path / "research" / "experiments"
     result = _make_validation_artifact_dir(experiments_base, "ofi_mc")
     assert result.exists()
     assert result.is_dir()
     assert "ofi_mc" in str(result)
-
-
-# ---------------------------------------------------------------------------
-# _ensure_project_root_on_path
-# ---------------------------------------------------------------------------
 
 
 def test_ensure_project_root_on_path_adds_root_to_sys_path(tmp_path):

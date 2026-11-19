@@ -20,7 +20,7 @@ from hft_platform.risk.validators import DailyLossLimitValidator, PositionLimitV
 
 def _make_intent(
     qty: int = 10,
-    price: int = 1_000_000,  # 100.0000 scaled x10000
+    price: int = 1_000_000,
     strategy_id: str = "strat_a",
     symbol: str = "2330",
     intent_type: IntentType = IntentType.NEW,
@@ -50,11 +50,6 @@ def _make_config(
         "strategies": strategies or {},
     }
     return cfg
-
-
-# ---------------------------------------------------------------------------
-# PositionLimitValidator tests
-# ---------------------------------------------------------------------------
 
 
 class TestPositionLimitValidator(unittest.TestCase):
@@ -103,13 +98,11 @@ class TestPositionLimitValidator(unittest.TestCase):
         strategies = {"strat_a": {"max_position_lots": 5}}
         validator = self._make_validator(max_lots=100, strategies=strategies)
 
-        # strat_a is limited to 5
         intent_a = _make_intent(qty=6, strategy_id="strat_a")
         ok, reason = validator.check(intent_a)
         self.assertFalse(ok)
         self.assertIn("POSITION_LIMIT_EXCEEDED", reason)
 
-        # strat_b falls back to global default (100)
         intent_b = _make_intent(qty=50, strategy_id="strat_b")
         ok, reason = validator.check(intent_b)
         self.assertTrue(ok)
@@ -117,7 +110,6 @@ class TestPositionLimitValidator(unittest.TestCase):
     def test_abs_qty_used_for_sell_side(self) -> None:
         """Negative qty (sell) should use abs value for comparison."""
         validator = self._make_validator(max_lots=50)
-        # Sell intent with qty=60 exceeds limit of 50
         intent = _make_intent(qty=60, intent_type=IntentType.NEW)
         intent = OrderIntent(
             intent_id=2,
@@ -180,11 +172,6 @@ class TestPositionLimitValidator(unittest.TestCase):
         self.assertEqual(cfg["intraday_pnl"]["hard_limit_ntd"], 5000)
 
 
-# ---------------------------------------------------------------------------
-# DailyLossLimitValidator tests
-# ---------------------------------------------------------------------------
-
-
 class TestDailyLossLimitValidator(unittest.TestCase):
     def _make_validator(
         self, max_daily_loss: int = 500_000_000, strategies: dict | None = None
@@ -201,14 +188,14 @@ class TestDailyLossLimitValidator(unittest.TestCase):
 
     def test_allows_order_when_loss_below_limit(self) -> None:
         validator = self._make_validator(max_daily_loss=500_000_000)
-        validator.record_pnl("strat_a", -100_000_000)  # loss of 100M < limit 500M
+        validator.record_pnl("strat_a", -100_000_000)
         intent = _make_intent()
         ok, reason = validator.check(intent)
         self.assertTrue(ok)
 
     def test_rejects_order_when_loss_at_limit(self) -> None:
         validator = self._make_validator(max_daily_loss=500_000_000)
-        validator.record_pnl("strat_a", -500_000_000)  # exactly at limit
+        validator.record_pnl("strat_a", -500_000_000)
         intent = _make_intent()
         ok, reason = validator.check(intent)
         self.assertFalse(ok)
@@ -216,7 +203,7 @@ class TestDailyLossLimitValidator(unittest.TestCase):
 
     def test_rejects_order_when_loss_exceeds_limit(self) -> None:
         validator = self._make_validator(max_daily_loss=500_000_000)
-        validator.record_pnl("strat_a", -600_000_000)  # 600M > 500M limit
+        validator.record_pnl("strat_a", -600_000_000)
         intent = _make_intent()
         ok, reason = validator.check(intent)
         self.assertFalse(ok)
@@ -225,7 +212,6 @@ class TestDailyLossLimitValidator(unittest.TestCase):
     def test_tracks_losses_per_strategy(self) -> None:
         """Losses must be tracked independently per strategy."""
         validator = self._make_validator(max_daily_loss=500_000_000)
-        # strat_a hits limit, strat_b does not
         validator.record_pnl("strat_a", -600_000_000)
         validator.record_pnl("strat_b", -100_000_000)
 
@@ -244,13 +230,11 @@ class TestDailyLossLimitValidator(unittest.TestCase):
         validator = self._make_validator(max_daily_loss=500_000_000)
         validator.record_pnl("strat_a", -200_000_000)
         validator.record_pnl("strat_a", -200_000_000)
-        # Total = -400M, below 500M limit
         intent = _make_intent()
         ok, _ = validator.check(intent)
         self.assertTrue(ok)
 
         validator.record_pnl("strat_a", -200_000_000)
-        # Total = -600M, exceeds 500M limit
         ok, reason = validator.check(intent)
         self.assertFalse(ok)
         self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", reason)
@@ -258,9 +242,8 @@ class TestDailyLossLimitValidator(unittest.TestCase):
     def test_gain_offsets_loss(self) -> None:
         """Gains recorded after losses should reduce effective daily loss."""
         validator = self._make_validator(max_daily_loss=500_000_000)
-        validator.record_pnl("strat_a", -600_000_000)  # exceeds limit
-        validator.record_pnl("strat_a", 200_000_000)  # gain of 200M
-        # Net = -400M, below 500M limit — should now pass
+        validator.record_pnl("strat_a", -600_000_000)
+        validator.record_pnl("strat_a", 200_000_000)
         intent = _make_intent()
         ok, reason = validator.check(intent)
         self.assertTrue(ok)
@@ -280,12 +263,10 @@ class TestDailyLossLimitValidator(unittest.TestCase):
         validator = self._make_validator(max_daily_loss=500_000_000)
         validator.record_pnl("strat_a", -600_000_000)
 
-        # Sanity: currently over limit
         intent = _make_intent()
         ok, _ = validator.check(intent)
         self.assertFalse(ok)
 
-        # Simulate date rollover by patching _today_midnight_ns to return tomorrow
         tomorrow_midnight_ns = validator._current_reset_boundary_ns + DailyLossLimitValidator._NS_PER_DAY
         with patch.object(
             DailyLossLimitValidator,
@@ -294,7 +275,6 @@ class TestDailyLossLimitValidator(unittest.TestCase):
         ):
             ok, reason = validator.check(intent)
 
-        # After reset, accumulated losses are cleared — should pass
         self.assertTrue(ok)
         self.assertEqual(reason, "OK")
         self.assertEqual(validator._accumulated_loss, {})
@@ -304,14 +284,12 @@ class TestDailyLossLimitValidator(unittest.TestCase):
         strategies = {"strat_a": {"max_daily_loss": 100_000_000}}
         validator = self._make_validator(max_daily_loss=500_000_000, strategies=strategies)
 
-        # strat_a hits its own tighter limit of 100M
         validator.record_pnl("strat_a", -150_000_000)
         intent_a = _make_intent(strategy_id="strat_a")
         ok, reason = validator.check(intent_a)
         self.assertFalse(ok)
         self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", reason)
 
-        # strat_b uses global default (500M) — 150M loss is fine
         validator.record_pnl("strat_b", -150_000_000)
         intent_b = _make_intent(strategy_id="strat_b")
         ok, reason = validator.check(intent_b)

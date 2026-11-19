@@ -24,7 +24,6 @@ logger = structlog.get_logger(__name__)
 
 def cmd_feed_status(args: argparse.Namespace) -> None:
     print("Feed status command is lightweight; ensure service is running.")
-    # Try reading Prometheus metrics if reachable
     import urllib.request
 
     try:
@@ -73,7 +72,6 @@ def cmd_diag(args: argparse.Namespace) -> None:
                 print(json.dumps(rec, ensure_ascii=False))
         return
 
-    # Minimal diag stub
     print("Diag:")
     print("- Check metrics at http://localhost:9090/metrics")
     print("- Common fixes: verify credentials, check network, ensure queues not full.")
@@ -103,7 +101,7 @@ def cmd_contracts_status(args: argparse.Namespace) -> None:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=_dt.timezone.utc)
             age_s = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds()
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             age_s = None
     try:
         stale_after = float(os.getenv("HFT_CONTRACT_REFRESH_S", str(args.stale_after_s)))
@@ -209,16 +207,11 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             print(f"Failed to import backtest modules: {exc}")
             sys.exit(1)
 
-        # If strategy provided, use adapter; else simple buy-hold runner.
         if args.strategy_module:
             if len(args.data) > 1:
                 print("Strategy bridge currently supports single-asset backtest; provide one data file.")
                 sys.exit(1)
             adapter = StrategyHbtAdapter(
-                # ``data``, not ``data_path``: the keyword never matched the
-                # signature, so ``hft backtest run --strategy-module ...`` died
-                # with TypeError on every invocation. Only tests/blackbox
-                # exercises this path, and no CI job runs that tier.
                 data=args.data[0],
                 strategy_module=args.strategy_module,
                 strategy_class=args.strategy_class or "SimpleMarketMaker",
@@ -282,8 +275,7 @@ def cmd_recorder_status(args: argparse.Namespace) -> None:
     wal_disk_min_mb = os.getenv("HFT_WAL_DISK_MIN_MB", "500")
     wal_pressure_policy = os.getenv("HFT_WAL_DISK_PRESSURE_POLICY", "drop")
 
-    # WAL backlog scan
-    wal_files: list[tuple[str, float, int]] = []  # (name, mtime, size)
+    wal_files: list[tuple[str, float, int]] = []
     try:
         with os.scandir(wal_dir) as it:
             for entry in it:
@@ -308,7 +300,6 @@ def cmd_recorder_status(args: argparse.Namespace) -> None:
             return f"{b / 1024:.1f} KB"
         return f"{b} B"
 
-    # Disk free
     disk_free_str = "unknown"
     try:
         st_vfs = os.statvfs(wal_dir if os.path.exists(wal_dir) else ".")
@@ -317,16 +308,15 @@ def cmd_recorder_status(args: argparse.Namespace) -> None:
             disk_free_str = f"{free_mb / 1024:.1f} GB"
         else:
             disk_free_str = f"{free_mb:.0f} MB"
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         pass
 
-    # WAL guard status
     try:
         guard_threshold_mb = int(wal_disk_min_mb)
         disk_free_mb_val = st_vfs.f_frsize * st_vfs.f_bavail / 1024 / 1024
         guard_active = disk_free_mb_val < guard_threshold_mb
         guard_str = "ACTIVE" if guard_active else "OFF"
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         guard_str = "unknown"
 
     if oldest_age_s is not None:
@@ -334,13 +324,12 @@ def cmd_recorder_status(args: argparse.Namespace) -> None:
     else:
         backlog_str = f"{wal_count} files"
 
-    # ClickHouse reachability
     ck_status = "unreachable"
     try:
         resp = urllib.request.urlopen(f"http://{ck_host}:{ck_port}/ping", timeout=2.0)  # nosec B310
         if resp.status == 200:
             ck_status = "ok"
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         pass
 
     ck_pool = os.getenv("HFT_CLICKHOUSE_POOL_SIZE", "8")
@@ -368,10 +357,6 @@ def cmd_ops_rearm_strategy(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc
-    # Say what actually happened. The old message claimed "Strategy re-armed"
-    # while writing a flag nothing consumed, so a dead strategy looked recovered
-    # to the operator who ran this. The engine applies the request on its next
-    # supervisor tick; confirm via strategy_quarantine_active.
     print(
         f"Re-arm requested for {args.strategy_id} (request_id={request_id}). "
         "The engine applies it on its next supervisor tick; confirm with "
@@ -415,8 +400,6 @@ def cmd_ops_rearm_platform(args: argparse.Namespace) -> None:
     except ValueError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-    # A request, not an outcome: the engine clears reduce-only on its next
-    # supervisor tick (log: platform_reduce_only_force_cleared).
     print(
         f"Platform re-arm requested (audit: {gate.state_path.parent / REARM_AUDIT_FILE}). "
         "The engine applies it on its next supervisor tick; confirm with platform_reduce_only == 0."
@@ -487,7 +470,6 @@ def cmd_ops_flatten(args: argparse.Namespace) -> None:
 
     logger.info("ops_flatten_start", scope=scope, scope_id=scope_id, deadline=deadline)
 
-    # Wait past the engine's own deadline so its verdict, not ours, is reported.
     result = _flatten_via_gate(scope=scope, scope_id=scope_id, deadline=deadline, poll_timeout_s=deadline + 30.0)
 
     if result is None:

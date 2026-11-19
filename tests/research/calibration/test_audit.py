@@ -15,9 +15,11 @@ from research.calibration.audit import (
 
 def test_instrument_audit_result_is_frozen():
     r = InstrumentAuditResult(
-        instrument="TMFD6", source="ck_export",
+        instrument="TMFD6",
+        source="ck_export",
         date_range=("2026-01-27", "2026-02-25"),
-        n_trading_days=7, n_fills=150,
+        n_trading_days=7,
+        n_fills=150,
         n_fills_with_queue_position=0,
         n_fills_with_decision_price=0,
         n_fills_with_latency=0,
@@ -31,9 +33,11 @@ def test_instrument_audit_result_is_frozen():
 
 def test_instrument_audit_result_to_dict():
     r = InstrumentAuditResult(
-        instrument="TMFD6", source="ck_export",
+        instrument="TMFD6",
+        source="ck_export",
         date_range=("2026-01-27", "2026-02-25"),
-        n_trading_days=7, n_fills=150,
+        n_trading_days=7,
+        n_fills=150,
         n_fills_with_queue_position=0,
         n_fills_with_decision_price=0,
         n_fills_with_latency=0,
@@ -73,7 +77,6 @@ def test_audit_ck_export_parquet_skips_invalid_date_filename(tmp_path):
     good = inst_dir / "2026-03-19.parquet"
     pd.DataFrame({"a": [1]}).to_parquet(good)
     results = audit_ck_export_parquet(tmp_path)
-    # Only the good file should be counted
     assert len(results) == 1
     assert results[0].n_trading_days == 1
     assert results[0].date_range == ("2026-03-19", "2026-03-19")
@@ -99,12 +102,13 @@ def test_audit_clickhouse_fills_empty_returns_empty():
 
 def test_audit_clickhouse_fills_returns_results():
     client = MagicMock()
-    client.query_df.return_value = pd.DataFrame({
-        "symbol": ["TMFD6"] * 3 + ["TXFD6"] * 2,
-        "trading_day": ["2026-03-01", "2026-03-02", "2026-03-03",
-                         "2026-03-01", "2026-03-02"],
-        "n_fills": [10, 12, 8, 5, 7],
-    })
+    client.query_df.return_value = pd.DataFrame(
+        {
+            "symbol": ["TMFD6"] * 3 + ["TXFD6"] * 2,
+            "trading_day": ["2026-03-01", "2026-03-02", "2026-03-03", "2026-03-01", "2026-03-02"],
+            "n_fills": [10, 12, 8, 5, 7],
+        }
+    )
     results = audit_clickhouse_fills(client)
     assert len(results) == 2
     assert {r.instrument for r in results} == {"TMFD6", "TXFD6"}
@@ -143,9 +147,11 @@ def test_audit_all_computes_intersection(sample_ck_export_parquet, tmp_path):
 
 def test_find_l2_data_days_from_ch_with_client():
     client = MagicMock()
-    client.query_df.return_value = pd.DataFrame({
-        "trading_day": ["2026-04-10", "2026-04-09", "2026-04-08"],
-    })
+    client.query_df.return_value = pd.DataFrame(
+        {
+            "trading_day": ["2026-04-10", "2026-04-09", "2026-04-08"],
+        }
+    )
     days = find_l2_data_days_from_ch("TMFD6", client)
     assert days == ["2026-04-08", "2026-04-09", "2026-04-10"]
 

@@ -77,7 +77,7 @@ def test_backup_never_overwrites_existing_bundle(tmp_path: Path, capsys) -> None
     first = list(dest.glob("*.bundle"))[0]
     original = first.read_bytes()
 
-    assert _run(repo, dest) == 2  # same stamp + same HEAD -> same name
+    assert _run(repo, dest) == 2
     assert "refusing to overwrite" in capsys.readouterr().out
     assert first.read_bytes() == original
 

@@ -15,7 +15,6 @@ import structlog
 
 logger = structlog.get_logger("feed_adapter.fubon.session_runtime")
 
-# Default reconnect cooldown in seconds.
 _DEFAULT_RECONNECT_COOLDOWN_S: float = 5.0
 
 
@@ -56,10 +55,6 @@ class FubonSessionRuntime:
         )
         self._login_latency_ns: int = 0
 
-    # ------------------------------------------------------------------ #
-    # Properties
-    # ------------------------------------------------------------------ #
-
     @property
     def is_logged_in(self) -> bool:
         """Return ``True`` if the session is currently authenticated."""
@@ -69,10 +64,6 @@ class FubonSessionRuntime:
     def account(self) -> Any:
         """Return the active trading account (set after successful login)."""
         return self._account
-
-    # ------------------------------------------------------------------ #
-    # Login
-    # ------------------------------------------------------------------ #
 
     def login(
         self,
@@ -129,10 +120,6 @@ class FubonSessionRuntime:
             )
             return False
 
-    # ------------------------------------------------------------------ #
-    # Login with retry
-    # ------------------------------------------------------------------ #
-
     def login_with_retry(
         self,
         max_retries: int = 3,
@@ -170,10 +157,6 @@ class FubonSessionRuntime:
         )
         return False
 
-    # ------------------------------------------------------------------ #
-    # Logout
-    # ------------------------------------------------------------------ #
-
     def logout(self) -> None:
         """Graceful SDK disconnect."""
         try:
@@ -182,10 +165,6 @@ class FubonSessionRuntime:
             logger.warning("fubon_logout_error", error=str(exc))
         self._logged_in = False
         logger.info("fubon_logged_out")
-
-    # ------------------------------------------------------------------ #
-    # Reconnect
-    # ------------------------------------------------------------------ #
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
         """Logout then login_with_retry, respecting a cooldown guard.
@@ -212,10 +191,6 @@ class FubonSessionRuntime:
         self.logout()
         return self.login_with_retry()
 
-    # ------------------------------------------------------------------ #
-    # Refresh token (re-login; Fubon has no token refresh API)
-    # ------------------------------------------------------------------ #
-
     def refresh_token(self) -> bool:
         """Refresh the session by performing a full logout/login cycle.
 
@@ -225,10 +200,6 @@ class FubonSessionRuntime:
         logger.info("fubon_refresh_token_start")
         self.logout()
         return self.login()
-
-    # ------------------------------------------------------------------ #
-    # Snapshot
-    # ------------------------------------------------------------------ #
 
     def snapshot(self) -> dict[str, Any]:
         """Return a dict describing the current session state."""

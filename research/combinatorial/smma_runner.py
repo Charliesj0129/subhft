@@ -80,12 +80,6 @@ from research.combinatorial.tick_dataset import (
     load_governed_tick_dataset,
 )
 
-# A mining run's active family determines the concrete dataset type: "smma",
-# "bidask" and "kbar" all read the SMMA-governed BarDataset (bidask reuses its
-# existing bid/ask columns, kbar its OHLCV columns), while "tick" reads the
-# independent TickBarDataset. Every
-# generic MiningRun code path (split planning, robustness slicing, fill
-# simulation) only ever touches fields both dataclasses share.
 GovernedBars = BarDataset | TickBarDataset
 
 RUN_SCHEMA = "alpha_mining_run.v3"
@@ -110,8 +104,6 @@ RSS_PAUSE_BYTES = 18 * 1024**3
 RSS_STOP_BYTES = 20 * 1024**3
 OUTPUT_STOP_BYTES = 100 * 1024**3
 
-# A candidate that fails a screen is screened out, not killed: KILL is the governed
-# verdict (status.py), and these rows are search-stage dispositions.
 SCREENED_OUT = "screened_out"
 _TESTED_STATUSES = frozenset({"passed", SCREENED_OUT})
 
@@ -2064,8 +2056,6 @@ class MiningRun:
             locked_results.append(result)
             pvalues.append(max(locked.bootstrap_pvalue, locked.permutation_pvalue))
             self._checkpoint(stage="locked_validation", state=checkpoint_state())
-        # BH counts every candidate the ledger has seen tested on locked validation,
-        # including ones whose p-values are not in hand (a resumed or repeated stage).
         tested_ids = {str(row.get("candidate_id")) for row in self._ledger.rows(stage="locked_validation")}
         tested_ids.update(result.candidate.candidate_id for result in locked_results)
         bh_n_tests = max(len(pvalues), len(tested_ids))

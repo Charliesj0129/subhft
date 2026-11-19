@@ -50,9 +50,9 @@ class _SequenceHbt:
 
     def wait_next_feed(self, *_args, **_kwargs) -> int:
         if self._idx + 1 >= len(self._depths):
-            return 1  # done
+            return 1
         self._idx += 1
-        return 2  # feed available (modern)
+        return 2
 
     @property
     def current_timestamp(self) -> int:
@@ -97,7 +97,7 @@ class _RecordingStrategy(BaseStrategy):
         super().__init__(strategy_id, **kwargs)
         self.captured: list[FrameResult] = []
 
-    def handle_event(self, ctx, event):  # noqa: ANN001
+    def handle_event(self, ctx, event):
         if isinstance(event, FeatureUpdateEvent):
             self.captured.append(
                 FrameResult(
@@ -153,7 +153,6 @@ def _build_sequence() -> tuple[list[_Depth], list[int], list[LobInputFrame]]:
 
 def test_full_adapter_feature_path_matches_shared_python(monkeypatch) -> None:
     if not getattr(hbt_adapter, "HFTBACKTEST_AVAILABLE", False):
-        # Stub forces availability; this guard is defensive for import-time failures.
         pass
 
     depths, timestamps, frames = _build_sequence()

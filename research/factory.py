@@ -20,17 +20,17 @@ ROOT = Path(__file__).resolve().parent
 
 ALLOWED_ROOT_DIRS: set[str] = {
     ".benchmarks",
-    "__pycache__",  # tolerated; clean command removes it
+    "__pycache__",
     "alphas",
     "arxiv_paper",
     "arxiv_papers",
     "archive",
     "backtest",
-    "calibration",  # research.calibration package (audit.py, cli.py, replay.py …)
-    "candidate_loop",  # research.candidate_loop package — governed candidate generation loop (tracked, tested)
+    "calibration",
+    "candidate_loop",
     "combinatorial",
     "data",
-    "data_pipeline",  # research.data_pipeline package — canonical L2+tick export contract
+    "data_pipeline",
     "experiments",
     "knowledge",
     "logs",
@@ -39,9 +39,9 @@ ALLOWED_ROOT_DIRS: set[str] = {
     "results_batch7",
     "registry",
     "results",
-    "strategy_archive",  # load-bearing: config/live/strategies.yaml + loop_v1 charter pin this path
-    "t1",  # research.t1 package — TXF-led mainline (regime_viability.py et al.)
-    "templates",  # canonical authoring templates, including strategy_spec.yaml
+    "strategy_archive",
+    "t1",
+    "templates",
     "tools",
 }
 
@@ -179,7 +179,6 @@ def _audit_alpha_contract(errors: list[str], warnings: list[str], details: dict[
         if not test_files:
             missing_tests[alpha_dir.name] = str((alpha_dir / "tests").relative_to(ROOT))
 
-    # Second pass: detect ungoverned flat .py files at the alphas/ root level.
     ungoverned_scripts = [
         p.name for p in sorted(alphas_root.iterdir()) if p.is_file() and p.suffix == ".py" and p.name != "__init__.py"
     ]
@@ -190,7 +189,6 @@ def _audit_alpha_contract(errors: list[str], warnings: list[str], details: dict[
             + ". Move to research/archive/implementations/ or scaffold as governed alphas."
         )
 
-    # Third pass: check skills_used / roles_used in manifests via AlphaRegistry.
     alphas_missing_skills: list[str] = []
     alphas_missing_roles: list[str] = []
     try:
@@ -205,7 +203,7 @@ def _audit_alpha_contract(errors: list[str], warnings: list[str], details: dict[
             if not getattr(manifest, "roles_used", ()):
                 alphas_missing_roles.append(alpha_id)
     except Exception:
-        pass  # registry errors are surfaced separately
+        pass
 
     if alphas_missing_skills:
         warnings.append(
@@ -1829,10 +1827,6 @@ def _research_candidate_blockers(
         blockers.append("min_round_trips_not_met")
     if not _metric_at_least(oos_days, min_oos_days):
         blockers.append("min_oos_trading_days_not_met")
-    # Fail closed: the drawdown gate must be *explicitly* True to clear.  A
-    # missing gate (None / absent from the validation summary) is unproven
-    # drawdown control, not implicit agreement, so it blocks paper/live
-    # eligibility exactly like an outright failure.
     if drawdown_gate is not True:
         blockers.append("drawdown_gate_failed")
     blockers.extend(

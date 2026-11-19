@@ -41,13 +41,11 @@ def test_invoke_sub_gates_maker_includes_fill_quality():
     )
 
     names = {r["name"] for r in results}
-    # Maker sub-gates should include common + maker-specific
     assert "sharpe_threshold" in names
     assert "max_drawdown" in names
     assert "winning_day_pct" in names
     assert "fill_quality" in names
     assert "fill_rate_validation" in names
-    # Taker-specific should NOT be in maker
     assert "ic_evaluation" not in names
 
 
@@ -85,7 +83,6 @@ def test_invoke_sub_gates_taker_includes_ic_evaluation():
     names = {r["name"] for r in results}
     assert "sharpe_threshold" in names
     assert "ic_evaluation" in names
-    # Maker-specific should NOT be in taker
     assert "fill_quality" not in names
     assert "fill_rate_validation" not in names
 
@@ -95,17 +92,14 @@ def test_invoke_sub_gates_defensive_on_error():
     results = _invoke_sub_gates_advisory(
         strategy_type="maker",
         result_payload={
-            # Intentionally missing most fields to force errors
             "run_id": "test",
         },
         thresholds={},
     )
-    # Should return SOMETHING — either passed entries or error entries
     assert isinstance(results, list)
-    # All results should be dicts with 'name' key
     for r in results:
         assert "name" in r
-        assert "passed" in r  # may be None on error
+        assert "passed" in r
 
 
 def test_invoke_sub_gates_result_structure():

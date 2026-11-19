@@ -9,25 +9,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 
-# Add src/ first so compiled hft_platform.rust_core takes priority.
 for candidate in (SRC, ROOT):
     path = str(candidate)
     if path not in sys.path:
         sys.path.insert(0, path)
 
-# The rust_core/ directory at ROOT is Cargo source, not a Python package.
-# If Python accidentally imported it as a namespace package (before the
-# compiled extension was loaded), evict it so the real module can be found.
 
 _rust_ns = sys.modules.get("rust_core")
 if _rust_ns is not None and getattr(_rust_ns, "__spec__", None) is not None:
     if getattr(_rust_ns.__spec__, "origin", None) is None:
-        # Namespace package — evict so hft_platform.rust_core alias can fill in
         del sys.modules["rust_core"]
 
-# ---------------------------------------------------------------------------
-# WU-T01: Shared factory functions and fixtures
-# ---------------------------------------------------------------------------
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -44,9 +36,8 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.events import BidAskEvent, MetaData, TickEvent
 
-# Default values (Precision Law: all prices scaled x10000)
 _DEFAULT_SYMBOL = "2330"
-_DEFAULT_PRICE = 5_000_000  # 500.0 * 10000
+_DEFAULT_PRICE = 5_000_000
 _DEFAULT_TS_NS = 1_700_000_000_000_000_000
 
 
@@ -101,13 +92,12 @@ def make_order_command(**overrides) -> OrderCommand:
     elif isinstance(intent_overrides, dict):
         intent = make_order_intent(**intent_overrides)
     else:
-        # Already an OrderIntent instance
         intent = intent_overrides
 
     defaults = {
         "cmd_id": 1,
         "intent": intent,
-        "deadline_ns": _DEFAULT_TS_NS + 1_000_000_000,  # 1s after default ts
+        "deadline_ns": _DEFAULT_TS_NS + 1_000_000_000,
         "storm_guard_state": StormGuardState.NORMAL,
         "created_ns": _DEFAULT_TS_NS,
     }
@@ -154,8 +144,7 @@ def make_bidask_event(**overrides) -> BidAskEvent:
     else:
         meta = meta_overrides
 
-    # Default 5-level book: bids descending, asks ascending from default price
-    tick_size = 1_000  # 0.1 * 10000
+    tick_size = 1_000
     if "bids" not in overrides:
         bids = np.array(
             [[_DEFAULT_PRICE - i * tick_size, 100] for i in range(5)],
@@ -206,14 +195,6 @@ def _isolate_autonomy_state_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(_manual_rearm, "DEFAULT_RUNTIME_STATE_PATH", base / "runtime_state.json")
     monkeypatch.setattr(_evidence, "DEFAULT_AUTONOMY_EVIDENCE_DIR", base)
     _evidence.reset_shared_autonomy_evidence_writer()
-    # The degrade controller is a process-wide singleton holding the platform's
-    # own REDUCE_ONLY/HALT latch, and a latch is designed to survive -- so it
-    # survives the test that set it. ``tests/spec/test_resilience.py`` drives a
-    # real ``HFTSystem`` to HALT and leaves the platform in REDUCE_ONLY for the
-    # rest of the process: every later test that dispatches a NEW order gets it
-    # DLQ'd with ``reason="platform_reduce_only"``. Alphabetical collection put
-    # ``tests/e2e`` before ``tests/spec``, so a full run hid it and naming a
-    # tier explicitly did not.
     _platform_degrade.reset_shared_platform_degrade_controller()
     try:
         yield
@@ -240,18 +221,12 @@ def _isolate_execution_state_paths(tmp_path, monkeypatch):
     after that. The failure looks like a flake and is not: it is the previous
     run's evidence doing its job.
     """
-    # Deliberately NOT created: several tests assert their ``tmp_path`` is
-    # empty, and a directory this fixture made would be a file they never
-    # wrote. Every writer below does ``mkdir(parents=True)`` on first use, so
-    # the directory appears only when a test actually persists something.
     base = tmp_path / "exec_state"
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(base / "fill_dedup_window.jsonl"))
     monkeypatch.setenv("HFT_DEDUP_PERSIST_PATH", str(base / "dedup_window.jsonl"))
     monkeypatch.setenv("HFT_POSITION_CHECKPOINT_PATH", str(base / "position_checkpoint.json"))
     monkeypatch.setenv("HFT_ORDER_ID_MAP_PERSIST_PATH", str(base / "order_id_map.jsonl"))
     monkeypatch.setenv("HFT_GATEWAY_LEADER_LEASE_PATH", str(base / "gateway_leader.lock"))
-    # The durable stops: a latch left in the checkout would halt every later
-    # test that runs a supervise tick or a boot.
     monkeypatch.setenv("HFT_KILL_SWITCH_PATH", str(base / "kill_switch"))
     monkeypatch.setenv("HFT_MANUAL_LATCH_DIR", str(base / "manual_latches"))
     monkeypatch.setenv("HFT_DAILY_LOSS_STATE_PATH", str(base / "daily_loss_state.json"))

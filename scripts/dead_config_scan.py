@@ -42,7 +42,7 @@ CATEGORIES = ("dead_config_key", "unreferenced_config_file", "rule_file_not_load
 ENV_YAML_GLOB = "config/env/*/*.yaml"
 SRC_RELPATH = Path("src/hft_platform")
 UNREFERENCED_EXCLUDED_PREFIXES = ("config/monitoring/", "config/agent_system/", "config/symbols.examples/")
-UNREFERENCED_EXCLUDED_SUFFIXES = (".md",)  # documentation is read by people, not loaded
+UNREFERENCED_EXCLUDED_SUFFIXES = (".md",)
 READER_ROOTS = ("src", "scripts", "research", "tests", ".github", "config")
 READER_FILES = ("Makefile", "Dockerfile", "pyproject.toml")
 CODE_PREFIXES = ("src/", "scripts/", "research/", "tests/")
@@ -72,7 +72,6 @@ class Finding:
     detail: str
 
 
-# ---------------------------------------------------------------------------------------- dead keys
 
 
 def spelled_names(src_root: Path) -> tuple[set[str], set[str]]:
@@ -150,7 +149,6 @@ def find_dead_keys(root: Path, yaml_glob: str = ENV_YAML_GLOB) -> list[Finding]:
     return findings
 
 
-# ----------------------------------------------------------------------------- unreferenced files
 
 
 def _tracked_config_files(root: Path) -> list[str]:
@@ -259,14 +257,12 @@ def _is_referenced(rel: str, tokens: Tokens, base_counts: dict[str, int]) -> boo
         if not _named_elsewhere(readers, rel):
             continue
         if rel == tok or ("/" + rel).endswith("/" + tok):
-            return True  # a full or partial path: ``env/prod/main.yaml``
+            return True
         if tok.endswith("/" + tail):
-            return True  # a container path whose last two parts match: ``/etc/prometheus/alerts/rules.yaml``
-    # a bare name, only when no other config file shares it
+            return True
     return base_counts.get(base, 0) == 1 and _named_elsewhere(bare.get(base, set()), rel)
 
 
-# ---------------------------------------------------------------------------- Prometheus rule files
 
 
 def _compose_mounts(service: dict[str, Any]) -> list[tuple[str, str]]:
@@ -351,7 +347,6 @@ def find_unloaded_rule_files(root: Path) -> list[Finding]:
     return findings
 
 
-# --------------------------------------------------------------------------------------------- main
 
 
 def _rel(path: Path, root: Path) -> str:

@@ -89,7 +89,7 @@ class TestRegistrationSeedsSymbols:
         )
         runner.set_family_resolver(resolver)
 
-        strat = _FakeStrategy("s1", symbols={"2330"})  # no families
+        strat = _FakeStrategy("s1", symbols={"2330"})
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
 
@@ -97,14 +97,12 @@ class TestRegistrationSeedsSymbols:
 
     def test_no_resolver_registration_is_noop(self) -> None:
         runner = _runner()
-        # No set_family_resolver() call.
         strat = _FakeStrategy(
             "s1",
             contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
-        # No ref available, symbols unchanged.
         assert strat.symbols == set()
 
 
@@ -129,7 +127,6 @@ class TestRebindHookUpdatesSymbols:
         runner._apply_family_bindings(strat)
         assert strat.symbols == {"TMFE6"}
 
-        # Rollover: swap to June.
         resolver.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(6)]},
@@ -137,7 +134,6 @@ class TestRebindHookUpdatesSymbols:
                 snapshot_ns=2000,
             )
         )
-        # Hook installed via set_family_resolver → strategy.symbols updated.
         assert "TMFF6" in strat.symbols
         assert "TMFE6" not in strat.symbols
 
@@ -156,7 +152,6 @@ class TestRebindHookUpdatesSymbols:
         )
         runner.strategies.extend([tmf_strat, txf_strat])
 
-        # Swap a snapshot that only has TMF — txf_strat's symbols stay empty.
         resolver.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(5)]},
@@ -171,7 +166,7 @@ class TestRebindHookUpdatesSymbols:
 class TestColdStart:
     def test_empty_resolver_registered_first_binds_on_first_swap(self) -> None:
         runner = _runner()
-        resolver = ContractFamilyResolver()  # cold — no snapshot yet
+        resolver = ContractFamilyResolver()
         runner.set_family_resolver(resolver)
 
         strat = _FakeStrategy(
@@ -180,10 +175,8 @@ class TestColdStart:
         )
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
-        # Nothing to bind yet.
         assert strat.symbols == set()
 
-        # Populator lands first snapshot — hook rebinds strategy atomically.
         resolver.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(5)]},
@@ -197,7 +190,6 @@ class TestColdStart:
 class TestSetResolverReBindsExistingStrategies:
     def test_set_family_resolver_after_registration_applies_bindings(self) -> None:
         runner = _runner()
-        # Register strategies FIRST, then attach resolver (reverse of normal).
         strat = _FakeStrategy(
             "s1",
             contract_families=(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
@@ -222,7 +214,7 @@ class TestNoneResolverSafe:
         runner = _runner()
         resolver = ContractFamilyResolver()
         runner.set_family_resolver(resolver)
-        runner.set_family_resolver(None)  # should not raise
+        runner.set_family_resolver(None)
         assert runner._family_resolver is None
 
 
@@ -234,12 +226,7 @@ class TestResolverMissingAddHookSafely:
             pass
 
         runner.set_family_resolver(_Fake())
-        # Must not raise; runner must remember the attempt.
         assert runner._family_resolver is not None
-
-
-# Smoke: the module-level hook wiring in bootstrap sets up families AND still
-# calls resolve_symbol_aliases — verify both paths are compatible.
 
 
 class TestCoexistWithLegacyAliasPath:

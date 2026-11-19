@@ -25,13 +25,9 @@ def _make_mgr(metrics=None) -> StrategyCircuitBreakerManager:
             default_threshold=3,
             default_timeout_s=60,
         )
-    # Replace _metrics after construction so tests can inspect/control it
     if metrics is not None:
         mgr._metrics = metrics
     return mgr
-
-
-# ─── record_success — metrics exception is swallowed (lines 130-131) ─────────
 
 
 def test_record_success_does_not_raise_when_metrics_explode():
@@ -40,24 +36,19 @@ def test_record_success_does_not_raise_when_metrics_explode():
     broken_metrics.circuit_breaker_state.labels.side_effect = RuntimeError("metrics broken")
     mgr = _make_mgr(metrics=broken_metrics)
 
-    # Must not raise
     mgr.record_success("strat1")
 
-    # Breaker still exists and is not tripped
     assert not mgr.get_breaker("strat1").is_open()
 
 
 def test_record_success_swallows_attribute_error():
     """record_success handles AttributeError from broken metrics gracefully."""
     broken_metrics = MagicMock()
-    broken_metrics.circuit_breaker_state = None  # causes AttributeError on .labels()
+    broken_metrics.circuit_breaker_state = None
     mgr = _make_mgr(metrics=broken_metrics)
 
-    mgr.record_success("strat2")  # must not raise
-    assert True  # reached without error
-
-
-# ─── record_failure — tripped path + metrics exception (lines 138-140) ───────
+    mgr.record_success("strat2")
+    assert True
 
 
 def test_record_failure_tripped_with_broken_metrics_does_not_raise():
@@ -66,12 +57,10 @@ def test_record_failure_tripped_with_broken_metrics_does_not_raise():
     broken_metrics.circuit_breaker_state.labels.side_effect = Exception("Prometheus dead")
     mgr = _make_mgr(metrics=broken_metrics)
 
-    # Trip the breaker by exceeding threshold (3 failures needed)
     tripped = False
     for _ in range(4):
-        tripped = mgr.record_failure("strat_trip")  # last call triggers tripped=True
+        tripped = mgr.record_failure("strat_trip")
 
-    # Should have tripped but never raised
     assert tripped is True
 
 
@@ -80,10 +69,8 @@ def test_record_failure_not_tripped_does_not_call_metrics_set():
     metrics = MagicMock()
     mgr = _make_mgr(metrics=metrics)
 
-    # Single failure — not tripped yet (threshold=3)
     mgr.record_failure("strat_ok")
 
-    # circuit_breaker_state.labels(...).set(1) should NOT be called
     metrics.circuit_breaker_state.labels.return_value.set.assert_not_called()
 
 
@@ -94,29 +81,22 @@ def test_record_failure_sets_metric_1_on_trip():
     metrics.circuit_breaker_state.labels.return_value = label_mock
     mgr = _make_mgr(metrics=metrics)
 
-    # Trip the breaker
     for _ in range(4):
         mgr.record_failure("strat_trip2")
 
-    # set(1) must have been called at least once
     label_mock.set.assert_called_with(1)
-
-
-# ─── _evict_idle — del self._breakers[sid] (line 147) ────────────────────────
 
 
 def test_evict_idle_removes_healthy_zero_failure_breakers():
     """_evict_idle removes breakers that are healthy and have zero failures."""
     mgr = _make_mgr()
 
-    # Touch two breakers so they exist in _breakers
     mgr.get_breaker("idle_one")
     mgr.get_breaker("idle_two")
 
     assert "idle_one" in mgr._breakers
     assert "idle_two" in mgr._breakers
 
-    # Both have zero failures and are not open -> should be evicted
     mgr._evict_idle()
 
     assert "idle_one" not in mgr._breakers
@@ -127,11 +107,10 @@ def test_evict_idle_preserves_breakers_with_failures():
     """_evict_idle keeps breakers that have recorded failures (even if not tripped)."""
     mgr = _make_mgr()
 
-    mgr.record_failure("active")  # 1 failure, not open
+    mgr.record_failure("active")
 
     mgr._evict_idle()
 
-    # active breaker should still exist (has failure_count > 0)
     assert "active" in mgr._breakers
 
 
@@ -139,7 +118,6 @@ def test_evict_idle_preserves_open_breakers():
     """_evict_idle keeps open circuit breakers regardless of failure count."""
     mgr = _make_mgr()
 
-    # Trip the breaker
     for _ in range(4):
         mgr.record_failure("tripped")
 
@@ -147,7 +125,6 @@ def test_evict_idle_preserves_open_breakers():
 
     mgr._evict_idle()
 
-    # Tripped breaker must NOT be evicted
     assert "tripped" in mgr._breakers
 
 
@@ -155,5 +132,5 @@ def test_evict_idle_on_empty_breakers_is_noop():
     """_evict_idle with no registered breakers does nothing."""
     mgr = _make_mgr()
     assert len(mgr._breakers) == 0
-    mgr._evict_idle()  # must not raise
+    mgr._evict_idle()
     assert len(mgr._breakers) == 0

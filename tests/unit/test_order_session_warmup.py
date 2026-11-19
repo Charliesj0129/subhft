@@ -82,8 +82,8 @@ class TestWarmupClock:
         clock = WarmupClock()
         clock.decide(trading_now=False, trading_after_lead=True)
         clock.mark(True)
-        clock.decide(trading_now=True, trading_after_lead=True)  # session opened
-        clock.decide(trading_now=False, trading_after_lead=False)  # session closed
+        clock.decide(trading_now=True, trading_after_lead=True)
+        clock.decide(trading_now=False, trading_after_lead=False)
         assert clock.decide(trading_now=False, trading_after_lead=True).warm is True
 
     def test_an_open_session_rearms_the_latch(self) -> None:
@@ -138,8 +138,6 @@ class TestRunLoop:
     @pytest.mark.asyncio
     async def test_the_loop_warms_once_per_pre_open_window(self) -> None:
         client = FakeClient(succeed_on=1)
-        # closed with an open ahead on every tick: the latch, not the window,
-        # is what must stop the second warm-up.
         warmup = OrderSessionWarmup(
             client, tick_s=0.0, attempts=2, retry_interval_s=0.0, window_source=lambda: (False, True)
         )

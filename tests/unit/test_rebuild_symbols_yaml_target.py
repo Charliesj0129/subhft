@@ -50,8 +50,6 @@ def test_rebuild_symbols_yaml_recipe_parses_into_the_symbols_builder() -> None:
 
     argv = _recipe_argv("rebuild-symbols-yaml")
 
-    # parse_args raises SystemExit(2) on an unknown subcommand or flag, which
-    # is exactly how this target failed.
     args = build_parser().parse_args(argv)
 
     assert args.func is cmd_symbols_build
@@ -71,11 +69,7 @@ def test_every_makefile_cli_target_names_a_real_subcommand() -> None:
     from hft_platform.cli._parser import build_parser
 
     parser = build_parser()
-    top_level = {
-        choice
-        for action in parser._subparsers._group_actions  # noqa: SLF001 - argparse exposes choices no other way
-        for choice in action.choices
-    }
+    top_level = {choice for action in parser._subparsers._group_actions for choice in action.choices}
     assert top_level, "parser exposes no subcommands; the introspection above broke"
 
     lines = [
@@ -88,6 +82,6 @@ def test_every_makefile_cli_target_names_a_real_subcommand() -> None:
     for line in lines:
         remainder = line[len(_CLI_PREFIX) :].lstrip()
         if remainder.startswith("."):
-            continue  # `-m hft_platform.alpha.spec_check` — a module, not the CLI
+            continue
         command = shlex.split(remainder)[0]
         assert command in top_level, f"Makefile recipe invokes unknown subcommand {command!r}: {line}"

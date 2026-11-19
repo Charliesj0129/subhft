@@ -19,13 +19,12 @@ class _RespStream:
 
     def write(self, data: bytes) -> int:
         self.written.extend(data)
-        # Count *-prefixed commands and queue +OK for each
         n_commands = data.count(b"*")
         pos = self._read_buf.tell()
-        self._read_buf.seek(0, 2)  # seek to end
+        self._read_buf.seek(0, 2)
         for _ in range(n_commands):
             self._read_buf.write(b"+OK\r\n")
-        self._read_buf.seek(pos)  # restore read position
+        self._read_buf.seek(pos)
         return len(data)
 
     def read(self, n: int = -1) -> bytes:
@@ -41,7 +40,7 @@ class _FakeRedisClient:
     def __init__(self) -> None:
         self.host = "127.0.0.1"
         self.port = 6379
-        self._sock = True  # pretend connected
+        self._sock = True
         self._stream = _RespStream()
 
     def connect(self) -> None:
@@ -51,7 +50,6 @@ class _FakeRedisClient:
         self._sock = None
 
     def request(self, *parts: str) -> str:
-        # Record command for assertion
         self._stream.written.extend("|".join(parts).encode() + b"\n")
         return "OK"
 
@@ -76,19 +74,16 @@ def _make_payload(symbol: str = "2330", ingest_ts: int = 1000) -> dict:
 
 def test_publish_noop_when_not_running() -> None:
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379)
-    # Not started — publish should be no-op
     pub.publish_market_data(_make_payload())
     assert pub._queue.empty()
 
 
 def test_publish_drops_on_queue_full() -> None:
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379, queue_size=64)
-    pub._running = True  # simulate started without thread
-    # Fill queue
+    pub._running = True
     for i in range(64):
         pub.publish_market_data(_make_payload(ingest_ts=i))
     assert pub._queue.full()
-    # Next publish should drop
     pub.publish_market_data(_make_payload(ingest_ts=999))
     assert pub.dropped == 1
 
@@ -96,10 +91,8 @@ def test_publish_drops_on_queue_full() -> None:
 def test_publish_skips_empty_book() -> None:
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379)
     pub._running = True
-    # No bids_price → should skip
     pub.publish_market_data({"symbol": "2330", "ingest_ts": 1, "bids_price": [], "asks_price": [1]})
     assert pub._queue.empty()
-    # No asks_price → should skip
     pub.publish_market_data({"symbol": "2330", "ingest_ts": 1, "bids_price": [1], "asks_price": []})
     assert pub._queue.empty()
 
@@ -113,16 +106,13 @@ def test_publish_now_generates_correct_redis_commands() -> None:
     pub._publish_now(payload)
 
     written = fake._stream.written.decode("utf-8", errors="replace")
-    # Verify SET with EX for latest key
     assert "monitor:l1:latest:TMFC6" in written
     assert "EX" in written
     assert "300" in written
-    # Verify LPUSH for ring key
     assert "monitor:l1:ring:TMFC6" in written
     assert "LPUSH" in written
-    # Verify LTRIM
     assert "LTRIM" in written
-    assert "31" in written  # ring_size - 1
+    assert "31" in written
 
 
 def test_start_close_lifecycle() -> None:
@@ -132,7 +122,6 @@ def test_start_close_lifecycle() -> None:
     assert pub._running is True
     assert pub._thread is not None
     assert pub._thread.is_alive()
-    # Double start should be no-op
     pub.start()
     pub.close()
     assert pub._running is False
@@ -143,7 +132,7 @@ def test_heartbeat_writes_key() -> None:
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379, key_prefix="test:l1")
     fake = _FakeRedisClient()
     pub._client = fake
-    pub._last_heartbeat = 0.0  # force heartbeat to fire
+    pub._last_heartbeat = 0.0
     pub._maybe_heartbeat()
     assert pub._last_heartbeat > 0
     written = fake._stream.written.decode("utf-8", errors="replace")
@@ -156,9 +145,8 @@ def test_heartbeat_not_written_when_recent() -> None:
     pub = MonitorLivePublisher(host="127.0.0.1", port=6379)
     fake = _FakeRedisClient()
     pub._client = fake
-    pub._last_heartbeat = time.monotonic()  # just written
+    pub._last_heartbeat = time.monotonic()
     pub._maybe_heartbeat()
-    # Stream should have no writes
     assert len(fake._stream.written) == 0
 
 
@@ -169,7 +157,7 @@ def test_published_counter_not_incremented_by_publish_now() -> None:
     pub._client = fake
     assert pub.published == 0
     pub._publish_now(_make_payload())
-    assert pub.published == 0  # only incremented in _run()
+    assert pub.published == 0
 
 
 def test_publish_snapshots_payload_at_enqueue_not_dequeue() -> None:
@@ -200,17 +188,15 @@ def test_publish_snapshots_payload_at_enqueue_not_dequeue() -> None:
     }
     pub.publish_market_data(cached)
 
-    # Simulate the next engine-loop tick mutating the cached dict in place.
     cached["ingest_ts"] = 2000
     for i in range(5):
-        cached["bids_price"][i] = 900 + i  # tick 2: wildly different prices
+        cached["bids_price"][i] = 900 + i
         cached["asks_price"][i] = 1000 + i
         cached["bids_vol"][i] = 1
         cached["asks_vol"][i] = 2
     cached["price_scaled"] = 999
     cached["volume"] = 42
 
-    # What the consumer finds in the queue should be tick 1, NOT tick 2.
     sym, body_bytes = pub._queue.get_nowait()
     assert sym == "2330"
     body = orjson.loads(body_bytes)
@@ -301,7 +287,6 @@ def test_concurrent_producer_and_consumer_no_torn_read() -> None:
                 return
             body = orjson.loads(body_bytes)
             t = body["ingest_ts"]
-            # All five bid levels must belong to the same tick.
             expected_bids = [t * 10 + i for i in range(5)]
             expected_asks = [t * 10 + i + 5 for i in range(5)]
             if body["bids_price"] != expected_bids or body["asks_price"] != expected_asks:

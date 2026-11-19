@@ -15,7 +15,6 @@ from hft_platform.infra.ch_client import get_ch_config
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 from hft_platform.recorder.wal import WALWriter
 
-# import clickhouse_connect # Mocked for now if not available in env
 try:
     import clickhouse_connect
 except ImportError:
@@ -44,8 +43,6 @@ class L7PartialMigrationError(RuntimeError):
     pass
 
 
-# L7: canonical 7-column audit chain. MUST match recorder/worker.py
-# ``L7_AUDIT_COLUMNS`` exactly.
 _L7_AUDIT_COLUMN_NAMES: frozenset[str] = frozenset(
     {
         "trace_id",
@@ -58,22 +55,15 @@ _L7_AUDIT_COLUMN_NAMES: frozenset[str] = frozenset(
     }
 )
 
-# Tables governed by the L7 dual-write filter. Migrations 20260505_001 and
-# 20260505_002 add the audit columns to these two tables only; other tables
-# (market_data, latency_spans, pnl_snapshots, order_intents, etc.) are not
-# subject to the strip.
 _L7_AUDIT_TABLES: frozenset[str] = frozenset({"hft.orders", "hft.fills"})
 
 _L7_AUDIT_MIGRATION_VERSIONS: tuple[str, str] = ("20260505_001", "20260505_002")
 
 
 class DataWriter:
-    # Default to native protocol (port 9000) for better performance
-    # HTTP protocol (8123) is slower but more compatible
     DEFAULT_NATIVE_PORT = 9000
     DEFAULT_HTTP_PORT = 8123
 
-    # Exponential backoff configuration
     DEFAULT_MAX_RETRIES = 5
     DEFAULT_BASE_DELAY_S = 1.0
     DEFAULT_MAX_BACKOFF_S = 30.0
@@ -86,11 +76,9 @@ class DataWriter:
     def __init__(self, ch_host="localhost", ch_port=9000, wal_dir=".wal"):
         self.ch_client = None
         self.wal = WALWriter(wal_dir)
-        # Per-table lock striping: avoid serializing inserts across different tables
         self._ch_locks: dict[str, threading.Lock] = {}
         self._ch_locks_guard = threading.Lock()
         self._ch_heartbeat_lock = threading.Lock()
-        # Determine protocol based on port (9000=native, 8123=HTTP)
         use_native = ch_port == self.DEFAULT_NATIVE_PORT
         _cfg = get_ch_config()
         self.ch_params = {
@@ -98,14 +86,12 @@ class DataWriter:
             "port": ch_port,
             "username": _cfg["username"],
             "password": _cfg["password"],
-            "compress": True,  # Enable compression for native protocol
+            "compress": True,
         }
-        # Native protocol uses 'interface' parameter
         if use_native:
             self.ch_params["interface"] = "native"
         self.connected = False
         self._schema_initialized = False
-        # ClickHouse is opt-in; enable by setting HFT_CLICKHOUSE_ENABLED=1
         self.ch_enabled = str(os.getenv("HFT_CLICKHOUSE_ENABLED", "")).lower() in ("1", "true", "yes", "on")
         if os.getenv("HFT_DISABLE_CLICKHOUSE"):
             warnings.warn(
@@ -115,18 +101,15 @@ class DataWriter:
             )
             logger.warning("Deprecated env var HFT_DISABLE_CLICKHOUSE used; migrate to HFT_CLICKHOUSE_ENABLED=0")
             self.ch_enabled = False
-        # Allow host/port override via env
         self.ch_params["host"] = os.getenv("HFT_CLICKHOUSE_HOST", self.ch_params["host"])
         env_port = os.getenv("HFT_CLICKHOUSE_PORT")
         if env_port:
             self.ch_params["port"] = int(env_port)
-            # Re-check if native based on env port
             if int(env_port) == self.DEFAULT_NATIVE_PORT:
                 self.ch_params["interface"] = "native"
             elif "interface" in self.ch_params:
                 del self.ch_params["interface"]
 
-        # EC-2: CH insert timeout
         self._insert_timeout_s = float(os.getenv("HFT_CH_INSERT_TIMEOUT_S", "30"))
         self._insert_warn_ms = int(os.getenv("HFT_CH_INSERT_WARN_MS", "5000"))
         self._ch_column_oriented = os.getenv("HFT_CH_COLUMN_ORIENTED", "1").lower() not in {
@@ -146,13 +129,8 @@ class DataWriter:
         self._ch_insert_count = 0
         self._ch_columnar_insert_count = 0
         self._native_interface_fallback_used = False
-        # Apply send_receive_timeout to CH params
         self.ch_params["send_receive_timeout"] = int(self._insert_timeout_s)
 
-        # CC-3: Bounded thread pool for CH inserts.
-        # P2 fix: align pool size with semaphore ceiling so we don't pay for
-        # idle worker threads. The semaphore is the authoritative concurrency
-        # gate; any extra executor slots above it are never used.
         self._max_concurrent_inserts = int(os.getenv("HFT_CH_MAX_CONCURRENT_INSERTS", "6"))
         self._pool_size = max(1, int(os.getenv("HFT_CH_INSERT_POOL_SIZE", str(self._max_concurrent_inserts))))
         if self._pool_size > self._max_concurrent_inserts:
@@ -168,15 +146,6 @@ class DataWriter:
         )
         self._insert_semaphore = asyncio.Semaphore(self._max_concurrent_inserts)
 
-        # CC-4: WAL batch writer (lazy init).
-        # M2 (2026-04-25): protect lazy init with a dedicated lock so multiple
-        # batchers calling ``_get_wal_batch_writer`` concurrently from the
-        # ClickHouse insert thread pool cannot create racing WALBatchWriter
-        # instances (each spawning its own ``wal-batch-timer`` thread).
-        # Production evidence shows only 1 timer thread alive today, but the
-        # race is real — first concurrent invocations would have been observed
-        # only by chance ordering. Double-checked locking is correct here
-        # because ``_wal_batch_writer`` is a single-assignment slot.
         self._wal_batch_writer: Any = None
         self._wal_batch_writer_init_lock = threading.Lock()
         self._wal_batch_enabled = os.getenv("HFT_WAL_BATCH_ENABLED", "1").lower() not in {
@@ -186,10 +155,8 @@ class DataWriter:
             "off",
         }
 
-        # EC-5: Health tracker reference
         self._health_tracker: Any = None
 
-        # Exponential backoff settings (configurable via env)
         self._max_retries = int(os.getenv("HFT_CH_MAX_RETRIES", str(self.DEFAULT_MAX_RETRIES)))
         self._base_delay_s = float(os.getenv("HFT_CH_BASE_DELAY_S", str(self.DEFAULT_BASE_DELAY_S)))
         self._max_backoff_s = float(os.getenv("HFT_CH_MAX_BACKOFF_S", str(self.DEFAULT_MAX_BACKOFF_S)))
@@ -201,7 +168,6 @@ class DataWriter:
             logger.warning("Failed to parse HFT_TS_MAX_FUTURE_S, disabling future filter", error=str(exc))
             self._ts_max_future_ns = 0
 
-        # Heartbeat configuration (B4)
         self._heartbeat_interval_s = float(os.getenv("HFT_CH_HEARTBEAT_INTERVAL_S", "30"))
         self._heartbeat_timeout_s = float(os.getenv("HFT_CH_HEARTBEAT_TIMEOUT_S", "5"))
         self._heartbeat_thread: threading.Thread | None = None
@@ -217,16 +183,9 @@ class DataWriter:
             from hft_platform.observability.metrics import MetricsRegistry
 
             self.metrics = MetricsRegistry.get()
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             self.metrics = None
 
-        # L7: dual-write mapper state. Populated by ``_detect_l7_audit_columns``
-        # after ``apply_schema()`` succeeds. ``_l7_audit_active_tables`` is the
-        # set of tables (from _L7_AUDIT_TABLES) for which the L7 audit columns
-        # are present in the destination schema; absent tables get the audit
-        # columns stripped at insert time. ``_l7_audit_detected`` is False until
-        # detection runs successfully — when False, behavior defaults to legacy
-        # (strip), matching pre-L7 deployments where the migration has not run.
         self._l7_audit_active_tables: set[str] = set()
         self._l7_audit_detected: bool = False
 
@@ -245,7 +204,6 @@ class DataWriter:
         prev_port = int(self.ch_params.get("port", self.DEFAULT_NATIVE_PORT))
         fallback_port = int(os.getenv("HFT_CLICKHOUSE_HTTP_FALLBACK_PORT", str(self.DEFAULT_HTTP_PORT)))
         self.ch_params.pop("interface", None)
-        # If port is the canonical native port, switch to HTTP fallback port by default.
         if prev_port == self.DEFAULT_NATIVE_PORT:
             self.ch_params["port"] = fallback_port
         self._native_interface_fallback_used = True
@@ -305,21 +263,16 @@ class DataWriter:
         """
         if not self._wal_batch_enabled:
             return None
-        # First check (lock-free fast path)
         writer = self._wal_batch_writer
         if writer is not None:
             return writer
-        # Slow path: serialise initialisation
         with self._wal_batch_writer_init_lock:
-            # Re-check after acquiring lock — another thread may have
-            # initialised the writer between our first read and the lock.
             if self._wal_batch_writer is None:
                 try:
                     from hft_platform.recorder.wal import WALBatchWriter
 
                     self._wal_batch_writer = WALBatchWriter(self.wal.wal_dir)
-                except Exception as _exc:  # noqa: BLE001
-                    # Leave as None; subsequent calls will retry under the lock.
+                except Exception as _exc:
                     self._wal_batch_writer = None
             return self._wal_batch_writer
 
@@ -335,11 +288,9 @@ class DataWriter:
 
     def _compute_backoff_delay(self, attempt: int) -> float:
         """Compute exponential backoff delay with jitter to avoid thundering herd."""
-        # Exponential: base_delay * 2^attempt, capped at max_backoff
         delay = min(self._base_delay_s * (2**attempt), self._max_backoff_s)
-        # Add jitter: delay * (1 +/- jitter_factor * random)
         jitter = delay * self._jitter_factor * (random.random() * 2 - 1)
-        return max(0.1, delay + jitter)  # Minimum 100ms
+        return max(0.1, delay + jitter)
 
     def connect(self):
         """Synchronous connect - use connect_async() in async contexts."""
@@ -352,7 +303,7 @@ class DataWriter:
             try:
                 self.ch_client = self._create_clickhouse_client()
                 self.connected = True
-                self._connect_attempts = 0  # Reset on success
+                self._connect_attempts = 0
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
                 if self.metrics:
                     self.metrics.clickhouse_connection_health.set(1)
@@ -391,7 +342,7 @@ class DataWriter:
             try:
                 self.ch_client = await asyncio.to_thread(self._create_clickhouse_client)
                 self.connected = True
-                self._connect_attempts = 0  # Reset on success
+                self._connect_attempts = 0
                 logger.info("Connected to ClickHouse", attempt=attempt + 1)
                 if self.metrics:
                     self.metrics.clickhouse_connection_health.set(1)
@@ -444,17 +395,12 @@ class DataWriter:
                     pass
             return
 
-        # L7 dual-write: detect whether audit columns are live on hft.orders
-        # and hft.fills. Must run AFTER apply_schema() so that newly-applied
-        # migrations are visible in hft.schema_migrations. ``L7PartialMigrationError``
-        # propagates — the recorder must refuse to start in partial state.
         self._detect_l7_audit_columns()
 
         try:
             ensure_price_scaled_views(self.ch_client)
         except Exception as se:
             logger.error("Schema view repair failed", error=str(se))
-            # Views are optional, don't fail completely
 
     def _detect_l7_audit_columns(self) -> None:
         """Query hft.schema_migrations to populate ``_l7_audit_active_tables``.
@@ -473,8 +419,6 @@ class DataWriter:
             return
         try:
             v_orders, v_fills = _L7_AUDIT_MIGRATION_VERSIONS
-            # v_orders / v_fills are module-level migration version constants
-            # from _L7_AUDIT_MIGRATION_VERSIONS — never user-controlled.
             result = self.ch_client.query(
                 f"SELECT version FROM hft.schema_migrations WHERE version IN ('{v_orders}', '{v_fills}')"  # nosec B608
             )
@@ -506,9 +450,7 @@ class DataWriter:
             )
         except L7PartialMigrationError:
             raise
-        except Exception as exc:  # noqa: BLE001
-            # Detection failure is non-fatal: default to legacy (strip) so we
-            # never insert a column that doesn't exist on the destination.
+        except Exception as exc:
             logger.warning(
                 "l7_audit_columns_detection_failed_defaulting_legacy",
                 error=str(exc),
@@ -709,7 +651,6 @@ class DataWriter:
             if self._health_tracker:
                 self._health_tracker.record_event("wal_fallback", table=table, count=row_count)
 
-            # CC-4: Use batch writer if available
             batch_writer = self._get_wal_batch_writer()
             if batch_writer is not None and hasattr(batch_writer, "add_columnar"):
                 wal_ok = await batch_writer.add_columnar(table, column_names, column_data, row_count)
@@ -754,8 +695,6 @@ class DataWriter:
         column_data: list[list[Any]],
         row_count: int,
     ) -> None:
-        # L7 dual-write: strip audit columns when destination table is in
-        # legacy schema state. No-op for tables outside _L7_AUDIT_TABLES.
         column_names, column_data = self._strip_l7_columnar(table, column_names, column_data)
         self._ch_columnar_insert_count += 1
         if self._should_log_insert_success(self._ch_columnar_insert_count):
@@ -774,12 +713,6 @@ class DataWriter:
                             column_oriented=True,
                         )
                     except TypeError as te:
-                        # Distinguish "client doesn't support column_oriented" from
-                        # actual data-type errors in the payload.  The column_oriented
-                        # kwarg is passed *only* in the try-block above; a TypeError
-                        # from malformed column_data would also occur in the fallback
-                        # row-oriented path.  Retry once without column_oriented — if
-                        # the same TypeError recurs, it is a real data error.
                         self._ch_column_oriented = False
                         logger.debug(
                             "column_oriented_fallback",
@@ -795,7 +728,7 @@ class DataWriter:
         try:
             if self.metrics:
                 self.metrics.recorder_ch_insert_latency_ms.labels(table=table).observe(elapsed_ms)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
@@ -872,7 +805,6 @@ class DataWriter:
             if self._health_tracker:
                 self._health_tracker.record_event("wal_fallback", table=table, count=len(data))
 
-            # CC-4: Use batch writer if available
             batch_writer = self._get_wal_batch_writer()
             if batch_writer is not None:
                 wal_ok = await batch_writer.add(table, data)
@@ -890,16 +822,12 @@ class DataWriter:
                 raise WriterDoubleFaultError(f"Both CH and WAL failed for table={table}, rows={len(data)}")
 
     def _ch_insert(self, table, data):
-        # Infer columns from first row assuming consistent dicts
         if not data:
             return
         for chunk in self._iter_row_chunks(data):
             self._ch_insert_once(table, chunk)
 
     def _ch_insert_once(self, table: str, data: list[dict[str, Any]]) -> None:
-        # L7 dual-write: strip audit keys from each row dict when destination
-        # table is in legacy schema state. No-op for tables outside
-        # _L7_AUDIT_TABLES.
         data = self._strip_l7_rowdicts(table, data)
         self._ch_insert_count += 1
         if self._should_log_insert_success(self._ch_insert_count):
@@ -908,8 +836,6 @@ class DataWriter:
 
         keys = list(data[0].keys())
         values = [[row.get(k) for k in keys] for row in data]
-        # clickhouse_connect client session is not thread-safe across command/insert.
-        # Serialize heartbeat and inserts to avoid concurrent query errors.
         with self._ch_heartbeat_lock:
             if self.ch_client is None:
                 raise ConnectionError("ClickHouse client disconnected during insert")
@@ -920,7 +846,7 @@ class DataWriter:
         try:
             if self.metrics:
                 self.metrics.recorder_ch_insert_latency_ms.labels(table=table).observe(elapsed_ms)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         if elapsed_ms > self._insert_warn_ms:
             logger.warning(
@@ -938,14 +864,13 @@ class DataWriter:
         if not data:
             return data
         if not self._ts_max_future_ns:
-            # Still enforce ingest_ts >= exch_ts when both present
             result: list[dict] = []
             for row in data:
                 try:
                     exch_ts = row.get("exch_ts")
                     ingest_ts = row.get("ingest_ts")
                     if exch_ts and ingest_ts and int(ingest_ts) < int(exch_ts):
-                        row = dict(row)  # I-H1: shallow copy to avoid mutating shared references
+                        row = dict(row)
                         row["ingest_ts"] = int(exch_ts)
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
@@ -969,7 +894,7 @@ class DataWriter:
                     dropped += 1
                     continue
                 if exch_ts_i and ingest_ts_i and ingest_ts_i < exch_ts_i:
-                    row = dict(row)  # I-H1: shallow copy to avoid mutating shared references
+                    row = dict(row)
                     row["ingest_ts"] = exch_ts_i
                 kept.append(row)
             except Exception as exc:
@@ -1007,7 +932,6 @@ class DataWriter:
         if exch_idx is None and ingest_idx is None:
             return column_data, row_count
 
-        # Copy mutable columns to avoid mutating shared references (I-H1)
         if ingest_idx is not None:
             column_data[ingest_idx] = list(column_data[ingest_idx])
 
@@ -1056,10 +980,8 @@ class DataWriter:
         """Graceful shutdown: flush WAL batch writer and shutdown thread pool."""
         shutdown_timeout = int(os.getenv("HFT_CH_SHUTDOWN_TIMEOUT_S", "30"))
 
-        # Stop heartbeat FIRST to prevent client invalidation during drain
         self._heartbeat_running = False
 
-        # Flush WAL batch writer if active
         if self._wal_batch_writer is not None:
             try:
                 await self._wal_batch_writer.flush()
@@ -1070,7 +992,6 @@ class DataWriter:
             except Exception as e:
                 logger.error("WAL batch writer stop failed on shutdown", error=str(e))
 
-        # Wait for in-flight inserts to complete (semaphore drain)
         deadline = time.monotonic() + shutdown_timeout
         drained = True
         while self._insert_semaphore._value < self._max_concurrent_inserts:
@@ -1088,5 +1009,4 @@ class DataWriter:
         if drained:
             logger.info("All in-flight inserts drained before shutdown")
 
-        # Shutdown thread pool — wait=True only if we successfully drained
         self._executor.shutdown(wait=drained)

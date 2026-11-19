@@ -23,12 +23,9 @@ from research.backtest.maker_engine import Hold, PostQuote, TickData
 from research.registry.schemas import AlphaProtocol
 
 _SCALE = 1_000_000
-_TXF_POINT_VALUE_NTD = 200  # TXFD6: 200 NTD/pt
+_TXF_POINT_VALUE_NTD = 200
 
 
-# ----------------------------------------------------------------------------
-# Factory fixtures
-# ----------------------------------------------------------------------------
 
 
 def _bidask(
@@ -65,9 +62,6 @@ def _trade(price_pts: int, volume: int = 1, ts_ns: int | None = None) -> TickDat
     )
 
 
-# ----------------------------------------------------------------------------
-# TXF maker leg — scaled-int price arithmetic
-# ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -98,7 +92,7 @@ def test_txf_maker_posts_quotes_at_scaled_int_prices(
 def test_txf_spread_gate_blocks_quotes_below_threshold() -> None:
     """Default spread_threshold_pts=5. Spread=4 (below TXF 5pt gate) -> blocked."""
     maker = TxfTmfPairMaker()
-    step = maker.on_txf_tick(_bidask(17500, 17504))  # spread=4
+    step = maker.on_txf_tick(_bidask(17500, 17504))
     posts = [a for a in step.maker_actions if isinstance(a, PostQuote)]
     assert posts == []
     assert step.maker_actions == [Hold()]
@@ -119,9 +113,6 @@ def test_custom_spread_threshold_overrides_default() -> None:
     assert len(posts) == 2
 
 
-# ----------------------------------------------------------------------------
-# Monotonic time ordering
-# ----------------------------------------------------------------------------
 
 
 def test_monotonic_timestamp_ordering_preserved() -> None:
@@ -131,15 +122,11 @@ def test_monotonic_timestamp_ordering_preserved() -> None:
     t1 = time.monotonic_ns()
     maker.on_txf_tick(_bidask(17501, 17506, ts_ns=t1))
     assert t1 > t0
-    # Monotonic clock is much smaller than wall-clock epoch ns.
     EPOCH_THRESHOLD_NS = 100_000_000_000_000_000
     assert t0 < EPOCH_THRESHOLD_NS
     assert t1 < EPOCH_THRESHOLD_NS
 
 
-# ----------------------------------------------------------------------------
-# Max-position gate on TXF leg
-# ----------------------------------------------------------------------------
 
 
 def test_txf_stops_buying_at_max_pos() -> None:
@@ -164,9 +151,6 @@ def test_txf_stops_selling_at_negative_max_pos() -> None:
     assert "buy" in sides
 
 
-# ----------------------------------------------------------------------------
-# Price-movement gate (ROD anti-stack)
-# ----------------------------------------------------------------------------
 
 
 def test_txf_does_not_restack_same_price() -> None:
@@ -179,9 +163,6 @@ def test_txf_does_not_restack_same_price() -> None:
     assert second_posts == []
 
 
-# ----------------------------------------------------------------------------
-# Hedge trigger — critical pair logic
-# ----------------------------------------------------------------------------
 
 
 def test_hedge_not_issued_below_trigger() -> None:
@@ -204,7 +185,7 @@ def test_hedge_issued_when_long_inventory_crosses_trigger() -> None:
     step = maker.on_txf_tick(_bidask(17500, 17505))
     assert step.hedge is not None
     assert step.hedge.side == "sell"
-    assert step.hedge.qty == 20  # 1 TXF contract × 20 TMF hedge-ratio
+    assert step.hedge.qty == 20
     assert step.hedge.trigger_txf_pos_pts == 1
 
 
@@ -266,7 +247,6 @@ def test_hedge_fill_updates_tmf_position() -> None:
     applied = maker.on_tmf_fill("buy", 2_000 * _SCALE, 20)
     assert applied == 20
     assert maker.tmf_position == 20
-    # Sell hedge decrements
     applied = maker.on_tmf_fill("sell", 2_000 * _SCALE, 5)
     assert applied == -5
     assert maker.tmf_position == 15
@@ -291,9 +271,7 @@ def test_hedge_execution_price_applies_slippage() -> None:
     """DA WARN #4: configurable slippage (0..1 pt)."""
     maker = TxfTmfPairMaker(params=C30Params(tmf_taker_slippage_pts=1))
     maker.on_tmf_tick(_bidask(2000, 2002))
-    # buy lifts ask -> ask + slip
     assert maker.hedge_execution_price("buy") == (2002 + 1) * _SCALE
-    # sell hits bid -> bid - slip
     assert maker.hedge_execution_price("sell") == (2000 - 1) * _SCALE
 
 
@@ -309,9 +287,6 @@ def test_tmf_tick_alone_rechecks_hedge() -> None:
     assert step.hedge.side == "sell"
 
 
-# ----------------------------------------------------------------------------
-# Gap reset
-# ----------------------------------------------------------------------------
 
 
 def test_on_gap_clears_transient_quote_state() -> None:
@@ -319,7 +294,6 @@ def test_on_gap_clears_transient_quote_state() -> None:
     maker.on_txf_tick(_bidask(17500, 17505))
     maker.on_tmf_tick(_bidask(2000, 2002))
     maker.on_gap()
-    # Post-gap, the same prices should re-enter the price-movement gate.
     step = maker.on_txf_tick(_bidask(17500, 17505))
     posts = [a for a in step.maker_actions if isinstance(a, PostQuote)]
     assert len(posts) == 2
@@ -336,9 +310,6 @@ def test_on_gap_preserves_authoritative_position() -> None:
     assert maker.tmf_position == -20
 
 
-# ----------------------------------------------------------------------------
-# Malformed books
-# ----------------------------------------------------------------------------
 
 
 def test_trade_events_return_hold_and_do_not_post() -> None:
@@ -350,7 +321,7 @@ def test_trade_events_return_hold_and_do_not_post() -> None:
 
 def test_rejects_crossed_book() -> None:
     maker = TxfTmfPairMaker()
-    step = maker.on_txf_tick(_bidask(17505, 17504))  # bid > ask
+    step = maker.on_txf_tick(_bidask(17505, 17504))
     assert [a for a in step.maker_actions if isinstance(a, PostQuote)] == []
 
 
@@ -371,9 +342,6 @@ def test_rejects_zero_priced_book() -> None:
     assert [a for a in step.maker_actions if isinstance(a, PostQuote)] == []
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol conformance
-# ----------------------------------------------------------------------------
 
 
 def test_c30_alpha_conforms_to_alpha_protocol() -> None:
@@ -416,9 +384,6 @@ def test_c30_reset_clears_positions() -> None:
     assert alpha.maker.tmf_position == 0
 
 
-# ----------------------------------------------------------------------------
-# PairStepResult shape
-# ----------------------------------------------------------------------------
 
 
 def test_pair_step_result_default_is_empty() -> None:

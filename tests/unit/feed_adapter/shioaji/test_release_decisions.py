@@ -60,21 +60,14 @@ def _safe_entry(root: Path, version: str = "9.9.9", **overrides: Any) -> dict[st
     return entry
 
 
-# --- the ledger that actually ships -------------------------------------------------
-
-
 def test_the_shipped_ledger_loads_and_agrees_with_every_diff_it_cites() -> None:
     ledger_pin, records = dec.load_decisions()
     assert ledger_pin == watch.read_pin()
-    # An empty ledger is valid only while no captured release is newer than the
-    # pin; the next test owns that rule.
     for version, decision in records.items():
         assert decision.version == version
 
 
 def test_the_shipped_ledger_is_written_against_the_version_pyproject_pins() -> None:
-    # Every verdict is relative to the pin. A ledger against a stale pin does not
-    # describe the upgrade in front of anyone.
     ledger_pin, _ = dec.load_decisions()
     assert ledger_pin == watch.read_pin()
 
@@ -88,9 +81,6 @@ def test_every_captured_release_newer_than_the_pin_has_a_recorded_decision() -> 
     if not newer:
         pytest.skip("the pin is the newest captured release; there is nothing to decide yet")
     assert newer <= set(records), f"captured but never decided: {sorted(newer - set(records))}"
-
-
-# --- a verdict may not contradict its own evidence ----------------------------------
 
 
 def test_an_adopt_verdict_is_refused_when_its_evidence_names_a_platform_break(tmp_path: Path) -> None:
@@ -122,8 +112,6 @@ def test_a_blocked_verdict_is_refused_when_a_blocking_symbol_is_absent_from_the_
 
 
 def test_evidence_must_be_the_diff_from_the_pin_to_the_decided_version(tmp_path: Path) -> None:
-    # A consecutive hop (1.7.2 -> 1.7.3) can be SAFE while the move from the pin
-    # is BLOCKED, so it must not be usable as evidence for 1.7.3.
     entry = _safe_entry(tmp_path)
     entry["evidence"] = _write_evidence(tmp_path, "9.9.8", "9.9.9", breaking=[])
     with pytest.raises(dec.DecisionLedgerError, match="pin-to-candidate diff"):
@@ -135,9 +123,6 @@ def test_evidence_that_does_not_exist_is_refused(tmp_path: Path) -> None:
     (tmp_path / entry["evidence"]).unlink()
     with pytest.raises(dec.DecisionLedgerError, match="does not exist"):
         _load(tmp_path, [entry])
-
-
-# --- a deferral must expire ---------------------------------------------------------
 
 
 def test_a_defer_without_a_revisit_date_is_refused(tmp_path: Path) -> None:
@@ -165,11 +150,7 @@ def test_a_deferral_is_current_before_its_revisit_date_and_expired_after(tmp_pat
     assert decision.status(date(2026, 9, 27)) == dec.EXPIRED
 
 
-# --- malformed ledgers fail closed ---------------------------------------------------
-
-
 def test_a_misspelled_key_is_refused_rather_than_silently_dropped(tmp_path: Path) -> None:
-    # `revist_after` would otherwise make a deferral permanent and invisible.
     entry = _safe_entry(tmp_path)
     entry["revist_after"] = date(2026, 9, 26)
     with pytest.raises(dec.DecisionLedgerError, match="unknown key"):
@@ -206,9 +187,6 @@ def test_a_non_iso_decision_date_is_refused(tmp_path: Path) -> None:
         _load(tmp_path, [entry])
 
 
-# --- what the watch report does with a decision --------------------------------------
-
-
 def _release(version: str, *, captured: bool, decision: Any = None) -> watch.Release:
     key = watch.parse_version(version)
     assert key is not None
@@ -216,8 +194,6 @@ def _release(version: str, *, captured: bool, decision: Any = None) -> watch.Rel
 
 
 def test_a_release_with_a_surface_but_no_decision_still_needs_action(tmp_path: Path) -> None:
-    # This is the hole the ledger exists to close: before it, capturing a
-    # surface was enough to make the weekly watcher go quiet.
     report = watch.build_report(PIN, [_release("1.5.7", captured=True)], today=date(2026, 8, 27))
     assert report["releases"][0]["state"] == watch.UNDECIDED
     assert report["counts"]["undecided"] == 1

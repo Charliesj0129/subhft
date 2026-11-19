@@ -18,9 +18,6 @@ from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
 
-# ---------------------------------------------------------------------------
-# Mocks
-# ---------------------------------------------------------------------------
 class _Depth:
     best_bid = 10000
     best_ask = 10010
@@ -85,9 +82,6 @@ def _patch(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# Benchmarks
-# ---------------------------------------------------------------------------
 N_TICKS = 100_000
 
 
@@ -166,13 +160,11 @@ def test_bench_save_baseline(monkeypatch):  # noqa: no-assert
         equity_sample_ns=1,
     )
 
-    # Fill recording
     t0 = time.perf_counter_ns()
     for i in range(10_000):
         adapter._record_fill(i * 1000, 1, i + 1, 20000)
     fill_us = (time.perf_counter_ns() - t0) / 10_000 / 1000.0
 
-    # Equity sampling
     adapter._reset_equity_buffers()
     t0 = time.perf_counter_ns()
     for i in range(10_000):

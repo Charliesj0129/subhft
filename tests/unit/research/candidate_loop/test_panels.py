@@ -34,7 +34,7 @@ EVENT_DTYPE = np.dtype(
 
 BID = 1 << 29
 ASK = 1 << 28
-EXCH_LOCAL = (1 << 31) | (1 << 30)  # real exports set status bits; replay ignores them
+EXCH_LOCAL = (1 << 31) | (1 << 30)
 
 
 def _ev(base: int, side: int = 0) -> int:
@@ -70,19 +70,17 @@ class TestBatchFlushSemantics:
             + _l5_batch(2000, 2000, [(100.0, 7.0)], [(101.0, 2.0)])
         )
         cols = replay_to_panel(data, tick_size=1.0)
-        # Batch 2 re-emitted only one bid level -> L2 must be gone, not carried.
         assert cols["bid_qty_1"][1] == 7.0
         assert np.isnan(cols["bid_px_2"][1])
         assert cols["bid_qty_2"][1] == 0.0
 
     def test_single_sided_batch_carries_other_side_forward(self) -> None:
         data = _stream(
-            _l5_batch(1000, 1000, [(100.0, 5.0)], [(101.0, 3.0)])
-            + _l5_batch(2000, 2000, [(100.0, 9.0)], [])  # bid-only batch
+            _l5_batch(1000, 1000, [(100.0, 5.0)], [(101.0, 3.0)]) + _l5_batch(2000, 2000, [(100.0, 9.0)], [])
         )
         cols = replay_to_panel(data, tick_size=1.0)
         assert cols["bid_qty_1"][1] == 9.0
-        assert cols["ask_px_1"][1] == 101.0  # carried forward
+        assert cols["ask_px_1"][1] == 101.0
         assert cols["ask_qty_1"][1] == 3.0
 
     def test_qty_zero_phantom_clear_events_are_dropped(self) -> None:
@@ -92,7 +90,7 @@ class TestBatchFlushSemantics:
         assert np.isnan(cols["bid_px_2"][0])
 
     def test_bids_sorted_descending_asks_ascending_top5(self) -> None:
-        bids = [(96.0 + i, 1.0 + i) for i in range(6)]  # 96..101, six levels
+        bids = [(96.0 + i, 1.0 + i) for i in range(6)]
         asks = [(102.0 + i, 1.0 + i) for i in range(6)]
         data = _stream(_l5_batch(1000, 1000, bids, asks))
         cols = replay_to_panel(data, tick_size=1.0)
@@ -139,7 +137,6 @@ class TestTradesAndDerivedColumns:
         data = _stream(_l5_batch(1000, 1000, [(100.0, 6.0)], [(102.0, 2.0)]))
         cols = replay_to_panel(data, tick_size=1.0)
         assert cols["mid"][0] == 101.0
-        # microprice = (bid*ask_qty + ask*bid_qty)/(bid_qty+ask_qty)
         assert cols["microprice"][0] == pytest.approx((100.0 * 2.0 + 102.0 * 6.0) / 8.0)
         assert cols["spread_ticks"][0] == 2.0
 
@@ -259,7 +256,7 @@ class TestGoldenDayCrossCheck:
         )
 
         data, _ = panels.load_l2_events(GOLDEN_NPZ)
-        data = data[:500_000]  # bounded runtime; ~thousands of batches
+        data = data[:500_000]
         cols = replay_to_panel(data, tick_size=1.0)
         snap, n = replay_to_snapshots(
             data,
@@ -268,8 +265,6 @@ class TestGoldenDayCrossCheck:
             cfg=SnapshotConfig(sample_period_ns=1_000_000_000, drop_warmup_seconds=0.0),
         )
         assert n > 100
-        # snapshot_builder labels buckets by START but the state is as-of the
-        # bucket END: last panel row with exch_ts strictly before start+period.
         cutoff = snap["exch_ts_ns"] + 1_000_000_000
         idx = np.searchsorted(cols["exch_ts"], cutoff, side="left") - 1
         sample = slice(10, n, max(1, n // 200))

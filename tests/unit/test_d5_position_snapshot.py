@@ -32,7 +32,6 @@ def test_snapshot_holds_lock_during_copy():
     real_lock = threading.Lock()
     acquired_calls: list[bool] = []
 
-    # Use a context-manager-compatible wrapper to spy on lock usage
     class SpyLock:
         def __enter__(self):
             acquired_calls.append(True)
@@ -110,13 +109,10 @@ def test_snapshot_deep_copies_position_objects():
     snap = ps.snapshot_positions()
     snap_pos = snap["A:S:2330"]
 
-    # Snapshot must be a DIFFERENT object
     assert snap_pos is not orig
 
-    # Mutate original (simulating concurrent fill)
     orig.net_qty = 20
     orig.avg_price_scaled = 600_0000
 
-    # Snapshot copy must be unaffected
     assert snap_pos.net_qty == 10
     assert snap_pos.avg_price_scaled == 500_0000

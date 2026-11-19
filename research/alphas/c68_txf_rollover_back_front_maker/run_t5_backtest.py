@@ -58,8 +58,6 @@ _MAKER_REBATE_NTD_PER_SIDE = 10
 _COST_RT_SCENARIOS_PTS: tuple[float, ...] = (1.05, 1.50, 1.95, 3.00)
 _HEDGE_RATIOS: tuple[float, ...] = (0.9, 1.0, 1.1)
 
-# Identified rollover-window analogs in CK
-# TXFD6 became new-front 2026-02-23..25 after TXFB6 expiry (T1 analog)
 _ROLLOVER_ANALOG_TXFD6_FEB: tuple[str, str, str] = (
     "2026-02-23", "2026-02-24", "2026-02-25",
 )
@@ -146,7 +144,6 @@ def _run_c68(
     spread_threshold_pts: int = 12,
 ) -> dict:
     """Run C68 with calendar gate covering all supplied dates."""
-    # Set window to cover all supplied dates so calendar gate is open.
     start = date.fromisoformat(dates[0])
     end = date.fromisoformat(dates[-1])
     strategy = TxfRolloverBackFrontMaker(
@@ -237,9 +234,6 @@ def main() -> int:
     source = ClickHouseSource(password=os.environ["CLICKHOUSE_PASSWORD"])
     source.health_check()
 
-    # Primary OOS: TXFD6 Feb 2026-02-23..25 (N=3 days).
-    # This is the ONLY rollover analog with the narrow 12-16 pt spread regime
-    # matching the C68 hypothesis (per Researcher T1).
     primary_dates = list(_ROLLOVER_ANALOG_TXFD6_FEB)
     logger.info(
         "primary_analog_start",
@@ -266,20 +260,18 @@ def main() -> int:
             days_positive=run["days_positive_inst"],
         )
 
-    # Best-case per-mp at inst RT 1.5 pt
     best_mp_inst = max(
         primary_runs.items(),
         key=lambda kv: kv[1]["cost_sensitivity"]["rt_1.50_pt"]["net_ntd"],
     )
 
-    # Sample-size S3 assessment
     s3_assessment = {
         "n_days": 3,
         "n_trips_total_across_mp_bracket": sum(
             r["trips_total"] for r in primary_runs.values()
         ),
         "walk_forward_k_required": 5,
-        "walk_forward_k_available_today": 1,  # only 1 rollover cycle in CK
+        "walk_forward_k_available_today": 1,
         "s3_verdict": (
             "FAIL — rollover is rare event; only 1 complete cycle (TXFD6 Feb) "
             "in available CK data. Cannot satisfy walk-forward k=5 without "

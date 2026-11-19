@@ -44,7 +44,6 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-# Make ``research/`` and ``src/`` importable when invoked as a script.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -54,15 +53,6 @@ if str(_REPO_ROOT / "src") not in sys.path:
 from hft_platform.backtest.ch_data_source import ChDataSource  # noqa: E402
 from research.backtest.calibrate_queue_fill import calibrate  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Inputs: 5 days per symbol. Inventory verified via ClickHouse on 2026-05-05.
-# Selection rationale:
-#   - TMFD6 / TXFD6: pick mid-volume trading days (avoid the 1.3M-event 04-02
-#     spike to keep fixtures inside the 50 MB total budget) but with enough
-#     events that ``MIN_ATTEMPTS_PER_CELL=30`` saturates most active hours.
-#   - TXO35500E6: most-active April option contract (~2 weeks pre-expiry).
-#     Plan §6 Task 7 expects TXO to drop more cells than the futures.
-# ---------------------------------------------------------------------------
 SYMBOL_DATES: dict[str, list[str]] = {
     "TMFD6": [
         "2026-04-08",
@@ -78,13 +68,6 @@ SYMBOL_DATES: dict[str, list[str]] = {
         "2026-04-13",
         "2026-04-14",
     ],
-    # TXO35000Q6 chosen as the most active option contract with at least 5
-    # days carrying real trade ticks. Trade activity is sparse compared to
-    # futures (hundreds vs hundreds-of-thousands) — Plan §6 Task 7 expects
-    # cells_dropped to dominate for TXO; we still include it so Task 8 can
-    # exercise the multi-symbol q_hat lookup path. Days were chosen to
-    # maximise tick coverage within the available inventory (sampled
-    # 2026-05-05).
     "TXO35000Q6": [
         "2026-04-17",
         "2026-04-22",
@@ -94,11 +77,9 @@ SYMBOL_DATES: dict[str, list[str]] = {
     ],
 }
 
-# Where to write outputs.
 Q_HAT_DIR = _REPO_ROOT / "research" / "backtest" / "q_hat_data"
 FIXTURE_DIR = _REPO_ROOT / "tests" / "fixtures" / "q_hat_calibration"
 
-# Calibration columns. The harness only reads these four fields off each row.
 _CALIB_DTYPE = np.dtype(
     [
         ("ev", "u8"),

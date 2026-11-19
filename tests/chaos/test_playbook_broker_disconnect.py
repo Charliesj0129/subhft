@@ -64,5 +64,4 @@ class TestPlaybookBrokerDisconnect:
 
         assert not controller.reduce_only_active
         assert transition.to_mode.value == "NORMAL"
-        # Verify NEW opens are allowed again
         assert controller.allow_intent(intent_type=IntentType.NEW, opens_risk=True)

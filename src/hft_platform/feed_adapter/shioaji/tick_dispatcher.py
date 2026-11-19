@@ -33,7 +33,6 @@ logger = get_logger("feed_adapter.tick_dispatcher")
 
 _USE_RING_BUFFER: bool = os.environ.get("HFT_TICK_RING_BUFFER", "0") == "1"
 
-# Type alias for queue items: (args, kwargs) or None (sentinel).
 _Item = tuple[tuple[Any, ...], dict[str, Any]] | None
 
 
@@ -95,9 +94,7 @@ class TickDispatcher:
         self._queue_size = max(1, queue_size)
         self._batch_max = max(1, batch_max)
         self._metrics_every = max(1, metrics_every)
-        # Legacy queue.Queue transport (default).
         self._queue: queue.Queue[_Item] | None = None
-        # Lock-free deque transport (opt-in via env var or kwarg).
         self._deque: collections.deque[_Item] | None = None
         self._deque_event: threading.Event | None = None
         self._thread: threading.Thread | None = None
@@ -106,14 +103,7 @@ class TickDispatcher:
         self._enqueued: int = 0
         self._processed: int = 0
         self._use_deque: bool = use_deque if use_deque is not None else _USE_RING_BUFFER
-        # H12: fires once per drop so downstream can propagate a gap
-        # (e.g., FeatureEngine.mark_gap_all). Invoked on broker callback
-        # thread, so callback MUST be cheap and non-blocking.
         self._on_drop_callback: Callable[[], None] | None = None
-
-    # ------------------------------------------------------------------
-    # Public read-only counters (for diagnostics / backward compat)
-    # ------------------------------------------------------------------
 
     @property
     def dropped(self) -> int:
@@ -130,10 +120,6 @@ class TickDispatcher:
     @property
     def running(self) -> bool:
         return self._running
-
-    # ------------------------------------------------------------------
-    # HOT PATH — enqueue_tick
-    # ------------------------------------------------------------------
 
     def enqueue_tick(self, *args: Any, **kwargs: Any) -> None:
         """Non-blocking callback ingress: broker thread enqueues, worker executes."""
@@ -198,11 +184,9 @@ class TickDispatcher:
         if dq is None or ev is None:
             self._process_tick_fn(*args, **kwargs)
             return
-        # len(deque) is O(1) and atomic in CPython.
         if len(dq) >= self._queue_size:
             self._on_drop(metrics)
             return
-        # append is atomic in CPython (GIL-protected C call).
         dq.append((args, kwargs))
         self._enqueued += 1
         if metrics and (self._enqueued % self._metrics_every == 0):
@@ -212,7 +196,6 @@ class TickDispatcher:
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
-        # Wake the consumer.  ``Event.set()`` is very cheap when already set.
         ev.set()
 
     def _on_drop(self, metrics: Any | None) -> None:
@@ -230,7 +213,7 @@ class TickDispatcher:
         if cb is not None:
             try:
                 cb()
-            except Exception as exc:  # noqa: BLE001 — never break hot path on gap-signal failure
+            except Exception as exc:
                 logger.debug("on_drop_callback_failed", error=str(exc))
         if self._dropped % 100 == 1:
             logger.warning(
@@ -248,10 +231,6 @@ class TickDispatcher:
         runs on the broker callback thread.
         """
         self._on_drop_callback = cb
-
-    # ------------------------------------------------------------------
-    # Worker lifecycle
-    # ------------------------------------------------------------------
 
     def start_worker(self) -> None:
         """Start the background dispatch worker (idempotent)."""
@@ -334,8 +313,6 @@ class TickDispatcher:
 
     def _start_deque_worker(self) -> None:
         """Spawn the lock-free deque-based worker."""
-        # deque without maxlen — we enforce capacity in _enqueue_deque
-        # to get drop-newest semantics instead of deque's drop-oldest.
         self._deque = collections.deque()
         self._deque_event = threading.Event()
         dq = self._deque
@@ -350,12 +327,8 @@ class TickDispatcher:
             processed_local = 0
             try:
                 while self._running:
-                    # Wait for signal or timeout (avoids busy-spin).
                     ev.wait(timeout=0.5)
                     ev.clear()
-                    # Drain in batches until the deque is empty.  This avoids
-                    # stalling when more items than batch_max were enqueued
-                    # between a single Event.set() / .clear() pair.
                     while self._running:
                         batch_count = 0
                         while batch_count < batch_max and self._running:
@@ -381,8 +354,6 @@ class TickDispatcher:
                             except Exception as exc:
                                 logger.debug("operation_fallback", error=str(exc))
                                 pass
-                        # If this batch was smaller than batch_max, deque is
-                        # empty — break out to the outer ev.wait() loop.
                         if batch_count < batch_max:
                             break
             except Exception as exc:
@@ -406,7 +377,6 @@ class TickDispatcher:
         if not self._running:
             return
         self._running = False
-        # Wake the worker so it can exit promptly.
         if self._use_deque:
             ev = self._deque_event
             if ev is not None:
@@ -427,10 +397,6 @@ class TickDispatcher:
         self._deque = None
         self._deque_event = None
 
-    # ------------------------------------------------------------------
-    # Quote route refresh
-    # ------------------------------------------------------------------
-
     @staticmethod
     def refresh_quote_routes(
         symbols: list[dict[str, Any]],
@@ -449,10 +415,6 @@ class TickDispatcher:
         if subscribed_codes:
             codes.extend(str(c) for c in subscribed_codes)
         _router._registry_rebind_codes(client, codes)
-
-    # ------------------------------------------------------------------
-    # Wrapped tick callback (persistent, exception-safe)
-    # ------------------------------------------------------------------
 
     @staticmethod
     def wrapped_tick_cb(tick_callback: Callable[..., Any] | None, *args: Any, **kwargs: Any) -> None:

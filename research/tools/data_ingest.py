@@ -22,9 +22,6 @@ from typing import Any
 import numpy as np
 import structlog
 
-# ---------------------------------------------------------------------------
-# sys.path bootstrap so this module is importable as research.tools.data_ingest
-# ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve()
 _RESEARCH_ROOT = _HERE.parent.parent
 _PROJECT_ROOT = _RESEARCH_ROOT.parent
@@ -35,12 +32,9 @@ for _p in (_PROJECT_ROOT, _RESEARCH_ROOT):
 
 logger = structlog.get_logger(__name__)
 
-# ClickHouse price scaling constant (matches recorder/mapper.py CLICKHOUSE_PRICE_SCALE)
 _CH_PRICE_SCALE: float = 1_000_000.0
-# Target .npy price scale (x10000 convention per CLAUDE.md)
 _NPY_PRICE_SCALE: int = 10_000
 
-# LOB numpy dtype for ingested real data
 _LOB_DTYPE = np.dtype(
     [
         ("timestamp_ns", "i8"),
@@ -116,12 +110,10 @@ def _build_meta(
         "row_count": row_count,
         "data_fingerprint": data_fingerprint,
         "generator_script": "research/tools/data_ingest.py",
-        # UL2 required fields
         "dataset_id": output_path.stem,
         "schema_version": "1",
         "rows": row_count,
         "fields": list(_LOB_DTYPE.names),
-        # UL3 required fields
         "rng_seed": None,
         "generator_version": "real_data_v1",
         "parameters": {"symbol": symbol, "start": start, "end": end},
@@ -185,7 +177,6 @@ def ingest_from_clickhouse(
             "Check symbol name, date range, and ClickHouse connectivity."
         )
 
-    # Build structured numpy array
     arr = np.empty(row_count, dtype=_LOB_DTYPE)
     for i, row in enumerate(rows):
         (ts_ns, price, volume, side, bid_price, bid_volume, ask_price, ask_volume) = row
@@ -217,9 +208,6 @@ def ingest_from_clickhouse(
     return output_path
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(

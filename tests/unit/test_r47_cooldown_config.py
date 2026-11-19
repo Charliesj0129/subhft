@@ -26,7 +26,6 @@ def strategy_cls():
 class TestQuoteCooldownConfigurable:
     def test_default_cooldown_is_1000_ms(self, strategy_cls):
         s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1)
-        # Shioaji P95 RTT ~800ms — default must cover it.
         assert s._QUOTE_COOLDOWN_NS == 1_000_000_000, (
             f"D2: default quote cooldown must be 1000 ms to exceed Shioaji RTT; "
             f"got {s._QUOTE_COOLDOWN_NS} ns (= {s._QUOTE_COOLDOWN_NS / 1_000_000} ms)"
@@ -41,6 +40,5 @@ class TestQuoteCooldownConfigurable:
         assert s._QUOTE_COOLDOWN_NS == 0
 
     def test_high_cooldown_accepted(self, strategy_cls):
-        # Operator tune-up for congested conditions (e.g. 5 s).
         s = strategy_cls(strategy_id="r47_test", spread_threshold_pts=5, max_pos=1, quote_cooldown_ms=5000)
         assert s._QUOTE_COOLDOWN_NS == 5_000_000_000

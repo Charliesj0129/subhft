@@ -69,11 +69,10 @@ def test_flipping_approved_true_is_detected():
 def test_brief_body_surfaces_maker_rescue_and_near_miss():
     body = parse_brief(_render()).body
     assert "maker" in body.lower()
-    assert "a1" in body  # the near-miss alpha_id
+    assert "a1" in body
 
 
 def test_quoted_string_approved_is_rejected_not_silently_true():
-    # a human quoting the value must NOT read as approved (false-approval guard)
     text = _render().replace("approved: false", 'approved: "false"')
     with pytest.raises(ValueError):
         parse_brief(text)

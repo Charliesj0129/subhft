@@ -47,12 +47,6 @@ class InventoryMtMGate:
         is_strict = bool(thresholds.get("_is_strict_profile", False))
         daily = getattr(result, "daily_pnl", None) or []
 
-        # Slice B requires dict rows with ``fills`` and ``residual_mtm_pts``.
-        # Legacy float-only rows lack the bookkeeping needed for this gate.
-        # Under loose profile: advisory PASS (back-compat with pre-Slice-B
-        # scorecards).  Under strict profile: FAIL — strict promotion must
-        # not silently accept a contract-shape mismatch as an OK result
-        # (punch-list item 2, 2026-05-29).
         dict_rows = [row for row in daily if isinstance(row, dict)]
         if dict_rows:
             n_fills = sum(int(row.get("fills", 0) or 0) for row in dict_rows)
@@ -67,8 +61,6 @@ class InventoryMtMGate:
         net_after_residual = realized + residual_mtm
 
         if schema_advisory:
-            # Rows without the bookkeeping fields cannot be audited: strict
-            # reports ERROR (not a measured failure); loose keeps advisory PASS.
             return SubGateResult(
                 name=self.name,
                 passed=not is_strict,
@@ -88,7 +80,6 @@ class InventoryMtMGate:
                 ),
             )
 
-        # Strict-only: empty daily_pnl is insufficient evidence.
         if is_strict and not dict_rows and not daily:
             return SubGateResult(
                 name=self.name,

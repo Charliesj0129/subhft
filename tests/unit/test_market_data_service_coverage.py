@@ -27,10 +27,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_symbols_config() -> tuple[tempfile.TemporaryDirectory, Path]:
     tmp = tempfile.TemporaryDirectory()
@@ -63,13 +59,8 @@ def _make_service(extra_env: dict | None = None, **kwargs):
 
     with patch.dict(os.environ, env):
         svc = MarketDataService(bus, raw_queue, client, **kwargs)
-    svc._tmp = tmp  # keep alive
+    svc._tmp = tmp
     return svc, bus, raw_queue, client
-
-
-# ---------------------------------------------------------------------------
-# _set_state
-# ---------------------------------------------------------------------------
 
 
 def test_set_state_changes_state():
@@ -87,11 +78,6 @@ def test_set_state_no_change_when_same():
     svc, *_ = _make_service()
     svc._set_state(FeedState.INIT)
     assert svc.state == FeedState.INIT
-
-
-# ---------------------------------------------------------------------------
-# _build_trace_id
-# ---------------------------------------------------------------------------
 
 
 def test_build_trace_id_with_meta_seq():
@@ -115,11 +101,6 @@ def test_build_trace_id_no_meta():
 
     event = SimpleNamespace()
     assert MarketDataService._build_trace_id(event) == ""
-
-
-# ---------------------------------------------------------------------------
-# _publish_events
-# ---------------------------------------------------------------------------
 
 
 def test_publish_events_full_with_stats_and_features():
@@ -210,11 +191,6 @@ def test_publish_events_not_full_nothing():
     bus.publish_nowait.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# _enqueue_raw
-# ---------------------------------------------------------------------------
-
-
 def test_enqueue_raw_normal():
     svc, *_ = _make_service()
     svc._enqueue_raw("TSE", {"code": "2330"})
@@ -224,7 +200,6 @@ def test_enqueue_raw_normal():
 def test_enqueue_raw_queue_full_increments_drop_counter():
     svc, *_ = _make_service()
     svc.raw_queue = asyncio.Queue(maxsize=1)
-    # Fill the queue
     svc.raw_queue.put_nowait(("exchange", "first"))
 
     initial_dropped = svc._raw_dropped_count
@@ -248,14 +223,8 @@ def test_enqueue_raw_no_metrics_registry():
     svc.raw_queue.put_nowait(("x", "y"))
     svc.metrics_registry = None
 
-    # Should not raise
     svc._enqueue_raw("TSE", {"code": "2330"})
     assert svc._raw_dropped_count == 1
-
-
-# ---------------------------------------------------------------------------
-# _record_direct_event
-# ---------------------------------------------------------------------------
 
 
 def _make_tick_event(symbol="2330"):
@@ -307,7 +276,6 @@ def test_record_direct_event_queue_full_enters_degraded_mode():
     svc._record_direct = True
     svc._record_drop_on_full = True
     svc._record_degrade_threshold = 1
-    # Fill the queue
     recorder_queue.put_nowait({"topic": "tick", "data": {}})
 
     event = _make_tick_event()
@@ -325,8 +293,8 @@ def test_record_direct_event_degraded_skips_recording():
     recorder_queue = asyncio.Queue(maxsize=100)
     svc.recorder_queue = recorder_queue
     svc._record_degraded = True
-    svc._record_degrade_last_check = time.monotonic()  # recent check
-    svc._record_degrade_check_s = 1000.0  # won't trigger check
+    svc._record_degrade_last_check = time.monotonic()
+    svc._record_degrade_check_s = 1000.0
 
     event = _make_tick_event()
     svc._record_direct_event(event)
@@ -342,7 +310,6 @@ def test_record_direct_event_degraded_recovers_when_queue_below_threshold():
     svc._record_degraded = True
     svc._record_degraded_since = time.monotonic() - 60.0
     svc._record_degraded_drops = 5
-    # Force the degraded check to run
     svc._record_degrade_last_check = time.monotonic() - 100.0
     svc._record_degrade_check_s = 1.0
 
@@ -352,7 +319,6 @@ def test_record_direct_event_degraded_recovers_when_queue_below_threshold():
         mock_map.return_value = ("tick", {"symbol": "2330"})
         svc._record_direct_event(event)
 
-    # Queue has space (qsize=0 < maxsize*0.5=50), so degraded mode exits
     assert svc._record_degraded is False
 
 
@@ -360,7 +326,6 @@ def test_record_direct_event_degraded_stays_if_queue_still_full():
     svc, *_ = _make_service()
     recorder_queue = asyncio.Queue(maxsize=10)
     svc.recorder_queue = recorder_queue
-    # Fill queue to capacity
     for _ in range(10):
         recorder_queue.put_nowait({"topic": "tick", "data": {}})
     svc._record_degraded = True
@@ -372,7 +337,6 @@ def test_record_direct_event_degraded_stays_if_queue_still_full():
     event = _make_tick_event()
     svc._record_direct_event(event)
 
-    # Queue still full, stays degraded
     assert svc._record_degraded is True
     assert svc._record_degraded_drops == 1
 
@@ -385,7 +349,6 @@ def test_recorder_degraded_gauge_set_on_enter():
     svc._record_direct = True
     svc._record_drop_on_full = True
     svc._record_degrade_threshold = 1
-    # Fill the queue
     recorder_queue.put_nowait({"topic": "tick", "data": {}})
 
     gauge = MagicMock()
@@ -442,7 +405,6 @@ def test_recorder_degraded_counter_increments_each_entry():
 
     event = _make_tick_event()
 
-    # First entry into degraded mode
     recorder_queue.put_nowait({"topic": "tick", "data": {}})
     with patch("hft_platform.recorder.mapper.map_event_to_record") as mock_map:
         mock_map.return_value = ("tick", {"symbol": "2330"})
@@ -450,7 +412,6 @@ def test_recorder_degraded_counter_increments_each_entry():
     assert svc._record_degraded is True
     assert counter.inc.call_count == 1
 
-    # Recover: empty queue, force check
     while not recorder_queue.empty():
         recorder_queue.get_nowait()
     svc._record_degrade_last_check = time.monotonic() - 100.0
@@ -460,7 +421,6 @@ def test_recorder_degraded_counter_increments_each_entry():
         svc._record_direct_event(event)
     assert svc._record_degraded is False
 
-    # Second entry into degraded mode — drain queue first (recovery wrote into it)
     svc._recorder_dropped_count = 0
     while not recorder_queue.empty():
         recorder_queue.get_nowait()
@@ -476,7 +436,6 @@ def test_record_direct_event_no_recorder_queue():
     svc, *_ = _make_service()
     svc.recorder_queue = None
     event = _make_tick_event()
-    # Should return immediately without error
     svc._record_direct_event(event)
     assert svc.recorder_queue is None
 
@@ -492,13 +451,7 @@ def test_record_direct_event_map_raises():
         mock_map.side_effect = RuntimeError("mapping error")
         svc._record_direct_event(event)
 
-    # Exception handled, nothing queued
     assert recorder_queue.qsize() == 0
-
-
-# ---------------------------------------------------------------------------
-# get_max_feed_gap_s
-# ---------------------------------------------------------------------------
 
 
 def test_get_max_feed_gap_s_empty():
@@ -517,23 +470,20 @@ def test_get_max_feed_gap_s_futures_symbol():
 
 def test_get_max_feed_gap_s_excludes_stock_symbols():
     svc, *_ = _make_service()
-    # Only stock symbols (numeric) — should fall back to global max
     svc._symbol_last_tick = {"2330": time.monotonic() - 10.0}
     gap = svc.get_max_feed_gap_s()
-    assert gap > 9.0  # falls back to global max (no futures)
+    assert gap > 9.0
 
 
 def test_get_max_feed_gap_s_excludes_option_symbols():
     svc, *_ = _make_service()
-    # Only option symbols — should fall back to global max
     svc._symbol_last_tick = {"TXO12345": time.monotonic() - 10.0}
     gap = svc.get_max_feed_gap_s()
-    assert gap > 9.0  # falls back to option max
+    assert gap > 9.0
 
 
 def test_get_max_feed_gap_s_mixed_excludes_options_and_stocks():
     svc, *_ = _make_service()
-    # Futures symbol with 2s gap, stock with 200s gap, option with 60s gap
     svc._symbol_last_tick = {
         "TXFD6": time.monotonic() - 2.0,
         "2330": time.monotonic() - 200.0,
@@ -541,13 +491,11 @@ def test_get_max_feed_gap_s_mixed_excludes_options_and_stocks():
         "MXO9999": time.monotonic() - 90.0,
     }
     gap = svc.get_max_feed_gap_s()
-    # Should be ~2s (futures only), not 200s (stock) or 90s (option)
     assert gap < 10.0
 
 
 def test_get_max_feed_gap_s_night_session_stocks_excluded():
     svc, *_ = _make_service()
-    # Night session scenario: futures active (small gap), stocks dormant (huge gap)
     svc._symbol_last_tick = {
         "TMFD6": time.monotonic() - 1.0,
         "TXFD6": time.monotonic() - 2.0,
@@ -556,13 +504,7 @@ def test_get_max_feed_gap_s_night_session_stocks_excluded():
         "2345": time.monotonic() - 400.0,
     }
     gap = svc.get_max_feed_gap_s()
-    # Should be ~2s (TXFD6), not 600s (stocks)
     assert gap < 10.0
-
-
-# ---------------------------------------------------------------------------
-# get_active_feed_gap_s
-# ---------------------------------------------------------------------------
 
 
 def test_get_active_feed_gap_s_excludes_chronically_inactive_symbol():
@@ -574,14 +516,12 @@ def test_get_active_feed_gap_s_excludes_chronically_inactive_symbol():
     svc, *_ = _make_service()
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFD6": now - 0.5,  # active front-month
-        "TXFD6": now - 1.0,  # active front-month
-        "TMFI6": now - 2148.0,  # chronically stale far-month (real-world example)
+        "TMFD6": now - 0.5,
+        "TXFD6": now - 1.0,
+        "TMFI6": now - 2148.0,
     }
-    # Only the actively-trading front-month contracts crossed the baseline.
     svc._ever_active_symbols = {"TMFD6", "TXFD6"}
     gap = svc.get_active_feed_gap_s()
-    # Should reflect only TMFD6/TXFD6 (≤1.0s), not TMFI6 (2148s)
     assert gap < 5.0
 
 
@@ -594,10 +534,8 @@ def test_get_active_feed_gap_s_falls_back_when_no_active_futures():
         "TMFI6": now - 2148.0,
         "TXFI6": now - 2400.0,
     }
-    # No symbol has crossed the 5-event baseline yet → empty latched set.
     svc._ever_active_symbols = set()
     gap = svc.get_active_feed_gap_s(active_threshold_s=300.0)
-    # Empty latched set → fall back to get_max_feed_gap_s, which returns ≥2148s
     assert gap >= 2000.0
 
 
@@ -608,11 +546,9 @@ def test_get_active_feed_gap_s_deprecated_kwarg_is_ignored():
     svc, *_ = _make_service()
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFD6": now - 250.0,  # 250s silence on a latched symbol
+        "TMFD6": now - 250.0,
     }
     svc._ever_active_symbols = {"TMFD6"}
-    # Both calls must return the same latched silence (~250s) regardless
-    # of the deprecated kwarg.
     gap_default = svc.get_active_feed_gap_s()
     gap_legacy = svc.get_active_feed_gap_s(active_threshold_s=100.0)
     assert 240.0 < gap_default < 270.0
@@ -643,13 +579,11 @@ def test_partial_feed_failure_still_triggers_unhealthy():
     svc, *_ = _make_service()
     now_mono = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFE6": now_mono - 2000.0,  # was actively trading, now silent
-        "TXFE6": now_mono - 0.5,  # still healthy front-month
+        "TMFE6": now_mono - 2000.0,
+        "TXFE6": now_mono - 0.5,
     }
-    # Both symbols crossed the activity baseline before the partial outage.
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
     gap = svc.get_active_feed_gap_s()
-    # Must report the 2000s silence on TMFE6, not the 0.5s healthy TXFE6.
     assert gap >= 1900.0
 
 
@@ -661,14 +595,11 @@ def test_chronically_idle_symbol_does_not_trigger_unhealthy():
     svc, *_ = _make_service()
     now_mono = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFI6": now_mono - 2148.0,  # chronically idle, 1 lifetime event
-        "TMFE6": now_mono - 0.5,  # actively trading front-month
+        "TMFI6": now_mono - 2148.0,
+        "TMFE6": now_mono - 0.5,
     }
-    # Only TMFE6 ever crossed the baseline.  TMFI6 had a single handshake
-    # print and never qualified as active.
     svc._ever_active_symbols = {"TMFE6"}
     gap = svc.get_active_feed_gap_s()
-    # Must reflect TMFE6 only (≤1.0s); TMFI6's 2148s silence is structural.
     assert gap < 5.0
 
 
@@ -683,21 +614,15 @@ def test_symbol_enters_active_set_after_baseline_events():
     baseline = svc._ACTIVE_BASELINE_EVENT_COUNT
     assert baseline >= 1
 
-    # Below baseline: not in the ever-active set.
     for _ in range(baseline - 1):
         svc._update_symbol_tick_inline(event)
     assert "TMFE6" not in svc._ever_active_symbols
     assert svc._event_counts.get("TMFE6", 0) == baseline - 1
 
-    # Baseline-crossing event: enters the set and the per-symbol counter
-    # is reclaimed (no further hot-path counter ops once latched).
     svc._update_symbol_tick_inline(event)
     assert "TMFE6" in svc._ever_active_symbols
     assert "TMFE6" not in svc._event_counts
 
-    # Subsequent events: still in set (idempotent) and the counter must
-    # remain reclaimed — the hot path skips counter ops after latch to
-    # honour the Allocator Law (no per-event int allocations forever).
     for _ in range(10):
         svc._update_symbol_tick_inline(event)
     assert "TMFE6" in svc._ever_active_symbols
@@ -716,17 +641,11 @@ def test_event_counter_reclaimed_after_latch():
     event = SimpleNamespace(symbol="TMFE6")
     baseline = svc._ACTIVE_BASELINE_EVENT_COUNT
 
-    # Cross the baseline.
     for _ in range(baseline):
         svc._update_symbol_tick_inline(event)
     assert "TMFE6" in svc._ever_active_symbols
-    # Counter slot reclaimed on the latch event.
     assert "TMFE6" not in svc._event_counts
 
-    # 1000 further events: the counter slot must remain absent.  This is
-    # the regression we want to pin: under the old design ``_event_counts``
-    # would now hold ``baseline + 1000`` and a new int object had been
-    # allocated for every increment.
     for _ in range(1000):
         svc._update_symbol_tick_inline(event)
     assert "TMFE6" not in svc._event_counts
@@ -739,23 +658,15 @@ def test_active_set_latches_across_silence():
     svc, *_ = _make_service()
 
     event = SimpleNamespace(symbol="TMFE6")
-    # Cross the baseline.
     for _ in range(svc._ACTIVE_BASELINE_EVENT_COUNT):
         svc._update_symbol_tick_inline(event)
     assert "TMFE6" in svc._ever_active_symbols
 
-    # Simulate 600s of silence by rewinding the symbol's last-tick monotonic
-    # timestamp.  The latched set must NOT eject the symbol.
     svc._symbol_last_tick["TMFE6"] = time.monotonic() - 600.0
     assert "TMFE6" in svc._ever_active_symbols
 
     gap = svc.get_active_feed_gap_s()
     assert gap >= 590.0
-
-
-# ---------------------------------------------------------------------------
-# get_feed_gaps_by_symbol
-# ---------------------------------------------------------------------------
 
 
 def test_get_feed_gaps_by_symbol_empty():
@@ -774,11 +685,6 @@ def test_get_feed_gaps_by_symbol_returns_gaps():
     assert set(gaps.keys()) == {"2330", "TXFD6"}
     assert gaps["2330"] > 4.0
     assert gaps["TXFD6"] > 1.0
-
-
-# ---------------------------------------------------------------------------
-# _maybe_update_features
-# ---------------------------------------------------------------------------
 
 
 def test_maybe_update_features_no_engine():
@@ -802,7 +708,7 @@ def test_maybe_update_features_stats_missing_best_bid():
     svc, *_ = _make_service()
     svc.feature_engine = MagicMock()
     event = SimpleNamespace(symbol="2330")
-    stats = SimpleNamespace()  # missing best_bid, best_ask
+    stats = SimpleNamespace()
     result = svc._maybe_update_features(event, stats)
     assert result is None
 
@@ -819,7 +725,6 @@ def test_maybe_update_features_happy_path_process_lob_update():
     svc._fe_process_lob_update = feature_engine.process_lob_update
 
     event = SimpleNamespace(symbol="2330", trade_direction=0, meta=None)
-    # stats must be LOBStatsEvent or tuple to pass isinstance check in _maybe_update_features
     stats = ("lobstats", "2330", 0, 200000, 100, 0.5, 100000, 100100, 500, 500)
     svc.metrics_registry = None
 
@@ -831,7 +736,7 @@ def test_maybe_update_features_happy_path_fallback_process_lob_stats():
     svc, *_ = _make_service()
 
     feature_engine = MagicMock()
-    feature_engine.process_lob_update = None  # not callable, triggers fallback
+    feature_engine.process_lob_update = None
     feature_update = MagicMock()
     feature_update.feature_set_id = "v3"
     feature_update.quality_flags = 0
@@ -839,7 +744,6 @@ def test_maybe_update_features_happy_path_fallback_process_lob_stats():
     svc.feature_engine = feature_engine
 
     event = SimpleNamespace(symbol="2330", trade_direction=0, meta=None)
-    # stats must be LOBStatsEvent or tuple to pass isinstance check
     stats = ("lobstats", "2330", 0, 200000, 100, 0.5, 100000, 100100, 500, 500)
     svc.metrics_registry = None
 
@@ -872,13 +776,11 @@ def test_maybe_update_features_error_counted_without_sampling():
     """
     svc, *_ = _make_service()
 
-    # Set up a feature engine that always raises via the fast-path callable.
     feature_engine = MagicMock()
     raising_fn = MagicMock(side_effect=RuntimeError("test error"))
     svc.feature_engine = feature_engine
     svc._fe_process_lob_update = raising_fn
 
-    # Build a minimal metrics registry with a mock counter.
     error_child = MagicMock()
     mock_metric = MagicMock()
     mock_metric.labels.return_value = error_child
@@ -887,22 +789,18 @@ def test_maybe_update_features_error_counted_without_sampling():
     metrics_registry.feature_plane_updates_total = mock_metric
     svc.metrics_registry = metrics_registry
 
-    # Use a sample_every value large enough that the old (broken) code would
-    # never fire the counter within our test loop.
     sample_every = 100
     svc._feature_metrics_sample_every = sample_every
     svc._feature_metrics_counter = 0
 
     event = SimpleNamespace(symbol="2330", trade_direction=0, meta=None)
-    # stats must be a tuple or LOBStatsEvent to pass isinstance guard in the method.
     stats = ("lobstats", "2330", 0, 200000, 100, 0.5, 100000, 100100, 500, 500)
 
-    num_errors = 5  # well below sample_every=100
+    num_errors = 5
     for _ in range(num_errors):
         result = svc._maybe_update_features(event, stats)
         assert result is None
 
-    # With the fix: error_child.inc() called once per error regardless of sampling.
     assert error_child.inc.call_count == num_errors, (
         f"Expected {num_errors} error increments, got {error_child.inc.call_count}. "
         "Error metrics must NOT be gated by the sampling guard."
@@ -934,11 +832,6 @@ def test_maybe_update_features_on_tick_called_for_classified_tick():
 
     svc._maybe_update_features(event, stats)
     feature_engine.on_tick.assert_called_once_with("2330", 5000000, 100, 1, 100)
-
-
-# ---------------------------------------------------------------------------
-# _process_raw
-# ---------------------------------------------------------------------------
 
 
 def _make_bidask_raw():
@@ -1029,7 +922,6 @@ def test_process_raw_object_tick():
     svc.lob.process_event = MagicMock(return_value=None)
     svc.feature_engine = None
 
-    # Object-style raw with close/price but no bid attributes
     raw = SimpleNamespace(close=500.0)
     svc._process_raw(raw)
 
@@ -1061,11 +953,6 @@ def test_process_raw_records_when_record_direct():
     assert recorder_queue.qsize() == 1
 
 
-# ---------------------------------------------------------------------------
-# _within_reconnect_window
-# ---------------------------------------------------------------------------
-
-
 def test_within_reconnect_window_no_constraints():
     svc, *_ = _make_service()
     svc.reconnect_days = set()
@@ -1084,10 +971,7 @@ def test_within_reconnect_window_inside_hours():
     svc.reconnect_hours_2 = ""
     svc._reconnect_tzinfo = ZoneInfo("UTC")
 
-    # Monday 10:30 UTC — inside window
     fake_ts = dt.datetime(2025, 1, 6, 10, 30, 0, tzinfo=dt.timezone.utc).timestamp()
-    # ``_within_reconnect_window`` lives in the mixin module, so the clock must be
-    # frozen there — patching market_data.timebase silently uses the real clock.
     with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
         mock_tb.now_s.return_value = fake_ts
         with patch.dict(os.environ, {"HFT_RECONNECT_USE_CALENDAR": "0"}):
@@ -1105,7 +989,6 @@ def test_within_reconnect_window_outside_hours():
     svc.reconnect_hours_2 = ""
     svc._reconnect_tzinfo = ZoneInfo("UTC")
 
-    # Monday 15:30 UTC — outside window
     fake_ts = dt.datetime(2025, 1, 6, 15, 30, 0, tzinfo=dt.timezone.utc).timestamp()
     with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
         mock_tb.now_s.return_value = fake_ts
@@ -1114,17 +997,11 @@ def test_within_reconnect_window_outside_hours():
     assert result is False
 
 
-# ---------------------------------------------------------------------------
-# _publish_to_redis
-# ---------------------------------------------------------------------------
-
-
 def test_publish_to_redis_no_publisher():
     svc, *_ = _make_service()
     svc._redis_publisher = None
     event = SimpleNamespace(symbol="2330", meta=None)
     stats = SimpleNamespace()
-    # Should not raise
     svc._publish_to_redis(event, stats)
     assert svc._redis_publisher is None
 
@@ -1173,14 +1050,8 @@ def test_publish_to_redis_publisher_raises_silently():
     svc._redis_publisher = pub
 
     event = SimpleNamespace(symbol="2330", meta=None, local_ts=0, price=None, bids=None, asks=None)
-    # Should not raise — fire-and-forget
     svc._publish_to_redis(event, SimpleNamespace())
     pub.publish_market_data.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _init_redis_publisher
-# ---------------------------------------------------------------------------
 
 
 def test_init_redis_publisher_disabled():
@@ -1209,11 +1080,6 @@ def test_init_redis_publisher_import_error_sets_none():
     assert svc._redis_publisher is None
 
 
-# ---------------------------------------------------------------------------
-# _log_first_event
-# ---------------------------------------------------------------------------
-
-
 def test_log_first_tick_event():
     from hft_platform.events import TickEvent
 
@@ -1229,7 +1095,7 @@ def test_log_first_tick_event_only_once():
     from hft_platform.events import TickEvent
 
     svc, *_ = _make_service()
-    svc._first_tick_event = True  # already seen
+    svc._first_tick_event = True
 
     event = TickEvent(meta=None, symbol="2330", price=5000000, volume=100)
     svc._log_first_event(event)
@@ -1251,11 +1117,6 @@ def test_log_first_bidask_event():
     assert svc._first_bidask_event is True
 
 
-# ---------------------------------------------------------------------------
-# _update_symbol_tick_inline
-# ---------------------------------------------------------------------------
-
-
 def test_update_symbol_tick_inline_updates_dict():
     svc, *_ = _make_service()
     svc._symbol_tick_inline = True
@@ -1270,11 +1131,6 @@ def test_update_symbol_tick_inline_no_symbol():
     event = SimpleNamespace(symbol=None)
     svc._update_symbol_tick_inline(event)
     assert None not in svc._symbol_last_tick
-
-
-# ---------------------------------------------------------------------------
-# _shm publisher init with symbols
-# ---------------------------------------------------------------------------
 
 
 def test_init_shm_publisher_with_subscribed_symbols():
@@ -1300,7 +1156,6 @@ def test_init_shm_publisher_with_subscribed_symbols():
         with patch("hft_platform.ipc.shm_snapshot.ShmSnapshotWriter", return_value=mock_shm):
             svc = MarketDataService(bus, raw_queue, client)
 
-    # Both symbols should be indexed
     assert "2330" in svc._shm_symbol_index
     assert "TXFD6" in svc._shm_symbol_index
     assert svc._shm_symbol_index["2330"] == 0
@@ -1308,18 +1163,11 @@ def test_init_shm_publisher_with_subscribed_symbols():
     svc._tmp = tmp
 
 
-# ---------------------------------------------------------------------------
-# _on_shioaji_event — basic coverage
-# ---------------------------------------------------------------------------
-
-
 def test_on_shioaji_event_no_loop():
     svc, *_ = _make_service()
-    # No 'loop' attribute — should hit error log path
     if hasattr(svc, "loop"):
         del svc.loop
 
-    # Should not raise
     svc._on_shioaji_event({"code": "2330", "close": 500.0, "volume": 100})
     assert svc.raw_queue.qsize() == 0
 
@@ -1337,18 +1185,10 @@ def test_on_shioaji_event_exception_is_handled():
     svc, *_ = _make_service()
     assert svc._cb_drop_callback_error is not None
     before = svc._cb_drop_callback_error._value.get()
-    # Patch the name ``market_data`` calls, not the attribute of the module it was imported from: a patch on
-    # ``_md_ingestion`` leaves this module's binding alone, never raises, and the old assertions passed anyway.
     with patch("hft_platform.services.market_data.try_fast_extract_callback_payload", side_effect=RuntimeError("oops")):
-        # Should not raise
         svc._on_shioaji_event({"code": "2330"})
     assert svc._cb_drop_callback_error._value.get() == before + 1
     assert svc.raw_queue.qsize() == 0
-
-
-# ---------------------------------------------------------------------------
-# _env_int and _obs_policy module-level helpers
-# ---------------------------------------------------------------------------
 
 
 def test_env_int_valid():
@@ -1386,11 +1226,6 @@ def test_obs_policy_invalid_defaults_to_balanced():
         assert _obs_policy() == "balanced"
 
 
-# ---------------------------------------------------------------------------
-# _init_feature_shadow_engine
-# ---------------------------------------------------------------------------
-
-
 def test_init_feature_shadow_engine_disabled_by_default():
     svc, *_ = _make_service()
     svc.feature_engine = MagicMock()
@@ -1407,15 +1242,9 @@ def test_init_feature_shadow_engine_no_feature_engine():
     assert svc._feature_shadow_engine is None
 
 
-# ---------------------------------------------------------------------------
-# _emit_trace
-# ---------------------------------------------------------------------------
-
-
 def test_emit_trace_no_sampler():
     svc, *_ = _make_service()
     svc._trace_sampler = None
-    # Should not raise
     svc._emit_trace("stage", "trace_id", {"key": "val"})
     assert svc._trace_sampler is None
 
@@ -1433,14 +1262,8 @@ def test_emit_trace_sampler_raises_silently():
     sampler = MagicMock()
     sampler.emit = MagicMock(side_effect=RuntimeError("trace error"))
     svc._trace_sampler = sampler
-    # Should not raise
     svc._emit_trace("stage", "", {})
     sampler.emit.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _publish_nowait / _publish_many_nowait fallback paths
-# ---------------------------------------------------------------------------
 
 
 def test_publish_nowait_uses_publish_nowait():
@@ -1459,29 +1282,22 @@ def test_publish_many_nowait_uses_publish_many_nowait():
 
 def test_publish_many_nowait_fallback_to_individual():
     svc, bus, *_ = _make_service()
-    # _bus_publish_many_nowait is cached at init; set to None to trigger fallback
     svc._bus_publish_many_nowait = None
     events = [SimpleNamespace(symbol="A"), SimpleNamespace(symbol="B")]
     svc._publish_many_nowait(events)
     assert bus.publish_nowait.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# _record_shioaji_crash_signature
-# ---------------------------------------------------------------------------
-
-
 def test_record_crash_signature_no_registry():
     svc, *_ = _make_service()
     svc.metrics_registry = None
-    # Should not raise
     svc._record_shioaji_crash_signature("connection reset", context="md_callback")
     assert svc.metrics_registry is None
 
 
 def test_record_crash_signature_no_metric_attr():
     svc, *_ = _make_service()
-    svc.metrics_registry = MagicMock(spec=[])  # empty spec, no attributes
+    svc.metrics_registry = MagicMock(spec=[])
     svc._record_shioaji_crash_signature("connection reset", context="md_callback")
     assert svc.metrics_registry.method_calls == []
 
@@ -1489,15 +1305,9 @@ def test_record_crash_signature_no_metric_attr():
 def test_record_crash_signature_no_match():
     svc, *_ = _make_service()
     svc.metrics_registry = MagicMock()
-    # Text that doesn't match any known crash signature
     with patch("hft_platform.services._md_observability.detect_crash_signature", return_value=None):
         svc._record_shioaji_crash_signature("just a regular log message", context="md_callback")
     svc.metrics_registry.shioaji_crash_signature_total.labels.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# FeedState enum
-# ---------------------------------------------------------------------------
 
 
 def test_feed_state_values():
@@ -1508,11 +1318,6 @@ def test_feed_state_values():
     assert hasattr(FeedState, "CONNECTED")
     assert hasattr(FeedState, "DISCONNECTED")
     assert hasattr(FeedState, "RECOVERING")
-
-
-# ---------------------------------------------------------------------------
-# _mark_pending_reconnect
-# ---------------------------------------------------------------------------
 
 
 def test_mark_pending_reconnect_sets_fields():
@@ -1536,23 +1341,14 @@ def test_mark_pending_reconnect_preserves_since():
 
     svc._mark_pending_reconnect(30.0, reason="heartbeat_gap")
 
-    # since should NOT be updated if already set
     assert svc._pending_reconnect_since == original_since
-
-
-# ---------------------------------------------------------------------------
-# _get_trace_sampler (lines 59-60, 62-65)
-# ---------------------------------------------------------------------------
 
 
 def test_get_trace_sampler_success():
     """Covers the import-success path of _get_trace_sampler (lines 59-62)."""
     from hft_platform.services.market_data import _get_trace_sampler
 
-    # If diagnostics.trace is importable, returns a sampler object (or None).
-    # Either way the function should not raise.
     result = _get_trace_sampler()
-    # Result is either a sampler or None — both are acceptable.
     assert result is None or hasattr(result, "emit")
 
 
@@ -1560,15 +1356,9 @@ def test_get_trace_sampler_exception_returns_none():
     """Covers the except path of _get_trace_sampler (lines 63-65)."""
     from hft_platform.services.market_data import _get_trace_sampler
 
-    # Patch the inner import to raise
     with patch.dict("sys.modules", {"hft_platform.diagnostics.trace": None}):
         result = _get_trace_sampler()
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _summarize_md (lines 124-134)
-# ---------------------------------------------------------------------------
 
 
 def test_summarize_md_none():
@@ -1612,11 +1402,6 @@ def test_summarize_md_object_without_nested():
     assert result["nested"] == {}
 
 
-# ---------------------------------------------------------------------------
-# _try_fast_extract_callback_payload (lines 159-161)
-# ---------------------------------------------------------------------------
-
-
 def test_fast_extract_payload_alternate_order_a0_md_a1_exchange():
     """Covers lines 157-161: argc==2 but second arg is exchange, first is MD."""
     from hft_platform.services.market_data import _try_fast_extract_callback_payload
@@ -1645,11 +1430,6 @@ def test_fast_extract_payload_argc_3_last_is_md():
     assert exchange == "TSE"
 
 
-# ---------------------------------------------------------------------------
-# __init__ LOB feature_engine setattr exception (lines 237-239)
-# ---------------------------------------------------------------------------
-
-
 def test_init_lob_feature_engine_setattr_exception():
     """Covers lines 237-239: setattr(self.lob, 'feature_engine', ...) raises."""
     from hft_platform.engine.event_bus import RingBufferBus
@@ -1665,7 +1445,6 @@ def test_init_lob_feature_engine_setattr_exception():
     raw_queue = asyncio.Queue(maxsize=100)
     client = MagicMock()
 
-    # Make LOBEngine raise on setattr for feature_engine
     lob_mock = MagicMock()
     type(lob_mock).feature_engine = property(
         lambda self: None,
@@ -1676,14 +1455,8 @@ def test_init_lob_feature_engine_setattr_exception():
         with patch("hft_platform.services.market_data.LOBEngine", return_value=lob_mock):
             svc = MarketDataService(bus, raw_queue, client)
 
-    # Service should still be constructed despite the setattr exception
     assert svc.lob is lob_mock
     svc._tmp = tmp
-
-
-# ---------------------------------------------------------------------------
-# __init__ invalid timezone (lines 276-278)
-# ---------------------------------------------------------------------------
 
 
 def test_init_invalid_timezone_defaults_to_utc():
@@ -1692,11 +1465,6 @@ def test_init_invalid_timezone_defaults_to_utc():
 
     svc, *_ = _make_service(extra_env={"HFT_RECONNECT_TZ": "Invalid/NoSuchTZ"})
     assert svc._reconnect_tzinfo == dt.UTC
-
-
-# ---------------------------------------------------------------------------
-# __init__ recorder mapper import exception (lines 348-349)
-# ---------------------------------------------------------------------------
 
 
 def test_init_recorder_mapper_import_exception():
@@ -1720,14 +1488,8 @@ def test_init_recorder_mapper_import_exception():
         with patch.dict("sys.modules", {"hft_platform.recorder.mapper": None}):
             svc = MarketDataService(bus, raw_queue, client, recorder_queue=recorder_queue)
 
-    # Despite import failure, service should initialize (mapper resolved lazily)
     assert svc._map_event_to_record is None
     svc._tmp = tmp
-
-
-# ---------------------------------------------------------------------------
-# _init_shm_publisher: symbols fallback + exception (lines 484, 491-493)
-# ---------------------------------------------------------------------------
 
 
 def test_init_shm_publisher_uses_symbols_fallback():
@@ -1738,9 +1500,8 @@ def test_init_shm_publisher_uses_symbols_fallback():
     tmp, cfg = _make_symbols_config()
     bus = MagicMock(spec=RingBufferBus)
     raw_queue = asyncio.Queue()
-    client = MagicMock(spec=[])  # empty spec — no subscribed_symbols attribute
+    client = MagicMock(spec=[])
 
-    # Add 'symbols' attribute as fallback
     client.symbols = ["2330", "TXFD6"]
 
     env = {
@@ -1788,16 +1549,10 @@ def test_init_shm_publisher_exception_sets_none():
     svc._tmp = tmp
 
 
-# ---------------------------------------------------------------------------
-# _publish_to_shm (lines 587-638)
-# ---------------------------------------------------------------------------
-
-
 def test_publish_to_shm_no_publisher():
     """Covers line 588-589: early return when publisher is None."""
     svc, *_ = _make_service()
     svc._shm_publisher = None
-    # Should not raise
     svc._publish_to_shm("2330", SimpleNamespace(), None)
     assert svc._shm_publisher is None
 
@@ -1826,13 +1581,11 @@ def test_publish_to_shm_known_symbol_with_stats():
     svc._publish_to_shm("2330", stats, None)
     publisher.publish.assert_called_once()
     call_args = publisher.publish.call_args[0]
-    assert call_args[0] == 0  # idx
-    assert call_args[2] == 12345  # sym_hash
-    # LOB fields
+    assert call_args[0] == 0
+    assert call_args[2] == 12345
     lob = call_args[3]
-    assert lob[0] == 5000000  # best_bid
-    assert lob[1] == 5001000  # best_ask
-    # Features should be zeros (no feature_tuple)
+    assert lob[0] == 5000000
+    assert lob[1] == 5001000
     feats = call_args[4]
     assert all(f == 0 for f in feats)
 
@@ -1847,7 +1600,7 @@ def test_publish_to_shm_with_feature_tuple():
     svc._shm_symbol_hashes = {"2330": 12345}
 
     stats = SimpleNamespace(local_ts=1000000000)
-    feature_tuple = tuple(range(100, 116))  # 16 feature values
+    feature_tuple = tuple(range(100, 116))
     svc._publish_to_shm("2330", stats, feature_tuple)
     publisher.publish.assert_called_once()
     feats = publisher.publish.call_args[0][4]
@@ -1865,7 +1618,7 @@ def test_publish_to_shm_feature_tuple_too_short():
     svc._shm_symbol_hashes = {"2330": 12345}
 
     stats = SimpleNamespace(local_ts=0)
-    feature_tuple = (1, 2, 3)  # Too short
+    feature_tuple = (1, 2, 3)
     svc._publish_to_shm("2330", stats, feature_tuple)
     publisher.publish.assert_called_once()
     feats = publisher.publish.call_args[0][4]
@@ -1895,11 +1648,11 @@ def test_publish_to_shm_max_symbols_exceeded():
     publisher = MagicMock()
     publisher.max_symbols = 1
     svc._shm_publisher = publisher
-    svc._shm_symbol_index = {"2330": 0}  # Already at capacity
+    svc._shm_symbol_index = {"2330": 0}
     svc._shm_symbol_hashes = {"2330": 12345}
 
     stats = SimpleNamespace(local_ts=0)
-    svc._publish_to_shm("TXFD6", stats, None)  # Should return early
+    svc._publish_to_shm("TXFD6", stats, None)
     publisher.publish.assert_not_called()
     assert "TXFD6" not in svc._shm_symbol_index
 
@@ -1915,7 +1668,6 @@ def test_publish_to_shm_publisher_raises_silently():
     svc._shm_symbol_hashes = {"2330": 12345}
 
     stats = SimpleNamespace(local_ts=0)
-    # Should not raise
     svc._publish_to_shm("2330", stats, None)
     publisher.publish.assert_called_once()
 
@@ -1934,16 +1686,9 @@ def test_publish_to_shm_caches_buffers():
     assert "2330" in svc._shm_lob_cache
     assert "2330" in svc._shm_feat_cache
 
-    # Second call reuses the cached buffer
     stats2 = SimpleNamespace(best_bid=200, local_ts=0)
     svc._publish_to_shm("2330", stats2, None)
-    # Should be the same list object
     assert svc._shm_lob_cache["2330"][0] == 200
-
-
-# ---------------------------------------------------------------------------
-# _init_feature_shadow_engine (lines 650-652, 671, 673-675)
-# ---------------------------------------------------------------------------
 
 
 def test_init_feature_shadow_kernel_backend_exception():
@@ -1960,7 +1705,6 @@ def test_init_feature_shadow_kernel_backend_exception():
             MockFE.return_value = shadow
             svc._init_feature_shadow_engine()
 
-    # Shadow engine should be assigned since backends differ
     assert svc._feature_shadow_engine is shadow
 
 
@@ -1978,7 +1722,7 @@ def test_init_feature_shadow_auto_mode_same_backend_returns():
     ):
         with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
             shadow = MagicMock()
-            shadow.kernel_backend.return_value = "python"  # Same as primary
+            shadow.kernel_backend.return_value = "python"
             MockFE.return_value = shadow
             svc._init_feature_shadow_engine()
 
@@ -2020,13 +1764,7 @@ def test_init_feature_shadow_explicit_backend_same_ok():
             MockFE.return_value = shadow
             svc._init_feature_shadow_engine()
 
-    # Explicit request: shadow should be assigned even if same backend
     assert svc._feature_shadow_engine is shadow
-
-
-# ---------------------------------------------------------------------------
-# _process_raw: norm_recovery path (lines 770-771)
-# ---------------------------------------------------------------------------
 
 
 def test_process_raw_norm_recovery_triggers_after_failures():
@@ -2045,7 +1783,7 @@ def test_process_raw_norm_recovery_triggers_after_failures():
     sg = MagicMock()
     svc._storm_guard = sg
     svc._NORM_FAILURE_ESCALATE = 5
-    svc._norm_consecutive_failures = 5  # At threshold
+    svc._norm_consecutive_failures = 5
 
     raw = {"code": "2330", "close": 500.0, "volume": 100}
     svc._process_raw(raw)
@@ -2073,16 +1811,9 @@ def test_process_raw_norm_recovery_exception_swallowed():
     svc._norm_consecutive_failures = 3
 
     raw = {"code": "2330", "close": 500.0, "volume": 100}
-    # Should not raise
     svc._process_raw(raw)
     sg.report_norm_recovery.assert_called_once()
-    # Counter should be reset to 0 after successful normalization
     assert svc._norm_consecutive_failures == 0
-
-
-# ---------------------------------------------------------------------------
-# _md_wal_fallback_write
-# ---------------------------------------------------------------------------
 
 
 def test_md_wal_fallback_write_no_writer():
@@ -2097,13 +1828,11 @@ def test_md_wal_fallback_write_skips_by_sample_rate():
     """WAL fallback writes only 1-in-N events."""
     svc, *_ = _make_service()
     writer = MagicMock()
-    # Return a fresh coroutine each call to avoid event loop issues
     writer.write = MagicMock(side_effect=lambda *a, **kw: asyncio.coroutine(lambda: None)())
     svc._wal_writer = writer
     svc._wal_fallback_sample_rate = 10
     svc._wal_fallback_count = 0
 
-    # First 9 calls should be skipped (count not divisible by 10)
     for _ in range(9):
         svc._md_wal_fallback_write("tick", {"symbol": "2330"})
     assert svc._wal_fallback_count == 9
@@ -2113,10 +1842,8 @@ def test_on_wal_fallback_done_no_exception():
     """CF-5: done callback does nothing when no exception."""
     from hft_platform.services.market_data import MarketDataService
 
-    # Use a mock future to avoid event-loop dependency
     fut = MagicMock()
     fut.exception.return_value = None
-    # Should not raise
     MarketDataService._on_wal_fallback_done(fut)
     fut.exception.assert_called_once()
 
@@ -2127,14 +1854,8 @@ def test_on_wal_fallback_done_with_exception():
 
     fut = MagicMock()
     fut.exception.return_value = IOError("disk full")
-    # Should not raise — just logs
     MarketDataService._on_wal_fallback_done(fut)
     fut.exception.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _record_direct_event: non-drop path with pending puts (line 1523-1530)
-# ---------------------------------------------------------------------------
 
 
 def test_record_direct_non_drop_pending_puts_exceeded():
@@ -2153,11 +1874,6 @@ def test_record_direct_non_drop_pending_puts_exceeded():
         svc._record_direct_event(event)
 
     assert svc._recorder_dropped_count == 1
-
-
-# ---------------------------------------------------------------------------
-# _looks_like_md edge cases
-# ---------------------------------------------------------------------------
 
 
 def test_looks_like_md_none():
@@ -2190,14 +1906,8 @@ def test_looks_like_md_object_with_code_and_time():
 def test_looks_like_md_object_with_symbol_only():
     from hft_platform.services.market_data import _looks_like_md
 
-    # symbol alone without price or time — the condition is (has_price) or (has_code and (has_price or has_time))
     obj = SimpleNamespace(symbol="2330")
     assert _looks_like_md(obj) is False
-
-
-# ---------------------------------------------------------------------------
-# _unwrap_md edge cases
-# ---------------------------------------------------------------------------
 
 
 def test_unwrap_md_none():
@@ -2243,11 +1953,6 @@ def test_unwrap_md_plain_dict_passthrough():
     assert _unwrap_md(d) is d
 
 
-# ---------------------------------------------------------------------------
-# _is_futures_symbol
-# ---------------------------------------------------------------------------
-
-
 def test_is_futures_symbol_alpha_prefix():
     from hft_platform.services.market_data import MarketDataService
 
@@ -2266,11 +1971,6 @@ def test_is_futures_symbol_empty():
     from hft_platform.services.market_data import MarketDataService
 
     assert MarketDataService._is_futures_symbol("") is False
-
-
-# ---------------------------------------------------------------------------
-# _record_shioaji_crash_signature with match
-# ---------------------------------------------------------------------------
 
 
 def test_record_crash_signature_with_match():
@@ -2301,13 +2001,7 @@ def test_record_crash_signature_metric_inc_raises():  # noqa: no-assert
         "hft_platform.services.market_data.detect_crash_signature",
         return_value="conn_reset",
     ):
-        # Should not raise
         svc._record_shioaji_crash_signature("connection reset", context="md_callback")
-
-
-# ---------------------------------------------------------------------------
-# _process_raw: norm failure escalation to storm_guard
-# ---------------------------------------------------------------------------
 
 
 def test_process_raw_norm_failure_escalates_to_storm_guard():
@@ -2319,18 +2013,13 @@ def test_process_raw_norm_failure_escalates_to_storm_guard():
     sg = MagicMock()
     svc._storm_guard = sg
     svc._NORM_FAILURE_ESCALATE = 2
-    svc._norm_consecutive_failures = 1  # One away from threshold
+    svc._norm_consecutive_failures = 1
 
     raw = {"code": "2330", "close": 500.0, "volume": 100}
     svc._process_raw(raw)
 
     assert svc._norm_consecutive_failures == 2
     sg.report_norm_failure.assert_called_once_with(2)
-
-
-# ---------------------------------------------------------------------------
-# _record_direct_event: WAL fallback on QueueFull
-# ---------------------------------------------------------------------------
 
 
 def test_record_direct_queue_full_triggers_wal_fallback():
@@ -2340,7 +2029,7 @@ def test_record_direct_queue_full_triggers_wal_fallback():
     svc.recorder_queue = recorder_queue
     svc._record_direct = True
     svc._record_drop_on_full = True
-    svc._record_degrade_threshold = 1000  # High so degraded mode is not entered
+    svc._record_degrade_threshold = 1000
     recorder_queue.put_nowait({"topic": "tick", "data": {}})
 
     svc._wal_writer = MagicMock()
@@ -2354,22 +2043,17 @@ def test_record_direct_queue_full_triggers_wal_fallback():
     svc._md_wal_fallback_write.assert_called_once_with("tick", {"symbol": "2330"})
 
 
-# ---------------------------------------------------------------------------
-# _enqueue_raw: sliding window drops and storm guard escalation
-# ---------------------------------------------------------------------------
-
-
 def test_enqueue_raw_consecutive_drops_trigger_storm():
     """Covers storm guard escalation on consecutive drops."""
     svc, *_ = _make_service()
     svc.raw_queue = asyncio.Queue(maxsize=1)
-    svc.raw_queue.put_nowait(("x", "y"))  # Fill
+    svc.raw_queue.put_nowait(("x", "y"))
 
     sg = MagicMock()
     svc._storm_guard = sg
     svc._raw_drop_degrade_threshold = 2
     svc._raw_drop_halt_threshold = 1000
-    svc._raw_consecutive_drops = 1  # Will become 2 after next drop
+    svc._raw_consecutive_drops = 1
 
     svc._enqueue_raw("TSE", {"code": "2330"})
     sg.trigger_storm.assert_called_once()
@@ -2400,7 +2084,7 @@ def test_enqueue_raw_feature_engine_mark_gap():
     svc.feature_engine = fe
     svc._storm_guard = None
     svc._raw_drop_degrade_threshold = 2
-    svc._raw_consecutive_drops = 1  # Will become 2 = threshold
+    svc._raw_consecutive_drops = 1
 
     svc._enqueue_raw("TSE", {"code": "2330"})
     fe.mark_gap_all.assert_called_once()
@@ -2414,32 +2098,15 @@ def test_enqueue_raw_sliding_window_storm():
 
     sg = MagicMock()
     svc._storm_guard = sg
-    svc._raw_drop_degrade_threshold = 1000  # High enough to skip
+    svc._raw_drop_degrade_threshold = 1000
     svc._raw_drop_halt_threshold = 1000
-    svc._raw_drop_window_threshold = 1  # Trigger on any window count
-    svc._raw_drop_window_count = 100.0  # Already high
+    svc._raw_drop_window_threshold = 1
+    svc._raw_drop_window_count = 100.0
     svc._raw_drop_window_last_ns = 1
     svc._raw_consecutive_drops = 0
 
     svc._enqueue_raw("TSE", {"code": "2330"})
-    # Should have triggered storm via window check
     sg.trigger_storm.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# RC-2 v2: get_active_feed_gap_s subscription-membership de-latch
-# ---------------------------------------------------------------------------
-#
-# v1 (recency-window) was reverted because it silently dropped any latched
-# symbol whose silence exceeded the recency window — exactly the partial
-# outage masking pattern that b80b950c originally tried to address.
-#
-# v2 separates "expired contract" from "partial outage" via
-# ``client.subscribed_codes`` (set[str]).  ``contracts_runtime.refresh()``
-# discards expired codes from this set; latched symbols no longer in the
-# set are de-latched.  Symbols still in the set always contribute their
-# silence age to ``max_gap`` regardless of how long they have been silent.
-# ---------------------------------------------------------------------------
 
 
 def test_feed_gap_excludes_silent_latched_symbol():
@@ -2455,20 +2122,16 @@ def test_feed_gap_excludes_silent_latched_symbol():
     platform in reduce_only.
     """
     svc, _bus, _raw, client = _make_service()
-    # Simulate post-rollover state: TMFI6 has expired and is no longer
-    # subscribed, while TMFD6/TXFD6 remain the active front-month codes.
     client.subscribed_codes = {"TMFD6", "TXFD6"}
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFD6": now - 0.5,  # active front-month, still subscribed
-        "TXFD6": now - 1.0,  # active front-month, still subscribed
-        "TMFI6": now - 1200.0,  # latched but already unsubscribed
+        "TMFD6": now - 0.5,
+        "TXFD6": now - 1.0,
+        "TMFI6": now - 1200.0,
     }
     svc._ever_active_symbols = {"TMFD6", "TXFD6", "TMFI6"}
     gap = svc.get_active_feed_gap_s()
-    # Must reflect only TMFD6/TXFD6 (≤1.0s), NOT 1200s from unsubscribed TMFI6.
     assert gap < 5.0, f"unsubscribed TMFI6 leaked into max gap: {gap=}"
-    # TMFI6 must be auto-pruned from the latched set on this call.
     assert "TMFI6" not in svc._ever_active_symbols
     assert {"TMFD6", "TXFD6"}.issubset(svc._ever_active_symbols)
 
@@ -2479,7 +2142,7 @@ def test_feed_gap_delatches_when_symbol_drops_from_subscriptions():
     ``get_active_feed_gap_s`` must de-latch it so the latched set does
     not grow unboundedly across long sessions or multi-day uptime."""
     svc, _bus, _raw, client = _make_service()
-    client.subscribed_codes = {"TMFD6"}  # TMFI6 has rolled out
+    client.subscribed_codes = {"TMFD6"}
     now = time.monotonic()
     svc._symbol_last_tick = {
         "TMFD6": now - 0.5,
@@ -2487,7 +2150,6 @@ def test_feed_gap_delatches_when_symbol_drops_from_subscriptions():
     }
     svc._ever_active_symbols = {"TMFD6", "TMFI6"}
     _ = svc.get_active_feed_gap_s()
-    # TMFI6 should be auto-pruned from the latched set.
     assert "TMFI6" not in svc._ever_active_symbols
     assert "TMFD6" in svc._ever_active_symbols
 
@@ -2499,18 +2161,15 @@ def test_feed_gap_real_outage_still_surfaces():
     that broke RC-2 v1 (recency window): silence ≥ recency was
     silently dropped from ``max_gap``."""
     svc, _bus, _raw, client = _make_service()
-    client.subscribed_codes = {"TXFD6", "TMFD6"}  # both still subscribed
+    client.subscribed_codes = {"TXFD6", "TMFD6"}
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TXFD6": now - 0.5,  # healthy
-        "TMFD6": now - 250.0,  # silent 250s — partial outage
+        "TXFD6": now - 0.5,
+        "TMFD6": now - 250.0,
     }
     svc._ever_active_symbols = {"TXFD6", "TMFD6"}
     gap = svc.get_active_feed_gap_s()
-    # TMFD6 silence must be reported in full.
     assert gap >= 200.0, f"real outage masked: {gap=}"
-    # And both symbols stay latched (silence on a subscribed symbol
-    # does NOT trigger de-latch).
     assert {"TXFD6", "TMFD6"} <= svc._ever_active_symbols
 
 
@@ -2520,32 +2179,15 @@ def test_feed_gap_long_outage_on_subscribed_symbol_still_surfaces():
     symbol silent for 2000s while still in ``subscribed_codes`` MUST
     surface its full silence — no recency cap, no time-based mask."""
     svc, _bus, _raw, client = _make_service()
-    client.subscribed_codes = {"TMFE6", "TXFE6"}  # both still subscribed
+    client.subscribed_codes = {"TMFE6", "TXFE6"}
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFE6": now - 2000.0,  # 2000s silence on a subscribed symbol
+        "TMFE6": now - 2000.0,
         "TXFE6": now - 0.5,
     }
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
     gap = svc.get_active_feed_gap_s()
     assert gap >= 1900.0, f"long outage on subscribed symbol masked: {gap=}"
-
-
-# ---------------------------------------------------------------------------
-# RC-2 v2 alias-resolution patch (Codex P1 #3)
-# ---------------------------------------------------------------------------
-#
-# ``client.subscribed_codes`` records *config-time* codes.  For rollover
-# aliases (TMFR1, TXFR1, …) these differ from the resolved month code
-# the broker callback delivers (TMFE6, TXFE6, …).  Quote callbacks
-# populate ``_ever_active_symbols`` with the resolved code, so a naive
-# ``symbol in subscribed_codes`` check would treat every alias-resolved
-# future as "unsubscribed" and silently mask its partial outage.
-#
-# ``ContractsRuntime.resolve_symbol_aliases()`` populates
-# ``client.alias_to_actual`` (config_code → resolved_code).  The
-# de-latch logic must union that mapping into the membership set.
-# ---------------------------------------------------------------------------
 
 
 def test_feed_gap_alias_resolved_symbol_not_delatched():
@@ -2556,18 +2198,15 @@ def test_feed_gap_alias_resolved_symbol_not_delatched():
     otherwise a 2000s outage on TMFE6 would be silently de-latched
     just because a healthy non-alias front-month exists alongside."""
     svc, _bus, _raw, client = _make_service()
-    # Config used rollover aliases; broker resolved them mid-session.
     client.subscribed_codes = {"TMFR1", "TXFE6"}
     client.alias_to_actual = {"TMFR1": "TMFE6"}
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFE6": now - 2000.0,  # alias-resolved symbol, real outage
-        "TXFE6": now - 0.5,  # healthy non-alias front-month
+        "TMFE6": now - 2000.0,
+        "TXFE6": now - 0.5,
     }
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
     gap = svc.get_active_feed_gap_s()
-    # TMFE6 must remain a contributor: its 2000s silence MUST surface
-    # rather than being de-latched as "unsubscribed" against TMFR1.
     assert gap >= 1900.0, f"alias-resolved outage masked: {gap=}"
     assert "TMFE6" in svc._ever_active_symbols
     assert "TXFE6" in svc._ever_active_symbols
@@ -2589,9 +2228,6 @@ def test_feed_gap_alias_resolution_failure_falls_back_safe():
         def keys(self):  # pragma: no cover - never reached
             raise RuntimeError("alias map exploded")
 
-    # Force ``isinstance(raw_alias_map, dict)`` to be True yet make
-    # ``dict(raw_alias_map)`` snapshot raise.  Subclassing dict and
-    # overriding ``__iter__`` is the cleanest way to guarantee both.
     class _BoomDict(dict):
         def __iter__(self):
             raise RuntimeError("alias snapshot exploded")
@@ -2600,12 +2236,10 @@ def test_feed_gap_alias_resolution_failure_falls_back_safe():
     client.alias_to_actual = _BoomDict({"TMFR1": "TMFE6"})
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFE6": now - 2000.0,  # alias-resolved symbol, real outage
+        "TMFE6": now - 2000.0,
     }
     svc._ever_active_symbols = {"TMFE6"}
     gap = svc.get_active_feed_gap_s()
-    # Resolver failure → subscription_set=None → every latched symbol
-    # contributes → 2000s silence on TMFE6 surfaces in full.
     assert gap >= 1900.0, f"resolver failure masked outage: {gap=}"
     assert "TMFE6" in svc._ever_active_symbols
 
@@ -2619,11 +2253,9 @@ def test_feed_gap_falls_back_when_subscriptions_unavailable():
     membership question authoritatively (Defense-in-Depth: missing
     signal must not silently mask a partial failure)."""
     svc, *_ = _make_service()
-    # NB: client is a plain MagicMock, so ``client.subscribed_codes``
-    # auto-resolves to a MagicMock attribute (not a real set).
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFE6": now - 2000.0,  # silent 2000s
+        "TMFE6": now - 2000.0,
         "TXFE6": now - 0.5,
     }
     svc._ever_active_symbols = {"TMFE6", "TXFE6"}
@@ -2631,27 +2263,6 @@ def test_feed_gap_falls_back_when_subscriptions_unavailable():
     assert gap >= 1900.0, (
         f"fallback path must surface long silence on every latched symbol when membership cannot be determined: {gap=}"
     )
-
-
-# ---------------------------------------------------------------------------
-# RC-3 patches (Codex P1 #5 + P2 #6)
-# ---------------------------------------------------------------------------
-#
-# P1 #5: production runs with ``HFT_QUOTE_CONNECTIONS > 1`` use a
-#        ``QuoteConnectionPool`` as the platform's ``client`` handle.  The
-#        pool MUST aggregate ``subscribed_codes`` and ``alias_to_actual``
-#        across its underlying clients, otherwise ``subscription_set``
-#        stays ``None`` in production and the de-latch path never engages.
-#
-# P2 #6: when every latched symbol is de-latched in the same call (typical
-#        rollover window: new front-month subscribed but no tick has
-#        crossed the 5-event baseline; old contract just pruned), falling
-#        back to ``get_max_feed_gap_s`` re-scans ``_symbol_last_tick`` —
-#        which still contains the just-de-latched expired contract's stale
-#        gap — and falsely reports it as the active feed gap.  Must
-#        instead return ``0.0`` (honest "no active latched contract") and
-#        only fall back when membership was never resolvable.
-# ---------------------------------------------------------------------------
 
 
 def test_feed_gap_pool_aggregates_subscribed_codes():
@@ -2669,8 +2280,6 @@ def test_feed_gap_pool_aggregates_subscribed_codes():
 
     aggregated = pool.subscribed_codes
     assert aggregated == {"TMFD6", "TXFD6", "MXFD6"}
-    # Snapshot semantics: mutating the pool's view must NOT touch the
-    # underlying per-client sets.
     aggregated.add("BOGUS")
     assert "BOGUS" not in client_a.subscribed_codes
     assert "BOGUS" not in client_b.subscribed_codes
@@ -2690,8 +2299,6 @@ def test_feed_gap_pool_aggregates_alias_map():
 
     aggregated = pool.alias_to_actual
     assert aggregated == {"TMFR1": "TMFE6", "TXFR1": "TXFE6"}
-    # Snapshot semantics: mutating the pool's view must NOT touch the
-    # underlying per-client dicts.
     aggregated["INJECTED"] = "BOGUS"
     assert "INJECTED" not in client_a.alias_to_actual
     assert "INJECTED" not in client_b.alias_to_actual
@@ -2706,27 +2313,17 @@ def test_feed_gap_returns_zero_when_all_delatched():
     just-de-latched expired contract's stale gap, recreating the
     rollover-window false-reduce-only the de-latch was meant to fix."""
     svc, _bus, _raw, client = _make_service()
-    # New front-month subscribed; old TMFI6 has just rolled out.
     client.subscribed_codes = {"TMFD7"}
     client.alias_to_actual = {}
     now = time.monotonic()
-    # ``_symbol_last_tick`` still carries TMFI6's stale 1200s gap (it
-    # has not been pruned from the per-symbol last-tick map).
     svc._symbol_last_tick = {
         "TMFI6": now - 1200.0,
     }
-    # TMFI6 is the only latched symbol, and it is no longer in the
-    # subscription set — the loop will de-latch it.
     svc._ever_active_symbols = {"TMFI6"}
 
     gap = svc.get_active_feed_gap_s()
 
-    # Pre-fix: the fallback re-scanned ``_symbol_last_tick`` and
-    # returned 1200.0, tripping the 600s threshold and locking the
-    # platform into reduce-only across every rollover window.
-    # Post-fix: honest "no active latched contract right now".
     assert gap == 0.0, f"stale gap leaked through fallback: {gap=}"
-    # And the de-latch was applied for real.
     assert "TMFI6" not in svc._ever_active_symbols
 
 
@@ -2737,18 +2334,12 @@ def test_feed_gap_falls_back_only_when_subscription_unknown():
     cold-start dead-feed signal.  This is the ONLY case the fallback
     is allowed to fire."""
     svc, _bus, _raw, client = _make_service()
-    # Force ``subscription_set = None``: the MagicMock client returns a
-    # MagicMock for ``subscribed_codes`` which is not isinstance(set).
-    # Latched set is empty so ``active_count == 0`` via the empty loop,
-    # not via the de-latch path.
     now = time.monotonic()
     svc._symbol_last_tick = {
-        "TMFE6": now - 2500.0,  # genuinely-dead cold-start signal
+        "TMFE6": now - 2500.0,
     }
-    svc._ever_active_symbols = set()  # no symbol latched yet
+    svc._ever_active_symbols = set()
 
     gap = svc.get_active_feed_gap_s()
 
-    # Membership unknown + nothing latched → fall back to legacy
-    # max-gap so cold-start dead feeds still surface.
     assert gap >= 2400.0, f"fallback must fire when membership is unknown and nothing is latched: {gap=}"

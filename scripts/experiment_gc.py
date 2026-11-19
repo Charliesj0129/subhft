@@ -24,9 +24,6 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Logging setup — structlog is not required for standalone scripts; use stdlib
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%SZ",
@@ -35,8 +32,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("experiment_gc")
 
-# Directory name timestamp pattern used in validations/:
-#   20260318T152526Z_6cbf7024
 _TS_RE = re.compile(r"^(\d{8}T\d{6}Z)")
 _TS_FMT = "%Y%m%dT%H%M%SZ"
 
@@ -44,14 +39,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNS_ROOT = REPO_ROOT / "research" / "experiments" / "runs"
 VALIDATIONS_ROOT = REPO_ROOT / "research" / "experiments" / "validations"
 
-# Only these are reclaimable. Everything else in a run directory is metadata
-# (trial evidence) and stays, so a GC'd run still counts as a trial.
 PAYLOAD_SUFFIXES = frozenset({".npy", ".npz"})
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _payload_files(path: Path) -> list[Path]:
@@ -108,9 +98,6 @@ def _dir_age(directory: Path) -> datetime:
     return datetime.fromtimestamp(mtime, tz=timezone.utc)
 
 
-# ---------------------------------------------------------------------------
-# Runs root (UUID-named, grouped by alpha via meta.json)
-# ---------------------------------------------------------------------------
 
 
 def _read_alpha_id(run_dir: Path) -> str:
@@ -145,16 +132,12 @@ def _collect_runs(
         age = _dir_age(entry)
         by_alpha.setdefault(alpha_id, []).append((age, entry))
 
-    # Sort each alpha's runs oldest-first
     for alpha_id in by_alpha:
         by_alpha[alpha_id].sort(key=lambda t: t[0])
 
     return by_alpha
 
 
-# ---------------------------------------------------------------------------
-# Validations root (alpha-named subdirs → timestamp-named run dirs)
-# ---------------------------------------------------------------------------
 
 
 def _collect_validations(
@@ -186,9 +169,6 @@ def _collect_validations(
     return by_alpha
 
 
-# ---------------------------------------------------------------------------
-# GC logic
-# ---------------------------------------------------------------------------
 
 
 def _select_deletions(
@@ -214,7 +194,6 @@ def _select_deletions(
             )
             continue
 
-        # Preserve the most recent keep_latest entries (end of list = newest)
         protected_indices = set(range(total - keep_latest, total))
 
         for idx, (age, path) in enumerate(runs):
@@ -248,7 +227,6 @@ def run_gc(
         },
     )
 
-    # Collect candidates from both roots
     runs_by_alpha = _collect_runs(runs_root)
     validations_by_alpha = _collect_validations(validations_root)
 
@@ -256,8 +234,6 @@ def run_gc(
         len(v) for v in validations_by_alpha.values()
     )
 
-    # Merge into one collection for uniform reporting; prefix alpha with source
-    # to avoid collisions (runs and validations use the same alpha names)
     def _prefixed(
         source: str,
         by_alpha: dict[str, list[tuple[datetime, Path]]],
@@ -324,9 +300,6 @@ def run_gc(
         )
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def _build_parser() -> argparse.ArgumentParser:

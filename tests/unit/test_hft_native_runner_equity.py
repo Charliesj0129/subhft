@@ -19,9 +19,6 @@ from research.backtest.hft_native_runner import (
 from research.backtest.types import BacktestConfig
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def _make_config(**overrides: object) -> BacktestConfig:
     """Build a BacktestConfig with sensible test defaults."""
     defaults: dict[str, object] = {
@@ -49,9 +46,6 @@ def _make_structured_array(n: int, *, local_ts_step_ns: int = 2_000_000) -> np.n
     return arr
 
 
-# ---------------------------------------------------------------------------
-# _compute_equity_curve
-# ---------------------------------------------------------------------------
 class TestComputeEquityCurve:
     def test_basic(self) -> None:
         """Prices go up, long position -> equity increases."""
@@ -63,15 +57,13 @@ class TestComputeEquityCurve:
 
         assert equity.shape == (3,)
         assert equity[0] == config.initial_equity
-        # pnl_step[0] = 1.0 * (101-100) = 1.0
-        # pnl_step[1] = 1.0 * (102-101) = 1.0
         assert equity[1] == pytest.approx(config.initial_equity + 1.0)
         assert equity[2] == pytest.approx(config.initial_equity + 2.0)
 
     def test_cost_is_charged_per_contract_changed(self) -> None:
         """Each contract the position changes by pays ``cost_per_side_pts``; price level is irrelevant."""
         prices = np.array([100.0, 101.0, 102.0, 103.0, 104.0], dtype=np.float64)
-        positions = np.array([0.0, 1.0, 1.0, 3.0, 2.0], dtype=np.float64)  # 1 + 2 + 1 contracts
+        positions = np.array([0.0, 1.0, 1.0, 3.0, 2.0], dtype=np.float64)
 
         gross = _compute_equity_curve(prices, positions, _make_config())
         net = _compute_equity_curve(prices, positions, _make_config(cost_per_side_pts=0.75))
@@ -79,7 +71,7 @@ class TestComputeEquityCurve:
         far_gross = _compute_equity_curve(prices * 100.0, positions, _make_config())
 
         assert gross[-1] - net[-1] == pytest.approx(4 * 0.75)
-        assert far_gross[-1] - far[-1] == pytest.approx(4 * 0.75)  # not a bps rate of the price
+        assert far_gross[-1] - far[-1] == pytest.approx(4 * 0.75)
 
     def test_negative_cost_is_rejected(self) -> None:
         prices = np.array([100.0, 101.0], dtype=np.float64)
@@ -109,16 +101,13 @@ class TestComputeEquityCurve:
         assert equity[0] == config.initial_equity
 
 
-# ---------------------------------------------------------------------------
-# _apply_latency_to_positions
-# ---------------------------------------------------------------------------
 class TestApplyLatencyToPositions:
     def test_delays_positions(self) -> None:
         """Position change at tick 5 should arrive later, delayed by submit_steps."""
         n = 50
         data = _make_structured_array(n, local_ts_step_ns=2_000_000)
         desired = np.zeros(n, dtype=np.float64)
-        desired[5:] = 1.0  # want to go long at tick 5
+        desired[5:] = 1.0
 
         config = _make_config(
             submit_ack_latency_ms=36.0,
@@ -127,11 +116,8 @@ class TestApplyLatencyToPositions:
         )
         executed = _apply_latency_to_positions(data, desired, config)
 
-        # At tick 5, position should still be 0 (order hasn't arrived)
         assert executed[5] == 0.0
-        # Eventually the position should become 1.0
         assert executed[-1] == 1.0
-        # submit_steps = ceil(36_000_000 / 2_000_000) = 18
         expected_arrival = 5 + 18
         assert executed[expected_arrival] == 1.0
         assert executed[expected_arrival - 1] == 0.0
@@ -141,7 +127,7 @@ class TestApplyLatencyToPositions:
         n = 80
         data = _make_structured_array(n, local_ts_step_ns=1_000_000)
         desired = np.zeros(n, dtype=np.float64)
-        desired[5:40] = 1.0  # long from tick 5 to 39, then close
+        desired[5:40] = 1.0
 
         config = _make_config(
             submit_ack_latency_ms=10.0,
@@ -151,15 +137,11 @@ class TestApplyLatencyToPositions:
         )
         executed = _apply_latency_to_positions(data, desired, config)
 
-        # submit_steps = ceil(10ms / 1ms) = 10
-        # cancel_steps = ceil(20ms / 1ms) = 20
         submit_arrival = 5 + 10
         assert executed[submit_arrival] == 1.0
 
-        # Position close requested at tick 40 -> arrives at tick 40 + 20 = 60
         cancel_arrival = 40 + 20
         assert executed[cancel_arrival] == 0.0
-        # One tick before cancel arrives, still holding
         assert executed[cancel_arrival - 1] == 1.0
 
     def test_single_element(self) -> None:
@@ -173,9 +155,6 @@ class TestApplyLatencyToPositions:
         assert result[0] == 1.0
 
 
-# ---------------------------------------------------------------------------
-# _estimate_step_ns
-# ---------------------------------------------------------------------------
 class TestEstimateStepNs:
     def test_with_local_ts(self) -> None:
         """Structured array with local_ts -> correct median step."""
@@ -207,15 +186,11 @@ class TestEstimateStepNs:
         assert step == 1_000_000
 
 
-# ---------------------------------------------------------------------------
-# _run_adapter_slice integration (mocked adapter)
-# ---------------------------------------------------------------------------
 class TestRunAdapterSliceEquity:
     def test_nonzero_sharpe_with_signals(self, tmp_path: object) -> None:
         """When signals are non-zero, the signal-based equity should not be flat."""
         from research.backtest.hft_native_runner import _run_adapter_slice
 
-        # Create a fake NPZ with structured data (trending prices)
         n = 200
         dt = np.dtype(
             [
@@ -233,11 +208,9 @@ class TestRunAdapterSliceEquity:
         npz_path = str(tmp_path / "test.npz")  # type: ignore[operator]
         np.savez_compressed(npz_path, data=data)
 
-        # Build a mock alpha
         mock_alpha = MagicMock()
         mock_alpha.manifest.alpha_id = "test_alpha"
 
-        # Build signal log: alternating positive signals -> non-zero positions
         signal_log = [(i * 2_000_000, 0.5 if i % 20 < 10 else -0.5, 100.0 + i * 0.05) for i in range(n)]
 
         config = _make_config(
@@ -250,7 +223,6 @@ class TestRunAdapterSliceEquity:
             max_position=5,
         )
 
-        # Mock the adapter to avoid needing real hftbacktest
         mock_adapter = MagicMock()
         mock_adapter.equity_values = np.ones(n, dtype=np.float64) * config.initial_equity
         mock_adapter.run = MagicMock()
@@ -270,7 +242,6 @@ class TestRunAdapterSliceEquity:
                 config,
             )
 
-        # Equity should NOT be flat (signals produce positions, prices trend up)
         assert equity.size > 1
         equity_range = float(np.max(equity) - np.min(equity))
         assert equity_range > 0.0, "Equity curve is flat — signal-based PnL not computed"

@@ -8,10 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Shared helper — matches the pattern in test_system_service_behavior.py
-# ---------------------------------------------------------------------------
-
 
 def _make_system():
     """Return an HFTSystem instance with all dependencies mocked out."""
@@ -56,7 +52,7 @@ def _make_system():
             sys_obj.bootstrapper = MagicMock()
             sys_obj.registry = mock_reg
             sys_obj.bus = mock_reg.bus
-            sys_obj.bus.cursor = -1  # int so stop_async comparison works
+            sys_obj.bus.cursor = -1
             sys_obj.raw_queue = mock_reg.raw_queue
             sys_obj.raw_exec_queue = mock_reg.raw_exec_queue
             sys_obj.risk_queue = mock_reg.risk_queue
@@ -81,8 +77,6 @@ def _make_system():
             sys_obj.gateway_service = None
             sys_obj.evidence_writer = MagicMock()
             sys_obj.platform_degrade_controller = MagicMock()
-            # The degrade transitions persist off the event loop now, so the three
-            # moved methods have to be awaitable on the double as well.
             sys_obj.platform_degrade_controller.enter_reduce_only_async = AsyncMock()
             sys_obj.platform_degrade_controller.exit_reduce_only_async = AsyncMock()
             sys_obj.platform_degrade_controller.check_auto_recovery_async = AsyncMock(return_value=False)
@@ -116,11 +110,6 @@ def _make_system():
             return sys_obj
 
 
-# ---------------------------------------------------------------------------
-# _safe_enqueue_exec — three paths
-# ---------------------------------------------------------------------------
-
-
 def test_safe_enqueue_exec_normal_path():
     """Event enqueued into raw_exec_queue without overflow."""
     sys_obj = _make_system()
@@ -139,7 +128,6 @@ def test_safe_enqueue_exec_normal_path():
 def test_safe_enqueue_exec_overflow_append():
     """Queue full → event appended to overflow buffer."""
     sys_obj = _make_system()
-    # Fill the exec queue to capacity
     sys_obj.raw_exec_queue = asyncio.Queue(maxsize=1)
     sys_obj.raw_exec_queue.put_nowait(SimpleNamespace(topic="fill"))
 
@@ -159,7 +147,7 @@ def test_safe_enqueue_exec_overflow_halt_on_repeated():
     sys_obj = _make_system()
     sys_obj.raw_exec_queue = asyncio.Queue(maxsize=1)
     sys_obj.raw_exec_queue.put_nowait(SimpleNamespace(topic="seed"))
-    sys_obj._exec_overflow_counter = 2  # two previous overflows
+    sys_obj._exec_overflow_counter = 2
 
     event = SimpleNamespace(topic="fill3")
     mock_metrics = MagicMock()
@@ -175,7 +163,6 @@ def test_safe_enqueue_exec_overflow_buf_full():
     sys_obj = _make_system()
     sys_obj.raw_exec_queue = asyncio.Queue(maxsize=1)
     sys_obj.raw_exec_queue.put_nowait(SimpleNamespace(topic="seed"))
-    # Fill overflow buffer to max
     sys_obj._exec_overflow_buf = ["x"] * sys_obj._EXEC_OVERFLOW_MAX
 
     event = SimpleNamespace(topic="overflow_event")
@@ -188,11 +175,6 @@ def test_safe_enqueue_exec_overflow_buf_full():
     assert sys_obj._exec_overflow_evicted == 1
 
 
-# ---------------------------------------------------------------------------
-# _on_exec
-# ---------------------------------------------------------------------------
-
-
 def test_on_exec_when_running_schedules_call():
     """_on_exec schedules work on loop when running=True."""
     sys_obj = _make_system()
@@ -203,7 +185,6 @@ def test_on_exec_when_running_schedules_call():
     with patch("hft_platform.services.system.timebase") as mock_tb:
         mock_tb.now_ns.return_value = 12345
         with patch("hft_platform.services.system.RawExecEvent", create=True) as _:
-            # Just confirm call_soon_threadsafe is called
             sys_obj._on_exec("fill", {"price": 100})
 
     loop.call_soon_threadsafe.assert_called_once()
@@ -227,14 +208,8 @@ def test_on_exec_no_loop_skips():
     sys_obj.loop = None
     sys_obj.running = True
 
-    # Should not raise
     sys_obj._on_exec("fill", {"price": 100})
     assert sys_obj.loop is None
-
-
-# ---------------------------------------------------------------------------
-# _close_broker_client
-# ---------------------------------------------------------------------------
 
 
 def test_close_broker_client_calls_close():
@@ -251,10 +226,9 @@ def test_close_broker_client_calls_close():
 def test_close_broker_client_no_close_attr():
     """_close_broker_client silently skips clients without close method."""
     sys_obj = _make_system()
-    client_no_close = SimpleNamespace()  # no close attribute
+    client_no_close = SimpleNamespace()
     sys_obj.test_client = client_no_close
 
-    # Should not raise
     sys_obj._close_broker_client("test_client")
     assert not hasattr(client_no_close, "close")
 
@@ -266,7 +240,6 @@ def test_close_broker_client_exception_is_swallowed():
     mock_client.close.side_effect = RuntimeError("logout failed")
     sys_obj.test_client = mock_client
 
-    # Should not raise
     sys_obj._close_broker_client("test_client")
     mock_client.close.assert_called_once()
 
@@ -278,11 +251,6 @@ def test_close_broker_client_none_client():
 
     sys_obj._close_broker_client("missing_client")
     assert sys_obj.missing_client is None
-
-
-# ---------------------------------------------------------------------------
-# _on_sighup
-# ---------------------------------------------------------------------------
 
 
 def test_on_sighup_reloads_config():
@@ -300,15 +268,9 @@ def test_on_sighup_exception_is_logged():
     sys_obj = _make_system()
     sys_obj.risk_engine.reload_config = MagicMock(side_effect=RuntimeError("reload error"))
 
-    # Should not raise
     sys_obj._on_sighup()
 
     sys_obj.risk_engine.reload_config.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _teardown_bootstrap
-# ---------------------------------------------------------------------------
 
 
 def test_teardown_bootstrap_calls_teardown():
@@ -340,15 +302,9 @@ def test_teardown_bootstrap_exception_is_swallowed():
     sys_obj._bootstrap_torn_down = False
     sys_obj.bootstrapper.teardown = MagicMock(side_effect=RuntimeError("teardown failed"))
 
-    # Should not raise
     sys_obj._teardown_bootstrap()
 
     assert sys_obj._bootstrap_torn_down is True
-
-
-# ---------------------------------------------------------------------------
-# _update_platform_degrade_state
-# ---------------------------------------------------------------------------
 
 
 def test_update_platform_degrade_state_with_reasons():
@@ -384,7 +340,6 @@ def test_update_platform_degrade_state_no_controller():
     sys_obj = _make_system()
     sys_obj.platform_degrade_controller = None
 
-    # Should not raise
     asyncio.run(sys_obj._update_platform_degrade_state())
     assert sys_obj.platform_degrade_controller is None
 
@@ -394,14 +349,8 @@ def test_update_platform_degrade_state_no_inputs():
     sys_obj = _make_system()
     sys_obj.platform_degrade_inputs = None
 
-    # Should not raise
     asyncio.run(sys_obj._update_platform_degrade_state())
     assert sys_obj.platform_degrade_inputs is None
-
-
-# ---------------------------------------------------------------------------
-# _start_service
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -420,7 +369,6 @@ async def test_start_service_exec_router_sets_metric():
         sys_obj._start_service("exec_router", _dummy())
 
     mock_metrics.execution_router_alive.set.assert_called_once_with(1)
-    # Clean up the created task
     if "exec_router" in sys_obj.tasks and sys_obj.tasks["exec_router"]:
         sys_obj.tasks["exec_router"].cancel()
         result = await asyncio.gather(sys_obj.tasks["exec_router"], return_exceptions=True)
@@ -473,11 +421,6 @@ async def test_start_service_generic():
         assert sys_obj.tasks["recorder"].done()
 
 
-# ---------------------------------------------------------------------------
-# _pnl_snapshot_exporter
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_pnl_snapshot_exporter_one_iteration(monkeypatch):
     """_pnl_snapshot_exporter exports one row per position then stops."""
@@ -514,7 +457,6 @@ async def test_pnl_snapshot_exporter_one_iteration(monkeypatch):
         with patch("asyncio.sleep", side_effect=_mock_sleep):
             await sys_obj._pnl_snapshot_exporter()
 
-    # Should have queued one row
     assert sys_obj.recorder_queue.qsize() >= 1
     item = sys_obj.recorder_queue.get_nowait()
     assert item["topic"] == "pnl_snapshots"
@@ -527,7 +469,7 @@ async def test_pnl_snapshot_exporter_queue_full_silent(monkeypatch):
     sys_obj = _make_system()
     sys_obj.running = True
     sys_obj.recorder_queue = asyncio.Queue(maxsize=1)
-    sys_obj.recorder_queue.put_nowait({"topic": "other", "data": {}})  # fill it
+    sys_obj.recorder_queue.put_nowait({"topic": "other", "data": {}})
 
     pos = SimpleNamespace(
         account_id="acct1",
@@ -555,15 +497,8 @@ async def test_pnl_snapshot_exporter_queue_full_silent(monkeypatch):
     with patch("hft_platform.services.system.timebase") as mock_tb:
         mock_tb.now_ns.return_value = 12345
         with patch("asyncio.sleep", side_effect=_mock_sleep):
-            # Should not raise even with full queue
             await sys_obj._pnl_snapshot_exporter()
-    # Queue remains at capacity with only the pre-filled item (pnl row was dropped)
     assert sys_obj.recorder_queue.qsize() == 1
-
-
-# ---------------------------------------------------------------------------
-# stop_async
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -573,14 +508,12 @@ async def test_stop_async_cancels_tasks_and_calls_teardown():
     sys_obj.running = True
     sys_obj._bootstrap_torn_down = False
 
-    # Create a real async task that blocks indefinitely
     async def _blocker():
         await asyncio.sleep(9999)
 
     task = asyncio.create_task(_blocker())
     sys_obj.tasks = {"blocker": task}
 
-    # Make evidence_writer.record_transition a regular MagicMock
     sys_obj.evidence_writer.record_transition = MagicMock()
 
     await sys_obj.stop_async()

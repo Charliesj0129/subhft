@@ -140,12 +140,12 @@ class TestCBSInitialization:
         params = cbs["params"]
 
         assert enabled["OPPORTUNISTIC_MM_TMF"] is False
-        assert enabled["CBS_TMF"] is False  # Disabled: 0/84 contrarian, 0/6 momentum configs profitable
+        assert enabled["CBS_TMF"] is False
         assert params["lookback_ns"] > 0
         assert params["trigger_sigma"] > 0
         assert params["take_profit_pts"] > 0
         assert params["stop_loss_pts"] > 0
-        assert params["session_start_sec"] == 0  # full-day fallback; SessionGovernor is authoritative in prod
+        assert params["session_start_sec"] == 0
         assert params["session_end_sec"] == 86400
 
 
@@ -172,9 +172,9 @@ class TestCBSSessionGate:
     def test_overnight_session_wraparound_is_supported(self) -> None:
         cbs = _all_session_cbs(session_start_sec=15 * 3600, session_end_sec=5 * 3600)
 
-        assert cbs._in_session(0) is False  # 08:00 TWN
-        assert cbs._in_session(8 * 3600 * _ONE_SEC_NS) is True  # 16:00 TWN
-        assert cbs._in_session(17 * 3600 * _ONE_SEC_NS) is True  # 01:00 TWN next day
+        assert cbs._in_session(0) is False
+        assert cbs._in_session(8 * 3600 * _ONE_SEC_NS) is True
+        assert cbs._in_session(17 * 3600 * _ONE_SEC_NS) is True
 
 
 class TestCBSNormalizedEntry:
@@ -264,36 +264,30 @@ class TestCBSExitStateMachine:
         assert close_intents[0].side == Side.SELL
 
     def test_aggressive_exit_ioc_rejection_allows_retry(self) -> None:
-        # Simulate: position entered, stop-loss triggers, aggressive IOC fired, IOC comes back CANCELLED
         cbs = _all_session_cbs(stop_loss_pts=4)
         ctx = _make_ctx()
         _seed_low_vol_history(cbs, ctx)
         cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS, points=32_990))
         ctx.positions["TMFD6"] = 1
         cbs.handle_event(ctx, _make_fill(Side.BUY, 32_991))
-        # Skip resting limit so no exit_order_id to cancel
         cbs._awaiting_exit_order["TMFD6"] = False
         cbs._exit_order_id["TMFD6"] = ""
         cbs._state["TMFD6"] = "positioned"
 
-        # Stop-loss triggers aggressive exit
         close_intents = cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 40 * _ONE_SEC_NS, points=32_986))
         assert len(close_intents) == 1
         assert close_intents[0].tif == TIF.IOC
         assert cbs._aggressive_exit_inflight["TMFD6"] is True
         assert cbs._awaiting_exit_order["TMFD6"] is True
 
-        # IOC comes back CANCELLED with no fill
         cancel_event = _make_order(OrderStatus.CANCELLED, Side.SELL, order_id="ioc-exit-1", price_points=32_986)
         cbs.handle_event(ctx, cancel_event)
 
-        # Flag must be reset so retry is possible on next tick
         assert cbs._aggressive_exit_inflight["TMFD6"] is False
         assert cbs._awaiting_exit_order["TMFD6"] is False
         assert cbs._pending_force_close["TMFD6"] is True
 
     def test_aggressive_exit_ioc_filled_completes_trip(self) -> None:
-        # Simulate: aggressive IOC fired, fill arrives — round trip completes normally
         cbs = _all_session_cbs(stop_loss_pts=4)
         ctx = _make_ctx()
         _seed_low_vol_history(cbs, ctx)
@@ -304,11 +298,9 @@ class TestCBSExitStateMachine:
         cbs._exit_order_id["TMFD6"] = ""
         cbs._state["TMFD6"] = "positioned"
 
-        # Stop-loss triggers aggressive exit
         cbs.handle_event(ctx, _make_stats(ts=_TS_0930_UTC_NS + 40 * _ONE_SEC_NS, points=32_986))
         assert cbs._aggressive_exit_inflight["TMFD6"] is True
 
-        # IOC fills → on_fill exits with exit_side → _complete_round_trip
         ctx.positions["TMFD6"] = 0
         cbs.handle_event(ctx, _make_fill(Side.SELL, 32_986, order_id="ioc-exit-fill"))
 
@@ -339,13 +331,12 @@ class TestCBSSpreadGuard:
         ctx = _make_ctx()
         _seed_low_vol_history(cbs, ctx)
 
-        # Wide spread: 5 pts = 50000 scaled
         wide_event = LOBStatsEvent(
             symbol="TMFD6",
             ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS,
             imbalance=0.0,
             best_bid=_scaled_price(32_988),
-            best_ask=_scaled_price(32_993),  # 5 pts spread
+            best_ask=_scaled_price(32_993),
             bid_depth=10,
             ask_depth=10,
             mid_price_x2=_mid_x2(32_990),
@@ -361,10 +352,8 @@ class TestCBSSpreadGuard:
         ctx = _make_ctx()
         _seed_low_vol_history(cbs, ctx)
 
-        # Normal spread: 1 pt = 10000 scaled, with large move to trigger entry
         normal_event = _make_stats(ts=_TS_0930_UTC_NS + 30 * _ONE_SEC_NS, points=32_990)
         intents = cbs.handle_event(ctx, normal_event)
-        # With 1-pt spread and a 10-pt move (33000→32990), should trigger
         assert len(intents) > 0
 
     def test_zero_spread_blocks_entry(self) -> None:

@@ -77,13 +77,8 @@ import structlog
 
 logger = structlog.get_logger("service.loop_watchdog")
 
-# Distinct, non-zero exit code so an operator (and `restart: always`) can tell a
-# stall-kill apart from a normal shutdown or an unrelated crash.
 STALL_KILL_EXIT_CODE = 70
 
-#: Innermost frames kept per stalled thread. Deep enough to cross an SDK
-#: boundary and name the blocking call, short enough that the dump still fits
-#: in one container-log line.
 DEFAULT_STACK_DEPTH = 40
 
 
@@ -120,8 +115,6 @@ class LoopStallWatchdog:
         self._last_beat = self._clock()
         self._fired = False
         self._warned = False
-        # Set by beat(), so the dump names the loop's own thread rather than
-        # guessing at the main thread. None until the loop has beaten once.
         self._loop_thread_ident: int | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -156,18 +149,12 @@ class LoopStallWatchdog:
             return False
         elapsed = self.stale_for()
         if self._warn_stall_s > 0.0 and elapsed >= self._warn_stall_s and not self._warned:
-            # Fires even when the loop later recovers: a 30 s stall that never
-            # reaches the kill threshold is exactly the evidence that was
-            # missing on 2026-09-15.
             self._warned = True
             self._emit_stack_dump("event_loop_stall_warning", elapsed)
         if elapsed < self._stall_kill_s:
             return False
         if not self._fired:
             self._fired = True
-            # Emit to BOTH structlog and raw stderr: the structlog/logging path
-            # may itself be starved or blocked behind the spin, but the direct
-            # write is guaranteed to reach the container log before we exit.
             try:
                 logger.critical(
                     "event_loop_stall_kill",
@@ -210,8 +197,6 @@ class LoopStallWatchdog:
             parts.append(f"loop thread {loop_ident} ({names.get(loop_ident, '?')}):")
             parts.append(self._format_frame(frames[loop_ident], self._stack_depth))
         elif loop_ident is None:
-            # The loop never beat, so there is nothing to single out. Dump every
-            # thread shallowly rather than claiming to know which one is stuck.
             parts.append("loop thread unknown (never beat); innermost frame per thread:")
         else:
             parts.append(f"loop thread {loop_ident} has no frame (exited?); innermost frame per thread:")
@@ -284,14 +269,10 @@ class LoopStallWatchdog:
             self._thread = None
 
     def _run(self) -> None:  # pragma: no cover - thread loop; logic tested via check_once
-        # ``Event.wait`` returns True only when stop() is set, so the loop exits
-        # promptly on shutdown and otherwise polls every check_interval_s.
         while not self._stop.wait(self._check_interval_s):
             try:
                 self.check_once()
             except Exception:
-                # The watchdog must never die silently; if its own check raised,
-                # treat the loop as unobservable and trigger the safe failure.
                 try:
                     self._on_stall(self.stale_for())
                 except Exception:

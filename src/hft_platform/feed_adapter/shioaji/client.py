@@ -96,8 +96,6 @@ def _apply_solace_arity_shim() -> None:
     global _SOLACE_ARITY_SHIM_APPLIED
     if _SOLACE_ARITY_SHIM_APPLIED:
         return
-    # Use a local logger handle: this function runs at module-import time,
-    # before the module-level ``logger`` symbol is assigned further below.
     _log = get_logger("feed_adapter")
     try:
         import inspect
@@ -180,7 +178,6 @@ fcntl: ModuleType | None = _fcntl
 
 logger = get_logger("feed_adapter")
 
-# Backward-compatible exports for existing tests/bench harnesses.
 CLIENT_REGISTRY = _router.CLIENT_REGISTRY
 CLIENT_REGISTRY_LOCK = _router.CLIENT_REGISTRY_LOCK
 CLIENT_REGISTRY_BY_CODE = _router.CLIENT_REGISTRY_BY_CODE
@@ -223,12 +220,6 @@ def _registry_unregister(client: Any) -> None:
 def dispatch_tick_cb(*args, **kwargs):
     global _ROUTE_MISS_COUNT
     _sync_router_route_globals()
-    # Arity bridge: 1.5.x v1 callbacks pass a single (data) arg; 1.3.3 passes
-    # (topic, data). The router hot path is the concrete 2-arg
-    # ``dispatch_tick_cb(topic, quote)``, so normalise here — for the 1-arg
-    # shape topic=None lets ``_extract_quote_code_from_obj`` read the code off
-    # the tick. Without this, a 1-arg call raises TypeError before the router's
-    # own try/except, disconnecting the feed on the first 1.5.x tick.
     if len(args) == 1 and not kwargs:
         _router.dispatch_tick_cb(None, args[0])
     elif len(args) >= 2:
@@ -240,18 +231,9 @@ def dispatch_tick_cb(*args, **kwargs):
 
 class ShioajiClient:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
-        # Per-quote-connection cap (broker Solace topic budget). Preserved as
-        # ``MAX_SUBSCRIPTIONS`` for backward compatibility with quote_runtime
-        # and subscription_manager which gate per-conn subscribe loops.
         self.MAX_SUBSCRIPTIONS = int(
             (shioaji_config or {}).get("max_subscriptions", DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN)
         )
-        # Per-client preflight ceiling for the universe. RC-1 (2026-04-27):
-        # the rollover-resolved universe grew to 588 contracts; the old
-        # 120-cap raised in ``_load_config`` and silently broke reload-cycle.
-        # Default 600 (env-overridable via ``HFT_MAX_SUBSCRIPTIONS``) covers
-        # the post-2026-04-27 universe with headroom; sharding into per-conn
-        # buckets is enforced separately by QuoteConnectionPool.
         self.MAX_SUBSCRIPTIONS_PER_CLIENT = int(
             (shioaji_config or {}).get("max_subscriptions_per_client", DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT)
         )
@@ -305,19 +287,12 @@ class ShioajiClient:
             self.api = None
         self.config_path = config_path
         self.symbols: List[Dict[str, Any]] = []
-        # Q3 (2026-04-27): metrics must exist BEFORE ``_load_config`` runs so
-        # the ``feed_symbol_config_reload_total`` Counter can be bumped at
-        # every exit branch. Moved up from after subscribed_codes init.
         self.metrics = MetricsRegistry.get()
         self._load_config()
         self.subscribed_count = 0
         self.subscribed_codes: set[str] = set()
-        # D2: serializes _resubscribe_all (4 callers across 3 threads:
-        # watchdog, schedule_resubscribe daemon, SDK event_13/event_4 thread,
-        # MarketDataService._attempt_resubscribe via to_thread).
-        # try_acquire(blocking=False) so concurrent callers no-op.
         self._resubscribe_lock: threading.Lock = threading.Lock()
-        self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
+        self.alias_to_actual: dict[str, str] = {}
         self.tick_callback: Callable[..., Any] | None = None
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
             "1",
@@ -326,16 +301,6 @@ class ShioajiClient:
             "on",
         }
         if not _dispatch_async:
-            # P1 (2026-04-24): when the async dispatch worker is disabled
-            # Shioaji delivers quote callbacks inline from (potentially
-            # multiple) SDK threads directly into _process_tick. This exposes
-            # concurrent read-modify-write on _first_quote_seen,
-            # _last_quote_data_ts, and the (_pending_quote_resubscribe,
-            # _pending_quote_reason, _pending_quote_ts) triple. The
-            # QuoteEventHandler._pending_lock (P0-D2) covers the triple, but
-            # the simple-flag RMW on _first_quote_seen remains unguarded.
-            # Shout loudly so operators know they have opted out of the safe
-            # default single-consumer dispatch path.
             logger.warning(
                 "shioaji_quote_dispatch_async_disabled",
                 note=(
@@ -365,7 +330,6 @@ class ShioajiClient:
             batch_max=_dispatch_batch_max,
             metrics_every=_dispatch_metrics_every,
         )
-        # Backward-compat aliases ------------------------------------------------
         self._quote_dispatch_async = _dispatch_async
         self._quote_dispatch_queue_size = _dispatch_queue_size
         self._quote_dispatch_batch_max = _dispatch_batch_max
@@ -386,23 +350,13 @@ class ShioajiClient:
         self.ca_active = False
         self._reconnect_lock = threading.Lock()
         self._callback_register_lock = threading.Lock()
-        # H13: guards writes to _quote_version so watchdog thread cannot
-        # flip the value mid-decision in readers (e.g., subscribe path,
-        # get_quote_version snapshot).
         self._quote_version_lock = threading.Lock()
         self._last_reconnect_ts = 0.0
         self._reconnect_backoff_s = float(os.getenv("HFT_RECONNECT_BACKOFF_S", "30"))
         self._reconnect_backoff_max_s = float(os.getenv("HFT_RECONNECT_BACKOFF_MAX_S", "120"))
         self._login_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_TIMEOUT_S", "20"))
-        # A contract-fetching login carries the contract download on top of the
-        # handshake, so it gets its own, longer budget; the no-contract fallback
-        # keeps the tight one.
         self._login_contract_timeout_s = float(os.getenv("HFT_SHIOAJI_LOGIN_CONTRACT_TIMEOUT_S", "60"))
         self._sdk_busy_grace_s = float(os.getenv("HFT_SHIOAJI_SDK_BUSY_GRACE_S", "2"))
-        # Contract fetches demand exclusive access in shioaji 1.5.x, so the
-        # pooled facades take the shared login slot for them too. The timeout is
-        # generous because four sequential fetches at up to
-        # ``_login_contract_timeout_s`` each must fit inside it.
         self._contract_fetch_stagger_gap_s = float(os.getenv("HFT_SHIOAJI_CONTRACT_FETCH_GAP_S", "2"))
         self._contract_fetch_stagger_timeout_s = float(os.getenv("HFT_SHIOAJI_CONTRACT_FETCH_SLOT_TIMEOUT_S", "300"))
         self._reconnect_timeout_s = float(os.getenv("HFT_SHIOAJI_RECONNECT_TIMEOUT_S", "45"))
@@ -411,18 +365,10 @@ class ShioajiClient:
             self._login_retry_max = max(0, int(os.getenv("HFT_SHIOAJI_LOGIN_RETRY_MAX", "1")))
         except ValueError:
             self._login_retry_max = 1
-        # Bound on leaked (timed-out) SDK guard threads before refusing new
-        # calls fail-closed — prevents a reconnect storm from spinning up
-        # unbounded CPU-pegging threads that starve the asyncio loop. 0 disables
-        # the gate (counting still happens for observability).
         try:
             self._max_abandoned_guard_threads = max(0, int(os.getenv("HFT_SHIOAJI_MAX_ABANDONED_GUARD_THREADS", "3")))
         except ValueError:
             self._max_abandoned_guard_threads = 3
-        # Per-client re-entry guard. The bound above is process-wide; this one
-        # answers the different question "is *this* SDK object still occupied by
-        # an abandoned worker?", which is what shioaji 1.5.x's Rust ``_core``
-        # rejects with ``Already borrowed``.
         self._sdk_inflight = _InflightGuard()
         self._last_login_error: str | None = None
         self._last_reconnect_error: str | None = None
@@ -484,13 +430,11 @@ class ShioajiClient:
         self._quote_pending_stall_warn_s = float(os.getenv("HFT_QUOTE_PENDING_STALL_WARN_S", "120"))
         self._quote_pending_stall_reported = False
         self._event_callback_registered = False
-        # Keep a strong reference to event callback to avoid SDK-side weakref GC issues.
         self._event_callback_fn = self._on_quote_event
         self._event_callback_retrying = False
         self._event_callback_retry_thread: threading.Thread | None = None
         self._event_callback_retry_s = float(os.getenv("HFT_QUOTE_EVENT_RETRY_S", "5"))
         self._session_down_callback_registered = False
-        # Same strong-reference reasoning as ``_event_callback_fn``.
         self._session_down_callback_fn = self._on_session_down
         self._pending_quote_reason: str | None = None
         self._resubscribe_scheduled = False
@@ -501,7 +445,6 @@ class ShioajiClient:
             hard_cap=int(os.getenv("HFT_SHIOAJI_API_HARD_CAP", "25")),
             window_s=int(os.getenv("HFT_SHIOAJI_API_WINDOW_S", "5")),
         )
-        # Tiered rate limiters per Shioaji API category
         self._order_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_ORDER_SOFT_CAP", "200")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_ORDER_HARD_CAP", "250")),
@@ -518,22 +461,14 @@ class ShioajiClient:
             window_s=int(os.getenv("HFT_SHIOAJI_ACCOUNT_WINDOW_S", "5")),
         )
 
-        # Session refresh configuration (C3)
-        self._session_refresh_interval_s = float(os.getenv("HFT_SESSION_REFRESH_S", "86400"))  # 24 hours
+        self._session_refresh_interval_s = float(os.getenv("HFT_SESSION_REFRESH_S", "86400"))
         self._last_session_refresh_ts = 0.0
         self._session_refresh_thread: threading.Thread | None = None
         self._session_refresh_running = False
-        self._session_refresh_check_interval_s = 3600.0  # Check every hour
-        # The refresh thread also owns re-login after a failed refresh, and an
-        # hourly poll meant a logged-out facade stayed dark for up to an hour
-        # before anything even noticed. Poll cheaply, evaluate the (unchanged)
-        # refresh schedule at the check interval. Retry backoff starts here and
-        # doubles, capped at the check interval; every attempt goes through the
-        # process-wide login slot, so a 60 s floor cannot re-create a 451 storm.
+        self._session_refresh_check_interval_s = 3600.0
         self._session_relogin_poll_s = float(os.getenv("HFT_SESSION_RELOGIN_POLL_S", "60"))
         self._session_relogin_backoff_s = float(os.getenv("HFT_SESSION_RELOGIN_BACKOFF_S", "60"))
 
-        # Holiday-aware session refresh (O4)
         self._session_refresh_holiday_aware = os.getenv("HFT_SESSION_REFRESH_HOLIDAY_AWARE", "1").strip().lower() in {
             "1",
             "true",
@@ -541,58 +476,29 @@ class ShioajiClient:
             "on",
         }
 
-        # Post-refresh health check (O5)
         self._session_refresh_verify_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_VERIFY_TIMEOUT_S", "10.0"))
 
-        # Cross-facade refresh staggering (2026-07-24 "451 Too Many Connections").
-        # Each facade refreshes on its own thread; without jitter their fixed
-        # check intervals stay phase-aligned from pool start-up and every facade
-        # re-logs-in within the same few hundred ms.
         self._session_refresh_jitter_frac = float(os.getenv("HFT_SESSION_REFRESH_JITTER_FRAC", "0.15"))
         self._session_refresh_stagger_gap_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_S", "5.0"))
         self._session_refresh_stagger_timeout_s = float(os.getenv("HFT_SESSION_REFRESH_STAGGER_TIMEOUT_S", "120.0"))
-        # Reconnects share the same slot but wait less for it: feed recovery is
-        # time-critical, so proceeding unserialised beats not reconnecting.
         self._reconnect_stagger_timeout_s = float(os.getenv("HFT_RECONNECT_STAGGER_TIMEOUT_S", "60.0"))
 
-        # Market open grace period (C4)
-        self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))  # 60 seconds
+        self._market_open_grace_s = float(os.getenv("HFT_MARKET_OPEN_GRACE_S", "60"))
         self._market_open_grace_active = False
 
-        # C2: Failed subscription tracking + retry thread.
-        # L2: backed by ``collections.deque`` — individual ``append`` /
-        # ``popleft`` ops are GIL-atomic in CPython, so the event loop
-        # (``subscription_manager.py:112`` append) and the retry daemon
-        # (``quote_runtime.py:_retry_loop`` drain) can mutate it without
-        # an explicit lock as long as nobody REBINDS the attribute.
-        # All call sites mutate in place via append / popleft / extend /
-        # clear; do NOT reassign ``_failed_sub_symbols = something``.
         self._failed_sub_symbols: deque[Dict[str, Any]] = deque()
         self._sub_retry_running = False
         self._sub_retry_thread: threading.Thread | None = None
         self._contract_retry_s = float(os.getenv("HFT_CONTRACT_RETRY_S", "60"))
 
-        # C3: Contract cache refresh thread
         self._contract_refresh_s = float(os.getenv("HFT_CONTRACT_REFRESH_S", "86400"))
         self._contract_cache_path = os.getenv("HFT_CONTRACT_CACHE_PATH", "config/contracts.json")
-        # How recent a sibling facade's rebuild has to be for this facade to reuse
-        # it instead of repeating the read/walk/write. Its real job is to stop the
-        # *next* hourly cycle inheriting this one, so it only has to sit between
-        # one cycle's duration (~11 s worst case) and ``_contract_refresh_s``.
         self._contract_refresh_share_window_s = float(os.getenv("HFT_CONTRACT_REFRESH_SHARE_WINDOW_S", "300"))
-        # How long a facade waits for whichever sibling is mid-rebuild before
-        # giving up and repeating the work itself. One rebuild measured 2.0 s
-        # uncontended on THESHOW, so 30 s is ~15x headroom; it exists only so a
-        # wedged facade cannot stall the pool's other refresh threads forever.
         self._contract_refresh_share_wait_s = float(os.getenv("HFT_CONTRACT_REFRESH_SHARE_WAIT_S", "30"))
         self._contract_refresh_running = False
         self._contract_refresh_thread: threading.Thread | None = None
         self._contract_refresh_lock = threading.Lock()
         self._contract_refresh_version = 0
-        # Wall-clock seconds of the last broker ``SYS/CONTRACT`` announcement,
-        # 0.0 until one arrives. Written from a broker callback thread and read
-        # for diagnostics only; a float assignment is atomic under the GIL, so no
-        # lock is warranted for a once-a-day event.
         self._contract_update_last_event_s: float = 0.0
         self._contract_refresh_last_diff: dict[str, Any] = {}
         self._contract_refresh_last_status: dict[str, Any] = {}
@@ -609,20 +515,10 @@ class ShioajiClient:
         self._session_lock_path = str(Path(lock_dir) / f"shioaji_session_{lock_id}{_lock_suffix}.lock")
         self._session_lock_fd: Any | None = None
 
-        # C2: Session policy interface — quote-side code must use this, not call
-        # self.reconnect() directly, to keep session and quote runtimes decoupled.
-        # Initialized lazily (after self is fully constructed) by ShioajiClientFacade
-        # or by calling _init_session_policy(). This avoids a circular import at
-        # module-load time while still providing the Protocol interface.
         self._session_policy: Any | None = None
 
-        # C3: Quote event handler — centralises pending state transitions.
-        # When set (by ShioajiClientFacade), _mark_quote_pending and
-        # _clear_quote_pending delegate to this handler so the state machine
-        # is owned by QuoteEventHandler rather than scattered across the client.
         self._quote_event_handler: Any | None = None
 
-        # C4: Domain runtimes/gateways (contracts/account/order/session/quote).
         from hft_platform.feed_adapter.shioaji.account_gateway import AccountGateway
         from hft_platform.feed_adapter.shioaji.contracts_runtime import ContractsRuntime
         from hft_platform.feed_adapter.shioaji.order_gateway import OrderGateway
@@ -638,11 +534,9 @@ class ShioajiClient:
         self._quote_runtime = QuoteRuntime(self)
         self._reconnect_orchestrator = ReconnectOrchestrator(self)
         self._subscription_manager = SubscriptionManager(self)
-        # Wire decoupled interfaces (SessionPolicy + QuoteEventHandler).
         self._session_policy = self._session_runtime
         self._quote_event_handler = self._quote_runtime._event_handler
 
-        # Register self globally (callback routing + strong ref)
         _registry_register(self)
         self._refresh_quote_routes()
         logger.info("Registered ShioajiClient in Global Registry")
@@ -746,8 +640,6 @@ class ShioajiClient:
         )
 
     def _set_thread_alive_metric(self, thread_name: str, alive: bool) -> None:
-        # conn_id is injected by QuoteConnectionPool onto each pooled client;
-        # standalone clients keep the placeholder.
         _set_thread_alive_metric_impl(
             getattr(self, "metrics", None),
             thread_name,
@@ -786,7 +678,6 @@ class ShioajiClient:
     def _cache_set(self, key: str, ttl_s: float, value: Any) -> None:
         _cache_set_impl(self._api_cache, self._api_cache_lock, self._api_cache_max_size, key, ttl_s, value)
 
-    # Operation-to-limiter routing tables
     _ORDER_OPS: frozenset[str] = frozenset(
         {
             "place_order",
@@ -883,9 +774,6 @@ class ShioajiClient:
 
     def _refresh_quote_routes(self) -> None:
         """Delegates to TickDispatcher.refresh_quote_routes()."""
-        # Include both config codes AND actual codes from alias resolution
-        # so the router recognises callbacks arriving with resolved month codes
-        # (e.g. TMFE6) even when config specifies R1/R2 aliases (e.g. TMFR1).
         sub_codes = getattr(self, "subscribed_codes", None)
         alias_map = getattr(self, "alias_to_actual", None)
         if alias_map and sub_codes is not None:
@@ -907,8 +795,7 @@ class ShioajiClient:
             metric = getattr(self.metrics, "feed_symbol_config_reload_total", None)
             if metric is not None:
                 metric.labels(result=result).inc()
-        except Exception:  # noqa: BLE001
-            # Never let metric bookkeeping crash the reload path.
+        except Exception:
             pass
 
     def _load_config(self):
@@ -924,7 +811,7 @@ class ShioajiClient:
                 severity="critical",
             )
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self._bump_symbol_reload_metric("other")
             logger.error(
                 "symbol_config_load_other_error",
@@ -961,20 +848,9 @@ class ShioajiClient:
                 after=len(self.symbols),
                 missing=missing,
             )
-        # RC-1 (2026-04-27): preflight ceiling is the per-client universe
-        # bound (default 600), NOT the per-conn cap (120). The per-conn cap
-        # is enforced by QuoteConnectionPool sharding. ``_load_config`` used
-        # to compare against ``self.MAX_SUBSCRIPTIONS`` (per-conn 120) AND
-        # raised when ``HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS`` was unset, which
-        # silently broke the 25-min reload cycle for the 588-symbol universe.
-        # New default: truncate-with-warn. Strict mode preserved via
-        # ``HFT_STRICT_SUBSCRIPTION_LIMIT=1``.
         ceiling = int(self.MAX_SUBSCRIPTIONS_PER_CLIENT)
         if len(self.symbols) > ceiling:
             strict_mode = os.getenv("HFT_STRICT_SUBSCRIPTION_LIMIT", "0") == "1"
-            # Back-compat: ``HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS`` defaults to "1"
-            # (truncate-with-warn). Setting it to "0" forces strict-raise even
-            # when ``HFT_STRICT_SUBSCRIPTION_LIMIT`` is unset.
             allow_truncate = os.getenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS", "1") == "1"
             if strict_mode or not allow_truncate:
                 self._bump_symbol_reload_metric("exceeds_limit")
@@ -996,16 +872,6 @@ class ShioajiClient:
             )
             self.symbols = self.symbols[:ceiling]
         else:
-            # P2 #8 (2026-04-27): preflight pool-capacity advisory. RC-1
-            # made 121–600 symbols pass as ``result="ok"`` against the
-            # per-client ceiling, but ``SubscriptionManager`` still gates
-            # per-conn at ``DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN`` (120).
-            # When ``HFT_QUOTE_CONNECTIONS`` is unset (single-conn deploy),
-            # the silently-truncated universe is the post-RC-1 silent miss.
-            # We advise here so ops sees the issue at config-load time
-            # instead of waiting for the next subscribe cycle. Subscribe-time
-            # truncation is still authoritatively recorded by
-            # ``feed_subscription_truncate_total`` in subscription_manager.
             try:
                 num_conns = max(1, int(os.getenv("HFT_QUOTE_CONNECTIONS", "1")))
             except (TypeError, ValueError):
@@ -1024,7 +890,6 @@ class ShioajiClient:
             else:
                 self._bump_symbol_reload_metric("ok")
 
-        # Build map
         self.code_exchange_map = {s["code"]: s["exchange"] for s in self.symbols if s.get("code") and s.get("exchange")}
         self._refresh_quote_routes()
 
@@ -1041,12 +906,12 @@ class ShioajiClient:
                 error_type=type(exc).__name__,
                 error=scrub_broker_error(str(exc)),
             )
-        except Exception:  # noqa: BLE001 - a failing report must not abort the recreate
+        except Exception:
             pass
         try:
             if self.metrics is not None and hasattr(self.metrics, "shioaji_logout_failed_total"):
                 self.metrics.shioaji_logout_failed_total.labels(context="recreate_api").inc()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def recreate_api(self) -> bool:
@@ -1064,7 +929,7 @@ class ShioajiClient:
             if old_api is not None:
                 try:
                     old_api.logout()
-                except Exception as exc:  # noqa: BLE001 - best effort, the old handle is discarded either way
+                except Exception as exc:
                     self._note_logout_failed_on_recreate(exc)
             is_sim = self.mode == "simulation"
             self.api = _sj.Shioaji(simulation=is_sim)
@@ -1072,8 +937,6 @@ class ShioajiClient:
             self._callbacks_registered = False
             self._contracts_ready = False
             self.ca_active = False
-            # D2: in-place clear preserves object identity for concurrent
-            # readers (e.g. _resubscribe_all may be holding a snapshot).
             self.subscribed_codes.clear()
             self.subscribed_count = 0
             self._clear_quote_pending()
@@ -1095,8 +958,6 @@ class ShioajiClient:
         contracts_cb=None,
     ):
         """Login to Shioaji broker. Delegates to SessionRuntime.login_with_retry()."""
-        # Surface legacy SDK Solace reconnect settings when available. Shioaji
-        # 1.5.x uses a native messaging core, so this is a no-op there.
         log_solace_reconnect_params()
         return self._session_runtime.login_with_retry(
             api_key=api_key,
@@ -1164,14 +1025,6 @@ class ShioajiClient:
             logger.error("CA activation failed", error=str(exc))
 
     def _quote_api(self):
-        # Dual-version chokepoint for the whole quote surface (subscribe/
-        # unsubscribe, v1 callback setters, set_event_callback). 1.5 exposes
-        # these on the top-level api; 1.3.3 only on the api.quote proxy.
-        # resolve_quote_api prefers the top-level api, so the adapter stops
-        # touching the deprecated api.quote.* shims on 1.5.x while transparently
-        # falling back to the proxy on 1.3.3. The v0 setters (dropped in 1.5)
-        # are absent here on 1.5.x, which is exactly what _supports_quote_v0()
-        # should observe.
         return resolve_quote_api(self.api)
 
     def subscribe_basket(self, cb: Callable[..., Any]):
@@ -1198,16 +1051,12 @@ class ShioajiClient:
             ok_quote = True
             ok_event = True
             try:
-                # Use global dispatcher to avoid weak-ref issues with bound methods.
                 ok_quote = self._register_quote_callbacks()
             except Exception as e:
                 logger.error("Quote callback registration failed", error=str(e))
                 ok_quote = False
 
             ok_event = self._register_event_callback()
-            # Observational only -- deliberately not folded into ok_quote /
-            # ok_event, so losing it never blocks quote registration or the
-            # retry ladder.
             self._session_down_callback_registered = self._register_session_down_callback()
 
             self._callbacks_registered = ok_quote
@@ -1369,12 +1218,8 @@ class ShioajiClient:
     def reload_symbols(self) -> None:
         self._contracts().reload_symbols()
 
-    # --- C2: Failed subscription retry thread ---
-
     def _start_sub_retry_thread(self, cb: Callable[..., Any]) -> None:
         self._quotes().start_sub_retry_thread(cb)
-
-    # --- C3: Contract cache refresh thread ---
 
     def _is_contract_cache_stale(self) -> bool:
         return self._contracts().is_contract_cache_stale()
@@ -1465,8 +1310,6 @@ class ShioajiClient:
 
     def fetch_snapshots(self):
         return self._accounts().fetch_snapshots()
-
-    # get_positions was defined earlier. Removing duplicate.
 
     def place_order(
         self,

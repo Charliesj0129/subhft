@@ -36,7 +36,7 @@ from research.backtest.maker_engine import (
 )
 from research.registry.schemas import AlphaProtocol
 
-_SCALE = 1_000_000  # CK convention
+_SCALE = 1_000_000
 
 
 def _bidask(
@@ -73,9 +73,6 @@ def _trade(price_pts: int, volume: int = 1, ts_ns: int | None = None) -> TickDat
     )
 
 
-# ----------------------------------------------------------------------------
-# Spread-gate boundary (DA-mandated edge case)
-# ----------------------------------------------------------------------------
 
 
 def test_spread_gate_blocks_at_sp4() -> None:
@@ -106,13 +103,10 @@ def test_spread_gate_admits_at_sp6() -> None:
 def test_spread_gate_counter_advances_on_block() -> None:
     maker = TxfD6SoloMaker()
     maker.on_tick(_bidask(17500, 17504))
-    maker.on_tick(_bidask(17501, 17504))  # diff levels to avoid price-move gate
+    maker.on_tick(_bidask(17501, 17504))
     assert maker.spread_blocked == 2
 
 
-# ----------------------------------------------------------------------------
-# Scaled-int price arithmetic
-# ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -140,9 +134,6 @@ def test_posts_at_scaled_int_prices(
         assert isinstance(a.price, int)
 
 
-# ----------------------------------------------------------------------------
-# R47-minimal: signal layers disabled (attribute absence)
-# ----------------------------------------------------------------------------
 
 
 def test_no_signal_layer_methods_exposed() -> None:
@@ -170,9 +161,6 @@ def test_signal_layer_params_exposed_for_future() -> None:
     assert hasattr(C33Params(), "enable_qi_layer")
 
 
-# ----------------------------------------------------------------------------
-# Max-pos gate
-# ----------------------------------------------------------------------------
 
 
 def test_max_pos_1_default() -> None:
@@ -224,15 +212,11 @@ def test_stops_buying_at_max_pos_5() -> None:
 def test_max_pos_blocked_counter_advances() -> None:
     maker = TxfD6SoloMaker(params=C33Params(max_pos=1))
     maker.on_fill("buy", 17_500 * _SCALE, 17500.5)
-    # Different price each tick to clear price-movement gate.
     maker.on_tick(_bidask(17500, 17505))
     maker.on_tick(_bidask(17501, 17506))
     assert maker.max_pos_blocked >= 1
 
 
-# ----------------------------------------------------------------------------
-# Inventory skew
-# ----------------------------------------------------------------------------
 
 
 def test_inventory_skew_none_at_pos_zero() -> None:
@@ -249,7 +233,6 @@ def test_inventory_skew_lowers_both_quotes_when_long() -> None:
     params = C33Params(max_pos=3, inventory_skew_tenths=2)
     maker = TxfD6SoloMaker(params=params)
     maker.on_fill("buy", 17_500 * _SCALE, 17500.5)
-    # skew = 1 * 2 * scale // 10 = 200_000 (0.2 pt)
     actions = maker.on_tick(_bidask(17500, 17505))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
     assert posts["buy"] == 17500 * _SCALE - 200_000
@@ -263,14 +246,10 @@ def test_inventory_skew_raises_both_quotes_when_short() -> None:
     maker.on_fill("sell", 17_500 * _SCALE, 17500.5)
     actions = maker.on_tick(_bidask(17500, 17505))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # pos = -1 → skew = -1 * 2 * scale // 10 = -200_000
-    assert posts["buy"] == 17500 * _SCALE - (-200_000)  # = +200_000
+    assert posts["buy"] == 17500 * _SCALE - (-200_000)
     assert posts["sell"] == 17505 * _SCALE + 200_000
 
 
-# ----------------------------------------------------------------------------
-# Price-movement gate (ROD anti-stack)
-# ----------------------------------------------------------------------------
 
 
 def test_does_not_restack_same_price() -> None:
@@ -290,9 +269,6 @@ def test_reposts_when_price_moves() -> None:
     assert len([a for a in second if isinstance(a, PostQuote)]) == 2
 
 
-# ----------------------------------------------------------------------------
-# Bid/ask execution (no mid)
-# ----------------------------------------------------------------------------
 
 
 def test_posts_at_best_bid_not_mid() -> None:
@@ -300,7 +276,6 @@ def test_posts_at_best_bid_not_mid() -> None:
     maker = TxfD6SoloMaker()
     actions = maker.on_tick(_bidask(17500, 17505))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # Mid = 17502.5 × scale = 17_502_500_000 — must NOT equal buy quote
     assert posts["buy"] == 17500 * _SCALE
     assert posts["buy"] != 17_502_500_000
 
@@ -312,9 +287,6 @@ def test_posts_at_best_ask_not_mid() -> None:
     assert posts["sell"] == 17505 * _SCALE
 
 
-# ----------------------------------------------------------------------------
-# TXFD6 point value
-# ----------------------------------------------------------------------------
 
 
 def test_txf_point_value_is_200_ntd() -> None:
@@ -327,9 +299,6 @@ def test_txf_rt_cost_is_3pt() -> None:
     assert _TXF_RT_COST_PTS == 3.0
 
 
-# ----------------------------------------------------------------------------
-# Monotonic time ordering
-# ----------------------------------------------------------------------------
 
 
 def test_monotonic_timestamp_ordering_preserved() -> None:
@@ -344,9 +313,6 @@ def test_monotonic_timestamp_ordering_preserved() -> None:
     assert t1 < EPOCH_THRESHOLD_NS
 
 
-# ----------------------------------------------------------------------------
-# Degenerate books
-# ----------------------------------------------------------------------------
 
 
 def test_trade_event_returns_hold() -> None:
@@ -357,7 +323,7 @@ def test_trade_event_returns_hold() -> None:
 
 def test_rejects_crossed_book() -> None:
     maker = TxfD6SoloMaker()
-    actions = maker.on_tick(_bidask(17505, 17504))  # crossed
+    actions = maker.on_tick(_bidask(17505, 17504))
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
@@ -378,16 +344,12 @@ def test_rejects_zero_priced_book() -> None:
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
-# ----------------------------------------------------------------------------
-# Gap / reset
-# ----------------------------------------------------------------------------
 
 
 def test_on_gap_clears_transient_quote_state() -> None:
     maker = TxfD6SoloMaker()
     maker.on_tick(_bidask(17500, 17505))
     maker.on_gap()
-    # After gap, same prices can post again (price-gate cleared).
     actions = maker.on_tick(_bidask(17500, 17505))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert len(posts) == 2
@@ -414,9 +376,6 @@ def test_reset_clears_position_and_quotes() -> None:
     assert maker.quotes_posted == 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol conformance
-# ----------------------------------------------------------------------------
 
 
 def test_c33_alpha_conforms_to_alpha_protocol() -> None:
@@ -460,9 +419,6 @@ def test_c33_reset_clears_position() -> None:
     assert alpha.maker.position == 0
 
 
-# ----------------------------------------------------------------------------
-# Cycle tracking (DA-mandated close-side classification helper)
-# ----------------------------------------------------------------------------
 
 
 def test_position_decreases_on_sell_fill() -> None:
@@ -472,6 +428,6 @@ def test_position_decreases_on_sell_fill() -> None:
     maker.on_fill("buy", 17_500 * _SCALE, 17500.5)
     assert maker.position == 2
     maker.on_fill("sell", 17_510 * _SCALE, 17505.5)
-    assert maker.position == 1  # reduced by 1; would-be close fill partially
+    assert maker.position == 1
     maker.on_fill("sell", 17_510 * _SCALE, 17505.5)
-    assert maker.position == 0  # fully flat; last fill closed the position
+    assert maker.position == 0

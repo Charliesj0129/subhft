@@ -51,7 +51,7 @@ def test_coalesce_key_variants(tmp_path):
     cancel_cmd = _make_cmd(IntentType.CANCEL, target_order_id="OID")
     amend_cmd = _make_cmd(IntentType.AMEND, target_order_id="OID")
 
-    assert adapter._coalesce_key(new_cmd) == ("new", "strat", "TXF", 1)  # X-C2: intent_id included
+    assert adapter._coalesce_key(new_cmd) == ("new", "strat", "TXF", 1)
     assert adapter._coalesce_key(cancel_cmd) == ("cancel", "strat", "OID")
     assert adapter._coalesce_key(amend_cmd) == ("amend", "strat", "OID")
 
@@ -146,8 +146,7 @@ async def test_submit_typed_command_nowait_materialized_by_worker(tmp_path, monk
         called.append(cmd)
 
     monkeypatch.setattr(adapter, "_dispatch_to_api", _capture_dispatch)
-    # R7: deadline_ns must be in the future to avoid expiration in _api_worker
-    future_deadline_ns = time.monotonic_ns() + 10_000_000_000  # 10 seconds from now
+    future_deadline_ns = time.monotonic_ns() + 10_000_000_000
     frame = (
         "typed_order_cmd_v1",
         77,
@@ -231,16 +230,12 @@ def test_intent_to_command_deadline_uses_monotonic_domain(tmp_path):
     cmd = adapter._intent_to_command(intent)
     after_mono = time.monotonic_ns()
 
-    # Deadline must be reachable from the monotonic clock (not epoch ~1.7e18)
-    # Epoch wall-clock is ~1.7e18 ns; monotonic is ~1e12 ns on a typical system
-    EPOCH_THRESHOLD_NS = 10**15  # 1e15 ns = ~11.5 days since boot vs ~54 years since epoch
+    EPOCH_THRESHOLD_NS = 10**15
     assert cmd.deadline_ns < EPOCH_THRESHOLD_NS, f"deadline_ns={cmd.deadline_ns} looks like epoch time, not monotonic"
 
-    # Deadline must be after the current monotonic time (not yet expired)
     assert time.monotonic_ns() <= cmd.deadline_ns, "deadline_ns is already in the past — order would expire immediately"
 
-    # deadline_ns must be at least mono_before + ttl (minus small tolerance for execution time)
-    assert cmd.deadline_ns >= before_mono + intent.ttl_ns - 1_000_000  # 1ms tolerance
+    assert cmd.deadline_ns >= before_mono + intent.ttl_ns - 1_000_000
 
 
 def test_intent_to_command_created_ns_uses_epoch_domain(tmp_path):
@@ -250,16 +245,10 @@ def test_intent_to_command_created_ns_uses_epoch_domain(tmp_path):
 
     cmd = adapter._intent_to_command(intent)
 
-    # Epoch wall-clock is ~1.7e18 ns; monotonic is ~1e12 ns
     EPOCH_THRESHOLD_NS = 10**15
     assert cmd.created_ns > EPOCH_THRESHOLD_NS, (
         f"created_ns={cmd.created_ns} looks like monotonic time, not epoch wall-clock"
     )
-
-
-# ---------------------------------------------------------------------------
-# _deferred_terminals bounded deque (H4 fix)
-# ---------------------------------------------------------------------------
 
 
 def test_deferred_terminals_bounded_at_256(tmp_path):
@@ -277,6 +266,5 @@ def test_deferred_terminals_evicts_oldest_on_overflow(tmp_path):
     for i in range(300):
         adapter._deferred_terminals.append((f"s{i}", f"o{i}", float(i)))
     assert len(adapter._deferred_terminals) == 256
-    # Oldest entries (0-43) should have been evicted
     first = adapter._deferred_terminals[0]
     assert first[0] == "s44", f"Expected s44 as oldest, got {first[0]}"

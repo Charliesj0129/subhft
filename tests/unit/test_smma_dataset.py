@@ -332,8 +332,6 @@ def _save_with_report(tmp_path, monkeypatch, report) -> dict[str, Any]:
 def test_sidecar_records_an_unstamped_verdict_when_no_source_audit_exists(tmp_path, monkeypatch) -> None:
     payload = _save_with_report(tmp_path, monkeypatch, None)
 
-    # The absence of an audit must be visible in the artifact, not inferred from a
-    # missing key -- a reader cannot tell "never audited" from "key dropped".
     assert payload["source_quality_verdict"] == "unstamped"
 
 
@@ -348,8 +346,6 @@ def test_sidecar_carries_the_source_audit_verdict_when_the_audit_covers_the_rang
 def test_sidecar_flags_a_source_audit_that_does_not_cover_the_requested_range(tmp_path, monkeypatch) -> None:
     payload = _save_with_report(tmp_path, monkeypatch, _audit_report("2026-01-01", "2026-02-01"))
 
-    # A stale audit is worse than none if it reads as coverage, so the mismatch is
-    # named and the requested window recorded alongside it.
     assert payload["source_quality_verdict"] == "unstamped_range_mismatch"
     assert payload["source_quality_requested_range"] == ["2026-07-02", "2026-07-06"]
 
@@ -369,10 +365,8 @@ def test_source_quality_stamp_is_covered_by_the_sidecar_metadata_hash(tmp_path, 
 
     payload = json.loads(sidecar.read_text())
     assert payload["source_quality_verdict"] == "pass"
-    payload["source_quality_verdict"] = "fail"  # rewrite the verdict by hand
+    payload["source_quality_verdict"] = "fail"
     sidecar.write_text(json.dumps(payload))
 
-    # The stamp is merged before the hash is computed, so rewriting the verdict
-    # invalidates the sidecar instead of silently changing the artifact's story.
     with pytest.raises(DatasetGovernanceError, match="sidecar fingerprint mismatch"):
         load_governed_dataset(path)

@@ -126,8 +126,8 @@ class TestSettledContractUnderSim:
     @pytest.mark.parametrize(
         ("cutoff", "action"),
         [
-            (date(2026, 9, 16), "preserved_not_comparable"),  # delivery day, before 13:30
-            (date(2026, 9, 17), "dropped_settled"),  # delivery day after 13:30, and every day after
+            (date(2026, 9, 16), "preserved_not_comparable"),
+            (date(2026, 9, 17), "dropped_settled"),
         ],
         ids=["final-session-still-open", "final-session-closed"],
     )

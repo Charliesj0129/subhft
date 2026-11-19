@@ -37,7 +37,6 @@ def discover_gate_d_candidates(
     tracker = ExperimentTracker(base_dir=experiments_dir)
     runs = tracker.list_runs()
 
-    # Latest run per alpha
     latest: dict[str, Any] = {}
     for run in runs:
         if run.alpha_id in latest:
@@ -58,7 +57,6 @@ def discover_gate_d_candidates(
         drawdown = float(scorecard.get("max_drawdown", 1.0))
         corr = float(scorecard.get("correlation_pool_max", 0.0))
 
-        # Gate D thresholds
         if sharpe_oos < min_sharpe_oos:
             continue
         if abs(drawdown) > max_abs_drawdown:
@@ -66,12 +64,11 @@ def discover_gate_d_candidates(
         if corr > max_correlation:
             continue
 
-        # Check paper-trade sessions
         summary = tracker.summarize_paper_trade(alpha_id)
         session_count = int(summary.get("session_count", 0))
 
         if session_count >= 5:
-            continue  # Already has enough sessions
+            continue
 
         candidates.append(
             {
@@ -130,7 +127,6 @@ def batch_record_sessions(
         for i in range(needed):
             day_offset = i + 1
             session_date = start_date + timedelta(days=day_offset)
-            # Skip weekends
             while session_date.weekday() >= 5:
                 session_date += timedelta(days=1)
 

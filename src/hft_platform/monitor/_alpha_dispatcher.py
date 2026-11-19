@@ -29,9 +29,9 @@ class AlphaDispatcher:
 
     def __init__(self) -> None:
         self._alpha_classes: dict[str, type[Any]] = {}
-        self._weights: dict[str, float] = {}  # alpha_id -> weight from promotion
+        self._weights: dict[str, float] = {}
         self._alpha_ids: tuple[str, ...] = ()
-        self._weighted_ids: tuple[str, ...] = ()  # pre-filtered: only IDs with weight > 0
+        self._weighted_ids: tuple[str, ...] = ()
 
     @property
     def alpha_ids(self) -> tuple[str, ...]:
@@ -64,7 +64,6 @@ class AlphaDispatcher:
 
         self._alpha_ids = tuple(loaded)
 
-        # Load promotion weights and pre-filter weighted IDs
         self._weights = _load_promotion_weights(promotions_dir)
         self._weighted_ids = tuple(aid for aid in self._alpha_ids if self._weights.get(aid, 0.0) > 0)
         logger.info(
@@ -138,7 +137,6 @@ class AlphaDispatcher:
                 astate.update_z(signal)
                 astate.signal_sparkline_append(signal)
 
-        # Compute composite
         self._update_composite(sym_state)
 
     def _update_composite(self, sym_state: SymbolState) -> None:
@@ -171,10 +169,8 @@ def _probe_dispatch_keys(runtime: Any) -> tuple[str, ...] | None:
     try:
         sig = inspect.signature(runtime.update)
         params = sig.parameters
-        # If **kwargs present, alpha accepts full payload
         if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
             return None
-        # Extract positional/keyword param names
         keys = tuple(
             name
             for name, p in params.items()

@@ -17,10 +17,6 @@ from hft_platform.config.loader import (
     load_settings,
 )
 
-# ---------------------------------------------------------------------------
-# _merge()
-# ---------------------------------------------------------------------------
-
 
 class TestMerge:
     def test_flat_override(self) -> None:
@@ -62,11 +58,6 @@ class TestMerge:
         result = _merge(deepcopy(base), deepcopy(override))
         result["a"]["c"] = 999
         assert override["a"]["c"] == 2
-
-
-# ---------------------------------------------------------------------------
-# _load_settings_py()
-# ---------------------------------------------------------------------------
 
 
 class TestLoadSettingsPy:
@@ -119,11 +110,6 @@ class TestLoadSettingsPy:
         assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# _env_overrides()
-# ---------------------------------------------------------------------------
-
-
 class TestEnvOverrides:
     def test_hft_mode(self, monkeypatch) -> None:
         monkeypatch.setenv("HFT_MODE", "live")
@@ -174,11 +160,6 @@ class TestEnvOverrides:
         assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# detect_live_credentials()
-# ---------------------------------------------------------------------------
-
-
 class TestDetectLiveCredentials:
     def test_both_set(self, monkeypatch) -> None:
         monkeypatch.setenv("SHIOAJI_API_KEY", "key123")
@@ -196,11 +177,6 @@ class TestDetectLiveCredentials:
         assert detect_live_credentials() is False
 
 
-# ---------------------------------------------------------------------------
-# _load_yaml()
-# ---------------------------------------------------------------------------
-
-
 class TestLoadYaml:
     def test_valid_file(self, tmp_path) -> None:
         p = tmp_path / "cfg.yaml"
@@ -211,11 +187,6 @@ class TestLoadYaml:
     def test_missing_file(self, tmp_path) -> None:
         result = _load_yaml(str(tmp_path / "missing.yaml"))
         assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# load_settings()
-# ---------------------------------------------------------------------------
 
 
 class TestLoadSettings:
@@ -251,7 +222,6 @@ class TestLoadSettings:
             patch("hft_platform.config.loader._load_settings_py", return_value={}),
             patch("os.path.exists", return_value=False),
         ):
-            # skip_config_validation=True must not call validate_config_or_exit
             settings, defaults = load_settings({"skip_config_validation": True})
             assert settings["mode"] == "sim"
 
@@ -273,7 +243,6 @@ class TestLoadSettings:
         with (
             patch("hft_platform.config.loader.DEFAULT_YAML_PATH", str(yaml_file)),
             patch("hft_platform.config.loader._load_settings_py", return_value={}),
-            # Only the env-overlay path is missing; the base yaml exists in tmp_path.
             patch(
                 "hft_platform.config.loader.os.path.exists",
                 side_effect=lambda p: not p.startswith("config/env/"),

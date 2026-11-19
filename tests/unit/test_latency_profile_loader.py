@@ -45,7 +45,6 @@ class TestLoadProfiles:
         assert profiles["shioaji_sim_p95_v2026-03-04"]["submit_ack_latency_ms"] == 36.0
 
     def test_load_missing_file_raises(self, tmp_path: Path) -> None:
-        # No profiles is not a usable answer: a caller would run at zero latency.
         with pytest.raises(FileNotFoundError):
             load_profiles(tmp_path / "missing.yaml")
 
@@ -77,7 +76,6 @@ class TestResolveProfile:
             "profiles": {
                 "incomplete": {
                     "submit_ack_latency_ms": 36.0,
-                    # missing other required fields
                 },
             },
         }
@@ -95,7 +93,6 @@ class TestResolveProfile:
         assert result["submit_ack_latency_ms"] == 36.0
 
     def test_unique_prefix_is_not_a_match(self, profiles_yaml: Path) -> None:
-        # A prefix used to resolve to whichever profile shared it; ids are exact now.
         profiles = load_profiles(profiles_yaml)
         with pytest.raises(KeyError, match="not found"):
             resolve_profile("shioaji_sim_p95_v2026-03", profiles)

@@ -66,8 +66,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hft", description="HFT Platform CLI")
     sub = parser.add_subparsers(dest="command")
 
-    # ... (Previous commands)
-
     config_cmd = sub.add_parser("config", help="Configuration utilities")
     config_sub = config_cmd.add_subparsers(dest="config_cmd")
 
@@ -395,7 +393,6 @@ def build_parser() -> argparse.ArgumentParser:
     ops_flatten.add_argument("--deadline", type=int, default=120, help="Flatten deadline in seconds")
     ops_flatten.set_defaults(func=cmd_ops_flatten)
 
-    # ── Risk Management ────────────────────────────────────────────────
     risk = sub.add_parser("risk", help="Risk management utilities")
     risk_sub = risk.add_subparsers(dest="risk_cmd")
 
@@ -420,7 +417,6 @@ def build_parser() -> argparse.ArgumentParser:
     risk_rearm.add_argument("--reason", required=True, help="Why it is safe to resume")
     risk_rearm.set_defaults(func=cmd_risk_rearm)
 
-    # ── Health Preflight ───────────────────────────────────────────────
     health = sub.add_parser("health", help="Health check utilities")
     health_sub = health.add_subparsers(dest="health_cmd")
 
@@ -429,7 +425,6 @@ def build_parser() -> argparse.ArgumentParser:
     health_preflight.add_argument("--json", action="store_true", help="Output as JSON")
     health_preflight.set_defaults(func=cmd_health_preflight)
 
-    # ── Go-Live Checklist ──────────────────────────────────────────────
     golive = sub.add_parser("golive", help="Go-live checklist utilities")
     golive_sub = golive.add_subparsers(dest="golive_cmd")
 
@@ -725,7 +720,6 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_validate.add_argument("--out", help="Optional summary JSON output path")
     alpha_validate.set_defaults(func=forward_to_research)
 
-    # L6: loose-mode screening — produces a non-promotion-eligible artifact.
     alpha_screen = alpha_sub.add_parser(
         "screen",
         help=(
@@ -758,10 +752,6 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_vb.add_argument("--out", help="Batch report JSON path")
     alpha_vb.set_defaults(func=forward_to_research)
 
-    # ── Slice-D Task 11: cheap pre-screener (renamed onto #341) ─────────
-    # `alpha screen` is the loose-mode validate verb from #341; the
-    # cheap pre-screener registers as `alpha cheap-screen` to avoid the
-    # subparser-name collision.
     alpha_cheap_screen = alpha_sub.add_parser(
         "cheap-screen",
         help="Cheap screener (IC + turnover + cost-floor gate)",
@@ -794,7 +784,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_cheap_screen.set_defaults(func=cmd_alpha_cheap_screen)
 
-    # ── Slice-D Task 12: manual kill ledger entry ──────────────────────
     alpha_kill = alpha_sub.add_parser(
         "kill",
         help="Manually record a kill in the kill ledger",
@@ -818,7 +807,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     alpha_kill.set_defaults(func=cmd_alpha_kill)
 
-    # ── Slice-D Task 13: hierarchical clustering ───────────────────────
     alpha_cluster = alpha_sub.add_parser(
         "cluster",
         help="Hierarchical correlation clustering across alphas",
@@ -1059,7 +1047,6 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_exp_best.add_argument("--out", help="Optional JSON output path")
     alpha_exp_best.set_defaults(func=cmd_alpha_experiments_best)
 
-    # -- Batch pipeline automation --
     alpha_batch_corr = alpha_sub.add_parser(
         "batch-correlation", help="Batch compute correlation_pool_max across all alphas"
     )
@@ -1116,15 +1103,6 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote_batch.add_argument("--out", help="Optional JSON output path")
     alpha_promote_batch.set_defaults(func=forward_to_research)
 
-    # ── Stage 5: canonical pipeline orchestrator (D2) ───────────────────
-    # `hft alpha pipeline {run,triage}` is the single entrypoint that
-    # `make research` / `make research-triage` now shell out to. Argument
-    # spec lives in `hft_platform.cli_args.research_pipeline`, which both this
-    # parser and `research.pipeline` import — platform code must not import
-    # `research`, so the contract moved to the platform side rather than being
-    # borrowed from it.
-    # The body runs as `python -m research alpha pipeline ...` (cli/_research.py);
-    # where `research/` is absent (production images) the forward reports that.
     alpha_pipeline = alpha_sub.add_parser(
         "pipeline",
         help="Canonical research pipeline orchestrator (mirrors `make research`).",
@@ -1151,7 +1129,6 @@ def build_parser() -> argparse.ArgumentParser:
         handler=forward_to_research,
     )
 
-    # ── TCA ─────────────────────────────────────────────────────────────
     tca = sub.add_parser("tca", help="Transaction Cost Analysis utilities")
     tca_sub = tca.add_subparsers(dest="tca_cmd")
 
@@ -1159,7 +1136,6 @@ def build_parser() -> argparse.ArgumentParser:
     tca_daily.add_argument("--date", default=None, help="Report date (YYYY-MM-DD, default today)")
     tca_daily.set_defaults(func=cmd_tca_daily)
 
-    # ── Feasibility ──────────────────────────────────────────────────────
     feasibility = sub.add_parser("feasibility", help="Feasibility analysis")
     feasibility_sub = feasibility.add_subparsers(dest="feasibility_cmd")
 
@@ -1167,7 +1143,6 @@ def build_parser() -> argparse.ArgumentParser:
     feas_report.add_argument("--date", default=None, help="Date (YYYY-MM-DD), default today")
     feas_report.set_defaults(func=cmd_feasibility_report)
 
-    # ── Signal Monitor TUI ──────────────────────────────────────────────
     monitor_cmd = sub.add_parser("monitor", help="Signal Monitor TUI (SHM + ClickHouse hybrid)")
     monitor_cmd.add_argument("--watchlist", default=None, help="Path to watchlist.yaml")
     monitor_cmd.add_argument("--symbols", default=None, help="Path to symbols.yaml")

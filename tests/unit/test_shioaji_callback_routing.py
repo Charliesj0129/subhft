@@ -51,7 +51,6 @@ def test_enqueue_tick_drops_when_queue_full(monkeypatch):
         quote_dispatch_async=True,
         queue_size=1,
     )
-    # Pre-fill to capacity so next enqueue drops.
     dispatcher.start_worker()
     import queue as _q
 

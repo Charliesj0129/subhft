@@ -39,7 +39,6 @@ async def test_notify_daily_loss_sends_critical(dispatcher, mock_sender) -> None
     mock_sender.send.assert_awaited_once()
     call_kwargs = mock_sender.send.call_args
     assert call_kwargs.kwargs["critical"] is True
-    # PnL value should appear in message
     assert "-50,000" in call_kwargs.args[0] or "-50000" in call_kwargs.args[0]
 
 
@@ -156,7 +155,6 @@ async def test_dispatcher_with_disabled_sender(mock_sender) -> None:
     mock_sender.send = AsyncMock(return_value=False)
     d = NotificationDispatcher(sender=mock_sender)
 
-    # Should not raise, send still called
     await d.notify_halt(reason="test")
     mock_sender.send.assert_awaited_once()
     assert mock_sender.send.await_count == 1

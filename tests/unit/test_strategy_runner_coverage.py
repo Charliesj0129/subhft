@@ -16,10 +16,6 @@ import pytest
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.ops.session_governor import SessionPhase, TrackGate
 
-# ---------------------------------------------------------------------------
-# Helpers / stubs
-# ---------------------------------------------------------------------------
-
 
 def _make_bus(events=None):
     bus = MagicMock()
@@ -97,11 +93,6 @@ def runner_factory():
         return runner, bus, rq
 
     return _make
-
-
-# ---------------------------------------------------------------------------
-# Tests: module-level helpers (_typed_intent_* functions)
-# ---------------------------------------------------------------------------
 
 
 class TestTypedIntentHelpers:
@@ -218,11 +209,6 @@ class TestTypedIntentHelpers:
         assert _typed_intent_side(intent) is None
 
 
-# ---------------------------------------------------------------------------
-# Tests: _get_symbol_net_qty
-# ---------------------------------------------------------------------------
-
-
 class TestGetSymbolNetQty:
     """Test lines 125-148: position lookup for CLOSE_ONLY phase."""
 
@@ -286,11 +272,6 @@ class TestGetSymbolNetQty:
         pos = SimpleNamespace(net_qty=10)
         store = SimpleNamespace(positions={"acct:strat_a:2330": pos})
         assert _get_symbol_net_qty(store, "TSMC") == 0
-
-
-# ---------------------------------------------------------------------------
-# Tests: filter_intents_by_phase (static method)
-# ---------------------------------------------------------------------------
 
 
 class TestFilterIntentsByPhase:
@@ -409,7 +390,6 @@ class TestFilterIntentsByPhase:
         from hft_platform.strategy.runner import StrategyRunner
 
         gate = self._make_track_gate("TSMC", SessionPhase.CLOSE_ONLY)
-        # CANCEL typed intent (intent_type=2)
         typed_cancel = ("typed_intent_v1", 1, "strat_a", "TSMC", 2, 0, 100, 1, 0)
         result = StrategyRunner.filter_intents_by_phase([typed_cancel], gate)
         assert len(result) == 1
@@ -419,15 +399,9 @@ class TestFilterIntentsByPhase:
         from hft_platform.strategy.runner import StrategyRunner
 
         gate = self._make_track_gate("TSMC", SessionPhase.CLOSE_ONLY)
-        # NEW typed intent (intent_type=0, side=1=SELL, tif=0=LIMIT)
         typed_new = ("typed_intent_v1", 1, "strat_a", "TSMC", 0, 1, 100, 1, 0)
         result = StrategyRunner.filter_intents_by_phase([typed_new], gate)
         assert len(result) == 0
-
-
-# ---------------------------------------------------------------------------
-# Tests: _extract_event_trace tuple paths
-# ---------------------------------------------------------------------------
 
 
 class TestExtractEventTrace:
@@ -455,7 +429,7 @@ class TestExtractEventTrace:
         runner, _, _ = runner_factory()
         event = ("tick", "TSMC", 100, 200, 300, 400, 500, None)
         ts, trace_id = runner._extract_event_trace(event)
-        assert ts > 0  # Falls back to now_ns()
+        assert ts > 0
 
     def test_meta_source_ts_fallback(self, runner_factory):
         """Line 1414: local_ts=0 falls back to source_ts."""
@@ -473,11 +447,6 @@ class TestExtractEventTrace:
         ts, trace_id = runner._extract_event_trace(event)
         assert ts == 1000
         assert trace_id == ""
-
-
-# ---------------------------------------------------------------------------
-# Tests: resolve_symbol_aliases and _resolve_strategy_symbol_params
-# ---------------------------------------------------------------------------
 
 
 class TestResolveSymbolAliases:
@@ -520,14 +489,8 @@ class TestResolveSymbolAliases:
         runner.symbol_metadata = None
         strat = _FakeStrategy("s1", symbols=["TSMC"])
         runner.register(strat)
-        # Should not raise
         runner._resolve_strategy_symbol_params(strat)
         assert "TSMC" in strat.symbols
-
-
-# ---------------------------------------------------------------------------
-# Tests: misc setters
-# ---------------------------------------------------------------------------
 
 
 class TestMiscSetters:
@@ -570,18 +533,6 @@ class TestMiscSetters:
         assert runner._storm_guard is sg
 
 
-# P2 (2026-04-25): ``set_publish_sink`` removed — the runner never propagated
-# the sink to per-strategy ``StrategyContext`` instances, so the wired sink
-# was never invoked in production. Bootstrap no longer wires it. The test
-# that asserted ``runner._publish_sink is sink`` was therefore exercising a
-# dead path; it has been removed alongside the implementation.
-
-
-# ---------------------------------------------------------------------------
-# Tests: run() with batch mode
-# ---------------------------------------------------------------------------
-
-
 class TestRunBatchMode:
     """Test lines 428-440: batch consumption mode."""
 
@@ -594,7 +545,7 @@ class TestRunBatchMode:
         bus = MagicMock()
 
         async def _batch_gen(*args, **kwargs):
-            yield events  # one batch
+            yield events
 
         bus.consume_batch.return_value = _batch_gen()
         bus.cursor = 0
@@ -617,12 +568,7 @@ class TestRunBatchMode:
         bus.cursor = 0
         runner, _, _ = runner_factory(bus=bus)
         await asyncio.wait_for(runner.run(), timeout=5.0)
-        assert runner.running is True  # was set before loop
-
-
-# ---------------------------------------------------------------------------
-# Tests: process_event edge cases
-# ---------------------------------------------------------------------------
+        assert runner.running is True
 
 
 class TestProcessEventEdgeCases:
@@ -659,7 +605,6 @@ class TestProcessEventEdgeCases:
         runner, _, _ = runner_factory()
         strat = _FakeStrategy("s1")
         runner.register(strat)
-        # Artificially desync versions
         runner._strategies_version = 999
         event = _make_event()
         await runner.process_event(event)
@@ -672,7 +617,6 @@ class TestProcessEventEdgeCases:
         strat = _FakeStrategy("s_disabled", enabled=False)
         runner.register(strat)
         runner._rust_circuit = None
-        # No halted state set — this goes to the else branch
         event = _make_event()
         await runner.process_event(event)
         assert len(strat._calls) == 0
@@ -690,7 +634,6 @@ class TestProcessEventEdgeCases:
     async def test_lob_l1_decision_price_on_order_intent(self, runner_factory):
         """Lines covering decision_price population from LOB L1."""
         runner, _, rq = runner_factory()
-        # Set up L1 source that returns mid_price_x2
         runner._lob_l1_source = lambda sym: (0, 500_0000, 510_0000, 1010_0000, 10_0000, 100, 100)
         strat = _FakeStrategy("s_l1")
         intent = OrderIntent(
@@ -712,11 +655,6 @@ class TestProcessEventEdgeCases:
         assert submitted.decision_price == 1010_0000 // 2
 
 
-# ---------------------------------------------------------------------------
-# Tests: _get_trace_sampler fallback
-# ---------------------------------------------------------------------------
-
-
 class TestGetTraceSampler:
     def test_get_trace_sampler_import_error_returns_none(self):
         """Lines 51-52: ImportError returns None."""
@@ -729,13 +667,7 @@ class TestGetTraceSampler:
         from hft_platform.strategy.runner import _get_trace_sampler
 
         result = _get_trace_sampler()
-        # It either returns a sampler object or None depending on module availability
         assert result is None or hasattr(result, "emit")
-
-
-# ---------------------------------------------------------------------------
-# Tests: StrategyRunner constructor edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestConstructorEdgeCases:
@@ -751,17 +683,11 @@ class TestConstructorEdgeCases:
         """Lines 322-323: Rust circuit breaker init failure logs warning."""
         monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "1")
 
-        # Mock _RustCircuitBreaker to raise on init
         with patch("hft_platform.strategy.runner._RustCircuitBreaker") as mock_cls:
             mock_cls.side_effect = RuntimeError("init fail")
             with patch("hft_platform.strategy.runner._RUST_CIRCUIT_ENABLED", True):
                 runner, _, _ = runner_factory()
                 assert runner._rust_circuit is None
-
-
-# ---------------------------------------------------------------------------
-# Tests: _build_positions recovery merge
-# ---------------------------------------------------------------------------
 
 
 class TestBuildPositionsRecovery:
@@ -779,7 +705,6 @@ class TestBuildPositionsRecovery:
         runner, _, _ = runner_factory(position_store=pos_store)
         result = runner._build_positions_by_strategy()
         assert result.get("strat_r", {}).get("TSMC") == 3
-        # Short key falls to wildcard
         assert result.get("*", {}).get("TXFD6") == -1
 
     def test_recovery_positions_zero_qty_skipped(self, runner_factory):
@@ -795,11 +720,6 @@ class TestBuildPositionsRecovery:
         runner, _, _ = runner_factory(position_store=pos_store)
         result = runner._build_positions_by_strategy()
         assert "strat_r" not in result
-
-
-# ---------------------------------------------------------------------------
-# Tests: register compat error with fail_fast
-# ---------------------------------------------------------------------------
 
 
 class TestRegisterCompatError:
@@ -830,14 +750,8 @@ class TestRegisterCompatError:
                 SimpleNamespace(level="error", strategy_id="metric_err_strat", code="X", message="x"),
             ],
         ):
-            # fail_fast is off, so this should not raise
             runner.register(strat)
         assert strat in runner.strategies
-
-
-# ---------------------------------------------------------------------------
-# Tests: storm guard escalation
-# ---------------------------------------------------------------------------
 
 
 class TestStormGuardEscalation:
@@ -865,12 +779,10 @@ class TestStormGuardEscalation:
         strat._return_value = [intent]
         runner.register(strat)
 
-        # First event: storm
         await runner.process_event(_make_event())
         sg.trigger_storm.assert_called_with("risk_queue_full")
         sg.trigger_halt.assert_not_called()
 
-        # Second event: halt
         await runner.process_event(_make_event())
         sg.trigger_halt.assert_called_with("risk_queue_full_persistent")
 

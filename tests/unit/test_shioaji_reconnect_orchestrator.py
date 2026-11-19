@@ -81,7 +81,6 @@ class TestReconnectSequence:
 
     def test_reconnect_lock_contention_returns_false(self, client):
         orch = ReconnectOrchestrator(client)
-        # Acquire the lock externally
         client._reconnect_lock.acquire()
         try:
             assert orch.reconnect(reason="test", force=True) is False
@@ -106,7 +105,7 @@ class TestReconnectSequence:
         client.tick_callback = None
         result = orch.reconnect(reason="recovery", force=True)
         assert result is True
-        assert client._reconnect_backoff_s == 30.0  # reset to default
+        assert client._reconnect_backoff_s == 30.0
 
     def test_reconnect_with_subscribe(self, client):
         orch = ReconnectOrchestrator(client)
@@ -125,7 +124,6 @@ class TestReconnectSequence:
     def test_reconnect_exception_records_metric(self, client):
         orch = ReconnectOrchestrator(client)
         client._last_reconnect_ts = 0.0
-        # Make logout raise to trigger exception path
         client.api.logout.side_effect = RuntimeError("boom")
         client.login = MagicMock(side_effect=RuntimeError("double boom"))
         result = orch.reconnect(reason="crash", force=True)
@@ -158,7 +156,6 @@ class TestQuoteEventFSM:
         """Event code 4 should schedule a resubscribe."""
         client._resubscribe_scheduled = False
         client._on_quote_event(0, 4, "reset", "quote_reset")
-        # schedule_resubscribe sets _resubscribe_scheduled
         assert client._resubscribe_scheduled is True
 
 
@@ -168,8 +165,6 @@ class TestTradingHoursGuard:
     def test_is_trading_hours_fallback(self, client):
         """When market calendar is unavailable, uses fallback logic."""
         orch = ReconnectOrchestrator(client)
-        # The fallback uses weekday + time check; result depends on current time
-        # Just verify it returns a bool without error
         result = orch.is_trading_hours()
         assert isinstance(result, bool)
 
@@ -206,7 +201,6 @@ class TestQuoteSchemaMismatch:
         orch = ReconnectOrchestrator(client)
         client._quote_schema_mismatch_count = 0
         client._quote_schema_mismatch_log_every = 100
-        # count becomes 1, 1 % 100 == 1 -> should log
         orch.handle_quote_schema_mismatch("empty")
         assert client._quote_schema_mismatch_count == 1
 
@@ -232,7 +226,6 @@ class TestVerifyQuotesFlowing:
         client.subscribed_count = 1
         client._last_quote_data_ts = 0.0
 
-        # Simulate quotes arriving after a short delay
         def _bump_ts():
             time.sleep(0.1)
             client._last_quote_data_ts = time.time() + 1000
@@ -256,7 +249,6 @@ class TestGetQuoteVersion:
     def test_no_shioaji_returns_none(self, client):
         """When shioaji cannot be imported, get_quote_version returns None."""
         orch = ReconnectOrchestrator(client)
-        # Force the import inside get_quote_version to fail
         with patch.dict("sys.modules", {"shioaji": None}):
             result = orch.get_quote_version()
             assert result is None
@@ -361,7 +353,7 @@ class TestReconnectLoginSlot:
     def test_reconnect_releases_login_slot_when_recreate_api_fails(self, client):
         """The hard-reconnect early return is inside the slot's scope too."""
         orch = ReconnectOrchestrator(client)
-        orch._consecutive_failures = 99  # force the hard-reconnect branch
+        orch._consecutive_failures = 99
         client._last_reconnect_ts = 0.0
         client.recreate_api = MagicMock(return_value=False)
 
@@ -393,7 +385,6 @@ class TestReconnectLoginSlot:
         ):
             assert orch.reconnect(reason="test", force=True) is True
 
-        # Releasing a slot we never held would free another facade's.
         mock_release.assert_not_called()
 
     def test_reconnect_uses_shorter_slot_timeout_than_session_refresh(self, client):

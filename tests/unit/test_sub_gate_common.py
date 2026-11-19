@@ -33,12 +33,8 @@ def _make_result(daily_pnl: list[float], strategy_type: str = "maker") -> Backte
     )
 
 
-# --- SharpeThresholdGate ---
-
-
 def test_sharpe_gate_passes_when_above_threshold():
     gate = SharpeThresholdGate()
-    # Consistent positive returns -> high Sharpe
     result = _make_result([10, 12, 11, 13, 10, 14, 11, 12, 13, 10] * 3)
     sub = gate.evaluate(result, config=None, thresholds={"sharpe_is_min": 0.5})
     assert sub.passed
@@ -47,7 +43,6 @@ def test_sharpe_gate_passes_when_above_threshold():
 
 def test_sharpe_gate_fails_when_below_threshold():
     gate = SharpeThresholdGate()
-    # Near-zero mean, high vol -> low Sharpe
     result = _make_result([1, -1, 2, -2, 1, -1, 2, -2, 1, -1] * 3)
     sub = gate.evaluate(result, config=None, thresholds={"sharpe_is_min": 1.0})
     assert not sub.passed
@@ -69,12 +64,8 @@ def test_sharpe_gate_applies_to_both():
     assert SharpeThresholdGate().applies_to == {"maker", "taker"}
 
 
-# --- MaxDrawdownGate ---
-
-
 def test_max_drawdown_gate_passes_small_dd():
     gate = MaxDrawdownGate()
-    # Equity monotonically increases -> no drawdown
     result = _make_result([10, 5, 8, 12, 7, 10])
     sub = gate.evaluate(result, config=None, thresholds={"max_drawdown_pct": 50.0})
     assert sub.passed
@@ -83,14 +74,12 @@ def test_max_drawdown_gate_passes_small_dd():
 
 def test_max_drawdown_gate_fails_large_dd():
     gate = MaxDrawdownGate()
-    # Rise then crash: 100 -> 200 -> 50 -> 25% of peak = 75% DD
     result = _make_result([100, 100, -75, -75])
     sub = gate.evaluate(result, config=None, thresholds={"max_drawdown_pct": 30.0})
     assert not sub.passed
 
 
 def test_max_drawdown_gate_no_daily_pnl_is_error_not_pass():
-    # A missing series is a missing input, not a zero drawdown.
     gate = MaxDrawdownGate()
     result = _make_result([])
     sub = gate.evaluate(result, config=None, thresholds={"max_drawdown_pct": 30.0})
@@ -103,12 +92,8 @@ def test_max_drawdown_gate_name():
     assert MaxDrawdownGate().name == "max_drawdown"
 
 
-# --- WinningDayPctGate ---
-
-
 def test_winning_day_gate_passes_at_60_pct():
     gate = WinningDayPctGate()
-    # 6 wins, 4 losses = 60%
     result = _make_result([1, 1, 1, 1, 1, 1, -1, -1, -1, -1])
     sub = gate.evaluate(result, config=None, thresholds={"winning_day_pct_min": 55})
     assert sub.passed
@@ -127,7 +112,6 @@ def test_winning_day_gate_zero_pnl_not_winning():
     gate = WinningDayPctGate()
     result = _make_result([0, 0, 0, 0, 1, 1])
     sub = gate.evaluate(result, config=None, thresholds={"winning_day_pct_min": 30})
-    # 2 out of 6 = 33.3%
     assert sub.passed
     assert sub.metrics["winning_day_pct"] == pytest.approx(33.33, abs=0.1)
 

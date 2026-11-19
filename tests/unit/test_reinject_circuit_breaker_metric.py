@@ -38,7 +38,6 @@ def test_reinject_counter_appears_in_prometheus_registry():
 def test_reinject_counter_survives_second_metrics_registry_init():
     """Creating a second MetricsRegistry instance must not orphan the counter."""
     _make_registry()
-    # Force re-init (simulates test teardown / re-setup)
     MetricsRegistry._instance = None
     reg2 = MetricsRegistry.get()
     assert hasattr(reg2, "recorder_reinject_circuit_breaker_drops_total")
@@ -51,7 +50,6 @@ async def test_reinject_circuit_breaker_increments_registry_counter():
     """When batcher hits the reinject circuit breaker the MetricsRegistry counter is incremented."""
     reg = _make_registry()
 
-    # Zero it out by checking current value
     counter = reg.recorder_reinject_circuit_breaker_drops_total
 
     failing_writer = MagicMock()
@@ -64,11 +62,9 @@ async def test_reinject_circuit_breaker_increments_registry_counter():
         writer=failing_writer,
         max_buffer_size=100,
     )
-    # Override _reinject_max_failures to 0 so first failure triggers circuit breaker
     b._reinject_max_failures = 0
-    b._reinject_consecutive_failures = 1  # already at max
+    b._reinject_consecutive_failures = 1
 
-    # Manufacture a flush buffer with one row
     from hft_platform.recorder.batcher import ColumnarBuffer
 
     flush_buf = ColumnarBuffer("hft.test_table")

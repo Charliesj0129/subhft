@@ -66,10 +66,8 @@ def test_metrics_registry_feed_events_total_defined() -> None:
     registry = MetricsRegistry.get()
     assert hasattr(registry, "feed_events_total"), "MetricsRegistry must define feed_events_total"
 
-    # Verify labeling works for both supported type values without error
     tick_child = registry.feed_events_total.labels(type="tick")
     bidask_child = registry.feed_events_total.labels(type="bidask")
 
-    # Calling inc() should not raise
     tick_child.inc(0)
     bidask_child.inc(0)

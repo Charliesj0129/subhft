@@ -13,10 +13,6 @@ import pytest
 from research.backtest.cost_models import TAIFEXCost
 from research.backtest.types import BacktestConfig
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _BASE_DATA_PATH = "research/data/raw/dummy.npz"
 _TMF = TAIFEXCost(instrument="TMF", commission_pts_per_side=0.8, tax_pts_per_side=0.45, point_value_nwd=10)
 
@@ -42,15 +38,10 @@ def _run_equity(prices, positions, config):
     )
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 def test_bps_and_rebate_fields_are_gone():
     names = {f.name for f in dataclasses.fields(BacktestConfig)}
     assert not names & {"maker_fee_bps", "taker_fee_bps", "sell_tax_bps"}
-    assert BacktestConfig(data_paths=[_BASE_DATA_PATH]).cost_per_side_pts is None  # gross screening
+    assert BacktestConfig(data_paths=[_BASE_DATA_PATH]).cost_per_side_pts is None
 
 
 def test_round_trip_costs_two_sides_of_the_cost_profile():

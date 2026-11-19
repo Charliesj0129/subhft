@@ -70,10 +70,6 @@ def _git_sha() -> str:
 
 
 def _resolve_compose() -> str:
-    # ``--no-interpolate`` is also what keeps ``env_file`` contents out of the output: plain ``config`` merges them
-    # into ``environment`` (``.env`` is one of them), and the result is committed to a public repo. Checked on
-    # Compose v5.0.2, where ``--no-env-resolution`` has the same effect; the property is pinned by
-    # tests/integration/test_locked_compose_generator_env_file.py, whichever flag provides it.
     cmd = [
         "docker",
         "compose",
@@ -215,7 +211,7 @@ def _repo_relative(value: str) -> str | None:
     try:
         relative = Path(value).relative_to(REPO_ROOT)
     except ValueError:
-        return None  # a real host path, not one of ours
+        return None
     return "." if relative == Path(".") else f"./{relative}"
 
 
@@ -223,7 +219,7 @@ def _relativize_volumes(svc: dict) -> int:
     rewritten = 0
     for vol in svc.get("volumes") or []:
         if not isinstance(vol, dict):
-            continue  # short syntax: parameterized, and never absolute
+            continue
         replacement = _repo_relative(str(vol.get("source", "")))
         if replacement is not None:
             vol["source"] = replacement
@@ -373,10 +369,6 @@ def _assert_matches_committed_identity(compose: dict) -> None:
     except (OSError, yaml.YAMLError) as exc:
         raise SystemExit(f"cannot read the existing {LOCKED_COMPOSE.name} to verify identity: {exc}") from exc
     if not isinstance(committed, dict):
-        # Only a *missing* file can mean "nothing to preserve". A file that
-        # exists and does not parse as a mapping is damage, and reading it as
-        # an absent baseline would disable the check below on exactly the
-        # regeneration that most needs it.
         raise SystemExit(
             f"refusing to write {LOCKED_COMPOSE.name}: the existing file parses as "
             f"{type(committed).__name__}, not a mapping, so the project name it records "

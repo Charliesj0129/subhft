@@ -49,9 +49,6 @@ def _cats(findings) -> list[str]:
     return [f.category for f in findings]
 
 
-# ── CLI ──
-
-
 def test_an_unknown_cli_subcommand_is_reported_with_the_defined_ones():
     found = mod.check_cli(_spans("```bash\nhft admin status --broker x\n```\n"), _parser(), "d.md")
 
@@ -63,7 +60,7 @@ def test_an_unknown_cli_subcommand_is_reported_with_the_defined_ones():
 def test_flags_after_an_unknown_subcommand_are_not_reported_against_the_parent():
     found = mod.check_cli(_spans("`hft admin status --verbose --full`"), _parser(), "d.md")
 
-    assert _cats(found) == ["cli_command"]  # no cascade of cli_flag
+    assert _cats(found) == ["cli_command"]
 
 
 def test_a_real_command_with_real_flags_and_a_quoted_value_is_clean():
@@ -103,9 +100,6 @@ def test_placeholders_stop_command_resolution():
     assert mod.check_cli(_spans("`hft <group> <sub>`\n`hft $CMD run`"), _parser(), "d.md") == []
 
 
-# ── make ──
-
-
 def test_makefile_targets_ignore_recipes_variables_and_phony_lists():
     text = ".PHONY: a b\nVAR := 1\ncheck: lint\n\techo hi\nlint test: ## both\n\t@true\n"
 
@@ -126,9 +120,6 @@ def test_a_variable_assignment_before_the_target_does_not_hide_a_missing_target(
     found = mod.check_make(_spans("`make FILE=x.py ghost-target`\n"), {"check"}, "d.md")
 
     assert [f.detail for f in found] == ["`make ghost-target` has no rule in the Makefile"]
-
-
-# ── metrics ──
 
 
 def test_metric_selectors_are_checked_and_prefix_mistakes_are_explained():
@@ -195,9 +186,6 @@ def test_defined_metrics_come_from_code_textfile_scripts_and_recording_rules(tmp
     assert mod.collect_defined_metrics(root) == {"queue_depth", "orders_total", "disk_free_bytes", "slo:orders:ratio"}
 
 
-# ── paths and links ──
-
-
 def test_a_missing_repo_path_is_reported_and_placeholders_and_runtime_dirs_are_not(tmp_path: Path):
     root = _repo(tmp_path)
     (root / "scripts" / "real.py").write_text("", encoding="utf-8")
@@ -247,9 +235,6 @@ def test_relative_links_are_resolved_from_the_document_and_urls_and_anchors_are_
         "link target `missing.md` does not exist",
         "link target `../runbooks.md#9-service` does not exist",
     ]
-
-
-# ── alerts ──
 
 
 def test_alert_runbook_urls_and_expression_metrics_are_checked(tmp_path: Path):
@@ -305,9 +290,6 @@ def test_promql_names_skip_functions_labels_numbers_and_keywords():
     assert names == {"a_total", "b", "c"}
 
 
-# ── whole run and CLI ──
-
-
 def _doc_repo(tmp_path: Path) -> Path:
     root = _repo(tmp_path)
     (root / "src" / "hft_platform" / "m.py").write_text('a = _pn("queue_depth")\n', encoding="utf-8")
@@ -340,15 +322,11 @@ def test_doc_roots_are_scanned_recursively(tmp_path: Path):
 def test_the_cli_tree_includes_dev_only_commands_whatever_the_start_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    # `hft alpha pipeline` used to be registered only when `research` was importable. It is always registered now
-    # (its body runs as `python -m research alpha`); the checker must still see it with no `research` on sys.path.
     root = _repo(tmp_path)
     (root / "research").mkdir()
     (root / "research" / "__init__.py").write_text("", encoding="utf-8")
     (root / "research" / "pipeline.py").write_text("", encoding="utf-8")
     (root / "docs" / "runbooks" / "p.md").write_text("`hft alpha pipeline triage`\n", encoding="utf-8")
-    # pytest puts the real checkout on sys.path (pyproject `pythonpath`), so drop every entry that could supply
-    # a `research` package, leaving only the temporary root as the one place the checker can find it.
     monkeypatch.setattr(sys, "path", [p for p in sys.path if not (Path(p or ".") / "research").is_dir()])
     for name in [n for n in sys.modules if n == "research" or n.startswith("research.")]:
         monkeypatch.delitem(sys.modules, name)

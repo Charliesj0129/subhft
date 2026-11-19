@@ -15,9 +15,6 @@ from research.backtest.alpha_strategy_bridge import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Minimal AlphaProtocol stub
-# ---------------------------------------------------------------------------
 class _ConstantAlpha:
     """Always returns a fixed signal value."""
 
@@ -81,14 +78,11 @@ class _CountingAlpha:
         return float(self._count) * 0.1
 
 
-# ---------------------------------------------------------------------------
-# LOBStatsEvent stub
-# ---------------------------------------------------------------------------
 def _make_lob_event(
     symbol: str = "TXFB6",
     ts: int = 1_000_000_000,
-    best_bid: int = 999_000,  # 99.9 * 10000
-    best_ask: int = 1_001_000,  # 100.1 * 10000
+    best_bid: int = 999_000,
+    best_ask: int = 1_001_000,
     bid_depth: int = 10,
     ask_depth: int = 5,
     imbalance: float = 0.1,
@@ -106,9 +100,6 @@ def _make_lob_event(
     )
 
 
-# ---------------------------------------------------------------------------
-# AlphaStrategyBridge tests
-# ---------------------------------------------------------------------------
 class TestAlphaStrategyBridgeInit:
     def test_default_params(self):
         alpha = _ConstantAlpha()
@@ -152,7 +143,6 @@ class TestAlphaStrategyBridgeOnStats:
         ts_ns, signal, mid_price = bridge.signal_log[0]
         assert ts_ns == 1_234_567_890
         assert signal == pytest.approx(0.42)
-        # mid = (99.9 + 100.1) / 2 = 100.0
         assert mid_price == pytest.approx(100.0)
 
     def test_multiple_events_accumulate(self):
@@ -169,7 +159,6 @@ class TestAlphaStrategyBridgeOnStats:
         """bid/ask are scaled ints; bridge must divide by price_scale."""
         alpha = _ConstantAlpha(0.0)
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6", price_scale=10_000)
-        # best_bid = 500_000 → 50.0; best_ask = 500_100 → 50.01
         event = _make_lob_event(best_bid=500_000, best_ask=500_100)
         bridge.on_stats(event)
         _, _, mid = bridge.signal_log[0]
@@ -179,7 +168,7 @@ class TestAlphaStrategyBridgeOnStats:
         """Events for wrong symbol should be ignored."""
         alpha = _ConstantAlpha(0.5)
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
-        event = _make_lob_event(symbol="2330")  # different symbol
+        event = _make_lob_event(symbol="2330")
         bridge.handle_event(MagicMock(), event)
         assert bridge.signal_log == []
 
@@ -230,9 +219,6 @@ class TestAlphaStrategyBridgeOnStats:
         assert signal == pytest.approx(0.0)
 
 
-# ---------------------------------------------------------------------------
-# FeatureEngine enrichment tests
-# ---------------------------------------------------------------------------
 class _CapturingAlpha:
     """Alpha that captures kwargs for inspection."""
 
@@ -262,13 +248,11 @@ class TestFeatureEngineEnrichment:
         alpha = _CapturingAlpha()
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
 
-        # Wire a mock ctx with a 16-value feature tuple
         fake_tuple = tuple(float(i) for i in range(16))
         ctx = MagicMock()
         ctx.get_feature_tuple.return_value = fake_tuple
         bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
 
-        # Alpha should have received all 16 fe_* keys
         for i, key in enumerate(_FE_KEYS):
             assert key in alpha.last_kwargs, f"Missing key: {key}"
             assert alpha.last_kwargs[key] == float(i)
@@ -277,7 +261,6 @@ class TestFeatureEngineEnrichment:
         """Without handle_event (no ctx), fe_* keys should not appear."""
         alpha = _CapturingAlpha()
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
-        # Call on_stats directly — no ctx set
         bridge.on_stats(_make_lob_event())
         for key in _FE_KEYS:
             assert key not in alpha.last_kwargs
@@ -303,7 +286,6 @@ class TestFeatureEngineEnrichment:
         ctx.get_feature_tuple.side_effect = RuntimeError("boom")
         bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
 
-        # Should still record a signal (0.0)
         assert len(bridge.signal_log) == 1
         for key in _FE_KEYS:
             assert key not in alpha.last_kwargs
@@ -318,7 +300,7 @@ class TestFeatureEngineEnrichment:
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
 
         ctx = MagicMock()
-        ctx.get_feature_tuple.return_value = (1.0, 2.0, 3.0)  # only 3 values
+        ctx.get_feature_tuple.return_value = (1.0, 2.0, 3.0)
         bridge.handle_event(ctx, _make_lob_event(symbol="TXFB6"))
 
         for key in _FE_KEYS:
@@ -351,9 +333,6 @@ class TestFeatureEngineEnrichment:
             assert key in alpha.last_kwargs, f"Missing base key: {key}"
 
 
-# ---------------------------------------------------------------------------
-# signal_log_to_arrays
-# ---------------------------------------------------------------------------
 class TestSignalLogToArrays:
     def test_empty_log(self):
         ts, sig, mid = signal_log_to_arrays([])
@@ -375,9 +354,6 @@ class TestSignalLogToArrays:
         assert float(sig[0]) == pytest.approx(1.23)
 
 
-# ---------------------------------------------------------------------------
-# OFI first-tick spike fix tests
-# ---------------------------------------------------------------------------
 class TestOFIFirstTickSpike:
     def test_first_tick_ofi_is_zero(self):
         """First tick should produce ofi_l1_raw=0.0, not a spurious spike."""
@@ -391,9 +367,7 @@ class TestOFIFirstTickSpike:
         """Second tick should compute proper delta from first tick."""
         alpha = _OFICaptureAlpha()
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
-        # First tick: seed prev state
         bridge.on_stats(_make_lob_event(bid_depth=100, ask_depth=50))
-        # Second tick: bid 100->120 (+20), ask 50->40 (-10) => ofi = 20 - (-10) = 30
         bridge.on_stats(_make_lob_event(bid_depth=120, ask_depth=40, ts=2_000_000_000))
         assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(30.0)
 
@@ -401,10 +375,8 @@ class TestOFIFirstTickSpike:
         """Cumulative OFI should be 0 after first tick, not bid-ask."""
         alpha = _OFICaptureAlpha()
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
-        # First tick
         bridge.on_stats(_make_lob_event(bid_depth=100, ask_depth=50))
         assert alpha.last_kwargs["ofi_l1_cum"] == pytest.approx(0.0)
-        # Second tick: ofi_raw = (120-100) - (40-50) = 30
         bridge.on_stats(_make_lob_event(bid_depth=120, ask_depth=40, ts=2_000_000_000))
         assert alpha.last_kwargs["ofi_l1_cum"] == pytest.approx(30.0)
 
@@ -412,12 +384,9 @@ class TestOFIFirstTickSpike:
         """After reset, next tick should be treated as a new first tick."""
         alpha = _OFICaptureAlpha()
         bridge = AlphaStrategyBridge(alpha, symbol="TXFB6")
-        # First tick
         bridge.on_stats(_make_lob_event(bid_depth=100, ask_depth=50))
         assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(0.0)
-        # Reset
         bridge.reset()
-        # Post-reset tick should behave as first tick again
         bridge.on_stats(_make_lob_event(bid_depth=200, ask_depth=80, ts=3_000_000_000))
         assert alpha.last_kwargs["ofi_l1_raw"] == pytest.approx(0.0)
         assert alpha.last_kwargs["ofi_l1_cum"] == pytest.approx(0.0)

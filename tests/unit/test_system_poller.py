@@ -57,7 +57,6 @@ def test_system_poller_updates_gauges(monkeypatch):
     poller.stop()
     poller._thread.join(timeout=3.0)
 
-    # Gauges should have been updated
     assert metrics.system_cpu_usage._value.get() > 0
     assert metrics.system_memory_usage._value.get() > 0
 
@@ -83,7 +82,6 @@ def test_system_poller_handles_no_psutil(monkeypatch):
     poller = SystemPoller(metrics, interval_s=0.1)
     poller.start()
     time.sleep(0.3)
-    # Thread should have exited due to ImportError
     assert not poller._thread.is_alive()
 
 
@@ -109,7 +107,7 @@ def test_system_poller_no_double_start(monkeypatch):
     poller = SystemPoller(metrics, interval_s=1.0)
     poller.start()
     first_thread = poller._thread
-    poller.start()  # Should not create a new thread
+    poller.start()
     assert poller._thread is first_thread
     poller.stop()
     poller._thread.join(timeout=3.0)

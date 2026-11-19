@@ -29,9 +29,6 @@ from typing import Any, Callable
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,9 +37,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("hotpath_profile_matrix")
 
-# ---------------------------------------------------------------------------
-# Optional platform imports — graceful degradation when platform not installed
-# ---------------------------------------------------------------------------
 
 try:
     from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
@@ -79,19 +73,15 @@ except ImportError:
     _RISK_ENGINE_AVAILABLE = False
     log.warning("RiskEngine not importable — risk stage will be skipped")
 
-# ---------------------------------------------------------------------------
-# Synthetic event factories
-# ---------------------------------------------------------------------------
 
 _SYMBOL = "2330"
-_PRICE_SCALED = 5950000  # 595.0 * 10000
-_TS_NS = 1_700_000_000_000_000_000  # fixed synthetic timestamp
+_PRICE_SCALED = 5950000
+_TS_NS = 1_700_000_000_000_000_000
 
 
 def _make_meta(seq: int = 1) -> Any:
     if _EVENTS_AVAILABLE:
         return MetaData(seq=seq, source_ts=_TS_NS, local_ts=_TS_NS, topic=_SYMBOL)
-    # Minimal stub
     class _Meta:
         def __init__(self) -> None:
             self.seq = seq
@@ -172,9 +162,6 @@ def _make_lob_stats_event() -> Any:
     return _Stats()
 
 
-# ---------------------------------------------------------------------------
-# Stage result containers
-# ---------------------------------------------------------------------------
 
 @dataclass
 class StageResult:
@@ -214,9 +201,6 @@ class StageResult:
         }
 
 
-# ---------------------------------------------------------------------------
-# Profiling helpers
-# ---------------------------------------------------------------------------
 
 def _time_stage(
     fn: Callable[[], Any],
@@ -228,7 +212,6 @@ def _time_stage(
     Performs warmup iterations before measurement to allow JIT / cache warm-up.
     """
     errors = 0
-    # Warmup
     for _ in range(warmup):
         try:
             fn()
@@ -247,9 +230,6 @@ def _time_stage(
     return samples, errors
 
 
-# ---------------------------------------------------------------------------
-# Individual stage profilers
-# ---------------------------------------------------------------------------
 
 def profile_normalizer(n: int) -> StageResult:
     result = StageResult(stage="normalizer", available=_NORMALIZER_AVAILABLE, iterations=n)
@@ -259,15 +239,12 @@ def profile_normalizer(n: int) -> StageResult:
         return result
 
     try:
-        # Build a minimal normalizer — no broker SDK required
         normalizer = MarketDataNormalizer.__new__(MarketDataNormalizer)
-        # Attempt minimal init — may vary; fall back to dict-lookup approach
         try:
             normalizer.__init__()  # type: ignore[misc]
         except Exception:
             pass
 
-        # Build a realistic raw payload dict (Shioaji-style raw tick format)
         raw_tick: dict[str, Any] = {
             "Symbol": _SYMBOL,
             "Close": [595.0],
@@ -453,9 +430,6 @@ def profile_risk_evaluate(n: int) -> StageResult:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Reporting
-# ---------------------------------------------------------------------------
 
 _COL_WIDTHS = (22, 10, 10, 10, 10, 8, 8)
 _HEADER = ("Stage", "P50 (ns)", "P95 (ns)", "P99 (ns)", "Mean (ns)", "Iter", "Errors")
@@ -492,9 +466,6 @@ def print_ascii_table(results: list[StageResult]) -> None:
     print()
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -597,7 +568,6 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print_ascii_table(results)
 
-    # Exit non-zero only if all stages skipped (platform not installed)
     all_skipped = all(not r.samples_ns for r in results)
     if all_skipped:
         log.error("All stages skipped — platform imports unavailable")

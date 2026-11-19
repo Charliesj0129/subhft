@@ -13,10 +13,6 @@ import pytest
 
 from hft_platform.recorder.writer import DataWriter
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture()
 def writer(tmp_path):
@@ -53,11 +49,6 @@ def connected_writer(tmp_path):
     w.ch_enabled = True
     w.ch_client = MagicMock()
     return w
-
-
-# ---------------------------------------------------------------------------
-# Credential environment variable resolution
-# ---------------------------------------------------------------------------
 
 
 def test_username_resolved_from_hft_clickhouse_username_deprecated(tmp_path):
@@ -182,11 +173,6 @@ def test_hft_ts_max_future_s_parse_failure_disables_filter(tmp_path):
     assert writer._ts_max_future_ns == 0
 
 
-# ---------------------------------------------------------------------------
-# _maybe_fallback_clickhouse_interface
-# ---------------------------------------------------------------------------
-
-
 def test_fallback_interface_strips_native_on_matching_error(writer):
     writer.ch_params["interface"] = "native"
     writer.ch_params["port"] = 9000
@@ -217,11 +203,6 @@ def test_fallback_interface_port_stays_when_not_canonical(writer):
     exc = Exception("unrecognized client type native")
     writer._maybe_fallback_clickhouse_interface(exc)
     assert writer.ch_params["port"] == 19000
-
-
-# ---------------------------------------------------------------------------
-# _init_schema failure path
-# ---------------------------------------------------------------------------
 
 
 def test_init_schema_failure_sets_disconnected(writer):
@@ -268,11 +249,6 @@ def test_init_schema_sets_metrics_on_success(writer):
     mock_metrics.recorder_schema_init_failed.set.assert_called_with(0)
 
 
-# ---------------------------------------------------------------------------
-# get_status
-# ---------------------------------------------------------------------------
-
-
 def test_get_status_returns_expected_keys(writer):
     status = writer.get_status()
     for key in (
@@ -297,20 +273,10 @@ def test_get_status_wal_only_mode_when_not_connected(writer):
     assert status["wal_only_mode"] is True
 
 
-# ---------------------------------------------------------------------------
-# set_health_tracker
-# ---------------------------------------------------------------------------
-
-
 def test_set_health_tracker_assigns_reference(writer):
     tracker = MagicMock()
     writer.set_health_tracker(tracker)
     assert writer._health_tracker is tracker
-
-
-# ---------------------------------------------------------------------------
-# _do_heartbeat_check
-# ---------------------------------------------------------------------------
 
 
 def test_do_heartbeat_check_returns_true_on_success(connected_writer):
@@ -328,11 +294,6 @@ def test_do_heartbeat_check_returns_false_on_exception(connected_writer):
     assert connected_writer._do_heartbeat_check() is False
 
 
-# ---------------------------------------------------------------------------
-# _compute_backoff_delay
-# ---------------------------------------------------------------------------
-
-
 def test_compute_backoff_delay_bounded(writer):
     for attempt in range(10):
         delay = writer._compute_backoff_delay(attempt)
@@ -347,11 +308,6 @@ def test_compute_backoff_delay_increases_with_attempt(writer):
     avg_0 = sum(delays_0) / len(delays_0)
     avg_5 = sum(delays_5) / len(delays_5)
     assert avg_5 >= avg_0
-
-
-# ---------------------------------------------------------------------------
-# _iter_row_chunks and _iter_columnar_chunks
-# ---------------------------------------------------------------------------
 
 
 def test_iter_row_chunks_splits_when_chunk_size_set(writer):
@@ -387,11 +343,6 @@ def test_iter_columnar_chunks_no_split_when_chunk_zero(writer):
     assert len(chunks) == 1
 
 
-# ---------------------------------------------------------------------------
-# _should_log_insert_success
-# ---------------------------------------------------------------------------
-
-
 def test_should_log_insert_success_when_flag_set(writer):
     writer._ch_insert_log_success = True
     assert writer._should_log_insert_success(1) is True
@@ -408,11 +359,6 @@ def test_should_log_insert_returns_false_when_both_disabled(writer):
     writer._ch_insert_log_success = False
     writer._ch_insert_log_every = 0
     assert writer._should_log_insert_success(1) is False
-
-
-# ---------------------------------------------------------------------------
-# _transpose_columnar_rows and _columnar_to_row_dicts
-# ---------------------------------------------------------------------------
 
 
 def test_transpose_columnar_rows_empty():
@@ -440,11 +386,6 @@ def test_columnar_to_row_dicts_correctness():
 
 def test_columnar_to_row_dicts_empty_names():
     assert DataWriter._columnar_to_row_dicts([], [[1]], 1) == []
-
-
-# ---------------------------------------------------------------------------
-# _sanitize_timestamps
-# ---------------------------------------------------------------------------
 
 
 def test_sanitize_timestamps_passes_through_empty(writer):
@@ -523,11 +464,6 @@ def test_sanitize_timestamps_row_without_ts_fields(writer):
     result = writer._sanitize_timestamps("t", [row])
     assert len(result) == 1
     assert result[0]["symbol"] == "2330"
-
-
-# ---------------------------------------------------------------------------
-# _sanitize_columnar
-# ---------------------------------------------------------------------------
 
 
 def test_sanitize_columnar_returns_unchanged_when_no_ts_columns(writer):
@@ -612,13 +548,7 @@ def test_sanitize_columnar_exception_in_row_keeps_row(writer):
     col_names = ["exch_ts", "ingest_ts"]
     col_data = [["bad_value"], ["bad_value"]]
     result_data, count = writer._sanitize_columnar("t", col_names, col_data, 1)
-    # Exception path keeps the row
     assert count == 1
-
-
-# ---------------------------------------------------------------------------
-# _get_wal_batch_writer lazy init
-# ---------------------------------------------------------------------------
 
 
 def test_get_wal_batch_writer_returns_none_when_disabled(writer):
@@ -639,11 +569,6 @@ def test_get_wal_batch_writer_returns_none_on_import_error(writer):
         mock.return_value = None
         result = mock()
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# write() paths
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -750,11 +675,6 @@ async def test_write_empty_data_returns_early(writer):
     writer.wal.write.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# write_columnar() paths
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_write_columnar_empty_returns_early(writer):
     await writer.write_columnar("t", [], [], 0)
@@ -833,11 +753,6 @@ async def test_write_columnar_double_fault_raises(connected_writer):
             await connected_writer.write_columnar("t", ["exch_ts"], [[now_ns]], 1)
 
 
-# ---------------------------------------------------------------------------
-# shutdown
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_shutdown_flushes_wal_batch_writer(writer):
     mock_bw = MagicMock()
@@ -878,11 +793,6 @@ async def test_shutdown_without_wal_batch_writer(writer):
     writer._wal_batch_writer = None
     await writer.shutdown()
     assert writer._wal_batch_writer is None
-
-
-# ---------------------------------------------------------------------------
-# connect() sync
-# ---------------------------------------------------------------------------
 
 
 @patch("hft_platform.recorder.writer.clickhouse_connect")
@@ -964,11 +874,6 @@ def test_connect_wal_only_when_disabled(writer):
     assert not writer.connected
 
 
-# ---------------------------------------------------------------------------
-# connect_async
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_connect_async_wal_only_when_disabled(writer):
     await writer.connect_async()
@@ -1007,11 +912,6 @@ async def test_connect_async_failure_sets_metrics(mock_ch, tmp_path):
     mock_metrics.clickhouse_connection_health.set.assert_called_with(0)
 
 
-# ---------------------------------------------------------------------------
-# _start_heartbeat_thread guards
-# ---------------------------------------------------------------------------
-
-
 def test_start_heartbeat_does_nothing_when_not_connected(writer):
     writer.connected = False
     writer._heartbeat_running = False
@@ -1023,11 +923,6 @@ def test_start_heartbeat_does_nothing_when_already_running(connected_writer):
     connected_writer._heartbeat_running = True
     connected_writer._start_heartbeat_thread()
     assert connected_writer._heartbeat_thread is None
-
-
-# ---------------------------------------------------------------------------
-# _schedule_reconnect guards
-# ---------------------------------------------------------------------------
 
 
 def test_schedule_reconnect_does_nothing_when_ch_disabled(writer):
@@ -1051,11 +946,6 @@ def test_schedule_reconnect_skips_when_already_running(writer):
     writer._reconnect_running = True
     writer._schedule_reconnect("test")
     assert writer._reconnect_running
-
-
-# ---------------------------------------------------------------------------
-# _ch_insert_columnar with column_oriented fallbacks
-# ---------------------------------------------------------------------------
 
 
 def test_ch_insert_columnar_once_column_oriented_false(connected_writer):
@@ -1086,7 +976,7 @@ def test_ch_insert_columnar_once_fallback_on_type_error(connected_writer):
 def test_ch_insert_columnar_once_slow_insert_warning(connected_writer):
     """Slow insert triggers warning log (elapsed > warn threshold)."""
     connected_writer._ch_column_oriented = True
-    connected_writer._insert_warn_ms = 0  # any insert is "slow"
+    connected_writer._insert_warn_ms = 0
     connected_writer.ch_client.insert = MagicMock()
     col_data = [[1], [10]]
     connected_writer._ch_insert_columnar_once("t", ["a", "b"], col_data, 1)
@@ -1104,11 +994,6 @@ def test_ch_insert_columnar_disconnected_raises(connected_writer):
     connected_writer.ch_client = None
     with pytest.raises(ConnectionError):
         connected_writer._ch_insert_columnar_once("t", ["a"], [[1]], 1)
-
-
-# ---------------------------------------------------------------------------
-# _ch_insert (row dict path)
-# ---------------------------------------------------------------------------
 
 
 def test_ch_insert_empty_data(connected_writer):
@@ -1132,11 +1017,6 @@ def test_ch_insert_once_disconnected_raises(connected_writer):
         connected_writer._ch_insert_once("t", [{"a": 1}])
 
 
-# ---------------------------------------------------------------------------
-# _is_native_interface_unsupported_error
-# ---------------------------------------------------------------------------
-
-
 def test_is_native_interface_unsupported_error_matches():
     exc = Exception("unrecognized client type native")
     assert DataWriter._is_native_interface_unsupported_error(exc) is True
@@ -1150,11 +1030,6 @@ def test_is_native_interface_unsupported_error_no_match():
 def test_is_native_interface_invalid_interface_match():
     exc = Exception("invalid interface")
     assert DataWriter._is_native_interface_unsupported_error(exc) is True
-
-
-# ---------------------------------------------------------------------------
-# _start_heartbeat_thread: actually runs the loop
-# ---------------------------------------------------------------------------
 
 
 def test_start_heartbeat_runs_and_stops_on_heartbeat_failure(tmp_path):
@@ -1171,12 +1046,10 @@ def test_start_heartbeat_runs_and_stops_on_heartbeat_failure(tmp_path):
 
     with patch.object(w, "_schedule_reconnect"):
         w._start_heartbeat_thread()
-        # Wait briefly for heartbeat to detect failure
         import time
 
         time.sleep(0.1)
 
-    # Heartbeat should have marked connection as stale
     assert w.connected is False
     assert w.ch_client is None
     assert w._heartbeat_running is False
@@ -1192,20 +1065,14 @@ def test_start_heartbeat_stops_when_flag_cleared(tmp_path):
     w.connected = True
     w.ch_enabled = True
     w.ch_client = MagicMock()
-    w.ch_client.command.return_value = None  # heartbeat succeeds
+    w.ch_client.command.return_value = None
 
     w._start_heartbeat_thread()
     assert w._heartbeat_running is True
 
-    # Stop it
     w._heartbeat_running = False
     time.sleep(0.05)
     assert w._heartbeat_running is False
-
-
-# ---------------------------------------------------------------------------
-# _schedule_reconnect: actually runs reconnect thread
-# ---------------------------------------------------------------------------
 
 
 def test_schedule_reconnect_runs_reconnect_thread(tmp_path):
@@ -1236,7 +1103,6 @@ def test_schedule_reconnect_skips_when_lock_held(tmp_path):
     w.ch_enabled = True
     w._last_reconnect_ts = 0
     w._reconnect_running = False
-    # Hold the lock
     w._reconnect_lock.acquire()
     try:
         w._schedule_reconnect("test")
@@ -1245,17 +1111,11 @@ def test_schedule_reconnect_skips_when_lock_held(tmp_path):
         w._reconnect_lock.release()
 
 
-# ---------------------------------------------------------------------------
-# shutdown: semaphore drain timeout path
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_shutdown_drains_semaphore_before_pool_shutdown(writer):
     """shutdown waits for semaphore drain and shuts down executor."""
     writer._wal_batch_writer = None
     await writer.shutdown()
-    # Executor should be shut down
     assert writer._executor._shutdown
 
 
@@ -1272,10 +1132,8 @@ async def test_shutdown_timeout_on_in_flight_inserts(tmp_path):
         w = DataWriter(wal_dir=str(tmp_path))
     w._wal_batch_writer = None
 
-    # Acquire the semaphore to simulate in-flight inserts
     await w._insert_semaphore.acquire()
 
-    # Patch time.monotonic to make deadline already passed
     import time as _time
 
     original_monotonic = _time.monotonic
@@ -1283,21 +1141,14 @@ async def test_shutdown_timeout_on_in_flight_inserts(tmp_path):
 
     def fast_monotonic():
         call_count[0] += 1
-        # First call sets deadline; subsequent calls exceed it
         if call_count[0] <= 1:
             return original_monotonic()
-        return original_monotonic() + 100  # way past deadline
+        return original_monotonic() + 100
 
     with patch("hft_platform.recorder.writer.time.monotonic", side_effect=fast_monotonic):
         await w.shutdown()
 
-    # Executor should shut down (with wait=False due to timeout)
     assert w._executor._shutdown
-
-
-# ---------------------------------------------------------------------------
-# _create_clickhouse_client with fallback
-# ---------------------------------------------------------------------------
 
 
 @patch("hft_platform.recorder.writer.clickhouse_connect")

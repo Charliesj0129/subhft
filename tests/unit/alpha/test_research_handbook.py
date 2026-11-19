@@ -29,7 +29,7 @@ def _rows(table: str) -> list[list[str]]:
     text = _HANDBOOK.read_text(encoding="utf-8")
     match = re.search(rf"<!-- handbook:{table}:begin -->\n(.*?)\n<!-- handbook:{table}:end -->", text, re.S)
     assert match, f"handbook table {table!r} not found"
-    lines = match.group(1).splitlines()[2:]  # header and separator
+    lines = match.group(1).splitlines()[2:]
     return [[cell.strip().strip("`") for cell in line.strip("|").split("|")] for line in lines]
 
 

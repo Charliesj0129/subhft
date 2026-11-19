@@ -79,11 +79,6 @@ _TXO_JUNE = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# Options: the data was there all along                                        #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_an_option_expiry_in_the_shipped_slash_format_is_parsed() -> None:
     """``config/symbols.yaml`` writes "2026/06/17"; fromisoformat rejects it and
@@ -122,11 +117,6 @@ def test_an_option_without_an_expiry_field_keeps_a_none_expiry() -> None:
     assert _meta({"TXO30400R6": entry}).registry.get("TXO30400R6").expiry is None
 
 
-# --------------------------------------------------------------------------- #
-# Futures: derived from the contract month code                                #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_a_futures_expiry_is_derived_from_its_month_code() -> None:
     """H = the 8th month letter → August 2026. TAIFEX monthly contracts settle
@@ -146,7 +136,6 @@ def test_the_third_wednesday_rule_matches_the_brokers_own_option_data() -> None:
 
     assert _third_wednesday(2026, 6) == date(2026, 6, 17)
     assert _third_wednesday(2026, 8) == date(2026, 8, 19)
-    # A month starting on a Wednesday: the third Wednesday is the 15th.
     assert _third_wednesday(2026, 4) == date(2026, 4, 15)
 
 
@@ -176,11 +165,6 @@ def test_an_equity_gets_no_expiry() -> None:
     assert _meta({"2330": entry}).registry.get("2330").expiry is None
 
 
-# --------------------------------------------------------------------------- #
-# What the recorder writes                                                     #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_the_recorder_writes_a_real_futures_expiry_not_the_epoch() -> None:
     """The observable symptom: every futures row carried the schema default."""
@@ -207,11 +191,6 @@ def test_an_unknown_symbol_still_falls_back_to_the_epoch() -> None:
     from hft_platform.recorder.mapper import _instrument_fields
 
     assert _instrument_fields("NOPE", _meta({}))["expiry"] == date(1970, 1, 1)
-
-
-# --------------------------------------------------------------------------- #
-# The capacity valve that could never open                                     #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit

@@ -14,7 +14,6 @@ OWNER_CHAT_ID = "12345"
 def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", OWNER_CHAT_ID)
-    # Reset cached owner ID so monkeypatch takes effect
     import hft_platform.bot.app as bot_app
 
     bot_app._OWNER_CHAT_ID = 0
@@ -132,7 +131,7 @@ async def test_pos_command_skips_zero_qty_positions():
 
     positions = {
         "acc:r47_maker:TXFD6": FakePosition("acc", "r47_maker", "TXFD6", 2),
-        "acc:r47_maker:TMFD6": FakePosition("acc", "r47_maker", "TMFD6", 0),  # flat
+        "acc:r47_maker:TMFD6": FakePosition("acc", "r47_maker", "TMFD6", 0),
     }
 
     with patch("hft_platform.bot.handlers._get_position_store", return_value=_make_fake_store(positions)):
@@ -185,7 +184,6 @@ async def test_pos_command_aggregate_footer_shown_for_multiple_strategies():
         await cmd_pos(update, context)
 
         reply = update.message.reply_text.call_args[0][0]
-        # Aggregate total footer should appear
         assert "合計" in reply
 
 
@@ -197,7 +195,7 @@ async def test_pos_command_unauthorized_user_rejected():
     positions = {"acc:r47_maker:TXFD6": FakePosition("acc", "r47_maker", "TXFD6", 1)}
 
     with patch("hft_platform.bot.handlers._get_position_store", return_value=_make_fake_store(positions)):
-        update = _make_update(chat_id=99999)  # not the owner
+        update = _make_update(chat_id=99999)
         context = MagicMock()
         context.args = []
 

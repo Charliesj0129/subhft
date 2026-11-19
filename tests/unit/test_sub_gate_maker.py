@@ -33,9 +33,6 @@ def _maker_result(pnl_per_fill=1.0, adverse_fill_pct=0.3, fill_rate_per_day=5.0)
     )
 
 
-# --- FillQualityGate ---
-
-
 def test_fill_quality_gate_passes():
     gate = FillQualityGate()
     sub = gate.evaluate(
@@ -59,7 +56,7 @@ def test_fill_quality_gate_fails_on_negative_pnl_per_fill():
 def test_fill_quality_gate_fails_on_high_adverse():
     gate = FillQualityGate()
     sub = gate.evaluate(
-        _maker_result(adverse_fill_pct=0.7),  # 70%
+        _maker_result(adverse_fill_pct=0.7),
         config=None,
         thresholds={"pnl_per_fill_min_pts": 0, "adverse_fill_pct_max": 50},
     )
@@ -72,9 +69,6 @@ def test_fill_quality_gate_name_and_applies_to():
     assert g.applies_to == {"maker"}
 
 
-# --- FillRateValidationGate ---
-
-
 def test_fill_rate_validation_passes_within_deviation():
     gate = FillRateValidationGate()
 
@@ -82,7 +76,7 @@ def test_fill_rate_validation_passes_within_deviation():
         expected_fill_rate_per_day = 5.0
 
     sub = gate.evaluate(
-        _maker_result(fill_rate_per_day=6.0),  # 20% higher
+        _maker_result(fill_rate_per_day=6.0),
         config=None,
         thresholds={"fill_rate_deviation_max": 0.5},
         profile=FakeProfile(),
@@ -97,7 +91,7 @@ def test_fill_rate_validation_fails_large_deviation():
         expected_fill_rate_per_day = 5.0
 
     sub = gate.evaluate(
-        _maker_result(fill_rate_per_day=20.0),  # 300% higher
+        _maker_result(fill_rate_per_day=20.0),
         config=None,
         thresholds={"fill_rate_deviation_max": 0.5},
         profile=FakeProfile(),
@@ -123,7 +117,6 @@ def test_fill_rate_validation_skips_when_no_fill_rate():
     class FakeProfile:
         expected_fill_rate_per_day = 5.0
 
-    # fill_rate_per_day = None
     result = BacktestResult(
         run_id="r1",
         config_hash="h1",

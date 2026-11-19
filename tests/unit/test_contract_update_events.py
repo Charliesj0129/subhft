@@ -49,11 +49,6 @@ def _event(action: Any = "ContractAction.FORCE", security_type: Any = "ContractU
     return SimpleNamespace(action=action, security_type=security_type, check_file_ts=ts)
 
 
-# --------------------------------------------------------------------------- #
-# Registration                                                                 #
-# --------------------------------------------------------------------------- #
-
-
 def test_contract_event_callback_is_registered_on_the_api():
     api = _Api()
     runtime = _runtime(api)
@@ -75,7 +70,7 @@ def test_contract_event_registration_reports_failure_without_raising():
 
 def test_contract_event_registration_is_skipped_when_the_sdk_lacks_the_api():
     """Older SDK builds simply do not expose it — that is not an error."""
-    runtime = _runtime(SimpleNamespace())  # no set_contract_event_callback
+    runtime = _runtime(SimpleNamespace())
     assert runtime.register_contract_event_callback() is False
 
 
@@ -122,11 +117,6 @@ def test_registration_gauge_is_labelled_per_facade():
     metrics.contract_event_callback_registered.labels.assert_called_once_with(conn_id="2")
 
 
-# --------------------------------------------------------------------------- #
-# Handler behaviour                                                            #
-# --------------------------------------------------------------------------- #
-
-
 def test_contract_update_event_records_timestamp_and_metric():
     metrics = SimpleNamespace(
         contract_update_events_total=MagicMock(),
@@ -164,7 +154,7 @@ def test_contract_update_event_handler_never_raises_into_the_sdk():
             raise RuntimeError("boom")
 
     runtime = _runtime(_Api())
-    runtime._on_contract_update_event(_Exploding())  # must not raise
+    runtime._on_contract_update_event(_Exploding())
 
 
 def test_contract_update_event_does_not_re_enter_the_sdk():
@@ -181,11 +171,6 @@ def test_contract_update_event_survives_a_missing_metrics_registry():
     runtime = _runtime(_Api(), metrics=None)
     runtime._on_contract_update_event(_event())
     assert runtime._client._contract_update_last_event_s > 0
-
-
-# --------------------------------------------------------------------------- #
-# Label bounding (cardinality discipline)                                      #
-# --------------------------------------------------------------------------- #
 
 
 def test_unknown_contract_event_values_collapse_to_other():

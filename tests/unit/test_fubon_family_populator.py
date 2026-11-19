@@ -118,8 +118,6 @@ class TestPopulator:
         assert count == 1
 
     def test_expired_contracts_dropped(self) -> None:
-        # parse_display uses end-of-month as the expiry placeholder, so
-        # TMFD6 (April) is still active on 2026-04-30 and drops on 2026-05-01.
         runtime = _FakeRuntime(
             [
                 {"code": "TMFC6"},
@@ -202,7 +200,7 @@ class TestPopulator:
             [
                 {"code": "not a valid code!!"},
                 {"code": "TMFE6"},
-                {},  # missing code
+                {},
                 {"code": None},
             ]
         )

@@ -18,11 +18,6 @@ def _wait_processed(dispatcher: TickDispatcher, expected: int, timeout: float = 
         time.sleep(0.01)
 
 
-# ------------------------------------------------------------------
-# _process_tick callback routing
-# ------------------------------------------------------------------
-
-
 class TestProcessTickRouting:
     """Verify that enqueue_tick ultimately invokes the process_tick_fn."""
 
@@ -81,11 +76,6 @@ class TestProcessTickRouting:
         assert call_count == 2
 
 
-# ------------------------------------------------------------------
-# Enqueue / dequeue behaviour
-# ------------------------------------------------------------------
-
-
 class TestEnqueueDequeue:
     def test_drop_when_queue_full(self) -> None:
         cb = MagicMock()
@@ -96,7 +86,6 @@ class TestEnqueueDequeue:
             queue_size=1,
         )
         dispatcher.start_worker()
-        # Replace queue with a pre-filled one.
         dispatcher._queue = queue.Queue(maxsize=1)
         dispatcher._queue.put_nowait(((), {}))
 
@@ -128,7 +117,6 @@ class TestEnqueueDequeue:
             quote_dispatch_async=True,
             queue_size=64,
         )
-        # Force queue to None (simulates race before worker init).
         dispatcher._running = True
         dispatcher._queue = None
         dispatcher.enqueue_tick("tick_data")
@@ -155,11 +143,6 @@ class TestEnqueueDequeue:
         dispatcher.stop_worker()
         assert received == [f"t{i}" for i in range(6)]
         assert dispatcher.processed == 6
-
-
-# ------------------------------------------------------------------
-# Worker lifecycle
-# ------------------------------------------------------------------
 
 
 class TestWorkerLifecycle:
@@ -201,7 +184,6 @@ class TestWorkerLifecycle:
             metrics=None,
             quote_dispatch_async=True,
         )
-        # Calling stop without start should not raise.
         dispatcher.stop_worker()
         dispatcher.stop_worker()
         assert dispatcher.running is False
@@ -217,11 +199,6 @@ class TestWorkerLifecycle:
         dispatcher.start_worker()
         assert dispatcher.running is False
         assert dispatcher._thread is None
-
-
-# ------------------------------------------------------------------
-# refresh_quote_routes
-# ------------------------------------------------------------------
 
 
 class TestRefreshQuoteRoutes:
@@ -255,11 +232,6 @@ class TestRefreshQuoteRoutes:
         assert "AAAA" in snapshot
 
 
-# ------------------------------------------------------------------
-# wrapped_tick_cb
-# ------------------------------------------------------------------
-
-
 class TestWrappedTickCb:
     def test_calls_callback(self) -> None:
         cb = MagicMock()
@@ -267,20 +239,13 @@ class TestWrappedTickCb:
         cb.assert_called_once_with("a", "b", k=1)
 
     def test_noop_when_callback_none(self) -> None:
-        # Should not raise.
         result = TickDispatcher.wrapped_tick_cb(None, "a")
         assert result is None
 
     def test_exception_swallowed(self) -> None:
         cb = MagicMock(side_effect=RuntimeError("oops"))
-        # Should not raise.
         TickDispatcher.wrapped_tick_cb(cb, "a")
         cb.assert_called_once()
-
-
-# ==================================================================
-# Deque transport (HFT_TICK_RING_BUFFER=1) tests
-# ==================================================================
 
 
 class TestDequeTransportRouting:
@@ -342,14 +307,12 @@ class TestDequeEnqueueDequeue:
             use_deque=True,
         )
         dispatcher.start_worker()
-        # Stuff the deque directly to simulate full state.
         assert dispatcher._deque is not None
         dispatcher._deque.append((("old1",), {}))
         dispatcher._deque.append((("old2",), {}))
 
         dispatcher.enqueue_tick("new_tick")
         assert dispatcher.dropped == 1
-        # The deque still has the original items, new one was dropped.
         assert len(dispatcher._deque) == 2
         dispatcher.stop_worker()
 

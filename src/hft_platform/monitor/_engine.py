@@ -42,7 +42,6 @@ from hft_platform.monitor._types import (
 
 logger = get_logger("monitor.engine")
 
-# Sort mode constants
 SORT_OPPORTUNITY = 0
 SORT_COMPOSITE = 1
 SORT_CONFIG = 2
@@ -70,28 +69,21 @@ class MonitorEngine:
         "_stale_buf",
         "_ref_product_type",
         "_session_cache",
-        # Phase 1: event ring buffer
         "_event_ring",
         "_event_ring_idx",
         "_event_ring_len",
-        # Phase 2: sort mode
         "_sort_mode",
-        # Phase 3: selection + detail
         "_selected_idx",
         "_detail_visible",
-        # S1: heartbeat
         "_poll_count",
         "_last_poll_ns",
-        # S3: collapsed closed symbols
         "_closed_collapsed",
-        # Production readiness: toast, help, event log, warning filter, force poll, problem log
         "_toast",
         "_show_help",
         "_show_event_log",
         "_warning_filter",
         "_force_poll",
         "_show_problem_log",
-        # Cost attribution panel
         "_cost_lines",
         "_cost_last_fetch_ns",
     )
@@ -114,30 +106,23 @@ class MonitorEngine:
         self._stale_buf: list[str] = []
         self._ref_product_type: str = "stock"
         self._session_cache: dict[str, tuple[bool, str, str]] = {}
-        # Phase 1: event ring buffer
         self._event_ring: list[MonitorEvent] = [
             MonitorEvent(symbol="", label="", fired_ns=0) for _ in range(_EVENT_RING_SIZE)
         ]
         self._event_ring_idx: int = 0
         self._event_ring_len: int = 0
-        # Phase 2: sort mode
         self._sort_mode: int = SORT_OPPORTUNITY
-        # Phase 3: selection + detail
         self._selected_idx: int = 0
         self._detail_visible: bool = False
-        # S1: heartbeat
         self._poll_count: int = 0
         self._last_poll_ns: int = 0
-        # S3: collapsed closed symbols
         self._closed_collapsed: bool = True
-        # Production readiness
         self._toast: Toast | None = None
         self._show_help: bool = False
         self._show_event_log: bool = False
         self._warning_filter: bool = False
         self._force_poll: bool = False
         self._show_problem_log: bool = False
-        # Cost attribution panel
         self._cost_lines: list[str] = []
         self._cost_last_fetch_ns: int = 0
 
@@ -154,14 +139,13 @@ class MonitorEngine:
         import os
 
         cfg = self._config
-        ds_mode = cfg.data_source  # "ch" | "shm" | "auto"
+        ds_mode = cfg.data_source
 
         if ds_mode == "shm":
             shm_name = os.getenv("HFT_MONITOR_SHM_NAME", "hft_monitor_snapshot")
             max_sym = int(os.getenv("HFT_MONITOR_SHM_MAX_SYMBOLS", "64"))
             return ShmDataSource(shm_name=shm_name, max_symbols=max_sym, symbols=symbols)
 
-        # Build CH (or Redis / Hybrid) source — always needed for "ch" and "auto"
         if cfg.source == "redis":
             from hft_platform.monitor._redis_poller import RedisPoller
 
@@ -218,7 +202,6 @@ class MonitorEngine:
         if ds_mode == "ch":
             return ch_source
 
-        # "auto" → try hybrid (SHM + CH)
         shm_name = os.getenv("HFT_MONITOR_SHM_NAME", "hft_monitor_snapshot")
         max_sym = int(os.getenv("HFT_MONITOR_SHM_MAX_SYMBOLS", "64"))
         try:
@@ -239,23 +222,19 @@ class MonitorEngine:
     def initialize(self) -> None:
         """Run initialization steps. Transitions to WARMING_UP or ERROR."""
         try:
-            # Step 1: Validate config
             self._init_step = 1
             if not self._config.symbols:
                 raise ValueError("No symbols in watchlist")
 
-            # Step 2: Initialize symbol states
             self._init_step = 2
             self._sym_states = [SymbolState(symbol=ws) for ws in self._config.symbols]
             self._sym_states_sorted = list(self._sym_states)
 
-            # Step 3: Connect data source
             self._init_step = 3
             symbols = tuple(ws.code for ws in self._config.symbols)
             self._data_source = self._create_data_source(symbols)
             self._data_source.connect()
 
-            # Step 4: Load alphas
             self._init_step = 4
             all_alpha_ids: set[str] = set()
             for ws in self._config.symbols:
@@ -272,7 +251,6 @@ class MonitorEngine:
             for sym_state in self._sym_states:
                 self._dispatcher.bind_symbol(sym_state)
 
-            # Compute stable alpha column order (once)
             seen_alpha: set[str] = set()
             for ws in self._config.symbols:
                 for aid in ws.alpha_ids:
@@ -280,13 +258,11 @@ class MonitorEngine:
                         seen_alpha.add(aid)
                         self._alpha_cols.append(aid)
 
-            # Cache reference product_type for header display
             for ws in self._config.symbols:
                 if ws.product_type in ("future", "option"):
                     self._ref_product_type = ws.product_type
                     break
 
-            # Step 5: Done
             self._init_step = 5
             self._refresh_sessions()
             self._bootstrap_all_symbols()
@@ -304,7 +280,6 @@ class MonitorEngine:
         if self._state == MonitorState.ERROR:
             return
 
-        # S1: heartbeat tracking
         self._poll_count += 1
         self._last_poll_ns = timebase.now_ns()
 
@@ -344,41 +319,33 @@ class MonitorEngine:
             logger.warning("source_disconnected", error=self._data_source.last_error)
             return
 
-        # Process each symbol's rows
         now_ns = timebase.now_ns()
         warmup = self._config.warmup_ticks
         for ss in self._sym_states:
-            # Phase 1: snapshot prev values before processing
             snapshot_prev(ss)
 
             sym_rows = rows_by_sym.get(ss.symbol.code, [])
             for row in sym_rows:
                 self._process_row(ss, row)
 
-            # Stale detection (only for active sessions)
             if ss.session_active and ss.tick_count > 0:
                 age_s = (now_ns - ss.last_update_ns) / 1e9
                 ss.is_stale = age_s > self._config.stale_threshold_s
             else:
                 ss.is_stale = False
 
-            # Phase 1: detect events + compute opportunity score
             detect_events(ss, now_ns)
             ss.opportunity_score = compute_opportunity_score(ss, warmup)
 
-            # Push to event ring if any event fired
             if ss.event_flags != EventFlag.NONE:
                 label = format_event_label(EventFlag(ss.event_flags), ss)
                 if label:
                     self._push_event(ss.symbol.code, label, now_ns)
 
-        # Phase 2: sort symbols
         self._sort_symbols()
 
-        # State transitions
         self._update_state()
 
-        # Refresh cost attribution (every 60s)
         self._maybe_refresh_cost(now_ns)
 
     def _push_event(self, symbol: str, label: str, fired_ns: int) -> None:
@@ -406,7 +373,6 @@ class MonitorEngine:
                 reverse=True,
             )
         else:
-            # Config order = original order
             self._sym_states_sorted = list(self._sym_states)
 
     def cycle_sort_mode(self) -> None:
@@ -432,7 +398,7 @@ class MonitorEngine:
                 any_ready = True
                 if ss.is_stale:
                     any_stale = True
-                    break  # both flags set — no need to continue
+                    break
             elif ss.tick_count > 0 and ss.is_stale:
                 any_stale = True
 
@@ -491,8 +457,6 @@ class MonitorEngine:
     def request_stop(self) -> None:
         self._running = False
 
-    # ---- Phase 3: Navigation ---- #
-
     def move_selection(self, delta: int) -> None:
         """Move selection index by delta, clamped to valid range."""
         n = len(self._sym_states_sorted)
@@ -508,15 +472,10 @@ class MonitorEngine:
         """Close detail panel and clear selection."""
         self._detail_visible = False
 
-    # S3: Collapsed closed symbols
     def toggle_closed_collapse(self) -> None:
         """Toggle whether closed symbols are collapsed into a summary row."""
         self._closed_collapsed = not self._closed_collapsed
         self._set_toast("Closed: hidden" if self._closed_collapsed else "Closed: shown", "cyan")
-
-    # ------------------------------------------------------------------ #
-    # Production readiness: warnings, polling, reconnect, toggles          #
-    # ------------------------------------------------------------------ #
 
     def clear_warnings(self) -> None:
         now = timebase.now_ns()
@@ -564,11 +523,7 @@ class MonitorEngine:
     def toggle_problem_log(self) -> None:
         self._show_problem_log = not self._show_problem_log
 
-    # ------------------------------------------------------------------ #
-    # Cost attribution refresh                                             #
-    # ------------------------------------------------------------------ #
-
-    _COST_REFRESH_NS: int = 60_000_000_000  # 60s
+    _COST_REFRESH_NS: int = 60_000_000_000
 
     def _maybe_refresh_cost(self, now_ns: int) -> None:
         """Refresh cost attribution from ClickHouse every 60s."""
@@ -592,32 +547,24 @@ class MonitorEngine:
         ds = self._data_source
         if ds is None:
             return None
-        # CHDataSource wraps a CHPoller which owns the client
         if isinstance(ds, CHDataSource):
             poller = getattr(ds, "_poller", None)
             return getattr(poller, "_client", None)
-        # HybridDataSource has a _ch_source
         ch_src = getattr(ds, "_ch_source", None)
         if ch_src is not None:
             poller = getattr(ch_src, "_poller", None)
             return getattr(poller, "_client", None)
         return None
 
-    # ------------------------------------------------------------------ #
-    # Rendering helpers                                                    #
-    # ------------------------------------------------------------------ #
-
     def get_header_context(self) -> HeaderContext:
         """Build data-only header context for rendering."""
         now = self._last_now or dt.datetime.now(_TZ_TAIPEI)
         time_str = now.strftime("%Y-%m-%d %H:%M:%S TST")
 
-        # Session display (use cached ref_product_type)
         session_display = ""
         if self._sym_states:
             _, _, session_display = get_session_info(self._ref_product_type, now)
 
-        # Source status — label reflects actual data source type
         ds = self._data_source
         if isinstance(ds, RedisHybridSource):
             source_label = ds.mode_label
@@ -631,7 +578,6 @@ class MonitorEngine:
             source_label = "CH"
 
         if ds and ds.connected:
-            # Check heartbeat staleness via protocol property
             hb_stale = ds.heartbeat_stale
             if hb_stale:
                 ch_status = f"{source_label}: STALE (no heartbeat)"
@@ -643,14 +589,12 @@ class MonitorEngine:
         else:
             ch_status = f"{source_label}: --"
 
-        # Stale symbols (reuse pre-allocated list)
         self._stale_buf.clear()
         for ss in self._sym_states:
             if ss.is_stale:
                 self._stale_buf.append(ss.symbol.code)
         stale = list(self._stale_buf)
 
-        # Extra info
         extra = ""
         if self._state == MonitorState.INITIALIZING:
             extra = f"Step {self._init_step}/5"
@@ -664,17 +608,13 @@ class MonitorEngine:
         elif self._state == MonitorState.ERROR:
             extra = self._error_msg[:80]
 
-        # Event ticker (Phase 1)
         event_ticker = self._build_event_ticker()
 
-        # S1: heartbeat age
         now_ns = timebase.now_ns()
         poll_age_s = (now_ns - self._last_poll_ns) / 1e9 if self._last_poll_ns > 0 else 0.0
 
-        # S3: count closed symbols
         n_closed = sum(1 for ss in self._sym_states if ss.is_closed)
 
-        # Bad-data summary for header
         total_bad = sum(ss.invalid_row_count for ss in self._sym_states)
         total_rows = sum(ss.tick_count + ss.invalid_row_count for ss in self._sym_states)
         any_active_now = any(ss.session_active for ss in self._sym_states)
@@ -759,7 +699,6 @@ class MonitorEngine:
         if now is None:
             now = dt.datetime.now(_TZ_TAIPEI)
 
-        # Reuse pre-allocated session cache (typically 2-3 types)
         self._session_cache.clear()
         cache = self._session_cache
         any_active = False
@@ -877,7 +816,6 @@ class MonitorEngine:
         ss.last_invalid_reason = ""
         ss.max_severity = Severity.INFO
         ss.is_stale = False
-        # Phase 1: reset event tracking fields
         ss.prev_composite = 0.0
         ss.prev_agree_direction = 0
         ss.prev_spread_bps = 0.0

@@ -20,7 +20,6 @@ async def test_wal_latency():
     wal = WALWriter(wal_dir)
     data = [{"ts": time.time_ns(), "val": i} for i in range(100)]
 
-    # Measure time to fire-and-forget 100 writes
     start = time.perf_counter()
     tasks = []
     for i in range(100):
@@ -33,7 +32,6 @@ async def test_wal_latency():
     total_duration = time.perf_counter() - start
     print(f"Total time (including threads): {total_duration * 1000:.2f} ms")
 
-    # Verify files
     files = os.listdir(wal_dir)
     print(f"Files created: {len(files)} (Expected 100)")
     assert len(files) == 100
@@ -65,7 +63,7 @@ async def test_bus_throughput():
 
     print(f"Published {N} events in {duration * 1000:.2f} ms")
     print(f"Throughput: {N / duration:.0f} events/sec")
-    assert received_count == N + 1  # + STOP
+    assert received_count == N + 1
 
 
 if __name__ == "__main__":

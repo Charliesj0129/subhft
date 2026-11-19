@@ -30,7 +30,7 @@ from hft_platform.order.adapter import OrderAdapter
 from hft_platform.order.broker_stall import BrokerStallTracker
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
 
-S = 1_000_000_000  # ns per second
+S = 1_000_000_000
 
 
 class _Clock:
@@ -48,7 +48,7 @@ def _intent(intent_type: IntentType = IntentType.NEW, side: Side = Side.BUY, str
         symbol="TMFL6",
         intent_type=intent_type,
         side=side,
-        price=230_000_000,  # 23000.0 x10000
+        price=230_000_000,
         qty=1,
         tif=TIF.LIMIT,
     )
@@ -58,11 +58,6 @@ def _guard(silence_ns: list[int], **thresholds: int) -> StormGuard:
     guard = StormGuard(RiskThresholds(**thresholds))
     guard.set_broker_stall_provider(lambda: silence_ns[0])
     return guard
-
-
-# --------------------------------------------------------------------------- #
-# BrokerStallTracker                                                           #
-# --------------------------------------------------------------------------- #
 
 
 def test_silence_is_zero_with_nothing_outstanding() -> None:
@@ -96,8 +91,6 @@ def test_calls_queued_behind_a_stuck_one_count_from_the_oldest() -> None:
 
     assert tracker.silence_ns() == 3 * S
     tracker.answered(stuck)
-    # The later call was sent before that answer arrived: overtaken, so the path
-    # is moving and its own wait is not silence.
     assert tracker.silence_ns() == 0
 
 
@@ -122,11 +115,11 @@ def test_a_call_sent_after_the_last_answer_counts_even_with_an_older_one_lost() 
     clock = _Clock()
     tracker = BrokerStallTracker(clock=clock)
 
-    tracker.sent()  # lost
+    tracker.sent()
     clock.now += S // 10
     tracker.answered(tracker.sent())
     clock.now += S
-    tracker.sent()  # waiting, sent after the answer
+    tracker.sent()
     clock.now += 2 * S
 
     assert tracker.silence_ns() == 2 * S
@@ -142,7 +135,6 @@ def test_an_sdk_exception_stops_the_wait_but_is_not_an_answer() -> None:
     clock.now += 2 * S
     tracker.abandoned(first)
 
-    # ``second`` was sent before nothing answered: it still waits, from its own send.
     assert tracker.silence_ns() == 2 * S
     tracker.abandoned(second)
     assert tracker.silence_ns() == 0
@@ -160,21 +152,18 @@ def test_each_answer_reports_the_silence_it_ended() -> None:
     clock.now += 4 * S
     tracker.answered(stuck)
     clock.now += S // 10
-    tracker.answered(queued)  # served after the stuck one: waited only since it came back
+    tracker.answered(queued)
 
     assert episodes == [5 * S, S // 10]
 
 
 def test_a_call_queued_behind_a_stuck_one_counts_once_that_one_is_answered() -> None:
-    # Review of f54e334c7: B, sent after the stuck A, was ignored once A was
-    # answered (it was sent before A's answer arrived), so a stall on B was
-    # invisible and new orders queued behind it.
     clock = _Clock()
     tracker = BrokerStallTracker(clock=clock)
 
     stuck = tracker.sent()
     clock.now += 3 * S
-    tracker.sent()  # queued behind ``stuck`` (e.g. an exempt cancel)
+    tracker.sent()
     clock.now += 16 * S
     tracker.answered(stuck)
 
@@ -184,11 +173,10 @@ def test_a_call_queued_behind_a_stuck_one_counts_once_that_one_is_answered() -> 
 
 
 def test_the_age_bound_applies_without_a_new_send() -> None:
-    # Back-pressure stops new sends, so the bound cannot depend on one.
     clock = _Clock()
     tracker = BrokerStallTracker(clock=clock, max_age_ns=60 * S)
 
-    tracker.sent()  # its completion is never delivered
+    tracker.sent()
     clock.now += 59 * S
     assert tracker.silence_ns() == 59 * S
     clock.now += 2 * S
@@ -203,7 +191,7 @@ def test_a_late_answer_for_an_evicted_call_still_moves_the_last_answer() -> None
 
     evicted = tracker.sent()
     clock.now += 61 * S
-    waiting = tracker.sent()  # evicts ``evicted``
+    waiting = tracker.sent()
     clock.now += 5 * S
     tracker.answered(evicted)
 
@@ -233,11 +221,6 @@ def test_the_entry_count_is_bounded() -> None:
         tracker.sent()
 
     assert tracker.inflight() == 4
-
-
-# --------------------------------------------------------------------------- #
-# StormGuard gate                                                              #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize("intent_type", [IntentType.NEW, IntentType.AMEND])
@@ -274,7 +257,7 @@ def test_backpressure_never_holds_a_cancel_or_flatten(intent_type) -> None:
 
 def test_backpressure_lets_a_position_reducing_order_through() -> None:
     guard = _guard([5 * S])
-    guard.set_position_provider(lambda symbol, strategy_id: 1)  # long one lot
+    guard.set_position_provider(lambda symbol, strategy_id: 1)
 
     assert guard.validate(_intent(side=Side.SELL))[0] is True
     assert guard.validate(_intent(side=Side.BUY)) == (False, "BROKER_BACKPRESSURE")
@@ -357,11 +340,6 @@ def test_the_defaults_are_one_second_and_ten_seconds() -> None:
     assert (t.broker_backpressure_silence_us, t.broker_stall_storm_us) == (1_000_000, 10_000_000)
 
 
-# --------------------------------------------------------------------------- #
-# Risk config applies at boot                                                  #
-# --------------------------------------------------------------------------- #
-
-
 def _risk_engine(tmp_path, yaml_text: str, storm_guard: StormGuard):
     from hft_platform.risk.engine import RiskEngine
 
@@ -397,8 +375,6 @@ def test_a_risk_config_without_stormguard_keys_changes_nothing(tmp_path) -> None
 
 
 def test_a_bad_risk_config_value_changes_no_threshold_and_keeps_env(tmp_path, monkeypatch) -> None:
-    # Review of f54e334c7: a bad key aborted reload_thresholds after earlier
-    # keys were set and before env was re-applied, so YAML beat env.
     monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "123456")
     guard = StormGuard()
     before = guard.thresholds.latency_storm_us
@@ -411,11 +387,6 @@ def test_a_bad_risk_config_value_changes_no_threshold_and_keeps_env(tmp_path, mo
 
     assert before == 123_456
     assert guard.thresholds.latency_storm_us == 123_456
-
-
-# --------------------------------------------------------------------------- #
-# OrderAdapter                                                                 #
-# --------------------------------------------------------------------------- #
 
 
 def _adapter(tmp_path) -> OrderAdapter:
@@ -432,7 +403,7 @@ def _cmd(intent: OrderIntent, cmd_id: int = 1) -> OrderCommand:
     return OrderCommand(
         cmd_id=cmd_id,
         intent=intent,
-        deadline_ns=time.monotonic_ns() + 5 * S,  # _api_worker compares against monotonic
+        deadline_ns=time.monotonic_ns() + 5 * S,
         storm_guard_state=StormGuardState.NORMAL,
         created_ns=timebase.now_ns(),
     )
@@ -460,8 +431,6 @@ async def test_a_timed_out_call_keeps_counting_until_its_late_answer(tmp_path) -
         release.wait(5)
         return "trade"
 
-    # 20 ms: the shortest wait that still lets the worker thread start; the
-    # call is meant to outlive it.
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(
             adapter._run_blocking_call(_stuck, _track_broker=True, _on_late=lambda kind, value: late.set()),
@@ -480,7 +449,6 @@ async def test_a_timed_out_call_keeps_counting_until_its_late_answer(tmp_path) -
 
 
 def test_reading_the_silence_writes_no_metric(tmp_path) -> None:
-    # StormGuard reads it per NEW/AMEND intent; the gauge must not be set there.
     adapter = _adapter(tmp_path)
     adapter.metrics = MagicMock()
 
@@ -527,8 +495,8 @@ async def test_the_worker_refuses_a_queued_new_while_the_broker_is_silent(tmp_pa
     adapter = _adapter(tmp_path)
     adapter.running = True
     adapter.set_storm_guard(StormGuard())
-    adapter._broker_stall.sent()  # a call the broker has not answered
-    adapter._broker_stall._outstanding[0] -= 2 * S  # ... for 2 s
+    adapter._broker_stall.sent()
+    adapter._broker_stall._outstanding[0] -= 2 * S
     sink: asyncio.Queue = asyncio.Queue()
     adapter.set_rejection_sink(sink)
     dispatched: list[OrderCommand] = []
@@ -553,10 +521,10 @@ async def test_the_worker_refuses_a_queued_new_while_the_broker_is_silent(tmp_pa
 
     assert dispatched == []
     assert feedback.reason_code == "dispatch_broker_backpressure"
-    assert feedback.was_approved is False  # nothing was sent: the slot is free to reuse
+    assert feedback.was_approved is False
     after = adapter.metrics.order_local_reject_total.labels(reason="broker_backpressure")._value.get()
     assert after - before == 1
-    assert len(adapter._dlq._buffer) == dlq_before  # a refusal, not a dead letter
+    assert len(adapter._dlq._buffer) == dlq_before
 
 
 @pytest.mark.asyncio
@@ -619,7 +587,7 @@ async def _until(predicate, timeout_s: float = 5.0) -> None:
 @pytest.mark.parametrize("op", ["place_order", "cancel_order", "update_order"])
 async def test_call_api_tracks_order_calls_past_their_timeout(tmp_path, op) -> None:
     adapter = _adapter(tmp_path)
-    adapter._api_timeout_s = 0.02  # the call below is meant to outlive it
+    adapter._api_timeout_s = 0.02
     release = threading.Event()
 
     def _stuck() -> str:

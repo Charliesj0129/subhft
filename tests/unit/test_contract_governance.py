@@ -18,7 +18,6 @@ def test_write_contract_cache_atomic(tmp_path: Path):
     contracts = [{"code": "2330", "exchange": "TSE"}]
     write_contract_cache(contracts, str(out))
 
-    # No .tmp file should remain
     tmp = tmp_path / "contracts.json.tmp"
     assert not tmp.exists(), ".tmp file must be removed after atomic rename"
 
@@ -32,7 +31,6 @@ def test_write_contract_cache_atomic(tmp_path: Path):
 def test_write_contract_cache_version_monotonic(tmp_path: Path):
     """Seeding with cache_version=5 should produce version 6 on next write."""
     out = tmp_path / "contracts.json"
-    # Seed existing file with version 5
     out.write_text(json.dumps({"cache_version": 5, "contracts": []}))
 
     write_contract_cache([{"code": "2454"}], str(out))
@@ -60,7 +58,7 @@ def test_preflight_stale_cache_logs_warning(tmp_path: Path):
         client._contract_cache_path = str(tmp_path / "contracts.json")
         client.symbols = []
         client.MAX_SUBSCRIPTIONS = 200
-        client.api = MagicMock()  # non-None api so _get_contract would be called
+        client.api = MagicMock()
         runtime = client._contracts()
 
         with patch.object(type(runtime), "is_contract_cache_stale", return_value=True):
@@ -118,11 +116,9 @@ def test_preflight_skipped_when_env_off(tmp_path: Path):
         client.MAX_SUBSCRIPTIONS = 200
         client.subscribed_count = 0
         client._last_quote_data_ts = 0
-        client.api = None  # triggers early return before preflight injection
+        client.api = None
 
-        # With api=None, subscribe_basket returns early — so test env gate directly
         with patch.dict(os.environ, {"HFT_CONTRACT_PREFLIGHT": "0"}):
-            # Simulate the guard check in subscribe_basket inline
             if os.getenv("HFT_CONTRACT_PREFLIGHT", "1") == "1":
                 client._preflight_contracts()
 
@@ -134,7 +130,6 @@ def test_refresh_diff_logged(tmp_path: Path):
     import threading
 
     cache_path = tmp_path / "contracts.json"
-    # Seed with 2 old contracts
     cache_path.write_text(json.dumps({"cache_version": 1, "contracts": [{"code": "2330"}, {"code": "2454"}]}))
 
     from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -150,20 +145,16 @@ def test_refresh_diff_logged(tmp_path: Path):
         client._contract_refresh_last_diff = {}
         client._contract_refresh_resubscribe_policy = "none"
         client.symbols = []
-        # Provide required threading lock
         client._contract_refresh_lock = threading.Lock()
 
-        # Set up Contracts on mock api so the inner try blocks don't fail
         client.api.Contracts.Stocks.TSE = []
         client.api.Contracts.Stocks.OTC = []
         client.api.Contracts.Futures.keys.return_value = []
         client.api.Contracts.Options.keys.return_value = []
 
-        # Patch write_contract_cache to a successful no-op so diff logging always fires
         def _fake_write_cc(contracts, path, **_kwargs):
             pass
 
-        # Simulate _ensure_contracts doing nothing
         with patch.object(client, "_ensure_contracts"):
             with patch.object(client, "_load_config"):
                 with patch("hft_platform.config.symbols.write_contract_cache", side_effect=_fake_write_cc):

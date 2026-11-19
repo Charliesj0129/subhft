@@ -34,46 +34,33 @@ from structlog import get_logger
 
 logger = get_logger("risk.drift_burst")
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
 _EPS: float = 1e-15
 _DEFAULT_WINDOW_SIZE: int = 100
-_DEFAULT_BURST_THRESHOLD: float = 3.0  # ~99.7% confidence under H0 (std normal)
+_DEFAULT_BURST_THRESHOLD: float = 3.0
 _DEFAULT_COOLDOWN_TICKS: int = 50
-_DEFAULT_COOLDOWN_NS: int = 5_000_000_000  # 5 seconds — production default
-_DEFAULT_MIN_BPV: float = 1e-10  # minimum BPV floor to prevent T-stat explosion
-_MAX_WINDOW: int = 2048  # hard cap on window size
-_MU1_INV_SQ: float = math.pi / 2.0  # μ₁⁻² scaling for BPV (Christensen et al.)
-
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
+_DEFAULT_COOLDOWN_NS: int = 5_000_000_000
+_DEFAULT_MIN_BPV: float = 1e-10
+_MAX_WINDOW: int = 2048
+_MU1_INV_SQ: float = math.pi / 2.0
 
 
 class BurstEvent(NamedTuple):
     """Immutable burst detection event."""
 
-    ts: int  # timestamp nanoseconds
-    direction: int  # +1 buy burst, -1 sell burst
-    magnitude: float  # |T(t)| statistic value
-    toxicity_type: str  # "informed" or "liquidity"
-    t_statistic: float  # raw T statistic (signed)
+    ts: int
+    direction: int
+    magnitude: float
+    toxicity_type: str
+    t_statistic: float
 
 
 class ToxicityResult(NamedTuple):
     """Result from DriftBurstDetector.evaluate()."""
 
     burst_detected: bool
-    toxicity_score: float  # [0, 1]
+    toxicity_score: float
     burst_event: BurstEvent | None
-
-
-# ---------------------------------------------------------------------------
-# DriftBurstDetector
-# ---------------------------------------------------------------------------
 
 
 class DriftBurstDetector:
@@ -118,7 +105,7 @@ class DriftBurstDetector:
         cooldown_ns: int = _DEFAULT_COOLDOWN_NS,
         min_bpv: float = _DEFAULT_MIN_BPV,
         skip_zero_returns: bool = True,
-        stale_reset_ns: int = 300_000_000_000,  # 5 min gap → reset (session boundary, Bug 20)
+        stale_reset_ns: int = 300_000_000_000,
     ) -> None:
         if window_size < 10:
             raise ValueError(f"window_size must be >= 10, got {window_size}")
@@ -134,7 +121,6 @@ class DriftBurstDetector:
         self._min_bpv: float = max(0.0, min_bpv)
         self._skip_zero_returns: bool = skip_zero_returns
 
-        # Pre-allocated ring buffers (Allocator Law)
         self._returns: np.ndarray = np.zeros(window_size, dtype=np.float64)
         self._abs_returns: np.ndarray = np.zeros(window_size, dtype=np.float64)
         self._head: int = 0
@@ -143,7 +129,7 @@ class DriftBurstDetector:
         self._last_mid_x2: int = 0
         self._last_update_ns: int = 0
         self._stale_reset_ns: int = max(0, int(stale_reset_ns))
-        self._ticks_since_burst: int = self._cooldown_ticks + 1  # start not in cooldown
+        self._ticks_since_burst: int = self._cooldown_ticks + 1
         self._last_burst_ts: int = 0
         self._in_cooldown: bool = False
         self._t_statistic: float = 0.0
@@ -181,22 +167,11 @@ class DriftBurstDetector:
         """
         burst_event: BurstEvent | None = None
 
-        # Symbol change → the accumulated window belongs to a different
-        # instrument and is meaningless here. Production fed this detector
-        # whichever symbol happened to iterate first out of a TTL-evicting
-        # dict, so the window silently interleaved contracts whose spreads
-        # differed by more than 10x — 405 "bursts" in 24 h, none attributable.
         if symbol and symbol != self._symbol:
             if self._symbol:
                 self.reset()
             self._symbol = symbol
 
-        # Bug 20 (2026-04-17): Session-boundary stale-state guard. A long gap
-        # (e.g. 13:45 day close → 15:00 night open = 75 min) leaves _last_mid_x2
-        # stale. First post-gap tick produces a log-return that dwarfs the
-        # intraday diffusion returns still in the ring buffer, driving |T| to
-        # saturation and toxicity → 1.0 (false HALT). If ts indicates a gap
-        # larger than _stale_reset_ns since the last update, reset the detector.
         if (
             self._stale_reset_ns > 0
             and ts > 0
@@ -207,7 +182,6 @@ class DriftBurstDetector:
         if ts > 0:
             self._last_update_ns = ts
 
-        # Track cooldown: timestamp-based if cooldown_ns > 0, else tick-based
         self._ticks_since_burst += 1
         if self._in_cooldown:
             if self._cooldown_ns > 0 and ts > 0:
@@ -216,7 +190,6 @@ class DriftBurstDetector:
             elif self._ticks_since_burst > self._cooldown_ticks:
                 self._in_cooldown = False
 
-        # Compute log-return
         if self._last_mid_x2 <= 0 or mid_price_x2 <= 0:
             self._last_mid_x2 = mid_price_x2
             return ToxicityResult(
@@ -225,13 +198,9 @@ class DriftBurstDetector:
                 burst_event=None,
             )
 
-        # Log-return (float is acceptable: non-accounting signal metric)
         log_ret = math.log(mid_price_x2 / self._last_mid_x2)
         self._last_mid_x2 = mid_price_x2
 
-        # Fix 2: Skip zero returns — on sub-ms tick data, only actual price
-        # moves carry information. Zero returns inflate the ring buffer with
-        # uninformative entries that drive BPV to zero.
         if self._skip_zero_returns and log_ret == 0.0:
             return ToxicityResult(
                 burst_detected=False,
@@ -239,7 +208,6 @@ class DriftBurstDetector:
                 burst_event=None,
             )
 
-        # Update ring buffer
         old_idx = self._head
         old_return = self._returns[old_idx]
 
@@ -250,7 +218,6 @@ class DriftBurstDetector:
         if self._count < self._window_size:
             self._count += 1
             self._drift_sum += log_ret
-            # Not enough data for reliable test
             if self._count < self._window_size:
                 self._toxicity_score = 0.0
                 return ToxicityResult(
@@ -259,19 +226,13 @@ class DriftBurstDetector:
                     burst_event=None,
                 )
         else:
-            # Incremental drift update
             self._drift_sum += log_ret - old_return
 
-        # Compute drift estimate (mean return over window)
         n = self._count
         drift_estimate = self._drift_sum / n
 
-        # Compute bipower variation (BPV) — jump-robust volatility
-        # BPV = (pi/2) * (1/(n-1)) * sum(|r_i| * |r_{i-1}|)
         bpv = self._compute_bpv()
 
-        # Fix 1: Minimum BPV floor — when BPV is near zero (insufficient
-        # volatility data), T-statistic explodes. Skip burst detection.
         if bpv < self._min_bpv:
             self._t_statistic = 0.0
             self._toxicity_score = 0.0
@@ -281,18 +242,12 @@ class DriftBurstDetector:
                 burst_event=None,
             )
 
-        # T-statistic: drift / sqrt(bpv / n)
         vol_estimate = math.sqrt(bpv / n)
         self._t_statistic = drift_estimate / max(vol_estimate, _EPS)
 
-        # Convert |T| to toxicity score in [0, 1] via sigmoid mapping:
-        #   toxicity = 2 / (1 + exp(-|T| / scale)) - 1
-        # where scale = burst_threshold.
-        # Properties: T=0 → 0, T=threshold → ~0.46, T→∞ → 1.0
         abs_t = abs(self._t_statistic)
         self._toxicity_score = 2.0 / (1.0 + math.exp(-abs_t / self._burst_threshold)) - 1.0
 
-        # Burst detection
         burst_detected = False
         if abs_t > self._burst_threshold and not self._in_cooldown:
             burst_detected = True
@@ -302,7 +257,6 @@ class DriftBurstDetector:
 
             direction = 1 if self._t_statistic > 0 else -1
 
-            # Classify burst toxicity using concurrent LOB state
             toxicity_type = self._classify_toxicity(
                 direction=direction,
                 spread_scaled=spread_scaled,
@@ -348,10 +302,8 @@ class DriftBurstDetector:
         if n < 2:
             return _EPS
 
-        # Build ordered view from ring buffer
-        # Instead of copying, use modular indexing
         total = 0.0
-        start = self._head  # head points to next write = oldest
+        start = self._head
         for i in range(1, n):
             idx_curr = (start + i) % self._window_size
             idx_prev = (start + i - 1) % self._window_size
@@ -379,15 +331,8 @@ class DriftBurstDetector:
         Returns:
             "informed" or "liquidity".
         """
-        # Imbalance alignment: positive imbalance = more bid depth
-        # Buy burst + positive imbalance = informed sellers consumed asks,
-        #   bids remain => buy-side pressure with depth support = informed
-        # We check if imbalance direction OPPOSES burst direction
-        # (counter-party is being swept)
         imbalance_opposes = (direction > 0 and imbalance < -0.2) or (direction < 0 and imbalance > 0.2)
 
-        # Wide spread suggests market makers pulling out (toxicity)
-        # We use a simple heuristic: spread > 0 and imbalance opposing
         if imbalance_opposes and spread_scaled > 0:
             return "informed"
 

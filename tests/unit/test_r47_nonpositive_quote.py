@@ -58,9 +58,6 @@ class _CapturingContext(StrategyContext):
 
 @pytest.fixture
 def strat() -> R47MakerStrategy:
-    # spread_threshold_pts=1 so the wide book below clears the spread gate;
-    # the production config uses a threshold tuned for TMF, and the point of
-    # this test is the arithmetic downstream of the gate, not the gate.
     return R47MakerStrategy(strategy_id="R47", spread_threshold_pts=1, quote_cooldown_ms=0)
 
 
@@ -68,10 +65,6 @@ class TestNonPositiveQuoteIsBlocked:
     def test_a_book_whose_spread_exceeds_its_mid_produces_no_intent(self, strat: R47MakerStrategy) -> None:
         ctx = _CapturingContext()
 
-        # 0.1 bid / 5.0 ask: the spread (4.9 pts) is wider than the mid
-        # (2.55 pts), so the half-spread widening alone eats the whole mid, and
-        # the imbalance adjustment carries the bid the rest of the way past
-        # zero. On origin/main this reaches _intent_factory as price=-10000.
         strat.handle_event(ctx, _stats("TXO40900U6", 1_000, 50_000, imbalance=-0.5))
 
         new_intents = [i for i in ctx.intents if i[1] == int(IntentType.NEW)]
@@ -82,7 +75,6 @@ class TestNonPositiveQuoteIsBlocked:
         """The guard must not silence the instrument the strategy exists for."""
         ctx = _CapturingContext()
 
-        # TMF around 20,000 pts with a 2-pt spread.
         strat.handle_event(ctx, _stats("TMFI6", 200_000_000, 200_020_000))
 
         prices = [i[2] for i in ctx.intents if i[1] == int(IntentType.NEW)]

@@ -83,7 +83,6 @@ def _mk_events(ts_base_ns=1_000_000_000):
             trade_volume=0,
             is_trade=False,
         ),
-        # Trade at 99 (would fill a BUY@100) — 100 ms after placement
         TickData(
             exch_ts=ts_base_ns + 100_000_000,
             bid_price=100 * scale,
@@ -94,7 +93,6 @@ def _mk_events(ts_base_ns=1_000_000_000):
             trade_volume=5,
             is_trade=True,
         ),
-        # Another trade at 99 — 1000 ms after placement
         TickData(
             exch_ts=ts_base_ns + 1_000_000_000,
             bid_price=100 * scale,
@@ -131,14 +129,7 @@ class TestLatencyProfileInjection:
         )
         strat = _BuyOnceStrategy()
         fills, _, _, _ = engine._run_day(strat, _mk_events())
-        # Only the later trade (t=+1000ms) should fill; the +100ms trade is
-        # lost because the order is in flight.
         assert len(fills) == 1
-        # The fill ts should correspond to the LATER trade.
-        # (Engine doesn't record timestamp in fill dict; implicit check via
-        # count: with no latency this test would also count 1 because the
-        # strategy only posts once. So we verify via an explicit "lost trade"
-        # counter or a gap by using 2 overlapping orders in another test.)
 
     def test_place_latency_400ms_blocks_100ms_trade(self):
         """Direct latency test: place_ns=400ms means +100ms trade should NOT
@@ -170,7 +161,7 @@ class TestLatencyProfileInjection:
                 is_trade=False,
             ),
             TickData(
-                exch_ts=100_000_000,  # +100ms, still in-flight (place_ns=400ms)
+                exch_ts=100_000_000,
                 bid_price=100 * scale,
                 ask_price=102 * scale,
                 bid_qty=10,
@@ -221,7 +212,6 @@ class TestLatencyProfileInjection:
                 trade_volume=0,
                 is_trade=False,
             ),
-            # bidask tick 2 → strategy issues CancelQuote
             TickData(
                 exch_ts=100_000_000,
                 bid_price=100 * scale,
@@ -232,7 +222,6 @@ class TestLatencyProfileInjection:
                 trade_volume=0,
                 is_trade=False,
             ),
-            # Trade at +300ms, cancel_ns=500ms so cancel not yet effective
             TickData(
                 exch_ts=300_000_000,
                 bid_price=100 * scale,

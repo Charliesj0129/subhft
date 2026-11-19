@@ -33,10 +33,6 @@ from hft_platform.alpha.pool import (
     recompute_pool_correlations,
 )
 
-# ---------------------------------------------------------------------------
-# AlphaPool (lines 27-30, 32, 36-37, 45-47, 51-52, 55-56)
-# ---------------------------------------------------------------------------
-
 
 def test_alpha_pool_init_with_ids():
     pool = AlphaPool(alpha_ids=["a", "b"])
@@ -59,11 +55,6 @@ def test_alpha_pool_set_weights():
     assert abs(pool.get_weights()["b"] - 0.7) < 1e-9
 
 
-# ---------------------------------------------------------------------------
-# PoolOptimizationResult.to_dict (line 68)
-# ---------------------------------------------------------------------------
-
-
 def test_pool_optimization_result_to_dict():
     result = PoolOptimizationResult(
         method="equal_weight",
@@ -78,11 +69,6 @@ def test_pool_optimization_result_to_dict():
     assert d["returns_used"] is False
 
 
-# ---------------------------------------------------------------------------
-# compute_correlation_payload: single sample (lines 103-105)
-# ---------------------------------------------------------------------------
-
-
 def test_compute_correlation_payload_single_sample():
     signals = {"a": np.array([1.0]), "b": np.array([2.0])}
     result = compute_correlation_payload(signals=signals)
@@ -94,11 +80,6 @@ def test_compute_correlation_payload_empty():
     result = compute_correlation_payload(signals={})
     assert result["alpha_ids"] == []
     assert result["sample_length"] == 0
-
-
-# ---------------------------------------------------------------------------
-# flag_redundant_pairs: non-square matrix, spearman metric (line 137)
-# ---------------------------------------------------------------------------
 
 
 def test_flag_redundant_pairs_non_square_matrix():
@@ -115,11 +96,6 @@ def test_flag_redundant_pairs_spearman():
     result = flag_redundant_pairs(payload, metric="spearman", threshold=0.7)
     assert len(result) == 1
     assert result[0]["metric"] == "spearman"
-
-
-# ---------------------------------------------------------------------------
-# optimize_pool_weights: different methods (lines 167, 177, 216, 229, 243)
-# ---------------------------------------------------------------------------
 
 
 def test_optimize_pool_weights_empty_signals(tmp_path: Path):
@@ -197,11 +173,6 @@ def test_optimize_pool_weights_ridge(tmp_path: Path):
     assert len(result.weights) == 2
 
 
-# ---------------------------------------------------------------------------
-# marginal_contribution_test (lines 289, 318, 321, 337, 350)
-# ---------------------------------------------------------------------------
-
-
 def test_marginal_contribution_test_no_existing():
     result = marginal_contribution_test(
         new_signal=np.array([1.0, 2.0, 3.0]),
@@ -235,11 +206,6 @@ def test_marginal_contribution_test_with_data():
     assert isinstance(result["passed"], bool)
 
 
-# ---------------------------------------------------------------------------
-# _normalize_weights edge cases (lines 429, 431, 434)
-# ---------------------------------------------------------------------------
-
-
 def test_normalize_weights_all_zeros():
     w = np.array([0.0, 0.0, 0.0])
     result = _normalize_weights(w)
@@ -252,17 +218,12 @@ def test_normalize_weights_empty():
     assert result.size == 0
 
 
-# ---------------------------------------------------------------------------
-# _pool_metric edge cases (lines 453, 464)
-# ---------------------------------------------------------------------------
-
-
 def test_pool_metric_no_returns_single_alpha():
     data = np.array([[1.0, 2.0, 3.0]])
     weights = np.array([1.0])
     metric, name = _pool_metric(data, weights, None)
     assert name == "diversification_score"
-    assert abs(metric) < 1e-9  # single alpha => 0
+    assert abs(metric) < 1e-9
 
 
 def test_pool_metric_with_returns_short():
@@ -271,12 +232,7 @@ def test_pool_metric_with_returns_short():
     returns = np.array([0.01, 0.02])
     metric, name = _pool_metric(data, weights, returns)
     assert name == "pool_sharpe"
-    assert abs(metric) < 1e-9  # m < 3
-
-
-# ---------------------------------------------------------------------------
-# _relative_uplift (lines 375-379, 381-387)
-# ---------------------------------------------------------------------------
+    assert abs(metric) < 1e-9
 
 
 def test_relative_uplift_zero_baseline_positive_candidate():
@@ -294,11 +250,6 @@ def test_relative_uplift_normal():
     assert abs(result - 0.5) < 1e-9
 
 
-# ---------------------------------------------------------------------------
-# _coerce_returns (lines 337, 350)
-# ---------------------------------------------------------------------------
-
-
 def test_coerce_returns_none():
     assert _coerce_returns(None) is None
 
@@ -311,11 +262,6 @@ def test_coerce_returns_valid():
     result = _coerce_returns([1.0, 2.0, 3.0])
     assert result is not None
     assert result.shape == (3,)
-
-
-# ---------------------------------------------------------------------------
-# _ic_weighted fallback cases (lines 375-379)
-# ---------------------------------------------------------------------------
 
 
 def test_ic_weighted_no_returns():
@@ -338,11 +284,6 @@ def test_ic_weighted_all_zero_ic():
     assert np.allclose(result, 0.5)
 
 
-# ---------------------------------------------------------------------------
-# _mean_variance with returns (line 396, 400, 408)
-# ---------------------------------------------------------------------------
-
-
 def test_mean_variance_with_short_returns(recwarn):
     data = np.array([[1.0], [2.0]])
     returns = np.array([0.5])
@@ -358,19 +299,9 @@ def test_mean_variance_all_zero_mu():
     assert result.shape[0] == 2
 
 
-# ---------------------------------------------------------------------------
-# _safe_corr short input
-# ---------------------------------------------------------------------------
-
-
 def test_safe_corr_short_input():
     result = _safe_corr(np.array([1.0]), np.array([2.0]))
     assert result == 0.0
-
-
-# ---------------------------------------------------------------------------
-# recompute_pool_correlations (lines 509, 513-516, 519-520)
-# ---------------------------------------------------------------------------
 
 
 def test_recompute_pool_correlations_empty(tmp_path: Path):
@@ -407,11 +338,6 @@ def test_recompute_pool_correlations_apply(tmp_path: Path):
     assert "a" in result["correlation_pool_max"]
     assert "b" in result["correlation_pool_max"]
     assert len(result["updated_scorecards"]) > 0
-
-
-# ---------------------------------------------------------------------------
-# load_pool_signals_from_experiments (lines 529, 531, 535, 543-545, 547-549)
-# ---------------------------------------------------------------------------
 
 
 def test_load_pool_signals_no_dir(tmp_path: Path):

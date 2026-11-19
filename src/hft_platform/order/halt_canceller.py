@@ -25,7 +25,7 @@ halt_cancel_orders_total = Counter(
 )
 
 _BATCH_SIZE = 20
-_BATCH_DELAY_S = 0.005  # 5ms between batches
+_BATCH_DELAY_S = 0.005
 
 
 async def cancel_all_live_orders(order_adapter: Any, storm_guard: Any) -> int:
@@ -45,7 +45,6 @@ async def cancel_all_live_orders(order_adapter: Any, storm_guard: Any) -> int:
         logger.debug("halt_cancel_skipped", reason="not_in_halt", state=int(storm_guard.state))
         return 0
 
-    # Snapshot live orders under lock to avoid mutation during iteration.
     async with order_adapter._live_orders_lock:
         snapshot: Dict[str, Any] = dict(order_adapter.live_orders)
 
@@ -79,7 +78,7 @@ async def cancel_all_live_orders(order_adapter: Any, storm_guard: Any) -> int:
         cmd = OrderCommand(
             cmd_id=now_ns,
             intent=intent,
-            deadline_ns=now_ns + 5_000_000_000,  # 5s deadline
+            deadline_ns=now_ns + 5_000_000_000,
             storm_guard_state=StormGuardState.HALT,
             created_ns=now_ns,
         )
@@ -93,7 +92,6 @@ async def cancel_all_live_orders(order_adapter: Any, storm_guard: Any) -> int:
             batch.clear()
             await asyncio.sleep(_BATCH_DELAY_S)
 
-    # Flush remaining
     for c in batch:
         order_adapter.order_queue.put_nowait(c)
 

@@ -37,7 +37,6 @@ def cmd_tca_daily(args: argparse.Namespace) -> None:
         print(f"No fills found for {date_str}.")
         return
 
-    # Print table
     cols = [f"{'Strategy':<20}", f"{'Symbol':<10}", f"{'Trades':>7}", f"{'Volume':>8}"]
     cols += [f"{'Comm bps':>10}", f"{'Tax bps':>9}", f"{'Total bps':>10}"]
     header = " ".join(cols)

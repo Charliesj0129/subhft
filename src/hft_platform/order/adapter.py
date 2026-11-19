@@ -31,31 +31,23 @@ from hft_platform.order.shadow_writer import ShadowOrderWriter
 logger = get_logger("order_adapter")
 
 _PENDING_SENTINEL = object()
-# ``HFT_ORDER_MODE`` values that may send through a real broker session.
-# ``real`` is bootstrap's alias for ``live``; listed so an unnormalized value
-# is not mistaken for sim.
 _ORDER_MODES_LIVE = frozenset({"live", "real"})
-# TTL-expired phantoms remembered so a very late fill can still be claimed.
 _EXPIRED_PHANTOM_MAX = 64
 _EXPIRED_PHANTOM_RETENTION_S = 4 * 3600.0
 _TERMINAL_BEFORE_REGISTERED = object()
 _GUARD_TIMEOUT = object()
-# ``_call_api`` result for a ``cancel_order`` whose wrapper timed out. Distinct from
-# ``None`` (a failure that is known to have failed): the first attempt may still be
-# running in the SDK thread, so the cancel may well have landed.
 _CANCEL_TIMED_OUT = object()
-# ``_match_open_order``: more than one broker order fits a phantom; hold its slot.
 _AMBIGUOUS_MATCH = object()
 
 
 class _CancelWatch(NamedTuple):
     """A cancel the broker call accepted, whose effect has not been seen yet."""
 
-    at: float  # precision-time: monotonic stamp of the dispatch (or of the retry)
+    at: float
     intent: OrderIntent
     cmd_id: int
-    attempts: int  # 0 = first cancel only, 1 = retried once
-    confirm_s: float | None = None  # precision-time: None uses the global window
+    attempts: int
+    confirm_s: float | None = None
 
 
 def _phantom_side(side: Any) -> int:
@@ -81,31 +73,12 @@ class _PhantomEntry(NamedTuple):
     symbol: str
     created_ns: int
     intent: OrderIntent
-    # Side actually placed at the broker (int(Side)); -1 = unknown, matches either
-    # side. A FORCE_FLAT places on the closing side derived from the position, not
-    # ``intent.side``; legacy-materialised records carry a placeholder intent.
     side: int = -1
 
 
-# Operations that mutate broker state and must not be retried if the
-# timed-out attempt might still succeed in the thread pool.
 _MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
-# Ops whose duration is a broker round-trip worth reporting to StormGuard's
-# ``order_rtt`` input. Cancel is included even though it is not "mutating" in
-# the duplicate-order sense: a broker that stops answering cancels is exactly
-# the condition the breaker exists for.
 _ORDER_RTT_OPS: frozenset[str] = frozenset({"place_order", "cancel_order", "update_order"})
-# Commands that reduce risk and so outlive their ``deadline_ns``. A NEW or AMEND
-# carries a price that goes stale; a CANCEL does not -- a late one is still the
-# right command, and a target that already ended is answered by
-# ``cancel_already_terminal``. Dropping one leaves the order live at the broker
-# with nothing left that will cancel it (THESHOW 2026-10-05: six SELLs).
 _DEADLINE_EXEMPT_INTENTS: frozenset[IntentType] = frozenset({IntentType.CANCEL, IntentType.FORCE_FLAT})
-# Substrings that identify a broker session that has not come up. Shared by
-# ``_is_transient_error`` (which retries them) and
-# ``_is_session_establishment_error`` (which counts them toward a reconnect),
-# so the two can never drift apart and start disagreeing about what a dead
-# session looks like.
 _SESSION_ESTABLISHMENT_PATTERNS: tuple[str, ...] = (
     "sessionnotestablished",
     "session not established",
@@ -118,12 +91,12 @@ class _TimeoutCancelled(Exception):
 
 
 TypedOrderCommandFrame: TypeAlias = tuple[
-    str,  # marker: typed_order_cmd_v1
-    int,  # cmd_id
-    int,  # deadline_ns
-    int,  # storm_guard_state
-    int,  # created_ns
-    Any,  # typed_intent_frame
+    str,
+    int,
+    int,
+    int,
+    int,
+    Any,
 ]
 
 
@@ -153,20 +126,8 @@ class OrderAdapter:
         "_order_id_map_persist_interval_s",
         "_order_id_map_last_persist_s",
         "_order_id_map_trailing_handle",
-        # Serialises the checkpoint's snapshot+write. ``_maybe_persist`` hands
-        # the write to the default executor, which has many workers, so two
-        # checkpoints could otherwise run concurrently and the older snapshot
-        # could win the rename.
         "_order_id_map_io_lock",
-        # In-flight executor futures for those writes, so a caller can await
-        # the checkpoint it just scheduled instead of guessing.
         "_order_id_map_persist_futures",
-        # H3: per-entry metadata for TTL-based ABA prevention. Sidecar to
-        # ``order_id_map`` so the (broker_id -> order_key) lookup API stays
-        # unchanged. ``_order_id_meta[broker_id] = (created_ns, state)`` where
-        # state is "live" until a terminal callback flips it to "terminal".
-        # On persist, terminal entries are filtered out; on load, entries
-        # older than ``HFT_ORDER_ID_MAP_TTL_S`` or already terminal are dropped.
         "_order_id_meta",
         "_order_id_map_ttl_ns",
         "running",
@@ -175,18 +136,10 @@ class OrderAdapter:
         "_metadata",
         "price_codec",
         "live_orders",
-        # Sidecar for ``sweep_stale_live_orders``: ``live_orders`` values are
-        # broker Trade objects, which carry no strategy_id/symbol/side, so the
-        # sweep cannot tell the strategy which pending slot it just orphaned.
-        # Keyed identically to ``live_orders``; evicted on the same paths.
         "_live_order_intents",
-        # order_key -> (monotonic stamp, cumulative filled qty). Shioaji's order
-        # topic carries no fill quantity, so this ledger is the only place the
-        # platform learns how much of an order has traded.
         "_fill_ledger",
         "_fill_ledger_max",
         "_fill_ledger_ttl_s",
-        # order_key -> monotonic stamp of the moment the order ended. See ``note_terminal``.
         "_finished_orders",
         "_finished_max",
         "_finished_ttl_s",
@@ -224,7 +177,6 @@ class OrderAdapter:
         "_cancel_inflight_targets",
         "_cancel_inflight_max",
         "_cancel_inflight_ttl_s",
-        # target order_key -> _CancelWatch. See ``check_unconfirmed_cancels``.
         "_cancel_watch",
         "_cancel_confirm_s",
         "_cancel_timeout_confirm_s",
@@ -233,32 +185,18 @@ class OrderAdapter:
         "_cancel_retry_tasks",
         "_phantom_bind_tasks",
         "_engine_thread_id",
-        # M4: per-occurrence phantom storage. Replaces the parallel
-        # ``_phantom_order_keys`` + ``_phantom_intents`` dicts (each keyed
-        # by ``"strategy_id:intent_id"`` -> single tuple/intent) with a
-        # single dict whose values are append-only lists of
-        # ``_PhantomEntry`` so reusing the same intent_id within a process
-        # lifetime never overwrites a prior phantom record.
         "_phantom_records",
-        # Backwards-compat read/write views — synced by the phantom
-        # helpers. Legacy tests that mutate these dicts directly still
-        # work because the helpers reconstruct them from
-        # ``_phantom_records``. Always reflect the LAST occurrence per
-        # key (matching the pre-M4 invariant).
         "_phantom_order_keys",
         "_phantom_intents",
         "_phantom_order_max",
         "_phantom_recovery_ttl_s",
         "_phantom_lock",
-        # Broker search for TTL-expired phantoms (``_settle_expired_phantoms``).
         "_phantom_lookup_task",
         "_phantom_lookup_timeout_s",
         "_phantom_lookup_max_hold_s",
         "_audit_writer",
         "_explanation_assembler",
         "_rejection_sink",
-        # Outstanding broker order calls and the last broker answer; source of
-        # ``broker_silence_ns`` for StormGuard's back-pressure gate.
         "_broker_stall",
         "_pending_fill_index",
         "_pending_fill_registered_at",
@@ -267,7 +205,7 @@ class OrderAdapter:
         "_pending_fill_lock",
         "_custom_field_counter",
         "_background_tasks",
-        "__dict__",  # needed for test monkey-patching
+        "__dict__",
     )
 
     def __init__(
@@ -285,60 +223,24 @@ class OrderAdapter:
         self.config_path = config_path
         self.order_queue = order_queue
         self.client = broker_client
-        # Read once: ``services.bootstrap.resolve_order_mode`` has already
-        # validated the variable and written the canonical value back to the
-        # environment before any adapter is built. Enforced per order in
-        # ``_order_mode_refusal``.
         self._order_mode = os.getenv("HFT_ORDER_MODE", "sim").strip().lower()
         self._broker_codec = broker_codec
-        # Map broker order IDs -> order_key ("strategy_id:intent_id")
-        # P0-E1: protected by a threading.RLock (not asyncio.Lock) because
-        # ``_on_exec`` runs on the broker callback thread and calls the
-        # resolver pre-hand-off (see ``services/system.py::_on_exec``).
-        # Critical sections are small (single dict get / bounded-N eviction),
-        # so event-loop latency impact is negligible.
-        # P1-8: re-entrant so batch writers (`_register_broker_ids`,
-        # `_load_order_id_map`) can hold the lock while delegating individual
-        # writes through ``_set_order_id_mapping`` / ``_del_order_id_mapping``
-        # without deadlocking. Same-thread re-acquire is O(1).
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self._order_id_map_lock = threading.RLock()
-        # Map order_key -> cmd.created_ns for e2e latency tracking (SLO-2)
-        # Shared with ExecutionRouter for fill-side lookup
         self._cmd_created_ns_map: Dict[str, int] = cmd_created_ns_map if cmd_created_ns_map is not None else {}
-        # TCA price map: order_key -> (decision_price, arrival_price) for fill enrichment
         self._cmd_tca_map: Dict[str, tuple[int, int]] = cmd_tca_map if cmd_tca_map is not None else {}
-        # L8 (loop_v1): trace_id map for FillEvent enrichment. Populated alongside
-        # ``_cmd_tca_map`` in ``_dispatch_to_api`` and read by ExecutionRouter when
-        # a fill is matched to a known order_key. Bounded/evicted in lockstep with
-        # ``_cmd_created_ns_map`` so the three maps share a single TTL.
         self._cmd_trace_id_map: Dict[str, str] = cmd_trace_id_map if cmd_trace_id_map is not None else {}
         self._mid_price_fn: Callable[[str], int] | None = mid_price_fn
-        self._storm_guard: Any = None  # Set post-init to close TOCTOU gap (M1)
+        self._storm_guard: Any = None
         self._broker_stall = BrokerStallTracker(on_episode=self._observe_broker_silence_episode)
         self._order_id_map_max_size = int(os.getenv("HFT_ORDER_ID_MAP_MAX_SIZE", "10000"))
         self._order_id_map_persist_path: str = os.getenv("HFT_ORDER_ID_MAP_PERSIST_PATH", ".state/order_id_map.jsonl")
         self._order_id_map_persist_interval_s: float = float(os.getenv("HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S", "1.0"))
-        # -inf, not 0.0. ``time.monotonic()`` counts from boot, so 0.0 means
-        # "at boot" -- on a host whose uptime is shorter than
-        # HFT_ORDER_ID_MAP_PERSIST_INTERVAL_S the very first checkpoint is
-        # throttled away instead of being written immediately. The fill-dedup
-        # twin had the same sentinel and was fixed in PR #446; this copy was
-        # left behind, which is the third time this checkpoint pair has drifted
-        # apart. Benign at the 1 s default, live as soon as the interval is
-        # configured larger.
-        self._order_id_map_last_persist_s: float = float("-inf")  # monotonic timestamp
+        self._order_id_map_last_persist_s: float = float("-inf")
         self._order_id_map_trailing_handle: asyncio.TimerHandle | None = None
         self._order_id_map_io_lock = threading.Lock()
         self._order_id_map_persist_futures: set[asyncio.Future[None]] = set()
-        # H3: per-entry metadata sidecar (broker_id -> (created_ns, state)).
-        # ``state`` is "live" or "terminal"; the persist filter drops terminal
-        # rows so a future restart cannot resurrect a stale (broker_id ->
-        # order_key) binding when the broker re-uses the same id (ABA).
         self._order_id_meta: dict[str, tuple[int, str]] = {}
-        # H3: TTL for persisted entries. Default 24h (86400s) — anything older
-        # is assumed terminal at the broker even if no terminal callback was
-        # observed (callback loss, daemon-thread crash, etc.).
         self._order_id_map_ttl_ns: int = int(float(os.getenv("HFT_ORDER_ID_MAP_TTL_S", "86400")) * 1_000_000_000)
         self._load_order_id_map()
         self._cmd_map_max_size = int(os.getenv("HFT_CMD_MAP_MAX_SIZE", "10000"))
@@ -347,108 +249,63 @@ class OrderAdapter:
         self.latency = LatencyRecorder.get()
         self._metadata: SymbolMetadata = SymbolMetadata()
         self.price_codec: PriceCodec = PriceCodec(SymbolMetadataPriceScaleProvider(self._metadata))
-        self._actual_to_config: dict[str, str] = {}  # reverse alias: TMFE6 → TMFR1
-        # Option-3 Gate 3: optional ContractFamilyResolver. When ``intent.contract``
-        # is set AND the resolver's snapshot has a native_hint for it, the
-        # adapter trusts ``intent.contract.display()`` directly as the broker
-        # code, bypassing the ``_actual_to_config`` reverse-alias lookup which
-        # was the Bug 12 (alias dict empty on restart) root cause.
+        self._actual_to_config: dict[str, str] = {}
         self._contract_resolver: Any = None
 
-        # State - Protected by _live_orders_lock for concurrent access
-        self.live_orders: Dict[str, Any] = {}  # Map "strategy_id:intent_id" -> Trade Object or Status dict
-        # order_key -> (intent, effective side). FORCE_FLAT places on the
-        # closing side, which is the opposite of ``intent.side``, so the side
-        # is stored explicitly rather than re-derived at release time.
+        self.live_orders: Dict[str, Any] = {}
         self._live_order_intents: Dict[str, tuple[OrderIntent, Side]] = {}
-        # Bounded (max cardinality + TTL), engine-loop only. The TTL must outlive
-        # ``_live_orders_ttl_s`` plus the late reject of a cancel that raced the fill.
         self._fill_ledger: collections.OrderedDict[str, tuple[float, int]] = collections.OrderedDict()
         self._fill_ledger_max: int = int(os.getenv("HFT_FILL_LEDGER_MAX", "8192"))
         self._fill_ledger_ttl_s: float = float(os.getenv("HFT_FILL_LEDGER_TTL_S", "900"))
-        # Orders that have ended, by any route. A cancel retry the broker rejects
-        # arrives as a second terminal status 0.02-1.28 s after the first
-        # (THESHOW 2026-10-05, 34 orders); the router asks this ledger so the
-        # second one releases nothing. Same bound and TTL as the fill ledger.
         self._finished_orders: collections.OrderedDict[str, float] = collections.OrderedDict()
         self._finished_max: int = self._fill_ledger_max
         self._finished_ttl_s: float = self._fill_ledger_ttl_s
         self._live_orders_lock = asyncio.Lock()
         self._pending_order_keys: set[str] = set()
-        # TTL sweep: evict orphaned live_orders entries (missed terminal callbacks)
-        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))  # duration (s)
+        self._live_orders_ttl_s: float = float(os.getenv("HFT_LIVE_ORDERS_TTL_S", "300"))
         self._live_orders_max_size: int = int(os.getenv("HFT_LIVE_ORDERS_MAX_SIZE", "10000"))
-        # -inf for the same reason as the checkpoint stamp above: this is a
-        # monotonic clock, so 0.0 means "at boot" and the first sweep inside
-        # the first 60 s of uptime is skipped rather than run.
-        self._live_orders_last_sweep_s: float = float("-inf")  # monotonic timestamp
-        self._live_orders_inserted_at: Dict[str, float] = {}  # order_key -> monotonic timestamp
-        # Bounded deque: auto-evicts oldest entries when full (OOM protection)
+        self._live_orders_last_sweep_s: float = float("-inf")
+        self._live_orders_inserted_at: Dict[str, float] = {}
         self._deferred_terminals: collections.deque[tuple[str, str, float]] = collections.deque(maxlen=256)
 
-        # Bug #29: bounded LRU of recently-terminal order_keys, populated by
-        # on_terminal_state. Used by CANCEL path to distinguish race-loser
-        # (order filled/cancelled just before CANCEL arrived → success) from
-        # genuine unknown order_id (typo / strategy bug → preserve WARNING+DLQ).
         self._recently_terminal_orders: collections.OrderedDict[str, tuple[float, str]] = collections.OrderedDict()
         self._recently_terminal_max: int = int(os.getenv("HFT_RECENT_TERMINAL_MAX", "2048"))
         self._recently_terminal_ttl_s: float = float(os.getenv("HFT_RECENT_TERMINAL_TTL_S", "60"))
         self._cancel_inflight_targets: collections.OrderedDict[str, float] = collections.OrderedDict()
         self._cancel_inflight_max: int = int(os.getenv("HFT_CANCEL_INFLIGHT_MAX", "2048"))
         self._cancel_inflight_ttl_s: float = float(os.getenv("HFT_CANCEL_INFLIGHT_TTL_S", "30"))
-        # Cancels the broker call accepted but whose order is still live after
-        # ``_cancel_confirm_s``. Bounded; engine-loop only.
         self._cancel_watch: collections.OrderedDict[str, _CancelWatch] = collections.OrderedDict()
-        self._cancel_confirm_s: float = float(os.getenv("HFT_CANCEL_CONFIRM_S", "60"))  # precision-time
-        # A cancel that TIMED OUT is not retried blind (the first attempt may have
-        # landed); it is looked at again after this shorter window instead.
-        self._cancel_timeout_confirm_s: float = float(os.getenv("HFT_CANCEL_TIMEOUT_CONFIRM_S", "10"))  # precision-time
-        self._cancel_check_interval_s: float = 5.0  # precision-time
-        self._cancel_check_last_s: float = float("-inf")  # monotonic timestamp
+        self._cancel_confirm_s: float = float(os.getenv("HFT_CANCEL_CONFIRM_S", "60"))
+        self._cancel_timeout_confirm_s: float = float(os.getenv("HFT_CANCEL_TIMEOUT_CONFIRM_S", "10"))
+        self._cancel_check_interval_s: float = 5.0
+        self._cancel_check_last_s: float = float("-inf")
         self._cancel_retry_tasks: set[asyncio.Task[None]] = set()
         self._phantom_bind_tasks: set[asyncio.Task[None]] = set()
-        # P1-3: ``_recently_terminal_orders`` and ``_cancel_inflight_targets`` are
-        # OrderedDicts mutated by the helpers below. They are designed for
-        # engine-loop-only use (no lock). Capture the engine thread id lazily on
-        # the first call so a misuse from a broker/recorder thread surfaces as
-        # ``RuntimeError`` instead of silently corrupting the LRU state.
         self._engine_thread_id: int | None = None
 
-        # Helpers
         self.rate_limiter = RateLimiter(soft_cap=180, hard_cap=250, window_s=10)
         self.circuit_breaker = CircuitBreaker(threshold=5, timeout_s=60)
-        # Counts order attempts lost in a row to a session that never came
-        # up. The circuit breaker above stops *sending* into a broken
-        # broker; this counts a specific reason so the session watchdog can
-        # go and fix it. Neither can substitute for the other: the breaker
-        # re-probes every 60 s forever without ever re-authenticating.
         self._consecutive_session_errors = 0
         self.order_id_resolver = OrderIdResolver(
             self.order_id_map, lock=self._order_id_map_lock, is_live=self.is_order_live
         )
-        self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))  # precision-time
-        self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))  # precision-time
+        self._api_timeout_s = float(os.getenv("HFT_API_TIMEOUT_S", "3.0"))
+        self._api_guard_timeout_s = float(os.getenv("HFT_API_GUARD_TIMEOUT_S", "0.005"))
         self._api_max_inflight = int(os.getenv("HFT_API_MAX_INFLIGHT", "16"))
         self._api_semaphore = asyncio.Semaphore(self._api_max_inflight)
         self._api_queue_max = int(os.getenv("HFT_API_QUEUE_MAX", "1024"))
         self._api_queue: asyncio.Queue[OrderCommand | TypedOrderCommandFrame] = asyncio.Queue(
             maxsize=self._api_queue_max
         )
-        self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))  # precision-time
+        self._api_coalesce_window_s = float(os.getenv("HFT_API_COALESCE_WINDOW_S", "0.005"))
         self._api_pending: dict[tuple, OrderCommand] = {}
-        # P1-4 hole fix: snapshot of items lifted from _api_pending into the
-        # dispatch loop's local `pending` list. Drained per-iteration as each
-        # item is finalized; outer cancel/exception handlers release any
-        # remainder so dedup slots never leak.
         self._api_inflight: list[OrderCommand] = []
         self._api_worker_task: asyncio.Task | None = None
         self._supports_typed_command_ingress = True
         self._trace_sampler = _get_trace_sampler()
 
-        # Dead Letter Queue for rejected orders
         self._dlq: DeadLetterQueue = get_dlq()
 
-        # Per-symbol rate limiter, per-strategy circuit breaker, shadow mode
         self.per_symbol_rate_limiter = PerSymbolRateLimiter()
         self.strategy_cb_mgr = StrategyCircuitBreakerManager()
         try:
@@ -459,77 +316,35 @@ class OrderAdapter:
         self.platform_degrade_controller = get_shared_platform_degrade_controller(metrics=self.metrics)
         self.position_store: Any = None
 
-        # Idempotency dedup for non-gateway path (avoid double-dedup when Gateway is active)
         _gateway_on = os.getenv("HFT_GATEWAY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         self._dedup_store: IdempotencyStore | None = None if _gateway_on else IdempotencyStore(persist_enabled=False)
 
-        # Phantom order tracking: timed-out mutating calls that may have succeeded at broker
-        # R2-03: Bounded dict with TTL eviction (Architecture Governance Rule 12)
-        # M4 (2026-04-25): per-occurrence list. The same (strategy_id,
-        # intent_id) can repeat within one process lifetime (DLQ replay,
-        # retry, or just intent_id reuse by the strategy) — each occurrence
-        # gets its own ``_PhantomEntry`` so neither side overwrites the
-        # other. Resolution and cleanup pop FIFO from the per-key list,
-        # keeping each occurrence independently traceable.
         self._phantom_records: dict[str, list[_PhantomEntry]] = {}
-        # Backwards-compat views maintained by the helpers below. Legacy
-        # tests and metric scrapers can still read these dicts; writes
-        # through these dicts are picked up by ``_sync_phantom_views``
-        # on the next helper call.
         self._phantom_order_keys: dict[str, tuple[float, str]] = {}
         self._phantom_intents: dict[str, OrderIntent] = {}
         self._phantom_order_max: int = 1000
         self._phantom_recovery_ttl_s: float = float(os.getenv("HFT_PHANTOM_RECOVERY_TTL_S", "300"))
-        # Before a TTL-expired phantom gives its slot back, the broker's working
-        # orders are searched for it (THESHOW 2026-11-05: R47:33723 timed out,
-        # was released at the TTL while it sat at the broker, filled 6 min
-        # later and took R47 to -2 against max_pos=1). A failed search keeps the
-        # slot; after this long the old unconditional release applies.
         self._phantom_lookup_task: asyncio.Task[None] | None = None
-        self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))  # precision-time
-        self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))  # precision-time
-        # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
-        # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
-        # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
-        # ``clear_phantom_candidate``, and the over-capacity eviction branch
-        # inside ``_call_api``) can observe interleaved reads/writes; the
-        # previous unguarded list-comprehension over the records dict
-        # inside the capacity eviction path could raise
-        # ``RuntimeError: dictionary changed size during iteration`` when a
-        # peer task popped keys. ``threading.Lock`` (not asyncio) because
-        # ``resolve_phantom_fill`` is documented as callable from other
-        # threads in future (it currently runs on the loop, but the lock
-        # discipline needs to remain correct if that changes).
+        self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))
+        self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))
         self._phantom_lock = threading.Lock()
 
-        # Pending fill index: maps "{symbol}:{side}" -> [order_key, ...] for strategy_id
-        # resolution in deal callbacks where order_id_map has no seed data (Shioaji futures).
         self._pending_fill_index: dict[str, list[str]] = {}
         self._pending_fill_registered_at: dict[str, float] = {}
-        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "7200"))  # duration (s)
-        # H6: opt-in strict mode. When enabled, resolve_strategy_from_deal
-        # returns None on ambiguity (multiple pending entries for the same
-        # symbol+side) so the caller routes to UNKNOWN / DLQ rather than
-        # silently misattributing a fill via FIFO pop.
+        self._pending_fill_ttl_s: float = float(os.getenv("HFT_PENDING_FILL_TTL_S", "7200"))
         self._pending_fifo_strict: bool = os.getenv("HFT_PENDING_FIFO_STRICT", "0").lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
-        self._pending_fill_lock = threading.Lock()  # protects _pending_fill_index across threads
+        self._pending_fill_lock = threading.Lock()
         self._custom_field_counter: int = 0
 
-        # Prevent GC of fire-and-forget tasks (safety orders during HALT drain)
         self._background_tasks: set[asyncio.Task] = set()
 
-        # Audit writer for order lifecycle logging (optional, injected post-init)
         self._audit_writer: Any = None
-        # L8 (loop_v1): canonical-explanation assembler (optional, injected post-init).
-        # Receives lifecycle events alongside _audit_writer so a single
-        # OrderExplanation row is emitted per terminal order.
         self._explanation_assembler: Any = None
-        # Rejection feedback sink for dispatch failures (optional, injected post-init)
         self._rejection_sink: asyncio.Queue | None = None
 
         self.load_config()
@@ -589,7 +404,7 @@ class OrderAdapter:
             return False
         try:
             return check(intent) is True
-        except Exception:  # noqa: BLE001 - the predicate is advisory; HALT is enforced separately
+        except Exception:
             logger.warning("backpressure_check_failed", exc_info=True)
             return False
 
@@ -604,13 +419,13 @@ class OrderAdapter:
     def _publish_broker_inflight(self) -> None:
         try:
             self.metrics.order_broker_inflight.set(self._broker_stall.inflight())
-        except Exception:  # noqa: BLE001 - a metric must never block the order path
+        except Exception:
             logger.debug("order_broker_inflight_publish_failed", exc_info=True)
 
     def _observe_broker_silence_episode(self, duration_ns: int) -> None:
         try:
-            self.metrics.order_broker_silence_episode_seconds.observe(duration_ns / 1e9)  # precision-time
-        except Exception:  # noqa: BLE001 - a metric must never block the order path
+            self.metrics.order_broker_silence_episode_seconds.observe(duration_ns / 1e9)
+        except Exception:
             logger.debug("order_broker_silence_episode_observe_failed", exc_info=True)
 
     def _observe_order_rtt(self, op: str, duration_ns: int) -> None:
@@ -630,7 +445,7 @@ class OrderAdapter:
             return
         try:
             observe(duration_ns // 1000)
-        except Exception:  # noqa: BLE001 - a risk-input report must never fail an order
+        except Exception:
             logger.debug("order_rtt_observe_failed", op=op)
 
     def _begin_dispatch_ticket(self, intent: OrderIntent) -> int | None:
@@ -652,14 +467,9 @@ class OrderAdapter:
             return None
         try:
             ok, _reason, ticket_id = begin(intent)
-        except Exception:  # noqa: BLE001 — never block dispatch on telemetry
+        except Exception:
             return None
         if not ok:
-            # StormGuard rejected at begin — propagate by returning a
-            # sentinel-like None plus letting the caller observe via
-            # ``ticket_id is None``. The pre-check in ``_api_worker``
-            # should have caught this; we still log and rely on the
-            # follow-on broker call to be skipped.
             return None
         return ticket_id
 
@@ -688,20 +498,15 @@ class OrderAdapter:
             return
         try:
             halted_during_dispatch = bool(end(ticket_id))
-        except Exception:  # noqa: BLE001 — never crash the order path
+        except Exception:
             return
         if not halted_during_dispatch:
             return
-        # HALT triggered while we were awaiting the broker. The broker may
-        # have accepted the order. Emit a defensive cancel and bump the
-        # dedicated metric so SREs can see TOCTOU recoveries in dashboards.
         try:
             self.metrics.order_halt_post_dispatch_cancel_total.inc()
-        except Exception:  # noqa: BLE001 — metric must never block
+        except Exception:
             pass
         if trade is None or trade is _GUARD_TIMEOUT:
-            # The broker call did not produce a trade object — nothing
-            # to cancel locally. The caller has already DLQ'd the intent.
             logger.warning(
                 "halt_post_dispatch_no_trade",
                 intent_id=intent.intent_id,
@@ -722,7 +527,7 @@ class OrderAdapter:
                 self._run_blocking_call(self.client.cancel_order, trade, _track_broker=True),
                 timeout=self._api_timeout_s,
             )
-        except Exception as exc:  # noqa: BLE001 — best-effort defensive cancel
+        except Exception as exc:
             logger.error(
                 "halt_post_dispatch_defensive_cancel_failed",
                 intent_id=intent.intent_id,
@@ -748,7 +553,7 @@ class OrderAdapter:
             return False
         try:
             return bool(check(intent))
-        except Exception:  # noqa: BLE001 — predicate must never raise
+        except Exception:
             return False
 
     def set_alias_map(self, alias_map: dict[str, str]) -> None:
@@ -791,20 +596,20 @@ class OrderAdapter:
                 if snapshot.native_hint(contract) is not None:
                     try:
                         self.metrics.order_contract_code_resolution_total.labels(source="resolver_hit").inc()
-                    except Exception:  # noqa: BLE001 — metric must never break order path
+                    except Exception:
                         pass
                     return contract.display()
-            except Exception:  # noqa: BLE001 — fall back silently
+            except Exception:
                 pass
         if intent.symbol in self._actual_to_config:
             try:
                 self.metrics.order_contract_code_resolution_total.labels(source="alias_fallback").inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return self._actual_to_config[intent.symbol]
         try:
             self.metrics.order_contract_code_resolution_total.labels(source="symbol_raw").inc()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         return intent.symbol
 
@@ -837,7 +642,7 @@ class OrderAdapter:
         """
         try:
             self.metrics.order_deadline_overridden_total.labels(intent_type=intent.intent_type.name).inc()
-        except Exception:  # noqa: BLE001 — a metric must never block the order path
+        except Exception:
             pass
         logger.warning(
             "order_deadline_overridden",
@@ -880,10 +685,6 @@ class OrderAdapter:
         ``on_fill``. If no fill arrives, pending remains elevated — a safe
         liveness loss preferred over an unsafe max_pos breach.
         """
-        # getattr, not attribute access: ``_rejection_sink`` is a __slots__
-        # entry, and the HALT rejection in ``execute`` runs OUTSIDE that
-        # method's try:, so a half-built adapter would raise AttributeError
-        # straight into the order path rather than skipping the feedback.
         sink = getattr(self, "_rejection_sink", None)
         if sink is None:
             return False
@@ -905,7 +706,7 @@ class OrderAdapter:
         except asyncio.QueueFull:
             self.metrics.rejection_sink_overflow_total.inc()
         except Exception:
-            pass  # feedback must never crash order path
+            pass
         return False
 
     def _audit_log_order(self, order_data: dict) -> None:
@@ -913,10 +714,8 @@ class OrderAdapter:
         if self._audit_writer is not None:
             try:
                 self._audit_writer.log_order(order_data)
-            except Exception:  # noqa: BLE001
-                pass  # audit must never block or crash order dispatch
-        # L8: forward to explanation assembler. Best-effort — exceptions never
-        # propagate to the order path (assembler is observability-only).
+            except Exception:
+                pass
         asm = self._explanation_assembler
         if asm is None:
             return
@@ -930,18 +729,14 @@ class OrderAdapter:
             if event == "dispatched" and intent_type == "NEW":
                 asm.on_command(client_order_id=str(order_key), command_payload=dict(order_data))
             elif event == "dispatched" and intent_type in {"CANCEL", "AMEND"}:
-                # Cancel/Amend dispatched against a NEW order — record on the target's
-                # explanation entry so the cancel attempt appears in the timeline.
                 if target_key:
                     asm.on_cancel(client_order_id=str(target_key), cancel_payload=dict(order_data))
             elif event in {"cancel_no_op_already_inflight", "cancel_no_op_already_terminal"}:
                 if target_key:
                     asm.on_cancel(client_order_id=str(target_key), cancel_payload=dict(order_data))
             elif event == "dispatch_failed":
-                # Dispatch failure: still record on the originating order_key so
-                # the explanation marks the rejected attempt.
                 asm.on_cancel(client_order_id=str(order_key), cancel_payload=dict(order_data))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     async def invalidate_live_orders(self, reason: str = "reconnect") -> int:
@@ -957,7 +752,6 @@ class OrderAdapter:
         async with self._live_orders_lock:
             count = len(self.live_orders)
             if count > 0:
-                # Do NOT call _remove_pending_fill — keep index alive for fill replay
                 logger.warning(
                     "invalidating_live_orders_after_reconnect",
                     count=count,
@@ -991,24 +785,17 @@ class OrderAdapter:
         ``client_order_id`` so the slot is not paid for twice.
         """
         now_mono = time.monotonic()
-        # The cancel watch runs on its own, shorter clock: a timed-out cancel is
-        # judged after HFT_CANCEL_TIMEOUT_CONFIRM_S, which a once-a-minute check
-        # would stretch to a minute. It always runs before eviction, while the
-        # Trade handle is still held. A failure here never blocks the sweep.
         if now_mono - self._cancel_check_last_s >= self._cancel_check_interval_s:
             self._cancel_check_last_s = now_mono
             try:
                 await self.check_unconfirmed_cancels()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("check_unconfirmed_cancels_error", error=str(exc))
         if now_mono - self._live_orders_last_sweep_s < 60.0:
             return 0
         self._live_orders_last_sweep_s = now_mono
         cutoff = now_mono - self._live_orders_ttl_s
         evicted = 0
-        # Collected under the lock, emitted after it: _send_dispatch_rejection
-        # calls into the rejection sink's put_nowait and must not run while the
-        # live-orders lock is held.
         orphaned_pendings: list[tuple[str, OrderIntent, Side]] = []
         filled_swept = 0
         async with self._live_orders_lock:
@@ -1023,16 +810,12 @@ class OrderAdapter:
                 tracked = self._live_order_intents.pop(k, None)
                 if tracked is not None:
                     if self.filled_qty_for(k) >= tracked[0].qty:
-                        # Fully filled: the fill already gave the slot back via
-                        # on_fill. Releasing again would free a slot a live order
-                        # may occupy (2,169 spurious releases in 31 d, THESHOW).
                         filled_swept += 1
-                        self._mark_finished(k)  # the fill already freed the slot
+                        self._mark_finished(k)
                     else:
                         orphaned_pendings.append((k, *tracked))
                 self._remove_pending_fill(k)
                 evicted += 1
-            # Also prune _live_orders_inserted_at for keys no longer in live_orders
             orphaned = [k for k in self._live_orders_inserted_at if k not in self.live_orders]
             for k in orphaned:
                 del self._live_orders_inserted_at[k]
@@ -1048,7 +831,7 @@ class OrderAdapter:
         if filled_swept:
             try:
                 self.metrics.live_order_swept_after_fill_total.inc(filled_swept)
-            except Exception:  # noqa: BLE001 — metric must never break order path
+            except Exception:
                 pass
         for key, intent, side in orphaned_pendings:
             released = self._send_dispatch_rejection(
@@ -1058,15 +841,11 @@ class OrderAdapter:
                 side=side,
             )
             if released:
-                # Only now is the slot known to be on its way back to the strategy.
-                # If the feedback was dropped, the order's real terminal is the one
-                # release the strategy will still get: do not zero it.
                 self._mark_finished(key)
             try:
                 self.metrics.live_order_ttl_releases_total.inc()
-            except Exception:  # noqa: BLE001 — metric must never break order path
+            except Exception:
                 pass
-        # Hard cap: if still over max size, evict oldest
         if len(self.live_orders) > self._live_orders_max_size:
             async with self._live_orders_lock:
                 sorted_keys = sorted(
@@ -1085,8 +864,6 @@ class OrderAdapter:
                         evicted=overflow,
                         max_size=self._live_orders_max_size,
                     )
-        # Sweep orphaned pending-fill entries that never entered live_orders.
-        # These arise when place_order fails before the order is registered in live_orders.
         now_mono = time.monotonic()
         with self._pending_fill_lock:
             expired_keys = [
@@ -1126,7 +903,6 @@ class OrderAdapter:
         accounting (CB armed, reject metric inc'd, ERROR-level log).
         """
         is_phantom_candidate = intent.intent_type in (IntentType.NEW, IntentType.FORCE_FLAT)
-        # Always release dedup so strategy can retry with the same idempotency key
         self._dedup_release(intent.idempotency_key)
 
         if is_phantom_candidate:
@@ -1148,13 +924,6 @@ class OrderAdapter:
             self._update_cb_metric()
             self.strategy_cb_mgr.record_failure(intent.strategy_id)
 
-        # Bug 23: phantom_pending=True keeps strategy pending elevated so the
-        # strategy doesn't emit a duplicate while the broker may still fill.
-        # The Bug D recovery janitor will release pending after TTL if no
-        # callback arrives.
-        # Only a phantom candidate (NEW / FORCE_FLAT) is reported: a failed
-        # CANCEL or AMEND never took a slot, and its feedback would be applied
-        # to ``feedback.side`` -- always BUY for a CANCEL (strategy/base.cancel).
         if is_phantom_candidate:
             self._send_dispatch_rejection(
                 intent,
@@ -1163,17 +932,10 @@ class OrderAdapter:
             )
 
         if is_phantom_candidate:
-            # The phantom must carry the side that went to the broker: a
-            # FORCE_FLAT places on ``close_side`` (tracked with the live order),
-            # which can differ from ``intent.side``. A FORCE_FLAT that failed
-            # before it was tracked has no known side (-1, matches either).
             placed_side: int | None = None
             if intent.intent_type == IntentType.FORCE_FLAT:
                 tracked = self._live_order_intents.get(f"{intent.strategy_id}:{intent.intent_id}")
                 placed_side = _phantom_side(tracked[1]) if tracked is not None else -1
-            # M4: append per-occurrence record under _phantom_lock so concurrent
-            # ``resolve_phantom_fill`` / ``clear_phantom_candidate`` cannot
-            # race with insert + capacity-eviction sweep.
             with self._phantom_lock:
                 phantom_key = self._register_phantom(intent, placed_side)
                 if self._phantom_record_count() > self._phantom_order_max:
@@ -1187,22 +949,12 @@ class OrderAdapter:
             )
             self.metrics.phantom_order_candidates_total.inc()
 
-        # Clean up live_orders sentinel to prevent permanent slot occupation
         order_key = f"{intent.strategy_id}:{intent.intent_id}"
         async with self._live_orders_lock:
             if self.live_orders.get(order_key) is _PENDING_SENTINEL:
                 del self.live_orders[order_key]
                 self._untrack_live_order_intent(order_key)
                 self._pending_order_keys.discard(order_key)
-        # NOTE: do NOT remove pending_fill for phantom candidates — the order
-        # may have reached the broker and fills arriving later need the
-        # pending_fill_index for strategy_id resolution.
-
-    # ── M4: phantom record helpers ────────────────────────────────────────
-    # Multi-occurrence phantom storage. ``_phantom_records[key]`` is an
-    # append-only list of ``_PhantomEntry``, so the same intent_id reused
-    # within one process lifetime cannot overwrite a prior record.
-    # ALL writes go through these helpers and ALL reads under ``_phantom_lock``.
 
     def _get_phantom_records(self) -> dict[str, list[_PhantomEntry]]:
         """M4: lazy accessor for the canonical phantom store.
@@ -1270,10 +1022,6 @@ class OrderAdapter:
         )
         records = self._get_phantom_records()
         records.setdefault(phantom_key, []).append(entry)
-        # Backwards-compat: keep the legacy views aligned with the LAST
-        # occurrence per key. The canonical multi-occurrence store remains
-        # ``_phantom_records``; legacy code reading these dicts sees the
-        # most recent occurrence (the pre-M4 contract).
         self._get_phantom_legacy_keys()[phantom_key] = (entry.monotonic_ts, entry.symbol)
         self._get_phantom_legacy_intents()[phantom_key] = entry.intent
         return phantom_key
@@ -1307,7 +1055,6 @@ class OrderAdapter:
             removed += len(records) - len(kept)
             if kept:
                 records_dict[key] = kept
-                # Resync legacy views to the surviving last occurrence.
                 last = kept[-1]
                 legacy_keys[key] = (last.monotonic_ts, last.symbol)
                 legacy_intents[key] = last.intent
@@ -1374,9 +1121,6 @@ class OrderAdapter:
                 continue
             intent = legacy_intents.get(key)
             if intent is None:
-                # Synthesise a minimal intent so feedback / FIFO logic
-                # has something to work with. Strategy_id is parsed from
-                # the key; intent_id is opportunistic (best-effort).
                 strat = key.split(":", 1)[0] if ":" in key else key
                 rest = key.split(":", 1)[1] if ":" in key else ""
                 try:
@@ -1425,7 +1169,6 @@ class OrderAdapter:
         runs in the background and releases from there). Called from the
         supervisor loop.
         """
-        # M4: materialise legacy-only entries (see ``resolve_phantom_fill``).
         with self._phantom_lock:
             self._phantom_materialize_legacy()
         if not self._get_phantom_records():
@@ -1470,7 +1213,7 @@ class OrderAdapter:
         """Search the broker for TTL-expired phantoms; bind what it holds, release the rest."""
         try:
             await self._settle_expired_phantoms_once(ttl_s)
-        except Exception:  # noqa: BLE001 — a background task: log it, the next sweep retries
+        except Exception:
             logger.error("phantom_broker_lookup_crashed", exc_info=True)
             self._count_phantom_bound("lookup_failed")
 
@@ -1485,10 +1228,10 @@ class OrderAdapter:
                     timeout=getattr(self, "_phantom_lookup_timeout_s", 15.0),
                 )
             )
-        except Exception as exc:  # noqa: BLE001 — any failure means "broker state unknown": keep the slot
+        except Exception as exc:
             logger.warning("phantom_broker_lookup_failed", error=repr(exc))
             trades = None
-        due = self._due_phantoms(ttl_s)  # re-read: a fill or a late Trade may have settled some meanwhile
+        due = self._due_phantoms(ttl_s)
         if trades is None:
             self._count_phantom_bound("lookup_failed")
             max_hold = getattr(self, "_phantom_lookup_max_hold_s", 1800.0)
@@ -1504,7 +1247,7 @@ class OrderAdapter:
             if match is _AMBIGUOUS_MATCH:
                 self._count_phantom_bound("lookup_ambiguous")
                 logger.warning("phantom_broker_lookup_ambiguous", order_key=pkey, symbol=record.symbol)
-                continue  # held; retried next sweep, released after the max hold
+                continue
             if match is None:
                 release.append((pkey, record))
                 continue
@@ -1542,13 +1285,10 @@ class OrderAdapter:
         token = self._custom_field_token_for(order_key)
         try:
             code = self._resolve_broker_contract_code(intent)
-        except Exception:  # noqa: BLE001 — fall back to the platform symbol
+        except Exception:
             code = intent.symbol
         codec = self._broker_codec
         action = codec.encode_side(intent.side) if codec is not None else ("Buy" if intent.side == Side.BUY else "Sell")
-        # An SDK that echoes custom_field on any listed order echoes it on all:
-        # then an order without one was not placed by the platform (a manual
-        # order on the same account) and must never be taken over.
         echoes = any(self._sdk_field(self._sdk_field(t, "order"), "custom_field") for t in trades)
         candidates: list[Any] = []
         for trade in trades:
@@ -1593,17 +1333,13 @@ class OrderAdapter:
         """Hand the slot back for these phantom records (the pre-lookup TTL release)."""
         now_mono = time.monotonic()
         released = 0
-        # P0-E2 + M4: per-occurrence evict under _phantom_lock, emit feedback
-        # after. ``_send_dispatch_rejection`` calls into
-        # _rejection_sink.put_nowait; we intentionally release the lock
-        # before that to avoid holding the phantom lock across queue I/O.
         expired: list[tuple[str, OrderIntent]] = []
         with self._phantom_lock:
             records_dict = self._get_phantom_records()
             for pkey, record in due:
                 records = records_dict.get(pkey)
                 if not records or not any(r is record for r in records):
-                    continue  # settled meanwhile (fill claim, late Trade bind)
+                    continue
                 records_dict[pkey] = [r for r in records if r is not record]
                 if records_dict[pkey]:
                     self._phantom_resync_legacy(pkey)
@@ -1613,8 +1349,6 @@ class OrderAdapter:
                 placed = record.side if record.side != -1 else _phantom_side(record.intent.side)
                 self._get_expired_phantoms().append((now_mono, pkey, record.symbol, placed))
         for _pkey, intent in expired:
-            # After this the record can no longer claim a fill: a late fill for
-            # the order reaches the router as strategy UNKNOWN.
             self._audit_log_order(
                 {
                     "event": "phantom_expired",
@@ -1628,8 +1362,6 @@ class OrderAdapter:
                     "error": f"phantom_ttl_{ttl_s:g}s",
                 }
             )
-            # No Trade, no error, nothing bound, for the whole TTL: this one is a
-            # dead letter, and the only kind a timeout produces.
             self.metrics.order_reject_total.inc()
             await self._add_to_dlq(intent, RejectionReason.OUTCOME_UNRESOLVED, f"phantom_ttl_{ttl_s:g}s")
             if self._send_dispatch_rejection(
@@ -1637,9 +1369,6 @@ class OrderAdapter:
                 "phantom_recovery_ttl_expired",
                 phantom_pending=False,
             ):
-                # The slot is back with the strategy; whatever status the order
-                # gets later must not release it again. (A dropped feedback leaves
-                # the real terminal as the only release, so it is not recorded.)
                 self._mark_finished(_pkey)
             released += 1
             try:
@@ -1680,13 +1409,9 @@ class OrderAdapter:
             elapsed_s = elapsed_ns / 1e9
             try:
                 has_ids = kind == "trade" and self._trade_has_broker_ids(value)
-            except Exception:  # noqa: BLE001 — an odd SDK object must not cost the whole report
+            except Exception:
                 has_ids = False
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
-            # When the broker stamped the order, beside when we sent it: a stamp
-            # near the send means the order sat at the broker and the answer was
-            # slow to come back; a stamp near the answer means it queued before
-            # the broker took it. Raw SDK value, no timezone assumed.
             order_datetime = ""
             if kind == "trade":
                 try:
@@ -1697,10 +1422,9 @@ class OrderAdapter:
                         else getattr(status, "order_datetime", None)
                     )
                     order_datetime = "" if stamp is None else str(stamp)
-                except Exception:  # noqa: BLE001 — an odd SDK object must not cost the whole report
+                except Exception:
                     order_datetime = ""
                 if self.latency:
-                    # The real duration; api_place_order stopped at the timeout.
                     self.latency.record(
                         "api_place_order_late",
                         elapsed_ns,
@@ -1720,7 +1444,7 @@ class OrderAdapter:
             )
             try:
                 self.metrics.place_order_late_result_total.labels(kind=kind).inc()
-            except Exception:  # noqa: BLE001 — a metric must never break the order path
+            except Exception:
                 pass
             row: dict[str, Any] = {
                 "event": "late_result",
@@ -1737,7 +1461,7 @@ class OrderAdapter:
                 row["error"] = type(value).__name__
             self._audit_log_order(row)
             if intent.intent_type != IntentType.NEW:
-                return  # only a NEW took a pending slot; never cancel a FORCE_FLAT
+                return
             if kind == "trade" and has_ids:
                 self._spawn_phantom_bind(intent, value)
             elif kind == "cancelled_before_send" or (kind == "error" and not self._error_may_have_sent(value)):
@@ -1774,7 +1498,7 @@ class OrderAdapter:
     def _count_phantom_bound(self, outcome: str) -> None:
         try:
             self.metrics.phantom_bound_total.labels(outcome=outcome).inc()
-        except Exception:  # noqa: BLE001 — a metric must never break the order path
+        except Exception:
             pass
 
     def _take_phantom_record(self, order_key: str) -> bool:
@@ -1795,12 +1519,10 @@ class OrderAdapter:
         """The SDK answered that no order exists: hand the pending slot back now."""
         order_key = f"{intent.strategy_id}:{intent.intent_id}"
         if not self._take_phantom_record(order_key):
-            return  # the TTL sweep or a fill claim already settled the slot
+            return
         if self._send_dispatch_rejection(intent, "place_order_not_sent", phantom_pending=False):
-            self._mark_finished(order_key)  # nothing will ever terminal this order
+            self._mark_finished(order_key)
         self._count_phantom_bound("released_not_sent")
-        # Now known to have failed: the reject and dead letter the timeout
-        # deferred (``_dispatch_to_api`` books neither for a phantom).
         self.metrics.order_reject_total.inc()
         self._record_broker_failure(intent)
         self._spawn_dlq_add(intent, RejectionReason.CONNECTION_ERROR, "place_order_not_sent")
@@ -1870,8 +1592,6 @@ class OrderAdapter:
         """
         order_key = f"{intent.strategy_id}:{intent.intent_id}"
         try:
-            # The dispatch that timed out removes its placeholder right after the
-            # timeout; installing the Trade before that would lose it.
             for _ in range(50):
                 async with self._live_orders_lock:
                     if self.live_orders.get(order_key) is not _PENDING_SENTINEL:
@@ -1895,9 +1615,9 @@ class OrderAdapter:
             if filled:
                 outcome = "skipped_filled"
             elif not live:
-                outcome = "skipped_gone"  # a terminal that beat the registration ended it
+                outcome = "skipped_gone"
             elif self._is_cancel_inflight(order_key):
-                outcome = "cancel_inflight"  # another cancel is already on its way
+                outcome = "cancel_inflight"
             else:
                 outcome = await self._cancel_bound_trade(order_key, intent, trade)
             self._count_phantom_bound(outcome)
@@ -1914,7 +1634,7 @@ class OrderAdapter:
                     "details": f"outcome={outcome} slot_held={slot_held}",
                 }
             )
-        except Exception:  # noqa: BLE001 — a failed bind falls back to the TTL release
+        except Exception:
             logger.warning("phantom_bind_failed", order_key=order_key, exc_info=True)
             self._count_phantom_bound("kept_for_ttl")
 
@@ -1928,7 +1648,6 @@ class OrderAdapter:
             self._watch_cancel(order_key, cancel_intent, 0, confirm_s=self._cancel_timeout_confirm_s)
             return "cancel_timeout"
         if result is None or result is _GUARD_TIMEOUT:
-            # Nothing landed: look again after the normal window, re-sent once.
             self._clear_cancel_inflight(order_key)
             self._watch_cancel(order_key, cancel_intent, 0)
             return "cancel_failed"
@@ -1975,7 +1694,7 @@ class OrderAdapter:
                 return
             try:
                 _on_late(kind, value)
-            except Exception:  # noqa: BLE001 — observation must never disturb the loop
+            except Exception:
                 logger.warning("late_result_callback_failed", exc_info=True)
 
         def _set_result(value: Any) -> None:
@@ -1999,7 +1718,7 @@ class OrderAdapter:
         def _worker() -> None:
             try:
                 result = fn(*args, **kwargs)
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 try:
                     loop.call_soon_threadsafe(_set_exception, exc)
                 except RuntimeError:
@@ -2065,10 +1784,6 @@ class OrderAdapter:
 
         Returns strategy_id or None.
         """
-        # M4: materialise any legacy-only entries so the canonical-store
-        # iteration below can resolve them (test fixtures still seed
-        # ``_phantom_order_keys`` directly without writing through the
-        # helpers).
         with self._phantom_lock:
             self._phantom_materialize_legacy()
         if not self._get_phantom_records() and not self._get_expired_phantoms():
@@ -2077,9 +1792,6 @@ class OrderAdapter:
         side = getattr(fill_event, "side", None)
         if not symbol:
             return None
-        # Bug 16: None side on a fill event is a data integrity error. Previously
-        # defaulted to BUY which could misattribute phantom fills. Skip resolution
-        # and log; upstream reconciliation will surface the orphan via metrics.
         if side is None:
             logger.warning(
                 "phantom_fill_resolution_skipped_none_side",
@@ -2087,28 +1799,20 @@ class OrderAdapter:
                 fill_event=repr(fill_event),
             )
             return None
-        # Check pending_fill_index first — it has symbol+side specificity.
-        # Lock order: _pending_fill_lock → _phantom_lock (no reverse path).
         side_name = "SELL" if int(side) == 1 else "BUY"
         pf_key = f"{symbol}:{side_name}"
         with self._pending_fill_lock:
             pending = self._pending_fill_index.get(pf_key)
             if pending:
-                # Found a pending fill entry — pop FIFO and resolve
                 order_key = pending.pop(0)
                 self._pending_fill_registered_at.pop(order_key, None)
                 if not pending:
                     del self._pending_fill_index[pf_key]
                 strategy_id = order_key.split(":", 1)[0] if ":" in order_key else order_key
                 self._note_phantom_fill(order_key, fill_event)
-                # M4: pop ONE phantom occurrence (FIFO) for ``order_key`` so a
-                # sibling occurrence (same intent_id, second submission) stays
-                # resolvable for its own fill.
                 with self._phantom_lock:
                     records = self._get_phantom_records().get(order_key)
                     if records:
-                        # Oldest occurrence of THIS side: a reused intent_id may
-                        # hold an opposite-side occurrence that is not this fill's.
                         idx = next((i for i, r in enumerate(records) if r.side in (-1, int(side))), None)
                         if idx is not None:
                             records.pop(idx)
@@ -2121,43 +1825,27 @@ class OrderAdapter:
                     strategy_id=strategy_id,
                 )
                 return strategy_id
-        # Fallback: match phantom key with verified symbol match.
         now_mono = time.monotonic()
         with self._phantom_lock:
-            # Snapshot inside the lock; process candidates below (still holding
-            # the lock for the matching pop to avoid a concurrent task stealing
-            # the same key between our match decision and the pop).
-            # Oldest eligible occurrence across ALL keys (registration time), not the
-            # first key in dict order: a reused key's newer occurrence must not beat
-            # another key's older one. Eligible = fresh, on the fill's symbol, on the
-            # fill's side. A fill can only belong to an order of its own side: a SELL
-            # fill popping an older BUY phantom leaked the strategy's BUY pending slot
-            # forever (THESHOW 2026-11-11, R47). Side -1 (unknown: legacy record,
-            # untracked FORCE_FLAT, malformed side) matches either side.
             best: tuple[float, str, int] | None = None
             fill_side = int(side)
             for key, recs in self._get_phantom_records().items():
                 for i, rec in enumerate(recs):
-                    # Skip entries older than 2 hours (stale phantoms)
                     if (now_mono - rec.monotonic_ts) > 7200.0:
                         continue
-                    # C-2 fix: MUST verify symbol match to prevent cross-strategy misattribution
                     if rec.symbol and rec.symbol != symbol:
                         continue
                     if rec.side != -1 and rec.side != fill_side:
                         continue
                     if best is None or rec.monotonic_ts < best[0]:
                         best = (rec.monotonic_ts, key, i)
-                    break  # occurrences are appended in order: the first eligible is this key's oldest
+                    break
             if best is not None:
                 _, pkey, idx = best
                 records = self._get_phantom_records()[pkey]
                 strategy_id = pkey.split(":", 1)[0] if ":" in pkey else pkey
-                # M4: pop ONE occurrence; siblings retained.
                 records.pop(idx)
                 self._phantom_resync_legacy(pkey)
-                # The order's Trade may still come back: ``_bind_late_trade`` must
-                # find it already filled instead of cancelling a finished order.
                 self._note_phantom_fill(pkey, fill_event)
                 logger.warning(
                     "phantom_fill_resolved_via_phantom_keys",
@@ -2167,8 +1855,6 @@ class OrderAdapter:
                     strategy_id=strategy_id,
                 )
                 return strategy_id
-            # Last resort: a phantom whose TTL ran out with no answer from the SDK.
-            # Oldest first, same symbol and side, within the retention window.
             ledger = self._get_expired_phantoms()
             for entry in tuple(ledger):
                 expired_at, pkey, esymbol, eside = entry
@@ -2208,24 +1894,21 @@ class OrderAdapter:
                 self.circuit_breaker.timeout_s = cb_cfg.get("timeout_seconds", self.circuit_breaker.timeout_s)
 
     def _intent_to_command(self, intent: OrderIntent) -> OrderCommand:
-        mono_ns = time.monotonic_ns()  # monotonic clock for deadline comparison
-        created_ns = timebase.now_ns()  # epoch wall-clock for TCA / recording
+        mono_ns = time.monotonic_ns()
+        created_ns = timebase.now_ns()
         ttl_ns = int(intent.ttl_ns) if intent.ttl_ns > 0 else 5_000_000_000
-        # Stamp HALT only for legitimate HaltFlattener intents (FORCE_FLAT + halt_flatten reason)
         storm_guard_state = (
             StormGuardState.HALT
             if intent.reason == "halt_flatten" and intent.intent_type == IntentType.FORCE_FLAT
             else StormGuardState.NORMAL
         )
-        # TCA: arrival_price = current LOB mid-price (not decision_price)
         if self._mid_price_fn is not None:
             try:
                 arrival = self._mid_price_fn(intent.symbol)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 arrival = int(intent.decision_price)
         else:
             arrival = int(intent.decision_price)
-        # Fall back to decision_price if LOB returned 0 (book not ready)
         if arrival <= 0:
             arrival = int(intent.decision_price)
         return OrderCommand(
@@ -2255,25 +1938,23 @@ class OrderAdapter:
 
         try:
             while self.running:
-                # Allow exceptions to crash the task (Supervisor will handle)
                 try:
                     cmd: OrderCommand = await asyncio.wait_for(
                         self.order_queue.get(),
-                        timeout=1.0,  # Check running flag periodically
+                        timeout=1.0,
                     )
                 except asyncio.TimeoutError:
                     continue
 
-                # Check Deadline
                 if time.monotonic_ns() > cmd.deadline_ns and not self._deadline_exempt(cmd.intent):
                     logger.warning("Order Timeout (Pre-dispatch)", cmd_id=cmd.cmd_id)
                     try:
                         self.metrics.order_deadline_expired_total.inc()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     try:
                         self.metrics.order_reject_total.inc()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     self._dedup_release(cmd.intent.idempotency_key)
                     await self._add_to_dlq(
@@ -2288,7 +1969,6 @@ class OrderAdapter:
                 await self.execute(cmd)
                 self.order_queue.task_done()
         finally:
-            # Ensure worker task is properly cancelled and awaited
             if self._api_worker_task:
                 self._api_worker_task.cancel()
                 try:
@@ -2298,20 +1978,13 @@ class OrderAdapter:
                 self._api_worker_task = None
             try:
                 self.shadow_sink.flush()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("shadow_sink_flush_failed", error=str(exc))
             logger.info("OrderAdapter stopped")
 
     def check_rate_limit(self) -> bool:
         """Sliding window check."""
         return self.rate_limiter.check()
-
-    # ── P1-8: order_id_map mutation helpers ────────────────────────────────
-    # Every write into ``self.order_id_map`` MUST go through these helpers so
-    # the lock discipline cannot drift. ``_order_id_map_lock`` is an RLock so
-    # batch writers (`_register_broker_ids`) can hold it while delegating to
-    # the helpers without deadlocking. Each call emits a ``debug`` log with
-    # the ``source=`` argument for forensic tracing of the mutation site.
 
     def _get_order_id_meta(self) -> dict[str, tuple[int, str]]:
         """H3: lazy accessor for the metadata sidecar.
@@ -2449,11 +2122,6 @@ class OrderAdapter:
                     t_ns_raw = obj.get("t_ns")
                     state_raw = obj.get("s")
                     if t_ns_raw is None or state_raw is None:
-                        # Legacy schema — drop. Pre-H3 entries have no age
-                        # info, so we cannot honour TTL for them; skipping
-                        # is the conservative choice (a missing mapping
-                        # falls back to UNKNOWN attribution downstream,
-                        # which is far safer than an ABA misattribution).
                         skipped_legacy += 1
                         continue
                     try:
@@ -2476,7 +2144,6 @@ class OrderAdapter:
                         state=state,
                     )
                     loaded += 1
-            # Enforce max size
             while len(self.order_id_map) > self._order_id_map_max_size:
                 first_key = next(iter(self.order_id_map))
                 self._del_order_id_mapping(first_key, source="persisted_evict")
@@ -2516,7 +2183,6 @@ class OrderAdapter:
         """
         with self._order_id_map_io_lock:
             path = self._order_id_map_persist_path
-            # Snapshot under the lock so the order_id_map and metadata views agree.
             meta_dict = self._get_order_id_meta()
             with self._order_id_map_lock:
                 snapshot: list[tuple[str, str, int, str]] = []
@@ -2524,14 +2190,11 @@ class OrderAdapter:
                 for k, v in self.order_id_map.items():
                     meta = meta_dict.get(k)
                     if meta is None:
-                        # Defensive: unmetered entry (direct mutation, legacy
-                        # callsite, or test path) — stamp as live with the
-                        # current timestamp so a future load applies TTL only.
                         snapshot.append((k, v, now_ns, "live"))
                         continue
                     t_ns, state = meta
                     if state == "terminal":
-                        continue  # H3: drop terminals from the persisted snapshot
+                        continue
                     snapshot.append((k, v, t_ns, state))
             try:
                 import orjson
@@ -2547,8 +2210,6 @@ class OrderAdapter:
                         os.fsync(f.fileno())
                     os.rename(tmp_path, path)
                 finally:
-                    # M2 (2026-04-25): finally-cleanup so orphan tmpfiles don't
-                    # accumulate when the worker dies between fsync and rename.
                     if os.path.exists(tmp_path):
                         try:
                             os.unlink(tmp_path)
@@ -2567,14 +2228,6 @@ class OrderAdapter:
         now_s = time.monotonic()
         if not force and self._order_id_map_persist_interval_s > 0:
             if (now_s - self._order_id_map_last_persist_s) < self._order_id_map_persist_interval_s:
-                # Leading-edge-only throttling silently dropped this write, and
-                # nothing ever retried it: ``force=True`` has no call site, so a
-                # mapping registered inside the interval was persisted only if
-                # another order happened to arrive after it. A two-sided quote
-                # registers both legs ~0.3 s apart, so the second leg was never
-                # checkpointed and could not be recovered after a restart.
-                # Schedule the trailing edge so the newest mapping always
-                # reaches disk within one interval.
                 self._schedule_trailing_persist(now_s)
                 return
         self._cancel_trailing_persist()
@@ -2582,13 +2235,8 @@ class OrderAdapter:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop (shutdown or non-async context) — persist inline
             self.persist_order_id_map()
             return
-        # Keep the future. It used to be dropped on the floor, which left no
-        # way to tell a scheduled checkpoint from a completed one: the caller
-        # could only guess how long the executor needed. ``flush_order_id_map``
-        # turns that guess into a wait.
         future = loop.run_in_executor(None, self.persist_order_id_map)
         self._order_id_map_persist_futures.add(future)
         future.add_done_callback(self._order_id_map_persist_futures.discard)
@@ -2604,24 +2252,16 @@ class OrderAdapter:
         pending = [f for f in tuple(self._order_id_map_persist_futures) if not f.done()]
         if not pending:
             return
-        # ``return_exceptions`` because the write itself already logs and
-        # swallows its own failures: a shutdown must not be aborted by one.
         await asyncio.gather(*pending, return_exceptions=True)
 
     def _schedule_trailing_persist(self, now_seconds: float) -> None:
         """Arm a one-shot flush for the end of the current throttle window."""
         if self._order_id_map_trailing_handle is not None:
-            return  # already armed; it will capture this write too
+            return
         delay = max(0.0, self._order_id_map_persist_interval_s - (now_seconds - self._order_id_map_last_persist_s))
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop (shutdown or a sync caller): there is nothing to
-            # defer onto. Persisting inline here would honour durability at the
-            # cost of the throttle's only job — bounding fsync frequency — so
-            # the write is left for the next call, exactly as before. The adapter
-            # always runs under a loop in production, which is where the dropped
-            # trailing write actually cost us.
             return
         self._order_id_map_trailing_handle = loop.call_later(delay, self._run_trailing_persist)
 
@@ -2678,10 +2318,6 @@ class OrderAdapter:
             if order_key not in pending:
                 pending.append(order_key)
             self._pending_fill_registered_at[order_key] = time.monotonic()
-            # P1-8: route through the shared helper so every writer site has
-            # the same lock + audit-log discipline. Lock order is preserved
-            # (``_pending_fill_lock`` already held → helper takes the
-            # re-entrant ``_order_id_map_lock``).
             self._set_order_id_mapping(custom_field_token, order_key, source="register_pending_fill")
         self._maybe_persist_order_id_map()
 
@@ -2699,7 +2335,7 @@ class OrderAdapter:
             for key in empty_keys:
                 self._pending_fill_index.pop(key, None)
 
-    async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:  # precision-ok
+    async def drain_and_cancel(self, timeout_s: float = 5.0) -> int:
         """Drain pending orders and cancel all live orders."""
         cancelled = 0
         while not self.order_queue.empty():
@@ -2708,8 +2344,6 @@ class OrderAdapter:
                 self.order_queue.task_done()
             except asyncio.QueueEmpty:
                 break
-        # Also drain _api_queue (gateway mode dispatches directly to it)
-        # Safety-order filter: preserve CANCEL/FORCE_FLAT + halt-exempt strategies
         _api_drained = 0
         _api_safety: list = []
         while not self._api_queue.empty():
@@ -2727,7 +2361,6 @@ class OrderAdapter:
                     _api_drained += 1
             except asyncio.QueueEmpty:
                 break
-        # Dispatch safety commands directly via _dispatch_to_api (bypasses stopped _api_worker)
         for cmd in _api_safety:
             try:
                 _task = asyncio.create_task(self._dispatch_to_api(cmd))
@@ -2784,9 +2417,6 @@ class OrderAdapter:
         mismatch so the regression is loud.
         """
         tid = threading.get_ident()
-        # ``__slots__`` storage: tests that build adapters via ``__new__``
-        # without invoking ``__init__`` may not have the slot populated.
-        # ``getattr`` with default keeps the helper robust to both paths.
         engine_tid = getattr(self, "_engine_thread_id", None)
         if engine_tid is None:
             self._engine_thread_id = tid
@@ -2856,7 +2486,7 @@ class OrderAdapter:
         target_key: str,
         intent: OrderIntent,
         cmd_id: int,
-        confirm_s: float | None = None,  # precision-time
+        confirm_s: float | None = None,
     ) -> None:
         """Remember a cancel whose effect nobody checks.
 
@@ -2890,7 +2520,7 @@ class OrderAdapter:
             for key, watch in list(self._cancel_watch.items()):
                 trade = self.live_orders.get(key)
                 if trade is None:
-                    del self._cancel_watch[key]  # confirmed: the order is gone
+                    del self._cancel_watch[key]
                 elif now - watch.at >= (self._cancel_confirm_s if watch.confirm_s is None else watch.confirm_s):
                     due.append((key, watch, trade))
         for key, watch, trade in due:
@@ -2907,7 +2537,7 @@ class OrderAdapter:
             )
             try:
                 self.metrics.cancel_unconfirmed_total.labels(outcome=outcome).inc()
-            except Exception:  # noqa: BLE001 — metric must never break order path
+            except Exception:
                 pass
             self._audit_log_order(
                 {
@@ -2937,8 +2567,8 @@ class OrderAdapter:
             if result is _CANCEL_TIMED_OUT:
                 result_label = "timeout"
             else:
-                result_label = "failed" if result is None or result is _GUARD_TIMEOUT else "sent"  # None: error
-        except Exception as exc:  # noqa: BLE001 — a failed retry must not escape the task
+                result_label = "failed" if result is None or result is _GUARD_TIMEOUT else "sent"
+        except Exception as exc:
             logger.warning("cancel_retry_error", target=key, error=str(exc))
             result_label = "error"
         if result_label == "sent":
@@ -2946,7 +2576,7 @@ class OrderAdapter:
             self.per_symbol_rate_limiter.record(watch.intent.symbol)
         try:
             self.metrics.cancel_retry_total.labels(result=result_label).inc()
-        except Exception:  # noqa: BLE001 — metric must never break order path
+        except Exception:
             pass
         self._audit_log_order(
             {
@@ -3051,7 +2681,7 @@ class OrderAdapter:
         self._remove_pending_fill(order_key)
         try:
             self.metrics.live_order_completed_by_fill_total.inc()
-        except Exception:  # noqa: BLE001 — metric must never break order path
+        except Exception:
             pass
         return True
 
@@ -3064,22 +2694,14 @@ class OrderAdapter:
             entry = self.live_orders.get(order_key)
 
             if entry is not None and entry is not _PENDING_SENTINEL:
-                # Normal path — order is registered, clean up
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
                 self._untrack_live_order_intent(order_key)
                 self._record_recent_terminal(order_key, reason="terminal")
-                # Clean up e2e latency tracking entry (SLO-2)
                 self._cmd_created_ns_map.pop(order_key, None)
-                # Clean up TCA price tracking entry
                 self._cmd_tca_map.pop(order_key, None)
-                # L8: clean up trace_id map alongside TCA map
                 self._cmd_trace_id_map.pop(order_key, None)
                 self._remove_pending_fill(order_key)
-                # L8: emit canonical explanation. The lifecycle_status here is
-                # coarse — finer-grained classification (filled vs partial vs
-                # canceled) is best-effort future work; "filled" is the most
-                # common terminal in the steady state.
                 if self._explanation_assembler is not None:
                     try:
                         self._explanation_assembler.on_terminal(
@@ -3087,25 +2709,19 @@ class OrderAdapter:
                             lifecycle_status="filled",
                             ts_emit_ns=int(time.time_ns()),
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                 return
 
-            # A cancel/reject that trails the fill which already finished this
-            # order. Without this it would be parked as "terminal before
-            # registration" whenever the strategy has a new order in flight.
             completed = self._recently_terminal_orders.get(order_key)
             if completed is not None and completed[1] == "filled":
                 logger.info("terminal_after_fill_ignored", key=order_key)
                 return
 
-            # Check if any order for this strategy is in-flight
             has_pending = any(k.startswith(f"{strategy_id}:") for k in self._pending_order_keys)
             if has_pending:
                 if len(self._deferred_terminals) == self._deferred_terminals.maxlen:
-                    # Evicted entry's order will linger in live_orders until TTL sweep.
-                    # Proactively clean it up to avoid blocking new orders for that strategy.
-                    evicted = self._deferred_terminals[0]  # will be popped by append
+                    evicted = self._deferred_terminals[0]
                     evicted_key = f"{evicted[0]}:{evicted[1]}"
                     self.live_orders.pop(evicted_key, None)
                     self._untrack_live_order_intent(evicted_key)
@@ -3130,7 +2746,6 @@ class OrderAdapter:
                 )
                 return
 
-            # No pending orders — genuine orphan or already cleaned up
             if order_key in self.live_orders:
                 logger.info("Removing terminal order", key=order_key)
                 del self.live_orders[order_key]
@@ -3151,10 +2766,6 @@ class OrderAdapter:
         Returns True if any new mapping was added.
         """
         changed = False
-        # P1-8: hold the RLock across the whole batch so the get/set pair is
-        # atomic (no peer writer can slip a different value between the
-        # ``.get(key)`` check and the helper's write). The helper re-acquires
-        # the same RLock per write; re-entrant acquire is O(1).
         with self._order_id_map_lock:
             for broker_id in ids:
                 key = str(broker_id or "")
@@ -3165,8 +2776,6 @@ class OrderAdapter:
                 self._set_order_id_mapping(key, order_key, source="register_broker_ids_bulk")
                 changed = True
         return changed
-
-        # Also clean up rate limit window if needed? No, rate limit is distinct.
 
     async def _register_broker_ids(self, order_key: str, trade: Any) -> bool:
         """Register broker IDs to order_key mapping with lock protection."""
@@ -3211,17 +2820,7 @@ class OrderAdapter:
                         ids.add(val)
 
         changed = False
-        # P0-E1: synchronous lock, because broker-thread readers (_on_exec)
-        # also take this lock. All critical sections here are dict ops only.
-        # P1-8: ``_order_id_map_lock`` is now an RLock so the per-key writes
-        # below can re-route through ``_set_order_id_mapping`` /
-        # ``_del_order_id_mapping`` (which take the lock again) without
-        # deadlocking. This ensures every mutation path emits a uniform
-        # ``order_id_map_set`` / ``order_id_map_del`` debug log keyed by
-        # ``source=``.
         with self._order_id_map_lock:
-            # Evict oldest entries if at limit — skip entries whose order_key
-            # is still in live_orders to prevent orphaning active fills (M6).
             if len(self.order_id_map) >= self._order_id_map_max_size:
                 evict_target = max(1, len(self.order_id_map) // 10)
                 evicted = 0
@@ -3229,7 +2828,6 @@ class OrderAdapter:
                     if evicted >= evict_target:
                         break
                     mapped_key = self.order_id_map[k]
-                    # Protect entries linked to live orders or pending fills (recently placed)
                     if mapped_key in self.live_orders:
                         continue
                     if mapped_key in self._pending_fill_registered_at:
@@ -3268,7 +2866,6 @@ class OrderAdapter:
         order_key = self._lookup_pending_order_key(symbol, action, consume=consume)
         if not order_key:
             return None
-        # order_key is "STRATEGY_ID:intent_id"
         return order_key.split(":", 1)[0] if ":" in order_key else order_key
 
     def _lookup_pending_order_key(self, symbol: str, action: str, *, consume: bool) -> str | None:
@@ -3299,15 +2896,11 @@ class OrderAdapter:
                 try:
                     self.metrics.pending_fill_expired_total.inc()
                 except Exception:
-                    pass  # metric may not exist during tests
+                    pass
                 logger.warning("pending_fill_index_expired", symbol=symbol, action=action, order_key=head)
             if not pending:
                 return None
             remaining_before_pop = len(pending)
-            # H6: under strict mode, refuse ambiguous FIFO pops so the
-            # caller can DLQ / UNKNOWN-route the fill rather than silently
-            # misattribute. Permissive mode (default) preserves the legacy
-            # behaviour — FIFO head wins, warning emitted.
             if remaining_before_pop > 1 and self._pending_fifo_strict:
                 logger.warning(
                     "pending_fill_fifo_ambiguous_blocked",
@@ -3318,10 +2911,9 @@ class OrderAdapter:
                 )
                 try:
                     self.metrics.pending_fill_ambiguous_blocked_total.inc()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 return None
-            # FIFO: takes the oldest pending order for this symbol+side.
             if consume:
                 order_key = pending.pop(0)
                 self._pending_fill_registered_at.pop(order_key, None)
@@ -3449,15 +3041,9 @@ class OrderAdapter:
             )
             return False
 
-        # StormGuard HALT check — both stamped and live state (closes TOCTOU gap)
         _is_halt = cmd.storm_guard_state == StormGuardState.HALT
         if not _is_halt and self._storm_guard is not None:
             _is_halt = getattr(self._storm_guard, "state", None) == StormGuardState.HALT
-        # Constitution: HALT blocks new orders but allows CANCEL/FORCE_FLAT through.
-        # halt_flatten requires conjunction with FORCE_FLAT to prevent spoofing.
-        # Bug 24 (2026-04-17): reducing cover orders also bypass (mirrors Bug 21/22
-        # reduce-only bypass at validator / Gateway layers — adapter is the last gate
-        # and must remain consistent under HALT, else cover orders stranded in DLQ).
         _halt_exempt = (
             intent.intent_type == IntentType.CANCEL
             or intent.intent_type == IntentType.FORCE_FLAT
@@ -3474,11 +3060,8 @@ class OrderAdapter:
             )
             return False
 
-        # Safety-critical intents (CANCEL/FORCE_FLAT) bypass rate limiters and
-        # circuit breakers — they must never be blocked during HALT evacuation.
         _safety_exempt = intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
 
-        # Idempotency dedup check (D-01) — skip for safety-exempt and empty keys
         if not _safety_exempt and self._dedup_store is not None and intent.idempotency_key:
             existing = self._dedup_store.check_or_reserve(intent.idempotency_key)
             if existing is not None:
@@ -3498,15 +3081,12 @@ class OrderAdapter:
                 )
                 return False
 
-        # R2-01: Track whether we reserved a dedup slot so we can release it on
-        # unexpected exception (prevents orphaned slots blocking re-submission).
         _dedup_key = (
             intent.idempotency_key
             if (not _safety_exempt and self._dedup_store is not None and intent.idempotency_key)
             else ""
         )
         try:
-            # Per-symbol rate limit check (WU-06)
             if not _safety_exempt:
                 ps_result = self.per_symbol_rate_limiter.check(intent.symbol)
                 if ps_result == PerSymbolRateResult.HARD:
@@ -3518,7 +3098,6 @@ class OrderAdapter:
                     )
                     return False
 
-            # Per-strategy circuit breaker check (WU-09)
             if not _safety_exempt and self.strategy_cb_mgr.is_open(intent.strategy_id):
                 await self._reject_before_dispatch(
                     intent,
@@ -3528,7 +3107,6 @@ class OrderAdapter:
                 )
                 return False
 
-            # Circuit Breaker Check
             if not _safety_exempt and self.circuit_breaker.is_open():
                 logger.warning("Circuit Breaker Open - Rejecting", cmd_id=cmd.cmd_id)
                 await self._reject_before_dispatch(
@@ -3540,7 +3118,6 @@ class OrderAdapter:
                 return False
 
             if not _safety_exempt and not self.check_rate_limit():
-                # Rate limit exceeded
                 await self._reject_before_dispatch(
                     intent,
                     RejectionReason.RATE_LIMIT,
@@ -3561,7 +3138,6 @@ class OrderAdapter:
                 return False
             self._reserve_platform_reduce_only_close(intent)
 
-            # Shadow mode intercept (WU-10)
             if self.shadow_sink.enabled:
                 self.shadow_sink.intercept(intent)
                 self.per_symbol_rate_limiter.record(intent.symbol)
@@ -3592,8 +3168,6 @@ class OrderAdapter:
                     self._dedup_commit(intent.idempotency_key, False, "dispatch_error", cmd.cmd_id)
                     return False
                 return ok
-            # Dedup remains in 'reserved' state until _api_worker resolves it
-            # (commit on dispatch success, release on failure/skip).
             return await self._enqueue_api(cmd)
         except Exception:
             if _dedup_key:
@@ -3738,7 +3312,7 @@ class OrderAdapter:
         reason_label = reason.value if isinstance(reason, RejectionReason) else str(reason)
         try:
             self.metrics.order_local_reject_total.labels(reason=reason_label).inc()
-        except Exception:  # noqa: BLE001 — a metric must never block the order path
+        except Exception:
             pass
         audit = self._audit_writer
         if audit is not None:
@@ -3754,7 +3328,7 @@ class OrderAdapter:
                         "reason_code": f"ADAPTER_{reason_label.upper()}",
                     }
                 )
-            except Exception:  # noqa: BLE001 — audit must never block or crash the order path
+            except Exception:
                 pass
         logger.warning(
             "order_rejected_before_dispatch",
@@ -3810,7 +3384,6 @@ class OrderAdapter:
         return True
 
     def _platform_degrade_allows(self, intent: OrderIntent) -> bool:
-        # FORCE_FLAT and CANCEL are always allowed regardless of platform degrade state
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True
         controller = getattr(self, "platform_degrade_controller", None)
@@ -3964,15 +3537,11 @@ class OrderAdapter:
             ref_price = scale * 1000
 
         if close_side == Side.BUY:
-            # Cap at +7% above reference to stay within exchange daily price limits (±10%).
-            # Previous 2x multiplier exceeded TAIFEX limits, causing HALT evacuation failure.
             return max(ref_price + scale, int(ref_price * 1.07))
         return max(scale, int(ref_price * 0.93))
 
     async def _dispatch_to_api(self, cmd: OrderCommand) -> bool:
         intent = cmd.intent
-        # Re-checked at the broker boundary: the HALT drain dispatches queued
-        # safety commands straight here, past ``execute``.
         order_mode_reason = self._order_mode_refusal(intent)
         if order_mode_reason:
             await self._reject_before_dispatch(
@@ -3989,33 +3558,23 @@ class OrderAdapter:
         try:
             order_key = f"{intent.strategy_id}:{intent.intent_id}"
 
-            # Record dispatch timestamp for e2e latency tracking (SLO-2)
             if cmd.created_ns > 0:
                 self._cmd_created_ns_map[order_key] = cmd.created_ns
-            # L8: stamp trace_id for fill-side enrichment. NEW only — AMEND/CANCEL
-            # share the original NEW's trace via target_order_key, not their own
-            # intent_id. Empty string (never None) so the FillEvent default holds.
             if intent.intent_type == IntentType.NEW:
                 _t = str(getattr(intent, "trace_id", "") or "")
                 if _t:
                     self._cmd_trace_id_map[order_key] = _t
-            # TCA: store decision/arrival prices for fill enrichment (NEW only —
-            # AMEND/CANCEL should not overwrite the original arrival reference point)
             if intent.intent_type == IntentType.NEW:
                 arrival = int(cmd.arrival_price)
-                # RiskEngine path leaves arrival_price=0; stamp from LOB mid-price
                 if arrival <= 0 and self._mid_price_fn is not None:
                     try:
                         arrival = self._mid_price_fn(intent.symbol)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         arrival = int(cmd.decision_price)
                 if arrival <= 0:
                     arrival = int(cmd.decision_price)
                 self._cmd_tca_map[order_key] = (int(cmd.decision_price), arrival)
 
-            # Bound cmd maps — evict oldest FIFO entries, skipping live orders (M6 pattern).
-            # Use _cmd_created_ns_map as the trigger since it is the superset (populated for
-            # all intent types, while _cmd_tca_map is NEW-only).
             if len(self._cmd_created_ns_map) >= self._cmd_map_max_size:
                 evict_target = max(1, len(self._cmd_created_ns_map) // 10)
                 evicted = 0
@@ -4049,7 +3608,6 @@ class OrderAdapter:
                     return False
                 logger.info("Placing Order", symbol=intent.symbol, price=intent.price, qty=intent.qty, side=intent.side)
 
-                # Dynamic Exchange Lookup (prefer config metadata)
                 meta = self.metadata
                 meta_exchange = ""
                 if hasattr(meta, "exchange"):
@@ -4098,16 +3656,12 @@ class OrderAdapter:
                         )
                         order_params = {}
 
-                # Convert Side IntEnum to broker-specific string
                 action_str = self._broker_codec.encode_side(intent.side)
 
-                # De-scale price (Fixed Point -> Float limit price)
                 price_float = self.price_codec.descale(intent.symbol, intent.price)
 
-                # TIF Mapping via broker codec
                 tif_str = self._broker_codec.encode_tif(intent.tif)
 
-                # D2: Pre-register sentinel to track in-flight order
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
@@ -4117,7 +3671,6 @@ class OrderAdapter:
                 c_field = self._next_custom_field_token()
                 await self._register_pending_fill(order_key, intent.symbol, intent.side, c_field)
 
-                # Broker-specific price type encoding + validation
                 _intent_pt = getattr(intent, "price_type", "LMT")
                 _raw_pt = _intent_pt if _intent_pt != "LMT" else str(order_params.get("price_type", "LMT"))
                 price_type = self._broker_codec.encode_price_type(_raw_pt)
@@ -4137,7 +3690,6 @@ class OrderAdapter:
                     self._remove_pending_fill(order_key)
                     return False
 
-                # Live safety: CA must be active when enabled
                 if getattr(self.client, "mode", "") != "simulation" and getattr(self.client, "activate_ca", False):
                     if not getattr(self.client, "ca_active", False):
                         logger.error(
@@ -4152,18 +3704,7 @@ class OrderAdapter:
                         self._remove_pending_fill(order_key)
                         return False
 
-                # Resolve the broker-side contract code. Gate 3 prefers
-                # ``intent.contract.display()`` when the resolver has a native
-                # hint for it (structured path); falls back to the reverse
-                # alias dict for legacy intents. See
-                # :meth:`_resolve_broker_contract_code` for ordering rationale.
                 order_contract_code = self._resolve_broker_contract_code(intent)
-                # H1: open a StormGuard ticket so a HALT triggered during the
-                # broker await window is observable post-dispatch and we can
-                # emit a defensive cancel for an order that may have reached
-                # the broker after we were told to stop. ``ticket_id`` is None
-                # when StormGuard is unwired (unit tests) — disabling the
-                # post-dispatch check is safe because there is no HALT source.
                 ticket_id = self._begin_dispatch_ticket(intent)
                 trade: Any = None
                 try:
@@ -4184,20 +3725,11 @@ class OrderAdapter:
                         **order_params,
                     )
                 finally:
-                    # F-D1: ticket MUST be closed even when the broker call
-                    # raises (OSError/TimeoutError/ConnectionError/RuntimeError
-                    # are caught by the outer except). Without this finally,
-                    # exception-failed dispatches leak tickets in
-                    # _inflight_dispatch_tickets forever. trade is None on
-                    # exception → _end_dispatch_ticket skips the defensive
-                    # cancel branch (no broker artefact to cancel).
                     await self._end_dispatch_ticket(ticket_id, intent, trade, cmd.cmd_id)
                 if trade is None or trade is _GUARD_TIMEOUT:
                     _is_timeout = trade is _GUARD_TIMEOUT
                     _fail_reason = "api_timeout" if _is_timeout else "api_failure"
                     _dlq_reason = RejectionReason.API_TIMEOUT if _is_timeout else RejectionReason.CONNECTION_ERROR
-                    # Read BEFORE the live_orders teardown below, which is what
-                    # blinds the other reclaim paths.
                     _phantom_pending = (not _is_timeout) and self._has_phantom_for(intent)
                     async with self._live_orders_lock:
                         self.live_orders.pop(order_key, None)
@@ -4206,13 +3738,8 @@ class OrderAdapter:
                     if not _is_timeout:
                         self._remove_pending_fill(order_key)
                     if not _phantom_pending:
-                        # A phantom's reject (or not) is booked when its outcome
-                        # is known; ``_call_api`` counted it as unknown.
                         self.metrics.order_reject_total.inc()
                     self._dedup_commit(intent.idempotency_key, False, _fail_reason, cmd.cmd_id)
-                    # A timed-out place_order left no row in audit.orders_log: the
-                    # order is accepted by the broker later, shows up as UNKNOWN
-                    # and cannot be traced back to the intent that produced it.
                     self._audit_log_order(
                         {
                             "event": "dispatch_failed",
@@ -4225,38 +3752,11 @@ class OrderAdapter:
                             "strategy_id": intent.strategy_id,
                             "cmd_id": int(cmd.cmd_id),
                             "error": _fail_reason,
-                            # True: the call may have reached the broker (a phantom
-                            # candidate is registered). False: it never did.
                             "phantom": _phantom_pending,
                         }
                     )
                     if not _phantom_pending:
-                        # A phantom is not a dead letter yet: the broker answers
-                        # most of them late, and _bind_late_trade cancels those.
-                        # It is dead-lettered once it is known to be one --
-                        # never sent (_release_unsent_phantom) or never answered
-                        # (release_stale_phantom_pendings).
                         await self._add_to_dlq(intent, _dlq_reason, _fail_reason)
-                    # The strategy is still holding the pending slot it took to
-                    # emit this intent, and this is the last point at which
-                    # anything can tell it otherwise. Returning False without
-                    # feedback blinded all three reclaim paths at once:
-                    # release_stale_phantom_pendings had no phantom to find on a
-                    # non-transient failure, sweep_stale_live_orders had just had
-                    # the entry deleted above, and no RiskFeedback was emitted.
-                    # A maker holding one slot per side then has can_buy and
-                    # can_sell both false -- a silent freeze that needs a human.
-                    # That is what kept R47_MAKER_TMF dead for 10 days after the
-                    # 2026-08-31 "401 Token is expired", which _is_transient_error
-                    # correctly classifies as non-transient.
-                    #
-                    # phantom_pending decides who owns the slot from here:
-                    #   _GUARD_TIMEOUT -> the semaphore was never acquired, so
-                    #     the broker call was never made: release now.
-                    #   None + phantom  -> a mutating call timed out and may have
-                    #     reached the broker. Keep the slot held (Bug 23) and let
-                    #     the phantom TTL release it, or a fill claim it.
-                    #   None, no phantom -> nothing reached the broker: release.
                     self._send_dispatch_rejection(
                         intent,
                         _fail_reason,
@@ -4266,25 +3766,15 @@ class OrderAdapter:
                     return False
 
                 self.metrics.order_actions_total.labels(type="new").inc()
-                # Bug #35 (2026-04-21): Removed `trade.timestamp = ...` setattr
-                # block. Shioaji Trade is a strict Pydantic model that rejects
-                # unknown fields with ValueError, generating one warning per
-                # order with no benefit — TTL tracking already uses the
-                # `_live_orders_inserted_at` sidecar populated at line 1730.
 
-                # Register broker IDs BEFORE removing from pending keys so that
-                # fast fill callbacks arriving during this window are still
-                # deferred (DECISION-007 race fix).
                 has_broker_ids = await self._register_broker_ids(order_key, trade)
                 if has_broker_ids:
                     self._remove_pending_fill(order_key)
 
-                # D2: Replace sentinel with real trade and leave pending state
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = trade
                     self._pending_order_keys.discard(order_key)
 
-                # Process any deferred terminal callbacks now that IDs are mapped.
                 await self._drain_deferred_terminals(order_key, trade)
 
                 self.rate_limiter.record()
@@ -4292,9 +3782,6 @@ class OrderAdapter:
                 self.circuit_breaker.record_success()
                 self._update_cb_metric()
                 self.strategy_cb_mgr.record_success(intent.strategy_id)
-                # L8: register the intent with the explanation assembler BEFORE
-                # the audit log so any deferred terminal that fires during the
-                # audit_log_order call still finds the entry.
                 if self._explanation_assembler is not None:
                     try:
                         self._explanation_assembler.on_intent(
@@ -4311,7 +3798,7 @@ class OrderAdapter:
                                 "decision_price": int(getattr(intent, "decision_price", 0) or 0),
                             },
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                 self._audit_log_order(
                     {
@@ -4378,7 +3865,6 @@ class OrderAdapter:
                     self.live_orders[order_key] = _PENDING_SENTINEL
                     self._pending_order_keys.add(order_key)
                     self._live_orders_inserted_at[order_key] = time.monotonic()
-                    # FORCE_FLAT places on the closing side, not intent.side.
                     self._track_live_order_intent(order_key, intent, close_side)
 
                 c_field = self._next_custom_field_token()
@@ -4408,9 +3894,6 @@ class OrderAdapter:
                     if trade is not _GUARD_TIMEOUT:
                         self._remove_pending_fill(order_key)
                     return False
-
-                # Bug #35: TTL tracked via `_live_orders_inserted_at` sidecar
-                # (line 1910). No need to mutate the Pydantic Trade object.
 
                 async with self._live_orders_lock:
                     self.live_orders[order_key] = trade
@@ -4475,12 +3958,6 @@ class OrderAdapter:
                     logger.info("Canceling Order", target=target_key)
                     result = await self._call_api("cancel_order", self.client.cancel_order, target_trade, intent=intent)
                     if result is _CANCEL_TIMED_OUT:
-                        # The SDK thread is still running: this cancel may have
-                        # landed. Watch it on the short window -- re-sent once
-                        # only if the order is still live then. The target stays
-                        # marked in flight (its TTL, or the order's terminal,
-                        # clears it): a strategy that asks again meanwhile gets
-                        # ``cancel_already_inflight`` instead of a blind repeat.
                         self._audit_log_order(
                             {
                                 "event": "cancel_timeout",
@@ -4525,9 +4002,6 @@ class OrderAdapter:
                         intent, RejectionReason.CANCEL_TARGET_TERMINAL, "Cancel target terminated before registered"
                     )
                 else:
-                    # Bug #29: distinguish race-loser cancels (target was just
-                    # filled/cancelled, removed from live_orders before CANCEL
-                    # arrived) from true unknown order_ids (typo, strategy bug).
                     if self._is_recently_terminal(target_key):
                         logger.info(
                             "cancel_already_terminal",
@@ -4550,10 +4024,6 @@ class OrderAdapter:
                         )
                         return True
                     if self._has_unbound_phantom(intent.strategy_id, intent.symbol):
-                        # The strategy named the order by the broker's ack id, which
-                        # reached it before the timed-out place_order's Trade did
-                        # (R47 10/8 04:21:43, 20 ms ahead). That Trade is bound and
-                        # cancelled on arrival, so this cancel is already covered.
                         logger.info(
                             "cancel_deferred_to_phantom_bind",
                             target=target_key,
@@ -4579,17 +4049,10 @@ class OrderAdapter:
                     and target_trade is not _PENDING_SENTINEL
                     and target_trade is not _TERMINAL_BEFORE_REGISTERED
                 ):
-                    # Descale price
                     price_f = self.price_codec.descale(intent.symbol, intent.price)
 
                     logger.info("Amending Order", target=target_key, new_price=price_f)
-                    # H1: same TOCTOU window applies to AMEND because update_order
-                    # can also take ~395ms on Shioaji P95. The defensive cancel
-                    # post-HALT cancels the underlying live order (target_trade),
-                    # not the amend itself.
                     amend_ticket_id = self._begin_dispatch_ticket(intent)
-                    # P3-?: rename to avoid mypy [no-redef] (shadows `result`
-                    # bound at line 2767 inside the CANCEL branch above).
                     amend_result: Any = None
                     try:
                         amend_result = await self._call_api(
@@ -4600,10 +4063,6 @@ class OrderAdapter:
                             intent=intent,
                         )
                     finally:
-                        # F-D1: ticket close paired with begin_dispatch via
-                        # finally so broker exceptions don't leak tickets.
-                        # target_trade is the AMEND target — defensive cancel
-                        # cancels the underlying live order on HALT mid-await.
                         await self._end_dispatch_ticket(amend_ticket_id, intent, target_trade, cmd.cmd_id)
                     if amend_result is None or amend_result is _GUARD_TIMEOUT:
                         return False
@@ -4655,7 +4114,6 @@ class OrderAdapter:
                     "error": str(e),
                 }
             )
-            # Clean up sentinel to prevent permanent slot occupation (D2 rollback)
             if cancel_target_key:
                 self._clear_cancel_inflight(cancel_target_key)
             async with self._live_orders_lock:
@@ -4669,11 +4127,6 @@ class OrderAdapter:
             self._emit_trace("order_dispatch_ok", intent, {"cmd_id": int(cmd.cmd_id)})
         return True
 
-    # M3: priority ordering for the api-queue eviction policy. Higher
-    # numbers preempt lower numbers when the queue is full. CANCEL and
-    # FORCE_FLAT are safety intents (must reach the broker even under
-    # pressure); AMEND mutates an existing live order and is preferred
-    # over NEW which can usually be retried by the strategy.
     _API_INTENT_PRIORITY: dict[IntentType, int] = {
         IntentType.CANCEL: 4,
         IntentType.FORCE_FLAT: 3,
@@ -4707,8 +4160,6 @@ class OrderAdapter:
                 try:
                     self._api_queue.put_nowait(cmd)
                 except asyncio.QueueFull:
-                    # Race: queue filled again before we could put; put
-                    # the evicted command back and fall through to DLQ.
                     try:
                         self._api_queue.put_nowait(evicted)
                     except asyncio.QueueFull:
@@ -4743,7 +4194,7 @@ class OrderAdapter:
                             evicted_intent_type=evicted_type.name,
                             evictor_intent_type=evictor_type.name,
                         ).inc()
-                    except Exception:  # noqa: BLE001 — metric must never block path
+                    except Exception:
                         pass
                     await self._reject_before_dispatch(
                         evicted.intent,
@@ -4783,32 +4234,26 @@ class OrderAdapter:
         """
         evictor_pri = self._api_intent_priority(evictor_intent_type)
         if evictor_pri <= self._api_intent_priority(IntentType.NEW):
-            return None  # NEW (or unknown) cannot evict anything
+            return None
         try:
             internal = self._api_queue._queue  # type: ignore[attr-defined]
         except AttributeError:
             return None
         if not internal:
             return None
-        # Pick the lowest-priority victim, breaking ties by oldest (FIFO).
-        # ``enumerate(list(internal))`` snapshots the deque so concurrent
-        # mutations (defensive — single asyncio loop owns this queue) do
-        # not invalidate iteration.
         target: tuple[int, OrderCommand] | None = None
-        target_pri = evictor_pri  # must be strictly lower than evictor
+        target_pri = evictor_pri
         for idx, item in enumerate(list(internal)):
             intent = getattr(item, "intent", None)
             if intent is None:
                 continue
             pri = self._api_intent_priority(intent.intent_type)
             if pri >= evictor_pri:
-                continue  # not evictable by this evictor
+                continue
             if target is None or pri < target_pri:
                 target = (idx, item)
                 target_pri = pri
                 if pri == self._api_intent_priority(IntentType.NEW):
-                    # Lowest possible victim already found at this index;
-                    # FIFO break: keep the first one found.
                     break
         if target is None:
             return None
@@ -4818,9 +4263,6 @@ class OrderAdapter:
             return None
         return target[1]
 
-    # H7 backwards-compat alias retained for any external callers; the
-    # new policy supersedes "evict NEW for CANCEL" with a general
-    # priority-based eviction. M3 (2026-04-25).
     def _evict_new_for_cancel(self) -> OrderCommand | None:
         return self._evict_lower_priority_for_safety_intent(IntentType.CANCEL)
 
@@ -4876,10 +4318,6 @@ class OrderAdapter:
             try:
                 item = await self._api_queue.get()
             except asyncio.CancelledError:
-                # P1-4: drain any residual coalesced pending before exit.
-                # Rare, but if a previous iteration stored items into
-                # ``_api_pending`` and we were cancelled before clearing,
-                # those dedup slots would leak otherwise.
                 self._release_pending_on_cancel()
                 raise
             try:
@@ -4893,8 +4331,6 @@ class OrderAdapter:
                     self._record_queue_latency(cmd)
                 self._store_pending(cmd)
 
-                # Fast-path: skip coalesce window for urgent intent types (CANCEL,
-                # FORCE_FLAT) to minimise latency on safety-critical orders.
                 _urgent = cmd.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT)
                 if not _urgent and self._api_coalesce_window_s > 0:
                     start = time.monotonic()
@@ -4910,8 +4346,6 @@ class OrderAdapter:
                                 else cast(OrderCommand, item)
                             )
                             self._store_pending(cmd)
-                            # Urgent command arrived — break out immediately so
-                            # CANCEL/FORCE_FLAT is not delayed by coalesce window.
                             if cmd.intent.intent_type in (
                                 IntentType.CANCEL,
                                 IntentType.FORCE_FLAT,
@@ -4920,27 +4354,14 @@ class OrderAdapter:
                         except asyncio.TimeoutError:
                             break
                         except asyncio.CancelledError:
-                            # P1-4: Python 3.12 wait_for / Queue.get cancel race.
-                            # Even if ``wait_for`` successfully retrieved an item
-                            # (materialised into ``cmd`` above) we will never
-                            # reach the store step here; release anything that
-                            # was already staged. Re-raise after cleanup.
                             self._release_pending_on_cancel()
                             raise
 
                 pending = list(self._api_pending.values())
                 self._api_pending.clear()
-                # Prioritize urgent intents (CANCEL, FORCE_FLAT) ahead of NEWs
-                # to ensure risk-reducing orders execute before risk-increasing ones.
                 pending.sort(
                     key=lambda c: 0 if c.intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT) else 1
                 )
-                # P1-4 hole fix: stage the snapshot in _api_inflight so
-                # cancel / unexpected-exception handlers see un-dispatched
-                # items and can release their dedup slots. Each branch below
-                # removes its item from _api_inflight only on the SUCCESS
-                # path; if CancelledError fires mid-await the remove is
-                # skipped and the outer handler picks the item up.
                 self._api_inflight = list(pending)
                 for item in pending:
                     _exempt = item.intent.intent_type in (
@@ -4974,12 +4395,6 @@ class OrderAdapter:
                         except ValueError:
                             pass
                         continue
-                    # Broker back-pressure, re-asked at the last moment: this
-                    # worker is serial, so a NEW queued behind a call that just
-                    # timed out reaches here while that call is still waiting
-                    # at the broker -- RiskEngine approved it before the stall
-                    # began. Refused, not dead-lettered: nothing was sent, and
-                    # the price that justified it will be stale by the answer.
                     if self._backpressure_blocks(item.intent):
                         self._dedup_release(item.intent.idempotency_key)
                         await self._reject_before_dispatch(
@@ -5020,10 +4435,6 @@ class OrderAdapter:
                         ok = await self._dispatch_to_api(item)
                         if ok:
                             self._dedup_commit(item.intent.idempotency_key, True, "dispatched", item.cmd_id)
-                        # Reached here = dispatch finished without cancel.
-                        # On a CancelledError flight from _dispatch_to_api,
-                        # this remove is skipped and the outer handler at
-                        # line ~2750 picks the item up via _api_inflight.
                         try:
                             self._api_inflight.remove(item)
                         except ValueError:
@@ -5035,10 +4446,6 @@ class OrderAdapter:
                         except ValueError:
                             pass
             except asyncio.CancelledError:
-                # P1-4: shutdown / task-cancel path. Release any dedup slots
-                # for commands in ``_api_pending`` that we have not yet
-                # dispatched, so the same idempotency_key can be resubmitted
-                # cleanly on the next worker lifetime. Re-raise after cleanup.
                 self._release_pending_on_cancel()
                 raise
             except Exception:
@@ -5048,9 +4455,6 @@ class OrderAdapter:
                 self._update_cb_metric()
                 if current_cmd is not None:
                     self.strategy_cb_mgr.record_failure(current_cmd.intent.strategy_id)
-                # Release dedup slots for orphaned commands before clearing.
-                # P1-4 hole fix: also drain _api_inflight (un-dispatched
-                # snapshot items), not just _api_pending.
                 for orphaned in self._api_pending.values():
                     self._dedup_release(orphaned.intent.idempotency_key)
                 self._api_pending.clear()
@@ -5081,21 +4485,21 @@ class OrderAdapter:
         for orphaned in self._api_pending.values():
             try:
                 self._dedup_release(orphaned.intent.idempotency_key)
-            except Exception:  # noqa: BLE001 — dedup release must never raise
+            except Exception:
                 pass
             released += 1
         self._api_pending.clear()
         for orphaned in self._api_inflight:
             try:
                 self._dedup_release(orphaned.intent.idempotency_key)
-            except Exception:  # noqa: BLE001 — dedup release must never raise
+            except Exception:
                 pass
             released += 1
         self._api_inflight.clear()
         if released:
             try:
                 logger.warning("_api_worker_cancel_released_pending", count=released)
-            except Exception:  # noqa: BLE001 — log must never mask CancelledError
+            except Exception:
                 pass
 
     def _update_cb_metric(self) -> None:
@@ -5104,7 +4508,7 @@ class OrderAdapter:
             self.metrics.circuit_breaker_state.labels(component="order_adapter").set(
                 1 if self.circuit_breaker.is_open() else 0
             )
-        except Exception:  # noqa: BLE001 — metrics must never crash the hot path
+        except Exception:
             pass
 
     def _record_queue_latency(self, cmd: OrderCommand) -> None:
@@ -5123,37 +4527,11 @@ class OrderAdapter:
 
     def _is_transient_error(self, exc: Exception) -> bool:
         """Check if error is transient and worth retrying."""
-        # Connection errors
         if isinstance(exc, (ConnectionError, ConnectionResetError, ConnectionRefusedError)):
             return True
-        # Timeout errors
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
             return True
-        # Check error message for common transient patterns
         err_str = str(exc).lower()
-        # The session-establishment group was added 2026-09-10. The Shioaji
-        # SDK reports a broker session that has not come up yet as
-        #
-        #   place_order: Shioaji error Session error SolClient send request
-        #   api/v1/paper/place_order, code: NotReady, Error ErrorInfo {
-        #   sub_code: SubCode(SessionNotEstablished), error_str: "Unable to
-        #   wait for session '(cN,sN)_sinopac' to be established" }
-        #
-        # and none of the five original substrings appear anywhere in it, so
-        # the most obviously retryable condition there is -- a session still
-        # coming up -- was classified permanent. ``_call_api`` then skips its
-        # retry loop entirely and the order goes to the DLQ on the first
-        # attempt. Measured on THESHOW: 166 occurrences over the log retention
-        # window, escalating 6 -> 30 -> 34 -> 96 per day, driving
-        # ``dlq_size_total{source="order"}`` from 6 to 31 inside one night
-        # session and tripping the circuit breaker.
-        #
-        # This does NOT come back as a ``TimeoutError``: the SDK raises fast,
-        # so the failing call costs tens of milliseconds, not the 3 s
-        # ``HFT_API_TIMEOUT_S``. It therefore reaches the plain non-transient
-        # return below rather than the mutating-timeout guard above, which is
-        # exactly why no retry ever happened and why this is safe to retry --
-        # a call that never reached the broker cannot have placed an order.
         transient_patterns = (
             "econnrefused",
             "econnreset",
@@ -5207,14 +4585,11 @@ class OrderAdapter:
             self.metrics.api_guard_timeout_total.inc()
             return _GUARD_TIMEOUT
 
-        base_delay_s = 0.01  # 10ms initial backoff
+        base_delay_s = 0.01
         is_mutating = op in _MUTATING_OPS
 
         try:
             for attempt in range(max_retries + 1):
-                # For mutating operations, wrap the broker call with a
-                # cancellation guard so a timed-out thread cannot actually
-                # execute the broker SDK call after we move on to retry.
                 cancelled = threading.Event() if is_mutating else None
 
                 def _guarded_call(
@@ -5255,19 +4630,7 @@ class OrderAdapter:
                                 symbol=intent.symbol,
                                 strategy_id=intent.strategy_id,
                             )
-                    # Feed the broker round-trip to StormGuard. This is the
-                    # only place in the platform that measures it, and until
-                    # now the value stopped at the histogram: the ``order_rtt``
-                    # breaker input had no producer at all, so it sat at a
-                    # structural zero that reads exactly like a healthy input.
-                    # Recording only -- ``StormGuard.update()`` stays the sole
-                    # evaluator, so the breaker cannot be escalated from a path
-                    # its own state machine cannot see.
                     self._observe_order_rtt(op, duration)
-                    # Any answer at all means the session is up. Reset here
-                    # rather than only on place_order so a successful cancel
-                    # also clears it -- the watchdog must not relogin a session
-                    # that is demonstrably working.
                     self._consecutive_session_errors = 0
                     self.circuit_breaker.record_success()
                     self._update_cb_metric()
@@ -5275,33 +4638,19 @@ class OrderAdapter:
                         self.strategy_cb_mgr.record_success(intent.strategy_id)
                     return result
 
-                except Exception as exc:  # noqa: BLE001 — broker SDK retry
-                    # Signal the in-flight thread to abort if it hasn't
-                    # started the broker call yet (best-effort guard).
+                except Exception as exc:
                     if cancelled is not None:
                         cancelled.set()
 
-                    # Treat our internal cancellation as a timeout
                     if isinstance(exc, _TimeoutCancelled):
                         exc = asyncio.TimeoutError()
 
                     is_transient = self._is_transient_error(exc)
-                    # A cancel that timed out is not repeated blind either: the
-                    # first attempt may have landed, and the repeat is answered
-                    # "already cancelled" -- a FAILED after CANCELLED (E3,
-                    # 2026-10-05). It is counted once, below, and handed back as
-                    # ``_CANCEL_TIMED_OUT`` so the caller can watch it.
                     cancel_timed_out = op == "cancel_order" and isinstance(exc, (asyncio.TimeoutError, TimeoutError))
                     if cancel_timed_out:
                         is_transient = False
 
-                    # For mutating ops that timed out, do NOT retry — the
-                    # original thread-pool call may still complete at the
-                    # broker side, and retrying would create a duplicate.
                     if is_mutating and isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-                        # A broker that never answers is the strongest possible
-                        # round-trip signal; reporting only successes would keep
-                        # the input quiet exactly when it matters most.
                         self._observe_order_rtt(op, time.perf_counter_ns() - start_ns)
                         logger.error(
                             "Mutating API call timed out, skipping retry to prevent duplicate",
@@ -5309,38 +4658,16 @@ class OrderAdapter:
                             attempt=attempt + 1,
                             timeout_s=self._api_timeout_s,
                         )
-                        # Outcome unknown, not failed: on THESHOW 116 of 120 of
-                        # these were accepted and answered 5-30 s later. Counting
-                        # them as rejects and breaker failures tripped the breaker
-                        # on orders that existed; what each one turns into is
-                        # booked when it is known (_late_place_reporter,
-                        # release_stale_phantom_pendings). A broker that stops
-                        # answering is held by StormGuard's broker back-pressure
-                        # and long-stall STORM instead.
-                        # Only a NEW has that later booking (phantom + late
-                        # reporter + TTL sweep). A FORCE_FLAT or AMEND that times
-                        # out is never booked again, so it is still counted as a
-                        # failure here, as before.
                         try:
                             self.metrics.order_outcome_unknown_total.labels(op=op).inc()
-                        except Exception:  # noqa: BLE001 - a metric must never block the order path
+                        except Exception:
                             logger.debug("order_outcome_unknown_metric_failed", exc_info=True)
                         if intent is None or intent.intent_type != IntentType.NEW:
                             self.metrics.order_reject_total.inc()
                             self._record_broker_failure(intent)
-                        # D-03: Track phantom order candidates for reconciliation
-                        # R2-02: Use 2-part order_key format for reconciliation parity
-                        # Bug #29: only NEW intents can produce phantom orders.
-                        # CANCEL/AMEND failures are not "phantom orders" — gating
-                        # prevents spurious phantom_recovery_releases on cancels.
                         if intent is not None and intent.intent_type == IntentType.NEW:
-                            # M4: append per-occurrence record under _phantom_lock.
-                            # Multiple registrations with the same key (intent_id
-                            # reused within process lifetime) accumulate as
-                            # separate entries; resolution / cleanup pop FIFO.
                             with self._phantom_lock:
                                 phantom_key = self._register_phantom(intent)
-                                # R2-03: Evict entries older than 1 hour when over capacity.
                                 if self._phantom_record_count() > self._phantom_order_max:
                                     self._evict_stale_phantom_records(max_age_s=3600.0)
                             logger.warning(
@@ -5363,7 +4690,6 @@ class OrderAdapter:
                         return None
 
                     if is_transient and attempt < max_retries:
-                        # Exponential backoff: 10ms, 20ms, 40ms...
                         delay = base_delay_s * (2**attempt)
                         logger.warning(
                             "API call failed, retrying",
@@ -5376,11 +4702,6 @@ class OrderAdapter:
                         await asyncio.sleep(delay)
                         continue
 
-                    # Non-transient error or exhausted retries
-                    # Count only here, where the order is actually given up on:
-                    # counting per attempt would treat one lost order as three
-                    # and trip the watchdog at a third of the intended
-                    # threshold.
                     if self._is_session_establishment_error(exc):
                         self._consecutive_session_errors += 1
                     logger.error(
@@ -5408,7 +4729,6 @@ class OrderAdapter:
                         )
                     return _CANCEL_TIMED_OUT if cancel_timed_out else None
 
-            # Should not reach here, but handle gracefully
             return None
         finally:
             self._api_semaphore.release()
@@ -5418,8 +4738,6 @@ class OrderAdapter:
         if sampler is None:
             return
         try:
-            # L5: every adapter trace is order-bearing (takes OrderIntent),
-            # so bypass sample_every — incomplete chains break replay/explain.
             sampler.emit_always(
                 stage=stage,
                 trace_id=str(getattr(intent, "trace_id", "") or ""),

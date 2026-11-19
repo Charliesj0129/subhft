@@ -54,7 +54,6 @@ from research.backtest.cost_models import CostModel
 METHOD_ID = "taker_ioc_touch_v1"
 ANNUALIZATION_DAYS = 252
 
-# hftbacktest order status / request codes (hftbacktest.order).
 _STATUS_NEW = 1
 _REQ_NONE = 0
 
@@ -66,7 +65,7 @@ class TakerSimError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class TakerFill:
     ts_ns: int
-    qty: int  # signed: + bought, - sold
+    qty: int
     price_pts: float
 
 
@@ -74,13 +73,13 @@ class TakerFill:
 class TakerDay:
     trading_day: dt.date
     fills: tuple[TakerFill, ...]
-    residual_qty: int  # open position closed at the last touch (signed, before closing)
-    close_price_pts: float  # price the residual was closed at; 0.0 when flat
-    n_contracts: int  # contracts traded, including the closing ones
+    residual_qty: int
+    close_price_pts: float
+    n_contracts: int
     gross_pts: float
     cost_pts: float
     net_pts: float
-    events_sha256: str = ""  # content hash of the day's event rows; names the day as a holdout
+    events_sha256: str = ""
 
     def to_row(self) -> dict[str, Any]:
         return {
@@ -92,8 +91,6 @@ class TakerDay:
             "net_pts": self.net_pts,
             "residual_qty": self.residual_qty,
             "close_price_pts": self.close_price_pts,
-            # Sub-gate row shape (``hft_platform.alpha._sub_gates``): net PnL, fills including
-            # the closing one, and no residual inventory (it was closed at the last touch).
             "pnl_pts": self.net_pts,
             "fills": len(self.fills) + (1 if self.residual_qty else 0),
             "residual_mtm_pts": 0.0,

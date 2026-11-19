@@ -18,7 +18,7 @@ from hft_platform.services import market_data as market_data_module
 from hft_platform.services.market_data import MarketDataService
 
 DEFAULT_SYMBOL = "2330"
-DEFAULT_PRICE = 5_000_000  # scaled x10000
+DEFAULT_PRICE = 5_000_000
 
 
 class _FakeMD:
@@ -88,7 +88,6 @@ class TestOnShioajiEvent:
         _on_event(svc, "TSE", _tick_dict())
         svc._raw_first_seen = True
         _on_event(svc, "TSE", _tick_dict())
-        # Still True, no error
         assert svc._raw_first_seen is True
 
     def test_first_parsed_flag_set(self) -> None:
@@ -110,7 +109,6 @@ class TestOnShioajiEvent:
 
     def test_exception_calls_crash_signature(self) -> None:
         svc = _make_svc()
-        # Force an exception by making loop.call_soon_threadsafe raise
         svc.loop.call_soon_threadsafe.side_effect = RuntimeError("boom")
         md = _tick_dict()
         _on_event(svc, "TSE", md)
@@ -142,7 +140,7 @@ class TestOnShioajiEvent:
         svc = _make_svc()
         del svc.loop
         md = _tick_dict()
-        _on_event(svc, "TSE", md)  # must not raise
+        _on_event(svc, "TSE", md)
         assert not hasattr(svc, "loop")
 
     def test_fallback_path_single_arg(self) -> None:
@@ -170,12 +168,8 @@ class TestOnShioajiEvent:
         svc = _make_svc()
         svc.metrics_registry = MagicMock()
         svc.metrics_registry.market_data_callback_parse_total.labels.side_effect = RuntimeError("metric fail")
-        # Should not raise
         _on_event(svc, "TSE", _tick_dict())
         svc.loop.call_soon_threadsafe.assert_called_once()
-
-
-# ── N80: the callback's error log is throttled, the counters are not ─────
 
 
 class _Clock:
@@ -232,7 +226,7 @@ def test_a_second_burst_is_not_blamed_for_the_first(throttled):
     svc.loop.call_soon_threadsafe.side_effect = RuntimeError("malformed packet")
     _on_event(svc, "TSE", _tick_dict())
     clock.now += market_data_module._CALLBACK_LOG_INTERVAL_S
-    _on_event(svc, "TSE", _tick_dict())  # logs, suppressed 0
+    _on_event(svc, "TSE", _tick_dict())
     clock.now += market_data_module._CALLBACK_LOG_INTERVAL_S
     _on_event(svc, "TSE", _tick_dict())
 

@@ -61,11 +61,6 @@ def _filter_active_contracts(
 logger = get_logger("config.symbols.expansion")
 
 
-# ---------------------------------------------------------------------------
-# Entry builder
-# ---------------------------------------------------------------------------
-
-
 def _default_exchange_for_code(code: str) -> str:
     if code.isdigit():
         return "TSE"
@@ -110,11 +105,6 @@ def build_entry(
     return entry
 
 
-# ---------------------------------------------------------------------------
-# Option enrichment helpers
-# ---------------------------------------------------------------------------
-
-# Map option root prefix → underlying futures root
 _OPTION_UNDERLYING_MAP: dict[str, str] = {
     "TXO": "TX",
     "MXO": "MX",
@@ -123,15 +113,11 @@ _OPTION_UNDERLYING_MAP: dict[str, str] = {
     "GTX": "TX",
 }
 
-# Default point value per option root (NTD per index point)
 _OPTION_POINT_VALUE: dict[str, int] = {
     "TXO": 50,
     "MXO": 10,
 }
 
-# Default trading metadata per futures root.
-# Platform invariant: all price fields use price_scale=10000 (see test_futures_symbol_config).
-# tick_size is in raw points; the scaled tick is tick_size * price_scale at the boundary.
 _FUTURES_METADATA: dict[str, dict[str, int]] = {
     "TXF": {"point_value": 200, "tick_size": 1, "price_scale": 10000},
     "MXF": {"point_value": 50, "tick_size": 1, "price_scale": 10000},
@@ -163,12 +149,10 @@ def _enrich_option_entry(
     Fields set (using setdefault where attrs may have already provided values):
         right, strike, expiry, underlying, point_value, price_scale
     """
-    # right
     raw_right = contract.get("option_right") or contract.get("right")
     if raw_right is not None:
         entry["right"] = _normalize_option_right(raw_right)
 
-    # strike — raw int from exchange, no scaling
     raw_strike = contract.get("strike_price")
     if raw_strike is None:
         raw_strike = contract.get("strike")
@@ -177,7 +161,6 @@ def _enrich_option_entry(
     else:
         result.warnings.append(f"Missing strike for option {code}")
 
-    # expiry
     raw_expiry = contract.get("delivery_date")
     if raw_expiry is None:
         raw_expiry = contract.get("expiry") or contract.get("expiry_date")
@@ -186,30 +169,21 @@ def _enrich_option_entry(
     else:
         result.warnings.append(f"Missing expiry for option {code}")
 
-    # underlying — derive root prefix from code, look up in map
     matched_root: str | None = None
     for prefix in _OPTION_UNDERLYING_MAP:
         if code.upper().startswith(prefix):
             matched_root = prefix
             break
     if matched_root is None:
-        # Try entry.get("root") if present (set by caller)
         matched_root = str(entry.get("root") or "")
 
     if matched_root:
         entry.setdefault("underlying", _OPTION_UNDERLYING_MAP.get(matched_root, matched_root))
 
-    # point_value — attrs take precedence (already merged via entry.update(attrs)), use setdefault
     if matched_root and matched_root in _OPTION_POINT_VALUE:
         entry.setdefault("point_value", _OPTION_POINT_VALUE[matched_root])
 
-    # price_scale — platform default 10000; use setdefault so attrs/contract override works
     entry.setdefault("price_scale", 10000)
-
-
-# ---------------------------------------------------------------------------
-# Grouping helpers
-# ---------------------------------------------------------------------------
 
 
 def _group_by_expiry(contracts: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -217,11 +191,6 @@ def _group_by_expiry(contracts: list[dict[str, Any]]) -> list[list[dict[str, Any
     for contract in contracts:
         grouped.setdefault(expiry_key(contract), []).append(contract)
     return [grouped[key] for key in sorted(grouped.keys())]
-
-
-# ---------------------------------------------------------------------------
-# Synthetic expansion
-# ---------------------------------------------------------------------------
 
 
 def _expand_synthetic(prefix: str, count: int, attrs: dict[str, Any], result: SymbolBuildResult) -> None:
@@ -235,11 +204,6 @@ def _expand_synthetic(prefix: str, count: int, attrs: dict[str, Any], result: Sy
         if entry:
             entry.setdefault("exchange", "SIM")
             result.symbols.append(entry)
-
-
-# ---------------------------------------------------------------------------
-# Futures expansion
-# ---------------------------------------------------------------------------
 
 
 def _expand_futures(
@@ -307,8 +271,6 @@ def _expand_futures(
                 result.errors.append(f"Unknown futures month selector: {token} ({root})")
                 continue
             if idx_val >= len(groups):
-                # Broker doesn't currently list this expiry (e.g., far months not yet listed).
-                # Drop it from the universe with a warning instead of failing the build.
                 result.warnings.append(
                     f"Futures month selector unavailable: {root}@{token} "
                     f"(only {len(groups)} active expiry/expiries in cache)"
@@ -332,11 +294,6 @@ def _expand_futures(
             result.symbols.append(entry)
 
 
-# ---------------------------------------------------------------------------
-# Options helpers
-# ---------------------------------------------------------------------------
-
-
 def _normalize_option_right(value: Any) -> str:
     text = str(value or "").upper()
     if "CALL" in text or text.endswith("C"):
@@ -346,8 +303,6 @@ def _normalize_option_right(value: Any) -> str:
     return ""
 
 
-# Option root -> the future whose price the strike window must be centred on. Only roots whose underlying
-# is certain are listed; anything else needs an explicit ``underlying_price``.
 UNDERLYING_FUTURE_ROOT: dict[str, str] = {"TXO": "TXF"}
 
 
@@ -391,7 +346,7 @@ def pick_underlying_price(
                 value = _positive_float(source.get(key))
                 if value is not None:
                     return value, f"{future_root}:{code}"
-        break  # only the nearest future is the underlying
+        break
     return None, ""
 
 
@@ -413,11 +368,6 @@ def _parse_selector(selector: str) -> tuple[str, int]:
         if match:
             offset = int(match.group(1))
     return mode, offset
-
-
-# ---------------------------------------------------------------------------
-# Options expansion
-# ---------------------------------------------------------------------------
 
 
 def _expand_options(
@@ -464,7 +414,6 @@ def _expand_options(
             result.errors.append(f"Unknown options month selector: {token} ({root})")
             continue
         if idx >= len(groups):
-            # Broker doesn't currently list this expiry; skip with warning instead of erroring out.
             result.warnings.append(
                 f"Options month selector unavailable: {root}@{token} "
                 f"(only {len(groups)} active expiry/expiries in cache)"
@@ -567,11 +516,6 @@ def _expand_options(
             if entry:
                 entry.setdefault("exchange", "OPT")
                 result.symbols.append(entry)
-
-
-# ---------------------------------------------------------------------------
-# Top-level spec dispatch
-# ---------------------------------------------------------------------------
 
 
 def expand_spec(

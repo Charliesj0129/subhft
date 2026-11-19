@@ -16,7 +16,7 @@ pub struct PriceLevel {
 pub struct LimitOrderBook {
     #[pyo3(get)]
     pub symbol: String,
-    pub bids: BTreeMap<u64, f64>, // Price(scaled) -> Qty
+    pub bids: BTreeMap<u64, f64>,
     pub asks: BTreeMap<u64, f64>,
 }
 
@@ -32,7 +32,7 @@ impl LimitOrderBook {
     }
 
     pub fn update(&mut self, is_bid: bool, price: f64, quantity: f64) {
-        let scaled_price = (price * 10000.0) as u64; // Simple scaling for key
+        let scaled_price = (price * 10000.0) as u64;
         let book = if is_bid {
             &mut self.bids
         } else {

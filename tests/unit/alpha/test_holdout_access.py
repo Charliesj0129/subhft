@@ -33,11 +33,6 @@ def _config(run_mode: str = "exploratory") -> ValidationConfig:
     return ValidationConfig(alpha_id="alpha_x", data_paths=["d.npy"], run_mode=run_mode)
 
 
-# ---------------------------------------------------------------------------
-# Holdout identity
-# ---------------------------------------------------------------------------
-
-
 def test_holdout_identity_is_stable_for_the_same_days_and_events() -> None:
     first, second = _holdout_identity(_rows(_DAYS)), _holdout_identity(list(reversed(_rows(_DAYS))))
     assert first["key"] == second["key"] and first["key"]
@@ -51,9 +46,9 @@ def test_holdout_identity_changes_with_the_days_or_the_events() -> None:
 
 
 def _fill_eval_key(tmp_path: Path, train_payload: bytes, is_rows: list[dict]) -> str:
-    from types import SimpleNamespace  # noqa: PLC0415
+    from types import SimpleNamespace
 
-    from hft_platform.alpha._gate_c import _fill_backtest_eval  # noqa: PLC0415
+    from hft_platform.alpha._gate_c import _fill_backtest_eval
 
     train = tmp_path / f"train_{len(train_payload)}.npz"
     train.write_bytes(train_payload)
@@ -87,7 +82,7 @@ def test_holdout_key_survives_a_change_to_the_training_data(tmp_path: Path) -> N
 
 
 def test_events_hash_names_the_rows_not_the_container(tmp_path: Path) -> None:
-    from research.backtest.taker_sim import events_sha256  # noqa: PLC0415
+    from research.backtest.taker_sim import events_sha256
 
     np.savez_compressed(tmp_path / "a.npz", data=np.arange(6, dtype=np.int64))
     np.savez(tmp_path / "b.npz", data=np.arange(6, dtype=np.int64))
@@ -100,11 +95,6 @@ def test_holdout_identity_without_days_or_hashes_cannot_be_recorded() -> None:
     assert _holdout_identity([])["key"] is None
     unhashed = _holdout_identity([{"date": d} for d in _DAYS])
     assert unhashed["key"] is None and "no event hash" in unhashed["reason"]
-
-
-# ---------------------------------------------------------------------------
-# Evidence log
-# ---------------------------------------------------------------------------
 
 
 def test_first_read_is_not_reused(tmp_path: Path) -> None:
@@ -146,11 +136,6 @@ def test_holdout_access_needs_a_key_and_an_alpha(tmp_path: Path) -> None:
         EvidenceWriter(tmp_path).record_holdout_access(
             holdout_key="", alpha_id="alpha_x", run_id=None, mode=RunMode.EXPLORATORY
         )
-
-
-# ---------------------------------------------------------------------------
-# Validation wiring
-# ---------------------------------------------------------------------------
 
 
 def test_governed_run_records_under_its_writer(tmp_path: Path) -> None:

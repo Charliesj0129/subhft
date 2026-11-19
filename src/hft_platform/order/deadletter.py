@@ -55,11 +55,7 @@ class RejectionReason(str, Enum):
     AMEND_TARGET_PENDING = "amend_target_pending"
     AMEND_TARGET_TERMINAL = "amend_target_terminal"
     ORDER_MODE = "order_mode"
-    # Refused before dispatch while the broker had not answered an earlier call
-    # for longer than StormGuard's ``broker_backpressure_silence_us``.
     BROKER_BACKPRESSURE = "broker_backpressure"
-    # A place_order that timed out and never resolved: no Trade, no error,
-    # nothing bound, past the phantom TTL (``release_stale_phantom_pendings``).
     OUTCOME_UNRESOLVED = "outcome_unresolved"
     UNKNOWN = "unknown"
 
@@ -73,7 +69,7 @@ class DeadLetterEntry:
     strategy_id: str
     symbol: str
     side: str
-    price: int  # Scaled price
+    price: int
     qty: int
     reason: str
     error_message: str
@@ -113,21 +109,18 @@ class DeadLetterQueue:
         self.dlq_dir.mkdir(parents=True, exist_ok=True)
         self.max_buffer_size = max_buffer_size
 
-        # In-memory buffer (pre-allocated capacity)
         self._buffer: List[DeadLetterEntry] = []
         self._lock = asyncio.Lock()
 
-        # Stats
         self.total_entries = 0
         self.total_flushed = 0
 
-        # Metrics
         self._metrics = MetricsRegistry.get()
         try:
             adds = self._metrics.order_dlq_adds_total
             for _reason in RejectionReason:
                 adds.labels(reason=_reason.value)
-        except Exception:  # noqa: BLE001 - metrics must never block DLQ construction
+        except Exception:
             logger.debug("order_dlq_adds_precreate_failed", exc_info=True)
 
         logger.info("DeadLetterQueue initialized", dir=str(self.dlq_dir), max_buffer=max_buffer_size)
@@ -171,13 +164,11 @@ class DeadLetterQueue:
                 self._metrics.dlq_size_total.labels(source="order").inc()
                 self._metrics.order_dlq_adds_total.labels(reason=entry.reason).inc()
             except Exception:
-                pass  # Metrics must never block DLQ operation
+                pass
 
-            # Flush to disk if buffer is full
             if len(self._buffer) >= self.max_buffer_size:
                 await self._flush_locked()
 
-            # Safety: drop oldest entries if buffer still exceeds bound (e.g. flush failed)
             if len(self._buffer) > self.max_buffer_size:
                 overflow = len(self._buffer) - self.max_buffer_size
                 del self._buffer[:overflow]
@@ -208,7 +199,6 @@ class DeadLetterQueue:
         entries = self._buffer[:]
         self._buffer.clear()
 
-        # Write to file in executor (non-blocking)
         loop = asyncio.get_running_loop()
         count = await loop.run_in_executor(None, self._write_entries, entries)
         self.total_flushed += count
@@ -279,7 +269,6 @@ class DeadLetterQueue:
         return entries
 
 
-# Global singleton instance
 _dlq_instance: Optional[DeadLetterQueue] = None
 
 

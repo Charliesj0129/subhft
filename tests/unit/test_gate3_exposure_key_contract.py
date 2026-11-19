@@ -39,7 +39,7 @@ class TestFromIntent:
     def test_structured_intent_uses_contract_display(self) -> None:
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
         key = ExposureKey.from_intent(_intent("TMFE6", contract=ref))
-        assert key.symbol == "TMFE6"  # equals display() of FutureRef
+        assert key.symbol == "TMFE6"
         assert key.contract is ref
 
     def test_structured_symbol_derived_from_contract_not_symbol_field(self) -> None:
@@ -79,7 +79,6 @@ class TestBucketParity:
         store.check_and_update(ExposureKey.from_intent(legacy), legacy, order_key="o1")
         store.check_and_update(ExposureKey.from_intent(structured), structured, order_key="o2")
 
-        # Both reservations share the same (account, strategy, symbol) bucket.
         exposure = store.get_exposure("default", "r47", "TMFE6")
         assert exposure == 2 * 100_000 * 1
 

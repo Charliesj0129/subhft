@@ -30,8 +30,6 @@ from __future__ import annotations
 
 import os
 
-# Per-quote-connection cap (broker Solace topic budget). Do NOT raise
-# without re-measuring the broker cap — see module docstring.
 DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN: int = 120
 
 
@@ -51,5 +49,4 @@ def _resolve_default_max_subscriptions_per_client(default: int = 600) -> int:
     return parsed if parsed >= 1 else default
 
 
-# Per-ShioajiClient preflight ceiling (universe bound, env-overridable).
 DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT: int = _resolve_default_max_subscriptions_per_client()

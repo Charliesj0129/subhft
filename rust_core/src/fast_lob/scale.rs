@@ -247,7 +247,7 @@ mod tests {
         let (mid, spread, imbalance) = compute_l1_stats(1000, 1010, 50, 50);
         assert_eq!(mid, 1005.0);
         assert_eq!(spread, 10.0);
-        assert_eq!(imbalance, 0.0); // equal volumes -> 0 imbalance
+        assert_eq!(imbalance, 0.0);
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
         let (mid, spread, imbalance) = compute_l1_stats(1000, 1010, 80, 20);
         assert_eq!(mid, 1005.0);
         assert_eq!(spread, 10.0);
-        // imbalance = (80 - 20) / 100 = 0.6
+
         assert!((imbalance - 0.6).abs() < 1e-12);
     }
 
@@ -280,13 +280,13 @@ mod tests {
         let (mid, spread, imbalance) = compute_l1_stats(1000, 1010, 0, 0);
         assert_eq!(mid, 1005.0);
         assert_eq!(spread, 10.0);
-        assert_eq!(imbalance, 0.0); // total_top == 0 -> imbalance stays 0
+        assert_eq!(imbalance, 0.0);
     }
 
     #[test]
     fn test_compute_l1_stats_negative_imbalance() {
         let (_, _, imbalance) = compute_l1_stats(1000, 1010, 20, 80);
-        // imbalance = (20 - 80) / 100 = -0.6
+
         assert!((imbalance - (-0.6)).abs() < 1e-12);
     }
 }

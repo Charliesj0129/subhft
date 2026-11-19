@@ -49,10 +49,6 @@ def test_check_and_submit_invokes_submit_fn_under_lock_when_normal():
     submitted: list[bool] = []
 
     def _submit():
-        # While we are here, trigger_halt must be blocked because we hold
-        # the lock. We can't directly assert that, but we can fire a
-        # trigger_halt in a background thread and confirm it hasn't
-        # changed state by the time submit_fn returns.
         submitted.append(True)
 
     ok, reason = sg.check_and_submit(_mk_intent(), _submit)
@@ -91,18 +87,13 @@ def test_check_and_submit_race_with_trigger_halt_is_consistent():
 
     for _ in range(iterations):
         sg = StormGuard()
-        # Reset to NORMAL each loop so we explore the race.
         submitted_ok: list[bool] = []
 
         def _submit():
-            # At this exact moment the lock is held, so state cannot
-            # transition underneath us. Snapshot the state and record.
             submitted_ok.append(sg.state == StormGuardState.NORMAL)
 
         def _run_submit():
             ok, _ = sg.check_and_submit(_mk_intent(), _submit)
-            # If ok was returned, submit_fn must have been invoked AND
-            # the state must have been non-HALT at submit time.
             if ok and submitted_ok and not submitted_ok[-1]:
                 violations.append("submit happened under HALT state")
 

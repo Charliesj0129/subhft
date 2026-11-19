@@ -7,8 +7,6 @@ import pytest
 
 from hft_platform.recorder.loader import WALLoaderService
 
-# These tests exercise WAL loading/archiving, not dedup logic.
-# Explicitly disable dedup to isolate concerns.
 pytestmark = pytest.mark.usefixtures("_disable_wal_dedup")
 
 
@@ -84,8 +82,6 @@ def test_wal_loader_non_market_tables(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    # Use the same embedded timestamp for both files so this test remains
-    # order-insensitive under strict-order replay.
     orders = wal_dir / "orders_1.jsonl"
     fills = wal_dir / "fills_1.jsonl"
     orders.write_text(json.dumps({"order_id": "O1", "symbol": "2330", "side": "Buy"}) + "\n")
@@ -102,9 +98,7 @@ def test_wal_loader_non_market_tables(tmp_path):
 
     assert (archive_dir / orders.name).exists()
     assert (archive_dir / fills.name).exists()
-    # Phase 12: Now inserts are called for orders and fills tables
     assert loader.ch_client.insert.call_count == 2
-    # Verify the table names
     call_args = [call[0][0] for call in loader.ch_client.insert.call_args_list]
     assert "hft.orders" in call_args
     assert "hft.fills" in call_args
@@ -137,18 +131,15 @@ def test_wal_loader_force_skips_mtime_check(tmp_path):
 
     fpath = wal_dir / "market_data_5.jsonl"
     fpath.write_text(json.dumps(row) + "\n")
-    # Touch file just now (would normally be skipped)
     os.utime(fpath, None)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader.ch_client = MagicMock()
 
-    # Without force, should skip
     loader.process_files(force=False)
     assert fpath.exists()
     loader.ch_client.insert.assert_not_called()
 
-    # With force, should process
     loader.process_files(force=True)
     assert not fpath.exists()
     assert (archive_dir / fpath.name).exists()
@@ -165,24 +156,21 @@ def test_wal_loader_accumulation_check(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    # Create some WAL files
     for i in range(5):
         fpath = wal_dir / f"market_data_{i}.jsonl"
         fpath.write_text('{"test": 1}\n' * 100)
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader.metrics = MagicMock()
-    loader._last_wal_check_ts = 0  # Force check
+    loader._last_wal_check_ts = 0
 
     loader._check_wal_accumulation()
 
-    # Verify metrics were updated
     loader.metrics.wal_file_count.set.assert_called()
     loader.metrics.wal_directory_size_bytes.set.assert_called()
     loader.metrics.wal_oldest_file_age_seconds.set.assert_called()
     loader.metrics.wal_drain_eta_seconds.set.assert_called()
 
-    # Check file count
     call_args = loader.metrics.wal_file_count.set.call_args[0][0]
     assert call_args == 5
 
@@ -285,8 +273,6 @@ def test_manifest_load_removes_stuck_entries(tmp_path):
     loader._manifest_enabled = True
     loader._manifest_path = str(manifest_path)
 
-    # Saving prunes entries whose file is gone from both wal_dir and archive_dir,
-    # so the surviving names must actually exist somewhere.
     (archive_dir / "other_2.jsonl").write_text("{}\n")
     (archive_dir / "new_3.jsonl").write_text("{}\n")
 
@@ -366,11 +352,9 @@ def test_process_files_defers_when_no_client(tmp_path):
     os.utime(fpath, (past, past))
 
     loader = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
-    # ch_client is None — simulates pre-connection state
 
     loader.process_files(force=True)
 
-    # File must NOT have been moved or converted to DLQ
     assert fpath.exists(), "WAL file should remain for retry after client connects"
     dlq_dir = wal_dir / "dlq"
     assert not dlq_dir.exists() or not list(dlq_dir.iterdir()), "DLQ must be empty"

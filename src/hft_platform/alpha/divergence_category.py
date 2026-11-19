@@ -44,25 +44,6 @@ class DivergenceCategory(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Canonical intent-log fields → category.
-# Rationale (per goal §8 semantics):
-# - __missing__       : length mismatch ⇒ live and replay disagree on
-#                       the data record they observed.
-# - symbol            : same.
-# - timestamp_us      : ts alignment by definition.
-# - decision_price    : the price at decision time drifts when the
-#                       feature snapshot read at a different latency.
-# - qty               : per CLAUDE.md, sizing is governed by
-#                       position-sizing rule + risk caps; qty drift in
-#                       intents is most often a position_limit divergence.
-# - strategy_id /
-#   intent_id /
-#   intent_type /
-#   side / tif /
-#   price /
-#   target_order_id /
-#   price_type        : same code, same inputs ⇒ identifier or
-#                       behavioural divergence is implementation drift.
 _FIELD_TO_CATEGORY: dict[str, DivergenceCategory] = {
     "__missing__": DivergenceCategory.DATA_MISMATCH,
     "symbol": DivergenceCategory.DATA_MISMATCH,
@@ -77,27 +58,11 @@ _FIELD_TO_CATEGORY: dict[str, DivergenceCategory] = {
     "price": DivergenceCategory.IMPLEMENTATION_DRIFT,
     "target_order_id": DivergenceCategory.IMPLEMENTATION_DRIFT,
     "price_type": DivergenceCategory.IMPLEMENTATION_DRIFT,
-    # §7 session-phase parity. ``session_phase`` is recorded on OrderIntent but
-    # not yet in the comparison digest (live side needs an hft.order_intents
-    # column first); the mapping is kept ready for when it is compared.
-    # ``force_flat_triggered`` was dropped (redundant — covered by
-    # ``intent_type == FORCE_FLAT``, which maps to IMPLEMENTATION_DRIFT) and
-    # ``risk_filter_active`` was dropped (a RiskDecision property, not an
-    # OrderIntent one); a stray ``risk_*`` key still routes via the prefix rule.
     "session_phase": DivergenceCategory.SESSION_PHASE_FILTER,
 }
 
 
 _PREFIX_TO_CATEGORY: tuple[tuple[str, DivergenceCategory], ...] = (
-    # Round 14: prefix matching so sidecar producers can surface
-    # divergences in the three categories with no canonical intent
-    # field today.  The replay-parity harness records per-field
-    # histogram keys; when an upstream emits e.g. ``feature_obi`` /
-    # ``session_phase`` / ``risk_filter_breach`` we route the count
-    # to the right triage owner without waiting on a schema rev.
-    #
-    # Ordering matters — first match wins.  More specific prefixes
-    # should appear earlier; the current set is already disjoint.
     ("feature_", DivergenceCategory.FEATURE_MISMATCH),
     ("session_", DivergenceCategory.SESSION_PHASE_FILTER),
     ("risk_", DivergenceCategory.RISK_FILTER),

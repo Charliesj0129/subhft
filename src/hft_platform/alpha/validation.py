@@ -8,9 +8,6 @@ from typing import Any
 
 import structlog
 
-# ---------------------------------------------------------------------------
-# Re-export gate-a private helpers that tests import from validation.py
-# ---------------------------------------------------------------------------
 from hft_platform.alpha._gate_a import (  # noqa: E402, F401
     _FIELD_ALIASES,
     _check_hftbacktest_v2_data_format,
@@ -20,21 +17,11 @@ from hft_platform.alpha._gate_a import (  # noqa: E402, F401
     _resolve_paper_ref,
     _validate_dataset_metadata,
 )
-
-# ---------------------------------------------------------------------------
-# Re-export _optimize_parameters so that test_alpha_validation_gates.py can
-# continue importing it from validation.py.
-# ---------------------------------------------------------------------------
 from hft_platform.alpha._param_opt import (  # noqa: E402, F401
     _evaluate_parameter_robustness,
     _evaluate_stress_backtest,
     _optimize_parameters,
 )
-
-# ---------------------------------------------------------------------------
-# Re-export stat helpers from _stat_tests (single source of truth)
-# Tests and downstream code import these symbols from validation.py.
-# ---------------------------------------------------------------------------
 from hft_platform.alpha._stat_tests import (  # noqa: E402, F401
     _bds_correlation_delta,
     _compute_oos_returns,
@@ -43,11 +30,6 @@ from hft_platform.alpha._stat_tests import (  # noqa: E402, F401
     _extract_stat_test_pvalues,
     _run_bds_independence_test,
 )
-
-# ---------------------------------------------------------------------------
-# Re-export helpers from _validation_helpers (single source of truth)
-# These were duplicated in validation.py; tests may import them from here.
-# ---------------------------------------------------------------------------
 from hft_platform.alpha._validation_helpers import (  # noqa: E402, F401
     _dataset_metadata_candidates,
     _dataset_row_count,
@@ -63,16 +45,12 @@ from hft_platform.alpha._validation_helpers import (  # noqa: E402, F401
     _resolve_first_data_meta_path,
     _write_json,
 )
-
-# ---------------------------------------------------------------------------
-# Re-export canonical types from _validation_types (single source of truth)
-# ---------------------------------------------------------------------------
-from hft_platform.alpha._validation_types import (  # noqa: E402
+from hft_platform.alpha._validation_types import (
     GateReport,
     ValidationConfig,
     ValidationResult,
 )
-from hft_platform.alpha.evidence import (  # noqa: E402
+from hft_platform.alpha.evidence import (
     EvidenceWriter,
     GovernedRunRefused,
     RunMode,
@@ -80,16 +58,13 @@ from hft_platform.alpha.evidence import (  # noqa: E402
     record_exploratory_holdout_access,
     require_governed,
 )
-from hft_platform.alpha.gate_c_runtime import GateCRuntime  # noqa: E402
-from hft_platform.alpha.outcomes import Verdict  # noqa: E402
-from hft_platform.alpha.provenance import file_sha256, git_state  # noqa: E402
+from hft_platform.alpha.gate_c_runtime import GateCRuntime
+from hft_platform.alpha.outcomes import Verdict
+from hft_platform.alpha.provenance import file_sha256, git_state
 
 _log = structlog.get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Gate A — delegate to _gate_a (includes full data governance checks)
-# ---------------------------------------------------------------------------
 def run_gate_a(
     manifest: Any,
     data_paths: list[str],
@@ -98,24 +73,18 @@ def run_gate_a(
     root: Path | None = None,
 ) -> GateReport:
     """Delegate to _gate_a.run_gate_a which includes full data governance checks."""
-    from hft_platform.alpha._gate_a import run_gate_a as _run_gate_a  # noqa: PLC0415
+    from hft_platform.alpha._gate_a import run_gate_a as _run_gate_a
 
     return _run_gate_a(manifest, data_paths, config=config, root=root)
 
 
-# ---------------------------------------------------------------------------
-# Gate B — already delegates to _gate_b
-# ---------------------------------------------------------------------------
 def run_gate_b(alpha_id: str, project_root: Path, skip_tests: bool = False, timeout_s: int = 300) -> GateReport:
     """Delegate to _gate_b.run_gate_b which includes alpha_id validation."""
-    from hft_platform.alpha._gate_b import run_gate_b as _run_gate_b  # noqa: PLC0415
+    from hft_platform.alpha._gate_b import run_gate_b as _run_gate_b
 
     return _run_gate_b(alpha_id, project_root, skip_tests=skip_tests, timeout_s=timeout_s)
 
 
-# ---------------------------------------------------------------------------
-# Gate C — delegate to _gate_c (fill-priced taker PnL, trend contamination check)
-# ---------------------------------------------------------------------------
 def run_gate_c(
     alpha: Any,
     config: ValidationConfig,
@@ -125,14 +94,11 @@ def run_gate_c(
     runtime: GateCRuntime | None = None,
 ) -> tuple[GateReport, str, str, str, str]:
     """Delegate to _gate_c.run_gate_c which includes trend contamination check."""
-    from hft_platform.alpha._gate_c import run_gate_c as _run_gate_c  # noqa: PLC0415
+    from hft_platform.alpha._gate_c import run_gate_c as _run_gate_c
 
     return _run_gate_c(alpha, config, root, resolved_data_paths, experiments_base, runtime=runtime)
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator — stays in validation.py (unique)
-# ---------------------------------------------------------------------------
 def run_alpha_validation(config: ValidationConfig, *, gate_c_runtime: GateCRuntime | None = None) -> ValidationResult:
     """Gates A-C for one alpha. Gate C runs only with ``gate_c_runtime`` injected (research side, ADR-005)."""
     from hft_platform.alpha.discovery import AlphaDiscoveryRegistry
@@ -142,7 +108,6 @@ def run_alpha_validation(config: ValidationConfig, *, gate_c_runtime: GateCRunti
 
     resolved_data_paths = [_resolve_data_path(root, path) for path in config.data_paths]
     experiments_base = _resolve_data_path(root, config.experiments_dir)
-    # An unknown run_mode raises here: a typo must not run as governed or silently as exploratory.
     governed = RunMode(config.run_mode) is RunMode.GOVERNED
     writer, start_commit = _start_governed_run(config, root, Path(experiments_base)) if governed else (None, None)
     validation_dir = _make_validation_artifact_dir(Path(experiments_base), config.alpha_id)
@@ -215,13 +180,12 @@ def run_alpha_validation(config: ValidationConfig, *, gate_c_runtime: GateCRunti
 
     overall = gate_a.passed and gate_b.passed and gate_c.passed
 
-    # Best-effort audit logging (guarded by HFT_ALPHA_AUDIT_ENABLED)
     try:
         from hft_platform.alpha.audit import log_gate_result
 
         for gate_report in (gate_a, gate_b, gate_c):
             log_gate_result(config.alpha_id, run_id, gate_report, cfg_hash)
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         _log.debug("audit_log_failed", alpha_id=config.alpha_id, exc_info=True)
 
     if writer is not None:
@@ -249,9 +213,6 @@ def run_alpha_validation(config: ValidationConfig, *, gate_c_runtime: GateCRunti
     )
 
 
-# ---------------------------------------------------------------------------
-# Governed runs: evidence root, seal, verdict ledger (ADR-005 section 6)
-# ---------------------------------------------------------------------------
 def _profile_name(config: ValidationConfig) -> str | None:
     return getattr(config.profile, "name", None) or None
 
@@ -369,9 +330,6 @@ def _publish_governed_run(
         writer.append_verdict(event, mode=RunMode.GOVERNED)
 
 
-# ---------------------------------------------------------------------------
-# Batch validator — unique to validation.py
-# ---------------------------------------------------------------------------
 def batch_validate(
     *,
     alpha_ids: list[str],

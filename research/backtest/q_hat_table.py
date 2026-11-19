@@ -35,7 +35,6 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-# A depth strictly less than this threshold is "shallow"; depth >= threshold is "deep".
 SHALLOW_THRESHOLD: int = 5
 
 

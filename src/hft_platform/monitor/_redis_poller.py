@@ -23,7 +23,6 @@ from hft_platform.monitor._types import RowView
 
 logger = get_logger("monitor.redis_poller")
 
-# Max age (seconds) for heartbeat to be considered fresh
 _HEARTBEAT_MAX_AGE_S = 15.0
 
 
@@ -67,7 +66,6 @@ class RedisPoller:
         self._ring_size = max(1, int(ring_size))
         self._batch_limit = max(1, int(batch_limit))
         self._heartbeat_stale = False
-        # Pre-compute keys
         self._hb_key = f"{self._key_prefix}:heartbeat"
         self._latest_keys_cache: dict[str, str] = {s: f"{self._key_prefix}:latest:{s}" for s in symbols}
         self._ring_keys_cache: dict[str, str] = {s: f"{self._key_prefix}:ring:{s}" for s in symbols}
@@ -101,17 +99,14 @@ class RedisPoller:
         if not cursors:
             return {}
         try:
-            # Merge heartbeat GET into MGET: prepend heartbeat key
             symbols = list(cursors)
             latest_keys = [self._latest_key(s) for s in symbols]
             mget_keys = [self._hb_key, *latest_keys]
             mget_values = self._client.request("MGET", *mget_keys)
 
-            # Extract heartbeat (first value) and process
             self._parse_heartbeat(mget_values[0] if mget_values else None)
             latest_values = mget_values[1:] if mget_values else []
 
-            # Identify symbols needing ring fetch
             rows_by_symbol: dict[str, list[RowView]] = {s: [] for s in symbols}
             ring_limit = str(min(self._batch_limit, self._ring_size) - 1)
             need_ring: list[str] = []
@@ -123,7 +118,6 @@ class RedisPoller:
                     continue
                 need_ring.append(symbol)
 
-            # Batch all LRANGE via pipeline (1 round-trip)
             if need_ring:
                 pipe_cmds = tuple(("LRANGE", self._ring_key(s), "0", ring_limit) for s in need_ring)
                 pipe_results = self._client.pipeline(*pipe_cmds)
@@ -158,7 +152,6 @@ class RedisPoller:
                 str(min(max(1, int(limit)), self._ring_size) - 1),
             )
             self._retry_count = 0
-            # Single-pass reverse iteration with early filter
             rows: list[RowView] = []
             for raw in reversed(ring_values or []):
                 if raw is None:

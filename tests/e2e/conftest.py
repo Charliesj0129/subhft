@@ -24,30 +24,16 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.events import BidAskEvent, LOBStatsEvent, MetaData, TickEvent
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 SCALE: int = 10_000
 DEFAULT_SYMBOL: str = "2330"
-DEFAULT_PRICE: int = 500 * SCALE  # 5_000_000
+DEFAULT_PRICE: int = 500 * SCALE
 DEFAULT_TS_NS: int = 1_700_000_000_000_000_000
-
-
-# ---------------------------------------------------------------------------
-# Markers
-# ---------------------------------------------------------------------------
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "e2e: end-to-end tests covering full runtime planes")
     config.addinivalue_line("markers", "e2e_chain: multi-step chained E2E scenarios")
     config.addinivalue_line("markers", "e2e_integration: E2E tests requiring external services (ClickHouse, Redis)")
-
-
-# ---------------------------------------------------------------------------
-# InMemoryBrokerAPI
-# ---------------------------------------------------------------------------
 
 
 class InMemoryBrokerAPI:
@@ -69,7 +55,7 @@ class InMemoryBrokerAPI:
         self._seq_counter: int = 1000
         self._ord_counter: int = 1
 
-    def get_exchange(self, symbol: str) -> str:  # noqa: ARG002
+    def get_exchange(self, symbol: str) -> str:
         return "TSE"
 
     def place_order(self, **kwargs: Any) -> dict[str, Any]:
@@ -95,11 +81,6 @@ class InMemoryBrokerAPI:
         self.placed_orders.append(updated)
         self.last_trade = updated
         return updated
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -185,11 +166,6 @@ adapter:
     return str(path)
 
 
-# ---------------------------------------------------------------------------
-# Async helpers
-# ---------------------------------------------------------------------------
-
-
 async def wait_for_predicate(
     predicate: Callable[[], bool],
     timeout: float = 2.0,
@@ -231,11 +207,6 @@ async def collect_bus_events(
         except asyncio.TimeoutError:
             break
     return collected
-
-
-# ---------------------------------------------------------------------------
-# Factory helpers
-# ---------------------------------------------------------------------------
 
 
 def make_intent(
@@ -308,8 +279,8 @@ def make_tick(
 
 def make_bidask(
     symbol: str = DEFAULT_SYMBOL,
-    bid_price: int = DEFAULT_PRICE - SCALE,  # 499 * SCALE
-    ask_price: int = DEFAULT_PRICE + SCALE,  # 501 * SCALE
+    bid_price: int = DEFAULT_PRICE - SCALE,
+    ask_price: int = DEFAULT_PRICE + SCALE,
     bid_vol: int = 500,
     ask_vol: int = 500,
     seq: int = 1,

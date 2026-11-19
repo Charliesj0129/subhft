@@ -19,7 +19,7 @@ def test_stress_test_single_scenario():
     assert len(results) == 1
     assert results[0].name == "down_3pct"
     assert isinstance(results[0].pnl_ntd, float)
-    assert results[0].pnl_ntd < 0  # long delta, price drops
+    assert results[0].pnl_ntd < 0
 
 
 def test_stress_test_vol_crush_short_straddle():
@@ -40,7 +40,7 @@ def test_stress_test_vol_crush_short_straddle():
     scenarios = [ScenarioConfig(name="vol_crush", underlying_shift_pct=0.0, vol_shift_abs=-0.10)]
     results = run_stress_test(positions, surface, scenarios, 20000.0, 50.0)
     assert len(results) == 1
-    assert results[0].pnl_ntd > 0  # short vega benefits
+    assert results[0].pnl_ntd > 0
 
 
 def test_stress_test_empty_positions():

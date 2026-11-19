@@ -78,7 +78,6 @@ class TestBuildRecordLiftsReplayParity:
         assert rows[0]["replay_divergence_category"] == "latency_shift"
 
     def test_all_vocab_categories_lift_verbatim(self, _isolated) -> None:
-        # Every §8 category must round-trip unchanged.
         vocab = [
             "data_mismatch",
             "feature_mismatch",

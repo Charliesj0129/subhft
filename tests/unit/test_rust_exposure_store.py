@@ -46,22 +46,22 @@ class TestRustExposureStore:
         s = self._make()
         s.check_and_update("acct", "s1", "2330", NEW, 1000, 10)
         s.check_and_update("acct", "s1", "2330", NEW, 2000, 5)
-        assert s.get_exposure("acct", "s1", "2330") == 20_000  # 10k + 10k
+        assert s.get_exposure("acct", "s1", "2330") == 20_000
 
     def test_global_limit(self):
         s = self._make(global_max=50_000)
-        s.check_and_update("acct", "s1", "2330", NEW, 1000, 40)  # 40k
-        ok, code = s.check_and_update("acct", "s1", "2330", NEW, 1000, 20)  # +20k > 50k
+        s.check_and_update("acct", "s1", "2330", NEW, 1000, 40)
+        ok, code = s.check_and_update("acct", "s1", "2330", NEW, 1000, 20)
         assert ok is False
-        assert code == 1  # GLOBAL_EXPOSURE_LIMIT
+        assert code == 1
 
     def test_strategy_limit(self):
         s = self._make()
         s.set_limit("s1", 100_000)
-        s.check_and_update("acct", "s1", "2330", NEW, 1000, 90)  # 90k
-        ok, code = s.check_and_update("acct", "s1", "2330", NEW, 1000, 20)  # +20k > 100k
+        s.check_and_update("acct", "s1", "2330", NEW, 1000, 90)
+        ok, code = s.check_and_update("acct", "s1", "2330", NEW, 1000, 20)
         assert ok is False
-        assert code == 2  # STRATEGY_EXPOSURE_LIMIT
+        assert code == 2
 
     def test_symbol_cardinality_limit(self):
         s = self._make(max_symbols=3)
@@ -70,15 +70,13 @@ class TestRustExposureStore:
         s.check_and_update("a", "s1", "SYM3", NEW, 100, 1)
         ok, code = s.check_and_update("a", "s1", "SYM4", NEW, 100, 1)
         assert ok is False
-        assert code == 3  # SYMBOL_LIMIT_REACHED
+        assert code == 3
 
     def test_symbol_eviction_on_zero(self):
         s = self._make(max_symbols=2)
         s.check_and_update("a", "s1", "SYM1", NEW, 100, 1)
         s.check_and_update("a", "s1", "SYM2", NEW, 100, 1)
-        # Release SYM1 to zero
         s.release("a", "s1", "SYM1", NEW, 100, 1)
-        # Now SYM1 is at 0, eviction should free a slot
         ok, code = s.check_and_update("a", "s1", "SYM3", NEW, 100, 1)
         assert ok is True
 
@@ -93,7 +91,7 @@ class TestRustExposureStore:
     def test_release_clamps_to_zero(self):
         s = self._make()
         s.check_and_update("acct", "s1", "2330", NEW, 100, 1)
-        s.release("acct", "s1", "2330", NEW, 200, 1)  # release more than held
+        s.release("acct", "s1", "2330", NEW, 200, 1)
         assert s.get_exposure("acct", "s1", "2330") == 0
         assert s.get_global_notional() == 0
 
@@ -101,7 +99,7 @@ class TestRustExposureStore:
         s = self._make()
         s.check_and_update("acct", "s1", "2330", NEW, 1000, 10)
         s.release("acct", "s1", "2330", CANCEL, 1000, 10)
-        assert s.get_global_notional() == 10_000  # unchanged
+        assert s.get_global_notional() == 10_000
 
     def test_size(self):
         s = self._make()
@@ -140,7 +138,6 @@ class TestRustExposureStore:
         rs_ok, _ = rs_store.check_and_update("acct", "s1", "2330", NEW, 10000, 40)
         assert py_ok == rs_ok
 
-        # Second order should hit global limit
         py_ok2, _ = py_store.check_and_update(key, intent)
         rs_ok2, _ = rs_store.check_and_update("acct", "s1", "2330", NEW, 10000, 40)
         assert py_ok2 == rs_ok2 is False

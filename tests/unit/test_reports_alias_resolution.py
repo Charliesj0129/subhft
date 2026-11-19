@@ -35,16 +35,14 @@ class TestAliasResolution:
     def test_query_ohlcv_resolves_txfr1_to_active_month(self) -> None:
         """``_query_ohlcv("TXFR1", ...)`` must query CH for the active month code."""
         collector, mock_execute = _make_collector()
-        # First call = alias resolution, second call = the OHLCV query itself.
         mock_execute.side_effect = [
-            [("TXFE6", 3_031_352)],  # alias-resolution result
-            [],  # OHLCV result (irrelevant — we only check the param)
+            [("TXFE6", 3_031_352)],
+            [],
         ]
 
         collector._query_ohlcv("TXFR1", "exch_ts > 0")
 
         assert mock_execute.call_count == 2
-        # The OHLCV call (second) must carry the resolved month code.
         ohlcv_params = mock_execute.call_args_list[1].args[1]
         assert ohlcv_params == {"symbol": "TXFE6"}
 
@@ -55,7 +53,6 @@ class TestAliasResolution:
 
         collector._query_ohlcv("TXFE6", "exch_ts > 0")
 
-        # Exactly one call — the OHLCV query itself, no alias-resolution probe.
         assert mock_execute.call_count == 1
         ohlcv_params = mock_execute.call_args.args[1]
         assert ohlcv_params == {"symbol": "TXFE6"}
@@ -84,15 +81,14 @@ class TestAliasResolution:
         """Repeat alias lookups within one collector reuse the first result."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            [("TXFE6", 3_031_352)],  # alias-resolution probe
-            [],  # first OHLCV
-            [],  # second OHLCV — must NOT trigger another alias probe
+            [("TXFE6", 3_031_352)],
+            [],
+            [],
         ]
 
         collector._query_ohlcv("TXFR1", "exch_ts > 0")
         collector._query_ohlcv("TXFR1", "exch_ts > 0")
 
-        # 1 alias-resolve + 2 OHLCV = 3 total. Alias probe ran once.
         assert mock_execute.call_count == 3
 
     def test_alias_resolution_scoped_to_latest_trading_day(self) -> None:
@@ -108,16 +104,13 @@ class TestAliasResolution:
         """
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            [("TXFF6", 63_334)],  # alias-resolution probe (latest-day winner)
-            [],  # OHLCV
+            [("TXFF6", 63_334)],
+            [],
         ]
 
         collector._query_ohlcv("TXFR1", "exch_ts > 0")
 
         resolution_sql = mock_execute.call_args_list[0].args[0]
-        # The ranking window must be pinned to the most-recent day with data,
-        # not the whole trailing window (which is biased toward the just-expired
-        # contract for ~2 weeks after every roll).
         assert "max(toDate(" in resolution_sql, (
             "alias resolution must restrict ranking to the latest trading day; "
             f"got SQL without a max-date scope:\n{resolution_sql}"
@@ -127,13 +120,11 @@ class TestAliasResolution:
         """If CH has no active month for the root, return alias unchanged."""
         collector, mock_execute = _make_collector()
         mock_execute.side_effect = [
-            [],  # alias-resolution probe finds nothing
-            [],  # OHLCV
+            [],
+            [],
         ]
 
         collector._query_ohlcv("TXFR1", "exch_ts > 0")
 
         ohlcv_params = mock_execute.call_args_list[1].args[1]
-        # Falls back to the alias rather than crashing — caller will see zero
-        # rows but pipeline does not blow up.
         assert ohlcv_params == {"symbol": "TXFR1"}

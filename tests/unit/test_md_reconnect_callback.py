@@ -87,7 +87,6 @@ async def test_callback_error_does_not_block_reconnect():
     ok = await svc._trigger_reconnect(gap=120.0, reason="err_test")
 
     assert ok is True
-    # Second callback still fires despite first raising
     assert second_called == ["err_test"]
 
 

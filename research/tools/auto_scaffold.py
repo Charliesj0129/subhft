@@ -67,7 +67,6 @@ class AutoScaffoldPipeline:
                     alpha_id=alpha_id,
                     paper_ref=hyp.paper_ref,
                 )
-                # Still mark as scaffolded since it exists
                 self._queue.mark_scaffolded(hyp.paper_ref)
                 results.append({
                     "alpha_id": alpha_id,
@@ -85,7 +84,6 @@ class AutoScaffoldPipeline:
                 })
                 continue
 
-            # Scaffold via subprocess to reuse existing CLI
             cmd = [
                 sys.executable,
                 "-m",

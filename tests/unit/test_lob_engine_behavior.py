@@ -8,8 +8,6 @@ import numpy as np
 
 from hft_platform.feed_adapter.lob_engine import BookState, _NoopLock
 
-# ── _NoopLock ─────────────────────────────────────────────────────────────
-
 
 class TestNoopLock:
     def test_context_manager(self):
@@ -20,9 +18,6 @@ class TestNoopLock:
     def test_exit_returns_false(self):
         lock = _NoopLock()
         assert lock.__exit__(None, None, None) is False
-
-
-# ── BookState construction ────────────────────────────────────────────────
 
 
 class TestBookStateInit:
@@ -44,11 +39,9 @@ class TestBookStateInit:
 
         assert mod._LOCKS_ENABLED is True
         bs = BookState("2330")
-        # The real threading.Lock is not a class, so check it quacks like one:
         assert hasattr(bs.lock, "acquire")
         assert hasattr(bs.lock, "release")
         assert not isinstance(bs.lock, mod._NoopLock)
-        # Sanity check: the type matches the module-level Lock factory.
         assert type(bs.lock).__module__ == _RealLock.__module__
 
     def test_rust_state_disabled(self):
@@ -77,9 +70,6 @@ class TestBookStateInit:
             mod._RUST_BOOK_STATE_ENABLED = old_en
 
 
-# ── apply_update branches ─────────────────────────────────────────────────
-
-
 class TestApplyUpdate:
     def test_late_packet_skipped(self):
         bs = BookState("2330")
@@ -87,7 +77,7 @@ class TestApplyUpdate:
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1010000, 10]], dtype=np.int64)
         bs.apply_update(bids, asks, 50)
-        assert bs.bids == []  # not updated
+        assert bs.bids == []
 
     def test_numpy_int64(self):
         bs = BookState("2330")
@@ -151,7 +141,6 @@ class TestApplyUpdate:
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1010000, 5]], dtype=np.int64)
         bs.apply_update(bids, asks, 200)
-        # Falls back to Python _recompute
         assert bs.mid_price_x2 == 2010000
 
     def test_stats_none_mode(self):
@@ -165,7 +154,6 @@ class TestApplyUpdate:
             bids = np.array([[1000000, 10]], dtype=np.int64)
             asks = np.array([[1010000, 5]], dtype=np.int64)
             bs.apply_update(bids, asks, 100)
-            # Stats not recomputed in NONE mode
             assert bs.version == 1
         finally:
             mod._STATS_NONE = old
@@ -218,9 +206,6 @@ class TestApplyUpdate:
         assert bs.asks == []
 
 
-# ── update_tick ───────────────────────────────────────────────────────────
-
-
 class TestUpdateTick:
     def test_normal(self):
         bs = BookState("2330")
@@ -233,9 +218,6 @@ class TestUpdateTick:
         bs.exch_ts = 300
         bs.update_tick(5000000, 100, 200)
         assert bs.last_price == 0
-
-
-# ── _recompute branches ──────────────────────────────────────────────────
 
 
 class TestRecompute:
@@ -275,7 +257,7 @@ class TestRecompute:
         bs.bids = np.array([[1000000, 10]], dtype=np.int64)
         bs.asks = []
         bs._recompute()
-        assert bs.mid_price_x2 == 0  # need both sides
+        assert bs.mid_price_x2 == 0
 
     def test_one_sided_asks_only(self):
         bs = BookState("2330")
@@ -296,7 +278,6 @@ class TestRecompute:
             bs.bids = np.array([[1000000, 10]], dtype=np.int64)
             bs.asks = np.array([[1010000, 5]], dtype=np.int64)
             bs._recompute()
-            # Falls back to Python
             assert bs.mid_price_x2 == 2010000
         finally:
             mod._RUST_COMPUTE_STATS = old
@@ -316,9 +297,6 @@ class TestRecompute:
         bs.asks = np.array([[1010000, 5]], dtype=np.int64)
         bs._recompute()
         assert bs.bid_depth_total == 0
-
-
-# ── get_stats ─────────────────────────────────────────────────────────────
 
 
 class TestGetStats:
@@ -348,12 +326,8 @@ class TestGetStats:
         assert stats.best_ask == 0
 
 
-# ── get_stats_tuple ───────────────────────────────────────────────────────
-
-
 class TestGetStatsTuple:
     def test_ignores_rust_state(self):
-        # The Rust state misses stats-path updates, so it must not be the source.
         bs = BookState("2330")
         mock_rs = MagicMock()
         mock_rs.get_stats_tuple.return_value = (1, 2, 3, 4, 5, 6)
@@ -393,18 +367,15 @@ class TestGetStatsTuple:
         assert isinstance(result, tuple)
 
 
-# ── LOBEngine.get_mid_price ─────────────────────────────────────────────
-
-
 class TestLOBEngineGetMidPrice:
     def test_returns_mid_price_for_known_symbol(self):
         from hft_platform.feed_adapter.lob_engine import LOBEngine
 
         engine = LOBEngine()
         bs = BookState("TXFD6")
-        bs.mid_price_x2 = 400_0000  # bid 195 + ask 205 = 400 (x10000)
+        bs.mid_price_x2 = 400_0000
         engine.books["TXFD6"] = bs
-        assert engine.get_mid_price("TXFD6") == 200_0000  # 200 x10000
+        assert engine.get_mid_price("TXFD6") == 200_0000
 
     def test_returns_none_for_unknown_symbol(self):
         from hft_platform.feed_adapter.lob_engine import LOBEngine
@@ -417,6 +388,6 @@ class TestLOBEngineGetMidPrice:
 
         engine = LOBEngine()
         bs = BookState("TXFD6")
-        bs.mid_price_x2 = 0  # empty or one-sided book
+        bs.mid_price_x2 = 0
         engine.books["TXFD6"] = bs
         assert engine.get_mid_price("TXFD6") is None

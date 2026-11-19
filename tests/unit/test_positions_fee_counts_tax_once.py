@@ -15,9 +15,9 @@ from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.tca.fee_calculator import FeeCalculator
 
-_COMMISSION = 600_000  # 60 NTD, x10000
-_TAX = 7_000_000  # 700 NTD, x10000
-_TOTAL = _COMMISSION + _TAX  # what FeeCalculator puts in FillEvent.fee
+_COMMISSION = 600_000
+_TAX = 7_000_000
+_TOTAL = _COMMISSION + _TAX
 
 _FUTURES_FEES = """\
 futures:
@@ -72,7 +72,7 @@ def test_fees_scaled_counts_tax_once(backend: str) -> None:
 def test_fees_scaled_of_a_round_trip_is_the_sum_of_the_fills_fees(backend: str) -> None:
     store = _store(backend)
 
-    store.on_fill(_fill(Side.BUY, fee=_COMMISSION, tax=0, fill_id="F1"))  # a buy is not taxed
+    store.on_fill(_fill(Side.BUY, fee=_COMMISSION, tax=0, fill_id="F1"))
     store.on_fill(_fill(Side.SELL, fee=_TOTAL, tax=_TAX, fill_id="F2", price=175_010_000))
 
     assert store.positions["ACC:S1:TXFL5"].fees_scaled == _COMMISSION + _TOTAL
@@ -104,7 +104,7 @@ def test_a_normalized_fill_reaches_the_position_with_the_calculators_total(backe
     fees.write_text(_FUTURES_FEES)
     calculator = FeeCalculator.from_yaml(str(fees))
     expected = calculator.compute("TXFL5", "SELL", 1, 175_000_000)
-    assert 0 < expected.tax < expected.total  # the fixture must exercise a taxed fill
+    assert 0 < expected.tax < expected.total
 
     normalizer = ExecutionNormalizer(fee_calculator=calculator)
     fill = normalizer.normalize_fill(

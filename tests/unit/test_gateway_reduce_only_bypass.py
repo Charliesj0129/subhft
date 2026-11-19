@@ -50,7 +50,6 @@ def _make_intent(
 class TestGatewayHaltReduceOnly:
     def _make_policy(self, position: int = 0) -> GatewayPolicy:
         policy = GatewayPolicy()
-        # bypass startup holdoff
         policy._startup_holdoff_until = 0.0
         policy.set_halt()
         policy.set_position_provider(_position_provider({("TMFE6", "R47"): position}))
@@ -109,7 +108,6 @@ class TestGatewayHaltReduceOnly:
 
 class TestGatewayDegradeReduceOnly:
     def _make_policy(self, position: int = 0) -> GatewayPolicy:
-        # DEGRADE is entered automatically on STORM; simulate via set and STORM state
         policy = GatewayPolicy()
         policy._startup_holdoff_until = 0.0
         from hft_platform.gateway.policy import GatewayPolicyMode
@@ -120,7 +118,6 @@ class TestGatewayDegradeReduceOnly:
 
     def test_degrade_blocks_opener(self):
         policy = self._make_policy(position=0)
-        # Call with STORM state to prevent auto-NORMAL transition
         ok, reason = policy.gate(_make_intent(side=Side.BUY, qty=1), StormGuardState.STORM)
         assert not ok
         assert reason == "DEGRADE"
@@ -163,6 +160,5 @@ class TestGatewayTypedFastPath:
             sg_state=StormGuardState.HALT,
             strategy_id="R47",
         )
-        # Without symbol/side/qty, can't classify → falls back to HALT block
         assert not ok
         assert reason == "HALT"

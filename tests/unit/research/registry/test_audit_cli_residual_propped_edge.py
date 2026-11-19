@@ -79,14 +79,12 @@ class TestResidualProppedEdge:
         assert verdict == "clean"
 
     def test_propped_when_realized_nonpositive_and_net_positive(self, _isolated) -> None:
-        # All of net comes from the unrealized residual mark.
         _record(run_id="bad", realized=-3.0, residual=15.0, net=12.0)
         verdict, detail = audit_cli.residual_propped_edge(_row("bad"))
         assert verdict == "propped"
         assert "residual mark" in detail
 
     def test_clean_when_net_nonpositive(self, _isolated) -> None:
-        # net<=0 is not a §3 inflation case (residual isn't propping a win).
         _record(run_id="neg", realized=-5.0, residual=2.0, net=-3.0)
         verdict, _detail = audit_cli.residual_propped_edge(_row("neg"))
         assert verdict == "clean"
@@ -113,7 +111,6 @@ class TestProppedBlocksPromotion:
         assert "residual:propped" not in blockers
 
     def test_missing_inventory_split_is_not_a_blocker(self, _isolated) -> None:
-        # missing-not-a-blocker: no inventory_mtm gate -> no residual blocker.
         _record(run_id="bare", realized=None, residual=None, net=None)
         _ready, blockers = audit_cli.promotion_readiness(_row("bare"))
         assert "residual:propped" not in blockers

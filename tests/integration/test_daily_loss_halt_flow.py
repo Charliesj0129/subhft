@@ -19,10 +19,6 @@ from hft_platform.core import timebase
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.validators import DailyLossLimitValidator
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _write_config(tmp_path, *, max_daily_loss: int = 100_000_000) -> str:
     """Write a minimal risk YAML config and return the file path string."""
@@ -50,7 +46,7 @@ def _write_config(tmp_path, *, max_daily_loss: int = 100_000_000) -> str:
 def _make_intent(
     *,
     strategy_id: str = "s1",
-    price: int = 500_0000,  # 500 NTD x10000
+    price: int = 500_0000,
     qty: int = 1,
 ) -> OrderIntent:
     return OrderIntent(
@@ -71,11 +67,6 @@ def _get_daily_loss_validator(engine: RiskEngine) -> DailyLossLimitValidator:
         if isinstance(v, DailyLossLimitValidator):
             return v
     raise AssertionError("DailyLossLimitValidator not found")
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -100,30 +91,21 @@ def engine_with_dispatcher(tmp_path):
     return eng, mock_dispatcher
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestDailyLossTriggersHaltState:
     """Verify that a daily loss breach escalates StormGuard to HALT."""
 
     def test_daily_loss_triggers_halt_state(self, engine):
         """Accumulated loss >= limit → evaluate() → StormGuard state == HALT."""
-        # Precondition: StormGuard is NORMAL
         assert engine.storm_guard.state == StormGuardState.NORMAL
 
-        # Accumulate loss at the threshold
         engine.notify_fill_pnl("s1", -100_000_000)
 
         intent = _make_intent(strategy_id="s1")
         decision = engine.evaluate(intent)
 
-        # Order rejected due to daily loss
         assert decision.approved is False
         assert "DAILY_LOSS" in decision.reason_code
 
-        # StormGuard must now be in HALT
         assert engine.storm_guard.state == StormGuardState.HALT
 
     def test_halt_state_blocks_subsequent_orders(self, engine):
@@ -131,7 +113,6 @@ class TestDailyLossTriggersHaltState:
         engine.notify_fill_pnl("s1", -150_000_000)
         engine.evaluate(_make_intent(strategy_id="s1"))
 
-        # HALT should now block s2 orders too via StormGuard check
         assert engine.storm_guard.state == StormGuardState.HALT
         decision_s2 = engine.evaluate(_make_intent(strategy_id="s2"))
         assert decision_s2.approved is False
@@ -154,7 +135,6 @@ class TestDailyLossTriggersHaltState:
 
     def test_update_unrealized_pnl_contributes_to_halt(self, engine):
         """Unrealized loss via update_unrealized_pnl should also trigger HALT."""
-        # No realized loss, but unrealized loss exceeds limit
         engine.update_unrealized_pnl(-120_000_000)
 
         intent = _make_intent(strategy_id="s1")
@@ -177,9 +157,8 @@ class TestDailyLossSendsTelegramNotification:
         intent = _make_intent(strategy_id="s1")
         engine.evaluate(intent)
 
-        # Give the event loop a tick to execute created tasks
         await asyncio.sleep(0)
-        await asyncio.sleep(0)  # two yields to flush task queue
+        await asyncio.sleep(0)
 
         mock_dispatcher.notify_daily_loss.assert_called_once()
         mock_dispatcher.notify_halt.assert_called_once()
@@ -189,7 +168,6 @@ class TestDailyLossSendsTelegramNotification:
         """Engine without dispatcher must not raise when HALT is triggered."""
         engine.notify_fill_pnl("s1", -100_000_000)
         intent = _make_intent(strategy_id="s1")
-        # Must not raise
         decision = engine.evaluate(intent)
         assert decision.approved is False
         assert engine.storm_guard.state == StormGuardState.HALT
@@ -201,14 +179,12 @@ class TestDailyLossSendsTelegramNotification:
 
         engine.notify_fill_pnl("s1", -100_000_000)
 
-        # First evaluate — triggers HALT + notification
         engine.evaluate(_make_intent(strategy_id="s1"))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
         call_count_after_first = mock_dispatcher.notify_daily_loss.call_count
 
-        # Second evaluate — already HALT, should not re-trigger
         engine.evaluate(_make_intent(strategy_id="s2"))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
@@ -223,11 +199,8 @@ class TestUnrealizedPnlTriggersHaltWithoutEvaluate:
         """Unrealized loss exceeding limit triggers HALT without evaluate()."""
         assert engine.storm_guard.state == StormGuardState.NORMAL
 
-        # Record some realized loss near threshold
         engine.notify_fill_pnl("s1", -80_000_000)
 
-        # Unrealized loss pushes total over the limit — should trigger HALT
-        # without needing a new intent/evaluate() call.
         engine.update_unrealized_pnl(-30_000_000)
 
         assert engine.storm_guard.state == StormGuardState.HALT

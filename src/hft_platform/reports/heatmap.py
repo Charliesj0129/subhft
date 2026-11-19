@@ -73,15 +73,14 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
         import matplotlib
 
         matplotlib.use("Agg")
-        import matplotlib.dates as mdates  # noqa: E402
-        import matplotlib.pyplot as plt  # noqa: E402
-        from matplotlib.cm import RdYlGn  # noqa: E402
-        from matplotlib.colors import TwoSlopeNorm  # noqa: E402
+        import matplotlib.dates as mdates
+        import matplotlib.pyplot as plt
+        from matplotlib.cm import RdYlGn
+        from matplotlib.colors import TwoSlopeNorm
     except ImportError:
         logger.warning("matplotlib not installed; skipping heatmap generation")
         return None
 
-    # -- Parse timestamps and extract data vectors --------------------------
     times = [datetime.strptime(fb.ts.split(".")[0], "%Y-%m-%d %H:%M:%S") for fb in sd.flow_5m]
     ud_ratios = [fb.ud_ratio for fb in sd.flow_5m]
     volumes = [fb.total_vol for fb in sd.flow_5m]
@@ -92,30 +91,24 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
     max_vol = max(volumes) if volumes else 1
     norm_vols = [v / max_vol for v in volumes]
 
-    # -- Colormap norm centered at 1.0 (neutral U/D ratio) -----------------
     vmin = min(ud_ratios) if ud_ratios else 0.5
     vmax = max(ud_ratios) if ud_ratios else 1.5
-    # Ensure the norm boundaries are strictly around 1.0
     if vmin >= 1.0:
         vmin = 0.5
     if vmax <= 1.0:
         vmax = 1.5
     norm = TwoSlopeNorm(vmin=vmin, vcenter=1.0, vmax=vmax)
 
-    # -- Build figure -------------------------------------------------------
     fig, ax = plt.subplots(figsize=(12, 5))
     ax2 = ax.twinx()
 
-    # Color strip (bottom): U/D ratio heatmap as narrow horizontal bars
     bar_width = (times[1] - times[0]) if len(times) > 1 else timedelta(minutes=5)
     for t, ratio in zip(times, ud_ratios, strict=True):
         color = RdYlGn(norm(ratio))
         ax.bar(t, 0.08, width=bar_width, bottom=0, color=color, align="center", edgecolor="none")
 
-    # Volume bars (semi-transparent gray)
     ax.bar(times, norm_vols, width=bar_width, bottom=0.1, color="gray", alpha=0.4, align="center", edgecolor="none")
 
-    # Large trade markers
     for lt in sd.large_trades:
         lt_time = datetime.strptime(lt.ts.split(".")[0], "%Y-%m-%d %H:%M:%S")
         lt_price = lt.price / PLATFORM_SCALE
@@ -124,12 +117,10 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
         size = max(30, min(200, lt.volume * 2))
         ax2.scatter(lt_time, lt_price, marker=marker, s=size, color=color, zorder=5, edgecolors="black", linewidths=0.5)
 
-    # Price line on right Y axis
     if bar_times and mid_prices:
         ax2.plot(bar_times, mid_prices, color="royalblue", linewidth=1.5, label="Mid Price")
         ax2.set_ylabel("Price")
 
-    # Formatting
     ax.set_ylim(0, 1.2)
     ax.set_yticks([])
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
@@ -147,7 +138,6 @@ def generate_heatmap(sd: SessionData) -> bytes | None:
 
     fig.tight_layout()
 
-    # -- Write to bytes -----------------------------------------------------
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=100)
     plt.close(fig)

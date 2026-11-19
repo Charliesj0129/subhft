@@ -27,8 +27,6 @@ from hft_platform.core import timebase
 from hft_platform.gateway.policy import GatewayPolicy, GatewayPolicyMode
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
 
-# ── Helpers ──────────────────────────────────────────────────────────────
-
 
 def _make_intent(
     intent_type: IntentType = IntentType.NEW,
@@ -74,9 +72,6 @@ def _make_storm_guard(
     )
     sg.state = state
     return sg
-
-
-# ── H4/M1/M2: GatewayPolicy tests ──────────────────────────────────────
 
 
 class TestGatewayPolicyHaltExempt:
@@ -174,16 +169,13 @@ class TestGatewayPolicyHaltExempt:
         assert ok is True
 
 
-# ── H1: RiskEngine post-approve HALT check ──────────────────────────────
-
-
 class TestRiskEngineHaltExempt:
     """Tests for RiskEngine._is_halt_exempt (H1)."""
 
     def test_is_halt_exempt_with_halt_exempt_strategies(self):
         from hft_platform.risk.engine import RiskEngine
 
-        cfg_path = "/dev/null"  # Will fail load_config, we patch it
+        cfg_path = "/dev/null"
         intent_q = asyncio.Queue()
         order_q = asyncio.Queue()
         sg = _make_storm_guard(StormGuardState.HALT, frozenset({"exempt_strat"}))
@@ -211,9 +203,6 @@ class TestRiskEngineHaltExempt:
         sg.is_halt_exempt.assert_called_with("any_strat")
 
 
-# ── H2/H3: OrderAdapter halt-exempt checks ──────────────────────────────
-
-
 class TestOrderAdapterHaltExempt:
     """Tests for OrderAdapter halt-exempt in execute() and _api_worker() (H2, H3)."""
 
@@ -225,7 +214,6 @@ class TestOrderAdapterHaltExempt:
             StormGuardState.HALT,
             frozenset({"exempt_strat"}),
         )
-        # Call the real method
         result = OrderAdapter._is_strategy_halt_exempt(adapter, "exempt_strat")
         assert result is True
 
@@ -249,9 +237,6 @@ class TestOrderAdapterHaltExempt:
         assert result is False
 
 
-# ── M5: halt_flatten spoof prevention ────────────────────────────────────
-
-
 class TestHaltFlattenSpoofPrevention:
     """Tests that reason='halt_flatten' alone no longer bypasses HALT (M5)."""
 
@@ -262,7 +247,7 @@ class TestHaltFlattenSpoofPrevention:
         adapter = MagicMock(spec=OrderAdapter)
         adapter._storm_guard = _make_storm_guard(
             StormGuardState.HALT,
-            frozenset(),  # no exempt strategies
+            frozenset(),
         )
         adapter._is_strategy_halt_exempt = OrderAdapter._is_strategy_halt_exempt.__get__(adapter)
 
@@ -274,7 +259,6 @@ class TestHaltFlattenSpoofPrevention:
         )
         intent = cmd.intent
 
-        # Reproduce the _halt_exempt check from execute()
         _halt_exempt = (
             intent.intent_type == IntentType.CANCEL
             or intent.intent_type == IntentType.FORCE_FLAT
@@ -307,9 +291,6 @@ class TestHaltFlattenSpoofPrevention:
             or adapter._is_strategy_halt_exempt(intent.strategy_id)
         )
         assert _halt_exempt is True
-
-
-# ── RC-3 Decision BUG#4: public API contract ────────────────────────────
 
 
 class TestStormGuardHaltExemptPublicAPI:
@@ -358,11 +339,9 @@ class TestStormGuardHaltExemptPublicAPI:
         from hft_platform.risk.engine import RiskEngine
 
         sg = _make_storm_guard(StormGuardState.HALT, frozenset({"R47_MAKER_TMF"}))
-        # Public method exists, callable, returns bool.
         assert callable(sg.is_halt_exempt)
         assert isinstance(sg.is_halt_exempt("R47_MAKER_TMF"), bool)
 
-        # RiskEngine routes through the public method.
         with pytest.MonkeyPatch.context() as m:
             m.setattr(
                 RiskEngine,
@@ -378,7 +357,6 @@ class TestStormGuardHaltExemptPublicAPI:
         assert engine._is_halt_exempt("R47_MAKER_TMF") is True
         assert engine._is_halt_exempt("OTHER") is False
 
-        # OrderAdapter routes through the public method.
         adapter = MagicMock(spec=OrderAdapter)
         adapter._storm_guard = sg
         assert OrderAdapter._is_strategy_halt_exempt(adapter, "R47_MAKER_TMF") is True

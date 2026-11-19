@@ -27,8 +27,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE_DIR = REPO_ROOT / "research" / "archive" / "alphas_2026-04-17"
 SUMMARY_JSONL = REPO_ROOT / "research" / "archive" / "_kill_summary_2026-04-17.jsonl"
 KILLED_AT_ISO = "2026-04-17T00:00:00Z"
-# 2026-04-17T00:00:00Z in ns since epoch. Hardcoded so the migration is
-# deterministic and idempotent across re-runs.
 KILLED_AT_NS = 1_776_384_000_000_000_000
 
 DEFAULT_REASON = "archived_2026_04_17"
@@ -90,7 +88,7 @@ def _scan(archive_dir: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]
             ledger_rows.append(
                 {
                     "alpha_id": alpha_id,
-                    "gate": "manual",  # archive sweep treated as manual decommission
+                    "gate": "manual",
                     "reason": reason,
                     "stable_artifact_hash": artifact_hash,
                     "scorecard_id": "",
@@ -146,7 +144,6 @@ def _apply(
     summary_path: Path,
 ) -> tuple[int, int]:
     """Write rows. Returns ``(inserted_ledger, inserted_summary)``."""
-    # Imported here so the dry-run path doesn't pull in the full alpha stack.
     from hft_platform.alpha.kill_ledger import KillRecord, append_kill
 
     inserted_ledger = 0

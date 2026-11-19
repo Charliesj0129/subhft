@@ -33,9 +33,6 @@ class FormulaSyntaxError(ValueError):
     """Raised when a formula cannot be parsed (maps to FORMULA_PARSE_ERROR)."""
 
 
-# ---------------------------------------------------------------------------
-# AST nodes (frozen dataclasses, structural equality for tests).
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,15 +82,12 @@ Node = Union[Identifier, Number, String, UnaryOp, BinOp, Call, Compare]
 COMPARE_OPS = ("<=", ">=", "==", "<", ">")
 
 
-# ---------------------------------------------------------------------------
-# Tokenizer.
-# ---------------------------------------------------------------------------
 
 _TOK_IDENT = "IDENT"
 _TOK_NUMBER = "NUMBER"
 _TOK_STRING = "STRING"
-_TOK_OP = "OP"  # + - * /
-_TOK_CMP = "CMP"  # <= >= < > ==
+_TOK_OP = "OP"
+_TOK_CMP = "CMP"
 _TOK_LPAREN = "("
 _TOK_RPAREN = ")"
 _TOK_COMMA = ","
@@ -156,7 +150,7 @@ def _tokenize(text: str) -> list[_Token]:
                 i += 1
             if i >= n:
                 raise FormulaSyntaxError(f"Unterminated string starting at position {start}")
-            i += 1  # closing quote
+            i += 1
             tokens.append(_Token(_TOK_STRING, "".join(buf), start))
             continue
         if ch.isalpha() or ch == "_":
@@ -184,9 +178,6 @@ def _tokenize(text: str) -> list[_Token]:
     return tokens
 
 
-# ---------------------------------------------------------------------------
-# Recursive-descent parser.
-# ---------------------------------------------------------------------------
 
 
 class _Parser:
@@ -278,14 +269,14 @@ class _Parser:
 
     def _parse_call(self) -> Node:
         name_tok = self._advance()
-        self._advance()  # '('
+        self._advance()
         args: list[Node] = []
         kwargs: list[tuple[str, Node]] = []
         if self._peek().kind != _TOK_RPAREN:
             while True:
                 if self._peek().kind == _TOK_IDENT and self._peek(1).kind == _TOK_ASSIGN:
                     key_tok = self._advance()
-                    self._advance()  # '='
+                    self._advance()
                     kwargs.append((key_tok.value, self._parse_expr()))
                 else:
                     if kwargs:
@@ -308,9 +299,6 @@ class _Parser:
         return Call(name_tok.value, tuple(args), tuple(kwargs))
 
 
-# ---------------------------------------------------------------------------
-# Public API.
-# ---------------------------------------------------------------------------
 
 
 def parse(formula: str, *, allow_compare: bool = False) -> Node:
@@ -398,8 +386,6 @@ def _collect_idents(node: Node, out: list[Identifier]) -> None:
         _collect_idents(node.left, out)
         _collect_idents(node.right, out)
     elif isinstance(node, Call):
-        # Call args are intentionally NOT walked here: bare side identifiers
-        # (bid/ask) are argument values, not panel/feature references.
         pass
 
 

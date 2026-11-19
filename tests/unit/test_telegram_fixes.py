@@ -14,10 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Minimal aiohttp stub (same approach as test_telegram.py)
-# ---------------------------------------------------------------------------
-
 
 def _build_aiohttp_stub() -> types.ModuleType:
     stub = types.ModuleType("aiohttp")
@@ -38,9 +34,6 @@ def _build_aiohttp_stub() -> types.ModuleType:
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
 else:
-    # Another test's stub (e.g. test_telegram_retry) may register a
-    # ClientTimeout that lacks the .total attribute we assert on.
-    # Always overwrite with our version that stores kwargs.
     _existing = sys.modules["aiohttp"]
 
     class _FakeClientTimeout:
@@ -49,17 +42,10 @@ else:
 
     _existing.ClientTimeout = _FakeClientTimeout  # type: ignore[attr-defined]
 
-# Ensure the telegram module's own aiohttp binding is set (may be None if
-# an earlier test imported telegram before the stub was installed).
-import hft_platform.notifications.telegram as _tg_mod_fixes  # noqa: E402
+import hft_platform.notifications.telegram as _tg_mod_fixes
 
 if _tg_mod_fixes.aiohttp is None:
     _tg_mod_fixes.aiohttp = sys.modules["aiohttp"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_update(
@@ -105,11 +91,6 @@ def _make_sender(enabled: bool = True, rate_limit_seconds: float = 0.0):
         enabled=enabled,
         rate_limit_seconds=rate_limit_seconds,
     )
-
-
-# ---------------------------------------------------------------------------
-# T1: TelegramSender POST timeout
-# ---------------------------------------------------------------------------
 
 
 class TestT1SenderTimeout:

@@ -18,10 +18,6 @@ from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.router import ExecutionRouter, _synthesize_dedup_key
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
@@ -98,8 +94,6 @@ def _patch_metrics(monkeypatch: pytest.MonkeyPatch, tmp_path) -> MagicMock:
         "hft_platform.observability.metrics.MetricsRegistry.get",
         staticmethod(lambda: stub),
     )
-    # Isolate dedup window from cross-test state pollution: point persist path
-    # to a fresh temp directory so the router starts with an empty dedup set.
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "dedup.jsonl"))
     return stub
 
@@ -148,11 +142,6 @@ def terminal_handler() -> MagicMock:
     return MagicMock()
 
 
-# ===========================================================================
-# 1. _synthesize_dedup_key unit tests
-# ===========================================================================
-
-
 class TestSynthesizeDedupKey:
     """Unit tests for _synthesize_dedup_key helper."""
 
@@ -172,11 +161,6 @@ class TestSynthesizeDedupKey:
         assert _synthesize_dedup_key(f1) != _synthesize_dedup_key(f2)
 
 
-# ===========================================================================
-# 2. Router dedup with empty fill_id
-# ===========================================================================
-
-
 class TestRouterEmptyFillIdDedup:
     """Ensure empty fill_id fills are deduplicated via synthetic key."""
 
@@ -193,7 +177,6 @@ class TestRouterEmptyFillIdDedup:
             position_store=position_store,
             terminal_handler=terminal_handler,
         )
-        # Patch normalizer to return fills with empty fill_id
         fill = _make_fill(fill_id="", symbol="2330", side=Side.BUY, price=1_000_000, qty=1, match_ts_ns=1_000_000_000)
 
         call_count = 0
@@ -206,13 +189,11 @@ class TestRouterEmptyFillIdDedup:
 
         router.normalizer.normalize_fill = _mock_normalize  # type: ignore[method-assign]
 
-        # Enqueue two identical deal events
         raw1 = _make_deal_raw(seqno="")
         raw2 = _make_deal_raw(seqno="")
         await raw_queue.put(raw1)
         await raw_queue.put(raw2)
 
-        # Process first fill
         task = asyncio.create_task(router.run())
         await asyncio.sleep(0.05)
         router.running = False
@@ -222,9 +203,7 @@ class TestRouterEmptyFillIdDedup:
         except asyncio.CancelledError:
             pass
 
-        # position_store.on_fill_async should be called only once (second is deduped)
         assert position_store.on_fill_async.call_count == 1
-        # duplicate_fill_total should be incremented once
         router.metrics.duplicate_fill_total.inc.assert_called()
 
     @pytest.mark.asyncio()
@@ -300,13 +279,7 @@ class TestRouterEmptyFillIdDedup:
         except asyncio.CancelledError:
             pass
 
-        # Both fills have different match_ts_ns so both should process
         assert position_store.on_fill_async.call_count == 2
-
-
-# ===========================================================================
-# 3. Normalizer synthetic fill_id generation
-# ===========================================================================
 
 
 class TestNormalizerSyntheticFillId:
@@ -324,7 +297,6 @@ class TestNormalizerSyntheticFillId:
                 "account_id": "acct1",
                 "custom_field": "strat1",
                 "ts": 1_000_000_000,
-                # No seqno or seq_no
             },
             ingest_ts_ns=1_000_000_000,
         )

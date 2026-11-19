@@ -137,10 +137,10 @@ async def test_expired_phantom_found_open_at_broker_is_bound_not_released(tmp_co
 
     await _sweep(adapter)
 
-    assert _released_feedbacks(sink) == []  # the slot stays with the order
+    assert _released_feedbacks(sink) == []
     adapter._spawn_phantom_bind.assert_called_once()
     assert adapter._spawn_phantom_bind.call_args.args[1] is trade
-    assert KEY in adapter._phantom_records  # the bind takes the record, not the sweep
+    assert KEY in adapter._phantom_records
 
 
 @pytest.mark.asyncio
@@ -165,7 +165,7 @@ async def test_expired_phantom_kept_when_broker_lookup_fails_until_max_hold(tmp_
     assert _released_feedbacks(sink) == []
     assert KEY in adapter._phantom_records
 
-    adapter._phantom_lookup_max_hold_s = 0.0  # held past the bound: the old release applies
+    adapter._phantom_lookup_max_hold_s = 0.0
     await _sweep(adapter)
     assert len(_released_feedbacks(sink)) == 1
     assert KEY not in adapter._phantom_records
@@ -199,7 +199,7 @@ async def test_expired_phantom_held_when_two_broker_orders_fit(tmp_config):
 @pytest.mark.asyncio
 async def test_expired_phantom_ignores_order_bound_to_another_platform_order(tmp_config):
     adapter, sink = _adapter(tmp_config, _ListingClient([_trade(custom_field=None)]))
-    adapter.order_id_map["1B2839"] = "s1:7"  # a tracked order, not this phantom
+    adapter.order_id_map["1B2839"] = "s1:7"
 
     await _sweep(adapter)
 
@@ -219,7 +219,7 @@ async def test_expired_phantom_other_token_is_not_this_order(tmp_config):
 
 @pytest.mark.asyncio
 async def test_client_without_order_listing_keeps_unconditional_ttl_release(tmp_config):
-    client = MagicMock()  # answers to any attribute, defines no list_open_orders
+    client = MagicMock()
     adapter, sink = _adapter(tmp_config, client)
 
     released = await adapter.release_stale_phantom_pendings(ttl_s=30.0)

@@ -11,14 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-# Force Python position tracker
 os.environ["HFT_RUST_POSITIONS"] = "0"
 
 from hft_platform.contracts.execution import FillEvent, Side
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_fill(
@@ -61,11 +56,6 @@ def _make_position_store():
         return store
 
 
-# ---------------------------------------------------------------------------
-# 1. Inventory conservation
-# ---------------------------------------------------------------------------
-
-
 class TestInventoryConservation:
     def test_net_qty_equals_buys_minus_sells(self):
         """net_qty = sum(buy_qty) - sum(sell_qty)."""
@@ -73,19 +63,14 @@ class TestInventoryConservation:
         store.on_fill(_make_fill(side=Side.BUY, qty=10, ts=1))
         store.on_fill(_make_fill(side=Side.BUY, qty=5, ts=2))
         delta = store.on_fill(_make_fill(side=Side.SELL, qty=3, ts=3))
-        assert delta.net_qty == 10 + 5 - 3  # 12
+        assert delta.net_qty == 10 + 5 - 3
 
     def test_net_qty_goes_negative(self):
         """Selling more than bought produces negative net_qty."""
         store = _make_position_store()
         store.on_fill(_make_fill(side=Side.BUY, qty=2, ts=1))
         delta = store.on_fill(_make_fill(side=Side.SELL, qty=5, ts=2))
-        assert delta.net_qty == 2 - 5  # -3
-
-
-# ---------------------------------------------------------------------------
-# 2. PnL conservation on full close
-# ---------------------------------------------------------------------------
+        assert delta.net_qty == 2 - 5
 
 
 class TestPnlConservation:
@@ -95,7 +80,7 @@ class TestPnlConservation:
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1_000_000, ts=1))
         delta = store.on_fill(_make_fill(side=Side.SELL, qty=10, price=1_050_000, ts=2))
         assert delta.net_qty == 0
-        assert delta.realized_pnl == (1_050_000 - 1_000_000) * 10  # 500_000
+        assert delta.realized_pnl == (1_050_000 - 1_000_000) * 10
 
     def test_full_close_short_pnl(self):
         """Full close PnL = (entry - exit) * qty for short."""
@@ -103,12 +88,7 @@ class TestPnlConservation:
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=2_000_000, ts=1))
         delta = store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1_950_000, ts=2))
         assert delta.net_qty == 0
-        assert delta.realized_pnl == (2_000_000 - 1_950_000) * 10  # 500_000
-
-
-# ---------------------------------------------------------------------------
-# 3. Fee accumulation
-# ---------------------------------------------------------------------------
+        assert delta.realized_pnl == (2_000_000 - 1_950_000) * 10
 
 
 class TestFeeAccumulation:
@@ -120,12 +100,7 @@ class TestFeeAccumulation:
 
         key = "acc1:test_strat:2330"
         pos = store.positions[key]
-        assert pos.fees_scaled == 150 + 280  # 430; the tax is inside each fee, not on top
-
-
-# ---------------------------------------------------------------------------
-# 4. Partial close PnL
-# ---------------------------------------------------------------------------
+        assert pos.fees_scaled == 150 + 280
 
 
 class TestPartialClosePnl:
@@ -134,12 +109,7 @@ class TestPartialClosePnl:
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1_000_000, ts=1))
         delta = store.on_fill(_make_fill(side=Side.SELL, qty=4, price=1_100_000, ts=2))
         assert delta.net_qty == 6
-        assert delta.realized_pnl == (1_100_000 - 1_000_000) * 4  # 400_000
-
-
-# ---------------------------------------------------------------------------
-# 5. Position flip: long -> short
-# ---------------------------------------------------------------------------
+        assert delta.realized_pnl == (1_100_000 - 1_000_000) * 4
 
 
 class TestPositionFlipLongShort:
@@ -147,9 +117,8 @@ class TestPositionFlipLongShort:
         store = _make_position_store()
         store.on_fill(_make_fill(side=Side.BUY, qty=5, price=1_000_000, ts=1))
         delta = store.on_fill(_make_fill(side=Side.SELL, qty=8, price=1_200_000, ts=2))
-        # Close 5 long, open 3 short
         assert delta.net_qty == -3
-        assert delta.realized_pnl == (1_200_000 - 1_000_000) * 5  # 1_000_000
+        assert delta.realized_pnl == (1_200_000 - 1_000_000) * 5
 
     def test_flip_avg_price_resets(self):
         """After flip, avg_price should be the new side's entry price."""
@@ -163,24 +132,13 @@ class TestPositionFlipLongShort:
         assert pos.avg_price_scaled == 1_200_000
 
 
-# ---------------------------------------------------------------------------
-# 6. Position flip: short -> long
-# ---------------------------------------------------------------------------
-
-
 class TestPositionFlipShortLong:
     def test_flip_short_to_long(self):
         store = _make_position_store()
         store.on_fill(_make_fill(side=Side.SELL, qty=4, price=2_000_000, ts=1))
         delta = store.on_fill(_make_fill(side=Side.BUY, qty=7, price=1_800_000, ts=2))
-        # Close 4 short (profit), open 3 long
         assert delta.net_qty == 3
-        assert delta.realized_pnl == (2_000_000 - 1_800_000) * 4  # 800_000
-
-
-# ---------------------------------------------------------------------------
-# 7. Zero-crossing avg_price
-# ---------------------------------------------------------------------------
+        assert delta.realized_pnl == (2_000_000 - 1_800_000) * 4
 
 
 class TestZeroCrossingAvgPrice:
@@ -194,15 +152,9 @@ class TestZeroCrossingAvgPrice:
         pos = store.positions[key]
         assert pos.net_qty == 0
 
-        # Reopen
         store.on_fill(_make_fill(side=Side.BUY, qty=3, price=2_000_000, ts=3))
         assert pos.avg_price_scaled == 2_000_000
         assert pos.net_qty == 3
-
-
-# ---------------------------------------------------------------------------
-# 8. Multiple opens avg_price
-# ---------------------------------------------------------------------------
 
 
 class TestMultipleOpensAvgPrice:
@@ -214,14 +166,8 @@ class TestMultipleOpensAvgPrice:
 
         key = "acc1:test_strat:2330"
         pos = store.positions[key]
-        # Weighted: (2*1M + 3*1.2M + 5*1.1M) / 10 = (2M + 3.6M + 5.5M) / 10 = 11.1M / 10 = 1_110_000
         assert pos.avg_price_scaled == 1_110_000
         assert pos.net_qty == 10
-
-
-# ---------------------------------------------------------------------------
-# 9. Flat position reopen
-# ---------------------------------------------------------------------------
 
 
 class TestFlatPositionReopen:
@@ -239,11 +185,6 @@ class TestFlatPositionReopen:
         assert pos.avg_price_scaled == 2_500_000
 
 
-# ---------------------------------------------------------------------------
-# 10. PnL sign: long profit / loss
-# ---------------------------------------------------------------------------
-
-
 class TestPnlSignLong:
     def test_long_profit(self):
         store = _make_position_store()
@@ -256,11 +197,6 @@ class TestPnlSignLong:
         store.on_fill(_make_fill(side=Side.BUY, qty=1, price=1_000_000, ts=1))
         delta = store.on_fill(_make_fill(side=Side.SELL, qty=1, price=900_000, ts=2))
         assert delta.realized_pnl < 0
-
-
-# ---------------------------------------------------------------------------
-# 11. PnL sign: short profit / loss
-# ---------------------------------------------------------------------------
 
 
 class TestPnlSignShort:
@@ -277,11 +213,6 @@ class TestPnlSignShort:
         assert delta.realized_pnl < 0
 
 
-# ---------------------------------------------------------------------------
-# 12. PositionStore eviction
-# ---------------------------------------------------------------------------
-
-
 class TestPositionStoreEviction:
     def test_eviction_at_max_size(self, monkeypatch):
         """PositionStore evicts flat positions when reaching max_size."""
@@ -295,7 +226,6 @@ class TestPositionStoreEviction:
             store.metrics = None
             store._positions_max_size = 5
 
-            # Fill 5 positions and close them (flat)
             for i in range(5):
                 sym = f"SYM{i}"
                 store.on_fill(_make_fill(side=Side.BUY, qty=1, price=1_000_000, ts=i * 2 + 1, symbol=sym))
@@ -303,14 +233,8 @@ class TestPositionStoreEviction:
 
             assert len(store.positions) == 5
 
-            # Adding a 6th symbol triggers eviction of flat positions
             store.on_fill(_make_fill(side=Side.BUY, qty=1, price=1_000_000, ts=100, symbol="SYM_NEW"))
             assert len(store.positions) <= 5
-
-
-# ---------------------------------------------------------------------------
-# 13. PositionStore key format
-# ---------------------------------------------------------------------------
 
 
 class TestPositionStoreKeyFormat:
@@ -319,10 +243,6 @@ class TestPositionStoreKeyFormat:
         store.on_fill(_make_fill(account_id="ACC", strategy_id="STRAT", symbol="SYM", ts=1))
         assert "ACC:STRAT:SYM" in store.positions
 
-
-# ---------------------------------------------------------------------------
-# 14. Hypothesis property tests
-# ---------------------------------------------------------------------------
 
 try:
     from hypothesis import given, settings
@@ -363,8 +283,8 @@ except ImportError:
 class TestHypothesisPositionConservation:
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=1, max_value=500),  # buy qty
-        st.integers(min_value=1, max_value=500),  # sell qty
+        st.integers(min_value=1, max_value=500),
+        st.integers(min_value=1, max_value=500),
     )
     def test_net_qty_conservation(self, buy_qty, sell_qty):
         """net_qty is always buy_qty - sell_qty regardless of prices."""
@@ -375,8 +295,8 @@ class TestHypothesisPositionConservation:
 
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=1, max_value=5000),  # fee
-        st.integers(min_value=1, max_value=20),  # n fills
+        st.integers(min_value=1, max_value=5000),
+        st.integers(min_value=1, max_value=20),
     )
     def test_fee_monotonicity(self, fee, n_fills):
         """Cumulative fees never decrease."""
@@ -391,8 +311,8 @@ class TestHypothesisPositionConservation:
 
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=100_000, max_value=50_000_000),  # price
-        st.integers(min_value=1, max_value=100),  # qty
+        st.integers(min_value=100_000, max_value=50_000_000),
+        st.integers(min_value=1, max_value=100),
     )
     def test_round_trip_pnl_zero(self, price, qty):
         """Buy and sell at same price => PnL is zero."""

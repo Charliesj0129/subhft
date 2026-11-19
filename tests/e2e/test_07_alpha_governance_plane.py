@@ -22,10 +22,6 @@ import numpy as np
 import pytest
 import yaml
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_npz_with_fields(path: Path, fields: list[str]) -> str:
     """Create a .npz file with a structured array that has the given field names."""
@@ -64,18 +60,12 @@ def _make_canary_yaml(promotions_dir: Path, alpha_id: str, **overrides: Any) -> 
     return yaml_path
 
 
-# ===========================================================================
-# TestChain — sequential gate tests
-# ===========================================================================
-
-
 @pytest.mark.e2e_chain
 class TestChain:
     def test_gate_a_manifest_validation(self, tmp_path: Path) -> None:
         """Gate A passes when manifest has required fields and data covers them."""
         from hft_platform.alpha.validation import run_gate_a
 
-        # Create a data file with the required fields
         data_file = _make_npz_with_fields(
             tmp_path / "feed.npz",
             ["bid_px", "ask_px", "bid_qty", "ask_qty", "trade_vol", "current_mid"],
@@ -101,7 +91,6 @@ class TestChain:
         """Gate A fails when required data_fields are not in the dataset."""
         from hft_platform.alpha.validation import run_gate_a
 
-        # Data file has only generic fields, NOT the required ones
         data_file = _make_npz_with_fields(
             tmp_path / "partial.npz",
             ["timestamp", "volume"],
@@ -124,11 +113,9 @@ class TestChain:
         """Gate B returns a GateReport with a .passed attribute."""
         from hft_platform.alpha.validation import run_gate_b
 
-        # Use skip_tests=True to avoid actually running pytest on a dummy alpha
         report = run_gate_b(alpha_id="nonexistent_alpha", project_root=tmp_path, skip_tests=True)
         assert report is not None
         assert hasattr(report, "passed"), "GateReport must have .passed"
-        # When skipped, it should pass
         assert report.passed is True
         assert report.details.get("skipped") is True
 
@@ -153,24 +140,12 @@ class TestChain:
                 "live_uplift_factor": 1.5,
                 "model_applied": True,
             },
-            # Gate D grew a blocking replay-parity audit (Slice C). It is
-            # fail-closed: a scorecard with no ``replay_parity`` cannot be
-            # promoted. This test is the tripwire for exactly that, and it fired
-            # correctly -- the fixture is what was out of date.
             "replay_parity": {"match_pct": 99.0},
-            # L6 equity provenance. Absence is warn-only for scorecards that
-            # predate the field, but a *contract* fixture is not a legacy run:
-            # what this test pins is what a well-formed scorecard looks like
-            # now, and that includes declaring where the equity came from.
             "equity_source": "real",
-            # Gate D's cost-uncertainty audit reads the Gate C sub-gate payload;
-            # a scorecard without it cannot be evaluated (ERROR, not a pass).
-            # inventory_mtm is a maker audit, so a taker scorecard omits it.
             "strategy_type": "taker",
             "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
         }
 
-        # Validate scorecard against the actual production gate
         config = PromotionConfig(
             alpha_id="contract_test",
             owner="test_owner",
@@ -184,15 +159,6 @@ class TestChain:
             f"Well-formed scorecard must pass Gate D; failed checks: "
             f"{[k for k, v in checks.items() if not v.get('pass')]}"
         )
-        # Every Gate D check must be accounted for by a scorecard field.
-        #
-        # The check name is no longer always the field name: the audits added
-        # since this was written are called ``<field>_audit`` and read a
-        # differently-named payload. Asserting name equality therefore reported
-        # a contract gap that did not exist, while a genuinely new check would
-        # have been indistinguishable from that noise. Declaring the mapping
-        # keeps the tripwire -- a new check with no entry here still breaks the
-        # test -- without the false positive.
         check_to_scorecard_field = {
             "sharpe_oos": "sharpe_oos",
             "max_drawdown": "max_drawdown",
@@ -201,13 +167,8 @@ class TestChain:
             "latency_profile": "latency_profile",
             "latency_audit_strict": "latency_profile",
             "replay_parity_audit": "replay_parity",
-            # Advisory, and legitimately absent from a well-formed scorecard:
-            # the gate returns an explicit advisory PASS when the field is
-            # missing, so the field is optional by design.
             "equity_source": "equity_source",
-            # Maker audit: NOT_APPLICABLE (non-blocking) on this taker scorecard.
             "inventory_mtm_audit": None,
-            # Required: a missing payload is an ERROR, not an advisory PASS.
             "cost_uncertainty_audit": "cost_uncertainty",
         }
         for key, check in checks.items():
@@ -232,17 +193,15 @@ class TestChain:
 
         scorecard: dict[str, Any] = {
             "sharpe_oos": 1.5,
-            "max_drawdown": -0.1,  # >= -0.2 threshold
-            "turnover": 1.0,  # <= 2.0 threshold
-            "correlation_pool_max": 0.3,  # <= 0.7 threshold
+            "max_drawdown": -0.1,
+            "turnover": 1.0,
+            "correlation_pool_max": 0.3,
             "latency_profile": {
                 "latency_profile_id": "sim_p95_v2026-02-26",
                 "model_applied": True,
             },
-            # Blocking since Slice C -- see test_gate_c_backtest_scorecard.
             "replay_parity": {"match_pct": 99.0},
             "equity_source": "real",
-            # Required audit payload -- see test_gate_c_backtest_scorecard.
             "strategy_type": "taker",
             "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
         }
@@ -269,11 +228,11 @@ class TestChain:
         from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_d
 
         scorecard: dict[str, Any] = {
-            "sharpe_oos": 0.3,  # below min_sharpe_oos=1.0
-            "max_drawdown": -0.5,  # below max_abs_drawdown=0.2
-            "turnover": 3.0,  # above max_turnover=2.0
-            "correlation_pool_max": 0.8,  # above max_correlation=0.7
-            "latency_profile": None,  # missing
+            "sharpe_oos": 0.3,
+            "max_drawdown": -0.5,
+            "turnover": 3.0,
+            "correlation_pool_max": 0.8,
+            "latency_profile": None,
         }
         config = PromotionConfig(
             alpha_id="test_alpha",
@@ -296,7 +255,6 @@ class TestChain:
         """Gate E returns a (bool, dict) tuple — contract is verified."""
         from hft_platform.alpha.promotion import PromotionConfig, _evaluate_gate_e
 
-        # Provide a paper trade summary that satisfies the defaults
         summary = {
             "session_count": 6,
             "calendar_span_days": 8,
@@ -326,11 +284,6 @@ class TestChain:
         assert isinstance(passed, bool)
         assert isinstance(checks, dict)
         assert passed is True, f"Gate E should pass with valid shadow session inputs; checks: {checks}"
-
-
-# ===========================================================================
-# TestIntegration — async integration tests
-# ===========================================================================
 
 
 @pytest.mark.e2e_integration
@@ -373,8 +326,8 @@ class TestIntegration:
         monitor = CanaryMonitor(promotions_dir=str(promotions_dir))
 
         bad_metrics = {
-            "slippage_bps": 10.0,  # exceeds max 3.0
-            "drawdown_contribution": 0.1,  # exceeds max 0.02
+            "slippage_bps": 10.0,
+            "drawdown_contribution": 0.1,
             "execution_error_rate": 0.001,
             "sessions_live": 3,
         }
@@ -383,7 +336,6 @@ class TestIntegration:
             f"Expected rolled_back due to bad metrics; got: {status.state}, reason: {status.reason}"
         )
 
-        # Apply the rollback decision — YAML should be updated
         monitor.apply_decision(status)
 
         updated = yaml.safe_load(yaml_path.read_text())
@@ -395,7 +347,6 @@ class TestIntegration:
         """_verify_gate_c_passed raises ValueError when meta.json marks gate_c=False."""
         from hft_platform.alpha.promotion import _verify_gate_c_passed
 
-        # Create a scorecard directory with meta.json indicating Gate C failure
         run_dir = tmp_path / "research" / "experiments" / "runs" / "run_001"
         run_dir.mkdir(parents=True, exist_ok=True)
         scorecard_path = run_dir / "scorecard.json"
@@ -417,6 +368,5 @@ class TestIntegration:
         meta_path = run_dir / "meta.json"
         meta_path.write_text(json.dumps({"gate_status": {"gate_c": True}}))
 
-        # Should not raise — returns None on success
         result = _verify_gate_c_passed(scorecard_path)
         assert result is None

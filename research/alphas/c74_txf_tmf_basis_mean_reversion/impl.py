@@ -59,18 +59,11 @@ _TMF_POINT_VALUE_NTD = 10
 _TXF_INST_RT_COST_PTS = 1.5
 _TMF_INST_RT_COST_PTS = 1.5
 
-# Hedge ratio: 20 TMF per 1 TXF (dollar-neutral per R5 C30 / R7 C66 lesson).
 _HEDGE_RATIO_TMF_PER_TXF: int = _TXF_POINT_VALUE_NTD // _TMF_POINT_VALUE_NTD
 
-# DA T2 stale-quote filter — skip entries when |basis| > this bound.
-# DA T2 noted typical basis per-day mean ~+0.39 pt; exclusion at 50 pt
-# catches snapshot glitches / partial-fills of back-month aliasing.
 _STALE_QUOTE_FILTER_BASIS_PT = 50
 
 
-# ----------------------------------------------------------------------------
-# RollingBasisStats — tracks mu + sigma over a time window
-# ----------------------------------------------------------------------------
 
 
 @dataclass
@@ -118,7 +111,6 @@ class RollingBasisStats:
         if n < 2:
             return 0.0
         m = self._sum / n
-        # Sample variance: var = (sum_sq - n*mean^2) / (n - 1).
         variance_num = self._sum_sq - n * m * m
         if variance_num <= 0:
             return 0.0
@@ -130,9 +122,6 @@ class RollingBasisStats:
         self._sum_sq = 0.0
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,21 +162,18 @@ class C74Params:
     hedge_ratio_tmf_per_txf: int = _HEDGE_RATIO_TMF_PER_TXF
 
 
-# ----------------------------------------------------------------------------
-# TxfTmfBasisMeanReversion — cross-instrument strategy
-# ----------------------------------------------------------------------------
 
 
 @dataclass
 class _OpenTrip:
     """Represents an active basis position."""
 
-    side: str                    # "long_basis" or "short_basis"
+    side: str
     entry_ts_ns: int
     entry_basis_pts: float
     entry_mu_pts: float
     entry_sigma_pts: float
-    txf_bid: int                 # scaled
+    txf_bid: int
     txf_ask: int
     tmf_bid: int
     tmf_ask: int
@@ -217,10 +203,8 @@ class TxfTmfBasisMeanReversion:
         "_last_tmf_mid_pts",
         "_last_ts_ns",
         "_scale",
-        # state
         "_open_trip",
-        "_closed_trips",     # list[dict] for PnL analysis
-        # counters
+        "_closed_trips",
         "_tick_count",
         "_stale_filter_hits",
         "_entries_posted",
@@ -253,7 +237,6 @@ class TxfTmfBasisMeanReversion:
         self._exits_timeout = 0
         self._exits_stop_loss = 0
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def params(self) -> C74Params:
@@ -303,7 +286,6 @@ class TxfTmfBasisMeanReversion:
     def rolling_n(self) -> int:
         return self._stats.n()
 
-    # ---- Core update path ------------------------------------------------
 
     def update_mid(self, symbol: str, tick: TickData) -> list[object]:
         """Handle an event from one instrument; returns action list.
@@ -336,21 +318,17 @@ class TxfTmfBasisMeanReversion:
 
         self._last_ts_ns = tick.exch_ts
 
-        # Need both legs for basis computation.
         if self._last_txf_mid_pts <= 0 or self._last_tmf_mid_pts <= 0:
             return [Hold()]
 
         basis_pts = self._compute_basis()
 
-        # Stale-quote filter (DA T2 mandatory #3).
         if abs(basis_pts) > self._params.stale_basis_filter_pt:
             self._stale_filter_hits += 1
             return [Hold()]
 
-        # Update rolling stats.
         self._stats.push(tick.exch_ts, basis_pts)
 
-        # Decision logic: first check exit, then entry.
         if self._open_trip is not None:
             return self._check_exit(basis_pts, tick.exch_ts)
         return self._check_entry(basis_pts, tick.exch_ts)
@@ -379,10 +357,8 @@ class TxfTmfBasisMeanReversion:
         if abs(dev) <= params.entry_sigma * sigma:
             return [Hold()]
 
-        # Entry trigger
         actions: list[object] = []
         if dev > 0:
-            # basis too high -> SHORT basis: sell TXF + buy TMF (both maker).
             trip_side = "short_basis"
             actions.append(PostQuote(side="sell_txf", price=self._last_txf_ask, qty=1))
             actions.append(
@@ -393,7 +369,6 @@ class TxfTmfBasisMeanReversion:
                 )
             )
         else:
-            # basis too low -> LONG basis: buy TXF + sell TMF (both maker).
             trip_side = "long_basis"
             actions.append(PostQuote(side="buy_txf", price=self._last_txf_bid, qty=1))
             actions.append(
@@ -422,16 +397,13 @@ class TxfTmfBasisMeanReversion:
         assert trip is not None
         params = self._params
         mu = self._stats.mean()
-        # Reversion: dev has crossed mu
         dev_now = basis_pts - mu
         entry_dev = trip.entry_basis_pts - trip.entry_mu_pts
         reverted = (entry_dev > 0 and dev_now <= 0) or (
             entry_dev < 0 and dev_now >= 0
         )
-        # Timeout
         elapsed_ns = ts_ns - trip.entry_ts_ns
         timed_out = elapsed_ns >= params.timeout_seconds * 1_000_000_000
-        # Stop-loss (absolute deviation magnitude in entry-epoch sigma units)
         stop_pts = params.stop_sigma * trip.entry_sigma_pts
         stopped = abs(basis_pts - trip.entry_mu_pts) > stop_pts
 
@@ -443,7 +415,6 @@ class TxfTmfBasisMeanReversion:
             else ("reversion" if reverted else "timeout")
         )
         actions: list[object] = []
-        # Flatten both legs. For stop_loss -> taker cross; else -> maker.
         if trip.side == "short_basis":
             if stopped:
                 actions.append(PostQuote(side="buy_txf_taker", price=self._last_txf_ask, qty=1))
@@ -483,7 +454,6 @@ class TxfTmfBasisMeanReversion:
                     )
                 )
 
-        # Record closed trip (for PnL analysis)
         self._closed_trips.append({
             "side": trip.side,
             "exit_reason": exit_reason,
@@ -506,12 +476,10 @@ class TxfTmfBasisMeanReversion:
         self._open_trip = None
         return actions
 
-    # ---- Convenience for test harness / runner --------------------------
 
     def on_gap(self) -> None:
         """Reset rolling stats on bus overflow (conservative)."""
         self._stats.reset()
-        # Do NOT reset open trip — caller must flatten externally if needed.
 
     def reset(self) -> None:
         self._stats.reset()
@@ -532,9 +500,6 @@ class TxfTmfBasisMeanReversion:
         self._exits_stop_loss = 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C74Alpha:
@@ -602,7 +567,7 @@ class C74Alpha:
             roles_used=("architect", "code-reviewer"),
             skills_used=("hft-backtester",),
             feature_set_version=None,
-            strategy_type="maker",     # cross_instrument_mm not in enum; maker closest
+            strategy_type="maker",
             instrument="TXFD6+TMFD6",
         )
 

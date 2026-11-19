@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-_OLD_MTIME = 1_000_000  # 1970-01-12: older than any --keep-days cutoff
+_OLD_MTIME = 1_000_000
 
 
 def _load_module():
@@ -48,8 +48,6 @@ def roots(tmp_path):
     runs_root = tmp_path / "runs"
     validations_root = tmp_path / "validations"
     validations_root.mkdir()
-    # Two old runs plus one recent run for the same alpha; --keep-latest 1
-    # protects the recent one, so both old runs are eligible.
     old_a = _make_run(runs_root, "run-a", "alpha_x", old=True)
     old_b = _make_run(runs_root, "run-b", "alpha_x", old=True)
     recent = _make_run(runs_root, "run-c", "alpha_x", old=False)
@@ -100,7 +98,6 @@ def test_experiment_gc_apply_keeps_run_countable_as_a_trial(roots):
 
     gc.main(_argv(runs_root, validations_root, "--apply"))
 
-    # The run's alpha attribution must still resolve after GC.
     assert len(gc._collect_runs(runs_root)["alpha_x"]) == 3
 
 

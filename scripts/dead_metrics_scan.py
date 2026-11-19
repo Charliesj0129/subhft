@@ -36,7 +36,7 @@ from typing import Any, Iterable
 import yaml
 
 CATEGORIES = ("unreferenced_metric", "dynamic_only_metric", "alert_on_unreferenced_metric")
-INFORMATIONAL = ("dynamic_only_metric",)  # listed for a reader to confirm; never fails --strict
+INFORMATIONAL = ("dynamic_only_metric",)
 METRIC_KINDS = {"Counter", "Gauge", "Histogram", "Summary", "Info", "Enum"}
 DYNAMIC_ACCESSORS = {"getattr", "hasattr", "setattr"}
 METRICS_RELPATH = Path("src/hft_platform/observability/metrics.py")
@@ -72,7 +72,7 @@ class Refs:
 
 @dataclass(frozen=True, slots=True)
 class Consumer:
-    kind: str  # "alert" | "record" | "dashboard"
+    kind: str
     name: str
     file: str
     line: int
@@ -101,7 +101,7 @@ def _exported_name(call: ast.Call, fallback: str) -> str:
         return fallback
     first = call.args[0]
     if isinstance(first, ast.Call) and first.args and isinstance(first.args[0], ast.Constant):
-        value = first.args[0].value  # _pn("name")
+        value = first.args[0].value
         return value if isinstance(value, str) else fallback
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
         return first.value

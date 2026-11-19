@@ -27,10 +27,6 @@ from hft_platform.order.adapter import OrderAdapter
 from hft_platform.order.circuit_breaker import StrategyCircuitBreakerManager
 from hft_platform.order.deadletter import RejectionReason
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 STRATEGY_ID = "strat_test_cb"
 
 
@@ -50,7 +46,7 @@ def _make_intent(**overrides: Any) -> OrderIntent:
 
 
 def _make_cmd(intent: OrderIntent, cmd_id: int = 1) -> OrderCommand:
-    deadline_ns = time.monotonic_ns() + 10_000_000_000  # 10s
+    deadline_ns = time.monotonic_ns() + 10_000_000_000
     return OrderCommand(
         cmd_id=cmd_id,
         intent=intent,
@@ -81,11 +77,6 @@ def _make_adapter(tmp_path: Any, client: Any = None) -> OrderAdapter:
     return adapter
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def mock_deps():
     with (
@@ -108,11 +99,6 @@ def mock_deps():
         yield
 
 
-# ---------------------------------------------------------------------------
-# Test 1: broker error on NEW order → record_failure called on strategy CB
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_broker_error_calls_strategy_cb_record_failure(tmp_path):
     """After a broker OSError on a NEW order, strategy_cb_mgr.record_failure is called."""
@@ -122,12 +108,10 @@ async def test_broker_error_calls_strategy_cb_record_failure(tmp_path):
 
     adapter = _make_adapter(tmp_path, client=client)
 
-    # Patch strategy_cb_mgr so we can track calls
     mock_scb = MagicMock(spec=StrategyCircuitBreakerManager)
     mock_scb.is_open.return_value = False
     adapter.strategy_cb_mgr = mock_scb
 
-    # Set up codec so dispatch proceeds past validation
     codec = MagicMock()
     codec.encode_side.return_value = "Buy"
     codec.encode_tif.return_value = "ROD"
@@ -141,11 +125,6 @@ async def test_broker_error_calls_strategy_cb_record_failure(tmp_path):
 
     mock_scb.record_failure.assert_called_once_with(STRATEGY_ID)
     mock_scb.record_success.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Test 2: successful NEW order → record_success called on strategy CB
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -178,15 +157,9 @@ async def test_successful_new_order_calls_strategy_cb_record_success(tmp_path):
 
     await adapter._dispatch_to_api(cmd)
 
-    # record_success may be called more than once (once in _call_api, once in _dispatch_to_api)
     assert mock_scb.record_success.call_count >= 1
     assert all(call.args == (STRATEGY_ID,) for call in mock_scb.record_success.call_args_list)
     mock_scb.record_failure.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Test 3: after enough failures, is_open returns True and order is rejected
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -198,18 +171,14 @@ async def test_strategy_cb_open_blocks_new_order(tmp_path):
 
     adapter = _make_adapter(tmp_path, client=client)
 
-    # Configure a real StrategyCircuitBreakerManager with threshold=2
     real_scb = StrategyCircuitBreakerManager(default_threshold=2, default_timeout_s=60)
     adapter.strategy_cb_mgr = real_scb
 
-    # Simulate 2 failures to trip the breaker
     real_scb.record_failure(STRATEGY_ID)
     real_scb.record_failure(STRATEGY_ID)
 
-    # Breaker should now be open
     assert real_scb.is_open(STRATEGY_ID), "Breaker must be open after threshold failures"
 
-    # An open breaker is a local refusal: it is booked, not dead-lettered.
     refusals: list[tuple] = []
 
     def _capture_refusal(intent, reason, msg="", halt_exempt_blocked=False):
@@ -217,7 +186,6 @@ async def test_strategy_cb_open_blocks_new_order(tmp_path):
 
     adapter._record_local_reject = _capture_refusal  # type: ignore[method-assign]
 
-    # Validate client so we get past validation
     codec = MagicMock()
     codec.encode_side.return_value = "Buy"
     codec.encode_tif.return_value = "ROD"
@@ -227,11 +195,9 @@ async def test_strategy_cb_open_blocks_new_order(tmp_path):
     intent = _make_intent(intent_id=99)
     cmd = _make_cmd(intent, cmd_id=99)
 
-    # Use execute which is the entry point that checks strategy CB
     adapter._validate_client = MagicMock(return_value=True)  # type: ignore[method-assign]
     await adapter.execute(cmd)
 
-    # The order must have been refused, not placed
     assert len(refusals) == 1, f"Expected 1 refusal, got {refusals}"
     _, reason, msg = refusals[0]
     assert reason is RejectionReason.CIRCUIT_BREAKER, f"Unexpected reason: {reason!r}"

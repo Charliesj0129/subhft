@@ -77,9 +77,6 @@ def load_queue_calibration_profile(
         exponent = entry.get("exponent")
         calibration_date = entry["calibration_date"]
 
-        # Preserve the adapter's previous fail-closed behavior: profiles missing
-        # research evidence fields are incompatible even though this read model
-        # consumes only the queue-model fields above.
         entry["data_days_used"]
         entry["held_out_days"]
         entry["composite_score"]

@@ -19,7 +19,6 @@ yaml = pytest.importorskip("yaml")
 
 STRATEGIES_PATH = Path(__file__).resolve().parents[2] / "config" / "live" / "strategies.yaml"
 
-# TAIFEX monthly code: root + month letter (A-L) + single-digit year, e.g. TMFE6.
 _CONCRETE_MONTH = re.compile(r"^[A-Z]{2,4}[A-L][0-9]$")
 
 

@@ -38,10 +38,6 @@ from hft_platform.feed_adapter.shioaji._infra import scrub_broker_error
 
 logger = get_logger("feed_adapter.shioaji.compat")
 
-# Real execution payloads nest 2-3 deep (event -> order/status/contract ->
-# scalars). The cap is generous enough to never truncate one while still
-# terminating on a self-referencing mapping, which would otherwise take the
-# broker callback thread down with a RecursionError.
 _MAX_PAYLOAD_DEPTH = 12
 
 
@@ -239,9 +235,6 @@ def resolve_trading_account(api: Any, attr: str) -> Any | None:
         return None
 
 
-# The categories this platform subscribes or trades (config/symbols.yaml holds
-# futures, options and TSE stocks). Indexs is left out on purpose: nothing
-# depends on it, and waiting on it would only add a way to never be ready.
 _READY_CATEGORIES = ("Futures", "Options", "Stocks")
 
 
@@ -301,7 +294,6 @@ def wait_contracts_ready(
             try:
                 fetch()
             except Exception as exc:
-                # "exclusive access lost" included: the load in flight may still finish.
                 logger.warning("contracts_fetch_failed_waiting", error=scrub_broker_error(exc))
             continue
         sleep(poll_s)

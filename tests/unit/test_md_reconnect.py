@@ -23,10 +23,6 @@ from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
 from hft_platform.services.market_data import MarketDataService
 
-# ---------------------------------------------------------------------------
-# Helper: a minimal concrete class that mixes in MarketDataReconnectMixin
-# ---------------------------------------------------------------------------
-
 
 class _FakeMD(MarketDataReconnectMixin):
     """Minimal stub that satisfies all getattr() probes in the mixin.
@@ -85,16 +81,11 @@ class _FakeMD(MarketDataReconnectMixin):
         self._symbol_gap_consecutive_cycles: int = 5
         self._symbol_gap_resubscribe_cooldown_s: float = 120.0
         self._last_symbol_gap_resubscribe_ts: float = 0.0
-        self._symbol_gap_skip_off_hours: bool = False  # skip off-hours check in tests
+        self._symbol_gap_skip_off_hours: bool = False
         self._watchdog_interval_s: float = 0.001
 
     def _set_state(self, state: FeedState) -> None:
         self.state = state
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -102,17 +93,11 @@ def md() -> _FakeMD:
     return _FakeMD()
 
 
-# ---------------------------------------------------------------------------
-# _should_rollover_reconnect
-# ---------------------------------------------------------------------------
-
-
 class TestShouldRolloverReconnect:
     def test_returns_false_when_last_event_same_day(self, md: _FakeMD) -> None:
         now = dt.datetime.now(tz=dt.timezone.utc)
         with patch("hft_platform.services._md_reconnect.timebase") as tb:
             tb.now_s.return_value = now.timestamp()
-            # last_event_ts is also today
             md.last_event_ts = now.timestamp() - 10.0
             assert md._should_rollover_reconnect() is False
 
@@ -130,7 +115,6 @@ class TestShouldRolloverReconnect:
         with patch("hft_platform.services._md_reconnect.timebase") as tb:
             tb.now_s.return_value = now.timestamp()
             md.last_event_ts = yesterday.timestamp()
-            # First call sets the seen date; second should return False
             assert md._should_rollover_reconnect() is True
             assert md._should_rollover_reconnect() is False
 
@@ -144,19 +128,12 @@ class TestShouldRolloverReconnect:
             assert md._last_rollover_seen_date == now.date()
 
 
-# ---------------------------------------------------------------------------
-# _within_reconnect_window
-# ---------------------------------------------------------------------------
-
-
 class TestWithinReconnectWindow:
     def test_returns_true_when_no_constraints_configured(self, md: _FakeMD) -> None:
-        # No reconnect_days, no reconnect_hours → always open
         with patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}):
             assert md._within_reconnect_window() is True
 
     def test_respects_reconnect_hours_window_inside(self, md: _FakeMD) -> None:
-        # Pick a time inside the window
         now = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "08:00-13:00"
         with (
@@ -177,7 +154,6 @@ class TestWithinReconnectWindow:
             assert md._within_reconnect_window() is False
 
     def test_wraps_midnight_window(self, md: _FakeMD) -> None:
-        # Window 22:00 – 02:00 (wraps midnight)
         now_after_midnight = dt.datetime(2024, 1, 15, 1, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_hours = "22:00-02:00"
         with (
@@ -188,8 +164,7 @@ class TestWithinReconnectWindow:
             assert md._within_reconnect_window() is True
 
     def test_weekday_filter_blocks_wrong_day(self, md: _FakeMD) -> None:
-        # Tuesday (strftime %a.lower() = 'tue'), only allow 'mon'
-        now = dt.datetime(2024, 1, 16, 9, 0, 0, tzinfo=dt.timezone.utc)  # Tuesday
+        now = dt.datetime(2024, 1, 16, 9, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_days = {"mon"}
         with (
             patch("hft_platform.services._md_reconnect.timebase") as tb,
@@ -199,7 +174,7 @@ class TestWithinReconnectWindow:
             assert md._within_reconnect_window() is False
 
     def test_weekday_filter_allows_correct_day(self, md: _FakeMD) -> None:
-        now = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc)  # Monday
+        now = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc)
         md.reconnect_days = {"mon"}
         with (
             patch("hft_platform.services._md_reconnect.timebase") as tb,
@@ -224,17 +199,6 @@ class TestWithinReconnectWindow:
             assert md.within_reconnect_window() == md._within_reconnect_window()
 
 
-# ---------------------------------------------------------------------------
-# Cross-midnight session ownership (THESHOW Monday reconnect storm, 2026-07-27)
-#
-# THESHOW runs HFT_RECONNECT_HOURS_2=14:55-05:05 with days mon..fri. On Monday
-# 00:00-05:05 the tail matched on wall-clock alone, but the session that owns it
-# would have opened Sunday 15:00 — and Sunday is not a trading day. The facade
-# health monitor therefore reconnected for five hours into a closed market,
-# producing ~350 broker logins rejected with "code: 451, Too Many Connections".
-# ---------------------------------------------------------------------------
-
-
 class _FakeCalendar:
     """Stand-in for MarketCalendar with an explicit trading-day set."""
 
@@ -252,7 +216,6 @@ class _FakeCalendar:
         return 1
 
 
-# 2026-07-27 is the Monday whose small hours triggered the production storm.
 _MON = dt.date(2026, 7, 27)
 _TUE = dt.date(2026, 7, 28)
 _TRADING_WEEK = {_MON, _TUE, dt.date(2026, 7, 29), dt.date(2026, 7, 30), dt.date(2026, 7, 31)}
@@ -277,29 +240,22 @@ class TestCrossMidnightSessionOwnership:
             return md._within_reconnect_window()
 
     def test_window_closed_on_monday_small_hours_when_sunday_not_trading(self, md_theshow: _FakeMD) -> None:
-        # Monday 02:00: inside 14:55-05:05 by the clock, but Sunday never opened.
         when = dt.datetime(2026, 7, 27, 2, 0, tzinfo=dt.timezone.utc)
         assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is False
 
     def test_window_open_on_tuesday_small_hours_after_monday_session(self, md_theshow: _FakeMD) -> None:
-        # Tuesday 02:00: the night session opened Monday 15:00 and is genuinely live.
         when = dt.datetime(2026, 7, 28, 2, 0, tzinfo=dt.timezone.utc)
         assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is True
 
     def test_window_open_on_monday_evening_leg(self, md_theshow: _FakeMD) -> None:
-        # Monday 16:00 is the evening leg of the same window — never gated.
         when = dt.datetime(2026, 7, 27, 16, 0, tzinfo=dt.timezone.utc)
         assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is True
 
     def test_window_open_during_configured_day_window(self, md_theshow: _FakeMD) -> None:
-        # The non-wrapping day window must not be touched by the ownership check.
         when = dt.datetime(2026, 7, 27, 9, 0, tzinfo=dt.timezone.utc)
         assert self._check(md_theshow, when, _FakeCalendar(_TRADING_WEEK)) is True
 
     def test_window_closed_on_first_trading_day_after_a_holiday(self, md_theshow: _FakeMD) -> None:
-        # Monday trades but Friday..Sunday were a holiday block: no session owns
-        # Monday's small hours. days_until_trading(Monday) == 0, so the pre-existing
-        # holiday guard cannot catch this on its own.
         when = dt.datetime(2026, 7, 27, 3, 30, tzinfo=dt.timezone.utc)
         calendar = _FakeCalendar({_MON, _TUE})
         assert self._check(md_theshow, when, calendar) is False
@@ -337,11 +293,6 @@ class TestCrossMidnightSessionOwnership:
         assert MarketDataService._within_reconnect_window is MarketDataReconnectMixin._within_reconnect_window
 
 
-# ---------------------------------------------------------------------------
-# _attempt_resubscribe
-# ---------------------------------------------------------------------------
-
-
 class TestAttemptResubscribe:
     @pytest.mark.asyncio
     async def test_skips_outside_window(self, md: _FakeMD) -> None:
@@ -360,7 +311,7 @@ class TestAttemptResubscribe:
     @pytest.mark.asyncio
     async def test_respects_cooldown(self, md: _FakeMD) -> None:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
-        md._last_resubscribe_ts = now_ts - 5.0  # within cooldown
+        md._last_resubscribe_ts = now_ts - 5.0
         md.resubscribe_cooldown_s = 15.0
         client = MagicMock()
         md.client = client
@@ -375,7 +326,7 @@ class TestAttemptResubscribe:
     @pytest.mark.asyncio
     async def test_calls_client_resubscribe_on_success(self, md: _FakeMD) -> None:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
-        md._last_resubscribe_ts = now_ts - 100.0  # cooldown passed
+        md._last_resubscribe_ts = now_ts - 100.0
         client = MagicMock()
         client.resubscribe.return_value = True
         md.client = client
@@ -386,7 +337,7 @@ class TestAttemptResubscribe:
             tb.now_s.return_value = now_ts
             await md._attempt_resubscribe(30.0, reason="heartbeat_gap")
         client.resubscribe.assert_called_once()
-        assert md._resubscribe_attempts == 0  # reset on success
+        assert md._resubscribe_attempts == 0
 
     @pytest.mark.asyncio
     async def test_increments_attempts_on_failure(self, md: _FakeMD) -> None:
@@ -422,16 +373,11 @@ class TestAttemptResubscribe:
         metrics.feed_reconnect_total.labels.assert_called_with(result="symbol_gap")
 
 
-# ---------------------------------------------------------------------------
-# _trigger_reconnect
-# ---------------------------------------------------------------------------
-
-
 class TestTriggerReconnect:
     @pytest.mark.asyncio
     async def test_returns_false_when_within_cooldown(self, md: _FakeMD) -> None:
         now_ts = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone.utc).timestamp()
-        md._last_reconnect_ts = now_ts - 10.0  # well within 60s cooldown
+        md._last_reconnect_ts = now_ts - 10.0
         with (
             patch("hft_platform.services.market_data.timebase") as tb,
             patch("hft_platform.services._md_reconnect.timebase") as tb_mixin,
@@ -563,7 +509,6 @@ class TestTriggerReconnect:
             tb.now_s.return_value = now_ts
             await md._trigger_reconnect(30.0, reason="session_rollover")
         call_args = client.reconnect.call_args
-        # second positional arg is force_login=True
         assert call_args[0][1] is True
 
     @pytest.mark.asyncio
@@ -601,11 +546,6 @@ class TestTriggerReconnect:
         assert MarketDataService._trigger_reconnect.__qualname__ == "MarketDataService._trigger_reconnect"
 
 
-# ---------------------------------------------------------------------------
-# _mark_pending_reconnect
-# ---------------------------------------------------------------------------
-
-
 class TestMarkPendingReconnect:
     def test_sets_pending_reason_and_gap(self, md: _FakeMD) -> None:
         now_ts = 1700000000.0
@@ -629,13 +569,7 @@ class TestMarkPendingReconnect:
         with patch("hft_platform.services._md_reconnect.timebase") as tb:
             tb.now_s.return_value = first_ts + 99.0
             md._mark_pending_reconnect(20.0, reason="heartbeat_gap")
-        # since should remain at first_ts, not updated
         assert md._pending_reconnect_since == first_ts
-
-
-# ---------------------------------------------------------------------------
-# _request_reconnect
-# ---------------------------------------------------------------------------
 
 
 class TestRequestReconnect:
@@ -660,14 +594,8 @@ class TestRequestReconnect:
         assert md._pending_reconnect_reason == "heartbeat_gap"
 
 
-# ---------------------------------------------------------------------------
-# _is_trading_hours (fallback path — calendar unavailable)
-# ---------------------------------------------------------------------------
-
-
 class TestIsTradingHours:
     def test_weekday_within_hours(self, md: _FakeMD) -> None:
-        # Mon 09:00 UTC+8 → 01:00 UTC; map to a fixed UTC+8 aware timestamp
         aware_dt = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
         with (
             patch("hft_platform.services._md_reconnect.timebase") as tb,
@@ -681,23 +609,15 @@ class TestIsTradingHours:
             assert md._is_trading_hours() is True
 
     def test_fallback_weekend_returns_false(self, md: _FakeMD) -> None:
-        # Saturday UTC+8 = weekday()=5
         sat = dt.datetime(2024, 1, 20, 10, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
         with (
             patch("hft_platform.services._md_reconnect.timebase") as tb,
             patch("hft_platform.core.market_calendar.get_calendar", side_effect=ImportError),
         ):
             tb.now_s.return_value = sat.timestamp()
-            # Force calendar import to fail so the fallback runs
             with patch.dict("sys.modules", {"hft_platform.core.market_calendar": None}):
                 result = md._is_trading_hours()
-        # Weekend → False
         assert result is False
-
-
-# ---------------------------------------------------------------------------
-# _run_monitor_reconnect_checks
-# ---------------------------------------------------------------------------
 
 
 class TestRunMonitorReconnectChecks:
@@ -713,7 +633,6 @@ class TestRunMonitorReconnectChecks:
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
         md._trigger_reconnect.assert_awaited()
-        # Clears pending state on success
         assert md._pending_reconnect_reason is None
         assert md._pending_reconnect_gap == 0.0
         assert md._pending_reconnect_since is None
@@ -742,7 +661,6 @@ class TestRunMonitorReconnectChecks:
             patch("hft_platform.services._md_reconnect.timebase") as tb,
         ):
             tb.now_s.return_value = 1700000000.0
-            # gap > resubscribe_gap_s (15), < reconnect_gap_s (60)
             await md._run_monitor_reconnect_checks(20.0)
         md._attempt_resubscribe.assert_awaited_once()
         assert md._attempt_resubscribe.await_count == 1
@@ -757,7 +675,6 @@ class TestRunMonitorReconnectChecks:
             patch("hft_platform.services._md_reconnect.timebase") as tb,
         ):
             tb.now_s.return_value = 1700000000.0
-            # gap > force_reconnect_gap_s (300)
             await md._run_monitor_reconnect_checks(350.0)
         md._request_reconnect.assert_awaited()
         assert md._request_reconnect.await_count >= 1

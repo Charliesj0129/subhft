@@ -12,10 +12,6 @@ import pytest
 
 from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_position(symbol: str, net_qty: int, avg_price: int, pnl: int) -> MagicMock:
     pos = MagicMock()
@@ -36,11 +32,6 @@ def _make_store(positions: dict | None = None) -> MagicMock:
     store._peak_equity_scaled = 0
     store._total_realized_pnl_scaled = sum(pos.realized_pnl_scaled for pos in snapshot.values())
     return store
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestWriteCheckpoint:
@@ -70,12 +61,10 @@ class TestWriteCheckpoint:
         writer = PositionCheckpointWriter(store, path=path, interval_s=1)
         writer.write_checkpoint()
 
-        # File exists and is valid JSON
         with open(path, "rb") as f:
             data = json.loads(f.read())
         assert isinstance(data, dict)
 
-        # No leftover temp files
         remaining = [f for f in os.listdir(tmp_path) if f.startswith(".ckpt_")]
         assert remaining == []
 
@@ -89,7 +78,6 @@ class TestWriteCheckpoint:
             data = json.loads(f.read())
 
         stored_sha = data.pop("sha256")
-        # Re-serialize without sha256 and verify
         try:
             import orjson
 
@@ -152,7 +140,6 @@ class TestLoadCheckpoint:
         writer = PositionCheckpointWriter(store, path=path, interval_s=1)
         writer.write_checkpoint()
 
-        # Tamper with the file
         with open(path, "rb") as f:
             data = json.loads(f.read())
         data["positions"]["k"]["net_qty"] = 9999
@@ -198,7 +185,6 @@ class TestAsyncRun:
         writer = PositionCheckpointWriter(store, path=path, interval_s=0.05)
 
         async def stop_after_write():
-            # Wait enough for at least one write
             for _ in range(20):
                 await asyncio.sleep(0.02)
                 if os.path.exists(path):

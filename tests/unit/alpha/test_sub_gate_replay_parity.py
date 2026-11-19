@@ -57,10 +57,6 @@ class TestReplayParityGate:
         assert "missing" in out.details.lower()
 
     def test_reports_uncovered_session_phase_when_digest_omits_it(self) -> None:
-        # session_phase is recorded on OrderIntent but kept out of the live
-        # comparison digest (no hft.order_intents column yet), so the gate must
-        # flag it as uncovered rather than letting a high match_pct read as
-        # verified session parity. Advisory: passed stays True.
         gate = ReplayParityGate()
         report = _FakeReport(match_pct=100.0, observed_fields=("price", "qty", "side"))
         result = _FakeResult(replay_parity_report=report)

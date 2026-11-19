@@ -15,7 +15,6 @@ from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 def guard():
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
         g = StormGuard()
-        # Speed up tests: zero cooldown, single clear needed
         g._halt_cooldown_s = 0.0
         g._storm_cooldown_s = 0.0
         g._de_escalate_threshold = 1
@@ -29,7 +28,6 @@ def test_reconciliation_hold_blocks_halt_recovery(guard):
 
     guard.set_reconciliation_hold(True)
 
-    # Multiple update() calls with healthy metrics should NOT de-escalate
     for _ in range(10):
         guard.update(latency_us=0, feed_gap_s=0.0)
 
@@ -42,14 +40,11 @@ def test_reconciliation_hold_release_allows_recovery(guard):
     guard.trigger_halt("RECONCILIATION_MISMATCH")
     guard.set_reconciliation_hold(True)
 
-    # Still held
     guard.update(latency_us=0, feed_gap_s=0.0)
     assert guard.state == StormGuardState.HALT
 
-    # Release hold
     guard.set_reconciliation_hold(False)
 
-    # Now de-escalation should work
     state = guard.update(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
 
@@ -59,7 +54,6 @@ def test_reconciliation_hold_does_not_affect_non_halt(guard):
     guard.trigger_storm("test")
     guard.set_reconciliation_hold(True)
 
-    # STORM should still be able to de-escalate (hold is HALT-specific)
     state = guard.update(latency_us=0, feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
 
@@ -81,7 +75,7 @@ def test_normal_halt_recovery_without_hold(guard):
 def test_reconciliation_hold_set_idempotent(guard):
     """Setting hold to the same value is a no-op (no error)."""
     guard.set_reconciliation_hold(True)
-    guard.set_reconciliation_hold(True)  # idempotent
+    guard.set_reconciliation_hold(True)
     assert guard.reconciliation_hold is True
 
     guard.set_reconciliation_hold(False)

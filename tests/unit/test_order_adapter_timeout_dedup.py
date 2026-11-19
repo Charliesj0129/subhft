@@ -21,8 +21,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.order.adapter import OrderAdapter
 
-# ── Fixtures ───────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def tmp_config(tmp_path):
@@ -85,9 +83,6 @@ def _make_intent() -> OrderIntent:
     )
 
 
-# ── place_order timeout does NOT retry ─────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_place_order_timeout_no_retry(tmp_config):
     """When place_order times out, _call_api must NOT retry to avoid duplicates."""
@@ -100,7 +95,7 @@ async def test_place_order_timeout_no_retry(tmp_config):
     def slow_place_order(**kwargs: Any) -> dict[str, str]:
         nonlocal call_count
         call_count += 1
-        time.sleep(0.2)  # Exceeds timeout
+        time.sleep(0.2)
         return {"seq_no": "A1", "ord_no": "B2"}
 
     result = await adapter._call_api(
@@ -111,7 +106,6 @@ async def test_place_order_timeout_no_retry(tmp_config):
     )
 
     assert result is None
-    # Must be called exactly once — no retry after timeout
     assert call_count == 1
 
 
@@ -141,9 +135,6 @@ async def test_update_order_timeout_no_retry(tmp_config):
     assert call_count == 1
 
 
-# ── Non-mutating operations still retry on timeout ─────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_list_positions_timeout_retries_normally(tmp_config):
     """Read-only operations like list_positions still retry on timeout."""
@@ -157,7 +148,7 @@ async def test_list_positions_timeout_retries_normally(tmp_config):
         nonlocal call_count
         call_count += 1
         if call_count < 3:
-            time.sleep(0.2)  # Times out on first two attempts
+            time.sleep(0.2)
         return [{"symbol": "2330", "qty": 10}]
 
     result = await adapter._call_api(
@@ -167,7 +158,7 @@ async def test_list_positions_timeout_retries_normally(tmp_config):
     )
 
     assert result == [{"symbol": "2330", "qty": 10}]
-    assert call_count == 3  # Retried twice before succeeding
+    assert call_count == 3
 
 
 @pytest.mark.asyncio
@@ -200,7 +191,7 @@ async def test_cancel_order_timeout_is_not_retried_and_is_flagged_as_timed_out(t
     )
 
     assert result is adapter_module._CANCEL_TIMED_OUT
-    assert call_count == 1  # no blind retry
+    assert call_count == 1
 
 
 @pytest.mark.asyncio
@@ -225,10 +216,7 @@ async def test_cancel_order_transient_non_timeout_error_still_retries(tmp_config
     )
 
     assert result == {"status": "cancelled"}
-    assert call_count == 2  # retried once
-
-
-# ── Normal (non-timeout) flow unaffected ───────────────────────────────────
+    assert call_count == 2
 
 
 @pytest.mark.asyncio
@@ -271,10 +259,7 @@ async def test_place_order_transient_non_timeout_still_retries(tmp_config):
     )
 
     assert result == {"seq_no": "A1", "ord_no": "B2"}
-    assert call_count == 2  # Retried once for non-timeout transient error
-
-
-# ── Cancellation guard prevents late execution ─────────────────────────────
+    assert call_count == 2
 
 
 @pytest.mark.asyncio

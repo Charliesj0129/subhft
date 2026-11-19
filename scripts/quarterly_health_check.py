@@ -18,7 +18,7 @@ from pathlib import Path
 @dataclass
 class CheckResult:
     name: str
-    status: str  # PASS, WARN, FAIL
+    status: str
     detail: str
 
 

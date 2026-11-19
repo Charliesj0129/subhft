@@ -33,12 +33,10 @@ from research.data_pipeline import asof, dedup, filter_session_rows
 
 READER_ID = "governed_ck_reader_v1"
 CK_PRICE_SCALE = 1_000_000
-# Same window as the exporter's BidAsk rule (``research.data_pipeline.DEDUP_WINDOW_NS``).
 BIDASK_DEDUP_WINDOW_NS = 500_000
 SESSION_RULE = "xtai_session_dates+taifex_session_windows"
 QUERY_SETTINGS = {"max_memory_usage": 2_500_000_000, "max_threads": 2}
 
-# Row layout: the exporter's nine columns, then ``trade_direction``.
 COLUMNS = (
     "type",
     "exch_ts",

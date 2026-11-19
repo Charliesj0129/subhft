@@ -151,11 +151,6 @@ async def _timed_out_then_answered(adapter: OrderAdapter, broker: _LateBroker, *
     broker.release.set()
 
 
-# --------------------------------------------------------------------------- #
-# The Trade is taken over                                                      #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.asyncio
 async def test_a_late_trade_is_bound_tracked_and_cancelled(tmp_config):
     broker = _LateBroker(_TRADE)
@@ -203,7 +198,7 @@ async def test_a_bound_order_keeps_its_slot_until_its_own_terminal(tmp_config):
     assert [f for f in _feedback(adapter) if not f.was_approved] == [], "no slot is handed back yet"
     assert _KEY in adapter._live_order_intents, "if no terminal ever comes the live-order sweep releases it once"
 
-    await adapter.on_terminal_state(_STRATEGY, "A1B2C")  # the CANCELLED ack, resolved through the bound id
+    await adapter.on_terminal_state(_STRATEGY, "A1B2C")
 
     assert _KEY not in adapter.live_orders
 
@@ -215,7 +210,7 @@ async def test_a_late_trade_after_the_ttl_release_is_still_cancelled_but_release
     adapter._phantom_recovery_ttl_s = 0.0
     ok = await adapter._dispatch_to_api(_command())
     assert ok is False
-    _feedback(adapter)  # the phantom_pending=True feedback of the dispatch itself
+    _feedback(adapter)
     assert await adapter.release_stale_phantom_pendings() == 1
     (released,) = _feedback(adapter)
     assert released.was_approved is False
@@ -239,7 +234,7 @@ async def test_a_late_trade_that_already_filled_is_not_cancelled(tmp_config):
     adapter = _adapter(tmp_config, place_order=broker)
     ok = await adapter._dispatch_to_api(_command())
     assert ok is False
-    adapter._record_fill_ledger(_KEY, 1)  # the deal reached the platform before the Trade did
+    adapter._record_fill_ledger(_KEY, 1)
 
     broker.release.set()
     await _until(lambda: _rows(adapter, "phantom_bound"))
@@ -275,11 +270,6 @@ async def test_a_late_trade_without_ids_is_left_to_the_ttl(tmp_config):
     adapter.client.cancel_order.assert_not_called()
     assert _outcomes(adapter) == ["kept_for_ttl"]
     assert adapter.get_phantom_candidates() == frozenset({_KEY})
-
-
-# --------------------------------------------------------------------------- #
-# How the cancel can end                                                       #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
@@ -346,11 +336,6 @@ async def test_a_second_cancel_for_the_bound_order_is_a_no_op(tmp_config):
     assert _rows(adapter, "cancel_no_op_already_inflight")
 
 
-# --------------------------------------------------------------------------- #
-# An answer that says no order exists                                          #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.asyncio
 async def test_an_sdk_error_that_proves_nothing_was_sent_hands_the_slot_back_at_once(tmp_config):
     broker = _LateBroker(RuntimeError("Session error SessionNotEstablished"))
@@ -391,9 +376,8 @@ async def test_an_sdk_timeout_error_keeps_the_slot_for_the_ttl(tmp_config):
 @pytest.mark.asyncio
 async def test_a_call_stopped_before_it_reached_the_sdk_hands_the_slot_back(tmp_config):
     adapter = _adapter(tmp_config, place_order=MagicMock())
-    ok = await adapter._dispatch_to_api(_command())  # registers nothing: the call answered
+    ok = await adapter._dispatch_to_api(_command())
     assert ok is True
-    # Reproduce the timed-out dispatch's state, then deliver the guard's answer.
     with adapter._phantom_lock:
         adapter._register_phantom(_intent(8))
     _feedback(adapter)
@@ -405,11 +389,6 @@ async def test_a_call_stopped_before_it_reached_the_sdk_hands_the_slot_back(tmp_
     (released,) = _feedback(adapter)
     assert released.was_approved is False
     assert adapter.get_phantom_candidates() == frozenset()
-
-
-# --------------------------------------------------------------------------- #
-# The fallback                                                                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_the_phantom_fallback_ttl_matches_the_live_order_ttl(tmp_config):

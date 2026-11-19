@@ -29,19 +29,14 @@ import yaml
 
 logger = structlog.get_logger("alpha.latency_audit")
 
-# Latency fields that are numerically validated against reference profiles.
 _NUMERIC_LATENCY_FIELDS: tuple[str, ...] = (
     "submit_ack_latency_ms",
     "modify_ack_latency_ms",
     "cancel_ack_latency_ms",
 )
 
-# Minimum ratio: scorecard value must be >= reference * _GATE_D_TOLERANCE
 _GATE_D_TOLERANCE: float = 0.8
 
-# Slice B Task 12 — broker P95 fields required under strict promotion profile.
-# Under the vm_ul6_strict profile a scorecard's resolved latency profile must
-# populate both fields or the audit fails closed (no advisory fallback).
 _STRICT_REQUIRED_P95_FIELDS: tuple[str, ...] = (
     "submit_ack_latency_ms",
     "cancel_ack_latency_ms",
@@ -187,15 +182,12 @@ def _alpha_id_from_path(scorecard_path: Path, project_root: Path) -> str:
             return str(data["alpha_id"])
     except Exception:
         pass
-    # Fallback: path relative to research/experiments/<type>/<alpha_id>/...
     experiments_root = project_root / "research" / "experiments"
     try:
         rel = scorecard_path.relative_to(experiments_root)
-        # rel = validations/my_alpha/scorecard.json  or
-        #       validations/my_alpha/20260318T.../scorecard.json
         parts = rel.parts
         if len(parts) >= 2:
-            return parts[1]  # the alpha name directory
+            return parts[1]
     except ValueError:
         pass
     return scorecard_path.parent.name
@@ -217,7 +209,6 @@ def _validate_profile(
         return False, issues
 
     if not reference_profiles:
-        # Profiles YAML unavailable — cannot validate values, but profile exists
         issues.append(f"latency_profiles.yaml unavailable; cannot validate profile '{profile_id}'")
         return False, issues
 
@@ -231,7 +222,6 @@ def _validate_profile(
         sc_value = scorecard_latency_profile.get(field)
 
         if ref_value is None:
-            # Reference profile doesn't declare this field — skip
             continue
 
         if sc_value is None:
@@ -245,7 +235,6 @@ def _validate_profile(
             issues.append(f"latency_profile.{field} is non-numeric: {sc_value!r}")
             continue
 
-        # Gate D logic: scorecard value must be >= reference * tolerance
         threshold = ref_float * _GATE_D_TOLERANCE
         if sc_float < threshold:
             issues.append(
@@ -291,7 +280,6 @@ def _audit_scorecard(
         profile_valid, profile_issues = _validate_profile(latency_profile, reference_profiles)
         issues.extend(profile_issues)
 
-    # Stress test check
     stress_test = data.get("stress_test")
     if isinstance(stress_test, dict):
         stress_tested = bool(stress_test.get("passed", False))
@@ -301,8 +289,6 @@ def _audit_scorecard(
         stress_tested = False
         if stress_test is not None:
             issues.append(f"stress_test has unexpected type: {type(stress_test).__name__}")
-        # Missing stress_test is not necessarily an issue for older scorecards;
-        # we record stress_tested=False but do not add a blocking issue here.
 
     logger.debug(
         "audited scorecard",
@@ -373,7 +359,6 @@ def format_audit_report(results: list[LatencyAuditResult]) -> str:
     lines.append("Latency Audit Report")
     lines.append("=" * 100)
 
-    # Column widths
     col_alpha = 36
     col_profile = 12
     col_valid = 10
@@ -400,7 +385,6 @@ def format_audit_report(results: list[LatencyAuditResult]) -> str:
             f"{r.alpha_id:<{col_alpha}}{has_p:<{col_profile}}{valid:<{col_valid}}{stress:<{col_stress}}{issue_summary}"
         )
 
-        # Append remaining issues indented under the first
         indent = " " * indent_width
         for issue in r.issues[1:]:
             lines.append(f"{indent}{issue}")
@@ -445,7 +429,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def _detect_project_root() -> Path:
     """Auto-detect project root as three levels up from this file."""
-    # src/hft_platform/alpha/latency_audit.py → project root
     return Path(__file__).resolve().parent.parent.parent.parent
 
 

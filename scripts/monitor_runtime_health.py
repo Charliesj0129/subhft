@@ -157,9 +157,6 @@ def main() -> None:  # noqa: C901
     off_hours_product = os.getenv("HFT_MONITOR_PRODUCT_TYPE", "future")
     off_hours_log_interval_s = _float_env("HFT_MONITOR_OFF_HOURS_LOG_INTERVAL_S", 300.0)
     last_off_hours_log_ts = 0.0
-    # Alert types suppressed when outside trading hours (liquidity/ingestion noise).
-    # Connectivity / crash alerts (metrics_fetch, clickhouse, future_rows, wal_fallback)
-    # remain active 24/7.
     off_hours_suppressed_types = {"feed_gap", "ingest_rate", "ingest_lag"}
 
     ch_client = clickhouse_connect.get_client(
@@ -175,7 +172,6 @@ def main() -> None:  # noqa: C901
         now = time.time()
         alerts: List[Dict[str, object]] = []
 
-        # --- Prometheus metrics ---
         try:
             resp = requests.get(metrics_url, timeout=5)
             resp.raise_for_status()
@@ -213,7 +209,6 @@ def main() -> None:  # noqa: C901
         except Exception as exc:
             alerts.append({"type": "metrics_fetch", "severity": "warning", "error": str(exc)})
 
-        # --- ClickHouse checks ---
         try:
             future_ns = int(future_tol_s * 1e9)
             future_rows = _query_scalar(
@@ -249,7 +244,6 @@ def main() -> None:  # noqa: C901
         except Exception as exc:
             alerts.append({"type": "clickhouse", "severity": "warning", "error": str(exc)})
 
-        # --- Filter off-hours liquidity/ingestion alerts ---
         in_trading = _is_trading_hours_now(off_hours_product) if skip_off_hours else True
         if not in_trading:
             suppressed = [a for a in alerts if a.get("type") in off_hours_suppressed_types]
@@ -262,7 +256,6 @@ def main() -> None:  # noqa: C901
                 )
                 last_off_hours_log_ts = now
 
-        # --- Emit + optional webhook ---
         if alerts:
             for alert in alerts:
                 logger.warning("Runtime monitor alert", **alert)

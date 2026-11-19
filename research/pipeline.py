@@ -40,14 +40,7 @@ from hft_platform.cli_args.research_pipeline import (
 )
 from research import factory
 
-# Stage 2 (2026-05-28): the legacy in-code overrides dict
-# ``_VM_UL6_PROFILE_OVERRIDES`` and ``_PROFILE_BASELINE_DEFAULTS`` were removed.
-# Their values now live in ``config/research/profiles/vm_ul6_strict.yaml`` under
-# the ``pipeline_overrides:`` / ``pipeline_baseline_defaults:`` keys and are
-# loaded by ``hft_platform.alpha._validation_profile.load_profile``.
-# See /home/charlie/.claude/plans/swift-meandering-avalanche.md Stage 2.
 
-# Relative to the repo root, not the cwd (see ``hft_platform.alpha.paths``).
 _PROFILE_YAML_DIR = Path("config/research/profiles")
 
 
@@ -152,8 +145,6 @@ def _apply_validation_profile(
     profile_stem = _resolve_profile_token(raw_profile, notes=notes)
     if profile_stem is None:
         if strict_mode:
-            # standard is exploratory: it has no blocking sub-gates, so a
-            # governed run under it could reach promotion unmeasured.
             raise ValueError(
                 "strict (governed) runs need a strict validation profile; "
                 f"'{_STANDARD_VALIDATION_PROFILE}' is exploratory only (use triage mode)"
@@ -171,7 +162,6 @@ def _apply_validation_profile(
         baseline = baselines.get(key)
         current = getattr(args, key)
         if baseline is not None and not _values_equal(current, baseline):
-            # User explicitly overrode the baseline default — respect that.
             continue
         setattr(args, key, target)
         applied.append(key)
@@ -260,8 +250,6 @@ def _validate(
             stress_fee_multiplier=float(args.stress_fee_multiplier),
             min_stress_sharpe_ratio=float(args.min_stress_sharpe_ratio),
             stress_drawdown_limit_multiplier=float(args.stress_drawdown_limit_multiplier),
-            # Gate C blocks on the profile's sub-gates only when it is given
-            # the profile; without it they stay advisory.
             profile=loaded_profile,
             run_mode=(RunMode.GOVERNED if strict_mode else RunMode.EXPLORATORY).value,
         ),
@@ -422,12 +410,7 @@ def _run_pipeline(args: argparse.Namespace, *, mode: str) -> int:
     if no_promote:
         notes.append("Promotion step skipped by --no-promote.")
     elif not validation.passed:
-        # Only a PASS verdict enters promotion. Running promote_alpha on a
-        # failed validation used to raise on the Gate C check and record a
-        # kill for runs that were never measured.
         notes.append("Promotion step skipped: validation did not reach a PASS verdict.")
-        # Skipping promotion must not drop a real KILL: record it from the
-        # stored Gate C verdict (nothing is written for any other verdict).
         if validation.scorecard_path and record_gate_c_kill(
             alpha_id=args.alpha_id, project_root=root, scorecard_path=validation.scorecard_path
         ):

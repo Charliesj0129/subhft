@@ -67,11 +67,6 @@ def _md_shim(client, *, hooks=None, gates=None) -> MarketDataService:
     return inst
 
 
-# --------------------------------------------------------------------------- #
-# 1. The defect itself                                                         #
-# --------------------------------------------------------------------------- #
-
-
 def test_post_connect_hooks_run_even_when_alias_map_is_empty():
     """An alias-free symbol universe must still get one hook pass per connect.
 
@@ -123,11 +118,6 @@ def test_one_failing_hook_does_not_stop_the_rest_of_the_chain():
     assert order == ["boom", "later"]
 
 
-# --------------------------------------------------------------------------- #
-# 2. The chain end to end: expired binding → front month                        #
-# --------------------------------------------------------------------------- #
-
-
 def test_family_populator_rebinds_strategy_symbols_to_current_front_month():
     """Drive the real chain: connect fires the hook, the populator rebinds.
 
@@ -147,7 +137,6 @@ def test_family_populator_rebinds_strategy_symbols_to_current_front_month():
     runner._family_resolver = None
     runner.set_family_resolver(resolver)
 
-    # Mapping container matching Shioaji's ``Contracts.Futures`` interface.
     roots = {
         "TMF": [
             SimpleNamespace(code="TMFI6", delivery_date="2026/09/16", delivery_month=None),
@@ -171,17 +160,7 @@ def test_family_populator_rebinds_strategy_symbols_to_current_front_month():
     md._propagate_alias_map(trigger="post_subscribe", force_hooks=True)
 
     assert "TMFI6" in strategy.symbols, "front month must be bound after connect"
-    # The expired expiry survives because the config file hardcodes it and
-    # ``_apply_family_bindings`` only adds. Harmless for liveness (nothing is
-    # subscribed to it) but it keeps ``preflight_symbol_mismatch`` firing —
-    # removing the hardcode from config/live/strategies.yaml is a separate,
-    # frozen-registry change.
     assert "TMFE6" in strategy.symbols
-
-
-# --------------------------------------------------------------------------- #
-# 3. Gates fail closed instead of degrading to a warning                        #
-# --------------------------------------------------------------------------- #
 
 
 def test_stale_instrument_gate_runs_on_a_plain_connect():
@@ -291,11 +270,6 @@ def test_gate_refusal_increments_its_own_counter():
     counter.labels.return_value.inc.assert_called_once()
 
 
-# --------------------------------------------------------------------------- #
-# 4. Coverage ratio stops claiming health it cannot have                        #
-# --------------------------------------------------------------------------- #
-
-
 def test_coverage_ratio_is_not_one_when_no_aliases_are_configured():
     """0/0 is undefined, not "fully covered".
 
@@ -329,11 +303,6 @@ def test_alias_map_size_reports_the_configured_alias_count():
     assert registry.alias_resolution_coverage_ratio._value.get() == 1.0
 
 
-# --------------------------------------------------------------------------- #
-# 5. Trading liveness is measurable                                             #
-# --------------------------------------------------------------------------- #
-
-
 def test_bound_live_symbols_gauge_is_zero_when_strategy_binds_expired_contract():
     """The number that would have caught this in an hour instead of two months."""
     from hft_platform.observability.metrics import MetricsRegistry
@@ -361,11 +330,6 @@ def test_bound_live_symbols_gauge_counts_only_symbols_the_feed_carries():
     counts = publish_strategy_binding_liveness([strategy], {"TMFI6", "TXFI6"})
 
     assert counts == {"R47_MAKER_TMF": 1}
-
-
-# --------------------------------------------------------------------------- #
-# 5. Field findings from the 2026-08-08 deploy                                 #
-# --------------------------------------------------------------------------- #
 
 
 def test_liveness_measurement_is_registered_after_the_family_populators():
@@ -408,12 +372,6 @@ def test_pool_exposes_contract_lookup_from_a_logged_in_client():
     from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
     sentinel = object()
-    # Real shape, verified against the running engine: ShioajiClientFacade
-    # exposes `api` and `logged_in` but NOT `_get_contract`, and defines no
-    # `__getattr__`, so the lookup only exists one level down on `_client`.
-    # The first version of this test used a facade fake that carried
-    # `_get_contract` directly — a fake more capable than the real object — so
-    # it passed while production resolved every contract to None.
     dead = SimpleNamespace(logged_in=False, _client=SimpleNamespace(_get_contract=lambda *a, **k: "WRONG"))
     live = SimpleNamespace(logged_in=True, _client=SimpleNamespace(_get_contract=lambda *a, **k: sentinel))
 

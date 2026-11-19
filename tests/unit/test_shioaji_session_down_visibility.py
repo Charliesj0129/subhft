@@ -45,7 +45,6 @@ class TestSessionDownCallbackRegistration:
         api.set_session_down_callback.assert_called_once_with(client._session_down_callback_fn)
 
     def test_registration_reports_false_when_the_sdk_lacks_the_setter(self, module_log_sink) -> None:
-        # A future SDK could drop it. Degrade to a warning; never raise.
         api = SimpleNamespace()
         client = _registrar(api)
         logs = module_log_sink(client_module)
@@ -80,8 +79,6 @@ class TestSessionDownIsVisible:
 
         QuoteRuntime.on_session_down(runtime)
 
-        # Error level is the whole point: the outage was invisible precisely
-        # because every SDK-adjacent event was logged at info.
         assert [e for e in logs if e["event"] == "shioaji_session_down" and e["log_level"] == "error"]
 
     def test_session_down_increments_its_counter(self) -> None:
@@ -93,16 +90,13 @@ class TestSessionDownIsVisible:
         metrics.shioaji_session_down_total.inc.assert_called_once_with()
 
     def test_session_down_never_raises_into_the_sdk(self, module_log_sink) -> None:
-        # Runs on a broker thread inside a C caller: an escape is a crash.
         metrics = mock.MagicMock()
         metrics.shioaji_session_down_total.inc.side_effect = RuntimeError("registry gone")
         runtime = self._runtime(metrics)
         logs = module_log_sink(quote_runtime_module)
 
-        QuoteRuntime.on_session_down(runtime)  # must not raise
+        QuoteRuntime.on_session_down(runtime)
 
-        # Reaching the counter proves the raise came from inside the handler
-        # and was swallowed there, rather than the handler never running.
         metrics.shioaji_session_down_total.inc.assert_called_once_with()
         assert [e for e in logs if e["event"] == "shioaji_session_down"]
 
@@ -128,8 +122,6 @@ class TestRegistrationStaysObservational:
         src = inspect.getsource(ShioajiClient._register_callbacks)
         assert "_register_session_down_callback()" in src
 
-        # It must land in its own attribute, never folded into the two flags
-        # that drive the retry ladder.
         assert "self._session_down_callback_registered = self._register_session_down_callback()" in src
         for gating in (
             "ok_quote = self._register_session_down_callback",

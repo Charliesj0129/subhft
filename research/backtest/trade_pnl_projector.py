@@ -98,7 +98,6 @@ def project_trade_pnl_from_position_series(
             price_raw = float(prices[i])
         except (TypeError, ValueError):
             continue
-        # Re-scale so project_trade_pnl's divisor lands on points.
         fills.extend(
             {"side": side, "price": price_raw} for _ in range(abs(delta))
         )

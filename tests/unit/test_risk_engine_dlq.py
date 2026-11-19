@@ -26,7 +26,6 @@ def engine(tmp_path):
     q_in = asyncio.Queue()
     q_out = asyncio.Queue(maxsize=4096)
     eng = RiskEngine(str(cfg), q_in, q_out)
-    # Set drain interval to 1 for easier testing
     eng._dlq_drain_interval = 1
     return eng
 
@@ -73,14 +72,13 @@ class TestDlqExpiration:
 
     def test_expired_entries_discarded(self, engine: RiskEngine) -> None:
         cmd = engine.create_command(_make_intent(1))
-        # Enqueue with a timestamp well past the TTL
         old_ts = time.monotonic_ns() - engine._dlq_ttl_ns - 1_000_000_000
         engine._order_dlq.append((cmd, old_ts))
 
         engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
-        assert engine.order_queue.empty()  # expired, not drained
+        assert engine.order_queue.empty()
 
     def test_expired_metric_incremented(self, engine: RiskEngine) -> None:
         cmd = engine.create_command(_make_intent(1))
@@ -115,7 +113,6 @@ class TestDlqDrainStopsWhenFull:
     """Test that drain stops when order_queue is full again."""
 
     def test_drain_stops_at_full_queue(self, engine: RiskEngine) -> None:
-        # Use a tiny queue
         engine.order_queue = asyncio.Queue(maxsize=1)
         now = time.monotonic_ns()
         cmd1 = engine.create_command(_make_intent(1))
@@ -125,7 +122,6 @@ class TestDlqDrainStopsWhenFull:
 
         engine._drain_order_dlq()
 
-        # Only 1 should have been drained; 1 remains in DLQ
         assert engine.order_queue.qsize() == 1
         assert len(engine._order_dlq) == 1
         remaining_cmd, _ = engine._order_dlq[0]
@@ -140,19 +136,16 @@ class TestDlqDrainCounter:
         engine._dlq_drain_interval = 3
         engine._dlq_drain_counter = 0
 
-        # Populate DLQ
         now = time.monotonic_ns()
         for i in range(3):
             cmd = engine.create_command(_make_intent(i + 10))
             engine._order_dlq.append((cmd, now))
 
-        # Simulate 3 intents through run loop
         for _ in range(3):
             intent = _make_intent(price=100, qty=1)
             engine.intent_queue.put_nowait(intent)
 
         task = asyncio.create_task(engine.run())
-        # Wait for processing
         await asyncio.sleep(0.1)
 
         engine.running = False
@@ -162,8 +155,6 @@ class TestDlqDrainCounter:
         except asyncio.CancelledError:
             pass
 
-        # After 3 intents with interval=3, drain should have been called once
-        # DLQ entries should have been drained
         assert len(engine._order_dlq) == 0
 
     def test_counter_does_not_drain_before_interval(self, engine: RiskEngine) -> None:
@@ -173,11 +164,9 @@ class TestDlqDrainCounter:
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-        # Simulate counter increments below interval
         for _ in range(4):
             engine._dlq_drain_counter += 1
 
-        # Counter is 4, interval is 5 — should not drain yet
         assert engine._dlq_drain_counter < engine._dlq_drain_interval
         assert len(engine._order_dlq) == 1
 
@@ -207,7 +196,6 @@ class TestDlqHaltGuard:
     def test_drain_expires_past_deadline_commands(self, engine: RiskEngine) -> None:
         """Commands whose deadline_ns is in the past are expired, not replayed."""
         cmd = engine.create_command(_make_intent(1))
-        # Override deadline to be in the past
         import dataclasses
 
         cmd = dataclasses.replace(cmd, deadline_ns=time.monotonic_ns() - 1_000_000)
@@ -227,7 +215,6 @@ class TestDlqHaltGuard:
         assert engine.storm_guard.state == StormGuardState.NORMAL
 
         cmd = engine.create_command(_make_intent(1))
-        # deadline_ns is 500ms in the future — should pass
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
         engine._drain_order_dlq()
@@ -258,10 +245,6 @@ class TestDlqDrainConcurrentHalt:
         engine._order_dlq.append((cmd2, now))
         engine._order_dlq.append((cmd3, now))
 
-        # _drain_order_dlq calls storm_guard.state per-item in this order:
-        #   1st call: top-level >= STORM guard (before loop) → NORMAL (proceed to loop)
-        #   2nd call: in-loop >= STORM recheck for cmd1 → NORMAL (cmd1 drains)
-        #   3rd call: in-loop >= STORM recheck for cmd2 → HALT (triggers mid-drain clear)
         state_values = [StormGuardState.NORMAL, StormGuardState.NORMAL, StormGuardState.HALT]
 
         with patch.object(
@@ -272,12 +255,10 @@ class TestDlqDrainConcurrentHalt:
         ):
             engine._drain_order_dlq()
 
-        # cmd1 was drained before HALT was detected
         assert engine.order_queue.qsize() == 1
         out = engine.order_queue.get_nowait()
         assert out.cmd_id == cmd1.cmd_id
 
-        # cmd2 and cmd3 were cleared from the DLQ — not pushed to order_queue
         assert len(engine._order_dlq) == 0
         assert engine.order_queue.empty()
 
@@ -287,9 +268,7 @@ class TestDlqRevalidation:
 
     def test_rejects_when_position_limit_exceeded(self, engine: RiskEngine) -> None:
         """DLQ replay drops command when position limit would be exceeded."""
-        # Wire a position_provider that reports a position at the limit
         engine._position_provider = lambda symbol, strategy_id: 1000
-        # Reinit the PositionLimitValidator with the provider so it picks up positions
         from hft_platform.risk.validators import PositionLimitValidator
 
         for v in engine.validators:
@@ -297,7 +276,6 @@ class TestDlqRevalidation:
                 v._position_provider = engine._current_strategy_symbol_net_position
                 break
 
-        # qty=10 would push abs(1000 + 10) = 1010 > max_position_lots (1000)
         cmd = engine.create_command(_make_intent(1, qty=10))
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
@@ -305,14 +283,12 @@ class TestDlqRevalidation:
         engine._drain_order_dlq()
         after_rejected = engine.metrics.risk_dlq_revalidation_rejected_total._value.get()
 
-        # Command should be rejected and NOT pushed to order_queue
         assert engine.order_queue.empty()
         assert len(engine._order_dlq) == 0
         assert after_rejected - before_rejected == 1
 
     def test_allows_when_position_limit_ok(self, engine: RiskEngine) -> None:
         """DLQ replay allows command when position limit is fine."""
-        # Position provider reports zero position — plenty of room
         engine._position_provider = lambda symbol, strategy_id: 0
         from hft_platform.risk.validators import PositionLimitValidator
 
@@ -364,7 +340,6 @@ class TestDlqRevalidation:
 
     def test_existing_ttl_and_storm_behavior_unchanged(self, engine: RiskEngine) -> None:
         """Regression: TTL expiry and STORM clearing remain unaffected by revalidation."""
-        # TTL-expired entry should still be expired (not revalidated)
         cmd = engine.create_command(_make_intent(1))
         old_ts = time.monotonic_ns() - engine._dlq_ttl_ns - 1_000_000_000
         engine._order_dlq.append((cmd, old_ts))
@@ -390,14 +365,12 @@ class TestDlqOverflowMetric:
         cmd2 = engine.create_command(_make_intent(2))
         cmd3 = engine.create_command(_make_intent(3))
 
-        # Fill DLQ to capacity via direct append (simulating order_queue full path)
         engine._order_dlq.append((cmd1, now))
         engine._order_dlq.append((cmd2, now))
         assert len(engine._order_dlq) == 2
 
         before = engine.metrics.risk_dlq_overflow_total._value.get()
 
-        # Simulate the overflow path from engine.py lines ~466-469
         engine._order_dlq.append((cmd3, now))
         if len(engine._order_dlq) > engine._ORDER_DLQ_MAX:
             engine._order_dlq.popleft()
@@ -407,7 +380,6 @@ class TestDlqOverflowMetric:
 
         assert after - before == 1
         assert len(engine._order_dlq) == 2
-        # cmd1 was evicted; cmd2 and cmd3 remain
         remaining_ids = [cmd.cmd_id for cmd, _ in engine._order_dlq]
         assert remaining_ids == [cmd2.cmd_id, cmd3.cmd_id]
 

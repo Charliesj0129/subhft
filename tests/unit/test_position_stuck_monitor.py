@@ -33,7 +33,6 @@ def _pos(strategy_id, symbol, net_qty, last_update_ts, avg_price_scaled=377_000_
 
 class _Store:
     def __init__(self, positions):
-        # Mimic PositionStore.positions: Dict[key, Position]
         self.positions = {f"{p.strategy_id}:{p.symbol}": p for p in positions}
 
 
@@ -41,7 +40,7 @@ class _Store:
 class TestPositionStuckMonitor:
     async def test_flat_position_emits_no_alert(self):
         now_ns = time.time_ns()
-        store = _Store([_pos("R47", "TMFE6", 0, now_ns - 10_000_000_000_000)])  # flat
+        store = _Store([_pos("R47", "TMFE6", 0, now_ns - 10_000_000_000_000)])
         dispatcher = AsyncMock()
         mon = PositionStuckMonitor(
             position_store=store,
@@ -53,7 +52,7 @@ class TestPositionStuckMonitor:
 
     async def test_young_position_updates_gauge_no_alert(self):
         now_ns = time.time_ns()
-        store = _Store([_pos("R47", "TMFE6", -1, now_ns - 2_000_000_000)])  # 2s old
+        store = _Store([_pos("R47", "TMFE6", -1, now_ns - 2_000_000_000)])
         dispatcher = AsyncMock()
         mon = PositionStuckMonitor(
             position_store=store,
@@ -63,12 +62,10 @@ class TestPositionStuckMonitor:
         await mon._tick()
         dispatcher.notify_position_stuck.assert_not_awaited()
 
-        # Gauge populated
         metric = MetricsRegistry.get().position_age_seconds.labels(strategy="R47", symbol="TMFE6")
         assert metric._value.get() >= 0
 
     async def test_stuck_position_fires_once_then_dedups(self):
-        # 10 min old position
         now_ns = time.time_ns()
         stuck = _pos("R47", "TMFE6", -1, now_ns - 600_000_000_000)
         store = _Store([stuck])
@@ -78,10 +75,9 @@ class TestPositionStuckMonitor:
             dispatcher=dispatcher,
             alert_threshold_s=300,
         )
-        # Seed first_observed so age uses the fresh last_update_ts (10 min old).
         mon._first_observed_ns[("R47", "TMFE6")] = now_ns - 600_000_000_000
         await mon._tick()
-        await mon._tick()  # second tick must NOT re-alert (dedup)
+        await mon._tick()
         await mon._tick()
 
         assert dispatcher.notify_position_stuck.await_count == 1
@@ -105,11 +101,9 @@ class TestPositionStuckMonitor:
         await mon._tick()
         assert dispatcher.notify_position_stuck.await_count == 1
 
-        # Position flips to flat → dedup key cleared
         stuck.net_qty = 0
         await mon._tick()
 
-        # New stuck position for same key
         stuck.net_qty = -1
         stuck.last_update_ts = time.time_ns() - 600_000_000_000
         mon._first_observed_ns[("R47", "TMFE6")] = time.time_ns() - 600_000_000_000
@@ -128,8 +122,6 @@ class TestPositionStuckMonitor:
             dispatcher=dispatcher,
             alert_threshold_s=300,
         )
-        # Seed old position with a first_observed that matches its last_update
-        # (simulates 10 min live observation), and young with first_observed=now.
         mon._first_observed_ns[("R47", "TMFE6")] = now_ns - 600_000_000_000
         mon._first_observed_ns[("C14", "TXFF6")] = now_ns - 5_000_000_000
         await mon._tick()
@@ -146,14 +138,14 @@ class TestPositionStuckMonitor:
             dispatcher=None,
             alert_threshold_s=300,
         )
-        await mon._tick()  # must not raise
+        await mon._tick()
 
     async def test_stale_last_update_ts_from_recovery_does_not_false_alert(self):
         """Bug 27b (2026-04-18): a Position with ``last_update_ts`` 24h ago
         (inherited from startup recovery) must NOT alert until the position
         has persisted ``alert_threshold_s`` within the live monitor session."""
         now_ns = time.time_ns()
-        stale_24h = now_ns - 86_400_000_000_000  # 24 hours ago in ns
+        stale_24h = now_ns - 86_400_000_000_000
         stuck = _pos("R47", "TMFE6", 1, stale_24h)
         store = _Store([stuck])
         dispatcher = AsyncMock()
@@ -162,16 +154,14 @@ class TestPositionStuckMonitor:
             dispatcher=dispatcher,
             alert_threshold_s=300,
         )
-        await mon._tick()  # first observation → anchors first_observed_ns to now
+        await mon._tick()
         dispatcher.notify_position_stuck.assert_not_awaited()
-        await mon._tick()  # second tick 0s later → still not alert-worthy
+        await mon._tick()
         dispatcher.notify_position_stuck.assert_not_awaited()
 
     async def test_unrealized_pnl_computed_when_mid_provided(self):
         """Verify that mid_price_fn yields an unrealized_ntd field in the alert."""
         now_ns = time.time_ns()
-        # net_qty=-1 short @ 37800*10000, mid=37900*10000 → diff +100*10000 scaled
-        # unrealized = (37900-37800)*10000 * -1 * 10 / 10000 = -1000 NTD
         stuck = _pos("R47", "TMFE6", -1, now_ns - 600_000_000_000, avg_price_scaled=378_000_000)
         store = _Store([stuck])
         dispatcher = AsyncMock()

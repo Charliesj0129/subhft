@@ -38,10 +38,6 @@ class ShioajiMetricsBridge:
         self._registry: MetricsRegistry = registry or MetricsRegistry.get()
         self._label_cache: dict[tuple[str, tuple[tuple[str, str], ...]], Any] = {}
 
-    # ------------------------------------------------------------------
-    # Cached label lookup helper
-    # ------------------------------------------------------------------
-
     def _child(self, metric_name: str, **labels: str) -> Any:
         """Return a cached child metric for the given labels."""
         key = (metric_name, tuple(sorted(labels.items())))
@@ -54,10 +50,6 @@ class ShioajiMetricsBridge:
         child = metric.labels(**labels)
         self._label_cache[key] = child
         return child
-
-    # ------------------------------------------------------------------
-    # API latency / errors
-    # ------------------------------------------------------------------
 
     def api_latency(self, op: str, result: str) -> Any:
         """``shioaji_api_latency_ms.labels(op=op, result=result)``."""
@@ -75,10 +67,6 @@ class ShioajiMetricsBridge:
         """``shioaji_api_jitter_ms_hist.labels(op=op)``."""
         return self._child("shioaji_api_jitter_ms_hist", op=op)
 
-    # ------------------------------------------------------------------
-    # Quote routing / callback
-    # ------------------------------------------------------------------
-
     def quote_route(self, result: str) -> Any:
         """``shioaji_quote_route_total.labels(result=result)``."""
         return self._child("shioaji_quote_route_total", result=result)
@@ -95,17 +83,9 @@ class ShioajiMetricsBridge:
         """``shioaji_quote_callback_queue_dropped_total`` (no labels)."""
         return getattr(self._registry, "shioaji_quote_callback_queue_dropped_total", None)
 
-    # ------------------------------------------------------------------
-    # Thread liveness
-    # ------------------------------------------------------------------
-
     def thread_alive(self, thread: str, conn_id: str = "-") -> Any:
         """``shioaji_thread_alive.labels(thread=thread, conn_id=conn_id)``."""
         return self._child("shioaji_thread_alive", thread=thread, conn_id=conn_id)
-
-    # ------------------------------------------------------------------
-    # Quote pending / stall
-    # ------------------------------------------------------------------
 
     def quote_pending_age(self) -> Any:
         """``shioaji_quote_pending_age_seconds`` (no labels)."""
@@ -114,10 +94,6 @@ class ShioajiMetricsBridge:
     def quote_pending_stall(self, reason: str) -> Any:
         """``shioaji_quote_pending_stall_total.labels(reason=reason)``."""
         return self._child("shioaji_quote_pending_stall_total", reason=reason)
-
-    # ------------------------------------------------------------------
-    # Session / Login
-    # ------------------------------------------------------------------
 
     def session_lock_conflicts(self) -> Any:
         """``shioaji_session_lock_conflicts_total`` (no labels)."""
@@ -131,10 +107,6 @@ class ShioajiMetricsBridge:
         """``shioaji_crash_signature_total.labels(...)``."""
         return self._child("shioaji_crash_signature_total", signature=signature, context=context)
 
-    # ------------------------------------------------------------------
-    # Keep-alive / Contract
-    # ------------------------------------------------------------------
-
     def keepalive_failures(self) -> Any:
         """``shioaji_keepalive_failures_total`` (no labels)."""
         return getattr(self._registry, "shioaji_keepalive_failures_total", None)
@@ -143,10 +115,6 @@ class ShioajiMetricsBridge:
         """``shioaji_contract_lookup_errors_total.labels(code=code)``."""
         return self._child("shioaji_contract_lookup_errors_total", code=code)
 
-    # ------------------------------------------------------------------
-    # Feed-level metrics (used by reconnect/resubscribe paths)
-    # ------------------------------------------------------------------
-
     def feed_reconnect(self, result: str) -> Any:
         """``feed_reconnect_total.labels(result=result)``."""
         return self._child("feed_reconnect_total", result=result)
@@ -154,10 +122,6 @@ class ShioajiMetricsBridge:
     def feed_resubscribe(self, result: str) -> Any:
         """``feed_resubscribe_total.labels(result=result)``."""
         return self._child("feed_resubscribe_total", result=result)
-
-    # ------------------------------------------------------------------
-    # Raw registry access (escape hatch)
-    # ------------------------------------------------------------------
 
     @property
     def registry(self) -> MetricsRegistry:

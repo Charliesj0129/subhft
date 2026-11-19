@@ -114,7 +114,6 @@ class TestFacadeSlotFeedGap:
 
     def test_feed_gap_reflects_last_data_mono(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
-        # Set last_data_mono to 2 seconds ago
         slot.last_data_mono = time.monotonic() - 2.0
         gap = slot.feed_gap_s()
         assert 1.9 <= gap <= 2.5
@@ -134,25 +133,21 @@ class TestFacadeSlotBackoff:
     def test_backoff_zero_failures(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
         slot.reconnect_failures = 0
-        # 5.0 * (2**0) = 5.0
         assert slot.backoff_s() == pytest.approx(5.0)
 
     def test_backoff_one_failure(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
         slot.reconnect_failures = 1
-        # 5.0 * (2**1) = 10.0
         assert slot.backoff_s() == pytest.approx(10.0)
 
     def test_backoff_five_failures(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
         slot.reconnect_failures = 5
-        # 5.0 * (2**5) = 160.0 → capped at 120.0
         assert slot.backoff_s() == pytest.approx(120.0)
 
     def test_backoff_ten_failures_capped(self) -> None:
         slot = FacadeSlot(conn_id="c0", facade=MagicMock())
         slot.reconnect_failures = 10
-        # 5.0 * (2**10) = 5120.0 → capped at 120.0
         assert slot.backoff_s() == pytest.approx(120.0)
 
     def test_backoff_cap_is_120(self) -> None:

@@ -82,16 +82,13 @@ async def test_respects_poll_interval() -> None:
     client = FakeBrokerClient(margin_used=50_000, margin_available=100_000)
     monitor = MarginMonitor(client, poll_interval_s=30)
 
-    # First call at t=30s — should poll (elapsed from _last_poll_ns=0 is 30s >= 30s)
     result1 = await monitor.check(now_ns=30_000_000_000)
     assert result1 is not None
     assert result1.action == "ok"
 
-    # Second call at t=40s (only 10s since last poll) — should skip
     result2 = await monitor.check(now_ns=40_000_000_000)
     assert result2 is None
 
-    # Third call at t=61s (31s since last poll, past interval) — should poll again
     result3 = await monitor.check(now_ns=61_000_000_000)
     assert result3 is not None
     assert result3.action == "ok"
@@ -103,24 +100,20 @@ async def test_warn_to_critical_to_ok_transitions() -> None:
     client = FakeBrokerClient(margin_used=50_000, margin_available=100_000)
     monitor = MarginMonitor(client, warn_ratio=0.80, critical_ratio=0.90, poll_interval_s=0)
 
-    # Start OK
     result = await monitor.check(now_ns=1_000_000_000)
     assert result is not None
     assert result.action == "ok"
 
-    # Move to warn
     client._margin_used = 85_000
     result = await monitor.check(now_ns=2_000_000_000)
     assert result is not None
     assert result.action == "warn"
 
-    # Move to critical
     client._margin_used = 95_000
     result = await monitor.check(now_ns=3_000_000_000)
     assert result is not None
     assert result.action == "critical"
 
-    # Recover to OK
     client._margin_used = 50_000
     result = await monitor.check(now_ns=4_000_000_000)
     assert result is not None
@@ -135,5 +128,4 @@ async def test_zero_available_margin_no_division_by_zero() -> None:
 
     result = await monitor.check(now_ns=1_000_000_000)
     assert result is not None
-    # available clamped to 1, so ratio = 50000/1 = 50000.0 -> critical
     assert result.action == "critical"

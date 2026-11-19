@@ -40,7 +40,6 @@ def service(metrics_registry):
     raw_queue = asyncio.Queue()
     client = MagicMock()
     svc = MarketDataService(bus, raw_queue, client)
-    # Attach loop so we can control the parse_miss vs loop_missing path
     svc.loop = MagicMock()
     return svc
 
@@ -56,8 +55,6 @@ class TestMdCallbackDropParseMiss:
         assert service._cb_drop_parse_miss is not None
         before = service._cb_drop_parse_miss._value.get()
 
-        # Call with zero args so fast-extract returns (None, None) and fallback
-        # loop has nothing to iterate, leaving msg=None.
         service._on_shioaji_event()
 
         after = service._cb_drop_parse_miss._value.get()
@@ -87,7 +84,6 @@ class TestMdCallbackDropLoopMissing:
     def test_loop_missing_increments_counter(self, service):
         """When self.loop is missing, loop_missing counter increments."""
         assert service._cb_drop_loop_missing is not None
-        # Remove the loop attribute
         if hasattr(service, "loop"):
             delattr(service, "loop")
 
@@ -96,7 +92,6 @@ class TestMdCallbackDropLoopMissing:
         mock_tick = MagicMock()
         mock_tick.code = "2330"
 
-        # Provide a valid msg so we reach the loop-missing branch
         with patch(
             f"{_PATCH_PREFIX}.try_fast_extract_callback_payload",
             return_value=("TSE", mock_tick),

@@ -5,8 +5,6 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, List
 
-# from hftbacktest import BacktestAsset, HashMapMarketDepthBacktest
-# Assuming hftbacktest API usage. For this prototype, we'll mock the loop if deps missing.
 from structlog import get_logger
 
 from hft_platform.backtest.equity import EquitySource, classify_equity_source, extract_equity_series
@@ -29,7 +27,7 @@ class HftBacktestConfig:
     record_out: str | None = None
     report: bool = False
     seed: int = 42
-    risk_config: Any = None  # BacktestRiskConfig or None
+    risk_config: Any = None
 
 
 @dataclass(frozen=True, init=False)
@@ -45,8 +43,6 @@ class HftBacktestRunResult:
     report_path: str | None
     risk_rejection_count: int = 0
     risk_rejection_breakdown: dict[str, int] = field(default_factory=dict)
-    # L6: Equity provenance for promotion eligibility. ``synthetic`` cannot
-    # enter Gate D under a strict profile; ``real`` and ``real_no_trade`` can.
     equity_source: EquitySource = "real"
 
     def __init__(
@@ -82,7 +78,6 @@ class HftBacktestRunResult:
         object.__setattr__(self, "risk_rejection_count", risk_rejection_count)
         object.__setattr__(self, "risk_rejection_breakdown", dict(risk_rejection_breakdown or {}))
         if equity_source is None:
-            # Back-compat: legacy callers pass only ``used_synthetic_equity``.
             equity_source = "synthetic" if used_synthetic_equity else "real"
         object.__setattr__(self, "equity_source", equity_source)
 
@@ -94,7 +89,7 @@ class HftBacktestRunResult:
 class HftBacktestRunner:
     def __init__(self, cfg: HftBacktestConfig):
         self.cfg = cfg
-        self.strategy_name = "demo"  # todo: extract from args or cfg if added
+        self.strategy_name = "demo"
         self.date = "20241215"
         self.symbol = cfg.symbols[0] if cfg.symbols else "2330"
         self.strategy_instance: Any = None
@@ -107,17 +102,10 @@ class HftBacktestRunner:
         run_id = str(uuid.uuid4())
         config_hash = self._compute_config_hash()
 
-        # ... (rest of logic needs adaptation to use cfg.data etc)
-        # 1. Load Strategy Class
-        # Similar logic to manage.py run_strategy
         try:
             import importlib
 
-            # Dynamically load from package
             mod = importlib.import_module(f"hft_platform.strategies.{self.strategy_name}")
-            # Find class
-            # Naming convention: snake_case strategy file -> PascalCase class?
-            # Or inspect module for BaseStrategy subclass
             from hft_platform.strategy.base import BaseStrategy
 
             target_cls = None
@@ -136,11 +124,9 @@ class HftBacktestRunner:
             logger.error("Failed to load strategy", error=str(e))
             return None
 
-        # 2. Prepare Data
         data_path = self._resolve_data_path()
         self._ensure_data(data_path)
 
-        # 3. Execution using Adapter
         from hft_platform.backtest.adapter import HftBacktestAdapter
 
         try:
@@ -156,14 +142,8 @@ class HftBacktestRunner:
                 risk_config=self.cfg.risk_config,
             )
 
-            # Run
             adapter.run()
 
-            # result is True if success? hftbacktest return bool usually.
-            # Stats come from hbt.stats?
-            # actually adapter.run returns hbt.close() which might return bool.
-
-            # Inspect internal stats if available in wrapper
             equity_series = extract_equity_series(adapter)
             pnl = 0.0
             if equity_series is not None and equity_series.is_valid():
@@ -186,7 +166,6 @@ class HftBacktestRunner:
                 risk_rejection_count = adapter._risk_evaluator.rejection_count
                 risk_rejection_breakdown = adapter._risk_evaluator.rejection_breakdown
 
-            # 4. Generate Report
             report_path: str | None = None
             used_synthetic_equity = True
             if self.cfg.report:
@@ -197,9 +176,6 @@ class HftBacktestRunner:
                 else:
                     report_path, used_synthetic_equity = self._generate_report(pnl)
 
-            # L6: Classify equity provenance. ``n_fills`` is approximated by
-            # ``adapter.n_fills`` if exposed; otherwise fall back to the
-            # risk-rejection delta (zero rejections + zero motion = no-trade).
             adapter_fills = getattr(adapter, "n_fills", None)
             n_fills_for_classifier = int(adapter_fills) if adapter_fills is not None else None
             if equity_series is None or not equity_series.is_valid():
@@ -272,31 +248,24 @@ class HftBacktestRunner:
         if not os.path.exists(path):
             logger.info("Generating mock NPZ data for demo...", path=path)
             try:
-                # Check for hftbacktest helper
-                # New hftbacktest might not have generate_dummy_data exposed easily
-                # We'll create simple standard structure manually using numpy
                 import numpy as np
 
-                # Structure: [event_flags, exch_ts, local_ts, price, qty]
-                # 1000 ticks
                 count = 1000
                 data = np.zeros(
                     count, dtype=[("ev", "u8"), ("exch_ts", "u8"), ("local_ts", "u8"), ("price", "f8"), ("qty", "f8")]
                 )
 
-                start_ts = 1600000000000000  # arbitrary
+                start_ts = 1600000000000000
 
-                # Random walk
                 price = 100.0
                 for i in range(count):
                     price += np.random.randn() * 0.05
-                    data[i]["ev"] = 1  # Trade?
-                    data[i]["exch_ts"] = start_ts + i * 1000000  # 1ms
+                    data[i]["ev"] = 1
+                    data[i]["exch_ts"] = start_ts + i * 1000000
                     data[i]["local_ts"] = start_ts + i * 1000000 + 100
                     data[i]["price"] = price
                     data[i]["qty"] = 1.0
 
-                # Save compressed
                 np.savez_compressed(path, data=data)
                 logger.info("Generated mock data", count=count)
 
@@ -357,7 +326,6 @@ class HftBacktestRunner:
 
         except Exception as e:
             logger.error("Failed to generate HTML report", error=str(e))
-            # Fallback
             with open(f"reports/error_{self.date}.txt", "w") as f:
                 f.write(f"Error generating report: {e}")
         return None, True

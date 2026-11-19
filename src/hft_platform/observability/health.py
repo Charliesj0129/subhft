@@ -27,11 +27,9 @@ logger = get_logger("observability.health")
 _DEFAULT_PORT = 8080
 _STARTUP_TS = time.time()
 
-# Queue pressure threshold (fraction of maxsize)
 _QUEUE_PRESSURE_THRESHOLD = 0.8
 
-# ClickHouse write staleness threshold (nanoseconds)
-_CH_WRITE_STALE_NS = 60_000_000_000  # 60 seconds
+_CH_WRITE_STALE_NS = 60_000_000_000
 
 
 def _json_dumps(obj: Any) -> bytes:
@@ -91,8 +89,6 @@ class HealthServer:
         self._version = os.getenv("HFT_VERSION", "unknown")
         self._degradation_tracker = DegradationTracker()
 
-    # -- Checks -------------------------------------------------------------
-
     def _check_readiness(self) -> tuple[str, dict[str, Any]]:  # noqa: C901
         """Evaluate readiness based on system state.
 
@@ -106,13 +102,11 @@ class HealthServer:
         if self._system is None:
             return "unavailable", {"system": "not_attached"}
 
-        # 1. System running flag
         system_running: bool = getattr(self._system, "running", False)
         checks["system_running"] = system_running
         if not system_running:
             unavailable_reasons.append("system_not_running")
 
-        # 2. Broker login
         md_client = getattr(self._system, "md_client", None)
         order_client = getattr(self._system, "order_client", None)
         order_mode = getattr(self._system, "order_mode", "sim")
@@ -133,7 +127,6 @@ class HealthServer:
             if not subscriptions_complete:
                 unavailable_reasons.append("subscriptions_incomplete")
 
-        # 3. StormGuard
         storm_guard = getattr(self._system, "storm_guard", None)
         if storm_guard is not None:
             from hft_platform.risk.storm_guard import StormGuardState
@@ -147,7 +140,6 @@ class HealthServer:
         else:
             checks["storm_guard"] = "unknown"
 
-        # 4. Critical tasks alive
         tasks: dict[str, Any] = getattr(self._system, "tasks", {})
         critical_tasks = ["md", "recorder"]
         if orders_enabled:
@@ -166,7 +158,6 @@ class HealthServer:
         if dead_tasks:
             unavailable_reasons.append(f"critical_tasks_dead:{','.join(dead_tasks)}")
 
-        # 5. Optional tasks (execution)
         optional_tasks: dict[str, bool] = {}
         for name in ("exec_router", "exec_gateway"):
             task = tasks.get(name)
@@ -175,14 +166,12 @@ class HealthServer:
         if optional_tasks:
             checks["optional_tasks"] = optional_tasks
 
-        # 6. Feed connected
         md_service = getattr(self._system, "md_service", None)
         feed_ok: bool = getattr(md_service, "running", False) if md_service else False
         checks["feed_connected"] = feed_ok
         if not feed_ok and system_running:
             degraded_reasons.append("feed_disconnected")
 
-        # 7. ClickHouse write health
         recorder_service = getattr(self._system, "recorder", None)
         if recorder_service is not None:
             ch_healthy = getattr(recorder_service, "healthy", None)
@@ -192,7 +181,6 @@ class HealthServer:
                 if not ch_healthy:
                     degraded_reasons.append("clickhouse_unhealthy")
             elif last_write_ok is not None:
-                # last_write_ok is expected to be a nanosecond timestamp
                 now_ns = timebase.now_ns()
                 stale = (now_ns - last_write_ok) > _CH_WRITE_STALE_NS if last_write_ok > 0 else True
                 checks["clickhouse_write"] = not stale
@@ -201,7 +189,6 @@ class HealthServer:
             else:
                 checks["clickhouse_write"] = "unknown"
 
-        # 8. Queue pressure
         queue_names = ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue")
         queue_pressure: dict[str, Any] = {}
         any_pressure = False
@@ -222,7 +209,6 @@ class HealthServer:
         if any_pressure:
             degraded_reasons.append("queue_pressure_high")
 
-        # 8b. Execution dict pressure (pending fill index, api_pending)
         _oa = getattr(self._system, "order_adapter", None)
         if _oa is not None:
             _pfi_size = len(getattr(_oa, "_pending_fill_index", {}))
@@ -235,19 +221,15 @@ class HealthServer:
             if _pfi_size > _max_exec_dict or _api_pend_size > _max_exec_dict:
                 degraded_reasons.append("exec_dict_pressure_high")
 
-        # 9. Order path: task alive AND broker connected
         order_task = tasks.get("order")
         order_alive = order_task is not None and not order_task.done()
         if orders_enabled and (not order_alive or not order_logged_in):
             if "critical_tasks_dead:order" not in str(unavailable_reasons):
-                # Only add if not already captured by critical task check
                 if not order_alive and "order" not in dead_tasks:
                     unavailable_reasons.append("order_path_down")
                 elif order_alive and not order_logged_in:
-                    # broker_not_logged_in already covers this
                     pass
 
-        # Determine final status
         checks["unavailable_reasons"] = unavailable_reasons
         checks["degraded_reasons"] = degraded_reasons
 
@@ -273,7 +255,6 @@ class HealthServer:
             "timestamp_ns": timebase.now_ns(),
         }
 
-        # Queue depths (legacy compat + detail)
         if self._system is not None:
             queues: dict[str, int] = {}
             for qname in ("raw_queue", "raw_exec_queue", "risk_queue", "order_queue", "recorder_queue"):
@@ -282,24 +263,19 @@ class HealthServer:
                     queues[qname] = q.qsize()
             result["queues"] = queues
 
-            # StormGuard state value
             sg = getattr(self._system, "storm_guard", None)
             if sg is not None:
                 result["storm_guard_state"] = int(sg.state)
 
-        # Recent degradation events
         recent_degradations = self._degradation_tracker.recent
         if recent_degradations:
             result["degradation_events"] = recent_degradations
 
         return result
 
-    # -- HTTP protocol handler (minimal HTTP/1.1) ---------------------------
-
     async def _handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         """Handle a single HTTP connection."""
         try:
-            # Read request line (up to 4 KiB)
             request_line = await asyncio.wait_for(reader.readline(), timeout=5.0)
             if not request_line:
                 return
@@ -309,9 +285,8 @@ class HealthServer:
                 self._send_response(writer, 400, b'{"error":"bad_request"}')
                 return
 
-            path = parts[1].split("?")[0]  # Strip query string
+            path = parts[1].split("?")[0]
 
-            # Consume remaining headers (read until blank line)
             while True:
                 line = await asyncio.wait_for(reader.readline(), timeout=5.0)
                 if line in (b"\r\n", b"\n", b""):
@@ -370,8 +345,6 @@ class HealthServer:
         header_lines.append("")
         header = "\r\n".join(header_lines)
         writer.write(header.encode("utf-8") + body)
-
-    # -- Lifecycle ----------------------------------------------------------
 
     async def run(self) -> None:
         """Start the health HTTP server and serve until cancelled."""

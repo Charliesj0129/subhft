@@ -75,13 +75,11 @@ impl RustPositionTracker {
     ) -> (i64, i64, i64, i64) {
         let pos = self.positions.entry(key).or_insert_with(PositionState::new);
 
-        let is_buy = side == 0; // Side.BUY == 0
+        let is_buy = side == 0;
         let signed_fill_qty: i64 = if is_buy { qty } else { -qty };
 
-        // Accumulate fees
         pos.fees_scaled += fee + tax;
 
-        // Determine if this fill closes existing exposure
         let current_sign = if pos.net_qty > 0 {
             1
         } else if pos.net_qty < 0 {
@@ -95,18 +93,12 @@ impl RustPositionTracker {
 
         if closing {
             let abs_net = pos.net_qty.abs();
-            let abs_fill = qty; // qty is always positive
+            let abs_fill = qty;
             let close_qty = abs_net.min(abs_fill);
 
-            // PnL in fixed-point:
-            //   Long closing (sell):  (fill_price - avg_price) * close_qty * multiplier
-            //   Short closing (buy):  (avg_price - fill_price) * close_qty * multiplier
-            // multiplier: stocks=1, futures=point_value (TMF=10, MXF=50, TXF=200)
             let pnl = if is_buy {
-                // Covering a short
                 (pos.avg_price_scaled - price_scaled) * close_qty * multiplier
             } else {
-                // Selling a long
                 (price_scaled - pos.avg_price_scaled) * close_qty * multiplier
             };
             pos.realized_pnl_scaled += pnl;
@@ -114,27 +106,19 @@ impl RustPositionTracker {
             pos.net_qty += signed_fill_qty;
 
             if pos.net_qty == 0 {
-                // Closed to flat — reset avg_price (match Python Position.update)
                 pos.avg_price_scaled = 0;
             } else if (current_sign > 0 && pos.net_qty < 0) || (current_sign < 0 && pos.net_qty > 0)
             {
-                // Flipped sides — remainder starts at the new fill price
                 pos.avg_price_scaled = price_scaled;
             }
+        } else if pos.net_qty == 0 {
+            pos.avg_price_scaled = price_scaled;
+            pos.net_qty += signed_fill_qty;
         } else {
-            // Opening or increasing position
-            if pos.net_qty == 0 {
-                pos.avg_price_scaled = price_scaled;
-                pos.net_qty += signed_fill_qty;
-            } else {
-                // Weighted average:
-                //   new_avg = (old_net * old_avg + signed_qty * fill_price) / new_net
-                let total_val = pos.net_qty * pos.avg_price_scaled + signed_fill_qty * price_scaled;
-                pos.net_qty += signed_fill_qty;
-                if pos.net_qty != 0 {
-                    // Round-to-nearest matching Python: (2*total + net) // (2*net)
-                    pos.avg_price_scaled = (2 * total_val + pos.net_qty) / (2 * pos.net_qty);
-                }
+            let total_val = pos.net_qty * pos.avg_price_scaled + signed_fill_qty * price_scaled;
+            pos.net_qty += signed_fill_qty;
+            if pos.net_qty != 0 {
+                pos.avg_price_scaled = (2 * total_val + pos.net_qty) / (2 * pos.net_qty);
             }
         }
 
@@ -212,14 +196,12 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:SYM".to_string();
 
-        // Buy 10 @ 1000 (scaled), multiplier=1 (stock)
         let (net, avg, pnl, fees) = tracker.update(key.clone(), BUY, 10, 1000, 5, 0, 100, 1);
         assert_eq!(net, 10);
         assert_eq!(avg, 1000);
         assert_eq!(pnl, 0);
         assert_eq!(fees, 5);
 
-        // Sell 10 @ 1050 → PnL = (1050-1000)*10*1 = 500
         let (net, _avg, pnl, fees) = tracker.update(key.clone(), SELL, 10, 1050, 5, 0, 200, 1);
         assert_eq!(net, 0);
         assert_eq!(pnl, 500);
@@ -231,13 +213,11 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:SYM".to_string();
 
-        // Sell 5 @ 2000 (open short)
         let (net, avg, pnl, _) = tracker.update(key.clone(), SELL, 5, 2000, 0, 0, 100, 1);
         assert_eq!(net, -5);
         assert_eq!(avg, 2000);
         assert_eq!(pnl, 0);
 
-        // Buy 5 @ 1900 (cover) → PnL = (2000-1900)*5*1 = 500
         let (net, _avg, pnl, _) = tracker.update(key.clone(), BUY, 5, 1900, 0, 0, 200, 1);
         assert_eq!(net, 0);
         assert_eq!(pnl, 500);
@@ -248,9 +228,8 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:SYM".to_string();
 
-        // Buy 10 @ 1000
         tracker.update(key.clone(), BUY, 10, 1000, 0, 0, 100, 1);
-        // Buy 10 @ 1200 → avg = (10*1000 + 10*1200) / 20 = 1100
+
         let (net, avg, pnl, _) = tracker.update(key.clone(), BUY, 10, 1200, 0, 0, 200, 1);
         assert_eq!(net, 20);
         assert_eq!(avg, 1100);
@@ -262,13 +241,12 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:SYM".to_string();
 
-        // Buy 10 @ 1000
         tracker.update(key.clone(), BUY, 10, 1000, 0, 0, 100, 1);
-        // Sell 15 @ 1100 → close 10 (pnl=1000*1), open short 5 @ 1100
+
         let (net, avg, pnl, _) = tracker.update(key.clone(), SELL, 15, 1100, 0, 0, 200, 1);
         assert_eq!(net, -5);
         assert_eq!(avg, 1100);
-        assert_eq!(pnl, 1000); // (1100-1000)*10*1
+        assert_eq!(pnl, 1000);
     }
 
     #[test]
@@ -276,12 +254,11 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:TMFD6".to_string();
 
-        // Buy 1 @ 333450000, multiplier=10 (微台指)
         tracker.update(key.clone(), BUY, 1, 333_450_000, 0, 0, 100, 10);
-        // Sell 1 @ 333440000 → PnL = (333440000-333450000)*1*10 = -100000
+
         let (net, _avg, pnl, _) = tracker.update(key.clone(), SELL, 1, 333_440_000, 0, 0, 200, 10);
         assert_eq!(net, 0);
-        assert_eq!(pnl, -100_000); // -10 NTD (descaled)
+        assert_eq!(pnl, -100_000);
     }
 
     #[test]
@@ -289,11 +266,10 @@ mod tests {
         let mut tracker = RustPositionTracker::new();
         let key = "acc:strat:MXFD6".to_string();
 
-        // Buy 1 @ 333450000, multiplier=50 (小台指)
         tracker.update(key.clone(), BUY, 1, 333_450_000, 0, 0, 100, 50);
-        // Sell 1 @ 333440000 → PnL = (333440000-333450000)*1*50 = -500000
+
         let (net, _avg, pnl, _) = tracker.update(key.clone(), SELL, 1, 333_440_000, 0, 0, 200, 50);
         assert_eq!(net, 0);
-        assert_eq!(pnl, -500_000); // -50 NTD (descaled)
+        assert_eq!(pnl, -500_000);
     }
 }

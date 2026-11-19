@@ -58,16 +58,14 @@ def _seed_pending(adapter: OrderAdapter, *entries: tuple[str, str, str]) -> None
 
 def test_ambiguous_fifo_returns_none_in_strict_mode(tmp_config: str):
     adapter = _make_adapter(tmp_config)
-    # The flag is read from env at init; set it directly for test determinism.
     adapter._pending_fifo_strict = True
     _seed_pending(
         adapter,
         ("TMFD6", "BUY", "S1:o1"),
-        ("TMFD6", "BUY", "S2:o2"),  # second, same (symbol, side) — ambiguous
+        ("TMFD6", "BUY", "S2:o2"),
     )
     resolved = adapter.resolve_strategy_from_deal("TMFD6", "buy")
     assert resolved is None
-    # The ambiguous entries must remain — strict mode refuses to pop.
     with adapter._pending_fill_lock:
         assert len(adapter._pending_fill_index.get("TMFD6:BUY", [])) == 2
 
@@ -89,4 +87,4 @@ def test_permissive_mode_preserves_legacy_fifo_pop(tmp_config: str):
         ("TMFD6", "BUY", "S2:o2"),
     )
     resolved = adapter.resolve_strategy_from_deal("TMFD6", "buy")
-    assert resolved == "S1"  # FIFO head
+    assert resolved == "S1"

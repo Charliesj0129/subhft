@@ -67,7 +67,7 @@ impl BookStateInner {
             } else {
                 0
             };
-            // Top-of-book imbalance (matches normalizer_bidask.rs convention)
+
             let bv_top = self.bids[0][1];
             let av_top = self.asks[0][1];
             let top_total = bv_top + av_top;
@@ -132,14 +132,13 @@ impl RustNormalizerLobFused {
         scale: i64,
         tick_size_scaled: i64,
     ) -> PyResult<PyObject> {
-        let _ = tick_size_scaled; // reserved for future synthetic side generation
+        let _ = tick_size_scaled;
 
         let book = self
             .books
             .entry(symbol.to_owned())
             .or_insert_with(BookStateInner::new);
 
-        // Build bid levels: scale prices, filter zeros, pair with volumes
         let n_bids = bid_prices.len().min(bid_volumes.len());
         book.bids.clear();
         for i in 0..n_bids {
@@ -153,10 +152,9 @@ impl RustNormalizerLobFused {
             }
             book.bids.push([scaled, bid_volumes[i]]);
         }
-        // Sort bids descending by price
+
         book.bids.sort_unstable_by(|a, b| b[0].cmp(&a[0]));
 
-        // Build ask levels
         let n_asks = ask_prices.len().min(ask_volumes.len());
         book.asks.clear();
         for i in 0..n_asks {
@@ -170,14 +168,12 @@ impl RustNormalizerLobFused {
             }
             book.asks.push([scaled, ask_volumes[i]]);
         }
-        // Sort asks ascending by price
+
         book.asks.sort_unstable_by(|a, b| a[0].cmp(&b[0]));
 
-        // Compute stats
         book.recompute_stats();
         book.version += 1;
 
-        // Build numpy arrays
         let bids_np = levels_to_numpy(py, &book.bids);
         let asks_np = levels_to_numpy(py, &book.asks);
 

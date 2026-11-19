@@ -83,11 +83,6 @@ class SubscriptionManager:
         self._client = client
 
     def subscribe_basket(self, cb: Callable[..., Any]) -> None:  # noqa: C901
-        # Complexity: P2 #8 added the truncate-detection branch + post-loop
-        # signal which pushed the function from 15 → 16. Extracting the
-        # detection block into a helper would obscure the per-iteration
-        # control flow that this loop depends on, so the noqa is preferred
-        # here. See ``_signal_subscription_truncated`` for the alert path.
         """Subscribe to all configured symbols.
 
         Orchestrates callback registration, contract preflight, per-symbol
@@ -112,9 +107,6 @@ class SubscriptionManager:
                 callbacks_registered=c._callbacks_registered,
                 event_callback_registered=c._event_callback_registered,
             )
-            # L2: mutate the deque in place — never rebind the attribute,
-            # otherwise concurrent ``append`` from peers (or the retry
-            # daemon racing this re-init) lands on the orphaned object.
             c._failed_sub_symbols.clear()
             c._failed_sub_symbols.extend(sym for sym in c.symbols if isinstance(sym, dict))
             if c._failed_sub_symbols:
@@ -126,7 +118,6 @@ class SubscriptionManager:
         quote_api = c._quote_api()
         if quote_api is None or not hasattr(quote_api, "subscribe"):
             logger.warning("Quote API unavailable; deferring quote subscription")
-            # L2: in-place mutation — see comment above.
             c._failed_sub_symbols.clear()
             c._failed_sub_symbols.extend(sym for sym in c.symbols if isinstance(sym, dict))
             if c._failed_sub_symbols:
@@ -154,17 +145,6 @@ class SubscriptionManager:
         truncated_at_limit = False
         for sym in c.symbols:
             if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                # P2 #8 (2026-04-27): RC-1 raised the ``_load_config`` ceiling
-                # to MAX_SUBSCRIPTIONS_PER_CLIENT (default 600) but this loop
-                # still gates at the per-conn cap (MAX_SUBSCRIPTIONS=120).
-                # Counter ``feed_subscription_truncate_total{reason="conn_limit"}``
-                # is bumped once after the loop via ``_signal_subscription_truncated``.
-                #
-                # 2026-05-23: log template rewritten to per-facade scope with
-                # ``conn_id`` + ``shard_size`` (renamed from misleading
-                # ``requested``) + ``dropped_sample`` + actionable diagnostic
-                # hint, since the old "Subscription limit reached" message hid
-                # the contract-refresh shard-overwrite bug for weeks.
                 truncated_at_limit = True
                 _log_truncate_event(c, requested=requested, phase="subscribe_basket")
                 break
@@ -222,10 +202,6 @@ class SubscriptionManager:
                     pass
             return False
 
-        # Capture alias→actual mapping (e.g. TXFR1 → TXFE6)
-        # For R1/R2/C0/C1 contracts, contract.code == config code (e.g. "TMFR1"),
-        # but callbacks arrive with the resolved month code (e.g. "TMFE6").
-        # Derive the actual code from delivery_month/delivery_date.
         actual_code = derive_callback_code(contract, code)
         if actual_code != code:
             c.alias_to_actual[code] = actual_code
@@ -310,13 +286,8 @@ class SubscriptionManager:
         if quote_api is None or not hasattr(quote_api, "subscribe"):
             return
 
-        # D2: try-acquire the resubscribe lock. The lock is owned by the
-        # client (added in __init__) and may be absent on legacy mocks; fall
-        # back to a per-call lock so tests without mock setup still behave.
         lock = getattr(c, "_resubscribe_lock", None)
         if lock is None:
-            # Eager-create on first use; harmless on legacy paths because
-            # _resubscribe_all is the only call site that takes it.
             import threading as _t
 
             c._resubscribe_lock = _t.Lock()  # type: ignore[attr-defined]
@@ -327,21 +298,18 @@ class SubscriptionManager:
             if counter is not None:
                 try:
                     counter.inc()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
             logger.debug("resubscribe_skipped_concurrent_caller")
             return
 
         try:
-            # Cooldown RMW now under the lock — no torn read/write.
             now = timebase.now_s()
             last = getattr(c, "_last_resubscribe_ts", 0.0)
             cooldown = getattr(c, "resubscribe_cooldown", 1.5)
             if now - last < cooldown:
                 return
             c._last_resubscribe_ts = now  # type: ignore[attr-defined]
-            # Unsubscribe existing symbols from broker SDK before re-subscribing
-            # to prevent subscription count accumulation on soft recovery.
             old_codes = set(c.subscribed_codes)
             for sym in c.symbols:
                 code = sym.get("code")
@@ -350,17 +318,9 @@ class SubscriptionManager:
                         self._unsubscribe_symbol(sym)
                     except Exception as exc:
                         logger.debug("unsubscribe_before_resubscribe_failed", code=code, error=str(exc))
-            # Solace settling delay: per-session topic slots are not freed
-            # synchronously on unsubscribe, so the resubscribe burst below
-            # can overshoot the broker ~250-topic cap and produce the 2026-05-12
-            # event_4 storm. Default 200 ms is empirically sufficient; set to 0
-            # via HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S to disable.
             settle_s = float(os.getenv("HFT_RESUBSCRIBE_UNSUBSCRIBE_SETTLE_S", "0.2"))
             if settle_s > 0:
                 time.sleep(settle_s)
-            # D2: in-place clear preserves object identity. Peer readers
-            # holding a reference (e.g. the watchdog's snapshot path)
-            # always see a consistent live object — never an orphaned set.
             c.subscribed_codes.clear()
             c.subscribed_count = 0
             failed: list[dict[str, Any]] = []
@@ -368,10 +328,6 @@ class SubscriptionManager:
             truncated_at_limit = False
             for sym in c.symbols:
                 if c.subscribed_count >= c.MAX_SUBSCRIPTIONS:
-                    # P2 #8 (2026-04-27): mirror subscribe_basket. The
-                    # resubscribe path also silently dropped 121+ symbols
-                    # before this fix. 2026-05-23: shared log template via
-                    # ``_log_truncate_event`` (per-facade scope w/ conn_id).
                     truncated_at_limit = True
                     _log_truncate_event(c, requested=requested, phase="resubscribe")
                     break
@@ -395,11 +351,6 @@ class SubscriptionManager:
             )
 
         if failed:
-            # L2: mutate the deque in place rather than reassigning. The
-            # retry daemon may have just appended a peer-thread failure;
-            # rebinding to ``failed`` would silently drop it. Resubscribe
-            # is a fresh cycle so it is safe to clear pre-existing entries
-            # for symbols not in this batch.
             c._failed_sub_symbols.clear()
             c._failed_sub_symbols.extend(failed)
             logger.warning(
@@ -448,11 +399,6 @@ class SubscriptionManager:
 
         def _order_cb(stat: Any, msg: Any) -> None:
             try:
-                # The 1.5.x core hands back Rust mapping types that no
-                # isinstance(x, dict) gate downstream accepts and that orjson
-                # refuses outright. Converting here — the last point that is
-                # allowed to know an SDK type exists — is what keeps the rest
-                # of the platform broker-agnostic. See to_plain_payload.
                 payload = to_plain_payload(msg)
                 if stat in deal_states:
                     on_deal(payload)
@@ -488,14 +434,14 @@ class SubscriptionManager:
         if counter is not None:
             try:
                 counter.labels(reason=reason).inc()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("subscription_truncate_metric_bump_failed", error=str(exc))
 
         dispatcher = getattr(c, "_notification_dispatcher", None)
         if dispatcher is None or not hasattr(dispatcher, "notify_subscription_truncated"):
             return
         try:
-            import asyncio as _asyncio  # local import — non hot-path
+            import asyncio as _asyncio
 
             coro = dispatcher.notify_subscription_truncated(
                 reason=reason,
@@ -507,18 +453,14 @@ class SubscriptionManager:
             try:
                 spawn_retained(coro, name="notify_subscription_truncated")
             except RuntimeError:
-                # subscribe_basket usually runs on the asyncio loop, but SDK
-                # callbacks (event_13/event_4) and worker threads do not.
-                # Best-effort run-to-completion; swallow failure so subscribe
-                # path never crashes on alert dispatch.
                 try:
                     _asyncio.run(coro)
-                except Exception as run_exc:  # noqa: BLE001
+                except Exception as run_exc:
                     logger.warning(
                         "subscription_truncated_alert_run_failed",
                         error=str(run_exc),
                     )
-        except Exception as notify_exc:  # noqa: BLE001
+        except Exception as notify_exc:
             logger.warning(
                 "subscription_truncated_alert_dispatch_failed",
                 error=str(notify_exc),

@@ -79,7 +79,6 @@ def test_pipeline_overrides_applied_from_yaml() -> None:
     assert profile is not None
     assert profile.name == "vm_ul6_strict"
 
-    # Spot-check several keys we know flipped.
     assert args.latency_profile_id == "sim_stress_v2026-02-26"
     assert args.local_decision_pipeline_latency_us == 1000
     assert args.min_sharpe_oos_gate_d == 1.8
@@ -106,12 +105,9 @@ def test_vm_ul6_alias_loads_same_yaml_as_canonical() -> None:
     assert profile_a is not None and profile_b is not None
     assert profile_a.name == profile_b.name == "vm_ul6_strict"
 
-    # Every overridden arg must match across alias and canonical.
     for key in profile_b.pipeline_overrides:
         if hasattr(args_alias, key):
-            assert getattr(args_alias, key) == getattr(args_canon, key), (
-                f"alias drift on key {key}"
-            )
+            assert getattr(args_alias, key) == getattr(args_canon, key), f"alias drift on key {key}"
 
 
 def test_yaml_load_exposes_pipeline_overrides() -> None:
@@ -120,7 +116,6 @@ def test_yaml_load_exposes_pipeline_overrides() -> None:
     assert profile.is_strict is True
     assert profile.pipeline_overrides, "pipeline_overrides must be populated"
     assert profile.pipeline_baseline_defaults, "pipeline_baseline_defaults must be populated"
-    # The Stage-2 drift resolution: stricter Sharpe wins.
     assert profile.pipeline_overrides["min_sharpe_oos_gate_d"] == 1.8
     assert profile.thresholds["taker"]["sharpe_oos_min"] == 1.8
 
@@ -169,7 +164,5 @@ def test_promote_batch_accepts_profile(token: str) -> None:
         text=True,
         cwd=str(REPO_ROOT),
     )
-    # rc=2 is acceptable here ("no approved alphas") but the failure mode must
-    # NOT be the "--profile required" early-exit.
     combined = proc.stdout + proc.stderr
     assert "--profile is required" not in combined

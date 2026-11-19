@@ -38,7 +38,6 @@ import yaml
 
 from research.candidate_loop.schema import DeathReason, Status
 
-# Gate evaluation order is part of score_v1 (first-failure-wins).
 GATE_ORDER = (
     "no_signal",
     "sign_unstable",
@@ -111,16 +110,13 @@ def load_scoring_config(path: Path) -> ScoringConfig:
     )
 
 
-# ---------------------------------------------------------------------------
-# Hard gates.
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class GateOutcome:
     gates_passed: tuple[str, ...]
     gates_failed: tuple[str, ...]
-    death_reason: DeathReason | None  # first failure, None when all pass
+    death_reason: DeathReason | None
 
     @property
     def survived(self) -> bool:
@@ -150,11 +146,8 @@ def apply_hard_gates(train: dict[str, Any], validation: dict[str, Any], cfg: Sco
     failures["sign_unstable"] = float(train.get("sign_consistency", 0.0)) < cfg.sign_consistency_min or contradiction
 
     failures["cost_proxy_taker"] = float(train.get("cost_survival_score", 0.0)) < cfg.cost_survival_min
-    # Maker view: lower-bound cost (<= taker), same threshold — can only fail
-    # when taker also failed; recorded for the maker-rescuable trace.
     failures["cost_proxy_maker"] = float(train.get("maker_cost_survival_score", 0.0)) < cfg.maker_cost_survival_min
 
-    # Signed retention: a sign flip is negative, so one comparison covers both.
     failures["latency_1ms"] = float(train.get("latency_1ms_score", 0.0)) < cfg.latency_retention_min
 
     failures["one_day_only"] = float(train.get("one_day_concentration", 1.0)) > cfg.one_day_concentration_max
@@ -170,9 +163,6 @@ def is_maker_rescuable(outcome: GateOutcome) -> bool:
     return "cost_proxy_taker" in outcome.gates_failed and "cost_proxy_maker" not in outcome.gates_failed
 
 
-# ---------------------------------------------------------------------------
-# final_score (score_v1).
-# ---------------------------------------------------------------------------
 
 
 def compute_score_components(
@@ -200,9 +190,6 @@ def compute_final_score(
     return final, components
 
 
-# ---------------------------------------------------------------------------
-# Promotion (§14).
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)

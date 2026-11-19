@@ -23,12 +23,8 @@ from research.combinatorial.expression_lang import compile_expression
 
 logger = get_logger("search_engine")
 
-# sqrt(252) on a per-row Sharpe: a fixed ranking scale kept so scores stay comparable
-# with earlier runs (the 0.25 pool-correlation weight is tuned against it).
 _SCREEN_SCALE = 252.0
 
-# Rolling operators whose value is identically constant when both operands are
-# the same series, so any candidate containing one is a tautology, not an alpha.
 _SELF_DEGENERATE_OPS = frozenset({"ts_corr"})
 
 
@@ -101,7 +97,6 @@ class AlphaSearchEngine:
         self._mutation_failures = 0
         self._trials_evaluated = 0
         self._distinct_trials: set[str] = set()
-        # One fixed-length sample per distinct trial, for the effective trial count.
         self._trial_samples: dict[str, np.ndarray] = {}
 
     def random_search(self, n_trials: int = 1000) -> list[SearchResult]:
@@ -238,8 +233,6 @@ class AlphaSearchEngine:
             return f"rank(ts_sum({field}, {window}))"
         other = self._pick_distinct_feature(field)
         if other is None:
-            # Only one feature available: a correlation family cannot be built
-            # without correlating it with itself, so fall back to a real one.
             return f"zscore(ts_delta({field}, {window}), {window})"
         return f"sign(ts_corr({field}, {other}, {window}))"
 
@@ -272,9 +265,6 @@ class AlphaSearchEngine:
                 node.id = self._rng.choice(self._feature_keys)
         rebuilt = ast.unparse(tree)
         if has_self_correlation(rebuilt):
-            # Swapping a feature token can collapse ts_corr(a, b, w) into
-            # ts_corr(a, a, w), which is identically +1 on every non-degenerate
-            # window — a constant signal that scores as market drift, not alpha.
             self._mutation_failures += 1
             logger.warning("alpha_mutation_degenerate", expr=rebuilt[:120], reason="self_correlation")
             return self._random_expression()
@@ -317,7 +307,6 @@ class AlphaSearchEngine:
                     out = max(out, local_max)
                     used_fast_path = True
 
-        # Rare path: pool arrays longer than signal (mismatched lengths). Fall back to exact correlation.
         if not used_fast_path or any(n > sig.size for n in self._pool_corr_groups):
             for pool in self.pool_signals.values():
                 n = min(sig.size, pool.size)

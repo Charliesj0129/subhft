@@ -57,7 +57,6 @@ class TestForceFlatResidualGate:
         assert out.metrics["force_flat_trip_share_pct"] == 0.0
 
     def test_residual_below_threshold_passes(self) -> None:
-        # 1 force-flat unit / 10 trips = 10% < 30%.
         r = _Result(
             trade_pnl=[1.0] * 10,
             abs_residual_qty=1,
@@ -72,7 +71,6 @@ class TestForceFlatResidualGate:
         assert out.metrics["force_flat_trip_share_pct"] == pytest.approx(10.0)
 
     def test_residual_at_threshold_passes(self) -> None:
-        # 3 / 10 = 30% exactly — boundary inclusive.
         r = _Result(
             trade_pnl=[1.0] * 10,
             abs_residual_qty=3,
@@ -86,7 +84,6 @@ class TestForceFlatResidualGate:
         assert out.passed is True
 
     def test_residual_above_threshold_fails(self) -> None:
-        # 5 / 10 = 50% > 30% threshold.
         r = _Result(
             trade_pnl=[1.0] * 10,
             abs_residual_qty=5,
@@ -102,10 +99,6 @@ class TestForceFlatResidualGate:
         assert "ff_share=50.0%" in out.details
 
     def test_residual_exceeding_n_trips_clamps_to_100pct(self) -> None:
-        # Defensive: abs_residual_qty > n_trips can happen for
-        # taker series where many of the entry deltas were absorbed
-        # by intermediate exits.  Upper-bound clamp keeps the metric
-        # bounded by n_trips.
         r = _Result(
             trade_pnl=[1.0, 2.0],
             abs_residual_qty=10,
@@ -126,14 +119,12 @@ class TestForceFlatResidualGate:
             mark_method="force_flat_last_mid",
         )
         out = self.gate.evaluate(r, config=None, thresholds={})
-        # Threshold absent → loose-profile advisory PASS with metrics.
         assert out.passed is True
         assert out.metrics["force_flat_trip_share_max_pct"] is None
         assert out.metrics["force_flat_trip_share_pct"] == pytest.approx(100.0 * 2 / 3)
         assert "advisory" in out.details
 
     def test_missing_attributes_default_to_safe_zero(self) -> None:
-        # Object without the new fields (legacy fixture) must not crash.
         class _Bare:
             pass
 

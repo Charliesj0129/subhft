@@ -99,10 +99,8 @@ class TestAutoRecovery:
     def test_auto_recovery_after_all_reasons_cleared(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
-        # Reasons cleared, start cooldown
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
-        assert ctrl.reduce_only_active is True  # still in cooldown
-        # Cooldown elapses (60s = 60_000_000_000 ns)
+        assert ctrl.reduce_only_active is True
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
@@ -111,10 +109,8 @@ class TestAutoRecovery:
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
         ctrl.enter_reduce_only(reason="recorder_data_loss")
-        # Feed clears but recorder_data_loss remains (truly non-recoverable)
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert recovered is False
-        # Even after cooldown
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is False
         assert ctrl.reduce_only_active is True
@@ -122,9 +118,8 @@ class TestAutoRecovery:
     def test_queue_depth_exceeded_auto_recovers_when_queues_drop(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="queue_depth_exceeded")
-        # Queues drop below threshold → reason no longer in current_reasons
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
-        assert ctrl.reduce_only_active is True  # still in 60s cooldown
+        assert ctrl.reduce_only_active is True
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
@@ -156,29 +151,21 @@ class TestAutoRecovery:
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="queue_depth_exceeded")
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
-        # Burst re-fires during cooldown
         ctrl.check_auto_recovery(current_reasons=["queue_depth_exceeded"], now_ns=30_000_000_000)
-        # 60s from t=1s would be 61s; should still NOT recover because re-fire reset the timer
         ctrl.check_auto_recovery(current_reasons=[], now_ns=50_000_000_000)
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is False
-        # 60s after re-clear at t=50s → recover at t=111s
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=111_000_000_000)
         assert recovered is True
 
     def test_auto_recovery_reset_on_retrigger(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
-        # Reasons cleared, start cooldown at t=1s
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
-        # Reason re-appears at t=30s
         ctrl.check_auto_recovery(current_reasons=["feed_reconnect_unhealthy"], now_ns=30_000_000_000)
-        # Clears again at t=50s
         ctrl.check_auto_recovery(current_reasons=[], now_ns=50_000_000_000)
-        # 60s from t=50s would be t=110s — should NOT recover at t=70s
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=70_000_000_000)
         assert recovered is False
-        # Should recover at t=111s (60s after re-clear)
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=111_000_000_000)
         assert recovered is True
 
@@ -192,7 +179,6 @@ class TestAutoRecovery:
     def test_auto_recovery_clears_auto_recoverable_reasons_from_set(self):
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=1)
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
-        # Input no longer reports feed_reconnect_unhealthy
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert "feed_reconnect_unhealthy" not in ctrl._active_reasons
 
@@ -206,7 +192,6 @@ class TestAutoRecovery:
         assert "feed_reconnect_pending" in _AUTO_RECOVERABLE_REASONS
         assert "feed_gap_exceeded" in _AUTO_RECOVERABLE_REASONS
         assert "rss_unhealthy" in _AUTO_RECOVERABLE_REASONS
-        # Transient conditions that self-resolve must be auto-recoverable
         assert "reconciliation_drift" in _AUTO_RECOVERABLE_REASONS
         assert "feed_reconnect_flapping" in _AUTO_RECOVERABLE_REASONS
 
@@ -222,11 +207,9 @@ class TestAutoRecovery:
         ctrl.enter_reduce_only(reason="reconciliation_drift")
         assert ctrl.reduce_only_active is True
 
-        # Drift resolved — reason no longer in current_reasons
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert "reconciliation_drift" not in ctrl._active_reasons
 
-        # Cooldown elapses
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=11_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
@@ -241,11 +224,9 @@ class TestAutoRecovery:
         ctrl.enter_reduce_only(reason="feed_reconnect_flapping")
         assert ctrl.reduce_only_active is True
 
-        # Flap events expired — reason no longer in current_reasons
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert "feed_reconnect_flapping" not in ctrl._active_reasons
 
-        # Cooldown elapses
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=11_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
@@ -255,21 +236,16 @@ class TestAutoRecovery:
         flapping → entire night session locked in REDUCE_ONLY with zero intents.
         """
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=10)
-        # Day session: non-critical drift fires
         ctrl.enter_reduce_only(reason="reconciliation_drift")
-        # Reconnect also flaps during day→night transition
         ctrl.enter_reduce_only(reason="feed_reconnect_flapping")
         assert ctrl._active_reasons == {"reconciliation_drift", "feed_reconnect_flapping"}
 
-        # Night session opens: both conditions resolve
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert ctrl._active_reasons == set()
 
-        # After cooldown: system recovers
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=11_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
-        # New opening intents should be allowed
         assert ctrl.allow_intent(intent_type=IntentType.NEW, opens_risk=True) is True
 
     def test_auto_recovery_works_for_feed_reconnect_pending(self):
@@ -277,10 +253,8 @@ class TestAutoRecovery:
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="feed_reconnect_pending")
         assert ctrl.reduce_only_active is True
-        # Reconnect succeeds → reason clears from inputs
         ctrl.check_auto_recovery(current_reasons=[], now_ns=1_000_000_000)
         assert "feed_reconnect_pending" not in ctrl._active_reasons
-        # Cooldown elapses
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
@@ -299,11 +273,9 @@ class TestAutoRecovery:
         """
         ctrl = PlatformDegradeController(auto_recovery_enabled=True, auto_recovery_cooldown_s=60)
         ctrl.enter_reduce_only(reason="feed_reconnect_unhealthy")
-        # Simulate 5 consecutive supervisor cycles where the upstream
-        # signal (now correctly filtered) reports no reasons.
         for cycle_ns in (1_000_000_000, 5_000_000_000, 10_000_000_000, 30_000_000_000, 50_000_000_000):
             ctrl.check_auto_recovery(current_reasons=[], now_ns=cycle_ns)
-        assert ctrl.reduce_only_active is True  # still inside cooldown
+        assert ctrl.reduce_only_active is True
         recovered = ctrl.check_auto_recovery(current_reasons=[], now_ns=61_000_000_001)
         assert recovered is True
         assert ctrl.reduce_only_active is False
@@ -365,10 +337,8 @@ class TestManualRearmGateBridge:
         gate = ManualRearmGate(state_path=tmp_path / "runtime_state.json")
         gate.rearm_platform(token=gate.platform_token(), reason="feed back", actor="test")
 
-        # Live controller must be cleared (force_clear bridge fired).
         assert ctrl.reduce_only_active is False
         assert ctrl._active_reasons == set()
-        # Persisted flag must also be cleared (JSON source of truth).
         snapshot = gate.snapshot()
         assert snapshot["platform"]["manual_rearm_required"] is False
 
@@ -377,9 +347,8 @@ class TestManualRearmGateBridge:
         exists yet (fresh deployment / tooling context)."""
         from hft_platform.ops.manual_rearm import ManualRearmGate
 
-        # Leave _shared_controller as None.
         gate = ManualRearmGate(state_path=tmp_path / "runtime_state.json")
-        gate.rearm_platform(token=gate.platform_token(), reason="tooling", actor="test")  # must not raise
+        gate.rearm_platform(token=gate.platform_token(), reason="tooling", actor="test")
         snapshot = gate.snapshot()
         assert snapshot["platform"]["manual_rearm_required"] is False
 
@@ -414,7 +383,7 @@ class TestSingletonRestoresManualRearmState:
         assert "restored_from_runtime_state" not in ctrl._active_reasons
 
     def test_singleton_stays_normal_when_no_persisted_rearm(self, tmp_path, monkeypatch):
-        state_path = tmp_path / "runtime_state.json"  # absent — defaults to clean
+        state_path = tmp_path / "runtime_state.json"
         monkeypatch.setattr("hft_platform.ops.manual_rearm.DEFAULT_RUNTIME_STATE_PATH", state_path)
         ctrl = get_shared_platform_degrade_controller()
         assert ctrl.reduce_only_active is False

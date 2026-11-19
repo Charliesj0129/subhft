@@ -11,10 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers / stubs (mirror test_strategy_runner_timeout.py conventions)
-# ---------------------------------------------------------------------------
-
 
 def _make_bus(events=None):
     bus = MagicMock()
@@ -50,23 +46,15 @@ def _make_intent(strategy_id: str = "strat_a"):
 
 
 def _make_event(symbol: str = "TSMC", ts: int = 0):
-    # ts=0 triggers fallback to now_ns() in _extract_event_trace so events are always fresh
     return SimpleNamespace(symbol=symbol, ts=ts)
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
 def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
-    # Force Python-only circuit breaker for deterministic assertions
     monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
-    # Low threshold so that if the bug regresses it trips quickly
     monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_THRESHOLD", "3")
 
 
@@ -99,11 +87,6 @@ def make_runner(mock_metrics):
     return _factory
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_queue_full_does_not_advance_circuit_breaker(make_runner, mock_metrics):
     """QueueFull drops must NOT advance the circuit breaker state.
@@ -114,28 +97,22 @@ async def test_queue_full_does_not_advance_circuit_breaker(make_runner, mock_met
     - After many events the circuit state must remain 'normal'
     - strategy.enabled must stay True
     """
-    # Risk queue that always raises QueueFull
     always_full_queue = MagicMock(spec=["put_nowait"])
     always_full_queue.put_nowait.side_effect = asyncio.QueueFull()
 
     runner = make_runner(risk_queue=always_full_queue)
 
     strat = _FakeStrategy(sid="healthy_strat")
-    # Each handle_event call returns one intent
     strat._return_value = [_make_intent("healthy_strat")]
     runner.register(strat)
 
-    # Fire more events than the circuit threshold (3) to ensure no escalation
     for _ in range(10):
         await runner.process_event(_make_event())
 
-    # Circuit state must remain normal
     assert runner._circuit_states.get("healthy_strat", "normal") == "normal", (
         "QueueFull should not advance the circuit breaker"
     )
-    # Strategy must remain enabled
     assert strat.enabled is True, "QueueFull should not disable the strategy"
-    # Strategy must have received all events (it was never broken)
     assert len(strat._calls) == 10, "Strategy should have received all 10 events"
 
 

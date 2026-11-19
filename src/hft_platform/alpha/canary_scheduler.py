@@ -35,14 +35,12 @@ from hft_platform.core.background_tasks import spawn_retained
 
 logger = get_logger("alpha.canary_scheduler")
 
-_DEFAULT_INTERVAL_S = 86400.0  # 24 hours
+_DEFAULT_INTERVAL_S = 86400.0
 _DEFAULT_DRY_RUN = True
 
-# Conservative fail-safe defaults: exceed rollback thresholds to trigger rollback when data missing.
-# This is fail-safe: missing metrics = assume worst case.
-_FAILSAFE_SLIPPAGE_BPS = 999.0  # well above any reasonable max_slippage threshold
-_FAILSAFE_DRAWDOWN = 1.0  # 100% drawdown — worst possible
-_FAILSAFE_ERROR_RATE = 1.0  # 100% error rate — worst possible
+_FAILSAFE_SLIPPAGE_BPS = 999.0
+_FAILSAFE_DRAWDOWN = 1.0
+_FAILSAFE_ERROR_RATE = 1.0
 
 
 class CanaryAutoScheduler:
@@ -79,10 +77,6 @@ class CanaryAutoScheduler:
 
         self._task: asyncio.Task[None] | None = None
 
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
     @property
     def dry_run(self) -> bool:
         """Whether the scheduler is in dry-run mode."""
@@ -92,10 +86,6 @@ class CanaryAutoScheduler:
     def interval(self) -> float:
         """Evaluation interval in seconds."""
         return self._interval
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
 
     def start(self) -> None:
         """Schedule the background evaluation loop as an asyncio task."""
@@ -133,22 +123,14 @@ class CanaryAutoScheduler:
                 exc_type=type(exc).__name__,
             )
 
-    # ------------------------------------------------------------------
-    # Internal loop
-    # ------------------------------------------------------------------
-
     async def _run_loop(self) -> None:
         """Sleep-then-evaluate loop; runs until cancelled."""
         while True:
             await asyncio.sleep(self._interval)
             try:
                 await self.evaluate_all()
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.error("canary_auto_evaluate_loop_error", exc_info=True)
-
-    # ------------------------------------------------------------------
-    # Core evaluation
-    # ------------------------------------------------------------------
 
     async def evaluate_all(self) -> list[CanaryStatus]:
         """Evaluate all active canaries and optionally apply decisions.
@@ -175,7 +157,6 @@ class CanaryAutoScheduler:
                 continue
 
             try:
-                # Try CK metrics first, fall back to YAML-based _build_metrics
                 live_metrics = None
                 _ck_actually_used = False
                 if self._metrics_query is not None:
@@ -210,7 +191,6 @@ class CanaryAutoScheduler:
                         alpha_id=alpha_id,
                         state=status.state,
                     )
-                    # Notify on rollback or graduation
                     if status.state in ("rolled_back", "graduated") and self._notification_dispatcher is not None:
                         try:
                             spawn_retained(
@@ -221,13 +201,13 @@ class CanaryAutoScheduler:
                                 ),
                                 name="notify_canary_action",
                             )
-                        except Exception as _notify_exc:  # noqa: BLE001
+                        except Exception as _notify_exc:
                             logger.warning(
                                 "canary_auto_notify_failed",
                                 alpha_id=alpha_id,
                                 error=str(_notify_exc),
                             )
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.error(
                     "canary_auto_evaluate_error",
                     alpha_id=alpha_id,
@@ -242,10 +222,6 @@ class CanaryAutoScheduler:
         )
         return results
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _build_metrics(canary: dict[str, Any]) -> dict[str, Any]:
         """Extract live metrics from canary YAML state.
@@ -259,7 +235,6 @@ class CanaryAutoScheduler:
         if not isinstance(stored, dict):
             stored = {}
 
-        # If live_metrics entirely absent, return all fail-safe defaults
         if not stored:
             return {
                 "slippage_bps": _FAILSAFE_SLIPPAGE_BPS,
@@ -268,9 +243,6 @@ class CanaryAutoScheduler:
                 "sessions_live": 0,
             }
 
-        # If live_metrics present, fill in missing fields with fail-safe defaults.
-        # Use _safe_float/_safe_int to handle explicit None values in YAML
-        # (e.g., ``slippage_bps: null``), which dict.get() returns as None.
         def _safe_float(val: Any, default: float) -> float:
             return float(val) if val is not None else default
 

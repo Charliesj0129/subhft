@@ -24,10 +24,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.risk.storm_guard import StormGuard
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_intent(intent_type: IntentType) -> OrderIntent:
     """Create a minimal OrderIntent for testing."""
@@ -37,7 +33,7 @@ def _make_intent(intent_type: IntentType) -> OrderIntent:
         symbol="2330",
         intent_type=intent_type,
         side=Side.BUY,
-        price=100_0000,  # scaled x10000
+        price=100_0000,
         qty=1,
     )
 
@@ -53,25 +49,16 @@ def _make_fsm(state: StormGuardState) -> StormGuard:
     return fsm
 
 
-# ---------------------------------------------------------------------------
-# Parametrized matrix
-# ---------------------------------------------------------------------------
-
-# (state, intent_type, expected_ok)
 _MATRIX: list[tuple[StormGuardState, IntentType, bool]] = [
-    # NORMAL — all allowed
     (StormGuardState.NORMAL, IntentType.NEW, True),
     (StormGuardState.NORMAL, IntentType.AMEND, True),
     (StormGuardState.NORMAL, IntentType.CANCEL, True),
-    # WARM — all allowed
     (StormGuardState.WARM, IntentType.NEW, True),
     (StormGuardState.WARM, IntentType.AMEND, True),
     (StormGuardState.WARM, IntentType.CANCEL, True),
-    # STORM — NEW + AMEND blocked, CANCEL allowed
     (StormGuardState.STORM, IntentType.NEW, False),
     (StormGuardState.STORM, IntentType.AMEND, False),
     (StormGuardState.STORM, IntentType.CANCEL, True),
-    # HALT — only CANCEL allowed
     (StormGuardState.HALT, IntentType.NEW, False),
     (StormGuardState.HALT, IntentType.AMEND, False),
     (StormGuardState.HALT, IntentType.CANCEL, True),
@@ -102,11 +89,6 @@ def test_stormguard_validate_matrix(
     else:
         assert reason != "OK"
         assert "STORMGUARD" in reason
-
-
-# ---------------------------------------------------------------------------
-# Reason code verification
-# ---------------------------------------------------------------------------
 
 
 class TestStormGuardReasonCodes:

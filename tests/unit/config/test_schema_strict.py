@@ -31,7 +31,7 @@ def test_validate_config_loose_strips_unknown_keys():
     cfg = _base_dict()
     cfg["totally_unknown_key"] = 42
     cfg["another_unknown"] = "x"
-    result = validate_config(cfg)  # strict defaults to False
+    result = validate_config(cfg)
     assert isinstance(result, HftConfig)
     assert result.mode == "sim"
 
@@ -39,7 +39,7 @@ def test_validate_config_loose_strips_unknown_keys():
 def test_validate_config_strict_rejects_unknown_keys():
     """Strict mode surfaces typos as ConfigValidationError."""
     cfg = _base_dict()
-    cfg["stratgy"] = "typo"  # intentional typo of `strategy`
+    cfg["stratgy"] = "typo"
     with pytest.raises(ConfigValidationError) as exc:
         validate_config(cfg, strict=True)
     assert "stratgy" in str(exc.value)
@@ -76,7 +76,6 @@ def test_validate_config_strict_lists_all_unknowns():
     with pytest.raises(ConfigValidationError) as exc:
         validate_config(cfg, strict=True)
     msg = str(exc.value)
-    # Sorted: alpha, mu, zeta
     assert msg.index("alpha") < msg.index("mu") < msg.index("zeta")
 
 

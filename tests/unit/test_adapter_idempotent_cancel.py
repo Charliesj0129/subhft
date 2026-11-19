@@ -145,7 +145,6 @@ async def test_cancel_after_recent_terminal_logs_info_no_dlq(tmp_config, mock_de
     adapter = _make_adapter(tmp_config)
     target_oid = "OID-recently-filled"
 
-    # Simulate: order was live then on_terminal_state removed it (filled/cancelled)
     adapter._record_recent_terminal(f"strat1:{target_oid}", reason="filled")
 
     cancel = _make_cancel_intent(intent_id=99, target_order_id=target_oid)

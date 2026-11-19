@@ -15,13 +15,8 @@ from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
 from hft_platform.services.market_data import MarketDataService
 
-# ---------------------------------------------------------------------------
-# Minimal concrete class mixing in MarketDataReconnectMixin
-# ---------------------------------------------------------------------------
-
 
 class _FakeMD(MarketDataReconnectMixin):
-    # Bound from the service: the mixin no longer shadows the live method.
     _trigger_reconnect = MarketDataService._trigger_reconnect
 
     def __init__(self) -> None:
@@ -89,11 +84,6 @@ def md() -> _FakeMD:
     return _FakeMD()
 
 
-# ---------------------------------------------------------------------------
-# _within_reconnect_window: calendar path (lines 63-70)
-# ---------------------------------------------------------------------------
-
-
 class TestWithinReconnectWindowCalendar:
     def test_calendar_blocks_non_trading_day(self, md: _FakeMD) -> None:
         """Calendar available + days_until_trading > 1 => False (lines 63-64, 66-70)."""
@@ -138,7 +128,6 @@ class TestWithinReconnectWindowCalendar:
             patch("hft_platform.core.market_calendar.get_calendar", side_effect=RuntimeError("no cal")),
         ):
             tb.now_s.return_value = now.timestamp()
-            # Even though calendar fails, still within hour window
             assert md._within_reconnect_window() is True
 
     def test_calendar_not_available_continues(self, md: _FakeMD) -> None:
@@ -166,13 +155,7 @@ class TestWithinReconnectWindowCalendar:
             patch.dict("os.environ", {"HFT_RECONNECT_USE_CALENDAR": "0"}),
         ):
             tb.now_s.return_value = now.timestamp()
-            # Malformed window => loop continues, no windows match => False
             assert md._within_reconnect_window() is False
-
-
-# ---------------------------------------------------------------------------
-# _attempt_resubscribe: heartbeat_gap metric caching (lines 105-109)
-# ---------------------------------------------------------------------------
 
 
 class TestAttemptResubscribeMetrics:
@@ -193,20 +176,13 @@ class TestAttemptResubscribeMetrics:
             tb.now_s.return_value = now_ts
             md._last_resubscribe_ts = now_ts - 100.0
             await md._attempt_resubscribe(30.0, reason="heartbeat_gap")
-            # First call sets the cached child
             assert md._feed_reconnect_gap_metric_child is not None
             cached = md._feed_reconnect_gap_metric_child
 
-            # Second call should reuse the cached child
             md._last_resubscribe_ts = now_ts - 100.0
             tb.now_s.return_value = now_ts + 100.0
             await md._attempt_resubscribe(30.0, reason="heartbeat_gap")
             assert md._feed_reconnect_gap_metric_child is cached
-
-
-# ---------------------------------------------------------------------------
-# _trigger_reconnect: timeout metrics, exception metrics (lines 152, 158-160)
-# ---------------------------------------------------------------------------
 
 
 class TestTriggerReconnectMetrics:
@@ -265,11 +241,6 @@ class TestTriggerReconnectMetrics:
         metrics.feed_reconnect_exception_total.labels.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# _apply_post_reconnect_resets (lines 189-195)
-# ---------------------------------------------------------------------------
-
-
 class TestPostReconnectResets:
     def test_apply_pending_resets_on_client(self, md: _FakeMD) -> None:
         """Client with _apply_pending_resets calls it (lines 187-188)."""
@@ -282,7 +253,7 @@ class TestPostReconnectResets:
     def test_fallback_resets_lob_and_feature_engine(self, md: _FakeMD) -> None:
         """Without _apply_pending_resets and without get_healthy_feed_gap_s,
         resets LOB and feature engine (lines 189-195)."""
-        client = MagicMock(spec=[])  # no attributes
+        client = MagicMock(spec=[])
         md.client = client
         md.lob = MagicMock()
         md.lob.reset_books = MagicMock()
@@ -303,17 +274,11 @@ class TestPostReconnectResets:
         md.feature_engine.reset_all.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# _is_trading_hours: fallback path (lines 230-241)
-# ---------------------------------------------------------------------------
-
-
 class TestIsTradingHoursFallback:
     def test_fallback_weekday_within_hours(self, md: _FakeMD) -> None:
         """Weekday within 8:45-13:45 CST returns True (lines 240-241)."""
-        # 10:00 CST = UTC+8
         cst = dt.timezone(dt.timedelta(hours=8))
-        aware = dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=cst)  # Monday
+        aware = dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=cst)
         with (
             patch("hft_platform.services._md_reconnect.timebase") as tb,
             patch.dict("os.environ", {"HFT_WATCHDOG_PRODUCT_TYPE": "future"}),
@@ -325,7 +290,7 @@ class TestIsTradingHoursFallback:
     def test_fallback_weekday_outside_hours(self, md: _FakeMD) -> None:
         """Weekday outside 8:45-13:45 CST returns False."""
         cst = dt.timezone(dt.timedelta(hours=8))
-        aware = dt.datetime(2024, 1, 15, 7, 0, 0, tzinfo=cst)  # Monday, 07:00
+        aware = dt.datetime(2024, 1, 15, 7, 0, 0, tzinfo=cst)
         with (
             patch("hft_platform.services._md_reconnect.timebase") as tb,
             patch.dict("os.environ", {"HFT_WATCHDOG_PRODUCT_TYPE": "future"}),
@@ -361,11 +326,6 @@ class TestIsTradingHoursFallback:
             tb.now_s.return_value = dt.datetime(2024, 1, 15, 10, 0, tzinfo=dt.timezone.utc).timestamp()
             assert md._is_trading_hours() is True
         mock_cal.is_trading_hours.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _is_market_open_grace_period (lines 245-268)
-# ---------------------------------------------------------------------------
 
 
 class TestMarketOpenGracePeriod:
@@ -431,7 +391,7 @@ class TestMarketOpenGracePeriod:
         """Outside grace period returns False."""
         md._market_open_grace_s = 60.0
         tz = dt.timezone.utc
-        now_dt = dt.datetime(2024, 1, 15, 9, 5, 0, tzinfo=tz)  # 5 min after open
+        now_dt = dt.datetime(2024, 1, 15, 9, 5, 0, tzinfo=tz)
         open_dt = dt.datetime(2024, 1, 15, 9, 0, 0, tzinfo=tz)
         mock_cal = MagicMock()
         mock_cal._tz = tz
@@ -482,11 +442,6 @@ class TestMarketOpenGracePeriod:
         metrics.market_open_grace_active.set.assert_called_once_with(1)
 
 
-# ---------------------------------------------------------------------------
-# _find_stale_symbols (lines 274-284)
-# ---------------------------------------------------------------------------
-
-
 class TestFindStaleSymbols:
     def test_finds_stale_symbols(self, md: _FakeMD) -> None:
         """Symbols with gap > threshold are returned (lines 274-284)."""
@@ -495,9 +450,9 @@ class TestFindStaleSymbols:
         md._symbol_gap_threshold_s = 6.0
         stale = md._find_stale_symbols(snapshot, now)
         symbols = [s for s, _, _ in stale]
-        assert "SYM_A" in symbols  # gap=10
-        assert "SYM_C" in symbols  # gap=20
-        assert "SYM_B" not in symbols  # gap=1
+        assert "SYM_A" in symbols
+        assert "SYM_C" in symbols
+        assert "SYM_B" not in symbols
 
     def test_excludes_option_prefixes(self, md: _FakeMD) -> None:
         """Option symbols (TXO, MXO, etc.) are excluded (line 279)."""
@@ -514,17 +469,17 @@ class TestFindStaleSymbols:
         md._market_open_grace_gap_threshold_s = 30.0
         md._symbol_gap_threshold_s = 6.0
         now = 100.0
-        snapshot = {"SYM_A": 85.0}  # gap=15, > 6 but < 30
+        snapshot = {"SYM_A": 85.0}
 
         with patch.object(md, "_is_market_open_grace_period", return_value=True):
             stale = md._find_stale_symbols(snapshot, now)
-        assert len(stale) == 0  # 15s < 30s grace threshold
+        assert len(stale) == 0
 
     def test_no_grace_normal_threshold(self, md: _FakeMD) -> None:
         """Without grace period, normal threshold applies."""
         md._symbol_gap_threshold_s = 6.0
         now = 100.0
-        snapshot = {"SYM_A": 85.0}  # gap=15
+        snapshot = {"SYM_A": 85.0}
 
         with patch.object(md, "_is_market_open_grace_period", return_value=False):
             stale = md._find_stale_symbols(snapshot, now)
@@ -537,15 +492,14 @@ class TestFindStaleSymbols:
         md._symbol_gap_threshold_s = 6.0
         md._symbol_gap_threshold_overrides = {"TXFG6": 60.0, "2207": 120.0}
         now = 1000.0
-        # gap=20 — would trigger global 6s threshold but well below override
         snapshot = {"TXFG6": 980.0, "2207": 940.0, "TXFD6": 980.0}
 
         with patch.object(md, "_is_market_open_grace_period", return_value=False):
             stale = md._find_stale_symbols(snapshot, now)
         symbols = [s for s, _, _ in stale]
-        assert "TXFG6" not in symbols  # 20s < 60s override
-        assert "2207" not in symbols  # 60s < 120s override
-        assert "TXFD6" in symbols  # 20s > 6s global threshold
+        assert "TXFG6" not in symbols
+        assert "2207" not in symbols
+        assert "TXFD6" in symbols
 
     def test_override_does_not_lower_below_global(self, md: _FakeMD) -> None:
         """Per-symbol override is only consulted as a per-symbol threshold;
@@ -553,16 +507,11 @@ class TestFindStaleSymbols:
         md._symbol_gap_threshold_s = 6.0
         md._symbol_gap_threshold_overrides = {"TXFG6": 60.0}
         now = 1000.0
-        snapshot = {"UNRELATED": 985.0}  # gap=15 — no override → use global 6s
+        snapshot = {"UNRELATED": 985.0}
 
         with patch.object(md, "_is_market_open_grace_period", return_value=False):
             stale = md._find_stale_symbols(snapshot, now)
         assert ("UNRELATED", 15.0) in [(s, round(g, 1)) for s, g, _ in stale]
-
-
-# ---------------------------------------------------------------------------
-# _watchdog_loop (lines 294-361)
-# ---------------------------------------------------------------------------
 
 
 class TestWatchdogLoop:
@@ -670,7 +619,6 @@ class TestWatchdogLoop:
         md._symbol_gap_threshold_s = 6.0
         md._watchdog_interval_s = 0.001
 
-        # 3 symbols, 2 stale (gap > 6s)
         md._symbol_last_tick = {
             "SYM_A": now_mono - 50.0,
             "SYM_B": now_mono - 50.0,
@@ -756,7 +704,6 @@ class TestWatchdogLoop:
         with patch("hft_platform.services._md_reconnect.asyncio.sleep", counting_sleep):
             await md._watchdog_loop()
 
-        # Loop continued past the RuntimeError
         assert iterations >= 3
 
     @pytest.mark.asyncio
@@ -785,13 +732,7 @@ class TestWatchdogLoop:
         with patch("hft_platform.services._md_reconnect.asyncio.sleep", counting_sleep):
             await md._watchdog_loop()
 
-        # Hits reset because no symbols are stale
         assert md._symbol_gap_consecutive_hits == 0
-
-
-# ---------------------------------------------------------------------------
-# _run_monitor_reconnect_checks: session_rollover pending (lines 374-381)
-# ---------------------------------------------------------------------------
 
 
 class TestMonitorReconnectRollover:
@@ -827,7 +768,6 @@ class TestMonitorReconnectRollover:
             tb.now_s.return_value = 1700000000.0
             await md._run_monitor_reconnect_checks(0.0)
 
-        # Pending state should NOT be cleared on failure
         assert md._pending_reconnect_reason == "heartbeat_gap"
 
     @pytest.mark.asyncio
@@ -845,30 +785,19 @@ class TestMonitorReconnectRollover:
             patch("hft_platform.services._md_reconnect.timebase") as tb,
         ):
             tb.now_s.return_value = 1700000000.0
-            # gap=80 > reconnect_gap_s=60 and attempts=3 > 2
             await md._run_monitor_reconnect_checks(80.0)
 
         md._request_reconnect.assert_awaited()
-
-
-# ---------------------------------------------------------------------------
-# register_on_reconnect (lines 216)
-# ---------------------------------------------------------------------------
 
 
 class TestRegisterOnReconnect:
     def test_register_creates_list_if_missing(self) -> None:
         """register_on_reconnect initializes _on_reconnect_callbacks if not present."""
         md = _FakeMD()
-        del md._on_reconnect_callbacks  # remove to test lazy init
+        del md._on_reconnect_callbacks
         cb = MagicMock()
         md.register_on_reconnect(cb)
         assert cb in md._on_reconnect_callbacks
-
-
-# ---------------------------------------------------------------------------
-# _mark_pending_reconnect: new reason changes reason (line 199-200)
-# ---------------------------------------------------------------------------
 
 
 class TestMarkPendingNewReason:
@@ -881,5 +810,4 @@ class TestMarkPendingNewReason:
             md._mark_pending_reconnect(50.0, reason="session_rollover")
         assert md._pending_reconnect_reason == "session_rollover"
         assert md._pending_reconnect_gap == 50.0
-        # since should remain at 1000.0 (not overwritten)
         assert md._pending_reconnect_since == 1000.0

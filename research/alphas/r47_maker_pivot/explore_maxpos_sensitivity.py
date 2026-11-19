@@ -258,7 +258,6 @@ def main() -> None:
                 f"Sharpe={result.sharpe:>6.2f}  ({elapsed:.1f}s)"
             )
 
-    # Summary
     print("\n" + "=" * 70)
     print("AGGREGATE COMPARISON")
     print("=" * 70)
@@ -302,7 +301,6 @@ def main() -> None:
         print(f"    PnL/fill:     {total_pnl / total_fills:>+.3f} pts" if total_fills > 0 else "")
         print(f"    Avg Sharpe:   {avg_sharpe:.2f}")
 
-    # Save
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "metadata": {

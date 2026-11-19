@@ -13,9 +13,7 @@ def test_black76_call_atm():
 
     F, K, T, sigma, r = 100.0, 100.0, 1.0, 0.20, 0.05
     price = black76_price(F, K, T, sigma, r, "C")
-    # ATM call must be positive
     assert price > 0
-    # Brenner-Subrahmanyam closed-form approx: ~F * sigma * sqrt(T/(2*pi)) * exp(-rT)
     approx = F * sigma * math.sqrt(T / (2 * math.pi)) * math.exp(-r * T)
     assert abs(price - approx) / approx < 0.05
 
@@ -26,7 +24,6 @@ def test_black76_put_atm():
     F, K, T, sigma, r = 100.0, 100.0, 1.0, 0.20, 0.05
     call = black76_price(F, K, T, sigma, r, "C")
     put = black76_price(F, K, T, sigma, r, "P")
-    # F=K → C - P ≈ 0 (both discounted at same rate)
     assert abs(call - put) < 1e-8
 
 
@@ -54,7 +51,6 @@ def test_black76_put_call_parity():
     F, K, T, sigma, r = 105.0, 95.0, 0.5, 0.25, 0.03
     call = black76_price(F, K, T, sigma, r, "C")
     put = black76_price(F, K, T, sigma, r, "P")
-    # C - P = e^{-rT}(F - K)
     expected = math.exp(-r * T) * (F - K)
     assert abs((call - put) - expected) < 1e-8
 
@@ -69,7 +65,6 @@ def test_black76_invalid_cp_raises():
 def test_black76_zero_time_call():
     from hft_platform.options.pricing import black76_price
 
-    # At expiry (T=0), call = max(F-K, 0)
     price_itm = black76_price(110.0, 100.0, 0.0, 0.20, 0.05, "C")
     assert abs(price_itm - 10.0) < 1e-10
 
@@ -100,7 +95,6 @@ def test_solve_iv_roundtrip_put():
 def test_solve_iv_deep_otm_returns_nan():
     from hft_platform.options.pricing import solve_iv
 
-    # Deep OTM: price well below 0.5 * tick_size
     iv = solve_iv(0.001, 100.0, 200.0, 0.5, 0.03, "C", tick_size=1.0)
     assert math.isnan(iv)
 

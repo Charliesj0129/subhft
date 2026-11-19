@@ -22,8 +22,6 @@ from unittest.mock import MagicMock, patch
 
 def test_hftsystem_loop_attribute_exists_after_init():
     """After __init__ completes, self.loop must be an attribute (None)."""
-    # Patch SystemBootstrapper.build so __init__ does not actually
-    # construct the whole platform.
     with patch("hft_platform.services.system.SystemBootstrapper") as MockBootstrapper:
         registry = MagicMock()
         registry.raw_queue = MagicMock()
@@ -43,7 +41,6 @@ def test_hftsystem_loop_attribute_exists_after_init():
         registry.evidence_writer = None
         registry.platform_degrade_controller = None
         registry.platform_degrade_inputs = None
-        # attributes accessed in __init__
         md_service = MagicMock()
         md_service.register_on_reconnect = MagicMock()
         registry.md_service = md_service
@@ -70,6 +67,5 @@ def test_hftsystem_loop_attribute_exists_after_init():
         from hft_platform.services.system import HFTSystem
 
         system = HFTSystem(settings={})
-        # H9 invariant: self.loop must exist post-__init__.
         assert hasattr(system, "loop"), "self.loop must be set in __init__"
         assert system.loop is None, "self.loop must default to None until run()"

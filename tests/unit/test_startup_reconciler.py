@@ -49,11 +49,11 @@ class _StubBrokerFill:
     id: str = "FILL_BROKER_1"
     code: str = "TMFE6"
     order_id: str = "BROKER_v002A"
-    seqno: str = "BROKER_v002A"  # some Shioaji versions use seqno
+    seqno: str = "BROKER_v002A"
     action: str = "Buy"
     quantity: int = 1
     price: float = 37500.0
-    ts: int = 1_776_000_000_000_000_000  # ns
+    ts: int = 1_776_000_000_000_000_000
 
 
 def _broker_account_query(
@@ -163,7 +163,6 @@ async def test_broker_api_failure_is_fail_soft() -> None:
         metrics=metrics,
         today=date(2026, 4, 20),
     )
-    # MUST NOT raise — bootstrap must continue
     result = await reconciler.run()
 
     assert result.inserted == 0
@@ -179,8 +178,8 @@ async def test_handles_both_closed_and_open_positions() -> None:
     metrics = _stub_metrics()
     closed = [_StubBrokerFill(id="F1", order_id="O1")]
     open_pos = [
-        _StubBrokerFill(id="F1", order_id="O1"),  # duplicate of closed
-        _StubBrokerFill(id="F2", order_id="O2"),  # unique to open
+        _StubBrokerFill(id="F1", order_id="O1"),
+        _StubBrokerFill(id="F2", order_id="O2"),
     ]
     api = _broker_account_query(closed_details=closed, open_positions=open_pos)
     ch = AsyncMock()

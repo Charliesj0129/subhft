@@ -28,8 +28,8 @@ class TestLeaveOneDayOut:
 
 class TestDropTopTrades:
     def test_drops_top_pct_by_magnitude(self) -> None:
-        trades = [10.0, -50.0, 1.0, 2.0, 3.0]  # |.| sorted desc => -50, 10, 3, 2, 1
-        kept = drop_top_trades(trades, pct=0.4)  # drop top 2
+        trades = [10.0, -50.0, 1.0, 2.0, 3.0]
+        kept = drop_top_trades(trades, pct=0.4)
         assert sorted(kept) == [1.0, 2.0, 3.0]
 
     def test_zero_pct_keeps_all(self) -> None:

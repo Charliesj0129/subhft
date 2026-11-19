@@ -18,11 +18,6 @@ import pytest
 _PRICE_SCALE = 10_000
 
 
-# ---------------------------------------------------------------------------
-# Stubbing
-# ---------------------------------------------------------------------------
-
-
 class _FakeCore:
     """Minimal AlphaStrategy stub returning configurable signal."""
 
@@ -129,11 +124,6 @@ def _make_bidask(symbol="BTCUSD", bids=None, asks=None):
     )
 
 
-# ---------------------------------------------------------------------------
-# Initialization & Parameter Validation
-# ---------------------------------------------------------------------------
-
-
 class TestStrategyInit:
     def test_default_params_stored(self):
         """Lines 56-90: init stores merged params."""
@@ -203,11 +193,6 @@ class TestParamValidation:
         assert strat.params["hawkes_mu"] == 100.0
 
 
-# ---------------------------------------------------------------------------
-# _trim_book
-# ---------------------------------------------------------------------------
-
-
 class TestTrimBook:
     def test_no_trim_when_within_limits(self):
         """Lines 119-120: early return when within max_book_levels."""
@@ -225,7 +210,6 @@ class TestTrimBook:
         strat.bids = {i * _PRICE_SCALE: 10 for i in range(20)}
         strat._trim_book()
         assert len(strat.bids) == 5
-        # Should keep highest 5 prices
         kept = sorted(strat.bids.keys(), reverse=True)
         assert kept[0] == 19 * _PRICE_SCALE
 
@@ -248,11 +232,6 @@ class TestTrimBook:
         strat._trim_book()
         assert len(strat.bids) == 3
         assert len(strat.asks) == 3
-
-
-# ---------------------------------------------------------------------------
-# on_book_update
-# ---------------------------------------------------------------------------
 
 
 class TestOnBookUpdate:
@@ -288,11 +267,9 @@ class TestOnBookUpdate:
         """Lines 146-147: qty <= 0 removes price level."""
         strat = _make_strategy()
         ctx = _make_ctx()
-        # First add a level
         event1 = _make_bidask(bids=[[100 * _PRICE_SCALE, 10]], asks=[[101 * _PRICE_SCALE, 5]])
         strat.handle_event(ctx, event1)
         assert 100 * _PRICE_SCALE in strat.bids
-        # Then remove it
         event2 = _make_bidask(bids=[[100 * _PRICE_SCALE, 0]], asks=[[101 * _PRICE_SCALE, 5]])
         strat.handle_event(ctx, event2)
         assert 100 * _PRICE_SCALE not in strat.bids
@@ -329,7 +306,6 @@ class TestOnBookUpdate:
         bids = [[100 * _PRICE_SCALE, 10]]
         asks = [[101 * _PRICE_SCALE, 15]]
         event = _make_bidask(bids=bids, asks=asks)
-        # Should not raise
         strat.handle_event(ctx, event)
 
     def test_on_book_update_exception_increments_metrics(self):
@@ -363,11 +339,6 @@ class TestOnBookUpdate:
         assert len(strat.asks) == 0
 
 
-# ---------------------------------------------------------------------------
-# on_tick
-# ---------------------------------------------------------------------------
-
-
 class TestOnTick:
     def test_unknown_symbol_ignored(self):
         """Line 192: symbol not in symbols."""
@@ -375,7 +346,6 @@ class TestOnTick:
         ctx = _make_ctx()
         tick = _make_tick(symbol="UNKNOWN")
         strat.handle_event(ctx, tick)
-        # No change to state
         assert strat.best_bid == 0
 
     def test_l1_fallback_when_bbo_not_set(self):
@@ -399,7 +369,7 @@ class TestOnTick:
         strat.core.on_trade.return_value = None
         tick = _make_tick(price=50 * _PRICE_SCALE)
         strat.handle_event(ctx, tick)
-        assert strat.best_bid == 0  # unchanged
+        assert strat.best_bid == 0
 
     def test_l1_not_used_when_bbo_set(self):
         """Lines 197: skip L1 fallback when BBO already set."""
@@ -411,7 +381,6 @@ class TestOnTick:
         strat.core.on_trade.return_value = None
         tick = _make_tick()
         strat.handle_event(ctx, tick)
-        # L1 not fetched
         assert strat.best_bid == 100 * _PRICE_SCALE
 
     def test_aggressor_buy_inferred_from_ask(self):
@@ -424,9 +393,8 @@ class TestOnTick:
         strat.core.on_trade.return_value = None
         tick = _make_tick(price=101 * _PRICE_SCALE)
         strat.handle_event(ctx, tick)
-        # on_trade called with is_buyer_maker=False (aggressor is buyer)
         call_args = strat.core.on_trade.call_args
-        assert call_args[0][3] is False  # is_buyer_maker
+        assert call_args[0][3] is False
 
     def test_aggressor_sell_inferred_from_bid(self):
         """Lines 216-217: price <= best_bid → aggressor sell."""
@@ -439,7 +407,7 @@ class TestOnTick:
         tick = _make_tick(price=100 * _PRICE_SCALE)
         strat.handle_event(ctx, tick)
         call_args = strat.core.on_trade.call_args
-        assert call_args[0][3] is True  # is_buyer_maker
+        assert call_args[0][3] is True
 
     def test_midprice_defaults_to_aggressor_buy(self):
         """Lines 219-221: unclear price defaults to aggressor buy."""
@@ -449,10 +417,10 @@ class TestOnTick:
         ctx = _make_ctx()
         strat.core = MagicMock()
         strat.core.on_trade.return_value = None
-        tick = _make_tick(price=101 * _PRICE_SCALE)  # between bid and ask
+        tick = _make_tick(price=101 * _PRICE_SCALE)
         strat.handle_event(ctx, tick)
         call_args = strat.core.on_trade.call_args
-        assert call_args[0][3] is False  # is_buyer_maker (default aggressor buy)
+        assert call_args[0][3] is False
 
     def test_on_tick_exception_logged(self):  # noqa: no-assert
         """Lines 227-238: exception in on_trade caught."""
@@ -463,7 +431,6 @@ class TestOnTick:
         strat.core = MagicMock()
         strat.core.on_trade.side_effect = RuntimeError("tick boom")
         tick = _make_tick()
-        # Should not raise
         strat.handle_event(ctx, tick)
 
     def test_on_tick_exception_increments_metrics(self):
@@ -479,11 +446,6 @@ class TestOnTick:
         tick = _make_tick()
         strat.handle_event(ctx, tick)
         assert counter.labels.called
-
-
-# ---------------------------------------------------------------------------
-# _execute_on_signal
-# ---------------------------------------------------------------------------
 
 
 class TestExecuteOnSignal:
@@ -604,7 +566,7 @@ class TestExecuteOnSignal:
 
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.SELL
-        assert call_kw["qty"] == 3  # abs(pos)
+        assert call_kw["qty"] == 3
         assert "BTCUSD" not in strat._entry_price
 
     def test_stop_loss_short_fires(self):
@@ -632,7 +594,7 @@ class TestExecuteOnSignal:
         strat = _make_strategy(stop_loss_ticks=10, tick_size=1.0)
         entry = 100 * _PRICE_SCALE
         stop_dist = 10 * int(1.0 * _PRICE_SCALE)
-        bid = entry - stop_dist  # exactly at threshold (< is strict)
+        bid = entry - stop_dist
         ctx = _make_ctx(positions={"BTCUSD": 1})
         strat.ctx = ctx
         strat.best_bid = bid
@@ -648,7 +610,6 @@ class TestExecuteOnSignal:
         strat.ctx = ctx
         strat.best_bid = 50 * _PRICE_SCALE
         strat.best_ask = 51 * _PRICE_SCALE
-        # No entry price set
         strat._execute_on_signal("BTCUSD", signal=0.0)
         assert not ctx.place_order.called
 
@@ -685,17 +646,11 @@ class TestExecuteOnSignal:
         strat.best_bid = bid
         strat.best_ask = bid + _PRICE_SCALE
         strat._entry_price["BTCUSD"] = entry
-        strat._execute_on_signal("BTCUSD", signal=0.8)  # strong buy signal
-        # Stop-loss sell happens, not a buy
+        strat._execute_on_signal("BTCUSD", signal=0.8)
         from hft_platform.contracts.strategy import Side
 
         call_kw = ctx.place_order.call_args.kwargs
         assert call_kw["side"] == Side.SELL
-
-
-# ---------------------------------------------------------------------------
-# Book update + signal execution integration
-# ---------------------------------------------------------------------------
 
 
 class TestBookUpdateSignalFlow:
@@ -704,7 +659,7 @@ class TestBookUpdateSignalFlow:
         strat = _make_strategy(signal_threshold=0.3)
         ctx = _make_ctx(positions={"BTCUSD": 0})
         strat.core = _FakeCore()
-        strat.core.signal = 0.5  # strong buy
+        strat.core.signal = 0.5
         bids = [[100 * _PRICE_SCALE, 10]]
         asks = [[101 * _PRICE_SCALE, 15]]
         event = _make_bidask(bids=bids, asks=asks)
@@ -716,17 +671,12 @@ class TestBookUpdateSignalFlow:
         strat = _make_strategy(signal_threshold=0.3)
         ctx = _make_ctx(positions={"BTCUSD": 0})
         strat.core = _FakeCore()
-        strat.core.signal = 0.1  # weak signal
+        strat.core.signal = 0.1
         bids = [[100 * _PRICE_SCALE, 10]]
         asks = [[101 * _PRICE_SCALE, 15]]
         event = _make_bidask(bids=bids, asks=asks)
         intents = strat.handle_event(ctx, event)
         assert len(intents) == 0
-
-
-# ---------------------------------------------------------------------------
-# Metrics exception handling edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestMetricsExceptionPaths:
@@ -742,7 +692,6 @@ class TestMetricsExceptionPaths:
         bids = [[100 * _PRICE_SCALE, 10]]
         asks = [[101 * _PRICE_SCALE, 15]]
         event = _make_bidask(bids=bids, asks=asks)
-        # Should not raise even when metrics itself errors
         strat.handle_event(ctx, event)
         assert counter.labels.called
 
@@ -771,18 +720,16 @@ class TestMetricsExceptionPaths:
         bids = [[100 * _PRICE_SCALE, 10]]
         asks = [[101 * _PRICE_SCALE, 15]]
         event = _make_bidask(bids=bids, asks=asks)
-        strat.handle_event(ctx, event)  # no crash
+        strat.handle_event(ctx, event)
 
     def test_on_tick_no_ctx_l1_fallback(self):
         """Lines 197-204: ctx.get_l1_scaled returns None."""
         strat = _make_strategy()
         ctx = _make_ctx(l1_data=None)
-        # Override L1 source to return None always
         ctx._lob_l1_source = lambda _: None
         strat.core = MagicMock()
         strat.core.on_trade.return_value = None
         tick = _make_tick(price=50 * _PRICE_SCALE)
         strat.handle_event(ctx, tick)
-        # BBO unchanged since L1 returned None
         assert strat.best_bid == 0
         assert strat.best_ask == 0

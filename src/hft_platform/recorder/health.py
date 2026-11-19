@@ -45,7 +45,6 @@ class PipelineHealthTracker:
         self._last_ch_ok_ts = time.monotonic()
         self._ch_connected = True
 
-        # Metrics
         self._metrics: Any = None
         try:
             from hft_platform.observability.metrics import MetricsRegistry
@@ -68,14 +67,12 @@ class PipelineHealthTracker:
         with self._lock:
             self._events.append((now, event_type, kwargs))
 
-            # Track CH connectivity
             if event_type == "ch_connected":
                 self._ch_connected = True
                 self._last_ch_ok_ts = now
             elif event_type in ("ch_timeout", "ch_error", "ch_disconnected"):
                 self._ch_connected = False
 
-            # Recompute state
             old_state = self._state
             self._state = self._compute_state(now)
 

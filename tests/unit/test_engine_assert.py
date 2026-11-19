@@ -21,7 +21,6 @@ def test_bootstrap_symbol_raises_if_no_data_source() -> None:
     )
     engine = MonitorEngine(config)
 
-    # Create a minimal SymbolState
     ss = SymbolState(
         symbol=WatchlistSymbol(
             code="2330",
@@ -30,9 +29,7 @@ def test_bootstrap_symbol_raises_if_no_data_source() -> None:
         ),
     )
 
-    # Verify _data_source is None
     assert engine._data_source is None
 
-    # Should raise RuntimeError, not AssertionError
     with pytest.raises(RuntimeError, match="_bootstrap_symbol called before data source initialized"):
         engine._bootstrap_symbol(ss)

@@ -17,10 +17,6 @@ import pytest
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.core import timebase
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _FILL_SEQ = 0
 
 
@@ -55,11 +51,6 @@ def _make_fill(
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. Python path accumulation and PnL (Position.update direct)
-# ---------------------------------------------------------------------------
-
-
 class TestPositionUpdate:
     """Verify Position.update() arithmetic using scaled-int prices (x10000)."""
 
@@ -68,32 +59,27 @@ class TestPositionUpdate:
 
         pos = Position(account_id="ACC1", strategy_id="STRAT1", symbol="2330")
 
-        # Step 1: Buy 10 @ 500_0000
         fill1 = _make_fill(side=Side.BUY, qty=10, price=500_0000)
         pos.update(fill1)
         assert pos.net_qty == 10
         assert pos.avg_price_scaled == 500_0000
         assert pos.realized_pnl_scaled == 0
 
-        # Step 2: Buy 5 @ 510_0000 -> weighted avg
         fill2 = _make_fill(side=Side.BUY, qty=5, price=510_0000)
         pos.update(fill2)
         assert pos.net_qty == 15
-        expected_avg = (10 * 500_0000 + 5 * 510_0000) // 15  # 503_3333
+        expected_avg = (10 * 500_0000 + 5 * 510_0000) // 15
         assert pos.avg_price_scaled == expected_avg
         assert pos.realized_pnl_scaled == 0
 
-        # Step 3: Sell 10 @ 520_0000 -> partial close, positive PnL
         fill3 = _make_fill(side=Side.SELL, qty=10, price=520_0000)
         pos.update(fill3)
         assert pos.net_qty == 5
         expected_pnl = (520_0000 - expected_avg) * 10
         assert pos.realized_pnl_scaled == expected_pnl
-        assert expected_pnl > 0  # profit
-        # avg_price unchanged (still long, no flip)
+        assert expected_pnl > 0
         assert pos.avg_price_scaled == expected_avg
 
-        # Step 4: Sell remaining 5 @ 520_0000 -> flat
         fill4 = _make_fill(side=Side.SELL, qty=5, price=520_0000)
         pos.update(fill4)
         assert pos.net_qty == 0
@@ -105,7 +91,7 @@ class TestPositionUpdate:
         from hft_platform.execution.positions import Position
 
         pos = Position(account_id="ACC1", strategy_id="STRAT1", symbol="2330")
-        fill1 = _make_fill(side=Side.BUY, qty=1, price=100_0000, fee=30, tax=10)  # fee is all-in
+        fill1 = _make_fill(side=Side.BUY, qty=1, price=100_0000, fee=30, tax=10)
         pos.update(fill1)
         assert pos.fees_scaled == 30
 
@@ -122,11 +108,6 @@ class TestPositionUpdate:
         assert pos.last_update_ts == fill.match_ts_ns
 
 
-# ---------------------------------------------------------------------------
-# 2. Drawdown tracking via PositionStore
-# ---------------------------------------------------------------------------
-
-
 class TestDrawdown:
     """Verify portfolio drawdown tracking in PositionStore."""
 
@@ -134,7 +115,6 @@ class TestDrawdown:
     def store(self, monkeypatch):
         monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         monkeypatch.setenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "2000000")
-        # Reimport to pick up env change
         import importlib
 
         import hft_platform.execution.positions as mod
@@ -142,36 +122,30 @@ class TestDrawdown:
         importlib.reload(mod)
         s = mod.PositionStore()
         yield s
-        # Reload again to restore default
         importlib.reload(mod)
 
     def test_drawdown_zero_before_any_fills(self, store) -> None:
         assert store.get_drawdown_pct() == 0.0
 
     def test_drawdown_zero_after_profit(self, store) -> None:
-        # Open long
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=100_0000))
-        assert store.get_drawdown_pct() == 0.0  # no realized PnL yet
+        assert store.get_drawdown_pct() == 0.0
 
-        # Close long at higher price -> profit
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=110_0000))
         pnl = store._total_realized_pnl_scaled
         assert pnl > 0
         assert store._peak_equity_scaled == pnl
-        assert store.get_drawdown_pct() == 0.0  # at peak
+        assert store.get_drawdown_pct() == 0.0
 
     def test_drawdown_after_loss(self, store) -> None:
-        # First: profitable round-trip to establish peak
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=100_0000))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=120_0000))
         peak = store._peak_equity_scaled
         assert peak > 0
 
-        # Second: losing round-trip
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=120_0000))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=110_0000))
 
-        # PnL decreased from peak
         current = store._total_realized_pnl_scaled
         assert current < peak
         dd = store.get_drawdown_pct()
@@ -180,22 +154,15 @@ class TestDrawdown:
         assert abs(dd - expected_dd) < 1e-12
 
     def test_peak_never_decreases(self, store) -> None:
-        # Profit
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=100_0000))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=110_0000))
         peak1 = store._peak_equity_scaled
 
-        # Loss
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=110_0000))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=105_0000))
         peak2 = store._peak_equity_scaled
 
-        assert peak2 == peak1  # peak never drops
-
-
-# ---------------------------------------------------------------------------
-# 3. Double-fill (no built-in dedup)
-# ---------------------------------------------------------------------------
+        assert peak2 == peak1
 
 
 class TestDoubleFill:
@@ -216,16 +183,11 @@ class TestDoubleFill:
     def test_duplicate_fill_doubles_position(self, store) -> None:
         fill = _make_fill(side=Side.BUY, qty=5, price=100_0000)
         store.on_fill(fill)
-        store.on_fill(fill)  # same fill again
+        store.on_fill(fill)
 
         key = f"{fill.account_id}:{fill.strategy_id}:{fill.symbol}"
         pos = store.positions[key]
-        assert pos.net_qty == 10  # 5 + 5, no dedup
-
-
-# ---------------------------------------------------------------------------
-# 4. Position flipping (long -> short in single fill)
-# ---------------------------------------------------------------------------
+        assert pos.net_qty == 10
 
 
 class TestPositionFlip:
@@ -241,9 +203,7 @@ class TestPositionFlip:
 
         pos.update(_make_fill(side=Side.SELL, qty=10, price=110_0000))
         assert pos.net_qty == -5
-        # Closing 5 long @ 100 with sell @ 110 -> pnl = (110-100)*5 = 50_0000
         assert pos.realized_pnl_scaled == (110_0000 - 100_0000) * 5
-        # Remaining short has avg_price = sell price
         assert pos.avg_price_scaled == 110_0000
 
     def test_flip_short_to_long(self) -> None:
@@ -256,15 +216,8 @@ class TestPositionFlip:
 
         pos.update(_make_fill(side=Side.BUY, qty=10, price=100_0000))
         assert pos.net_qty == 5
-        # Closing 5 short @ 110 with buy @ 100 -> pnl = (110-100)*5 = 50_0000
         assert pos.realized_pnl_scaled == (110_0000 - 100_0000) * 5
-        # Remaining long has avg_price = buy price
         assert pos.avg_price_scaled == 100_0000
-
-
-# ---------------------------------------------------------------------------
-# 5. Zero-quantity fill edge case
-# ---------------------------------------------------------------------------
 
 
 class TestZeroQuantityFill:
@@ -286,16 +239,10 @@ class TestZeroQuantityFill:
         pos.update(_make_fill(side=Side.BUY, qty=5, price=100_0000))
         assert pos.net_qty == 5
 
-        # Zero-qty fill should not change state (except fees/timestamp)
         pos.update(_make_fill(side=Side.SELL, qty=0, price=200_0000))
         assert pos.net_qty == 5
         assert pos.avg_price_scaled == 100_0000
         assert pos.realized_pnl_scaled == 0
-
-
-# ---------------------------------------------------------------------------
-# 6. Eviction of flat positions at capacity
-# ---------------------------------------------------------------------------
 
 
 class TestEviction:
@@ -316,31 +263,21 @@ class TestEviction:
         importlib.reload(mod)
 
     def test_eviction_triggered_at_capacity(self, store) -> None:
-        # Fill 5 symbols to capacity, then flatten some
         for i in range(5):
             sym = f"SYM{i}"
             store.on_fill(_make_fill(side=Side.BUY, qty=1, price=100_0000, symbol=sym))
 
         assert len(store.positions) == 5
 
-        # Flatten first 2 symbols (make net_qty=0)
         for i in range(2):
             sym = f"SYM{i}"
             store.on_fill(_make_fill(side=Side.SELL, qty=1, price=100_0000, symbol=sym))
 
-        # Now try to add a 6th symbol -> should trigger eviction of flat positions
         store.on_fill(_make_fill(side=Side.BUY, qty=1, price=100_0000, symbol="NEW1"))
 
-        # Should have evicted at least one flat position to make room
         assert len(store.positions) <= 5
-        # The new symbol should exist
         key_new = "ACC1:STRAT1:NEW1"
         assert key_new in store.positions
-
-
-# ---------------------------------------------------------------------------
-# 7. Rust/Python parity (conditional on Rust availability)
-# ---------------------------------------------------------------------------
 
 
 class TestRustPythonParity:
@@ -366,12 +303,10 @@ class TestRustPythonParity:
 
         import hft_platform.execution.positions as mod
 
-        # Python-only store
         monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         importlib.reload(mod)
         py_store = mod.PositionStore()
 
-        # Rust store
         monkeypatch.setenv("HFT_RUST_POSITIONS", "1")
         importlib.reload(mod)
         rust_store = mod.PositionStore()
@@ -394,8 +329,6 @@ class TestRustPythonParity:
             pd_rs = rust_store.on_fill(fill)
 
             assert pd_py.net_qty == pd_rs.net_qty, f"net_qty mismatch after {fill.fill_id}"
-            # avg_price diverges on exact close: Python zeroes it, Rust retains stale value
-            # This is cosmetic (no financial impact when net_qty=0); Rust fix tracked separately
             if pd_py.net_qty != 0:
                 assert pd_py.avg_price == pd_rs.avg_price, f"avg_price mismatch after {fill.fill_id}"
             assert pd_py.realized_pnl == pd_rs.realized_pnl, f"realized_pnl mismatch after {fill.fill_id}"
@@ -405,8 +338,8 @@ class TestRustPythonParity:
 
         fills = [
             _make_fill(side=Side.BUY, qty=5, price=100_0000),
-            _make_fill(side=Side.SELL, qty=10, price=110_0000),  # flip to short
-            _make_fill(side=Side.BUY, qty=5, price=105_0000),  # close short
+            _make_fill(side=Side.SELL, qty=10, price=110_0000),
+            _make_fill(side=Side.BUY, qty=5, price=105_0000),
         ]
 
         for fill in fills:

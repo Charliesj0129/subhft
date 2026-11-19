@@ -16,10 +16,6 @@ from hft_platform.events import BidAskEvent, BookStats, FusedBookStats, MetaData
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.trade_classifier import TradeClassifier
 
-# Validated Imports
-
-# Use existing implementation of SymbolMetadata.
-
 logger = get_logger("feed_adapter.normalizer")
 
 _TICK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(TickEvent, "__dataclass_fields__", {})
@@ -45,8 +41,6 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "off",
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
-# Experimental scratch-array path for fixed 5-level books. Disabled by default
-# because Python-level element copies can be slower on some hosts.
 _SHIOAJI_FIXED5_SCRATCH = os.getenv("HFT_MD_FIXED5_SCRATCH", "0").lower() not in {
     "0",
     "false",
@@ -86,7 +80,6 @@ try:
     _RUST_NORMALIZE_BIDASK_NP = getattr(_rust_core, "normalize_bidask_tuple_np", None)
     _RUST_NORMALIZE_BIDASK_SYNTH = getattr(_rust_core, "normalize_bidask_tuple_with_synth", None)
 except Exception as exc:
-    # CRITICAL: Rust acceleration disabled - performance will be 10-100x slower
     logger.warning(
         "Rust acceleration DISABLED - falling back to pure Python (10-100x slower)",
         error=str(exc),
@@ -101,10 +94,9 @@ except Exception as exc:
     _RUST_NORMALIZE_BIDASK_NP = None
     _RUST_NORMALIZE_BIDASK_SYNTH = None
 
-# Fused normalizer+LOB pipeline (single Rust call replaces normalize → book update → stats)
 _HAS_FUSED = False
 _RustNormalizerLobFused: type | None = None
-if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:  # _rust_core loaded successfully
+if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:
     try:
         _RustNormalizerLobFused = getattr(_rust_core, "RustNormalizerLobFused", None)
         _HAS_FUSED = _RustNormalizerLobFused is not None
@@ -113,9 +105,6 @@ if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:  # _rust_core loaded success
         _HAS_FUSED = False
 
 
-# TAIFEX monthly contract codes: ROOT + month letter (A=Jan … L=Dec) + year
-# digit, e.g. TMFH6 = August 2026. Continuous-family codes (TMFR1) and weekly
-# option codes do not match and are deliberately left without a derived date.
 _MONTHLY_CONTRACT_RE = re.compile(r"^([A-Z]{2,4})([A-L])([0-9])$")
 
 
@@ -127,7 +116,6 @@ def _third_wednesday(year: int, month: int) -> dt.date:
     third Wednesday of that month.
     """
     first = dt.date(year, month, 1)
-    # weekday(): Monday=0 … Wednesday=2
     first_wednesday = 1 + (2 - first.weekday()) % 7
     return dt.date(year, month, first_wednesday + 14)
 
@@ -197,7 +185,6 @@ class SymbolMetadata:
     DEFAULT_SCALE = 10_000
 
     def __init__(self, config_path: str | None = None):
-        # simplified for this context, assuming existing logic was ok, just need it here
         if config_path is None:
             from hft_platform.config.symbols_path import resolve_symbols_config_path
 
@@ -211,16 +198,8 @@ class SymbolMetadata:
         self._exchange_cache: dict[str, str] = {}
         self._product_type_cache: dict[str, str] = {}
         self._mtime: float | None = None
-        # A universe roll replaces contracts while the engine runs (see
-        # ``QuoteConnectionPool.roll_universe``). The canonical file on disk is
-        # the operator's, so the rolled universe arrives here instead and is
-        # re-applied after every load — otherwise the next ``reload_if_changed``
-        # would price a freshly subscribed month off a file that predates it.
         self._runtime_overlay: list[dict[str, Any]] = []
-        self.alias_to_actual: dict[str, str] = {}  # config alias → callback code (e.g. TXFR1 → TXFE6)
-        # Serialises whole reloads so two loads (roll worker vs loop-thread
-        # ``reload_if_changed``) cannot publish out of order. The event loop
-        # never waits on it: ``reload_if_changed`` skips when it is held.
+        self.alias_to_actual: dict[str, str] = {}
         self._reload_lock = threading.Lock()
         from hft_platform.core.instrument_registry import InstrumentRegistry
 
@@ -264,14 +243,8 @@ class SymbolMetadata:
         except Exception as exc:
             logger.warning("symbol_metadata_load_failed", error=str(exc), config_path=self.config_path)
         self._apply_overlay(meta, tags_by_symbol, symbols_by_tag)
-        # An actual month code that exists only through ``set_alias_map`` is
-        # not in the file, so a reload would otherwise drop it and its lookups
-        # would resolve to "".
         self._copy_alias_entries(meta)
 
-        # Publish: tables first, then fresh caches. A reader holding an old
-        # cache may still fill it, but that dict is discarded; a reader that
-        # sees a new cache reads it after ``meta`` was replaced.
         self.meta = meta
         self.tags_by_symbol = tags_by_symbol
         self.symbols_by_tag = symbols_by_tag
@@ -279,10 +252,6 @@ class SymbolMetadata:
         self._price_scale_cache = {}
         self._exchange_cache = {}
         self._product_type_cache = {}
-        # ``set_alias_map`` on another thread may have recorded an alias after
-        # the copy above and written its entry into the old table. It updates
-        # ``alias_to_actual`` before touching ``meta``, so a second pass over
-        # the published table catches it.
         self._copy_alias_entries(self.meta)
 
     def _copy_alias_entries(self, meta: dict[str, dict[str, Any]]) -> None:
@@ -336,9 +305,6 @@ class SymbolMetadata:
         except OSError:
             return False
         if self._mtime is None or mtime > self._mtime:
-            # Runs on the event loop: never wait for a roll's reload. If one
-            # is in flight, skip; ``_mtime`` is still the old one unless that
-            # reload saw the new file, so the next call retries.
             if not self._reload_lock.acquire(blocking=False):
                 return False
             try:
@@ -391,26 +357,14 @@ class SymbolMetadata:
             parsed = parse_display(symbol, base_year=base_year)
         except ValueError:
             parsed = None
-        # A family string (e.g. "TMFR1") is not a concrete contract; events
-        # carry a concrete expiry. We keep the ``contract`` field as None for
-        # family-form symbols and rely on the resolver to fill it at dispatch.
         if isinstance(parsed, ContractFamily):
             parsed = None
-        # Defensive: future single-digit year parser may not uniquely
-        # identify the exact expiry day. Downstream (ContractResolver) is the
-        # authority for concrete expiry dates; parse_display is a best-effort
-        # fallback for dual-write convenience.
         if isinstance(parsed, FutureRef):
-            parsed = parsed  # type intentionally narrowed; keep as parsed.
+            parsed = parsed
         cache[symbol] = parsed
         return parsed
 
     def price_scale(self, symbol: str) -> int:
-        # Bind the cache before reading ``meta``: a concurrent ``_load`` swaps
-        # ``meta`` before the caches, so a value computed here lands either in
-        # the dict it was read against or in one that is already discarded.
-        # Only symbols with an entry are cached; a miss stays uncached so it
-        # cannot outlive the reload that adds the symbol.
         cache = self._price_scale_cache
         cached = cache.get(symbol)
         if cached is not None:
@@ -460,7 +414,6 @@ class SymbolMetadata:
         return 1
 
     def exchange(self, symbol: str) -> str:
-        # Same cache discipline as ``price_scale``: bind first, cache hits only.
         cache = self._exchange_cache
         cached = cache.get(symbol)
         if cached is not None:
@@ -479,8 +432,6 @@ class SymbolMetadata:
             return cached
         entry = self.meta.get(symbol)
         if entry is None:
-            # Not cached: a "" here sent TMFK6 orders down the untyped
-            # stock path until restart (2026-11-09).
             return ""
         raw = (
             entry.get("product_type")
@@ -594,11 +545,6 @@ class SymbolMetadata:
                     option_right = OptionRight.CALL
                 elif raw_right.upper() in ("P", "PUT"):
                     option_right = OptionRight.PUT
-            # Expiry applies to every derivative, not just options. Gating it
-            # with strike/right left every futures row in ``hft.market_data``
-            # on the schema default 1970-01-01, and left ``InstrumentRegistry.
-            # evict_expired`` — the registry's only capacity relief valve —
-            # with nothing it could ever evict.
             expiry = _parse_instrument_expiry(entry.get("expiry"), code)
             if expiry is None and itype in (InstrumentType.FUTURE, InstrumentType.OPTION):
                 expiry = _derive_monthly_expiry(code)
@@ -721,7 +667,6 @@ class MarketDataNormalizer:
         import itertools
 
         self._seq_gen = itertools.count(1)
-        # self._lock = Lock() # Removed
         self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
@@ -801,13 +746,6 @@ class MarketDataNormalizer:
                 raw_delta = local_ts - exch_ts
                 if _TS_MAX_LAG_NS and raw_delta > _TS_MAX_LAG_NS:
                     if _TS_SKEW_LOG_COOLDOWN_NS and (local_ts - self._last_skew_log_ns > _TS_SKEW_LOG_COOLDOWN_NS):
-                        # Live signal showed 3 distinct mis-epoched
-                        # contracts (EXFF6 ~3.95 days, TXFG6 ~33 min,
-                        # MXFF6 ~7.5s) all collapsing to the clamp ceiling
-                        # in the gauge, with no way to tell them apart.
-                        # Always include the broker code + raw / clamped
-                        # delta so the warning carries enough context to
-                        # triage the underlying ts_epoch problem.
                         logger.warning(
                             "feed_time_skew",
                             topic=topic,
@@ -818,9 +756,6 @@ class MarketDataNormalizer:
                         )
                         self._last_skew_log_ns = local_ts
                     if self.metrics:
-                        # Sample over-threshold events at three severities
-                        # so dashboards can alert on "any skew >1s" without
-                        # being drowned by routine sub-second jitter.
                         if raw_delta > 60_000_000_000:
                             self.metrics.feed_time_skew_over_threshold_total.labels(
                                 topic=topic, severity="critical_60s"
@@ -834,13 +769,6 @@ class MarketDataNormalizer:
                                 topic=topic, severity="warn_1s"
                             ).inc()
                     local_ts = exch_ts + _TS_MAX_LAG_NS
-            # The gauge answers "right now, how skewed is this topic?", so it
-            # must carry the raw delta. ``local_ts - exch_ts`` here is the
-            # post-clamp delta, which is capped at _TS_MAX_LAG_NS and therefore
-            # cannot express the magnitude that actually matters. ``raw_delta``
-            # is 0 when the exchange timestamp was in the future (nothing to
-            # report) and equals the post-clamp delta whenever no clamp fired,
-            # so this is strictly more information for the same one ``set()``.
             if self.metrics:
                 self.metrics.feed_time_skew_ns.labels(topic=topic).set(raw_delta)
         return exch_ts, local_ts
@@ -934,8 +862,6 @@ class MarketDataNormalizer:
         return bids, asks, synthesized
 
     def normalize_tick(self, payload: Any) -> TickEvent | tuple | None:
-        # Fast path lookup without _coalesce
-        # Assuming Shioaji standard keys: 'code', 'close', 'volume', 'ts'
         try:
             if isinstance(payload, dict):
                 symbol = payload.get("code") or payload.get("Code")
@@ -981,7 +907,6 @@ class MarketDataNormalizer:
                                 is_odd_lot,
                                 exch_ts,
                             ) = rust_tuple
-                            # Rust extract::<f64> fails on str values; fall through to Python
                             if price == 0 and close_val:
                                 raise ValueError("rust returned zero price for non-zero close")
                             if price <= 0:
@@ -1063,7 +988,7 @@ class MarketDataNormalizer:
                 price=price,
                 volume=volume,
                 total_volume=total_volume,
-                bid_side_total_vol=0,  # Optimization: skip less used fields unless needed
+                bid_side_total_vol=0,
                 ask_side_total_vol=0,
                 is_simtrade=is_simtrade,
                 is_odd_lot=is_odd_lot,
@@ -1103,11 +1028,9 @@ class MarketDataNormalizer:
 
             scale = self._get_scale(symbol)
 
-            # Fused path: single Rust call does scale + book update + stats
             fused = self._fused
             if fused is not None:
                 try:
-                    # tick_size_scaled = 1 tick unit in scaled price space (reserved for future use)
                     tick_size_scaled = 1
                     fused_result = fused.process_bidask(
                         symbol,
@@ -1139,9 +1062,7 @@ class MarketDataNormalizer:
                         mx2 = int(mid_x2)
                         ss = int(spread_scaled)
                         timb = float(top_imbalance)
-                        # Standard stats (backward-compat: mid_price as float, spread as float)
                         compat_stats = BookStats(bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
-                        # Fused stats: integer mid_x2 + spread_scaled for LOBEngine bypass
                         fused_stats = FusedBookStats(bb, ba, bd, ad, mx2, ss, timb)
 
                         self._trade_classifier.update_quotes(symbol, bb, ba)
@@ -1177,24 +1098,10 @@ class MarketDataNormalizer:
                             **_event_contract_kw(BidAskEvent, self.metadata, symbol),
                         )
                 except Exception as exc:
-                    # Fall through to standard path
                     logger.debug("rust_bidask_fallback", stage="fused_path", error=str(exc))
                     if self._rust_fallback_bidask:
                         self._rust_fallback_bidask.inc()
 
-            # Convert to numpy
-            # We need to scale prices. Using numpy vectorization for scaling is faster.
-            # But converting list->numpy is overhead.
-            # If lists are small (5 levels), list comp might be faster than np.array(list).
-
-            # Bids with filtering 0s?
-            # Shioaji might send 0 for empty levels.
-
-            # Optimization: Use list comprehension for small N (N=5)
-            # Returns List[List[int]] directly (faster than numpy conversion)
-
-            # Bids / Asks
-            # Rust path uses zero-copy NumPy views and returns int64 ndarray (N,2).
             bids_final = None
             asks_final = None
             rust_available = bool(_RUST_SCALE_BOOK_PAIR or _RUST_SCALE_BOOK_SEQ or _RUST_NORMALIZE_BIDASK)
@@ -1278,8 +1185,6 @@ class MarketDataNormalizer:
                     stats = None
                     synthesized = False
 
-            # Hot path for standard Shioaji bidask streams: avoid Python np.asarray() churn
-            # when Rust can directly scale Python sequences and compute stats.
             if (
                 stats is None
                 and use_rust
@@ -1319,7 +1224,6 @@ class MarketDataNormalizer:
                         if bid_prices_np is None or bid_vols_np is None or ask_prices_np is None or ask_vols_np is None:
                             use_fixed5 = False
                     if use_fixed5:
-                        # Shioaji stock/futures bidask is typically fixed 5 levels.
                         for i in range(5):
                             bid_prices_np[i] = float(bp[i])
                             bid_vols_np[i] = int(bv[i])
@@ -1414,8 +1318,6 @@ class MarketDataNormalizer:
                     asks_final = None
                     stats = None
 
-            # If a Rust normalize path already returned bids/asks+stats, do not recompute
-            # the same work again via scale_book_pair_stats.
             if stats is None and use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
                 try:
                     bids_final, asks_final, _raw_stats2 = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
@@ -1464,7 +1366,6 @@ class MarketDataNormalizer:
             if not synthesized:
                 bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
 
-            # Update trade classifier with latest best bid/ask
             if stats is not None:
                 self._trade_classifier.update_quotes(symbol, stats[0], stats[1])
             elif bids_final and asks_final:
@@ -1532,7 +1433,6 @@ class MarketDataNormalizer:
                 self._skip_snapshot_missing_symbol.inc()
             return None
 
-        # Guard: broker SDK may return list-typed fields for multi-level snapshots
         if isinstance(buy_price, (list, tuple)):
             buy_price = buy_price[0] if buy_price else 0
         if isinstance(sell_price, (list, tuple)):

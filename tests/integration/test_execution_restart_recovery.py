@@ -82,7 +82,6 @@ async def test_restart_restores_order_id_routing_for_fill_resolution(tmp_path):
 
     adapter1 = _make_adapter(tmp_path, persist_path)
     await adapter1._register_broker_ids("R47:101", {"ordno": "ORD_RESTART", "seqno": "SEQ_RESTART"})
-    # Ensure persist completes synchronously before second adapter loads
     adapter1.persist_order_id_map()
 
     adapter2 = _make_adapter(tmp_path, persist_path)
@@ -105,10 +104,6 @@ async def test_restart_restores_fill_dedup_and_skips_replayed_fill(tmp_path):
 
     assert drained1 == 1
     position_store1.on_fill.assert_called_once()
-    # The checkpoint is handed to the default executor, so "the fill was
-    # registered" and "the dedup window is recoverable" are two different
-    # instants. Waiting makes this a durability check rather than a race
-    # against a thread pool.
     await router1.flush_fill_dedup()
     assert os.path.exists(persist_path)
 

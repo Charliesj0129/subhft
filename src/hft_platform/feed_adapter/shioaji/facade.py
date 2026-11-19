@@ -37,8 +37,6 @@ class ShioajiClientFacade:
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None) -> None:
         client = ShioajiClient(config_path=config_path, shioaji_config=shioaji_config)
         self._client = client
-        # Reuse the runtime instances already created by ShioajiClient.__init__
-        # so the Facade, the client, and the runtimes all share the same objects.
         self.session_runtime = client._session_runtime
         self.quote_runtime = client._quote_runtime
         self.reconnect_orchestrator = client._reconnect_orchestrator
@@ -49,7 +47,6 @@ class ShioajiClientFacade:
         self.scanner_gateway = ScannerGateway(client)
         self.market_info_gateway = MarketInfoGateway(client)
         self.subscription_manager = client._subscription_manager
-        # Wire decoupled interfaces (already set in __init__, but kept explicit here).
         client._session_policy = self.session_runtime
         client._quote_event_handler = self.quote_runtime._event_handler
 

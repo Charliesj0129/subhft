@@ -31,7 +31,6 @@ _PROFILES = _ROOT / "config" / "research" / "profiles"
 _V1 = _PROFILES / "vm_ul6_strict.yaml"
 _V2 = _PROFILES / "vm_ul6_strict_v2.yaml"
 
-# The only pipeline_overrides v2 changes, each a repaired reference.
 _V2_OVERRIDE_CHANGES = {
     "latency_profile_id",
     "submit_ack_latency_ms",
@@ -114,10 +113,10 @@ def test_profile_thresholds_win_but_never_loosen_a_gate():
         is_strict=True,
         thresholds={
             "taker": {
-                "sharpe_oos_min": 1.8,  # stricter than the run: wins
-                "max_drawdown_pct": 40,  # looser than the run: ignored
-                "winning_day_pct_min": 50,  # looser than the run: ignored
-                "min_oos_days": 30,  # new key: added
+                "sharpe_oos_min": 1.8,
+                "max_drawdown_pct": 40,
+                "winning_day_pct_min": 50,
+                "min_oos_days": 30,
             }
         },
     )
@@ -264,7 +263,7 @@ def test_governed_run_defaults_to_v2_profile_and_hands_it_to_gate_c(monkeypatch,
     assert seen["profile"].name == "vm_ul6_strict_v2"
     assert seen["run_mode"] == "governed"
     assert seen["experiments_dir"] == str(governed_env)
-    assert isinstance(seen["gate_c_runtime"], GateCRuntime)  # research injects it; the platform never loads it
+    assert isinstance(seen["gate_c_runtime"], GateCRuntime)
 
 
 def test_governed_run_refuses_the_exploratory_standard_profile(tmp_path: Path):

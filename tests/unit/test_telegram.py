@@ -9,11 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Build a minimal aiohttp stub and inject into sys.modules so the telegram
-# module can be imported without the real aiohttp dependency.
-# ---------------------------------------------------------------------------
-
 
 def _build_aiohttp_stub() -> types.ModuleType:
     """Return a minimal aiohttp stub module with ClientSession."""
@@ -27,21 +22,13 @@ def _build_aiohttp_stub() -> types.ModuleType:
     return stub
 
 
-# Inject before any telegram import happens
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
 
-# Ensure the telegram module's own aiohttp binding is set (may be None if
-# an earlier test imported telegram before the stub was installed).
-import hft_platform.notifications.telegram as _tg_mod  # noqa: E402
+import hft_platform.notifications.telegram as _tg_mod
 
 if _tg_mod.aiohttp is None:
     _tg_mod.aiohttp = sys.modules["aiohttp"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_sender(enabled: bool = True, rate_limit_seconds: float = 1.0):
@@ -80,13 +67,8 @@ def _make_mock_session(status: int = 200, post_ok: bool = True) -> tuple[MagicMo
     mock_session = MagicMock()
     mock_session.closed = False
     mock_session.post = MagicMock(return_value=mock_response)
-    mock_session.close = AsyncMock()  # async close must be awaitable
+    mock_session.close = AsyncMock()
     return mock_session, mock_response
-
-
-# ---------------------------------------------------------------------------
-# TelegramSender tests
-# ---------------------------------------------------------------------------
 
 
 class TestTelegramSender:
@@ -98,7 +80,6 @@ class TestTelegramSender:
 
         with patch("hft_platform.notifications.telegram.aiohttp") as mock_aiohttp:
             mock_aiohttp.ClientSession.return_value = mock_session
-            # Inject the session directly to bypass lazy creation
             sender._session = mock_session
             result = await sender.send("Hello HFT")
 
@@ -141,7 +122,7 @@ class TestTelegramSender:
     async def test_rate_limiter_batches_non_critical(self):
         """Non-critical send within rate-limit window should return False."""
         sender = _make_sender(rate_limit_seconds=60.0)
-        sender._last_send_ts = time.monotonic()  # simulate recent send
+        sender._last_send_ts = time.monotonic()
 
         with patch("hft_platform.notifications.telegram.aiohttp") as mock_aiohttp:
             result = await sender.send("rate limited message")
@@ -153,7 +134,7 @@ class TestTelegramSender:
     async def test_critical_bypasses_rate_limit(self):
         """Critical=True should bypass the rate limit and send immediately."""
         sender = _make_sender(rate_limit_seconds=60.0)
-        sender._last_send_ts = time.monotonic()  # simulate recent send
+        sender._last_send_ts = time.monotonic()
 
         mock_session, _ = _make_mock_session()
 
@@ -175,7 +156,6 @@ class TestTelegramSender:
             await sender.send("first")
             await sender.send("second")
 
-        # ClientSession constructor should only be called once (lazily on first send)
         assert mock_aiohttp.ClientSession.call_count == 1
         assert mock_session.post.call_count == 2
 

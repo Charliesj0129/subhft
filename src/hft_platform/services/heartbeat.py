@@ -47,9 +47,6 @@ def heartbeat_writable(path: str = DEFAULT_HEARTBEAT_PATH) -> tuple[bool, str | 
     needs, then leaves the file as-is — it never writes a separate sentinel.
     """
     try:
-        # Append-mode open creates the file if missing and verifies write
-        # permission on both the directory and (if pre-existing) the file,
-        # without truncating a heartbeat a live writer may already own.
         with open(path, "a"):
             pass
         return True, None

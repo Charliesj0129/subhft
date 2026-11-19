@@ -414,7 +414,6 @@ async def test_order_id_map_eviction_removes_oldest_10_percent(tmp_config):
     trade.order = None
     trade.status = None
     await adapter._register_broker_ids("s1:trigger", trade)
-    # Should evict 10 oldest non-live entries + add 1 new = 91
     assert len(adapter.order_id_map) == 91
     assert "TRIGGER" in adapter.order_id_map
     for i in range(10):
@@ -427,10 +426,8 @@ async def test_order_id_map_eviction_skips_live_orders(tmp_config):
     """M6: Eviction must not remove entries whose order_key is in live_orders."""
     adapter = _make_adapter(tmp_config)
     adapter._order_id_map_max_size = 20
-    # Seed 20 entries, make the first 5 point to live order keys
     for i in range(20):
         adapter.order_id_map[f"id_{i:02d}"] = f"key_{i}"
-    # Mark first 5 as live
     for i in range(5):
         adapter.live_orders[f"key_{i}"] = MagicMock()
 
@@ -445,15 +442,9 @@ async def test_order_id_map_eviction_skips_live_orders(tmp_config):
     trade.status = None
     await adapter._register_broker_ids("s1:new", trade)
 
-    # Live entries (key_0..key_4) must survive eviction
     for i in range(5):
         assert f"id_{i:02d}" in adapter.order_id_map, f"Live entry id_{i:02d} should NOT be evicted"
     assert "NEW" in adapter.order_id_map
-
-
-# ---------------------------------------------------------------------------
-# Coalesce window bypass for urgent intents (H3 fix)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -463,15 +454,8 @@ async def test_cancel_skips_coalesce_window(tmp_config):
 
     client = _make_client()
     adapter = _make_adapter(tmp_config, client)
-    # 30 s, not 500 ms. The discrimination this test needs is "did the CANCEL
-    # wait for the window or not", and the old 500 ms window left only 150 ms
-    # of headroom for scheduler jitter. Under the 16-worker xdist run `make ci`
-    # uses, that failed 2 runs in 3 while the behaviour was correct. A window
-    # far larger than any plausible scheduling delay makes the two outcomes
-    # unmistakable instead of merely far apart.
     adapter._api_coalesce_window_s = 30.0
 
-    # Seed a live order so cancel dispatch finds its target
     adapter.live_orders["strat1:ORD-TARGET"] = MagicMock()
 
     cancel_intent = _make_intent(
@@ -485,9 +469,6 @@ async def test_cancel_skips_coalesce_window(tmp_config):
     adapter.running = True
     t0 = time.monotonic()
     worker = asyncio.create_task(adapter._api_worker())
-    # Poll for the dispatch rather than sleeping a fixed 50 ms and timing the
-    # whole block: the old version measured its own sleep plus jitter, so a
-    # loaded runner failed it. Polling measures only how long the worker took.
     deadline = t0 + 2.0
     while time.monotonic() < deadline and not client.cancel_order.called:
         await asyncio.sleep(0.005)
@@ -500,8 +481,6 @@ async def test_cancel_skips_coalesce_window(tmp_config):
         pass
 
     client.cancel_order.assert_called_once()
-    # Dispatched at all within 2 s proves the 30 s window was bypassed; no
-    # scheduling delay bridges that gap.
     assert elapsed < 30.0, f"Took {elapsed:.3f}s — coalesce window was NOT bypassed"
 
 
@@ -512,7 +491,7 @@ async def test_force_flat_skips_coalesce_window(tmp_config):
 
     client = _make_client()
     adapter = _make_adapter(tmp_config, client)
-    adapter._api_coalesce_window_s = 30.0  # see test_cancel_skips_coalesce_window
+    adapter._api_coalesce_window_s = 30.0
 
     flat_intent = _make_intent(intent_type=IntentType.FORCE_FLAT)
     flat_cmd = _make_cmd(intent=flat_intent)
@@ -541,13 +520,7 @@ async def test_force_flat_skips_coalesce_window(tmp_config):
         pass
 
     assert len(dispatched) == 1, "Expected exactly one dispatch call"
-    # Reached dispatch at all within 2 s proves the 30 s window was bypassed.
     assert dispatched[0] - t0 < 30.0, f"Dispatch took {dispatched[0] - t0:.3f}s — coalesce NOT bypassed"
-
-
-# ---------------------------------------------------------------------------
-# StormGuard HALT-skip in _api_worker: DLQ entry + dedicated metric
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -563,35 +536,28 @@ async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
     client = _make_client()
     adapter = _make_adapter(tmp_config, client)
 
-    # Inject a mock DLQ so we can assert on it
     dlq_mock = AsyncMock()
     adapter._dlq = dlq_mock
 
-    # Inject a mock metrics object so we can assert counter increments
     metrics_mock = MagicMock()
     metrics_mock.order_halt_skip_total = MagicMock()
     metrics_mock.order_reject_total = MagicMock()
     adapter.metrics = metrics_mock
 
-    # Set StormGuard to HALT
     sg = MagicMock()
     sg.state = StormGuardState.HALT
     sg.is_halt_exempt.return_value = False
     adapter._storm_guard = sg
 
-    # Disable coalesce window to keep the test fast
     adapter._api_coalesce_window_s = 0.0
 
-    # Build a NEW intent (non-exempt) and put it into the _api_queue
     intent = _make_intent(intent_type=IntentType.NEW, strategy_id="strat_halt", symbol="0050")
     cmd = _make_cmd(intent=intent)
     await adapter._api_queue.put(cmd)
 
-    # Patch _dispatch_to_api to confirm it is NOT called
     dispatch_mock = AsyncMock()
     adapter._dispatch_to_api = dispatch_mock
 
-    # Run the worker for one cycle then cancel
     adapter.running = True
     worker = asyncio.create_task(adapter._api_worker())
     await asyncio.sleep(0.05)
@@ -602,18 +568,14 @@ async def test_api_worker_halt_skip_sends_dlq_and_metric(tmp_config):
     except asyncio.CancelledError:
         pass
 
-    # Dedicated metric incremented (no labels — strategy_id removed to avoid cardinality bomb)
     metrics_mock.order_halt_skip_total.inc.assert_called_once()
-    # Backward-compat reject metric also incremented
     metrics_mock.order_reject_total.inc.assert_called_once()
-    # DLQ received the entry
     dlq_mock.add.assert_awaited_once()
     call_kwargs = dlq_mock.add.call_args[1]
     assert call_kwargs["reason"] == RejectionReason.STORMGUARD_HALT
     assert "STORMGUARD_HALT_SKIP" in call_kwargs["error_message"]
     assert call_kwargs["strategy_id"] == "strat_halt"
     assert call_kwargs["symbol"] == "0050"
-    # Broker dispatch must NOT be called
     dispatch_mock.assert_not_awaited()
 
 
@@ -654,7 +616,5 @@ async def test_api_worker_halt_skip_exempt_cancel_still_dispatched(tmp_config):
     except asyncio.CancelledError:
         pass
 
-    # HALT-skip metric must NOT fire for exempt intents
     metrics_mock.order_halt_skip_total.inc.assert_not_called()
-    # Dispatch must have been called for the CANCEL
     dispatch_mock.assert_awaited_once_with(cmd)

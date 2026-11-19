@@ -96,5 +96,4 @@ def test_order_dead_letter_is_a_warning_and_an_unresolved_order_is_critical() ->
 
     assert alerts["OrderDeadLetterQueueGrowing"]["labels"]["severity"] == "warning"
     assert alerts["OrderOutcomeUnresolved"]["labels"]["severity"] == "critical"
-    # The recorder half of the DLQ split still pages: those rows are not in ClickHouse.
     assert alerts["RecorderDeadLetterQueueGrowing"]["labels"]["severity"] == "critical"

@@ -37,7 +37,7 @@ def main() -> None:
     e = read_event()
     ti = e.get("tool_input") or {}
     path = os.path.normpath(ti.get("file_path") or ti.get("notebook_path") or "")
-    if path.startswith("/tmp/claude-"):  # scratchpad (normalized: traversal cannot fake this)
+    if path.startswith("/tmp/claude-"):
         sys.exit(0)
     rel = os.path.relpath(path) if os.path.isabs(path) else path
     rel = rel.replace("\\", "/")

@@ -97,7 +97,7 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
     from research.candidate_loop.splits import load_split_definition
 
     client = _ch_client(required=True)
-    assert client is not None  # required=True exits on failure
+    assert client is not None
     rc = RunConfig.for_run_id(args.batch, runs_root=Path(args.runs_root))
     eval_cfg = load_evaluator_config(rc.evaluator_config_path)
     scoring_cfg = load_scoring_config(rc.scoring_config_path)
@@ -135,7 +135,6 @@ def _cmd_shortlist(args: argparse.Namespace) -> int:
         return 2
     summary = json.loads(path.read_text())
     for status in ("shortlisted", "watchlist"):
-        # failure_summary.json files written before research v2 C4 say "promoted".
         rows = summary.get(status, summary.get("promoted", []) if status == "shortlisted" else [])
         print(f"{status.upper()} ({len(rows)}):")
         for row in rows:
@@ -181,7 +180,7 @@ def _cmd_governor_generate(args: argparse.Namespace) -> int:
 
     cfg = load_governor_config(Path(args.governor_config))
     try:
-        client = DeepSeekClient(cfg)  # reads DEEPSEEK_API_KEY; fail-closed
+        client = DeepSeekClient(cfg)
     except DeepSeekError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc

@@ -3,8 +3,6 @@ from hftbacktest import GTX, LIMIT
 from numba import float64, int64, njit
 from numba.experimental import jitclass
 
-# --- Signal Trackers (Embedded for Standalone) ---
-
 K_PROPAGATOR = 3
 
 
@@ -73,22 +71,17 @@ class PropagatorTracker:
         self.total_impact = s
 
 
-# --- Market Maker Strategy ---
-
-
 @njit
 def strategy(hbt):
     asset_no = 0
 
-    # --- Parameters ---
     base_spread_ticks = 2.0
     hawkes_spread_coeff = 0.5
     propagator_skew_coeff = 0.5
     risk_aversion = 0.1
     order_qty = 1.0
-    requote_interval_ns = 100_000_000  # 100ms
+    requote_interval_ns = 100_000_000
 
-    # --- State ---
     hawkes = HawkesTracker(1.0, 0.5, 10.0)
     propagator = PropagatorTracker()
     inventory = 0.0
@@ -97,8 +90,7 @@ def strategy(hbt):
     bid_order_id = 0
     ask_order_id = 0
 
-    # --- Main Loop ---
-    while hbt.elapse(1_000_000) == 0:  # 1ms
+    while hbt.elapse(1_000_000) == 0:
         current_ts = hbt.current_timestamp
         depth = hbt.depth(asset_no)
 
@@ -108,7 +100,6 @@ def strategy(hbt):
         tick_size = depth.tick_size
         mid_price = (depth.best_bid + depth.best_ask) / 2.0
 
-        # 1. Update Signals
         trades = hbt.last_trades(asset_no)
         is_event = len(trades) > 0
         hawkes.update(current_ts, is_event)
@@ -121,12 +112,9 @@ def strategy(hbt):
             propagator.add_event(sign, qty)
         hbt.clear_last_trades(asset_no)
 
-        # 2. Calculate Quoting Prices
-        # Spread: widens with Hawkes intensity
         spread = base_spread_ticks * tick_size * (1.0 + hawkes_spread_coeff * hawkes.intensity)
         half_spread = spread / 2.0
 
-        # Skew: adjust reservation price based on inventory and propagator
         inv_penalty = risk_aversion * inventory * tick_size
         prop_skew = propagator_skew_coeff * propagator.total_impact * tick_size
 
@@ -135,10 +123,7 @@ def strategy(hbt):
         bid_price = round((reservation_price - half_spread) / tick_size) * tick_size
         ask_price = round((reservation_price + half_spread) / tick_size) * tick_size
 
-        # 3. Order Management (Cancel & Requote)
-        # Simple logic: requote every N ms
         if current_ts - last_quote_ts > requote_interval_ns:
-            # Cancel old orders
             if bid_order_id != 0:
                 hbt.cancel(asset_no, bid_order_id, False)
             if ask_order_id != 0:
@@ -146,7 +131,6 @@ def strategy(hbt):
 
             hbt.clear_inactive_orders(asset_no)
 
-            # Place new quotes
             bid_order_id = next_order_id
             next_order_id += 1
             hbt.submit_buy_order(asset_no, bid_order_id, bid_price, order_qty, GTX, LIMIT, False)
@@ -156,9 +140,5 @@ def strategy(hbt):
             hbt.submit_sell_order(asset_no, ask_order_id, ask_price, order_qty, GTX, LIMIT, False)
 
             last_quote_ts = current_ts
-
-        # 4. Track Fills (Inventory Update) - Simplified
-        # In hftbacktest, you'd check order status. For simplicity, we just proceed.
-        # A proper implementation would check hbt.orders() for fill status.
 
     return True

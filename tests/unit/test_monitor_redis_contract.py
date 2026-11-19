@@ -19,8 +19,8 @@ def _make_publisher_payload() -> dict:
     return {
         "symbol": "2330",
         "ingest_ts": 1710000000000000000,
-        "bids_price": [210_000_000],  # 210.0 NTD × 1e6
-        "asks_price": [210_500_000],  # 210.5 NTD × 1e6
+        "bids_price": [210_000_000],
+        "asks_price": [210_500_000],
         "bids_vol": [100],
         "asks_vol": [80],
         "price_scaled": 0,
@@ -83,7 +83,6 @@ def test_decoded_row_produces_valid_enrich_payload() -> None:
 
     enriched = enrich_tick(row, ss)
 
-    # Core price fields
     assert enriched["bid_px"] > 0
     assert enriched["ask_px"] > 0
     assert enriched["mid_price"] > 0
@@ -95,7 +94,6 @@ def test_decoded_row_produces_valid_enrich_payload() -> None:
     assert "ofi_l1_cum" in enriched
     assert "local_ts" in enriched
 
-    # State was updated
     assert ss.tick_count == 1
     assert ss.last_price > 0
     assert ss.spread_bps > 0
@@ -106,7 +104,6 @@ def test_second_tick_produces_nonzero_ofi() -> None:
     ws = WatchlistSymbol(code="2330", name="TSMC", product_type="stock", alpha_ids=("queue_imbalance",))
     ss = SymbolState(symbol=ws)
 
-    # Tick 1
     row1 = RowView(
         symbol="2330",
         ingest_ts=1000,
@@ -119,20 +116,18 @@ def test_second_tick_produces_nonzero_ofi() -> None:
     )
     enrich_tick(row1, ss)
 
-    # Tick 2 — quantities changed
     row2 = RowView(
         symbol="2330",
         ingest_ts=2000,
         bids_price=[210_000_000],
         asks_price=[210_500_000],
-        bids_vol=[120],  # +20
-        asks_vol=[70],  # -10
+        bids_vol=[120],
+        asks_vol=[70],
         price_scaled=0,
         volume=0,
     )
     enriched = enrich_tick(row2, ss)
 
-    # OFI = (bid_qty_change) - (ask_qty_change) = (120-100) - (70-80) = 20 - (-10) = 30
     assert enriched["ofi_l1_raw"] == 30.0
     assert enriched["ofi_l1_cum"] == 30.0
 

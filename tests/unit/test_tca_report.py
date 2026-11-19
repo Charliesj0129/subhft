@@ -44,9 +44,7 @@ class TestTCAReportGenerator:
         gen = TCAReportGenerator()
         report = _make_report()
         msg = gen.format_telegram_section([report])
-        # total_cost_bps_mean=2.6
         assert "2.6" in msg
-        # commission_bps_mean=1.2
         assert "1.2" in msg
 
     def test_format_single_report_has_tca_summary_header(self) -> None:
@@ -73,7 +71,6 @@ class TestTCAReportGenerator:
         gen = TCAReportGenerator()
         report = _make_report(trade_count=7)
         msg = gen.format_telegram_section([report])
-        # volume = 7 * 5 = 35
         assert "35" in msg
 
     def test_format_single_report_matches_spec(self) -> None:

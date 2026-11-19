@@ -125,7 +125,6 @@ class MaxDrawdownGate:
         pnl = _to_daily_series(result.daily_pnl)
         threshold_pct = thresholds.get("max_drawdown_pct", 30.0)
         if not pnl:
-            # No series is a missing input, not a zero drawdown.
             return SubGateResult(
                 name=self.name,
                 passed=False,
@@ -140,7 +139,6 @@ class MaxDrawdownGate:
         peak = float(running_max.max()) if len(running_max) else 0.0
         if peak <= 0:
             if max_dd <= 0:
-                # Equity never moved: there is no drawdown to measure yet.
                 return SubGateResult(
                     name=self.name,
                     passed=False,
@@ -148,7 +146,6 @@ class MaxDrawdownGate:
                     metrics={"max_dd_pct": None, "threshold": float(threshold_pct), "peak": peak},
                     details="equity never moved; drawdown not measurable",
                 )
-            # Losses below a non-positive peak are unbounded as a share of peak.
             return SubGateResult(
                 name=self.name,
                 passed=False,

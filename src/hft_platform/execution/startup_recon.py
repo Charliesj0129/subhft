@@ -28,7 +28,6 @@ from hft_platform.execution.reconciliation import (
 
 logger = get_logger("startup_recon")
 
-# 0=not_run, 1=pass, 2=discrepancy, 3=error
 startup_recon_status = Gauge(
     "startup_recon_status",
     "Startup position reconciliation status (0=not_run, 1=pass, 2=discrepancy, 3=error)",
@@ -48,11 +47,6 @@ startup_recon_not_comparable = Gauge(
 )
 startup_recon_not_comparable.set(0)
 
-#: Order modes under which the broker cannot confirm the platform's own
-#: positions, because orders are routed to a paper venue while
-#: ``list_positions()`` reads the real account. Mirrors
-#: ``execution.reconciliation._NON_COMPARABLE_ORDER_MODES`` and the sim aliases
-#: in ``services.bootstrap._ORDER_MODE_ALIASES``.
 _NON_COMPARABLE_ORDER_MODES = frozenset({"sim", "simulation", "paper"})
 
 _BLOCK_ENV = "HFT_STARTUP_RECON_BLOCK"
@@ -85,7 +79,7 @@ def _settled_delivery_date(symbol: str, *, cutoff: date) -> date | None:
 class RecoveryResult:
     """Outcome of startup position recovery."""
 
-    source: str  # "dual", "broker_only", "checkpoint_only", "empty"
+    source: str
     positions_loaded: int = 0
     auto_corrected: int = 0
     halted: bool = False
@@ -108,15 +102,8 @@ class StartupPositionVerifier:
     ) -> None:
         self.client = client
         self.store = position_store
-        # Under a paper order path the live account cannot confirm the
-        # platform's own positions, so ``broker_qty == 0`` carries no
-        # information about them. See ``_recover_dual``.
         self._order_mode = (order_mode or os.environ.get("HFT_ORDER_MODE", "")).strip().lower()
-        # Set when a valid checkpoint is read; ``_write_to_store`` uses it to
-        # bank the realized PnL no restored position ends up carrying.
         self._ckpt_total_rpnl: int | None = None
-        #: ``checkpoint_identity()`` of the running engine, set by bootstrap.
-        #: A checkpoint stamped with a different identity is not restored.
         self.identity: Dict[str, str] | None = None
 
         if blocking is not None:
@@ -155,17 +142,14 @@ class StartupPositionVerifier:
         t0 = timebase.now_ns()
 
         try:
-            # 1. Fetch broker positions
             broker_map = await self._fetch_broker_positions()
 
-            # 2. Build local position map
             local_map = self._build_local_map()
 
-            # 3. Optionally merge checkpoint data (for symbols not in local store)
             if self.checkpoint_path:
                 from hft_platform.execution.checkpoint import (
-                    PositionCheckpointWriter,  # noqa: PLC0415
-                    checkpoint_identity_mismatch,  # noqa: PLC0415
+                    PositionCheckpointWriter,
+                    checkpoint_identity_mismatch,
                 )
 
                 ckpt_data = PositionCheckpointWriter.load_checkpoint(self.checkpoint_path)
@@ -173,7 +157,6 @@ class StartupPositionVerifier:
                     ckpt_data = None
                 if ckpt_data is not None:
                     ckpt_positions = ckpt_data.get("positions", {})
-                    # Aggregate symbol-level qty from per-strategy checkpoint entries
                     checkpoint_map: Dict[str, int] = {}
                     for _key, pos_data in ckpt_positions.items():
                         sym = pos_data.get("symbol", _key.split(":")[-1])
@@ -187,7 +170,6 @@ class StartupPositionVerifier:
                             if sym not in local_map:
                                 local_map[sym] = qty
 
-            # 4. Compute discrepancies via the same logic as ReconciliationService
             self.discrepancies = ReconciliationService._compute_discrepancies(
                 None,  # type: ignore[arg-type]  # static-compatible call
                 local_map,
@@ -227,7 +209,6 @@ class StartupPositionVerifier:
                 )
 
         except RuntimeError:
-            # Re-raise blocking-mode errors without masking
             raise
         except Exception as exc:
             self.status = 3
@@ -241,10 +222,6 @@ class StartupPositionVerifier:
 
         return self.discrepancies
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     async def _fetch_broker_positions(self) -> Dict[str, int]:
         """Fetch positions from broker and return {symbol: qty} map."""
         raw_positions = await asyncio.to_thread(self.client.get_positions)
@@ -257,10 +234,6 @@ class StartupPositionVerifier:
             symbol = pos.symbol
             local_map[symbol] = local_map.get(symbol, 0) + pos.net_qty
         return local_map
-
-    # ------------------------------------------------------------------
-    # Position Recovery (dual-source merge + graduated response)
-    # ------------------------------------------------------------------
 
     async def recover(
         self,
@@ -287,7 +260,6 @@ class StartupPositionVerifier:
 
         logger.info("position_recovery: starting", trading_date=trading_date)
 
-        # 1. Load checkpoint
         ckpt_data = None
         ckpt_positions: Dict[str, Dict[str, Any]] = {}
         ckpt_valid = False
@@ -301,17 +273,6 @@ class StartupPositionVerifier:
                 if self._ckpt_date_within_tolerance(ckpt_td, trading_date):
                     ckpt_valid = True
                     ckpt_positions = ckpt_data.get("positions", {})
-                    # M2: Restore portfolio-level aggregates so StormGuard drawdown
-                    # resumes from the correct high-watermark after crash recovery.
-                    #
-                    # Presence, not truthiness. A checkpoint recording peak=0 and
-                    # total=0 is a *valid* record, and it still needs rebanking
-                    # whenever the surviving positions do not themselves sum to
-                    # zero -- a retained position at +100000 against an evicted
-                    # -100000 totals zero, but restores as +100000 and inflates
-                    # peak by the same amount. Reading the checkpoint's own zero
-                    # as "no checkpoint aggregates" is what made that invisible;
-                    # only a genuinely absent field means a pre-M2 checkpoint.
                     has_aggregates = (
                         ckpt_data.get("peak_equity_scaled") is not None
                         or ckpt_data.get("total_realized_pnl_scaled") is not None
@@ -323,8 +284,6 @@ class StartupPositionVerifier:
                             peak_equity_scaled=peak_equity,
                             total_realized_pnl_scaled=total_rpnl,
                         )
-                        # Positions are written later and will not account for
-                        # all of this total; _write_to_store rebanks the rest.
                         self._ckpt_total_rpnl = total_rpnl
                         logger.info(
                             "position_recovery: portfolio aggregates restored",
@@ -341,7 +300,6 @@ class StartupPositionVerifier:
             else:
                 logger.info("position_recovery: no checkpoint found")
 
-        # 2. Query broker
         broker_map: Dict[str, int] = {}
         broker_available = False
         try:
@@ -351,7 +309,6 @@ class StartupPositionVerifier:
         except Exception as exc:
             logger.warning("position_recovery: broker unavailable", error=str(exc))
 
-        # 3. Determine source and act
         if ckpt_valid and broker_available:
             result = self._recover_dual(ckpt_positions, broker_map, account_id)
         elif broker_available:
@@ -373,7 +330,7 @@ class StartupPositionVerifier:
         renamed aside rather than left for the next periodic write to overwrite,
         so the other engine's state can still be inspected.
         """
-        from hft_platform.execution.checkpoint import checkpoint_identity_mismatch  # noqa: PLC0415
+        from hft_platform.execution.checkpoint import checkpoint_identity_mismatch
 
         mismatched = checkpoint_identity_mismatch(ckpt_data, self.identity)
         if not mismatched:
@@ -392,10 +349,10 @@ class StartupPositionVerifier:
             moved_to=aside,
         )
         try:
-            from hft_platform.observability.metrics import MetricsRegistry  # noqa: PLC0415
+            from hft_platform.observability.metrics import MetricsRegistry
 
             MetricsRegistry.get().startup_warnings_total.labels(component="checkpoint_identity").inc()
-        except Exception as exc:  # noqa: BLE001 - metrics must never block recovery
+        except Exception as exc:
             logger.debug("checkpoint_identity_metric_failed", error=str(exc))
         return True
 
@@ -433,9 +390,6 @@ class StartupPositionVerifier:
         if delta_days > tolerance_days:
             return False
 
-        # Only treat adjacent trading dates as equivalent during the brief
-        # 05:00 handover window where a just-written night-session checkpoint
-        # can legitimately straddle the TAIFEX trading-date rollover.
         now_tpe = _dt.fromtimestamp(timebase.now_s(), tz=ZoneInfo("Asia/Taipei"))
         return now_tpe.hour == 5 and now_tpe.minute <= 5
 
@@ -475,9 +429,7 @@ class StartupPositionVerifier:
             if sym:
                 all_symbols.add(sym)
 
-        # Build symbol-level qty by ACCUMULATING across strategies
         ckpt_qty_map: Dict[str, int] = {}
-        # Group checkpoint entries by symbol (preserving composite keys)
         ckpt_entries_by_symbol: Dict[str, list[tuple[str, Dict[str, Any]]]] = {}
         for _key, pos_data in ckpt_positions.items():
             sym = pos_data.get("symbol", _key.split(":")[-1])
@@ -498,29 +450,7 @@ class StartupPositionVerifier:
 
             entries = ckpt_entries_by_symbol.get(symbol, [])
 
-            # Exactly ONE direction is undefined under a paper order path: a
-            # position the checkpoint holds and the live account reports as 0.
-            # That is the configured routing, not drift, and on 2026-09-04 it
-            # halted the engine on checkpoint -4 vs broker 0.
-            #
-            # The opposite direction stays fully meaningful and is deliberately
-            # NOT suppressed: a position the BROKER reports and the platform
-            # does not hold was placed outside this platform, and paper routing
-            # explains nothing about it. Same partition as
-            # ``ReconciliationService`` draws for the steady-state loop.
             if sim_unverifiable and broker_qty == 0 and ckpt_qty != 0:
-                # Except when the contract no longer exists. The exchange
-                # settled it on its delivery date, so broker 0 is a fact and
-                # no longer a gap in what paper routing can confirm. Restored
-                # anyway, it could never be priced or closed, so the
-                # mark-to-market stayed incomplete and a daily stop could never
-                # release. That was TMFI6 +1 on THESHOW from 2026-09-16, and a
-                # plain restart would have brought it back every time.
-                #
-                # Its realized PnL is kept: _rebank_unaccounted_realized_pnl
-                # banks whatever the surviving positions do not carry. The
-                # final-settlement mark is not booked, because the platform has
-                # no settlement price to book it at.
                 settled_on = _settled_delivery_date(symbol, cutoff=cutoff)
                 if settled_on is not None:
                     auto_corrected += 1
@@ -551,8 +481,6 @@ class StartupPositionVerifier:
                         "action": "preserved_not_comparable",
                     }
                 )
-                # Restore the checkpoint unchanged. ``ckpt_total == target_qty``
-                # so the per-strategy split is preserved exactly.
                 self._distribute_correction(entries, ckpt_qty, account_id, merged, symbol=symbol)
                 continue
 
@@ -576,9 +504,6 @@ class StartupPositionVerifier:
                         "action": "corrected",
                     }
                 )
-                # Distribute broker correction across per-strategy entries.
-                # For single-strategy symbols, use broker qty directly.
-                # For multi-strategy, scale proportionally (preserving sum = broker_qty).
                 self._distribute_correction(entries, broker_qty, account_id, merged, symbol=symbol)
             else:
                 if broker_qty != 0:
@@ -601,9 +526,6 @@ class StartupPositionVerifier:
             return RecoveryResult(source="dual", halted=True, mismatches=mismatches)
 
         loaded = self._write_to_store(merged, account_id)
-        # 1 means "positions match". A book that could not be compared has not
-        # matched anything, and a startup that verified nothing must not read as
-        # a clean pass on the one gauge an operator looks at.
         status_val = 2 if (auto_corrected > 0 or not_comparable > 0) else 1
         startup_recon_status.set(status_val)
         startup_recon_positions_loaded.set(loaded)
@@ -636,15 +558,6 @@ class StartupPositionVerifier:
                 merged[key] = {
                     "symbol": symbol,
                     "net_qty": target_qty,
-                    # -1, not 0, for the same reason ``_recover_broker_only``
-                    # gives below: the broker told us a quantity and not a cost
-                    # basis, and every downstream consumer detects "unknown
-                    # basis" with ``avg_price_scaled < 0``
-                    # (checkpoint.py:138, checkpoint.py:155, positions.py:586).
-                    # A 0 here is not a sentinel -- it is read as a real fill at
-                    # price zero, so unrealized PnL accrues at mid x qty x
-                    # multiplier on every tick and the first close books the
-                    # entire notional as profit.
                     "avg_price_scaled": -1,
                     "realized_pnl_scaled": 0,
                     "fees_scaled": 0,
@@ -670,10 +583,7 @@ class StartupPositionVerifier:
                 "strategy_id": ckpt_strat,
             }
             return
-        # Multi-strategy: preserve per-strategy split from checkpoint when total
-        # matches. Otherwise assign proportionally (rounded, remainder to first).
         ckpt_total = sum(d.get("net_qty", 0) for _, d in entries)
-        # First pass: compute adjusted quantities per entry.
         adj_qtys: list[int] = []
         for i, (_key, data) in enumerate(entries):
             entry_qty = data.get("net_qty", 0)
@@ -683,11 +593,9 @@ class StartupPositionVerifier:
                 adj_qtys.append(round(entry_qty * target_qty / ckpt_total))
             else:
                 adj_qtys.append(target_qty if i == 0 else 0)
-        # Remainder correction: ensure sum equals target_qty exactly.
         remainder = target_qty - sum(adj_qtys)
         if remainder != 0:
             adj_qtys[0] += remainder
-        # Second pass: write into merged dict.
         for idx, (key, data) in enumerate(entries):
             ckpt_acct, ckpt_strat, sym = self._parse_composite_key(key)
             merged[key] = {
@@ -711,9 +619,6 @@ class StartupPositionVerifier:
         merged: Dict[str, Dict[str, Any]] = {}
         for symbol, qty in broker_map.items():
             if qty != 0:
-                # avg_price_scaled=0 causes massive fake PnL on first close.
-                # Use a sentinel -1 so downstream can detect "unknown cost basis"
-                # and avoid treating first close as profit from zero.
                 key = f"{account_id}:{MANUAL_STRATEGY_ID}:{symbol}"
                 merged[key] = {
                     "symbol": symbol,
@@ -762,7 +667,6 @@ class StartupPositionVerifier:
         if ckpt_qty == broker_qty:
             return "match"
         diff = abs(ckpt_qty - broker_qty)
-        # Side mismatch (long vs short) is always critical
         if (ckpt_qty > 0 and broker_qty < 0) or (ckpt_qty < 0 and broker_qty > 0):
             return "critical"
         threshold = self._futures_qty_threshold if self._is_futures(symbol) else self._qty_threshold

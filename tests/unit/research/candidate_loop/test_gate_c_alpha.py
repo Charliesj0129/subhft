@@ -166,7 +166,7 @@ def test_alpha_on_the_golden_day_sees_the_replay_on_the_panel_clock(tmp_path) ->
     from research.candidate_loop.panels import load_l2_events, replay_to_panel
 
     data, _ = load_l2_events(GOLDEN_NPZ)
-    data = data[:300_000]  # bounded runtime
+    data = data[:300_000]
     day_file = tmp_path / "golden_head.npz"
     np.savez_compressed(day_file, data=data)
     panel = Panel(columns=replay_to_panel(data, tick_size=1.0), meta={"day": "2026-04-13", "dir_clean": True})
@@ -180,9 +180,6 @@ def test_alpha_on_the_golden_day_sees_the_replay_on_the_panel_clock(tmp_path) ->
     calls = np.asarray(alpha.calls, dtype=np.int64)
     panel_ts = np.sort(panel.columns["local_ts"].astype(np.int64))
     assert calls.size > 1000
-    # The replay clock is the panel clock: every tick falls inside the panel's span and
-    # over half land exactly on the end of a panel batch (a different clock would match
-    # none). The bridge also ticks inside a batch; those ticks read the previous batch.
     assert panel_ts[0] <= calls.min() and calls.max() <= panel_ts[-1]
     assert np.isin(calls, panel_ts).mean() > 0.5
     replayed = np.array([alpha.update(local_ts=int(ts)) for ts in calls])

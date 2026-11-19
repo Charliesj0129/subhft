@@ -13,10 +13,6 @@ import numpy as np
 from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
-# ---------------------------------------------------------------------------
-# Mocks
-# ---------------------------------------------------------------------------
-
 
 class _Depth:
     """Minimal depth mock returning float prices like real hftbacktest."""
@@ -37,9 +33,9 @@ class _Hbt:
 
     def wait_next_feed(self, *_a, **_kw) -> int:
         if self._ran:
-            return 1  # end-of-data
+            return 1
         self._ran = True
-        return 2  # feed event
+        return 2
 
     def depth(self, *_a, **_kw) -> _Depth:
         return self._depth
@@ -90,11 +86,6 @@ def _patch(monkeypatch, depth: _Depth | None = None) -> None:
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# _build_l1_bidask_event rescaling
-# ---------------------------------------------------------------------------
-
-
 def test_build_l1_bidask_event_rescales_to_x10000(monkeypatch):
     """_build_l1_bidask_event must store prices as scaled ints (x10000)."""
     depth = _Depth(best_bid=100.5, best_ask=100.6, bid_qty=10, ask_qty=8)
@@ -108,8 +99,8 @@ def test_build_l1_bidask_event_rescales_to_x10000(monkeypatch):
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=1_000_000)
 
-    assert event.bids[0, 0] == 1_005_000  # 100.5 * 10000
-    assert event.asks[0, 0] == 1_006_000  # 100.6 * 10000
+    assert event.bids[0, 0] == 1_005_000
+    assert event.asks[0, 0] == 1_006_000
 
 
 def test_build_l1_bidask_event_zero_price(monkeypatch):
@@ -130,7 +121,6 @@ def test_build_l1_bidask_event_zero_price(monkeypatch):
 
 def test_build_l1_bidask_event_tick_level_prices(monkeypatch):
     """Adjacent tick prices separated by 0.5 NTD round correctly after rescaling."""
-    # Smallest futures tick for TMFD6 is 0.5 points ≈ 5000 in x10000
     depth = _Depth(best_bid=10000.0, best_ask=10000.5, bid_qty=1, ask_qty=1)
     _patch(monkeypatch, depth=depth)
 
@@ -142,10 +132,8 @@ def test_build_l1_bidask_event_tick_level_prices(monkeypatch):
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
 
-    # 10000.0 * 10000 = 100_000_000; 10000.5 * 10000 = 100_005_000
     assert event.bids[0, 0] == 100_000_000
     assert event.asks[0, 0] == 100_005_000
-    # Spread must be exactly one tick (5000 units)
     assert event.asks[0, 0] - event.bids[0, 0] == 5_000
 
 
@@ -165,11 +153,6 @@ def test_build_l1_bidask_event_qty_unaffected(monkeypatch):
     assert event.asks[0, 1] == 4
 
 
-# ---------------------------------------------------------------------------
-# get_mid_price_x2 rescaling
-# ---------------------------------------------------------------------------
-
-
 def test_get_mid_price_x2_rescales(monkeypatch):
     """get_mid_price_x2 returns sum of both prices scaled by x10000."""
     depth = _Depth(best_bid=1.0, best_ask=1.001)
@@ -181,7 +164,6 @@ def test_get_mid_price_x2_rescales(monkeypatch):
         data="d",
         price_scale=10_000,
     )
-    # 1.0 * 10000 = 10000; 1.001 * 10000 = 10010 → sum = 20010
     assert adapter.get_mid_price_x2() == 20_010
 
 
@@ -197,11 +179,6 @@ def test_get_mid_price_x2_is_int(monkeypatch):
     )
     result = adapter.get_mid_price_x2()
     assert isinstance(result, int)
-
-
-# ---------------------------------------------------------------------------
-# Rounding — no truncation on fractional float prices
-# ---------------------------------------------------------------------------
 
 
 def test_no_truncation_on_fractional_price(monkeypatch):
@@ -221,15 +198,8 @@ def test_no_truncation_on_fractional_price(monkeypatch):
     )
     event = adapter._build_l1_bidask_event(depth, ts_ns=0)
 
-    # Without round(): int(0.01009999 * 10000) = int(100.9999) = 100 (WRONG)
-    # With round():    int(round(0.01009999 * 10000)) = int(101.0) = 101 (CORRECT)
     assert event.bids[0, 0] == 101
     assert event.asks[0, 0] == 101
-
-
-# ---------------------------------------------------------------------------
-# Dtype integrity
-# ---------------------------------------------------------------------------
 
 
 def test_build_l1_bidask_event_arrays_are_int64(monkeypatch):

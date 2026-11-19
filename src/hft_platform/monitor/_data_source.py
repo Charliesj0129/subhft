@@ -129,10 +129,8 @@ class CHDataSource:
         return getattr(self._poller, "heartbeat_stale", False)
 
 
-# Scale factor: SHM uses platform x10000, CH uses x1000000
-_PLATFORM_TO_CH_SCALE = CH_PRICE_SCALE // PLATFORM_SCALE  # 100
+_PLATFORM_TO_CH_SCALE = CH_PRICE_SCALE // PLATFORM_SCALE
 
-# Exponential backoff constants for ShmDataSource.try_reconnect()
 _SHM_BACKOFF_MIN_S: float = 1.0
 _SHM_BACKOFF_MAX_S: float = 60.0
 _SHM_BACKOFF_FACTOR: float = 2.0
@@ -180,7 +178,6 @@ class ShmDataSource:
             from hft_platform.ipc.shm_snapshot import ShmSnapshotReader, _symbol_hash
 
             self._reader = ShmSnapshotReader(shm_name, max_symbols=max_symbols)
-            # Build symbol→slot mapping by scanning for known symbol hashes
             sym_hashes = {_symbol_hash(s): s for s in symbols}
             for slot_idx in range(max_symbols):
                 snap = self._reader.read_slot(slot_idx)
@@ -198,7 +195,7 @@ class ShmDataSource:
             logger.warning("shm_data_source_connect_failed", error=str(exc))
 
     def connect(self) -> None:
-        pass  # Connection happens in __init__
+        pass
 
     def poll(self, cursors: dict[str, int]) -> dict[str, list[RowView]]:
         if self._reader is None:
@@ -210,7 +207,6 @@ class ShmDataSource:
         for sym, cursor_ts in cursors.items():
             slot_idx = self._symbol_to_slot.get(sym)
             if slot_idx is None:
-                # Try lazy discovery
                 self._try_discover_slot(sym)
                 slot_idx = self._symbol_to_slot.get(sym)
                 if slot_idx is None:
@@ -220,13 +216,11 @@ class ShmDataSource:
             if snap is None:
                 continue
 
-            # Skip if version unchanged
             prev_ver = self._slot_versions.get(slot_idx, 0)
             if snap.version == prev_ver:
                 continue
             self._slot_versions[slot_idx] = snap.version
 
-            # Skip if older than cursor
             if snap.ts_ns <= cursor_ts:
                 continue
 
@@ -293,7 +287,6 @@ class ShmDataSource:
                     sym = sym_hashes[snap.symbol_hash]
                     new_symbol_to_slot[sym] = slot_idx
 
-            # Commit new state atomically
             self._reader = reader
             self._symbol_to_slot = new_symbol_to_slot
             self._slot_versions.clear()
@@ -389,7 +382,6 @@ class HybridDataSource:
         if self._shm_ok:
             try:
                 result = self._shm.poll(cursors)
-                # Periodic CH backfill for sparkline history
                 self._maybe_backfill(result, cursors)
                 return result
             except Exception as exc:
@@ -533,7 +525,6 @@ class RedisHybridSource:
         if self._redis_ok:
             try:
                 result = self._redis.poll(cursors)
-                # Periodic CH backfill for sparkline history
                 self._maybe_backfill(result, cursors)
                 return result
             except Exception as exc:
@@ -583,7 +574,6 @@ class RedisHybridSource:
         return []
 
     def try_reconnect(self) -> bool:
-        # Try redis first
         if not self._redis_ok:
             try:
                 self._redis.connect()
@@ -593,7 +583,6 @@ class RedisHybridSource:
                 logger.debug("operation_fallback", error=str(exc))
                 pass
 
-        # Try CH (RuntimeError propagates to caller for max-retry exhaustion)
         if not self._ch_ok:
             try:
                 if self._ch.try_reconnect():
@@ -645,7 +634,6 @@ def _snapshot_to_row_view(symbol: str, snap: Any) -> RowView:
     RowView expects CH scale, so multiply by 100.
     """
     lob = snap.lob_fields
-    # lob[0] = best_bid (x10000), lob[1] = best_ask (x10000)
     best_bid_ch = lob[0] * _PLATFORM_TO_CH_SCALE if len(lob) > 0 else 0
     best_ask_ch = lob[1] * _PLATFORM_TO_CH_SCALE if len(lob) > 1 else 0
     l1_bid_qty = lob[6] if len(lob) > 6 else 0

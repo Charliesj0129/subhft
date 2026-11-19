@@ -20,8 +20,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.order.adapter import OrderAdapter
 
-# ── Fixtures ───────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def tmp_config(tmp_path):
@@ -85,9 +83,6 @@ def _make_intent(intent_id: int = 1, strategy_id: str = "s1") -> OrderIntent:
     )
 
 
-# ── Tests ──────────────────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_phantom_dispatch_does_not_inflate_reject_or_cb_metrics(tmp_config):
     """Bug D' (2026-04-20): phantom_order_candidate_dispatch_failed should NOT
@@ -102,14 +97,9 @@ async def test_phantom_dispatch_does_not_inflate_reject_or_cb_metrics(tmp_config
     adapter.set_rejection_sink(sink)
     intent = _make_intent(intent_id=99)
 
-    # Reset CB state and metric mock counts for clean assertions
     adapter.metrics.order_reject_total.reset_mock()
     cb_failures_before = adapter.circuit_breaker.failure_count
 
-    # Inline reproduction of the _api_worker except branch (so we can drive
-    # it directly rather than spinning up the full worker with a fake-raising
-    # _dispatch_to_api). After Bug D' fix, the metric/CB calls below must
-    # NOT happen on the phantom-candidate code path.
     try:
         raise RuntimeError("simulated Shioaji place_order client-side exception")
     except Exception:
@@ -120,7 +110,6 @@ async def test_phantom_dispatch_does_not_inflate_reject_or_cb_metrics(tmp_config
         "phantom dispatch must not call circuit_breaker.record_failure()"
     )
 
-    # The phantom candidate must still be tracked (so on_fill can reconcile)
     assert f"{intent.strategy_id}:{intent.intent_id}" in adapter._phantom_order_keys
     adapter.metrics.phantom_order_candidates_total.inc.assert_called_once()
 
@@ -143,9 +132,6 @@ async def test_release_stale_phantom_pendings_emits_recovery_feedback(tmp_config
     intent = _make_intent(intent_id=42)
     phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
 
-    # Simulate phantom registration (mirrors adapter.py:2118-2123 path).
-    # M4: register via the canonical multi-occurrence store, then back-date
-    # the timestamp so the recovery sweep treats it as eligible.
     adapter._send_dispatch_rejection(intent, "dispatch_failed", phantom_pending=True)
     from hft_platform.order.adapter import _PhantomEntry
 
@@ -161,11 +147,9 @@ async def test_release_stale_phantom_pendings_emits_recovery_feedback(tmp_config
     adapter._phantom_order_keys[phantom_key] = (aged_ts, intent.symbol)
     adapter._phantom_intents[phantom_key] = intent
 
-    # Drain the initial phantom_pending feedback (was_approved=True)
     fb1 = sink.get_nowait()
     assert fb1.was_approved is True
 
-    # Run recovery sweep with TTL=30s — our entry is 999s old, eligible
     released = await adapter.release_stale_phantom_pendings(ttl_s=30.0)
 
     assert released == 1
@@ -205,10 +189,8 @@ async def test_release_stale_phantom_pendings_skips_fresh_entries(tmp_config):
 async def test_mutating_timeout_adds_phantom_candidate(tmp_config):
     """A mutating op timeout with intent should add to phantom set and inc metric."""
     adapter = _make_adapter(tmp_config)
-    # Make _api_timeout_s very short so we timeout quickly
     adapter._api_timeout_s = 0.01
 
-    # Broker call that hangs forever
     def _hang(*a, **kw):
         import time
 
@@ -224,7 +206,6 @@ async def test_mutating_timeout_adds_phantom_candidate(tmp_config):
     )
 
     assert result is None
-    # R2-02: 2-part key format matching order_key convention
     expected_key = f"{intent.strategy_id}:{intent.intent_id}"
     assert expected_key in adapter._phantom_order_keys
     adapter.metrics.phantom_order_candidates_total.inc.assert_called_once()
@@ -300,7 +281,6 @@ def test_get_phantom_candidates_returns_frozenset(tmp_config):
 
     assert isinstance(result, frozenset)
     assert result == frozenset({"s1:1", "s2:2"})
-    # Mutating the returned set should not affect the adapter
     assert len(adapter._phantom_records) == 2
 
 
@@ -353,10 +333,9 @@ async def test_deadline_expired_increments_metric(tmp_config):
     adapter = _make_adapter(tmp_config)
     adapter.metrics.order_deadline_expired_total = MagicMock()
 
-    # Build a command whose deadline is already in the past
     from hft_platform.contracts.strategy import OrderCommand, StormGuardState
 
-    past_deadline = _time.monotonic_ns() - 1_000_000  # 1 ms in the past
+    past_deadline = _time.monotonic_ns() - 1_000_000
     cmd = OrderCommand(
         cmd_id=1,
         intent=_make_intent(),
@@ -365,7 +344,6 @@ async def test_deadline_expired_increments_metric(tmp_config):
     )
     await adapter.order_queue.put(cmd)
 
-    # Run the adapter.run() coroutine briefly — the deadline check lives there
     run_task = asyncio.create_task(adapter.run())
     await asyncio.sleep(0.05)
     adapter.running = False
@@ -388,15 +366,14 @@ async def test_phantom_set_eviction_at_max_size(tmp_config):
     the over-capacity sweep drops them.
     """
     adapter = _make_adapter(tmp_config)
-    adapter._phantom_order_max = 5  # Low cap for testing
+    adapter._phantom_order_max = 5
     adapter._api_timeout_s = 0.01
 
-    # Pre-fill with old entries (simulate timestamps from 2 hours ago)
     import time
 
     from hft_platform.order.adapter import _PhantomEntry
 
-    old_ts = time.monotonic() - 7200.0  # 2 hours ago
+    old_ts = time.monotonic() - 7200.0
     for i in range(6):
         key = f"old_strat:{i}"
         intent_old = _make_intent(intent_id=i, strategy_id="old_strat")
@@ -413,13 +390,11 @@ async def test_phantom_set_eviction_at_max_size(tmp_config):
 
     assert adapter._phantom_record_count() == 6
 
-    # Trigger a new phantom via timeout — this should trigger eviction
     def _hang(*a, **kw):
         time.sleep(5)
 
     intent = _make_intent(intent_id=999)
     await adapter._call_api("place_order", _hang, intent=intent, max_retries=0)
 
-    # Old entries (>1 hour) should be evicted, only the new one remains
     assert adapter._phantom_record_count() <= adapter._phantom_order_max
     assert f"{intent.strategy_id}:{intent.intent_id}" in adapter._phantom_records

@@ -57,7 +57,7 @@ class TestSecondsSinceSessionOpen:
     def test_after_midnight_carries_the_whole_evening(self, calendar: MarketCalendar) -> None:
         """04:22 belongs to the session that opened at 15:00 the day before."""
         elapsed = calendar.seconds_since_futures_session_open(_at(2026, 9, 16, 4, 22))
-        assert elapsed == pytest.approx((13 * 3600) + (22 * 60))  # 15:00 -> 04:22
+        assert elapsed == pytest.approx((13 * 3600) + (22 * 60))
 
     def test_the_last_ten_minutes_of_the_day_session_are_covered(self, calendar: MarketCalendar) -> None:
         """13:40 is inside the session; the env window had already closed at 13:35."""

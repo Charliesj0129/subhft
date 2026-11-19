@@ -8,7 +8,7 @@ from pathlib import Path
 from research.data_pipeline import _write_day_outputs, dedup, rows_to_l2_and_ticks
 
 NS = 1_000_000_000
-T0 = (1_780_000_000 // 86400) * 86400 * NS  # a UTC midnight, so hour and day groups are predictable
+T0 = (1_780_000_000 // 86400) * 86400 * NS
 
 
 def _keys(count: int, copies: int, *, start_s: int = 0, step_ns: int = NS) -> list[tuple[int, int, int]]:
@@ -82,8 +82,8 @@ class TestKeepCounts:
 
     def test_a_thin_bucket_uses_its_hour_then_its_day(self) -> None:
         busy = _keys(60, 2, start_s=0)
-        thin = _keys(3, 2, start_s=1200)  # three keys: too few to estimate from
-        far = _keys(3, 2, start_s=5 * 3600)  # a different hour, also thin
+        thin = _keys(3, 2, start_s=1200)
+        far = _keys(3, 2, start_s=5 * 3600)
 
         keep, stats = dedup.keep_counts(busy + thin + far, bucket_seconds=300)
 
@@ -168,7 +168,7 @@ class TestExporter:
         events, _, removed = rows_to_l2_and_ticks(rows, dedup_report=report)
 
         assert removed == 2 and report["bidask_removed"] == 2
-        assert len(events) == 2 * 3  # two snapshots of (clear, bid, ask)
+        assert len(events) == 2 * 3
 
     def test_the_sidecar_records_the_rule_and_what_it_removed(self, tmp_path: Path) -> None:
         report: dict = {}

@@ -14,15 +14,8 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-# ---------------------------------------------------------------------------
-# Module-level markers for TestChain
-# ---------------------------------------------------------------------------
 pytestmark = [pytest.mark.e2e]
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 _MOCK_TARGETS = [
     "hft_platform.feed_adapter.shioaji.facade.ShioajiClientFacade",
@@ -44,7 +37,7 @@ _MOCK_TARGETS = [
 ]
 
 
-def _build_with_all_mocks(settings: dict | None = None) -> "ServiceRegistry":  # noqa: F821
+def _build_with_all_mocks(settings: dict | None = None) -> "ServiceRegistry":
     """Build ServiceRegistry with all external deps mocked out."""
     from hft_platform.services.bootstrap import SystemBootstrapper
 
@@ -60,11 +53,6 @@ def _build_with_all_mocks(settings: dict | None = None) -> "ServiceRegistry":  #
             p.stop()
 
     return registry
-
-
-# ---------------------------------------------------------------------------
-# TestChain — config layer tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.e2e_chain
@@ -83,13 +71,11 @@ class TestChain:
         that other keys follow the full CLI > Env > YAML priority, and that
         HFT_MODE env var is applied when no CLI override of mode is given.
         """
-        # Write base YAML with custom_key=base
         cfg_dir = tmp_path / "config" / "base"
         cfg_dir.mkdir(parents=True)
         base_cfg = {"mode": "sim", "custom_key": "base"}
         (cfg_dir / "main.yaml").write_text(yaml.dump(base_cfg))
 
-        # Env var sets mode=replay; no HFT_SYMBOLS set
         monkeypatch.setenv("HFT_MODE", "replay")
         monkeypatch.delenv("HFT_SYMBOLS", raising=False)
         monkeypatch.setenv("HFT_SKIP_CONFIG_VALIDATION", "1")
@@ -97,12 +83,9 @@ class TestChain:
 
         from hft_platform.config.loader import load_settings
 
-        # CLI override sets symbols — CLI wins for non-mode keys
         settings, _defaults = load_settings(cli_overrides={"symbols": ["CLI_SYM"]})
 
-        # HFT_MODE env var beats base YAML mode=sim
         assert settings["mode"] == "replay", f"Expected 'replay' (env var) but got {settings['mode']!r}"
-        # CLI wins for symbols
         assert settings["symbols"] == ["CLI_SYM"], f"Expected CLI symbols but got {settings['symbols']!r}"
 
     def test_symbols_yaml_loading(
@@ -110,8 +93,6 @@ class TestChain:
         e2e_symbols_yaml: str,
     ) -> None:
         """SymbolMetadata correctly reads scale, exchange, and multiplier from YAML."""
-        # The conftest fixture uses 'symbol' key, but SymbolMetadata reads 'code' key.
-        # Write a compatible YAML using 'code' key.
         import tempfile
 
         content = """\
@@ -165,11 +146,6 @@ symbols:
         assert settings["mode"] == "sim", f"Expected 'sim' but got {settings['mode']!r}"
 
 
-# ---------------------------------------------------------------------------
-# TestIntegration — bootstrap wiring tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.e2e_integration
 class TestIntegration:
     """Bootstrap service-graph integration tests (all external deps mocked)."""
@@ -194,7 +170,6 @@ class TestIntegration:
 
         assert isinstance(registry, ServiceRegistry)
 
-        # Queues exist and are bounded
         assert registry.raw_queue is not None
         assert registry.raw_queue.maxsize >= 1
         assert registry.risk_queue is not None
@@ -204,7 +179,6 @@ class TestIntegration:
         assert registry.recorder_queue is not None
         assert registry.recorder_queue.maxsize >= 1
 
-        # Core services are non-None
         assert registry.md_service is not None
         assert registry.risk_engine is not None
         assert registry.order_adapter is not None

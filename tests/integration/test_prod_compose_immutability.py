@@ -35,13 +35,8 @@ REPO_ROOT = Path(__file__).parent.parent.parent
 _LOCKED_COMPOSE = REPO_ROOT / "docker-compose.prod.locked.yml"
 _LOCKED_NAME = _LOCKED_COMPOSE.name
 
-# Rendered by ``compose_render`` (tests/integration/conftest.py) from a scratch
-# copy with interpolation on: the locked file's ``${VAR:-default}`` volume specs
-# are rejected under ``--no-interpolate``, which is how this file used to read it.
 Renderer = Callable[..., dict[str, Any]]
 
-# Bind mounts whose target is one of these (or descends from one) shadow the
-# image-side code with the host working tree.
 _FORBIDDEN_SOURCE_TARGETS = ("/app/src", "/app/scripts", "/app/config")
 
 
@@ -65,7 +60,6 @@ def test_locked_compose_has_no_bind_mounts_under_source_paths(compose_render: Re
             vol_type = str(vol.get("type", "bind"))
             target = str(vol.get("target", ""))
             source = vol.get("source", "")
-            # Only bind mounts can shadow image content from the host.
             if vol_type != "bind":
                 continue
             for forbidden in _FORBIDDEN_SOURCE_TARGETS:

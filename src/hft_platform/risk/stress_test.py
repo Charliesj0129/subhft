@@ -27,8 +27,8 @@ class ScenarioConfig:
     """Definition of a single stress scenario."""
 
     name: str
-    underlying_shift_pct: float  # e.g. -3.0 means −3% move
-    vol_shift_abs: float  # e.g.  0.05 means +5 vol points (absolute)
+    underlying_shift_pct: float
+    vol_shift_abs: float
 
 
 @dataclass(slots=True)
@@ -38,8 +38,8 @@ class ScenarioResult:
     name: str
     underlying_shift_pct: float
     vol_shift_abs: float
-    pnl_ntd: float  # NTD P&L across all positions
-    greeks_after: list[PositionGreeks]  # approximate Greeks post-shock
+    pnl_ntd: float
+    greeks_after: list[PositionGreeks]
 
 
 def _apply_scenario(
@@ -50,20 +50,16 @@ def _apply_scenario(
 ) -> ScenarioResult:
     """Compute P&L and post-shock Greeks for *scenario*."""
     delta_s = underlying_price * scenario.underlying_shift_pct / 100.0
-    delta_sigma = scenario.vol_shift_abs  # already absolute vol shift
+    delta_sigma = scenario.vol_shift_abs
 
     total_pnl = 0.0
     greeks_after: list[PositionGreeks] = []
 
     for pos in positions:
         g = pos.greeks
-        # Second-order price approximation
-        # Vega is defined per 1% (0.01) vol move; delta_sigma is in absolute
-        # vol units, so we scale by 100 to convert to "% vol" units.
         price_change = g.delta * delta_s + 0.5 * g.gamma * delta_s * delta_s + g.vega * delta_sigma * 100.0
         total_pnl += pos.qty * price_change * multiplier
 
-        # Approximate post-shock delta using delta + gamma * ΔS
         new_delta = g.delta + g.gamma * delta_s
         new_greeks = GreeksResult(
             delta=new_delta,
@@ -106,15 +102,8 @@ def run_stress_test(
     Returns:
         List of ScenarioResult, one per scenario, in the same order as *scenarios*.
     """
-    # P3-?: vulture flagged `surface` and `risk_free_rate` as 100% unused; both
-    # are documented public-API parameters reserved for the future full
-    # re-pricing extension (cf. docstring above). Tests pass them consistently,
-    # so the right fix is to mark them used here — `del`-ing them is a no-op at
-    # runtime and silences vulture without breaking callers. When the
-    # re-pricing extension lands, replace the `del` lines with the actual
-    # consumers (IV lookup via `surface`, discount factor via `risk_free_rate`).
-    del surface  # reserved for IV lookup in future re-pricing
-    del risk_free_rate  # reserved for discount factor in future re-pricing
+    del surface
+    del risk_free_rate
     results: list[ScenarioResult] = []
     for scenario in scenarios:
         if not positions:

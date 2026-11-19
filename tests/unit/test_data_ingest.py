@@ -16,22 +16,17 @@ from research.tools.data_ingest import (
     ingest_from_clickhouse,
 )
 
-# ---------------------------------------------------------------------------
-# Price scaling
-# ---------------------------------------------------------------------------
-
 
 def test_ingest_price_scaling_basic() -> None:
     """price_scaled / 100 should equal x10000 integer (NTD * 10000)."""
-    # ClickHouse stores 100 NTD as 100_000_000 (100 * 1_000_000)
     price_scaled = 100_000_000
     result = _ch_price_to_x10000(price_scaled)
-    assert result == 1_000_000  # 100 NTD * 10000
+    assert result == 1_000_000
 
 
 def test_ingest_price_scaling_round_trip() -> None:
     """price_x10000 / 10000 == price_scaled / 1_000_000 (both equal NTD)."""
-    price_scaled = 15_500_000  # 15.5 NTD in ClickHouse encoding
+    price_scaled = 15_500_000
     price_x10000 = _ch_price_to_x10000(price_scaled)
     ntd_via_ch = price_scaled / 1_000_000
     ntd_via_npy = price_x10000 / 10_000
@@ -40,7 +35,6 @@ def test_ingest_price_scaling_round_trip() -> None:
 
 def test_ingest_price_scaling_integer_division() -> None:
     """_ch_price_to_x10000 uses integer division — sub-cent precision is truncated."""
-    # 100 NTD + 1 sub-unit → still 1_000_000 after integer division
     price_scaled = 100_000_001
     result = _ch_price_to_x10000(price_scaled)
     assert result == 1_000_000
@@ -55,11 +49,6 @@ def test_ingest_price_scaling_large_value() -> None:
     price_scaled = 20_000 * 1_000_000
     result = _ch_price_to_x10000(price_scaled)
     assert result == 20_000 * 10_000
-
-
-# ---------------------------------------------------------------------------
-# _build_meta sidecar
-# ---------------------------------------------------------------------------
 
 
 def _sample_meta(output_path: Path, row_count: int = 100) -> dict:
@@ -79,18 +68,15 @@ def test_meta_sidecar_has_required_ul3_fields(tmp_path: Path) -> None:
     output_path = tmp_path / "TXFC6_2026-03-01_2026-03-10.npy"
     meta = _sample_meta(output_path)
 
-    # UL2 fields
     assert "dataset_id" in meta
     assert "schema_version" in meta
     assert "rows" in meta
     assert "fields" in meta
 
-    # UL3 fields
     assert "rng_seed" in meta
     assert "generator_version" in meta
     assert "parameters" in meta
 
-    # Provenance fields
     assert "source_type" in meta
     assert "data_fingerprint" in meta
     assert "data_ul" in meta
@@ -142,11 +128,6 @@ def test_meta_sidecar_date_range(tmp_path: Path) -> None:
     assert meta["date_range"] == ["2026-03-01", "2026-03-10"]
 
 
-# ---------------------------------------------------------------------------
-# LOB dtype
-# ---------------------------------------------------------------------------
-
-
 def test_lob_dtype_has_expected_fields() -> None:
     expected_fields = {
         "timestamp_ns",
@@ -163,28 +144,23 @@ def test_lob_dtype_has_expected_fields() -> None:
 
 def test_lob_dtype_price_is_int() -> None:
     """Price fields should be signed int64 for x10000 convention."""
-    assert _LOB_DTYPE["price"].kind == "i"  # signed integer
+    assert _LOB_DTYPE["price"].kind == "i"
     assert _LOB_DTYPE["bid_price"].kind == "i"
     assert _LOB_DTYPE["ask_price"].kind == "i"
-
-
-# ---------------------------------------------------------------------------
-# ingest_from_clickhouse — mocked ClickHouse
-# ---------------------------------------------------------------------------
 
 
 def _make_mock_rows(n: int = 5) -> list[tuple]:
     """Return fake query rows in the expected column order."""
     return [
         (
-            1_700_000_000_000_000_000 + i * 1_000_000,  # timestamp_ns
-            100_000_000 + i * 10_000,  # price (ClickHouse scaled)
-            10 + i,  # volume
-            "Buy",  # side
-            99_990_000,  # bid_price
-            50,  # bid_volume
-            100_010_000,  # ask_price
-            50,  # ask_volume
+            1_700_000_000_000_000_000 + i * 1_000_000,
+            100_000_000 + i * 10_000,
+            10 + i,
+            "Buy",
+            99_990_000,
+            50,
+            100_010_000,
+            50,
         )
         for i in range(n)
     ]
@@ -234,19 +210,19 @@ def test_ingest_npy_has_correct_dtype(tmp_path: Path) -> None:
 
 def test_ingest_price_conversion_in_output(tmp_path: Path) -> None:
     """Prices in .npy should be x10000-scaled integers (price_scaled / 100)."""
-    price_scaled = 100_000_000  # 100 NTD in ClickHouse
-    expected_x10000 = 1_000_000  # 100 * 10000
+    price_scaled = 100_000_000
+    expected_x10000 = 1_000_000
 
     rows = [
         (
-            1_700_000_000_000_000_000,  # timestamp_ns
-            price_scaled,  # price
-            5,  # volume
-            "Buy",  # side
-            price_scaled - 10_000,  # bid_price
-            10,  # bid_volume
-            price_scaled + 10_000,  # ask_price
-            10,  # ask_volume
+            1_700_000_000_000_000_000,
+            price_scaled,
+            5,
+            "Buy",
+            price_scaled - 10_000,
+            10,
+            price_scaled + 10_000,
+            10,
         )
     ]
     mock_client = _mock_ch_client(rows)
@@ -283,7 +259,7 @@ def test_ingest_meta_json_content(tmp_path: Path) -> None:
     assert meta["row_count"] == 3
     assert meta["date_range"] == ["2026-03-01", "2026-03-05"]
     assert "data_fingerprint" in meta
-    assert len(meta["data_fingerprint"]) == 64  # SHA-256 hex string
+    assert len(meta["data_fingerprint"]) == 64
 
 
 def test_ingest_row_count_in_npy(tmp_path: Path) -> None:
@@ -305,7 +281,7 @@ def test_ingest_row_count_in_npy(tmp_path: Path) -> None:
 
 def test_ingest_handles_no_data(tmp_path: Path) -> None:
     """An empty result set from ClickHouse should raise ValueError, not silently create an empty file."""
-    mock_client = _mock_ch_client([])  # zero rows
+    mock_client = _mock_ch_client([])
 
     with patch("clickhouse_connect.get_client", return_value=mock_client):
         with pytest.raises(ValueError, match="No data returned"):

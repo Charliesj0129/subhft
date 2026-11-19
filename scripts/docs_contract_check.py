@@ -35,7 +35,6 @@ CATEGORIES = ("cli_command", "cli_flag", "make_target", "metric", "path", "runbo
 
 DEFAULT_DOC_ROOTS = ("docs/runbooks", "docs/operations")
 PATH_ROOTS = ("scripts", "docs", "config", "src", "tests", "research", "rust_core", ".agent", ".claude", ".github")
-# Runtime or generated locations that legitimately do not exist in a checkout.
 PATH_IGNORED_PREFIXES = ("research/data/", "research/experiments/runs/", "docs/generated/")
 METRIC_DEF_CALLS = {"Counter", "Gauge", "Histogram", "Summary", "Info", "Enum"}
 METRIC_SUFFIXES = ("_total", "_bucket", "_sum", "_count", "_created")
@@ -82,7 +81,6 @@ class Finding:
     detail: str
 
 
-# --------------------------------------------------------------------------------------- doc scanning
 
 
 def iter_code_spans(text: str) -> Iterable[tuple[int, str]]:
@@ -124,7 +122,6 @@ def iter_prose_links(text: str) -> Iterable[tuple[int, str]]:
             yield lineno, m.group(1)
 
 
-# ------------------------------------------------------------------------------------------- CLI check
 
 
 def _subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
@@ -140,7 +137,7 @@ def _accepts_flag(parser: argparse.ArgumentParser, flag: str) -> bool:
     options = [o for o in parser._option_string_actions if o.startswith("--")]
     if flag in options:
         return True
-    return any(o.startswith(flag) for o in options)  # argparse accepts unambiguous prefixes
+    return any(o.startswith(flag) for o in options)
 
 
 def check_cli_line(parser: argparse.ArgumentParser, rest: str) -> list[tuple[str, str]]:
@@ -192,7 +189,6 @@ def check_cli(spans: Iterable[tuple[int, str]], parser: argparse.ArgumentParser,
     return found
 
 
-# ------------------------------------------------------------------------------------------ make check
 
 
 def makefile_targets(makefile_text: str) -> set[str]:
@@ -225,7 +221,6 @@ def check_make(spans: Iterable[tuple[int, str]], targets: set[str], rel: str) ->
     return found
 
 
-# ---------------------------------------------------------------------------------------- metric check
 
 
 def _strip_suffix(name: str) -> str:
@@ -322,7 +317,6 @@ def check_metrics(spans: Iterable[tuple[int, str]], defined: set[str], rel: str)
     return found
 
 
-# ------------------------------------------------------------------------------------------ path check
 
 
 def _clean_path(raw: str) -> str:
@@ -379,7 +373,6 @@ def check_links(links: Iterable[tuple[int, str]], doc: Path, root: Path, rel: st
     return found
 
 
-# ----------------------------------------------------------------------------------------- alert check
 
 
 def _promql_metric_names(expr: str) -> set[str]:
@@ -445,7 +438,6 @@ def check_alert_files(root: Path, defined: set[str]) -> list[Finding]:
     return found
 
 
-# ------------------------------------------------------------------------------------------------ run
 
 
 def collect_docs(root: Path, doc_roots: Iterable[str]) -> list[Path]:
@@ -466,9 +458,6 @@ def run_checks(
     include_alerts: bool = True,
 ) -> list[Finding]:
     if parser is None:
-        # The parser registers every command, the dev-only research ones included (their bodies run as
-        # `python -m research alpha ...`). Put the checkout on the path (last, so nothing is shadowed) so the
-        # command tree is the one a developer has whatever directory this script was started from.
         if str(root) not in sys.path:
             sys.path.append(str(root))
         from hft_platform.cli._parser import build_parser

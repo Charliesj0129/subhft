@@ -21,7 +21,7 @@ class TestSafeEnqueueExec:
 
     def test_overflow_routes_to_buffer(self):
         queue = asyncio.Queue(maxsize=1)
-        queue.put_nowait(MagicMock())  # fill it
+        queue.put_nowait(MagicMock())
         overflow_buf = collections.deque()
         overflow_max = 4096
         metrics = MagicMock()
@@ -61,7 +61,7 @@ class TestSafeEnqueueExec:
             else:
                 overflow_buf.append(event)
 
-        assert len(overflow_buf) == 2  # unchanged
+        assert len(overflow_buf) == 2
         metrics.exec_overflow_evicted_total.inc.assert_called_once()
         storm_guard.trigger_halt.assert_called_once_with("exec_overflow_buf_exhausted")
 

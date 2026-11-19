@@ -23,9 +23,7 @@ pytest.importorskip("clickhouse_connect")
 from hft_platform.backtest.adapter import HFTBACKTEST_AVAILABLE, HftBacktestAdapter
 from hft_platform.backtest.ch_data_source import ChDataSource, DataValidationError
 
-# Reference day selection — first candidate whose .npz file exists on disk is used.
 REFERENCE_CANDIDATES = [
-    # (instrument, date, absolute_npz_path)
     (
         "TMFD6",
         "2026-03-19",
@@ -53,7 +51,7 @@ def _first_available_reference() -> tuple[str, str, Path] | None:
 
 def _ch_available() -> bool:
     try:
-        import clickhouse_connect  # noqa: PLC0415
+        import clickhouse_connect
 
         client = clickhouse_connect.get_client(host="localhost", port=9000)
         client.ping()
@@ -89,10 +87,9 @@ def test_streaming_adapter_fill_equivalence():
         def on_stop(self):
             pass
 
-    assert _REF is not None  # type guard — skipif above ensures this
+    assert _REF is not None
     instrument, date, npz_path = _REF
 
-    # --- Streaming path ---
     ch = ChDataSource()
     try:
         streaming_events = ch.load_day(instrument, date)
@@ -109,7 +106,6 @@ def test_streaming_adapter_fill_equivalence():
     )
     adapter_stream.run()
 
-    # --- .npz path ---
     adapter_npz = HftBacktestAdapter(
         strategy=NullStrategy(),
         asset_symbol=instrument,
@@ -136,7 +132,7 @@ def test_streaming_adapter_rejects_validation_failure():
     """
     with patch("clickhouse_connect.get_client") as mock_get_client:
         client = MagicMock()
-        client.query_df.return_value = pd.DataFrame()  # empty → validation failure
+        client.query_df.return_value = pd.DataFrame()
         mock_get_client.return_value = client
 
         src = ChDataSource()

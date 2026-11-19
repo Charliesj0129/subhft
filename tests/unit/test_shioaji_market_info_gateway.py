@@ -19,11 +19,6 @@ def _make_client(*, mode: str = "live", logged_in: bool = True) -> MagicMock:
     return client
 
 
-# ---------------------------------------------------------------------------
-# get_credit_enquires
-# ---------------------------------------------------------------------------
-
-
 class TestGetCreditEnquires:
     def test_returns_empty_in_simulation(self):
         client = _make_client(mode="simulation")
@@ -49,7 +44,6 @@ class TestGetCreditEnquires:
         client.api.credit_enquires.assert_called_once()
         client._cache_set.assert_called_once()
         client._record_api_latency.assert_called_once()
-        # Verify latency recorded as ok
         call_args, call_kwargs = client._record_api_latency.call_args
         assert call_args[0] == "credit_enquires"
         assert call_kwargs.get("ok", True) is True
@@ -72,7 +66,6 @@ class TestGetCreditEnquires:
         gw = MarketInfoGateway(client)
         result = gw.get_credit_enquires(["2330"], "TSE")
         assert result == []
-        # Latency recorded as failed
         call_args, call_kwargs = client._record_api_latency.call_args
         assert call_args[0] == "credit_enquires"
         assert call_kwargs.get("ok") is False
@@ -88,11 +81,6 @@ class TestGetCreditEnquires:
         gw = MarketInfoGateway(client)
         gw.get_credit_enquires(["2330"], "TSE", product_type="stock")
         client._get_contract.assert_called_once_with("TSE", "2330", product_type="stock", allow_synthetic=False)
-
-
-# ---------------------------------------------------------------------------
-# get_short_stock_sources
-# ---------------------------------------------------------------------------
 
 
 class TestGetShortStockSources:
@@ -142,11 +130,6 @@ class TestGetShortStockSources:
         assert gw.get_short_stock_sources(["2330"], "TSE") == []
 
 
-# ---------------------------------------------------------------------------
-# get_punish_stocks
-# ---------------------------------------------------------------------------
-
-
 class TestGetPunishStocks:
     def test_returns_empty_in_simulation(self):
         client = _make_client(mode="simulation")
@@ -193,11 +176,6 @@ class TestGetPunishStocks:
         assert gw.get_punish_stocks() == []
 
 
-# ---------------------------------------------------------------------------
-# get_notice_stocks
-# ---------------------------------------------------------------------------
-
-
 class TestGetNoticeStocks:
     def test_returns_empty_in_simulation(self):
         client = _make_client(mode="simulation")
@@ -242,11 +220,6 @@ class TestGetNoticeStocks:
         client.api.notice.return_value = None
         gw = MarketInfoGateway(client)
         assert gw.get_notice_stocks() == []
-
-
-# ---------------------------------------------------------------------------
-# Facade integration
-# ---------------------------------------------------------------------------
 
 
 class TestFacadeWiring:
@@ -327,11 +300,6 @@ class TestFacadeWiring:
                 result = facade.get_short_stock_sources(["2330"], "TSE")
                 assert result == []
                 m.assert_called_once_with(["2330"], "TSE", timeout=5000, product_type=None)
-
-
-# ---------------------------------------------------------------------------
-# _resolve_contracts
-# ---------------------------------------------------------------------------
 
 
 class TestResolveContracts:

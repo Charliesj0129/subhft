@@ -17,10 +17,6 @@ from hft_platform.engine.event_bus import (
     _PyFastTickRingBuffer,
 )
 
-# ---------------------------------------------------------------------------
-# _pack_book_levels edge cases
-# ---------------------------------------------------------------------------
-
 
 def test_pack_book_levels_returns_empty_for_none():
     result = _pack_book_levels(None)
@@ -58,21 +54,14 @@ def test_pack_book_levels_skips_none_rows():
 
 def test_pack_book_levels_returns_none_for_bad_row_elements():
     levels = [["not_a_price", "not_a_vol"]]
-    # "not_a_price" can't be cast to int → inner except → returns None
     result = _pack_book_levels(levels)
     assert result is None
 
 
 def test_pack_book_levels_returns_none_for_non_iterable_row():
-    # A row that has no __getitem__ causes exception → returns None
-    levels = [42]  # int has no [0] subscript
+    levels = [42]
     result = _pack_book_levels(levels)
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _PyFastTickRingBuffer
-# ---------------------------------------------------------------------------
 
 
 def test_py_fast_tick_ring_get_returns_none_on_empty():
@@ -88,11 +77,6 @@ def test_py_fast_tick_ring_set_and_get():
     assert result[0] == "tick"
     assert result[1] == "2330"
     assert result[2] == 10000
-
-
-# ---------------------------------------------------------------------------
-# _PyFastBidAskRingBuffer
-# ---------------------------------------------------------------------------
 
 
 def test_py_fast_bidask_ring_get_returns_falsy_on_empty():
@@ -130,7 +114,6 @@ def test_py_fast_bidask_ring_set_bidask_with_stats():
     result = ring.get(0)
     assert result is not None
     assert result[0] == "bidask"
-    # With stats the tuple is longer (includes imbalance etc.)
     assert len(result) > 6
 
 
@@ -184,13 +167,7 @@ def test_py_fast_bidask_ring_packed_roundtrip_with_stats():
     assert result is not None
     assert result[0] == "bidask"
     assert result[1] == "2330"
-    # has_stats=True → extended tuple with best_bid, best_ask, etc.
     assert len(result) >= 13
-
-
-# ---------------------------------------------------------------------------
-# _PyFastLOBStatsRingBuffer
-# ---------------------------------------------------------------------------
 
 
 def test_py_fast_lobstats_ring_get_returns_none_on_empty():
@@ -206,11 +183,6 @@ def test_py_fast_lobstats_ring_set_and_get():
     assert result[0] == "2330"
 
 
-# ---------------------------------------------------------------------------
-# RingBufferBus: set_storm_guard
-# ---------------------------------------------------------------------------
-
-
 def test_set_storm_guard_assigns_reference():
     bus = RingBufferBus(size=4)
     dummy_guard = MagicMock()
@@ -218,28 +190,17 @@ def test_set_storm_guard_assigns_reference():
     assert bus._storm_guard is dummy_guard
 
 
-# ---------------------------------------------------------------------------
-# RingBufferBus: _store_fallback with lazy buffer creation
-# ---------------------------------------------------------------------------
-
-
 def test_store_fallback_creates_buffer_when_none(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
     monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
     monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
     bus = RingBufferBus(size=4)
-    # Force buffer to None to exercise lazy creation path
     bus.buffer = None
     bus._use_rust = False
     bus._ring = None
     bus._store_fallback(0, "test-event")
     assert bus.buffer is not None
     assert bus.buffer[0] == "test-event"
-
-
-# ---------------------------------------------------------------------------
-# RingBufferBus: multi-writer publish_many async path
-# ---------------------------------------------------------------------------
 
 
 def test_publish_many_multi_writer_path(monkeypatch):
@@ -257,11 +218,6 @@ def test_publish_many_multi_writer_path(monkeypatch):
     assert "x" in result
     assert "y" in result
     assert "z" in result
-
-
-# ---------------------------------------------------------------------------
-# RingBufferBus: pure-Python buffer consume path
-# ---------------------------------------------------------------------------
 
 
 def test_consume_reads_from_python_buffer(monkeypatch):
@@ -301,11 +257,6 @@ def test_consume_batch_reads_from_python_buffer(monkeypatch):
     assert result == ["a", "b"]
 
 
-# ---------------------------------------------------------------------------
-# RingBufferBus: typed tick ring fallback (no Rust) — kind routing in consume
-# ---------------------------------------------------------------------------
-
-
 def test_consume_typed_tick_ring_routing(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", True)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", False)
@@ -326,11 +277,6 @@ def test_consume_typed_tick_ring_routing(monkeypatch):
 
     result = asyncio.run(_run())
     assert result == tick
-
-
-# ---------------------------------------------------------------------------
-# RingBufferBus: typed book rings — bidask without stats (no rest fields)
-# ---------------------------------------------------------------------------
 
 
 def test_typed_book_ring_bidask_no_stats(monkeypatch):
@@ -354,11 +300,6 @@ def test_typed_book_ring_bidask_no_stats(monkeypatch):
     assert result == bidask
 
 
-# ---------------------------------------------------------------------------
-# RingBufferBus: rust_typed mode with mocked FastTypedRingBuffer
-# ---------------------------------------------------------------------------
-
-
 def test_rust_typed_publish_path(monkeypatch):
     """Verify rust_typed mode delegates to FastTypedRingBuffer.publish()."""
 
@@ -378,7 +319,6 @@ def test_rust_typed_publish_path(monkeypatch):
     bus = RingBufferBus(size=8)
     assert bus._typed_ring is not None
 
-    # Publish a tick event
     tick = ("tick", "2330", 10000, 5, 50, False, False, 123456789)
     bus.publish_nowait(tick)
     assert len(bus._typed_ring.calls) == 1
@@ -388,7 +328,6 @@ def test_rust_typed_publish_path(monkeypatch):
     assert kind == _KIND_TICK
     assert price == 10000
 
-    # Publish a bidask event with full stats
     bidask = ("bidask", "2330", [[10000, 1]], [[10010, 1]], 999, False, 10000, 10010, 5, 3, 10005.0, 10.0, 0.2)
     bus.publish_nowait(bidask)
     assert len(bus._typed_ring.calls) == 2
@@ -396,7 +335,6 @@ def test_rust_typed_publish_path(monkeypatch):
 
     assert bus._typed_ring.calls[1][0] == _KIND_BIDASK
 
-    # Publish a trade event
     trade = ("trade", "2330", 10000, 1, 123456789)
     bus.publish_nowait(trade)
     assert len(bus._typed_ring.calls) == 3
@@ -404,7 +342,6 @@ def test_rust_typed_publish_path(monkeypatch):
 
     assert bus._typed_ring.calls[2][0] == _KIND_TRADE
 
-    # Publish a non-classified event
     other = {"some": "dict"}
     bus.publish_nowait(other)
     assert len(bus._typed_ring.calls) == 4
@@ -430,17 +367,11 @@ def test_rust_typed_publish_short_bidask_tuple(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=8)
-    # 6-element bidask (no stats)
     bidask = ("bidask", "2330", [[10000, 1]], [[10010, 1]], 999, False)
     bus.publish_nowait(bidask)
     from hft_platform.engine.event_bus import _KIND_BIDASK
 
     assert bus._typed_ring.calls[0] == _KIND_BIDASK
-
-
-# ---------------------------------------------------------------------------
-# RingBufferBus: BUS_MODE=python when HFT_BUS_RUST=0
-# ---------------------------------------------------------------------------
 
 
 def test_bus_mode_python_when_rust_disabled(monkeypatch):
@@ -451,11 +382,6 @@ def test_bus_mode_python_when_rust_disabled(monkeypatch):
     bus = RingBufferBus(size=4)
     assert bus._bus_mode == "python"
     assert bus.buffer is not None
-
-
-# ---------------------------------------------------------------------------
-# RingBufferBus: spin-wait mode (HFT_BUS_WAIT_MODE=spin)
-# ---------------------------------------------------------------------------
 
 
 def test_spin_wait_mode_signal_is_none(monkeypatch):
@@ -485,11 +411,6 @@ def test_spin_wait_consume_event(monkeypatch):
     assert result == "spin-event"
 
 
-# ---------------------------------------------------------------------------
-# RingBufferBus: typed book ring exception fallback → stored in fallback buffer
-# ---------------------------------------------------------------------------
-
-
 def test_typed_book_ring_exception_uses_fallback(monkeypatch):
     """When typed ring set_bidask raises, event must still land in fallback buffer."""
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", False)
@@ -501,13 +422,11 @@ def test_typed_book_ring_exception_uses_fallback(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
     bus = RingBufferBus(size=8)
 
-    # Patch _bidask_ring.set_bidask_packed to raise so we fall through
     bus._bidask_ring.set_bidask_packed = MagicMock(side_effect=RuntimeError("boom"))
     bus._bidask_ring.set_bidask = MagicMock(side_effect=RuntimeError("boom"))
 
     bidask = ("bidask", "2330", [[10000, 1]], [[10010, 1]], 123, False)
     bus.publish_nowait(bidask)
-    # Event should have been stored in fallback buffer
     assert bus.cursor == 0
     assert bus.buffer is not None
     assert bus.buffer[0] == bidask

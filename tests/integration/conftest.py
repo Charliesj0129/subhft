@@ -38,12 +38,8 @@ _COMPOSE_FILES = (
     _REPO_ROOT / "docker-compose.prod.locked.yml",
 )
 
-# ``${VAR:?message}`` -- Compose aborts when one of these is unset.
 _REQUIRED_VAR = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):\?")
 
-# The docker CLI needs these to find the daemon and its config. Nothing else is
-# inherited, so no ``SHIOAJI_*`` / ``HFT_*`` / password value can reach either
-# render -- and therefore none can reach an assertion message.
 _DOCKER_ENV_KEYS = frozenset({"PATH", "HOME", "USER", "XDG_RUNTIME_DIR", "TMPDIR"})
 
 _PLACEHOLDER = "placeholder-for-compose-tests"

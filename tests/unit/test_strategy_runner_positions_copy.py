@@ -66,7 +66,7 @@ class _CapturingStrategy:
         self.seen_positions: list[dict] = []
         self.seen_type: list[type] = []
 
-    def handle_event(self, ctx, event):  # noqa: ANN001
+    def handle_event(self, ctx, event):
         self.seen_positions.append(dict(ctx.positions))
         self.seen_type.append(type(ctx.positions))
         return []
@@ -84,7 +84,7 @@ class _MutatingStrategy:
         self.mutation_error: Exception | None = None
         self.seen_positions: list[dict] = []
 
-    def handle_event(self, ctx, event):  # noqa: ANN001
+    def handle_event(self, ctx, event):
         self.seen_positions.append(dict(ctx.positions))
         try:
             ctx.positions["__injected__"] = 9999

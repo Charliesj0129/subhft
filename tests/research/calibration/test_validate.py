@@ -20,7 +20,7 @@ def test_split_days_raises_on_single_day():
 
 
 def test_split_days_sufficient_uses_70_30():
-    days = [f"2026-03-{i:02d}" for i in range(1, 16)]  # 15 days
+    days = [f"2026-03-{i:02d}" for i in range(1, 16)]
     train, test = split_days(days, ratio=0.7)
     assert len(train) == 10
     assert len(test) == 5
@@ -28,9 +28,8 @@ def test_split_days_sufficient_uses_70_30():
 
 
 def test_split_days_low_count_uses_loo():
-    days = [f"2026-03-{i:02d}" for i in range(1, 8)]  # 7 days
+    days = [f"2026-03-{i:02d}" for i in range(1, 8)]
     train, test = split_days(days, ratio=0.7)
-    # < 15 days: leave-one-out means test has 1, train has rest
     assert len(test) == 1
     assert len(train) == 6
 

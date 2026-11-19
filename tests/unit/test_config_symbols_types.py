@@ -18,10 +18,6 @@ from hft_platform.config._symbols_types import (
     parse_date_key,
 )
 
-# ---------------------------------------------------------------------------
-# SymbolBuildResult
-# ---------------------------------------------------------------------------
-
 
 def test_symbol_build_result_ok_no_errors():
     result = SymbolBuildResult()
@@ -49,11 +45,6 @@ def test_symbol_build_result_with_symbols():
     result = SymbolBuildResult(symbols=[{"code": "2330"}])
     assert len(result.symbols) == 1
     assert result.ok() is True
-
-
-# ---------------------------------------------------------------------------
-# FilterSpec
-# ---------------------------------------------------------------------------
 
 
 def test_filter_spec_defaults():
@@ -85,7 +76,7 @@ def test_filter_spec_merge_months_initial_none_sets_months():
 def test_filter_spec_merge_months_second_call_deduplicates():
     spec = FilterSpec()
     spec.merge_months(["202406", "202409"])
-    spec.merge_months(["202409", "202412"])  # 202409 duplicate
+    spec.merge_months(["202409", "202412"])
     assert spec.months is not None
     assert spec.months.count("202409") == 1
     assert "202412" in spec.months
@@ -97,11 +88,6 @@ def test_filter_spec_merge_months_preserves_order():
     spec.merge_months(["202406"])
     assert spec.months[0] == "202412"
     assert "202406" in spec.months
-
-
-# ---------------------------------------------------------------------------
-# derive_root
-# ---------------------------------------------------------------------------
 
 
 def test_derive_root_normal_futures_code():
@@ -126,11 +112,6 @@ def test_derive_root_empty_string():
 
 def test_derive_root_mixed_prefix():
     assert derive_root("XY123") == "XY"
-
-
-# ---------------------------------------------------------------------------
-# parse_date_key
-# ---------------------------------------------------------------------------
 
 
 def test_parse_date_key_none():
@@ -175,11 +156,6 @@ def test_parse_date_key_empty_string():
     assert parse_date_key("") is None
 
 
-# ---------------------------------------------------------------------------
-# expiry_key
-# ---------------------------------------------------------------------------
-
-
 def test_expiry_key_from_delivery_date():
     contract = {"code": "TXFD6", "delivery_date": 20260619}
     assert expiry_key(contract) == 20260619
@@ -210,17 +186,12 @@ def test_expiry_key_due_date_field():
     assert expiry_key(contract) == 20261218
 
 
-# ---------------------------------------------------------------------------
-# contract_dte_days
-# ---------------------------------------------------------------------------
-
-
 def test_contract_dte_days_valid_future_date():
     future_date = (datetime.now(UTC) + timedelta(days=30)).strftime("%Y%m%d")
     contract = {"delivery_date": int(future_date)}
     result = contract_dte_days(contract)
     assert result is not None
-    assert 25 <= result <= 35  # roughly 30 days ahead
+    assert 25 <= result <= 35
 
 
 def test_contract_dte_days_past_date_negative():
@@ -238,10 +209,8 @@ def test_contract_dte_days_no_date_fields_returns_none():
 
 
 def test_contract_dte_days_unparseable_date_skips_to_next():
-    # An unparseable date string should trigger ValueError continue, then try next key.
     contract = {"delivery_date": "00000000", "expiry": "20260619"}
     result = contract_dte_days(contract)
-    # expiry is a valid future date — should return something
     assert result is not None
 
 
@@ -249,11 +218,6 @@ def test_contract_dte_days_all_unparseable_returns_none():
     contract = {"delivery_date": "00000000", "expiry": "bad_date"}
     result = contract_dte_days(contract)
     assert result is None
-
-
-# ---------------------------------------------------------------------------
-# ContractIndex
-# ---------------------------------------------------------------------------
 
 
 def test_contract_index_empty_contracts():
@@ -301,7 +265,6 @@ def test_contract_index_options_classified_by_root():
 def test_contract_index_root_derived_from_code_when_missing():
     contracts = [{"code": "TXFD6", "type": "fut"}]
     idx = ContractIndex(contracts=contracts)
-    # root derived via derive_root("TXFD6") = "TXFD"
     assert "TXFD" in idx.futures_by_root
 
 
@@ -312,7 +275,7 @@ def test_contract_index_metrics_dict_payload_normalized():
 
 
 def test_contract_index_metrics_non_dict_payload_wrapped():
-    metrics = {"2330": 850}  # non-dict value
+    metrics = {"2330": 850}
     idx = ContractIndex(contracts=[], metrics_by_code=metrics)
     assert idx.metrics_by_code["2330"] == {"value": 850}
 
@@ -329,19 +292,17 @@ def test_contract_index_mixed_contract_types():
     contracts = [
         {"code": "TXFD6", "root": "TXF", "type": "future"},
         {"code": "TXO20000C", "root": "TXO", "type": "option"},
-        {"code": "2330"},  # no type — neither futures nor options
+        {"code": "2330"},
     ]
     idx = ContractIndex(contracts=contracts)
     assert "TXF" in idx.futures_by_root
     assert "TXO" in idx.options_by_root
     assert "2330" in idx.by_code
-    # 2330 should not appear in futures or options by root
     assert "2330" not in idx.futures_by_root
     assert "2330" not in idx.options_by_root
 
 
 def test_contract_index_security_type_field_fallback():
-    # When "type" is absent, use "security_type".
     contracts = [{"code": "TXFD6", "root": "TXF", "security_type": "future"}]
     idx = ContractIndex(contracts=contracts)
     assert "TXF" in idx.futures_by_root

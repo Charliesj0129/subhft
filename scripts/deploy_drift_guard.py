@@ -40,8 +40,6 @@ DEFAULT_INCLUDE_PATHS = [
 DEFAULT_ENV_PREFIXES = ["HFT_", "CLICKHOUSE_", "REDIS_", "SHIOAJI_", "SYMBOLS_"]
 DEFAULT_RUNTIME_SERVICES = ["hft-engine", "wal-loader", "hft-monitor", "prometheus", "clickhouse", "redis"]
 
-# Runtime env VALUES are never persisted. Each variable is stored as a keyed digest, so a snapshot can say
-# WHICH variable changed (names are kept) but not what it holds. The key lives next to the outputs, mode 0600.
 DIGEST_KEY_FILENAME = ".digest_key"
 DIGEST_HEX_CHARS = 16
 
@@ -200,7 +198,6 @@ def _collect_included_files(project_root: Path, includes: Iterable[str]) -> tupl
 
         missing.append(inc)
 
-    # De-duplicate while preserving sorted deterministic order.
     uniq = sorted(set(files), key=lambda p: str(p))
     return uniq, sorted(set(missing))
 
@@ -486,7 +483,6 @@ def _compare_snapshots(
         bsvc = bruntime.get(svc)
         csvc = cruntime.get(svc)
         if not isinstance(bsvc, dict) or not isinstance(csvc, dict):
-            # Presence and image only: a legacy baseline entry carries plaintext env values, so never copy it.
             runtime_diff[svc] = {
                 "baseline_present": isinstance(bsvc, dict),
                 "current_present": isinstance(csvc, dict),

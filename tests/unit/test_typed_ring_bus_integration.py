@@ -26,7 +26,6 @@ def test_bus_mode_rust_typed_overrides_legacy(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_FastTypedRingBuffer", None)
     bus = RingBufferBus(size=4)
     assert bus._bus_mode == "rust_typed"
-    # No typed ring since FastTypedRingBuffer is None
     assert bus._typed_ring is None
 
 
@@ -35,7 +34,6 @@ def test_rust_typed_fallback_to_python_when_unavailable(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_BUS_MODE", "rust_typed")
     monkeypatch.setattr(event_bus_mod, "_FastTypedRingBuffer", None)
     bus = RingBufferBus(size=4)
-    # Still constructs, typed_ring is None so fallback buffer used
     assert bus._typed_ring is None
 
     async def _run():
@@ -115,13 +113,12 @@ def test_rust_typed_with_mock_typed_ring(monkeypatch):
 
     assert len(bus._typed_ring.published) == 1
     frame = bus._typed_ring.published[0]
-    # kind=1 (tick), price0=10000, qty0=5, qty1=50, exch_ts_ns=123456789
-    assert frame[0] == 1  # kind = _KIND_TICK
-    assert frame[3] == 123456789  # exch_ts_ns
-    assert frame[5] == 10000  # price0
-    assert frame[6] == 0  # price1 (unused for tick)
-    assert frame[7] == 5  # qty0 (volume)
-    assert frame[8] == 50  # qty1 (total_volume)
+    assert frame[0] == 1
+    assert frame[3] == 123456789
+    assert frame[5] == 10000
+    assert frame[6] == 0
+    assert frame[7] == 5
+    assert frame[8] == 50
 
 
 def test_rust_typed_consume_uses_fallback_buffer(monkeypatch):
@@ -169,26 +166,26 @@ def test_rust_typed_bidask_publish_maps_fields(monkeypatch):
         "2330",
         [[10000, 3]],
         [[10010, 4]],
-        999888777,  # exch_ts
+        999888777,
         False,
         10000,
-        10010,  # best_bid, best_ask
+        10010,
         5,
-        9,  # bid_depth, ask_depth
+        9,
         10005.0,
         10.0,
-        0.123,  # imbalance
+        0.123,
     )
     bus.publish_nowait(bidask)
 
     frame = bus._typed_ring.published[0]
-    assert frame[0] == 2  # kind = _KIND_BIDASK
-    assert frame[3] == 999888777  # exch_ts_ns
-    assert frame[5] == 10000  # price0 = best_bid
-    assert frame[6] == 10010  # price1 = best_ask
-    assert frame[7] == 5  # qty0 = bid_depth
-    assert frame[8] == 9  # qty1 = ask_depth
-    assert abs(frame[11] - 0.123) < 1e-9  # ratio0 = imbalance
+    assert frame[0] == 2
+    assert frame[3] == 999888777
+    assert frame[5] == 10000
+    assert frame[6] == 10010
+    assert frame[7] == 5
+    assert frame[8] == 9
+    assert abs(frame[11] - 0.123) < 1e-9
 
 
 def test_rust_typed_with_importorskip():
@@ -200,7 +197,6 @@ def test_rust_typed_with_importorskip():
         _ftrb = _ftrb_cls
     except (ImportError, AttributeError):
         pass
-    # This test just validates the import path; skip gracefully if not registered
     if _ftrb is None:
         import pytest
 

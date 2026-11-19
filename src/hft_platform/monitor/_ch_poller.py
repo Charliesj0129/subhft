@@ -11,7 +11,6 @@ from hft_platform.monitor._types import RowView
 
 logger = get_logger("monitor.ch_poller")
 
-# Batched SQL: single query for all symbols, partitioned client-side
 _POLL_BATCH_SQL = """\
 SELECT symbol, ingest_ts, bids_price, asks_price, bids_vol, asks_vol, price_scaled, volume
 FROM hft.market_data
@@ -149,11 +148,9 @@ class CHPoller:
                 },
             )
 
-            # Clear previous results and reuse pre-allocated dict/lists
             for lst in self._rows_by_symbol.values():
                 lst.clear()
 
-            # Partition results by symbol with per-symbol cursor filtering
             for raw_row in result.result_rows:
                 rv = _to_row_view(raw_row)
                 sym = rv.symbol

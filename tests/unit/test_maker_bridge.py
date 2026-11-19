@@ -44,7 +44,7 @@ def test_bridge_translates_post_quote_buy():
     assert intent.tif == TIF.LIMIT
     assert intent.strategy_id == "test"
     assert intent.symbol == "TMFD6"
-    assert intent.intent_id == 1  # counter starts at 1
+    assert intent.intent_id == 1
 
 
 def test_bridge_translates_post_quote_sell():
@@ -64,12 +64,10 @@ def test_bridge_translates_cancel_quote_uses_tracked_target():
     inner = MagicMock()
     bridge = MakerStrategyBridge(inner=inner, strategy_id="test", symbol="TMFD6")
 
-    # First place a buy quote
     inner.on_tick.return_value = PostQuote(side="buy", price=17000, qty=1)
     post_intents = bridge.handle_event(ctx=None, event=SimpleNamespace(symbol="TMFD6"))
     assert post_intents[0].intent_id == 1
 
-    # Then cancel that side
     inner.on_tick.return_value = CancelQuote(side="buy")
     cancel_intents = bridge.handle_event(ctx=None, event=SimpleNamespace(symbol="TMFD6"))
     assert len(cancel_intents) == 1

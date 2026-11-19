@@ -14,10 +14,6 @@ from hft_platform.reports.rules.informed_flow import (
     score_volume_spike,
 )
 
-# ---------------------------------------------------------------------------
-# Test helper
-# ---------------------------------------------------------------------------
-
 
 def _fb(ud: float, net: int = 0, vol: int = 100, ticks: int = 50) -> FlowBar:
     up = int(vol * ud / (1 + ud)) if ud > 0 else 0
@@ -38,37 +34,28 @@ def _lt(price: int, volume: int, direction: str) -> LargeTrade:
     return LargeTrade(ts="t", price=price, volume=volume, direction=direction)
 
 
-# ---------------------------------------------------------------------------
-# IF-01  score_session_ud
-# ---------------------------------------------------------------------------
-
-
 class TestScoreSessionUD:
     def test_empty_bars_returns_zero(self) -> None:
         assert score_session_ud([]) == 0.0
 
     def test_neutral_ratio_returns_zero(self) -> None:
-        # equal uptick / downtick → ratio 1.0 → score 0.0
         bars = [_fb(1.0)] * 4
         result = score_session_ud(bars)
         assert result == pytest.approx(0.0, abs=1e-6)
 
     def test_bullish_ratio_positive_score(self) -> None:
-        # ratio > 1.1 → positive score, clamped +1.0
-        bars = [_fb(2.0)] * 4  # ud_ratio=2, ratio sum(up)/sum(dn) > 1.1
+        bars = [_fb(2.0)] * 4
         result = score_session_ud(bars)
         assert result > 0.0
         assert result <= 1.0
 
     def test_bearish_ratio_negative_score(self) -> None:
-        # ratio < 0.9 → negative score
-        bars = [_fb(0.5)] * 4  # ud_ratio=0.5, ratio < 0.9
+        bars = [_fb(0.5)] * 4
         result = score_session_ud(bars)
         assert result < 0.0
         assert result >= -1.0
 
     def test_very_bearish_clamped_to_minus_one(self) -> None:
-        # ratio = 0.0 (no uptick) → should clamp to -1.0
         bars = [
             FlowBar(
                 ts="t", ticks=10, total_vol=100, uptick_vol=0, downtick_vol=100, flat_vol=0, ud_ratio=0.0, net_flow=-100
@@ -78,7 +65,6 @@ class TestScoreSessionUD:
         assert result == pytest.approx(-1.0)
 
     def test_very_bullish_clamped_to_plus_one(self) -> None:
-        # ratio >> 1.1 → clamp to +1.0
         bars = [
             FlowBar(
                 ts="t",
@@ -95,14 +81,8 @@ class TestScoreSessionUD:
         assert result == pytest.approx(1.0)
 
 
-# ---------------------------------------------------------------------------
-# IF-02  score_sustained_pressure
-# ---------------------------------------------------------------------------
-
-
 class TestScoreSustainedPressure:
     def test_no_sustained_run_returns_zero(self) -> None:
-        # alternating, never 4 consecutive
         bars = [_fb(1.0), _fb(0.5), _fb(1.5), _fb(0.8)]
         result = score_sustained_pressure(bars)
         assert result == 0.0
@@ -129,11 +109,6 @@ class TestScoreSustainedPressure:
 
     def test_empty_returns_zero(self) -> None:
         assert score_sustained_pressure([]) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# IF-03  score_large_trade_net
-# ---------------------------------------------------------------------------
 
 
 class TestScoreLargeTradeNet:
@@ -170,11 +145,6 @@ class TestScoreLargeTradeNet:
         assert result == pytest.approx(0.0)
 
 
-# ---------------------------------------------------------------------------
-# IF-04  find_large_trade_clusters
-# ---------------------------------------------------------------------------
-
-
 class TestFindLargeTradeClusters:
     def test_no_cluster_returns_empty(self) -> None:
         trades = [_lt(1_000_000, 100, "buy"), _lt(2_000_000, 100, "sell")]
@@ -209,11 +179,6 @@ class TestFindLargeTradeClusters:
         assert total_vol == 180
 
 
-# ---------------------------------------------------------------------------
-# IF-05  score_end_of_session_drift
-# ---------------------------------------------------------------------------
-
-
 class TestScoreEndOfSessionDrift:
     def test_less_than_8_bars_returns_zero(self) -> None:
         bars = [_fb(1.0)] * 7
@@ -221,13 +186,11 @@ class TestScoreEndOfSessionDrift:
         assert result == 0.0
 
     def test_no_drift_returns_zero(self) -> None:
-        # uniform session: last 6 same as full
         bars = [_fb(1.0)] * 10
         result = score_end_of_session_drift(bars)
         assert result == pytest.approx(0.0, abs=1e-6)
 
     def test_eod_bearish_drift_returns_negative(self) -> None:
-        # first 6 bars bullish, last 6 bearish → drift negative
         early = [_fb(2.0)] * 6
         late = [_fb(0.3)] * 6
         bars = early + late
@@ -235,7 +198,6 @@ class TestScoreEndOfSessionDrift:
         assert result < 0.0
 
     def test_small_drift_returns_zero(self) -> None:
-        # early and late both near 1.0 → abs(drift) < 0.2 → 0.0
         bars = [_fb(1.05)] * 6 + [_fb(0.98)] * 6
         result = score_end_of_session_drift(bars)
         assert result == 0.0
@@ -246,11 +208,6 @@ class TestScoreEndOfSessionDrift:
         bars = early + late
         result = score_end_of_session_drift(bars)
         assert result > 0.0
-
-
-# ---------------------------------------------------------------------------
-# IF-06  score_volume_spike
-# ---------------------------------------------------------------------------
 
 
 class TestScoreVolumeSpike:

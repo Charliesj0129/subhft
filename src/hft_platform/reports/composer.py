@@ -49,11 +49,6 @@ _TREND_DESC: Final[dict[str, str]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Formatting helpers (ported from renderer.py)
-# ---------------------------------------------------------------------------
-
-
 def _p(scaled: int) -> str:
     """Format scaled price as human-readable with commas."""
     return f"{scaled // PLATFORM_SCALE:,}"
@@ -104,11 +99,6 @@ def _median_spread(spread_dist: dict[int, int]) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Message splitting
-# ---------------------------------------------------------------------------
-
-
 def _split_message(content: str, min_tier: str) -> list[MessagePart]:
     """Split a text message into parts that each fit within TELEGRAM_MAX_LEN."""
     if len(content) <= TELEGRAM_MAX_LEN:
@@ -117,10 +107,8 @@ def _split_message(content: str, min_tier: str) -> list[MessagePart]:
     parts: list[MessagePart] = []
     remaining = content
     while len(remaining) > TELEGRAM_MAX_LEN:
-        # Find last newline before the limit
         cut = remaining.rfind("\n", 0, TELEGRAM_MAX_LEN)
         if cut <= 0:
-            # No newline found; hard cut at limit
             cut = TELEGRAM_MAX_LEN
         parts.append(MessagePart(kind="text", content=remaining[:cut], min_tier=min_tier))
         remaining = remaining[cut:].lstrip("\n")
@@ -128,11 +116,6 @@ def _split_message(content: str, min_tier: str) -> list[MessagePart]:
     if remaining:
         parts.append(MessagePart(kind="text", content=remaining, min_tier=min_tier))
     return parts
-
-
-# ---------------------------------------------------------------------------
-# ReportComposer
-# ---------------------------------------------------------------------------
 
 
 class ReportComposer:
@@ -170,10 +153,6 @@ class ReportComposer:
         )
         return ComposedReport(messages=parts)
 
-    # ------------------------------------------------------------------
-    # 1. Summary (free tier)
-    # ------------------------------------------------------------------
-
     def _compose_summary(self, fr: FactReport, rr: ReasoningReport) -> str:
         sd = fr.session_data
         session_label = _SESSION_LABELS.get(sd.session, sd.session)
@@ -183,7 +162,6 @@ class ReportComposer:
         bias_label = _BIAS_LABELS.get(rr.bias.bias, "中性")
         confidence_pct = int(rr.bias.confidence * 100)
 
-        # Top 4 evidences by weight
         sorted_ev = sorted(rr.bias.evidences, key=lambda e: e.weight, reverse=True)[:4]
         evidence_lines: list[str] = []
         for i, ev in enumerate(sorted_ev):
@@ -201,7 +179,6 @@ class ReportComposer:
         ]
         lines.extend(evidence_lines)
 
-        # Cross-day comparison
         if fr.cross_day.prev_days:
             price_pos_desc = _PRICE_POSITION_DESC.get(fr.cross_day.price_position, fr.cross_day.price_position)
             cross_day_line = f"vs 前日：{price_pos_desc}"
@@ -214,10 +191,6 @@ class ReportComposer:
             lines.append(f"vs 前 3 日：{trend_desc}")
 
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # 2. Narrative (paid tier)
-    # ------------------------------------------------------------------
 
     def _compose_narrative(self, rr: ReasoningReport) -> str:
         narr = rr.narrative
@@ -233,10 +206,6 @@ class ReportComposer:
         lines.append("")
         lines.append(f"→ {narr.conclusion}")
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # 2b. LLM decision layer (paid tier)
-    # ------------------------------------------------------------------
 
     def _compose_llm_decision(self, decision: LLMDecisionReport) -> str:
         intraday_stance = _BIAS_LABELS.get(decision.intraday_plan.stance, decision.intraday_plan.stance)
@@ -285,10 +254,6 @@ class ReportComposer:
         lines.extend(f"  - {item}" for item in decision.execution_notes)
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # 3. Flow analysis (paid tier)
-    # ------------------------------------------------------------------
-
     def _compose_flow(self, fr: FactReport) -> str:
         flow = fr.flow
 
@@ -302,32 +267,24 @@ class ReportComposer:
             "▎時段分析:",
         ]
 
-        # Segments
         for seg in fr.segments:
             vol_pct = int(seg.volume_pct * 100)
             lines.append(f"  {seg.name} {seg.time_range} {_ud_bar(seg.ud_ratio)} {vol_pct}%")
 
-        # Sustained runs
         if flow.sustained_runs:
             run_parts = [f"{side}x{count}({tr})" for side, count, tr in flow.sustained_runs]
             lines.append(f"▎持續壓力: {', '.join(run_parts)}")
         else:
             lines.append("▎持續壓力: 無")
 
-        # EOD drift
         lines.append(f"▎尾盤漂移: U/D {flow.session_ud:.2f} → {flow.eod_ud:.2f} (drift {flow.eod_drift:+.2f})")
 
-        # Volume spikes
         if flow.volume_spikes:
             lines.append("")
             for bar, ratio in flow.volume_spikes:
                 lines.append(f"  爆量 {bar.ts} ({ratio:.1f}x)")
 
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # 4. Chips (paid tier)
-    # ------------------------------------------------------------------
 
     def _compose_chips(self, fr: FactReport) -> str:
         chips = fr.chips
@@ -364,10 +321,6 @@ class ReportComposer:
 
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # 5. Levels (paid tier)
-    # ------------------------------------------------------------------
-
     def _compose_levels(self, rr: ReasoningReport) -> str:
         levels = rr.levels
 
@@ -403,10 +356,6 @@ class ReportComposer:
 
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # 6. Scenarios (paid tier)
-    # ------------------------------------------------------------------
-
     def _compose_scenarios(self, rr: ReasoningReport) -> str:
         labels = ["A", "B", "C", "D", "E"]
         lines = ["📋 情境規劃"]
@@ -421,10 +370,6 @@ class ReportComposer:
             lines.append(f"  {sc.description}")
 
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # 7. Heatmap (paid tier, image)
-    # ------------------------------------------------------------------
 
     def _compose_heatmap(self, fr: FactReport) -> MessagePart | None:
         try:
@@ -445,17 +390,8 @@ class ReportComposer:
             min_tier="paid",
         )
 
-    # ------------------------------------------------------------------
-    # 8. Disclaimer (free tier)
-    # ------------------------------------------------------------------
-
     def _compose_disclaimer(self) -> str:
         return "⚠️ 本報告基於歷史行情數據自動生成，僅供參考，不構成投資建議。投資有風險，請自行評估。"
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _importance_from_strength(strength: float) -> int:

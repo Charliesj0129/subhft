@@ -28,11 +28,11 @@ import pytest
 from hft_platform.utils.logging import configure_logging, credential_scrubber, get_logger
 
 _BOT_ID = "1234567890"
-_TOKEN_TAIL = "AAF" + "x9" * 17  # 37 url-safe chars, the real token shape
+_TOKEN_TAIL = "AAF" + "x9" * 17
 _TG_TOKEN = f"{_BOT_ID}:{_TOKEN_TAIL}"
 _PAIR_VALUE = "hunter" + "2-fake"
 _PW_KEY = "pass" + "word"
-_NATIONAL_ID = "A" + "1" + "23456789"  # letter, 1|2, eight digits
+_NATIONAL_ID = "A" + "1" + "23456789"
 _JWT = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiJmYWtlIn0" + "." + "c2lnbmF0dXJlLWZha2U"
 
 
@@ -63,9 +63,6 @@ def _render_structlog_error(name: str, exc: BaseException) -> str:
     return buf.getvalue()
 
 
-# --- traceback path -----------------------------------------------------------
-
-
 def test_traceback_text_masks_password_pair() -> None:
     out = _render_structlog_error("tb-password", RuntimeError(f"login failed password={_PAIR_VALUE}"))
     assert "Traceback" in out, "the traceback must still be rendered"
@@ -91,9 +88,6 @@ def test_exception_object_passed_as_a_field_is_scrubbed() -> None:
     assert "RuntimeError" in str(out["error"])
 
 
-# --- telegram token ------------------------------------------------------------
-
-
 def test_telegram_token_in_bot_url_is_masked() -> None:
     url = f"https://api.telegram.org/bot{_TG_TOKEN}/getUpdates"
     out = credential_scrubber(None, "info", {"event": f"HTTP Request: POST {url} 200"})
@@ -104,9 +98,6 @@ def test_telegram_token_in_bot_url_is_masked() -> None:
 def test_telegram_token_standalone_is_still_masked() -> None:
     out = credential_scrubber(None, "info", {"event": f"token is {_TG_TOKEN} ok"})
     assert _TOKEN_TAIL not in out["event"]
-
-
-# --- free text pairs and identifiers --------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -145,9 +136,6 @@ def test_person_id_keyword_is_masked_by_name() -> None:
 def test_national_id_shape_in_free_text_is_masked() -> None:
     out = credential_scrubber(None, "info", {"event": f"client PYAPI/{_NATIONAL_ID}/1003 ok"})
     assert _NATIONAL_ID not in out["event"]
-
-
-# --- stdlib logging bypass -------------------------------------------------------
 
 
 def test_stdlib_message_is_scrubbed(stdlib_sink: io.StringIO) -> None:
@@ -204,9 +192,6 @@ def test_http_client_loggers_are_not_at_info() -> None:
     finally:
         for n, lvl in saved.items():
             logging.getLogger(n).setLevel(lvl)
-
-
-# --- the bot process --------------------------------------------------------------
 
 
 def test_bot_main_configures_logging_before_building_the_app(monkeypatch: pytest.MonkeyPatch) -> None:

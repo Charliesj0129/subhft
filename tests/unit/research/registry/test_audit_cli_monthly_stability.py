@@ -138,7 +138,7 @@ class TestMonthlyStabilityReview:
         _record(run_id="fine", median=30.0, worst=5.0, top_month=40.0)
         out = audit_cli.monthly_stability_review()
         body = [r for r in out.split("\n") if r.startswith(("mild", "deep", "fine"))]
-        assert body[0].startswith("deep")  # deepest losing month first
+        assert body[0].startswith("deep")
         assert body[1].startswith("mild")
         assert "fine" not in out
         assert "(2 monthly-unstable" in out

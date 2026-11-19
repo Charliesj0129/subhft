@@ -67,7 +67,7 @@ def check_one(path: str | Path) -> tuple[bool, list[str]]:
         return False, [f"spec not found: {p}"]
     except ValueError as exc:
         return False, [str(exc)]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return False, [f"failed to load {p}: {exc!r}"]
     errors = validate_spec(spec)
     return len(errors) == 0, errors

@@ -76,7 +76,7 @@ def _cleanup_test_rows(ch_client) -> None:
             ch_client.command(
                 f"ALTER TABLE {table} DELETE WHERE {key} LIKE '{L7_TEST_PREFIX}%' SETTINGS mutations_sync = 1"
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
 
@@ -102,8 +102,6 @@ class TestL7Migration:
             assert writer._l7_audit_detected is True
             assert writer._l7_audit_active_tables == {"hft.orders", "hft.fills"}
         finally:
-            # Best-effort shutdown so heartbeat thread doesn't leak.
-            # Plain attribute assignment on a connected DataWriter cannot raise.
             writer._heartbeat_running = False
 
     def test_round_trip_extended_mode_populates_audit_fields(self, schema_applied) -> None:
@@ -155,7 +153,7 @@ class TestL7Migration:
         writer = DataWriter(ch_host=host, ch_port=port)
         writer.connect()
         try:
-            writer._l7_audit_active_tables = set()  # legacy simulation
+            writer._l7_audit_active_tables = set()
             order_id = f"{L7_TEST_PREFIX}{uuid.uuid4()}"
             ts = time.time_ns()
             data = [
@@ -172,7 +170,6 @@ class TestL7Migration:
                     "latency_us": 150,
                     "instrument_type": "future",
                     "oc_type": "open",
-                    # Audit fields included by the producer; strip MUST drop them.
                     "trace_id": "should-be-stripped",
                     "git_sha": "should-be-stripped",
                 }
@@ -181,10 +178,8 @@ class TestL7Migration:
             result = schema_applied.query(f"SELECT trace_id, git_sha FROM hft.orders WHERE order_id = '{order_id}'")
             assert len(result.result_rows) == 1
             trace_id, git_sha = result.result_rows[0]
-            # Strip dropped the keys; ClickHouse defaults gave us '' on read.
             assert trace_id == ""
             assert git_sha == ""
         finally:
             _cleanup_test_rows(schema_applied)
-            # Plain attribute assignment cannot raise.
             writer._heartbeat_running = False

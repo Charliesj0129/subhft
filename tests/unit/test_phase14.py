@@ -8,8 +8,6 @@ import time
 
 import pytest
 
-# ── CC-1: ColumnarBuffer ─────────────────────────────────────────────────
-
 
 class TestColumnarBuffer:
     def test_append_row_fixes_schema(self):
@@ -36,9 +34,9 @@ class TestColumnarBuffer:
 
         buf = ColumnarBuffer("test")
         buf.append_row({"a": 1, "b": 2})
-        buf.append_row({"a": 3})  # Missing 'b'
+        buf.append_row({"a": 3})
         cols, data = buf.to_columnar()
-        assert data[1] == [2, None]  # b column
+        assert data[1] == [2, None]
 
     def test_append_values_with_schema(self):
         from hft_platform.recorder.batcher import ColumnarBuffer
@@ -74,7 +72,6 @@ class TestColumnarBuffer:
         buf.clear()
         assert buf.row_count == 0
         assert buf.column_names == ["a"]
-        # Can still append after clear
         buf.append_row({"a": 2})
         assert buf.row_count == 1
 
@@ -99,9 +96,6 @@ class TestColumnarBuffer:
         assert buf.to_row_dicts() == []
 
 
-# ── EC-4: Sort by column ─────────────────────────────────────────────────
-
-
 class TestColumnarSort:
     def test_sort_by_column(self):
         from hft_platform.recorder.batcher import ColumnarBuffer
@@ -124,7 +118,6 @@ class TestColumnarSort:
         buf.append_row({"ts": 10, "v": "a"})
         buf.sort_by_column("ts")
         rows = buf.to_row_dicts()
-        # None sorts as 0
         assert rows[0]["v"] == "x"
 
     def test_sort_nonexistent_column_noop(self):
@@ -133,10 +126,7 @@ class TestColumnarSort:
         buf = ColumnarBuffer("test")
         buf.append_row({"a": 1})
         buf.sort_by_column("nonexistent")
-        assert buf.row_count == 1  # No crash
-
-
-# ── CC-2: Double-buffer swap / Batcher ────────────────────────────────────
+        assert buf.row_count == 1
 
 
 class _MockWriter:
@@ -168,8 +158,8 @@ async def test_batcher_columnar_flush():
     assert table == "hft.test"
     assert cols == ["id", "val"]
     assert count == 2
-    assert data[0] == [1, 2]  # id column
-    assert data[1] == ["a", "b"]  # val column
+    assert data[0] == [1, 2]
+    assert data[1] == ["a", "b"]
 
 
 @pytest.mark.asyncio
@@ -282,9 +272,6 @@ async def test_batcher_check_flush():
     assert w.columnar_calls
 
 
-# ── EC-1: GlobalMemoryGuard ──────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_global_memory_guard_budget():
     from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
@@ -298,14 +285,11 @@ async def test_global_memory_guard_budget():
     guard.register(b1)
     guard.register(b2)
 
-    # Fill low-priority batcher
     for i in range(4):
         await b1.add({"id": i})
     assert b1._active.row_count == 4
 
-    # High-priority should be allowed; low-priority shed
     allowed = guard.check_budget("hft.market_data", 3)
-    # After shedding from latency_spans, should allow some
     assert allowed >= 1
 
     GlobalMemoryGuard.reset()
@@ -322,32 +306,26 @@ async def test_global_memory_guard_under_budget():
     GlobalMemoryGuard.reset()
 
 
-# ── CC-4 / EC-3: WALBatchWriter ──────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_wal_batch_writer_coalescing(tmp_path):
     from hft_platform.recorder.wal import WALBatchWriter
 
     writer = WALBatchWriter(str(tmp_path))
-    writer._timer_running = False  # Disable auto-flush for test
+    writer._timer_running = False
 
     await writer.add("hft.market_data", [{"symbol": "TSE001", "price": 100}])
     await writer.add("hft.orders", [{"order_id": "O1"}])
 
-    # Manually flush
     await writer.flush()
 
     files = list(tmp_path.glob("batch_*.jsonl"))
     assert len(files) >= 1
 
-    # Read and verify multi-table format
     import json
 
     content = files[0].read_text()
     lines = [json.loads(line) for line in content.strip().split("\n")]
 
-    # Should have headers
     headers = [line for line in lines if "__wal_table__" in line]
     assert len(headers) == 2
     assert headers[0]["__wal_table__"] == "hft.market_data"
@@ -358,14 +336,13 @@ async def test_wal_batch_writer_coalescing(tmp_path):
 
 @pytest.mark.asyncio
 async def test_wal_batch_writer_size_limit(tmp_path, monkeypatch):
-    monkeypatch.setenv("HFT_WAL_FILE_MAX_MB", "0.001")  # ~1KB limit
+    monkeypatch.setenv("HFT_WAL_FILE_MAX_MB", "0.001")
 
     from hft_platform.recorder.wal import WALBatchWriter
 
     writer = WALBatchWriter(str(tmp_path))
     writer._timer_running = False
 
-    # Add enough data to exceed 1KB
     large_rows = [{"data": "x" * 200} for _ in range(10)]
     await writer.add("hft.test", large_rows)
     await writer.flush()
@@ -374,9 +351,6 @@ async def test_wal_batch_writer_size_limit(tmp_path, monkeypatch):
     assert len(files) >= 2, f"Expected file split, got {len(files)} files"
 
     writer.stop()
-
-
-# ── EC-5: PipelineHealthTracker ───────────────────────────────────────────
 
 
 class TestPipelineHealthTracker:
@@ -422,15 +396,12 @@ class TestPipelineHealthTracker:
         from hft_platform.recorder.health import PipelineHealthTracker
 
         tracker = PipelineHealthTracker()
-        tracker._window_s = 0.01  # 10ms window
+        tracker._window_s = 0.01
         tracker.record_event("wal_fallback", table="test")
         time.sleep(0.02)
         tracker.prune()
         health = tracker.get_health()
         assert health["events_in_window"] == 0
-
-
-# ── CC-5: Schema extractors ──────────────────────────────────────────────
 
 
 class TestSchemaExtractors:
@@ -477,13 +448,8 @@ class TestSchemaExtractors:
     def test_extractor_returns_none_on_error(self):
         from hft_platform.recorder.worker import _extract_market_data
 
-        # Non-dict, non-object with no attributes = returns mostly None values but still works
         result = _extract_market_data(42)
-        # Should return a dict (with None values) or None
         assert result is None or isinstance(result, dict)
-
-
-# ── Loader: Multi-table WAL parsing ──────────────────────────────────────
 
 
 class TestLoaderBatchParsing:
@@ -495,9 +461,6 @@ class TestLoaderBatchParsing:
         assert WALLoaderService._parse_batch_table_name("hft.trades") == "trades"
         assert WALLoaderService._parse_batch_table_name("market_data") == "market_data"
         assert WALLoaderService._parse_batch_table_name("hft.logs") == "risk_log"
-
-
-# ── Writer: write_columnar ───────────────────────────────────────────────
 
 
 @pytest.mark.asyncio

@@ -62,7 +62,6 @@ def test_truncate_log_includes_dropped_sample():
     client = _StubClient(conn_id="0", symbols=_make_symbols(150), subscribed=120)
     record = _emit(client, requested=150, phase="subscribe_basket")
     text = str(record)
-    # First 5 dropped codes (indices 120..124)
     for i in range(120, 125):
         assert f"SYM{i:04d}" in text, f"expected dropped sample SYM{i:04d} in: {text!r}"
 

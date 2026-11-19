@@ -17,18 +17,12 @@ from structlog import get_logger
 logger = get_logger("config.schema")
 
 
-# ---------------------------------------------------------------------------
-# Schema definitions
-# ---------------------------------------------------------------------------
-
-
 class StrategyConfig(msgspec.Struct, frozen=True):
     """Strategy section of the config."""
 
     id: str
     module: str
 
-    # ``class`` is a Python keyword; msgspec renames via ``rename``.
     class_name: str = msgspec.field(name="class", default="")
     params: Dict[str, Any] = msgspec.field(default_factory=dict)
 
@@ -74,29 +68,14 @@ class HftConfig(msgspec.Struct, frozen=True):
 
     intraday_pnl: Optional[IntraDayPnlConfig] = None
 
-    # Allow extra keys that overlay YAMLs or settings.py may inject.
-    # We capture them explicitly so msgspec doesn't reject unknown fields.
     env: Optional[str] = None
 
-    # Loop-mode binding (loop_v1). When set, the loader resolves
-    # config/loops/<loop_id>.yaml and forces strategy/broker from that
-    # file. Strict schema is also enforced whenever loop_id is set, so
-    # typos surface fast.
     loop_id: Optional[str] = None
 
-    # Env-overlay service-config blocks. These are consumed by services
-    # (Shadow service, broker adapters) via ``settings.get("<name>")``
-    # rather than as typed structs. Declared here so strict mode accepts
-    # them as known top-level keys instead of treating them as typos.
-    # Source files: ``config/env/shadow/main.yaml``, ``config/env/live/main.yaml``.
     shadow: Optional[Dict[str, Any]] = None
     shioaji: Optional[Dict[str, Any]] = None
     fubon: Optional[Dict[str, Any]] = None
 
-
-# ---------------------------------------------------------------------------
-# Validation helpers
-# ---------------------------------------------------------------------------
 
 _VALID_MODES = {"sim", "live", "replay"}
 _VALID_BROKERS = {"shioaji", "fubon"}
@@ -131,7 +110,6 @@ def _semantic_checks(cfg: HftConfig) -> List[str]:
         if not cfg.strategy.module:
             errors.append("strategy.module must be a non-empty string")
 
-    # Intraday PnL sanity
     if cfg.intraday_pnl is not None:
         pnl = cfg.intraday_pnl
         if pnl.soft_limit_ntd < 0:
@@ -166,7 +144,6 @@ def validate_config(config_dict: Dict[str, Any], *, strict: bool = False) -> Hft
         If structural or semantic validation fails, or (when ``strict``)
         unknown top-level keys are present.
     """
-    # Strip unknown top-level keys that msgspec would reject, but log them.
     known_fields = {f.encode_name for f in msgspec.structs.fields(HftConfig)}
     extra_keys = set(config_dict.keys()) - known_fields
     clean = {k: v for k, v in config_dict.items() if k in known_fields}
@@ -176,13 +153,11 @@ def validate_config(config_dict: Dict[str, Any], *, strict: bool = False) -> Hft
             raise ConfigValidationError("unknown top-level keys (strict mode): " + ", ".join(sorted(extra_keys)))
         logger.debug("config_schema_extra_keys_ignored", keys=sorted(extra_keys))
 
-    # Structural validation via msgspec.convert
     try:
         cfg = msgspec.convert(clean, HftConfig, strict=False)
     except msgspec.ValidationError as exc:
         raise ConfigValidationError(f"Config structure invalid: {exc}") from exc
 
-    # Semantic validation
     errors = _semantic_checks(cfg)
     if errors:
         raise ConfigValidationError("Config semantic errors:\n  - " + "\n  - ".join(errors))

@@ -47,7 +47,7 @@ def test_detail_panel_shows_symbol_and_composite() -> None:
     ss = _ss()
     panel = build_detail_panel(ss, _config(), {"alpha_1": 0.5})
     text = panel.renderable.plain
-    assert "ALP" in text  # truncated alpha_1 -> ALP
+    assert "ALP" in text
     assert "Composite" in text
 
 

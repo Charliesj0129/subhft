@@ -36,7 +36,6 @@ def test_del_helper_returns_prior_value():
     prior = adapter._del_order_id_mapping("BROKER123", source="unit_test")
     assert prior == "strat:1"
     assert "BROKER123" not in adapter.order_id_map
-    # Idempotent: deleting absent key returns None.
     assert adapter._del_order_id_mapping("BROKER123", source="unit_test") is None
 
 
@@ -44,7 +43,6 @@ def test_helper_lock_is_reentrant():
     """Re-entrant lock allows batch writers to hold the lock while delegating
     individual writes through the helper. Non-reentrant Lock would deadlock."""
     adapter = _make_adapter()
-    # Simulate batch writer pattern.
     with adapter._order_id_map_lock:
         adapter._set_order_id_mapping("A", "strat:1", source="batch")
         adapter._set_order_id_mapping("B", "strat:2", source="batch")
@@ -61,7 +59,7 @@ def test_concurrent_set_no_lost_writes():
     barrier = threading.Barrier(threads_n)
 
     def _worker(tid: int) -> None:
-        barrier.wait()  # maximise contention
+        barrier.wait()
         for i in range(writes_per_thread):
             key = f"t{tid}-k{i}"
             adapter._set_order_id_mapping(key, f"strat:{tid}:{i}", source=f"worker-{tid}")
@@ -80,7 +78,6 @@ def test_set_helper_emits_debug_log_with_source():
     adapter = _make_adapter()
     with patch("hft_platform.order.adapter.logger") as mock_logger:
         adapter._set_order_id_mapping("TOKEN1", "strat:9", source="unit_set_log")
-    # Assert logger.debug was called with the expected event + source.
     call_args_list = mock_logger.debug.call_args_list
     assert any(
         ("order_id_map_set",) == call.args and call.kwargs.get("source") == "unit_set_log" for call in call_args_list
@@ -111,5 +108,4 @@ def test_register_broker_ids_bulk_uses_helper():
         for call in mock_logger.debug.call_args_list
         if call.args and call.args[0] == "order_id_map_set"
     ]
-    # All three writes MUST emit a debug log with the bulk source tag.
     assert sources.count("register_broker_ids_bulk") == 3

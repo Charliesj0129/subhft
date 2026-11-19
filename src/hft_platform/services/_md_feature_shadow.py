@@ -61,14 +61,11 @@ def init_feature_shadow_engine(svc: Any) -> None:
             emit_events=True,
             kernel_backend=shadow_backend,
         )
-        # If backend fallback happened and becomes identical to primary due missing Rust,
-        # still allow compare if explicitly requested.
         if (
             requested == ""
             and hasattr(shadow, "kernel_backend")
             and shadow.kernel_backend() == primary_backend == "python"
         ):
-            # Auto mode could not create meaningful alternate backend.
             return
         svc._feature_shadow_engine = shadow
     except Exception as exc:

@@ -14,7 +14,7 @@ def test_wal_scheduler_initialization():
 
     assert scheduler._loader is mock_loader
     assert scheduler._running is False
-    assert scheduler._close_buffer_s == 300  # Default 5 minutes
+    assert scheduler._close_buffer_s == 300
 
 
 def test_wal_scheduler_start_stop():
@@ -23,7 +23,7 @@ def test_wal_scheduler_start_stop():
 
     mock_loader = MagicMock()
     scheduler = WALScheduler(mock_loader)
-    scheduler._check_interval_s = 0.1  # Fast check for test
+    scheduler._check_interval_s = 0.1
 
     scheduler.start()
     assert scheduler.running is True
@@ -68,12 +68,11 @@ def test_wal_scheduler_trigger_flush_handles_error():
     mock_loader = MagicMock()
     mock_loader.process_files.side_effect = RuntimeError("boom")
     scheduler = WALScheduler(mock_loader)
-    scheduler._flush_max_retries = 1  # No retries for faster test
+    scheduler._flush_max_retries = 1
     scheduler._flush_base_delay_s = 0.01
 
-    # trigger_flush now returns False after all retries exhausted
     result = scheduler.trigger_flush()
-    assert result is False  # Returns False because all retries failed
+    assert result is False
     mock_loader.process_files.assert_called_once_with(force=True)
 
 
@@ -84,7 +83,6 @@ def test_wal_scheduler_check_and_flush_non_trading_day():
     mock_loader = MagicMock()
     scheduler = WALScheduler(mock_loader)
 
-    # Mock calendar to return non-trading day
     mock_calendar = MagicMock()
     mock_calendar.is_trading_day.return_value = False
     mock_calendar._tz = dt.timezone.utc
@@ -108,16 +106,13 @@ def test_wal_scheduler_check_and_flush_before_close():
     scheduler = WALScheduler(mock_loader)
     scheduler._close_buffer_s = 300
 
-    # Mock calendar
     mock_calendar = MagicMock()
     mock_calendar.is_trading_day.return_value = True
     mock_calendar._tz = dt.timezone.utc
-    # Close time is 13:30, current time is 13:00 - before close + buffer
     close_time = dt.datetime(2026, 2, 11, 13, 30, tzinfo=dt.timezone.utc)
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # Freeze time to before trigger
     now = dt.datetime(2026, 2, 11, 13, 0, tzinfo=dt.timezone.utc)
     with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
         mock_tb.now_s.return_value = _epoch_s(now)
@@ -132,9 +127,8 @@ def test_wal_scheduler_check_and_flush_after_close():
 
     mock_loader = MagicMock()
     scheduler = WALScheduler(mock_loader)
-    scheduler._close_buffer_s = 300  # 5 minutes
+    scheduler._close_buffer_s = 300
 
-    # Mock calendar
     mock_calendar = MagicMock()
     mock_calendar.is_trading_day.return_value = True
     mock_calendar._tz = dt.timezone.utc
@@ -142,7 +136,6 @@ def test_wal_scheduler_check_and_flush_after_close():
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # Freeze time to after trigger (13:36 > 13:35)
     now = dt.datetime(2026, 2, 11, 13, 36, tzinfo=dt.timezone.utc)
     with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
         mock_tb.now_s.return_value = _epoch_s(now)
@@ -161,7 +154,6 @@ def test_wal_scheduler_no_double_flush():
     scheduler = WALScheduler(mock_loader)
     scheduler._close_buffer_s = 300
 
-    # Mock calendar
     mock_calendar = MagicMock()
     mock_calendar.is_trading_day.return_value = True
     mock_calendar._tz = dt.timezone.utc
@@ -169,7 +161,6 @@ def test_wal_scheduler_no_double_flush():
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # Set already flushed today
     scheduler._last_flush_date = dt.date(2026, 2, 11)
 
     now = dt.datetime(2026, 2, 11, 14, 0, tzinfo=dt.timezone.utc)
@@ -203,7 +194,7 @@ def test_wal_scheduler_metrics_on_error():
     mock_loader = MagicMock()
     mock_loader.process_files.side_effect = RuntimeError("boom")
     scheduler = WALScheduler(mock_loader)
-    scheduler._flush_max_retries = 1  # No retries for this test
+    scheduler._flush_max_retries = 1
 
     mock_metrics = MagicMock()
     scheduler._metrics = mock_metrics
@@ -219,16 +210,15 @@ def test_batch_flush_retry_on_failure():
     from hft_platform.recorder.wal_scheduler import WALScheduler
 
     mock_loader = MagicMock()
-    # Fail first two times, succeed third
     mock_loader.process_files.side_effect = [
         RuntimeError("fail 1"),
         RuntimeError("fail 2"),
-        None,  # Success
+        None,
     ]
 
     scheduler = WALScheduler(mock_loader)
     scheduler._flush_max_retries = 3
-    scheduler._flush_base_delay_s = 0.01  # Fast for test
+    scheduler._flush_base_delay_s = 0.01
     scheduler._flush_max_delay_s = 1.0
 
     mock_metrics = MagicMock()
@@ -238,7 +228,6 @@ def test_batch_flush_retry_on_failure():
 
     assert result is True
     assert mock_loader.process_files.call_count == 3
-    # Two retries should have been recorded
     assert mock_metrics.wal_batch_flush_retry_total.inc.call_count == 2
     mock_metrics.wal_batch_flush_total.labels.assert_called_with(result="ok")
 
@@ -252,7 +241,7 @@ def test_batch_flush_retry_exhausted():
 
     scheduler = WALScheduler(mock_loader)
     scheduler._flush_max_retries = 3
-    scheduler._flush_base_delay_s = 0.01  # Fast for test
+    scheduler._flush_base_delay_s = 0.01
     scheduler._flush_max_delay_s = 1.0
 
     mock_metrics = MagicMock()
@@ -262,7 +251,6 @@ def test_batch_flush_retry_exhausted():
 
     assert result is False
     assert mock_loader.process_files.call_count == 3
-    # Two retries (not counting first attempt)
     assert mock_metrics.wal_batch_flush_retry_total.inc.call_count == 2
     mock_metrics.wal_batch_flush_total.labels.assert_called_with(result="error")
 
@@ -303,7 +291,6 @@ def test_adaptive_check_interval_trading_hours():
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # During trading hours (10:00)
     now = dt.datetime(2026, 2, 16, 10, 0, tzinfo=dt.timezone.utc)
     with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
         mock_tb.now_s.return_value = _epoch_s(now)
@@ -328,7 +315,6 @@ def test_adaptive_check_interval_pre_market():
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # Pre-market (8:30 - within 1 hour before open)
     now = dt.datetime(2026, 2, 16, 8, 30, tzinfo=dt.timezone.utc)
     with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
         mock_tb.now_s.return_value = _epoch_s(now)
@@ -343,7 +329,7 @@ def test_adaptive_check_interval_post_close_buffer():
 
     mock_loader = MagicMock()
     scheduler = WALScheduler(mock_loader)
-    scheduler._close_buffer_s = 300  # 5 min buffer
+    scheduler._close_buffer_s = 300
 
     mock_calendar = MagicMock()
     mock_calendar.is_trading_day.return_value = True
@@ -354,7 +340,6 @@ def test_adaptive_check_interval_post_close_buffer():
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # Post-close buffer (13:35 - 5 minutes after close)
     now = dt.datetime(2026, 2, 16, 13, 35, tzinfo=dt.timezone.utc)
     with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
         mock_tb.now_s.return_value = _epoch_s(now)
@@ -369,7 +354,7 @@ def test_adaptive_check_interval_after_buffer():
 
     mock_loader = MagicMock()
     scheduler = WALScheduler(mock_loader)
-    scheduler._close_buffer_s = 300  # 5 min buffer
+    scheduler._close_buffer_s = 300
 
     mock_calendar = MagicMock()
     mock_calendar.is_trading_day.return_value = True
@@ -380,7 +365,6 @@ def test_adaptive_check_interval_after_buffer():
     mock_calendar.get_session_close.return_value = close_time
     scheduler._calendar = mock_calendar
 
-    # Well after buffer (15:00)
     now = dt.datetime(2026, 2, 16, 15, 0, tzinfo=dt.timezone.utc)
     with patch("hft_platform.recorder.wal_scheduler.timebase") as mock_tb:
         mock_tb.now_s.return_value = _epoch_s(now)

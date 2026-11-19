@@ -35,9 +35,7 @@ logger = structlog.get_logger()
 _ROOT = re.compile(r"^[A-Z]{2,4}$")
 _TZ_NAME = re.compile(r"^[A-Za-z_]+/[A-Za-z_]+$")
 
-# One part of a day on one contract: the contract and how to load its events.
 _Segment = tuple[str, Callable[[], "list[TickData]"]]
-# One day of a series: its row label and its segments (two on a rolled delivery day).
 _SeriesDay = tuple[str, tuple[_Segment, ...]]
 
 
@@ -68,14 +66,7 @@ class TickData:
         return (self.bid_price + self.ask_price) / (2 * self.scale)
 
 
-# Same convention as ``HftNativeRunner`` (``BacktestConfig.is_oos_split``): the first 70% of the
-# ordered observations are in-sample, the rest out-of-sample.
 DEFAULT_IS_OOS_SPLIT = 0.7
-# ``sharpe_oos`` feeds floors such as ``discover_gate_d_candidates(min_sharpe_oos=1.0)``. An annualised
-# Sharpe over n daily returns has a standard error near sqrt(252 / n): about 3.5 at 20 days, so a floor of
-# 1.0 would be cleared by luck. Until the OOS segment has this many days the engine keeps reporting 0.0
-# (the value those floors have always seen) and says why in ``sharpe_oos_status``; the raw figure is
-# still published as ``sharpe_oos_raw`` for people. Fixing the hard-coded 0.0 must not make a gate easier.
 MIN_OOS_DAYS = 20
 
 
@@ -86,7 +77,7 @@ class OosSharpe:
     raw: float
     reported: float
     days: int
-    status: str  # "ok" | "insufficient_oos_days" | "flat_oos_returns"
+    status: str
 
 
 @dataclass(frozen=True)
@@ -107,8 +98,6 @@ class LatencyProfile:
 
     place_ns: int = 0
     cancel_ns: int = 0
-    # Name of the profile in config/research/latency_profiles.yaml that these numbers came
-    # from. Empty when the profile was built by hand; the result then says "unlabelled".
     profile_id: str = ""
 
     @classmethod
@@ -267,12 +256,7 @@ class MakerEngine:
         self._fill_model = fill_model
         self._cost_model = cost_model
         self._ck_source = ck_source or ClickHouseSource()
-        # D5: None = instant-RTT (backward compat). Set for live-faithful sim.
         self._latency = latency_profile
-        # Slice B Task 3: mark-to-market policy for residual position. The
-        # day loop computes ``last_mid`` and the FIFO-residual avg entry and
-        # passes them through the static ``_compute_residual_mtm`` helper.
-        # ``mark_method`` is currently advisory (recorded in daily_pnl rows).
         self._mark_method = mark_method
         self._last_mid: int = 0
         self._last_avg_entry: int = 0
@@ -348,26 +332,12 @@ class MakerEngine:
         total_gross = 0.0
         total_fills = 0
         spread_breakdown: dict[int, dict] = {}
-        # Slice B Task 4: aggregate residual fields for BacktestResult.
-        # ``total_residual_mtm`` SUMS each day's residual_mtm_pts (mirrors the
-        # ``total_gross`` accumulation; the equity curve already reflects it).
-        # ``final_residual_qty`` snapshots the LAST traded day's residual qty
-        # (per-day FIFO is independent so day-to-day residual qty is not
-        # additive). Both default to 0 if no days traded.
         total_residual_mtm = 0.0
         final_residual_qty = 0
-        # Round 24/25: accumulate per-round-trip NET PnL across days so the
-        # trade-axis sub-gates (trade_concentration, outlier_trade_removal,
-        # edge_per_round_trip) read goal §1's per-round-trip edge directly
-        # instead of falling back to daily_pnl.  Per-trip net allocates the
-        # day-level cost/MtM delta evenly across that day's trips so the
-        # invariant ``sum(day-trips) == day_net`` holds whenever day_trips > 0.
         trade_pnl_pts: list[float] = []
 
         active_contract: str | None = None
         set_active_symbol = getattr(strategy, "set_active_symbol", None)
-        # _run_day starts every day flat with no resting orders; a strategy
-        # that keeps its own position is flattened to match before each one.
         flatten_position = getattr(strategy, "flatten_position", None)
         for date, segments in days:
             loaded = [(contract, load_events()) for contract, load_events in segments]
@@ -394,7 +364,6 @@ class MakerEngine:
 
                 seg_fills, day_position, seg_last_mid, seg_last_avg = self._run_day(strategy, events)
                 seg_gross, seg_trips, seg_wins = self._compute_fifo_pnl(seg_fills)
-                # Slice B Task 3: residual MtM folded into day-level accounting.
                 seg_residual_mtm = self._compute_residual_mtm(
                     open_pos=day_position,
                     mark_price=seg_last_mid,
@@ -406,7 +375,6 @@ class MakerEngine:
                 day_trips += seg_trips
                 day_wins += seg_wins
                 day_residual_mtm += seg_residual_mtm
-                # Trips never pair fills across contracts.
                 day_trip_grosses.extend(project_trade_pnl(seg_fills))
                 seg_rows.append(
                     {
@@ -417,18 +385,12 @@ class MakerEngine:
                         "residual_mtm_pts": round(seg_residual_mtm, 2),
                     }
                 )
-            # Punch-list (2026-05-29): preserve signed residual_qty
-            # (positive=long, negative=short) for accounting; expose
-            # ``abs_residual_qty`` as the derived display/aggregate field.
             day_residual_qty_signed = int(day_position)
             day_abs_residual_qty = abs(day_residual_qty_signed)
             day_gross_mtm_aware = day_gross + day_residual_mtm
             day_net = self._cost_model.apply(day_gross_mtm_aware, len(day_fills))
 
             total_gross += day_gross_mtm_aware
-            # Slice B Task 4: track residual aggregation alongside total_gross.
-            # Sum the rounded daily values so the result-level field matches
-            # ``round(sum(d["residual_mtm_pts"] for d in daily_pnl), 2)``.
             total_residual_mtm += round(day_residual_mtm, 2)
             final_residual_qty = day_residual_qty_signed
             total_fills += len(day_fills)
@@ -460,9 +422,6 @@ class MakerEngine:
                     spread_breakdown[spr] = {"fills": 0, "gross_pnl": 0.0}
                 spread_breakdown[spr]["fills"] += 1
 
-            # Round 25: project per-round-trip PnL from this day's fills,
-            # allocate day-level (cost + residual MtM) delta evenly across
-            # trips so sum-per-day == day_net (when day_trips > 0).
             if day_trip_grosses:
                 delta_per_trip = (day_net - day_gross) / len(day_trip_grosses)
                 trade_pnl_pts.extend(g + delta_per_trip for g in day_trip_grosses)
@@ -531,9 +490,6 @@ class MakerEngine:
                 "sharpe_oos_status": oos.status,
             },
             per_spread_breakdown={str(k): v for k, v in sorted(spread_breakdown.items())},
-            # Slice B Task 4 + 2026-05-29 punch list: residual decomposition.
-            # ``residual_qty`` carries the signed final-day position; the
-            # unsigned magnitude is exposed via ``abs_residual_qty``.
             residual_mtm_pts=round(total_residual_mtm, 2),
             residual_qty=final_residual_qty,
             abs_residual_qty=abs(final_residual_qty),
@@ -607,11 +563,8 @@ class MakerEngine:
         position = 0
         fills: list[dict] = []
         cur_bid = cur_ask = cur_bid_v = cur_ask_v = 0
-        # Slice B Task 3: track last well-formed mid (scaled int) for MtM.
         last_mid_scaled: int = 0
 
-        # D5 pending-action queues. Each entry is (activation_ts, op, payload).
-        # op ∈ {"place_buy", "place_sell", "cancel_buy", "cancel_sell"}.
         pending: list[tuple[int, str, QueuePosition | None]] = []
         place_ns = self._latency.place_ns if self._latency else 0
         cancel_ns = self._latency.cancel_ns if self._latency else 0
@@ -635,7 +588,7 @@ class MakerEngine:
             pending = remaining
 
         for event in events:
-            _apply_pending(event.exch_ts)  # D5: drain latency queue first
+            _apply_pending(event.exch_ts)
 
             if not event.is_trade:
                 cur_bid = event.bid_price
@@ -646,9 +599,6 @@ class MakerEngine:
                 if cur_ask <= cur_bid:
                     continue
 
-                # Slice B Task 3: capture the last well-formed mid (scaled
-                # int) for residual MtM. Crossed/locked books are skipped
-                # above, so this only updates from sane snapshots.
                 last_mid_scaled = (cur_bid + cur_ask) // 2
 
                 if buy_order is not None and buy_order.price != cur_bid:
@@ -664,8 +614,6 @@ class MakerEngine:
                             action.price,
                             cur_bid_v if action.side == "buy" else cur_ask_v,
                         )
-                        # D5: schedule placement at event.exch_ts + place_ns.
-                        # With place_ns=0 (default), this is applied this tick.
                         op = "place_buy" if action.side == "buy" else "place_sell"
                         if place_ns == 0:
                             if action.side == "buy":
@@ -724,8 +672,6 @@ class MakerEngine:
                         position -= 1
                         sell_order = None
 
-        # Slice B Task 3: derive the FIFO-residual avg entry. If flat, use
-        # last_mid so residual_mtm == 0 (matches helper's open_pos==0 path).
         if position == 0:
             last_avg_entry = last_mid_scaled
         else:
@@ -769,7 +715,7 @@ class MakerEngine:
         if open_pos == 0:
             return 0.0
         pnl_int = open_pos * (mark_price - avg_entry_price)
-        return pnl_int / scale  # scaled-int -> points
+        return pnl_int / scale
 
     @staticmethod
     def _compute_residual_avg_entry(fills: list[dict]) -> int:
@@ -806,8 +752,6 @@ class MakerEngine:
         residual = buy_q if buy_q else sell_q
         if not residual:
             return 0
-        # Integer mean — matches scaled-int convention; trailing fraction
-        # below 1 unit is irrelevant at scale=1_000_000 (sub-microtick).
         return sum(residual) // len(residual)
 
     @staticmethod

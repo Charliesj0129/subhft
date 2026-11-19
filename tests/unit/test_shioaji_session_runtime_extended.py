@@ -195,7 +195,7 @@ class TestLoginConnectionLimitBackoff:
         rt = self._rt_with_error(self._CONNLIMIT)
         with patch.object(SessionRuntime, "login_with_retry", side_effect=[False, False, False]) as lwr:
             assert rt.login() is False
-            assert lwr.call_count == 3  # initial + default 2 backoff retries
+            assert lwr.call_count == 3
         assert sleep_mock.call_count == 2
 
     def test_backoff_disabled_with_zero_retries(self, monkeypatch):
@@ -274,8 +274,8 @@ class TestRetriedLoginStillAwaitsContracts:
 
         client = make_mock_client(fetch_contract=True)
         client._safe_call_with_timeout.side_effect = [
-            (False, None, "timeout", True),  # first login timed out
-            (True, None, None, False),  # the retry succeeds
+            (False, None, "timeout", True),
+            (True, None, None, False),
         ]
 
         result = SessionRuntime(client).login_with_retry()
@@ -300,8 +300,6 @@ class TestRetriedLoginStillAwaitsContracts:
 
         SessionRuntime(client).login_with_retry()
 
-        # ``_ensure_contracts`` downloads with ``contract_download=True``; at
-        # login it would race the SDK's own load. Readiness is awaited instead.
         client._ensure_contracts.assert_not_called()
         assert client._contracts_ready is True
 
@@ -330,7 +328,7 @@ class TestQuoteOnlyConnectionSuppressesBlockedLog:
 
         client = make_mock_client(fetch_contract=False)
         client._safe_call_with_timeout.return_value = (True, None, None, False)
-        client.contracts_ready = False  # expected for quote-only connection
+        client.contracts_ready = False
 
         rt = SessionRuntime(client)
         with _patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as mock_log:
@@ -354,7 +352,7 @@ class TestQuoteOnlyConnectionSuppressesBlockedLog:
 
         client = make_mock_client(fetch_contract=True, api=MagicMock(), _login_contract_timeout_s=0.0)
         client._safe_call_with_timeout.return_value = (True, None, None, False)
-        client.contracts_ready = False  # unexpected — should warn
+        client.contracts_ready = False
 
         rt = SessionRuntime(client)
         with _patch("hft_platform.feed_adapter.shioaji.session_runtime.logger") as mock_log:

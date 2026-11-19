@@ -146,7 +146,7 @@ def main() -> None:
             duration_s=args.duration,
             symbol=args.symbol,
         )
-        print(f"Produced {produced} events, queue size: {queue.qsize()}")  # noqa: T201
+        print(f"Produced {produced} events, queue size: {queue.qsize()}")
 
     asyncio.run(_run())
 

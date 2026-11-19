@@ -11,10 +11,6 @@ import pytest
 
 from hft_platform.recorder.wal import WALWriter
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_row(i: int) -> dict:
     """Create a deterministic test row."""
@@ -41,11 +37,6 @@ def _read_all_jsonl_lines(wal_dir: Path) -> list[str]:
             if stripped:
                 all_lines.append(stripped)
     return all_lines
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.chaos

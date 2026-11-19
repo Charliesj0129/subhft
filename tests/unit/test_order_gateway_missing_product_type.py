@@ -41,7 +41,7 @@ class _StubClient:
 
 @pytest.fixture()
 def offline_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
-    monkeypatch.chdir(tmp_path)  # shioaji writes shioaji.log into the cwd
+    monkeypatch.chdir(tmp_path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         return sj.Shioaji(simulation=True)

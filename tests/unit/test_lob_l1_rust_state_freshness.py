@@ -20,7 +20,7 @@ from hft_platform.feed_adapter import lob_engine
 from hft_platform.feed_adapter.lob_engine import BookState, LOBEngine
 
 BOOT_TS = 1_000_000_000
-LIVE_TS = 61_000_000_000  # one minute later: past the loss exit's 30 s age limit
+LIVE_TS = 61_000_000_000
 
 BOOT_BID, BOOT_ASK = 459_680_000, 459_690_000
 LIVE_BID, LIVE_ASK = 450_770_000, 450_780_000

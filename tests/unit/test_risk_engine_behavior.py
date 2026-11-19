@@ -25,8 +25,6 @@ from hft_platform.contracts.strategy import (
 from hft_platform.risk import engine as engine_mod
 from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator, _obs_policy
 
-# ── Fixtures ───────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def cfg_path(tmp_path):
@@ -78,9 +76,6 @@ def _intent(
     )
 
 
-# ── _load_rust_risk_validator ──────────────────────────────────────────────
-
-
 def test_load_rust_risk_validator_caches():
     """Second call returns cached value without re-importing."""
     engine_mod._RustRiskValidator = None
@@ -97,9 +92,6 @@ def test_load_rust_risk_validator_both_fail():
         result = _load_rust_risk_validator()
         assert result is None
         engine_mod._RustRiskValidator = None
-
-
-# ── _obs_policy ────────────────────────────────────────────────────────────
 
 
 def test_obs_policy_minimal(monkeypatch):
@@ -119,16 +111,9 @@ def test_obs_policy_unknown_returns_empty(monkeypatch):
     assert _obs_policy() == ""
 
 
-# ── _get_trace_sampler ImportError ─────────────────────────────────────────
-
-
 def test_get_trace_sampler_import_error_returns_none():
     result = engine_mod._get_trace_sampler()
-    # diagnostics.trace module is present in this env; sampler is returned (not None)
     assert result is not None
-
-
-# ── _init_fast_gate ────────────────────────────────────────────────────────
 
 
 def test_init_fast_gate_disabled_by_default(engine):
@@ -165,9 +150,6 @@ def test_init_fast_gate_invalid_scale(cfg_path, monkeypatch):
             assert call_kwargs.get("price_scale", 10_000) == 10_000
 
 
-# ── _init_rust_validator ───────────────────────────────────────────────────
-
-
 def test_init_rust_validator_disabled_by_default(engine):
     assert engine._rust_validator is None
 
@@ -196,7 +178,6 @@ def test_init_rust_validator_per_strategy_config(cfg_path, monkeypatch):
         q_in = asyncio.Queue()
         q_out = asyncio.Queue()
         e = RiskEngine(cfg_path, q_in, q_out)
-        # set_band_ticks and set_max_notional should have been called for s1
         assert mock_instance.set_band_ticks.called or mock_instance.set_max_notional.called
 
 
@@ -211,9 +192,6 @@ def test_init_rust_validator_raises_returns_none(cfg_path, monkeypatch):
         q_out = asyncio.Queue()
         e = RiskEngine(cfg_path, q_in, q_out)
         assert e._rust_validator is None
-
-
-# ── reload_config ──────────────────────────────────────────────────────────
 
 
 def test_reload_config_updates_validators(engine):
@@ -238,11 +216,8 @@ def test_reload_config_updates_validators(engine):
 def test_reload_config_file_missing_logs_error(engine):
     """reload_config with missing file logs error without raising."""
     engine.config_path = "/nonexistent/path.yaml"
-    engine.reload_config()  # Must not propagate exception
+    engine.reload_config()
     assert engine.config_path == "/nonexistent/path.yaml"
-
-
-# ── run() async loop ───────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -268,7 +243,7 @@ async def test_run_approved_puts_command(engine):
 async def test_run_rejected_does_not_put_command(engine):
     """Float price triggers FLOAT_PRICE rejection."""
     bad_intent = MagicMock(spec=OrderIntent)
-    bad_intent.price = 100.5  # float triggers rejection
+    bad_intent.price = 100.5
     bad_intent.strategy_id = "s1"
     bad_intent.symbol = "TSE:2330"
     bad_intent.intent_type = IntentType.NEW
@@ -386,7 +361,6 @@ async def test_run_exception_metric_failure_does_not_mask_error(engine):
     except asyncio.CancelledError:
         pass
 
-    # Loop continued: second intent was processed
     assert call_count[0] >= 2
 
 
@@ -400,9 +374,6 @@ async def test_run_cancelled_error_stops_loop(engine):
     except asyncio.CancelledError:
         pass
     assert task.done() or task.cancelled()
-
-
-# ── evaluate: fast gate OSError / unknown code ────────────────────────────
 
 
 def test_evaluate_fast_gate_oserror_fail_closed(engine):
@@ -447,9 +418,6 @@ def test_evaluate_cancel_intent_skips_fast_gate(engine):
     assert decision.approved
 
 
-# ── evaluate: rust validator with LOB ─────────────────────────────────────
-
-
 def test_evaluate_rust_validator_ok(engine):
     """RustRiskValidator returning ok=True proceeds."""
     mock_rv = MagicMock()
@@ -478,7 +446,6 @@ def test_evaluate_rust_validator_oserror_falls_through(engine):
     engine._rust_validator = mock_rv
 
     decision = engine.evaluate(_intent())
-    # OSError falls through to Python validators; intent is within limits so approved
     assert decision.approved is True
 
 
@@ -493,14 +460,9 @@ def test_evaluate_rust_validator_with_lob_mid_price(engine):
 
     decision = engine.evaluate(_intent())
     call_args = mock_rv.check.call_args[0]
-    assert call_args[5] == 5_000_000  # mid_price passed in
-    # A Rust approval no longer ends the check: the Python price band runs
-    # after it and refuses a price 80% below that mid.
+    assert call_args[5] == 5_000_000
     assert not decision.approved
     assert decision.reason_code.startswith("PRICE_OUTSIDE_BAND")
-
-
-# ── typed_frame_view / create_command ─────────────────────────────────────
 
 
 def test_typed_frame_view_fallback(engine):
@@ -548,14 +510,11 @@ def test_create_typed_command_frame(engine):
     assert result[0] == "typed_order_cmd_v1"
 
 
-# ── emit reject metric edge cases ─────────────────────────────────────────
-
-
 def test_emit_reject_metric_none_metrics(engine):
     """_emit_reject_metric with no metrics returns silently."""
     engine.metrics = None
-    engine._emit_reject_metric("s1", "TEST_REASON")  # Must not raise
-    assert engine.metrics is None  # confirms no side-effect replacement
+    engine._emit_reject_metric("s1", "TEST_REASON")
+    assert engine.metrics is None
 
 
 def test_emit_reject_metric_counter_skips(engine):
@@ -579,13 +538,10 @@ def test_emit_reject_metric_cache_stale_owner_id(engine):
     mock_metrics.risk_reject_total.labels.return_value = mock_child
 
     engine.metrics = mock_metrics
-    engine._reject_metric_cache_owner_id = id(mock_metrics) + 999  # stale
+    engine._reject_metric_cache_owner_id = id(mock_metrics) + 999
 
     engine._emit_reject_metric("s1", "STALE_TEST")
     assert mock_metrics.risk_reject_total.labels.called
-
-
-# ── _audit_risk_decision ───────────────────────────────────────────────────
 
 
 def test_audit_risk_decision_called_on_approve(engine):
@@ -603,11 +559,8 @@ def test_audit_risk_decision_exception_swallowed(engine):
     with patch("hft_platform.recorder.audit.get_audit_writer", side_effect=RuntimeError("audit fail")):
         intent = _intent()
         decision = RiskDecision(approved=True, intent=intent)
-        engine._audit_risk_decision(intent, decision)  # Must not raise
-    assert decision.approved is True  # confirms no mutation on audit failure
-
-
-# ── _emit_trace ────────────────────────────────────────────────────────────
+        engine._audit_risk_decision(intent, decision)
+    assert decision.approved is True
 
 
 def test_emit_trace_with_sampler(engine):
@@ -616,13 +569,12 @@ def test_emit_trace_with_sampler(engine):
     intent = _intent()
 
     engine._emit_trace("risk_test", intent, {"stage": "test"})
-    # L5: order-bearing risk traces use emit_always (bypasses sample_every).
     sampler.emit_always.assert_called_once()
 
 
 def test_emit_trace_no_sampler(engine):
     engine._trace_sampler = None
-    engine._emit_trace("stage", _intent(), {})  # Must not raise
+    engine._emit_trace("stage", _intent(), {})
     assert engine._trace_sampler is None
 
 
@@ -630,11 +582,8 @@ def test_emit_trace_exception_swallowed(engine):
     sampler = MagicMock()
     sampler.emit_always.side_effect = TypeError("bad payload")
     engine._trace_sampler = sampler
-    engine._emit_trace("stage", _intent(), {"key": "val"})  # Must not raise
-    assert sampler.emit_always.called  # confirms emit_always was attempted before exception
-
-
-# ── notify_fill_pnl ────────────────────────────────────────────────────────
+    engine._emit_trace("stage", _intent(), {"key": "val"})
+    assert sampler.emit_always.called
 
 
 def test_notify_fill_pnl_with_daily_loss_validator(engine):
@@ -644,7 +593,6 @@ def test_notify_fill_pnl_with_daily_loss_validator(engine):
     has_dll = any(isinstance(v, DailyLossLimitValidator) for v in engine.validators)
     if has_dll:
         engine.notify_fill_pnl("s1", -50_000)
-        # Validator found and presumably updated without error
         assert True
 
 
@@ -653,11 +601,8 @@ def test_notify_fill_pnl_no_daily_loss_validator(engine):
     from hft_platform.risk.validators import DailyLossLimitValidator
 
     engine.validators = [v for v in engine.validators if not isinstance(v, DailyLossLimitValidator)]
-    engine.notify_fill_pnl("s1", -100_000)  # Must not raise
+    engine.notify_fill_pnl("s1", -100_000)
     assert not any(isinstance(v, DailyLossLimitValidator) for v in engine.validators)
-
-
-# ── shared scale cache ─────────────────────────────────────────────────────
 
 
 def test_shared_scale_cache_is_shared(cfg_path):
@@ -671,9 +616,6 @@ def test_shared_scale_cache_is_shared(cfg_path):
         assert len(set(caches)) == 1, "All validators should share the same cache dict"
 
 
-# ── evaluate float price ───────────────────────────────────────────────────
-
-
 def test_evaluate_float_price_rejects(engine):
     """Float price is rejected immediately with FLOAT_PRICE."""
     intent = MagicMock()
@@ -685,9 +627,6 @@ def test_evaluate_float_price_rejects(engine):
     decision = engine.evaluate(intent)
     assert not decision.approved
     assert decision.reason_code == "FLOAT_PRICE"
-
-
-# ── on_config_reload ───────────────────────────────────────────────────────
 
 
 def test_on_config_reload_clears_validator_caches(engine):

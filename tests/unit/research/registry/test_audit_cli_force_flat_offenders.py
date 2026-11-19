@@ -70,7 +70,6 @@ class TestForceFlatOffenders:
         assert "under_b" not in out
 
     def test_boundary_value_at_cap_is_excluded(self, _isolated) -> None:
-        # strictly-exceeds: exactly 30.0% is within the cap, not an offender.
         _record(run_id="exactly_cap", ff_share=30.0)
         out = audit_cli.force_flat_offenders()
         assert "exactly_cap" not in out

@@ -31,7 +31,6 @@ class TestQueueBackpressure:
                     produced += 1
                 except asyncio.QueueFull:
                     dropped += 1
-                # Simulate production rate
                 if i % 100 == 0:
                     await asyncio.sleep(0)
 
@@ -47,13 +46,10 @@ class TestQueueBackpressure:
 
         start = time.monotonic()
 
-        # Start consumer
         consumer_task = asyncio.create_task(consumer())
 
-        # Run producer
         await producer(10000)
 
-        # Wait for queue to drain
         await asyncio.sleep(0.5)
         consumer_task.cancel()
 
@@ -93,10 +89,8 @@ class TestQueueBackpressure:
                 except asyncio.TimeoutError:
                     break
 
-        # Start consumer
         consumer_task = asyncio.create_task(consumer())
 
-        # Start multiple producers
         producer_tasks = [asyncio.create_task(producer(i, 1000)) for i in range(5)]
 
         await asyncio.gather(*producer_tasks)
@@ -114,7 +108,6 @@ class TestQueueBackpressure:
 
         from hft_platform.recorder.batcher import BackpressurePolicy, Batcher
 
-        # Fast mock writer
         write_count = 0
         write_rows = 0
 
@@ -143,11 +136,9 @@ class TestQueueBackpressure:
 
         start = time.monotonic()
 
-        # Simulate high ingestion rate
         for i in range(10000):
             await batcher.add({"id": i, "value": f"data_{i}"})
 
-        # Force final flush
         await batcher.force_flush()
 
         elapsed = time.monotonic() - start
@@ -156,7 +147,6 @@ class TestQueueBackpressure:
         print(f"Writes: {write_count} batches, {write_rows} rows")
         print(f"Time: {elapsed:.2f}s, Rate: {batcher.total_count / elapsed:.0f}/s")
 
-        # Verify data integrity
         assert write_rows + batcher.dropped_count + len(batcher.buffer) == batcher.total_count
 
 
@@ -169,7 +159,6 @@ class TestRecorderQueueBackpressure:
         """Verify default bounded queue sizes are reasonable."""
         from hft_platform.services.bootstrap import SystemBootstrapper
 
-        # Check class constants
         assert SystemBootstrapper.DEFAULT_RAW_QUEUE_SIZE == 65536
         assert SystemBootstrapper.DEFAULT_RECORDER_QUEUE_SIZE == 16384
         assert SystemBootstrapper.DEFAULT_ORDER_QUEUE_SIZE == 2048
@@ -180,13 +169,11 @@ class TestRecorderQueueBackpressure:
         queue_size = 100
         queue: asyncio.Queue[int] = asyncio.Queue(maxsize=queue_size)
 
-        # Fill queue
         for i in range(queue_size):
             await queue.put(i)
 
         assert queue.full()
 
-        # Overflow attempts
         overflow_count = 0
         for i in range(50):
             try:
@@ -196,13 +183,11 @@ class TestRecorderQueueBackpressure:
 
         assert overflow_count == 50, "All overflow attempts should fail"
 
-        # Drain half
         for _ in range(50):
             queue.get_nowait()
 
         assert not queue.full()
 
-        # Should be able to add again
         for i in range(50):
             queue.put_nowait(i)
 

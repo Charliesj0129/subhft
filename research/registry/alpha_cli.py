@@ -834,9 +834,6 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         print(f"Failed to import batch promote module: {exc}")
         sys.exit(1)
 
-    # Stage 2 (2026-05-28): batch promotion must enter Gate D with the same
-    # strict-profile contract as single-alpha promotion. Without this, batch
-    # promote silently bypassed the YAML profile (D9).
     profile = _platform_alpha._load_strict_validation_profile(getattr(args, "profile", None))
 
     promoter = BatchPromoter(
@@ -872,9 +869,6 @@ def cmd_alpha_promote_batch(args: argparse.Namespace) -> None:
         sys.exit(2)
 
 
-# (alpha_cmd, nested subcommand or None) -> command body. Every command the
-# platform parser marks as forwarded has exactly one entry
-# (tests/unit/research/test_alpha_cli.py checks both directions).
 HANDLERS: dict[tuple[str, str | None], Callable[[argparse.Namespace], None]] = {
     ("scaffold", None): cmd_alpha_scaffold,
     ("search", None): cmd_alpha_search,

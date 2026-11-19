@@ -34,11 +34,6 @@ def _is_connection_limit_error(error: str | None) -> bool:
     return "too many connections" in normalized or "status_code=451" in normalized or "status code 451" in normalized
 
 
-#: Bounded label values for ``shioaji_login_fail_total{reason=...}``.
-#: The broker's error strings embed a per-request routing id, so feeding them to
-#: a Prometheus label mints a new series per failure — cardinality that explodes
-#: exactly when the system is already failing, and which also publishes broker
-#: session identifiers into ``/metrics``. Classify instead of pasting.
 _LOGIN_FAILURE_REASONS = ("connection_limit", "sdk_busy", "timeout", "auth", "network", "unknown", "other")
 
 
@@ -161,10 +156,6 @@ class SessionRuntime:
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
 
-    # ------------------------------------------------------------------ #
-    # SessionPolicy implementation
-    # ------------------------------------------------------------------ #
-
     def request_reconnect(self, reason: str, force: bool = False) -> bool:
         """Delegate reconnect request to the underlying client.
 
@@ -179,10 +170,6 @@ class SessionRuntime:
 
     def is_logged_in(self) -> bool:
         return bool(getattr(self._client, "logged_in", False))
-
-    # ------------------------------------------------------------------ #
-    # Login lifecycle (Phase-2: owned here, not in ShioajiClient)
-    # ------------------------------------------------------------------ #
 
     def login(self, *args, **kwargs) -> bool:
         """Public entrypoint — login_with_retry plus a bounded backoff-retry
@@ -274,20 +261,10 @@ class SessionRuntime:
             c._ensure_session_lock()
             logger.info("Using API Key/Secret for login")
             attempts_total = max(1, c._login_retry_max + 1)
-            # ``attempts_total`` is the ladder's *budget*. The ladder also has
-            # two paths that stop early on purpose, so the budget is not what
-            # actually happened -- see the exit below.
             attempts_made = 0
             deferred_reason: str | None = None
 
             def _do_login() -> None:
-                # Login only. From shioaji 1.7 ``login()`` starts loading
-                # contracts itself, and an explicit ``fetch_contracts`` issued
-                # meanwhile fails at once with "exclusive access lost" (live
-                # probe 2026-10-27). Bundling the two made every login look
-                # failed and sent it down a no-contract fallback that logged in
-                # a second time on the same session. Contracts are awaited
-                # after a successful login instead; see _await_contracts.
                 c.api.login(
                     api_key=key,
                     secret_key=secret,
@@ -305,23 +282,6 @@ class SessionRuntime:
                 c._record_api_latency("login", start_ns, ok=ok)
                 if not ok:
                     c._last_login_error = scrub_broker_error(err) if err is not None else "unknown"
-                    # Two independent sources of "the SDK is busy, come back
-                    # later", and both must skip the fallback and the ladder:
-                    #
-                    #   SDKBusyError  - the InflightGuard knows a worker *we*
-                    #                   abandoned is still inside the SDK.
-                    #   "sdk_busy"    - the SDK itself refused re-entry. The
-                    #                   guard cannot see this one: the borrow is
-                    #                   held by shioaji's own internals, not by
-                    #                   an abandoned call of ours.
-                    #
-                    # Only the first was handled, so the second fell through to
-                    # the (since removed) no-contract fallback and both retries — all re-entering
-                    # the same busy object and failing instantly. Observed
-                    # 2026-07-30 04:12 CST: every facade's solace session dropped
-                    # at once, the SDK went busy inside its own reconnect, and the
-                    # ladder turned one network blip into 165 "Already borrowed"
-                    # failures and 6 exhausted ladders in 90 s.
                     if isinstance(err, SDKBusyError) or classify_login_failure(c._last_login_error) == "sdk_busy":
                         logger.warning(
                             "Login deferred: broker SDK still occupied by an earlier call",
@@ -351,27 +311,16 @@ class SessionRuntime:
                         contracts_ok, elapsed_s, fetched = self._await_contracts(contracts_cb)
                         c._contracts_ready = contracts_ok
                         if contracts_ok:
-                            # Login-time freshness is the only contract load on
-                            # this platform that works: the hourly
-                            # ``fetch_contracts`` fails on a subscribed facade,
-                            # so this is what keeps
-                            # ``contract_cache_last_success_ts`` honest. It is
-                            # keyed on contracts that actually resolve, never on
-                            # ``contracts_ready`` (``hasattr(api, "Contracts")``,
-                            # always True once logged in).
                             try:
                                 gauge = (
                                     getattr(c.metrics, "contract_cache_last_success_ts", None) if c.metrics else None
                                 )
                                 if gauge is not None:
                                     gauge.set(timebase.now_s())
-                            except Exception as exc:  # a metric must never break login
+                            except Exception as exc:
                                 logger.debug("operation_fallback", error=str(exc))
                             logger.info("Contracts loaded", ready=True, elapsed_s=round(elapsed_s, 2), fetched=fetched)
                         else:
-                            # Configured to load contracts and none resolved in
-                            # the budget -- orders will be blocked. Not a login
-                            # failure: logging in again cannot load them faster.
                             logger.error(
                                 "Contracts not available after login — order placement will be blocked",
                                 elapsed_s=round(elapsed_s, 2),
@@ -380,9 +329,6 @@ class SessionRuntime:
                             )
                     else:
                         c._contracts_ready = c.contracts_ready
-                        # Quote-only connection (fetch_contract=False): contracts are
-                        # intentionally not awaited (e.g. QuoteConnectionPool group_id>0
-                        # skips contracts to save ~27 MB per connection).
                         logger.debug(
                             "Contracts not fetched (quote-only connection)",
                             fetch_contract_configured=False,
@@ -417,19 +363,6 @@ class SessionRuntime:
                     )
                     time.sleep(retry_sleep_s)
 
-            # Only one of the three ways out of that loop is an exhausted
-            # ladder. The other two break deliberately -- the SDK is still
-            # inside an earlier call, or the broker refused on its connection
-            # limit -- after a single attempt, and each already logged its own
-            # accurate line just above. Reporting all three as "retries
-            # exhausted ... attempts=<budget>" contradicted that line and
-            # inflated the count: over 2026-08-07..2026-09-07 the engine logged
-            # 56 exhaustions against 33 connection-limit breaks, so most of them
-            # never exhausted anything and none of them had made
-            # ``attempts_total`` attempts.
-            #
-            # The metric still counts every failed login, labelled by cause; it
-            # is only the log line that stops overstating.
             if deferred_reason is not None:
                 logger.warning(
                     "login_deferred_without_exhausting_ladder",
@@ -456,10 +389,6 @@ class SessionRuntime:
 
         logger.warning("No API key/secret found (Args/Env). Running in simulation/anonymous mode.")
         return False
-
-    # ------------------------------------------------------------------ #
-    # Session refresh (Phase-2: owned here, not in ShioajiClient)
-    # ------------------------------------------------------------------ #
 
     def start_session_refresh_thread(self) -> None:
         """Start background thread for preventive session refresh (C3).
@@ -497,14 +426,6 @@ class SessionRuntime:
                 c._set_thread_alive_metric("session_refresh", False)
                 return
 
-            # `c.logged_in` is deliberately NOT part of this condition. A
-            # refresh that logs out and then fails to log back in (broker
-            # "code: 451, Too Many Connections", transient network) leaves it
-            # False, so having it here terminated the thread on the first
-            # failure and abandoned the facade until some unrelated path
-            # happened to restart it. On 2026-07-25 that stranded 1 of 4 quote
-            # facades for 24 h, silently dropping its 74 symbols through an
-            # entire night session while FeedState stayed CONNECTED.
             check_interval_s = client_float(c, "_session_refresh_check_interval_s", 3600.0)
             base_backoff_s = client_float(c, "_session_relogin_backoff_s", 60.0)
             poll_s = min(client_float(c, "_session_relogin_poll_s", 60.0), check_interval_s)
@@ -513,19 +434,12 @@ class SessionRuntime:
             relogin_attempts = 0
             relogin_backoff_s = 0.0
             relogin_next_ts = 0.0
-            # How long this thread will stand aside for a reconnect that is
-            # already in flight. Reusing the re-login backoff keeps one number
-            # for "how long am I willing to wait before trying myself".
             max_defer_s = base_backoff_s
             defer_started_ts = 0.0
-            # Start the schedule clock a full interval out so the poll quantum
-            # cannot pull the first refresh evaluation forward.
             next_schedule_ts = timebase.now_s() + check_interval_s
 
             while c.api and c._session_refresh_running:
                 try:
-                    # Jitter each wake-up so facades brought up together by the
-                    # pool do not stay phase-aligned and re-login in lockstep.
                     time.sleep(refresh_sleep_s(poll_s, jitter_frac, random.random))
                     if not c._session_refresh_running:
                         break
@@ -533,26 +447,6 @@ class SessionRuntime:
                     now = timebase.now_s()
 
                     if not c.logged_in:
-                        # Recovery path. do_session_refresh() rebuilds the whole
-                        # facade (login -> callbacks -> resubscribe -> watchdog)
-                        # and already serialises on the process-wide login slot,
-                        # so retrying here cannot re-create the login storm that
-                        # caused the logout.
-                        #
-                        # But `logged_in` is also False for the whole
-                        # logout->login gap of a reconnect running on another
-                        # thread (reconnect_orchestrator clears it before
-                        # calling login()). Reading that as "abandoned facade"
-                        # stacks a second logout/login onto the first, and the
-                        # broker answers 451 — 8 of them inside the 14:45 CST
-                        # pre-open window on 2026-08-07. Stand aside instead,
-                        # without burning an attempt or advancing the backoff:
-                        # this is somebody else's recovery, not a failed one.
-                        #
-                        # Bounded on purpose. A reconnect that never releases
-                        # the lock must not disable this recovery path for
-                        # good — that would be the 2026-07-25 stranded-facade
-                        # failure wearing a new costume.
                         if _reconnect_in_flight(c):
                             if defer_started_ts == 0.0:
                                 defer_started_ts = now
@@ -593,26 +487,12 @@ class SessionRuntime:
                     relogin_backoff_s = 0.0
                     relogin_next_ts = 0.0
 
-                    # Everything below is the preventive-refresh schedule, which
-                    # still runs once per check interval regardless of poll rate.
                     if now < next_schedule_ts:
                         continue
                     next_schedule_ts = now + check_interval_s
 
                     now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=calendar._tz)
 
-                    # Skip refresh during active trading hours.
-                    #
-                    # ``product_type="future"`` is load-bearing: the default is
-                    # the TWSE *stock* window (09:00-13:30), and this platform
-                    # trades TAIFEX. Without it the entire night session
-                    # (15:00-05:00) reads as "closed", so a preventive
-                    # logout/login cycle ran on facades carrying 74 live
-                    # subscriptions while quotes were flowing. Measured on
-                    # THESHOW: refreshes at 00:11, 01:11, ... CST on 2026-08-01,
-                    # i.e. inside the Friday night session, and every observed
-                    # residual "451 Too Many Connections" outside a restart sat
-                    # in that window.
                     if calendar.is_trading_hours(now_dt, product_type="future"):
                         continue
 
@@ -620,18 +500,6 @@ class SessionRuntime:
                     elapsed = now - c._last_session_refresh_ts
 
                     if c._session_refresh_holiday_aware:
-                        # Holiday-aware mode (O4):
-                        # - Refresh during a long break (days_until > 1) too, so
-                        #   the session does not expire across it
-                        # - Regular refresh only on trading day or day before
-                        #
-                        # Both branches honour the interval. ``elapsed > 0`` used
-                        # to stand in for the holiday branch's condition, which
-                        # is true on every pass, so "refresh when approaching a
-                        # long holiday" actually meant "relogin every facade once
-                        # per check interval for the whole break": 96 refreshes
-                        # in 60 h on THESHOW, all reason="holiday", exactly 4 per
-                        # hour. That churn is what fed the residual 451s.
                         holiday_refresh = days_until > 1 and elapsed >= c._session_refresh_interval_s
                         regular_refresh = days_until <= 1 and elapsed >= c._session_refresh_interval_s
 
@@ -640,7 +508,6 @@ class SessionRuntime:
 
                         reason = "holiday" if holiday_refresh else "regular"
                     else:
-                        # Original mode: refresh based on interval only
                         if days_until > 1:
                             continue
                         if elapsed < c._session_refresh_interval_s:
@@ -681,11 +548,6 @@ class SessionRuntime:
         if not c.api:
             return False
 
-        # Hold the process-wide login slot across the whole logout/login cycle:
-        # the broker counts concurrent connections, so two facades overlapping
-        # here is what produced "code: 451, detail: Too Many Connections".
-        # A timeout returns False and we refresh anyway — a stale session is a
-        # worse failure than a 451 the retry path already recognises.
         slot_held = acquire_login_slot(
             min_gap_s=client_float(c, "_session_refresh_stagger_gap_s", 5.0),
             timeout_s=client_float(c, "_session_refresh_stagger_timeout_s", 120.0),
@@ -706,10 +568,6 @@ class SessionRuntime:
                 logger.info("Session refresh: logging in")
                 self.login_with_retry()
             finally:
-                # Released as soon as the connection is (re)established — the
-                # resubscribe and quote-verification below no longer contend for
-                # a broker connection slot, so holding it there would serialise
-                # the whole pool behind one facade's 10 s verify timeout.
                 if slot_held:
                     release_login_slot()
 
@@ -723,7 +581,6 @@ class SessionRuntime:
                     c._resubscribe_all()
                     c._start_quote_watchdog()
 
-                    # Post-refresh health check (O5)
                     if c._verify_quotes_flowing():
                         logger.info("Session refresh completed, quotes flowing")
                         if c.metrics:
@@ -733,10 +590,8 @@ class SessionRuntime:
                         logger.warning("Session refresh completed but quotes not flowing")
                         if c.metrics:
                             c.metrics.session_refresh_total.labels(result="partial").inc()
-                        # Still return True since login succeeded
                         return True
                 else:
-                    # No tick callback means no subscriptions to verify
                     if c.metrics:
                         c.metrics.session_refresh_total.labels(result="ok").inc()
                     logger.info("Session refresh completed (no subscriptions)")
@@ -752,10 +607,6 @@ class SessionRuntime:
             if c.metrics:
                 c.metrics.session_refresh_total.labels(result="error").inc()
             return False
-
-    # ------------------------------------------------------------------ #
-    # Legacy pass-through helpers
-    # ------------------------------------------------------------------ #
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
         return self.request_reconnect(reason=reason, force=force)

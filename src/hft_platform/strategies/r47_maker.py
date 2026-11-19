@@ -36,7 +36,6 @@ from hft_platform.strategy.base import QUALITY_FLAGS_CORRUPT
 
 logger = get_logger("strategy.r47_maker")
 
-# Feature indices (lob_shared_v3)
 _IDX_BEST_BID = 0
 _IDX_BEST_ASK = 1
 _IDX_L1_BID_QTY = 8
@@ -46,9 +45,6 @@ _IDX_TOXICITY_EMA50_X1000 = 21
 
 _PRICE_SCALE = 10000
 _LOG_INTERVAL = 500
-
-
-# ── D1: Permutation Entropy ──────────────────────────────────────────────
 
 
 class _PEState:
@@ -69,18 +65,15 @@ class _PEState:
 
     def __init__(self, d: int = 4, window: int = 100) -> None:
         self._d = d
-        self._n_patterns = math.factorial(d)  # 24 for D=4
+        self._n_patterns = math.factorial(d)
         self._h_max = math.log2(self._n_patterns)
         self._window_size = window
-        # Circular buffer for last D QI values (ordinal ranking)
         self._qi_buf: deque[float] = deque(maxlen=d)
         self._qi_len = 0
-        # Pattern histogram (pre-allocated, fixed size 24)
         self._pattern_counts = [0] * self._n_patterns
-        # Sliding window of pattern indices
         pat_win = window - d + 1
         self._pat_deque: deque[int] = deque(maxlen=pat_win)
-        self._h: float = 1.0  # start at max entropy (safe)
+        self._h: float = 1.0
         self._warmup_done = False
 
     def update(self, qi_value: float) -> float:
@@ -91,13 +84,10 @@ class _PEState:
         if self._qi_len < self._d:
             return self._h
 
-        # Compute ordinal pattern from last D values
         buf = list(self._qi_buf)
         pattern_id = self._rank_to_id(buf)
 
-        # Add to sliding window
         if len(self._pat_deque) == self._pat_deque.maxlen:
-            # Remove oldest
             old = self._pat_deque[0]
             self._pattern_counts[old] -= 1
         self._pat_deque.append(pattern_id)
@@ -109,7 +99,6 @@ class _PEState:
 
         self._warmup_done = True
 
-        # Compute Shannon entropy from histogram
         h = 0.0
         for c in self._pattern_counts:
             if c > 0:
@@ -126,23 +115,18 @@ class _PEState:
         For D=4: 24 unique indices guaranteed (no collisions).
         """
         d = len(vals)
-        # Compute ranks: rank[i] = number of values less than vals[i]
-        # (with tie-breaking by position for stability)
         ranks = [0] * d
         for i in range(d):
             for j in range(d):
                 if vals[j] < vals[i] or (vals[j] == vals[i] and j < i):
                     ranks[i] += 1
-        # Lehmer code: for each position, count how many remaining
-        # values in the suffix are smaller than the current rank
         idx = 0
-        factorials = [1] * d  # factorials[i] = (d-1-i)!
+        factorials = [1] * d
         f = 1
         for i in range(d - 1, -1, -1):
             factorials[i] = f
             f *= d - i
         for i in range(d):
-            # Count inversions: how many ranks[j] < ranks[i] for j > i
             count = 0
             for j in range(i + 1, d):
                 if ranks[j] < ranks[i]:
@@ -157,9 +141,6 @@ class _PEState:
     @property
     def warmed_up(self) -> bool:
         return self._warmup_done
-
-
-# ── D2: Queue Survival ───────────────────────────────────────────────────
 
 
 class _QueueState:
@@ -208,7 +189,6 @@ class _QueueState:
         d_bid = bid_qty - self._prev_bv
         d_ask = ask_qty - self._prev_av
 
-        # Separate arrivals (positive delta) and departures (negative delta)
         if d_bid > 0:
             self._lambda_bid = alpha * d_bid + (1 - alpha) * self._lambda_bid
         elif d_bid < 0:
@@ -219,14 +199,12 @@ class _QueueState:
         elif d_ask < 0:
             self._mu_ask = alpha * (-d_ask) + (1 - alpha) * self._mu_ask
 
-        # Gambler's ruin depletion probability
         q_bid = max(bid_qty, 1)
         q_ask = max(ask_qty, 1)
 
         rho_bid = self._mu_bid / max(self._lambda_bid, 1e-6)
         rho_ask = self._mu_ask / max(self._lambda_ask, 1e-6)
 
-        # P(depletion) = min(1, (mu/lambda)^q) — clamped
         self._p_depl_bid = min(1.0, rho_bid**q_bid) if rho_bid > 0 else 0.0
         self._p_depl_ask = min(1.0, rho_ask**q_ask) if rho_ask > 0 else 0.0
 
@@ -247,9 +225,6 @@ class _QueueState:
         return self._warmed_up
 
 
-# ── D3: MFG Inventory Proxy ──────────────────────────────────────────────
-
-
 class _MFGState:
     """Cumulative signed flow proxy for MM inventory estimation."""
 
@@ -265,7 +240,7 @@ class _MFGState:
     def __init__(self, ema_alpha: float = 0.01) -> None:
         self._ema_alpha = ema_alpha
         self._signed_flow_ema: float = 0.0
-        self._flow_std_ema: float = 1.0  # avoid div-by-zero
+        self._flow_std_ema: float = 1.0
         self._capitulation_z: float = 0.0
         self._update_count = 0
         self._warmed_up = False
@@ -279,7 +254,6 @@ class _MFGState:
         signed = direction * volume
         alpha = self._ema_alpha
         self._signed_flow_ema = alpha * signed + (1 - alpha) * self._signed_flow_ema
-        # Track std via EMA of squared deviation
         dev_sq = (signed - self._signed_flow_ema) ** 2
         self._flow_std_ema = alpha * dev_sq + (1 - alpha) * self._flow_std_ema
         std = max(math.sqrt(self._flow_std_ema), 1e-6)
@@ -301,9 +275,6 @@ class _MFGState:
     @property
     def warmed_up(self) -> bool:
         return self._warmed_up
-
-
-# ── R47 Strategy ─────────────────────────────────────────────────────────
 
 
 class R47MakerStrategy(SimpleMarketMaker):
@@ -336,69 +307,46 @@ class R47MakerStrategy(SimpleMarketMaker):
     def __init__(
         self,
         strategy_id: str = "r47_maker",
-        # D1: PE
         pe_danger_threshold: float = 0.55,
         pe_window: int = 100,
-        # D2: Queue
         queue_cancel_threshold: float = 0.7,
         queue_ema_alpha: float = 0.05,
-        # D3: MFG
         mfg_skew_z_threshold: float = 2.0,
         mfg_ema_alpha: float = 0.01,
-        # Gates
-        spread_threshold_pts: int = 5,  # TMFD6: breakeven 4 pts (RT 40 NTD / 10 NTD per pt)
+        spread_threshold_pts: int = 5,
         toxicity_max: int = 700,
-        # D4: QI adverse-selection skew
-        qi_skew_threshold: float = 1.0,  # 1.0 = disabled; 0.10 = optimized for TMFD6
+        qi_skew_threshold: float = 1.0,
         qi_widen_ticks: int = 1,
-        # D1 (2026-04-21 fix): stale-quote reconciliation threshold in ticks.
-        # When an active order's last quoted price differs from the current mid
-        # by more than this, cancel it — regardless of whether a placement gate
-        # (spread/toxicity/PE) would currently block a new quote. 0 = disabled.
         stale_quote_max_ticks: int = 3,
-        # D2 (2026-04-21 fix): quote cooldown in milliseconds. Must exceed
-        # broker SUBMITTED-callback RTT so that ``_active_*_oid`` is populated
-        # before the next placement; otherwise earlier in-flight orders get
-        # orphaned by single-slot tracking. Shioaji P95 RTT ~800 ms → default
-        # 1000 ms. Set to 0 to disable.
         quote_cooldown_ms: int = 1000,
-        # Cross-instrument execution
-        trade_symbol: str = "",  # if set, place orders on this symbol instead of signal symbol
+        trade_symbol: str = "",
         **kwargs: object,
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
         self._trade_symbol = trade_symbol
 
-        # D1
         self._pe_danger = pe_danger_threshold
         self._pe_states: dict[str, _PEState] = {}
         self._pe_window = pe_window
 
-        # D2
         self._queue_cancel_thresh = queue_cancel_threshold
         self._queue_states: dict[str, _QueueState] = {}
         self._queue_ema = queue_ema_alpha
 
-        # D3
         self._mfg_skew_z_thresh = mfg_skew_z_threshold
         self._mfg_states: dict[str, _MFGState] = {}
         self._mfg_ema = mfg_ema_alpha
 
-        # Gates
         self._spread_thresh_scaled = spread_threshold_pts * _PRICE_SCALE
         self._toxicity_max = toxicity_max
 
-        # D4: QI skew
         self._qi_skew_thresh = qi_skew_threshold
         self._qi_widen_ticks = qi_widen_ticks
 
-        # D1: stale-quote threshold in scaled-price units.
         self._stale_quote_max_scaled = stale_quote_max_ticks * _PRICE_SCALE
 
-        # Feature cache
         self._feature_cache: dict[str, tuple[int | float, ...]] = {}
 
-        # Counters
         self._stats_count = 0
         self._pe_blocked = 0
         self._queue_suppressed = 0
@@ -407,65 +355,35 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._spread_blocked = 0
         self._toxicity_blocked = 0
         self._quotes_sent = 0
-        self._stale_cancels = 0  # D1 counter
+        self._stale_cancels = 0
         self._nonpositive_quote_blocked = 0
 
-        # D2 quote suppression flags (set in on_features, read in on_stats)
         self._suppress_bid: bool = False
         self._suppress_ask: bool = False
 
-        # D4 QI skew widening (set in on_features, read in _generate_quotes)
         self._qi_widen_bid: int = 0
         self._qi_widen_ask: int = 0
 
-        # Local position tracker — bypasses stale StrategyContext cache.
-        # StrategyRunner's _positions_dirty flag can lag behind fills,
-        # causing self.position() to return stale values (e.g. 0) while
-        # actual position is non-zero. This dict is updated directly in
-        # on_fill() and is authoritative for max_pos enforcement.
         self._local_pos: dict[str, int] = {}
 
-        # Pending order counters — incremented when buy()/sell() is called,
-        # decremented on fill or cancel/reject (on_order). Prevents sending
-        # more orders than max_pos allows when multiple ROD orders are resting.
         self._pending_buy: dict[str, int] = {}
         self._pending_sell: dict[str, int] = {}
 
-        # Last quoted prices per symbol — suppress requotes when price hasn't moved.
-        # ROD orders rest at exchange; sending the same price again just stacks orders.
         self._last_bid: dict[str, int] = {}
         self._last_ask: dict[str, int] = {}
 
-        # DEC2-008: Fill dedup — prevent double-counting from duplicate broker callbacks.
         self._seen_fill_ids: set[str] = set()
         self._FILL_DEDUP_MAX = 500
 
-        # 2026-08-10: client_order_ids whose pending slot was already handed
-        # back by the adapter's stale-live-order sweep. A terminal callback can
-        # still arrive after the 300s TTL; without this, the slot is paid for
-        # twice and two pending orders on one side collapse to zero.
         self._ttl_released_keys: set[str] = set()
         self._TTL_RELEASED_MAX = 2048
 
-        # F2: Active order tracking — maps symbol to broker order_id.
-        # Used to cancel stale ROD orders before requoting at a new price.
-        # Without this, ROD orders stack at the exchange and fill on any
-        # price touch (76-order burst incident 2026-04-15 RC-3).
         self._active_buy_oid: dict[str, str] = {}
         self._active_sell_oid: dict[str, str] = {}
 
-        # D3 (2026-04-21 fix, minimal): track ALL in-flight oids as a set so
-        # RTT-spike races cannot orphan earlier orders. ``_active_*_oid``
-        # above is single-slot (last SUBMITTED wins) — fine in normal ops
-        # where D2 cooldown ≥ RTT, but degrades under RTT spikes. The set
-        # below is authoritative for cancel-all-stale paths. Full intent-id
-        # refactor (adding intent_id to OrderEvent) deferred as follow-up.
         self._inflight_buy_oids: dict[str, set[str]] = {}
         self._inflight_sell_oids: dict[str, set[str]] = {}
 
-        # D6 (2026-04-21 fix): cache Prometheus refs once to avoid re-lookup
-        # on hot path. Both metrics may be None if registry isn't initialised
-        # in this test/context — strategy still works without observability.
         self._metric_stale_cancels = None
         self._metric_inflight_oids = None
         self._metric_pending_qty = None
@@ -482,11 +400,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         except Exception as exc:  # pragma: no cover
             logger.debug("r47_metrics_lookup_fallback", error=str(exc))
 
-        # Bug 9 defense-in-depth: cooldown timer prevents rapid re-quoting
-        # even if pending counters are corrupted by async feedback. Cooldown
-        # must exceed broker SUBMITTED-callback RTT so ``_active_*_oid`` is
-        # populated before the next placement (D2 fix 2026-04-21). Default
-        # 1000 ms covers Shioaji P95 RTT ~800 ms with safety margin.
         self._last_quote_ns: dict[str, int] = {}
         self._QUOTE_COOLDOWN_NS: int = quote_cooldown_ms * 1_000_000
 
@@ -525,8 +438,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         """Return the symbol to use for order placement and position tracking."""
         return self._trade_symbol if self._trade_symbol else signal_symbol
 
-    # ── Event Handlers ────────────────────────────────────────────────
-
     def on_tick(self, event: TickEvent) -> None:
         """D3: Update MFG signed flow on each trade."""
         symbol = event.symbol
@@ -540,7 +451,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         """Cache features + update D1 PE and D2 Queue states."""
         if event.values is None:
             return
-        # Skip corrupted features (GAP, STATE_RESET, OUT_OF_ORDER)
         if event.quality_flags & QUALITY_FLAGS_CORRUPT:
             logger.debug(
                 "r47_features_skipped_corrupt",
@@ -553,25 +463,17 @@ class R47MakerStrategy(SimpleMarketMaker):
 
         features = event.values
 
-        # D1: Update PE with QI_1 (L1 imbalance)
         if len(features) > _IDX_L1_IMBALANCE_PPM:
             qi_val = float(features[_IDX_L1_IMBALANCE_PPM]) / 1_000_000
             pe = self._get_pe(symbol)
             pe.update(qi_val)
 
-        # D2: Update queue state with L1 quantities
         if len(features) > _IDX_L1_ASK_QTY:
             bid_qty = int(features[_IDX_L1_BID_QTY])
             ask_qty = int(features[_IDX_L1_ASK_QTY])
             queue = self._get_queue(symbol)
             queue.update(bid_qty, ask_qty)
 
-            # D2: Set quote suppression flags for on_stats()
-            # Since BaseStrategy.buy/sell don't return order IDs,
-            # we suppress the NEXT quote placement instead of cancelling.
-            # Disable semantics: threshold >= 1.0 means "never suppress"
-            # (p_depl is always in [0, 1], so > 1.0 is never true).
-            # WARNING: threshold=0.0 means "always suppress" (any p_depl > 0).
             self._suppress_bid = False
             self._suppress_ask = False
             if queue.warmed_up and self._queue_cancel_thresh < 1.0:
@@ -582,9 +484,6 @@ class R47MakerStrategy(SimpleMarketMaker):
                 if self._suppress_bid or self._suppress_ask:
                     self._queue_suppressed += 1
 
-            # D4: QI adverse-selection skew — widen the side under pressure
-            # QI > 0 = buying pressure → asks likely to be adversely filled → widen ask
-            # QI < 0 = selling pressure → bids likely to be adversely filled → widen bid
             self._qi_widen_bid = 0
             self._qi_widen_ask = 0
             if self._qi_skew_thresh < 1.0:
@@ -600,7 +499,6 @@ class R47MakerStrategy(SimpleMarketMaker):
 
     def on_fill(self, event: FillEvent) -> None:
         """Track position locally to avoid stale StrategyContext cache."""
-        # DEC2-008: Fill dedup to prevent position double-counting.
         fid = getattr(event, "fill_id", None) or ""
         if fid and fid in self._seen_fill_ids:
             logger.warning("r47_duplicate_fill_skipped", fill_id=fid, symbol=event.symbol)
@@ -608,7 +506,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         if fid:
             self._seen_fill_ids.add(fid)
             if len(self._seen_fill_ids) > self._FILL_DEDUP_MAX:
-                # Evict ~half (set has no ordering, but this bounds memory)
                 evict = len(self._seen_fill_ids) - self._FILL_DEDUP_MAX // 2
                 victims = set()
                 for fid in self._seen_fill_ids:
@@ -619,18 +516,14 @@ class R47MakerStrategy(SimpleMarketMaker):
         sym = event.symbol
         delta = event.qty if event.side == Side.BUY else -event.qty
         self._local_pos[sym] = self._local_pos.get(sym, 0) + delta
-        # Each fill consumes one pending slot
         if event.side == Side.BUY:
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - event.qty)
-            # F2: fill consumed the resting order — clear active tracking
             self._active_buy_oid.pop(sym, None)
-            # D3: remove this oid from in-flight set (other oids still tracked)
             self._discard_inflight_oid(sym, Side.BUY, event.order_id)
         else:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - event.qty)
             self._active_sell_oid.pop(sym, None)
             self._discard_inflight_oid(sym, Side.SELL, event.order_id)
-        # Bug 9 defense: clear cooldown so re-quoting resumes after fill
         if self._pending_buy.get(sym, 0) == 0 and self._pending_sell.get(sym, 0) == 0:
             self._last_quote_ns.pop(sym, None)
         logger.info(
@@ -646,35 +539,26 @@ class R47MakerStrategy(SimpleMarketMaker):
     def on_order(self, event: OrderEvent) -> None:
         """Track order IDs for cancel-before-requote and release pending on terminal."""
         sym = event.symbol
-        # F2: Capture broker order_id on SUBMITTED for cancel-before-requote.
         if event.status == OrderStatus.SUBMITTED:
             if event.side == Side.BUY:
                 self._active_buy_oid[sym] = event.order_id
-                self._inflight_buy_oids.setdefault(sym, set()).add(event.order_id)  # D3
+                self._inflight_buy_oids.setdefault(sym, set()).add(event.order_id)
                 self._set_inflight_metric(sym, Side.BUY)
             else:
                 self._active_sell_oid[sym] = event.order_id
-                self._inflight_sell_oids.setdefault(sym, set()).add(event.order_id)  # D3
+                self._inflight_sell_oids.setdefault(sym, set()).add(event.order_id)
                 self._set_inflight_metric(sym, Side.SELL)
             return
         if event.status not in (OrderStatus.CANCELLED, OrderStatus.FAILED):
             return
-        # Clear active order tracking on terminal state
         if event.side == Side.BUY:
             if self._active_buy_oid.get(sym) == event.order_id:
                 del self._active_buy_oid[sym]
-            self._discard_inflight_oid(sym, Side.BUY, event.order_id)  # D3
+            self._discard_inflight_oid(sym, Side.BUY, event.order_id)
         else:
             if self._active_sell_oid.get(sym) == event.order_id:
                 del self._active_sell_oid[sym]
-            self._discard_inflight_oid(sym, Side.SELL, event.order_id)  # D3
-        # 2026-08-10: the adapter's stale-live-order sweep may already have
-        # released this order's slot after the 300s TTL. Paying for it again
-        # here would free a slot a live order still occupies. The active/
-        # in-flight tracking above is cleared either way — only the pending
-        # decrement is skipped. An unattributable callback (empty
-        # client_order_id — the normalizer resolves it best-effort) keeps the
-        # pre-existing behaviour and decrements.
+            self._discard_inflight_oid(sym, Side.SELL, event.order_id)
         coid = getattr(event, "client_order_id", "")
         if coid and coid in self._ttl_released_keys:
             self._ttl_released_keys.discard(coid)
@@ -685,8 +569,6 @@ class R47MakerStrategy(SimpleMarketMaker):
                 status=event.status.name,
             )
             return
-        # DEC2-002: remaining_qty=0 means fully filled before cancel arrived.
-        # Decrement by 0 (no-op) — the fill already decremented pending.
         remaining = max(0, event.remaining_qty)
         if event.side == Side.BUY:
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - remaining)
@@ -711,26 +593,15 @@ class R47MakerStrategy(SimpleMarketMaker):
         causing the old else branch to decrement BOTH counters simultaneously,
         resetting max_pos protection and allowing unlimited order stacking.
         """
-        # DEC2-001: Approved feedback (e.g., DLQ expiry for dispatched orders)
-        # must NOT decrement pending — the order was sent to the broker and
-        # will be accounted for via on_fill/on_order.
         if getattr(feedback, "was_approved", False):
             return
         sym = feedback.symbol
         side = getattr(feedback, "side", None)
-        # F3: Do NOT clear _last_bid/_last_ask on rejection.
-        # Clearing price gate + decrementing pending re-arms both gates
-        # simultaneously, creating a reject→resend amplification loop
-        # (76-order burst incident 2026-04-15 RC-2).
         if side == Side.BUY:
             self._pending_buy[sym] = max(0, self._pending_buy.get(sym, 0) - 1)
         elif side == Side.SELL:
             self._pending_sell[sym] = max(0, self._pending_sell.get(sym, 0) - 1)
         else:
-            # Bug 9 fix: side=None feedback (from typed tuples via getattr)
-            # must NOT decrement both counters. This causes a liveness issue
-            # (pending stays elevated → quoting freezes) but that is the SAFE
-            # failure mode. Strategy restart recovers from frozen pending.
             logger.warning(
                 "r47_risk_feedback_no_side",
                 symbol=sym,
@@ -738,16 +609,9 @@ class R47MakerStrategy(SimpleMarketMaker):
                 feedback_side=repr(side),
             )
             return
-        # 2026-08-10: remember which order this release paid for, so a terminal
-        # callback arriving after the adapter's 300s TTL does not decrement the
-        # same slot a second time. ``client_order_id`` on an OrderEvent is
-        # exactly ``"strategy_id:intent_id"``, so the two sides correlate.
         if feedback.reason_code == "live_order_ttl_expired":
             self._ttl_released_keys.add(f"{feedback.strategy_id}:{feedback.intent_id}")
             if len(self._ttl_released_keys) > self._TTL_RELEASED_MAX:
-                # Set has no ordering; drop half to bound memory. A dropped key
-                # only costs the double-decrement this guard prevents, which is
-                # still floored at zero.
                 evict = len(self._ttl_released_keys) - self._TTL_RELEASED_MAX // 2
                 victims: set[str] = set()
                 for key in self._ttl_released_keys:
@@ -774,20 +638,10 @@ class R47MakerStrategy(SimpleMarketMaker):
         self._qi_widen_ask = 0
         self._last_bid.clear()
         self._last_ask.clear()
-        # F2: Clear active order IDs — after gap, SUBMITTED callbacks may have
-        # been lost, so stale IDs would cause cancel requests for unknown orders.
         self._active_buy_oid.clear()
         self._active_sell_oid.clear()
-        # D3: clear in-flight oid sets — after gap, SUBMITTED callbacks may
-        # have been lost, so stale ids would produce bogus cancels.
         self._inflight_buy_oids.clear()
         self._inflight_sell_oids.clear()
-        # NOTE: Do NOT clear _pending_buy/_pending_sell here.
-        # Clearing pending resets max_pos protection, allowing the strategy
-        # to send unbounded orders (76-order burst incident 2026-04-15 RC-1).
-        # If gap swallowed fill/cancel callbacks, stale pending counters
-        # block further quoting — this is the SAFE failure mode (liveness
-        # issue, not safety issue). Strategy restart recovers from this.
         logger.warning(
             "r47_gap_event_state_reset",
             missed=event.missed_count,
@@ -908,12 +762,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         """
         if self._stale_quote_max_scaled <= 0:
             return
-        # P3-a1: defense-in-depth — `event.mid_price_x2` and `event.spread_scaled`
-        # are typed `int | None`. Today the only caller (`on_stats`) guards before
-        # delegating, but the signature would otherwise lie. Without this local
-        # guard, `event.mid_price_x2 // 2` would raise TypeError if a future
-        # caller forgets to pre-validate. (Same reason the spread-gate on_stats
-        # already early-returns on None.)
         if event.mid_price_x2 is None or event.spread_scaled is None:
             return
         exec_sym = self._exec_symbol(event.symbol)
@@ -933,7 +781,6 @@ class R47MakerStrategy(SimpleMarketMaker):
         symbol = event.symbol
         self._stats_count += 1
 
-        # ── Validity guard ────────────────────────────────────────────
         if (
             event.mid_price_x2 is None
             or event.spread_scaled is None
@@ -942,27 +789,14 @@ class R47MakerStrategy(SimpleMarketMaker):
         ):
             return
 
-        # ── D1: Reconcile stale quotes BEFORE gates ──────────────────
-        # Placement gates (spread / toxicity / PE) suppress NEW quotes only;
-        # they must not block cleanup of abandoned orders.
         self._reconcile_stale_quotes(event)
 
-        # Each gate records *which* one suppressed the tick rather than
-        # returning, so the periodic diagnostic below can be emitted on every
-        # path. It used to live inside _generate_quotes, i.e. only after all
-        # three gates passed, which made it a survivor sample: across
-        # 2026-08-10..12 every one of the 55 r47_stats lines printed
-        # spread_pts:5 while the true mean was 2.96 and 94.19% of ticks were
-        # being blocked. The only diagnostic that could explain the silence was
-        # emitted only when the strategy was not silent.
         blocked_by: str | None = None
 
-        # ── Spread gate (hard floor) ──────────────────────────────────
         if event.spread_scaled < self._spread_thresh_scaled:
             self._spread_blocked += 1
             blocked_by = "spread"
 
-        # ── Toxicity gate ─────────────────────────────────────────────
         if blocked_by is None:
             features = self._feature_cache.get(symbol)
             if features and len(features) > _IDX_TOXICITY_EMA50_X1000:
@@ -971,14 +805,11 @@ class R47MakerStrategy(SimpleMarketMaker):
                     self._toxicity_blocked += 1
                     blocked_by = "toxicity"
 
-        # ── D1: PE Regime Gate ────────────────────────────────────────
         pe = self._get_pe(symbol)
         if blocked_by is None and pe.warmed_up and pe.h < self._pe_danger:
-            # Market too structured (trending) — do NOT quote
             self._pe_blocked += 1
             blocked_by = "pe"
 
-        # ── Generate and place quotes ─────────────────────────────────
         if blocked_by is None:
             self._generate_quotes(symbol, event, pe)
 
@@ -989,17 +820,11 @@ class R47MakerStrategy(SimpleMarketMaker):
         """Compute quote prices and place orders with D3 widening + D2 suppression."""
         exec_sym = self._exec_symbol(symbol)
 
-        # Bug 9 defense-in-depth: cooldown prevents rapid re-quoting even if
-        # pending counters are corrupted by async feedback with side=None.
         now_ns = _now_ns()
         last_q = self._last_quote_ns.get(exec_sym, 0)
         if last_q > 0 and (now_ns - last_q) < self._QUOTE_COOLDOWN_NS:
             return
 
-        # P3-a1: defense-in-depth — narrow `mid_price_x2`/`spread_scaled` from
-        # `int | None` to `int`. on_stats already guards, but mypy cannot see
-        # narrowing across calls; without this, mid * spread arithmetic below
-        # would raise TypeError in any future caller that skipped on_stats.
         if event.mid_price_x2 is None or event.spread_scaled is None:
             return
 
@@ -1010,40 +835,25 @@ class R47MakerStrategy(SimpleMarketMaker):
         spread_scaled = event.spread_scaled
         pos = self._local_position(exec_sym)
 
-        # Micro price with imbalance
         imbalance_adj = int(event.imbalance * spread_scaled * 20 * 2 // 100)
         micro_price_x2 = mid_price_x2 + imbalance_adj
 
-        # Inventory skew
         tick_size_scaled = max(1, spread_scaled * 50 // 100)
         skew_x2 = -(pos * tick_size_scaled * 2) // 5
         fair_value_x2 = micro_price_x2 + skew_x2
 
-        # Quote width — widen if PE indicates intermediate structure
         half_spread_scaled = max(1, spread_scaled // 2)
         pe_width_mult = 2 if (pe.warmed_up and pe.h < 0.70) else 1
         base_width = max(tick_size_scaled, half_spread_scaled) * pe_width_mult
 
-        # D3: Asymmetric spread widening (MFG inventory)
-        # D4: QI adverse-selection skew (widen side under pressure)
         qi_widen_bid_scaled = self._qi_widen_bid * _PRICE_SCALE
         qi_widen_ask_scaled = self._qi_widen_ask * _PRICE_SCALE
         bid_price_scaled = (fair_value_x2 - (base_width + mfg_widen_bid + qi_widen_bid_scaled) * 2) // 2
         ask_price_scaled = (fair_value_x2 + (base_width + mfg_widen_ask + qi_widen_ask_scaled) * 2) // 2
 
-        # Snap to tick grid: TMFD6/TXFD6 tick = 1 pt = 10000 scaled.
-        # Bid rounds DOWN, ask rounds UP to avoid crossing the spread.
         bid_price_scaled = (bid_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
         ask_price_scaled = -(-ask_price_scaled // _PRICE_SCALE) * _PRICE_SCALE
 
-        # Price floor. Every widening term above (base_width, the MFG skew, and
-        # the QI skew) is denominated in whole TXF points via ``_PRICE_SCALE``,
-        # so on any instrument whose entire premium is smaller than one point
-        # they subtract more than the mid and the bid comes out <= 0. The
-        # platform's under-scaled-price guard does catch that, but it catches it
-        # by raising out of ``handle_event``, which the runner reads as "this
-        # strategy is broken" and quarantines until a manual re-arm. A rejected
-        # quote must not be able to halt the strategy: drop it here instead.
         if bid_price_scaled <= 0 or ask_price_scaled <= 0:
             self._nonpositive_quote_blocked += 1
             logger.warning(
@@ -1057,28 +867,16 @@ class R47MakerStrategy(SimpleMarketMaker):
             )
             return
 
-        # Execution with D2 quote suppression — use exec_sym for orders.
-        # Price-gate: only send a new ROD if the price has moved by >= 1 tick
-        # from the last quoted price. ROD orders rest at the exchange; resending
-        # the same price just stacks redundant orders.
-        # Also gate on pending orders so resting RODs can't exceed max_pos.
         max_pos = self._max_pos
         pending_buy = self._pending_buy.get(exec_sym, 0)
         pending_sell = self._pending_sell.get(exec_sym, 0)
         bid_moved = bid_price_scaled != self._last_bid.get(exec_sym, -1)
         ask_moved = ask_price_scaled != self._last_ask.get(exec_sym, -1)
-        # DEC2-004: qty is ALWAYS 1. pending_buy/sell increment by 1 to match.
-        # If qty changes, pending tracking MUST be updated to use actual qty.
         _qty = 1
 
-        # F1: Hard position cap — _local_pos survives on_gap and cannot be
-        # reset by bus overflow or risk rejection. This is the last defense
-        # against order stacking (76-order burst incident 2026-04-15).
-        # pos already comes from _local_position(exec_sym) which uses _local_pos.
         can_buy = pos + pending_buy < max_pos and pos < max_pos
         can_sell = pos - pending_sell > -max_pos and pos > -max_pos
 
-        # F2: Cancel stale ROD before requoting at new price to prevent stacking.
         if bid_moved:
             self._cancel_tracked_side(exec_sym, Side.BUY)
         if ask_moved:
@@ -1109,9 +907,9 @@ class R47MakerStrategy(SimpleMarketMaker):
         widen = tick_size * skew_mult
         self._mfg_skewed += 1
         if mfg.flow_direction > 0:
-            return 0, widen  # widen ask
+            return 0, widen
         if mfg.flow_direction < 0:
-            return widen, 0  # widen bid
+            return widen, 0
         return 0, 0
 
     def _publish_gate_and_pending_metrics(self, exec_sym: str) -> None:
@@ -1172,10 +970,6 @@ class R47MakerStrategy(SimpleMarketMaker):
             spr_blk=self._spread_blocked,
             tox_blk=self._toxicity_blocked,
             qi_wdn=self._qi_widened,
-            stale_cnl=self._stale_cancels,  # D1
+            stale_cnl=self._stale_cancels,
             nonpos_blk=self._nonpositive_quote_blocked,
         )
-
-    # Note: cancel-by-order-id is not possible because BaseStrategy.buy()/sell()
-    # don't return order IDs. Quote suppression (not placing new quotes) is the
-    # effective mechanism — same pattern as OpportunisticMM's spread gate.

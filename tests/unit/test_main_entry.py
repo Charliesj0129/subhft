@@ -3,16 +3,12 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Import main module to patch where necessary
 import hft_platform.main
 
 
 class TestMainEntry(unittest.IsolatedAsyncioTestCase):
     async def test_main_startup(self):
         """Smoke test main entry point."""
-        # We need to patch HFTSystem inside 'hft_platform.main'
-        # But if it was already imported, we might need to patch the object itself
-        # or reload. The simplest robust way for this specific test:
 
         with patch("hft_platform.main.start_resilient_metrics_server") as mock_start:
             with patch("hft_platform.main.HFTSystem") as MockSys:
@@ -22,6 +18,5 @@ class TestMainEntry(unittest.IsolatedAsyncioTestCase):
                 with patch.object(sys, "argv", ["prog"]):
                     await hft_platform.main.main()
 
-                    # Verify
                     mock_start.assert_called_once()
                     MockSys.assert_called_once()

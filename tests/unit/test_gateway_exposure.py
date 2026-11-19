@@ -40,7 +40,6 @@ def test_exposure_cancel_always_passes():
 
 
 def test_exposure_global_limit_blocks():
-    # global max = price * qty = 1_000_000 * 1 = 1_000_000; second order should exceed
     store = ExposureStore(global_max_notional=1_000_000)
     ok1, _ = store.check_and_update(_key(), _make_intent(1_000_000, 1))
     assert ok1 is True
@@ -65,7 +64,6 @@ def test_exposure_release_allows_subsequent():
     store.check_and_update(_key(), intent)
     store.release_exposure(_key(), intent)
 
-    # After release, we should be able to submit again
     ok, _ = store.check_and_update(_key(), intent)
     assert ok is True
 
@@ -106,7 +104,7 @@ def test_exposure_typed_path_matches_object():
 
 def test_exposure_concurrent_no_overshoot():
     """10 threads each requesting same-sized order; only N that fit within limit should pass."""
-    global_max = 5_000_000  # allows exactly 5 x 1_000_000
+    global_max = 5_000_000
     store = ExposureStore(global_max_notional=global_max)
     approved = []
     lock = threading.Lock()
@@ -122,14 +120,12 @@ def test_exposure_concurrent_no_overshoot():
     for t in threads:
         t.join()
 
-    # Exactly 5 should have been approved
     assert sum(approved) == 5
-    # Global notional must not exceed limit
     assert store.get_global_notional() <= global_max
 
 
 def test_exposure_deterministic_rejection_reason():
-    store = ExposureStore(global_max_notional=0)  # unlimited
+    store = ExposureStore(global_max_notional=0)
     limits = {"s1": ExposureLimits(max_notional_scaled=500_000)}
     store._limits = limits
     store.check_and_update(_key(), _make_intent(500_000, 1))
@@ -156,7 +152,6 @@ def test_symbol_limit_evicts_zeroes_and_admits():
     max_symbols = 10
     store = ExposureStore(global_max_notional=0, max_symbols=max_symbols)
 
-    # Fill to max with symbols 0..9
     intents = {}
     for i in range(max_symbols):
         sym = f"TSE:{i:04d}"
@@ -168,18 +163,15 @@ def test_symbol_limit_evicts_zeroes_and_admits():
 
     assert store._symbol_count == max_symbols
 
-    # Release all positions → all notional → 0
     for sym, intent in intents.items():
         key = ExposureKey(account="default", strategy_id="s1", symbol=sym)
         store.release_exposure(key, intent)
 
-    # Now adding symbol 10 should trigger eviction and succeed
     new_sym = "TSE:9999"
     new_intent = _make_intent_for_symbol(new_sym)
     new_key = ExposureKey(account="default", strategy_id="s1", symbol=new_sym)
     ok, _ = store.check_and_update(new_key, new_intent)
     assert ok is True
-    # symbol_count should be 1 (just the new one; zeroes were evicted)
     assert store._symbol_count == 1
 
 
@@ -188,7 +180,6 @@ def test_symbol_limit_raises_after_10001_symbols():
     max_symbols = 10_000
     store = ExposureStore(global_max_notional=0, max_symbols=max_symbols)
 
-    # Add exactly max_symbols symbols (all with live exposure)
     for i in range(max_symbols):
         sym = f"SYM:{i:05d}"
         intent = _make_intent_for_symbol(sym)
@@ -197,7 +188,6 @@ def test_symbol_limit_raises_after_10001_symbols():
 
     assert store._symbol_count == max_symbols
 
-    # The 10,001st symbol should trigger eviction (no zeroes) then raise
     overflow_sym = "SYM:OVERFLOW"
     overflow_intent = _make_intent_for_symbol(overflow_sym)
     overflow_key = ExposureKey(account="acct", strategy_id="strat", symbol=overflow_sym)
@@ -205,7 +195,6 @@ def test_symbol_limit_raises_after_10001_symbols():
     with pytest.raises(ExposureLimitError):
         store.check_and_update(overflow_key, overflow_intent)
 
-    # symbol_count must not have grown
     assert store._symbol_count == max_symbols
 
 
@@ -244,13 +233,8 @@ def test_symbol_limit_concurrent_no_overshoot():
     for t in threads:
         t.join()
 
-    # Symbol count must never exceed the configured maximum
     assert store._symbol_count <= max_syms
-    # All approvals must be within the allowed set (no overshoot)
     assert sum(approved) <= max_syms
-
-
-# ── Additional coverage tests ──────────────────────────────────────────────────
 
 
 def test_release_exposure_cancel_intent_is_no_op():
@@ -264,7 +248,6 @@ def test_release_exposure_cancel_intent_is_no_op():
     cancel_intent = _make_intent(intent_type=IntentType.CANCEL)
     store.release_exposure(key, cancel_intent)
 
-    # Notional must be unchanged — cancel intent was skipped
     assert store.get_global_notional() == notional_before
 
 
@@ -273,9 +256,7 @@ def test_release_exposure_symbol_not_present_does_not_raise():
     store = ExposureStore(global_max_notional=0)
     key = ExposureKey(account="acct", strategy_id="strat", symbol="TSE:NEVER")
     intent = _make_intent(price=500_000, qty=2)
-    # No prior check_and_update — symbol is absent
     store.release_exposure(key, intent)
-    # Global notional should clamp to 0 (not go negative)
     assert store.get_global_notional() == 0
 
 
@@ -285,7 +266,6 @@ def test_release_exposure_clamps_global_notional_at_zero():
     key = _key()
     intent = _make_intent(price=1_000_000, qty=2)
     store.check_and_update(key, intent)
-    # Release more than what was added
     store.release_exposure(key, _make_intent(price=1_000_000, qty=10))
     assert store.get_global_notional() == 0
 
@@ -339,31 +319,27 @@ def test_get_exposure_nonexistent_key_returns_zero():
 def test_evict_zeroes_removes_empty_strategy_and_account_maps():
     """_evict_zeroes() cascades cleanup of empty strategy and account maps."""
     store = ExposureStore(global_max_notional=0, max_symbols=2)
-    # Add two symbols for the same account/strategy
     for sym in ("TSE:A", "TSE:B"):
         key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
         intent = _make_intent_for_symbol(sym)
         store.check_and_update(key, intent)
 
-    # Release both — sets notional to 0
     for sym in ("TSE:A", "TSE:B"):
         key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
         intent = _make_intent_for_symbol(sym)
         store.release_exposure(key, intent)
 
     assert store._symbol_count == 2
-    # Call _evict_zeroes manually under lock
     with store._lock:
         store._evict_zeroes()
 
-    # After eviction, symbol count should be 0 and maps should be empty
     assert store._symbol_count == 0
     assert "acct" not in store._exposure
 
 
 def test_check_and_update_typed_cancel_returns_ok():
     """check_and_update_typed() with CANCEL intent_type always returns (True, OK)."""
-    store = ExposureStore(global_max_notional=1)  # very tight limit
+    store = ExposureStore(global_max_notional=1)
     key = _key()
     ok, reason = store.check_and_update_typed(
         key,
@@ -417,7 +393,7 @@ def test_check_and_update_typed_with_rust_store_not_ok():
 
     class _MockRust:
         def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
-            return (False, 1)  # code 1 → not ExposureLimitError
+            return (False, 1)
 
         def reason_str(self, code):
             return "GLOBAL_EXPOSURE_LIMIT"
@@ -492,7 +468,6 @@ def test_get_global_notional_accumulates_across_symbols():
         key = ExposureKey(account="acct", strategy_id="strat", symbol=sym)
         intent = _make_intent_for_symbol(sym)
         store.check_and_update(key, intent)
-    # Each intent is price=1_000_000, qty=1 → notional=1_000_000
     assert store.get_global_notional() == 3_000_000
 
 
@@ -510,9 +485,6 @@ def test_exposure_env_var_max_symbols(monkeypatch):
     assert store._max_symbols == 7
 
 
-# ── H10: global_notional property ──────────────────────────────────────────
-
-
 def test_global_notional_property_returns_zero_on_init():
     """global_notional property returns 0 on a freshly constructed store."""
     store = ExposureStore(global_max_notional=0)
@@ -523,7 +495,6 @@ def test_global_notional_property_reflects_approved_intent():
     """global_notional property increases after an approved check_and_update."""
     store = ExposureStore(global_max_notional=0)
     store.check_and_update(_key(), _make_intent(price=2_000_000, qty=3))
-    # notional = 2_000_000 * 3
     assert store.global_notional == 6_000_000
 
 
@@ -541,9 +512,6 @@ def test_global_notional_property_matches_get_global_notional():
     store = ExposureStore(global_max_notional=0)
     store.check_and_update(_key(), _make_intent(price=500_000, qty=5))
     assert store.global_notional == store.get_global_notional()
-
-
-# ── Bug #6: Per-order tracking (exposure held past dispatch) ─────────────
 
 
 def _make_intent_with_key(
@@ -576,7 +544,6 @@ def test_per_order_tracking_holds_exposure():
     ok1, _ = store.check_and_update(key, intent, order_key="ord-1")
     assert ok1 is True
 
-    # Second order should be BLOCKED because first is still held
     intent2 = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-2")
     ok2, reason2 = store.check_and_update(key, intent2, order_key="ord-2")
     assert ok2 is False
@@ -594,7 +561,6 @@ def test_release_by_order_frees_capacity():
     assert released == 1_000_000
     assert store.get_global_notional() == 0
 
-    # Now capacity is free
     ok, _ = store.check_and_update(key, intent, order_key="ord-1b")
     assert ok is True
 
@@ -612,7 +578,6 @@ def test_expire_stale_orders_clears_old_reservations():
     intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="old-ord")
     store.check_and_update(key, intent, order_key="old-ord")
 
-    # Manually backdate the timestamp
     import time
 
     store._order_ts["old-ord"] = time.monotonic() - 100
@@ -634,20 +599,15 @@ def test_expire_stale_orders_keeps_fresh():
     assert store.get_global_notional() == 1_000_000
 
 
-# ── Bug #7: AMEND must check delta exposure ──────────────────────────────
-
-
 def test_amend_increase_blocked_by_global_limit():
     """Bug #7: AMEND that increases notional must be checked against limits."""
     store = ExposureStore(global_max_notional=1_500_000)
     key = _key()
-    # Place original order: 1M notional
     intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
     ok, _ = store.check_and_update(key, intent_new, order_key="ord-1")
     assert ok is True
     assert store.get_global_notional() == 1_000_000
 
-    # AMEND to 2M notional — delta +1M exceeds remaining capacity (500K)
     intent_amend = _make_intent_with_key(
         price=2_000_000,
         qty=1,
@@ -658,7 +618,6 @@ def test_amend_increase_blocked_by_global_limit():
     ok2, reason2 = store.check_and_update(key, intent_amend, order_key="amend-1")
     assert ok2 is False
     assert reason2 == "GLOBAL_EXPOSURE_LIMIT"
-    # Exposure unchanged
     assert store.get_global_notional() == 1_000_000
 
 
@@ -689,7 +648,6 @@ def test_amend_decrease_always_allowed():
     intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
     store.check_and_update(key, intent_new, order_key="ord-1")
 
-    # AMEND to 500K — delta is -500K, always allowed
     intent_amend = _make_intent_with_key(
         price=500_000,
         qty=1,
@@ -719,7 +677,6 @@ def test_amend_within_limit_approved_and_updates_tracking():
     ok, _ = store.check_and_update(key, intent_amend, order_key="amend-1")
     assert ok is True
     assert store.get_global_notional() == 2_000_000
-    # Per-order record updated
     assert store._order_notionals["ord-1"] == 2_000_000
 
 
@@ -730,7 +687,6 @@ def test_amend_rejection_rollback():
     intent_new = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key="ord-1")
     store.check_and_update(key, intent_new, order_key="ord-1")
 
-    # Approved AMEND: +1M delta
     intent_amend = _make_intent_with_key(
         price=2_000_000,
         qty=1,
@@ -742,7 +698,6 @@ def test_amend_rejection_rollback():
     assert ok is True
     assert store.get_global_notional() == 2_000_000
 
-    # Risk rejects → rollback via release_exposure
     store.release_exposure(key, intent_amend, order_key="amend-1")
     assert store.get_global_notional() == 1_000_000
     assert store._order_notionals["ord-1"] == 1_000_000
@@ -768,7 +723,6 @@ def test_amend_typed_path_checks_delta():
     """Bug #7 typed path: AMEND delta is checked via check_and_update_typed."""
     store = ExposureStore(global_max_notional=1_500_000)
     key = _key()
-    # Place via typed path
     store.check_and_update_typed(
         key,
         intent_type=int(IntentType.NEW),
@@ -776,7 +730,6 @@ def test_amend_typed_path_checks_delta():
         qty=1,
         order_key="ord-1",
     )
-    # AMEND via typed path — delta +1M exceeds remaining 500K
     ok, reason = store.check_and_update_typed(
         key,
         intent_type=int(IntentType.AMEND),
@@ -810,6 +763,5 @@ def test_consecutive_orders_blocked_with_per_order_tracking():
         intent = _make_intent_with_key(price=1_000_000, qty=1, idempotency_key=f"ord-{i}")
         ok, _ = store.check_and_update(key, intent, order_key=f"ord-{i}")
         results.append(ok)
-    # Only first should pass; rest blocked
     assert results == [True, False, False, False, False]
     assert store.get_global_notional() == 1_000_000

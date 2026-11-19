@@ -61,8 +61,6 @@ def test_is_trading_hours_now_uses_calendar_when_available() -> None:
 
 
 def test_is_trading_hours_now_falls_back_on_import_error() -> None:
-    # Fallback path uses a weekday window: weekend → False.
     with patch("hft_platform.core.market_calendar.get_calendar", side_effect=ImportError):
-        # We can't easily force "weekend now", but the fallback must return a bool
         result = _is_trading_hours_now("future")
         assert isinstance(result, bool)

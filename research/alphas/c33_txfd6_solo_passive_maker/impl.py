@@ -52,11 +52,9 @@ from research.registry.schemas import (
 
 logger = get_logger("alpha.c33_txfd6_solo_passive_maker")
 
-# TXFD6 instrument constants (not mutable by config).
-_TXF_POINT_VALUE_NTD = 200  # NTD per pt on TXF (vs TMF 10 NTD/pt)
-_TXF_RT_COST_PTS = 3.0       # retail RT, cited from memo
+_TXF_POINT_VALUE_NTD = 200
+_TXF_RT_COST_PTS = 3.0
 
-# Signal-layer method names we intentionally never call. Test asserts this.
 _DISABLED_SIGNAL_LAYERS = (
     "_update_pe",
     "_update_queue",
@@ -69,9 +67,6 @@ _DISABLED_SIGNAL_LAYERS = (
 )
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,9 +96,6 @@ class C33Params:
     enable_qi_layer: bool = False
 
 
-# ----------------------------------------------------------------------------
-# TxfD6SoloMaker — MakerEngine-compatible strategy
-# ----------------------------------------------------------------------------
 
 
 class TxfD6SoloMaker:
@@ -142,7 +134,6 @@ class TxfD6SoloMaker:
         self._quotes_posted = 0
         self._active_symbol = active_symbol
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def position(self) -> int:
@@ -172,7 +163,6 @@ class TxfD6SoloMaker:
     def active_symbol(self) -> str:
         return self._active_symbol
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -197,14 +187,11 @@ class TxfD6SoloMaker:
             self._spread_blocked += 1
             return [Hold()]
 
-        # R47-minimal: signal-layer gates are intentionally NOT evaluated.
-        # (See _DISABLED_SIGNAL_LAYERS — enforced by test; attribute absence.)
 
         actions: list[PostQuote | CancelQuote | Hold] = []
         pos = self._position
         max_pos = params.max_pos
 
-        # Inventory skew (scaled-integer, R47 best practice).
         skew = (pos * params.inventory_skew_tenths * scale) // 10
         bid_quote = tick.bid_price - skew
         ask_quote = tick.ask_price - skew
@@ -212,14 +199,12 @@ class TxfD6SoloMaker:
         bid_moved = bid_quote != self._last_bid
         ask_moved = ask_quote != self._last_ask
 
-        # Buy side: only if inventory not at +max_pos cap.
         if pos < max_pos and bid_moved:
             actions.append(PostQuote(side="buy", price=bid_quote, qty=1))
             self._last_bid = bid_quote
             self._quotes_posted += 1
         elif pos >= max_pos:
             self._max_pos_blocked += 1
-        # Sell side: only if inventory not at -max_pos cap.
         if pos > -max_pos and ask_moved:
             actions.append(PostQuote(side="sell", price=ask_quote, qty=1))
             self._last_ask = ask_quote
@@ -251,9 +236,6 @@ class TxfD6SoloMaker:
         self._quotes_posted = 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C33Alpha:

@@ -12,10 +12,6 @@ import pytest
 
 from hft_platform.events import GapEvent
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _patch_bus_env(monkeypatch):
@@ -25,15 +21,6 @@ def _patch_bus_env(monkeypatch):
     monkeypatch.setenv("HFT_BUS_MODE", "python")
     monkeypatch.setenv("HFT_BUS_TYPED_TICK_RING", "0")
     monkeypatch.setenv("HFT_BUS_TYPED_BOOK_RINGS", "0")
-
-
-# The former ``mock_metrics`` fixture patched
-# ``hft_platform.engine.event_bus.MetricsRegistry.get`` so these tests would not
-# touch the global registry. The bus no longer reaches for one: telemetry is an
-# injected port (``EventBusTelemetry``) defaulting to
-# ``NOOP_EVENT_BUS_TELEMETRY``, so the patch target stopped existing and the
-# fixture errored at setup. Nothing here asserted on it -- the subject is
-# ring-buffer semantics under concurrency -- so it is gone rather than rebuilt.
 
 
 def _make_bus(size: int = 64, mock_metrics_fixture=None):
@@ -49,16 +36,10 @@ def _make_bus(size: int = 64, mock_metrics_fixture=None):
     return bus
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.chaos
 class TestQueueChaos:
     """Chaos tests for asyncio.Queue and RingBufferBus."""
 
-    # 1. put_nowait drop semantics -------------------------------------------
     @pytest.mark.asyncio
     async def test_put_nowait_drop_semantics(self):
         """put_nowait on full queue raises QueueFull (drop semantics)."""
@@ -71,7 +52,6 @@ class TestQueueChaos:
 
         assert q.qsize() == 3
 
-    # 2. Bounded queue fill to maxsize ---------------------------------------
     @pytest.mark.asyncio
     async def test_bounded_queue_fill_to_maxsize(self):
         """Fill queue exactly to maxsize; no exception until maxsize+1."""
@@ -83,7 +63,6 @@ class TestQueueChaos:
             with pytest.raises(asyncio.QueueFull):
                 q.put_nowait(maxsize)
 
-    # 3. Queue drain rate (producer faster than consumer) --------------------
     @pytest.mark.asyncio
     async def test_queue_drain_rate(self):
         """Producer fills faster than consumer drains; queue stays bounded."""
@@ -111,14 +90,12 @@ class TestQueueChaos:
                     consumed += 1
                 except asyncio.QueueEmpty:
                     break
-                # Simulate slow consumer
                 await asyncio.sleep(0.001)
 
         await asyncio.gather(_producer(), _consumer())
         assert q.qsize() <= 10
         assert produced + dropped == 200
 
-    # 4. Multiple producers (5 threads) --------------------------------------
     def test_multiple_producers_threads(self):
         """5 threads publish to RingBufferBus concurrently."""
         bus = _make_bus(size=256)
@@ -140,10 +117,8 @@ class TestQueueChaos:
             t.join(timeout=10)
 
         assert not errors
-        # 5 * 100 = 500 publishes; cursor should reflect that
         assert bus.cursor == 499
 
-    # 5. Task cancellation under full queue ----------------------------------
     @pytest.mark.asyncio
     async def test_task_cancellation_under_full_queue(self):
         """Cancelled put() task does not corrupt queue state."""
@@ -152,7 +127,7 @@ class TestQueueChaos:
         q.put_nowait(2)
 
         async def _blocked_put():
-            await q.put(3)  # will block
+            await q.put(3)
 
         task = asyncio.create_task(_blocked_put())
         await asyncio.sleep(0.01)
@@ -160,13 +135,11 @@ class TestQueueChaos:
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        # Queue still functional
         val = q.get_nowait()
         assert val == 1
         q.put_nowait(99)
         assert q.qsize() == 2
 
-    # 6. Ring buffer overflow (oldest overwritten) ---------------------------
     def test_ring_buffer_overflow_overwrites_oldest(self):
         """Publishing beyond ring size overwrites oldest slots."""
         bus = _make_bus(size=4)
@@ -174,25 +147,18 @@ class TestQueueChaos:
             bus.publish_nowait(("event", i))
 
         assert bus.cursor == 9
-        # Slot 0 should now hold event written at cursor=8 (8 % 4 == 0)
         assert bus.buffer is not None
         assert bus.buffer[0] == ("event", 8)
         assert bus.buffer[1] == ("event", 9)
 
-    # 7. Ring buffer read consistency after overflow -------------------------
     @pytest.mark.asyncio
     async def test_ring_buffer_read_consistency_after_overflow(self):
         """Consumer that lags behind still reads consistent (newer) data."""
         bus = _make_bus(size=8)
 
-        # Publish 20 events (overflows 8-slot buffer)
         for i in range(20):
             bus.publish_nowait(("ev", i))
 
-        # A consumer starting from 0 has been lapped. The bus does not silently
-        # hand it the newer window: it yields a GapEvent first, so the consumer
-        # learns it lost data instead of inferring continuity from timestamps.
-        # This test used to subscript that GapEvent as a tuple.
         events_read: list[int] = []
         gaps: list[GapEvent] = []
         count = 0
@@ -206,10 +172,8 @@ class TestQueueChaos:
                 break
 
         assert gaps, "a lapped consumer must be told it was lapped"
-        # Whatever it does read afterwards is from the recent window (12..19).
         assert all(v >= 12 for v in events_read)
 
-    # 8. Back-pressure signal (QueueFull) ------------------------------------
     @pytest.mark.asyncio
     async def test_back_pressure_signal(self):
         """QueueFull exception signals back-pressure to producer."""
@@ -223,7 +187,6 @@ class TestQueueChaos:
         assert full_signals == 15
         assert q.qsize() == 5
 
-    # 9. Queue depth tracking under load -------------------------------------
     @pytest.mark.asyncio
     async def test_queue_depth_tracking_under_load(self):
         """qsize() remains accurate during concurrent put/get."""
@@ -253,7 +216,6 @@ class TestQueueChaos:
         await asyncio.gather(_producer(), _consumer())
         assert 0 <= max_depth <= 50
 
-    # 10. Concurrent get/put (5 producers + 5 consumers) --------------------
     @pytest.mark.asyncio
     async def test_concurrent_get_put(self):
         """5 async producers + 5 async consumers on bounded queue."""
@@ -284,7 +246,6 @@ class TestQueueChaos:
         assert len(consumed) == 100
         assert set(produced) == set(consumed)
 
-    # 11. Queue clear under load ---------------------------------------------
     @pytest.mark.asyncio
     async def test_queue_clear_under_load(self):
         """Draining a queue while producer is active does not raise."""
@@ -320,7 +281,6 @@ class TestQueueChaos:
         except asyncio.CancelledError:
             pass
 
-        # Drain remaining items so we can verify queue is still functional
         while not q.empty():
             try:
                 q.get_nowait()
@@ -329,7 +289,6 @@ class TestQueueChaos:
         q.put_nowait(999)
         assert q.get_nowait() == 999
 
-    # 12. Queue maxsize=1 edge case ------------------------------------------
     @pytest.mark.asyncio
     async def test_queue_maxsize_one(self):
         """Queue with maxsize=1 works correctly under rapid put/get."""
@@ -343,7 +302,6 @@ class TestQueueChaos:
 
         assert values == list(range(100))
 
-    # 13. Get timeout on empty queue -----------------------------------------
     @pytest.mark.asyncio
     async def test_get_timeout_on_empty_queue(self):
         """get() with timeout on empty queue raises TimeoutError."""
@@ -351,7 +309,6 @@ class TestQueueChaos:
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(q.get(), timeout=0.05)
 
-    # 14. Graceful degradation (drop-on-full, no crash) ----------------------
     @pytest.mark.asyncio
     async def test_graceful_degradation_drop_on_full(self):
         """Drop-on-full pattern: put_nowait catches QueueFull, never crashes."""
@@ -369,6 +326,5 @@ class TestQueueChaos:
         assert delivered == 5
         assert dropped == 995
         assert q.qsize() == 5
-        # Queue still works
         val = q.get_nowait()
         assert val == 0

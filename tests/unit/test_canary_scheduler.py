@@ -113,14 +113,13 @@ class TestCanaryAutoSchedulerLifecycle:
     async def _double_start(scheduler: CanaryAutoScheduler) -> None:
         scheduler.start()
         task1 = scheduler._task
-        scheduler.start()  # second start should not replace task
+        scheduler.start()
         assert scheduler._task is task1
         scheduler.stop()
 
     def test_stop_idempotent(self, tmp_path: Path) -> None:
         monitor = CanaryMonitor(promotions_dir=str(tmp_path))
         scheduler = CanaryAutoScheduler(monitor=monitor, interval_s=3600.0)
-        # stop without start — should not raise
         scheduler.stop()
         scheduler.stop()
         assert scheduler._task is None
@@ -221,7 +220,6 @@ class TestCanaryAutoSchedulerEvaluateAll:
         finally:
             loop.close()
 
-        # alpha_a failed, alpha_b should still be evaluated
         assert len(results) == 1
         assert results[0].alpha_id == "alpha_b"
 
@@ -231,7 +229,6 @@ class TestBuildMetrics:
         """When live_metrics is missing, use fail-safe (worst-case) defaults."""
         canary: dict = {"alpha_id": "test"}
         metrics = CanaryAutoScheduler._build_metrics(canary)
-        # Fail-safe defaults: exceed rollback thresholds
         assert metrics["slippage_bps"] == 999.0
         assert metrics["drawdown_contribution"] == 1.0
         assert metrics["execution_error_rate"] == 1.0
@@ -256,7 +253,6 @@ class TestBuildMetrics:
         """When live_metrics is not a dict, use fail-safe defaults."""
         canary: dict = {"alpha_id": "test", "live_metrics": "invalid"}
         metrics = CanaryAutoScheduler._build_metrics(canary)
-        # Fail-safe defaults
         assert metrics["slippage_bps"] == 999.0
         assert metrics["drawdown_contribution"] == 1.0
         assert metrics["execution_error_rate"] == 1.0
@@ -284,13 +280,11 @@ class TestSchedulerMetricsQuery:
 
         assert len(results) == 1
         assert results[0].alpha_id == "alpha_a"
-        # slippage=1.0 is below the 3.0 guardrail → canary continues
         assert results[0].state == "canary"
 
     def test_evaluate_all_uses_ck_metrics(self, tmp_path: Path) -> None:
         """Mock query returns good metrics → canary NOT rolled back."""
         promo_dir = tmp_path / "promos"
-        # Write YAML with empty live_metrics (would trigger fail-safe rollback if used)
         promo_dir.mkdir(parents=True, exist_ok=True)
         import yaml as _yaml
 
@@ -312,7 +306,6 @@ class TestSchedulerMetricsQuery:
                 },
             },
             "scorecard_snapshot": {"sharpe_oos": 1.5},
-            # intentionally no live_metrics block
         }
         (promo_dir / "ck.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
 
@@ -335,14 +328,12 @@ class TestSchedulerMetricsQuery:
 
         assert len(results) == 1
         assert results[0].alpha_id == "alpha_ck"
-        # Good CK metrics → should stay in canary (not rolled back)
         assert results[0].state == "canary"
         mock_query.fetch.assert_called_once_with("alpha_ck", "alpha_ck", 0)
 
     def test_evaluate_all_fallback_on_none(self, tmp_path: Path) -> None:
         """Mock query returns None → falls back to _build_metrics (fail-safe defaults trigger rollback)."""
         promo_dir = tmp_path / "promos"
-        # Write YAML with no live_metrics → _build_metrics will return fail-safe defaults
         promo_dir.mkdir(parents=True, exist_ok=True)
         import yaml as _yaml
 
@@ -364,12 +355,11 @@ class TestSchedulerMetricsQuery:
                 },
             },
             "scorecard_snapshot": {"sharpe_oos": 1.5},
-            # no live_metrics → fail-safe defaults → rollback
         }
         (promo_dir / "fb.yaml").write_text(_yaml.safe_dump(payload, sort_keys=False))
 
         mock_query = MagicMock()
-        mock_query.fetch.return_value = None  # query returns None → fall back
+        mock_query.fetch.return_value = None
 
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
         scheduler = CanaryAutoScheduler(monitor=monitor, dry_run=True, metrics_query=mock_query)
@@ -382,6 +372,5 @@ class TestSchedulerMetricsQuery:
 
         assert len(results) == 1
         assert results[0].alpha_id == "alpha_fb"
-        # Fail-safe defaults from _build_metrics should trigger rollback
         assert results[0].state == "rolled_back"
         mock_query.fetch.assert_called_once()

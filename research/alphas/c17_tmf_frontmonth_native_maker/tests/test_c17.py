@@ -67,9 +67,6 @@ def _trade(price_pts: int, volume: int = 1, ts_ns: int | None = None) -> TickDat
     )
 
 
-# --------------------------------------------------------------------------
-# Scaled-int price arithmetic (TMF scale = 1_000_000 in CK)
-# --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -100,7 +97,7 @@ def test_posts_quotes_at_scaled_int_prices(
 def test_spread_gate_blocks_quotes_below_threshold() -> None:
     """Default spread_threshold_pts=5. Spread=4 (like TMF 4 pt breakeven) → blocked."""
     maker = TmfFrontMonthMaker(active_symbol="TMFD6")
-    actions = maker.on_tick(_bidask(22500, 22504))  # spread = 4 pts, < 5
+    actions = maker.on_tick(_bidask(22500, 22504))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert posts == []
     assert actions == [Hold()]
@@ -108,7 +105,7 @@ def test_spread_gate_blocks_quotes_below_threshold() -> None:
 
 def test_spread_gate_admits_quotes_at_or_above_threshold() -> None:
     maker = TmfFrontMonthMaker(active_symbol="TMFD6")
-    actions = maker.on_tick(_bidask(22500, 22505))  # spread = 5 pts
+    actions = maker.on_tick(_bidask(22500, 22505))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert len(posts) == 2
 
@@ -118,14 +115,11 @@ def test_custom_spread_threshold_overrides_default() -> None:
         params=C17Params(spread_threshold_pts=3),
         active_symbol="TMFB6",
     )
-    actions = maker.on_tick(_bidask(22500, 22503))  # spread = 3 pts
+    actions = maker.on_tick(_bidask(22500, 22503))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert len(posts) == 2
 
 
-# --------------------------------------------------------------------------
-# Monotonic time ordering
-# --------------------------------------------------------------------------
 
 
 def test_monotonic_timestamp_ordering_preserved() -> None:
@@ -140,9 +134,6 @@ def test_monotonic_timestamp_ordering_preserved() -> None:
     assert t1 < EPOCH_THRESHOLD_NS
 
 
-# --------------------------------------------------------------------------
-# Max-position gate
-# --------------------------------------------------------------------------
 
 
 def test_stops_buying_at_max_pos() -> None:
@@ -171,9 +162,6 @@ def test_stops_selling_at_negative_max_pos() -> None:
     assert "buy" in sides
 
 
-# --------------------------------------------------------------------------
-# Price-movement gate
-# --------------------------------------------------------------------------
 
 
 def test_does_not_restack_same_price() -> None:
@@ -186,9 +174,6 @@ def test_does_not_restack_same_price() -> None:
     assert second_posts == []
 
 
-# --------------------------------------------------------------------------
-# Rollover boundary behaviour
-# --------------------------------------------------------------------------
 
 
 def test_rollover_flattens_outgoing_before_incoming() -> None:
@@ -224,9 +209,6 @@ def test_rollover_no_op_when_same_symbol() -> None:
     assert maker.rollover_events == 0
 
 
-# --------------------------------------------------------------------------
-# Gap reset
-# --------------------------------------------------------------------------
 
 
 def test_on_gap_clears_transient_quote_state() -> None:
@@ -247,9 +229,6 @@ def test_on_gap_preserves_authoritative_position() -> None:
     assert maker.position == 2
 
 
-# --------------------------------------------------------------------------
-# Trade events and malformed books
-# --------------------------------------------------------------------------
 
 
 def test_trade_events_return_hold_and_do_not_post() -> None:
@@ -281,9 +260,6 @@ def test_rejects_zero_priced_book() -> None:
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
-# --------------------------------------------------------------------------
-# AlphaProtocol conformance
-# --------------------------------------------------------------------------
 
 
 def test_c17_alpha_conforms_to_alpha_protocol() -> None:
@@ -310,9 +286,6 @@ def test_c17_manifest_documents_switch_semantics() -> None:
     assert "R51-C1B" in h or "TMFD6 R47" in h.upper()
 
 
-# --------------------------------------------------------------------------
-# Frontmonth selector — TMF windows
-# --------------------------------------------------------------------------
 
 
 def test_calendar_selector_returns_frontmonth_for_in_window_date() -> None:
@@ -336,7 +309,7 @@ def test_volume_selector_picks_highest_volume_in_eligible_set() -> None:
 
 def test_volume_selector_returns_none_when_no_eligible() -> None:
     sel = FrontMonthSelector()
-    vols = {"TMFE6": 1_000_000}  # Not in default windows
+    vols = {"TMFE6": 1_000_000}
     assert sel.select_by_volume(date(2026, 2, 10), vols) is None
 
 

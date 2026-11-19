@@ -56,9 +56,6 @@ from research.registry.schemas import (
 logger = get_logger("alpha.c30_txf_maker_tmf_hedge_pair")
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,9 +103,6 @@ class C30Params:
     tmf_taker_slippage_pts: int = 0
 
 
-# ----------------------------------------------------------------------------
-# Hedge action — emitted by TXF leg when inventory crosses trigger
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,13 +124,6 @@ class HedgeOrder:
     trigger_txf_pos_pts: int
 
 
-# ----------------------------------------------------------------------------
-# TXF maker leg — minimal R47-like implementation (spread gate + skew +
-# price-movement gate). No feature dependencies; feature-layer state from
-# R47 (_PEState / _QueueState / _MFGState) is intentionally omitted so C30
-# parks at "R47 minimal" defaults (all layers off) per DA T2 H3 ruling that
-# C30's edge source is spread capture, not layered signals.
-# ----------------------------------------------------------------------------
 
 
 class _TxfMakerLeg:
@@ -193,7 +180,6 @@ class _TxfMakerLeg:
         pos = self._position
         max_pos = params.txf_max_pos_contracts
 
-        # Inventory skew (scaled-integer, R47 best practice)
         skew = (pos * params.inventory_skew_tenths * scale) // 10
         bid_quote = tick.bid_price - skew
         ask_quote = tick.ask_price - skew
@@ -232,17 +218,13 @@ class _TxfMakerLeg:
         orchestrator can record the hedge event without touching private
         state. Kept for symmetry with a future netting variant.
         """
-        del delta_contracts  # no-op: TMF hedge offsets delta, not TXF pos
+        del delta_contracts
 
     def on_gap(self) -> None:
         self._last_bid = None
         self._last_ask = None
 
 
-# ----------------------------------------------------------------------------
-# TMF hedge leg — taker on inventory threshold. Uses top-of-book + a
-# configurable slippage constant for realistic T5 modelling.
-# ----------------------------------------------------------------------------
 
 
 class _TmfHedgeLeg:
@@ -294,7 +276,7 @@ class _TmfHedgeLeg:
 
         Returns None if the threshold is not crossed.
         """
-        del txf_point_value_ntd  # retained for backwards-compat of the signature
+        del txf_point_value_ntd
         if txf_position_contracts == 0:
             return None
         params = self._params
@@ -333,7 +315,7 @@ class _TmfHedgeLeg:
         sell); slippage widens adversely.
         """
         params = self._params
-        scale = 1_000_000  # CK scale; backtest engine can adjust
+        scale = 1_000_000
         slip = params.tmf_taker_slippage_pts * scale
         if side == "buy":
             return self._last_ask + slip if self._last_ask > 0 else 0
@@ -346,9 +328,6 @@ class _TmfHedgeLeg:
         self._last_ask = 0
 
 
-# ----------------------------------------------------------------------------
-# Pair orchestrator — drives TXF maker + TMF hedge together
-# ----------------------------------------------------------------------------
 
 
 @dataclass(slots=True)
@@ -405,7 +384,6 @@ class TxfTmfPairMaker:
         self._tmf_symbol = tmf_symbol
         self._txf_point_value_ntd = txf_point_value_ntd
 
-    # ---- Event entry points ------------------------------------------------
 
     def on_txf_tick(self, tick: TickData) -> PairStepResult:
         actions = self._txf_leg.on_tick(tick)
@@ -416,15 +394,11 @@ class TxfTmfPairMaker:
 
     def on_tmf_tick(self, tick: TickData) -> PairStepResult:
         self._tmf_leg.on_tmf_book(tick)
-        # Recheck hedge trigger on TMF tick too — inventory may have been
-        # accumulated since last TXF event but hedge execution price lives
-        # on the TMF stream.
         hedge = self._tmf_leg.compute_hedge(
             self._txf_leg.position, self._txf_point_value_ntd
         )
         return PairStepResult(maker_actions=[], hedge=hedge)
 
-    # ---- Fill callbacks ----------------------------------------------------
 
     def on_txf_fill(self, side: str, price: int, mid_price: float) -> None:
         self._txf_leg.on_fill(side, price, mid_price)
@@ -437,7 +411,6 @@ class TxfTmfPairMaker:
     def hedge_execution_price(self, side: str) -> int:
         return self._tmf_leg.hedge_execution_price(side)
 
-    # ---- Observability -----------------------------------------------------
 
     @property
     def txf_position(self) -> int:
@@ -472,9 +445,6 @@ class TxfTmfPairMaker:
         self._tmf_leg = _TmfHedgeLeg(self._params)
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim (registry smoke path)
-# ----------------------------------------------------------------------------
 
 
 class C30Alpha:

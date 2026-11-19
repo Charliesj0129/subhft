@@ -9,10 +9,6 @@ import pytest
 from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
 from hft_platform.reports.models import ChannelConfig, ComposedReport, MessagePart
 
-# ---------------------------------------------------------------------------
-# TestLoadChannels
-# ---------------------------------------------------------------------------
-
 
 class TestLoadChannels:
     def test_owner_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,11 +61,6 @@ class TestLoadChannels:
         assert channels == []
 
 
-# ---------------------------------------------------------------------------
-# TestReportSender
-# ---------------------------------------------------------------------------
-
-
 class TestReportSender:
     @pytest.mark.asyncio
     async def test_send_success_returns_true(self) -> None:
@@ -91,11 +82,6 @@ class TestReportSender:
         result = await sender.send("chat123", "hello")
 
         assert result is False
-
-
-# ---------------------------------------------------------------------------
-# TestDistributor
-# ---------------------------------------------------------------------------
 
 
 class TestDistributor:

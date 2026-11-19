@@ -60,13 +60,13 @@ def _make_validator(config=None):
 class TestSoftLimit:
     def test_allows_order_above_soft_limit(self):
         v = _make_validator()
-        v.record_pnl("TEST", _ntd(-400))  # -400 NTD, above the -500 soft limit
+        v.record_pnl("TEST", _ntd(-400))
         ok, reason = v.check(_make_intent())
         assert ok is True
 
     def test_soft_limit_triggers_reduce_only_flag(self):
         v = _make_validator()
-        v.record_pnl("TEST", _ntd(-550))  # -550 NTD, past the -500 soft limit
+        v.record_pnl("TEST", _ntd(-550))
         ok, reason = v.check(_make_intent())
         assert ok is False
         assert "SOFT_LIMIT" in reason
@@ -91,9 +91,9 @@ class TestSoftLimit:
     def test_soft_limit_recovery_blocked_by_cooldown(self):
         v = _make_validator()
         v.record_pnl("TEST", _ntd(-550))
-        v.check(_make_intent())  # triggers soft limit
+        v.check(_make_intent())
         assert v.soft_limit_active is True
-        v.record_pnl("TEST", _ntd(350))  # accumulated now = -200 NTD
+        v.record_pnl("TEST", _ntd(350))
         ok, _ = v.check(_make_intent())
         assert ok is False
         assert v.soft_limit_active is True
@@ -101,9 +101,9 @@ class TestSoftLimit:
     def test_soft_limit_recovery_after_cooldown(self):
         v = _make_validator()
         v.record_pnl("TEST", _ntd(-550))
-        v.check(_make_intent())  # triggers soft limit
-        v.record_pnl("TEST", _ntd(350))  # accumulated = -200 NTD
-        v._soft_limit_cooldown_until_ns = 0  # force cooldown expired
+        v.check(_make_intent())
+        v.record_pnl("TEST", _ntd(350))
+        v._soft_limit_cooldown_until_ns = 0
         ok, _ = v.check(_make_intent())
         assert ok is True
         assert v.soft_limit_active is False
@@ -114,10 +114,10 @@ class TestSoftLimit:
         v.check(_make_intent())
         v.record_pnl("TEST", _ntd(350))
         v._soft_limit_cooldown_until_ns = 0
-        v.check(_make_intent())  # recovers
+        v.check(_make_intent())
         assert v.soft_limit_active is False
-        v.record_pnl("TEST", _ntd(-400))  # now at -600 NTD
-        v.check(_make_intent())  # re-triggers
+        v.record_pnl("TEST", _ntd(-400))
+        v.check(_make_intent())
         assert v.soft_limit_active is True
         assert v._soft_limit_cooldown_until_ns > 0
 
@@ -151,7 +151,7 @@ class TestSoftLimit:
 
         v = DailyLossLimitValidator(_make_validator().config, None, position_provider=_provider)
         v.record_pnl("TEST", _ntd(-550))
-        v.check(_make_intent())  # trigger soft limit
+        v.check(_make_intent())
 
         v._soft_limit_cooldown_until_ns = 0
         ok, reason = v.check(_make_intent())
@@ -176,7 +176,7 @@ class TestNoPeakRule:
         v.record_pnl("TEST", _ntd(3760))
         ok, _ = v.check(_make_intent())
         assert ok is True
-        v.record_pnl("TEST", _ntd(-2490))  # +1,270 on the day; 66% given back
+        v.record_pnl("TEST", _ntd(-2490))
         ok, reason = v.check(_make_intent())
         assert ok is True, reason
         assert v.halt_triggered is False
@@ -184,9 +184,9 @@ class TestNoPeakRule:
 
     def test_a_retracement_with_unrealized_marks_is_not_a_stop(self):
         v = _make_validator()
-        v.update_unrealized(0, complete=True)  # flat at the day's open
-        v.update_unrealized(_ntd(3760), complete=True)  # open lot marked +3,760
-        v.update_unrealized(_ntd(1270), complete=True)  # same lot gives back 2,490
+        v.update_unrealized(0, complete=True)
+        v.update_unrealized(_ntd(3760), complete=True)
+        v.update_unrealized(_ntd(1270), complete=True)
         assert v.halt_triggered is False
         ok, reason = v.check(_make_intent())
         assert ok is True, reason
@@ -195,7 +195,7 @@ class TestNoPeakRule:
         v = _make_validator()
         v.record_pnl("TEST", _ntd(3000))
         v.check(_make_intent())
-        v.record_pnl("TEST", _ntd(-4050))  # -1,050 on the day, hard limit 1,000
+        v.record_pnl("TEST", _ntd(-4050))
         ok, _ = v.check(_make_intent())
         assert ok is False
         assert v.halt_reason == "DAILY_LOSS_LIMIT"
@@ -204,7 +204,7 @@ class TestNoPeakRule:
 class TestHardLimit:
     def test_hard_limit_triggers_halt(self):
         v = _make_validator()
-        v.record_pnl("TEST", _ntd(-1050))  # -1050 NTD, past the -1000 hard limit
+        v.record_pnl("TEST", _ntd(-1050))
         ok, reason = v.check(_make_intent())
         assert ok is False
         assert v.halt_triggered is True
@@ -213,7 +213,7 @@ class TestHardLimit:
         v = _make_validator()
         v.record_pnl("TEST", _ntd(-1050))
         v.check(_make_intent())
-        v.record_pnl("TEST", _ntd(1050))  # back to 0
+        v.record_pnl("TEST", _ntd(1050))
         ok, _ = v.check(_make_intent())
         assert ok is False
         assert v.halt_triggered is True
@@ -258,15 +258,13 @@ class TestStaleUnrealizedDoubleCount:
     """
 
     def test_hard_limit_not_tripped_by_double_counted_loss(self):
-        # Same staleness, opposite sign: the hard limit must measure the real
-        # loss, not the transient double count.
         v = _make_wide_soft_limit_validator()
-        v.update_unrealized(_ntd(-800))  # real loss 800 NTD, cap is 1000
+        v.update_unrealized(_ntd(-800))
         ok, _ = v.check(_make_intent())
         assert ok is True
         assert v.halt_triggered is False
 
-        v.record_pnl("TEST", _ntd(-800))  # closed at the marked loss
+        v.record_pnl("TEST", _ntd(-800))
         ok, reason = v.check(_make_intent())
         assert ok is True, reason
         assert v.halt_triggered is False
@@ -288,10 +286,10 @@ class TestStaleUnrealizedDoubleCount:
         v.update_unrealized(_ntd(-800))
         v.record_pnl("TEST", _ntd(-800))
         ok, _ = v.check(_make_intent())
-        assert ok is True  # inside the grace window
+        assert ok is True
         assert v.halt_triggered is False
 
-        v._last_consistent_ts_ns = 0  # force the grace window expired
+        v._last_consistent_ts_ns = 0
         ok, reason = v.check(_make_intent())
         assert ok is False
         assert "DAILY_LOSS_LIMIT_EXCEEDED" in reason
@@ -309,12 +307,11 @@ class TestStaleUnrealizedDoubleCount:
 
 class TestHardLimitRelease:
     def test_hard_limit_halt_does_not_release_on_recovery(self):
-        # The hard daily-loss halt keeps its designed sticky semantics.
         v = _make_validator()
         v.record_pnl("TEST", _ntd(-1050))
         v.check(_make_intent())
         assert v.halt_triggered is True
         assert v._halt_reason == "DAILY_LOSS_LIMIT"
-        v.record_pnl("TEST", _ntd(1050))  # back to flat PnL
+        v.record_pnl("TEST", _ntd(1050))
         v.update_unrealized(0, complete=True)
         assert v.halt_triggered is True

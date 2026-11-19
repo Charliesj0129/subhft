@@ -54,7 +54,6 @@ def _make_router(position_store: PositionStore | None = None) -> ExecutionRouter
         position_store=store,
         terminal_handler=terminal,
     )
-    # Isolate from on-disk dedup state
     router._seen_fill_ids = collections.OrderedDict()
     return router
 
@@ -66,7 +65,6 @@ def _reset_dlq_singleton(tmp_path, monkeypatch):
 
     old = dlq_mod._dlq
     dlq_mod._dlq = None
-    # Use temp path so tests don't load from or persist to the real .state/
     monkeypatch.setenv("HFT_FILL_DLQ_PERSIST_PATH", str(tmp_path / "test_dlq.jsonl"))
     yield
     dlq_mod._dlq = old
@@ -83,7 +81,6 @@ class TestRecoverFillGaps:
     async def test_checkpoint_fallback_resolves_orphaned_fill(self, tmp_path):
         """When order_id_map is empty (post-crash), checkpoint provides
         symbol→strategy mapping to resolve orphaned fills."""
-        # Prepare checkpoint with TXFD6 → strat_maker mapping
         import orjson
 
         ckpt_data = {
@@ -110,19 +107,17 @@ class TestRecoverFillGaps:
         with open(ckpt_path, "wb") as f:
             f.write(orjson.dumps(ckpt_data, option=orjson.OPT_SORT_KEYS))
 
-        # Seed DLQ with orphaned fill (unique fill_id to avoid dedup)
         dlq = get_orphaned_fill_dlq()
         orphan = _make_orphaned_fill(symbol="TXFD6", fill_id="G4_TEST_CKPT_1")
         dlq.add(orphan)
         assert dlq.count == 1
 
-        # Router with empty order_id_map (simulating crash recovery)
         router = _make_router()
         result = await router.recover_fill_gaps(checkpoint_path=ckpt_path)
 
         assert result["resolved"] == 1
         assert result["unresolved"] == 0
-        assert dlq.count == 0  # DLQ drained
+        assert dlq.count == 0
 
     @pytest.mark.asyncio
     async def test_unresolvable_fills_remain_in_dlq(self):
@@ -136,7 +131,7 @@ class TestRecoverFillGaps:
 
         assert result["resolved"] == 0
         assert result["unresolved"] == 1
-        assert dlq.count == 1  # Still in DLQ
+        assert dlq.count == 1
 
     @pytest.mark.asyncio
     async def test_dedup_skips_already_processed_fills(self, tmp_path):
@@ -172,7 +167,6 @@ class TestRecoverFillGaps:
         dlq.add(fill)
 
         router = _make_router()
-        # Pre-seed dedup window
         router._seen_fill_ids["ALREADY_SEEN"] = None
 
         result = await router.recover_fill_gaps(checkpoint_path=ckpt_path)

@@ -16,10 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 class _MockBus:
     """Minimal RingBufferBus stand-in for drain tests."""
@@ -35,7 +31,6 @@ class _MockBus:
         self._use_rust = False
         self._ring = None
         self.buffer = [None] * self.size
-        # pre-populate buffer
         for i, ev in enumerate(self._events):
             self.buffer[i % self.size] = ev
 
@@ -51,7 +46,6 @@ def _make_runner(bus, *, process_event_side_effect=None):
     """Build a minimal StrategyRunner-like stub that exposes drain_to_cursor."""
     from hft_platform.strategy.runner import StrategyRunner  # type: ignore
 
-    # Build a StrategyRunner using constructor stubs
     rq = MagicMock(spec=["put_nowait"])
     rq.put_nowait = MagicMock()
 
@@ -74,11 +68,6 @@ def _make_runner(bus, *, process_event_side_effect=None):
     return runner
 
 
-# ---------------------------------------------------------------------------
-# drain_to_cursor: basic drain
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_drain_processes_events_up_to_cursor():
     """drain_to_cursor should process all buffered events up to target_cursor."""
@@ -86,12 +75,8 @@ async def test_drain_processes_events_up_to_cursor():
     bus = _MockBus(events)
     runner = _make_runner(bus)
 
-    # Simulate runner hasn't consumed anything yet; bus.cursor = 4 (0-indexed)
-    # drain_to_cursor reads from bus.cursor+1 to target_cursor inclusive, but
-    # our impl walks from bus.cursor (exclusive) upward.
-    # Set runner's view: bus.cursor = -1 so all 5 events are pending
-    bus.cursor = -1  # runner hasn't read anything
-    target = 4  # last published seq
+    bus.cursor = -1
+    target = 4
 
     drained, skipped = await runner.drain_to_cursor(target, timeout_s=1.0)
 
@@ -120,22 +105,20 @@ async def test_drain_timeout_returns_skipped_count():
     """drain_to_cursor should return skipped > 0 when timeout expires."""
     events = [("tick", "TSMC", i, 1, 1, False, False, i) for i in range(100)]
     bus = _MockBus(events)
-    bus.cursor = -1  # nothing consumed yet
+    bus.cursor = -1
 
     call_count = 0
 
     async def _slow_process(ev):
         nonlocal call_count
         call_count += 1
-        # After 5 events, sleep past the timeout
         if call_count >= 5:
-            await asyncio.sleep(10)  # exceeds timeout
+            await asyncio.sleep(10)
 
     runner = _make_runner(bus, process_event_side_effect=_slow_process)
 
     drained, skipped = await runner.drain_to_cursor(target_cursor=99, timeout_s=0.05)
 
-    # Some events drained, remainder skipped
     assert drained > 0
     assert skipped > 0
     assert drained + skipped == 100
@@ -160,15 +143,9 @@ async def test_drain_process_event_exception_does_not_abort():
 
     drained, skipped = await runner.drain_to_cursor(target_cursor=3, timeout_s=1.0)
 
-    # All 4 events attempted; 3 successfully drained (1 errored but not counted)
     assert call_count == 4
-    assert drained == 3  # error on call 2 not counted
+    assert drained == 3
     assert skipped == 0
-
-
-# ---------------------------------------------------------------------------
-# stop_async: drain happens before strategy_runner.running = False
-# ---------------------------------------------------------------------------
 
 
 class _FakeBus:
@@ -258,7 +235,6 @@ async def test_stop_async_drain_before_strategy_runner_stop():
 
     sr.drain_to_cursor = _spy_drain
 
-    # Monkey-patch property setter to record when running is set to False
     original_setattr = object.__setattr__
 
     class _TrackedRunner(_FakeStrategyRunner):
@@ -270,7 +246,6 @@ async def test_stop_async_drain_before_strategy_runner_stop():
 
     system = _make_system_with_drain_runner(bus, tracked)
 
-    # Patch running setter to record order
     _running_set = []
     original_running = True
 
@@ -283,8 +258,6 @@ async def test_stop_async_drain_before_strategy_runner_stop():
 
     tracked.drain_to_cursor = _patched_drain
 
-    # We'll verify by checking that drain was awaited (patched) and that
-    # strategy_runner.running is False after stop_async
     await system.stop_async()
 
     assert len(_original_drain_called) == 1, "drain_to_cursor must be called exactly once"
@@ -348,7 +321,6 @@ async def test_stop_async_drain_exception_does_not_block_shutdown():
 
     system = _make_system_with_drain_runner(bus, sr)
 
-    # Must complete without raising
     await system.stop_async()
 
     assert sr.running is False, "strategy_runner.running must still be set False after drain error"

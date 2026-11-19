@@ -272,8 +272,6 @@ class TestHaltReasonLabel:
         assert a_inside.wait(timeout=5)
         b = threading.Thread(target=second_halt)
         b.start()
-        # Without the lock B completes here; with it B waits on A. 50 ms bounds
-        # the window B gets to finish before A is let go.
         b.join(timeout=0.05)
         release_a.set()
         a.join(timeout=5)

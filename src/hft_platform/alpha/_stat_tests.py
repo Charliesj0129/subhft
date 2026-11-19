@@ -100,10 +100,6 @@ def _evaluate_oos_statistical_tests(
     }
     signal_test_keys = ("ttest_mean_gt_zero", "wilcoxon_gt_zero", "sign_test_gt_half", "bootstrap_ci_mean")
     pass_count = int(sum(1 for key in signal_test_keys if bool(dict(tests.get(key, {})).get("pass"))))
-    # BDS is a diagnostic indicator for look-ahead contamination, not a hard gate.
-    # EMA-smoothed signals are always non-IID (by construction), so `pass=False` from
-    # BDS does not indicate look-ahead bias. Only the four signal quality tests above
-    # determine the gate result.
     diagnostic_gate_passed = bool(dict(tests.get("bds_independence", {})).get("pass", True))
     passed = pass_count >= int(min_tests_pass)
     return {
@@ -186,7 +182,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
     try:
         try:
             from statsmodels.tsa.stattools import bds as sm_bds
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             from statsmodels.stats.stattools import bds as sm_bds
 
         stat, pvals = sm_bds(sample, max_dim=2, epsilon=epsilon)
@@ -205,8 +201,7 @@ def _run_bds_independence_test(*, arr: np.ndarray, pvalue_threshold: float) -> d
             "reject_iid": reject_iid,
             "pass": not reject_iid,
         }
-    except Exception as _exc:  # noqa: BLE001
-        # Fallback when statsmodels is unavailable: permutation proxy on BDS-style correlation integral delta.
+    except Exception as _exc:
         rng = np.random.default_rng(42)
         draws = 200
         observed = float(_bds_correlation_delta(sample, epsilon))
@@ -293,7 +288,6 @@ def _check_monotonic_ic(
         strictly_increasing = all(finite_ics[i] < finite_ics[i + 1] for i in range(len(finite_ics) - 1))
         ic_range = max(finite_ics) - min(finite_ics)
         max_abs_ic = max(abs(ic) for ic in finite_ics)
-        # Require meaningful range and magnitude (pure noise < 0.03 abs)
         is_monotonic = strictly_increasing and ic_range > 0.02 and max_abs_ic > 0.03
 
     return {
@@ -320,7 +314,6 @@ def _check_detrended_ic(
     raw_ic = _spearman_ic(sig[mask_raw], fwd_1[mask_raw]) if mask_raw.sum() >= 20 else 0.0
     raw_ic = raw_ic if np.isfinite(raw_ic) else 0.0
 
-    # Rolling mean via cumsum trick
     w = int(detrend_window)
     cumsum = np.concatenate([[0.0], np.cumsum(fwd_1)])
     rolling_mean = np.full(n, np.nan, dtype=np.float64)
@@ -340,7 +333,6 @@ def _check_detrended_ic(
         "detrended_ic": dt_ic,
         "sign_flipped": sign_flipped,
         "below_threshold": below_threshold,
-        # Advisory: smallest |IC| these pairs could detect, treating them as independent.
         "n_obs": n_obs,
         "mdic_iid": min_detectable_ic(n_obs),
         "pass": not sign_flipped and not below_threshold,

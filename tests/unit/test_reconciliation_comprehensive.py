@@ -16,10 +16,6 @@ from hft_platform.execution.reconciliation import (
     _compute_backoff_delay,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def make_recon_service(positions=None, broker_positions=None, config=None):
     """Build a ReconciliationService with mocked dependencies."""
@@ -36,11 +32,6 @@ def make_recon_service(positions=None, broker_positions=None, config=None):
         m.get.return_value = registry
         svc = ReconciliationService(client, store, config or {}, storm_guard)
     return svc, storm_guard
-
-
-# ===================================================================
-# PositionDiscrepancy tests (6)
-# ===================================================================
 
 
 class TestPositionDiscrepancy:
@@ -61,17 +52,14 @@ class TestPositionDiscrepancy:
 
     def test_large_absolute_diff_is_critical(self):
         """abs(diff) > max(100, abs(local)//10) -> critical."""
-        # local=500, threshold = max(100, 50) = 100; diff=101 > 100
         d = PositionDiscrepancy(symbol="2330", local_qty=500, broker_qty=399, diff=101)
         assert d.is_critical is True
 
-        # local=2000, threshold = max(100, 200) = 200; diff=201 > 200
         d2 = PositionDiscrepancy(symbol="2317", local_qty=2000, broker_qty=1799, diff=201)
         assert d2.is_critical is True
 
     def test_small_diff_not_critical(self):
         """Small diff within threshold -> not critical."""
-        # local=1000, threshold = max(100, 100) = 100; diff=5 <= 100
         d = PositionDiscrepancy(symbol="2330", local_qty=1000, broker_qty=995, diff=5)
         assert d.is_critical is False
 
@@ -87,11 +75,6 @@ class TestPositionDiscrepancy:
 
         info = PositionDiscrepancy(symbol="2317", local_qty=1000, broker_qty=992, diff=8)
         assert info.severity == "info"
-
-
-# ===================================================================
-# _compute_backoff_delay tests (3)
-# ===================================================================
 
 
 class TestComputeBackoffDelay:
@@ -111,16 +94,9 @@ class TestComputeBackoffDelay:
         """With jitter > 0, repeated calls yield different values within bounds."""
         random.seed(1)
         vals = [_compute_backoff_delay(attempt=0, base=2.0, max_delay=60.0, jitter=0.2) for _ in range(20)]
-        # All values should be in [base*(1-jitter), base*(1+jitter)] = [1.6, 2.4]
         for v in vals:
             assert 1.6 <= v <= 2.4, f"value {v} outside jitter range"
-        # At least two distinct values
         assert len(set(vals)) > 1
-
-
-# ===================================================================
-# ReconciliationService tests (7)
-# ===================================================================
 
 
 class TestReconciliationService:
@@ -241,7 +217,7 @@ class TestReconciliationService:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return  # startup sync succeeds
+                return
             if call_count >= 5:
                 svc.running = False
             raise RuntimeError("broker unavailable")
@@ -249,8 +225,6 @@ class TestReconciliationService:
         with (
             patch.object(svc, "sync_portfolio", side_effect=sync_side_effect),
             patch.object(svc, "_update_failure_gauge"),
-            # Bug #38 added an off-session gate; force in-session so the failure
-            # counter actually increments regardless of when CI runs.
             patch.object(svc, "_in_trading_hours", return_value=True),
             patch(
                 "hft_platform.execution.reconciliation._compute_backoff_delay",
@@ -274,7 +248,7 @@ class TestReconciliationService:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return  # startup sync succeeds
+                return
             if call_count >= 5:
                 svc.running = False
                 return
@@ -283,7 +257,6 @@ class TestReconciliationService:
         with (
             patch.object(svc, "sync_portfolio", side_effect=sync_side_effect),
             patch.object(svc, "_update_failure_gauge"),
-            # Bug #38 off-session gate: force in-session so HALT path is reachable.
             patch.object(svc, "_in_trading_hours", return_value=True),
             patch(
                 "hft_platform.execution.reconciliation._compute_backoff_delay",
@@ -311,7 +284,7 @@ class TestReconciliationService:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return  # startup sync succeeds
+                return
             if call_count >= 8:
                 svc.running = False
                 return
@@ -378,13 +351,13 @@ class TestReconciliationService:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return  # startup sync succeeds
+                return
             if call_count == 2:
                 raise RuntimeError("transient error")
             if call_count == 3:
                 raise RuntimeError("transient error")
             if call_count == 4:
-                pass  # success — resets counter
+                pass
             if call_count >= 5:
                 svc.running = False
 

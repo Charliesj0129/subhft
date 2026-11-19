@@ -56,11 +56,10 @@ def test_adapter_accepts_ndarray_data():
     adapter = HftBacktestAdapter(
         strategy=_make_null_strategy(),
         asset_symbol="TMFD6",
-        data=events,  # ndarray input
+        data=events,
         tick_size=1.0,
         lot_size=1.0,
     )
-    # Verify the adapter accepted the ndarray
     assert adapter._data_ndarray is events
 
 
@@ -69,7 +68,6 @@ def test_adapter_str_path_backward_compat(tmp_path):
     if not HFTBACKTEST_AVAILABLE:
         pytest.skip("hftbacktest not installed")
 
-    # Build a valid .npz file with minimal event data
     dtype = _event_dtype()
     events = np.array(
         [
@@ -89,7 +87,6 @@ def test_adapter_str_path_backward_compat(tmp_path):
         tick_size=1.0,
         lot_size=1.0,
     )
-    # Verify str path is stored correctly
     assert adapter.data_path == str(npz_path)
     assert adapter._data_ndarray is None
 
@@ -100,12 +97,10 @@ def test_adapter_ndarray_infers_tick_size():
         pytest.skip("hftbacktest not installed")
 
     events = _minimal_events()
-    # Should not raise even without explicit tick_size
     adapter = HftBacktestAdapter(
         strategy=_make_null_strategy(),
         asset_symbol="TMFD6",
         data=events,
-        # tick_size omitted to trigger inference path
         lot_size=1.0,
     )
     assert adapter._data_ndarray is events

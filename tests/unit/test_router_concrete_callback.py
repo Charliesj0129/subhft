@@ -29,9 +29,6 @@ def _reset_registry() -> None:
         mod._CACHE_WARMED = False
 
 
-# --- Concrete 2-arg callback tests ---
-
-
 class TestConcreteCallback:
     def setup_method(self) -> None:
         _reset_registry()
@@ -68,7 +65,7 @@ class TestConcreteCallback:
         mod._registry_register(c1)
         mod._registry_rebind_codes(c1, ["2330"])
 
-        quote = {"price": 100}  # no code field
+        quote = {"price": 100}
         mod.dispatch_tick_cb("Q/TSE/2330", quote)
 
         c1._enqueue_tick.assert_called_once_with("Q/TSE/2330", quote)
@@ -105,12 +102,8 @@ class TestConcreteCallback:
         class Quote:
             code = "2330"
 
-        # Should not raise — exception is caught and logged internally.
         mod.dispatch_tick_cb("Q/TSE/2330", Quote())
         assert c1._enqueue_tick.call_count == 1
-
-
-# --- Compat callback tests ---
 
 
 class TestCompatCallback:
@@ -134,9 +127,6 @@ class TestCompatCallback:
         """No args/kwargs should be a no-op."""
         mod.dispatch_tick_cb_compat()
         assert mod.CLIENT_REGISTRY_SNAPSHOT == ()
-
-
-# --- Cache warmup tests ---
 
 
 class TestCacheWarmup:
@@ -179,7 +169,6 @@ class TestCacheWarmup:
         mod._registry_rebind_codes(c1, ["2330"])
         assert mod._CACHE_WARMED is True
 
-        # Pre-populated topic should be a cache hit — no lock needed.
         result = mod._extract_code_from_topic("Q/TSE/2330")
         assert result == "2330"
 
@@ -190,12 +179,10 @@ class TestCacheWarmup:
         mod._registry_rebind_codes(c1, ["2330"])
         assert mod._CACHE_WARMED is True
 
-        # Clear pre-populated entries to force a miss.
         mod.TOPIC_CODE_CACHE.clear()
 
         result = mod._extract_code_from_topic("Q/TSE/9999")
         assert result == "9999"
-        # Should be cached after first miss.
         assert mod.TOPIC_CODE_CACHE.get("Q/TSE/9999") == "9999"
 
     def test_cache_max_triggers_coarse_reset_then_add(self, monkeypatch: object) -> None:
@@ -212,14 +199,11 @@ class TestCacheWarmup:
         mod._registry_register(c1)
         mod._registry_rebind_codes(c1, ["2330"])
 
-        # Simulate at-max cache.
         monkeypatch.setattr(r, "_TOPIC_CODE_CACHE_MAX", 5)  # type: ignore[attr-defined]
         mod.TOPIC_CODE_CACHE.clear()
         for i in range(5):
             mod.TOPIC_CODE_CACHE[f"topic_{i}"] = f"code_{i}"
 
-        # At max — coarse reset clears the cache, then the new entry is
-        # written, leaving the cache with just the new entry.
         mod._extract_code_from_topic("Q/TSE/NEW_CODE")
         assert "Q/TSE/NEW_CODE" in mod.TOPIC_CODE_CACHE
         assert len(mod.TOPIC_CODE_CACHE) == 1, (

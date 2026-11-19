@@ -97,7 +97,6 @@ class TestEmitAlways:
 
         monkeypatch.setattr("pathlib.Path.open", _boom)
 
-        # Must swallow OSError silently; emit_always returns None always.
         assert sampler.emit_always(stage="order_dispatch_error", trace_id="t1", payload={"err": "x"}) is None
 
     def test_emit_always_preserves_trace_id_and_stage(self, tmp_path):

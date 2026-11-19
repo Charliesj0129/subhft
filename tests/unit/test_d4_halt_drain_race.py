@@ -25,7 +25,7 @@ def _make_engine():
     engine.order_queue = asyncio.Queue(maxsize=2)
     engine.metrics = MagicMock()
     engine.storm_guard = MagicMock()
-    engine.storm_guard.state = 0  # NORMAL
+    engine.storm_guard.state = 0
     engine._order_dlq = collections.deque()
     engine._ORDER_DLQ_MAX = 256
     return engine
@@ -40,7 +40,6 @@ def test_halt_guard_blocks_dispatch():
 
     cmd = _make_cmd()
 
-    # Simulate the HALT check from the run() loop
     if engine.storm_guard.state == StormGuardState.HALT:
         engine.metrics.risk_halt_blocked_total.inc()
     else:
@@ -54,7 +53,6 @@ def test_queue_full_routes_to_dlq():
     """When order_queue is full, command goes to DLQ and StormGuard HALTs."""
     engine = _make_engine()
 
-    # Fill queue
     engine.order_queue.put_nowait(MagicMock())
     engine.order_queue.put_nowait(MagicMock())
 

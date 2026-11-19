@@ -21,7 +21,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("core.session_hooks")
 
-# Type alias for hook callbacks: sync or async callables with no args.
 HookCallback = Callable[[], Any | Awaitable[Any]]
 
 _DEFAULT_POLL_INTERVAL_S = 30.0
@@ -94,19 +93,10 @@ class SessionHookManager:
         self._hook_timeout_s = float(os.getenv("HFT_SESSION_HOOKS_TIMEOUT_S", str(_DEFAULT_HOOK_TIMEOUT_S)))
         self._pre_market_hooks: list[tuple[str, HookCallback]] = []
         self._post_market_hooks: list[tuple[str, HookCallback]] = []
-        # TAIFEX by default. ``MarketCalendar.is_trading_hours`` treats
-        # ``product_type=None`` as the TWSE stock day session (09:00-13:30);
-        # this platform is TAIFEX-primary (day 08:45-13:45, night 15:00-05:00),
-        # so the default answered about the wrong market. With the old default a
-        # pre-market hook would fire 15 min after the futures open, a
-        # post-market hook 15 min before the futures close, and the entire night
-        # session would read as POST_MARKET so its boundaries never fired at all.
         self._product_type = os.getenv("HFT_SESSION_HOOKS_PRODUCT", "future")
         self._phase: SessionPhase | None = None
         self._running = False
-        self._calendar: Any = None  # Lazy-loaded MarketCalendar
-
-    # -- Registration API ---------------------------------------------------
+        self._calendar: Any = None
 
     def register_pre_market(self, name: str, callback: HookCallback) -> None:
         """Register a callback to run before market opens."""
@@ -117,8 +107,6 @@ class SessionHookManager:
         """Register a callback to run after market closes."""
         self._post_market_hooks.append((name, callback))
         logger.info("post_market_hook_registered", hook=name)
-
-    # -- Phase detection ----------------------------------------------------
 
     @property
     def phase(self) -> SessionPhase | None:
@@ -153,19 +141,15 @@ class SessionHookManager:
         if cal.is_trading_hours(now, product_type=self._product_type):
             return SessionPhase.MARKET_OPEN
 
-        # Check if today is a trading day and we are past market close.
         if cal.is_trading_day(now.date()):
             close = cal.get_session_close(now.date())
             if close is not None:
-                # Normalize both to offset-aware for comparison.
                 if close.tzinfo is None:
                     close = close.replace(tzinfo=tz)
                 if now >= close:
                     return SessionPhase.POST_MARKET
 
         return SessionPhase.PRE_MARKET
-
-    # -- Hook execution -----------------------------------------------------
 
     async def _fire_hooks(self, hooks: list[tuple[str, HookCallback]], label: str) -> None:
         """Run a list of hooks sequentially with timeout."""
@@ -198,8 +182,6 @@ class SessionHookManager:
                     exc_info=True,
                 )
 
-    # -- Main loop ----------------------------------------------------------
-
     async def run(self) -> None:
         """Main polling loop.  Should be started as a background task."""
         if not self._enabled:
@@ -207,7 +189,6 @@ class SessionHookManager:
             return
 
         self._running = True
-        # Determine initial phase without firing hooks.
         self._phase = self._detect_phase()
         logger.info(
             "session_hooks_started",
@@ -234,7 +215,6 @@ class SessionHookManager:
                 new_phase=new_phase.value,
             )
 
-            # Fire hooks on relevant transitions.
             if new_phase == SessionPhase.MARKET_OPEN and old_phase == SessionPhase.PRE_MARKET:
                 await self._fire_hooks(self._pre_market_hooks, "pre_market")
             elif new_phase == SessionPhase.POST_MARKET and old_phase == SessionPhase.MARKET_OPEN:

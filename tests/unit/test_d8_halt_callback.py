@@ -32,7 +32,6 @@ def test_halt_callback_exception_is_logged(storm_guard_with_failing_callback, ca
 
     async def _run():
         sg.trigger_halt("test")
-        # Give the scheduled task a chance to run and fail
         await asyncio.sleep(0.05)
 
     asyncio.run(_run())

@@ -57,7 +57,6 @@ class PositionFlattener:
 
     async def flatten_strategy(self, strategy_id: str) -> FlattenResult:
         """Flatten positions for a specific strategy."""
-        # Strategy-scoped flatten requires position store to support per-strategy queries
         positions = self._get_open_positions()
         if not positions:
             return FlattenResult()
@@ -69,8 +68,6 @@ class PositionFlattener:
         if hasattr(store, "get_open_positions"):
             raw_positions = store.get_open_positions()
             return {symbol: int(qty) for symbol, qty in raw_positions.items() if int(qty) != 0}
-        # Fallback: iterate the store's positions, including lots carried
-        # across a restart that no fill has merged yet.
         open_view = getattr(store, "snapshot_open_positions", None)
         if callable(open_view) or hasattr(store, "positions"):
             positions: dict[str, int] = {}
@@ -93,11 +90,9 @@ class PositionFlattener:
 
         try:
             async with asyncio.timeout(self._flatten_deadline_s):
-                # Step 1: Cancel all pending orders for these symbols
                 await self._cancel_pending(symbols)
-                await asyncio.sleep(0.1)  # Brief pause for cancel confirmations
+                await asyncio.sleep(0.1)
 
-                # Step 2: Send close orders for each position
                 for symbol in symbols:
                     qty = positions.get(symbol, 0)
                     if qty == 0:
@@ -116,7 +111,7 @@ class PositionFlattener:
                             symbol=symbol,
                             intent_type=IntentType.FORCE_FLAT,
                             side=close_side,
-                            price=0,  # market order (price=0 convention)
+                            price=0,
                             qty=close_qty,
                             timestamp_ns=timebase.now_ns(),
                         )
@@ -124,7 +119,6 @@ class PositionFlattener:
                         result.submitted += 1
                     except Exception as e:
                         logger.error("flatten_symbol_failed", symbol=symbol, error=str(e))
-                        # Retry once
                         try:
                             if intent is not None:
                                 await self._submit_intent(intent)
@@ -135,7 +129,6 @@ class PositionFlattener:
 
         except TimeoutError:
             logger.error("flatten_timeout", deadline_s=self._flatten_deadline_s)
-            # Count remaining unflatten symbols as failed
             remaining = len(symbols) - result.submitted - result.partially_closed - result.failed
             result.failed += remaining
 

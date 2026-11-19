@@ -14,10 +14,6 @@ from hft_platform.testing.shadow_runner import (
     run,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_intent(
     price: Any = 150_000,
@@ -36,11 +32,6 @@ def _make_intent(
     )
 
 
-# ---------------------------------------------------------------------------
-# ShadowResult dataclass
-# ---------------------------------------------------------------------------
-
-
 def test_shadow_result_default_values():
     result = ShadowResult()
     assert result.commands == []
@@ -53,11 +44,6 @@ def test_shadow_result_fields_are_independent():
     r2 = ShadowResult()
     r1.commands.append(object())  # type: ignore[arg-type]
     assert r2.commands == [], "ShadowResult instances must not share list references"
-
-
-# ---------------------------------------------------------------------------
-# RecordingOrderAdapter
-# ---------------------------------------------------------------------------
 
 
 def test_recording_adapter_submit_stores_command():
@@ -99,11 +85,6 @@ async def test_recording_adapter_execute_and_submit_share_list():
     assert len(adapter.commands) == 2
 
 
-# ---------------------------------------------------------------------------
-# _check_precision
-# ---------------------------------------------------------------------------
-
-
 def test_check_precision_valid_int_price_and_qty():
     intent = _make_intent(price=150_000, qty=10)
     violations = _check_precision(intent)
@@ -136,11 +117,6 @@ def test_check_precision_string_price_detected():
     violations = _check_precision(intent)
     assert len(violations) >= 1
     assert "price" in violations[0]
-
-
-# ---------------------------------------------------------------------------
-# run() — main async function
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

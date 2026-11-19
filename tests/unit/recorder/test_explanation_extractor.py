@@ -44,9 +44,6 @@ def _make_explanation() -> OrderExplanation:
 class TestExplanationExtractor:
     def test_columns_registered_in_extractor_columns_map(self) -> None:
         assert _EXTRACTOR_COLUMNS["explanations"] is EXPLANATION_COLUMNS
-        # The extractor expects exactly 18 columns; lock the contract so a
-        # future column addition can't silently desync the value list and the
-        # CK INSERT column list.
         assert len(EXPLANATION_COLUMNS) == 18
 
     def test_extract_from_dataclass(self) -> None:
@@ -55,7 +52,6 @@ class TestExplanationExtractor:
         assert values is not None
         assert len(values) == len(EXPLANATION_COLUMNS)
 
-        # Spot-check key positions.
         col_idx = {name: i for i, name in enumerate(EXPLANATION_COLUMNS)}
         assert values[col_idx["trace_id"]] == "trace-abc"
         assert values[col_idx["client_order_id"]] == "R47:42"
@@ -63,8 +59,6 @@ class TestExplanationExtractor:
         assert values[col_idx["lifecycle_status"]] == "filled"
         assert values[col_idx["ts_emit"]] == 1_700_000_000_000_000_000
 
-        # JSON fields should be valid JSON strings round-trippable to the
-        # original dict/list payload.
         decoded_feat = json.loads(values[col_idx["feature_snapshot"]])
         assert decoded_feat == {"spread_pts": 5, "qi": 0.14}
         decoded_fills = json.loads(values[col_idx["fills"]])

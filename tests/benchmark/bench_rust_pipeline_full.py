@@ -29,25 +29,19 @@ def _load_rust_core():
 
 rc = _load_rust_core()
 
-# ---------------------------------------------------------------------------
-# Test data
-# ---------------------------------------------------------------------------
-SCALE = 10000  # realistic x10000 scaling
+SCALE = 10000
 N_ITERS = 50_000
 
-# L5 book (5 levels) — typical Shioaji
 L5_BID_P = np.array([100.0, 99.95, 99.90, 99.85, 99.80], dtype=np.float64)
 L5_BID_V = np.array([50, 120, 80, 200, 150], dtype=np.int64)
 L5_ASK_P = np.array([100.05, 100.10, 100.15, 100.20, 100.25], dtype=np.float64)
 L5_ASK_V = np.array([60, 90, 110, 180, 140], dtype=np.int64)
 
-# L20 book (20 levels) — deep book
 L20_BID_P = np.array([100.0 - 0.05 * i for i in range(20)], dtype=np.float64)
 L20_BID_V = np.array([50 + i * 10 for i in range(20)], dtype=np.int64)
 L20_ASK_P = np.array([100.05 + 0.05 * i for i in range(20)], dtype=np.float64)
 L20_ASK_V = np.array([60 + i * 10 for i in range(20)], dtype=np.int64)
 
-# Tick payload
 TICK_PAYLOAD = {
     "code": "TXFD6",
     "ts": 1700000000000000,
@@ -56,7 +50,6 @@ TICK_PAYLOAD = {
     "tick_type": 1,
 }
 
-# BidAsk payload
 BA_PAYLOAD = {
     "code": "TXFD6",
     "ts": 1700000000000000,
@@ -66,7 +59,6 @@ BA_PAYLOAD = {
     "ask_volume": L5_ASK_V.tolist(),
 }
 
-# Position fills
 POS_FILLS = [
     (0, 10, 1000000, 5, 0),
     (0, 5, 1002000, 3, 0),
@@ -76,7 +68,6 @@ POS_FILLS = [
     (1, 20, 1004000, 10, 0),
 ]
 
-# Feature engine inputs
 FE_BEST_BID = 1000000
 FE_BEST_ASK = 1000500
 FE_MID_X2 = 2000500
@@ -110,13 +101,9 @@ def _bench(name: str, rust_fn, python_fn, n: int = N_ITERS):
     return us_rust, us_py
 
 
-# ===========================================================================
-# Stage 1: scale_book (LOB scaling)
-# ===========================================================================
 def bench_scale_book():
     _header("Stage 1: scale_book (LOB price scaling)")
 
-    # L5 Python
     def py_scale_l5():
         bids = [[int(round(p * SCALE)), int(v)] for p, v in zip(L5_BID_P, L5_BID_V) if p > 0]
         asks = [[int(round(p * SCALE)), int(v)] for p, v in zip(L5_ASK_P, L5_ASK_V) if p > 0]
@@ -127,7 +114,6 @@ def bench_scale_book():
 
     _bench("scale_book_pair_stats (L5, 5 levels)", rust_scale_l5, py_scale_l5)
 
-    # L20 Python
     def py_scale_l20():
         bids = [[int(round(p * SCALE)), int(v)] for p, v in zip(L20_BID_P, L20_BID_V) if p > 0]
         asks = [[int(round(p * SCALE)), int(v)] for p, v in zip(L20_ASK_P, L20_ASK_V) if p > 0]
@@ -139,9 +125,6 @@ def bench_scale_book():
     _bench("scale_book_pair_stats (L20, 20 levels)", rust_scale_l20, py_scale_l20)
 
 
-# ===========================================================================
-# Stage 2: normalize_tick
-# ===========================================================================
 def bench_normalize_tick():
     _header("Stage 2: normalize_tick")
 
@@ -161,9 +144,6 @@ def bench_normalize_tick():
     _bench("normalize_tick_tuple", rust_norm_tick, py_norm_tick)
 
 
-# ===========================================================================
-# Stage 3: normalize_bidask
-# ===========================================================================
 def bench_normalize_bidask():
     _header("Stage 3: normalize_bidask")
 
@@ -197,22 +177,17 @@ def bench_normalize_bidask():
 
     _bench("normalize_bidask_tuple_np (L5)", rust_norm_ba, py_norm_ba)
 
-    # Also test the dict-based path
     def rust_norm_ba_dict():
         return rc.normalize_bidask_tuple(BA_PAYLOAD, BA_PAYLOAD["code"], SCALE)
 
     _bench("normalize_bidask_tuple (dict)", rust_norm_ba_dict, py_norm_ba)
 
 
-# ===========================================================================
-# Stage 4: RingBuffer publish/consume
-# ===========================================================================
 def bench_ring_buffer():
     _header("Stage 4: RingBuffer (publish + consume)")
 
     event = ("tick", "TXFD6", 201000000, 5, 1700000000000000, 1)
 
-    # Rust RingBuffer
     ring_rust = rc.FastRingBuffer(4096)
     rust_seq = [0]
 
@@ -223,7 +198,6 @@ def bench_ring_buffer():
         rust_seq[0] = seq + 1
         return result
 
-    # Python list-based ring
     py_buf = [None] * 4096
     py_cursor = [0]
 
@@ -236,9 +210,6 @@ def bench_ring_buffer():
     _bench("publish + get (single event)", rust_pub_consume, py_pub_consume)
 
 
-# ===========================================================================
-# Stage 5: RustBookState (LOB state management)
-# ===========================================================================
 def bench_book_state():
     _header("Stage 5: RustBookState (LOB state update)")
 
@@ -255,7 +226,6 @@ def bench_book_state():
         ts[0] += 1
         rust_bs.apply_update(bids_scaled, asks_scaled, ts[0])
 
-    # Python equivalent
     class PyBookState:
         __slots__ = (
             "best_bid",
@@ -302,9 +272,6 @@ def bench_book_state():
     _bench("apply_update (L5)", rust_book_update, py_book_update)
 
 
-# ===========================================================================
-# Stage 6: Position Tracker
-# ===========================================================================
 def bench_position_tracker():
     _header("Stage 6: PositionTracker (6-fill sequence)")
 
@@ -351,9 +318,6 @@ def bench_position_tracker():
     _bench("6-fill round trip", rust_pos, py_pos, n=20_000)
 
 
-# ===========================================================================
-# Stage 7: Risk Validation (RustRiskValidator)
-# ===========================================================================
 def bench_risk_validator():
     _header("Stage 7: RiskValidator (PriceBand + MaxNotional)")
 
@@ -367,7 +331,7 @@ def bench_risk_validator():
     )
 
     def rust_validate():
-        return rv.check(1000000, 10, 1000500, 0)  # price, qty, mid, intent_type
+        return rv.check(1000000, 10, 1000500, 0)
 
     def py_validate():
         price = 1000000
@@ -386,9 +350,6 @@ def bench_risk_validator():
     _bench("check (price_band + max_notional)", rust_validate, py_validate)
 
 
-# ===========================================================================
-# Stage 8: Feature Engine Kernel (LobFeatureKernelV1)
-# ===========================================================================
 def bench_feature_kernel():
     _header("Stage 8: LobFeatureKernelV1 (16 features)")
 
@@ -410,7 +371,6 @@ def bench_feature_kernel():
             FE_L1_ASK_QTY,
         )
 
-    # Python equivalent (simplified EMA + OFI computation)
     prev = {"mid": 0, "spread": 0, "imb": 0.0, "ofi": 0.0, "bid_p": 0, "ask_p": 0, "bid_v": 0, "ask_v": 0}
     alpha = 2.0 / 9.0
 
@@ -418,11 +378,9 @@ def bench_feature_kernel():
         mid = FE_MID_X2
         spread = FE_SPREAD
         imb = (FE_L1_BID_QTY - FE_L1_ASK_QTY) / max(FE_L1_BID_QTY + FE_L1_ASK_QTY, 1)
-        # EMA updates
         ema_mid = prev["mid"] + alpha * (mid - prev["mid"]) if prev["mid"] else mid
         ema_spread = prev["spread"] + alpha * (spread - prev["spread"]) if prev["spread"] else spread
         ema_imb = prev["imb"] + alpha * (imb - prev["imb"])
-        # OFI
         e_bid = FE_L1_BID_QTY - prev["bid_v"] if FE_BEST_BID == prev["bid_p"] else FE_L1_BID_QTY
         e_ask = FE_L1_ASK_QTY - prev["ask_v"] if FE_BEST_ASK == prev["ask_p"] else FE_L1_ASK_QTY
         ofi = e_bid - e_ask
@@ -457,9 +415,6 @@ def bench_feature_kernel():
     _bench("16-feature kernel update", rust_fe, py_fe)
 
 
-# ===========================================================================
-# Stage 9: DedupStore
-# ===========================================================================
 def bench_dedup():
     _header("Stage 9: DedupStore (idempotency check)")
 
@@ -487,9 +442,6 @@ def bench_dedup():
     _bench("check_and_reserve", rust_dedup, py_dedup, n=100_000)
 
 
-# ===========================================================================
-# Stage 10: CircuitBreaker
-# ===========================================================================
 def bench_circuit_breaker():
     _header("Stage 10: CircuitBreaker (state transition)")
 
@@ -503,7 +455,6 @@ def bench_circuit_breaker():
         cb.record_success()
         return cb.state()
 
-    # Python equivalent
     class PyCB:
         __slots__ = ("failures", "successes", "state_val")
 
@@ -532,9 +483,6 @@ def bench_circuit_breaker():
     _bench("record_success + state", rust_cb, py_cb_fn)
 
 
-# ===========================================================================
-# Summary
-# ===========================================================================
 def main():
     if rc is None:
         print("ERROR: rust_core not available. Run: uv run maturin develop --manifest-path rust_core/Cargo.toml")

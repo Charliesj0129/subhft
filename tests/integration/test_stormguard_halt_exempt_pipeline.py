@@ -20,10 +20,6 @@ from hft_platform.risk.storm_guard import StormGuard
 
 pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def mock_metrics():
@@ -76,11 +72,6 @@ def _make_command(
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. StormGuard.validate() — halt-exempt passes, non-exempt blocked
-# ---------------------------------------------------------------------------
-
-
 class TestStormGuardValidateHaltExempt:
     def test_exempt_strategy_passes_in_halt(self, halt_exempt_guard):
         intent = _make_intent(strategy_id="spike_fader")
@@ -110,7 +101,7 @@ class TestStormGuardValidateHaltExempt:
         """Exempt strategies also bypass STORM NEW blocking."""
         halt_exempt_guard._halt_cooldown_s = 0.0
         halt_exempt_guard._de_escalate_threshold = 1
-        halt_exempt_guard.update(order_rtt_us=2_500_000)  # STORM level
+        halt_exempt_guard.update(order_rtt_us=2_500_000)
         intent = _make_intent(strategy_id="spike_fader")
         allowed, reason = halt_exempt_guard.validate(intent)
         assert allowed is True
@@ -123,11 +114,6 @@ class TestStormGuardValidateHaltExempt:
         allowed, reason = guard.validate(intent)
         assert allowed is False
         assert "STORM" in reason
-
-
-# ---------------------------------------------------------------------------
-# 2. GatewayPolicy — halt-exempt awareness (after fix)
-# ---------------------------------------------------------------------------
 
 
 class TestGatewayPolicyHaltExempt:
@@ -157,12 +143,10 @@ class TestGatewayPolicyHaltExempt:
         from hft_platform.gateway.policy import GatewayPolicy, GatewayPolicyMode
 
         policy = GatewayPolicy()
-        # Enter DEGRADE via storm
         intent = _make_intent()
         policy.gate(intent, StormGuardState.STORM)
         assert policy.mode == GatewayPolicyMode.DEGRADE
 
-        # Storm clears -> NORMAL
         policy.gate(intent, StormGuardState.NORMAL)
         assert policy.mode == GatewayPolicyMode.NORMAL
 
@@ -180,11 +164,6 @@ class TestGatewayPolicyHaltExempt:
         intent = _make_intent()
         allowed, _ = policy.gate(intent, StormGuardState.NORMAL)
         assert allowed is True
-
-
-# ---------------------------------------------------------------------------
-# 3. DLQ halt_exempt_blocked flag
-# ---------------------------------------------------------------------------
 
 
 class TestDLQHaltExemptFlag:
@@ -251,11 +230,6 @@ class TestDLQHaltExemptFlag:
         assert restored.halt_exempt_blocked is True
 
 
-# ---------------------------------------------------------------------------
-# 4. Feature recovery bypass when latency is elevated
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureRecoveryBypass:
     def test_feature_recovery_does_not_deescalate_when_latency_elevated(self, mock_metrics):
         """report_feature_recovery() clears flag but does NOT de-escalate state.
@@ -264,23 +238,17 @@ class TestFeatureRecoveryBypass:
         STORM conditions (latency, drawdown) are respected.
         """
         guard = StormGuard()
-        # Enter STORM via latency
         guard.update(latency_us=25000)
         assert guard.state == StormGuardState.STORM
 
-        # Simulate feature failure escalation (additive)
         guard.report_feature_failure(10)
         assert guard.state == StormGuardState.STORM
         assert guard._feature_failure_active is True
 
-        # Wait past recovery hold
         guard._feature_failure_storm_ts -= 10.0
 
-        # Feature recovers — flag cleared but state stays STORM
-        # because report_feature_recovery() delegates de-escalation to update()
         guard.report_feature_recovery()
         assert guard._feature_failure_active is False
-        # State remains STORM — latency is still elevated
         assert guard.state == StormGuardState.STORM
 
     def test_feature_recovery_anti_flap_suppresses_fast_recovery(self, mock_metrics):
@@ -289,15 +257,9 @@ class TestFeatureRecoveryBypass:
         guard.report_feature_failure(10)
         assert guard._feature_failure_active is True
 
-        # Immediately try recovery — should be suppressed
         guard.report_feature_recovery()
-        assert guard._feature_failure_active is True  # Still active
+        assert guard._feature_failure_active is True
         assert guard.state == StormGuardState.STORM
-
-
-# ---------------------------------------------------------------------------
-# 5. Runtime kill switch (grant/revoke halt exemption)
-# ---------------------------------------------------------------------------
 
 
 class TestRuntimeHaltExemption:
@@ -331,11 +293,6 @@ class TestRuntimeHaltExemption:
         guard = StormGuard()
         assert "strat_a" in guard._halt_exempt_strategies
         assert "strat_b" in guard._halt_exempt_strategies
-
-
-# ---------------------------------------------------------------------------
-# 6. order_halt_skip_total metric has strategy_id label
-# ---------------------------------------------------------------------------
 
 
 class TestOrderHaltSkipMetricLabel:

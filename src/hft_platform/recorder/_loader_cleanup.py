@@ -126,7 +126,6 @@ def _scan_dir_jsonl(path: str, now: float) -> tuple[int, int, float]:
             except OSError:
                 continue
     except OSError:
-        # Directory disappeared mid-scan — return what we have.
         pass
     return total_size, file_count, oldest_mtime
 
@@ -152,16 +151,11 @@ def _check_wal_accumulation(self: WALLoaderService) -> None:
         return
 
     try:
-        # Per-tier non-recursive scans. archive/ and dlq/ live under wal_dir;
-        # rglob would also find anything under archive/<subdir>/*.jsonl but
-        # in practice neither directory is nested.
         active_size, active_count, active_oldest = _scan_dir_jsonl(self.wal_dir, now)
         archive_size, archive_count, archive_oldest = _scan_dir_jsonl(self.archive_dir, now)
         dlq_size, dlq_count, dlq_oldest = _scan_dir_jsonl(self.dlq_dir, now)
 
-        # Emit metrics
         if self.metrics:
-            # Tiered gauges (P2-a):
             self.metrics.wal_directory_bytes.labels(tier="active").set(active_size)
             self.metrics.wal_directory_bytes.labels(tier="archive").set(archive_size)
             self.metrics.wal_directory_bytes.labels(tier="dlq").set(dlq_size)
@@ -169,15 +163,11 @@ def _check_wal_accumulation(self: WALLoaderService) -> None:
             self.metrics.wal_file_count_tiered.labels(tier="archive").set(archive_count)
             self.metrics.wal_file_count_tiered.labels(tier="dlq").set(dlq_count)
 
-            # Legacy unlabeled gauges — keep pointing at ACTIVE tier so
-            # existing dashboards / alerts don't lose meaning.
             self.metrics.wal_directory_size_bytes.set(active_size)
             self.metrics.wal_file_count.set(active_count)
             active_oldest_age = now - active_oldest if active_count else 0
             self.metrics.wal_oldest_file_age_seconds.set(active_oldest_age)
 
-            # CE3-06: WAL SLO metrics — these gate replay alerts. Active tier
-            # is the right choice (loader processes from there).
             self.metrics.wal_backlog_files.set(active_count)
             self.metrics.wal_replay_lag_seconds.set(active_oldest_age)
             now_ts = now
@@ -194,8 +184,6 @@ def _check_wal_accumulation(self: WALLoaderService) -> None:
             self._eta_sample_last_ts = now_ts
             self._eta_sample_last_processed = self._processed_files_total
 
-        # Log warnings: now sum of all tiers so the operator sees the real
-        # disk pressure (the live incident showed 0 active but 3 GB on disk).
         total_bytes = active_size + archive_size + dlq_size
         total_count = active_count + archive_count + dlq_count
         size_mb = total_bytes / (1024 * 1024)

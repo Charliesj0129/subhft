@@ -22,10 +22,6 @@ from hft_platform.feed_adapter.shioaji.signatures import detect_crash_signature
 
 logger = get_logger("feed_adapter.infra")
 
-# ---------------------------------------------------------------------------
-# Prometheus label sanitisation
-# ---------------------------------------------------------------------------
-
 
 def sanitize_metric_label(value: Any, *, fallback: str) -> str:
     """Ensure Prometheus label values are always strings with stable cardinality."""
@@ -44,11 +40,6 @@ def sanitize_metric_label(value: Any, *, fallback: str) -> str:
     if len(text) > 64:
         return text[:64]
     return text
-
-
-# ---------------------------------------------------------------------------
-# API latency recording
-# ---------------------------------------------------------------------------
 
 
 def record_api_latency(
@@ -81,11 +72,6 @@ def record_api_latency(
         metrics.shioaji_api_errors_total.labels(op=op_label).inc()
 
 
-# ---------------------------------------------------------------------------
-# Crash signature recording
-# ---------------------------------------------------------------------------
-
-
 def record_crash_signature(metrics: Any, text: str | None, *, context: str) -> None:
     """Increment crash signature counter if a known pattern is detected."""
     if not metrics or not hasattr(metrics, "shioaji_crash_signature_total"):
@@ -100,22 +86,6 @@ def record_crash_signature(metrics: Any, text: str | None, *, context: str) -> N
         return
 
 
-# ---------------------------------------------------------------------------
-# Timeout wrapper
-# ---------------------------------------------------------------------------
-
-
-# Abandoned-guard-thread registry.
-#
-# A timed-out ``safe_call_with_timeout`` leaves its daemon worker thread
-# running — Python cannot kill it. If that worker is inside a spinning Shioaji
-# SDK reconnect/login (e.g. the 2026-06-15 ``451 Too Many Connections`` path),
-# it pegs a CPU core and contends the GIL, starving the asyncio event loop.
-# Without a bound, a reconnect storm leaks one spinning thread per attempt and
-# the starvation becomes permanent (process stays alive, so ``restart: always``
-# never fires). We track abandoned workers and refuse to spawn new ones past a
-# cap so the leak is bounded and fail-closed; the in-process loop-stall
-# watchdog remains the last-resort recovery for a truly wedged process.
 _abandoned_lock = threading.Lock()
 _abandoned_threads: list[tuple[str, threading.Thread, threading.Event]] = []
 
@@ -300,8 +270,6 @@ def safe_call_with_timeout(
             _abandoned_threads.append((op, worker, done))
             live = _prune_abandoned_locked()
         if inflight is not None:
-            # The worker is still inside this client's SDK object; block
-            # re-entry until it actually returns.
             inflight.record_abandoned(op, done)
         logger.warning(
             "Broker SDK call timed out; worker thread abandoned (cannot be killed)",
@@ -314,11 +282,6 @@ def safe_call_with_timeout(
     if err is not None:
         return False, None, err, False
     return True, state.get("result"), None, False
-
-
-# ---------------------------------------------------------------------------
-# Thread liveness tracking
-# ---------------------------------------------------------------------------
 
 
 def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool, conn_id: str = "-") -> None:
@@ -334,11 +297,6 @@ def set_thread_alive_metric(metrics: Any, thread_name: str, alive: bool, conn_id
     except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
         return
-
-
-# ---------------------------------------------------------------------------
-# Quote pending metrics
-# ---------------------------------------------------------------------------
 
 
 def update_quote_pending_metrics(
@@ -382,11 +340,6 @@ def update_quote_pending_metrics(
     return stall_reported
 
 
-# ---------------------------------------------------------------------------
-# Session lock management
-# ---------------------------------------------------------------------------
-
-
 def ensure_session_lock(
     enabled: bool,
     lock_fd: Any | None,
@@ -407,7 +360,7 @@ def ensure_session_lock(
     try:
         p = Path(lock_path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        new_fd = open(p, "a+", encoding="utf-8")  # noqa: SIM115
+        new_fd = open(p, "a+", encoding="utf-8")
         if fcntl_mod is not None:
             fcntl_mod.flock(new_fd.fileno(), fcntl_mod.LOCK_EX | fcntl_mod.LOCK_NB)
         return True, new_fd
@@ -453,11 +406,6 @@ def release_session_lock(
         pass
 
 
-# ---------------------------------------------------------------------------
-# TTL-aware API response cache
-# ---------------------------------------------------------------------------
-
-
 def cache_get(
     cache: dict[str, tuple[float, Any]],
     lock: threading.Lock,
@@ -498,11 +446,6 @@ def cache_set(
         cache[key] = (expires_at, value)
 
 
-# ---------------------------------------------------------------------------
-# Per-operation rate limiter
-# ---------------------------------------------------------------------------
-
-
 def rate_limit_api(limiter: Any, op: str, *, category: str = "default") -> bool:
     """Check and record a rate-limited API call.
 
@@ -515,41 +458,14 @@ def rate_limit_api(limiter: Any, op: str, *, category: str = "default") -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Broker login staggering (2026-07-24 "451 Too Many Connections" incident)
-# ---------------------------------------------------------------------------
-#
-# Every quote facade runs its own session-refresh thread.  The pool brings them
-# up together, so their fixed-interval sleeps stay phase-aligned and all of them
-# log out and back in within a few hundred milliseconds of each other.  Shioaji
-# answers the later ones with ``code: 451, detail: Too Many Connections.``, the
-# retries are exhausted, and the refresh is reported as failed.
-#
-# Two independent defences, because either alone is insufficient: jitter spreads
-# the *arrivals* (cheap, no coordination), and the login slot serialises whatever
-# still overlaps (authoritative, but only within this process).
-
 _LOGIN_SLOT_LOCK = threading.Lock()
 _login_slot_last_release_s: float = 0.0
 
 
-# ---------------------------------------------------------------------------
-# Broker error scrubbing
-# ---------------------------------------------------------------------------
-#
-# Broker error payloads are echoed into container logs verbatim. Shioaji's login
-# rejections quote back the submitted identity and the connecting host, so a 451
-# storm writes the operator's TW national ID and the host's public IP into the
-# log stream once per retry. Redact at the boundary where the error is captured,
-# so every downstream log line, metric label and status field inherits it.
-
-# TW national / ARC ID: one letter, 1|2 (or A-D for the newer ARC format), 8 digits.
 _PERSON_ID_RE = re.compile(r"\b[A-Za-z][12A-Da-d]\d{8}\b")
 _IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-# key=value / "key": "value" / key: value forms for credential-ish keys.
 _CRED_KV_RE = re.compile(
     r"(?i)\b(person_id|personid|api_key|apikey|secret_key|secretkey|ca_passwd|password|token)\b"
-    # Optional closing quote so the JSON form `"api_key": "..."` matches too.
     r"([\"']?\s*[:=]\s*)"
     r"(\"[^\"]*\"|'[^']*'|[^\s,;)}\]]+)"
 )
@@ -643,7 +559,6 @@ def release_login_slot(*, clock: Callable[[], float] = time.monotonic) -> None:
     try:
         _LOGIN_SLOT_LOCK.release()
     except RuntimeError:
-        # Already released — never let bookkeeping kill a refresh thread.
         logger.debug("Login slot released twice")
 
 

@@ -101,7 +101,7 @@ def promote_candidate(
     ``selection_deflated_sharpe`` sub-gate deflates by it.
     """
     compiled = compile_expression(expression)
-    window = max_window_for_expression(expression)  # raises on non-streamable expressions
+    window = max_window_for_expression(expression)
     data_fields = tuple(sorted(compiled.variables))
     complexity = "O(N)" if window > 1 else "O(1)"
 

@@ -65,7 +65,6 @@ def _compile_expression_cached(
     forbid_raw_price_levels: bool,
     type_check: bool,
 ) -> CompiledExpression:
-    # Single parse: validate and compile in one pass to avoid double ast.parse
     tree = ast.parse(expression, mode="eval")
     names, depth = _validate_tree(tree)
     if depth > max_depth:
@@ -75,11 +74,9 @@ def _compile_expression_cached(
         if bad:
             raise ValueError(f"Raw price level variable is not allowed: {sorted(set(bad))}")
     if type_check:
-        # Local import: canonical_ast imports _validate_tree from this module,
-        # so a top-level import here would be circular.
         from research.combinatorial.canonical_ast import to_typed_ast
 
-        to_typed_ast(expression)  # raises ValueError on operator arity mismatch
+        to_typed_ast(expression)
     fast_path = _detect_fast_path(tree.body)
     return CompiledExpression(
         expression=expression,
@@ -199,7 +196,6 @@ def _looks_like_raw_price(name: str) -> bool:
 
 
 def _detect_fast_path(node: ast.AST) -> tuple[Any, ...] | None:
-    # zscore(ts_delta(x, w1), w2)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "zscore" and len(node.args) >= 2:
         inner = node.args[0]
         w2 = _const_int(node.args[1])
@@ -215,7 +211,6 @@ def _detect_fast_path(node: ast.AST) -> tuple[Any, ...] | None:
             if w1 is not None:
                 return ("zscore_ts_delta", inner.args[0].id, w1, w2)
 
-    # sign(ts_corr(x, y, w))
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "sign" and len(node.args) >= 1:
         inner = node.args[0]
         if (

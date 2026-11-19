@@ -15,19 +15,10 @@ import pytest
 from hft_platform.ops.manual_rearm import ManualRearmGate
 from hft_platform.ops.runtime_state_store import RuntimeStateUnreadable
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _write_state(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state), encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Construction
-# ---------------------------------------------------------------------------
 
 
 class TestManualRearmGateConstruction:
@@ -45,11 +36,6 @@ class TestManualRearmGateConstruction:
         p = tmp_path / "sub" / "state.json"
         gate = ManualRearmGate(state_path=p)
         assert gate.state_path == p
-
-
-# ---------------------------------------------------------------------------
-# _load_state: missing file returns default state
-# ---------------------------------------------------------------------------
 
 
 class TestLoadState:
@@ -138,11 +124,6 @@ class TestLoadState:
             gate._load_state()
 
 
-# ---------------------------------------------------------------------------
-# _write_state: atomic write via .tmp rename
-# ---------------------------------------------------------------------------
-
-
 class TestWriteState:
     def test_write_creates_file(self, tmp_path: Path) -> None:
         path = tmp_path / "nested" / "dir" / "state.json"
@@ -168,11 +149,6 @@ class TestWriteState:
         gate._write_state(gate._default_state())
         tmp = path.with_suffix(".json.tmp")
         assert not tmp.exists()
-
-
-# ---------------------------------------------------------------------------
-# rearm_strategy
-# ---------------------------------------------------------------------------
 
 
 class TestRearmStrategy:
@@ -203,8 +179,6 @@ class TestRearmStrategy:
         gate = ManualRearmGate(state_path=path)
         request_id = gate.rearm_strategy("alpha")
 
-        # The request is its own write-once file, not a field in the shared
-        # document. That is what removes the two-writer lost update entirely.
         from hft_platform.ops import rearm_requests
 
         (request,) = rearm_requests.pending(path.parent)
@@ -213,7 +187,6 @@ class TestRearmStrategy:
         assert request.quarantine_token == "run1:alpha:1"
 
         reloaded = json.loads(path.read_text(encoding="utf-8"))
-        # The CLI does not touch the shared state document at all.
         assert reloaded["strategies"]["alpha"]["manual_rearm_required"] is True
 
     def test_rearm_strategy_refuses_an_entry_without_a_quarantine_token(self, tmp_path: Path) -> None:
@@ -271,16 +244,9 @@ class TestRearmStrategy:
 
     def test_rearm_strategy_works_without_preexisting_file(self, tmp_path: Path) -> None:
         path = tmp_path / "state.json"
-        # Create a state with rearm required, write it, then test rearm raises (no file initially)
         gate = ManualRearmGate(state_path=path)
-        # No file exists -> strategy not present -> should raise
         with pytest.raises(ValueError):
             gate.rearm_strategy("alpha")
-
-
-# ---------------------------------------------------------------------------
-# rearm_platform
-# ---------------------------------------------------------------------------
 
 
 class TestRearmPlatform:
@@ -328,7 +294,6 @@ class TestRearmPlatform:
             },
         )
         gate = ManualRearmGate(state_path=path)
-        # Should not raise — idempotent
         gate.rearm_platform(token=gate.platform_token(), reason="reviewed", actor="test")
         reloaded = json.loads(path.read_text(encoding="utf-8"))
         assert reloaded["platform"]["manual_rearm_required"] is False
@@ -372,11 +337,6 @@ class TestRearmPlatform:
         gate = ManualRearmGate(state_path=path)
         gate.rearm_platform(token=gate.platform_token(), reason="reviewed", actor="test")
         assert path.exists()
-
-
-# ---------------------------------------------------------------------------
-# requires_manual_rearm
-# ---------------------------------------------------------------------------
 
 
 class TestRequiresManualRearm:
@@ -493,11 +453,6 @@ class TestRequiresManualRearm:
         assert gate.requires_manual_rearm("strategy", strategy_id="s1") is False
 
 
-# ---------------------------------------------------------------------------
-# snapshot
-# ---------------------------------------------------------------------------
-
-
 class TestSnapshot:
     def test_snapshot_returns_loaded_state(self, tmp_path: Path) -> None:
         path = tmp_path / "state.json"
@@ -519,11 +474,6 @@ class TestSnapshot:
             "platform": {"manual_rearm_required": False, "reason": None},
             "strategies": {},
         }
-
-
-# ---------------------------------------------------------------------------
-# Static helpers
-# ---------------------------------------------------------------------------
 
 
 class TestStaticHelpers:

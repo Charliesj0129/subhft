@@ -106,10 +106,6 @@ def test_cmd_alpha_mine_init_rejects_missing_session_field(capsys, tmp_path):
     assert exc.value.code == 2
 
 
-# ---------------------------------------------------------------------------
-# `hft alpha mine promote` (Phase 4: pipeline integration)
-# ---------------------------------------------------------------------------
-
 _ALPHAS_ROOT = Path("research/alphas")
 
 
@@ -290,7 +286,7 @@ def test_cmd_alpha_mine_promote_missing_results_file_exits_cleanly(scratch_alpha
 
 def test_cmd_alpha_mine_promote_malformed_results_row_exits_cleanly(scratch_alpha_id, tmp_path, capsys) -> None:
     results_path = tmp_path / "malformed_results.json"
-    results_path.write_text(json.dumps({"results": [{"expression": "add(x, y)"}]}))  # missing score/etc.
+    results_path.write_text(json.dumps({"results": [{"expression": "add(x, y)"}]}))
     args = _mine_promote_args(alpha_id=scratch_alpha_id, from_results=str(results_path), rank=0)
     with pytest.raises(SystemExit) as exc:
         alpha_cli.cmd_alpha_mine_promote(args)

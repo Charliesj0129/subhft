@@ -10,17 +10,13 @@ from hft_platform.alpha.paths import repo_path
 
 logger = get_logger("alpha.latency_profiles")
 
-# Relative to the repo root, not the cwd (see ``alpha.paths``).
 _DEFAULT_PROFILES_PATH = Path("config/research/latency_profiles.yaml")
 
-# Ids accepted besides the exact profile keys. There is no prefix matching: a
-# prefix silently picked whichever profile happened to share it.
 _ALIASES: dict[str, str] = {
     "sim_p95_v2026-02-26": "shioaji_sim_p95_v2026-02-26",
     "sim_p95_v2026-03-01": "shioaji_sim_p95_v2026-03-01",
     "sim_p95_v2026-03-04": "shioaji_sim_p95_v2026-03-04",
     "fubon_p95_v2026-03-12": "fubon_estimated_p95_v2026-03-12",
-    # r52's manifest names the 2026-04-24 measurement without its broker prefix.
     "v2026-04-24_measured": "r47_maker_shioaji_p95_v2026-04-24_measured",
 }
 
@@ -64,7 +60,6 @@ def resolve_profile(
     if profiles is None:
         profiles = load_profiles(yaml_path)
 
-    # Direct lookup
     if profile_id in profiles:
         profile = dict(profiles[profile_id])
     elif profile_id in _ALIASES and _ALIASES[profile_id] in profiles:

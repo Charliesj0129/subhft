@@ -18,8 +18,6 @@ import numpy as np
 class BacktestConfig:
     data_paths: list[str]
     is_oos_split: float = 0.7
-    # Statutory cost per contract per side in points (``cost_models.load_cost_profile``:
-    # commission + tax). None = gross: the mid-to-mid screening curve charges nothing.
     cost_per_side_pts: float | None = None
     signal_threshold: float = 0.3
     max_position: int = 5
@@ -30,9 +28,6 @@ class BacktestConfig:
     modify_ack_latency_ms: float = 43.0
     cancel_ack_latency_ms: float = 47.0
     live_uplift_factor: float = 1.5
-    # Stage 4 governance: auto-compute per-regime (high_vol/low_vol) Sharpe
-    # breakdown on every backtest run. Disable only for ultra-short datasets
-    # (<8 bars) or when calling from walk-forward inner loops.
     auto_regime_split: bool = True
     backtest_engine: str = "hftbacktest_v2"
     queue_model: str = "PowerProbQueueModel(3.0)"
@@ -64,7 +59,6 @@ class BacktestResult:
     config_hash: str
     latency_profile: dict[str, Any]
     mid_prices: np.ndarray | None = None
-    # --- Provenance metadata (added 2026-04-15) ---
     engine_type: str = "taker"
     fill_model: str = ""
     cost_model: str = ""
@@ -73,39 +67,14 @@ class BacktestResult:
     data_source: str = ""
     pipeline_mode: str = ""
     created_at: str = ""
-    # --- Maker-specific (None for taker) ---
     maker_scorecard: dict | None = None
     per_spread_breakdown: dict | None = None
     queue_fraction: float | None = None
-    # --- Slice B: Maker Realism (added 2026-05-05) ---
-    # Aggregation policy (set inside ``MakerEngine.run``):
-    #   * ``residual_mtm_pts`` -> SUM across traded days of each day's
-    #     ``residual_mtm_pts`` (mirrors ``total_gross`` accumulation in the
-    #     day loop; the equity curve already reflects this sum).
-    #   * ``residual_qty``     -> final-day snapshot, SIGNED (positive=long,
-    #     negative=short).  Per-day FIFO is independent so day-to-day residual
-    #     qty is not additive.  Sign preserved for accounting.
-    #   * ``abs_residual_qty`` -> ``abs(residual_qty)`` derived field for
-    #     display / aggregation contexts where sign would mask scale.
-    #   * ``mark_method``      -> single-policy string (identical every day
-    #     under current single-policy design).
-    # All four default to safe zero-values so taker engines and synthetic
-    # fixtures that construct ``BacktestResult`` without these fields stay
-    # backward-compatible.
     residual_mtm_pts: float = 0.0
     residual_qty: int = 0
     abs_residual_qty: int = 0
     mark_method: str = ""
-    # --- Daily detail ---
     daily_pnl: list[dict] | None = None
-    # --- Round-trip / FIFO matched trade PnL (added 2026-05-29) ---
-    # Per-trade net PnL in points after FIFO matching.  Required by the
-    # trade-axis sub-gates (trade_concentration, outlier_trade_removal,
-    # edge_per_round_trip) — without this they fall back to daily_pnl,
-    # which silently degrades trade-level dominance checks.
-    # Engines that can derive trades (e.g. MakerEngine via
-    # ``research/backtest/trade_pnl_projector.py``) should populate it;
-    # taker engines without explicit fills may leave it ``None``.
     trade_pnl: list[float] | None = None
 
 
@@ -143,10 +112,10 @@ class WalkForwardResult:
 class CPCVConfig:
     """Combinatorial Purged Cross-Validation configuration."""
 
-    n_groups: int = 6  # N contiguous groups; C(N, N//2) test-set combos
-    embargo_pct: float = 0.01  # 1% of data as gap between train/test boundaries
-    purge_pct: float = 0.005  # 0.5% purge around test boundaries
-    min_group_samples: int = 50  # minimum ticks per group
+    n_groups: int = 6
+    embargo_pct: float = 0.01
+    purge_pct: float = 0.005
+    min_group_samples: int = 50
 
 
 @dataclass(frozen=True)
@@ -154,8 +123,8 @@ class CPCVFoldResult:
     """Result for a single CPCV path (combination of test groups)."""
 
     path_idx: int
-    train_indices: tuple[int, ...]  # which groups used for train
-    test_indices: tuple[int, ...]  # which groups used for test
+    train_indices: tuple[int, ...]
+    test_indices: tuple[int, ...]
     train_size: int
     test_size: int
     sharpe: float
@@ -169,11 +138,11 @@ class CPCVResult:
     """Aggregated result from Combinatorial Purged Cross-Validation."""
 
     config: CPCVConfig
-    n_paths: int  # C(n_groups, n_groups//2)
+    n_paths: int
     folds: list[CPCVFoldResult]
-    pbo: float  # Probability of Backtest Overfitting
+    pbo: float
     path_sharpes: list[float]
-    path_consistency_pct: float  # fraction of paths with positive Sharpe
+    path_consistency_pct: float
     sharpe_mean: float
     sharpe_std: float
     sharpe_min: float

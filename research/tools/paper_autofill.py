@@ -109,7 +109,6 @@ _RULES: tuple[AutoFillRule, ...] = (
 )
 
 _CITATION_RULES: dict[str, AutoFillRule] = {
-    # Forecasting High Frequency Order Flow Imbalance
     "2408.03594": AutoFillRule(
         keywords=(),
         hypothesis=(
@@ -131,7 +130,6 @@ _CITATION_RULES: dict[str, AutoFillRule] = {
             "mid_price_x2",
         ),
     ),
-    # Multi-Level Order-Flow Imbalance in a Limit Order Book
     "1907.06230": AutoFillRule(
         keywords=(),
         hypothesis=(
@@ -149,7 +147,6 @@ _CITATION_RULES: dict[str, AutoFillRule] = {
             "mid_price_x2",
         ),
     ),
-    # Queue Imbalance as a One-Tick-Ahead Price Predictor in a Limit Order Book
     "1512.03492": AutoFillRule(
         keywords=(),
         hypothesis=(

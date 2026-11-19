@@ -41,7 +41,7 @@ TICK_SIZE = 1.0
 LOT_SIZE = 1.0
 POINT_VALUE_NTD = 10
 PRICE_SCALE = 10_000
-ELAPSE_NS = 100_000_000  # 100ms
+ELAPSE_NS = 100_000_000
 
 DATA_DIR = _REPO_ROOT / "research" / "data" / "raw" / "txfd6"
 DATA_FILES = sorted(DATA_DIR.glob("TXFD6_2026-0*_l2.hftbt.npz"))
@@ -78,7 +78,6 @@ class DayResult:
 
 
 CONFIGS = [
-    # A1: Original backtest (47us, research params)
     RunConfig(
         name="research_47us",
         latency_ns=47_000,
@@ -89,7 +88,6 @@ CONFIGS = [
         toxicity_max=700,
         max_pos=3,
     ),
-    # A2: Realistic latency (36ms, research params)
     RunConfig(
         name="research_36ms",
         latency_ns=36_000_000,
@@ -100,7 +98,6 @@ CONFIGS = [
         toxicity_max=700,
         max_pos=3,
     ),
-    # B1: Deployed config with 47us (baseline for deployed)
     RunConfig(
         name="deployed_47us",
         latency_ns=47_000,
@@ -111,7 +108,6 @@ CONFIGS = [
         toxicity_max=9999,
         max_pos=1,
     ),
-    # B2: Deployed config with 36ms (production-realistic)
     RunConfig(
         name="deployed_36ms",
         latency_ns=36_000_000,
@@ -331,7 +327,6 @@ def main() -> None:
 
     total_elapsed = time.monotonic() - t_total
 
-    # ── Comparison Tables ────────────────────────────────────────────
     print("\n" + "=" * 80)
     print("AGGREGATE COMPARISON")
     print("=" * 80)
@@ -375,7 +370,6 @@ def main() -> None:
         print(f"    Best day:     {best_day:>+10.1f} pts")
         print(f"    Worst DD:     {worst_dd:>10.1f} pts")
 
-    # ── Latency Delta ────────────────────────────────────────────────
     print("\n" + "=" * 80)
     print("LATENCY DELTA (47us -> 36ms)")
     print("=" * 80)
@@ -401,7 +395,6 @@ def main() -> None:
             print(f"    Fills @ 36ms: {fills_slow:>10}")
             print(f"    Fill delta:   {delta_fills:>+10} ({delta_fills_pct:>+.1f}%)")
 
-    # ── Per-Day Delta ────────────────────────────────────────────────
     print("\n" + "=" * 80)
     print("PER-DAY LATENCY DELTA (research config)")
     print("=" * 80)
@@ -432,7 +425,6 @@ def main() -> None:
 
     print(f"\nTotal elapsed: {total_elapsed:.0f}s")
 
-    # ── Save JSON ────────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "metadata": {

@@ -156,9 +156,6 @@ async def _run_router_one_tick(router, timeout: float = 0.1) -> None:
         await task
 
 
-# ── _create_task_with_error_handling ─────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_create_task_with_error_handling_logs_exception():
     """_on_task_done callback logs exception from failed task."""
@@ -202,9 +199,6 @@ async def test_create_task_with_error_handling_success():
     assert result == 42
 
 
-# ── set_risk_engine / set_overflow_buf / set_phantom_resolver ────────────
-
-
 def test_set_risk_engine():
     """set_risk_engine replaces the risk engine reference."""
     router = _make_router()
@@ -227,9 +221,6 @@ def test_set_phantom_resolver():
     resolver = MagicMock()
     router.set_phantom_resolver(resolver)
     assert router._phantom_resolver is resolver
-
-
-# ── _load_fill_dedup ────────────────────────────────────────────────────
 
 
 def test_load_fill_dedup_handles_corrupt_file(tmp_path, monkeypatch):
@@ -269,9 +260,6 @@ def test_load_fill_dedup_respects_max_size(tmp_path, monkeypatch):
     assert "fill_0000" not in router._seen_fill_ids
 
 
-# ── _register_fill_dedup_key eviction ────────────────────────────────────
-
-
 def test_register_fill_dedup_key_evicts_oldest(tmp_path, monkeypatch):
     """When max size exceeded, oldest entry is evicted."""
     monkeypatch.setenv("HFT_FILL_DEDUP_MAX_SIZE", "3")
@@ -286,9 +274,6 @@ def test_register_fill_dedup_key_evicts_oldest(tmp_path, monkeypatch):
     assert len(router._seen_fill_ids) == 3
     assert "a" not in router._seen_fill_ids
     assert "d" in router._seen_fill_ids
-
-
-# ── _backfill_order_id_map ──────────────────────────────────────────────
 
 
 def test_backfill_order_id_map_registers_new_ids():
@@ -330,9 +315,6 @@ def test_backfill_order_id_map_empty_ids():
     )
     router._backfill_order_id_map(raw)
     assert True
-
-
-# ── run() overflow buffer drain ──────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -397,9 +379,6 @@ async def test_run_overflow_buffer_drain_queue_full():
     assert len(overflow) >= 0
 
 
-# ── run() order recording: recorder_queue full + WAL fallback ────────────
-
-
 @pytest.mark.asyncio
 async def test_run_order_recording_queue_full_triggers_wal():
     """Order recording falls back to WAL when recorder_queue is full."""
@@ -428,16 +407,12 @@ async def test_run_order_recording_queue_full_triggers_wal():
     wal_writer.write.assert_called()
 
 
-# ── run() terminal handler with on_terminal_state object ─────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_terminal_handler_on_terminal_state_object():
     """Terminal handler via on_terminal_state method on handler object."""
     metrics = _stub_metrics()
     router = _make_router(metrics)
 
-    # Use a non-callable object with on_terminal_state to exercise the elif branch
     class TerminalStateHandler:
         def __init__(self):
             self.calls = []
@@ -485,9 +460,6 @@ async def test_run_terminal_handler_async_coroutine():
     assert True
 
 
-# ── run() fill normalization returns None ────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_fill_normalization_returns_none():
     """Fill normalization returning None increments fill_normalization_failed_total."""
@@ -504,9 +476,6 @@ async def test_run_fill_normalization_returns_none():
     metrics.fill_normalization_failed_total.inc.assert_called()
 
 
-# ── run() phantom resolver ───────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_phantom_resolver_resolves_fill():
     """Phantom resolver resolves UNKNOWN fill to a strategy_id."""
@@ -521,10 +490,6 @@ async def test_run_phantom_resolver_resolves_fill():
         router.raw_queue.put_nowait(raw)
         await _run_router_one_tick(router)
 
-    # This used to assert ``orphaned_fill_total.inc`` — encoding the defect the
-    # test's own name contradicts. The resolver RESOLVED the fill, so nothing
-    # was orphaned; counting it fired OrphanedFillDetected on a success. The
-    # counter that belongs on this path is the reconciliation one.
     metrics.orphaned_fill_total.inc.assert_not_called()
     metrics.phantom_fill_reconciled_total.inc.assert_called_once()
     router.position_store.on_fill.assert_called()
@@ -576,9 +541,6 @@ async def test_run_phantom_resolver_returns_unknown_still_dlq():
     mock_dlq.return_value.add.assert_called()
 
 
-# ── run() TCA enrichment ────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_tca_enrichment_sets_decision_and_arrival_price():
     """TCA enrichment populates decision_price and arrival_price on fill."""
@@ -598,9 +560,6 @@ async def test_run_tca_enrichment_sets_decision_and_arrival_price():
     assert fill.decision_price == 5_000_000
     assert fill.arrival_price == 5_001_000
     metrics.e2e_order_latency_ns.observe.assert_called()
-
-
-# ── _wal_fallback_write ─────────────────────────────────────────────────
 
 
 def test_wal_fallback_write_no_writer_logs_data_loss():
@@ -643,9 +602,6 @@ async def test_wal_fallback_write_async_failure_callback():
     assert True
 
 
-# ── _publish_nowait fallback ─────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_publish_nowait_falls_back_to_async():
     """_publish_nowait creates async task when bus has no publish_nowait."""
@@ -660,9 +616,6 @@ async def test_publish_nowait_falls_back_to_async():
     router._publish_nowait(event)
     await asyncio.sleep(0.05)
     assert True
-
-
-# ── persist_fill_dedup ───────────────────────────────────────────────────
 
 
 def test_persist_fill_dedup_writes_to_disk(tmp_path, monkeypatch):
@@ -688,9 +641,6 @@ def test_persist_fill_dedup_handles_error(tmp_path, monkeypatch):
     assert True
 
 
-# ── _maybe_persist_fill_dedup throttle ───────────────────────────────────
-
-
 def test_maybe_persist_throttles_by_interval(tmp_path, monkeypatch):
     """_maybe_persist_fill_dedup respects interval throttle."""
     dedup_path = tmp_path / "fill_dedup.jsonl"
@@ -707,9 +657,6 @@ def test_maybe_persist_throttles_by_interval(tmp_path, monkeypatch):
 
     router._maybe_persist_fill_dedup(force=True)
     assert dedup_path.exists()
-
-
-# ── stop() drain: phantom resolver in shutdown ───────────────────────────
 
 
 @pytest.mark.asyncio
@@ -855,9 +802,6 @@ async def test_stop_drain_order_on_terminal_state_async():
     assert ("strat1", "O_OBJ_ASYNC") in called
 
 
-# ── run() general error handling ─────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_run_generic_exception_increments_error_counter():
     """Generic exception in run() loop increments error counter."""
@@ -880,9 +824,6 @@ async def test_run_generic_exception_increments_error_counter():
     await _run_router_one_tick(router)
 
     metrics.execution_router_errors_total.inc.assert_called()
-
-
-# ── stop() drain: TCA enrichment ────────────────────────────────────────
 
 
 @pytest.mark.asyncio

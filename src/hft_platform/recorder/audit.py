@@ -36,20 +36,9 @@ _DEFAULT_QUEUE_SIZE = 10_000
 _DEFAULT_FLUSH_INTERVAL_MS = 1_000
 _DEFAULT_FLUSH_LIMIT = 500
 _DEFAULT_OVERFLOW_SIZE = 50_000
-# P1 fix: guardrail_log rows (StormGuard state transitions) are operationally
-# critical — root-cause transitions must survive a bursty cascade. Larger default
-# overflow, and "sticky-first" policy applied in ``_put``.
 _DEFAULT_GUARDRAIL_OVERFLOW_SIZE = 100_000
 _GUARDRAIL_TABLE = "audit.guardrail_log"
 
-# P1-a (2026-04-27): canonical column schemas for each audit table.
-# Producers emit different optional fields per call site (e.g. AMEND uses
-# new_price, CANCEL uses target_key, dispatch_failed uses error). The
-# ClickHouse insert path (DataWriter._ch_insert) infers columns from the
-# first row of the batch and would otherwise silently drop fields present in
-# later rows. ``_normalize_row`` fills missing keys with type-appropriate
-# defaults so every batched row has the same shape, matching the DDL in
-# 20260427_001_audit_schema_alignment.sql.
 _AUDIT_SCHEMA_DEFAULTS: dict[str, dict[str, Any]] = {
     "audit.orders_log": {
         "ts_ns": 0,
@@ -111,19 +100,15 @@ def _normalize_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
             import json
 
             out["details"] = json.dumps(extras, default=str, separators=(",", ":"))
-        except Exception:  # noqa: BLE001 — never crash the audit path on json
+        except Exception:
             out["details"] = ""
     return out
 
 
-# Bug #30: structlog method signature is `meth(event, *args, **kw)` plus a few
-# other reserved kwargs it injects. Splatting a row dict containing any of these
-# keys raises TypeError. Rename to `row_*` prefix in fallback path.
 _RESERVED_STRUCTLOG_KEYS: frozenset[str] = frozenset(
     {"event", "exc_info", "stack_info", "level", "logger", "timestamp", "_record", "_from_structlog"}
 )
 
-# Singleton instance
 _audit_writer: AuditWriter | None = None
 
 
@@ -168,16 +153,11 @@ class AuditWriter:
         "_tasks",
         "_running",
         "_dropped",
-        # P0-I3: Pre-start thread-safe buffer used until ``start()`` creates the
-        # real asyncio.Queue instances on the engine loop.
         "_pre_start_buffer",
         "_pre_start_lock",
         "_queues_ready",
         "_queue_size",
         "_overflow_size",
-        # I-M2 (2026-04-25): cross-thread fallback. _loop and _loop_thread_id
-        # are captured in ``start()``; _put detects non-loop callers and
-        # schedules the actual queue mutation via call_soon_threadsafe.
         "_loop",
         "_loop_thread_id",
         "_cross_thread_count",
@@ -202,30 +182,17 @@ class AuditWriter:
             os.getenv("HFT_AUDIT_GUARDRAIL_OVERFLOW_SIZE", str(_DEFAULT_GUARDRAIL_OVERFLOW_SIZE))
         )
         self._queue_size = resolved_size
-        # Per-table overflow sizes — guardrail gets a larger allocation so
-        # root-cause transitions survive bursty cascades.
         self._overflow_size: dict[str, int] = {
             name: (guardrail_overflow_size if name == _GUARDRAIL_TABLE else overflow_size) for name in self._TABLE_NAMES
         }
 
-        # P0-I3: DO NOT create asyncio.Queue instances here. The engine loop is
-        # not yet running when AuditWriter is first constructed (see
-        # bootstrap.py / HFTSystem.__init__ ordering). Queues are created lazily
-        # in ``start()`` on the engine loop.
         self._queues: dict[str, asyncio.Queue[dict[str, Any]] | None] = dict.fromkeys(self._TABLE_NAMES, None)
         self._queues_ready = False
 
-        # Pre-start buffer: thread-safe (collections.deque + threading.Lock)
-        # so any thread (including the daemon lease-refresh thread that may
-        # invoke StormGuard._transition before the engine loop is running) can
-        # safely enqueue audit rows without corrupting an asyncio.Queue. Size is
-        # queue_size + overflow_size so pre-start cannot exhaust earlier than
-        # the post-start queue + overflow combination would have.
         self._pre_start_lock = threading.Lock()
         self._pre_start_buffer: dict[str, collections.deque[dict[str, Any]]] = {
             name: collections.deque(maxlen=self._queue_size + self._overflow_size[name]) for name in self._TABLE_NAMES
         }
-        # Post-start overflow deque (per-table sized).
         self._overflow: dict[str, collections.deque[dict[str, Any]]] = {
             name: collections.deque(maxlen=self._overflow_size[name]) for name in self._TABLE_NAMES
         }
@@ -235,14 +202,9 @@ class AuditWriter:
         self._tasks: list[asyncio.Task[None]] = []
         self._running = False
         self._dropped: dict[str, int] = {name: 0 for name in self._TABLE_NAMES}
-        # I-M2: cross-thread bookkeeping. Captured in start(); read in _put.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread_id: int | None = None
         self._cross_thread_count: int = 0
-
-    # ------------------------------------------------------------------
-    # Public logging methods (non-blocking, hot-path safe)
-    # ------------------------------------------------------------------
 
     def log_order(self, order_data: dict[str, Any]) -> None:
         """Log an order dispatch event. Drops silently on queue full."""
@@ -259,10 +221,6 @@ class AuditWriter:
         transition_data.setdefault("ts_ns", timebase.now_ns())
         self._put("audit.guardrail_log", transition_data)
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     async def start(self) -> None:
         """Start background flush tasks for each audit table.
 
@@ -274,20 +232,13 @@ class AuditWriter:
         if self._running:
             return
 
-        # I-M2: capture the engine loop + its thread id so _put can detect
-        # cross-thread callers (lease-refresh-thread → trigger_halt → audit,
-        # broker-callback-thread → trigger_storm → audit) and dispatch via
-        # call_soon_threadsafe instead of corrupting the loop's _ready deque.
         self._loop = asyncio.get_running_loop()
         self._loop_thread_id = threading.get_ident()
 
-        # Create queues on the engine loop (getter semantics in Python 3.12 —
-        # asyncio.Queue binds to the running loop on first put/get).
         for table_name in self._TABLE_NAMES:
             self._queues[table_name] = asyncio.Queue(maxsize=self._queue_size)
         self._queues_ready = True
 
-        # Drain pre-start buffer into the fresh queues under lock.
         with self._pre_start_lock:
             for table_name, buf in self._pre_start_buffer.items():
                 q = self._queues[table_name]
@@ -298,8 +249,6 @@ class AuditWriter:
                     try:
                         q.put_nowait(item)
                     except asyncio.QueueFull:
-                        # Queue already full from pre-start overflow — route
-                        # into the normal overflow deque for retry on flush.
                         overflow = self._overflow[table_name]
                         if overflow.maxlen is None or len(overflow) < overflow.maxlen:
                             overflow.append(item)
@@ -322,13 +271,9 @@ class AuditWriter:
                 await task
             except asyncio.CancelledError:
                 pass
-        # Final drain
         for table_name in self._TABLE_NAMES:
             await self._drain(table_name)
         self._tasks.clear()
-        # I-M2: clear loop binding so any late-arriving log_* call from a
-        # daemon thread falls back to overflow deque rather than scheduling
-        # on a closed loop.
         self._loop = None
         self._loop_thread_id = None
         logger.info(
@@ -338,10 +283,6 @@ class AuditWriter:
             dropped_guardrail=self._dropped.get("audit.guardrail_log", 0),
             cross_thread_count=self._cross_thread_count,
         )
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
 
     def _put(self, table: str, data: dict[str, Any]) -> None:
         """Non-blocking enqueue with overflow buffer before drop.
@@ -361,27 +302,19 @@ class AuditWriter:
         the oldest — the root-cause transition at the top of a cascade is the
         most valuable row to retain for forensics.
         """
-        # Pre-start path: queues not yet created on any loop.
         if not self._queues_ready:
             with self._pre_start_lock:
                 buf = self._pre_start_buffer[table]
                 if buf.maxlen is None or len(buf) < buf.maxlen:
                     buf.append(data)
                 else:
-                    # Guardrail: reject newest to preserve oldest (root cause).
                     if table == _GUARDRAIL_TABLE:
                         self._dropped[table] = self._dropped.get(table, 0) + 1
                     else:
-                        # Non-guardrail: retain newest, evict oldest. Counted
-                        # as a drop for observability (an entry IS being lost,
-                        # even if deque auto-manages the maxlen).
-                        buf.append(data)  # deque drops leftmost automatically
+                        buf.append(data)
                         self._dropped[table] = self._dropped.get(table, 0) + 1
             return
 
-        # I-M2: cross-thread detection. If we are not on the loop thread,
-        # schedule the actual put on the loop. The fast path (loop thread)
-        # avoids the call_soon_threadsafe overhead.
         loop = self._loop
         if loop is not None and threading.get_ident() != self._loop_thread_id:
             self._cross_thread_count += 1
@@ -389,13 +322,11 @@ class AuditWriter:
                 from hft_platform.observability.metrics import MetricsRegistry
 
                 MetricsRegistry.get().audit_put_cross_thread_total.labels(table=table).inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             try:
                 loop.call_soon_threadsafe(self._do_put, table, data)
             except RuntimeError:
-                # Loop closed/closing — fall back to overflow deque (still
-                # thread-safe via deque's append) so audit isn't lost.
                 overflow = self._overflow[table]
                 if overflow.maxlen is not None and len(overflow) < overflow.maxlen:
                     overflow.append(data)
@@ -403,7 +334,6 @@ class AuditWriter:
                     self._dropped[table] = self._dropped.get(table, 0) + 1
             return
 
-        # Loop-thread path: existing fast path.
         self._do_put(table, data)
 
     def _do_put(self, table: str, data: dict[str, Any]) -> None:
@@ -414,7 +344,6 @@ class AuditWriter:
         """
         q = self._queues[table]
         if q is None:
-            # Should not happen after _queues_ready — defensive fallback.
             self._dropped[table] = self._dropped.get(table, 0) + 1
             return
 
@@ -435,10 +364,7 @@ class AuditWriter:
                 pass
             return
 
-        # Queue + overflow both full.
         if table == _GUARDRAIL_TABLE:
-            # P1 sticky-first: do NOT evict oldest; drop this new event so
-            # the first (root-cause) transition is preserved.
             self._dropped[table] = self._dropped.get(table, 0) + 1
             try:
                 from hft_platform.observability.metrics import MetricsRegistry
@@ -455,8 +381,6 @@ class AuditWriter:
                 )
             return
 
-        # Non-guardrail tables: hard drop (last resort) — behaviour preserved
-        # from prior revision for backward compat.
         self._dropped[table] = self._dropped.get(table, 0) + 1
         try:
             from hft_platform.observability.metrics import MetricsRegistry
@@ -476,8 +400,6 @@ class AuditWriter:
         """Background loop: drain queue and flush in batches."""
         queue = self._queues[table_name]
         if queue is None:
-            # Defensive — should never happen because start() populates queues
-            # before scheduling flush loops.
             logger.error("audit_flush_loop_no_queue", table=table_name)
             return
         batch: list[dict[str, Any]] = []
@@ -491,7 +413,6 @@ class AuditWriter:
                 except asyncio.TimeoutError:
                     pass
 
-                # Drain available items up to flush_limit
                 while len(batch) < self._flush_limit:
                     try:
                         batch.append(queue.get_nowait())
@@ -502,24 +423,15 @@ class AuditWriter:
                     await self._flush_batch(table_name, batch)
                     batch = []
 
-                # Drain overflow deque into main queue after flush frees space.
-                # P3-a2 (2026-04-27): self._queues[table_name] is typed
-                # ``Queue | None`` because stop() clears the queue ref. When
-                # _flush_loop runs concurrently with stop(), accessing
-                # ``.put_nowait`` on None would raise AttributeError. Treat
-                # that race as queue-closed and increment a labeled drop
-                # counter so we know about it instead of crashing the loop.
                 overflow = self._overflow[table_name]
                 while overflow:
                     cur_queue = self._queues[table_name]
                     if cur_queue is None:
-                        # Queue cleared mid-loop — abandon overflow drain;
-                        # _drain() will collect from overflow at shutdown.
                         try:
                             from hft_platform.observability.metrics import MetricsRegistry
 
                             MetricsRegistry.get().audit_dropped_total.labels(table=table_name).inc(len(overflow))
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
                         break
                     try:
@@ -529,7 +441,6 @@ class AuditWriter:
                         break
 
             except asyncio.CancelledError:
-                # Drain remaining before exiting
                 if batch:
                     await self._flush_batch(table_name, batch)
                 raise
@@ -553,12 +464,9 @@ class AuditWriter:
                     batch.append(queue.get_nowait())
                 except asyncio.QueueEmpty:
                     break
-        # Also drain overflow deque
         overflow = self._overflow[table_name]
         while overflow:
             batch.append(overflow.popleft())
-        # P0-I3: also drain pre-start buffer if anything is still there
-        # (e.g. shutdown before start() completed).
         with self._pre_start_lock:
             buf = self._pre_start_buffer[table_name]
             while buf:
@@ -572,27 +480,18 @@ class AuditWriter:
             return
 
         if self._writer is not None:
-            # P1-a (2026-04-27): normalize rows to the canonical DDL schema
-            # before handing to the writer. Each producer call site emits a
-            # different subset of optional fields; without normalization the
-            # writer's "infer columns from first row" path silently drops
-            # fields present only in later rows. See _normalize_row docstring.
             normalized = [_normalize_row(table_name, row) for row in batch]
             try:
                 await self._writer.write(table_name, normalized)
                 return
             except Exception as exc:
-                # P1-a: surface persistence failures via a labeled metric so
-                # ops dashboards can detect audit-write degradation without
-                # tailing structlog. ``reason`` keeps cardinality bounded by
-                # using the exception class name (not the full message).
                 try:
                     from hft_platform.observability.metrics import MetricsRegistry
 
                     MetricsRegistry.get().audit_persist_failures_total.labels(
                         table=table_name, reason=type(exc).__name__
                     ).inc()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 logger.error(
                     "Audit ClickHouse write failed, falling back to structlog",
@@ -602,15 +501,6 @@ class AuditWriter:
                     batch_size=len(batch),
                 )
 
-        # Fallback: log each row via structlog (never lose audit data silently).
-        # Bug #30: row dicts may contain keys reserved by structlog (`event`,
-        # `timestamp`, `level`, etc). Splatting them collides with structlog's
-        # positional kwargs → TypeError → batch dropped. Rename to row_* prefix.
-        # Log level rationale: when `self._writer is None` this is the documented
-        # operating mode (Bug #19) with a single startup warning — downgrade
-        # per-row emission to DEBUG to avoid 8 k/day INFO spam. When a writer
-        # *was* configured but the write actually failed, the `logger.error`
-        # above already fired; per-row rows here still help forensic recovery.
         row_level = logger.debug if self._writer is None else logger.info
         for row in batch:
             safe_row = {(f"row_{k}" if k in _RESERVED_STRUCTLOG_KEYS else k): v for k, v in row.items()}

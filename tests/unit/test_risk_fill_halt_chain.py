@@ -17,10 +17,6 @@ from hft_platform.core import timebase
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.validators import DailyLossLimitValidator
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _write_config(tmp_path, *, max_daily_loss: int = 100_000_000, strategies: dict | None = None):
     """Write a minimal risk YAML config and return the path string."""
@@ -50,7 +46,7 @@ def _make_intent(
     strategy_id: str = "s1",
     symbol: str = "2330",
     side: Side = Side.BUY,
-    price: int = 500_0000,  # 500 NTD in x10000
+    price: int = 500_0000,
     qty: int = 1,
 ) -> OrderIntent:
     return OrderIntent(
@@ -74,11 +70,6 @@ def _get_daily_loss_validator(engine: RiskEngine) -> DailyLossLimitValidator:
     raise AssertionError("DailyLossLimitValidator not found in engine.validators")
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def engine(tmp_path):
     """RiskEngine with max_daily_loss = 100_000_000 (10,000 NTD x10000)."""
@@ -86,11 +77,6 @@ def engine(tmp_path):
     q_in = asyncio.Queue()
     q_out = asyncio.Queue()
     return RiskEngine(cfg_path, q_in, q_out)
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestNotifyFillPnl:
@@ -125,7 +111,6 @@ class TestDailyLossLimitRejection:
 
     def test_loss_exceeds_threshold_rejects_order(self, engine):
         """When accumulated loss >= max_daily_loss, NEW intents must be rejected."""
-        # Accumulate loss exactly at the threshold (100_000_000 = 10,000 NTD x10000)
         engine.notify_fill_pnl("s1", -100_000_000)
 
         intent = _make_intent(strategy_id="s1")
@@ -146,7 +131,6 @@ class TestDailyLossLimitRejection:
 
     def test_below_threshold_still_approved(self, engine):
         """When accumulated loss is below the limit, orders should pass."""
-        # 99_999_999 is just under the 100_000_000 threshold
         engine.notify_fill_pnl("s1", -99_999_999)
 
         intent = _make_intent(strategy_id="s1")
@@ -208,23 +192,19 @@ class TestConfigReloadUpdatesThreshold:
 
     def test_config_reload_updates_threshold(self, tmp_path):
         """After reloading with a per-strategy threshold, previously rejected orders pass."""
-        # Start with strict global threshold: 50_000_000 (5,000 NTD x10000)
         cfg_path = _write_config(tmp_path, max_daily_loss=50_000_000)
         q_in = asyncio.Queue()
         q_out = asyncio.Queue()
         eng = RiskEngine(cfg_path, q_in, q_out)
 
-        # Verify initial threshold
         validator = _get_daily_loss_validator(eng)
         assert validator._default_max_daily_loss == 50_000_000
 
-        # Accumulate loss that exceeds initial threshold
         eng.notify_fill_pnl("s1", -60_000_000)
         intent = _make_intent(strategy_id="s1")
         decision = eng.evaluate(intent)
         assert decision.approved is False
 
-        # Rewrite config: add per-strategy override with higher limit
         new_cfg = {
             "global_defaults": {
                 "max_price_cap": 5000.0,
@@ -247,21 +227,15 @@ class TestConfigReloadUpdatesThreshold:
         cfg_file = tmp_path / "risk.yaml"
         cfg_file.write_text(yaml.dump(new_cfg))
 
-        # Reload config
         eng.reload_config()
 
-        # Verify strat_configs updated on the validator
         validator = _get_daily_loss_validator(eng)
         assert validator.strat_configs["s1"]["max_daily_loss"] == 200_000_000
 
-        # After a daily loss HALT, StormGuard is now in HALT state.
-        # An operator raising the threshold must also manually clear the halt to resume trading.
-        # Reset halt_triggered on the validator and StormGuard to simulate operator intervention.
         from hft_platform.contracts.strategy import StormGuardState
 
         validator.halt_triggered = False
         eng.storm_guard.state = StormGuardState.NORMAL
 
-        # Same intent should now be approved (60M loss < 200M per-strategy threshold)
         decision = eng.evaluate(intent)
         assert decision.approved is True

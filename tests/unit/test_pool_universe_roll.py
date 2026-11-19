@@ -26,9 +26,7 @@ import yaml
 from hft_platform.config import _symbols_types as symbols_types
 from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
-# 2026-09-17 20:00 Taipei — the night after TMFI6 settled (13:30 on 09-16).
 AFTER_SEPTEMBER_SETTLEMENT_NS = int(dt.datetime(2026, 9, 17, 12, 0, tzinfo=dt.UTC).timestamp() * 1e9)
-# 2026-09-16 20:00 Taipei — settlement day, after the 13:30 final session.
 SETTLEMENT_EVENING_NS = int(dt.datetime(2026, 9, 16, 12, 0, tzinfo=dt.UTC).timestamp() * 1e9)
 
 SEPTEMBER = "2026/09/16"
@@ -275,7 +273,6 @@ class TestRefusals:
 
         assert pool.roll_universe(live=False, now_ns=AFTER_SEPTEMBER_SETTLEMENT_NS) is False
 
-        # No last-good universe on disk, so boot stays on the canonical file.
         assert results == ["refused", "fallback_canonical"]
         assert _universe_codes(pool) == {"TMFJ6"}
 
@@ -401,7 +398,6 @@ class TestLiveRoll:
             today=dt.date(2026, 9, 17),
         )
         clients = _attach_facades(pool)
-        # The running universe came from a validated rebuild (the boot roll).
         pool._set_universe_source("list")
         monkeypatch.setattr(QuoteConnectionPool, "reconnect_allowed", lambda self: True)
 
@@ -682,12 +678,10 @@ NOVEMBER_FULL_CONTRACTS = [
     _future("TMFL6", "TMF", DECEMBER),
     _future("TXFK6", "TXF", NOVEMBER),
 ]
-# 2026-11-02: the contract cache on disk had lost every TXF row.
 NOVEMBER_PARTIAL_CONTRACTS = [
     _future("TMFK6", "TMF", NOVEMBER),
     _future("TMFL6", "TMF", DECEMBER),
 ]
-# 2026-11-02 22:00 Taipei.
 NOVEMBER_BOOT_NS = int(dt.datetime(2026, 11, 2, 14, 0, tzinfo=dt.UTC).timestamp() * 1e9)
 
 
@@ -722,7 +716,7 @@ class TestBootFallsBackToLastGood:
         pool = _make_pool(
             tmp_path,
             monkeypatch,
-            universe=["TMFE6", "TXFE6"],  # the stale canonical file
+            universe=["TMFE6", "TXFE6"],
             contracts=NOVEMBER_PARTIAL_CONTRACTS,
             list_body=TXF_TMF_LIST,
             today=dt.date(2026, 11, 2),

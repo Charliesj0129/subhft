@@ -38,19 +38,15 @@ class BayesianOptConfig:
     data_paths: list[str]
     n_trials: int = 30
     param_space: dict[str, tuple[float, float, bool]] = None  # type: ignore[assignment]
-    # name -> (lo, hi, log_scale)
-    objective: str = "risk_adjusted"  # matches validation.py's opt_objective
+    objective: str = "risk_adjusted"
     n_startup_trials: int = 10
     seed: int | None = None
     latency_profile_id: str = "shioaji_sim_p95_v2026-03-04"
-    # backtest config defaults
     is_oos_split: float = 0.7
     max_position: int = 5
-    # Statutory per-side cost in points (cost_models.load_cost_profile); None = gross.
     cost_per_side_pts: float | None = None
 
     def __post_init__(self) -> None:
-        # Frozen dataclass workaround: use object.__setattr__ for default mutable field
         if self.param_space is None:
             object.__setattr__(
                 self,
@@ -109,7 +105,6 @@ def _optimization_objective(
         return float(sharpe_oos)
     if mode == "ic_first":
         return float(sharpe_oos) - 0.1 * abs(float(turnover))
-    # Default: risk-adjusted objective.
     drawdown_penalty = max(0.0, abs(float(max_drawdown)) - 0.10) * 2.0
     turnover_penalty = max(0.0, float(turnover) - 1.0) * 0.25
     return float(sharpe_oos) - float(drawdown_penalty) - float(turnover_penalty)
@@ -128,10 +123,8 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
     from research.registry.alpha_registry import AlphaRegistry
     from research.tools.latency_profiles import load_latency_profile
 
-    # --- Load latency profile ---
     latency = load_latency_profile(config.latency_profile_id)
 
-    # --- Discover alpha ---
     project_root = Path(__file__).resolve().parents[2]
     alphas_dir = project_root / "research" / "alphas"
     registry = AlphaRegistry()
@@ -140,7 +133,6 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
         available = sorted(loaded.keys())
         raise ValueError(f"Alpha '{config.alpha_id}' not found in research/alphas/. Available: {available}")
 
-    # --- Resolve data paths and ensure hftbt format ---
     resolved_paths: list[str] = []
     for p in config.data_paths:
         candidate = Path(p)
@@ -151,7 +143,6 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
     for dp in resolved_paths:
         ensure_hftbt_npz(dp)
 
-    # --- Build base backtest config ---
     base_backtest_cfg = BacktestConfig(
         data_paths=resolved_paths,
         is_oos_split=float(config.is_oos_split),
@@ -166,10 +157,8 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
 
     param_space = dict(config.param_space)
 
-    # --- Silence Optuna's internal logging ---
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    # --- Create study ---
     sampler = optuna.samplers.TPESampler(
         n_startup_trials=min(config.n_startup_trials, config.n_trials),
         seed=config.seed,
@@ -179,16 +168,13 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
     trial_records: list[dict[str, Any]] = []
 
     def objective_fn(trial: optuna.Trial) -> float:
-        # Suggest parameters
         params: dict[str, float] = {}
         for name, (lo, hi, log_scale) in param_space.items():
             params[name] = trial.suggest_float(name, lo, hi, log=log_scale)
 
-        # Reconstruct alpha instance (fresh state per trial)
         alpha_cls = type(loaded[config.alpha_id])
         alpha_instance = alpha_cls()
 
-        # Build trial-specific backtest config
         trial_cfg = base_backtest_cfg
         if "signal_threshold" in params:
             trial_cfg = replace(trial_cfg, signal_threshold=params["signal_threshold"])
@@ -218,16 +204,12 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
 
     study.optimize(objective_fn, n_trials=config.n_trials)
 
-    # --- Extract results ---
     best_trial = study.best_trial
     best_params = dict(best_trial.params)
     best_objective = float(best_trial.value)
 
-    # --- Compute deflated Sharpe ---
-    # Multiple-testing deflation: best objective less SR0 for the best of n_trials (stats.selection_sr0)
     n_oos_fraction = 1.0 - config.is_oos_split
-    # Estimate n_oos from a representative data file
-    n_oos = 100  # fallback
+    n_oos = 100
     try:
         sample_path = resolved_paths[0] if resolved_paths else None
         if sample_path:
@@ -240,17 +222,16 @@ def run_bayesian_opt(config: BayesianOptConfig) -> BayesianOptResult:
             n_total = len(arr)
             n_oos = max(1, int(n_total * n_oos_fraction))
     except Exception:
-        pass  # use fallback
+        pass
 
     selection_penalty = selection_sr0(
         config.n_trials,
         observations=max(2, n_oos),
         trial_sharpes=[float(t.value) for t in study.trials if t.value is not None],
-        annualization=252.0,  # research.backtest.metrics.compute_sharpe default
+        annualization=252.0,
     )
     deflated_sharpe = best_objective - selection_penalty
 
-    # --- Parameter importance ---
     try:
         importance = optuna.importance.get_param_importances(study)
     except Exception:

@@ -8,10 +8,6 @@ import pytest
 
 from hft_platform.feed_adapter.fubon.account_gateway import FubonAccountGateway
 
-# ------------------------------------------------------------------ #
-# Fixtures
-# ------------------------------------------------------------------ #
-
 
 @pytest.fixture()
 def mock_sdk() -> MagicMock:
@@ -24,7 +20,6 @@ def mock_sdk() -> MagicMock:
     sdk.accounting.return_value = {"balance": 1_000_000, "margin_used": 200_000}
     sdk.futopt_accounting.return_value = {"margin": 500_000}
     sdk.settlements.return_value = [{"date": "2026-03-10", "amount": 50_000}]
-    # unrealized_gains_and_loses on the accounting sub-object
     sdk.accounting.unrealized_gains_and_loses = MagicMock(return_value=[{"symbol": "2330", "pnl": 12000}])
     sdk.accounting.query_settlement = MagicMock(return_value=[{"date": "2026-03-01", "amount": 30_000}])
     return sdk
@@ -33,11 +28,6 @@ def mock_sdk() -> MagicMock:
 @pytest.fixture()
 def gateway(mock_sdk: MagicMock) -> FubonAccountGateway:
     return FubonAccountGateway(sdk=mock_sdk, account="test-account")
-
-
-# ------------------------------------------------------------------ #
-# Existing low-level methods (sanity check)
-# ------------------------------------------------------------------ #
 
 
 class TestLowLevelMethods:
@@ -62,11 +52,6 @@ class TestLowLevelMethods:
         mock_sdk.settlements.assert_called_once()
 
 
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: get_positions
-# ------------------------------------------------------------------ #
-
-
 class TestGetPositions:
     def test_delegates_to_get_inventories(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
         result = gateway.get_positions()
@@ -78,11 +63,6 @@ class TestGetPositions:
         mock_sdk.stock.inventories.side_effect = RuntimeError("connection lost")
         result = gateway.get_positions()
         assert result is None
-
-
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: get_account_balance
-# ------------------------------------------------------------------ #
 
 
 class TestGetAccountBalance:
@@ -101,11 +81,6 @@ class TestGetAccountBalance:
         mock_sdk.accounting.side_effect = RuntimeError("timeout")
         result = gateway.get_account_balance()
         assert result == {}
-
-
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: list_position_detail
-# ------------------------------------------------------------------ #
 
 
 class TestListPositionDetail:
@@ -135,11 +110,6 @@ class TestListPositionDetail:
         mock_sdk.accounting.unrealized_gains_and_loses.return_value = {"pnl": 100}
         result = gateway.list_position_detail()
         assert result == [{"pnl": 100}]
-
-
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: list_profit_loss
-# ------------------------------------------------------------------ #
 
 
 class TestListProfitLoss:
@@ -173,11 +143,6 @@ class TestListProfitLoss:
         mock_sdk.accounting.query_settlement.return_value = {"amount": 50}
         result = gateway.list_profit_loss()
         assert result == [{"amount": 50}]
-
-
-# ------------------------------------------------------------------ #
-# Constructor
-# ------------------------------------------------------------------ #
 
 
 class TestConstructor:

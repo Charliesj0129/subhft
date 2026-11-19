@@ -24,8 +24,6 @@ SYSTEM = SRC / "services" / "system.py"
 SHUTDOWN_BUDGET_VAR = "HFT_SHUTDOWN_GRACE_TIMEOUT_S"
 RECORDER_TIMEOUT_VAR = "HFT_RECORDER_SHUTDOWN_TIMEOUT_S"
 
-# Slack the process needs after its shutdown budget runs out: the budget is a timeout on the wait, and the
-# interpreter still has to log, run exit handlers and return before Docker's clock ends.
 MIN_MARGIN_S = 5.0
 
 pytestmark = pytest.mark.unit

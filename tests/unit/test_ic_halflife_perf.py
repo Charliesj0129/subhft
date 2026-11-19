@@ -43,13 +43,11 @@ class TestComputeICHalflifeCorrectness:
         assert compute_ic_halflife(np.array([1.0, 2.0, 3.0])) == 0
 
     def test_strong_persistence_returns_high_lag(self) -> None:
-        # rho=0.95 -> ACF stays > 0.5 for ~13 lags; result should be >= 10.
         signals = _ar1(5000, rho=0.95, seed=7)
         result = compute_ic_halflife(signals)
         assert result >= 10, f"expected >=10, got {result}"
 
     def test_weak_persistence_returns_low_lag(self) -> None:
-        # rho=0.1 -> ACF drops below 0.5 by lag 1.
         signals = _ar1(5000, rho=0.1, seed=11)
         result = compute_ic_halflife(signals)
         assert 1 <= result <= 3, f"expected 1..3, got {result}"
@@ -72,8 +70,6 @@ class TestComputeICHalflifePerf:
         assert 0 <= result <= 50
 
     def test_handles_full_day_without_hang(self) -> None:
-        # Full TMFD6 trading-day all_signals size is roughly 4e5.  The
-        # pre-fix implementation projected hours at this scale.
         signals = _ar1(410_000, rho=0.3, seed=99)
         start = time.perf_counter()
         result = compute_ic_halflife(signals)

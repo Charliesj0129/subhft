@@ -12,10 +12,6 @@ from hft_platform.contracts.execution import OrderEvent, PositionDelta
 from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.router import ExecutionRouter, _create_task_with_error_handling
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
@@ -137,11 +133,6 @@ def router(bus: MagicMock, position_store: MagicMock) -> ExecutionRouter:
     return r
 
 
-# ---------------------------------------------------------------------------
-# Order event normalization + publish
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_order_event_normalized_and_published(router: ExecutionRouter, bus: MagicMock) -> None:
     raw = _make_order_raw(status="Submitted")
@@ -159,11 +150,6 @@ async def test_order_event_normalized_and_published(router: ExecutionRouter, bus
     bus.publish_nowait.assert_called()
     event = bus.publish_nowait.call_args[0][0]
     assert isinstance(event, OrderEvent)
-
-
-# ---------------------------------------------------------------------------
-# Terminal state handlers
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -196,7 +182,6 @@ async def test_terminal_async_handler_called(router: ExecutionRouter) -> None:
 
     task = asyncio.create_task(router.run())
     await router.raw_queue.join()
-    # Allow spawned tasks to run
     await asyncio.sleep(0.01)
     router.running = False
     task.cancel()
@@ -238,11 +223,6 @@ async def test_terminal_object_handler(router: ExecutionRouter) -> None:
     assert obj.called
 
 
-# ---------------------------------------------------------------------------
-# Fill -> position -> PnL flow
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_fill_updates_position(router: ExecutionRouter, position_store: MagicMock, bus: MagicMock) -> None:
     raw = _make_deal_raw()
@@ -259,11 +239,6 @@ async def test_fill_updates_position(router: ExecutionRouter, position_store: Ma
 
     position_store.on_fill_async.assert_awaited_once()
     bus.publish_many_nowait.assert_called()
-
-
-# ---------------------------------------------------------------------------
-# Non-terminal order skips handler
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -286,14 +261,8 @@ async def test_non_terminal_order_skips_handler(router: ExecutionRouter) -> None
     handler.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Error recovery
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_error_does_not_stop_loop(router: ExecutionRouter, bus: MagicMock) -> None:
-    # First event causes normalizer to throw, second should still process
     bad_raw = RawExecEvent(topic="order", data="NOT_A_DICT", ingest_ts_ns=1000)
     good_raw = _make_order_raw(status="Submitted")
 
@@ -309,13 +278,7 @@ async def test_error_does_not_stop_loop(router: ExecutionRouter, bus: MagicMock)
     except asyncio.CancelledError:
         pass
 
-    # The good event should have been published
     assert bus.publish_nowait.call_count >= 1
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle: running flag, alive metric, heartbeat, lag metric
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -368,7 +331,7 @@ async def test_heartbeat_updated(router: ExecutionRouter) -> None:
     except asyncio.CancelledError:
         pass
 
-    assert router.metrics.execution_router_heartbeat_ts.set.call_count >= 2  # init + loop
+    assert router.metrics.execution_router_heartbeat_ts.set.call_count >= 2
 
 
 @pytest.mark.asyncio
@@ -388,11 +351,6 @@ async def test_lag_metric_recorded(router: ExecutionRouter) -> None:
     router.metrics.execution_router_lag_ns.observe.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# Queue drain and cancellation
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancellation_stops_loop(router: ExecutionRouter) -> None:
     task = asyncio.create_task(router.run())
@@ -402,13 +360,7 @@ async def test_cancellation_stops_loop(router: ExecutionRouter) -> None:
         await task
     except asyncio.CancelledError:
         pass
-    # alive should be set to 0 after exit
     router.metrics.execution_router_alive.set.assert_called_with(0)
-
-
-# ---------------------------------------------------------------------------
-# Normalizer returns None
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -430,18 +382,12 @@ async def test_normalizer_returns_none_no_publish(router: ExecutionRouter, bus: 
     bus.publish_nowait.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Fill with risk engine
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_fill_with_risk_engine_notifies_pnl(router: ExecutionRouter, position_store: MagicMock) -> None:
     risk_engine = MagicMock()
     risk_engine.notify_fill_pnl = MagicMock()
     router._risk_engine = risk_engine
 
-    # Set up pre-position with realized_pnl
     pre_pos = SimpleNamespace(realized_pnl_scaled=100_000)
     position_store.positions = {"acct1:strat1:2330": pre_pos}
     position_store.on_fill_async = AsyncMock(
@@ -472,11 +418,6 @@ async def test_fill_with_risk_engine_notifies_pnl(router: ExecutionRouter, posit
     risk_engine.notify_fill_pnl.assert_called_once_with("strat1", 50_000)
 
 
-# ---------------------------------------------------------------------------
-# Fill without risk engine
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_fill_without_risk_engine(router: ExecutionRouter, bus: MagicMock) -> None:
     router._risk_engine = None
@@ -496,11 +437,6 @@ async def test_fill_without_risk_engine(router: ExecutionRouter, bus: MagicMock)
     bus.publish_many_nowait.assert_called()
 
 
-# ---------------------------------------------------------------------------
-# Handler exception isolation
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_handler_exception_does_not_crash(router: ExecutionRouter, bus: MagicMock) -> None:
     handler = MagicMock(side_effect=RuntimeError("handler error"))
@@ -518,13 +454,7 @@ async def test_handler_exception_does_not_crash(router: ExecutionRouter, bus: Ma
     except asyncio.CancelledError:
         pass
 
-    # The error metric should have been recorded
     router.metrics.execution_router_errors_total.inc.assert_called()
-
-
-# ---------------------------------------------------------------------------
-# _create_task_with_error_handling
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -533,7 +463,6 @@ async def test_create_task_with_error_handling_logs_exception() -> None:
         raise ValueError("test failure")
 
     task = _create_task_with_error_handling(fail(), name="test-fail")
-    # Let task run and fail
     await asyncio.sleep(0.01)
     assert task.done()
     with pytest.raises(ValueError):
@@ -550,11 +479,6 @@ async def test_create_task_with_error_handling_success() -> None:
     assert result == 42
 
 
-# ---------------------------------------------------------------------------
-# E2E order-to-fill latency metric (SLO-2)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_e2e_latency_observed_when_cmd_created_ns_known(bus: MagicMock, position_store: MagicMock) -> None:
     """When cmd_created_ns_map contains the order_key for a fill, latency is observed."""
@@ -564,7 +488,6 @@ async def test_e2e_latency_observed_when_cmd_created_ns_known(bus: MagicMock, po
     handler = MagicMock()
     r = ExecutionRouter(bus, q, order_id_map, position_store, handler, cmd_created_ns_map=cmd_created_ns_map)
 
-    # fill arrives 5ms after the command was dispatched
     raw = _make_deal_raw(order_id="ORD001", strategy_id="strat1", ingest_ts_ns=1_005_000_000)
     await r.raw_queue.put(raw)
 
@@ -584,7 +507,7 @@ async def test_e2e_latency_observed_when_cmd_created_ns_known(bus: MagicMock, po
 async def test_e2e_latency_not_observed_when_order_key_missing(bus: MagicMock, position_store: MagicMock) -> None:
     """When order_id_map has no entry for fill.order_id, no latency is observed."""
     q: asyncio.Queue = asyncio.Queue()
-    order_id_map: dict[str, str] = {}  # no mapping
+    order_id_map: dict[str, str] = {}
     cmd_created_ns_map: dict[str, int] = {}
     handler = MagicMock()
     r = ExecutionRouter(bus, q, order_id_map, position_store, handler, cmd_created_ns_map=cmd_created_ns_map)
@@ -602,11 +525,6 @@ async def test_e2e_latency_not_observed_when_order_key_missing(bus: MagicMock, p
         pass
 
     r.metrics.e2e_order_latency_ns.observe.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Direct order recording safety net (H5 fix)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -644,11 +562,6 @@ async def test_order_event_recorded_directly_to_recorder_queue(bus: MagicMock, p
     assert item["topic"] == "orders"
 
 
-# ---------------------------------------------------------------------------
-# DLQ retry uses on_fill_async (H2 fix)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_dlq_retry_uses_on_fill_async(router: ExecutionRouter, position_store: MagicMock, bus: MagicMock) -> None:
     """_retry_orphaned_fills must use on_fill_async, not blocking on_fill."""
@@ -671,7 +584,6 @@ async def test_dlq_retry_uses_on_fill_async(router: ExecutionRouter, position_st
         match_ts_ns=1_000_000_000,
     )
 
-    # Mock the DLQ to return one resolved fill
     mock_dlq = MagicMock()
     mock_dlq.count = 1
     mock_dlq.retry = MagicMock(return_value=([fake_fill], []))
@@ -682,7 +594,6 @@ async def test_dlq_retry_uses_on_fill_async(router: ExecutionRouter, position_st
     ):
         await router._retry_orphaned_fills()
 
-    # on_fill_async should be called, NOT on_fill
     position_store.on_fill_async.assert_awaited_once_with(fake_fill)
     position_store.on_fill.assert_not_called()
 
@@ -711,11 +622,6 @@ async def test_e2e_latency_not_observed_when_created_ns_zero(bus: MagicMock, pos
     r.metrics.e2e_order_latency_ns.observe.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# DLQ retry TCA enrichment (M4 fix)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_dlq_retry_enriches_fill_with_tca_prices(
     router: ExecutionRouter, position_store: MagicMock, bus: MagicMock
@@ -740,7 +646,6 @@ async def test_dlq_retry_enriches_fill_with_tca_prices(
         match_ts_ns=1_000_000_000,
     )
 
-    # Seed order_id_map and TCA map
     router._order_id_map["ORD001"] = "strat1:42"
     router._cmd_tca_map["strat1:42"] = (5_000_000, 5_010_000)
 
@@ -754,7 +659,6 @@ async def test_dlq_retry_enriches_fill_with_tca_prices(
     ):
         await router._retry_orphaned_fills()
 
-    # TCA prices should be enriched on the fill
     assert fake_fill.decision_price == 5_000_000
     assert fake_fill.arrival_price == 5_010_000
 

@@ -9,8 +9,6 @@ import pytest
 from hft_platform.tca.fee_calculator import FeeCalculator
 from hft_platform.tca.types import FeeBreakdown
 
-# --- fixtures ---
-
 _FUTURES_YAML = """\
 futures:
   TX:
@@ -56,30 +54,20 @@ def calc(yaml_path: Path) -> FeeCalculator:
     return FeeCalculator.from_yaml(str(yaml_path))
 
 
-# --- tests ---
-
-
 def test_buy_side_no_tax(calc: FeeCalculator) -> None:
     """Buy side should have zero tax (tax_side = sell only)."""
     result = calc.compute("TXF", "BUY", 1, 20000 * 10000)
     assert result.tax == 0
-    assert result.commission == 60 * 10000  # 60 NTD * 10000
+    assert result.commission == 60 * 10000
     assert result.total == result.commission
 
 
 def test_sell_side_has_tax(calc: FeeCalculator) -> None:
     """Sell side should include tax."""
-    # TX: price=20000 (scaled x10000 → 200000000), qty=1, point_value=200, tick_size=1
-    # notional = price * qty * point_value / tick_size = 20000 * 1 * 200 / 1 = 4_000_000 NTD
-    # tax = notional * 2.0 bps = 4_000_000 * 0.0002 = 800 NTD → 800 * 10000 = 8_000_000
-    price_scaled = 20000 * 10000  # 20000 points scaled x10000
+    price_scaled = 20000 * 10000
     result = calc.compute("TXF", "SELL", 1, price_scaled)
     assert result.tax > 0
     assert result.commission == 60 * 10000
-    # tax: notional_x100 = price_scaled * qty * point_value * 100 // tick_size_x100
-    #     = 200_000_000 * 1 * 200 * 100 // 100 = 40_000_000_000
-    # tax_scaled = notional_x100 * tax_rate_x100 // (10000 * 100)
-    #     = 40_000_000_000 * 200 // 1_000_000 = 8_000_000
     assert result.tax == 8_000_000
     assert result.total == result.commission + result.tax
 
@@ -130,7 +118,6 @@ def test_from_yaml(yaml_path: Path) -> None:
     """from_yaml classmethod should load and construct correctly."""
     calc = FeeCalculator.from_yaml(str(yaml_path))
     assert calc is not None
-    # Verify TX schedule loaded
     result = calc.compute("TXF", "BUY", 1, 20000 * 10000)
     assert result.commission == 60 * 10000
 

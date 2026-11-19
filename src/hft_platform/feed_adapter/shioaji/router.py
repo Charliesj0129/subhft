@@ -11,8 +11,6 @@ from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("feed_adapter")
 
-# --- Global Callback Registry & Dispatcher ---
-# Using global snapshots to avoid per-callback lock contention.
 CLIENT_REGISTRY: List[Any] = []
 CLIENT_REGISTRY_LOCK = threading.Lock()
 CLIENT_REGISTRY_BY_CODE: Dict[str, List[Any]] = {}
@@ -77,7 +75,6 @@ def _clear_topic_code_cache_locked() -> None:
 def _warmup_topic_code_cache_locked() -> None:
     """Pre-populate TOPIC_CODE_CACHE with common topic patterns for all bound codes."""
     for code in CLIENT_REGISTRY_BY_CODE:
-        # Pre-cache the most common Shioaji topic patterns.
         for pattern in (f"Q/TSE/{code}", f"Q/OTC/{code}", f"L1:STK:{code}:tick"):
             TOPIC_CODE_CACHE[pattern] = code
 
@@ -126,7 +123,6 @@ def _extract_quote_code_from_obj(obj: Any) -> str | None:
 
 
 def _extract_quote_code(*args: Any, **kwargs: Any) -> str | None:
-    # Fast common shapes first: (topic, quote), (exchange, quote), kwargs["quote"].
     if len(args) >= 2:
         code = _extract_quote_code_from_obj(args[1])
         if code:
@@ -159,19 +155,15 @@ def _extract_code_from_topic(topic: str) -> str | None:
         return cast(str | None, cached)
 
     code: str | None = None
-    # Common fast paths avoid regex allocation.
     if topic.startswith("Q/"):
-        # e.g. Q/TSE/2330
         last = topic.rsplit("/", 1)[-1]
         if last:
             code = last
     elif topic.startswith("L1:") and ":" in topic:
-        # e.g. L1:STK:2330:tick -> third token
         parts = topic.split(":")
         if len(parts) >= 3 and parts[2]:
             code = parts[2]
     elif ":" in topic:
-        # e.g. Quote:v1:BidAsk:TXFF202412
         parts = topic.split(":")
         for token in reversed(parts):
             tok = token.strip()
@@ -184,7 +176,6 @@ def _extract_code_from_topic(topic: str) -> str | None:
                 code = tok
                 break
     if code is None:
-        # General fallback for topic drift.
         candidates = re.findall(r"[A-Za-z0-9_]+", topic)
         for token in reversed(candidates):
             low = token.lower()
@@ -201,21 +192,8 @@ def _extract_code_from_topic(topic: str) -> str | None:
                         code = parts[-1]
                         break
 
-    # L1: Always write under CLIENT_REGISTRY_LOCK. The previous
-    # ``_CACHE_WARMED`` fast-path dropped the lock on the assumption that
-    # CPython dict writes are GIL-atomic; that is true for a single op,
-    # but ``len(); assign`` is two ops and races with concurrent
-    # ``_clear_topic_code_cache_locked()`` from
-    # ``_registry_rebind_codes`` / ``_registry_unregister``. A reader
-    # iterating the cache during such a clear could observe
-    # ``RuntimeError: dictionary changed size during iteration``, and a
-    # write between len-check and assign could overflow the cap. The cache
-    # is only written on a TOPIC_CODE_CACHE miss, which is rare after the
-    # bound codes are pre-warmed via ``_warmup_topic_code_cache_locked``,
-    # so the lock cost is negligible on the hot path.
     with CLIENT_REGISTRY_LOCK:
         if len(TOPIC_CODE_CACHE) >= _TOPIC_CODE_CACHE_MAX:
-            # Simple coarse reset keeps O(1) behavior on hot path.
             TOPIC_CODE_CACHE.clear()
         TOPIC_CODE_CACHE[topic] = code
     return code
@@ -279,7 +257,6 @@ def _registry_rebind_codes(client: Any, codes: list[str]) -> None:
                 bucket.append(client)
         _refresh_registry_snapshots_locked()
         _clear_topic_code_cache_locked()
-        # Pre-populate cache for all known codes and mark warmed.
         _warmup_topic_code_cache_locked()
         _CACHE_WARMED = True
 
@@ -397,7 +374,6 @@ def dispatch_tick_cb_compat(*args: Any, **kwargs: Any) -> None:
         if not args and not kwargs:
             return
         code = _extract_quote_code(*args, **kwargs)
-        # Reconstruct (topic, quote) from args for downstream dispatchers.
         topic = args[0] if args else None
         quote = args[1] if len(args) >= 2 else None
         _dispatch_core(code, topic, quote)

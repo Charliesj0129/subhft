@@ -21,10 +21,6 @@ from hft_platform.alpha._gate_c import run_gate_c
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 from research.backtest.gate_c_runtime import build_gate_c_runtime
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_backtest_result(**overrides: Any) -> types.SimpleNamespace:
     defaults = {
@@ -42,7 +38,6 @@ def _make_backtest_result(**overrides: Any) -> types.SimpleNamespace:
         "run_id": "run-test",
         "config_hash": "cfg-test",
         "latency_profile": {"model_applied": True},
-        # Gate C reports the trend check as ERROR without mid prices.
         "mid_prices": np.linspace(100.0, 101.0, 4, dtype=np.float64),
     }
     defaults.update(overrides)
@@ -211,11 +206,6 @@ def _run(tmp_path: Path, cfg_overrides: dict | None = None) -> tuple[GateReport,
     )
 
 
-# ---------------------------------------------------------------------------
-# Core metric checks
-# ---------------------------------------------------------------------------
-
-
 class TestGateCCoreMetrics:
     def test_passes_when_all_metrics_ok(self, gate_c_mocks):
         report, run_id, config_hash, scorecard_path, meta_path = _run(gate_c_mocks)
@@ -224,13 +214,11 @@ class TestGateCCoreMetrics:
         assert report.details["core_metrics_passed"] is True
 
     def test_day_axis_sub_gates_measure_the_fill_priced_days(self, gate_c_mocks):
-        # Day-axis sub-gates read the dated fill-priced rows, never the per-tick
-        # mid-to-mid equity curve.
         report, *_ = _run(gate_c_mocks)
         outcomes = {e["name"]: e["outcome"] for e in report.details["sub_gates_advisory"]}
         assert outcomes["sharpe_threshold"] == "pass"
         assert outcomes["winning_day_pct"] == "pass"
-        assert report.details["verdict"]["verdict"] == "PASS"  # no profile: sub-gates are advisory
+        assert report.details["verdict"]["verdict"] == "PASS"
 
     def test_missing_mid_prices_makes_trend_check_error(self, gate_c_mocks, monkeypatch):
         class NoMidRunner(_FakeRunner):
@@ -280,11 +268,6 @@ class TestGateCCoreMetrics:
         assert report.passed is False
 
 
-# ---------------------------------------------------------------------------
-# Statistical correction methods
-# ---------------------------------------------------------------------------
-
-
 class TestGateCStatCorrection:
     def test_bh_correction_method(self, gate_c_mocks):
         report, *_ = _run(gate_c_mocks, {"stat_correction_method": "bh"})
@@ -331,11 +314,6 @@ class TestGateCStatCorrection:
         )
         assert report.details["stat_gate_passed"] is False
         assert report.passed is False
-
-
-# ---------------------------------------------------------------------------
-# Walk-forward gating
-# ---------------------------------------------------------------------------
 
 
 class TestGateCWalkForward:
@@ -392,11 +370,6 @@ class TestGateCWalkForward:
         assert "fold_consistency_pct" in wf
 
 
-# ---------------------------------------------------------------------------
-# Parameter optimization
-# ---------------------------------------------------------------------------
-
-
 class TestGateCOptimization:
     def test_optimization_disabled(self, gate_c_mocks):
         report, *_ = _run(gate_c_mocks, {"enable_param_optimization": False})
@@ -426,7 +399,6 @@ class TestGateCOptimization:
             lambda **kw: {"passed": True, "selected_signal_threshold": 0.999},
         )
         _run(gate_c_mocks, {"enable_param_optimization": True})
-        # Initial run + re-run with new threshold = 2
         assert run_count["n"] == 2
 
     def test_selected_threshold_same_no_rerun(self, gate_c_mocks, monkeypatch):
@@ -447,11 +419,6 @@ class TestGateCOptimization:
         assert run_count["n"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Stress / robustness evaluation
-# ---------------------------------------------------------------------------
-
-
 class TestGateCStressAndRobustness:
     def test_stress_fail_blocks_gate(self, gate_c_mocks, monkeypatch):
         monkeypatch.setattr(
@@ -468,11 +435,6 @@ class TestGateCStressAndRobustness:
         )
         report, *_ = _run(gate_c_mocks)
         assert report.passed is False
-
-
-# ---------------------------------------------------------------------------
-# Output structure
-# ---------------------------------------------------------------------------
 
 
 class TestGateCOutputStructure:
@@ -531,11 +493,6 @@ class TestGateCOutputStructure:
         assert criteria["min_sharpe_oos"] == 0.5
 
 
-# ---------------------------------------------------------------------------
-# Research engine error
-# ---------------------------------------------------------------------------
-
-
 class TestGateCResearchEngineRejected:
     def test_research_engine_raises_error(self, gate_c_mocks):
         with pytest.raises(ValueError, match="research"):
@@ -574,7 +531,7 @@ class TestScorecardCarriesGateDAudits:
         sub_gate = next(e for e in report.details["sub_gates_advisory"] if e["name"] == "cost_uncertainty")
         assert scorecard["strategy_type"] == "taker"
         assert scorecard["cost_uncertainty"]["outcome"] == sub_gate["outcome"]
-        assert "inventory_mtm" not in scorecard  # maker-only sub-gate
+        assert "inventory_mtm" not in scorecard
 
         _, checks = _evaluate_gate_d_verdict(
             {**scorecard, "sharpe_oos": 1.5, "max_drawdown": -0.05, "turnover": 0.5, "correlation_pool_max": 0.2},
@@ -585,11 +542,6 @@ class TestScorecardCarriesGateDAudits:
         )
         assert checks["cost_uncertainty_audit"]["outcome"] == sub_gate["outcome"]
         assert checks["inventory_mtm_audit"]["outcome"] == "not_applicable"
-
-
-# ---------------------------------------------------------------------------
-# RunStamp (research v2 F4)
-# ---------------------------------------------------------------------------
 
 
 def test_taker_run_stamp_hashes_the_hftbt_npz_the_runner_reads(gate_c_mocks, monkeypatch):
@@ -625,18 +577,12 @@ def test_taker_run_stamp_hashes_the_hftbt_npz_the_runner_reads(gate_c_mocks, mon
     assert logged["run_stamp"]["calibration"] == "uncalibrated"
 
 
-# ---------------------------------------------------------------------------
-# Fill-priced taker PnL (research v2 C2c)
-# ---------------------------------------------------------------------------
-
-
 def _check(report: GateReport, name: str) -> dict[str, Any]:
     return next(e for e in report.details["gate_c_checks"] if e["name"] == name)
 
 
 class TestGateCFillPricedPnl:
     def test_mid_to_mid_alone_cannot_pass_gate_c(self, gate_c_mocks, monkeypatch):
-        # The screening runner reports sharpe_oos 1.2; the fills lose money every day.
         losing = [-3.0, -1.0, -4.0, -2.0, -5.0, -1.0, -3.0, -2.0, -4.0, -3.0]
         monkeypatch.setattr("research.backtest.gate_c_runtime._run_taker_sim", _fill_sim(losing))
         report, *_ = _run(gate_c_mocks)
@@ -644,7 +590,7 @@ class TestGateCFillPricedPnl:
         assert _check(report, "gate_c.screening_sharpe_oos")["outcome"] == "pass"
         assert _check(report, "gate_c.sharpe_oos")["outcome"] == "fail"
         assert report.passed is False
-        assert report.details["verdict"]["verdict"] == "KILL"  # a measured fail, not INVALID
+        assert report.details["verdict"]["verdict"] == "KILL"
 
     def test_screening_sharpe_still_blocks(self, gate_c_mocks, monkeypatch):
         class LosingScreen(_FakeRunner):
@@ -665,7 +611,7 @@ class TestGateCFillPricedPnl:
         assert report.details["pnl_method"] == "taker_ioc_touch_v1"
         assert fill["n_is_days"] == 7 and fill["n_oos_days"] == 3
         assert report.details["sharpe_oos"] == pytest.approx(fill["sharpe_oos"])
-        assert report.details["sharpe_oos"] != pytest.approx(1.2)  # not the screening value
+        assert report.details["sharpe_oos"] != pytest.approx(1.2)
         assert report.details["screening"] == {
             "method": "mid_to_mid_screening_v1",
             "sharpe_is": 1.5,

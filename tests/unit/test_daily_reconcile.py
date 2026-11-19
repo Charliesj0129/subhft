@@ -9,27 +9,15 @@ from __future__ import annotations
 import os
 import sys
 
-# Allow importing the script as a module (scripts/ is not a package)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 
 from daily_reconcile import compare_positions  # type: ignore[import]
 
-# Tolerance used across tests: 100_000 scaled units = 10 NTD
 _TOLERANCE = 100_000
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _pos(qty: int, pnl: int) -> dict:
     return {"qty": qty, "pnl": pnl}
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 def test_matching_positions_returns_true() -> None:
@@ -47,7 +35,7 @@ def test_matching_positions_returns_true() -> None:
 def test_qty_mismatch_detected() -> None:
     """Different qty between broker and platform → MISMATCH."""
     broker = {"2330": _pos(100, 5_000_000)}
-    platform = {"2330": _pos(99, 5_000_000)}  # one lot short
+    platform = {"2330": _pos(99, 5_000_000)}
     ch = {"2330": _pos(100, 5_000_000)}
 
     is_match, mismatches = compare_positions(broker, platform, ch, tolerance=_TOLERANCE)
@@ -64,7 +52,7 @@ def test_qty_mismatch_detected() -> None:
 def test_pnl_within_tolerance_matches() -> None:
     """PnL diff of 5 NTD (50_000 scaled) → within ±10 NTD tolerance → MATCH."""
     pnl_base = 10_000_000
-    pnl_diff = 50_000  # 5 NTD, well within 10 NTD tolerance
+    pnl_diff = 50_000
 
     broker = {"2330": _pos(0, pnl_base)}
     platform = {"2330": _pos(0, pnl_base + pnl_diff)}
@@ -79,7 +67,7 @@ def test_pnl_within_tolerance_matches() -> None:
 def test_pnl_exceeding_tolerance_mismatches() -> None:
     """PnL diff of 15 NTD (150_000 scaled) → exceeds ±10 NTD tolerance → MISMATCH."""
     pnl_base = 10_000_000
-    pnl_diff = 150_000  # 15 NTD, just over the 10 NTD tolerance
+    pnl_diff = 150_000
 
     broker = {"2330": _pos(0, pnl_base)}
     platform = {"2330": _pos(0, pnl_base + pnl_diff)}
@@ -109,8 +97,8 @@ def test_all_mismatches_reported() -> None:
         "TXFD6": _pos(2, 200_000_000),
     }
     platform = {
-        "2330": _pos(90, 5_000_000),  # qty differs
-        "TXFD6": _pos(2, 198_500_000),  # pnl differs by 1,500,000 (150 NTD)
+        "2330": _pos(90, 5_000_000),
+        "TXFD6": _pos(2, 198_500_000),
     }
     ch = {
         "2330": _pos(100, 5_000_000),
@@ -128,14 +116,12 @@ def test_all_mismatches_reported() -> None:
 
 def test_symbol_missing_from_broker_is_mismatch() -> None:
     """Symbol present in platform but absent from broker → treated as 0 qty/pnl on broker side."""
-    # Platform has an open position, broker has nothing (symbol never reported)
     broker: dict = {}
     platform = {"2330": _pos(50, 1_000_000)}
     ch = {"2330": _pos(50, 1_000_000)}
 
     is_match, mismatches = compare_positions(broker, platform, ch, tolerance=_TOLERANCE)
 
-    # Qty: 0 (broker) vs 50 (platform) vs 50 (ch) → mismatch
     assert is_match is False
     assert any(mm["symbol"] == "2330" for mm in mismatches)
 
@@ -143,7 +129,7 @@ def test_symbol_missing_from_broker_is_mismatch() -> None:
 def test_tolerance_boundary_exact_match() -> None:
     """PnL diff exactly equal to tolerance → MATCH (inclusive boundary)."""
     pnl_base = 5_000_000
-    pnl_diff = _TOLERANCE  # exactly at tolerance
+    pnl_diff = _TOLERANCE
 
     broker = {"2330": _pos(0, pnl_base)}
     platform = {"2330": _pos(0, pnl_base + pnl_diff)}
@@ -178,9 +164,9 @@ def test_multiple_symbols_partial_mismatch() -> None:
         "TXFD6": _pos(1, 50_000_000),
     }
     platform = {
-        "2330": _pos(10, 1_000_000),  # match
-        "2317": _pos(20, 2_000_000),  # match
-        "TXFD6": _pos(2, 50_000_000),  # qty mismatch
+        "2330": _pos(10, 1_000_000),
+        "2317": _pos(20, 2_000_000),
+        "TXFD6": _pos(2, 50_000_000),
     }
     ch = {
         "2330": _pos(10, 1_000_000),

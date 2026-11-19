@@ -21,8 +21,6 @@ _PUBLIC_CONTRACTS = (
     "validate_meta_ul",
 )
 
-# Captured before the ownership migration from a real protocol-4 pickle whose
-# global resolves through research.tools.vm_ul.DataUL.
 _LEGACY_DATA_UL_PICKLE = "gASVKQAAAAAAAACMFHJlc2VhcmNoLnRvb2xzLnZtX3VslIwGRGF0YVVMlJOUSwOFlFKULg=="
 
 

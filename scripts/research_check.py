@@ -44,17 +44,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 QUARANTINE_FILE = ROOT / "tests" / "research" / "quarantine.yaml"
 
-# Branch coverage measured 2026-10-26 on main (tracked files, archive and
-# experiments omitted, Rust extension not built, as in CI): 40.13. The floor is
-# that minus 2 points, rounded down, as in scripts/check_coverage_domains.py.
-# Raise it as coverage grows; tests/unit/test_research_check.py fails if it is lowered.
 COVERAGE_FLOOR = 38.0
 
-# Frozen trees: never edited, never tested, not part of the coverage base.
 FROZEN_PREFIXES = ("research/archive/", "research/experiments/")
 
-# pyflakes (undefined names, redefinitions, bad comparisons, ...) and syntax
-# errors. Unused imports/variables and placeholder-less f-strings are style.
 RUFF_SELECT = "F,E9"
 RUFF_IGNORE = "F401,F841,F541"
 
@@ -167,13 +160,11 @@ def pytest_command(entries: list[QuarantineEntry], rc_path: Path, root: Path = R
         sys.executable,
         "-m",
         "pytest",
-        # The platform addopts measure src/ with a 70% floor and ignore tests/research.
         "-o",
         "addopts=",
         "--timeout=60",
         "-p",
         "no:cacheprovider",
-        # Several alphas ship a tests/test_smoke.py; rootdir-relative module names would collide.
         "--import-mode=importlib",
         "-q",
         "--cov",

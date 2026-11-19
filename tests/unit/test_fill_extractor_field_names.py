@@ -10,10 +10,6 @@ from enum import IntEnum
 
 from hft_platform.recorder.worker import _extract_fill_values, _getattr_scaled
 
-# ---------------------------------------------------------------------------
-# Minimal FillEvent-like fixture matching contracts/execution.py
-# ---------------------------------------------------------------------------
-
 
 class _Side(IntEnum):
     BUY = 0
@@ -58,17 +54,12 @@ class _FakeFillEventScaled:
     broker_order_id: str = "B2"
 
 
-# ---------------------------------------------------------------------------
-# _getattr_scaled unit tests
-# ---------------------------------------------------------------------------
-
-
 def test_getattr_scaled_returns_plain_field_when_present():
     """Plain field name should take priority over _scaled variant."""
 
     class _Obj:
         price = 1234_0000
-        price_scaled = 9999_0000  # should be ignored
+        price_scaled = 9999_0000
 
     assert _getattr_scaled(_Obj(), "price") == 1234_0000
 
@@ -101,11 +92,6 @@ def test_getattr_scaled_does_not_treat_zero_as_missing():
     assert _getattr_scaled(_Obj(), "price") == 0
 
 
-# ---------------------------------------------------------------------------
-# _extract_fill_values with FillEvent-style objects
-# ---------------------------------------------------------------------------
-
-
 def test_extract_fill_values_reads_price_from_fill_event():
     """price field on FillEvent must be captured in the output list."""
     ev = _FakeFillEvent(
@@ -124,7 +110,6 @@ def test_extract_fill_values_reads_price_from_fill_event():
     )
     result = _extract_fill_values(ev)
     assert result is not None, "_extract_fill_values returned None unexpectedly"
-    # FILL_COLUMNS index 9 = price_scaled, 10 = fee_scaled, 11 = tax_scaled
     price_val = result[9]
     fee_val = result[10]
     tax_val = result[11]
@@ -151,13 +136,7 @@ def test_extract_fill_values_symbol_captured_from_fill_event():
     )
     result = _extract_fill_values(ev)
     assert result is not None
-    # FILL_COLUMNS index 6 = symbol
     assert result[6] == "0050"
-
-
-# ---------------------------------------------------------------------------
-# _extract_fill_values with _scaled-named objects (legacy WAL rows)
-# ---------------------------------------------------------------------------
 
 
 def test_extract_fill_values_reads_price_scaled_from_legacy_object():
@@ -171,11 +150,6 @@ def test_extract_fill_values_reads_price_scaled_from_legacy_object():
     assert price_val == 5678_0000, f"Expected price 5678_0000, got {price_val}"
     assert fee_val == 50_0000, f"Expected fee 50_0000, got {fee_val}"
     assert tax_val == 30_0000, f"Expected tax 30_0000, got {tax_val}"
-
-
-# ---------------------------------------------------------------------------
-# _extract_fill_values with dict rows
-# ---------------------------------------------------------------------------
 
 
 def test_extract_fill_values_reads_price_scaled_from_dict():

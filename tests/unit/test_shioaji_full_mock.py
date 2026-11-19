@@ -8,11 +8,6 @@ import yaml
 from prometheus_client import REGISTRY
 from prometheus_client.openmetrics.exposition import generate_latest as generate_openmetrics_latest
 
-# IMPORTANT: mocking BEFORE import is hard if module imports at top level.
-# shioaji_client tries to import shioaji inside try-except.
-# We will mock the module `shioaji` in `sys.modules` or rely on `sj` being None check if we can't install it.
-# However, we want to test the logic when `sj` IS present.
-# So we must patch `hft_platform.feed_adapter.shioaji_client.sj`
 from hft_platform.feed_adapter import shioaji_client as _shioaji_client  # noqa: F401  (module init side-effect)
 from hft_platform.feed_adapter.shioaji import client as _shioaji_inner_client
 from hft_platform.feed_adapter.shioaji_client import ShioajiClient
@@ -24,22 +19,18 @@ class TestShioajiClientFull(unittest.TestCase):
     def setUp(self):
         self.env_patcher = patch.dict(os.environ, {"HFT_SESSION_REFRESH_S": "0"})
         self.env_patcher.start()
-        # Create temp config
         self.tmp_config = tempfile.NamedTemporaryFile(mode="w", delete=False)
         yaml.dump(
             {"symbols": [{"code": "2330", "exchange": "TSE"}, {"code": "TXFA", "exchange": "FUT"}]}, self.tmp_config
         )
         self.tmp_config.close()
 
-        # Patch 'sj' in the module
         self.patcher = patch("hft_platform.feed_adapter.shioaji_client.sj")
         self.mock_sj_mod = self.patcher.start()
 
-        # Configure Mock Shioaji class
         self.mock_api_instance = MagicMock()
         self.mock_sj_mod.Shioaji.return_value = self.mock_api_instance
 
-        # Constants
         self.mock_sj_mod.constant.QuoteType.Tick = "tick"
         self.mock_sj_mod.constant.QuoteType.BidAsk = "bidask"
         self.mock_sj_mod.constant.Action.Buy = "Buy"
@@ -50,13 +41,9 @@ class TestShioajiClientFull(unittest.TestCase):
         self.mock_sj_mod.constant.OrderType.FOK = "FOK"
 
         self.client = ShioajiClient(config_path=self.tmp_config.name)
-        # Client init tries to create Shioaji() if sj is present
-        # We need to ensure self.client.api is our mock
         self.client.api = self.mock_api_instance
         self.client.metrics = MagicMock()
 
-        # Mock Contracts lookup structure
-        # Contracts.Stocks.TSE["2330"] etc
         self.mock_contract_2330 = MagicMock()
         self.mock_contract_2330.code = "2330"
         self.mock_contract_txfa = MagicMock()
@@ -74,7 +61,6 @@ class TestShioajiClientFull(unittest.TestCase):
         os.unlink(self.tmp_config.name)
 
     def test_login_flow(self):
-        # Test Env var login
         mark_contracts_loaded(self.mock_api_instance)
         with patch.dict(os.environ, {"SHIOAJI_API_KEY": "TESTKEY", "SHIOAJI_SECRET_KEY": "TESTSECRET"}):
             self.client.login()
@@ -106,18 +92,7 @@ class TestShioajiClientFull(unittest.TestCase):
         cb = MagicMock()
         self.client.subscribe_basket(cb)
 
-        # Should lookup 2330 and TXFA
-        # 2330 in config is TSE
-        # TXFA in config is FUT
-
-        # Verify subscriptions
-        # 2 symbols * 2 quote types = 4 subscribes
         self.assertEqual(self.mock_api_instance.subscribe.call_count, 4)
-        # Resolve against the inner module (hft_platform.feed_adapter.shioaji.client) at assert time.
-        # Production quote_runtime.py:410 does a local `from hft_platform.feed_adapter.shioaji.client
-        # import dispatch_tick_cb` — that picks up the freshest function each call. The shim
-        # `shioaji_client.dispatch_tick_cb` is name-bound at shim-load and goes stale if any other
-        # test reloads the inner module mid-suite, causing a false assert_called_with mismatch.
         self.mock_api_instance.set_on_tick_stk_v1_callback.assert_called_with(_shioaji_inner_client.dispatch_tick_cb)
 
     def test_callback_retry_loop_sets_registered(self):
@@ -146,7 +121,6 @@ class TestShioajiClientFull(unittest.TestCase):
     def test_place_order(self):
         self.client.place_order("2330", "TSE", "Buy", 100.0, 1, "ROD", "Regular")
 
-        # Verify sj.Order constructor called correctly
         self.mock_sj_mod.Order.assert_called()
         call_args = self.mock_sj_mod.Order.call_args
         kwargs = call_args[1]
@@ -156,7 +130,6 @@ class TestShioajiClientFull(unittest.TestCase):
         self.assertEqual(kwargs["price_type"], "LMT")
         self.assertEqual(kwargs["order_type"], "ROD")
 
-        # Verify api.place_order called with result of sj.Order
         self.mock_api_instance.place_order.assert_called()
 
     def test_set_execution_callbacks(self):
@@ -173,9 +146,7 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = True
         self.mock_api_instance.usage.return_value = {"subscribed": 1, "bytes_used": 10}
 
-        # First call hits API and caches.
         usage1 = self.client.get_usage()
-        # Second call should use cache.
         usage2 = self.client.get_usage()
 
         self.assertEqual(usage1, usage2)
@@ -196,14 +167,12 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_record_api_latency_error(self):
         start_ns = time.perf_counter_ns()
-        # Ensure error path doesn't raise.
         self.client._record_api_latency("place_order", start_ns, ok=False)
-        assert True  # reached without exception
+        assert True
 
     def test_record_api_latency_sanitizes_non_string_labels(self):
         self.client.metrics = MetricsRegistry.get()
         start_ns = time.perf_counter_ns()
-        # Regression guard: bad label types must not break /metrics exposition.
         self.client._record_api_latency(type("Catcher", (), {}), start_ns, ok=object)
         payload = generate_openmetrics_latest(REGISTRY)
         self.assertIn(b"shioaji_api_latency_ms", payload)
@@ -305,8 +274,6 @@ class TestShioajiClientFull(unittest.TestCase):
         self.mock_api_instance.set_event_callback.assert_called_with(self.client._event_callback_fn)
 
     def test_subscribe_symbol_returns_false_when_quote_api_missing(self):
-        # Logged-out api: no top-level subscribe surface (1.5) and no api.quote
-        # proxy (1.3.3) → resolve_quote_api returns None → subscribe fails closed.
         del self.client.api.subscribe
         del self.client.api.unsubscribe
         self.client.api.quote = None
@@ -360,7 +327,6 @@ class TestShioajiClientFull(unittest.TestCase):
             bid_price = [100]
             ask_price = [101]
 
-        # Common v1 callback shape: (exchange, quote_obj)
         self.client._process_tick("TSE", BidAsk())
 
         self.client.tick_callback.assert_called_once()
@@ -379,11 +345,8 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_is_market_open_grace_period_no_calendar(self):
         """Test grace period returns False when calendar unavailable."""
-        # Mock import error for market_calendar
         with patch.dict("sys.modules", {"hft_platform.core.market_calendar": None}):
-            # Should return False gracefully
             result = self.client._is_market_open_grace_period()
-            # Since the import might be cached, just verify no exception
             self.assertIsInstance(result, bool)
 
     def test_do_session_refresh_no_api(self):
@@ -396,7 +359,6 @@ class TestShioajiClientFull(unittest.TestCase):
         """Test successful session refresh."""
         self.client.logged_in = True
 
-        # Mock SessionRuntime.login_with_retry() to succeed.
         def mock_login_with_retry(*args, **kwargs):
             self.client.logged_in = True
             return True
@@ -409,10 +371,8 @@ class TestShioajiClientFull(unittest.TestCase):
 
     def test_session_refresh_holiday_aware_config(self):
         """Test holiday-aware session refresh configuration."""
-        # Default should be enabled
         self.assertTrue(self.client._session_refresh_holiday_aware)
 
-        # Test disabled via env
         with patch.dict(os.environ, {"HFT_SESSION_REFRESH_HOLIDAY_AWARE": "0"}):
             client = ShioajiClient(config_path=self.tmp_config.name)
             self.assertFalse(client._session_refresh_holiday_aware)
@@ -431,7 +391,6 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.subscribed_count = 1
         self.client._last_quote_data_ts = 100.0
 
-        # Simulate new quote data arriving
         def update_ts():
             time.sleep(0.05)
             self.client._last_quote_data_ts = 200.0
@@ -450,7 +409,6 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = True
         self.client.subscribed_count = 1
         self.client._last_quote_data_ts = 100.0
-        # Don't update timestamp
 
         result = self.client._verify_quotes_flowing(timeout_s=0.2)
         self.assertFalse(result)
@@ -461,13 +419,10 @@ class TestShioajiClientFull(unittest.TestCase):
             client = ShioajiClient(config_path=self.tmp_config.name)
             self.assertEqual(client._session_refresh_verify_timeout_s, 30.0)
 
-    # --- Feed Governance Tests (B1-B5) ---
-
     def test_login_fallback_no_contract_also_fails_returns_false(self):
         """B1: login() fallback failure should be fail-safe and return False."""
         self.client.api = self.mock_api_instance
         self.client.logged_in = False
-        # Both login attempts raise
         self.mock_api_instance.login.side_effect = RuntimeError("token_login failed")
 
         with patch.dict(
@@ -490,8 +445,8 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = True
         self.client._quote_watchdog_running = False
         self.client._quote_watchdog_interval_s = 0.01
-        self.client._quote_no_data_s = 0.0  # threshold so gap always triggers
-        self.client._last_quote_data_ts = 1.0  # old timestamp
+        self.client._quote_no_data_s = 0.0
+        self.client._last_quote_data_ts = 1.0
         self.client.tick_callback = MagicMock()
 
         ensure_cb = MagicMock()
@@ -502,7 +457,6 @@ class TestShioajiClientFull(unittest.TestCase):
         with patch.object(self.client, "_is_trading_hours", return_value=False):
             self.client._start_quote_watchdog()
             _time.sleep(0.05)
-            # Stop watchdog
             self.client.logged_in = False
             _time.sleep(0.02)
 
@@ -516,7 +470,6 @@ class TestShioajiClientFull(unittest.TestCase):
         caught: RuntimeError | None = None
 
         with patch.object(self.client, "reconnect", side_effect=RuntimeError("sim login fail")):
-            # Invoke _schedule_force_relogin with delay=0 and run inner function directly
             delay = 0.0
             self.client._quote_force_relogin_s = delay
 
@@ -534,7 +487,6 @@ class TestShioajiClientFull(unittest.TestCase):
                 finally:
                     self.client._pending_quote_relogining = False
 
-            # Should not raise
             _relogin_after()
 
         self.assertIsNotNone(caught)
@@ -579,10 +531,7 @@ class TestShioajiClientFull(unittest.TestCase):
 
         self.assertFalse(result)
         self.assertFalse(self.client.logged_in)
-        # Backoff should have doubled (30 → 60)
         self.assertAlmostEqual(self.client._reconnect_backoff_s, 60.0, places=1)
-
-    # --- C0-c: Reconnect Chaos Integration ---
 
     def test_reconnect_chaos_three_consecutive_login_timeouts_backoff_reaches_cap(self):
         """C0-c: 3 consecutive login() timeouts → backoff doubles up to cap.
@@ -598,22 +547,18 @@ class TestShioajiClientFull(unittest.TestCase):
 
         with patch.object(self.client, "login", side_effect=TimeoutError("broker_timeout")):
             result1 = self.client.reconnect(reason="chaos_1", force=True)
-            # Reset cooldown so subsequent calls are allowed
             self.client._last_reconnect_ts = 0.0
             result2 = self.client.reconnect(reason="chaos_2", force=True)
             self.client._last_reconnect_ts = 0.0
             result3 = self.client.reconnect(reason="chaos_3", force=True)
 
-        # All must fail cleanly
         self.assertFalse(result1)
         self.assertFalse(result2)
         self.assertFalse(result3)
 
-        # Backoff must have doubled toward cap: 30→60→120→120 (capped)
         self.assertGreaterEqual(self.client._reconnect_backoff_s, 60.0)
         self.assertLessEqual(self.client._reconnect_backoff_s, 120.0)
 
-        # logged_in must remain False
         self.assertFalse(self.client.logged_in)
 
     def test_reconnect_chaos_exception_from_logout_does_not_abort_reconnect(self):
@@ -625,7 +570,6 @@ class TestShioajiClientFull(unittest.TestCase):
         with patch.object(self.client, "login", return_value=False):
             result = self.client.reconnect(reason="chaos_logout", force=True)
 
-        # Should not raise; must return False (login failed)
         self.assertFalse(result)
 
     def test_reconnect_chaos_subscribe_exception_after_login_backoff_doubles(self):
@@ -644,7 +588,6 @@ class TestShioajiClientFull(unittest.TestCase):
                 result = self.client.reconnect(reason="chaos_cb", force=True)
 
         self.assertFalse(result)
-        # Backoff must have doubled
         self.assertAlmostEqual(self.client._reconnect_backoff_s, 60.0, places=1)
 
     def test_first_quote_increments_metric(self):
@@ -694,10 +637,7 @@ class TestShioajiClientFull(unittest.TestCase):
             self.client.logged_in = True
             return True
 
-        # _safe_call_with_timeout returns (ok, result, error, timed_out)
-        # timed_out=True triggers the timeout metric
         def ensure_cb_side_effect(*args):
-            # reconnect() resets _callbacks_registered = False; this restores it
             self.client._callbacks_registered = True
 
         with patch.object(self.client, "login", side_effect=mock_login):
@@ -719,7 +659,7 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client._callbacks_registered = True
         cb = MagicMock()
 
-        with patch.object(self.client, "_ensure_callbacks"):  # prevent side effects from setting flag
+        with patch.object(self.client, "_ensure_callbacks"):
             with patch.object(self.client, "_start_sub_retry_thread") as mock_retry:
                 with patch.object(self.client, "_start_quote_watchdog"):
                     with patch.object(self.client, "_start_session_refresh_thread"):
@@ -741,7 +681,6 @@ class TestShioajiClientFull(unittest.TestCase):
                     with patch.object(self.client, "_start_session_refresh_thread"):
                         self.client.subscribe_basket(cb)
 
-        # 2 symbols × 2 quote types = 4 calls
         self.assertEqual(self.mock_api_instance.subscribe.call_count, 4)
 
     def test_sub_retry_loop_skips_when_not_logged_in(self):
@@ -749,7 +688,6 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = False
         self.client._event_callback_registered = True
         self.client._callbacks_registered = True
-        # L2: in-place mutation — _failed_sub_symbols is now a deque.
         self.client._failed_sub_symbols.clear()
         self.client._failed_sub_symbols.append({"code": "2330", "exchange": "TSE"})
         cb = MagicMock()
@@ -773,7 +711,6 @@ class TestShioajiClientFull(unittest.TestCase):
         self.client.logged_in = True
         self.client._event_callback_registered = False
         self.client._callbacks_registered = True
-        # L2: in-place mutation — _failed_sub_symbols is now a deque.
         self.client._failed_sub_symbols.clear()
         self.client._failed_sub_symbols.append({"code": "2330", "exchange": "TSE"})
         cb = MagicMock()
@@ -786,7 +723,7 @@ class TestShioajiClientFull(unittest.TestCase):
                 self.client._sub_retry_running = False
 
         with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", side_effect=fake_sleep):
-            with patch.object(self.client, "_ensure_callbacks"):  # prevent it from setting the flag
+            with patch.object(self.client, "_ensure_callbacks"):
                 self.client._start_sub_retry_thread(cb)
                 self.client._sub_retry_thread.join(timeout=2)
 

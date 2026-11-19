@@ -16,11 +16,6 @@ def _isolate_fill_dedup(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "fill_dedup.jsonl"))
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
     m.execution_router_alive = MagicMock()
@@ -118,11 +113,6 @@ def _make_deal_raw(
     )
 
 
-# ---------------------------------------------------------------------------
-# Fix X-H3: _synthesize_dedup_key includes order_id
-# ---------------------------------------------------------------------------
-
-
 def test_synthesize_dedup_key_includes_order_id() -> None:
     """Two fills with different order_id but same price/qty/ts produce different keys."""
     fill_a = MagicMock()
@@ -162,11 +152,6 @@ def test_synthesize_dedup_key_same_order_is_deterministic() -> None:
     assert _synthesize_dedup_key(fill) == _synthesize_dedup_key(fill)
 
 
-# ---------------------------------------------------------------------------
-# Fix X-C1: shutdown drain uses PositionDelta.realized_pnl via delta
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_shutdown_drain_notify_fill_pnl_uses_delta() -> None:
     """Shutdown drain calls notify_fill_pnl with PositionDelta.realized_pnl, not fill attribute."""
@@ -198,7 +183,6 @@ async def test_shutdown_drain_no_notify_when_pnl_delta_is_zero() -> None:
 
     router = _make_router(metrics, risk_engine=risk_engine)
 
-    # Position store has existing realized pnl == delta.realized_pnl → delta is 0
     existing_pos = MagicMock()
     existing_pos.realized_pnl_scaled = 750
     router.position_store.positions = {"acct1:strat1:2330": existing_pos}
@@ -235,11 +219,6 @@ async def test_shutdown_drain_no_notify_when_no_risk_engine() -> None:
     assert drained == 1
 
 
-# ---------------------------------------------------------------------------
-# Fix X-M2: shutdown drain uses map_event_to_record for WAL writes
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_shutdown_drain_uses_mapped_recorder_queue() -> None:
     """Shutdown drain writes to recorder_queue via map_event_to_record, not raw FillEvent."""
@@ -270,7 +249,7 @@ async def test_shutdown_drain_wal_fallback_when_recorder_queue_full() -> None:
     """Shutdown drain falls back to WAL when recorder_queue is full."""
     metrics = _stub_metrics()
     recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-    recorder_queue.put_nowait("prefill")  # fill the queue
+    recorder_queue.put_nowait("prefill")
 
     wal_writer = MagicMock()
     wal_writer.write = AsyncMock(return_value=True)
@@ -290,7 +269,6 @@ async def test_shutdown_drain_wal_fallback_when_recorder_queue_full() -> None:
         router.raw_queue.put_nowait(raw)
         await router.stop(drain_timeout_s=1.0)
 
-    # Let the WAL async write complete
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -305,7 +283,6 @@ async def test_shutdown_drain_wal_fallback_when_no_recorder_queue() -> None:
     wal_writer.write = AsyncMock(return_value=True)
 
     router = _make_router(metrics, recorder_queue=None, wal_writer=wal_writer)
-    # Override symbol_metadata to None so the fallback branch is hit
     router._symbol_metadata = None
 
     fill_event = _make_fill_event(fill_id="FILL005")
@@ -325,11 +302,6 @@ async def test_shutdown_drain_wal_fallback_when_no_recorder_queue() -> None:
     assert call_args[0][0] == "fills"
 
 
-# ---------------------------------------------------------------------------
-# Fix X-H2: orphaned fill retry calls notify_fill_pnl
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_retry_orphaned_fills_calls_notify_fill_pnl() -> None:
     """DLQ retry notifies risk engine with delta.realized_pnl when non-zero."""
@@ -342,7 +314,6 @@ async def test_retry_orphaned_fills_calls_notify_fill_pnl() -> None:
     fill = _make_fill_event(fill_id="FILL006", strategy_id="strat1")
     delta = _make_delta(realized_pnl=300)
     router.position_store.on_fill = MagicMock(return_value=delta)
-    # Remove on_fill_async so synchronous path is used
     del router.position_store.on_fill_async
 
     with patch("hft_platform.execution.fill_dlq.get_orphaned_fill_dlq") as mock_get_dlq:
@@ -395,7 +366,6 @@ async def test_retry_orphaned_fills_no_notify_when_no_risk_engine() -> None:
         mock_dlq.count = 1
         mock_dlq.retry = MagicMock(return_value=([fill], []))
         mock_get_dlq.return_value = mock_dlq
-        # Should not raise
         await router._retry_orphaned_fills()
 
-    assert True  # Reached here without AttributeError
+    assert True

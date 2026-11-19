@@ -44,14 +44,9 @@ class TestMapperInstrumentFields:
         assert result is not None
         table, record = result
         assert record.get("instrument_type") == "future"
-        assert record.get("underlying") == ""  # not set in yaml
+        assert record.get("underlying") == ""
         assert record.get("strike_scaled") == 0
         assert record.get("option_right") == ""
-        # Was `date(1970, 1, 1)` — the ClickHouse schema default, i.e. "never
-        # written", which is the defect the expiry work fixed rather than a
-        # property worth pinning. The yaml above sets no expiry, so `TXFC0`
-        # (root TXF, month C = March, year digit 0, rolled forward out of the
-        # past) derives the third Wednesday of March 2030.
         assert record.get("expiry") == datetime.date(2030, 3, 20)
 
     def test_bidask_event_has_instrument_type(self, metadata_with_registry):

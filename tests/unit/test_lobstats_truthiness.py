@@ -17,9 +17,7 @@ class TestLOBStatsEventZeroPrice:
             bid_depth=10,
             ask_depth=20,
         )
-        # mid_price_x2 = best_bid + best_ask = 0 + 1000000 = 1000000
         assert event.mid_price_x2 == 1000000
-        # spread_scaled = best_ask - best_bid = 1000000 - 0 = 1000000
         assert event.spread_scaled == 1000000
 
     def test_zero_best_ask_computes_mid_price(self):
@@ -61,7 +59,7 @@ class TestLOBStatsEventZeroPrice:
             bid_depth=100,
             ask_depth=200,
         )
-        assert event.mid_price_x2 == 10010000  # 5000000 + 5010000
-        assert event.spread_scaled == 10000  # 5010000 - 5000000
+        assert event.mid_price_x2 == 10010000
+        assert event.spread_scaled == 10000
         assert event.mid_price == 5005000.0
         assert event.spread == 10000.0

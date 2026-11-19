@@ -64,7 +64,6 @@ def _make_ctx():
     ctx = MagicMock()
     ctx.positions = {}
     ctx.strategy_id = "r47_test"
-    # Return a unique mock for each place_order call
     ctx.place_order = MagicMock(side_effect=lambda **kw: MagicMock(**kw))
     return ctx
 
@@ -98,7 +97,6 @@ class TestBug9MaxPosViolation:
         only the FIRST should produce buy+sell intents."""
         ctx = _make_ctx()
 
-        # LOBStats events with slightly different mid prices (different quotes each time)
         events = [
             _make_lob_stats(mid_price_x2=7462_0000, spread_scaled=5_0000),
             _make_lob_stats(mid_price_x2=7461_0000, spread_scaled=5_0000),
@@ -110,7 +108,6 @@ class TestBug9MaxPosViolation:
             intents = r47_max1.handle_event(ctx, ev)
             all_intents.extend(intents)
 
-        # max_pos=1: at most 1 buy + 1 sell = 2 intents total
         assert len(all_intents) <= 2, (
             f"Bug 9: max_pos=1 violated! Got {len(all_intents)} intents "
             f"from {len(events)} consecutive LOBStats events. "
@@ -121,16 +118,13 @@ class TestBug9MaxPosViolation:
         """After first buy+sell, pending counters must block subsequent quotes."""
         ctx = _make_ctx()
 
-        # First LOBStats: should generate buy + sell
         ev1 = _make_lob_stats(mid_price_x2=7462_0000, spread_scaled=5_0000)
         intents1 = r47_max1.handle_event(ctx, ev1)
         assert len(intents1) == 2, f"First event should generate 2 intents, got {len(intents1)}"
 
-        # Check pending counters
         assert r47_max1._pending_buy.get("TMFE6", 0) == 1
         assert r47_max1._pending_sell.get("TMFE6", 0) == 1
 
-        # Second LOBStats with different price: should be blocked
         ev2 = _make_lob_stats(mid_price_x2=7461_0000, spread_scaled=5_0000)
         intents2 = r47_max1.handle_event(ctx, ev2)
         assert len(intents2) == 0, f"Second event should be blocked, got {len(intents2)} intents"
@@ -139,12 +133,10 @@ class TestBug9MaxPosViolation:
         """After both sides fill, the next LOBStats should generate quotes again."""
         ctx = _make_ctx()
 
-        # Generate first pair
         ev1 = _make_lob_stats(mid_price_x2=7462_0000, spread_scaled=5_0000)
         intents1 = r47_max1.handle_event(ctx, ev1)
         assert len(intents1) == 2
 
-        # Simulate fills
         buy_fill = FillEvent(
             fill_id="F001",
             account_id="acct",
@@ -180,7 +172,6 @@ class TestBug9MaxPosViolation:
         assert r47_max1._pending_sell.get("TMFE6", 0) == 0
         assert r47_max1._local_pos.get("TMFE6", 0) == 0
 
-        # Next LOBStats: should generate quotes again
         ev2 = _make_lob_stats(mid_price_x2=7460_0000, spread_scaled=5_0000)
         intents2 = r47_max1.handle_event(ctx, ev2)
         assert len(intents2) == 2, f"After fills, next event should generate 2 intents, got {len(intents2)}"
@@ -189,12 +180,10 @@ class TestBug9MaxPosViolation:
         """Verify RiskFeedback with Side enum (not int) decrements the right counter."""
         ctx = _make_ctx()
 
-        # Generate quotes
         ev1 = _make_lob_stats(mid_price_x2=7462_0000, spread_scaled=5_0000)
         r47_max1.handle_event(ctx, ev1)
         assert r47_max1._pending_buy.get("TMFE6", 0) == 1
 
-        # Send risk feedback with Side.BUY enum
         fb = RiskFeedback(
             intent_id=1,
             strategy_id="r47_test",
@@ -212,30 +201,24 @@ class TestBug9MaxPosViolation:
         falls through to else branch, decrementing BOTH counters."""
         ctx = _make_ctx()
 
-        # Generate quotes
         ev1 = _make_lob_stats(mid_price_x2=7462_0000, spread_scaled=5_0000)
         r47_max1.handle_event(ctx, ev1)
         assert r47_max1._pending_buy.get("TMFE6", 0) == 1
         assert r47_max1._pending_sell.get("TMFE6", 0) == 1
 
-        # Send risk feedback with int side (as typed_intent_identity returns)
         fb = RiskFeedback(
             intent_id=1,
             strategy_id="r47_test",
             symbol="TMFE6",
             reason_code="TRACK_GATE_SESSION_FILTERED",
             timestamp_ns=0,
-            side=int(Side.BUY),  # int, not Side enum!
+            side=int(Side.BUY),
             was_approved=False,
         )
         r47_max1.on_risk_feedback(fb)
 
-        # If Side is IntEnum: int(Side.BUY) == Side.BUY → True, only buy decremented
-        # If Side is regular Enum: int(Side.BUY) != Side.BUY → else branch, BOTH decremented!
-        # This is the potential root cause of Bug 9.
         buy_pending = r47_max1._pending_buy.get("TMFE6", 0)
         sell_pending = r47_max1._pending_sell.get("TMFE6", 0)
 
-        # CORRECT behavior: only buy should be decremented
         assert buy_pending == 0, f"Buy pending should be 0, got {buy_pending}"
         assert sell_pending == 1, f"Sell pending should still be 1, got {sell_pending}"

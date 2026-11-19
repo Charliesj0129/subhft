@@ -226,7 +226,6 @@ def test_normalize_fill_ts_seconds_to_ns(tmp_path, monkeypatch):
         time.time_ns(),
     )
     event = norm.normalize_fill(raw)
-    # Float arithmetic gives ~128ns jitter at this magnitude; accept ±1μs
     assert abs(event.match_ts_ns - 1_700_000_000_250_000_000) < 1_000
 
 
@@ -261,22 +260,17 @@ def test_normalize_fill_order_id_map_shapes(tmp_path, monkeypatch, mapping, expe
     assert event.strategy_id == expected
 
 
-# ---------------------------------------------------------------------------
-# M6: case-insensitive order side mapping
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("action", "expected_side"),
     [
-        ("Buy", Side.BUY),  # original exact-match case
-        ("buy", Side.BUY),  # lowercase
-        ("BUY", Side.BUY),  # uppercase
+        ("Buy", Side.BUY),
+        ("buy", Side.BUY),
+        ("BUY", Side.BUY),
         ("Sell", Side.SELL),
         ("sell", Side.SELL),
         ("SELL", Side.SELL),
-        ("", Side.SELL),  # empty → default SELL
-        (None, Side.SELL),  # missing → default SELL
+        ("", Side.SELL),
+        (None, Side.SELL),
     ],
 )
 def test_normalize_order_side_case_insensitive(tmp_path, monkeypatch, action, expected_side):
@@ -295,11 +289,6 @@ def test_normalize_order_side_case_insensitive(tmp_path, monkeypatch, action, ex
     event = norm.normalize_order(raw)
     assert event is not None
     assert event.side == expected_side, f"action={action!r} expected {expected_side} got {event.side}"
-
-
-# ---------------------------------------------------------------------------
-# M8: Remove hardcoded sim-account-01 fallback in fill normalizer
-# ---------------------------------------------------------------------------
 
 
 def test_normalize_fill_with_account_id_uses_it(tmp_path, monkeypatch):
@@ -328,7 +317,7 @@ def test_normalize_fill_with_account_id_uses_it(tmp_path, monkeypatch):
 def test_normalize_fill_missing_account_id_rejects_without_default(tmp_path, monkeypatch):
     """M8: Missing account_id with no default must reject the fill (return None)."""
     monkeypatch.setenv("SYMBOLS_CONFIG", str(_symbols_cfg(tmp_path)))
-    norm = ExecutionNormalizer()  # no default_account_id
+    norm = ExecutionNormalizer()
     raw = RawExecEvent(
         "deal",
         {
@@ -339,12 +328,11 @@ def test_normalize_fill_missing_account_id_rejects_without_default(tmp_path, mon
             "quantity": 1,
             "price": 1.00,
             "ts": 1,
-            # account_id intentionally omitted
         },
         time.time_ns(),
     )
     event = norm.normalize_fill(raw)
-    assert event is None  # rejected, not "unknown"
+    assert event is None
 
 
 def test_normalize_fill_missing_account_id_uses_default(tmp_path, monkeypatch):
@@ -479,8 +467,6 @@ def test_order_that_matches_no_registered_id_increments_the_attribution_counter(
 
     assert event is not None, "the order must still be recorded, only flagged"
     assert event.client_order_id == ""
-    # The label names which candidates the payload carried, so the next
-    # occurrence in production says WHY it failed, not just that it did.
     assert _unresolved_count(norm, "ordno,custom_field") == before + 1
 
 

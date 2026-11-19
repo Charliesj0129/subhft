@@ -91,7 +91,6 @@ class TelegramSender:
         if not self._enabled:
             return False
 
-        # Split oversized messages into <=4096-char chunks on newline boundaries
         if len(text) > self._MAX_MESSAGE_LEN:
             chunks = self._split_text(text, self._MAX_MESSAGE_LEN)
             all_ok = True
@@ -111,10 +110,8 @@ class TelegramSender:
             if len(text) <= max_len:
                 chunks.append(text)
                 break
-            # Find the last newline within the limit
             split_at = text.rfind("\n", 0, max_len)
             if split_at <= 0:
-                # No newline found; hard-split at max_len
                 split_at = max_len
             chunks.append(text[:split_at])
             text = text[split_at:].lstrip("\n")
@@ -124,10 +121,6 @@ class TelegramSender:
         """Send a single <=4096-char message to the configured chat."""
         now = time.monotonic()
         if not critical and (now - self._last_send_ts) < self._rate_limit_s:
-            # P3-b2 (2026-04-27): rate-limit drops were previously logged at
-            # DEBUG only AND silently merged with "send failed" via the bool
-            # return. Bump to INFO + dedicated metric so dashboards can
-            # distinguish "client-side throttled" from "downstream failure".
             logger.info(
                 "telegram.rate_limited",
                 elapsed_s=round(now - self._last_send_ts, 3),
@@ -138,7 +131,7 @@ class TelegramSender:
                 from hft_platform.observability.metrics import MetricsRegistry
 
                 MetricsRegistry.get().bot_rate_limited_total.labels(critical=str(critical).lower()).inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return False
 
@@ -188,12 +181,11 @@ class TelegramSender:
                     )
                     return False
 
-            except Exception as exc:  # noqa: BLE001
-                # H15: Close broken session so a fresh one is created on retry
+            except Exception as exc:
                 if self._session is not None:
                     try:
                         await self._session.close()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     self._session = None
                 if critical and attempt < max_attempts - 1:
@@ -210,7 +202,7 @@ class TelegramSender:
                 logger.warning("telegram.send_exception", exc=str(exc))
                 return False
 
-        return False  # exhausted all retries
+        return False
 
     async def close(self) -> None:
         """Close the underlying aiohttp session."""

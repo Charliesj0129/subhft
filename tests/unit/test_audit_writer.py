@@ -19,10 +19,6 @@ class TestAuditWriter:
     def teardown_method(self) -> None:
         reset_audit_writer()
 
-    # ------------------------------------------------------------------
-    # Construction
-    # ------------------------------------------------------------------
-
     def test_create_default_queues(self) -> None:
         """Post-refactor (P0-I3): queue SLOTS exist after __init__ but the
         actual asyncio.Queue instances are created lazily in start() on the
@@ -33,7 +29,6 @@ class TestAuditWriter:
         assert "audit.orders_log" in writer._queues
         assert "audit.risk_log" in writer._queues
         assert "audit.guardrail_log" in writer._queues
-        # Queues are None until start() is called on the engine loop.
         assert writer._queues_ready is False
         for q in writer._queues.values():
             assert q is None
@@ -42,10 +37,6 @@ class TestAuditWriter:
         """queue_size is stored and applied when start() creates the Queues."""
         writer = AuditWriter(queue_size=42)
         assert writer._queue_size == 42
-
-    # ------------------------------------------------------------------
-    # Non-blocking put
-    # ------------------------------------------------------------------
 
     def _pending_count(self, writer: AuditWriter, table: str) -> int:
         """Count rows buffered (pre-start deque OR queue + overflow)."""
@@ -72,7 +63,6 @@ class TestAuditWriter:
     def test_log_order_adds_ts_ns(self) -> None:
         writer = AuditWriter(queue_size=100)
         writer.log_order({"cmd_id": 1})
-        # Pre-start buffer path — row is in the pre-start deque.
         buf = writer._pre_start_buffer["audit.orders_log"]
         assert len(buf) == 1
         item = buf[0]
@@ -87,7 +77,7 @@ class TestAuditWriter:
         try:
             writer.log_order({"a": 1})
             writer.log_order({"a": 2})
-            writer.log_order({"a": 3})  # Goes to overflow buffer
+            writer.log_order({"a": 3})
             assert writer._queues["audit.orders_log"].qsize() == 2
             assert len(writer._overflow["audit.orders_log"]) == 1
             assert writer._dropped["audit.orders_log"] == 0
@@ -104,10 +94,10 @@ class TestAuditWriter:
             writer = AuditWriter(queue_size=1)
             await writer.start()
             try:
-                writer.log_order({"a": 1})  # queue
-                writer.log_order({"a": 2})  # overflow[0]
-                writer.log_order({"a": 3})  # overflow[1]
-                writer.log_order({"a": 4})  # hard drop
+                writer.log_order({"a": 1})
+                writer.log_order({"a": 2})
+                writer.log_order({"a": 3})
+                writer.log_order({"a": 4})
                 assert writer._queues["audit.orders_log"].qsize() == 1
                 assert len(writer._overflow["audit.orders_log"]) == 2
                 assert writer._dropped["audit.orders_log"] == 1
@@ -115,10 +105,6 @@ class TestAuditWriter:
                 await writer.stop()
         finally:
             os.environ.pop("HFT_AUDIT_OVERFLOW_SIZE", None)
-
-    # ------------------------------------------------------------------
-    # Flush to writer
-    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_flush_writes_to_ch(self) -> None:
@@ -128,7 +114,6 @@ class TestAuditWriter:
         audit.log_order({"cmd_id": 2})
 
         await audit.start()
-        # Give flush loop time to run (flush_interval=10ms, wait 5 cycles)
         await asyncio.sleep(0.05)
         await audit.stop()
 
@@ -146,10 +131,9 @@ class TestAuditWriter:
         audit.log_risk_decision({"approved": True})
 
         await audit.start()
-        await asyncio.sleep(0.05)  # flush_interval=10ms, wait 5 cycles
+        await asyncio.sleep(0.05)
         await audit.stop()
 
-        # Writer was called and failed, but no exception propagated
         mock_writer.write.assert_called()
 
     @pytest.mark.asyncio
@@ -159,9 +143,8 @@ class TestAuditWriter:
         audit.log_guardrail_transition({"old_state": "NORMAL", "new_state": "HALT"})
 
         await audit.start()
-        await asyncio.sleep(0.05)  # flush_interval=10ms, wait 5 cycles
+        await asyncio.sleep(0.05)
         await audit.stop()
-        # Structlog fallback drained all queues — all should be empty
         assert all(q.qsize() == 0 for q in audit._queues.values())
 
     @pytest.mark.asyncio
@@ -192,14 +175,6 @@ class TestAuditWriter:
         mock_logger.error.assert_called_once()
         mock_logger.info.assert_called_once()
 
-    # ------------------------------------------------------------------
-    # Bug #30 — reserved-kwarg collision regression
-    # ------------------------------------------------------------------
-    # orders_log rows include `"event": "dispatched"` (set by adapter.py).
-    # Splatting `**row` into logger.info("audit_fallback", **row) collides with
-    # structlog's positional `event` kwarg → TypeError → batch dropped silently
-    # by outer _flush_loop except. Fix renames reserved kwargs to row_* prefix.
-
     @pytest.mark.asyncio
     async def test_flush_fallback_handles_event_key_collision(self) -> None:
         """Row with `event` key (from order audit rows) must not raise TypeError
@@ -216,9 +191,7 @@ class TestAuditWriter:
             "strategy_id": "R47_MAKER_TMF",
             "cmd_id": 7,
         }
-        # Direct call to _flush_batch — the bug is in this method, isolate from queue plumbing
         await audit._flush_batch("audit.orders_log", [row])
-        # If we got here without raising TypeError, the collision is handled.
 
     @pytest.mark.asyncio
     async def test_flush_fallback_handles_all_reserved_structlog_keys(self) -> None:
@@ -249,17 +222,12 @@ class TestAuditWriter:
         mock_writer = AsyncMock()
         audit = AuditWriter(
             queue_size=100,
-            flush_interval_ms=5000,  # Long interval so flush doesn't happen naturally
+            flush_interval_ms=5000,
             writer=mock_writer,
         )
         audit.log_order({"cmd_id": 99})
-        # Don't start, just drain
         await audit._drain("audit.orders_log")
         mock_writer.write.assert_called_once()
-
-    # ------------------------------------------------------------------
-    # Singleton
-    # ------------------------------------------------------------------
 
     def test_get_audit_writer_singleton(self) -> None:
         a = get_audit_writer()
@@ -272,19 +240,15 @@ class TestAuditWriter:
         b = get_audit_writer()
         assert a is not b
 
-    # ------------------------------------------------------------------
-    # Dropped counts observability
-    # ------------------------------------------------------------------
-
     def test_dropped_counts_property(self) -> None:
         import os
 
         os.environ["HFT_AUDIT_OVERFLOW_SIZE"] = "1"
         try:
             writer = AuditWriter(queue_size=1)
-            writer.log_order({"a": 1})  # queue
-            writer.log_order({"a": 2})  # overflow
-            writer.log_order({"a": 3})  # hard drop
+            writer.log_order({"a": 1})
+            writer.log_order({"a": 2})
+            writer.log_order({"a": 3})
             counts = writer.dropped_counts
             assert counts["audit.orders_log"] == 1
             assert counts["audit.risk_log"] == 0

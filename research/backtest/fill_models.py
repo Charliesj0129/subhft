@@ -88,10 +88,6 @@ class QueueDepletionFill:
         self._qf = queue_fraction
         self._q_hat_table = q_hat_table
         self._symbol = symbol
-        # Default clock returns 0 ns -> hour=0; only relevant when a table is
-        # supplied without a clock, in which case the caller has effectively
-        # asked for the hour=0 cells. This mirrors the calibration harness's
-        # epoch-modulo convention (see calibrate_queue_fill._hour_of_day).
         self._clock = clock if clock is not None else (lambda: 0)
 
     @property
@@ -103,17 +99,9 @@ class QueueDepletionFill:
         return self._qf
 
     def post_quote(self, side: str, price: int, book_qty: int) -> QueuePosition:
-        # Default to the legacy literal qf so the no-table path is byte-for-byte
-        # identical to pre-Slice-B behavior.
         qf = self._qf
         if self._q_hat_table is not None:
-            # Hour-of-day must match the calibration harness convention
-            # (see research/backtest/calibrate_queue_fill._hour_of_day):
-            # epoch-ns -> seconds -> hours mod 24.
             hour = (self._clock() // 1_000_000_000) // 3600 % 24
-            # On a missing cell the lookup returns ``q_hat_table.fallback`` —
-            # see module docstring for the design rationale (single source
-            # of truth for fallback when a table is wired).
             qf = self._q_hat_table.lookup(self._symbol, int(hour), book_qty)
         queue_ahead = max(1, int(book_qty * qf))
         return QueuePosition(side=side, price=price, queue_ahead=queue_ahead)

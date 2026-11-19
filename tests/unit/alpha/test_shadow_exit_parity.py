@@ -61,7 +61,7 @@ _DROP = object()
 def _isolated_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(tmp_path / "_kill_ledger.jsonl"))
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
-    audit._ENABLED = None  # noqa: SLF001 -- re-read env on next call
+    audit._ENABLED = None
     kill_ledger._reset_cache_for_tests()
 
 
@@ -168,9 +168,6 @@ def _top_tier_canary(tmp_path: Path, result) -> tuple[Path, CanaryMonitor]:
     return promo_path, CanaryMonitor(promotions_dir=str(tmp_path / "config" / "strategy_promotions"))
 
 
-# --- Shadow exit: the canary holds until replay reports certify parity ------
-
-
 def test_canary_with_live_intents_and_no_parity_report_cannot_graduate(tmp_path: Path):
     result = _promote(tmp_path)
     assert result.approved is True
@@ -211,7 +208,6 @@ def test_canary_escalation_records_the_certification_once(tmp_path: Path):
     first = monitor.evaluate("alpha_v", {**_LIVE, "replay_parity_reports": [report]})
     assert first.state == "escalated"
     monitor.apply_decision(first)
-    # Nothing is owed any more: the next step needs no report.
     second = monitor.evaluate("alpha_v", _LIVE)
     assert second.state == "graduated"
     assert "certified_obligations" not in second.checks
@@ -254,9 +250,6 @@ def test_canary_reports_must_name_the_obligation_strategy(tmp_path: Path):
     assert "strategy_id 'ECHO' is not 'OTHER'" in held.checks["unmet_obligations"][0]
 
 
-# --- Binding: a report certifies only the strategy code that was promoted ---
-
-
 def _strategy_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> dict:
     """A runtime strategy module on sys.path, as replay settings that name it."""
     pkg = tmp_path / "strat_pkg"
@@ -271,7 +264,6 @@ def test_report_from_an_earlier_version_of_the_strategy_does_not_certify(
 ):
     settings = _strategy_module(tmp_path, monkeypatch, "class Echo:\n    version = 1\n")
     old_report = _replay_report(tmp_path, date(2026, 4, 21), settings=settings)
-    # The strategy changes but keeps its id; the new version is promoted.
     _strategy_module(tmp_path, monkeypatch, "class Echo:\n    version = 2\n")
     result = _promote(tmp_path, (old_report,), replay_strategy="echo_runtime:Echo")
     assert result.approved is False
@@ -280,7 +272,6 @@ def test_report_from_an_earlier_version_of_the_strategy_does_not_certify(
     assert "not the promoted strategy code" in check["detail"]
     assert _decision(result)["obligations"][0]["strategy_code"]["module"] == "echo_runtime"
 
-    # The canary rejects the stale report the same way.
     _, monitor = _top_tier_canary(tmp_path, _promote(tmp_path, replay_strategy="echo_runtime:Echo"))
     held = monitor.evaluate("alpha_v", {**_LIVE, "replay_parity_reports": [str(old_report)]})
     assert held.state == "canary"
@@ -341,12 +332,8 @@ def test_replay_report_fingerprints_the_strategy_it_ran(tmp_path: Path):
     assert fingerprint["config_sha256"] == shadow_parity.strategy_config_sha256(_REPLAY_SETTINGS["strategy"])
 
 
-# --- Threshold: a non-finite or out-of-range minimum never certifies ---------
-
-
 @pytest.mark.parametrize("minimum", [float("nan"), float("inf"), float("-inf"), 0.0, -5.0, 100.5])
 def test_promotion_with_a_bad_parity_threshold_keeps_the_obligation(tmp_path: Path, minimum: float):
-    # A 0% report: under ``match_pct < nan`` it would pass.
     zero = _edited_report(tmp_path, "zero", match_pct=0.0)
     result = _promote(tmp_path, (zero,), min_match_pct=minimum)
     assert result.approved is False
@@ -366,9 +353,6 @@ def test_judge_reports_rejects_a_nan_threshold_directly(tmp_path: Path):
         strategy_code=shadow_parity.pin_strategy(_ECHO),
     )
     assert judged["pass"] is False
-
-
-# --- Promotion: Gate E records the obligation, or certifies it early --------
 
 
 def test_promotion_without_reports_carries_the_obligation_to_the_canary(tmp_path: Path):
@@ -419,7 +403,6 @@ def test_promotion_divergent_replay_report_fails_gate_e(tmp_path: Path):
         ({"eligibility_status": "pre_recorder"}, "eligibility 'pre_recorder'"),
         ({"strategy_id": "OTHER"}, "strategy_id 'OTHER' is not 'ECHO'"),
         ({"session": ""}, "no session"),
-        # IntentDiff reports 100% when both streams are empty.
         ({"n_live_intents": 0, "n_replayed_intents": 0, "match_pct": 100.0}, "no live intents compared"),
         ({"n_live_intents": True}, "no live intents compared"),
         ({"n_live_intents": _DROP}, "no live intents compared"),
@@ -535,7 +518,6 @@ def test_strategy_fingerprint_sees_an_edit_that_keeps_size_and_mtime(tmp_path: P
     source = tmp_path / "strat_pkg" / "echo_runtime.py"
     stat = source.stat()
     before = strategy_fingerprint("echo_runtime", "Echo")
-    # Same size, same mtime: the file-hash cache key does not change.
     source.write_text("class Echo:\n    version = 2\n")
     os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 

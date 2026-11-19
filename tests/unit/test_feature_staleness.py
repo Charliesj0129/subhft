@@ -30,9 +30,6 @@ def _stats(symbol: str = "2330", ts: int = 1, bid: int = 1000000, ask: int = 100
     )
 
 
-# --- FeatureEngine.last_update_ns tests ---
-
-
 def test_last_update_ns_returns_none_before_any_update():
     eng = FeatureEngine()
     assert eng.last_update_ns("2330") is None
@@ -85,9 +82,6 @@ def test_last_update_ns_cleared_on_reset_all():
     assert eng.last_update_ns("2317") is None
 
 
-# --- StrategyContext.is_feature_stale tests ---
-
-
 def _make_ctx(*, staleness_source=None, staleness_counter=None):
     return StrategyContext(
         positions={},
@@ -110,13 +104,11 @@ def test_is_feature_stale_returns_true_when_never_updated():
 
 
 def test_is_feature_stale_returns_false_when_fresh():
-    # Source returns current time -> age ~0 -> not stale
     ctx = _make_ctx(staleness_source=lambda sym: time.time_ns())
     assert ctx.is_feature_stale("2330", max_age_ns=1_000_000_000) is False
 
 
 def test_is_feature_stale_returns_true_when_expired():
-    # Source returns a timestamp 2 seconds in the past; max_age = 1 second
     old_ts = time.time_ns() - 2_000_000_000
     ctx = _make_ctx(staleness_source=lambda sym: old_ts)
     assert ctx.is_feature_stale("2330", max_age_ns=1_000_000_000) is True
@@ -136,24 +128,18 @@ def test_is_feature_stale_does_not_increment_counter_when_fresh():
     counter.inc.assert_not_called()
 
 
-# --- Integration: FeatureEngine + StrategyContext wired together ---
-
-
 def test_staleness_integration_with_feature_engine():
     eng = FeatureEngine()
     counter = MagicMock()
 
     ctx = _make_ctx(staleness_source=eng.last_update_ns, staleness_counter=counter)
 
-    # Never updated -> stale
     assert ctx.is_feature_stale("2330", max_age_ns=1_000_000_000) is True
     assert counter.inc.call_count == 1
 
-    # Update feature engine -> fresh
     eng.process_lob_stats(_stats())
     assert ctx.is_feature_stale("2330", max_age_ns=1_000_000_000) is False
-    assert counter.inc.call_count == 1  # no new increment
+    assert counter.inc.call_count == 1
 
-    # With a very small TTL -> stale (time has passed since update)
     assert ctx.is_feature_stale("2330", max_age_ns=0) is True
     assert counter.inc.call_count == 2

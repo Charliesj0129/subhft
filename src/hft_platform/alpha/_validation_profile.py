@@ -17,9 +17,7 @@ import yaml
 logger = structlog.get_logger("alpha.validation_profile")
 
 
-# Later stages a deferred gate can be owed to (ADR-003: parity at Shadow exit).
 DEFERRAL_STAGES = frozenset({"shadow_exit"})
-# Promotion gates a profile may declare not applicable (Rust paused 2026-10-10).
 NOT_APPLICABLE_GATES = frozenset({"gate_f"})
 
 
@@ -35,17 +33,9 @@ class ValidationProfile:
     is_strict: bool
     thresholds: dict[str, dict[str, Any]] = field(default_factory=dict)
     blocking_sub_gates: tuple[str, ...] = ()
-    # Stage-2 (2026-05-28): argparse-arg overrides for research.pipeline.
-    # Optional — profiles that don't drive the pipeline (e.g. unit-test
-    # fixtures) leave these empty.
     pipeline_overrides: dict[str, Any] = field(default_factory=dict)
     pipeline_baseline_defaults: dict[str, Any] = field(default_factory=dict)
-    # Research v2 (ADR-003/005): a blocking sub-gate that cannot be measured
-    # at this stage, mapped to the later stage that owns it. NOT_APPLICABLE
-    # there becomes that stage's obligation instead of an INVALID run.
     deferrable: dict[str, str] = field(default_factory=dict)
-    # Whole promotion gates that do not apply under this profile, with the
-    # reason (e.g. ``gate_f: rust_paused``). Reported NOT_APPLICABLE, not PASS.
     not_applicable_gates: dict[str, str] = field(default_factory=dict)
 
     def thresholds_for(self, *, strategy_type: str) -> dict[str, Any]:

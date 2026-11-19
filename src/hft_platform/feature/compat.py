@@ -9,7 +9,7 @@ from hft_platform.feature.registry import FeatureRegistry
 
 @dataclass(frozen=True, slots=True)
 class FeatureCompatibilityIssue:
-    level: str  # error|warning
+    level: str
     code: str
     message: str
 
@@ -18,7 +18,7 @@ def check_feature_profile_compat(profile: FeatureProfile, registry: FeatureRegis
     issues: list[FeatureCompatibilityIssue] = []
     try:
         fs = registry.get(profile.feature_set_id)
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return [
             FeatureCompatibilityIssue(
                 "error", "unknown_feature_set", f"Unknown feature_set_id {profile.feature_set_id!r}"
@@ -43,7 +43,7 @@ def check_feature_profile_compat(profile: FeatureProfile, registry: FeatureRegis
                 issues.append(
                     FeatureCompatibilityIssue("warning", "large_ema_window", f"ema_window={w} is unusually large")
                 )
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             issues.append(FeatureCompatibilityIssue("error", "invalid_ema_window", "ema_window must be integer"))
     return issues
 

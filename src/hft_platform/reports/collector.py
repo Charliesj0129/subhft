@@ -44,8 +44,6 @@ __all__ = [
     "DataCollector",
 ]
 
-# Large-trade volume thresholds per symbol root (month-code agnostic).
-# Lookup: try exact match first, then strip trailing 2-char month code.
 _LARGE_TRADE_THRESHOLDS: dict[str, int] = {
     "TXF": 10,
     "TMF": 30,
@@ -60,7 +58,6 @@ def _get_large_trade_threshold(symbol: str) -> int:
     threshold = _LARGE_TRADE_THRESHOLDS.get(symbol)
     if threshold is not None:
         return threshold
-    # Root-prefix fallback: strip month code (e.g. TMFE6 → TMF)
     if len(symbol) >= 5:
         root = symbol[:-2]
         threshold = _LARGE_TRADE_THRESHOLDS.get(root)
@@ -69,7 +66,6 @@ def _get_large_trade_threshold(symbol: str) -> int:
     return _DEFAULT_LARGE_TRADE_THRESHOLD
 
 
-# Input validation patterns
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9]{1,20}$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DANGEROUS_SQL_RE = re.compile(
@@ -77,23 +73,11 @@ _DANGEROUS_SQL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Continuous-contract alias suffixes (R1/R2/C0/C1) — see contracts/ref.py.
-# Aliases like "TXFR1" never appear in hft.market_data (which stores the
-# resolved month code, e.g. "TXFE6"). We must resolve at query time or every
-# WHERE symbol = 'TXFR1' returns 0 rows. The live-broker resolver
-# (ContractsRuntime.resolve_symbol_aliases) is unavailable here because the
-# report pipeline runs out-of-band; we instead derive the active month code
-# from CH itself by picking the highest-volume root match in recent data.
 _ALIAS_SUFFIX_RE = re.compile(r"^([A-Z]{2,4})(R[12]|C[01])$")
-# Lookback window for resolving an alias to its active month code. Long enough
-# to cover the longest gap a reporter cares about (single-week run) but bounded
-# so that a recently-rolled-over front month wins over the prior expiring one.
 _ALIAS_RESOLUTION_LOOKBACK_DAYS = 14
 
-# Memory cap for every CH query
 _SETTINGS = "SETTINGS max_memory_usage = 2000000000"
 
-# ClickHouse connection / query timeouts and retry config
 _CH_CONNECT_TIMEOUT = 10
 _CH_QUERY_TIMEOUT = 60
 _CH_RETRY_DELAY_S = 2.0
@@ -150,11 +134,6 @@ def _validate_time_filter(time_filter: str) -> str:
     return time_filter
 
 
-# ---------------------------------------------------------------------------
-# Pure helpers
-# ---------------------------------------------------------------------------
-
-
 def _ch_to_platform(ch_price: int) -> int:
     """Convert a ClickHouse-scaled price (x1,000,000) to platform scale (x10,000)."""
     return ch_price // CH_TO_PLATFORM_DIVISOR
@@ -192,10 +171,6 @@ def _night_filter(date: str) -> str:
         f"AND {_TS} < toDateTime64('{date} 15:00:00', 3, 'Asia/Taipei') + INTERVAL 14 HOUR"
     )
 
-
-# ---------------------------------------------------------------------------
-# ClickHouse client abstraction
-# ---------------------------------------------------------------------------
 
 ExecuteFn = Callable[[str, "dict[str, Any] | None"], list[tuple[Any, ...]]]
 
@@ -254,11 +229,6 @@ def _make_execute(host: str) -> ExecuteFn:
     return _exec_native
 
 
-# ---------------------------------------------------------------------------
-# DataCollector
-# ---------------------------------------------------------------------------
-
-
 class DataCollector:
     """Fetch and normalise market data from ClickHouse for one session.
 
@@ -269,14 +239,8 @@ class DataCollector:
     def __init__(self, ch_host: str = "") -> None:
         host = ch_host or os.environ.get("HFT_CLICKHOUSE_HOST", "localhost")
         self._execute = _make_execute(host)
-        # Cache resolved alias→month-code for the lifetime of this collector
-        # so each report run pays at most one extra CH query per family.
         self._alias_cache: dict[str, str] = {}
         log.info("DataCollector initialised", ch_host=host)
-
-    # ------------------------------------------------------------------
-    # Alias resolution
-    # ------------------------------------------------------------------
 
     def _resolve_alias(self, symbol: str) -> str:
         """Resolve continuous-contract aliases (TXFR1) to month codes (TXFE6).
@@ -297,23 +261,9 @@ class DataCollector:
             return cached
         match = _ALIAS_SUFFIX_RE.match(symbol)
         if not match:
-            # Not an alias form — pass through. Cache to skip repeat regex.
             self._alias_cache[symbol] = symbol
             return symbol
         root = match.group(1)
-        # Pick the highest-volume month code matching ``<root>[A-L][0-9]`` *on
-        # the most recent trading day that has data*, within the lookback window.
-        #
-        # Why not rank by trailing-window cumulative volume: on a monthly roll
-        # the just-expired contract keeps the largest 14-day cumulative volume
-        # for ~2 weeks, so a cumulative ranking resolves TXFR1 to the dead
-        # contract (zero ticks post-roll) and every report returns no_data until
-        # the new front month overtakes it. Scoping the ranking to the latest
-        # day with data makes the live front month win on the roll date itself.
-        # (Regression: 2026-05-21 daily-report blackout after TXFE6 expiry.)
-        #
-        # The match() regex is anchored so injection via the symbol parameter
-        # cannot escape; root has already been validated by ``_validate_symbol``.
         sql = f"""
             SELECT symbol, sum(volume) AS vol
             FROM hft.market_data
@@ -332,7 +282,7 @@ class DataCollector:
         """  # nosec B608
         try:
             rows = self._execute(sql, None)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning(
                 "alias_resolution_failed",
                 symbol=symbol,
@@ -354,10 +304,6 @@ class DataCollector:
         )
         self._alias_cache[symbol] = resolved
         return resolved
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def collect_core(
         self,
@@ -441,19 +387,17 @@ class DataCollector:
 
         sd = self.collect_core(symbol, time_filter, session=session, date=date)
 
-        # Q5 and Q6 — heavy Array-column queries; gracefully degrade on OOM.
         try:
             spread = self._query_spread_dist(symbol, time_filter)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("Q5 spread query failed (likely OOM), skipping", symbol=symbol)
             spread = {}
         try:
             depth = self._query_depth_imbalance(symbol, time_filter)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("Q6 depth query failed (likely OOM), skipping", symbol=symbol)
             depth = []
 
-        # SessionData uses slots=True — cannot mutate; create a new instance.
         return SessionData(
             session=sd.session,
             symbol=sd.symbol,
@@ -470,10 +414,6 @@ class DataCollector:
             spread_dist=spread,
             depth_imbalance=depth,
         )
-
-    # ------------------------------------------------------------------
-    # Internal queries
-    # ------------------------------------------------------------------
 
     def _query_ohlcv(self, symbol: str, time_filter: str) -> dict:
         """Q1: Session OHLCV."""
@@ -736,10 +676,6 @@ class DataCollector:
             )
         return result
 
-    # ------------------------------------------------------------------
-    # Q7: Cross-day OHLCV + flow
-    # ------------------------------------------------------------------
-
     def collect_cross_day(
         self,
         symbol: str,
@@ -774,25 +710,19 @@ class DataCollector:
         prev_dates: list[str] = []
         cursor = ref - timedelta(days=1)
         while len(prev_dates) < lookback_days:
-            # Skip weekends: 5 = Saturday, 6 = Sunday
             if cursor.weekday() < 5:
                 prev_dates.append(cursor.isoformat())
             cursor -= timedelta(days=1)
-            # Safety: don't look back more than 30 calendar days
             if (ref - cursor).days > 30:
                 break
 
         if not prev_dates:
             return []
 
-        # Build a single UNION ALL query for all dates
         filter_fn = _day_filter if session == "day" else _night_filter
         parts: list[str] = []
         for d in prev_dates:
             tf = filter_fn(d)
-            # The lag must be computed in a subquery (ClickHouse rejects a
-            # window function nested inside an aggregate argument, Code 184
-            # ILLEGAL_AGGREGATION) — mirrors the Q3 _query_flow pattern.
             part = f"""
                 SELECT
                     '{d}'                                     AS day,
@@ -824,7 +754,7 @@ class DataCollector:
 
         try:
             rows = self._execute(sql, params)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.warning("Q7 cross-day query failed", symbol=symbol)
             return []
 

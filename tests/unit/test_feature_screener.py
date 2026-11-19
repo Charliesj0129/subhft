@@ -13,7 +13,6 @@ from research.tools.feature_screener import (
     screen_interactions,
 )
 
-# Minimum observations the screener requires before computing metrics.
 _MIN_OBS = 50
 
 
@@ -26,11 +25,6 @@ def _make_feature_array(
     if rng is None:
         rng = np.random.default_rng(0)
     return rng.standard_normal((n_rows, n_cols)).astype(np.float64)
-
-
-# ---------------------------------------------------------------------------
-# screen_features
-# ---------------------------------------------------------------------------
 
 
 def test_screen_features_returns_ranked_list(tmp_path: Path, recwarn) -> None:
@@ -49,17 +43,14 @@ def test_screen_features_returns_ranked_list(tmp_path: Path, recwarn) -> None:
     for row in results:
         assert required_keys.issubset(row.keys()), f"Missing keys in row: {row.keys()}"
 
-    # Results should be sorted: finite-score entries first, then NaN scores.
     finite_entries = [r for r in results if np.isfinite(r["score"])]
     nan_entries = [r for r in results if not np.isfinite(r["score"])]
-    # All finite entries come before NaN entries.
     for fi in finite_entries:
         idx_fi = results.index(fi)
         for ni in nan_entries:
             idx_ni = results.index(ni)
             assert idx_fi < idx_ni, "Finite-score results should precede NaN-score results"
 
-    # Finite-score entries should be sorted by score descending.
     scores = [r["score"] for r in finite_entries]
     assert scores == sorted(scores, reverse=True), "Finite scores should be sorted descending"
     assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
@@ -81,13 +72,12 @@ def test_screen_features_latency_profile_propagated(tmp_path: Path) -> None:
 
 def test_screen_features_handles_empty_array(tmp_path: Path) -> None:
     """An array with fewer rows than _MIN_OBS should produce NaN metrics, not crash."""
-    arr = np.zeros((10, 4), dtype=np.float64)  # 10 rows — below _MIN_OBS
+    arr = np.zeros((10, 4), dtype=np.float64)
     npy_path = tmp_path / "tiny.npy"
     np.save(str(npy_path), arr)
 
     results = screen_features([str(npy_path)])
 
-    # Should still return a list (possibly with NaN scores) rather than raising.
     assert isinstance(results, list)
     for row in results:
         assert "score" in row
@@ -114,16 +104,10 @@ def test_screen_features_stacks_multiple_files(tmp_path: Path) -> None:
 
     results = screen_features([str(p1), str(p2)])
 
-    # Combined should have more observations than single file.
     n_obs_combined = max(r["n_obs"] for r in results if np.isfinite(r["n_obs"]))
     results_single = screen_features([str(p1)])
     n_obs_single = max(r["n_obs"] for r in results_single if np.isfinite(r["n_obs"]))
     assert n_obs_combined >= n_obs_single
-
-
-# ---------------------------------------------------------------------------
-# _load_data
-# ---------------------------------------------------------------------------
 
 
 def test_load_data_npy_plain(tmp_path: Path) -> None:
@@ -167,22 +151,15 @@ def test_load_data_unsupported_extension_raises(tmp_path: Path) -> None:
         _load_data(str(p))
 
 
-# ---------------------------------------------------------------------------
-# screen_interactions
-# ---------------------------------------------------------------------------
-
-
 def test_screen_interactions_returns_pairs(tmp_path: Path) -> None:
     """screen_interactions returns dicts with feature_a, feature_b, interaction, ic, n_obs."""
     rng = np.random.default_rng(99)
-    # Need at least 2 distinct features that have finite IC to form pairs.
     arr = _make_feature_array(300, 6, rng)
     p = tmp_path / "data.npy"
     np.save(str(p), arr)
 
     results = screen_interactions([str(p)], top_k=3)
 
-    # May be empty if no features pass finite-IC filter, but if non-empty, keys are correct.
     required_keys = {"feature_a", "feature_b", "interaction", "ic", "n_obs"}
     for row in results:
         assert required_keys.issubset(row.keys()), f"Missing keys: {set(row.keys())}"
@@ -195,12 +172,11 @@ def test_screen_interactions_requires_at_least_two_features(tmp_path: Path) -> N
     p = tmp_path / "single.npy"
     np.save(str(p), arr)
 
-    # Should not raise — should return empty list or a list (graceful handling).
     try:
         results = screen_interactions([str(p)], top_k=5)
         assert isinstance(results, list)
     except RuntimeError:
-        pass  # RuntimeError("No valid data") is also acceptable
+        pass
 
 
 def test_screen_interactions_sorted_by_abs_ic(tmp_path: Path) -> None:

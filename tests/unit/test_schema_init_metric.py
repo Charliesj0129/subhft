@@ -10,10 +10,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# MetricsRegistry attribute
-# ---------------------------------------------------------------------------
-
 
 class TestMetricsRegistryAttribute:
     def test_recorder_schema_init_failed_attribute_exists(self):
@@ -27,11 +23,6 @@ class TestMetricsRegistryAttribute:
             "MetricsRegistry missing recorder_schema_init_failed attribute"
         )
         assert isinstance(registry.recorder_schema_init_failed, Gauge)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_writer_with_mock_metrics(monkeypatch):
@@ -62,11 +53,6 @@ def _make_writer_with_mock_metrics(monkeypatch):
         writer = DataWriter(ch_host="localhost", ch_port=9000)
         writer.metrics = mock_metrics
         return writer, mock_metrics
-
-
-# ---------------------------------------------------------------------------
-# _init_schema metric behaviour
-# ---------------------------------------------------------------------------
 
 
 class TestInitSchemaMetric:
@@ -109,7 +95,6 @@ class TestInitSchemaMetric:
             "hft_platform.recorder.writer.apply_schema",
             side_effect=RuntimeError("migration failed"),
         ):
-            # Must not raise despite the metric set failing
             writer._init_schema()
 
         assert writer.connected is False

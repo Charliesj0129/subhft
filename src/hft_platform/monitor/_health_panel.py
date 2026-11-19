@@ -63,7 +63,7 @@ _poll_counter: int = 0
 
 
 def toggle_health_visible() -> None:
-    global _health_visible  # noqa: PLW0603
+    global _health_visible
     _health_visible = not _health_visible
 
 
@@ -77,7 +77,7 @@ def get_cached_health() -> HealthState | None:
 
 def poll_health(feed_live: int = 0, feed_stale: int = 0, feed_total: int = 0) -> HealthState | None:
     """Synchronous poll (runs fetch on calling thread). Prefer poll_health_async() in async contexts."""
-    global _poll_counter, _current_health  # noqa: PLW0603
+    global _poll_counter, _current_health
     _poll_counter += 1
     if _poll_counter % 5 != 1:
         return _current_health
@@ -95,7 +95,7 @@ async def poll_health_async(feed_live: int = 0, feed_stale: int = 0, feed_total:
     Use this from async contexts (e.g. TUI event loop) to avoid stalling the
     event loop for up to 2 seconds on a Prometheus timeout.
     """
-    global _poll_counter, _current_health  # noqa: PLW0603
+    global _poll_counter, _current_health
     _poll_counter += 1
     if _poll_counter % 5 != 1:
         return _current_health

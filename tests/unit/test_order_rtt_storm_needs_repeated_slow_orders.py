@@ -20,7 +20,7 @@ from hft_platform.contracts.strategy import StormGuardState
 from hft_platform.risk import storm_guard as storm_guard_module
 from hft_platform.risk.storm_guard import RiskThresholds, StormGuard
 
-TIMEOUT_US = 3_000_000  # what a timed-out place_order reports
+TIMEOUT_US = 3_000_000
 
 
 class _Clock:
@@ -38,7 +38,7 @@ def clock(monkeypatch) -> _Clock:
     return c
 
 
-ARMED_STORM_US = 2_500_000  # the threshold the rule had before 2026-11-02
+ARMED_STORM_US = 2_500_000
 
 
 def _armed_guard() -> StormGuard:
@@ -96,9 +96,7 @@ def test_storm_holds_for_the_dwell_after_the_last_slow_order(clock) -> None:
     guard = _armed_guard()
     _enter_storm(guard, clock)
 
-    # 299 s of quiet ticks: still STORM.
     assert _quiet_ticks(guard, clock, 299) is StormGuardState.STORM
-    # Past the 300 s dwell, the usual N clean ticks bring it down.
     assert _quiet_ticks(guard, clock, 10) is StormGuardState.NORMAL
 
 
@@ -111,7 +109,6 @@ def test_a_slow_order_during_the_dwell_restarts_it(clock) -> None:
     clock.now += 1
     assert guard.update() is StormGuardState.STORM
 
-    # 200 s after the restart: the old dwell would have ended, the new one has not.
     assert _quiet_ticks(guard, clock, 200) is StormGuardState.STORM
     assert _quiet_ticks(guard, clock, 110) is StormGuardState.NORMAL
 

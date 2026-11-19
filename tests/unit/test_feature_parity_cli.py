@@ -18,12 +18,8 @@ def _run(**kwargs) -> argparse.Namespace:
 
 
 def test_feature_parity_ok_emits_json_and_exits_zero(capsys) -> None:
-    # Happy path: real self-test over available backends should pass.
     _feature.cmd_feature_parity(_run())
     out = capsys.readouterr().out
-    # run_self_test() may emit compact single-line structlog warnings to stdout before the
-    # indented result JSON; locate the result block (begins with "{\n" from json.dumps(indent=2))
-    # and decode just that object, ignoring any surrounding log lines.
     start = out.index("{\n")
     payload, _ = json.JSONDecoder().raw_decode(out[start:])
     assert payload["ok"] is True

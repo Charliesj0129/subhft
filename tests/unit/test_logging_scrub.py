@@ -30,8 +30,6 @@ from hft_platform.utils.logging import (
     get_logger,
 )
 
-# Realistic shape — a numeric bot id followed by ``:`` and ~35 url-safe-base64
-# characters. NOT a real token. Long enough to match `[A-Za-z0-9_-]{30,}`.
 _FAKE_TELEGRAM_TOKEN = "8794586948:AAFP1234567890abcdefghijklmnopqrstuv"
 
 
@@ -88,7 +86,6 @@ def test_full_pipeline_does_not_leak_telegram_token_in_field() -> None:
         logger.error("rpc_call_failed", telegram_token=_FAKE_TELEGRAM_TOKEN)
     out = buf.getvalue()
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
-    # Token mask OR generic mask is fine — both indicate redaction succeeded.
     assert "***" in out
 
 
@@ -101,8 +98,6 @@ def test_full_pipeline_does_not_leak_telegram_token_in_message() -> None:
     with redirect_stderr(buf):
         logger.error("investigator_probe", note=f"telegram_token={_FAKE_TELEGRAM_TOKEN}")
     out = buf.getvalue()
-    # Absence assertions alone pass on an empty capture, so prove the line was
-    # actually emitted before concluding anything about what it omits.
     assert out.strip(), "nothing was logged; the leak assertion below would be vacuous"
     assert _FAKE_TELEGRAM_TOKEN not in out, f"telegram token leaked in JSON: {out!r}"
 

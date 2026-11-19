@@ -46,11 +46,9 @@ logger = structlog.get_logger("c1.revalidation")
 
 _SCALE = 1_000_000
 
-# Latency profile (r47_maker_shioaji_p95_v2026-04-24_measured)
-_LATENCY_PLACE_NS = 395_000_000   # P95 quote-activation 395 ms
-_LATENCY_CANCEL_NS = 59_000_000   # P95 cancel ack 59 ms
+_LATENCY_PLACE_NS = 395_000_000
+_LATENCY_CANCEL_NS = 59_000_000
 
-# F2_maker per-fill wedge (per shared-context.yaml inherited_kill_walls F2)
 _F2_MAKER_WEDGE_PTS = 7.3
 
 
@@ -105,7 +103,6 @@ def _simulate_day(
             sp_pts = (cur_ask - cur_bid) // event.scale
             session_spread_pts.append(int(sp_pts))
 
-            # Quote moved away from posted price -> assume order missed.
             if buy_order is not None and buy_order.price != cur_bid:
                 buy_order = None
             if sell_order is not None and sell_order.price != cur_ask:
@@ -261,18 +258,14 @@ def _gate_c_calc(
     n_days = len(daily)
     total_net = float(net_pts.sum())
 
-    # 1. max_day_concentration_pct
     if abs(total_net) > 1e-9:
-        # absolute-contribution method (handles sign flips)
         abs_contrib = np.abs(net_pts)
         max_pct = float(abs_contrib.max() / abs_contrib.sum() * 100.0)
     else:
         max_pct = 0.0
 
-    # 2. winning_days
     winning_days = int(np.sum(net_pts > 0))
 
-    # 3. jackknife sign flip
     sign_total = np.sign(total_net) if abs(total_net) > 1e-9 else 0
     jackknife_sign_flip = False
     jackknife_signs = []
@@ -284,7 +277,6 @@ def _gate_c_calc(
         if sign_total != 0 and loo_sign != 0 and loo_sign != sign_total:
             jackknife_sign_flip = True
 
-    # 4. bootstrap CI on daily Sharpe
     if n_days >= 2 and net_pts.std() > 1e-9:
         rng = np.random.default_rng(rng_seed)
         boot_sharpes = []
@@ -302,7 +294,6 @@ def _gate_c_calc(
         ci_low = ci_high = 0.0
         ci_excludes_zero = False
 
-    # 5. fills_distinct_days
     fills_distinct_days = int(np.sum(n_fills > 0))
 
     return {
@@ -376,16 +367,12 @@ def _run_config(
         if not events:
             logger.warning("no_events", date=date)
             continue
-        # P2 #11 fix: reset strategy state at each day boundary so that stale
-        # `_position` / fit history from prior day does not gate today's
-        # quotes while daily FIFO PnL is computed assuming flat-start.
         strategy.reset_for_day()
         day = _simulate_day(
             strategy, events, queue_fraction, place_ns, cancel_ns
         )
         gross, n_trips, n_wins, per_trip = _fifo_trips(day["fills"])
         n_fills = len(day["fills"])
-        # Cost: per-side fee applied to each fill (FIFO model already pairs).
         cost_per_side = _TXF_RT_COST_PTS / 2.0
         fees = n_fills * cost_per_side
         net = gross - fees
@@ -508,7 +495,7 @@ def main() -> int:
     if not all_dates:
         logger.error("no_data", instrument=args.instrument)
         return 3
-    dates = all_dates  # full continuous-month inventory
+    dates = all_dates
     logger.info(
         "backtest_start",
         instrument=args.instrument,
@@ -543,7 +530,6 @@ def main() -> int:
             sharpe=run["sharpe_annualized"],
         )
 
-    # Pick best max_pos by net_pts
     best_key = max(runs, key=lambda k: runs[k]["net_pts_total"])
     summary = {
         "candidate": "C1_revalidation",

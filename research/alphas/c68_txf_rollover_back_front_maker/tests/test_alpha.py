@@ -44,7 +44,6 @@ from research.backtest.maker_engine import (
 from research.registry.schemas import AlphaProtocol
 
 _SCALE = 1_000_000
-# Canonical rollover window for TXFE6 becoming new-front (post-TXFD6 expiry)
 _WINDOW_START = date(2026, 4, 13)
 _WINDOW_END = date(2026, 4, 15)
 _INSIDE_WINDOW = date(2026, 4, 14)
@@ -101,9 +100,6 @@ def _maker_with_window(
     return m
 
 
-# ----------------------------------------------------------------------------
-# Calendar gate (NEW to C68 vs C33/C63)
-# ----------------------------------------------------------------------------
 
 
 def test_is_in_rollover_window_inside() -> None:
@@ -129,7 +125,7 @@ def test_is_in_rollover_window_after() -> None:
 def test_calendar_gate_blocks_quote_outside_window() -> None:
     """Outside rollover window -> Hold, no quote post."""
     m = _maker_with_window(inside=False)
-    actions = m.on_tick(_bidask(17500, 17513))  # 13 pt > 12 threshold
+    actions = m.on_tick(_bidask(17500, 17513))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert posts == []
     assert m.rollover_gate_blocked == 1
@@ -148,7 +144,7 @@ def test_calendar_gate_admits_quote_inside_window() -> None:
 def test_calendar_gate_open_when_window_unset() -> None:
     """If rollover_window_*_date is None, gate is OPEN (for tests without
     calendar context)."""
-    m = TxfRolloverBackFrontMaker()  # no window
+    m = TxfRolloverBackFrontMaker()
     actions = m.on_tick(_bidask(17500, 17513))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert len(posts) == 2
@@ -157,8 +153,6 @@ def test_calendar_gate_open_when_window_unset() -> None:
 
 def test_calendar_gate_blocked_counter_advances_on_each_tick() -> None:
     m = _maker_with_window(inside=False)
-    # Different prices to defeat price-move gate (though that doesn't even
-    # matter here because rollover gate fires first).
     m.on_tick(_bidask(17500, 17513))
     m.on_tick(_bidask(17501, 17514))
     m.on_tick(_bidask(17502, 17515))
@@ -166,9 +160,6 @@ def test_calendar_gate_blocked_counter_advances_on_each_tick() -> None:
     assert m.quotes_posted == 0
 
 
-# ----------------------------------------------------------------------------
-# Spread-gate boundary (TXFE6 narrow window: 12 pt canonical)
-# ----------------------------------------------------------------------------
 
 
 def test_spread_threshold_default_is_12() -> None:
@@ -222,7 +213,7 @@ def test_spread_gate_counter_advances_on_block() -> None:
 def test_spread_gate_fires_after_calendar_gate_passes() -> None:
     """Inside window with narrow spread -> spread_blocked counter advances."""
     m = _maker_with_window(inside=True)
-    m.on_tick(_bidask(17500, 17505))  # sp=5, below threshold 12
+    m.on_tick(_bidask(17500, 17505))
     assert m.rollover_gate_blocked == 0
     assert m.spread_blocked == 1
 
@@ -235,9 +226,6 @@ def test_calendar_gate_preempts_spread_gate() -> None:
     assert m.spread_blocked == 0
 
 
-# ----------------------------------------------------------------------------
-# Scaled-int price arithmetic
-# ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -266,9 +254,6 @@ def test_posts_at_scaled_int_prices(
         assert isinstance(a.price, int)
 
 
-# ----------------------------------------------------------------------------
-# R47-minimal: ALL four signal layers disabled
-# ----------------------------------------------------------------------------
 
 
 def test_no_signal_layer_methods_exposed() -> None:
@@ -299,9 +284,6 @@ def test_impl_does_not_import_signal_state_classes() -> None:
         )
 
 
-# ----------------------------------------------------------------------------
-# Max-pos gate (default 1 per data-constrained sample)
-# ----------------------------------------------------------------------------
 
 
 def test_max_pos_default_is_1_data_constrained() -> None:
@@ -357,9 +339,6 @@ def test_max_pos_blocked_counter_advances() -> None:
     assert m.max_pos_blocked >= 1
 
 
-# ----------------------------------------------------------------------------
-# Inventory skew (LINEAR in pos; NOT |pos|-gated)
-# ----------------------------------------------------------------------------
 
 
 def test_inventory_skew_none_at_pos_zero() -> None:
@@ -375,7 +354,6 @@ def test_inventory_skew_lowers_both_quotes_when_long() -> None:
     m.on_fill("buy", 17_500 * _SCALE, 17506.0)
     actions = m.on_tick(_bidask(17500, 17512))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # skew = 1 * 2 * scale // 10 = 200_000
     assert posts["buy"] == 17500 * _SCALE - 200_000
     assert posts["sell"] == 17512 * _SCALE - 200_000
 
@@ -395,13 +373,10 @@ def test_inventory_skew_scales_linearly_with_pos() -> None:
         m.on_fill("buy", 17_500 * _SCALE, 17506.0)
     actions = m.on_tick(_bidask(17500, 17520))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    assert posts["buy"] == 17500 * _SCALE - 600_000  # 3x pos=1 skew
+    assert posts["buy"] == 17500 * _SCALE - 600_000
     assert posts["sell"] == 17520 * _SCALE - 600_000
 
 
-# ----------------------------------------------------------------------------
-# Price-movement gate (ROD anti-stack)
-# ----------------------------------------------------------------------------
 
 
 def test_does_not_restack_same_price() -> None:
@@ -421,9 +396,6 @@ def test_reposts_when_price_moves() -> None:
     assert len([a for a in second if isinstance(a, PostQuote)]) == 2
 
 
-# ----------------------------------------------------------------------------
-# Bid/ask execution (no mid)
-# ----------------------------------------------------------------------------
 
 
 def test_posts_at_best_bid_not_mid() -> None:
@@ -431,7 +403,7 @@ def test_posts_at_best_bid_not_mid() -> None:
     actions = m.on_tick(_bidask(17500, 17512))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
     assert posts["buy"] == 17500 * _SCALE
-    assert posts["buy"] != 17_506_000_000  # mid
+    assert posts["buy"] != 17_506_000_000
 
 
 def test_posts_at_best_ask_not_mid() -> None:
@@ -441,9 +413,6 @@ def test_posts_at_best_ask_not_mid() -> None:
     assert posts["sell"] == 17512 * _SCALE
 
 
-# ----------------------------------------------------------------------------
-# TXF point value & inst RT citation
-# ----------------------------------------------------------------------------
 
 
 def test_txf_point_value_is_200_ntd() -> None:
@@ -465,18 +434,12 @@ def test_rollover_window_canonical_3_days() -> None:
 def test_c68_structural_viability_at_inst_rt() -> None:
     """Narrow-window edge: 12 pt gross - 1.5 pt per-cycle RT > 0."""
     p = C68Params()
-    # Edge at threshold: 2 x half_spread = threshold_pts.
-    # Hedge framing REJECTED per T1: both legs passive => only ONE RT per
-    # cycle (1.5 pt), not two (3 pt). See module docstring.
     gross_at_threshold = float(p.spread_threshold_pts)
     per_cycle_rt = _TXF_INST_RT_COST_PTS
     margin = gross_at_threshold - per_cycle_rt
-    assert margin >= 10.0  # 12 - 1.5 = 10.5 viable
+    assert margin >= 10.0
 
 
-# ----------------------------------------------------------------------------
-# Emergency unwind detection
-# ----------------------------------------------------------------------------
 
 
 def test_emergency_unwind_false_when_flat() -> None:
@@ -512,9 +475,6 @@ def test_emergency_unwind_false_when_no_window_configured() -> None:
     assert m.emergency_unwind_required() is False
 
 
-# ----------------------------------------------------------------------------
-# Monotonic time ordering
-# ----------------------------------------------------------------------------
 
 
 def test_monotonic_timestamp_ordering_preserved() -> None:
@@ -529,9 +489,6 @@ def test_monotonic_timestamp_ordering_preserved() -> None:
     assert t1 < EPOCH_THRESHOLD_NS
 
 
-# ----------------------------------------------------------------------------
-# Degenerate books
-# ----------------------------------------------------------------------------
 
 
 def test_trade_event_returns_hold() -> None:
@@ -542,7 +499,7 @@ def test_trade_event_returns_hold() -> None:
 
 def test_rejects_crossed_book() -> None:
     m = _maker_with_window()
-    actions = m.on_tick(_bidask(17512, 17500))  # crossed
+    actions = m.on_tick(_bidask(17512, 17500))
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
@@ -563,9 +520,6 @@ def test_rejects_zero_priced_book() -> None:
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
-# ----------------------------------------------------------------------------
-# Gap / reset
-# ----------------------------------------------------------------------------
 
 
 def test_on_gap_clears_transient_quote_state() -> None:
@@ -603,9 +557,6 @@ def test_reset_clears_position_quotes_and_session() -> None:
     assert m.current_session_date is None
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol conformance
-# ----------------------------------------------------------------------------
 
 
 def test_c68_alpha_conforms_to_alpha_protocol() -> None:
@@ -637,14 +588,14 @@ def test_c68_hypothesis_cites_rollover_window() -> None:
 def test_c68_hypothesis_cites_inst_rt() -> None:
     alpha = C68Alpha()
     h = alpha.manifest.hypothesis
-    assert "1.5" in h or "3 pt" in h  # inst RT appears
+    assert "1.5" in h or "3 pt" in h
 
 
 def test_c68_hypothesis_rejects_hedge_pair_framing() -> None:
     """Must document rejection of task-brief hedge-pair framing."""
     alpha = C68Alpha()
     h = alpha.manifest.hypothesis.lower()
-    assert "reject" in h  # "REJECTED: TAKE hedge leg inverts edge"
+    assert "reject" in h
 
 
 def test_c68_reset_clears_position() -> None:
@@ -655,9 +606,6 @@ def test_c68_reset_clears_position() -> None:
     assert alpha.maker.position == 0
 
 
-# ----------------------------------------------------------------------------
-# Cycle / position accounting
-# ----------------------------------------------------------------------------
 
 
 def test_position_decreases_on_sell_fill() -> None:
@@ -683,9 +631,6 @@ def test_position_resets_last_quote_on_fill() -> None:
     assert len(buy_posts) == 1
 
 
-# ----------------------------------------------------------------------------
-# Cross-candidate distinctions
-# ----------------------------------------------------------------------------
 
 
 def test_c68_default_threshold_higher_than_c63_and_c33() -> None:

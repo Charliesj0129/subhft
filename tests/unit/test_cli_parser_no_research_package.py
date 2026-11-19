@@ -19,12 +19,9 @@ import pytest
 def test_build_parser_succeeds_when_research_package_missing() -> None:
     from hft_platform.cli import _parser as parser_mod
 
-    # Simulate the production container: `import research.pipeline` raises.
     with mock.patch.dict(sys.modules, {"research": None, "research.pipeline": None}):
         parser = parser_mod.build_parser()
 
-    # Core ops surface must survive; the research-only pipeline commands may
-    # be absent, but parsing an ops command must not require research/.
     args = parser.parse_args(["ops", "rearm-platform", "--token", "t", "--reason", "r"])
     assert args.ops_cmd == "rearm-platform"
 

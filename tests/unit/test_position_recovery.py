@@ -12,20 +12,8 @@ from zoneinfo import ZoneInfo
 
 from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 
-# ``_ckpt_date_within_tolerance`` accepts an adjacent trading date only while the
-# Taipei wall clock is inside the 05:00-05:05 TAIFEX handover window. Any test
-# that feeds a D-1 checkpoint therefore has two different correct answers
-# depending on what time the suite happens to run, and pinning the clock is the
-# only way to assert either of them.
-#
-# This is not hypothetical: the nightly CI run on 2026-09-13 executed
-# ``test_recover_stale_checkpoint_broker_only`` at 21:04Z = 05:04 Taipei and
-# failed with ``assert 'dual' == 'broker_only'`` while every PR run that day
-# passed. The schedule lands inside the one six-minute window per day where the
-# unpinned assertion is wrong.
 _TAIPEI = ZoneInfo("Asia/Taipei")
 
-# 2026-09-14 is an ordinary Monday; only the time-of-day matters to the gate.
 _OUTSIDE_HANDOVER = datetime(2026, 9, 14, 11, 30, tzinfo=_TAIPEI)
 _INSIDE_HANDOVER = datetime(2026, 9, 14, 5, 2, tzinfo=_TAIPEI)
 
@@ -107,11 +95,6 @@ def test_verifier_threshold_defaults_from_env():
             os.environ.pop("HFT_STARTUP_RECON_FUTURES_QTY_THRESHOLD", None)
 
 
-# ---------------------------------------------------------------------------
-# Task 3: recover() — dual-source merge + graduated response
-# ---------------------------------------------------------------------------
-
-
 def _write_checkpoint(path, trading_date, positions):
     """Write a valid checkpoint file for testing."""
     from hft_platform.execution.checkpoint import PositionCheckpointWriter
@@ -159,7 +142,6 @@ def test_recover_dual_source_match(tmp_path):
     assert result.positions_loaded == 1
     assert result.auto_corrected == 0
     assert result.halted is False
-    # Recovery positions are now stored via load_recovery, not directly in positions
     store.load_recovery.assert_called_once_with(
         account_id="test",
         symbol="2330",
@@ -188,7 +170,6 @@ def test_recover_minor_discrepancy_auto_corrects(tmp_path):
     assert result.source == "dual"
     assert result.auto_corrected == 1
     assert result.halted is False
-    # Auto-corrected to broker qty (1005) via load_recovery
     store.load_recovery.assert_called_once_with(
         account_id="test",
         symbol="2330",
@@ -255,9 +236,6 @@ def test_recover_stale_checkpoint_broker_only(tmp_path):
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
     assert result.halted is False
-    # Broker-only recovery uses load_recovery with broker qty
-    # avg_price_scaled=-1 is sentinel for "unknown cost basis"
-    # strategy_id=MANUAL_STRATEGY_ID marks manual ownership for broker-only positions
     store.load_recovery.assert_called_once_with(
         account_id="test",
         symbol="2330",
@@ -318,18 +296,6 @@ def test_recover_no_checkpoint_broker_only(tmp_path):
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
     assert result.halted is False
-
-
-# ---------------------------------------------------------------------------
-# The 05:00-05:05 TAIFEX handover window (``_ckpt_date_within_tolerance``).
-#
-# The +/-1-day tolerance exists so a checkpoint written at 04:59 with
-# trading_date=D-1 is still recognised by a recovery run at 05:01, whose
-# trading_date is already D. Until now nothing asserted either side of that
-# gate: the only test that exercised it asserted the *outside* answer without
-# pinning the clock, so the branch was covered by accident for 1434 minutes a
-# day and contradicted for the other six.
-# ---------------------------------------------------------------------------
 
 
 def _stale_ckpt_verifier(tmp_path, ckpt_date, ckpt_qty=1000, broker_qty=1000):

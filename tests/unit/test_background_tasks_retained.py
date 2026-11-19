@@ -70,14 +70,11 @@ async def _assert_held_after_gc(parked: _Parked, *, started: int = 1) -> None:
     await _drain_retained()
 
 
-# ── the helper ───────────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_a_bare_task_parked_on_an_unreferenced_future_is_collected():
     """Control: the hazard exists in this interpreter, so the tests below prove something."""
     parked = _Parked()
-    asyncio.get_running_loop().create_task(parked.run())  # result dropped, as the call sites used to do
+    asyncio.get_running_loop().create_task(parked.run())
     await _settle()
     assert parked.started == 1
 
@@ -170,9 +167,6 @@ def test_a_task_is_scheduled_on_the_loop_it_is_given():
         loop.close()
 
 
-# ── the call sites ───────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_the_halt_notification_task_survives_garbage_collection():
     from hft_platform.risk.storm_guard import StormGuard
@@ -184,7 +178,7 @@ async def test_the_halt_notification_task_survives_garbage_collection():
     guard.bind_loop(asyncio.get_running_loop())
     callback = _make_halt_notification_callback(guard, SimpleNamespace(notify_halt=parked.run))
 
-    callback()  # on the loop thread: the "direct" path
+    callback()
 
     await _assert_held_after_gc(parked)
 
@@ -296,9 +290,6 @@ async def test_the_subscription_truncation_alert_survives_garbage_collection(mon
     manager.subscribe_basket(cb=lambda *a, **kw: None)
 
     await _assert_held_after_gc(parked)
-
-
-# ── the sites a unit test cannot reach ───────────────────────────────────
 
 
 def _discarded_task_calls(source_root: Path) -> list[str]:

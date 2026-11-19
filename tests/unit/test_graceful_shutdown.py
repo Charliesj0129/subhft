@@ -77,20 +77,16 @@ class TestGracefulShutdownBrokerLogout:
         system = _make_system_with_mocks()
         system.md_client.close.side_effect = RuntimeError("connection lost")
 
-        # Should not raise
         system.stop()
 
-        # order_client should still be called
         system.order_client.close.assert_called_with(logout=True)
 
     def test_stop_handles_missing_close_method(self) -> None:
         system = _make_system_with_mocks()
-        del system.md_client.close  # Remove close method
+        del system.md_client.close
 
-        # Should not raise
         system.stop()
 
-        # order_client should still be called
         system.order_client.close.assert_called_with(logout=True)
 
     def test_teardown_bootstrap_calls_broker_close_fallback(self) -> None:
@@ -98,7 +94,6 @@ class TestGracefulShutdownBrokerLogout:
         md_client = system.md_client
         order_client = system.order_client
 
-        # Reset the torn-down flag (stop() sets it via _teardown_bootstrap)
         system._bootstrap_torn_down = False
         md_client.close.reset_mock()
         order_client.close.reset_mock()
@@ -112,11 +107,9 @@ class TestGracefulShutdownBrokerLogout:
         system = _make_system_with_mocks()
         md_client = system.md_client
 
-        # First call tears down and sets flag
         system._teardown_bootstrap()
         call_count_after_first = md_client.close.call_count
         assert call_count_after_first > 0
 
-        # Second call should be a no-op due to _bootstrap_torn_down flag
         system._teardown_bootstrap()
         assert md_client.close.call_count == call_count_after_first

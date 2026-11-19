@@ -15,7 +15,6 @@ from .quote_runtime import FubonQuoteRuntime
 
 logger = get_logger("feed_adapter.fubon.subscription_manager")
 
-# Minimum seconds between consecutive resubscribe calls.
 _RESUBSCRIBE_COOLDOWN_S: float = 10.0
 
 
@@ -52,10 +51,6 @@ class FubonSubscriptionManager:
         self._last_resubscribe_ts: float = 0.0
         self.MAX_SUBSCRIPTIONS: int = max_subscriptions
         self.log = logger
-
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
 
     def subscribe_basket(self, cb: Callable[..., Any]) -> None:
         """Subscribe to all configured symbols.
@@ -127,10 +122,6 @@ class FubonSubscriptionManager:
         self._on_order_cb = on_order
         self._on_deal_cb = on_deal
         self.log.info("Fubon execution callbacks stored")
-
-    # ------------------------------------------------------------------ #
-    # Internal helpers
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     def _extract_codes(

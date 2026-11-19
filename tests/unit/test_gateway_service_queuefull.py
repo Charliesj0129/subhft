@@ -120,13 +120,9 @@ async def _run_one_intent(svc: GatewayService, ch: LocalIntentChannel, intent: O
         await task
 
 
-# ── C1: Exposure release on QueueFull ────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_queuefull_releases_exposure():
     """C1: Exposure reserved in Step 3 must be released when api_queue raises QueueFull."""
-    # Use a tight notional cap so we can verify re-admission after release
     exposure = ExposureStore(global_max_notional=1_000_000)
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, _ = _make_service(channel=ch, queue_full=True, exposure_store=exposure)
@@ -134,12 +130,9 @@ async def test_queuefull_releases_exposure():
     intent = _make_intent(key="k_exp_release", price=1_000_000, qty=1)
     await _run_one_intent(svc, ch, intent)
 
-    # Intent was rejected by QueueFull
     assert svc._rejected == 1
     assert svc._dispatched == 0
 
-    # After the failed dispatch, exposure must have been released so that the
-    # *same* notional can be reserved again on a retry.
     exp_key = ExposureKey(account="default", strategy_id="s1", symbol="TSE:2330")
     ok, reason = exposure.check_and_update(exp_key, intent)
     assert ok is True, (
@@ -157,11 +150,7 @@ async def test_queuefull_does_not_release_exposure_for_cancel():
     intent = _make_intent(key="k_cancel_full", intent_type=IntentType.CANCEL)
     await _run_one_intent(svc, ch, intent)
 
-    # Should still be rejected (queue full), just no exposure to release
     assert svc._rejected == 1
-
-
-# ── C2: Dedup commit ordering ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -206,12 +195,10 @@ async def test_queuefull_then_normal_dispatch_allowed():
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc_full, _ = _make_service(channel=ch, queue_full=True)
 
-    # First intent hits QueueFull
     intent_full = _make_intent(key="k_first_full")
     await _run_one_intent(svc_full, ch, intent_full)
     assert svc_full._rejected == 1
 
-    # New service instance (empty queue) with a different key dispatches fine
     ch2 = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc_ok, api_queue2 = _make_service(channel=ch2, queue_full=False)
     intent_ok = _make_intent(key="k_second_ok")

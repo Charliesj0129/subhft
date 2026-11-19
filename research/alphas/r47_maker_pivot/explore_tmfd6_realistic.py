@@ -40,7 +40,7 @@ TICK_SIZE = 1.0
 LOT_SIZE = 1.0
 POINT_VALUE_NTD = 10
 PRICE_SCALE = 10_000
-ELAPSE_NS = 100_000_000  # 100ms
+ELAPSE_NS = 100_000_000
 
 DATA_DIR = _REPO_ROOT / "research" / "data" / "raw" / "tmfd6"
 DATA_FILES = sorted(DATA_DIR.glob("TMFD6_2026-0*_l2.hftbt.npz"))
@@ -62,13 +62,11 @@ class RunConfig:
     queue_model_power: float
     spread_threshold_pts: int
     max_pos: int
-    # Strategy params
     pe_danger_threshold: float = 0.0
-    queue_cancel_threshold: float = 1.0  # 1.0 = disabled (NOT 0.0!)
+    queue_cancel_threshold: float = 1.0
     mfg_skew_z_threshold: float = 100.0
     toxicity_max: int = 9999
-    # Harness behavior
-    preserve_queue_priority: bool = True  # NEW: only cancel when price changes
+    preserve_queue_priority: bool = True
 
 
 @dataclass
@@ -87,17 +85,14 @@ class DayResult:
 
 
 CONFIGS = [
-    # === Core comparison: queue priority ON vs OFF (qm3, spr4) ===
     RunConfig(name="spr4_qm3_pq", latency_ns=36_000_000, queue_model_power=3.0,
               spread_threshold_pts=4, max_pos=1, preserve_queue_priority=True),
     RunConfig(name="spr4_qm3_NO_pq", latency_ns=36_000_000, queue_model_power=3.0,
               spread_threshold_pts=4, max_pos=1, preserve_queue_priority=False),
 
-    # === Queue model sensitivity (spr4, pq=True) ===
     RunConfig(name="spr4_qm1_pq", latency_ns=36_000_000, queue_model_power=1.0,
               spread_threshold_pts=4, max_pos=1, preserve_queue_priority=True),
 
-    # === Best candidate: spr3 + qm3 + pq ===
     RunConfig(name="spr3_qm3_pq", latency_ns=36_000_000, queue_model_power=3.0,
               spread_threshold_pts=3, max_pos=1, preserve_queue_priority=True),
 ]
@@ -158,7 +153,7 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
     order_id = 0
     active_buy_id: int | None = None
     active_sell_id: int | None = None
-    active_buy_price: float = 0.0  # Track active order prices for queue priority
+    active_buy_price: float = 0.0
     active_sell_price: float = 0.0
     equity_curve: list[float] = []
     fill_count = 0
@@ -187,7 +182,6 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
         if spread_pts >= cfg.spread_threshold_pts:
             spread_above_threshold += 1
 
-        # Track fills via position change
         cur_pos = int(hbt.position(0))
         if cur_pos != prev_pos:
             fill_count += abs(cur_pos - prev_pos)
@@ -198,7 +192,6 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
         equity_curve.append(sv.balance + cur_pos * mid)
         positions[SYMBOL] = cur_pos
 
-        # Build events for strategy
         bid_qty = int(getattr(dp, "best_bid_qty", 0) or 0)
         ask_qty = int(getattr(dp, "best_ask_qty", 0) or 0)
         bid_scaled = int(round(best_bid * PRICE_SCALE))
@@ -228,12 +221,10 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
             quality_flags=0, feature_ids=feature_ids, values=tuple(vals),
         )
 
-        # Get strategy's desired quotes
         captured_intents.clear()
         strategy.handle_event(ctx, feature_event)
         strategy.handle_event(ctx, lob_event)
 
-        # Extract desired buy/sell prices from intents
         desired_buy_price: float | None = None
         desired_sell_price: float | None = None
         for intent in captured_intents:
@@ -246,12 +237,9 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
             elif intent.side == Side.SELL and desired_sell_price is None:
                 desired_sell_price = price_rounded
 
-        # === Order management with queue priority preservation ===
         if cfg.preserve_queue_priority:
-            # BUY side
             if desired_buy_price is not None:
                 if active_buy_id is not None and active_buy_price != desired_buy_price:
-                    # Price changed → cancel and resubmit
                     hbt.cancel(0, active_buy_id, False)
                     active_buy_id = None
                     cancel_count += 1
@@ -262,15 +250,12 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
                     active_buy_id = order_id
                     active_buy_price = desired_buy_price
                     quotes_submitted += 1
-                # else: same price → keep order, preserve queue priority
             else:
-                # Strategy doesn't want to quote buy → cancel if active
                 if active_buy_id is not None:
                     hbt.cancel(0, active_buy_id, False)
                     active_buy_id = None
                     cancel_count += 1
 
-            # SELL side
             if desired_sell_price is not None:
                 if active_sell_id is not None and active_sell_price != desired_sell_price:
                     hbt.cancel(0, active_sell_id, False)
@@ -289,7 +274,6 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
                     active_sell_id = None
                     cancel_count += 1
         else:
-            # OLD behavior: cancel + resubmit every cycle (no queue priority)
             if active_buy_id is not None:
                 hbt.cancel(0, active_buy_id, False)
                 active_buy_id = None
@@ -314,16 +298,12 @@ def run_one_day(data_path: Path, cfg: RunConfig) -> DayResult:
 
         hbt.clear_inactive_orders(0)
 
-        # Check if we got filled (position changed) → need to reset that side
         new_pos = int(hbt.position(0))
         if new_pos != cur_pos:
-            # A fill happened — the filled order is now inactive
             if new_pos > cur_pos:
-                # Buy fill
                 active_buy_id = None
                 active_buy_price = 0.0
             else:
-                # Sell fill
                 active_sell_id = None
                 active_sell_price = 0.0
 
@@ -390,11 +370,10 @@ def main() -> None:
                 f"avg_spr={result.avg_spread_pts:>4.1f}  ({elapsed:.1f}s)"
             )
             results[cfg.name].append(result)
-            gc.collect()  # Prevent OOM from hftbacktest residual allocations
+            gc.collect()
 
     total_elapsed = time.monotonic() - t_total
 
-    # ── Aggregate ────────────────────────────────────────────────────
     print("\n" + "=" * 110)
     print("AGGREGATE COMPARISON")
     print("=" * 110)
@@ -448,7 +427,6 @@ def main() -> None:
         print(f"    Worst:    {worst_day:>+10.1f} pts  Best: {best_day:>+10.1f} pts  MaxDD: {worst_dd:.1f}")
         print(f"    Spread:   {avg_spread:>10.2f} pts")
 
-    # ── Key comparison: PQ vs NO_PQ ──────────────────────────────────
     if "spr4_qm2_pq" in summary and "spr4_qm2_NO_pq" in summary:
         print("\n" + "=" * 110)
         print("QUEUE PRIORITY IMPACT (spr4, qm2)")
@@ -462,7 +440,6 @@ def main() -> None:
 
     print(f"\nTotal elapsed: {total_elapsed:.0f}s")
 
-    # ── Save ─────────────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "metadata": {

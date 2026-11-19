@@ -163,7 +163,6 @@ class _StubSystem:
         self.order_client = SimpleNamespace(
             reconnect=_reconnect,
             set_execution_callbacks=_set_execution_callbacks,
-            # True throughout the real outage, which is why nothing may read it.
             is_connected=lambda: True,
         )
         if with_callbacks:

@@ -39,10 +39,6 @@ from hft_platform.reports.models import (
     VolatilityFacts,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 def _make_flow_bar(
     ts: str = "2026-03-28 09:00:00",
@@ -336,11 +332,6 @@ def _make_llm_decision() -> LLMDecisionReport:
     return decision
 
 
-# ---------------------------------------------------------------------------
-# Helper function tests
-# ---------------------------------------------------------------------------
-
-
 class TestHelpers:
     def test_p_formats_scaled_price(self) -> None:
         assert _p(200_000_000) == "20,000"
@@ -370,7 +361,6 @@ class TestHelpers:
         assert _median_spread({}) == 0
 
     def test_median_spread_basic(self) -> None:
-        # 100 counts at 1pt, 200 at 2pt, 50 at 3pt  => total=350, mid=175 => median=2
         assert _median_spread({1: 100, 2: 200, 3: 50}) == 2
 
 
@@ -382,9 +372,8 @@ class TestSplitMessage:
         assert parts[0].min_tier == "free"
 
     def test_long_message_split_at_newline(self) -> None:
-        # Create a message > 4096 chars
         line = "x" * 100 + "\n"
-        content = line * 50  # 5050 chars
+        content = line * 50
         parts = _split_message(content, "paid")
         assert len(parts) >= 2
         for part in parts:
@@ -394,11 +383,6 @@ class TestSplitMessage:
     def test_preserves_tier(self) -> None:
         parts = _split_message("test", "paid")
         assert parts[0].min_tier == "paid"
-
-
-# ---------------------------------------------------------------------------
-# Composer integration tests
-# ---------------------------------------------------------------------------
 
 
 class TestReportComposer:
@@ -430,7 +414,6 @@ class TestReportComposer:
         rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
-        # 6 text + disclaimer = 7 minimum (heatmap may or may not be present)
         assert len(result.messages) >= 7
 
     def test_summary_is_free_tier(
@@ -525,7 +508,6 @@ class TestReportComposer:
         rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
-        # Narrative is the second message (index 1)
         narr = result.messages[1]
         assert "📖 時段敘事" in narr.content
         assert "opening" in narr.content
@@ -537,7 +519,6 @@ class TestReportComposer:
         rr: ReasoningReport,
     ) -> None:
         result = composer.compose(fr, rr)
-        # Flow is the third message (index 2)
         flow_msg = result.messages[2]
         assert "🔍 流向深度分析" in flow_msg.content
         assert "U/D" in flow_msg.content

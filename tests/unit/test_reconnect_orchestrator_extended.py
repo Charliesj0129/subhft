@@ -57,11 +57,6 @@ def orch(client):
     return ReconnectOrchestrator(client)
 
 
-# ------------------------------------------------------------------ #
-# reconnect() tests
-# ------------------------------------------------------------------ #
-
-
 def test_reconnect_returns_false_when_api_is_none(client, orch):
     """reconnect returns False immediately when client.api is None."""
     client.api = None
@@ -139,20 +134,14 @@ def test_reconnect_subscribe_failure(mock_tb, client, orch):
 
     client.login.side_effect = login_side_effect
     client._ensure_callbacks.side_effect = ensure_callbacks_side_effect
-    # First call is logout (ok), second is subscribe (fail)
     client._safe_call_with_timeout.side_effect = [
-        (True, None, None, False),  # logout ok
-        (False, None, "sub_err", False),  # subscribe fail
+        (True, None, None, False),
+        (False, None, "sub_err", False),
     ]
 
     result = orch.reconnect(reason="sub-fail")
     assert result is False
     assert client._last_reconnect_error == "sub_err"
-
-
-# ------------------------------------------------------------------ #
-# request_reconnect_via_policy() tests
-# ------------------------------------------------------------------ #
 
 
 def test_request_reconnect_via_policy_delegates(client, orch):
@@ -185,11 +174,6 @@ def test_request_reconnect_via_policy_fallback(mock_tb, client, orch):
     result = orch.request_reconnect_via_policy(reason="fallback", force=True)
     assert result is True
     client.login.assert_called_once()
-
-
-# ------------------------------------------------------------------ #
-# verify_quotes_flowing() tests
-# ------------------------------------------------------------------ #
 
 
 @patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
@@ -238,11 +222,6 @@ def test_verify_quotes_flowing_timeout(mock_tb, mock_sleep, client, orch):
     assert orch.verify_quotes_flowing(timeout_s=0.01) is False
 
 
-# ------------------------------------------------------------------ #
-# is_trading_hours() tests
-# ------------------------------------------------------------------ #
-
-
 @patch("hft_platform.feed_adapter.shioaji.reconnect_orchestrator.timebase")
 def test_is_trading_hours_fallback_weekend(mock_tb, orch):
     """Fallback path returns False on weekends (Saturday)."""
@@ -278,7 +257,6 @@ def test_is_trading_hours_fallback_weekday_night_session(mock_tb, orch):
     """Fallback path returns True during night session (15:00-05:00)."""
     import datetime as dt
 
-    # 22:00 Taiwan time on a Wednesday — firmly in night session
     wed_22 = dt.datetime(2026, 3, 18, 22, 0, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
     mock_tb.now_s.return_value = wed_22.timestamp()
 
@@ -309,7 +287,6 @@ def test_is_trading_hours_fallback_weekday_session_gap(mock_tb, orch):
     """Fallback returns False during 05:01-08:44 gap between sessions."""
     import datetime as dt
 
-    # 06:30 Taiwan time — between night session close and day session open
     thu_630 = dt.datetime(2026, 3, 19, 6, 30, 0, tzinfo=dt.timezone(dt.timedelta(hours=8)))
     mock_tb.now_s.return_value = thu_630.timestamp()
 
@@ -343,7 +320,7 @@ def test_is_trading_hours_uses_futures_product_type(mock_tb, orch):
     mock_calendar = MagicMock()
     mock_calendar._tz = dt.timezone(dt.timedelta(hours=8))
     mock_calendar.is_trading_hours.return_value = True
-    mock_tb.now_s.return_value = 1742475600.0  # arbitrary
+    mock_tb.now_s.return_value = 1742475600.0
 
     with patch(
         "hft_platform.core.market_calendar.get_calendar",
@@ -352,14 +329,8 @@ def test_is_trading_hours_uses_futures_product_type(mock_tb, orch):
         result = orch.is_trading_hours()
 
     assert result is True
-    # Verify product_type="future" was passed
     call_kwargs = mock_calendar.is_trading_hours.call_args
     assert call_kwargs[1].get("product_type") == "future" or (len(call_kwargs[0]) > 1 and call_kwargs[0][1] == "future")
-
-
-# ------------------------------------------------------------------ #
-# handle_quote_schema_mismatch() tests
-# ------------------------------------------------------------------ #
 
 
 def test_handle_quote_schema_mismatch_increments_counter(client, orch):
@@ -379,6 +350,5 @@ def test_handle_quote_schema_mismatch_logs_periodically(client, orch):
         for i in range(12):
             orch.handle_quote_schema_mismatch("test_reason", f"arg_{i}")
 
-        # Logs at count 1, 6, 11 (i.e., when count % 5 == 1)
         assert mock_logger.error.call_count == 3
         assert client._quote_schema_mismatch_count == 12

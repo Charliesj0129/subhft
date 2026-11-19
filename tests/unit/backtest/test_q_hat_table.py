@@ -32,64 +32,48 @@ from research.backtest.q_hat_table import QHatTable
 
 
 def test_empty_table_returns_fallback() -> None:
-    # Arrange: default-constructed empty table (uses default fallback 0.5).
     table = QHatTable()
 
-    # Act
     result = table.lookup("TMFD6", 9, 3)
 
-    # Assert
     assert result == 0.5
 
 
 def test_loaded_table_hit_returns_calibrated_value() -> None:
-    # Arrange: table with one calibrated cell for TMFD6 hour=9 shallow (depth<5).
     table = QHatTable(_data={("TMFD6", 9, "shallow"): 0.42})
 
-    # Act
     result = table.lookup("TMFD6", 9, 3)
 
-    # Assert
     assert result == 0.42
 
 
 def test_unknown_symbol_returns_fallback() -> None:
-    # Arrange
     table = QHatTable(_data={("TMFD6", 9, "shallow"): 0.42})
 
-    # Act
     result = table.lookup("UNKNOWN", 9, 3)
 
-    # Assert
     assert result == 0.5
 
 
 def test_unknown_hour_returns_fallback() -> None:
-    # Arrange
     table = QHatTable(_data={("TMFD6", 9, "shallow"): 0.42})
 
-    # Act
     result = table.lookup("TMFD6", 14, 3)
 
-    # Assert
     assert result == 0.5
 
 
 def test_boundary_depth_five_uses_deep_bucket() -> None:
-    # Arrange: only the "deep" cell is calibrated; "shallow" cell falls through.
     table = QHatTable(_data={("TMFD6", 9, "deep"): 0.31})
 
-    # Act
-    deep_hit = table.lookup("TMFD6", 9, 5)  # depth=5 -> "deep" -> 0.31
-    shallow_miss = table.lookup("TMFD6", 9, 4)  # depth=4 -> "shallow" -> fallback
+    deep_hit = table.lookup("TMFD6", 9, 5)
+    shallow_miss = table.lookup("TMFD6", 9, 4)
 
-    # Assert
     assert deep_hit == 0.31
     assert shallow_miss == 0.5
 
 
 def test_load_roundtrip_via_parquet(tmp_path) -> None:
-    # Arrange: write a small parquet matching the documented schema.
     records = [
         {"symbol": "TMFD6", "hour": 9, "depth_bucket": "shallow", "q_hat": 0.42},
         {"symbol": "TMFD6", "hour": 9, "depth_bucket": "deep", "q_hat": 0.31},
@@ -99,26 +83,13 @@ def test_load_roundtrip_via_parquet(tmp_path) -> None:
     parquet_path = tmp_path / "q_hat.parquet"
     pq.write_table(arrow_table, parquet_path)
 
-    # Act
     loaded = QHatTable.load(parquet_path)
 
-    # Assert: every calibrated cell is recovered; uncalibrated cells fall through.
-    assert loaded.lookup("TMFD6", 9, 3) == 0.42  # shallow hit
-    assert loaded.lookup("TMFD6", 9, 5) == 0.31  # deep hit (boundary)
-    assert loaded.lookup("TXFD6", 13, 1) == 0.55  # other-symbol shallow hit
-    assert loaded.lookup("TXFD6", 13, 5) == 0.5  # missing deep cell -> fallback
-    assert loaded.lookup("UNKNOWN", 9, 3) == 0.5  # unknown symbol -> fallback
-
-
-# ---------------------------------------------------------------------------
-# Task 8 — QueueDepletionFill ↔ QHatTable wiring regression tests
-# ---------------------------------------------------------------------------
-# These tests exercise the new ``q_hat_table`` / ``symbol`` / ``clock`` keyword
-# arguments wired into ``QueueDepletionFill`` in Task 8. They live in this file
-# (rather than ``tests/unit/test_fill_models.py``) because they target the
-# QHatTable integration surface; the existing fill_models tests stay focused
-# on the legacy positional-only constructor path that ``_gate_c.py:232`` and
-# every existing call site still rely on.
+    assert loaded.lookup("TMFD6", 9, 3) == 0.42
+    assert loaded.lookup("TMFD6", 9, 5) == 0.31
+    assert loaded.lookup("TXFD6", 13, 1) == 0.55
+    assert loaded.lookup("TXFD6", 13, 5) == 0.5
+    assert loaded.lookup("UNKNOWN", 9, 3) == 0.5
 
 
 def test_queue_depletion_fill_without_table_unchanged() -> None:
@@ -133,7 +104,6 @@ def test_queue_depletion_fill_without_table_unchanged() -> None:
 
     pos = qdf.post_quote(side="buy", price=10000, book_qty=10)
 
-    # max(1, int(10 * 0.5)) == 5
     assert pos.queue_ahead == 5
 
 
@@ -141,8 +111,7 @@ def test_queue_depletion_fill_with_table_uses_lookup() -> None:
     """With a table + symbol + clock, queue_ahead reflects the looked-up qf."""
     table = QHatTable(_data={("TMFD6", 9, "shallow"): 0.30})
 
-    # Fixed clock at 09:00:00 UTC (hour=9 matches the calibrated cell).
-    fixed_clock = lambda: 9 * 3600 * 1_000_000_000  # noqa: E731
+    fixed_clock = lambda: 9 * 3600 * 1_000_000_000
 
     qdf = QueueDepletionFill(
         queue_fraction=0.5,
@@ -151,10 +120,8 @@ def test_queue_depletion_fill_with_table_uses_lookup() -> None:
         clock=fixed_clock,
     )
 
-    # depth=4 < SHALLOW_THRESHOLD(5) -> "shallow" bucket -> q_hat=0.30
     pos = qdf.post_quote(side="buy", price=10000, book_qty=4)
 
-    # max(1, int(4 * 0.30)) == max(1, 1) == 1 (truncation: int(1.2) == 1)
     assert pos.queue_ahead == 1
 
 
@@ -173,11 +140,10 @@ def test_queue_depletion_fill_unknown_cell_falls_back_to_qhat_fallback() -> None
     """
     table = QHatTable(_data={("TMFD6", 9, "shallow"): 0.30})
 
-    # hour=14 is not in the table -> lookup returns table.fallback (0.5).
-    fixed_clock = lambda: 14 * 3600 * 1_000_000_000  # noqa: E731
+    fixed_clock = lambda: 14 * 3600 * 1_000_000_000
 
     qdf = QueueDepletionFill(
-        queue_fraction=0.7,  # constructor qf intentionally != table.fallback
+        queue_fraction=0.7,
         q_hat_table=table,
         symbol="TMFD6",
         clock=fixed_clock,
@@ -185,5 +151,4 @@ def test_queue_depletion_fill_unknown_cell_falls_back_to_qhat_fallback() -> None
 
     pos = qdf.post_quote(side="buy", price=10000, book_qty=10)
 
-    # max(1, int(10 * 0.5)) == 5  (uses table.fallback=0.5, not _qf=0.7)
     assert pos.queue_ahead == 5

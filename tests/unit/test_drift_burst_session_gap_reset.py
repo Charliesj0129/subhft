@@ -18,8 +18,8 @@ def _fill_window(d: DriftBurstDetector, base_ts: int) -> None:
     """Push 100 small-diffusion ticks to warm the detector."""
     mid = 1_000_000
     for i in range(110):
-        mid += 10 if i % 2 == 0 else -10  # small oscillation
-        d.evaluate(mid_price_x2=mid, ts=base_ts + i * 1_000_000)  # 1ms apart
+        mid += 10 if i % 2 == 0 else -10
+        d.evaluate(mid_price_x2=mid, ts=base_ts + i * 1_000_000)
 
 
 class TestDriftBurstSessionGapReset:
@@ -27,13 +27,11 @@ class TestDriftBurstSessionGapReset:
         d = DriftBurstDetector(stale_reset_ns=300_000_000_000)
         t0 = 1_000_000_000_000
         _fill_window(d, t0)
-        assert d._count == 100  # warmed
+        assert d._count == 100
 
-        # 75 min gap (day close → night open)
         t_night = t0 + int(75 * 60 * 1e9)
         result = d.evaluate(mid_price_x2=1_001_000, ts=t_night)
 
-        # After reset, first post-gap tick must not trigger burst
         assert result.toxicity_score == 0.0
         assert not result.burst_detected
 
@@ -43,24 +41,23 @@ class TestDriftBurstSessionGapReset:
         _fill_window(d, t0)
         prior_count = d._count
 
-        # 1 min gap — should preserve state
         t_next = t0 + int(60 * 1e9)
         d.evaluate(mid_price_x2=1_000_100, ts=t_next)
-        assert d._count == prior_count  # window intact
+        assert d._count == prior_count
 
     def test_stale_reset_disabled_when_zero(self):
         d = DriftBurstDetector(stale_reset_ns=0)
         t0 = 1_000_000_000_000
         _fill_window(d, t0)
 
-        t_later = t0 + int(24 * 3600 * 1e9)  # 1 day
+        t_later = t0 + int(24 * 3600 * 1e9)
         d.evaluate(mid_price_x2=1_000_100, ts=t_later)
-        assert d._count == 100  # no reset
+        assert d._count == 100
 
     def test_zero_ts_does_not_trigger_reset(self):
         """Callers that pass ts=0 (legacy/test) must not hit the reset path."""
         d = DriftBurstDetector(stale_reset_ns=300_000_000_000)
-        _fill_window(d, 0)  # ts=0 throughout
+        _fill_window(d, 0)
         assert d._count == 100
 
     def test_session_open_after_night_close_no_false_halt(self):
@@ -69,9 +66,6 @@ class TestDriftBurstSessionGapReset:
         t0 = 1_000_000_000_000
         _fill_window(d, t0)
 
-        # Night open: 10bp jump (realistic Mini-TAIEX overnight move)
         t_night = t0 + int(75 * 60 * 1e9)
         result = d.evaluate(mid_price_x2=1_001_000, ts=t_night)
-        # Must NOT saturate to 1.0 even on a real jump — the detector
-        # reset, so first tick seeds _last_mid and returns zero toxicity.
         assert result.toxicity_score < 0.5

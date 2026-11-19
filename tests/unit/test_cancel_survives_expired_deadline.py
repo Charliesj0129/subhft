@@ -117,7 +117,6 @@ def _cmd(intent_type: IntentType, *, side: Side = Side.BUY, intent_id: int = 7, 
         target_order_id="OID-1" if intent_type == IntentType.CANCEL else "",
         reason="",
     )
-    # ``deadline_ns`` lives in the monotonic domain (see _intent_to_command).
     deadline = time.monotonic_ns() - 1_000_000 if expired else time.monotonic_ns() + 10**10
     return OrderCommand(
         cmd_id=intent_id,
@@ -141,7 +140,7 @@ async def _run_loop_once(adapter, cmd: OrderCommand) -> None:
     adapter.execute = AsyncMock()
     adapter.order_queue.put_nowait(cmd)
     task = asyncio.create_task(adapter.run())
-    await asyncio.wait_for(adapter.order_queue.join(), timeout=5.0)  # run() calls task_done() after each command
+    await asyncio.wait_for(adapter.order_queue.join(), timeout=5.0)
     adapter.running = False
     task.cancel()
     try:
@@ -158,7 +157,6 @@ async def _run_worker_once(adapter, cmd: OrderCommand) -> AsyncMock:
     adapter._dispatch_to_api = dispatch
     adapter._api_queue.put_nowait(cmd)
     worker = asyncio.create_task(adapter._api_worker())
-    # Done = the command left the queue, the coalesce buffer and the in-flight list.
     for _ in range(1000):
         if adapter._api_queue.empty() and not adapter._api_pending and not adapter._api_inflight:
             break
@@ -174,9 +172,6 @@ async def _run_worker_once(adapter, cmd: OrderCommand) -> AsyncMock:
     return dispatch
 
 
-# ── A1: run() pre-dispatch check ──────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("intent_type", [IntentType.CANCEL, IntentType.FORCE_FLAT])
 async def test_risk_reducing_command_past_deadline_is_still_executed_by_run(tmp_config, intent_type):
@@ -188,7 +183,6 @@ async def test_risk_reducing_command_past_deadline_is_still_executed_by_run(tmp_
     adapter.execute.assert_awaited_once_with(cmd)
     adapter._dlq.add.assert_not_awaited()
     assert _feedbacks(adapter) == []
-    # Counted once, where the command reaches the broker call (_api_worker) -- not here too.
     adapter.metrics.order_deadline_overridden_total.labels.assert_not_called()
 
 
@@ -216,9 +210,6 @@ async def test_amend_past_deadline_is_dropped_without_releasing_a_slot_it_never_
 
     adapter.execute.assert_not_awaited()
     assert _feedbacks(adapter) == []
-
-
-# ── A1: _api_worker check ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -275,9 +266,6 @@ async def test_a_future_deadline_cancel_is_dispatched_without_the_override_count
 
     dispatch.assert_awaited_once()
     mock_deps.order_deadline_overridden_total.labels.assert_not_called()
-
-
-# ── A2: dispatch exception ────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,6 @@ from hft_platform.risk.engine import RiskEngine
 
 from .conftest import make_bench_envelope, make_bench_intent
 
-# Load thresholds
 _THRESHOLDS_PATH = Path(__file__).parent / "thresholds.yaml"
 with open(_THRESHOLDS_PATH) as _f:
     _THRESHOLDS = yaml.safe_load(_f)
@@ -62,11 +61,9 @@ class TestRiskEvaluateLatency:
     def test_evaluate_p99_under_threshold(self, risk_engine: RiskEngine) -> None:
         intent = make_bench_intent()
 
-        # Warm up
         for _ in range(100):
             risk_engine.evaluate(intent)
 
-        # Measure
         durations_ns = _measure_ns(lambda: risk_engine.evaluate(intent), _ITERATIONS)
         durations_us = sorted(d / 1000.0 for d in durations_ns)
         p99 = _percentile(durations_us, 99)
@@ -95,7 +92,6 @@ class TestRiskEvaluateLatency:
         durations_us = sorted(d / 1000.0 for d in durations_ns)
         p99 = _percentile(durations_us, 99)
 
-        # CANCEL should be faster than the general threshold
         assert p99 < _RISK_P99_US, f"RiskEngine.evaluate(CANCEL) P99={p99:.1f}us exceeds threshold {_RISK_P99_US}us"
 
 
@@ -107,12 +103,10 @@ class TestGatewayEnvelopeLatency:
     async def test_process_envelope_p99_under_threshold(self, gateway_for_bench: GatewayService) -> None:
         svc = gateway_for_bench
 
-        # Warm up
         for i in range(100):
             env = make_bench_envelope(intent_id=i)
             await svc._process_envelope(env)
 
-        # Measure
         durations_ns: list[int] = []
         for i in range(_ITERATIONS):
             env = make_bench_envelope(intent_id=10_000 + i)
@@ -138,7 +132,6 @@ class TestNormalizeTickLatency:
 
         normalizer = MarketDataNormalizer()
 
-        # Simulate a Shioaji-like tick payload
         payload = {
             "code": "2330",
             "close": 500.0,
@@ -149,11 +142,9 @@ class TestNormalizeTickLatency:
             "intraday_odd": 0,
         }
 
-        # Warm up
         for _ in range(100):
             normalizer.normalize_tick(payload)
 
-        # Measure
         durations_ns = _measure_ns(lambda: normalizer.normalize_tick(payload), _ITERATIONS)
         durations_us = sorted(d / 1000.0 for d in durations_ns)
         p99 = _percentile(durations_us, 99)

@@ -32,10 +32,6 @@ def _to_date(value: object) -> date:
     return _EPOCH
 
 
-# ---------------------------------------------------------------------------
-# market_data
-# ---------------------------------------------------------------------------
-
 _MARKET_DATA_COLS: list[str] = [
     "symbol",
     "exchange",
@@ -50,7 +46,6 @@ _MARKET_DATA_COLS: list[str] = [
     "asks_vol",
     "seq_no",
     "trade_direction",
-    # Multi-instrument fields (added 2026-03-30)
     "instrument_type",
     "underlying",
     "strike_scaled",
@@ -84,7 +79,6 @@ def format_market_data(
         bids_vol = r.get("bids_vol") or r.get("bid_vol")
         asks_vol = r.get("asks_vol") or r.get("ask_vol")
 
-        # Normalize bid/ask arrays when provided as [[price, vol], ...]
         raw_bids = r.get("bids")
         raw_asks = r.get("asks")
         if raw_bids and isinstance(raw_bids, (list, tuple)) and isinstance(raw_bids[0], (list, tuple)):
@@ -94,7 +88,6 @@ def format_market_data(
             asks_price = [_to_scaled(p[0]) for p in raw_asks]
             asks_vol = [int(p[1]) for p in raw_asks]
 
-        # Convert float arrays to scaled int arrays (legacy support)
         if bids_price and isinstance(bids_price[0], float):
             bids_price = [_to_scaled(p) for p in bids_price]
         if asks_price and isinstance(asks_price[0], float):
@@ -103,7 +96,6 @@ def format_market_data(
         best_bid = r.get("best_bid") or (bids_price[0] if bids_price else None)
         best_ask = r.get("best_ask") or (asks_price[0] if asks_price else None)
 
-        # Handle price: prefer price_scaled, fallback to scaling float price
         if price_scaled is None:
             price_float = r.get("price") or r.get("mid_price")
             if price_float is None and best_bid is not None and best_ask is not None:
@@ -116,7 +108,6 @@ def format_market_data(
             else:
                 price_scaled = 0
 
-        # If we only have top-of-book, still store it as depth-1 arrays
         if not bids_price and best_bid is not None:
             bids_price = [_to_scaled(best_bid) if isinstance(best_bid, float) else int(best_bid)]
             bids_vol = [int(r.get("bid_depth") or 0)]
@@ -124,7 +115,6 @@ def format_market_data(
             asks_price = [_to_scaled(best_ask) if isinstance(best_ask, float) else int(best_ask)]
             asks_vol = [int(r.get("ask_depth") or 0)]
 
-        # Timestamp validation
         if ts:
             if _TS_MAX_FUTURE_NS:
                 now_ns = timebase.now_ns()
@@ -139,7 +129,6 @@ def format_market_data(
             if ingest_ts < ts:
                 ingest_ts = ts
 
-        # Warn on one-sided book (not tick, not both-empty)
         row_type = str(r.get("type") or "").strip().lower()
         has_bids = bool(bids_price)
         has_asks = bool(asks_price)
@@ -165,7 +154,6 @@ def format_market_data(
             asks_vol or [],
             int(r.get("seq_no", r.get("seq") or 0)),
             int(r.get("trade_direction", 0)),
-            # Multi-instrument fields (added 2026-03-30)
             r.get("instrument_type", ""),
             r.get("underlying", ""),
             int(r.get("strike_scaled", 0)),
@@ -176,10 +164,6 @@ def format_market_data(
 
     return _MARKET_DATA_COLS, data
 
-
-# ---------------------------------------------------------------------------
-# orders
-# ---------------------------------------------------------------------------
 
 _ORDERS_COLS: list[str] = [
     "order_id",
@@ -229,10 +213,6 @@ def format_orders(
     return _ORDERS_COLS, data
 
 
-# ---------------------------------------------------------------------------
-# trades / fills
-# ---------------------------------------------------------------------------
-
 _TRADES_COLS: list[str] = [
     "trade_id",
     "order_id",
@@ -275,10 +255,6 @@ def format_trades(
 
     return _TRADES_COLS, data
 
-
-# ---------------------------------------------------------------------------
-# fills (unified — targets hft.fills)
-# ---------------------------------------------------------------------------
 
 _FILLS_COLS: list[str] = [
     "ts_exchange",
@@ -339,10 +315,6 @@ def format_fills(
     return _FILLS_COLS, data
 
 
-# ---------------------------------------------------------------------------
-# risk_log
-# ---------------------------------------------------------------------------
-
 _RISK_LOG_COLS: list[str] = [
     "ts",
     "strategy_id",
@@ -375,11 +347,6 @@ def format_risk_log(
     return _RISK_LOG_COLS, data
 
 
-# ---------------------------------------------------------------------------
-# audit.* tables
-# ---------------------------------------------------------------------------
-
-
 def format_audit_table(table: str, rows: list[dict[str, Any]]) -> tuple[list[str], list[list]]:
     """Return ``(cols, data)`` for canonical audit tables."""
     from hft_platform.recorder.audit import _AUDIT_SCHEMA_DEFAULTS, _normalize_row
@@ -404,10 +371,6 @@ def format_audit_risk_log(rows: list[dict[str, Any]]) -> tuple[list[str], list[l
 def format_audit_guardrail_log(rows: list[dict[str, Any]]) -> tuple[list[str], list[list]]:
     return format_audit_table("audit.guardrail_log", rows)
 
-
-# ---------------------------------------------------------------------------
-# backtest_runs
-# ---------------------------------------------------------------------------
 
 _BACKTEST_RUNS_COLS: list[str] = [
     "run_id",
@@ -444,10 +407,6 @@ def format_backtest_runs(
 
     return _BACKTEST_RUNS_COLS, data
 
-
-# ---------------------------------------------------------------------------
-# pnl_snapshots
-# ---------------------------------------------------------------------------
 
 _PNL_SNAPSHOTS_COLS: list[str] = [
     "snapshot_ts",
@@ -490,10 +449,6 @@ def format_pnl_snapshots(
     return _PNL_SNAPSHOTS_COLS, data
 
 
-# ---------------------------------------------------------------------------
-# latency_spans
-# ---------------------------------------------------------------------------
-
 _LATENCY_SPANS_COLS: list[str] = [
     "ingest_ts",
     "stage",
@@ -524,10 +479,6 @@ def format_latency_spans(
 
     return _LATENCY_SPANS_COLS, data
 
-
-# ---------------------------------------------------------------------------
-# Dispatcher
-# ---------------------------------------------------------------------------
 
 _TABLE_FORMATTERS = {
     "market_data": ("hft.market_data", format_market_data),

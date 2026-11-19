@@ -96,8 +96,6 @@ def extract_signals(summary: dict[str, Any], family: str) -> SteeringSignals:
 
 
 def _has_cheap_near_miss(signals: SteeringSignals, cfg: GovernorConfig) -> bool:
-    # near_miss margins are signed distance-to-passing; a single-gate failure has
-    # margin < 0. "cheap to flip" = within the band just below the threshold.
     return any(
         float(nm.get("margin", -1.0)) >= -cfg.near_miss_margin_abs_max
         for nm in signals.near_misses
@@ -113,7 +111,6 @@ def classify_focus(signals: SteeringSignals, cfg: GovernorConfig) -> str:
         or rescue
     ):
         return "amplify"
-    # retire = literally zero survivors; a non-zero-but-tiny survival_rate falls through to deprioritize
     if signals.survival_rate == 0.0 and not rescue:
         return "retire"
     if signals.survival_rate <= cfg.deprioritize_survival_max:

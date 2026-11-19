@@ -36,8 +36,6 @@ def _runtime_with_client(interval_s: float = 0.001):
     client._quote_watchdog_interval_s = interval_s
     client._quote_watchdog_thread = None
     client._set_thread_alive_metric = mock.MagicMock()
-    # Real numerics: a MagicMock here would raise a TypeError of its own on
-    # every comparison and drown the error the test is actually about.
     client._quote_no_data_s = 10_000.0
     client._market_open_grace_s = 0.0
     client._last_quote_data_ts = time.time()
@@ -80,8 +78,6 @@ class TestWatchdogSurvivesATransientIterationError:
 
         type(client).logged_in = property(lambda _self: _flaky_logged_in())
         try:
-            # Reaching iteration 6 when iteration 2 raised is the proof: the
-            # old whole-loop try would have ended the thread at 2.
             ran_on = _run_watchdog_until(runtime, client, lambda: calls["n"] >= 6)
             assert ran_on, f"watchdog stopped after the error (iterations={calls['n']})"
             assert calls["n"] >= 6
@@ -93,7 +89,6 @@ class TestWatchdogSurvivesATransientIterationError:
         src = inspect.getsource(qr.QuoteRuntime.start_quote_watchdog)
         assert "error_decay_s" in src, "isolated errors must age out"
         assert "last_error_mono" in src
-        # The decay must be compared against a monotonic reading, not wall clock.
         assert "time.monotonic()" in src
 
     def test_a_persistently_failing_watchdog_still_gives_up(self):
@@ -123,14 +118,11 @@ class TestWatchdogSurvivesATransientIterationError:
         per_iteration_at = src.index("quote_watchdog_iteration_failed")
         thread_dead_at = src.index('"Quote watchdog thread crashed"')
 
-        # The per-iteration handler must sit between the loop head and the
-        # thread-level handler -- i.e. inside the loop, catching first.
         assert loop_at < per_iteration_at < thread_dead_at, (
             "the per-iteration handler must be inside the while loop and run "
             "before the thread-level one; a try wrapping the whole loop ends "
             "the thread on the first exception"
         )
-        # And it must be indented deeper than the loop head.
         loop_indent = len(src[:loop_at].rsplit("\n", 1)[1])
         handler_line_start = src.rindex("except Exception", 0, per_iteration_at)
         handler_indent = len(src[:handler_line_start].rsplit("\n", 1)[1])

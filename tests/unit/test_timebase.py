@@ -15,13 +15,11 @@ def test_coerce_ns_int_float_and_datetime():
     expected = int(naive.replace(tzinfo=timebase.TZINFO).timestamp() * 1e9)
     assert timebase.coerce_ns(naive) == expected
 
-    # int paths
     assert timebase.coerce_ns(1_700_000_000) == 1_700_000_000 * 1_000_000_000
     assert timebase.coerce_ns(1_700_000_000_000) == 1_700_000_000_000 * 1_000_000
     assert timebase.coerce_ns(1_700_000_000_000_000) == 1_700_000_000_000_000 * 1_000
     assert timebase.coerce_ns(1_700_000_000_000_000_000) == 1_700_000_000_000_000_000
 
-    # float paths
     assert timebase.coerce_ns(1_700_000_000.5) == int(1_700_000_000.5 * 1e9)
     assert timebase.coerce_ns(1_700_000_000_000.5) == int(1_700_000_000_000.5 * 1e6)
     assert timebase.coerce_ns(1_700_000_000_000_000.5) == int(1_700_000_000_000_000.5 * 1e3)

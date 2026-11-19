@@ -22,15 +22,12 @@ try:
 except ImportError:
     HYPOTHESIS_AVAILABLE = False
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
-_PRICE_MIN = 1_0000  # 1.0000 scaled
-_PRICE_MAX = 100_000_0000  # 100,000.0000 scaled
+_PRICE_MIN = 1_0000
+_PRICE_MAX = 100_000_0000
 _QTY_MIN = 1
 _QTY_MAX = 100
-_TS_BASE = 1_700_000_000_000_000_000  # arbitrary nanosecond epoch
+_TS_BASE = 1_700_000_000_000_000_000
 
 
 def _make_fill(
@@ -61,7 +58,6 @@ def _split_qty_into_parts(total: int, n: int, rng: random.Random) -> list[int]:
     """Split *total* into exactly *n* positive integer parts."""
     if n == 1:
         return [total]
-    # Use a "stars and bars" approach: pick (n-1) cut points in [1, total-1].
     if total < n:
         raise ValueError("Cannot split total into n positive parts")
     cuts = sorted(rng.sample(range(1, total), n - 1))
@@ -74,10 +70,6 @@ def _split_qty_into_parts(total: int, n: int, rng: random.Random) -> list[int]:
     return parts
 
 
-# ---------------------------------------------------------------------------
-# Hypothesis strategy: balanced fill sequences
-# ---------------------------------------------------------------------------
-
 if HYPOTHESIS_AVAILABLE:
 
     @st.composite
@@ -87,7 +79,6 @@ if HYPOTHESIS_AVAILABLE:
         n_sells = draw(st.integers(min_value=1, max_value=8))
         total_qty = draw(st.integers(min_value=max(n_buys, n_sells), max_value=500))
 
-        # Deterministic RNG seeded from hypothesis
         seed = draw(st.integers(min_value=0, max_value=2**31))
         rng = random.Random(seed)
 
@@ -102,14 +93,8 @@ if HYPOTHESIS_AVAILABLE:
             price = draw(st.integers(min_value=_PRICE_MIN, max_value=_PRICE_MAX))
             fills.append((Side.SELL, q, price))
 
-        # Shuffle order
         rng.shuffle(fills)
         return fills
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(not HYPOTHESIS_AVAILABLE, reason="hypothesis not installed")
@@ -136,7 +121,7 @@ class TestPositionInvariants:
         expected_fees = 0
         for seq, (side, qty, price) in enumerate(data):
             tax = seq * 5
-            fee = seq * 10 + tax  # deterministic all-in fee per fill: charge + tax
+            fee = seq * 10 + tax
             fill = _make_fill(side, qty, price, seq, fee=fee, tax=tax)
             expected_fees += fee
             pos.update(fill)

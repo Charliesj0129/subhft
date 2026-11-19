@@ -1,4 +1,3 @@
-# src/hft_platform/bot/handlers.py
 """Command handlers for the Telegram Bot."""
 
 from __future__ import annotations
@@ -19,16 +18,13 @@ _TZ = ZoneInfo("Asia/Taipei")
 
 PLATFORM_SCALE = 10_000
 
-# ---------------------------------------------------------------------------
-# Position store reference — set by bootstrap or bot app setup
-# ---------------------------------------------------------------------------
 
 _position_store_ref = None
 
 
 def set_position_store(store: object) -> None:
     """Set the PositionStore reference for bot commands."""
-    global _position_store_ref  # noqa: PLW0603
+    global _position_store_ref
     _position_store_ref = store
 
 
@@ -56,7 +52,6 @@ def _parse_report_args(args: list[str]) -> tuple[str, str | None]:
         if args[0].lower() in sessions:
             return default_symbol, args[0].lower()
         return args[0].upper(), None
-    # Two or more args: first = symbol, second = session
     symbol = args[0].upper()
     session = args[1].lower() if args[1].lower() in sessions else None
     return symbol, session
@@ -65,10 +60,9 @@ def _parse_report_args(args: list[str]) -> tuple[str, str | None]:
 def _prev_trading_date(now: datetime) -> str:
     """Return the most recent trading day (skip Sat/Sun) as YYYY-MM-DD."""
     d = now.astimezone(_TZ)
-    # weekday: 0=Mon .. 6=Sun
-    if d.weekday() == 5:  # Saturday → Friday
+    if d.weekday() == 5:
         d -= timedelta(days=1)
-    elif d.weekday() == 6:  # Sunday → Friday
+    elif d.weekday() == 6:
         d -= timedelta(days=2)
     return d.strftime("%Y-%m-%d")
 
@@ -103,7 +97,7 @@ def _collect_core_for_latest(symbol: str | None = None) -> Any:
             if sd.tick_count > 0:
                 return sd
 
-    return sd  # Return last attempt even if empty
+    return sd
 
 
 @owner_only
@@ -333,11 +327,9 @@ async def cmd_flow(update: Any, context: Any) -> None:
         f"成交量: {sd.volume:,}",
     ]
 
-    # Strongest bars
     lines.append(f"\n最強買: {flow.strongest_buy_bar.ts[-8:-3]} UD={flow.strongest_buy_bar.ud_ratio:.2f}")
     lines.append(f"最強賣: {flow.strongest_sell_bar.ts[-8:-3]} UD={flow.strongest_sell_bar.ud_ratio:.2f}")
 
-    # Segment summaries
     if fr.segments:
         lines.append("\n時段摘要：")
         for seg in fr.segments:
@@ -362,7 +354,7 @@ async def cmd_stop(update: Any, context: Any) -> None:
     try:
         path = await asyncio.to_thread(kill_switch.activate, f"TELEGRAM: {reason}", actor="telegram")
         token = await asyncio.to_thread(kill_switch.current_token)
-    except Exception as exc:  # noqa: BLE001 - the operator must hear that the stop did not land
+    except Exception as exc:
         _log.error("bot.stop_kill_switch_write_failed", error=str(exc), error_type=type(exc).__name__)
         await update.message.reply_text(
             f"❌ /stop 失敗：kill switch 沒有寫入（{type(exc).__name__}）。\n請在主機上執行 hft risk halt --reason ..."
@@ -430,7 +422,6 @@ async def cmd_pos(update: Any, context: Any) -> None:
         await update.message.reply_text("無持倉")
         return
 
-    # Group by strategy_id — skip flat (net_qty == 0) positions
     by_strategy: dict[str, list[tuple[str, int]]] = {}
     for _key, pos in positions.items():
         if pos.net_qty == 0:
@@ -440,7 +431,6 @@ async def cmd_pos(update: Any, context: Any) -> None:
             continue
         by_strategy.setdefault(strat, []).append((pos.symbol, pos.net_qty))
 
-    # Include recovery positions
     recovery = getattr(store, "_recovery_positions", {})
     for _rkey, rdata in recovery.items():
         if not isinstance(rdata, dict):
@@ -468,7 +458,6 @@ async def cmd_pos(update: Any, context: Any) -> None:
             total_by_symbol[symbol] = total_by_symbol.get(symbol, 0) + qty
         lines.append("")
 
-    # Aggregate footer — only shown when multiple strategies are present
     if len(by_strategy) > 1:
         lines.append("[合計]")
         for symbol in sorted(total_by_symbol):

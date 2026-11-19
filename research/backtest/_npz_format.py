@@ -61,8 +61,6 @@ class NpzFormatMismatchError(ValueError):
         )
 
 
-# hftbacktest.types.event_dtype field names (verified against the file
-# header schema; see docs/runbooks/npz-formats-2026-05-06.md).
 _HFTBT_EVENT_FIELDS: frozenset[str] = frozenset(
     {"ev", "exch_ts", "local_ts", "px", "qty", "order_id", "ival", "fval"}
 )
@@ -150,12 +148,8 @@ def detect_npz_format(path: str | Path) -> NpzFormat:
         depth = _read_meta_depth_levels(p)
         if depth is not None and depth >= 2:
             return NpzFormat.HFTBT_EVENT_L5
-        # Filename promised L5 but the sidecar doesn't confirm.  Treat as
-        # L1 (downgraded) so callers asking for L5 get a clear mismatch
-        # rather than a silent zero-MLDM degradation.
         return NpzFormat.HFTBT_EVENT_L1
 
-    # is_l1_candidate
     return NpzFormat.HFTBT_EVENT_L1
 
 

@@ -92,7 +92,6 @@ def _decompose(daily: list[dict]) -> dict:
     max_day_abs_share = max_day_abs / total_abs_pts if total_abs_pts > 0 else 0
     max_day_signed_share = max_day_signed / total_pts if abs(total_pts) > 1e-9 else 0
 
-    # Jackknife: total PnL excluding each day
     jackknife = []
     for i, d in enumerate(daily):
         without = total_pts - d["pnl_pts"]
@@ -107,12 +106,10 @@ def _decompose(daily: list[dict]) -> dict:
         )
     sign_flips = [j for j in jackknife if j["sign_flip"]]
 
-    # Top-N contribution
     top1_abs = rows_sorted_abs[0]["pnl_pts"] if rows_sorted_abs else 0
     top2_abs_sum = sum(abs(r["pnl_pts"]) for r in rows_sorted_abs[:2])
     top3_abs_sum = sum(abs(r["pnl_pts"]) for r in rows_sorted_abs[:3])
 
-    # Bootstrap CI on mean daily PnL
     rng = random.Random(_BOOTSTRAP_SEED)
     bootstrap_means = []
     for _ in range(_BOOTSTRAP_ITERS):
@@ -169,10 +166,8 @@ def _verdict(d: dict) -> tuple[str, list[str]]:
     sign_flips = d["n_jackknife_sign_flips"]
     top2_share = d["top2_abs_share"]
 
-    # DIFFUSE-SURVIVE: max_day <= 25% AND winning_days >= 5 AND no jackknife sign-flip
     diffuse = max_share <= 0.25 and win_days >= 5 and sign_flips == 0
 
-    # OUTLIER-KILL: 1-2 days contribute >50% AND jackknife flips sign when excluded
     outlier = top2_share > 0.50 and sign_flips >= 1
 
     if diffuse:
@@ -228,7 +223,6 @@ def main() -> int:
         "verdict_notes": notes,
     }
 
-    # Human-readable header to stderr
     print(file=sys.stderr)
     print("=" * 72, file=sys.stderr)
     print(f"A1 day decomposition — {_INSTRUMENT} @ {_PROFILE_NAME}", file=sys.stderr)
@@ -246,7 +240,6 @@ def main() -> int:
         print(f"  - {n}", file=sys.stderr)
     print(file=sys.stderr)
 
-    # JSON output to stdout (for programmatic consumption)
     print(json.dumps(out, indent=2))
     return 0
 

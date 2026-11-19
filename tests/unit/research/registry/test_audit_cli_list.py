@@ -67,7 +67,6 @@ class TestAuditCliList:
         _record(run_id="r27_a", strategy="alpha_one", edge=12.5)
         _record(run_id="r27_b", strategy="alpha_two", edge=6.5, blocking_passed=False, triage="killed")
         out = audit_cli.list_runs()
-        # Header + separator + 2 rows + footer.
         assert "run_id" in out and "edge" in out and "triage" in out
         assert "12.50" in out
         assert "6.50" in out

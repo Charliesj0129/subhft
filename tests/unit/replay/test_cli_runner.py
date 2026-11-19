@@ -357,9 +357,6 @@ def test_build_strategy_factory_happy_path_returns_callable() -> None:
     )
     assert factory is not None
     instance = factory(rng=None)
-    # importlib.import_module may resolve to a re-imported copy of the test
-    # module under conftest collection, so compare by class qualname rather
-    # than identity.
     assert type(instance).__name__ == "_EchoStrategy"
 
 

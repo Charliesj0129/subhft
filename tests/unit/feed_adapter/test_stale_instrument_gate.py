@@ -23,19 +23,10 @@ from hft_platform.feed_adapter.shioaji.contracts_runtime import (
     assert_not_expired,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_contract(code: str, delivery_date: date) -> SimpleNamespace:
     """Return a minimal fake contract object with code and delivery_date."""
     return SimpleNamespace(code=code, delivery_date=delivery_date)
-
-
-# ---------------------------------------------------------------------------
-# Unit tests for assert_not_expired
-# ---------------------------------------------------------------------------
 
 
 class TestAssertNotExpired:
@@ -59,7 +50,6 @@ class TestAssertNotExpired:
         today = date(2026, 5, 5)
         contract = _make_contract("TMFE6", today)
 
-        # Critical rollover-day-safe requirement: returns None on success.
         assert assert_not_expired(contract, today=today) is None
 
     def test_passes_for_future_delivery(self) -> None:
@@ -136,11 +126,6 @@ class TestUndatedInstruments:
             assert_not_expired(contract, today=date(2026, 5, 5))
 
 
-# ---------------------------------------------------------------------------
-# StaleInstrumentError smoke test
-# ---------------------------------------------------------------------------
-
-
 class TestStaleInstrumentError:
     """StaleInstrumentError must be a proper Exception subclass."""
 
@@ -153,21 +138,14 @@ class TestStaleInstrumentError:
         assert "TXFD6" in str(err)
 
 
-# ---------------------------------------------------------------------------
-# Bootstrap-level integration test
-# ---------------------------------------------------------------------------
-
-
 class TestBootstrapRefusesStartOnStaleSubscription:
     """Bootstrap must refuse to start if any subscribed contract is stale."""
 
     def test_bootstrap_refuses_start_on_stale_subscription(self) -> None:
         """Importing and calling the bootstrap gate with a stale contract raises."""
         today = date(2026, 5, 5)
-        # Simulate a stale TXO contract from April 2026
         stale_contract = _make_contract("TXO15000C6", date(2026, 4, 15))
 
-        # The gate must block this subscription
         with pytest.raises(StaleInstrumentError) as exc_info:
             assert_not_expired(stale_contract, today=today)
 
@@ -178,13 +156,7 @@ class TestBootstrapRefusesStartOnStaleSubscription:
         today = date(2026, 5, 5)
         rollover_contract = _make_contract("TMFE6", today)
 
-        # Must succeed without exception; function returns None.
         assert assert_not_expired(rollover_contract, today=today) is None
-
-
-# ---------------------------------------------------------------------------
-# Iteration helper used by services/bootstrap.py post-connect hook
-# ---------------------------------------------------------------------------
 
 
 class TestAssertNoStaleSubscriptions:
@@ -213,7 +185,7 @@ class TestAssertNoStaleSubscriptions:
 
         def _lookup(exch: str, code: str, ptype: str | None) -> SimpleNamespace:
             if code == "TXO15000C6":
-                return _make_contract(code, date(2026, 4, 15))  # 20 days expired
+                return _make_contract(code, date(2026, 4, 15))
             return _make_contract(code, today + datetime.timedelta(days=30))
 
         log = MagicMock()
@@ -232,17 +204,16 @@ class TestAssertNoStaleSubscriptions:
         symbols = [{"code": "GHOST", "exchange": "TAIFEX", "product_type": "future"}]
         log = MagicMock()
 
-        # Contract resolution returns None → helper must NOT raise (let preflight handle it)
         assert_no_stale_subscriptions(symbols, lambda *_: None, today=today, log=log)
         assert not log.error.called
 
     def test_skips_malformed_symbol_entries(self) -> None:
         today = date(2026, 5, 5)
         symbols = [
-            {"exchange": "TAIFEX"},  # no code
-            {"code": "TMFR1"},  # no exchange
-            "not-a-dict",  # not a mapping
-            {"code": "OK", "exchange": "TAIFEX"},  # valid → resolved
+            {"exchange": "TAIFEX"},
+            {"code": "TMFR1"},
+            "not-a-dict",
+            {"code": "OK", "exchange": "TAIFEX"},
         ]
 
         def _lookup(exch: str, code: str, ptype: str | None) -> SimpleNamespace:

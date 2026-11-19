@@ -10,8 +10,6 @@ import pytest
 
 from hft_platform.recorder.wal import WALWriter
 
-# ── WALWriter construction ────────────────────────────────────────────────
-
 
 class TestWALWriterInit:
     def test_default(self, tmp_path):
@@ -28,13 +26,10 @@ class TestWALWriterInit:
             assert w._metrics is None
 
 
-# ── _check_disk_space ─────────────────────────────────────────────────────
-
-
 class TestCheckDiskSpace:
     def test_sufficient_space(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
-        w._last_disk_check_ts = 0  # force check
+        w._last_disk_check_ts = 0
         result = w._check_disk_space()
         assert result is True
 
@@ -43,19 +38,19 @@ class TestCheckDiskSpace:
         w._last_disk_check_ts = time.monotonic()
         w._disk_full = True
         result = w._check_disk_space()
-        assert result is False  # cached disk_full
+        assert result is False
 
     def test_oserror_fail_open(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
         w._last_disk_check_ts = 0
         with patch("os.statvfs", side_effect=OSError("no stat")):
             result = w._check_disk_space()
-            assert result is True  # fail open
+            assert result is True
 
     def test_low_space_activates_breaker(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
         w._last_disk_check_ts = 0
-        w._disk_min_mb = 999999999  # impossibly high
+        w._disk_min_mb = 999999999
         result = w._check_disk_space()
         assert result is False
         assert w._disk_full is True
@@ -64,13 +59,10 @@ class TestCheckDiskSpace:
         w = WALWriter(str(tmp_path / "wal"))
         w._last_disk_check_ts = 0
         w._disk_full = True
-        w._disk_min_mb = 0  # any space is enough
+        w._disk_min_mb = 0
         result = w._check_disk_space()
         assert result is True
         assert w._disk_full is False
-
-
-# ── _handle_disk_pressure_skip ────────────────────────────────────────────
 
 
 class TestHandleDiskPressureSkip:
@@ -88,14 +80,11 @@ class TestHandleDiskPressureSkip:
             w._handle_disk_pressure_skip("test_table", 5, writer="wal")
 
 
-# ── _maybe_fsync_file ─────────────────────────────────────────────────────
-
-
 class TestMaybeFsyncFile:
     def test_disabled(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
         w._fsync_file_enabled = False
-        w._maybe_fsync_file(0, writer="wal")  # no-op
+        w._maybe_fsync_file(0, writer="wal")
         assert w._fsync_file_enabled is False
 
     def test_enabled(self, tmp_path):
@@ -111,26 +100,20 @@ class TestMaybeFsyncFile:
         assert w._fsync_file_enabled is True
 
 
-# ── _maybe_fsync_dir ──────────────────────────────────────────────────────
-
-
 class TestMaybeFsyncDir:
     def test_skipped_within_interval(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
-        w._dir_fsync_min_ms = 60000  # very high
+        w._dir_fsync_min_ms = 60000
         ts_before = time.monotonic()
         w._last_dir_fsync_ts = ts_before
-        w._maybe_fsync_dir(str(tmp_path), writer="wal")  # skipped
-        assert w._last_dir_fsync_ts == ts_before  # unchanged — was skipped
+        w._maybe_fsync_dir(str(tmp_path), writer="wal")
+        assert w._last_dir_fsync_ts == ts_before
 
     def test_runs_when_threshold_zero(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
         w._dir_fsync_min_ms = 0
         w._maybe_fsync_dir(str(tmp_path), writer="wal")
         assert w._dir_fsync_min_ms == 0
-
-
-# ── _record_* metrics no-ops ──────────────────────────────────────────────
 
 
 class TestMetricsNoOps:
@@ -140,7 +123,7 @@ class TestMetricsNoOps:
         w._record_wal_write_latency("wal", "atomic", 1.0)
         w._record_fsync_latency("wal", "file", 0.5)
         w._set_disk_pressure_metrics(100.0, False, "wal")
-        assert w._metrics is None  # confirms no side-effect
+        assert w._metrics is None
 
     def test_with_metrics(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
@@ -150,15 +133,12 @@ class TestMetricsNoOps:
         m.recorder_wal_write_latency_ms.labels.assert_called()
 
 
-# ── write async ───────────────────────────────────────────────────────────
-
-
 class TestWrite:
     @pytest.mark.asyncio
     async def test_disk_full_returns_false(self, tmp_path):
         w = WALWriter(str(tmp_path / "wal"))
         w._disk_full = True
-        w._last_disk_check_ts = time.monotonic()  # cached
+        w._last_disk_check_ts = time.monotonic()
         result = await w.write("test", [{"a": 1}])
         assert result is False
 

@@ -54,7 +54,7 @@ class _StrictPydanticTrade:
     order = None
     status = None
 
-    def __setattr__(self, name: str, value: Any) -> None:  # noqa: D401
+    def __setattr__(self, name: str, value: Any) -> None:
         raise ValueError(f'"Trade" object has no field "{name}"')
 
 
@@ -163,7 +163,6 @@ async def test_dispatch_succeeds_when_trade_setattr_raises_value_error(tmp_confi
     intent = _make_intent(intent_id=42)
     cmd = _make_cmd(intent)
 
-    # Must not raise; must return True (dispatch succeeded at broker)
     result = await adapter._dispatch_to_api(cmd)
 
     assert result is True, "dispatch must succeed even when trade.timestamp setattr raises ValueError"

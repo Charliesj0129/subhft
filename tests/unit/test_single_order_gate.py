@@ -99,7 +99,6 @@ def _adapter(tmp_path, monkeypatch, *, gateway_on: bool, order_mode: str = "sim"
     oa.platform_degrade_controller = None
     oa._storm_guard = None
     oa._record_local_reject = MagicMock()
-    # Accepted commands stay on ``_api_queue``: no worker drains it here.
     oa.running = True
     return oa
 
@@ -204,9 +203,6 @@ async def test_gateway_refusal_releases_exposure_and_commits_dedup(tmp_path, mon
     assert svc._dispatched == 0 and svc._rejected == 1
 
 
-# ── HFT_ORDER_MODE at dispatch ────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("intent_type", [IntentType.NEW, IntentType.FORCE_FLAT, IntentType.AMEND])
 async def test_order_mode_disabled_refuses_every_order_but_a_cancel(tmp_path, monkeypatch, intent_type):
@@ -269,9 +265,6 @@ def test_shioaji_facade_reports_its_session_mode():
     assert facade.mode == "simulation"
 
 
-# ── Risk-engine fast paths ────────────────────────────────────────────────
-
-
 def _engine(config: dict, position: int = 0):
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
     yaml.dump(config, tmp)
@@ -302,7 +295,7 @@ _CFG = {
 def test_fast_gate_kill_flag_does_not_block_a_force_flat():
     engine = _engine(_CFG, position=1)
     engine._fast_gate = MagicMock()
-    engine._fast_gate.check.return_value = (False, 1)  # FASTGATE_KILL_SWITCH
+    engine._fast_gate.check.return_value = (False, 1)
 
     flat = engine.evaluate(_intent(IntentType.FORCE_FLAT, side=Side.SELL))
     opener = engine.evaluate(_intent(IntentType.NEW, side=Side.BUY))
@@ -325,7 +318,7 @@ def test_fast_gate_kill_flag_does_not_block_a_reducing_order():
 def test_rust_validator_does_not_judge_a_reducing_order():
     engine = _engine(_CFG, position=1)
     engine._rust_validator = MagicMock()
-    engine._rust_validator.check.return_value = (False, 4)  # MAX_NOTIONAL_EXCEEDED
+    engine._rust_validator.check.return_value = (False, 4)
 
     cover = engine.evaluate(_intent(IntentType.NEW, side=Side.SELL))
     opener = engine.evaluate(_intent(IntentType.NEW, side=Side.BUY))
@@ -340,7 +333,7 @@ def test_rust_approval_does_not_skip_a_per_root_price_cap():
     engine._rust_validator = MagicMock()
     engine._rust_validator.check.return_value = (True, 0)
 
-    decision = engine.evaluate(_intent(IntentType.NEW, side=Side.BUY))  # 46,600 > the 40,000 TMF cap
+    decision = engine.evaluate(_intent(IntentType.NEW, side=Side.BUY))
 
     assert not decision.approved
     assert "CAP" in str(decision.reason_code).upper()

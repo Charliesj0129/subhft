@@ -147,8 +147,6 @@ async def test_watch_reads_the_runner_and_feed_and_publishes(monkeypatch: pytest
         return metrics
 
     task = asyncio.create_task(run_front_month_watch(runner, feed, metrics_getter=_metrics_getter, interval_s=60))
-    # The first evaluation loads the exchange calendar in a worker thread; wait
-    # for the publish itself rather than a fixed sleep.
     await asyncio.wait_for(published.wait(), timeout=20)
     task.cancel()
 

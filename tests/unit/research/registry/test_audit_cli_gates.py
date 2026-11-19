@@ -65,16 +65,13 @@ class TestAuditCliGates:
             ],
         )
         out = audit_cli.gates()
-        # min_sample_size: 2 evaluated, 2 failed → top of the table.
         lines = out.split("\n")
-        # Header + separator + body lines + footer.
         body = [ln for ln in lines if ln and not ln.startswith(("sub_gate", "---", "("))]
         assert body[0].startswith("min_sample_size")
         assert "100.0%" in body[0]
         st = next(ln for ln in body if ln.startswith("sharpe_threshold"))
         assert "50.0%" in st
         rp = next(ln for ln in body if ln.startswith("replay_parity"))
-        # 1 evaluated, 0 failed, 1 errored, 0.0% fail rate.
         assert "0.0%" in rp
         assert rp.split()[1:5] == ["1", "0", "1", "0.0%"]
 
@@ -83,10 +80,10 @@ class TestAuditCliGates:
             run_id="g_sort",
             sub_gates=[
                 _g("low_fail", False),
-                _g("low_fail", True),  # 1 fail / 2 evaluated
+                _g("low_fail", True),
                 _g("hi_fail", False),
                 _g("hi_fail", False),
-                _g("hi_fail", False),  # 3 fails
+                _g("hi_fail", False),
             ],
         )
         out = audit_cli.gates()
@@ -105,9 +102,7 @@ class TestAuditCliGates:
         )
         out = audit_cli.gates(top=2)
         assert "(2 sub-gates across 1 rows)" in out
-        # 3 entries -> top=2 keeps 2 of them.  The 'sub_gate' header also
-        # contains '_gate'; subtract its 1 occurrence.
-        body_count = out.count("_gate") - 1  # one for the header
+        body_count = out.count("_gate") - 1
         assert body_count == 2
 
     def test_filter_strategy_type(self, _isolated) -> None:

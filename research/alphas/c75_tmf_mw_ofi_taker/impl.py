@@ -56,19 +56,14 @@ from research.registry.schemas import (
     AlphaTier,
 )
 
-# FE-v3 indices (mirror of src/hft_platform/feature/registry.py
-# build_default_lob_feature_set_v3 layout).
 IDX_OFI_L1_EMA5S: int = 22
 IDX_OFI_L1_EMA30S: int = 23
 IDX_SPREAD_EMA30S: int = 25
 IDX_SPREAD_EMA300S: int = 26
 
-# Frozen weights (post-D2 rebalanced from 0.6/0.3 to 0.667/0.333 to
-# preserve the original 6:3 ratio after dropping the deep-momentum term).
 W_OFI_5S: float = 0.667
 W_OFI_30S: float = 0.333
 
-# Fire-gate constants.
 FIRE_THRESHOLD_STDEV_MULTIPLIER: float = 1.5
 FIRE_THRESHOLD_WINDOW_TICKS: int = 300
 SPREAD_REGIME_MULTIPLIER: float = 1.5
@@ -145,7 +140,7 @@ class C75TmfMwOfiTakerAlpha:
             ),
             formula="alpha_t = 0.667 * ofi_l1_ema5s_t + 0.333 * ofi_l1_ema30s_t",
             paper_refs=("Cont-Kukanov 2014 OFI",),
-            data_fields=(),  # FE-v3 derived features; no raw data_fields required
+            data_fields=(),
             complexity="O(1)",
             status=AlphaStatus.GATE_B,
             tier=AlphaTier.TIER_2,
@@ -160,8 +155,6 @@ class C75TmfMwOfiTakerAlpha:
         )
 
     def update(self, *args: Any, **kwargs: Any) -> float:
-        # Bridge passes payload as kwargs; pick out the feature tuple either
-        # from kwargs.features or the first positional arg.
         payload: Mapping[str, Any]
         if args and isinstance(args[0], Mapping):
             payload = args[0]
@@ -194,7 +187,6 @@ class C75TmfMwOfiTakerAlpha:
         return self._update_count >= WARMUP_TICKS
 
     def spread_regime_ok(self) -> bool:
-        # If we have no baseline yet, treat as anomalous (gate closed).
         if self._last_spread_ema300s <= 0.0:
             return False
         return self._last_spread_ema30s <= SPREAD_REGIME_MULTIPLIER * self._last_spread_ema300s
@@ -204,8 +196,6 @@ class C75TmfMwOfiTakerAlpha:
         n = len(self._signal_history)
         if n < FIRE_THRESHOLD_WINDOW_TICKS:
             return float("inf")
-        # Population stdev (no Bessel correction; consistent with frozen
-        # window length).
         mean = sum(self._signal_history) / n
         var = sum((x - mean) ** 2 for x in self._signal_history) / n
         stdev = var ** 0.5

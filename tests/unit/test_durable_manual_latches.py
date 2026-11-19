@@ -65,11 +65,6 @@ def _system(validator: DailyLossLimitValidator | None = None) -> HFTSystem:
     return system
 
 
-# ---------------------------------------------------------------------------
-# The latch store
-# ---------------------------------------------------------------------------
-
-
 class TestManualLatchStore:
     def test_activate_writes_a_latch_that_active_reports(self) -> None:
         assert manual_latches.activate(manual_latches.DAILY_LOSS, "DAILY_LOSS_LIMIT", actor="engine") is True
@@ -124,11 +119,6 @@ class TestManualLatchStore:
         assert manual_latches.latch_dir() == Path(".state/manual_latches")
 
 
-# ---------------------------------------------------------------------------
-# Kill switch: durable write, bind-mounted default, legacy path honoured
-# ---------------------------------------------------------------------------
-
-
 class TestKillSwitchDurability:
     def test_default_path_is_under_state(self, monkeypatch) -> None:
         monkeypatch.delenv(kill_switch.PATH_ENV, raising=False)
@@ -138,7 +128,6 @@ class TestKillSwitchDurability:
         target = tmp_path / "ks" / "kill_switch"
         kill_switch.activate("op", actor="cli", path=str(target))
         assert json.loads(target.read_text())["reason"] == "op"
-        # The lock is kept on purpose (it serializes activate with release); a temp file is not.
         assert sorted(p.name for p in target.parent.iterdir()) == ["kill_switch", "kill_switch.lock"]
 
     def test_legacy_runtime_latch_is_still_active_and_removed_by_resume(self, tmp_path, monkeypatch) -> None:
@@ -153,11 +142,6 @@ class TestKillSwitchDurability:
         assert kill_switch.deactivate() is True
         assert not legacy.exists()
         assert kill_switch.is_active() is False
-
-
-# ---------------------------------------------------------------------------
-# StormGuard hold
-# ---------------------------------------------------------------------------
 
 
 class TestManualLatchHold:
@@ -187,11 +171,6 @@ class TestManualLatchHold:
         guard.set_daily_loss_hold(False)
         guard.set_kill_switch_hold(False)
         assert guard.manual_latch_hold is True
-
-
-# ---------------------------------------------------------------------------
-# Validator state export / restore
-# ---------------------------------------------------------------------------
 
 
 class TestDailyLossStateRoundTrip:
@@ -236,7 +215,7 @@ class TestDailyLossStateRoundTrip:
         assert after.halt_reason == ""
         assert after.export_state()["accumulated"] == {"R47": -9_000_000}
         assert after.export_state()["halt_release_pending"] is False
-        assert after.export_state()["peak_pnl_scaled"] == 0  # legacy key only, never the restored peak
+        assert after.export_state()["peak_pnl_scaled"] == 0
 
     def test_malformed_state_raises_and_changes_nothing(self) -> None:
         state = _validator().export_state()
@@ -245,11 +224,6 @@ class TestDailyLossStateRoundTrip:
         with pytest.raises(ValueError):
             after.restore_state(state)
         assert after.halt_triggered is False
-
-
-# ---------------------------------------------------------------------------
-# Engine wiring: latch on the hard limit, persist, restore at boot
-# ---------------------------------------------------------------------------
 
 
 class TestSupervisorSync:
@@ -335,7 +309,7 @@ class TestSupervisorSync:
         asyncio.run(system._sync_manual_latches())
 
         self._roll_the_day(v)
-        _latch_daily(v)  # roll seen, but no complete snapshot yet
+        _latch_daily(v)
         asyncio.run(system._sync_manual_latches())
 
         assert "daily_loss" in manual_latches.active()
@@ -375,7 +349,6 @@ class TestSupervisorSync:
         asyncio.run(first._sync_manual_latches())
         assert daily_loss_state.state_path().exists()
 
-        # New process: fresh validator, fresh StormGuard; only the disk carries over.
         fresh = _validator()
         second = _system(fresh)
         second._restore_daily_loss_state()
@@ -402,11 +375,6 @@ class TestSupervisorSync:
         assert "manual_latches.DAILY_LOSS in self._manual_latches_active" in src
 
 
-# ---------------------------------------------------------------------------
-# Reconciliation mismatch
-# ---------------------------------------------------------------------------
-
-
 class TestReconciliationMismatchLatch:
     def test_mismatch_halt_writes_the_latch(self) -> None:
         from hft_platform.execution.reconciliation import ReconciliationService
@@ -421,11 +389,6 @@ class TestReconciliationMismatchLatch:
         assert list(latches) == ["reconciliation_mismatch"]
         assert latches["reconciliation_mismatch"].startswith("RECONCILIATION_MISMATCH: 1 critical")
         assert service.storm_guard.state == StormGuardState.HALT
-
-
-# ---------------------------------------------------------------------------
-# CLI and config
-# ---------------------------------------------------------------------------
 
 
 class TestRearmCli:
@@ -459,5 +422,4 @@ class TestProdLimits:
         v = DailyLossLimitValidator(cfg)
         assert v._hard_limit_threshold_scaled == 15_000 * 10_000
         assert v.position_loss_limit_scaled == 5_000 * 10_000
-        # The fallback stays above the operative cap (test_daily_loss_limit_precedence).
         assert cfg["global_defaults"]["max_daily_loss"] == 20_000 * 10_000

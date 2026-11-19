@@ -54,9 +54,6 @@ def _kill(alpha_id: str, kill_id: str, killed_by: str = "cli:kill:op", reason: s
     return {"alpha_id": alpha_id, "kill_id": kill_id, "gate": "C", "reason": reason, "killed_by": killed_by}
 
 
-# --- evidence root ---------------------------------------------------------
-
-
 def test_init_root_creates_the_layout_and_a_local_git_repo(tmp_path: Path) -> None:
     root = tmp_path / "ev"
     created = init_root(root)
@@ -96,9 +93,6 @@ def test_read_legacy_kills_malformed_line_raises(tmp_path: Path) -> None:
     path.write_text('{"alpha_id": "a"}\n', encoding="utf-8")
     with pytest.raises(ValueError, match="legacy_kill.v1"):
         list(EvidenceWriter(tmp_path).read_legacy_kills())
-
-
-# --- legacy adapter: quarantine -------------------------------------------
 
 
 def test_known_alpha_ids_covers_alphas_and_archive_batches(research_tree: Path) -> None:
@@ -172,9 +166,6 @@ def test_combined_run_stats_counts_both_roots(research_tree: Path, evidence: Pat
     assert stats["new_candidate"]["governed_run_count"] == 1
 
 
-# --- legacy adapter: kill sources -----------------------------------------
-
-
 def test_read_jsonl_kills_flags_fixtures_and_keeps_operator_kills(research_tree: Path, tmp_path: Path) -> None:
     path = tmp_path / "kills.jsonl"
     rows = [
@@ -215,9 +206,6 @@ def test_read_ch_kills_only_selects_and_converts_the_timestamp(research_tree: Pa
     assert client.queries[0].startswith("SELECT ") and "audit.alpha_kill_ledger" in client.queries[0]
     assert kill["killed_at"] == int(killed_at.timestamp()) * 1_000_000_000
     assert (kill["alpha_id"], kill["gate"], kill["source"], kill["quarantine"]) == ("real", "D", "clickhouse", None)
-
-
-# --- CLI ------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -379,9 +367,6 @@ def test_factory_index_records_run_counts_from_both_roots(research_tree, evidenc
         1,
     )
     assert row["latest_run_id"] == "gov1"
-
-
-# --- review fixes ----------------------------------------------------------
 
 
 def test_known_alpha_ids_includes_a_manifest_id_that_differs_from_the_directory(research_tree: Path) -> None:

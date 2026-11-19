@@ -20,10 +20,6 @@ from hft_platform.config._symbols_types import (
     SymbolBuildResult,
 )
 
-# ---------------------------------------------------------------------------
-# load_metrics_cache
-# ---------------------------------------------------------------------------
-
 
 class TestLoadMetricsCache:
     def test_returns_empty_dict_when_path_is_empty_string(self):
@@ -116,11 +112,6 @@ class TestLoadMetricsCache:
         assert result == {}
 
 
-# ---------------------------------------------------------------------------
-# load_contract_cache
-# ---------------------------------------------------------------------------
-
-
 class TestLoadContractCache:
     def test_returns_none_when_path_empty(self):
         result = load_contract_cache(path="")
@@ -192,11 +183,6 @@ class TestLoadContractCache:
         assert result.metrics_by_code == {}
 
 
-# ---------------------------------------------------------------------------
-# write_contract_cache
-# ---------------------------------------------------------------------------
-
-
 class TestWriteContractCache:
     def test_creates_new_file_with_version_1(self, tmp_path):
         dest = tmp_path / "contracts.json"
@@ -227,15 +213,9 @@ class TestWriteContractCache:
     def test_handles_corrupt_existing_file_gracefully(self, tmp_path):
         dest = tmp_path / "contracts.json"
         dest.write_text("{{corrupt}}")
-        # Should not raise; version should default to 1
         write_contract_cache([{"code": "2330"}], path=str(dest))
         data = json.loads(dest.read_text())
         assert data["cache_version"] == 1
-
-
-# ---------------------------------------------------------------------------
-# write_symbols_yaml
-# ---------------------------------------------------------------------------
 
 
 class TestWriteSymbolsYaml:
@@ -262,11 +242,6 @@ class TestWriteSymbolsYaml:
         write_symbols_yaml(symbols, output_path=str(dest))
         loaded = yaml.safe_load(dest.read_text())
         assert loaded["symbols"] == symbols
-
-
-# ---------------------------------------------------------------------------
-# validate_symbols
-# ---------------------------------------------------------------------------
 
 
 class TestValidateSymbols:
@@ -389,11 +364,6 @@ class TestValidateSymbols:
         assert scale_errors == []
 
 
-# ---------------------------------------------------------------------------
-# preview_lines
-# ---------------------------------------------------------------------------
-
-
 class TestPreviewLines:
     def test_shows_symbol_count(self):
         result = SymbolBuildResult(symbols=[{"code": "2330", "exchange": "TSE"}])
@@ -429,7 +399,6 @@ class TestPreviewLines:
         symbols = [{"code": str(i), "exchange": "TSE"} for i in range(20)]
         result = SymbolBuildResult(symbols=symbols)
         lines = preview_lines(result, sample=3)
-        # Only the first 3 should appear in sample line
         sample_line = next((l for l in lines if "sample=" in l), "")
         assert sample_line.count("(") == 3
 

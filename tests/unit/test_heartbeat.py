@@ -43,8 +43,8 @@ def test_write_heartbeat_failure_does_not_raise():
     from hft_platform.services.heartbeat import write_heartbeat
 
     path = "/nonexistent/dir/heartbeat.tmp"
-    write_heartbeat(path)  # Should not raise when directory doesn't exist
-    assert not os.path.exists(path)  # File was not created (directory missing)
+    write_heartbeat(path)
+    assert not os.path.exists(path)
 
 
 def test_write_heartbeat_writes_pid():

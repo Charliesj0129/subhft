@@ -22,16 +22,12 @@ from research.alphas.r52_amhp_dynamic_spread.impl import (
     R52AmhpDynamicSpreadStrategy,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_lob_stats(
     symbol: str = "TMFD6",
     *,
     mid_price_x2: int = 2_000_0000,
-    spread_scaled: int = 6 * _PRICE_SCALE,   # 6 pt observed spread
+    spread_scaled: int = 6 * _PRICE_SCALE,
     imbalance: float = 0.0,
     best_bid: int = 997_0000,
     best_ask: int = 1003_0000,
@@ -54,7 +50,7 @@ def _make_lob_stats(
 
 def _make_features(symbol: str = "TMFD6", l1_imb_ppm: int = 0) -> FeatureUpdateEvent:
     values = [0] * 22
-    values[10] = l1_imb_ppm   # _IDX_L1_IMBALANCE_PPM
+    values[10] = l1_imb_ppm
     return FeatureUpdateEvent(
         symbol=symbol,
         ts=0,
@@ -70,8 +66,9 @@ def _make_features(symbol: str = "TMFD6", l1_imb_ppm: int = 0) -> FeatureUpdateE
     )
 
 
-def _make_tick(symbol: str = "TMFD6", direction: int = 1, ts_ns: int = 0,
-               price: int = 1000_0000, volume: int = 1) -> TickEvent:
+def _make_tick(
+    symbol: str = "TMFD6", direction: int = 1, ts_ns: int = 0, price: int = 1000_0000, volume: int = 1
+) -> TickEvent:
     meta = SimpleNamespace(local_ts=0, source_ts=0, seq=1, topic="tick")
     ev = TickEvent(
         meta=meta,
@@ -80,8 +77,6 @@ def _make_tick(symbol: str = "TMFD6", direction: int = 1, ts_ns: int = 0,
         volume=volume,
         trade_direction=direction,
     )
-    # `ts` attribute is sourced from the TickEvent body in the strategy code.
-    # If your TickEvent surface doesn't have ts, fall back to meta clock.
     object.__setattr__(ev, "ts", ts_ns) if hasattr(ev, "ts") else None
     return ev
 
@@ -102,19 +97,12 @@ def strategy() -> R52AmhpDynamicSpreadStrategy:
     return strat
 
 
-# ---------------------------------------------------------------------------
-# L1 spread modulator tests
-# ---------------------------------------------------------------------------
-
-
 class TestL1SpreadModulator:
     def test_multiplier_at_calm_regime_is_unity(self, strategy):
-        # rho_hat=0, IIR=0 → multiplier = 1.0 (no widening)
         m = strategy._compute_multiplier(rho_hat=0.0, iir_abs=0.0)
         assert m == 1.0
 
     def test_multiplier_below_rho_low_clipped_to_unity(self, strategy):
-        # rho_hat below rho_low → no widening contribution from rho
         m = strategy._compute_multiplier(rho_hat=0.40, iir_abs=0.0)
         assert m == 1.0
 
@@ -127,19 +115,16 @@ class TestL1SpreadModulator:
         assert m_tense > m_normal
 
     def test_multiplier_capped_at_critical(self, strategy):
-        # rho_hat ≥ rho_critical (0.85) → snap to mult_cap
         m = strategy._compute_multiplier(rho_hat=0.90, iir_abs=0.0)
         assert m == strategy._mult_cap
 
     def test_multiplier_iir_critical_overrides(self, strategy):
-        # |IIR| ≥ iir_critical → snap to mult_cap regardless of rho
         m = strategy._compute_multiplier(rho_hat=0.10, iir_abs=0.85)
         assert m == strategy._mult_cap
 
     def test_l1_hard_floor_5pt_never_narrows(self, strategy):
         """L1 hard floor invariant — no input combination should drop spread
         target below 5 pt."""
-        # Even with adversarial inputs, multiplier minimum is 1.0
         for rho in (0.0, 0.3, 0.55, 0.84):
             for iir in (0.0, 0.2, 0.45, 0.69):
                 m = strategy._compute_multiplier(rho_hat=rho, iir_abs=iir)
@@ -152,7 +137,6 @@ class TestL1SpreadModulator:
                 )
 
     def test_l1_floor_held_when_observed_spread_below_target(self, strategy):
-        # observed 4 pt < target floor 5 pt → spread_blocked counter increments
         before = strategy._spread_blocked
         ev = _make_lob_stats(spread_scaled=4 * _PRICE_SCALE, ts=_NS_PER_SEC)
         strategy.on_stats(ev)
@@ -164,15 +148,8 @@ class TestRegimeSizeAttenuation:
         assert strategy._size_for_regime(rho_hat=0.20, iir_abs=0.10) == 1
 
     def test_size_critical_is_one(self, strategy):
-        # In the current default config max_pos=3 but per-quote qty=1 even at calm.
-        # Critical regime returns _SIZE_CRIT == 1; verify return value.
         assert strategy._size_for_regime(rho_hat=0.90, iir_abs=0.0) == 1
         assert strategy._size_for_regime(rho_hat=0.0, iir_abs=0.85) == 1
-
-
-# ---------------------------------------------------------------------------
-# Kill-flag telemetry tests
-# ---------------------------------------------------------------------------
 
 
 class TestKillFlagTelemetry:
@@ -198,41 +175,46 @@ class TestKillFlagTelemetry:
         assert snap["K1_total_pnl_pts"] == 2.5
         assert snap["K1_winning_days"] == 1
         assert snap["K1_distinct_fill_days"] == 1
-        # K3: gain = 4.0 - 2.5 = 1.5
         assert snap["K3_modulator_per_fill_gain_pts"] == 1.5
 
     def test_k1_max_day_pct_aggregates(self, strategy):
         strategy.record_fill_for_telemetry(
-            day="2026-02-15", pnl_pts=10.0, modulator_active=False,
-            captured_half_spread_pts=2.5, baseline_half_spread_pts=2.5,
+            day="2026-02-15",
+            pnl_pts=10.0,
+            modulator_active=False,
+            captured_half_spread_pts=2.5,
+            baseline_half_spread_pts=2.5,
         )
         strategy.record_fill_for_telemetry(
-            day="2026-02-16", pnl_pts=2.0, modulator_active=False,
-            captured_half_spread_pts=2.5, baseline_half_spread_pts=2.5,
+            day="2026-02-16",
+            pnl_pts=2.0,
+            modulator_active=False,
+            captured_half_spread_pts=2.5,
+            baseline_half_spread_pts=2.5,
         )
         snap = strategy.kill_flag_telemetry()
-        # Total = 12, max_day = 10 → max_day_pct = 10/12 = 0.833
         assert snap["K1_max_day_pct"] == pytest.approx(10.0 / 12.0)
         assert snap["K1_winning_days"] == 2
         assert snap["K1_distinct_fill_days"] == 2
 
     def test_k1_winning_days_excludes_negative(self, strategy):
         strategy.record_fill_for_telemetry(
-            day="2026-02-15", pnl_pts=5.0, modulator_active=False,
-            captured_half_spread_pts=2.5, baseline_half_spread_pts=2.5,
+            day="2026-02-15",
+            pnl_pts=5.0,
+            modulator_active=False,
+            captured_half_spread_pts=2.5,
+            baseline_half_spread_pts=2.5,
         )
         strategy.record_fill_for_telemetry(
-            day="2026-02-16", pnl_pts=-3.0, modulator_active=False,
-            captured_half_spread_pts=2.5, baseline_half_spread_pts=2.5,
+            day="2026-02-16",
+            pnl_pts=-3.0,
+            modulator_active=False,
+            captured_half_spread_pts=2.5,
+            baseline_half_spread_pts=2.5,
         )
         snap = strategy.kill_flag_telemetry()
         assert snap["K1_winning_days"] == 1
         assert snap["K1_distinct_fill_days"] == 2
-
-
-# ---------------------------------------------------------------------------
-# Day-level covariate plumbing tests
-# ---------------------------------------------------------------------------
 
 
 class TestDayCovariatePlumbing:

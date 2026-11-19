@@ -60,7 +60,7 @@ def audit_ck_export_parquet(directory: Path) -> list[InstrumentAuditResult]:
 
         entries: list[tuple[int, list[str], str, str]] = []
         for f in files:
-            stem = f.stem  # e.g., "2026-01-27" or "2026-02-03_partial"
+            stem = f.stem
             date_part = stem.split("_", 1)[0]
             if not _DATE_RE.match(date_part):
                 continue

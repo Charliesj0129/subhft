@@ -63,11 +63,6 @@ async def _cycles(service: ReconciliationService, n: int) -> None:
         await service.sync_portfolio()
 
 
-# --------------------------------------------------------------------------- #
-# The noise                                                                    #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_an_unchanged_empty_portfolio_stops_repeating_itself() -> None:
@@ -99,11 +94,6 @@ async def test_the_per_cycle_debug_detail_collapses_too() -> None:
     ):
         emitted = [c for c in log.debug.call_args_list if c[0][0] == event]
         assert len(emitted) == 1, f"{event} emitted {len(emitted)} times for 20 identical cycles"
-
-
-# --------------------------------------------------------------------------- #
-# …without becoming silence                                                    #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
@@ -187,11 +177,6 @@ async def test_the_suppressed_counter_resets_after_it_is_reported() -> None:
         await service.sync_portfolio()
 
     assert service._suppressed_sync_logs == 0
-
-
-# --------------------------------------------------------------------------- #
-# What must never be collapsed                                                 #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit

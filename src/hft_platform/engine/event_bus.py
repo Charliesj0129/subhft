@@ -23,8 +23,6 @@ _USE_TYPED_TICK_RING = os.getenv("HFT_BUS_TYPED_TICK_RING", "0").lower() not in 
 _USE_TYPED_BOOK_RINGS = os.getenv("HFT_BUS_TYPED_BOOK_RINGS", "0").lower() not in {"0", "false", "no", "off"}
 _TYPED_BIDASK_PACKED_LEVELS = max(1, int(os.getenv("HFT_BUS_TYPED_BIDASK_PACKED_LEVELS", "5")))
 
-# --- HFT_BUS_MODE: tri-mode resolution ---
-# Priority: HFT_BUS_MODE (explicit) > legacy HFT_BUS_RUST > default "python"
 _BUS_MODE: str = os.environ.get("HFT_BUS_MODE", "")
 if not _BUS_MODE:
     _BUS_MODE = "rust_pyobj" if os.environ.get("HFT_BUS_RUST", "0") == "1" else "python"
@@ -48,19 +46,17 @@ except Exception as exc:
     _RUST_BIDASK_RING_FACTORY = None
     _RUST_LOBSTATS_RING_FACTORY = None
 
-# --- FastTypedRingBuffer import (rust_typed mode) ---
 _FastTypedRingBuffer: Optional[type] = None
 if _BUS_MODE == "rust_typed":
     try:
         _FastTypedRingBuffer = getattr(_rust_core, "FastTypedRingBuffer", None) if _rust_core else None
         if _FastTypedRingBuffer is None:
             raise ImportError("FastTypedRingBuffer not found in rust_core")
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         logger.warning("FastTypedRingBuffer unavailable, falling back to python mode")
         _BUS_MODE = "python"
         _FastTypedRingBuffer = None
 
-# Event kind constants for typed ring mapping
 _KIND_TICK: int = 1
 _KIND_BIDASK: int = 2
 _KIND_TRADE: int = 3
@@ -84,7 +80,6 @@ class _PyFastTickRingBuffer:
         is_odd_lot: bool,
         exch_ts: int,
     ) -> None:
-        # Skip redundant coercions — normalizer already guarantees correct types
         self.buffer[int(idx) % self.size] = (
             symbol,
             price,
@@ -326,12 +321,11 @@ class RingBufferBus:
         self._kind_ring: list[int] | None = (
             [0] * size if (self._use_typed_tick_ring or self._use_typed_book_rings) else None
         )
-        # rust_typed mode: pre-allocate FastTypedRingBuffer
         self._typed_ring: Any = None
         if self._bus_mode == "rust_typed" and _FastTypedRingBuffer is not None:
             self._typed_ring = _FastTypedRingBuffer(size)
         self.buffer: List[Any] | None = None if self._use_rust else [None] * size
-        self.cursor: int = -1  # Writing cursor
+        self.cursor: int = -1
         self.single_writer = os.getenv("HFT_BUS_SINGLE_WRITER", "1").lower() not in {
             "0",
             "false",
@@ -340,8 +334,6 @@ class RingBufferBus:
         }
         self.write_lock = asyncio.Lock()
         self._telemetry = telemetry if telemetry is not None else NOOP_EVENT_BUS_TELEMETRY
-        # Event for lock-free notification (optional)
-        # Per-consumer signals to avoid lost-wakeup race (DEC-02)
         self.signal = None if _WAIT_MODE == "spin" else asyncio.Event()
         self._consumer_signals: list[asyncio.Event] = []
         self._consumer_positions: dict[str, int] = {}
@@ -349,13 +341,10 @@ class RingBufferBus:
         self._notify_counter = 0
         self._spin_sleep = float(os.getenv("HFT_BUS_SPIN_SLEEP", "0"))
         self._spin_budget = max(1, int(os.getenv("HFT_BUS_SPIN_BUDGET", "100")))
-        # StormGuard reference for triggering HALT on critical overflow
         self._storm_guard = storm_guard
-        # Overflow threshold for triggering HALT (consecutive overflows)
         self._overflow_halt_threshold = int(os.getenv("HFT_BUS_OVERFLOW_HALT_THRESHOLD", "3"))
-        self._overflow_count = 0  # legacy global (kept for backward compat metrics)
-        self._overflow_count_per_consumer: dict[str, int] = {}  # per-consumer overflow tracking
-        # Sliding-window overflow rate tracker (XB-03)
+        self._overflow_count = 0
+        self._overflow_count_per_consumer: dict[str, int] = {}
         self._overflow_window_s: float = float(os.getenv("HFT_BUS_OVERFLOW_WINDOW_S", "60.0"))
         self._overflow_rate_threshold: int = int(os.getenv("HFT_BUS_OVERFLOW_RATE_THRESHOLD", "10"))
         self._overflow_timestamps: collections.deque[float] = collections.deque(
@@ -370,7 +359,6 @@ class RingBufferBus:
         """Record an overflow timestamp and check sliding-window rate threshold (XB-03)."""
         now = time.monotonic()
         self._overflow_timestamps.append(now)
-        # Evict timestamps older than the window
         cutoff = now - self._overflow_window_s
         while self._overflow_timestamps and self._overflow_timestamps[0] < cutoff:
             self._overflow_timestamps.popleft()
@@ -398,7 +386,6 @@ class RingBufferBus:
     def _publish_unlocked(self, event: Any) -> None:
         next_seq = self.cursor + 1
 
-        # rust_typed fast path: delegate entirely to FastTypedRingBuffer
         if self._typed_ring is not None:
             kind, flags, symbol_id, exch_ts_ns, local_ts_ns = _KIND_OTHER, 0, 0, 0, 0
             price0 = price1 = qty0 = qty1 = aux0 = aux1 = 0
@@ -416,11 +403,11 @@ class RingBufferBus:
                     kind = _KIND_BIDASK
                     exch_ts_ns = int(event[4])
                     if len(event) >= 13:
-                        price0 = int(event[6])  # best_bid
-                        price1 = int(event[7])  # best_ask
-                        qty0 = int(event[8])  # bid_depth
-                        qty1 = int(event[9])  # ask_depth
-                        ratio0 = float(event[12])  # imbalance
+                        price0 = int(event[6])
+                        price1 = int(event[7])
+                        qty0 = int(event[8])
+                        qty1 = int(event[9])
+                        ratio0 = float(event[12])
                 elif tag == "trade":
                     kind = _KIND_TRADE
             self._typed_ring.publish(
@@ -437,7 +424,6 @@ class RingBufferBus:
                 aux1,
                 ratio0,
             )
-            # Also store in fallback buffer so consume() can read PyObject events
             self._store_fallback(next_seq, event)
             self.cursor = next_seq
             self._notify_counter += 1
@@ -573,10 +559,8 @@ class RingBufferBus:
     def _notify(self) -> None:
         if self._notify_counter % self._notify_every != 0:
             return
-        # Set per-consumer signals (DEC-02: avoids lost-wakeup race)
         for sig in self._consumer_signals:
             sig.set()
-        # Legacy shared signal for backward compatibility
         if self.signal is not None:
             self.signal.set()
 
@@ -594,24 +578,12 @@ class RingBufferBus:
     async def publish(self, event: Any):
         """Publish event to shared buffer."""
         if self.single_writer:
-            # Single-writer fast path: no lock
             self._publish_unlocked(event)
             self._notify()
             return
 
         async with self.write_lock:
-            # Check if we are overwriting unread data?
-            # For simplicity in this non-blocking design, we overwrite.
-            # Ideally we track min_reader_cursor to prevent overwrite if strict usage.
-            # But for HFT, latest data > stalled consumer.
             self._publish_unlocked(event)
-            # _notify(), not a bare ``self.signal.set()``. ``consume()`` waits
-            # on its OWN Event from ``_consumer_signals`` (DEC-02, added to fix
-            # a lost-wakeup race); the shared ``self.signal`` is only kept for
-            # backward compatibility and nothing awaits it. Setting just the
-            # legacy signal left every consumer parked in ``my_signal.wait()``
-            # forever -- a permanent hang, not a slowdown -- on the
-            # multi-writer path.
             self._notify()
 
     async def publish_many(self, events: List[Any]):
@@ -625,16 +597,11 @@ class RingBufferBus:
         async with self.write_lock:
             for event in events:
                 self._publish_unlocked(event)
-            # Same lost-wakeup as publish() above: per-consumer signals, not
-            # the legacy shared one.
             self._notify()
 
     async def consume(self, start_cursor: int | None = None, consumer_name: str = "unknown"):
         """Async generator for consuming events."""
-        # If start_cursor is None, join at current (latest).
-        # To replay from beginning, pass -1.
         local_seq = self.cursor if start_cursor is None else start_cursor
-        # Per-consumer signal to avoid lost-wakeup race (DEC-02)
         my_signal: asyncio.Event | None = None
         if self.signal is not None:
             my_signal = asyncio.Event()
@@ -643,13 +610,11 @@ class RingBufferBus:
 
         try:
             while True:
-                # Wait for data
                 while self.cursor <= local_seq:
                     if my_signal is not None:
                         await my_signal.wait()
                         my_signal.clear()
                     else:
-                        # Spin-wait mode: lock-free signaling via cursor polling.
                         if self._spin_sleep <= 0:
                             for _ in range(self._spin_budget):
                                 if self.cursor > local_seq:
@@ -659,13 +624,10 @@ class RingBufferBus:
                         else:
                             await asyncio.sleep(self._spin_sleep)
 
-                # Catch up batch
                 current_cursor = self.cursor
-                # Don't read more than size at once (buffer wrap protection for very slow consumer)
                 if current_cursor - local_seq > self.size:
-                    # Lagged too much, skip to latest - size
                     self._telemetry.overflow_counter.inc()
-                    self._overflow_count += 1  # legacy global
+                    self._overflow_count += 1
                     _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
                     self._overflow_count_per_consumer[consumer_name] = _consumer_ov
                     self._record_overflow_rate()
@@ -680,7 +642,6 @@ class RingBufferBus:
                         threshold=self._overflow_halt_threshold,
                     )
 
-                    # Trigger StormGuard HALT on repeated overflows (per-consumer)
                     if _consumer_ov >= self._overflow_halt_threshold and self._storm_guard is not None:
                         halt_msg = f"EventBus overflow: consumer={consumer_name}, {_consumer_ov} overflows, lag={lag}"
                         self._storm_guard.trigger_halt(halt_msg)
@@ -688,7 +649,6 @@ class RingBufferBus:
 
                     local_seq = current_cursor - self.size
 
-                    # Inject GapEvent so downstream strategies can reset stale state
                     self._consumer_positions[consumer_name] = local_seq
                     lag_gauge.set(self.cursor - local_seq)
                     self._telemetry.gap_event_counter.inc()
@@ -708,7 +668,6 @@ class RingBufferBus:
                         event = self._bidask_ring.get(local_seq)
                     elif kind == 3 and self._lobstats_ring is not None:
                         raw = self._lobstats_ring.get(local_seq)
-                        # Prepend "lobstats" tag so strategy dispatch matches
                         event = ("lobstats",) + raw if raw is not None else None
                     elif self._use_rust and self._ring is not None:
                         event = self._ring.get(local_seq)
@@ -721,17 +680,14 @@ class RingBufferBus:
                     if event is not None:
                         yield event
 
-                # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
                 lag_gauge.set(self.cursor - local_seq)
 
-                # Successful catch-up with no overflow — reset per-consumer counter
                 if self._overflow_count_per_consumer.get(consumer_name, 0) > 0:
                     self._overflow_count_per_consumer[consumer_name] = 0
                 if self._overflow_count > 0:
-                    self._overflow_count = 0  # legacy global
+                    self._overflow_count = 0
         finally:
-            # Unregister per-consumer signal on generator close
             if my_signal is not None and my_signal in self._consumer_signals:
                 self._consumer_signals.remove(my_signal)
             self._consumer_positions.pop(consumer_name, None)
@@ -741,7 +697,6 @@ class RingBufferBus:
         """Async generator yielding lists of events."""
         batch_size = max(1, batch_size)
         local_seq = self.cursor if start_cursor is None else start_cursor
-        # Per-consumer signal (DEC-02)
         my_signal: asyncio.Event | None = None
         if self.signal is not None:
             my_signal = asyncio.Event()
@@ -767,7 +722,7 @@ class RingBufferBus:
                 current_cursor = self.cursor
                 if current_cursor - local_seq > self.size:
                     self._telemetry.overflow_counter.inc()
-                    self._overflow_count += 1  # legacy global
+                    self._overflow_count += 1
                     _consumer_ov = self._overflow_count_per_consumer.get(consumer_name, 0) + 1
                     self._overflow_count_per_consumer[consumer_name] = _consumer_ov
                     self._record_overflow_rate()
@@ -793,7 +748,6 @@ class RingBufferBus:
 
                     local_seq = current_cursor - self.size
 
-                    # Inject GapEvent into batch so downstream strategies can reset stale state
                     self._consumer_positions[consumer_name] = local_seq
                     lag_gauge.set(self.cursor - local_seq)
                     self._telemetry.gap_event_counter.inc()
@@ -815,7 +769,6 @@ class RingBufferBus:
                         event = self._bidask_ring.get(local_seq)
                     elif kind == 3 and self._lobstats_ring is not None:
                         raw = self._lobstats_ring.get(local_seq)
-                        # Prepend "lobstats" tag so strategy dispatch matches
                         event = ("lobstats",) + raw if raw is not None else None
                     elif self._use_rust and self._ring is not None:
                         event = self._ring.get(local_seq)
@@ -831,7 +784,6 @@ class RingBufferBus:
                 if batch:
                     yield batch
 
-                # Track consumer position and report lag
                 self._consumer_positions[consumer_name] = local_seq
                 lag_gauge.set(self.cursor - local_seq)
 

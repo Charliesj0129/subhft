@@ -92,7 +92,7 @@ class TestDlqStormStateCheck:
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
-        assert engine.order_queue.qsize() == 1  # drained normally
+        assert engine.order_queue.qsize() == 1
 
     def test_dlq_not_cleared_during_warm_state(self, engine: RiskEngine) -> None:
         cmd = engine.create_command(_make_intent(1))
@@ -104,12 +104,11 @@ class TestDlqStormStateCheck:
             engine._drain_order_dlq()
 
         assert len(engine._order_dlq) == 0
-        assert engine.order_queue.qsize() == 1  # drained normally
+        assert engine.order_queue.qsize() == 1
 
     def test_dlq_storm_clears_mid_drain(self, engine: RiskEngine) -> None:
         """STORM check triggers mid-loop when first entries pass TTL/deadline but STORM is set."""
         now = time.monotonic_ns()
-        # First entry is fresh so it reaches the STORM check before TTL/deadline expire it
         cmd = engine.create_command(_make_intent(1))
         engine._order_dlq.append((cmd, now))
 
@@ -127,8 +126,6 @@ class TestNumpyFloatPriceGuard:
 
     def test_int_price_passes_type_check(self, engine: RiskEngine) -> None:
         intent = _make_intent(price=1000000)
-        # We only check the type-check stage; downstream validators may reject for other reasons.
-        # A non-FLOAT_PRICE rejection is acceptable — the key assertion is it's not "FLOAT_PRICE".
         result = engine.evaluate(intent)
         assert result.reason_code != "FLOAT_PRICE"
 

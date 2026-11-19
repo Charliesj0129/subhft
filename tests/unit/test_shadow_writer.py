@@ -38,7 +38,7 @@ class TestShadowOrderWriterBatching:
 
         with patch("hft_platform.order.shadow_writer._get_ch_client", return_value=mock_client):
             writer.add(_SAMPLE_RECORD)
-            writer.add(_SAMPLE_RECORD)  # triggers flush
+            writer.add(_SAMPLE_RECORD)
 
         mock_client.insert.assert_called_once()
         assert writer.pending_count == 0
@@ -73,7 +73,7 @@ class TestShadowOrderWriterBatching:
 
         with patch("hft_platform.order.shadow_writer._get_ch_client", return_value=mock_client):
             writer.add(_SAMPLE_RECORD)
-            writer.flush()  # must not raise
+            writer.flush()
 
         assert writer.pending_count == 0
 

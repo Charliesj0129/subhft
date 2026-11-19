@@ -17,11 +17,6 @@ def mock_sdk() -> MagicMock:
     return MagicMock()
 
 
-# ------------------------------------------------------------------ #
-# Init tests
-# ------------------------------------------------------------------ #
-
-
 class TestInit:
     def test_init_from_list_config(self, mock_sdk: MagicMock) -> None:
         symbols = [
@@ -69,17 +64,12 @@ class TestInit:
         assert rt.get_exchange("AAA") == "TSE"
 
 
-# ------------------------------------------------------------------ #
-# validate_symbols tests
-# ------------------------------------------------------------------ #
-
-
 class TestValidateSymbols:
     def test_valid_symbols_returns_empty(self, mock_sdk: MagicMock) -> None:
         symbols = [
             {"code": "2330", "exchange": "TSE"},
             {"code": "TXFG6", "exchange": "TAIFEX"},
-            {"code": "AbCd12345678901234", "exchange": "TSE"},  # 18 chars, valid
+            {"code": "AbCd12345678901234", "exchange": "TSE"},
         ]
         rt = FubonContractsRuntime(mock_sdk, symbols_config=symbols)
         assert rt.validate_symbols() == []
@@ -89,7 +79,7 @@ class TestValidateSymbols:
             {"code": "2330", "exchange": "TSE"},
             {"code": "BAD SPACE", "exchange": "TSE"},
             {"code": "", "exchange": "TSE"},
-            {"code": "A" * 21, "exchange": "TSE"},  # 21 chars, too long
+            {"code": "A" * 21, "exchange": "TSE"},
             {"code": "OK", "exchange": "TSE"},
         ]
         rt = FubonContractsRuntime(mock_sdk, symbols_config=symbols)
@@ -105,11 +95,6 @@ class TestValidateSymbols:
         rt = FubonContractsRuntime(mock_sdk, symbols_config=symbols)
         invalid = rt.validate_symbols()
         assert len(invalid) == 2
-
-
-# ------------------------------------------------------------------ #
-# get_exchange tests
-# ------------------------------------------------------------------ #
 
 
 class TestGetExchange:
@@ -136,11 +121,6 @@ class TestGetExchange:
         assert rt.get_exchange("2330") == ""
 
 
-# ------------------------------------------------------------------ #
-# reload_symbols tests
-# ------------------------------------------------------------------ #
-
-
 class TestReloadSymbols:
     def test_reload_detects_added_removed(self, mock_sdk: MagicMock) -> None:
         yaml_v1 = "symbols:\n  - code: '2330'\n    exchange: TSE\n  - code: '2317'\n    exchange: TSE\n"
@@ -155,19 +135,17 @@ class TestReloadSymbols:
         assert rt.get_exchange("2317") == "TSE"
         assert rt.get_exchange("6547") == ""
 
-        # Overwrite with v2
         Path(path).write_text(yaml_v2, encoding="utf-8")
         rt.reload_symbols()
 
-        assert rt.get_exchange("2317") == ""  # removed
-        assert rt.get_exchange("6547") == "OTC"  # added
-        assert rt.get_exchange("2330") == "TSE"  # still there
+        assert rt.get_exchange("2317") == ""
+        assert rt.get_exchange("6547") == "OTC"
+        assert rt.get_exchange("2330") == "TSE"
 
     def test_reload_no_path_uses_existing_config(self, mock_sdk: MagicMock) -> None:
         symbols = [{"code": "2330", "exchange": "TSE"}]
         rt = FubonContractsRuntime(mock_sdk, symbols_config=symbols)
 
-        # reload without path — should keep existing config
         rt.reload_symbols()
         assert rt.get_exchange("2330") == "TSE"
 
@@ -177,11 +155,6 @@ class TestReloadSymbols:
         rt.reload_symbols()
         ts_after = rt.refresh_status()["last_reload_ts"]
         assert ts_after >= ts_before
-
-
-# ------------------------------------------------------------------ #
-# refresh_status tests
-# ------------------------------------------------------------------ #
 
 
 class TestRefreshStatus:
@@ -206,18 +179,12 @@ class TestRefreshStatus:
         assert status["exchange_map_size"] == 0
 
 
-# ------------------------------------------------------------------ #
-# symbols property tests
-# ------------------------------------------------------------------ #
-
-
 class TestSymbolsProperty:
     def test_returns_copy(self, mock_sdk: MagicMock) -> None:
         symbols = [{"code": "2330", "exchange": "TSE"}]
         rt = FubonContractsRuntime(mock_sdk, symbols_config=symbols)
         result = rt.symbols
         result.append({"code": "EXTRA", "exchange": "OTC"})
-        # Original should be unaffected
         assert len(rt.symbols) == 1
 
     def test_symbols_from_dict_config_with_symbols_key(self, mock_sdk: MagicMock) -> None:
@@ -232,18 +199,13 @@ class TestSymbolsProperty:
         assert len(rt.symbols) == 3
 
 
-# ------------------------------------------------------------------ #
-# Edge cases
-# ------------------------------------------------------------------ #
-
-
 class TestEdgeCases:
     def test_missing_code_or_exchange_skipped_in_map(self, mock_sdk: MagicMock) -> None:
         symbols = [
             {"code": "2330", "exchange": "TSE"},
-            {"code": "", "exchange": "TSE"},  # empty code
-            {"code": "2317"},  # missing exchange
-            {"exchange": "OTC"},  # missing code
+            {"code": "", "exchange": "TSE"},
+            {"code": "2317"},
+            {"exchange": "OTC"},
         ]
         rt = FubonContractsRuntime(mock_sdk, symbols_config=symbols)
         assert rt.get_exchange("2330") == "TSE"

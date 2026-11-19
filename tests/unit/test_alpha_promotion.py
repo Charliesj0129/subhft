@@ -34,8 +34,6 @@ def _write_scorecard(
         "turnover": turnover,
         "correlation_pool_max": corr,
         "latency_profile": latency_profile,
-        # Gate D cannot evaluate a scorecard without the cost-uncertainty
-        # payload (ERROR); taker scorecards carry no inventory_mtm payload.
         "strategy_type": "taker",
         "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
     }
@@ -129,11 +127,6 @@ def test_promote_alpha_force_override(tmp_path: Path):
     assert result.promotion_config_path is not None
 
 
-# ---------------------------------------------------------------------------
-# P3a: Config versioning tests
-# ---------------------------------------------------------------------------
-
-
 def test_promotion_config_config_version_default():
     """Default config_version is 'v1' and parent_config_version is None."""
     config = PromotionConfig(alpha_id="test_alpha", owner="bob")
@@ -171,11 +164,6 @@ def test_write_promotion_config_includes_versions(tmp_path: Path):
     assert payload["parent_config_version"] == "v1"
 
 
-# ---------------------------------------------------------------------------
-# P3b: PromotionChecklist tests
-# ---------------------------------------------------------------------------
-
-
 def _make_gate_d_checks(sharpe_pass: bool, dd_pass: bool, turnover_pass: bool, latency_pass: bool = True):
     return {
         "sharpe_oos": {"value": 1.5, "min": 1.0, "pass": sharpe_pass},
@@ -207,7 +195,7 @@ def test_build_checklist_partial_fail():
     """When one check fails, all_passed() is False."""
     config = PromotionConfig(alpha_id="test", owner="bob")
     gate_d = _make_gate_d_checks(True, True, True)
-    gate_e = _make_gate_e_checks(False, True, True)  # shadow_sessions fails
+    gate_e = _make_gate_e_checks(False, True, True)
     checklist = build_promotion_checklist(config, gate_d, gate_e)
     assert checklist.all_passed() is False
 
@@ -435,11 +423,6 @@ def test_promote_alpha_rust_gate_fails_without_module(tmp_path: Path):
     assert not result.gate_f_passed
 
 
-# ---------------------------------------------------------------------------
-# P0-A: Gate E session duration default change (30 → 60 min)
-# ---------------------------------------------------------------------------
-
-
 def test_promotion_config_default_session_minutes_is_60():
     """Default min_paper_trade_session_minutes is 60 (not 30)."""
     config = PromotionConfig(alpha_id="test", owner="bob")
@@ -459,7 +442,7 @@ def test_gate_e_rejects_sub_60_minute_sessions_by_default(tmp_path: Path):
                 "session_count": 6,
                 "distinct_trading_days": 5,
                 "calendar_span_days": 7,
-                "min_session_duration_seconds": 3000,  # 50 minutes — below 60-min default
+                "min_session_duration_seconds": 3000,
                 "invalid_session_duration_count": 0,
                 "drift_alerts_total": 0,
                 "execution_reject_rate_mean": 0.001,
@@ -475,7 +458,6 @@ def test_gate_e_rejects_sub_60_minute_sessions_by_default(tmp_path: Path):
             require_paper_trade_governance=True,
             paper_trade_summary_path=str(summary_path),
             enable_rust_readiness_gate=False,
-            # min_paper_trade_session_minutes NOT specified → uses default=60
             validation_profile=_strict_profile(),
         )
     )
@@ -509,11 +491,6 @@ def test_promote_alpha_rust_gate_passes_with_mocked_parity(monkeypatch, tmp_path
     assert result.gate_f_passed
 
 
-# ---------------------------------------------------------------------------
-# P1: Gate E prefers P95 reject rate over mean
-# ---------------------------------------------------------------------------
-
-
 def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
     """Gate E uses execution_reject_rate_p95 (not mean) when present in summary."""
     import json
@@ -521,7 +498,6 @@ def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
     scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
     _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
 
-    # Write paper trade summary with high P95 (0.05 > threshold 0.01) but low mean (0.001)
     summary_dir = tmp_path / "research" / "experiments" / "paper_trade" / "ofi_mc" / "sessions"
     summary_dir.mkdir(parents=True)
     session = {
@@ -534,8 +510,8 @@ def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
         "fills": 10,
         "pnl_bps": 1.5,
         "drift_alerts": 0,
-        "execution_reject_rate": 0.001,  # mean is fine
-        "reject_rate_p95": 0.05,  # P95 exceeds 0.01 threshold
+        "execution_reject_rate": 0.001,
+        "reject_rate_p95": 0.05,
         "notes": "",
     }
     (summary_dir / "2026-02-01_abc.json").write_text(json.dumps(session))
@@ -554,9 +530,7 @@ def test_gate_e_uses_p95_reject_rate_from_summary(tmp_path: Path):
             validation_profile=_strict_profile(),
         )
     )
-    # P95 reject rate (0.05) > max_execution_reject_rate (0.01) → Gate E fails
     assert not result.gate_e_passed
-    # Read gate_e_checks from the promotion decision report
     decision = json.loads(Path(result.promotion_decision_path).read_text())
     rej = decision["gate_e_checks"]["checks"]["execution_reject_rate"]
     assert rej.get("source") == "p95"
@@ -582,8 +556,8 @@ def test_gate_e_falls_back_to_mean_when_p95_absent(tmp_path: Path):
         "fills": 10,
         "pnl_bps": 1.5,
         "drift_alerts": 0,
-        "execution_reject_rate": 0.005,  # mean within threshold
-        "reject_rate_p95": None,  # no P95 → fall back to mean
+        "execution_reject_rate": 0.005,
+        "reject_rate_p95": None,
         "notes": "",
     }
     (summary_dir / "2026-02-01_def.json").write_text(json.dumps(session))
@@ -608,11 +582,6 @@ def test_gate_e_falls_back_to_mean_when_p95_absent(tmp_path: Path):
     assert rej.get("value") == pytest.approx(0.005)
 
 
-# ---------------------------------------------------------------------------
-# P4: feature_set_version mismatch warning in Gate D (warn-only)
-# ---------------------------------------------------------------------------
-
-
 def test_gate_d_feature_set_version_mismatch_blocks_gate_d(tmp_path: Path):
     """feature_set_version mismatch blocks Gate D (Q3: hardened from warn-only)."""
     scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
@@ -624,17 +593,15 @@ def test_gate_d_feature_set_version_mismatch_blocks_gate_d(tmp_path: Path):
             owner="charlie",
             project_root=str(tmp_path),
             shadow_sessions=6,
-            manifest_feature_set_version="lob_shared_v0_old",  # mismatches live engine v1
+            manifest_feature_set_version="lob_shared_v0_old",
             validation_profile=_strict_profile(),
         )
     )
-    # Gate D fails with mismatch (blocking since Q3 hardening)
     assert not result.gate_d_passed
     assert not result.approved
     decision = json.loads(Path(result.promotion_decision_path).read_text())
     gate_d = decision.get("gate_d_passed", None)
     assert gate_d is False
-    # The integration report should show the mismatch detail
     report = json.loads(Path(result.integration_report_path).read_text())
     fsv_check = report.get("checks", {}).get("feature_set_version", {})
     assert fsv_check.get("match") is False
@@ -660,15 +627,9 @@ def test_gate_d_feature_set_version_match_passes(tmp_path: Path):
     )
     assert result.gate_d_passed
     decision = json.loads(Path(result.promotion_decision_path).read_text())
-    # find feature_set_version check in integration report's gate_d checks
     report = json.loads(Path(result.integration_report_path).read_text())
     fsv_check = report.get("checks", {}).get("feature_set_version", {})
     assert fsv_check.get("match") is True
-
-
-# ---------------------------------------------------------------------------
-# Additional coverage: uncovered branches in promote_alpha
-# ---------------------------------------------------------------------------
 
 
 def test_promote_alpha_raises_file_not_found_for_missing_scorecard(tmp_path: Path):
@@ -708,7 +669,6 @@ def test_promote_alpha_write_promotion_config_disabled_adds_reason(tmp_path: Pat
 
 def test_promote_alpha_explicit_relative_scorecard_path(tmp_path: Path):
     """scorecard_path as a relative path is resolved against project_root."""
-    # Create scorecard at a custom relative location
     scorecard_dir = tmp_path / "custom" / "sc"
     scorecard_dir.mkdir(parents=True)
     scorecard_file = scorecard_dir / "scorecard.json"
@@ -817,7 +777,6 @@ def test_build_checklist_with_paper_governance_adds_extra_items(tmp_path: Path):
         )
     )
     assert result.checklist is not None
-    # Base 7 items + 4 paper-trade items = 11
     assert len(result.checklist.items) == 11
     assert result.checklist.all_passed() is True
 
@@ -866,11 +825,6 @@ class TestStrictProfileRequirement:
             assert "strict profile required" not in str(exc), exc
 
 
-# ---------------------------------------------------------------------------
-# Slice C Task 10: Gate D replay_parity_audit check
-# ---------------------------------------------------------------------------
-
-
 def _gate_d_scorecard_with_parity(match_pct: float | None) -> dict:
     """Build a scorecard dict that satisfies all other Gate D required fields,
     so the replay_parity_audit is the focus of the assertion."""
@@ -916,11 +870,6 @@ def test_promotion_passes_when_replay_parity_at_or_above_threshold():
     assert checks["replay_parity_audit"]["value"] == 96.0
 
 
-# ---------------------------------------------------------------------------
-# Slice-D T14: promote_alpha auto-kill on Gate-C raise + Gate-D rejection
-# ---------------------------------------------------------------------------
-
-
 class TestSliceDAutoKill:
     """Auto-kill ledger writes on Gate-C raise and Gate-D rejection paths.
 
@@ -959,11 +908,9 @@ class TestSliceDAutoKill:
         alpha_dir = tmp_path / "research" / "alphas" / alpha_id
         alpha_dir.mkdir(parents=True, exist_ok=True)
 
-        # Scorecard tuned to pass Gate D when sharpe >= 1.0.
         sc_path = alpha_dir / "scorecard.json"
         _write_scorecard(sc_path, sharpe=sharpe, max_drawdown=-0.05, turnover=0.5, corr=0.3)
 
-        # meta.json governs Gate-C verification.
         (alpha_dir / "meta.json").write_text(
             json.dumps({"run_id": f"run-{alpha_id}", "gate_status": {"gate_c": gate_c_passed}})
         )
@@ -973,7 +920,6 @@ class TestSliceDAutoKill:
                 json.dumps({"details": {"verdict": {"verdict": gate_c_verdict, "reasons": reasons}}})
             )
 
-        # Minimal manifest so stable_artifact_hash is computable.
         (alpha_dir / "manifest.yaml").write_text(
             yaml.safe_dump(
                 {
@@ -999,10 +945,8 @@ class TestSliceDAutoKill:
 
         jsonl = tmp_path / "_kill_ledger.jsonl"
         monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(jsonl))
-        # Force jsonl path: keep CH disabled so the ledger writes land in
-        # the file we can read back from disk.
         monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
-        audit._ENABLED = None  # noqa: SLF001 -- re-read env on next call
+        audit._ENABLED = None
         kill_ledger._reset_cache_for_tests()
         return jsonl
 
@@ -1017,8 +961,6 @@ class TestSliceDAutoKill:
                 continue
             rows.append(json.loads(line))
         return rows
-
-    # -- Gate C raise path -----------------------------------------------
 
     def test_gate_c_kill_verdict_writes_kill_ledger_row(
         self,
@@ -1131,18 +1073,14 @@ class TestSliceDAutoKill:
         with pytest.raises(ValueError) as exc_info:
             promote_alpha(cfg)
 
-        # Original message preserved verbatim from _verify_gate_c_passed.
         assert "Gate C has not passed for this scorecard" in str(exc_info.value)
         assert str(sc_path) in str(exc_info.value)
-
-    # -- Gate D rejection path -------------------------------------------
 
     def test_gate_d_rejection_writes_kill_ledger_row(
         self,
         tmp_path: Path,
         _isolate_kill_ledger: Path,
     ) -> None:
-        # sharpe=0.2 < min_sharpe_oos=1.0 -> Gate D fails.
         root, sc_path = self._setup_alpha_fixture(tmp_path, "alpha_t14_d", gate_c_passed=True, sharpe=0.2)
         cfg = PromotionConfig(
             alpha_id="alpha_t14_d",
@@ -1159,7 +1097,6 @@ class TestSliceDAutoKill:
         assert len(rows) == 1, f"expected exactly 1 ledger row, got {rows}"
         assert rows[0]["alpha_id"] == "alpha_t14_d"
         assert rows[0]["gate"] == "D"
-        # Reason should at least mention the failed sharpe_oos gate.
         assert "sharpe_oos" in rows[0]["reason"]
         assert rows[0]["killed_by"] == "promote_alpha:auto"
 
@@ -1205,11 +1142,6 @@ class TestSliceDAutoKill:
         assert rows == [], f"ledger must be empty when env off, got {rows}"
 
 
-# ---------------------------------------------------------------------------
-# Slice B Task 12: Gate D inventory_mtm_audit + cost_uncertainty_audit checks
-# ---------------------------------------------------------------------------
-
-
 def _gate_d_base_scorecard(strategy_type: str = "maker") -> dict:
     """Build a scorecard dict that satisfies all other Gate D required fields,
     so the new Slice B audits are the focus of the assertion. Includes a
@@ -1223,9 +1155,6 @@ def _gate_d_base_scorecard(strategy_type: str = "maker") -> dict:
         "replay_parity": {"match_pct": 96.0},
         "strategy_type": strategy_type,
     }
-
-
-# --- inventory_mtm_audit -----------------------------------------------------
 
 
 def test_inventory_mtm_audit_blocks_when_maker_subgate_failed():
@@ -1277,7 +1206,6 @@ def test_inventory_mtm_audit_passes_when_maker_subgate_passed():
 def test_inventory_mtm_audit_advisory_pass_for_taker_strategy():
     """Taker strategies do not populate inventory_mtm; audit advisory PASS."""
     scorecard = _gate_d_base_scorecard(strategy_type="taker")
-    # No inventory_mtm key on scorecard — taker engine never emits it.
     config = PromotionConfig(
         alpha_id="taker_alpha",
         owner="charlie",
@@ -1288,9 +1216,6 @@ def test_inventory_mtm_audit_advisory_pass_for_taker_strategy():
     assert checks["inventory_mtm_audit"]["pass"] is True
     detail = str(checks["inventory_mtm_audit"].get("detail", "")).lower()
     assert "advisory" in detail or "taker" in detail
-
-
-# --- cost_uncertainty_audit --------------------------------------------------
 
 
 def test_cost_uncertainty_audit_blocks_when_p95_lower_below_floor():
@@ -1352,7 +1277,6 @@ def test_cost_uncertainty_audit_errors_when_payload_missing():
     from hft_platform.alpha.promotion import _evaluate_gate_d_verdict
 
     scorecard = _gate_d_base_scorecard(strategy_type="taker")
-    # No cost_uncertainty key on scorecard.
     config = PromotionConfig(
         alpha_id="legacy_alpha",
         owner="charlie",
@@ -1364,9 +1288,6 @@ def test_cost_uncertainty_audit_errors_when_payload_missing():
     assert checks["cost_uncertainty_audit"]["outcome"] == "error"
     assert "missing" in str(checks["cost_uncertainty_audit"].get("detail", "")).lower()
     assert verdict.verdict.value == "INVALID"
-
-
-# --- PromotionConfig field defaults -----------------------------------------
 
 
 def test_promotion_config_new_slice_b_fields_have_defaults():

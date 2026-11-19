@@ -199,7 +199,6 @@ class TestAuditCliExportForceFlat:
         assert ids == ["ff_keep"]
 
     def test_max_force_flat_share_keeps_rows_without_metric(self, _isolated) -> None:
-        # Gate didn't run -> no metric -> must not be silently dropped.
         _record(run_id="ff_no_metric", edge=12.0, ff_share=None)
         _record(run_id="ff_over", edge=12.0, ff_share=80.0)
         out = audit_cli.export(fmt="csv", max_force_flat_share=30.0)
@@ -207,7 +206,6 @@ class TestAuditCliExportForceFlat:
         assert ids == ["ff_no_metric"]
 
     def test_edge_min_and_max_force_flat_compose(self, _isolated) -> None:
-        # Only the high-edge, low-force-flat candidate survives both filters.
         _record(run_id="clean", edge=15.0, ff_share=10.0)
         _record(run_id="low_edge", edge=5.0, ff_share=10.0)
         _record(run_id="propped", edge=15.0, ff_share=90.0)
@@ -260,7 +258,6 @@ class TestAuditCliExportDayDominance:
         assert ids == ["dd_no_metric"]
 
     def test_edge_force_flat_and_dominance_compose(self, _isolated) -> None:
-        # Only the candidate clean on all three axes survives.
         _record(run_id="clean", edge=15.0, ff_share=10.0, day_dom=10.0)
         _record(run_id="propped_day", edge=15.0, ff_share=10.0, day_dom=90.0)
         _record(run_id="propped_ff", edge=15.0, ff_share=80.0, day_dom=10.0)

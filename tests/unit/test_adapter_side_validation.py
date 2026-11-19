@@ -20,13 +20,13 @@ def _make_adapter_stub():
 
     stub = OrderAdapter.__new__(OrderAdapter)
     stub._phantom_order_keys = {}
-    stub._phantom_intents = {}  # Bug D (2026-04-20)
+    stub._phantom_intents = {}
     stub._pending_fill_index = {}
     stub._pending_fill_registered_at = {}
     import threading
 
     stub._pending_fill_lock = threading.Lock()
-    stub._phantom_lock = threading.Lock()  # P0-E2
+    stub._phantom_lock = threading.Lock()
     return stub
 
 
@@ -34,7 +34,6 @@ class TestPhantomFillSideValidation:
     def test_side_none_does_not_default_to_buy(self):
         """Bug 16: side=None must not silently match BUY-side pending fills."""
         adapter = _make_adapter_stub()
-        # Plant a pending BUY-side fill; a None-side event must NOT consume it.
         adapter._phantom_order_keys["strat1:abc"] = (0.0, "TMFD6")
         adapter._pending_fill_index["TMFD6:BUY"] = ["strat1:abc"]
 
@@ -42,7 +41,6 @@ class TestPhantomFillSideValidation:
         result = adapter.resolve_phantom_fill(fill)
 
         assert result is None, "None side must not be resolved via BUY index"
-        # Pending index must be untouched
         assert adapter._pending_fill_index.get("TMFD6:BUY") == ["strat1:abc"]
 
     def test_side_0_maps_to_buy(self):
@@ -54,7 +52,7 @@ class TestPhantomFillSideValidation:
         result = adapter.resolve_phantom_fill(fill)
 
         assert result == "strat1"
-        assert "TMFD6:BUY" not in adapter._pending_fill_index  # consumed
+        assert "TMFD6:BUY" not in adapter._pending_fill_index
 
     def test_side_1_maps_to_sell(self):
         adapter = _make_adapter_stub()
@@ -65,7 +63,7 @@ class TestPhantomFillSideValidation:
         result = adapter.resolve_phantom_fill(fill)
 
         assert result == "strat1"
-        assert "TMFD6:SELL" not in adapter._pending_fill_index  # consumed
+        assert "TMFD6:SELL" not in adapter._pending_fill_index
 
     def test_side_none_does_not_match_sell_index_either(self):
         adapter = _make_adapter_stub()

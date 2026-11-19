@@ -60,11 +60,6 @@ def _read_kill_switch_reason(path: str) -> str:
     return kill_switch.read_reason(path)
 
 
-# Writers of the kill switch whose switch may close the book: a person, by
-# ``hft risk halt`` or Telegram ``/stop``. The startup recovery gate writes it
-# because the position truth is unknown, and a closing order computed from an
-# unknown book can open a position; an unreadable or actor-less record is
-# treated the same way.
 _KILL_FLATTEN_ACTORS = frozenset({"cli", "telegram"})
 
 
@@ -100,13 +95,8 @@ def _audit_persistence_writer_for_recorder(recorder: Any) -> Any | None:
     return getattr(recorder, "writer", None)
 
 
-#: Distinguishes "caller did not supply state" from "the shared read failed and
-#: returned None". Without it the failure path read runtime_state.json twice and
-#: logged two warnings on every one-second supervisor tick.
 _STATE_NOT_SUPPLIED: Any = object()
 
-#: Supervisor ticks between "still unpriceable" reminders. The supervisor runs
-#: at 1 Hz, so 3600 is hourly: 24 lines a day instead of 86,400.
 DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS = 3600
 
 
@@ -132,55 +122,27 @@ def _mtm_repeat_ticks_from_env() -> int:
 
 
 class HFTSystem:
-    # Latched reference instrument for the drift-burst detector (see
-    # ``_drift_burst_book``). Empty until the first book with a valid mid.
     _drift_burst_symbol: str
 
-    # Largest idle-probe overshoot since the supervisor last read it, and how
-    # many probe samples have been taken. Class-level defaults so instances
-    # built without ``__init__`` (tests use ``__new__``) still read cleanly, and
-    # so the supervisor can tell "the loop was clean" (peak 0.0, samples > 0)
-    # from "the probe never ran" (samples == 0), which must fall back rather
-    # than report a confident zero.
     _loop_probe_peak_ms: float = 0.0
     _loop_probe_samples: int = 0
 
-    # Edge state for ``_log_mtm_completeness``: what the last supervisor tick
-    # reported about the mark-to-market's completeness, so a condition that
-    # lasts days costs one line plus a periodic reminder rather than one line
-    # per second. ``None`` means nothing has been reported yet, which is
-    # distinct from "reported complete". Class-level for the same reason as the
-    # probe counters above.
     _mtm_last_incomplete: bool | None = None
     _mtm_last_unpriced: tuple[str, ...] = ()
     _mtm_incomplete_ticks: int = 0
     _mtm_last_log_tick: int = 0
     _mtm_repeat_ticks: int = DEFAULT_MTM_INCOMPLETE_REPEAT_TICKS
 
-    # -- Typed helpers to replace hasattr probes ----------------------------------
-
-    # A book older than this is not a price to close a position at: outside
-    # trading hours an IOC is rejected, and repeated rejects trip the breaker.
     _LOSS_EXIT_MAX_BOOK_AGE_NS: int = 30 * 1_000_000_000
 
-    # Durable manual latches present at the last supervise tick (name -> reason).
-    # Replaced, never mutated, so the class-level default is never shared state.
     _manual_latches_active: Mapping[str, str] = MappingProxyType({})
-    # The daily-loss manual latch was written for the stop now latched.
     _daily_loss_latch_published: bool = False
-    # Last document written to daily_loss_state; None before the first write.
     _daily_loss_state_written: dict[str, Any] | None = None
-    # The operator flatten (``hft ops flatten``) this process is working on:
-    # symbol -> platform net qty when it was claimed, and when it gives up.
     _operator_flatten_initial: Mapping[str, int] = MappingProxyType({})
     _operator_flatten_deadline_ns: int = 0
-    # ``initiated_ns`` of the claimed request: its id, so a newer request
-    # written meanwhile is not overwritten with this one's result.
     _operator_flatten_request_id: int = 0
     _flatten_gate: FlattenGate | None = None
-    # The kill switch is holding open positions it may not close; logged once.
     _kill_flatten_blocked_logged: bool = False
-    # Who wrote the present kill-switch file, refreshed every supervise tick.
     _kill_switch_actor: str = ""
 
     def _daily_loss_validator(self) -> DailyLossLimitValidator | None:
@@ -207,7 +169,7 @@ class HFTSystem:
             get_audit_writer().log_guardrail_transition(
                 {"old_state": "BOOT", "new_state": state, "reason": "engine_start"}
             )
-        except Exception as exc:  # noqa: BLE001 - an audit row must never block boot
+        except Exception as exc:
             logger.warning("audit_engine_start_failed", error=str(exc))
 
     def _restore_daily_loss_state(self) -> None:
@@ -225,7 +187,7 @@ class HFTSystem:
             if document is None:
                 return
             restored = validator.restore_state(document["validator"])
-        except Exception as exc:  # noqa: BLE001 - boot continues; the latch files carry the stops
+        except Exception as exc:
             logger.critical(
                 "daily_loss_state_unreadable_at_boot",
                 path=str(daily_loss_state.state_path()),
@@ -280,20 +242,20 @@ class HFTSystem:
                         actor="engine",
                     )
                     self._daily_loss_latch_published = True
-                except Exception as exc:  # noqa: BLE001 - retried next tick; the in-memory hold stands
+                except Exception as exc:
                     logger.error("daily_loss_latch_write_failed", error=str(exc))
             document = {"validator": validator.export_state(), "latch_published": self._daily_loss_latch_published}
             if document != self._daily_loss_state_written:
                 try:
                     await asyncio.to_thread(daily_loss_state.save, document)
                     self._daily_loss_state_written = document
-                except Exception as exc:  # noqa: BLE001 - retried next tick
+                except Exception as exc:
                     logger.error("daily_loss_state_write_failed", error=str(exc))
             if not validator.halt_triggered and manual_latches.DAILY_LOSS in self._manual_latches_active:
                 await self._release_daily_loss_latch_after_roll(int(validator.export_state()["boundary_ns"]))
         try:
             latches = await asyncio.to_thread(manual_latches.active)
-        except Exception as exc:  # noqa: BLE001 - keep the last known set
+        except Exception as exc:
             logger.error("manual_latch_read_failed", error=str(exc))
             latches = dict(self._manual_latches_active)
         self._apply_manual_latches(latches)
@@ -320,7 +282,7 @@ class HFTSystem:
                 reason="trading day rolled at 05:00 Taipei",
                 actor="engine:day_roll",
             )
-        except Exception as exc:  # noqa: BLE001 - retried next tick; the latch still holds HALT
+        except Exception as exc:
             logger.error("daily_loss_latch_release_failed", error=str(exc))
             return
         if released:
@@ -339,8 +301,6 @@ class HFTSystem:
         if controller is None or risk_engine is None:
             return
         operator_symbols = frozenset(self._operator_flatten_initial)
-        # The config switch turns the automatic triggers off; an operator's
-        # explicit flatten request still runs.
         auto_enabled = bool(
             ((getattr(risk_engine, "config", None) or {}).get("loss_exit", {}) or {}).get("enabled", True)
         )
@@ -366,24 +326,15 @@ class HFTSystem:
 
         positions = [
             OpenPosition(p.strategy_id, p.symbol, int(p.net_qty), int(p.avg_price_scaled))
-            # Includes lots recovered at startup that have not traded since: a
-            # carried lot in a month the strategy rolled away from would
-            # otherwise be invisible to every trigger.
             for p in self.position_store.snapshot_open_positions().values()
             if p.net_qty
         ]
         kill = auto_enabled and bool(getattr(getattr(self, "storm_guard", None), "kill_switch_hold", False))
-        # Evaluated with the switch off too, so the gauge returns to 0.
         kill_flatten = self._kill_switch_may_flatten(kill and bool(positions)) and kill
-        # Called with no positions too: that is what clears the retry
-        # bookkeeping of symbols that have since closed.
         meta = self.position_store.metadata
         intents = controller.plan(
             now_ns=now_ns,
             positions=positions,
-            # The manual latch outlives the validator's own flag (it survives
-            # the day roll and a restart); while it holds HALT, the exit must
-            # keep working or the stop freezes the book it was meant to close.
             daily_halt=auto_enabled
             and (
                 bool(daily is not None and daily.halt_triggered)
@@ -398,15 +349,11 @@ class HFTSystem:
             operator_symbols=operator_symbols,
             kill_switch=kill_flatten,
         )
-        # One call per tick: each call drops the cancel retry bookkeeping of
-        # orders it was not given, so two would reset each other's throttle.
         if kill:
             intents.extend(controller.cancel_intents(self._resting_orders(), now_ns, trigger=TRIGGER_KILL_SWITCH))
         elif operator_symbols:
             resting = [o for o in self._resting_orders() if o[2] in operator_symbols]
             intents.extend(controller.cancel_intents(resting, now_ns))
-        # With the gateway on, RiskEngine.run() is never started and nothing
-        # reads risk_queue: the exits must enter where the gateway listens.
         intent_channel = getattr(self, "intent_channel", None)
         gateway_on = getattr(self, "gateway_service", None) is not None and intent_channel is not None
         exit_queue: Any = intent_channel if gateway_on else self.risk_queue
@@ -436,7 +383,7 @@ class HFTSystem:
         """
         recon = getattr(self, "recon_service", None)
         verified_ns = int(getattr(recon, "positions_verified_mono_ns", 0) or 0)
-        interval_s = float(getattr(recon, "check_interval_s", 5.0) or 5.0)  # precision-ok
+        interval_s = float(getattr(recon, "check_interval_s", 5.0) or 5.0)
         max_age_ns = int(max(15.0, 3 * interval_s) * 1_000_000_000)
         verified = verified_ns > 0 and time.monotonic_ns() - verified_ns <= max_age_ns
         actor = self._kill_switch_actor
@@ -444,7 +391,7 @@ class HFTSystem:
         blocked = positions_open and not (verified and by_operator)
         try:
             MetricsRegistry.get().kill_switch_flatten_blocked.set(1 if blocked else 0)
-        except Exception as exc:  # noqa: BLE001 - the gauge must never stop the exit
+        except Exception as exc:
             logger.warning("kill_switch_flatten_blocked_gauge_failed", error=str(exc))
         if blocked and not self._kill_flatten_blocked_logged:
             logger.critical(
@@ -509,8 +456,6 @@ class HFTSystem:
         if req is None:
             return
         if req.status == FlattenStatus.PROCESSING:
-            # Claimed by an earlier process that did not finish it. Its orders
-            # stopped with it; say so instead of leaving the CLI waiting.
             await asyncio.to_thread(
                 gate.fail,
                 "engine restarted before the flatten finished; positions not confirmed",
@@ -556,10 +501,6 @@ class HFTSystem:
         initial = self._operator_flatten_initial
         net = self._platform_net_by_symbol()
         remaining = {sym: net[sym] for sym in initial if net.get(sym, 0) != 0}
-        # Flat is not done while an order in the symbol can still fill and
-        # reopen it: those are being cancelled (``_run_loss_exit``) and count
-        # as open until the broker confirms. So does an order not yet
-        # acknowledged, whose symbol is not known yet.
         live = getattr(getattr(self, "order_adapter", None), "live_orders", None) or {}
         unacked = any(
             getattr(trade, "contract", None) is None and not is_platform_exit(str(key)) for key, trade in live.items()
@@ -573,8 +514,6 @@ class HFTSystem:
         failed = sorted(sym for sym in remaining if sym not in partial)
         request_id = self._operator_flatten_request_id
         if unacked:
-            # Flat books prove nothing while an order the broker has not
-            # acknowledged can still fill: its symbol is not even known yet.
             written = await asyncio.to_thread(
                 gate.fail,
                 "orders still awaiting the broker's acknowledgement at the deadline; positions not confirmed",
@@ -591,8 +530,6 @@ class HFTSystem:
                 request_id=request_id,
             )
         if not written:
-            # A new request replaced this one in the file; it is claimed next
-            # tick. This one's outcome is in the log line below only.
             logger.warning("operator_flatten_superseded", request_id=self._operator_flatten_request_id)
         log = logger.error if remaining or unacked else logger.warning
         log(
@@ -728,13 +665,6 @@ class HFTSystem:
             if book is not None and book.mid_price_x2 > 0:
                 return book
 
-        # Pick the most liquid book rather than the first one the dict happens
-        # to yield. Latching fixed the *rotation* but not the *choice*: in
-        # production it latched EXFH6 — a far-month contract quoting a
-        # 48-point spread — and drove ~346 platform-wide toxicity bursts a day
-        # off the thinnest book on the system. Relative spread is the cheapest
-        # liquidity proxy the book already carries, so this needs no extra
-        # state, config, or symbol list that would go stale on a roll.
         fallback_symbol = ""
         fallback_book: Any | None = None
         best_symbol = ""
@@ -748,21 +678,14 @@ class HFTSystem:
             if fallback_book is None:
                 fallback_symbol, fallback_book = symbol, book
             spread = int(book.spread)
-            # A non-positive spread is a locked or half-built book, not a
-            # liquidity win — it must not outrank every real two-sided quote.
             if spread <= 0:
                 continue
-            # spread/mid compared by cross-multiplication: integer arithmetic
-            # only, per core law 4 (no float price math). The x2 factor in
-            # mid_price_x2 appears on both sides and cancels.
             if best_book is None or spread * best_mid_x2 < best_spread * mid_x2:
                 best_symbol, best_book, best_spread, best_mid_x2 = symbol, book, spread, mid_x2
 
         if best_book is not None:
             chosen_symbol, chosen_book, chosen_spread = best_symbol, best_book, best_spread
         elif fallback_book is not None:
-            # Every book is locked/one-sided. Feeding the detector nothing would
-            # silently disable the toxicity gate, so keep the old behaviour.
             chosen_symbol, chosen_book, chosen_spread = fallback_symbol, fallback_book, 0
         else:
             return None
@@ -780,19 +703,13 @@ class HFTSystem:
         configure_logging()
         self.settings = settings or {}
         self.running = False
-        # H9: pre-initialize loop so early broker-thread callbacks (which can
-        # fire between __init__ and run()'s first tick) can do an is-None
-        # check without tripping AttributeError. Assigned for real at run().
         self.loop: Optional[asyncio.AbstractEventLoop] = None
-        # In-process event-loop stall watchdog (force-exit on starvation so the
-        # container restart policy recovers a spinning/hung loop). Constructed
-        # and started in run(); referenced by stop_async() for clean teardown.
         self._loop_watchdog: LoopStallWatchdog | None = None
         self._recorder_seen_tick = False
         self._recorder_seen_bidask = False
         self._md_record_direct = os.getenv("HFT_MD_RECORD_DIRECT", "1").lower() not in {"0", "false", "no", "off"}
-        self._fill_record_direct = True  # Always use direct fill recording when recorder_queue is wired
-        self._order_record_direct = True  # Always use direct order recording (H5: prevent ring buffer overwrite)
+        self._fill_record_direct = True
+        self._order_record_direct = True
 
         self.bootstrapper = SystemBootstrapper(self.settings)
         self.registry = self.bootstrapper.build()
@@ -805,10 +722,6 @@ class HFTSystem:
         self._EXEC_OVERFLOW_MAX: int = 4096
         self._exec_overflow_counter: int = 0
         self._exec_overflow_evicted: int = 0
-        # Request ids already reported as belonging to another engine's
-        # quarantine. The supervisor rescans the directory every tick and a
-        # foreign request is never consumed, so without this the same file
-        # would produce a warning per tick forever.
         self._foreign_rearm_request_ids: set[str] = set()
         self._exec_startup_overflow_lost: bool = False
         self.risk_queue = self.registry.risk_queue
@@ -828,7 +741,6 @@ class HFTSystem:
         self.order_adapter = self.registry.order_adapter
         self.execution_gateway = self.registry.execution_gateway
         self.exec_service = self.registry.exec_service
-        # D1: Wire overflow buffer to router (buffer lives on system, router drains it)
         if hasattr(self.exec_service, "set_overflow_buf"):
             self.exec_service.set_overflow_buf(self._exec_overflow_buf)
         else:
@@ -852,8 +764,6 @@ class HFTSystem:
         )
         self.manual_rearm_gate = ManualRearmGate()
         self._last_platform_rearm_request_seen = 0.0
-        # Request ids already applied to the governor, so a duplicate read of
-        # the same request within one tick cannot re-arm twice.
 
         self.platform_degrade_inputs = getattr(
             self.registry, "platform_degrade_inputs", None
@@ -874,33 +784,23 @@ class HFTSystem:
         self.order_adapter.platform_degrade_controller = self.platform_degrade_controller
         self.order_adapter.position_store = self.position_store
         if hasattr(self.order_adapter, "set_storm_guard"):
-            self.order_adapter.set_storm_guard(self.storm_guard)  # M1: live HALT check
+            self.order_adapter.set_storm_guard(self.storm_guard)
         else:
             self.order_adapter._storm_guard = self.storm_guard
 
-        # Post-reconnect: invalidate stale live orders (they are dead at broker side)
         if hasattr(self.md_service, "register_on_reconnect"):
             self.md_service.register_on_reconnect(
                 lambda reason: self.order_adapter.invalidate_live_orders(reason=reason)
             )
-            # Reset stale event counter after reconnect so logs are per-session
             self.md_service.register_on_reconnect(lambda reason: self.strategy_runner.reset_stale_counter())
         self.recon_service.platform_degrade_controller = self.platform_degrade_controller
 
-        self._halt_log_mono: float = 0.0  # rate-limit HALT log to avoid spam
-        # ``None`` means "not currently halted". Deliberately not 0.0: a float
-        # sentinel inside the range of the clock it stores is how the STORM
-        # entry stamp once broke a drawdown release that no longer exists.
+        self._halt_log_mono: float = 0.0
         self._halt_episode_start_mono: float | None = None
-        self._halt_checkpoint_written: bool = False  # write checkpoint once on HALT entry
-        # Set when startup position recovery could not establish position truth.
-        # Everything that writes the checkpoint reads it: on that path the store
-        # is empty by construction, so any write replaces the evidence with zeros.
+        self._halt_checkpoint_written: bool = False
         self._recovery_halted: bool = False
         self._drift_burst_symbol = ""
         self._mtm_calculator = None
-        # See the class-level declarations; only the configured interval needs
-        # resolving per instance.
         self._mtm_last_incomplete = None
         self._mtm_last_unpriced = ()
         self._mtm_incomplete_ticks = 0
@@ -934,7 +834,7 @@ class HFTSystem:
         self._bootstrap_torn_down = False
         self._task_restart_attempts: Dict[str, int] = {}
         self._task_restart_until_s: Dict[str, float] = {}
-        self._task_started_at: Dict[str, float] = {}  # name → monotonic start time
+        self._task_started_at: Dict[str, float] = {}
         self._task_restart_base_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_S", 1.0, min_value=0.1)
         self._task_restart_max_delay_s = self._env_float("HFT_TASK_RESTART_BACKOFF_MAX_S", 30.0, min_value=0.1)
         self._task_restart_max_attempts = int(os.getenv("HFT_TASK_RESTART_MAX_ATTEMPTS", "10"))
@@ -944,43 +844,29 @@ class HFTSystem:
         self._recorder_bridge_drops: int = 0
         self._pnl_snapshot_drops: int = 0
 
-        # WU-11: Session hooks (disabled by default)
         self.session_hook_manager = SessionHookManager()
 
-        # WU-17: Structured health endpoint
         self.health_server = HealthServer(system=self)
 
-        # P1 fix: handle for stop_async() task created by synchronous stop().
-        # The launcher (main.py) awaits this to prevent loop teardown from
-        # cutting recorder drain / final checkpoint / order drain short.
         self._stop_async_task: asyncio.Task[None] | None = None
 
     async def run(self):
         self.running = True
         self.loop = asyncio.get_running_loop()
 
-        # Bind the engine loop into StormGuard so halt-callback coroutines scheduled
-        # from non-asyncio threads (e.g. bootstrap lease-refresh daemon) can be
-        # dispatched via run_coroutine_threadsafe instead of get_running_loop()
-        # (which raises RuntimeError in a non-loop thread). P0-I4.
         sg = getattr(self, "storm_guard", None)
         if sg is not None and hasattr(sg, "bind_loop"):
             sg.bind_loop(self.loop)
         self._audit_engine_start(sg)
 
-        # Schedule coroutines that build() collected while outside the engine loop.
-        # P0-I1: build() runs in __init__ without a running loop, so it cannot call
-        # asyncio.get_event_loop() safely on Python 3.12+. Coroutines returned from
-        # build() (e.g. config-snapshot writer, alertmanager bridge) are started here.
         self._deferred_tasks: list[asyncio.Task[Any]] = []
         registry = getattr(self, "registry", None)
         for coro in list(getattr(registry, "deferred_tasks", None) or []):
             try:
                 self._deferred_tasks.append(self.loop.create_task(coro))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("deferred_task_schedule_failed", error=str(exc))
 
-        # Check for fills lost during startup race (before loop was assigned)
         if self._exec_startup_overflow_lost:
             logger.critical(
                 "exec_startup_overflow_halt",
@@ -989,21 +875,13 @@ class HFTSystem:
             )
             self.storm_guard.trigger_halt("exec_overflow_startup_race")
 
-        # A latch a restart clears is not a latch. The container runs under
-        # ``restart: always``, so this file is the only thing that carries an
-        # emergency halt across a boot -- and _supervise() does not read it
-        # until every trading service is already running. Read it here instead,
-        # before anything can dispatch.
         if kill_switch.is_active():
             try:
                 _boot_ks_reason = kill_switch.read_reason()
-            except Exception as exc:  # noqa: BLE001 - present but unreadable is still active
+            except Exception as exc:
                 logger.warning("kill_switch_unreadable_at_boot", error=str(exc))
                 _boot_ks_reason = "kill_switch_file_present"
             self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_boot_ks_reason}")
-            # trigger_halt alone is not a latch: update() derives its target
-            # from latency/feed-gap health, so a quiet market de-escalates
-            # HALT once the cooldown elapses. The hold is what makes it stick.
             self.storm_guard.set_kill_switch_hold(True)
             logger.critical(
                 "Kill switch active at startup - booting into HALT",
@@ -1012,13 +890,10 @@ class HFTSystem:
                 consequence="feeds and recorder start; no new orders; cancels still allowed",
             )
 
-        # Same reasoning for the daily-loss state and the durable manual
-        # latches: both must be in force before anything can dispatch, and a
-        # restart must not be what releases them.
         self._restore_daily_loss_state()
         try:
             _boot_latches = manual_latches.active()
-        except Exception as exc:  # noqa: BLE001 - an unreadable latch dir is not a release
+        except Exception as exc:
             logger.critical("manual_latch_dir_unreadable_at_boot", error=str(exc))
             _boot_latches = {"unreadable": str(exc)}
         if _boot_latches:
@@ -1038,9 +913,6 @@ class HFTSystem:
             pass
 
         logger.info("System Starting...")
-        # Lifecycle boundary, not the trading loop: nothing is trading yet, and
-        # `manual_rearm_required=False` on a non-ack transition never reaches the
-        # locking store anyway -- only the audit trail. Left synchronous.
         self.evidence_writer.record_transition(
             scope="platform",
             mode="NORMAL",
@@ -1049,7 +921,6 @@ class HFTSystem:
         )
 
         try:
-            # Keep liveness observable while broker login or recovery blocks.
             self._start_service("health_server", self.health_server.run())
 
             order_mode = getattr(self, "order_mode", None)
@@ -1058,9 +929,6 @@ class HFTSystem:
                 self.order_mode = order_mode
             orders_enabled = order_mode != "disabled"
 
-            # Login order_client (separate Shioaji session for execution).
-            # md_client logs in via MarketDataService._connect_sequence(), but
-            # order_client needs its own login for contract resolution + callbacks.
             if orders_enabled:
                 login_ok = False
                 try:
@@ -1074,11 +942,6 @@ class HFTSystem:
                         "order_client logged in",
                         contracts_ready=getattr(self.order_client, "contracts_ready", "N/A"),
                     )
-                    # Kept on the instance so the order-session watchdog can
-                    # re-register exactly these after a reconnect. The reconnect
-                    # orchestrator restores *quote* callbacks only, so a relogin
-                    # that did not do this would leave the session authenticated
-                    # and placing orders while every fill went nowhere.
                     self._exec_callbacks = (
                         lambda state, payload: self._on_exec("order", {"state": state, "payload": payload}),
                         lambda payload: self._on_exec("deal", {"payload": payload}),
@@ -1095,34 +958,19 @@ class HFTSystem:
             else:
                 logger.warning("order_path_disabled_quote_only")
 
-            # Order governance is unnecessary in quote-only mode and can invoke
-            # flatten/recovery paths, so keep it outside the quote runtime.
             if orders_enabled and self.session_governor is not None:
                 await self.session_governor.start()
                 logger.info("SessionGovernor started")
 
-            # Opt-in: start AutonomyMonitor via supervisor (so crashes are detected/restarted)
             if orders_enabled and self.autonomy_monitor is not None:
                 self._start_service("autonomy_monitor", self.autonomy_monitor.run())
 
-            # Bug 27 (2026-04-17): start PositionStuckMonitor (alert-only observability).
             if orders_enabled and self.position_stuck_monitor is not None:
                 self._start_service("position_stuck_monitor", self.position_stuck_monitor.run())
 
-            # Start Services
-            # Recorder MUST start before exec_router to prevent fill recording gaps
-            # during startup (fills can arrive as soon as execution callbacks are wired).
             self._start_service("recorder", self.recorder.run())
-            # Save bus cursor BEFORE MarketDataService starts publishing events.
-            # StrategyRunner will replay from this cursor to avoid missing startup-window events.
             pre_md_cursor = self.bus.cursor
             self._start_service("md", self.md_service.run())
-            # C3: Position recovery MUST complete before exec_router so that
-            # exec_router does not apply startup-window fills on top of a
-            # stale position_store only to be overwritten by the broker
-            # snapshot. Fills arriving during recover() pile up in
-            # raw_exec_queue (bounded, with overflow buffer) and are consumed
-            # only after the canonical baseline is loaded.
             if orders_enabled and os.getenv("HFT_STARTUP_RECON_ENABLED", "1") == "1" and self.startup_verifier:
                 self._bind_checkpoint_identity()
                 try:
@@ -1169,20 +1017,14 @@ class HFTSystem:
 
             if orders_enabled:
                 self._start_service("exec_router", self.exec_service.run())
-                # CE-M2: start GatewayService when enabled; otherwise start RiskEngine standalone
                 if self.gateway_service is not None:
                     self._start_service("gateway", self.gateway_service.run())
                 else:
                     self._start_service("risk", self.risk_engine.run())
                 self._start_service("order", self.order_adapter.run())
                 self._start_service("exec_gateway", self.execution_gateway.run())
-                # Started under ``orders_enabled`` with the rest of the order
-                # path: with orders disabled there is no order session to keep
-                # alive, and a watchdog that relogs in a session nobody uses
-                # would spend the account's session allowance for nothing.
                 self._start_service("order_session_watchdog", self._order_session_watchdog())
 
-                # ── Checkpoint Writer (after recovery, before trading) ──
                 if self._recovery_halted:
                     logger.critical(
                         "checkpoint_writer_suppressed_after_recovery_halt",
@@ -1192,7 +1034,6 @@ class HFTSystem:
                     self._start_service("checkpoint_writer", self.checkpoint_writer.run())
 
                 self._start_service("recon", self.recon_service.run())
-                # Pass saved pre-MD cursor so StrategyRunner replays events published during startup
                 self.strategy_runner.set_start_cursor(pre_md_cursor)
                 self._start_service("strat", self.strategy_runner.run())
                 if (
@@ -1203,30 +1044,15 @@ class HFTSystem:
             else:
                 logger.info("quote_only_service_plane_active", services=["health_server", "recorder", "md"])
 
-            # Start AuditWriter flush tasks (singleton, lazy-created by RiskEngine/StormGuard)
             try:
                 from hft_platform.recorder.audit import get_audit_writer
 
                 self._audit_writer = get_audit_writer()
-                # P1-a (2026-04-27): wire the recorder's DataWriter so audit
-                # rows actually land in ClickHouse. Previously this call was
-                # `get_audit_writer()` with no writer arg; AuditWriter._writer
-                # stayed None and every batch fell through to the structlog
-                # ``audit_fallback`` log path (Bug #19), leaving audit.*
-                # tables empty.
-                #
-                # Companion fix: 20260427_001_audit_schema_alignment.sql
-                # rewrites the DDL to match producer payloads — without that
-                # migration this wiring would just trade silent fallback for
-                # noisy CH write errors.
                 _recorder_writer = _audit_persistence_writer_for_recorder(self.recorder)
                 if _recorder_writer is not None and hasattr(self._audit_writer, "set_writer"):
                     self._audit_writer.set_writer(_recorder_writer)
                 await self._audit_writer.start()
                 if getattr(self._audit_writer, "_writer", None) is None:
-                    # Recorder writer was unavailable at start time (rare —
-                    # implies recorder failed to construct). Keep the warning
-                    # so operators still see the degraded mode.
                     logger.warning(
                         "audit_writer_persistence_mode_structlog",
                         message=(
@@ -1246,7 +1072,6 @@ class HFTSystem:
                         persistence=_audit_persistence,
                         writer_type=type(_recorder_writer).__name__,
                     )
-                # Inject audit writer into OrderAdapter for order lifecycle logging
                 if hasattr(self.order_adapter, "set_audit_writer"):
                     self.order_adapter.set_audit_writer(self._audit_writer)
             except Exception as exc:
@@ -1267,21 +1092,14 @@ class HFTSystem:
             }:
                 self._start_service("pnl_exporter", self._pnl_snapshot_exporter())
 
-            # WU-11: Session hooks
             if orders_enabled and self.session_hook_manager.enabled:
                 self._start_service("session_hooks", self.session_hook_manager.run())
 
-            # Disable GC during active trading (HFT Core Law 1: Allocator Law)
             if os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {"1", "true", "yes", "on"}:
                 gc.disable()
                 _gc_disabled = True
                 logger.info("GC disabled for trading session")
 
-            # Start the event-loop stall watchdog before entering the supervisor
-            # loop. It runs on a dedicated OS thread and force-exits the process
-            # if _supervise() stops beating (loop spin/starvation) past the
-            # threshold, so the container restart policy recovers the engine in
-            # seconds. Disabled via HFT_LOOP_STALL_KILL_S<=0.
             self._loop_watchdog = LoopStallWatchdog(
                 stall_kill_s=self._env_float("HFT_LOOP_STALL_KILL_S", 60.0, 0.0),
                 check_interval_s=self._env_float("HFT_LOOP_STALL_CHECK_S", 5.0, 0.1),
@@ -1289,12 +1107,8 @@ class HFTSystem:
             )
             self._loop_watchdog.start()
 
-            # Independent loop-congestion probe. Not in _iter_supervised_services:
-            # it is a measurement, and a measurement dying must never HALT the
-            # platform. It is cancelled with the rest of self.tasks on shutdown.
             self._start_service("loop_probe", self._probe_event_loop_lag())
 
-            # Start Monitor/Supervisor Loop
             await self._supervise()
 
         except asyncio.CancelledError:
@@ -1303,8 +1117,6 @@ class HFTSystem:
             if _gc_disabled:
                 gc.enable()
                 logger.info("GC re-enabled after trading session")
-            # Use stop_async() for ordered shutdown: bridge → recorder drain → tasks.
-            # The sync stop() skips the recorder drain path, risking data loss.
             await self.stop_async()
 
     def _bind_checkpoint_identity(self) -> bool:
@@ -1318,11 +1130,11 @@ class HFTSystem:
         which no checkpoint written with a known account matches, so recovery
         falls back to the broker snapshot rather than vouch for a stranger's.
         """
-        from hft_platform.execution.checkpoint import checkpoint_identity  # noqa: PLC0415
+        from hft_platform.execution.checkpoint import checkpoint_identity
 
         try:
             account_id = str(getattr(self.order_client, "get_default_account_id", lambda: "")() or "")
-        except Exception as exc:  # noqa: BLE001 - an unknown account is handled below
+        except Exception as exc:
             logger.warning("checkpoint_identity_account_lookup_failed", error=str(exc))
             account_id = ""
         identity = checkpoint_identity(
@@ -1381,16 +1193,8 @@ class HFTSystem:
             path = kill_switch.activate(reason, actor="startup_position_recovery")
             logger.critical("kill_switch_latched_by_startup_recovery", path=path, reason=reason)
         except OSError as exc:
-            # The in-memory HALT below still holds for this boot; only the
-            # cross-restart latch is lost. Loud, not fatal.
             logger.critical("kill_switch_latch_write_failed", error=str(exc), reason=reason)
         self.storm_guard.trigger_halt(f"STARTUP_POSITION_RECOVERY: {source}")
-        # Pinned for the process lifetime, and deliberately not released by
-        # ``_supervise`` when the latch file goes away. This process holds an
-        # empty position store and has its checkpoint writer suppressed, so
-        # resuming it in place would trade with no position truth and persist
-        # nothing. Resolving a recovery halt is: fix the checkpoint, clear the
-        # latch, restart.
         self.storm_guard.set_kill_switch_hold(True)
 
     def _release_halt_drained(self, item: object, reason: str = "HALT_DRAINED") -> None:
@@ -1406,8 +1210,6 @@ class HFTSystem:
         queue = getattr(self.strategy_runner, "_rejection_queue", None)
         if queue is None:
             return
-        # OrderCommand / IntentEnvelope wrap the intent; a typed envelope wraps
-        # the typed tuple as ``payload``.
         intent = getattr(item, "intent", None)
         if intent is None:
             intent = getattr(item, "payload", item)
@@ -1506,7 +1308,7 @@ class HFTSystem:
                     metrics.execution_router_alive.set(1)
                 elif name == "exec_gateway":
                     metrics.execution_gateway_alive.set(1)
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 pass
         self.tasks[name] = asyncio.create_task(coro)
         self._task_started_at[name] = timebase.now_s()
@@ -1557,19 +1359,10 @@ class HFTSystem:
         recorder = getattr(self, "recorder", None)
         if recorder is None:
             return
-        # H10: single-path shutdown — if recorder.run()'s finally has
-        # already drained+flushed, skip the sync fallback. Double-drive
-        # would race on writer/batchers/WALFirstWriter state. Strict
-        # ``is True`` so test doubles (MagicMock auto-creates truthy
-        # attributes) do not accidentally short-circuit.
         if getattr(recorder, "_shutdown_drained", False) is True:
             logger.info("sync_drain_recorder_skipped_already_drained")
             return
 
-        # P0-I5: stop the WAL batch timer thread BEFORE the temp loop runs so
-        # that the temp loop becomes the sole writer to the WAL directory.
-        # Walk both possible WAL writer holders (DataWriter-embedded batch
-        # writer AND WAL-first writer's embedded batch writer).
         self._stop_wal_batch_timers(recorder)
 
         recorder.running = False
@@ -1605,7 +1398,7 @@ class HFTSystem:
         if wal_batch_writer is not None and hasattr(wal_batch_writer, "stop"):
             try:
                 wal_batch_writer.stop()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("wal_batch_writer_stop_failed", error=str(exc))
 
         wal_first = getattr(recorder, "_wal_first_writer", None)
@@ -1614,7 +1407,7 @@ class HFTSystem:
             if inner is not None and hasattr(inner, "stop"):
                 try:
                     inner.stop()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("wal_first_batch_writer_stop_failed", error=str(exc))
 
     def _teardown_bootstrap(self) -> None:
@@ -1652,7 +1445,7 @@ class HFTSystem:
                 await self._check_order_session_once(threshold)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — a watchdog must outlive its own failures
+            except Exception as exc:
                 logger.error("order_session_watchdog_error", error=str(exc))
 
     async def _check_order_session_once(self, threshold: int) -> str:
@@ -1680,7 +1473,7 @@ class HFTSystem:
                                                   placing orders while every
                                                   fill goes nowhere.
         """
-        from hft_platform.observability.metrics import MetricsRegistry  # noqa: PLC0415
+        from hft_platform.observability.metrics import MetricsRegistry
 
         metrics = MetricsRegistry.get()
         adapter = getattr(self, "order_adapter", None)
@@ -1694,18 +1487,11 @@ class HFTSystem:
 
         reconnect = getattr(self.order_client, "reconnect", None)
         if reconnect is None:
-            # A broker facade with no reconnect (sim/no-op clients). Say so
-            # every interval rather than looping silently: an order session
-            # nobody can revive is worth a log line.
             logger.error("order_session_down_but_client_cannot_reconnect", consecutive_session_errors=failures)
             return "cannot_reconnect"
 
         logger.warning("order_session_reconnect_attempt", consecutive_session_errors=failures, threshold=threshold)
         loop = asyncio.get_running_loop()
-        # force=False on purpose: the orchestrator's cooldown, backoff and
-        # process-wide login slot are what stop a persistently dead session
-        # from becoming a relogin storm that burns the account's session
-        # allowance and earns everything a 451.
         ok = await loop.run_in_executor(
             None,
             lambda: reconnect(reason="order_session_not_established", force=False),
@@ -1717,9 +1503,6 @@ class HFTSystem:
 
         callbacks = getattr(self, "_exec_callbacks", None)
         if callbacks is None:
-            # Reconnected but the fill path cannot be restored. Trading on
-            # would be worse than not trading: orders would fill and the
-            # platform would never hear about it.
             metrics.order_session_reconnect_total.labels(result="no_callbacks").inc()
             logger.critical("order_session_reconnected_without_execution_callbacks")
             return "no_callbacks"
@@ -1788,9 +1571,6 @@ class HFTSystem:
                     ("recon", "ReconciliationService", self.recon_service.run),
                     ("strat", "StrategyRunner", self.strategy_runner.run),
                     ("pnl_exporter", "PnLSnapshotExporter", self._pnl_snapshot_exporter),
-                    # Supervised like the rest of the order path. A recovery
-                    # loop that dies quietly leaves exactly the state it exists
-                    # to prevent: a dead order session nobody re-authenticates.
                     ("order_session_watchdog", "OrderSessionWatchdog", self._order_session_watchdog),
                 )
             )
@@ -1823,7 +1603,6 @@ class HFTSystem:
         """
         results: dict[str, str] = {}
 
-        # 1. Clear checkpoint file
         if self.checkpoint_writer is not None:
             path = getattr(self.checkpoint_writer, "_path", None)
             if path and os.path.exists(path):
@@ -1835,7 +1614,6 @@ class HFTSystem:
         else:
             results["checkpoint"] = "no writer"
 
-        # 2. Clear pending recovery positions in PositionStore
         recovery = getattr(self.position_store, "_recovery_positions", None)
         if recovery is not None:
             count = len(recovery)
@@ -1845,7 +1623,6 @@ class HFTSystem:
         else:
             results["recovery_positions"] = "no recovery state"
 
-        # 3. Clear DLQ state
         try:
             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
@@ -1857,20 +1634,17 @@ class HFTSystem:
         except Exception as exc:
             results["fill_dlq"] = f"error: {exc}"
 
-        # 4. Reset StormGuard to NORMAL (if in HALT from reconciliation)
         if self.storm_guard.state >= StormGuardState.STORM:
             old_state = self.storm_guard.state.name
             self.storm_guard._halt_entry_ts = 0.0
             self.storm_guard._storm_entry_ts = 0.0
             self.storm_guard._de_escalate_count = self.storm_guard._de_escalate_threshold
-            # Force de-escalation on next update cycle
             self.storm_guard.update(latency_us=0, feed_gap_s=0.0)
             results["storm_guard"] = f"reset from {old_state} to {self.storm_guard.state.name}"
             logger.info("graceful_reset: storm_guard reset", old=old_state, new=self.storm_guard.state.name)
         else:
             results["storm_guard"] = "already NORMAL"
 
-        # 5. Exit REDUCE_ONLY if active
         if self.platform_degrade_controller.reduce_only_active:
             await self.platform_degrade_controller.exit_reduce_only_async(reason=reason)
             results["reduce_only"] = "exited"
@@ -1878,7 +1652,6 @@ class HFTSystem:
         else:
             results["reduce_only"] = "not active"
 
-        # 6. Reset reconciliation state
         if self.recon_service is not None:
             self.recon_service._halt_triggered = False
             self.recon_service._consecutive_failures = 0
@@ -1930,7 +1703,6 @@ class HFTSystem:
             return
         attempt = self._task_restart_attempts.get(name, 0) + 1
 
-        # INFRA-018: Prevent infinite crash-loop restart oscillation.
         if attempt > self._task_restart_max_attempts:
             logger.critical(
                 "Service exceeded max restart attempts — permanently stopped",
@@ -1939,7 +1711,6 @@ class HFTSystem:
                 attempts=attempt - 1,
                 max_attempts=self._task_restart_max_attempts,
             )
-            # Trigger permanent HALT so trading stops cleanly.
             sg = getattr(self, "storm_guard", None)
             if sg is not None:
                 sg.trigger_halt(f"Service {name} crash-loop: {attempt - 1} restarts exceeded max")
@@ -1969,16 +1740,9 @@ class HFTSystem:
         state = await asyncio.to_thread(self._read_rearm_state)
         controller = getattr(self, "platform_degrade_controller", None)
         inputs = getattr(self, "platform_degrade_inputs", None)
-        # Read the live reasons BEFORE the re-arm is consumed. The re-arm has to
-        # re-apply them in memory before it suspends, or clearing here and
-        # re-checking below leaves allow_open() true across the audit write --
-        # a fail-open during exactly the condition reduce-only contains.
         reasons = inputs.reduce_only_reasons() if inputs is not None else []
         await self._consume_platform_rearm_request_async(state, reasons)
         await self._consume_strategy_rearm_requests(state)
-        # After the re-arm, deliberately: if an operator has both a re-arm
-        # and a quarantine pending for the same strategy, the tick must end
-        # quarantined. Stopping is the fail-closed direction.
         await self._consume_strategy_quarantine_requests()
         if controller is None or inputs is None:
             return
@@ -2018,7 +1782,7 @@ class HFTSystem:
         """
         try:
             rearm_requests.consume(request)
-        except Exception as exc:  # noqa: BLE001 - a failed delete must not stop supervision
+        except Exception as exc:
             logger.error(
                 "strategy_rearm_request_delete_failed",
                 strategy_id=getattr(request, "strategy_id", None),
@@ -2043,7 +1807,7 @@ class HFTSystem:
         """
         try:
             quarantine_requests.consume(request)
-        except Exception as exc:  # noqa: BLE001 - a failed delete must not stop supervision
+        except Exception as exc:
             logger.error(
                 "strategy_quarantine_request_delete_failed",
                 strategy_id=getattr(request, "strategy_id", None),
@@ -2078,7 +1842,7 @@ class HFTSystem:
             return
         try:
             requests = await asyncio.to_thread(quarantine_requests.pending, gate.state_path.parent)
-        except Exception as exc:  # noqa: BLE001 - a scan failure must not stop supervision
+        except Exception as exc:
             logger.warning("strategy_quarantine_request_scan_failed", error=str(exc))
             return
         for request in requests:
@@ -2094,10 +1858,6 @@ class HFTSystem:
                 )
                 continue
             if governor.quarantine_token(request.strategy_id) is not None:
-                # Already latched. Retire the request rather than re-latching:
-                # a second quarantine would mint a new token and orphan any
-                # re-arm request the operator has already written against the
-                # current one.
                 if not await asyncio.to_thread(self._retire_quarantine_request, request):
                     continue
                 logger.warning(
@@ -2106,13 +1866,9 @@ class HFTSystem:
                     request_id=request.request_id,
                 )
                 continue
-            # Apply BEFORE consuming, the opposite of the re-arm path and for
-            # the same reason: fail closed. If the process dies between the two
-            # the request is reapplied next boot, and re-quarantining is a
-            # no-op. Consuming first would risk losing the stop entirely.
             try:
                 await governor.quarantine_async(request.strategy_id, reason=request.reason)
-            except Exception as exc:  # noqa: BLE001 - one bad request must not stop the rest
+            except Exception as exc:
                 logger.error(
                     "strategy_quarantine_request_failed",
                     strategy_id=request.strategy_id,
@@ -2159,14 +1915,9 @@ class HFTSystem:
         if gate is None:
             return
         if state:
-            # Converge before consuming: a request in this same tick must be
-            # able to clear a latch adopted a few lines above it.
             try:
                 governor.reconcile_persisted_quarantines(state)
             except Exception as exc:
-                # A document this tick cannot parse must not stop supervision --
-                # the boot path is where an unreadable safety document fails
-                # closed. Here it means one tick adopts nothing.
                 logger.warning("strategy_quarantine_reconcile_failed", error=str(exc))
         try:
             requests = await asyncio.to_thread(rearm_requests.pending, gate.state_path.parent)
@@ -2175,13 +1926,6 @@ class HFTSystem:
             return
         for request in requests:
             if not governor.owns_token(request.quarantine_token):
-                # Another engine's quarantine. The directory is shared state and
-                # the session-ownership preflight is advisory, so two engines can
-                # be scanning it; retiring this would unlink an authorization the
-                # other engine has not seen yet and the operator would never learn
-                # it was destroyed. Not ours to judge, not ours to delete.
-                # Lazily, because this method is also exercised against an
-                # ``HFTSystem.__new__`` rig that never runs ``__init__``.
                 seen = getattr(self, "_foreign_rearm_request_ids", None)
                 if seen is None:
                     seen = self._foreign_rearm_request_ids = set()
@@ -2197,20 +1941,6 @@ class HFTSystem:
                 continue
             live_token = governor.quarantine_token(request.strategy_id)
             if live_token is None:
-                # No live quarantine, and after this branch that no longer
-                # includes "the engine restarted". It used to: the comment here
-                # said a strategy quarantine does not survive a restart, which
-                # is the exact defect ``restore_persisted_quarantines`` removes,
-                # and leaving it would tell the next reader that retiring a
-                # request across a restart is normal. It is not. A restored
-                # latch keeps its persisted token, so a request written before
-                # the restart still matches and is still applied.
-                #
-                # What reaches here now: an operator or an earlier request in
-                # this same tick cleared the latch, the request names a strategy
-                # that was never quarantined, or the pre-restart durable write
-                # failed so there was no latch on disk to restore. Retire it so
-                # it cannot linger and cannot apply to some future quarantine.
                 if not await asyncio.to_thread(self._retire_rearm_request, request):
                     continue
                 logger.warning(
@@ -2220,8 +1950,6 @@ class HFTSystem:
                 )
                 continue
             if live_token != request.quarantine_token:
-                # Authorizes a different quarantine instance than the live one.
-                # Retire it: the operator must look at the current failure.
                 if not await asyncio.to_thread(self._retire_rearm_request, request):
                     continue
                 logger.warning(
@@ -2232,11 +1960,6 @@ class HFTSystem:
                     live_token=live_token,
                 )
                 continue
-            # Consume before applying. If the process dies between the two, the
-            # strategy stays quarantined and the operator reissues -- the
-            # fail-closed direction. Consuming after could replay the request.
-            # A consume that *fails* must not be followed by the re-arm either,
-            # for the same reason: the request would still be on disk to replay.
             if not await asyncio.to_thread(self._retire_rearm_request, request):
                 continue
             if await governor.rearm_async(
@@ -2326,11 +2049,6 @@ class HFTSystem:
         _heartbeat_interval_ticks = int(os.getenv("HFT_HEARTBEAT_INTERVAL_S", "30"))
         _heartbeat_tick = 0
 
-        # Fail LOUD if the file-heartbeat path is not writable. On THESHOW
-        # (2026-06-15) this write failed silently for 18h (bind-mounted dir owned
-        # by root, container ran as uid 1000), disabling the external watchdog.
-        # The in-process LoopStallWatchdog is the primary net now, but surface
-        # the misconfiguration so the external watchdog can be relied on too.
         _hb_ok, _hb_reason = heartbeat_writable(_heartbeat_path)
         if not _hb_ok:
             logger.critical(
@@ -2343,8 +2061,6 @@ class HFTSystem:
                 ),
             )
 
-        # Periodic gen-0 GC: collect short-lived cyclic refs even when full GC is disabled.
-        # Gen-0 is typically <1ms and safe to run at supervisor frequency.
         _gc_gen0_interval = max(1, int(os.getenv("HFT_GC_GEN0_INTERVAL_TICKS", "10")))
         _gc_gen0_tick = 0
         _gc_gen0_enabled = os.getenv("HFT_GC_DISABLE_TRADING", "0").strip().lower() in {
@@ -2353,94 +2069,45 @@ class HFTSystem:
             "yes",
             "on",
         } and os.getenv("HFT_GC_GEN0_PERIODIC", "1").strip().lower() not in {"0", "false", "no", "off"}
-        # Periodic gen-2 GC: reclaim long-lived cyclic refs (structlog, asyncio internals).
-        #
-        # The default used to be 300 ticks (~5 min), justified by "typically
-        # <10 ms". Production disproved that. Measured on THESHOW across 107
-        # consecutive runs via the ``gc_gen2_periodic`` log below: the pause is
-        # ~40 ms with the feed idle and **100-116 ms during a live session** —
-        # it scales with the live object graph, not with uptime — while 105 of
-        # those 107 runs reclaimed *zero* objects (111 in total). At 5 min that
-        # was ~12 hard event-loop stalls per hour, against 18.5 measured probe
-        # excursions above 50 ms per hour — so this is the largest identified
-        # contributor to the tail, roughly two thirds of it, not all of it.
-        #
-        # ``gc.collect()`` holds the GIL, so this cannot be moved to an executor;
-        # frequency is the only lever that does not change what gets reclaimed.
-        # Hourly still yields 24 collections a day, which is ample for the
-        # gen-1/gen-2 accumulation this exists to bound under ``gc.disable()``.
         _gc_gen2_interval = max(60, int(os.getenv("HFT_GC_GEN2_INTERVAL_TICKS", "3600")))
         _gc_gen2_tick = 0
-        _gc_gen2_enabled = _gc_gen0_enabled  # same gate as gen-0
+        _gc_gen2_enabled = _gc_gen0_enabled
 
         while self.running:
-            await asyncio.sleep(interval_s)  # 1Hz Tick
+            await asyncio.sleep(interval_s)
             now_tick = loop.time()
-            # This spans the WHOLE tick period (sleep + the body below), so it is
-            # loop congestion PLUS this loop's own work — not "event loop lag"
-            # despite the metric name. Kept unrenamed because dashboards and
-            # alerts query it; ``event_loop_probe_lag_ms`` (an idle probe task)
-            # and ``supervisor_tick_duration_ms`` (recorded at the bottom of this
-            # body) split it into its two halves and should sum back to it.
             lag_s = max(0.0, now_tick - last_tick - interval_s)
             metrics.event_loop_lag_ms.set(lag_s * 1000.0)
             last_tick = now_tick
 
-            # Liveness beat for the stall watchdog. Recorded first thing each
-            # tick: if the loop later spins/blocks, beats stop and the watchdog
-            # thread force-exits the process so the container restarts it.
-            # ``getattr`` guard mirrors the shutdown paths below: partially
-            # constructed instances (tests build via ``__new__``) never set it.
             _watchdog = getattr(self, "_loop_watchdog", None)
             if _watchdog is not None:
                 _watchdog.beat()
 
-            # A. Update StormGuard with real metrics
-            # INFRA-007: Each computation is isolated so StormGuard.update()
-            # always runs even if individual inputs fail.
-
-            # 1. Get feed gap from market data service
             feed_gap_s = 0.0
             try:
                 feed_gap_s = self._get_max_feed_gap_s(self.md_service)
             except Exception as e:
                 logger.warning("StormGuard feed_gap computation failed", error=str(e))
 
-            # 2. Mark-to-market into the daily-loss validator. PnL goes there
-            # and only there: StormGuard reads platform health, and the day's
-            # net change is the one definition of a loss (B4a, 2026-10-23).
             if self._mtm_calculator is not None:
                 try:
-                    # snapshot() rather than total_unrealized_pnl(): the bare
-                    # total reports 0 both for a flat book and for a book where
-                    # nothing could be priced, and the daily stop is allowed to
-                    # lift only on the former.
                     mtm = self._mtm_calculator.snapshot()
                     self._log_mtm_completeness(mtm)
                     self.risk_engine.update_unrealized_pnl(int(mtm.total_scaled), complete=mtm.complete)
                 except Exception as e:
-                    # Was a bare ``pass``. A mark-to-market that fails every
-                    # tick also starves the daily-loss reset, and silence made
-                    # that indistinguishable from a healthy engine.
                     logger.warning("daily-loss mark-to-market update failed", error=str(e))
 
-            # The daily-loss reset boundary ticks regardless of the block above:
-            # it is what releases a latched daily-loss HALT, and the MtM read
-            # can fail for reasons that have nothing to do with the calendar.
             try:
                 self.risk_engine.roll_daily_loss_boundary()
             except Exception as e:
                 logger.warning("daily loss boundary roll failed", error=str(e))
 
-            # 2a. Durable manual latches and the persisted daily-loss state.
             try:
                 await self._sync_manual_latches()
             except Exception as e:
                 logger.error("manual latch sync failed", error=str(e), exc_info=True)
 
-            # 2b. Close positions a latched stop, a per-position loss limit,
-            # an expiring contract or an operator's ``hft ops flatten`` would
-            # otherwise leave open (risk/loss_exit.py).
             try:
                 await self._sync_operator_flatten()
             except Exception as e:
@@ -2450,10 +2117,8 @@ class HFTSystem:
             except Exception as e:
                 logger.error("loss exit failed", error=str(e), exc_info=True)
 
-            # 3. Latency input for StormGuard.
             latency_us = self._stormguard_latency_us(lag_s)
 
-            # 3b. Inform StormGuard of session state
             try:
                 if self.session_governor is not None:
                     from hft_platform.ops.session_governor import SessionPhase
@@ -2474,7 +2139,6 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard session state update failed", error=str(e))
 
-            # 4. ALWAYS call StormGuard.update() with whatever data we have.
             try:
                 self.storm_guard.update(
                     latency_us=latency_us,
@@ -2483,15 +2147,6 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard update call failed", error=str(e))
 
-            # 4b. Update StormGuard with LOB-derived drift-burst toxicity.
-            #
-            # The detector holds ONE instrument's return window, so it has to be
-            # fed one instrument. This used to take whatever came first out of
-            # ``lob_engine.books`` — a plain dict that evicts on TTL, so "first"
-            # silently rotated between contracts and the drift t-statistic ended
-            # up measuring the price gap between them (observed: the same
-            # detector logging spreads of 3.75 and 48.45 points). The reference
-            # symbol is now latched and only re-picked when it goes away.
             try:
                 if hasattr(self.storm_guard, "update_with_lob"):
                     lob_engine = getattr(self.md_service, "lob", None)
@@ -2508,7 +2163,6 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard LOB drift-burst update failed", error=str(e))
 
-            # 5. Update per-symbol feed gap metrics
             try:
                 feed_gap_metric = getattr(metrics, "feed_gap_by_symbol_seconds", None)
                 if feed_gap_metric is not None:
@@ -2518,21 +2172,13 @@ class HFTSystem:
             except Exception as e:
                 logger.warning("StormGuard per-symbol metrics failed", error=str(e))
 
-            # 6. Update per-connection pool metrics (if QuoteConnectionPool)
             _update_pool_metrics = getattr(self.md_client, "update_metrics", None)
             if _update_pool_metrics is not None:
                 try:
                     _update_pool_metrics()
                 except Exception as e:
-                    # QuoteConnectionPool.update_metrics() already counts and
-                    # logs its own failures (hft_quote_pool_metrics_*_total),
-                    # so reaching here means the pool object itself is broken.
-                    # Still non-fatal, but it must not be invisible: these
-                    # gauges are the only per-facade liveness signal there is.
                     logger.warning("pool_metrics_update_failed", error=str(e))
 
-            # Kill-switch file check (async to avoid blocking event loop)
-            # active_path also checks the pre-.state legacy location.
             loop = asyncio.get_running_loop()
             kill_switch_path = await loop.run_in_executor(None, kill_switch.active_path)
             if kill_switch_path is not None:
@@ -2543,29 +2189,16 @@ class HFTSystem:
                         _ks_reason = "kill_switch_file_present"
                     self.storm_guard.trigger_halt(f"KILL_SWITCH_FILE: {_ks_reason}")
                     logger.critical("Kill switch file detected", path=kill_switch_path, reason=_ks_reason)
-                # Every tick, not just on entry: the hold is what stops HALT
-                # de-escalating out from under a latch that is still present.
                 self.storm_guard.set_kill_switch_hold(True)
-                # Every tick too: a /stop written over a recovery latch changes
-                # who may close the book.
                 self._kill_switch_actor = await loop.run_in_executor(None, _read_kill_switch_actor, kill_switch_path)
             elif not self._recovery_halted:
-                # The file is the operator's authority, so removing it releases
-                # the hold and HALT de-escalates through the normal cooldown.
-                # A startup recovery halt is the one case that does not: see
-                # ``_on_startup_recovery_halt``.
                 self.storm_guard.set_kill_switch_hold(False)
                 self._kill_switch_actor = ""
             else:
                 self._kill_switch_actor = ""
-                # Startup recovery pin: the hold is already True for the process
-                # lifetime and the file may be gone. Re-assert it so the exported
-                # gauge is rewritten every tick; a first write that failed would
-                # otherwise leave it at 0 while the hold is still set.
                 self.storm_guard.set_kill_switch_hold(True)
 
             t_gateway = self.tasks.get("exec_gateway")
-            # Check Health for all critical services
             for name, component, coro_factory in self._iter_supervised_services():
                 task = self.tasks.get(name)
                 if task is None:
@@ -2581,26 +2214,18 @@ class HFTSystem:
                     continue
                 if exc is None and name in ("order", "exec_gateway") and self.storm_guard.state == StormGuardState.HALT:
                     continue
-                # I2-C1: HALT-stopped services should restart when HALT de-escalates,
-                # not trigger a new HALT. Detect by: no exception + running + non-HALT.
                 if exc is None and name in ("order", "exec_gateway") and self.storm_guard.state != StormGuardState.HALT:
                     logger.info("Restarting service after HALT de-escalation", task=name)
                     _svc = self.order_adapter if name == "order" else self.execution_gateway
                     self._set_service_running(_svc, True)
                     if self.running:
-                        # count_attempt=False: this task exited cleanly because
-                        # HALT stopped it. Bringing it back is normal control
-                        # flow, not crash recovery, and must not spend the
-                        # crash-loop budget.
                         self._try_restart_service(name, component, coro_factory, count_attempt=False)
                     continue
-                # Detect immediate failures: task died within 2s of creation.
-                # Apply extra backoff penalty to avoid rapid retry budget burn.
                 _started = self._task_started_at.get(name)
                 _immediate_fail = _started is not None and (timebase.now_s() - _started) < 2.0
                 if _immediate_fail:
                     cur = self._task_restart_attempts.get(name, 0)
-                    self._task_restart_attempts[name] = cur + 1  # extra penalty
+                    self._task_restart_attempts[name] = cur + 1
                 logger.critical(
                     "Critical service task stopped",
                     task=name,
@@ -2612,18 +2237,7 @@ class HFTSystem:
                 if self.running:
                     self._try_restart_service(name, component, coro_factory)
 
-            # Update Metrics — offload blocking psutil calls off the event loop
             await loop.run_in_executor(None, metrics.update_system_metrics)
-            # Per-facade health check (QuoteConnectionPool isolation).
-            # Outside a session, facade feed gaps are expected and a reconnect
-            # can never close them, so the pool suppresses *scheduling* while
-            # still running the FSM — degraded/recovered transitions stay
-            # visible. Suppression is decided inside the pool from
-            # MarketCalendar (QuoteConnectionPool.reconnect_allowed), not from
-            # the HFT_RECONNECT_HOURS wall-clock window this used to gate on:
-            # that window's night leg ran to 05:05 against an 05:00 close and
-            # produced a 5-minute relogin storm, while its day leg stopped at
-            # 13:35 and left the last 10 minutes of the day session unchecked.
             client = getattr(self.md_service, "client", None)
             if client is not None and hasattr(client, "check_facade_health"):
                 client.check_facade_health()
@@ -2665,27 +2279,22 @@ class HFTSystem:
 
             await self._update_platform_degrade_state()
 
-            # Periodic stale symbol eviction for FeatureEngine (rate-limited internally)
             _fe = getattr(getattr(self, "md_service", None), "feature_engine", None)
             if _fe is not None:
                 try:
                     _fe.evict_stale_symbols()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
-            # Periodic TTL sweep for live_orders (rate-limited internally)
             _oa = getattr(self, "order_adapter", None)
             if _oa is not None:
                 try:
                     await _oa.sweep_stale_live_orders()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
-                # Bug D (2026-04-20): release strategy pending counters for
-                # phantoms past TTL — prevents R47 indefinite freeze when broker
-                # never sends fill/cancel callback for a phantom.
                 try:
                     await _oa.release_stale_phantom_pendings()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
             now = timebase.now_s()
@@ -2695,13 +2304,11 @@ class HFTSystem:
             if t_gateway and not t_gateway.done():
                 metrics.execution_gateway_heartbeat_ts.set(now)
 
-            # File-based heartbeat for watchdog monitoring (every ~30s)
             _heartbeat_tick += 1
             if _heartbeat_tick >= _heartbeat_interval_ticks:
                 _heartbeat_tick = 0
                 write_heartbeat(_heartbeat_path)
 
-            # Check StormGuard State - CRITICAL: Block orders when HALT
             if self.storm_guard.state == StormGuardState.HALT:
                 _now_mono = time.monotonic()
                 _halt_started_mono = self._halt_episode_start_mono
@@ -2717,12 +2324,9 @@ class HFTSystem:
                         reason=self.storm_guard.state_reason,
                         halted_for_s=round(_now_mono - _halt_started_mono, 1),
                     )
-                # Defense-in-depth: propagate HALT to gateway policy FIRST so the
-                # gateway rejects new intents while we drain queues below.
                 if self.gateway_service is not None:
                     self.gateway_service.set_halt()
                 self._write_halt_entry_checkpoint()
-                # Drain risk queue — preserve safety orders + halt-exempt intents
                 risk_drained = 0
                 _requeue: list = []
                 while not self.risk_queue.empty():
@@ -2731,7 +2335,6 @@ class HFTSystem:
                         self.risk_queue.task_done()
                         _itype = getattr(item, "intent_type", None)
                         _sid = getattr(item, "strategy_id", None)
-                        # Preserve: CANCEL/FORCE_FLAT (always safe) + halt-exempt strategies
                         _is_safety = _itype in (IntentType.CANCEL, IntentType.FORCE_FLAT)
                         _is_exempt = bool(_sid) and self.storm_guard.is_halt_exempt(_sid)
                         if _is_safety or _is_exempt:
@@ -2758,7 +2361,6 @@ class HFTSystem:
                             logger.warning("halt_drain_metric_inc_failed", error=str(exc))
                 if risk_drained > 0:
                     logger.warning("Drained blocked intents from risk_queue during HALT", count=risk_drained)
-                # Drain intent_channel (gateway mode) — same safety filter
                 if self.intent_channel is not None and hasattr(self.intent_channel, "drain_nowait"):
                     _ic_drained = 0
                     _ic_requeue: list = []
@@ -2773,7 +2375,6 @@ class HFTSystem:
                         else:
                             _ic_drained += 1
                             self._release_halt_drained(envelope)
-                    # Re-inject safety envelopes via the internal queue (envelope already wrapped)
                     for envelope in _ic_requeue:
                         try:
                             self.intent_channel._queue.put_nowait(envelope)
@@ -2787,7 +2388,6 @@ class HFTSystem:
                             "Drained blocked intents from intent_channel during HALT",
                             count=_ic_drained,
                         )
-                # Drain order queue — preserve safety commands + halt-exempt
                 drained_count = 0
                 _cmd_requeue: list = []
                 while not self.order_queue.empty():
@@ -2806,13 +2406,10 @@ class HFTSystem:
                             self._release_halt_drained(cmd)
                     except asyncio.QueueEmpty:
                         break
-                # Safety cmds dispatched directly — execute() handles running=False
-                # via _dispatch_to_api(), bypassing the stopped _api_worker queue.
                 for cmd in _cmd_requeue:
                     try:
                         _task = asyncio.create_task(self.order_adapter.execute(cmd))
                         _task.add_done_callback(_log_safety_dispatch_error)
-                        # Anchor task to prevent GC before completion
                         _bg = getattr(self.order_adapter, "_background_tasks", None)
                         if _bg is not None:
                             _bg.add(_task)
@@ -2830,9 +2427,7 @@ class HFTSystem:
                         )
                 if drained_count > 0:
                     logger.warning("Drained blocked orders during HALT", count=drained_count)
-                # Signal order adapter to stop processing
                 self._set_service_running(self.order_adapter, False)
-                # H6: Cancel in-flight orders already dispatched to broker
                 try:
                     _drain_task = asyncio.create_task(self.order_adapter.drain_and_cancel())
                     _bg = getattr(self.order_adapter, "_background_tasks", None)
@@ -2842,27 +2437,17 @@ class HFTSystem:
                 except Exception as exc:
                     logger.warning("In-flight order cancellation failed during HALT", error=str(exc))
             else:
-                # Fix H5: Recover GatewayPolicy from sticky HALT when StormGuard
-                # de-escalates. set_normal() is idempotent, safe to call repeatedly.
                 if self.gateway_service is not None:
                     self.gateway_service.set_normal()
-                # Fix P2-4: Re-enable OrderAdapter after HALT recovery.
-                # During HALT we set order_adapter.running=False (line 712);
-                # without this, the adapter stays stopped after de-escalation.
                 self._set_service_running(self.order_adapter, True)
-                # Reset HALT log/checkpoint rate-limiting for next HALT episode.
                 self._halt_checkpoint_written = False
                 self._halt_episode_start_mono = None
 
-            # Periodic gen-0 GC: reclaim cyclic refs from framework objects
-            # (structlog, Prometheus, asyncio internals) without full GC pause.
             if _gc_gen0_enabled:
                 _gc_gen0_tick += 1
                 if _gc_gen0_tick >= _gc_gen0_interval:
                     _gc_gen0_tick = 0
                     gc.collect(0)
-            # Periodic gen-2 GC: reclaim long-lived cyclic refs that gen-0 cannot reach.
-            # Without this, 24/7 operation with gc.disable() leaks gen-1/gen-2 objects.
             if _gc_gen2_enabled:
                 _gc_gen2_tick += 1
                 if _gc_gen2_tick >= _gc_gen2_interval:
@@ -2877,10 +2462,6 @@ class HFTSystem:
                             duration_ms=round(_gc2_ms, 2),
                         )
 
-            # Last statement of the tick body: how long this loop's own work
-            # took. Everything above ran between ``now_tick`` and here, so the
-            # remainder of ``event_loop_lag_ms`` is congestion this loop did not
-            # cause. Attributing the 1 ms budget needs both numbers.
             _tick_hist = getattr(metrics, "supervisor_tick_duration_ms", None)
             if _tick_hist is not None:
                 _tick_hist.observe((loop.time() - now_tick) * 1000.0)
@@ -2907,14 +2488,6 @@ class HFTSystem:
         confident zero by an input that simply is not running.
         """
         samples = self._loop_probe_samples
-        # Drained, not accumulated. The probe is started by _start_service and
-        # deliberately left out of _iter_supervised_services, so it can die
-        # without HALTing anything -- and a dead probe's peak is 0.0, which a
-        # latency breaker reads as a perfectly healthy loop. A cumulative count
-        # would keep selecting this branch forever after the first sample and
-        # hand StormGuard that confident zero. Draining means a window with no
-        # new samples falls back to the supervisor's own signal: noisier, but
-        # alive.
         self._loop_probe_samples = 0
         if samples > 0:
             peak_ms = self._loop_probe_peak_ms
@@ -2945,9 +2518,6 @@ class HFTSystem:
             last = now
             if hist is not None:
                 hist.observe(overshoot_ms)
-            # Peak since the supervisor last drained it: this is StormGuard's
-            # loop-lag input. Kept here rather than read back off the histogram
-            # because a Prometheus histogram cannot report a max.
             if overshoot_ms > self._loop_probe_peak_ms:
                 self._loop_probe_peak_ms = overshoot_ms
             self._loop_probe_samples += 1
@@ -2955,8 +2525,6 @@ class HFTSystem:
     async def stop_async(self):
         """Async stop with proper task cleanup."""
         self.running = False
-        # Stop the stall watchdog first so an intentional, possibly slow
-        # shutdown drain below is never mistaken for a loop stall and killed.
         _watchdog = getattr(self, "_loop_watchdog", None)
         if _watchdog is not None:
             _watchdog.stop()
@@ -2965,8 +2533,6 @@ class HFTSystem:
         self.risk_engine.running = False
         self.recon_service.running = False
 
-        # Drain RingBufferBus before stopping StrategyRunner consumer so that
-        # events already published but not yet processed are not lost.
         _drain_timeout_ms = int(os.getenv("HFT_BUS_DRAIN_TIMEOUT_MS", "500"))
         _drain_timeout_s = _drain_timeout_ms / 1000.0
         _bus = getattr(self, "bus", None)
@@ -2997,20 +2563,17 @@ class HFTSystem:
                         "Bus drain outer timeout during shutdown",
                         timeout_ms=_drain_timeout_ms,
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("Bus drain failed during shutdown", error=str(exc))
 
         self.strategy_runner.running = False
-        self.execution_gateway.stop()  # Clean shutdown
+        self.execution_gateway.stop()
         self.session_hook_manager.stop()
         self.health_server.stop()
 
-        # Stop gateway service gracefully before task cancellation so its
-        # finally block (dedup.persist()) runs while the event loop is live.
         if getattr(self, "gateway_service", None) is not None:
             self.gateway_service.running = False
 
-        # I2-C2: Drain remaining fills from exec queue before order cancellation
         try:
             drained = await asyncio.wait_for(self.exec_service.stop(), timeout=3.0)
             if drained:
@@ -3020,17 +2583,12 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("ExecutionRouter drain failed", error=str(exc))
 
-        # Persist fill dedup window for restart-safe exactly-once fills
         try:
-            # Let any checkpoint already queued on the executor finish first, so
-            # the final synchronous write is not contending with it for the
-            # persist lock while the loop is on its way down.
             await self.exec_service.flush_fill_dedup()
             self.exec_service.persist_fill_dedup()
         except Exception as exc:
             logger.warning("fill_dedup_persist_failed_shutdown", error=str(exc))
 
-        # Persist orphaned fill DLQ so orphaned fills survive restart
         try:
             from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
 
@@ -3041,7 +2599,6 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("fill_dlq_persist_failed_shutdown", error=str(exc))
 
-        # H1: Drain in-flight orders and checkpoint positions before shutdown
         try:
             await asyncio.wait_for(self.order_adapter.drain_and_cancel(), timeout=10.0)
         except asyncio.TimeoutError:
@@ -3049,11 +2606,7 @@ class HFTSystem:
         except Exception as exc:
             logger.warning("Order drain failed during shutdown", error=str(exc))
 
-        # Persist order_id_map for restart-safe strategy resolution
         try:
-            # Let any checkpoint already queued on the executor finish first,
-            # so the final synchronous write is not contending with it for the
-            # persist lock while the loop is on its way down.
             await self.order_adapter.flush_order_id_map()
             self.order_adapter.persist_order_id_map()
         except Exception as exc:
@@ -3061,7 +2614,6 @@ class HFTSystem:
 
         self._write_final_checkpoint()
 
-        # Stop AuditWriter flush tasks and drain remaining rows
         _aw = getattr(self, "_audit_writer", None)
         if _aw is not None:
             try:
@@ -3070,11 +2622,9 @@ class HFTSystem:
             except Exception as exc:
                 logger.warning("AuditWriter stop failed", error=str(exc))
 
-        # WU-01: Broker logout before task cancellation
         for cn in ("md_client", "order_client"):
             self._close_broker_client(cn)
 
-        # Phase 1: Cancel recorder_bridge first so it stops enqueuing into recorder_queue.
         bridge_task = self.tasks.get("recorder_bridge")
         if bridge_task and not bridge_task.done():
             bridge_task.cancel()
@@ -3085,13 +2635,9 @@ class HFTSystem:
             except Exception as e:
                 logger.error("recorder_bridge cleanup error", error=str(e))
 
-        # Phase 2: Now signal recorder to drain remaining queue items and stop.
         if hasattr(self, "recorder") and self.recorder is not None:
             self.recorder.running = False
 
-        # Phase 2b: Wait for recorder to finish its shutdown flush.
-        # The recorder has its own 60s flush timeout (HFT_RECORDER_SHUTDOWN_TIMEOUT_S).
-        # We allow it slightly more to account for the drain phase before flush.
         recorder_task = self.tasks.get("recorder")
         if recorder_task and not recorder_task.done():
             _recorder_timeout = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60")) + 5.0
@@ -3110,10 +2656,9 @@ class HFTSystem:
             except Exception as exc:
                 logger.warning("Recorder shutdown error", error=str(exc))
 
-        # Phase 3: Cancel and await all remaining tasks.
         for name, task in list(self.tasks.items()):
             if name in ("recorder_bridge", "recorder"):
-                continue  # Already handled above
+                continue
             if task and not task.done():
                 task.cancel()
                 try:
@@ -3121,28 +2666,25 @@ class HFTSystem:
                 except asyncio.TimeoutError:
                     logger.warning("Task cleanup timeout", task=name)
                 except asyncio.CancelledError:
-                    pass  # Expected
+                    pass
                 except Exception as e:
                     logger.error("Task cleanup error", task=name, error=str(e))
 
         self.tasks.clear()
         self._teardown_bootstrap()
 
-        # Opt-in: stop AutonomyMonitor first (it reacts to states, stop before governor)
         if self.autonomy_monitor is not None:
             try:
                 await self.autonomy_monitor.stop()
             except Exception as exc:
                 logger.warning("AutonomyMonitor stop failed", error=str(exc))
 
-        # Opt-in: stop SessionGovernor after autonomy monitor
         if self.session_governor is not None:
             try:
                 await self.session_governor.stop()
             except Exception as exc:
                 logger.warning("SessionGovernor stop failed", error=str(exc))
 
-        # Shutdown boundary; see the note at system_start. Left synchronous.
         self.evidence_writer.record_transition(
             scope="platform",
             mode="CLOSED",
@@ -3162,33 +2704,17 @@ class HFTSystem:
         self.risk_engine.running = False
         self.recon_service.running = False
         self.strategy_runner.running = False
-        # NOTE: Do NOT set recorder.running=False here. The recorder must stay
-        # alive until _recorder_bridge (and any direct-write producers) have
-        # stopped enqueuing. The async shutdown path (_async_stop / _cleanup_tasks)
-        # cancels the bridge first, THEN signals the recorder to drain.
-        self.execution_gateway.stop()  # Clean shutdown
+        self.execution_gateway.stop()
         self.session_hook_manager.stop()
         self.health_server.stop()
 
-        # Stop gateway service gracefully before broker logout/task cancellation
-        # so its finally block (dedup.persist()) can complete.
         if getattr(self, "gateway_service", None) is not None:
             self.gateway_service.running = False
 
-        # Schedule async cleanup if event loop is available.
-        # H13: When the loop is running, defer broker close and bootstrap
-        # teardown to stop_async() so recorder can drain first.
-        # P1 fix: track the detached task on ``self._stop_async_task`` so the
-        # launcher (main.py) can await it before the loop is torn down — fixes
-        # fire-and-forget pattern where recorder drain / final checkpoint /
-        # order drain were cut short by ``asyncio.run`` loop teardown.
         loop = getattr(self, "loop", None)
         if loop is not None and loop.is_running():
             self._stop_async_task = asyncio.create_task(self.stop_async())
         else:
-            # Synchronous fallback: event loop not running.
-            # Flush recorder data before teardown to prevent silent data loss
-            # (INFRA-015). Use a temporary event loop for async drain.
             self._sync_drain_recorder()
             for cn in ("md_client", "order_client"):
                 self._close_broker_client(cn)
@@ -3277,29 +2803,9 @@ class HFTSystem:
                 self.storm_guard.trigger_halt("exec_queue_overflow_repeated")
 
     def _on_exec(self, topic, data):
-        # This callback runs in Shioaji thread.
-        # We must schedule work on the main loop.
         loop = getattr(self, "loop", None)
         from hft_platform.execution.normalizer import RawExecEvent
 
-        # For deal AND order callbacks, resolve strategy_id as early as possible.
-        # Prefer strong correlation (broker IDs/custom_field token in order_id_map),
-        # then fall back to the pending fill index only when necessary.
-        #
-        # This used to read ``topic == "deal"``, which is why hft.orders held
-        # 414 rows at 100% strategy_id='UNKNOWN' while fills were 9/9 correctly
-        # attributed: the order topic never entered this block at all. The
-        # order-ACK callback cannot resolve by broker id either, because it
-        # arrives ~4.3 ms BEFORE place_order() returns the Trade that carries
-        # those ids, so order_id_map cannot contain them yet:
-        #
-        #   13:55:19.204785  order callback, map_size=1 -> UNKNOWN
-        #   13:55:19.209064  _register_broker_ids writes ordno  (4.3 ms late)
-        #
-        # The pending-fill index, by contrast, is registered BEFORE dispatch
-        # (``_register_pending_fill``), so it is already populated when the ACK
-        # lands. The order path must PEEK it rather than consume it -- the fill
-        # that follows is the rightful consumer.
         if topic in ("deal", "order") and hasattr(self, "order_adapter") and self.order_adapter is not None:
             _payload = data.get("payload", data) if isinstance(data, dict) else data
             if isinstance(_payload, dict):
@@ -3355,14 +2861,6 @@ class HFTSystem:
                             getattr(_order, "custom_field", None),
                         ]
                     )
-            # The order topic nests what the deal topic carries flat. shioaji
-            # delivers {"contract": {...}, "order": {...}, "status": {...}} on
-            # `order`, so `action` lives on `order` and the symbol on
-            # `contract` -- exactly how normalize_order reads them
-            # (execution/normalizer.py:257,273). The id candidates above
-            # already descend into `order`; `action` and the symbol did not,
-            # so on every real order callback `_action` was None and both
-            # attribution branches below were skipped in silence.
             if _action is None:
                 _action = _payload_field(_order, "action")
             if _full_code is None and _code is None:
@@ -3371,8 +2869,6 @@ class HFTSystem:
                 _code = _payload_field(_contract, "code")
 
             _resolved = None
-            # ordno never repeats; the other ids are recycled by the broker and
-            # count only while their order is live (see OrderIdResolver.is_live).
             _strong_ids = [
                 str(v)
                 for src in (_payload, _order)
@@ -3381,9 +2877,6 @@ class HFTSystem:
             ]
             _ids = _strong_ids + [str(v) for v in _id_candidates if v and str(v) not in _strong_ids]
             resolver = getattr(self.order_adapter, "order_id_resolver", None)
-            # No candidates means nothing to look up. This runs on the broker
-            # callback thread, so an empty-list resolver call is pure overhead
-            # on every callback that carries no ids.
             if resolver is not None and _ids:
                 _resolved = resolver.resolve_strategy_id_from_candidates(_ids, strong=len(_strong_ids))
                 if _resolved == "UNKNOWN":
@@ -3398,10 +2891,6 @@ class HFTSystem:
             if _resolved and isinstance(data, dict):
                 data["_resolved_strategy_id"] = _resolved
             if topic == "order" and _action and isinstance(data, dict) and not data.get("_resolved_order_key"):
-                # Backfills hft.orders.client_order_id, which the resolver
-                # cannot supply on an ACK: it keys off broker ids that
-                # _register_broker_ids has not written yet. Without it the
-                # column is empty and hft.orders cannot be joined to hft.fills.
                 _symbols_ok = [str(v) for v in (_full_code, _code) if v]
                 if _symbols_ok:
                     _order_key = self.order_adapter.peek_order_key_from_pending_candidates(_symbols_ok, str(_action))
@@ -3410,8 +2899,6 @@ class HFTSystem:
 
         event = RawExecEvent(topic, data, timebase.now_ns())
         if not self.running:
-            # Buffer for later drain instead of dropping — broker can send callbacks
-            # before run() sets self.running = True.
             if len(self._exec_overflow_buf) < self._EXEC_OVERFLOW_MAX:
                 self._exec_overflow_buf.append(event)
             else:
@@ -3428,7 +2915,6 @@ class HFTSystem:
             try:
                 loop.call_soon_threadsafe(self._safe_enqueue_exec, event)
             except RuntimeError:
-                # Loop is closing/closed — fall through to overflow buffer
                 if len(self._exec_overflow_buf) < self._EXEC_OVERFLOW_MAX:
                     self._exec_overflow_buf.append(event)
                 else:
@@ -3439,7 +2925,6 @@ class HFTSystem:
                         evicted_count=self._exec_overflow_evicted,
                     )
         else:
-            # I-H4: loop not yet assigned (startup race) — buffer so events aren't dropped
             if len(self._exec_overflow_buf) >= self._EXEC_OVERFLOW_MAX:
                 self._exec_overflow_evicted += 1
                 try:
@@ -3447,28 +2932,25 @@ class HFTSystem:
 
                     MetricsRegistry.get().exec_overflow_evicted_total.inc()
                 except Exception:
-                    pass  # metrics may not be ready during early startup
+                    pass
                 logger.critical(
                     "exec_overflow_buf FULL in broker thread — fill persisted to DLQ file",
                     evicted_count=self._exec_overflow_evicted,
                     event_topic=getattr(event, "topic", "?"),
                 )
                 self._persist_lost_exec_event(event)
-                # Flag for deferred halt — checked when loop becomes available
                 self._exec_startup_overflow_lost = True
                 return
             self._exec_overflow_buf.append(event)
 
     async def _recorder_bridge(self):
         """Bridge all Bus events to Recorder."""
-        # Safety guard: if all direct recording flags are set, this coroutine should not run.
         if self._md_record_direct and self._fill_record_direct and self._order_record_direct:
             logger.info(
                 "recorder_bridge_early_exit",
                 reason="all_direct_recording_enabled",
             )
             return
-        # Start from -1 to capture first event
         batch_size = int(os.getenv("HFT_BUS_BATCH_SIZE", "0") or "0")
         consumer = (
             self.bus.consume_batch(batch_size, start_cursor=-1, consumer_name="recorder_bridge")
@@ -3488,7 +2970,6 @@ class HFTSystem:
                 for event in batch:
                     if self._md_record_direct and isinstance(event, (TickEvent, BidAskEvent)):
                         continue
-                    # Skip FillEvent/OrderEvent if direct recording is enabled (avoid duplicates)
                     if self._fill_record_direct and isinstance(event, FillEvent):
                         continue
                     if self._order_record_direct and isinstance(event, OrderEvent):

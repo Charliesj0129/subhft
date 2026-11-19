@@ -127,11 +127,6 @@ def _enter_long(strat: MomentumBounceStrategy, ctx: StrategyContext) -> None:
     strat.handle_event(ctx, fill)
 
 
-# ---------------------------------------------------------------------------
-# Direction flip tests
-# ---------------------------------------------------------------------------
-
-
 def test_momentum_enters_with_upward_move():
     """After large upward move, momentum should BUY (not SELL like CBS)."""
     strat = _make_strategy()
@@ -142,7 +137,7 @@ def test_momentum_enters_with_upward_move():
     intents = strat.handle_event(ctx, _make_stats(ts=ts_trigger, points=33_012))
 
     assert len(intents) == 1
-    assert intents[0].side == Side.BUY  # Momentum: buy on up move
+    assert intents[0].side == Side.BUY
     assert intents[0].tif == TIF.IOC
 
 
@@ -156,13 +151,8 @@ def test_momentum_enters_with_downward_move():
     intents = strat.handle_event(ctx, _make_stats(ts=ts_trigger, points=32_990))
 
     assert len(intents) == 1
-    assert intents[0].side == Side.SELL  # Momentum: sell on down move
+    assert intents[0].side == Side.SELL
     assert intents[0].tif == TIF.IOC
-
-
-# ---------------------------------------------------------------------------
-# No passive TP on fill
-# ---------------------------------------------------------------------------
 
 
 def test_no_passive_tp_placed_on_entry_fill():
@@ -181,11 +171,6 @@ def test_no_passive_tp_placed_on_entry_fill():
     assert strat._state["TMFD6"] == "positioned"
 
 
-# ---------------------------------------------------------------------------
-# Trailing stop tests
-# ---------------------------------------------------------------------------
-
-
 def test_trailing_stop_exits_after_peak():
     """Should exit when PnL drops trailing_stop_pts below peak."""
     strat = _make_strategy(stop_loss_pts=20, trailing_stop_pts=6, max_hold_ns=3600 * _ONE_SEC_NS)
@@ -193,13 +178,11 @@ def test_trailing_stop_exits_after_peak():
     _enter_long(strat, ctx)
     assert strat._state["TMFD6"] == "positioned"
 
-    # Price rises to 33027 (+15 pts profit from entry at 33012)
     ts_rise = _TS_0930_UTC_NS + 40 * _ONE_SEC_NS
     intents = strat.handle_event(ctx, _make_stats(ts=ts_rise, points=33_027))
     assert len(intents) == 0
     assert strat._peak_pnl_scaled["TMFD6"] > 0
 
-    # Price drops to 33020 (+8 pts from entry; peak was ~15, dropped ~7 > trailing 6)
     ts_drop = _TS_0930_UTC_NS + 50 * _ONE_SEC_NS
     intents = strat.handle_event(ctx, _make_stats(ts=ts_drop, points=33_020))
     assert len(intents) == 1
@@ -213,7 +196,6 @@ def test_hard_stop_loss_exits():
     ctx = _make_ctx()
     _enter_long(strat, ctx)
 
-    # Price drops to 33001 (-11 pts from entry at 33012, exceeds 10 pt SL)
     ts_sl = _TS_0930_UTC_NS + 40 * _ONE_SEC_NS
     intents = strat.handle_event(ctx, _make_stats(ts=ts_sl, points=33_001))
     assert len(intents) == 1
@@ -227,7 +209,6 @@ def test_time_exit_triggers():
     ctx = _make_ctx()
     _enter_long(strat, ctx)
 
-    # 91s from start, entry was at 30s, so elapsed = 61s > 60s max hold
     ts_timeout = _TS_0930_UTC_NS + 91 * _ONE_SEC_NS
     intents = strat.handle_event(ctx, _make_stats(ts=ts_timeout, points=33_014))
     assert len(intents) == 1
@@ -240,15 +221,9 @@ def test_trailing_stop_not_triggered_when_peak_is_zero():
     ctx = _make_ctx()
     _enter_long(strat, ctx)
 
-    # Price drops 3 pts from entry (33012 -> 33009). trailing_stop_pts=3 but peak is 0.
     ts_dip = _TS_0930_UTC_NS + 40 * _ONE_SEC_NS
     intents = strat.handle_event(ctx, _make_stats(ts=ts_dip, points=33_009))
     assert len(intents) == 0
-
-
-# ---------------------------------------------------------------------------
-# Spread guard inherited from CBS
-# ---------------------------------------------------------------------------
 
 
 def test_spread_guard_blocks_entry_on_wide_spread():
@@ -261,11 +236,6 @@ def test_spread_guard_blocks_entry_on_wide_spread():
     wide = _make_stats(ts=ts_trigger, points=33_012, spread_pts=5)
     intents = strat.handle_event(ctx, wide)
     assert len(intents) == 0
-
-
-# ---------------------------------------------------------------------------
-# Round-trip reset
-# ---------------------------------------------------------------------------
 
 
 def test_round_trip_resets_peak_pnl():
@@ -281,20 +251,11 @@ def test_round_trip_resets_peak_pnl():
     assert strat._peak_pnl_scaled["TMFD6"] == 0
 
 
-# ---------------------------------------------------------------------------
-# P1-e regression: bad-type kwarg must surface at construction (not silently
-# splat into super().__init__)
-# ---------------------------------------------------------------------------
-
-
 def test_bad_type_kwarg_raises_at_construction():
     """Passing wrong-type kwarg must raise TypeError at __init__ rather than
     silently splatting into CBS and crashing inside handle_event."""
     import pytest
 
-    # `trigger_sigma` is typed `float` and CBS does float(trigger_sigma).
-    # Passing an unparseable string must surface as TypeError/ValueError at
-    # construction, not later inside handle_event.
     with pytest.raises((TypeError, ValueError)):
         MomentumBounceStrategy(
             strategy_id="momentum_bounce",

@@ -10,7 +10,6 @@ def test_apply_schema_handles_missing_migrations_dir(tmp_path: Path, monkeypatch
 
     schema.apply_schema(client)
 
-    # apply_schema always initializes schema_migrations table first.
     client.command.assert_any_call("CREATE DATABASE IF NOT EXISTS hft")
     assert client.command.call_count >= 2
 
@@ -33,7 +32,6 @@ def test_apply_schema_runs_migration_up_statements(tmp_path: Path, monkeypatch) 
     issued = [str(call.args[0]) for call in client.command.call_args_list if call.args]
     assert any(stmt.startswith("CREATE TABLE foo()") for stmt in issued)
     assert any(stmt.startswith("CREATE TABLE bar()") for stmt in issued)
-    # Migration recording must use client.insert(), not client.command()
     assert not any("INSERT INTO hft.schema_migrations" in stmt for stmt in issued), (
         "Migration recording must use client.insert(), not client.command()"
     )
@@ -57,7 +55,6 @@ def test_apply_schema_records_migration_via_insert(tmp_path: Path, monkeypatch) 
         [["20260399_002", "record_test"]],
         column_names=["version", "name"],
     )
-    # Confirm no INSERT command was issued via client.command
     command_calls = [str(c.args[0]) for c in client.command.call_args_list if c.args]
     assert not any("INSERT INTO hft.schema_migrations" in s for s in command_calls)
 
@@ -72,13 +69,6 @@ def test_ensure_price_scaled_views_repairs() -> None:
     client = MagicMock()
     assert schema.ensure_price_scaled_views(client) is False
     client.command.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# _extract_up_statements — parser edge cases (regression: 2026-04-26 outage
-# where `-- Up:` and comment-only fragments stalled all migrations since
-# 2026-03-23, leading to 13 missing migrations and ClickHouse insert failures).
-# ---------------------------------------------------------------------------
 
 
 def test_extract_up_statements_marker_with_trailing_text() -> None:
@@ -158,7 +148,7 @@ def test_extract_up_statements_semicolon_inside_comment_does_not_split() -> None
     statements = schema._extract_up_statements(content)
     assert len(statements) == 2
     assert statements[0].splitlines()[-1].strip().startswith(") ENGINE=MergeTree")
-    assert "otherwise table stays empty" in statements[0]  # comment retained, not split
+    assert "otherwise table stays empty" in statements[0]
     assert statements[0].count("CREATE TABLE") == 1
     assert statements[1].startswith("CREATE TABLE bar")
 
@@ -169,5 +159,4 @@ def test_extract_up_statements_marker_must_be_at_line_start() -> None:
     statements = schema._extract_up_statements(content)
     assert len(statements) == 1
     assert "CREATE TABLE foo" in statements[0]
-    # The mid-statement `-- Updated...` must not have caused a re-split.
     assert "Updated to wider int" in statements[0]

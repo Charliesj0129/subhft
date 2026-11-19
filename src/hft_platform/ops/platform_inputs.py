@@ -10,8 +10,6 @@ from hft_platform.core import timebase
 logger = get_logger("platform_inputs")
 
 
-# The last calendar failure that was logged at WARNING: the supervisor reads the calendar every tick, so a
-# persistent fault is reported when it first appears or changes, and counted every time.
 _calendar_fault_seen: str | None = None
 
 
@@ -29,7 +27,7 @@ def _seconds_since_session_open() -> float | None:
         from hft_platform.core.market_calendar import get_calendar
 
         value = get_calendar().seconds_since_futures_session_open()
-    except Exception as exc:  # noqa: BLE001 — a calendar failure must not crash the supervisor
+    except Exception as exc:
         _note_calendar_unavailable(exc)
         return None
     _calendar_fault_seen = None
@@ -42,7 +40,7 @@ def _note_calendar_unavailable(exc: Exception) -> None:
         from hft_platform.observability.metrics import MetricsRegistry
 
         MetricsRegistry.get().platform_inputs_calendar_unavailable_total.inc()
-    except Exception as metrics_exc:  # noqa: BLE001 — the counter must not hide the original failure
+    except Exception as metrics_exc:
         logger.debug("platform_inputs_calendar_counter_failed", error=str(metrics_exc))
     fault = f"{type(exc).__name__}: {exc}"
     if fault == _calendar_fault_seen:
@@ -93,10 +91,6 @@ class PlatformDegradeInputs:
     order_queue: Any
     intent_channel: Any | None = None
     api_queue: Any | None = None
-    #: The reconciliation service, read level-triggered for position drift.
-    #: Optional so every existing construction site keeps working; when it is
-    #: absent the reason simply is not reported, which is the behaviour that
-    #: existed before -- not a new silent hole.
     reconciliation: Any | None = None
     redis_client: Any | None = None
     redis_healthcheck: Callable[[], bool] | None = None
@@ -108,9 +102,6 @@ class PlatformDegradeInputs:
     rss_threshold_mb: int = 2048
     wal_backlog_files_threshold: int = 200
     rss_reader: Callable[[], int] = _read_rss_bytes
-    # Boot grace-period for the recorder_data_loss HALT reason: a transient
-    # DATA_LOSS probe within this many seconds of construction is suppressed
-    # (2026-06-18 boot-latch incident). 0.0 = disabled (immediate latch).
     recorder_data_loss_boot_grace_s: float = 0.0
     _boot_ts_s: float = field(default_factory=timebase.now_s)
     _boot_grace_log_emitted: bool = False
@@ -175,15 +166,6 @@ class PlatformDegradeInputs:
 
         pending_since = getattr(self.md_service, "_pending_reconnect_since", None)
         if pending_since is not None and timebase.now_s() - float(pending_since) >= self.reconnect_pending_threshold_s:
-            # Suppress during expected session gaps (e.g. the 13:45-15:00
-            # day→night transition). The reconnect is "pending" precisely
-            # because the market is shut — that is normal, not anomalous.
-            #
-            # This used to ask ``within_reconnect_window()``, an env wall-clock
-            # range (``HFT_RECONNECT_HOURS=08:30-13:35``) that opens 15 minutes
-            # before the day session and closes 10 minutes before it ends. The
-            # market calendar is the thing actually being asked about, and it
-            # is right at every edge.
             if _seconds_since_session_open() is not None:
                 reasons.append("feed_reconnect_pending")
 
@@ -223,14 +205,11 @@ class PlatformDegradeInputs:
         if recorder_reason is not None:
             reasons.append(recorder_reason)
 
-        # Preserve first-cause ordering while preventing duplicates.
         return list(dict.fromkeys(reasons))
 
     def _recorder_reason(self) -> str | None:
         recorder_state = self._recorder_state()
         if recorder_state == "DATA_LOSS":
-            # recorder_data_loss is non-auto-recoverable (latches until manual
-            # rearm), so a transient boot-time probe must not emit it.
             if self._within_data_loss_boot_grace():
                 return None
             return "recorder_data_loss"
@@ -239,11 +218,6 @@ class PlatformDegradeInputs:
         return None
 
     def _feed_gap_s(self) -> float:
-        # Prefer active-symbol-aware gap when md_service exposes it; falls back
-        # to the legacy global-max gap for backwards compatibility.  The active
-        # variant excludes chronically-inactive subscriptions (e.g. illiquid
-        # OTM options or far-month futures) whose stale gaps would otherwise
-        # latch platform_reduce_only when liquid feeds are flowing normally.
         active_fn = getattr(self.md_service, "get_active_feed_gap_s", None)
         max_fn = getattr(self.md_service, "get_max_feed_gap_s", None)
         fn = active_fn if callable(active_fn) else max_fn
@@ -252,12 +226,7 @@ class PlatformDegradeInputs:
         gap = float(fn())
         since_open = _seconds_since_session_open()
         if since_open is None:
-            # The market is shut. Silence is the close, not an outage.
             return 0.0
-        # A gap cannot be older than the session carrying it. Without this the
-        # first reading of every session is the whole preceding close: EXFI6
-        # carried 12,671 s into 2026-09-15 08:31, 14 minutes before the bell,
-        # which is 21x the 600 s threshold.
         return min(gap, since_open)
 
     def _quote_flap_budget_exceeded(self) -> bool:

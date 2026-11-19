@@ -59,7 +59,6 @@ def test_load_config_truncates_when_over_per_client_limit(tmp_path, monkeypatch)
 
     client = ShioajiClient(config_path=str(config_path))
 
-    # 588 ≤ 600 (default per-client ceiling) → "ok" branch, no truncation.
     assert len(client.symbols) == 588
     after_ok = _counter_value(counter, result="ok")
     assert after_ok - before_ok >= 1.0, "ok branch must bump the metric"
@@ -74,15 +73,12 @@ def test_load_config_truncate_with_warn_when_exceeding_per_client_ceiling(tmp_pa
     counter = metrics.feed_symbol_config_reload_total
     before_exceeds = _counter_value(counter, result="exceeds_limit")
 
-    # New default: truncate-with-warn (HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS unset
-    # ⇒ truncate). HFT_STRICT_SUBSCRIPTION_LIMIT also unset ⇒ no raise.
     monkeypatch.delenv("HFT_ALLOW_TRUNCATE_SUBSCRIPTIONS", raising=False)
     monkeypatch.delenv("HFT_STRICT_SUBSCRIPTION_LIMIT", raising=False)
     monkeypatch.delenv("HFT_MAX_SUBSCRIPTIONS", raising=False)
 
     client = ShioajiClient(config_path=str(config_path))
 
-    # Truncated to per-client ceiling (default 600).
     assert len(client.symbols) == client.MAX_SUBSCRIPTIONS_PER_CLIENT == 600
     after_exceeds = _counter_value(counter, result="exceeds_limit")
     assert after_exceeds - before_exceeds == 1.0, "exceeds_limit branch must bump the metric exactly once"
@@ -114,8 +110,6 @@ def test_load_config_per_client_ceiling_env_override(tmp_path, monkeypatch):
     config_path = tmp_path / "symbols.yaml"
     config_path.write_text(yaml.dump({"symbols": _make_symbols(700)}))
 
-    # Env override is consumed at limits-module import time. Reload the
-    # module so the new value takes effect for this test only.
     monkeypatch.setenv("HFT_MAX_SUBSCRIPTIONS", "800")
     import importlib
 
@@ -124,10 +118,6 @@ def test_load_config_per_client_ceiling_env_override(tmp_path, monkeypatch):
     importlib.reload(_limits_mod)
     assert _limits_mod.DEFAULT_MAX_SUBSCRIPTIONS_PER_CLIENT == 800
 
-    # Re-import client module so it re-binds to the reloaded default. The
-    # client constructor reads the constant via the imported name; reloading
-    # the limits module is sufficient because the client reads the per-client
-    # default lazily at __init__ via the module-level constant.
     from hft_platform.feed_adapter.shioaji import client as _client_mod
 
     importlib.reload(_client_mod)

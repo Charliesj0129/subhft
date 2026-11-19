@@ -41,7 +41,6 @@ def build_detail_panel(
     now_ns = timebase.now_ns()
     lines = Text()
 
-    # Line 1: L1 quote
     bid_str = f"{ss.last_price - ss.spread_bps * ss.last_price / 20000:.1f}" if ss.last_price > 0 else "--"
     ask_str = f"{ss.last_price + ss.spread_bps * ss.last_price / 20000:.1f}" if ss.last_price > 0 else "--"
     mid_str = f"{ss.last_price:.1f}" if ss.last_price > 0 else "--"
@@ -49,7 +48,6 @@ def build_detail_panel(
     lines.append(f"  Imb: {(ss.bid_qty - ss.ask_qty) / max(ss.bid_qty + ss.ask_qty, 1):.2f}", _DIM)
     lines.append(f"  OFI: {ss.ofi_l1_cum:+.0f}\n", _DIM)
 
-    # Lines 2-N: Per-alpha detail with sparkline
     for aid, astate in ss.alpha_states.items():
         short = _ALPHA_SHORT.get(aid, aid[:4].upper())
         if astate.disabled:
@@ -67,12 +65,10 @@ def build_detail_panel(
         lines.append(f"{sig:+.3f}", z_style)
         lines.append(f" [z={abs(z):.1f}σ]  ", _DIM)
 
-        # Mini sparkline from per-alpha buffer
         spark_vals = astate.signal_sparkline_values()
         spark_str = _mini_sparkline(spark_vals) if spark_vals else ""
         lines.append(spark_str, z_style)
 
-        # Trend
         if len(spark_vals) >= 4:
             recent = spark_vals[-4:]
             if all(recent[i] <= recent[i + 1] for i in range(len(recent) - 1)):
@@ -83,7 +79,6 @@ def build_detail_panel(
                 lines.append("  trend: flat", _DIM)
         lines.append("\n")
 
-    # Composite line
     comp = ss.composite
     comp_style = _style_for_z(comp)
     dom = dominant_alpha_label(ss)
@@ -92,7 +87,6 @@ def build_detail_panel(
         lines.append(f"  Dominant: {dom}", _WHITE)
     lines.append("\n")
 
-    # WHY summary
     why_parts: list[str] = []
     pos = neg = total = 0
     for a in ss.alpha_states.values():
@@ -107,7 +101,6 @@ def build_detail_panel(
         direction = "bullish" if pos > neg else "bearish" if neg > pos else "mixed"
         why_parts.append(f"{dominant}/{total} {direction}")
     if dom:
-        # Find strongest alpha z
         max_z = 0.0
         max_aid = ""
         for a in ss.alpha_states.values():
@@ -120,7 +113,6 @@ def build_detail_panel(
         why_parts.append(f"spread {ss.spread_bps:.0f}bps")
     lines.append(f" WHY: {' | '.join(why_parts)}\n", _CYAN)
 
-    # Status bar
     age_s = (now_ns - ss.last_update_ns) / 1e9 if ss.last_update_ns > 0 else 0.0
     status = "✓ LIVE" if not ss.is_stale and not ss.is_closed else ("STALE" if ss.is_stale else "CLOSED")
 

@@ -109,11 +109,6 @@ def _drain(sink: asyncio.Queue) -> list[RiskFeedback]:
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Adapter: the ledger of finished orders                                       #
-# --------------------------------------------------------------------------- #
-
-
 def test_an_order_that_never_ended_is_not_finished(tmp_config):
     adapter = _adapter(tmp_config)
     key = _register_live(adapter, _intent())
@@ -179,7 +174,7 @@ async def test_a_sweep_release_that_never_reached_the_strategy_does_not_finish_t
     """The order's real terminal is then the only release the strategy will get."""
     adapter = _adapter(tmp_config)
     full: asyncio.Queue = asyncio.Queue(maxsize=1)
-    full.put_nowait(object())  # the sink is full: the feedback is dropped
+    full.put_nowait(object())
     adapter.set_rejection_sink(full)
     key = _register_live(adapter, _intent(), age_s=_TTL_S + 1)
     adapter._live_orders_last_sweep_s = float("-inf")
@@ -219,7 +214,7 @@ async def test_a_phantom_release_that_never_reached_the_strategy_does_not_finish
 async def test_a_fully_filled_stale_order_is_finished_without_a_release(tmp_config):
     adapter = _adapter(tmp_config)
     key = _register_live(adapter, _intent(), age_s=_TTL_S + 1)
-    adapter._record_fill_ledger(key, 1)  # traded in full; the fill freed the slot
+    adapter._record_fill_ledger(key, 1)
     adapter._live_orders_last_sweep_s = float("-inf")
 
     await adapter.sweep_stale_live_orders()
@@ -255,16 +250,11 @@ def test_the_finished_ledger_is_bounded(tmp_config):
 
 def test_a_finished_entry_expires(tmp_config):
     adapter = _adapter(tmp_config)
-    adapter._finished_ttl_s = -1.0  # every entry is already older than its TTL
+    adapter._finished_ttl_s = -1.0
     adapter.note_terminal(f"{_SID}:1")
 
     assert adapter.order_finished(f"{_SID}:1") is False
     assert adapter.note_terminal(f"{_SID}:1") is False, "an expired entry reads as a first terminal again"
-
-
-# --------------------------------------------------------------------------- #
-# Router: what a terminal status event reports                                 #
-# --------------------------------------------------------------------------- #
 
 
 def _order_event(*, status: OrderStatus, key: str = f"{_SID}:1", qty: int = 1) -> OrderEvent:
@@ -275,7 +265,7 @@ def _order_event(*, status: OrderStatus, key: str = f"{_SID}:1", qty: int = 1) -
         status=status,
         submitted_qty=qty,
         filled_qty=0,
-        remaining_qty=qty,  # what Shioaji's payload yields: nothing is ever filled
+        remaining_qty=qty,
         price=47000_0000,
         side=Side.BUY,
         ingest_ts_ns=0,
@@ -431,15 +421,10 @@ def test_a_tracker_without_the_method_leaves_the_event_alone():
     assert event.remaining_qty == 1
 
 
-# --------------------------------------------------------------------------- #
-# End to end: cancel, then the rejected retry -> R47 pending                   #
-# --------------------------------------------------------------------------- #
-
-
 async def _run_router(router: ExecutionRouter, published: list, expected: int) -> None:
     router.running = True
     task = asyncio.create_task(router.run())
-    for _ in range(1000):  # run() has no one-shot mode: poll until it has published what we queued
+    for _ in range(1000):
         if len(published) >= expected:
             break
         await asyncio.sleep(0.005)
@@ -499,7 +484,7 @@ async def test_r47_pending_is_released_once_when_a_cancel_retry_is_rejected_afte
     )
     router.set_fill_tracker(adapter)
     await queue.put(_order_topic("Cancel", "00", "S1"))
-    await queue.put(_order_topic("Cancel", "99", "S2"))  # the retry: "already cancelled"
+    await queue.put(_order_topic("Cancel", "99", "S2"))
 
     await _run_router(router, published, expected=2)
 
@@ -508,9 +493,9 @@ async def test_r47_pending_is_released_once_when_a_cancel_retry_is_rejected_afte
     assert [e.remaining_qty for e in orders] == [1, 0]
 
     strat = R47MakerStrategy(strategy_id=_SID, max_pos=1)
-    strat._pending_buy["TMFJ6"] = 1  # the live order occupies the slot
+    strat._pending_buy["TMFJ6"] = 1
     strat.on_order(orders[0])
     assert strat._pending_buy["TMFJ6"] == 0, "the cancel frees the slot"
-    strat._pending_buy["TMFJ6"] = 1  # a NEW quote now rests in it
+    strat._pending_buy["TMFJ6"] = 1
     strat.on_order(orders[1])
     assert strat._pending_buy["TMFJ6"] == 1, "the rejected retry must not free the new order's slot"

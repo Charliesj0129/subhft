@@ -48,13 +48,12 @@ def test_concurrent_lazy_init_creates_single_writer(isolated_wal_dir, monkeypatc
 
     construct_count = {"n": 0}
 
-    # Wrap WALBatchWriter to count constructions. Patch BEFORE threads race.
     import hft_platform.recorder.wal as wal_mod
 
     real_writer_cls = wal_mod.WALBatchWriter
 
     class _CountingWriter(real_writer_cls):  # type: ignore[misc, valid-type]
-        def __init__(self_inner, wal_dir: str) -> None:  # noqa: ANN001
+        def __init__(self_inner, wal_dir: str) -> None:
             construct_count["n"] += 1
             super().__init__(wal_dir)
 
@@ -64,7 +63,7 @@ def test_concurrent_lazy_init_creates_single_writer(isolated_wal_dir, monkeypatc
         try:
             barrier.wait(timeout=5.0)
             results[idx] = writer._get_wal_batch_writer()
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     threads = [threading.Thread(target=worker, args=(i,), name=f"race-{i}") for i in range(n_threads)]
@@ -81,7 +80,6 @@ def test_concurrent_lazy_init_creates_single_writer(isolated_wal_dir, monkeypatc
 
     assert construct_count["n"] == 1, f"Expected exactly one WALBatchWriter construction; got {construct_count['n']}"
 
-    # Stop the timer thread so we don't leak it past the test.
     if first is not None:
         first.stop()
 

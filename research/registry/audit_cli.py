@@ -62,10 +62,6 @@ def _format_gate_lines(sub_gates: list[dict]) -> Iterable[str]:
         yield f"  [{marker}] {name}: {details}"
 
 
-# Round 51: strict-profile thresholds for the composite promotion verdict.
-# These mirror the per-axis caps already surfaced in show()/summary() and
-# vm_ul6_strict.yaml; the verdict is purely derived (no relaxation of any
-# bar — 限制 §3).
 _EDGE_FLOOR_PTS = 10.0
 _FORCE_FLAT_CAP_PCT = 30.0
 _DAY_DOMINANCE_CAP_PCT = 25.0
@@ -101,9 +97,6 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     ff = row.get("force_flat_trip_share_pct")
     if isinstance(ff, (int, float)) and float(ff) > _FORCE_FLAT_CAP_PCT:
         blockers.append("force_flat")
-    # force-flat missing is not a blocker on its own: the gate may be
-    # inapplicable (no residual); the residual gate passes advisory in
-    # that case and the edge already accounts for realized PnL.
 
     dom = row.get("single_day_dominance_pct")
     if not isinstance(dom, (int, float)):
@@ -117,53 +110,26 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     elif sample != "adequate":
         blockers.append("sample")
     else:
-        # Round 79: 限制 §3 (不足樣本不得完成) — an 'adequate' label that its
-        # own counts *contradict* (n_fills/n_days present and below the gate
-        # minimum) must not pass the sample axis. Evidence that is merely
-        # absent does NOT block (missing-not-a-blocker, mirroring every other
-        # lifted axis); only a present-and-below count does. The advisory show
-        # line still surfaces the evidence-missing case (Round 78).
         _sample_verdict, _sample_reasons = sample_adequacy_audit(row)
         if _sample_verdict == "discrepant" and any(r.endswith("_below_min") for r in _sample_reasons):
             blockers.append("sample:discrepant")
 
-    # Round 56: 驗證標準 §6 — max_drawdown must stay within 2× avg-monthly net
-    # PnL. Like force-flat, a missing ratio is not a blocker on its own: the
-    # monthly_distribution gate needs >=2 months and is inapplicable to a
-    # short-window candidate. But a *present* breach (incl. inf when there is
-    # no positive monthly baseline) blocks promotion.
     dd_ratio = row.get("drawdown_to_avg_monthly_ratio")
     if isinstance(dd_ratio, (int, float)) and float(dd_ratio) > _DRAWDOWN_RATIO_CAP:
         blockers.append("drawdown")
 
-    # Round 57: 驗證標準 §6 單月收益支配性 — a candidate whose net PnL leans on
-    # one calendar month is not a durable monthly stream. Same gate as the
-    # drawdown axis, so a missing share is not a blocker; a present breach is.
     top_month = row.get("top_month_contribution_pct")
     if isinstance(top_month, (int, float)) and float(top_month) > _TOP_MONTH_CAP_PCT:
         blockers.append("top_month")
 
-    # Round 61: 驗證標準 §5 (虧損分布/是否被少數交易支配) — one trade carrying
-    # >50% of total loss makes the edge hostage to a single fill. Same
-    # missing-not-a-blocker semantics as the dominance axes.
     worst_loss = row.get("worst_loss_share_pct")
     if isinstance(worst_loss, (int, float)) and float(worst_loss) > _WORST_LOSS_SHARE_CAP_PCT:
         blockers.append("worst_loss")
 
-    # Round 63: 驗證標準 §7 (回測↔replay 訊號一致性, 限制 §3 不可放寬) — a present
-    # replay-parity result below the 95% match floor blocks. A missing result
-    # is not a blocker here (mirrors the other lifted axes); demonstrating
-    # parity for a row that has no replay log is left to a later round.
     replay_match = row.get("replay_match_pct")
     if isinstance(replay_match, (int, float)) and float(replay_match) < _REPLAY_MATCH_FLOOR_PCT:
         blockers.append("replay_parity")
 
-    # Round 91: 驗證標準 §3 (不得忽略殘倉提高 edge) — a net-positive edge whose
-    # realized half is non-positive is carried entirely by the unrealized residual
-    # mark and is not tradeable as stated. Like every other lifted axis this is
-    # missing-not-a-blocker: only a *present* realized+net pair that is propped
-    # blocks (a row with no inventory_mtm split stays advisory). No invented cap —
-    # the condition is the sign test net>0 & realized<=0.
     realized_pts = row.get("inventory_realized_pts")
     inv_net_pts = row.get("inventory_net_pts")
     if (
@@ -174,11 +140,6 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     ):
         blockers.append("residual:propped")
 
-    # Round 68: 驗證標準 §2 / 限制 §3 (成本扣除 不可放寬) — a *declared but
-    # incomplete* cost model blocks: if a cost_model_id is present yet omits a
-    # §2 knob (fee/tax/slip/latency), the edge can't be trusted as net. A row
-    # with no cost_model_id at all is not blocked here (that traceability gap
-    # is reported by spec_provenance_complete instead).
     prov = row.get("spec_provenance")
     cmid = prov.get("cost_model_id") if isinstance(prov, dict) else None
     if isinstance(cmid, str) and cmid:
@@ -192,31 +153,20 @@ def promotion_readiness(row: dict) -> tuple[bool, list[str]]:
     return (not blockers, blockers)
 
 
-# Round 64: map each promotion blocker onto the 迭代規則 §5 triage vocabulary
-# (failed / needs_more_sample / blocked_by_parity / blocked_by_risk /
-# blocked_by_audit). A row may carry several blockers; the dominant one is
-# chosen by category precedence below.
 _BLOCKER_TRIAGE_CATEGORY: dict[str, str] = {
     "replay_parity": "blocked_by_parity",
     "drawdown": "blocked_by_risk",
     "worst_loss": "blocked_by_risk",
     "blocking": "blocked_by_risk",
     "sample": "needs_more_sample",
-    # Round 79: a label-vs-evidence discrepancy is a record-trust failure, not
-    # merely a sample shortfall — treat it as an audit block.
     "sample:discrepant": "blocked_by_audit",
     "cost_model": "blocked_by_audit",
-    # Round 91: a residual-mark-propped edge is a credibility/record-trust
-    # failure (§3) — the stated net edge is not realized — so it blocks as audit.
     "residual:propped": "blocked_by_audit",
     "edge": "failed",
     "dominance": "failed",
     "top_month": "failed",
     "force_flat": "failed",
 }
-# Highest precedence first: an incomplete audit record can't be trusted at
-# all, then a parity break, then risk-limit breaches, then sample shortfall,
-# then a plain credibility failure.
 _TRIAGE_PRECEDENCE: tuple[str, ...] = (
     "blocked_by_audit",
     "blocked_by_parity",
@@ -253,9 +203,6 @@ def triage_reason(row: dict) -> str:
     return "failed"
 
 
-# Round 58: the spec-provenance keys a traceable Gate-C run must carry
-# (goal §4: 資料區間 / 成本假設 / required-gate set). These mirror
-# strategy_spec.load_spec_provenance's output shape.
 _REQUIRED_PROVENANCE_KEYS: tuple[str, ...] = (
     "data_range",
     "cost_model_id",
@@ -292,9 +239,6 @@ def spec_provenance_complete(row: dict) -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
-# Round 70: the 完成狀態 §3 fixed-spec top-level fields. The audit record can
-# attest to only a subset from what it stores; the rest live solely in
-# spec.yaml. Listing both halves makes the traceability boundary explicit.
 _SPEC_FIELDS_3: tuple[str, ...] = (
     "strategy_name",
     "market",
@@ -334,8 +278,6 @@ def spec_field_audit(row: dict) -> tuple[list[str], list[str]]:
         "instrument": bool(row.get("instrument")),
         "cost_model": cost_ok,
         "validation_plan": has_validation,
-        # Round 71: carried additively in spec_provenance when the candidate
-        # spec supplied them; absent for rows that predate the extension.
         "timeframe": bool(prov.get("timeframe")),
         "holding_period": bool(prov.get("holding_period")),
     }
@@ -413,7 +355,6 @@ def sample_adequacy_audit(row: dict) -> tuple[str, list[str]]:
         return ("no_gate", [])
     label = row.get("sample_adequacy_label")
     if label != "adequate":
-        # Non-adequate labels are self-limiting (NOT-READY); nothing to refute.
         return ("consistent", [])
     metrics = entry.get("metrics") or {}
     if not isinstance(metrics, dict):
@@ -495,49 +436,32 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     lines.append(f"triage_status   : {row.get('triage_status', '') or '(n/a)'}")
     reasons = row.get("triage_reasons") or []
     lines.append(f"triage_reasons  : {', '.join(reasons) if reasons else '(none)'}")
-    # Goal §5 hard bar (Round 26): surface the per-round-trip edge at the
-    # top of the row so audit show / compare highlight the > 10 pts/trade
-    # floor without callers spelunking through sub_gates[*].metrics.
     edge = row.get("mean_net_edge_pts_per_trade")
     if edge is None:
         lines.append("mean_net_edge   : (n/a — edge_per_round_trip gate not run)")
     else:
         marker = "PASS" if edge > 10.0 else "FAIL"
         lines.append(f"mean_net_edge   : {edge:.3f} pts/trade  [vs goal §5 floor 10.0 -> {marker}]")
-    # Round 45: surface force-flat residual share next to the edge so a
-    # reviewer can immediately see whether the edge is propped up by
-    # end-of-window inventory marks (Round 41-44 chain).
     ff_share = row.get("force_flat_trip_share_pct")
     if ff_share is None:
         lines.append("force_flat_share: (n/a — force_flat_residual gate not run)")
     else:
         ff_marker = "PASS" if ff_share <= 30.0 else "FAIL"
         lines.append(f"force_flat_share: {ff_share:.1f}% of trips  [vs strict cap 30.0% -> {ff_marker}]")
-    # Round 48: surface single-day dominance (驗證標準 §5) next to the edge
-    # so a reviewer sees whether the edge is carried by one trading day —
-    # the pathology that KILLed R65 / cd600 / T1-A.
     day_dom = row.get("single_day_dominance_pct")
     if day_dom is None:
         lines.append("single_day_dom : (n/a — single_day_dominance gate not run)")
     else:
         dom_marker = "PASS" if day_dom <= 25.0 else "FAIL"
         lines.append(f"single_day_dom : {day_dom:.1f}% of |total|  [vs strict cap 25.0% -> {dom_marker}]")
-    # Round 50: sample-adequacy label (驗證標準 §4) — a blocking-passed
-    # candidate that is not 'adequate' must still be triaged as
-    # promising / needs_more_sample / inconclusive, never complete.
     sample_label = row.get("sample_adequacy_label")
     if sample_label is None:
         lines.append("sample_adequacy: (n/a — min_sample_size gate not run)")
     else:
         sample_marker = "READY" if sample_label == "adequate" else "NOT-READY"
-        # Round 78: reconcile the 'adequate' label against its evidence so a
-        # label the record cannot substantiate is flagged (限制 §3 不足樣本不得完成).
         verdict, reasons = sample_adequacy_audit(row)
         suffix = f"  !! label-vs-evidence DISCREPANT [{', '.join(reasons)}]" if verdict == "discrepant" else ""
         lines.append(f"sample_adequacy: {sample_label}  [§4 -> {sample_marker}]{suffix}")
-    # Round 53: drawdown-to-avg-monthly ratio (驗證標準 §6) — max_drawdown must
-    # stay within 2× average monthly net PnL, else a candidate's edge is not
-    # survivable month-to-month. inf (avg_monthly <= 0) always reads FAIL.
     dd_ratio = row.get("drawdown_to_avg_monthly_ratio")
     if dd_ratio is None:
         lines.append("drawdown_ratio : (n/a — monthly_distribution gate not run)")
@@ -545,19 +469,12 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         dd_marker = "PASS" if dd_ratio <= 2.0 else "FAIL"
         dd_text = "inf" if dd_ratio == float("inf") else f"{dd_ratio:.2f}"
         lines.append(f"drawdown_ratio : {dd_text}× avg-monthly  [vs strict cap 2.0× -> {dd_marker}]")
-    # Round 54: single-month dominance (驗證標準 §6 "單月收益支配性") — the
-    # monthly analogue of single_day_dom; a candidate whose net PnL leans on
-    # one calendar month is not a durable monthly-income stream.
     top_month = row.get("top_month_contribution_pct")
     if top_month is None:
         lines.append("top_month_share: (n/a — monthly_distribution gate not run)")
     else:
         tm_marker = "PASS" if top_month <= 50.0 else "FAIL"
         lines.append(f"top_month_share: {top_month:.1f}% of net  [vs strict cap 50.0% -> {tm_marker}]")
-    # Round 76: monthly-stability secondary verdict (驗證標準 §6 "若月收益不穩，
-    # 需檢查 median_monthly_net_pnl / worst_month / 單月收益支配性") — advisory,
-    # built from factual fields, names why a passing-drawdown stream may be
-    # unstable.
     ms_verdict, ms_reasons = monthly_stability(row)
     if ms_verdict == "unknown":
         lines.append("monthly_stability: (n/a — no monthly metrics on record)")
@@ -565,17 +482,12 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         lines.append("monthly_stability: stable")
     else:
         lines.append(f"monthly_stability: UNSTABLE  [{', '.join(ms_reasons)}]")
-    # Round 60: worst-trade loss share (驗證標準 §5 損益/虧損分布) — what
-    # fraction of total loss the single worst trade carries; high share means
-    # the edge is hostage to one trade landing differently.
     worst_loss = row.get("worst_loss_share_pct")
     if worst_loss is None:
         lines.append("worst_loss_share: (n/a — trade_concentration gate not run)")
     else:
         wl_marker = "PASS" if worst_loss <= 50.0 else "FAIL"
         lines.append(f"worst_loss_share: {worst_loss:.1f}% of |loss|  [vs strict cap 50.0% -> {wl_marker}]")
-    # Round 62: replay parity (驗證標準 §7/§8) — backtest↔replay intent match,
-    # with the dominant divergence category named when below the floor.
     replay_match = row.get("replay_match_pct")
     if replay_match is None:
         lines.append("replay_parity  : (n/a — replay_parity gate not run)")
@@ -584,9 +496,6 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
         category = row.get("replay_divergence_category")
         suffix = f"; dominant={category}" if isinstance(category, str) and category and replay_match < 95.0 else ""
         lines.append(f"replay_parity  : {replay_match:.1f}% match  [vs strict floor 95.0% -> {rp_marker}{suffix}]")
-    # Round 66: residual mark-to-market (驗證標準 §2/§3) — how much of net edge
-    # is carried by the residual mark vs realized fills, so a reviewer can see
-    # whether un-FIFO'd inventory is propping the edge up.
     residual_mtm = row.get("residual_mtm_pts")
     if residual_mtm is None:
         lines.append("residual_mtm   : (n/a — inventory_mtm gate not run)")
@@ -597,41 +506,27 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
             lines.append(f"residual_mtm   : {residual_mtm:.1f} pts  ({share:.0f}% of net {inv_net:.1f})")
         else:
             lines.append(f"residual_mtm   : {residual_mtm:.1f} pts  (net n/a)")
-    # Round 89: 驗證標準 §3 — flag a net-positive edge that is carried entirely by
-    # the unrealized residual mark (realized<=0 while net>0). Advisory only (no
-    # invented cap), so a reviewer sees residual-propped edges at a glance.
     _rp_verdict, _rp_detail = residual_propped_edge(row)
     if _rp_verdict == "propped":
         lines.append(f"residual_propped: !! PROPPED — {_rp_detail}")
     elif _rp_verdict == "clean":
         lines.append(f"residual_propped: clean  ({_rp_detail})")
-    # Round 51: composite promotion verdict over every lifted axis, so a
-    # reviewer gets the kept/killed answer (驗證標準 §9) in one line.
     ready, blockers = promotion_readiness(row)
     if ready:
         lines.append("promotion_ready: READY  [all credibility axes + blocking clear]")
     else:
         lines.append(f"promotion_ready: NOT-READY  [blockers: {', '.join(blockers)}]")
-    # Round 64: dominant triage reason in the user's fixed vocabulary
-    # (迭代規則 §5) so the kept/killed rationale (驗證標準 §9) is one word.
     lines.append(f"triage_reason  : {triage_reason(row)}")
-    # Round 58: traceability completeness (goal §4) — separate from the
-    # credibility verdict; flags a row whose audit trail can't answer
-    # data-range / cost-model / required-gate provenance.
     spec_ok, spec_missing = spec_provenance_complete(row)
     if spec_ok:
         lines.append("spec_provenance: complete  [data_range, cost_model_id, required_gates]")
     else:
         lines.append(f"spec_provenance: INCOMPLETE  [missing: {', '.join(spec_missing)}]")
-    # Round 67: §2 cost-knob completeness parsed from the declared cost_model_id
-    # so a silently-omitted fee/tax/slippage/latency can't pass unnoticed.
     cost_ok, cost_missing = cost_model_complete(row)
     if cost_ok:
         lines.append("cost_model     : complete  [latency, fee, tax, slippage declared]")
     else:
         lines.append(f"cost_model     : INCOMPLETE  [§2 missing: {', '.join(cost_missing)}]")
-    # Round 70: 完成狀態 §3 fixed-spec coverage the audit record can attest to;
-    # behavioural fields live only in spec.yaml, not the audit log.
     traceable, untraceable = spec_field_audit(row)
     spec_line = f"spec_fields    : {len(traceable)}/{len(_SPEC_FIELDS_3)} traceable in record"
     if untraceable:
@@ -642,11 +537,6 @@ def show(run_id: str, strategy_type: str | None = None) -> str:
     return "\n".join(lines)
 
 
-# Round 80: the ordered axis catalogue for the promotion scorecard — each axis
-# names the 驗證標準 clause, the row field it reads, and the promotion_readiness
-# blocker keys that mean FAIL (hard breach) vs MISSING (record gap). The verdict
-# is sourced from promotion_readiness so the scorecard never drifts from the
-# kept/killed decision.
 _SCORECARD_AXES: tuple[tuple[str, str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     ("edge>10 (§5)", "mean_net_edge_pts_per_trade", "pts", ("edge",), ("edge:missing",)),
     ("force_flat<=30 (§2/§3)", "force_flat_trip_share_pct", "%", ("force_flat",), ()),
@@ -656,9 +546,6 @@ _SCORECARD_AXES: tuple[tuple[str, str, str, tuple[str, ...], tuple[str, ...]], .
     ("top_month<=50 (§6)", "top_month_contribution_pct", "%", ("top_month",), ()),
     ("worst_loss<=50 (§5)", "worst_loss_share_pct", "%", ("worst_loss",), ()),
     ("replay>=95 (§7/§8)", "replay_match_pct", "%", ("replay_parity",), ()),
-    # Round 92: the §3 residual-propped axis (realized half of inventory_mtm).
-    # FAIL iff the residual:propped blocker fired (net>0 & realized<=0); the
-    # blocker is missing-not-a-value, so a row with no inventory split shows n/a.
     ("residual (§3)", "inventory_realized_pts", "pts", ("residual:propped",), ()),
     ("blocking (§9)", "blocking_passed", "", ("blocking",), ()),
 )
@@ -771,10 +658,6 @@ def research_record(run_id: str, *, strategy_type: str | None = None) -> str:
         f"- triage: `{reason}`",
         f"- blockers: {', '.join(blockers) if blockers else '(none)'}",
     ]
-    # Round 90: carry the §3 residual-propped flag into the auto-generated record
-    # (it was advisory-only in show() since Round 89) so the residual-credibility
-    # signal travels with every traceable record. Advisory; omitted when the
-    # inventory_mtm gate didn't run.
     rp_verdict, rp_detail = residual_propped_edge(row)
     if rp_verdict == "propped":
         lines.append(f"- ⚠ residual_propped (§3): **PROPPED** — {rp_detail}")
@@ -860,10 +743,6 @@ def scorecard(run_id: str, *, strategy_type: str | None = None) -> str:
     return "\n".join(lines)
 
 
-# Round 81: rank order for the cohort leaderboard — READY first, then by how
-# few axes a row fails, then by edge descending. A triage precedence index
-# breaks ties among NOT-READY rows so the "closest to promotable" surfaces
-# above the structurally-failed ones.
 _LEADERBOARD_TRIAGE_RANK: dict[str, int] = {
     "promotable": 0,
     "needs_more_sample": 1,
@@ -908,8 +787,6 @@ def leaderboard(
         edge = row.get("mean_net_edge_pts_per_trade")
         edge_val = float(edge) if isinstance(edge, (int, float)) else float("-inf")
         triage_rank = _LEADERBOARD_TRIAGE_RANK.get(reason, 9)
-        # Sort key: READY first (0/1), then fewest fails, then triage rank,
-        # then highest edge (negate for ascending sort).
         ranked.append((0 if ready else 1, fails, -edge_val, row, reason, triage_rank))
 
     ranked.sort(key=lambda t: (t[0], t[1], t[5], t[2]))
@@ -971,8 +848,6 @@ def decision_trail(
     if not rows:
         return f"no audit rows for strategy_name={strategy_name!r}."
 
-    # Stable order: recorded_at_ns ascending; rows without a timestamp sort last
-    # while preserving their append order (natural read order).
     def _ts(row: dict) -> int:
         ts = row.get("recorded_at_ns")
         return int(ts) if isinstance(ts, (int, float)) else 2**63 - 1
@@ -1059,17 +934,12 @@ def compare(
     lines.append(f"blocking_pass : {a.get('blocking_passed')} -> {b.get('blocking_passed')}")
     lines.append(f"triage_status : {a.get('triage_status', '')!r} -> {b.get('triage_status', '')!r}")
     lines.append(f"triage_reasons: {a.get('triage_reasons') or []} -> {b.get('triage_reasons') or []}")
-    # Round 26: edge drift surfacing.  Either side may have the metric.
     edge_a = a.get("mean_net_edge_pts_per_trade")
     edge_b = b.get("mean_net_edge_pts_per_trade")
     if edge_a is not None or edge_b is not None:
         marker = "~" if edge_a != edge_b else " "
         lines.append(f"  {marker} mean_net_edge: {edge_a!r} -> {edge_b!r}  (goal §5 floor: 10.0)")
 
-    # Round 18: spec-provenance drift surfacing.  When either side
-    # carries spec_provenance, show the diff so the operator can
-    # attribute outcome differences to data_range / cost_model_id /
-    # required_gates changes rather than treat them as noise.
     prov_a = a.get("spec_provenance") or {}
     prov_b = b.get("spec_provenance") or {}
     if prov_a or prov_b:
@@ -1175,10 +1045,6 @@ _DEFAULT_TEMPLATE = Path("research/alphas/_templates/spec.yaml")
 _DEFAULT_ALPHAS_ROOT = Path("research/alphas")
 _TEMPLATE_NAME = "exemplar_txfd6_demo"
 
-# Round 37: map shape tag -> (template path, placeholder strategy_name).
-# `audit init --shape <tag>` picks the right exemplar without the
-# author having to know the file path.  Keep `single` first so it
-# remains the default and the back-compat behavior is preserved.
 _SHAPE_TEMPLATES: dict[str, tuple[Path, str]] = {
     "single": (_DEFAULT_TEMPLATE, _TEMPLATE_NAME),
     "straddle": (
@@ -1217,10 +1083,6 @@ def init_candidate(
 
     if not alpha_id or "/" in alpha_id or alpha_id.startswith("."):
         return f"refused: alpha_id {alpha_id!r} must be a plain directory name"
-    # Round 37: shape -> template resolution.  Explicit --template wins
-    # so old callers keep working.  `shape` must be one of the known
-    # exemplar tags or the call is refused (no silent fall-back to
-    # single — that would mask typos like --shape stradle).
     if template is not None and shape is not None:
         return "refused: pass either --template OR --shape, not both"
     placeholder_name = _TEMPLATE_NAME
@@ -1243,7 +1105,6 @@ def init_candidate(
     shutil.copyfile(template_path, target_spec)
     raw = target_spec.read_text(encoding="utf-8")
     new_name = strategy_name or alpha_id
-    # Single literal substitution: the exemplar's strategy_name slot.
     if placeholder_name in raw:
         raw = raw.replace(placeholder_name, new_name)
         target_spec.write_text(raw, encoding="utf-8")
@@ -1288,7 +1149,6 @@ def _field_state(value: object) -> str:
     if isinstance(value, (list, tuple)):
         if not value:
             return "missing"
-        # If any element is a placeholder string, surface that.
         states = [_field_state(v) for v in value]
         if "placeholder" in states:
             return "placeholder"
@@ -1368,7 +1228,6 @@ def verify_spec(
         out.append(f"({len(body)} candidates scanned)")
         return "\n".join(out)
 
-    # Single-spec mode.
     if not alpha_id:
         return "refused: pass an alpha_id, or use --all"
     spec_path = root_path / alpha_id / "spec.yaml"
@@ -1777,21 +1636,12 @@ _EXPORT_COLUMNS: tuple[str, ...] = (
     "single_day_dominance_pct",
     "median_monthly_net_pnl_pts",
     "worst_monthly_pnl_pts",
-    # Round 84: unified-metrics parity (§9 輸出統一 metrics) — the remaining
-    # surfaced credibility axes (§6 drawdown/top-month, §5 worst-loss, §7/§8
-    # replay) travel with the export so an external pivot has the same signal
-    # set as scorecard/show.
     "drawdown_to_avg_monthly_ratio",
     "top_month_contribution_pct",
     "worst_loss_share_pct",
     "replay_match_pct",
     "replay_divergence_category",
     "monthly_stability",
-    # Round 88: residual mark-to-market (驗證標準 §2/§3 殘倉 mark-to-market) — how
-    # much of net edge is carried by the end-of-window residual mark vs realized
-    # fills. show() surfaces it (Round 66); it must also travel with the unified
-    # export so an external pivot can see whether un-FIFO'd inventory props the
-    # edge up, the same as every other credibility axis.
     "inventory_realized_pts",
     "residual_mtm_pts",
     "inventory_net_pts",
@@ -1944,8 +1794,6 @@ def export(
             and float(r["mean_net_edge_pts_per_trade"]) >= edge_min
         ]
     if max_force_flat_share is not None:
-        # Keep rows missing the metric (gate didn't run); drop only those
-        # whose recorded share strictly exceeds the bound.
         rows = [
             r
             for r in rows
@@ -1953,7 +1801,6 @@ def export(
             or float(r["force_flat_trip_share_pct"]) <= max_force_flat_share
         ]
     if max_day_dominance is not None:
-        # Same keep-missing-metric semantics as max_force_flat_share.
         rows = [
             r
             for r in rows
@@ -1976,7 +1823,6 @@ def export(
             writer.writerow(p)
         return buf.getvalue().rstrip("\n")
 
-    # md: GFM table.
     lines: list[str] = []
     lines.append("| " + " | ".join(_EXPORT_COLUMNS) + " |")
     lines.append("|" + "|".join(["---"] * len(_EXPORT_COLUMNS)) + "|")
@@ -2055,8 +1901,6 @@ def summary(
     if edges:
         lines.append(f"  edge p50/p95   : {_percentile(edges, 50):.3f} / {_percentile(edges, 95):.3f} pts/trade")
         lines.append(f"  edge min/max   : {min(edges):.3f} / {max(edges):.3f} pts/trade")
-    # Round 45: force-flat residual aggregation so reviewers can spot
-    # whether the edge cohort is dominated by inventory-mark artifacts.
     ff_shares: list[float] = [
         float(r["force_flat_trip_share_pct"])
         for r in rows
@@ -2069,8 +1913,6 @@ def summary(
     if ff_shares:
         lines.append(f"  share p50/p95   : {_percentile(ff_shares, 50):.1f}% / {_percentile(ff_shares, 95):.1f}%")
         lines.append(f"  share min/max   : {min(ff_shares):.1f}% / {max(ff_shares):.1f}%")
-    # Round 49: single-day-dominance aggregation (驗證標準 §5) so reviewers
-    # can spot whether the cohort's edge is carried by one trading day.
     dom_shares: list[float] = [
         float(r["single_day_dominance_pct"])
         for r in rows
@@ -2083,9 +1925,6 @@ def summary(
     if dom_shares:
         lines.append(f"  share p50/p95   : {_percentile(dom_shares, 50):.1f}% / {_percentile(dom_shares, 95):.1f}%")
         lines.append(f"  share min/max   : {min(dom_shares):.1f}% / {max(dom_shares):.1f}%")
-    # Round 54: single-month-dominance aggregation (驗證標準 §6 "單月收益支配性")
-    # — the monthly analogue, so reviewers spot a cohort whose edge leans on
-    # one calendar month rather than a durable monthly stream.
     month_shares: list[float] = [
         float(r["top_month_contribution_pct"])
         for r in rows
@@ -2098,9 +1937,6 @@ def summary(
     if month_shares:
         lines.append(f"  share p50/p95   : {_percentile(month_shares, 50):.1f}% / {_percentile(month_shares, 95):.1f}%")
         lines.append(f"  share min/max   : {min(month_shares):.1f}% / {max(month_shares):.1f}%")
-    # Round 50: sample-adequacy distribution (驗證標準 §4) — how many
-    # candidates are actually deployment-ready vs must stay flagged
-    # promising / needs_more_sample / inconclusive.
     sample_counts: dict[str, int] = {}
     for r in rows:
         lbl = r.get("sample_adequacy_label")
@@ -2112,14 +1948,9 @@ def summary(
     for lbl in ("adequate", "promising", "needs_more_sample", "inconclusive"):
         if lbl in sample_counts:
             lines.append(f"  {lbl:16s}: {sample_counts[lbl]}")
-    # Round 51: composite promotion verdict count (驗證標準 §9) — how many
-    # candidates clear *every* credibility axis plus blocking at once.
     ready_count = sum(1 for r in rows if promotion_readiness(r)[0])
     lines.append("promotion_readiness (all axes + blocking clear):")
     lines.append(f"  READY rows     : {ready_count} / {total}")
-    # Round 59: cohort-level traceability gap (goal §4) — distinct from the
-    # credibility distribution; how many rows carry a complete audit trail
-    # (data_range / cost_model_id / required_gates) vs are missing provenance.
     complete_count = 0
     missing_key_counts: dict[str, int] = {}
     for r in rows:
@@ -2133,12 +1964,6 @@ def summary(
     if missing_key_counts:
         top_key, top_n = max(missing_key_counts.items(), key=lambda kv: kv[1])
         lines.append(f"  top missing key: {top_key} ({top_n})")
-    # Round 73: cohort-level §3 fixed-spec field traceability — how many of
-    # the 12 完成狀態 §3 fields the audit record itself can attest to, summed
-    # across the cohort.  Distinct from spec_provenance completeness (which is
-    # the §4 audit-trail triple): this is the §3 field-coverage distribution,
-    # built from spec_field_audit per row so a reviewer sees whether the
-    # cohort's records stand on their own or lean on spec.yaml.
     coverage_counts: dict[int, int] = {}
     for r in rows:
         traceable, _untraceable = spec_field_audit(r)
@@ -2147,12 +1972,6 @@ def summary(
     lines.append(f"spec_fields (完成狀態 §3, attestable from record / {len(_SPEC_FIELDS_3)}):")
     for n in sorted(coverage_counts, reverse=True):
         lines.append(f"  {n:2d}/{len(_SPEC_FIELDS_3)} traceable: {coverage_counts[n]}")
-    # Round 77: replay-parity divergence-category distribution (驗證標準 §8) —
-    # among rows whose replay_match_pct is below the strict 95% floor, which
-    # §8 inconsistency class (data_mismatch / latency_shift / …) dominates the
-    # cohort's parity failures.  Mirrors the triage-reason distribution; lets a
-    # reviewer see the systemic backtest↔replay gap at a glance rather than
-    # opening each below-floor row.
     below_floor = 0
     divergence_counts: dict[str, int] = {}
     for r in rows:
@@ -2167,9 +1986,6 @@ def summary(
         lines.append(f"replay divergence (驗證標準 §8, below {_REPLAY_MATCH_FLOOR_PCT:.0f}% floor): {below_floor} rows")
         for cat, n in sorted(divergence_counts.items(), key=lambda kv: (-kv[1], kv[0])):
             lines.append(f"  {cat:26s}: {n}")
-    # Round 65: triage-reason distribution (驗證標準 §9 比較策略) — how the
-    # cohort splits across the kept/killed vocabulary, derived from the
-    # composite verdict rather than the raw blocking triage_status.
     triage_reason_counts: dict[str, int] = {}
     for r in rows:
         reason = triage_reason(r)

@@ -28,10 +28,6 @@ from hft_platform.alpha.outcomes import (
     resolve_outcome,
 )
 
-# ---------------------------------------------------------------------------
-# alpha.outcomes
-# ---------------------------------------------------------------------------
-
 
 def _e(name: str, outcome: Outcome, **metrics) -> dict:
     return check_entry(name, outcome, metrics=metrics)
@@ -123,11 +119,6 @@ def test_verdict_result_round_trips_through_dict():
     assert VerdictResult.from_dict(v.to_dict()) == v
 
 
-# ---------------------------------------------------------------------------
-# Sub-gates that used to pass by default
-# ---------------------------------------------------------------------------
-
-
 class _R:
     def __init__(self, daily_pnl=None, n_fills=0, n_trading_days=0):
         self.daily_pnl = daily_pnl
@@ -155,14 +146,14 @@ def test_max_drawdown_never_above_zero_with_losses_fails():
 def test_max_drawdown_measured_case_unchanged():
     res = MaxDrawdownGate().evaluate(_R(daily_pnl=[10.0, -2.0, 5.0]), None, {"max_drawdown_pct": 30.0})
     assert res.outcome is Outcome.PASS
-    assert res.metrics["max_dd_pct"] == pytest.approx(2.0 / 13.0 * 100.0)  # existing max-peak denominator
+    assert res.metrics["max_dd_pct"] == pytest.approx(2.0 / 13.0 * 100.0)
 
 
 def test_min_sample_size_short_sample_reports_required_days():
     res = MinSampleSizeGate().evaluate(_R(n_fills=150, n_trading_days=40), None, {"min_fills": 300, "min_days": 60})
     assert res.passed is False
     assert res.outcome is Outcome.INSUFFICIENT_SAMPLE
-    assert res.metrics["required_n"] == 80  # 300 fills at 150/40 per day
+    assert res.metrics["required_n"] == 80
     assert res.metrics["reachable"] is None
 
 
@@ -173,8 +164,6 @@ def test_min_sample_size_zero_fills_is_unreachable():
 
 
 def test_min_sample_size_oos_floor_without_oos_counts_is_error():
-    # Taker profiles state min_oos_trades / min_oos_days; full-sample counts
-    # must not stand in for the out-of-sample axis.
     res = MinSampleSizeGate().evaluate(
         _R(n_fills=10_000, n_trading_days=500), None, {"min_oos_trades": 200, "min_oos_days": 30}
     )
@@ -189,10 +178,6 @@ def test_min_sample_size_without_daily_rows_is_error():
     )
     assert res.outcome is Outcome.ERROR
 
-
-# ---------------------------------------------------------------------------
-# Gate C aggregate (_invoke_sub_gates)
-# ---------------------------------------------------------------------------
 
 _STRICT = ValidationProfile(
     name="test_strict",
@@ -315,11 +300,6 @@ def test_day_axis_gates_error_without_dated_rows():
     assert verdict.verdict is Verdict.INVALID
 
 
-# ---------------------------------------------------------------------------
-# Research decision and kill record
-# ---------------------------------------------------------------------------
-
-
 def _report(blocking: dict) -> dict:
     return {"details": {"sub_gates_blocking": blocking}}
 
@@ -332,8 +312,6 @@ def test_research_decision_follows_stored_verdict():
 
 
 def test_research_decision_failure_status_ignores_passing_blocking_names():
-    # max_drawdown passed; only sharpe_threshold failed. The passing name used
-    # to drive the status to blocked_by_risk.
     blocking = {
         "passed": False,
         "names": ["sharpe_threshold", "max_drawdown"],
@@ -367,11 +345,6 @@ def test_kill_id_without_run_id_is_unchanged():
 
     rec = KillRecord(alpha_id="a", gate="manual", reason="x", stable_artifact_hash="h")
     assert rec.kill_id() == hashlib.sha256(b"a:manual:h").hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# Evidence checks report ERROR, not a measured failure
-# ---------------------------------------------------------------------------
 
 
 def test_replay_parity_missing_report_is_not_applicable_not_fail():

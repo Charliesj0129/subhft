@@ -37,7 +37,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("feed_adapter.fubon.quote_runtime")
 
-# Number of order book levels forwarded from the Fubon L5 feed.
 _BOOK_LEVELS: int = 5
 
 
@@ -58,10 +57,6 @@ class FubonQuoteRuntime:
         "log",
     )
 
-    # ------------------------------------------------------------------ #
-    # Lifecycle
-    # ------------------------------------------------------------------ #
-
     def __init__(self, sdk: Any) -> None:
         self._sdk = sdk
         self._on_tick: Callable[..., Any] | None = None
@@ -69,20 +64,10 @@ class FubonQuoteRuntime:
         self._watchdog_thread: threading.Thread | None = None
         self._subscribed: set[str] = set()
         self._running: bool = False
-        # Set True once ``stop()`` has been invoked. The Fubon SDK retains
-        # bound references to _on_fubon_trade / _on_fubon_book after stop,
-        # so late-arriving callbacks could still double-publish into the
-        # canonical pipeline during a resubscribe (P1, 2026-04-24). The
-        # callbacks check this flag first and silently drop once stopped.
         self._stopped: bool = False
         self._last_data_ts: float = 0.0
         self.log = logger
 
-        # Pre-allocated translation buffers used as *workspace* (Allocator Law).
-        # Values are overwritten on each callback to perform field translation
-        # without intermediate allocations.  A fresh snapshot dict is then
-        # passed to the registered callback — see _on_fubon_trade /
-        # _on_fubon_book for details.
         self._tick_buffer: dict[str, Any] = {
             "code": "",
             "close": 0,
@@ -98,10 +83,6 @@ class FubonQuoteRuntime:
             "ts": 0,
         }
 
-    # ------------------------------------------------------------------ #
-    # Callback registration
-    # ------------------------------------------------------------------ #
-
     def register_quote_callbacks(
         self,
         on_tick: Callable[..., Any],
@@ -111,10 +92,6 @@ class FubonQuoteRuntime:
         self._on_tick = on_tick
         self._on_bidask = on_bidask
         self.log.info("Fubon quote callbacks registered")
-
-    # ------------------------------------------------------------------ #
-    # Subscription management
-    # ------------------------------------------------------------------ #
 
     def subscribe(self, symbols: list[str]) -> None:
         """Subscribe to trades and books channels for the given symbols.
@@ -166,14 +143,8 @@ class FubonQuoteRuntime:
             self._subscribed.discard(sym)
             self.log.info("Fubon unsubscribed", symbol=sym)
 
-    # ------------------------------------------------------------------ #
-    # Internal callbacks — translate Fubon → canonical
-    # ------------------------------------------------------------------ #
-
     def _on_fubon_trade(self, data: Any) -> None:
         """Translate a Fubon trade event to canonical tick dict and forward."""
-        # P1 (2026-04-24): the SDK keeps a bound reference to this method
-        # after stop(); late deliveries must not leak into the pipeline.
         if self._stopped or self._on_tick is None:
             return
         try:
@@ -186,20 +157,14 @@ class FubonQuoteRuntime:
             volume = int(_get(data, "volume", 0))
             ts_raw = _get(data, "datetime", None)
 
-            # Convert timestamp to nanoseconds
             ts_ns = _ts_to_ns(ts_raw)
 
-            # Pass raw float price — the normalizer applies per-symbol scaling.
-            # Pre-scaling here would cause double-scaling (DATA-001).
             buf["code"] = symbol
             buf["close"] = price_raw
             buf["volume"] = volume
             buf["ts"] = ts_ns
 
             self._last_data_ts = time.monotonic()
-            # Create a fresh snapshot dict so the async consumer receives an
-            # independent object.  The workspace buf may be overwritten by the
-            # next callback before the event loop dequeues this message.
             self._on_tick(
                 {
                     "code": buf["code"],
@@ -213,8 +178,6 @@ class FubonQuoteRuntime:
 
     def _on_fubon_book(self, data: Any) -> None:
         """Translate a Fubon book event to canonical bidask dict and forward."""
-        # P1 (2026-04-24): the SDK keeps a bound reference to this method
-        # after stop(); late deliveries must not leak into the pipeline.
         if self._stopped or self._on_bidask is None:
             return
         try:
@@ -229,13 +192,11 @@ class FubonQuoteRuntime:
             ask_prices_raw = _get(data, "ask_prices", [])
             ask_sizes_raw = _get(data, "ask_sizes", [])
 
-            # Cache lengths to avoid repeated calls inside the hot loop.
             n_bp = len(bid_prices_raw)
             n_bv = len(bid_sizes_raw)
             n_ap = len(ask_prices_raw)
             n_av = len(ask_sizes_raw)
 
-            # Reuse the pre-allocated lists inside the buffer.
             bp = buf["bid_price"]
             bv = buf["bid_volume"]
             ap = buf["ask_price"]
@@ -251,9 +212,6 @@ class FubonQuoteRuntime:
             buf["ts"] = ts_ns
 
             self._last_data_ts = time.monotonic()
-            # Create a fresh snapshot dict with copies of the inner lists so
-            # the async consumer is fully isolated from the workspace buffer.
-            # list(bp) is safe because the elements are ints (immutable).
             self._on_bidask(
                 {
                     "code": buf["code"],
@@ -266,10 +224,6 @@ class FubonQuoteRuntime:
             )
         except Exception as exc:
             self.log.error("Fubon book callback error", error=str(exc))
-
-    # ------------------------------------------------------------------ #
-    # Watchdog
-    # ------------------------------------------------------------------ #
 
     def start_quote_watchdog(self, timeout_s: float = 30.0) -> None:
         """Start a watchdog thread that monitors data freshness.
@@ -304,10 +258,6 @@ class FubonQuoteRuntime:
         )
         self._watchdog_thread.start()
 
-    # ------------------------------------------------------------------ #
-    # Shutdown
-    # ------------------------------------------------------------------ #
-
     def stop(self) -> None:
         """Stop the watchdog and unsubscribe all symbols.
 
@@ -323,11 +273,6 @@ class FubonQuoteRuntime:
             self._watchdog_thread.join(timeout=5.0)
             self._watchdog_thread = None
         self.log.info("Fubon quote runtime stopped")
-
-
-# ---------------------------------------------------------------------- #
-# Module-level helpers (stateless, no allocation)
-# ---------------------------------------------------------------------- #
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:

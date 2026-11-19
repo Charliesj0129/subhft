@@ -35,18 +35,16 @@ def _make_adapter(elapse_results: list[int], *, num_iterations: int | None = Non
     The loop continues while the return value is 0.
     """
     adapter = MagicMock()
-    adapter.elapse_ns = 10_000_000  # 10 ms
+    adapter.elapse_ns = 10_000_000
     adapter.price_scale = 10_000
     adapter.dispatch_feature_events = False
 
-    # hbt mock
     hbt = MagicMock()
     hbt.elapse.side_effect = elapse_results
     hbt.current_timestamp = 1_234_567_890_000_000
 
-    # depth mock (valid depth by default)
     dp = MagicMock()
-    dp.best_bid = 1.0  # raw float, will be scaled
+    dp.best_bid = 1.0
     dp.best_ask = 1.01
     hbt.depth.return_value = dp
     hbt.last_trades.return_value = None
@@ -83,7 +81,6 @@ class TestRunElapseInvalidDepth:
 
         run_elapse(adapter)
 
-        # build_lob_event and dispatch_strategy should NOT be called
         adapter.strategy.handle_event.assert_not_called()
 
     def test_skips_loop_body_when_best_ask_zero(self):
@@ -110,7 +107,6 @@ class TestRunElapseInvalidDepth:
 class TestRunElapseNormalIteration:
     def _setup_adapter_with_event(self):
         adapter, dp = _make_adapter(elapse_results=[0, 1])
-        # Use valid depth
         dp.best_bid = 1.0
         dp.best_ask = 1.01
         adapter.hbt.current_timestamp = 5_000_000_000
@@ -118,7 +114,6 @@ class TestRunElapseNormalIteration:
         event = _make_lob_event()
         feature_event = None
 
-        # Patch helpers so we can control what they return
         adapter.strategy.handle_event.return_value = []
         return adapter, dp, event, feature_event
 
@@ -205,8 +200,7 @@ class TestRunElapseLastTrades:
         trades = [{"price": 1.0, "qty": 5}]
         adapter.hbt.last_trades.return_value = trades
 
-        # Use a real MagicMock event so setattr is allowed
-        event = MagicMock(spec_set=[])  # no spec → allows setattr
+        event = MagicMock(spec_set=[])
         event_obj = MagicMock()
 
         with (
@@ -217,7 +211,6 @@ class TestRunElapseLastTrades:
         ):
             run_elapse(adapter)
 
-        # clear_last_trades must be called to drain the buffer
         adapter.hbt.clear_last_trades.assert_called_once_with(0)
 
     def test_last_trades_none_when_hbt_raises_attribute_error(self):
@@ -232,7 +225,6 @@ class TestRunElapseLastTrades:
             patch("hft_platform.backtest._elapse_loop.dispatch_strategy"),
             patch("hft_platform.backtest._elapse_loop.validate_depth", return_value=True),
         ):
-            # Must not raise; loop should continue normally
             result = run_elapse(adapter)
 
         assert result == "closed"
@@ -258,7 +250,6 @@ class TestRunElapseLastTrades:
         adapter, dp = self._make_valid_adapter()
         adapter.hbt.last_trades.return_value = [{"trade": 1}]
 
-        # Simulate a frozen dataclass-like object
         class FrozenEvent:
             def __setattr__(self, name, value):
                 raise AttributeError("frozen")
@@ -283,7 +274,7 @@ class TestRunElapseFeatureEvents:
         dp.best_ask = 1.01
 
         event = _make_lob_event()
-        feature_event = MagicMock()  # a non-None feature event
+        feature_event = MagicMock()
 
         with (
             patch("hft_platform.backtest._elapse_loop.build_lob_event", return_value=(event, feature_event)),
@@ -322,8 +313,8 @@ class TestRunElapseTimestampScaling:
         adapter.hbt.current_timestamp = 9_999_999_000
 
         event = _make_lob_event()
-        expected_bid = int(round(1.23 * 10_000))  # 12300
-        expected_ask = int(round(1.24 * 10_000))  # 12400
+        expected_bid = int(round(1.23 * 10_000))
+        expected_ask = int(round(1.24 * 10_000))
 
         with (
             patch("hft_platform.backtest._elapse_loop.build_lob_event", return_value=(event, None)) as mock_build,
@@ -333,7 +324,6 @@ class TestRunElapseTimestampScaling:
         ):
             run_elapse(adapter)
 
-        # build_lob_event called with scaled bid/ask
         _args = mock_build.call_args
         assert _args[0][3] == expected_bid
         assert _args[0][4] == expected_ask
@@ -342,7 +332,7 @@ class TestRunElapseTimestampScaling:
         adapter, dp = _make_adapter(elapse_results=[0, 1])
         dp.best_bid = 1.0
         dp.best_ask = 1.01
-        adapter.hbt.current_timestamp = 1_234_567_890_123  # float-like
+        adapter.hbt.current_timestamp = 1_234_567_890_123
 
         event = _make_lob_event()
 

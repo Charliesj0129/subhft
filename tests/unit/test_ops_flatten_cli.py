@@ -21,7 +21,6 @@ class TestOpsFlattenCli:
     def test_cli_submits_flatten_request(self, gate: FlattenGate) -> None:
         """Verify that _flatten_via_gate creates a request file."""
 
-        # Simulate engine completing the request immediately
         def engine_sim() -> None:
             for _ in range(20):
                 req = gate.read_request()

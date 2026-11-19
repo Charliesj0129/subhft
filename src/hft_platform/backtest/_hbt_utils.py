@@ -17,23 +17,13 @@ logger = get_logger("hbt_adapter")
 _MODERN_DEFAULT_WAIT_TIMEOUT = 10**18
 
 
-# ---------------------------------------------------------------------------
-# Depth validation (was duplicated at lines 220-230 / 328-338)
-# ---------------------------------------------------------------------------
 def validate_depth(best_bid: float, best_ask: float) -> bool:
     """Return True if bid/ask are valid for event construction."""
     return (
-        best_bid == best_bid  # NaN check
-        and best_ask == best_ask
-        and best_bid > 0
-        and best_ask < 2147483647
-        and best_bid < best_ask
+        best_bid == best_bid and best_ask == best_ask and best_bid > 0 and best_ask < 2147483647 and best_bid < best_ask
     )
 
 
-# ---------------------------------------------------------------------------
-# Attribute resolution
-# ---------------------------------------------------------------------------
 def resolve_qty(obj: object, *attr_names: str) -> int:
     """Return the first non-None attribute from *obj*, cast to int.
 
@@ -59,9 +49,6 @@ def call_if_exists(obj: object, method_name: str, *args: object) -> object:
         return obj
 
 
-# ---------------------------------------------------------------------------
-# LOB event construction (was duplicated at lines 235-273 / 352-391)
-# ---------------------------------------------------------------------------
 def build_lob_event(
     adapter: object,
     dp: object,
@@ -119,10 +106,6 @@ def _build_basic_lob_event(
     )
 
 
-# ---------------------------------------------------------------------------
-# Fill detection (was duplicated at lines 275-293 / 400-417)
-# Now stores to SoA buffers (WU-02 Allocator Law fix)
-# ---------------------------------------------------------------------------
 def process_fills(adapter: object, ts_ns: int, best_bid: int, best_ask: int) -> None:
     """Detect fills, record in SoA buffers, and sample equity."""
     old_pos = adapter._prev_position  # type: ignore[attr-defined]
@@ -134,15 +117,11 @@ def process_fills(adapter: object, ts_ns: int, best_bid: int, best_ask: int) -> 
             adapter._total_buy_fills += abs(delta)  # type: ignore[attr-defined]
         else:
             adapter._total_sell_fills += abs(delta)  # type: ignore[attr-defined]
-        # mid_price_x2 = bid + ask (integer, no float division — Precision Law)
         adapter._record_fill(ts_ns, delta, new_pos, best_bid + best_ask)  # type: ignore[attr-defined]
     adapter._prev_position = new_pos  # type: ignore[attr-defined]
     adapter._maybe_record_equity_point(ts_ns, best_bid, best_ask)  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# Strategy dispatch (was duplicated at lines 296-305 / 421-430)
-# ---------------------------------------------------------------------------
 def finish_run(adapter: object) -> object:
     """Hand the strategy the final exchange state, then close the simulator.
 
@@ -173,9 +152,6 @@ def dispatch_strategy(adapter: object, event: object, feature_event: object | No
         adapter.execute_intent(intent)  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# Version detection
-# ---------------------------------------------------------------------------
 def detect_wait_status_mode() -> str:
     """Detect wait_next_feed status semantics.
 
@@ -199,9 +175,6 @@ def detect_wait_status_mode() -> str:
     return "modern" if tuple(parts[:2]) >= (2, 4) else "legacy"
 
 
-# ---------------------------------------------------------------------------
-# Tick size inference
-# ---------------------------------------------------------------------------
 def infer_tick_size_from_data(data_path: str | np.ndarray) -> float:
     """Infer a positive tick size from research.npy or hftbt.npz price fields.
 

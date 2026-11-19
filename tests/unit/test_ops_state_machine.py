@@ -134,7 +134,6 @@ class TestOperationsStateMachine:
             alert_callback=AsyncMock(),
         )
         sm.register_callback(bad_cb)
-        # Should not raise — callback errors are swallowed with logging
         await sm.transition_to(OpsState.TRADING)
         assert sm.state == OpsState.TRADING
 

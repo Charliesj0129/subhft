@@ -10,7 +10,6 @@ from hft_platform.order.adapter import OrderAdapter, OrderCommand
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.validators import PriceBandValidator
 
-# Mock Config
 MOCK_CONFIG = {
     "global_defaults": {"price_band_ticks": 10},
     "strategies": {"TEST_STRAT": {"max_notional": 1000}},
@@ -33,7 +32,6 @@ def _symbols_cfg(tmp_path):
 
 @pytest.mark.asyncio
 async def test_risk_validators():
-    # 1. Price Band
     validator = PriceBandValidator(MOCK_CONFIG)
     intent = OrderIntent(1, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, -100, 1, timestamp_ns=0)
     ok, reason = validator.check(intent)
@@ -52,15 +50,12 @@ async def test_risk_engine_pipeline(tmp_path, monkeypatch):
     engine = RiskEngine(str(config_path), i_q, o_q)
     task = asyncio.create_task(engine.run())
 
-    # Reject Case
     bad_intent = OrderIntent(3, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, -1, 1, timestamp_ns=0)
     await i_q.put(bad_intent)
     await asyncio.wait_for(i_q.join(), timeout=1.0)
-    assert o_q.empty()  # Should be dropped/rejected
+    assert o_q.empty()
 
-    # Approve Case
     good_intent = OrderIntent(4, "TEST_STRAT", "2330", IntentType.NEW, Side.BUY, 5000000, 1, timestamp_ns=0)
-    # 5000000/10000 * 1 = 500 notional < 1000 limit
     await i_q.put(good_intent)
     cmd = await asyncio.wait_for(o_q.get(), timeout=1.0)
     assert cmd.intent.intent_id == 4
@@ -73,7 +68,6 @@ async def test_risk_engine_pipeline(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_circuit_breaker(tmp_path):
-    # Setup
     q = asyncio.Queue()
     config_path = tmp_path / "test_adapter.yaml"
     config_path.write_text(yaml.safe_dump(MOCK_ADAPTER_CONFIG))
@@ -82,28 +76,23 @@ async def test_circuit_breaker(tmp_path):
     adapter.circuit_breaker.threshold = 2
     adapter.circuit_breaker.timeout_s = 1
 
-    # Run
     task = asyncio.create_task(adapter.run())
 
-    # Inject failures
-    deadline = time.time_ns() + 10_000_000_000  # +10s
+    deadline = time.time_ns() + 10_000_000_000
     cmd = OrderCommand(1, OrderIntent(1, "S", "C", 0, 0, 0, 0, target_order_id="1"), deadline, 0)
 
-    # We need to mock execute to raise exception, but execute checks limits first.
-    # We can patch client to raise
     class BalClient:
         pass
 
-    adapter.client = BalClient()  # No api object -> AttributeError -> caught as "Broker Error"
+    adapter.client = BalClient()
 
     await q.put(cmd)
-    await q.put(cmd)  # 2 failures
+    await q.put(cmd)
     await asyncio.wait_for(q.join(), timeout=1.0)
 
     assert adapter.circuit_breaker.failure_count >= 2
     assert adapter.circuit_breaker.open_until > 0
 
-    # 3rd should be rejected by CB immediately
     await q.put(cmd)
     await asyncio.wait_for(q.join(), timeout=1.0)
 
