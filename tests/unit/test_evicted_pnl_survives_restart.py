@@ -34,7 +34,6 @@ from hft_platform.execution.checkpoint import PositionCheckpointWriter
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.startup_recon import StartupPositionVerifier
 
-# Realized PnL at unit-test scale sits far below the production drawdown floor.
 _TEST_MIN_PEAK = 1_000
 
 
@@ -47,7 +46,7 @@ def _lower_drawdown_floor(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _store() -> PositionStore:
     s = PositionStore()
-    s.metrics = None  # no Prometheus side effects in unit tests
+    s.metrics = None
     return s
 
 
@@ -100,11 +99,6 @@ def _write_checkpoint(store: PositionStore, path: Path) -> str:
     return writer._trading_date_provider()
 
 
-# ---------------------------------------------------------------------------
-# The bank
-# ---------------------------------------------------------------------------
-
-
 def test_rebanking_absorbs_realized_pnl_no_restored_position_carries() -> None:
     store = _store()
     store.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=300)
@@ -124,18 +118,13 @@ def test_rebanking_banks_nothing_when_the_positions_account_for_the_total() -> N
 
 def test_restore_portfolio_aggregates_reinstates_peak_and_total() -> None:
     store = _store()
-    store._evicted_realized_pnl_scaled = 123_456  # stale value from a previous life
+    store._evicted_realized_pnl_scaled = 123_456
 
     store.restore_portfolio_aggregates(peak_equity_scaled=900, total_realized_pnl_scaled=800)
 
     assert store._peak_equity_scaled == 900
     assert store._total_realized_pnl_scaled == 800
     assert store._evicted_realized_pnl_scaled == 0
-
-
-# ---------------------------------------------------------------------------
-# The behaviour the bank exists for
-# ---------------------------------------------------------------------------
 
 
 def test_a_flat_position_does_not_become_drawdown_after_a_restart(tmp_path: Path) -> None:
@@ -145,8 +134,8 @@ def test_a_flat_position_does_not_become_drawdown_after_a_restart(tmp_path: Path
     their realized PnL -- but the restored peak does.
     """
     store = _store()
-    _round_trip(store, "AAA", entry=1_000_000, exit_=1_100_000)  # flat, +profit
-    store.on_fill(_fill("BBB", Side.BUY, 1, 1_000_000, "BBB-open"))  # still open
+    _round_trip(store, "AAA", entry=1_000_000, exit_=1_100_000)
+    store.on_fill(_fill("BBB", Side.BUY, 1, 1_000_000, "BBB-open"))
     peak = store._peak_equity_scaled
     assert store.get_drawdown_pct() == 0.0, "fixture is already in drawdown before the restart"
 
@@ -154,7 +143,6 @@ def test_a_flat_position_does_not_become_drawdown_after_a_restart(tmp_path: Path
     restarted = _recover_from(path, _write_checkpoint(store, path))
     assert restarted._peak_equity_scaled == peak, "peak was not restored; test proves nothing"
 
-    # An *opening* fill: the branch that recomputes the total from scratch.
     restarted.on_fill(_fill("CCC", Side.BUY, 1, 1_000_000, "CCC-open"))
 
     assert restarted.get_drawdown_pct() == 0.0, (
@@ -198,7 +186,6 @@ def test_a_real_loss_after_a_restart_is_still_reported_as_drawdown(tmp_path: Pat
     path = tmp_path / "ckpt.json"
     restarted = _recover_from(path, _write_checkpoint(store, path))
 
-    # Close BBB at a loss large enough to erase the day's profit and then some.
     restarted.on_fill(_fill("BBB", Side.BUY, 1, 1_000_000, "BBB-reopen"))
     restarted.on_fill(_fill("BBB", Side.SELL, 1, 500_000, "BBB-loss"))
 
@@ -223,7 +210,6 @@ def test_a_halted_recovery_still_leaves_the_store_internally_consistent(tmp_path
 
     restarted = _store()
     verifier = StartupPositionVerifier(MagicMock(), restarted, checkpoint_path=str(path))
-    # Broker reports the opposite side: a critical discrepancy, so recovery halts.
     verifier._fetch_broker_positions = _async_returning({"BBB": -1})  # type: ignore[method-assign]
     result = asyncio.run(verifier.recover(trading_date=trading_date, account_id="ACC"))
     assert result.halted, "fixture did not reach the halted branch"
@@ -246,28 +232,21 @@ def test_merging_a_recovery_position_does_not_double_count_the_bank(tmp_path: Pa
     position would inflate or deflate the portfolio total.
     """
     store = _store()
-    _round_trip(store, "AAA", entry=1_000_000, exit_=1_100_000)  # flat, dropped on restore
-    store.on_fill(_fill("BBB", Side.BUY, 1, 1_000_000, "BBB-open"))  # open, restored
+    _round_trip(store, "AAA", entry=1_000_000, exit_=1_100_000)
+    store.on_fill(_fill("BBB", Side.BUY, 1, 1_000_000, "BBB-open"))
     total_before = store._total_realized_pnl_scaled
 
     path = tmp_path / "ckpt.json"
     restarted = _recover_from(path, _write_checkpoint(store, path))
     assert restarted._total_realized_pnl_scaled == total_before
 
-    # Trade the recovered position: this is the seed-from-recovery merge.
     restarted.on_fill(_fill("BBB", Side.SELL, 1, 1_000_000, "BBB-flat"))
-    # ...and then an opening fill, which forces the full recompute.
     restarted.on_fill(_fill("CCC", Side.BUY, 1, 1_000_000, "CCC-open"))
 
     assert restarted._total_realized_pnl_scaled == total_before, (
         f"the merge changed the portfolio total: {restarted._total_realized_pnl_scaled} != {total_before}"
     )
     assert restarted.get_drawdown_pct() == 0.0
-
-
-# ---------------------------------------------------------------------------
-# The two doors the first version of this fix left open (Codex review, 2026-08-27)
-# ---------------------------------------------------------------------------
 
 
 def test_clearing_a_recovery_position_banks_its_realized_pnl() -> None:
@@ -292,7 +271,6 @@ def test_a_reconciliation_clear_does_not_resurface_as_drawdown() -> None:
     store.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=100_000)
 
     store.clear_symbol_positions("AAA")
-    # An *opening* fill carries pnl_delta == 0 and so takes the full-recompute branch.
     store.on_fill(_fill("BBB", Side.BUY, 1, 100, "bbb-open"))
 
     assert store._total_realized_pnl_scaled == 100_000
@@ -301,7 +279,7 @@ def test_a_reconciliation_clear_does_not_resurface_as_drawdown() -> None:
 
 def test_clearing_a_live_and_a_recovery_position_banks_both() -> None:
     store = _store()
-    _round_trip(store, "AAA", entry=100, exit_=200)  # a live position carrying realized PnL
+    _round_trip(store, "AAA", entry=100, exit_=200)
     store.load_recovery(account_id="ACC", symbol="AAA", net_qty=1, avg_price_scaled=100, realized_pnl_scaled=400)
     live_pnl = sum(p.realized_pnl_scaled for p in store.positions.values() if p.symbol == "AAA")
 
@@ -349,6 +327,4 @@ def test_a_checkpoint_with_no_aggregate_fields_at_all_is_left_alone(tmp_path: Pa
 
     restarted = _recover_from(path, trading_date)
 
-    # Nothing was restored, so nothing was rebanked -- the bank stays untouched
-    # rather than being forced to balance against a total that was never read.
     assert restarted._evicted_realized_pnl_scaled == 0

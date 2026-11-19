@@ -100,9 +100,9 @@ class _DailyProfitSource:
         sell = 100.0 + self._profits[int(date[-2:]) - 1]
         return [
             _tick(100, 102, ts=10),
-            _tick(100, 102, trade=99, ts=20),  # buy @100 fills
+            _tick(100, 102, trade=99, ts=20),
             _tick(sell - 2, sell, ts=30),
-            _tick(sell - 2, sell, trade=sell + 1, ts=40),  # sell @sell fills
+            _tick(sell - 2, sell, trade=sell + 1, ts=40),
         ]
 
 
@@ -130,7 +130,7 @@ def _long_run(in_sample: list[float], out_of_sample: list[float]) -> list[float]
 
 class TestOutOfSampleSharpe:
     def test_sharpe_oos_is_computed_from_the_last_30_percent_of_days(self) -> None:
-        profits = _long_run([1.0, 2.0] * 25, OOS_PATTERN * 5)  # 75 days
+        profits = _long_run([1.0, 2.0] * 25, OOS_PATTERN * 5)
         oos_days = len(profits) - int(len(profits) * 0.7)
         result = _run(profits)
 
@@ -149,14 +149,13 @@ class TestOutOfSampleSharpe:
 
     def test_a_short_oos_segment_still_reports_zero_so_no_floor_gets_easier(self) -> None:
         """49 days is the most a single TMF contract has; its 14 OOS days must not clear a 1.0 floor by luck."""
-        profits = _long_run([1.0, 2.0] * 17, OOS_PATTERN * 3)  # 49 days -> 15 OOS days
+        profits = _long_run([1.0, 2.0] * 17, OOS_PATTERN * 3)
         result = _run(profits)
 
         assert result.maker_scorecard["oos_days"] < MIN_OOS_DAYS
         assert result.sharpe_oos == 0.0
         assert not math.isnan(result.sharpe_oos)
         assert result.maker_scorecard["sharpe_oos_status"] == "insufficient_oos_days"
-        # ...but the measured number is not hidden from people:
         assert result.maker_scorecard["sharpe_oos_raw"] == pytest.approx(_sharpe(profits[-15:]))
 
     def test_sharpe_oos_is_zero_not_nan_when_the_out_of_sample_days_do_not_vary(self) -> None:
@@ -175,7 +174,7 @@ class TestOutOfSampleSharpe:
             assert not math.isnan(result.sharpe_oos)
 
     def test_the_split_fraction_can_be_chosen_and_is_validated(self) -> None:
-        profits = [1.0, 2.0] * 10 + OOS_PATTERN * 4  # 40 days
+        profits = [1.0, 2.0] * 10 + OOS_PATTERN * 4
         half = _run(profits, is_oos_split=0.5)
 
         assert half.maker_scorecard["oos_days"] == 20

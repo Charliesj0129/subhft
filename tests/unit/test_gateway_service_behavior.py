@@ -34,8 +34,6 @@ from hft_platform.gateway.service import (
     _obs_policy,
 )
 
-# ── Helpers ────────────────────────────────────────────────────────────────
-
 
 def _queue_gate(api_queue):
     """Stand-in for ``OrderAdapter.execute``: enqueue, False when the queue is full."""
@@ -140,9 +138,6 @@ async def _run_svc_one_tick(svc: GatewayService, timeout: float = 0.1) -> None:
         pass
 
 
-# ── _bool_env ──────────────────────────────────────────────────────────────
-
-
 def test_bool_env_none_returns_default():
     assert _bool_env(None, default=True) is True
     assert _bool_env(None, default=False) is False
@@ -163,9 +158,6 @@ def test_bool_env_falsy_strings():
         assert _bool_env(val) is False, f"Expected False for {val!r}"
 
 
-# ── _obs_policy ────────────────────────────────────────────────────────────
-
-
 def test_obs_policy_valid_values(monkeypatch):
     for val in ("minimal", "balanced", "debug"):
         monkeypatch.setenv("HFT_GATEWAY_OBS_POLICY", val)
@@ -184,9 +176,6 @@ def test_obs_policy_fallback_to_hft_obs(monkeypatch):
     assert _obs_policy() == "balanced"
 
 
-# ── _int_env ───────────────────────────────────────────────────────────────
-
-
 def test_int_env_returns_int(monkeypatch):
     monkeypatch.setenv("_TEST_INT_ENV_VAR", "42")
     assert _int_env("_TEST_INT_ENV_VAR", 1) == 42
@@ -203,9 +192,6 @@ def test_int_env_invalid_falls_back_to_default(monkeypatch):
     assert result == 5
 
 
-# ── _get_trace_sampler import failure ─────────────────────────────────────
-
-
 def test_get_trace_sampler_import_failure_returns_none():
     from hft_platform.gateway import service as svc_mod
 
@@ -213,9 +199,6 @@ def test_get_trace_sampler_import_failure_returns_none():
         ch = LocalIntentChannel(maxsize=8, ttl_ms=0)
         svc, _ = _build_service(channel=ch)
         assert svc is not None
-
-
-# ── GatewayService.__init__ HA leader lease ───────────────────────────────
 
 
 def test_init_ha_leader_lease_enabled(tmp_path, monkeypatch):
@@ -247,9 +230,6 @@ def test_init_obs_policy_sampling_rates(monkeypatch):
         monkeypatch.delenv("HFT_OBS_POLICY", raising=False)
         svc, _ = _build_service()
         assert svc._gateway_depth_sample_every >= 8
-
-
-# ── run() leader lease tick ────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -343,16 +323,13 @@ async def test_run_lease_cleanup_on_exit():
     assert svc.running is False
 
 
-# ── _process_envelope paths ────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_process_envelope_empty_key():
     """Intent with empty idempotency_key skips dedup check."""
     ch = LocalIntentChannel(maxsize=8, ttl_ms=0)
     svc, api_q = _build_service(channel=ch, approve=True)
 
-    intent = _make_intent(1, "")  # empty key
+    intent = _make_intent(1, "")
     ch.submit_nowait(intent)
 
     await _run_svc_one_tick(svc, timeout=0.1)
@@ -373,7 +350,6 @@ async def test_process_envelope_cancel_bypasses_exposure():
     ch.submit_nowait(intent)
 
     await _run_svc_one_tick(svc, timeout=0.1)
-    # Exposure check_and_update must NOT be called for CANCEL
     exposure.check_and_update.assert_not_called()
 
 
@@ -420,7 +396,6 @@ async def test_process_envelope_not_leader_dispatch_check():
     svc, api_q = _build_service(channel=ch, approve=True, leader_lease=lease)
 
     svc._leader_is_active = False
-    # Verify helper before running full loop
     assert not svc._is_dispatch_leader()
     assert api_q.empty()
 
@@ -431,11 +406,10 @@ async def test_process_envelope_not_leader_suppresses_via_process():
     ch = LocalIntentChannel(maxsize=8, ttl_ms=0)
     svc, api_q = _build_service(channel=ch, approve=True, exposure_store=ExposureStore())
     svc._leader_is_active = False
-    svc._leader_lease = MagicMock()  # non-None
+    svc._leader_lease = MagicMock()
 
     intent = _make_intent(1, "leader-key2")
 
-    # Simulate an envelope directly
     from hft_platform.gateway.channel import IntentEnvelope
 
     envelope = IntentEnvelope(intent=intent, enqueued_ns=0, ack_token="tok1")
@@ -472,9 +446,6 @@ async def test_process_envelope_order_queue_full():
     assert svc._rejected == 1
 
 
-# ── _leader_lease_tick / _loop errors ─────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_leader_lease_tick_none_lease():
     """_leader_lease_tick with no lease sets _leader_is_active to True."""
@@ -507,18 +478,15 @@ async def test_leader_lease_loop_exception_continues():
         call_count[0] += 1
         if call_count[0] <= 2:
             raise RuntimeError("loop tick error")
-        svc.running = False  # stop after 2 errors
+        svc.running = False
 
     svc._leader_lease_tick = flaky_tick
-    svc._leader_lease = MagicMock()  # non-None
+    svc._leader_lease = MagicMock()
     svc._leader_lease_refresh_s = 0.001
 
     await svc._leader_lease_loop()
     assert call_count[0] >= 2
     assert svc._leader_is_active is False
-
-
-# ── _emit_trace ────────────────────────────────────────────────────────────
 
 
 def test_emit_trace_with_sampler():
@@ -537,32 +505,25 @@ def test_emit_trace_sampler_exception_swallowed():
     sampler.emit.side_effect = RuntimeError("trace error")
     svc._trace_sampler = sampler
 
-    svc._emit_trace("stage", "tid", {})  # Must not raise
+    svc._emit_trace("stage", "tid", {})
 
-    # sampler.emit was called (exception was swallowed, not skipped)
     sampler.emit.assert_called_once()
 
 
 def test_emit_trace_no_sampler():
     svc, _ = _build_service()
     svc._trace_sampler = None
-    svc._emit_trace("stage", "tid", {"k": "v"})  # Must not raise
+    svc._emit_trace("stage", "tid", {"k": "v"})
 
-    # With no sampler, the function returns early — sampler is still None
     assert svc._trace_sampler is None
-
-
-# ── Metric helpers ─────────────────────────────────────────────────────────
 
 
 def test_emit_reject_metrics_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
     counter_before = svc._gateway_reject_counter
-    svc._emit_reject("TEST_REASON")  # Must not raise
+    svc._emit_reject("TEST_REASON")
 
-    # When metrics are disabled the function returns immediately without
-    # touching the sampling counter
     assert svc._gateway_reject_counter == counter_before
 
 
@@ -572,10 +533,8 @@ def test_emit_reject_metrics_enabled_no_registry():
     svc._metrics = None
     svc._gateway_reject_counter = 0
     svc._gateway_reject_sample_every = 1
-    svc._emit_reject("TEST_REASON")  # Must not raise
+    svc._emit_reject("TEST_REASON")
 
-    # Counter wraps (0+1)%1 == 0; no metric was incremented because
-    # _metrics_or_refresh() still returns None (no registry in test env)
     assert svc._gateway_reject_counter == 0
 
 
@@ -619,10 +578,8 @@ def test_record_latency_metrics_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
     counter_before = svc._gateway_latency_counter
-    svc._record_latency(0)  # Must not raise
+    svc._record_latency(0)
 
-    # When metrics are disabled the function returns immediately without
-    # touching the sampling counter
     assert svc._gateway_latency_counter == counter_before
 
 
@@ -647,10 +604,8 @@ def test_update_channel_depth_metric_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
     counter_before = svc._gateway_depth_counter
-    svc._update_channel_depth_metric()  # Must not raise
+    svc._update_channel_depth_metric()
 
-    # When metrics are disabled the function returns immediately without
-    # touching the sampling counter
     assert svc._gateway_depth_counter == counter_before
 
 
@@ -658,10 +613,8 @@ def test_inc_dedup_hit_metric_disabled():
     svc, _ = _build_service()
     svc._metrics_enabled = False
     counter_before = svc._gateway_dedup_counter
-    svc._inc_dedup_hit_metric()  # Must not raise
+    svc._inc_dedup_hit_metric()
 
-    # When metrics are disabled the function returns immediately without
-    # touching the sampling counter
     assert svc._gateway_dedup_counter == counter_before
 
 
@@ -682,17 +635,10 @@ def test_inc_dedup_hit_metric_enabled():
     mock_counter.inc.assert_called_once()
 
 
-# ── _metrics_or_refresh ────────────────────────────────────────────────────
-
-
 def test_metrics_or_refresh_no_metrics_triggers_refresh():
     svc, _ = _build_service()
     svc._metrics = None
     result = svc._metrics_or_refresh()
-    # When _metrics is None, _metrics_or_refresh calls _refresh_metrics_registry()
-    # which populates self._metrics from MetricsRegistry.get() and returns it.
-    # The registry is available in the test environment, so the result is non-None
-    # and equals the freshly-loaded self._metrics.
     assert result is svc._metrics
 
 
@@ -700,10 +646,10 @@ def test_metrics_or_refresh_owner_id_mismatch_triggers_refresh():
     svc, _ = _build_service()
     mock_metrics = MagicMock()
     svc._metrics = mock_metrics
-    svc._metrics_owner_id = id(mock_metrics) + 999  # mismatch
+    svc._metrics_owner_id = id(mock_metrics) + 999
 
     result = svc._metrics_or_refresh()
-    assert True  # Must not raise
+    assert True
 
 
 def test_metrics_or_refresh_matching_owner_returns_cached():
@@ -714,9 +660,6 @@ def test_metrics_or_refresh_matching_owner_returns_cached():
 
     result = svc._metrics_or_refresh()
     assert result is mock_metrics
-
-
-# ── _is_dispatch_leader ────────────────────────────────────────────────────
 
 
 def test_is_dispatch_leader_no_lease():
@@ -737,9 +680,6 @@ def test_is_dispatch_leader_with_active_lease():
     svc._leader_lease = MagicMock()
     svc._leader_is_active = True
     assert svc._is_dispatch_leader() is True
-
-
-# ── get_health ─────────────────────────────────────────────────────────────
 
 
 def test_get_health_returns_expected_keys():

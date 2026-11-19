@@ -82,9 +82,6 @@ def _trade(
     )
 
 
-# ----------------------------------------------------------------------------
-# Physics constants
-# ----------------------------------------------------------------------------
 
 
 def test_txf_point_value_200_ntd() -> None:
@@ -110,9 +107,6 @@ def test_stale_filter_default_50pt() -> None:
     assert _STALE_QUOTE_FILTER_BASIS_PT == 50
 
 
-# ----------------------------------------------------------------------------
-# RollingBasisStats
-# ----------------------------------------------------------------------------
 
 
 def test_rolling_stats_empty() -> None:
@@ -142,7 +136,6 @@ def test_rolling_stats_stdev() -> None:
     s = RollingBasisStats(window_ns=60_000_000_000)
     for i, v in enumerate([2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]):
         s.push(i * 1_000_000_000, v)
-    # Sample stdev (n-1 divisor) of this sequence is 2.138
     assert abs(s.stdev() - 2.138) < 0.01
 
 
@@ -151,7 +144,6 @@ def test_rolling_stats_eviction() -> None:
     s.push(0, 1.0)
     s.push(5_000_000_000, 2.0)
     assert s.n() == 2
-    # t=20_000_000_000 evicts both earlier samples (t=0 expires before t=10B)
     s.push(20_000_000_000, 3.0)
     assert s.n() == 1
     assert s.mean() == 3.0
@@ -165,17 +157,12 @@ def test_rolling_stats_reset() -> None:
     assert s.n() == 0
 
 
-# ----------------------------------------------------------------------------
-# Basis computation
-# ----------------------------------------------------------------------------
 
 
 def test_basis_arithmetic_dollar_neutral() -> None:
     strat = TxfTmfBasisMeanReversion()
-    # TXF mid 17500, TMF mid 875 => basis = 17500 - 20*875 = 0
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=1))
     strat.update_mid("TMFD6", _bidask(17499.5, 17500.5, ts_ns=2))
-    # Basis should have been stored inside strat; inspect via rolling stats
     assert abs(strat.rolling_mean - 0.0) < 0.01
 
 
@@ -183,7 +170,6 @@ def test_basis_positive_extreme() -> None:
     """TXF mid 17500, TMF mid 870 => basis = 17500 - 20*870 = 100 pt (extreme)."""
     strat = TxfTmfBasisMeanReversion()
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=1))
-    # basis = 17500 - 20*870 = 100 (exceeds stale filter of 50 -> hit logged)
     strat.update_mid("TMFD6", _bidask(869.5, 870.5, ts_ns=2))
     assert strat.stale_filter_hits >= 1
 
@@ -192,21 +178,16 @@ def test_basis_negative_extreme_within_filter() -> None:
     """Moderate negative basis within filter."""
     strat = TxfTmfBasisMeanReversion()
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=1))
-    # basis = 17500 - 20*876 = -20 (within 50-pt filter)
     strat.update_mid("TMFD6", _bidask(17500.5, 17501.5, ts_ns=2))
     assert strat.stale_filter_hits == 0
 
 
-# ----------------------------------------------------------------------------
-# Stale-quote filter (DA T2 flag #3)
-# ----------------------------------------------------------------------------
 
 
 def test_stale_filter_counter_advances() -> None:
     """|basis| > 50 pt increments stale_filter_hits."""
     strat = TxfTmfBasisMeanReversion()
-    strat.update_mid("TXFD6", _bidask(17999, 18001, ts_ns=1))  # mid 18000
-    # Choose TMF mid 800 => basis = 18000 - 16000 = 2000 (extreme)
+    strat.update_mid("TXFD6", _bidask(17999, 18001, ts_ns=1))
     strat.update_mid("TMFD6", _bidask(799.5, 800.5, ts_ns=2))
     assert strat.stale_filter_hits == 1
 
@@ -224,29 +205,21 @@ def test_stale_filter_custom_threshold() -> None:
     p = C74Params(stale_basis_filter_pt=5)
     strat = TxfTmfBasisMeanReversion(params=p)
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=1))
-    # basis = 17500 - 17490 = 10 (above 5-pt custom filter)
     strat.update_mid("TMFD6", _bidask(17489.5, 17490.5, ts_ns=2))
     assert strat.stale_filter_hits == 1
 
 
-# ----------------------------------------------------------------------------
-# Warm-up: no entry before min_samples
-# ----------------------------------------------------------------------------
 
 
 def test_no_entry_before_warmup_samples() -> None:
     p = C74Params(min_samples_for_entry=5, entry_sigma=0.5)
     strat = TxfTmfBasisMeanReversion(params=p)
-    # Only 3 samples (insufficient for warm-up)
     for i in range(3):
         strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=i * 1_000_000_000))
         strat.update_mid("TMFD6", _bidask(17499.5, 17500.5, ts_ns=i * 1_000_000_000 + 1))
     assert strat.entries_posted == 0
 
 
-# ----------------------------------------------------------------------------
-# Entry trigger (short basis on positive extreme; long basis on negative)
-# ----------------------------------------------------------------------------
 
 
 def _warm_up_and_get_strat(
@@ -267,7 +240,6 @@ def _warm_up_and_get_strat(
         timeout_seconds=timeout_seconds,
     )
     strat = TxfTmfBasisMeanReversion(params=p)
-    # Alternating small noise to yield non-zero sigma without entries.
     for i in range(n_warmup):
         ts = i * 1_000_000_000
         offset = 0.5 if i % 2 == 0 else -0.5
@@ -287,11 +259,8 @@ def test_entry_short_basis_at_positive_extreme() -> None:
     alone — entry fires on the update that creates the extreme)."""
     strat = _warm_up_and_get_strat()
     ts = 20_000_000_000
-    # TXF push creates extreme basis of ~+20 pt; entry fires on this tick
     actions = strat.update_mid("TXFD6", _bidask(17520, 17522, ts_ns=ts))
     assert strat.entries_posted == 1
-    # Entry side may have exited via subsequent updates; check it WAS short.
-    # We assert on posts emitted at entry-time, not the post-entry state.
     posts = [a for a in actions if isinstance(a, PostQuote)]
     sides = {a.side for a in posts}
     assert sides == {"sell_txf", "buy_tmf"}
@@ -300,7 +269,6 @@ def test_entry_short_basis_at_positive_extreme() -> None:
 def test_entry_long_basis_at_negative_extreme() -> None:
     strat = _warm_up_and_get_strat()
     ts = 20_000_000_000
-    # TXF push creates extreme basis of ~-20 pt
     actions = strat.update_mid("TXFD6", _bidask(17480, 17482, ts_ns=ts))
     assert strat.entries_posted == 1
     posts = [a for a in actions if isinstance(a, PostQuote)]
@@ -333,16 +301,12 @@ def test_no_entry_within_threshold() -> None:
     """Basis within 1-sigma of mu: no entry."""
     strat = _warm_up_and_get_strat()
     ts = 20_000_000_000
-    # Small deviation
     strat.update_mid("TXFD6", _bidask(17500, 17502, ts_ns=ts))
     strat.update_mid("TMFD6", _bidask(17499.5, 17500.5, ts_ns=ts + 1))
     assert strat.entries_posted == 0
     assert strat.open_trip is None
 
 
-# ----------------------------------------------------------------------------
-# Exit logic: reversion, timeout, stop-loss
-# ----------------------------------------------------------------------------
 
 
 def test_exit_on_reversion_to_mu() -> None:
@@ -353,7 +317,6 @@ def test_exit_on_reversion_to_mu() -> None:
     observation below mu to trigger reversion."""
     from research.alphas.c74_txf_tmf_basis_mean_reversion.impl import _OpenTrip
     strat = TxfTmfBasisMeanReversion()
-    # Manually bootstrap state: stats populated around mu=0
     for i in range(30):
         offset = 0.5 if i % 2 == 0 else -0.5
         strat._stats.push(i * 1_000_000_000, offset)
@@ -374,7 +337,6 @@ def test_exit_on_reversion_to_mu() -> None:
         tmf_bid=int(17499.5 * _SCALE),
         tmf_ask=int(17500.5 * _SCALE),
     )
-    # Now push a TXF tick that makes basis ≈ 0 (reverted to mu).
     ts2 = 25_000_000_000
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=ts2))
     strat.update_mid("TMFD6", _bidask(17499.5, 17500.5, ts_ns=ts2 + 1))
@@ -411,7 +373,6 @@ def test_exit_on_timeout() -> None:
         tmf_bid=int(17499.5 * _SCALE),
         tmf_ask=int(17500.5 * _SCALE),
     )
-    # 6 seconds after entry, basis still high (no reversion), stop disabled
     ts2 = 20_000_000_000 + 6_000_000_000
     strat.update_mid("TXFD6", _bidask(17520, 17522, ts_ns=ts2))
     strat.update_mid("TMFD6", _bidask(17499.5, 17500.5, ts_ns=ts2 + 1))
@@ -434,7 +395,6 @@ def test_exit_on_stop_loss_taker() -> None:
     strat._last_tmf_ask = int(17500.5 * _SCALE)
     strat._last_txf_mid_pts = 17520.0
     strat._last_tmf_mid_pts = 17500.0
-    # Entry at basis=20 with sigma=0.5 and stop_sigma=2 => stop at |dev|>1
     strat._open_trip = _OpenTrip(
         side="short_basis",
         entry_ts_ns=20_000_000_000,
@@ -446,9 +406,7 @@ def test_exit_on_stop_loss_taker() -> None:
         tmf_bid=int(17499.5 * _SCALE),
         tmf_ask=int(17500.5 * _SCALE),
     )
-    # Push basis to ~25 => |basis - 0| = 25 > 2*0.5 = 1 -> stop fires.
     ts2 = 21_000_000_000
-    # TXF push is what triggers the exit (basis becomes extreme)
     actions = strat.update_mid("TXFD6", _bidask(17524, 17526, ts_ns=ts2))
     assert strat.open_trip is None
     assert strat.exits_stop_loss == 1
@@ -456,9 +414,6 @@ def test_exit_on_stop_loss_taker() -> None:
     assert any("_taker" in a.side for a in posts)
 
 
-# ----------------------------------------------------------------------------
-# Closed-trip record keeping (for PnL distribution, DA flag #6)
-# ----------------------------------------------------------------------------
 
 
 def test_closed_trips_recorded_on_reversion() -> None:
@@ -487,14 +442,10 @@ def test_closed_trips_recorded_on_reversion() -> None:
         tmf_bid=int(17499.5 * _SCALE),
         tmf_ask=int(17500.5 * _SCALE),
     )
-    # Revert basis to ~0
     ts2 = 25_000_000_000
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=ts2))
     strat.update_mid("TMFD6", _bidask(17499.5, 17500.5, ts_ns=ts2 + 1))
     trips = strat.closed_trips
-    # There is exactly one pre-injected trip; the test checks it was closed
-    # with the correct attributes on that specific trip.
-    # Find the injected trip (entry_ts=20B)
     injected = [t for t in trips if t["entry_ts_ns"] == 20_000_000_000]
     assert len(injected) == 1
     assert injected[0]["side"] == "short_basis"
@@ -538,9 +489,6 @@ def test_closed_trips_record_stop_loss_as_taker() -> None:
     assert injected[0]["taker_close"] is True
 
 
-# ----------------------------------------------------------------------------
-# Symbol routing
-# ----------------------------------------------------------------------------
 
 
 def test_unknown_symbol_returns_hold() -> None:
@@ -559,15 +507,11 @@ def test_single_leg_no_basis_computation() -> None:
     """Only TXF update (no TMF) should not trigger basis-based logic."""
     strat = TxfTmfBasisMeanReversion()
     strat.update_mid("TXFD6", _bidask(17500, 17502))
-    # Basis requires BOTH legs; tick_count incremented but no stale hit.
     assert strat.tick_count == 1
     assert strat.stale_filter_hits == 0
     assert strat.rolling_n == 0
 
 
-# ----------------------------------------------------------------------------
-# Custom window / sigma params (T5 sweep ranges)
-# ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("window_sec", [300, 1800, 3600])
@@ -584,9 +528,6 @@ def test_entry_sigma_sweep(entry_sigma: float) -> None:
     assert strat.params.entry_sigma == entry_sigma
 
 
-# ----------------------------------------------------------------------------
-# Reset / gap resilience
-# ----------------------------------------------------------------------------
 
 
 def test_reset_clears_all_state() -> None:
@@ -594,7 +535,6 @@ def test_reset_clears_all_state() -> None:
     from research.alphas.c74_txf_tmf_basis_mean_reversion.impl import _OpenTrip
 
     strat = _warm_up_and_get_strat()
-    # Inject an open trip directly
     strat._open_trip = _OpenTrip(
         side="short_basis",
         entry_ts_ns=20_000_000_000,
@@ -632,26 +572,19 @@ def test_on_gap_resets_stats_but_not_trip() -> None:
     )
     assert strat.open_trip is not None
     strat.on_gap()
-    assert strat.open_trip is not None  # trip preserved
-    assert strat.rolling_n == 0          # stats reset
+    assert strat.open_trip is not None
+    assert strat.rolling_n == 0
 
 
-# ----------------------------------------------------------------------------
-# Timestamp alignment (DA flag #5)
-# ----------------------------------------------------------------------------
 
 
 def test_exch_ts_used_for_timing_not_wall_clock() -> None:
     """exch_ts supplied by tick is what the strategy records."""
     strat = TxfTmfBasisMeanReversion()
     strat.update_mid("TXFD6", _bidask(17499, 17501, ts_ns=12345))
-    # update_mid records exch_ts inside strat._last_ts_ns
     assert strat._last_ts_ns == 12345
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol conformance
-# ----------------------------------------------------------------------------
 
 
 def test_c74_alpha_conforms_to_alpha_protocol() -> None:
@@ -670,7 +603,6 @@ def test_c74_manifest_declares_latency_profile() -> None:
 
 def test_c74_manifest_documents_cross_instrument() -> None:
     alpha = C74Alpha()
-    # Cross-instrument => instrument string has both tickers
     assert "TXFD6" in alpha.manifest.instrument
     assert "TMFD6" in alpha.manifest.instrument
 
@@ -697,9 +629,6 @@ def test_c74_reset_clears_state() -> None:
     assert alpha.strategy.tick_count == 0
 
 
-# ----------------------------------------------------------------------------
-# Mutual-exclusion documentation (DA flag #9)
-# ----------------------------------------------------------------------------
 
 
 def test_mutual_exclusion_documented_in_manifest_promote_prereqs() -> None:

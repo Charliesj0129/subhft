@@ -14,8 +14,6 @@ import research.backtest.maker_engine as legacy
 
 _PUBLIC_ACTIONS = ("PostQuote", "CancelQuote", "Hold")
 
-# Captured before the ownership migration from real protocol-4 pickles whose
-# globals resolve through research.backtest.maker_engine.
 _LEGACY_POST_QUOTE_PICKLE = (
     "gASVWAAAAAAAAACMHnJlc2VhcmNoLmJhY2t0ZXN0Lm1ha2VyX2VuZ2luZZSMCVBvc3RRdW90"
     "ZZSTlCmBlH2UKIwEc2lkZZSMA2J1eZSMBXByaWNllE1oQowDcXR5lEsCdWIu"

@@ -56,11 +56,6 @@ def _make_stats(
     )
 
 
-# ----------------------------------------------------------------------------
-# Instantiation + slots
-# ----------------------------------------------------------------------------
-
-
 def test_instantiation_default() -> None:
     strat = C60TmfD6SoloMakerMinimal("c60_test")
     assert strat.strategy_id == "c60_test"
@@ -112,11 +107,6 @@ def test_default_parameters_match_canonical_mp_2() -> None:
     assert strat._qi_skew_widen_ticks == 1
     assert strat._enable_qi_layer is True
     assert strat._variant_label == "R47-minimal"
-
-
-# ----------------------------------------------------------------------------
-# strategies.yaml enabled=false enforcement (shadow scaffold discipline)
-# ----------------------------------------------------------------------------
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -171,7 +161,7 @@ def test_strategies_yaml_c60_params_match_canonical() -> None:
     c60 = _find_c60_entry(cfg)
     assert c60 is not None
     params = c60["params"]
-    assert params["max_pos"] == 2  # DA T6 canonical
+    assert params["max_pos"] == 2
     assert params["spread_threshold_pts"] == 5
     assert params["inventory_skew_tenths"] == 2
     assert params["qi_skew_threshold"] == 0.10
@@ -179,11 +169,6 @@ def test_strategies_yaml_c60_params_match_canonical() -> None:
     assert params["enable_qi_layer"] is True
     assert params["variant"] == "R47-minimal"
     assert params["shadow_mode"] is True
-
-
-# ----------------------------------------------------------------------------
-# strategy_limits.yaml
-# ----------------------------------------------------------------------------
 
 
 def _load_strategy_limits() -> dict:
@@ -200,7 +185,7 @@ def test_strategy_limits_has_c60_entry() -> None:
 def test_strategy_limits_c60_max_pos_matches_strategy() -> None:
     cfg = _load_strategy_limits()
     c60 = cfg["strategies"]["C60_TMFD6_SOLO_MAKER"]
-    assert c60["max_position_lots"] == 2  # mirrors strategy max_pos canonical
+    assert c60["max_position_lots"] == 2
 
 
 def test_strategy_limits_c60_daily_loss_hard_stop() -> None:
@@ -215,36 +200,24 @@ def test_strategy_limits_c60_auto_disable_6_canonical_rules() -> None:
     cfg = _load_strategy_limits()
     c60 = cfg["strategies"]["C60_TMFD6_SOLO_MAKER"]
     ad = c60["auto_disable"]
-    # Rule 1: rolling PnL floor
     assert ad["rolling_pnl_window_days"] == 5
     assert ad["rolling_pnl_min_ntd_per_day"] == -3000
     assert ad["rolling_pnl_trigger_count"] == 2
-    # Rule 2: spread regime shift >20% from 2 pt baseline
     assert ad["spread_regime_baseline_pt"] == 2
     assert ad["spread_regime_shift_pct_max"] == 20
     assert ad["spread_regime_consec_days"] == 3
-    # Rule 3: close-maker-rate drift
     assert ad["shadow_close_maker_rate_min"] == 0.80
     assert ad["shadow_close_maker_trailing_cycles"] == 200
-    # Rule 4: loss-tail asymmetry > 2x mean for 2 consec days
     assert ad["loss_tail_ratio_max"] == 2
     assert ad["loss_tail_consec_days"] == 2
-    # Rule 5: PnL vs projection shortfall (10% of 1367 after 30 days)
     assert ad["shadow_pnl_vs_projection_floor_pct"] == 10
     assert ad["shadow_projection_ntd_per_day"] == 1367
     assert ad["shadow_projection_min_days"] == 30
-    # Rule 6: walk-forward k=5
     assert ad["walk_forward_k"] == 5
     assert ad["walk_forward_min_positive"] == 3
-    # Structural guardrails (not one of the 6)
     assert ad["regime_persistence_sp_med_min"] == 1
     assert ad["regime_persistence_consec_days"] == 3
     assert ad["shadow_daily_pnl_min_ntd"] == 1367
-
-
-# ----------------------------------------------------------------------------
-# Price scaling — scaled-int x10000 (Precision Law)
-# ----------------------------------------------------------------------------
 
 
 def test_price_scale_constant_is_10k() -> None:
@@ -255,12 +228,11 @@ def test_price_scale_constant_is_10k() -> None:
 def test_on_stats_runs_without_error_on_valid_input() -> None:  # noqa: no-assert
     strat = C60TmfD6SoloMakerMinimal("c60_test", max_pos=2, subscribe_symbols=["TMFD6"])
     stats = _make_stats()
-    strat.on_stats(stats)  # should not raise
+    strat.on_stats(stats)
 
 
 def test_on_stats_skips_invalid_spread() -> None:
     strat = C60TmfD6SoloMakerMinimal("c60_test", subscribe_symbols=["TMFD6"])
-    # spread = 4 pt (< 5 pt threshold); no exception, no quote
     stats = _make_stats(
         best_bid=22500 * 10_000,
         best_ask=22504 * 10_000,
@@ -272,12 +244,7 @@ def test_on_stats_skips_invalid_spread() -> None:
 def test_on_stats_skips_zero_prices() -> None:  # noqa: no-assert
     strat = C60TmfD6SoloMakerMinimal("c60_test", subscribe_symbols=["TMFD6"])
     stats = _make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0)
-    strat.on_stats(stats)  # early return, no raise
-
-
-# ----------------------------------------------------------------------------
-# Spread gate boundary
-# ----------------------------------------------------------------------------
+    strat.on_stats(stats)
 
 
 def test_spread_gate_blocks_below_threshold_at_sp2() -> None:
@@ -304,17 +271,12 @@ def test_spread_gate_admits_at_threshold_with_qi_neutral() -> None:
     stats = _make_stats(
         best_bid=22500 * 10_000,
         best_ask=22505 * 10_000,
-        imbalance=0.0,  # neutral: D4 QI does not widen
+        imbalance=0.0,
         bid_depth=10,
         ask_depth=10,
     )
     strat.on_stats(stats)
     assert strat._quotes_posted == 2
-
-
-# ----------------------------------------------------------------------------
-# R47-minimal: D1/D2/D3 NOT referenced; D4 QI IS active
-# ----------------------------------------------------------------------------
 
 
 def test_wrapper_has_no_d1_d2_d3_signal_layer_attributes() -> None:
@@ -351,14 +313,8 @@ def test_wrapper_exposes_qi_compute_method() -> None:
     assert callable(strat._compute_qi_skew)
 
 
-# ----------------------------------------------------------------------------
-# D4 QI skew (top-of-book imbalance; NOT |pos|-modulated)
-# ----------------------------------------------------------------------------
-
-
 def test_qi_skew_widens_ask_when_bid_heavy() -> None:
     strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"])
-    # imbalance = +0.8 > +0.10 threshold -> widen ASK up 1 tick
     stats = _make_stats(imbalance=0.8)
     strat.on_stats(stats)
     assert strat._qi_widen_events == 1
@@ -375,7 +331,7 @@ def test_qi_skew_widens_bid_when_ask_heavy() -> None:
 
 def test_qi_skew_neutral_within_threshold() -> None:
     strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=True, subscribe_symbols=["TMFD6"])
-    stats = _make_stats(imbalance=0.04)  # within +/-0.10 threshold
+    stats = _make_stats(imbalance=0.04)
     strat.on_stats(stats)
     assert strat._qi_widen_events == 0
 
@@ -390,14 +346,11 @@ def test_qi_skew_is_not_pos_gated() -> None:
         max_pos=2,
         subscribe_symbols=["TMFD6"],
     )
-    # pos=0: widen once
     strat.on_stats(_make_stats(imbalance=0.8))
     widen_at_pos0 = strat._qi_widen_events
-    # drive pos up to +2
     strat.on_fill(_make_fill(Side.BUY))
     strat.on_fill(_make_fill(Side.BUY))
     assert strat._local_pos["TMFD6"] == 2
-    # identical book (note: price-move gate clears on fill via _last_bid.pop)
     strat.on_stats(_make_stats(imbalance=0.8))
     widen_at_pos2 = strat._qi_widen_events - widen_at_pos0
     assert widen_at_pos0 == 1
@@ -408,11 +361,6 @@ def test_qi_skew_disabled_by_param() -> None:
     strat = C60TmfD6SoloMakerMinimal("c60_test", enable_qi_layer=False, subscribe_symbols=["TMFD6"])
     strat.on_stats(_make_stats(imbalance=0.8))
     assert strat._qi_widen_events == 0
-
-
-# ----------------------------------------------------------------------------
-# max_pos gate (canonical mp=2)
-# ----------------------------------------------------------------------------
 
 
 def _make_fill(side_enum: object, qty: int = 1, price: int = 22500 * 10_000) -> object:
@@ -466,12 +414,6 @@ def test_on_gap_clears_transient_state() -> None:
     assert strat._last_ask == {}
 
 
-# ----------------------------------------------------------------------------
-# Runtime-mode default (shadow scaffold -> shadow_mode=False default;
-# strategies.yaml sets shadow_mode=true explicitly)
-# ----------------------------------------------------------------------------
-
-
 def test_shadow_mode_defaults_to_false() -> None:
     """Wrapper default is live-runtime; strategies.yaml opts into shadow."""
     strat = C60TmfD6SoloMakerMinimal("c60_test")
@@ -485,6 +427,6 @@ def test_queue_share_informational_only() -> None:
         queue_share=0.05,
         subscribe_symbols=["TMFD6"],
     )
-    stats = _make_stats(imbalance=0.0)  # neutral so QI doesn't alter quote
+    stats = _make_stats(imbalance=0.0)
     strat.on_stats(stats)
     assert strat._quotes_posted == 2

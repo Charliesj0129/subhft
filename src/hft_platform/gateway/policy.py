@@ -61,15 +61,9 @@ class GatewayPolicy:
             "off",
         }
         self._storm_guard = storm_guard
-        # Bug 22 (2026-04-17): allow reducing orders through HALT/DEGRADE even
-        # if strategy is not halt-exempt. Without this, R47 stuck short cannot
-        # cover through Gateway when StormGuard is in HALT (Bug 21 fixed the
-        # validator/StormGuard layers but Gateway runs first in the pipeline).
         self._position_provider: Callable[[str, str], int] | None = position_provider
         holdoff_s = float(os.getenv("HFT_GATEWAY_STARTUP_HOLDOFF_S", "60"))
         self._startup_holdoff_until: float = time.monotonic() + holdoff_s if holdoff_s > 0 else 0.0
-
-    # ── Public ────────────────────────────────────────────────────────────
 
     def gate(
         self,
@@ -122,16 +116,13 @@ class GatewayPolicy:
 
         Side-effect: auto-transitions to DEGRADE on STORM if configured.
         """
-        # Startup holdoff: block NEW/AMEND during initial STORM→NORMAL transient
         if self._startup_holdoff_until > 0 and intent_type not in _SAFETY_INTENT_TYPES:
             if time.monotonic() < self._startup_holdoff_until:
                 return False, "STARTUP_HOLDOFF"
 
-        # Auto-degrade on storm
         if self._degrade_on_storm and sg_state >= StormGuardState.STORM and self._mode == GatewayPolicyMode.NORMAL:
             self._set_mode(GatewayPolicyMode.DEGRADE)
 
-        # Recovery: back to NORMAL when storm clears
         if sg_state < StormGuardState.STORM and self._mode == GatewayPolicyMode.DEGRADE:
             self._set_mode(GatewayPolicyMode.NORMAL)
 
@@ -140,7 +131,6 @@ class GatewayPolicy:
                 return True, "OK"
             if intent_type == int(IntentType.CANCEL) and self._halt_cancel:
                 return True, "OK"
-            # Bug 22: reducing orders (cover / partial exit) always allowed in HALT
             if self._reduces_position(symbol, strategy_id, side, qty):
                 return True, "HALT_REDUCE_ONLY"
             if strategy_id and self._is_halt_exempt(strategy_id):
@@ -148,8 +138,6 @@ class GatewayPolicy:
             return False, "HALT"
 
         if self._mode == GatewayPolicyMode.DEGRADE:
-            # In DEGRADE, only allow risk-reducing operations (CANCEL, FORCE_FLAT)
-            # and halt-exempt strategies. Bug 22: also allow position-reducing orders.
             if intent_type not in _SAFETY_INTENT_TYPES:
                 if self._reduces_position(symbol, strategy_id, side, qty):
                     return True, "DEGRADE_REDUCE_ONLY"
@@ -170,7 +158,7 @@ class GatewayPolicy:
             return False
         try:
             current = int(provider(symbol, strategy_id) or 0)
-        except Exception:  # noqa: BLE001 — never raise from a predicate
+        except Exception:
             return False
         if current == 0:
             return False
@@ -197,8 +185,6 @@ class GatewayPolicy:
 
     def mode_int(self) -> int:
         return _MODE_TO_INT[self._mode]
-
-    # ── Private ───────────────────────────────────────────────────────────
 
     def _is_halt_exempt(self, strategy_id: str) -> bool:
         """Check if a strategy is halt-exempt via StormGuard."""

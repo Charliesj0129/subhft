@@ -77,7 +77,6 @@ _TMF_POINT_VALUE_NTD = 10
 _TMF_INST_RT_COST_PTS = 1.5
 _TMF_RETAIL_RT_COST_PTS = 4.0
 
-# Same as C60: D1/D2/D3 hard-disabled; D4 QI retained (deployed TMFD6 config).
 _DISABLED_SIGNAL_LAYERS_MOST = (
     "_update_pe",
     "_update_queue",
@@ -88,9 +87,6 @@ _DISABLED_SIGNAL_LAYERS_MOST = (
 )
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,15 +126,11 @@ class C72Params:
     enable_pe_layer: bool = False
     enable_queue_layer: bool = False
     enable_mfg_layer: bool = False
-    # C72-specific
     enable_queue_depth_gate: bool = True
     queue_depth_max_bid: int = 5
     queue_depth_max_ask: int = 5
 
 
-# ----------------------------------------------------------------------------
-# TmfD6QueuePositionAwareMaker — MakerEngine-compatible strategy
-# ----------------------------------------------------------------------------
 
 
 class TmfD6QueuePositionAwareMaker:
@@ -183,7 +175,6 @@ class TmfD6QueuePositionAwareMaker:
         self._quotes_posted = 0
         self._active_symbol = active_symbol
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def position(self) -> int:
@@ -225,7 +216,6 @@ class TmfD6QueuePositionAwareMaker:
     def active_symbol(self) -> str:
         return self._active_symbol
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -251,19 +241,16 @@ class TmfD6QueuePositionAwareMaker:
             self._spread_blocked += 1
             return [Hold()]
 
-        # L2 D4 QI skew (same as C60)
         widen_bid_ticks, widen_ask_ticks = self._compute_qi_skew(tick)
         if widen_bid_ticks or widen_ask_ticks:
             self._qi_widen_events += 1
 
-        # C72 queue-depth gate (NEW). Independent per-side.
         buy_depth_ok, sell_depth_ok = self._queue_depth_gate_check(tick)
 
         actions: list[PostQuote | CancelQuote | Hold] = []
         pos = self._position
         max_pos = params.max_pos
 
-        # Linear inventory skew (same as C60).
         skew = (pos * params.inventory_skew_tenths * scale) // 10
         tick_size = scale
         bid_quote = tick.bid_price - skew - widen_bid_ticks * tick_size
@@ -272,7 +259,6 @@ class TmfD6QueuePositionAwareMaker:
         bid_moved = bid_quote != self._last_bid
         ask_moved = ask_quote != self._last_ask
 
-        # Buy side: also require queue-depth gate.
         if pos < max_pos and bid_moved and buy_depth_ok:
             actions.append(PostQuote(side="buy", price=bid_quote, qty=1))
             self._last_bid = bid_quote
@@ -280,7 +266,6 @@ class TmfD6QueuePositionAwareMaker:
         elif pos >= max_pos:
             self._max_pos_blocked += 1
 
-        # Sell side: also require queue-depth gate.
         if pos > -max_pos and ask_moved and sell_depth_ok:
             actions.append(PostQuote(side="sell", price=ask_quote, qty=1))
             self._last_ask = ask_quote
@@ -319,11 +304,9 @@ class TmfD6QueuePositionAwareMaker:
         if not params.enable_queue_depth_gate:
             return True, True
 
-        # Buy-side: we would post at the bid; the near-side queue is bid_qty.
         buy_ok = tick.bid_qty <= params.queue_depth_max_bid
         if not buy_ok:
             self._queue_depth_blocked_bid += 1
-        # Sell-side: we would post at the ask; near-side queue is ask_qty.
         sell_ok = tick.ask_qty <= params.queue_depth_max_ask
         if not sell_ok:
             self._queue_depth_blocked_ask += 1
@@ -356,9 +339,6 @@ class TmfD6QueuePositionAwareMaker:
         self._quotes_posted = 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C72Alpha:

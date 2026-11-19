@@ -76,7 +76,7 @@ class AlertRouter:
                     reason=entry.get("reason", ""),
                 )
                 self._silence_rules[rule.rule_id] = rule
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("alert_router.silence_config_load_failed", error=str(exc))
 
     def add_silence(self, rule: SilenceRule) -> None:
@@ -103,12 +103,10 @@ class AlertRouter:
           2. Silence check — suppress matching alerts.
           3. Route by severity: INFO → batch, WARN → Telegram, CRITICAL/FATAL → Telegram + Webhook + escalation.
         """
-        # Step 1: aggregation / dedup
         passed = self._aggregator.process(alert)
         if passed is None:
             return
 
-        # Step 2: silence check
         if self._is_silenced(alert):
             logger.debug(
                 "alert_router.silenced",
@@ -117,7 +115,6 @@ class AlertRouter:
             )
             return
 
-        # Step 3: route by severity
         if alert.severity == AlertSeverity.INFO:
             self._info_batch.append(alert)
             return
@@ -185,13 +182,11 @@ class AlertRouter:
 
         Should be called by a scheduler (e.g. every 30–60 seconds).
         """
-        # Flush expired aggregation windows and send suppression summaries
         summaries = self._aggregator.flush_expired(now_ns)
         for s in summaries:
             msg = f"⚠️ {s.first_alert.title} — repeated {s.suppressed_count} times in past 5 minutes"
             await self._telegram.send(msg, critical=False)
 
-        # Re-send due escalations
         due = self._escalation.get_due(now_ns)
         for alert in due:
             logger.warning(
@@ -202,5 +197,4 @@ class AlertRouter:
             await self._send_critical(alert)
             self._escalation.mark_escalated(alert.alert_id, now_ns)
 
-        # Flush INFO batch
         await self.flush_info_batch()

@@ -51,7 +51,6 @@ _SCALE = 1_000_000
 _MAKER_REBATE_NTD_PER_SIDE = 10
 _COST_RT_SCENARIOS_PTS: tuple[float, ...] = (1.05, 1.50, 1.95, 3.00, 4.00)
 
-# C33 PROMOTE OOS reference for side-by-side context
 _C33_OOS_NTD_PER_DAY = 76920
 
 
@@ -150,7 +149,6 @@ def _simulate_day(
                     strategy.on_fill("sell", sell_order.price, mid)
                     sell_order = None
 
-    # Session median spread (point-in-time samples)
     if session_spread_pts_samples:
         sorted_sp = sorted(session_spread_pts_samples)
         median_idx = len(sorted_sp) // 2
@@ -309,7 +307,7 @@ def _run_strategy(
     gross_pts, total_trips, total_wins = _fifo_trips(all_fills)
     cost_sens = _cost_sensitivity(gross_pts, len(all_fills))
     rebate = _rebate_decomp(gross_pts, len(all_fills))
-    close_rate = 100.0 if all_fills else 0.0  # engine only places limit orders
+    close_rate = 100.0 if all_fills else 0.0
 
     n_days = len(daily_results)
     days_positive = sum(1 for d in daily_results if d["inst_net_pts"] > 0)
@@ -340,7 +338,6 @@ def _session_spread_quartile_analysis(
     daily = c63_run.get("daily", [])
     if not daily:
         return {"n_quartiles": 0}
-    # sort by session_median_sp_pts
     sorted_daily = sorted(daily, key=lambda d: d["session_median_sp_pts"])
     n = len(sorted_daily)
     q1_end = n // 4
@@ -430,7 +427,6 @@ def main() -> int:
     spread_sweep = [int(x) for x in args.spread_sweep.split(",")]
     max_pos_bracket = [int(x) for x in args.max_pos_bracket.split(",")]
 
-    # --- Main sweep: C63 across spread x max_pos grid ---
     c63_runs: dict[str, dict] = {}
     for sp in spread_sweep:
         for mp in max_pos_bracket:
@@ -450,12 +446,10 @@ def main() -> int:
                 close_maker_rate=run["close_maker_rate_pct"],
             )
 
-    # --- C33 side-by-side (threshold=5, mp=3) ---
     logger.info("c33_side_by_side_start")
     c33_sp5_mp3 = _run_c33_config(
         source, args.instrument, dates, max_pos=3, queue_fraction=args.qf
     )
-    # Also run C33 at mp=1 (the current live config)
     c33_sp5_mp1 = _run_c33_config(
         source, args.instrument, dates, max_pos=1, queue_fraction=args.qf
     )
@@ -467,11 +461,9 @@ def main() -> int:
         mp1_gross=c33_sp5_mp1["gross_pts_total"],
     )
 
-    # --- Per-session-median-spread quartile analysis (threshold=3, canonical mp=3) ---
     canonical_c63 = c63_runs.get("sp3_mp3", {})
     quartile = _session_spread_quartile_analysis(canonical_c63)
 
-    # --- Isolate threshold effect: C63 sp=3 mp=3 vs C33 sp=5 mp=3 ---
     c63_canonical = c63_runs.get("sp3_mp3", {})
     threshold_effect = {
         "c63_sp3_mp3_ntd_per_day": (

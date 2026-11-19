@@ -36,12 +36,12 @@ class CircuitBreaker:
             self._failure_count = value
 
     @property
-    def open_until(self) -> float:  # precision-time
+    def open_until(self) -> float:
         with self._lock:
             return self._open_until
 
     @open_until.setter
-    def open_until(self, value: float) -> None:  # precision-time
+    def open_until(self, value: float) -> None:
         with self._lock:
             self._open_until = value
 
@@ -97,7 +97,6 @@ class StrategyCircuitBreakerManager:
             if strategy_id in self._breakers:
                 return self._breakers[strategy_id]
 
-            # Cardinality check
             if len(self._breakers) >= self._max_strategies:
                 self._evict_idle()
                 if len(self._breakers) >= self._max_strategies:
@@ -106,10 +105,8 @@ class StrategyCircuitBreakerManager:
                         current=len(self._breakers),
                         max=self._max_strategies,
                     )
-                    # Return a temporary open breaker
                     return CircuitBreaker(threshold=1, timeout_s=self._default_timeout_s)
 
-            # Get per-strategy limits or defaults
             limits = self._strategy_limits.get(strategy_id, {})
             threshold = limits.get("cb_threshold", self._default_threshold)
             timeout_s = limits.get("cb_timeout_s", self._default_timeout_s)

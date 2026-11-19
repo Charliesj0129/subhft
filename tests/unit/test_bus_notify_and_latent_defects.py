@@ -25,7 +25,7 @@ class TestMultiWriterPublishWakesConsumers:
         from hft_platform.engine.event_bus import RingBufferBus
 
         bus = RingBufferBus(size=64)
-        bus.single_writer = False  # HFT_BUS_SINGLE_WRITER=0
+        bus.single_writer = False
         return bus
 
     def test_publish_wakes_a_waiting_consumer(self) -> None:
@@ -39,7 +39,7 @@ class TestMultiWriterPublishWakesConsumers:
                     return
 
             task = asyncio.create_task(reader())
-            await asyncio.sleep(0)  # let the consumer register its signal
+            await asyncio.sleep(0)
             await bus.publish(("tick", 1))
             await asyncio.wait_for(task, timeout=2.0)
             return got
@@ -127,7 +127,6 @@ class TestEvictionUsesTheTradingDate:
 
         taipei = dt.datetime.fromtimestamp(timebase.now_ns() / 1e9, tz=timebase.TZINFO)
         utc = dt.datetime.fromtimestamp(timebase.now_ns() / 1e9, tz=dt.timezone.utc)
-        # Same instant; the DATE differs for 8 hours out of every 24.
         assert (taipei.date() != utc.date()) == (taipei.hour < 8)
 
 
@@ -153,7 +152,7 @@ class TestSessionHooksAskAboutFutures:
             pytest.skip("chosen date is not a trading day in this calendar build")
 
         assert cal.is_trading_hours(night, product_type="future") is True
-        assert cal.is_trading_hours(night) is False  # the old, wrong question
+        assert cal.is_trading_hours(night) is False
 
 
 class TestFamilyResolverRolloverStillDiffs:

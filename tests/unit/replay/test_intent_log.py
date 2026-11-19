@@ -37,7 +37,6 @@ def test_canonical_form_excludes_volatile_fields() -> None:
 
     intent_a = _make_intent()
     intent_b = _make_intent()
-    # Inject volatile attributes that the canonical schema must ignore.
     object.__setattr__(intent_a, "trace_id", "trace-aaaa")
     object.__setattr__(intent_b, "trace_id", "trace-bbbb")
     object.__setattr__(intent_a, "idempotency_key", "idem-1")
@@ -79,7 +78,6 @@ def test_canonical_form_rounds_timestamp_to_us() -> None:
 
     assert log_a.hash() == log_b.hash()
 
-    # Cross-microsecond jitter (+1000 ns) must NOT collapse.
     log_c = ReplayedIntentLog()
     log_c.append(_make_intent(timestamp_ns=base_ns + 1_000))
     assert log_a.hash() != log_c.hash()
@@ -102,14 +100,12 @@ def test_load_from_jsonl(tmp_path: Path) -> None:
     with fixture.open("w", encoding="utf-8") as f:
         for rec in canonical:
             f.write(json.dumps(rec) + "\n")
-        # Stray blank line (loader must skip).
         f.write("\n")
 
     loaded = ReplayedIntentLog.from_jsonl(fixture)
     assert loaded.n_intents() == 3
     assert loaded.hash() == expected_hash
 
-    # Forward-compat: extra unknown key on first record must be dropped.
     extra_record = dict(canonical[0])
     extra_record["future_field_for_slice_d"] = "ignored"
     extra_path = tmp_path / "intents_with_extra.jsonl"
@@ -121,15 +117,6 @@ def test_load_from_jsonl(tmp_path: Path) -> None:
     loaded_extra = ReplayedIntentLog.from_jsonl(extra_path)
     assert loaded_extra.n_intents() == 3
     assert loaded_extra.hash() == expected_hash
-
-
-# --- §7 parity fields: R7 (2026-06-04) keeps them out of the digest ----
-#
-# The digest must stay symmetric with the live side (hft.order_intents),
-# which carries none of these columns. force_flat_triggered + risk_filter_active
-# were removed from the canonical schema entirely (covered by intent_type /
-# belongs to RiskDecision respectively); session_phase is recorded on the
-# intent but excluded from the comparison digest until a CH column exists.
 
 
 def test_canonical_record_is_exactly_the_fixed_12_field_shape() -> None:

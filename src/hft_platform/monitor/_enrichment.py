@@ -70,7 +70,6 @@ def enrich_tick(
     bids_price_0 = row.bids_price[0]
     asks_price_0 = row.asks_price[0]
 
-    # Prices in NTD (float, for display only)
     bid_px = bids_price_0 / _ch_scale
     ask_px = asks_price_0 / _ch_scale
     mid = (bid_px + ask_px) * 0.5
@@ -78,26 +77,21 @@ def enrich_tick(
     bid_qty = float(row.bids_vol[0])
     ask_qty = float(row.asks_vol[0])
 
-    # Platform-convention scaled ints (x10000)
     bid_x10k = bids_price_0 // _ch_div
     ask_x10k = asks_price_0 // _ch_div
 
     spread_scaled = ask_x10k - bid_x10k
 
-    # Microprice (LOBStatsEvent convention: x2 for integer precision)
     denom = bid_qty + ask_qty
     if denom > 0:
         microprice_x2 = int((bid_x10k * ask_qty + ask_x10k * bid_qty) / denom * 2)
     else:
-        microprice_x2 = bid_x10k + ask_x10k  # = mid * 2
+        microprice_x2 = bid_x10k + ask_x10k
 
-    # Spread in bps
     spread_bps = (ask_px - bid_px) / max(mid, 1e-8) * 10000.0 if mid > 0 else 0.0
 
-    # Imbalance
     imbalance = (bid_qty - ask_qty) / max(denom, 1.0)
 
-    # OFI L1 (first tick: 0)
     if sym_state.tick_count == 0:
         ofi_l1_raw = 0.0
     else:
@@ -105,7 +99,6 @@ def enrich_tick(
 
     ofi_l1_cum = sym_state.ofi_l1_cum + ofi_l1_raw
 
-    # Update symbol state (in-place mutation OK for pre-allocated state)
     sym_state.prev_bid_qty = bid_qty
     sym_state.prev_ask_qty = ask_qty
     sym_state.ofi_l1_cum = ofi_l1_cum
@@ -116,14 +109,11 @@ def enrich_tick(
     sym_state.tick_count += 1
     sym_state.last_update_ns = row.ingest_ts
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, row.ingest_ts)
-    # S7: append mid_price to price sparkline
     sym_state.price_sparkline_append(mid)
-    # History sparklines for detail dashboard
     sym_state.vol_sparkline_append(float(row.volume))
     sym_state.spread_sparkline_append(spread_bps)
     sym_state.imbal_sparkline_append(imbalance)
 
-    # Mutate pre-allocated payload buffer in-place
     buf = sym_state._payload_buf
     buf["bid_px"] = bid_px
     buf["ask_px"] = ask_px
@@ -161,7 +151,6 @@ def enrich_from_snapshot(
     l1_ask_qty = float(lob[7]) if len(lob) > 7 else 0.0
     microprice_x2 = lob[8] if len(lob) > 8 else 0
 
-    # NTD prices for display
     bid_px = best_bid / _scale
     ask_px = best_ask / _scale
     mid = (bid_px + ask_px) * 0.5
@@ -170,7 +159,6 @@ def enrich_from_snapshot(
     spread_bps = (ask_px - bid_px) / max(mid, 1e-8) * 10000.0 if mid > 0 else 0.0
     imbalance = (l1_bid_qty - l1_ask_qty) / max(denom, 1.0)
 
-    # OFI L1
     if sym_state.tick_count == 0:
         ofi_l1_raw = 0.0
     else:
@@ -178,7 +166,6 @@ def enrich_from_snapshot(
 
     ofi_l1_cum = sym_state.ofi_l1_cum + ofi_l1_raw
 
-    # Update symbol state
     sym_state.prev_bid_qty = l1_bid_qty
     sym_state.prev_ask_qty = l1_ask_qty
     sym_state.ofi_l1_cum = ofi_l1_cum
@@ -189,12 +176,10 @@ def enrich_from_snapshot(
     sym_state.tick_count += 1
     sym_state.last_update_ns = slot.ts_ns
     sym_state.cursor_ts_ns = max(sym_state.cursor_ts_ns, slot.ts_ns)
-    # S7: append mid_price to price sparkline
     sym_state.price_sparkline_append(mid)
-    # History sparklines for detail dashboard
     sym_state.spread_sparkline_append(spread_bps)
     sym_state.imbal_sparkline_append(imbalance)
-    sym_state.vol_sparkline_append(0.0)  # SHM doesn't provide per-tick volume
+    sym_state.vol_sparkline_append(0.0)
 
     buf = sym_state._payload_buf
     buf["bid_px"] = bid_px

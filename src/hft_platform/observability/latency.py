@@ -26,9 +26,6 @@ _VALID_STAGES: frozenset[str] = frozenset(
         "record",
         "bus_publish",
         "api_place_order",
-        # The real duration of a place_order that outlived the HFT_API_TIMEOUT_S
-        # wrapper (recorded when its late answer arrives). api_place_order stops
-        # at the timeout, so without this the tail above 3 s is invisible.
         "api_place_order_late",
         "api_cancel_order",
         "api_update_order",
@@ -90,7 +87,6 @@ class LatencyRecorder:
         self._stage_metric_cache: dict[str, Any] = {}
         self._stage_metric_cache_owner_id: int | None = id(self.metrics) if self.metrics is not None else None
 
-        # Retry buffer for overflow handling (B2)
         try:
             retry_buffer_size = int(os.getenv("HFT_LATENCY_RETRY_BUFFER_SIZE", "1000"))
         except ValueError:
@@ -151,7 +147,7 @@ class LatencyRecorder:
                         stage_metric = self.metrics.pipeline_latency_ns.labels(stage=stage)
                         self._stage_metric_cache[stage] = stage_metric
                     stage_metric.observe(latency_ns)
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.warning("latency_metric_observe_failed", error=str(_exc), stage=stage)
 
         if not self._should_sample():
@@ -172,21 +168,18 @@ class LatencyRecorder:
             "strategy_id": strategy_id or "",
         }
 
-        # Drain retry buffer first
         self._drain_retry_buffer()
 
         try:
             self._queue.put_nowait({"topic": "latency_spans", "data": payload})
-        except Exception as _exc:  # noqa: BLE001
-            # Queue full, add to retry buffer
+        except Exception as _exc:
             if len(self._retry_buffer) >= self._retry_buffer_size:
-                # Buffer also full, increment dropped counter
                 self._dropped_total += 1
                 if self._dropped_total % 100 == 0 and self.metrics:
                     try:
                         if hasattr(self.metrics, "latency_spans_dropped_total"):
                             self.metrics.latency_spans_dropped_total.inc(100)
-                    except Exception as _exc:  # noqa: BLE001
+                    except Exception as _exc:
                         logger.warning("latency_drop_counter_failed", error=str(_exc))
             else:
                 self._retry_buffer.append({"topic": "latency_spans", "data": payload})
@@ -200,7 +193,6 @@ class LatencyRecorder:
                 item = self._retry_buffer[0]
                 self._queue.put_nowait(item)
                 self._retry_buffer.popleft()
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.debug("latency_retry_drain_queue_full")
-                # Queue still full, stop draining
                 break

@@ -49,7 +49,6 @@ from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S, RedisClient
 
 logger = get_logger("monitor.redis_publish")
 
-# Heartbeat interval / TTL
 _HEARTBEAT_INTERVAL_S = 5.0
 _HEARTBEAT_TTL_S = 15
 
@@ -85,8 +84,6 @@ class MonitorLivePublisher:
         self._client = RedisClient(host=host, port=port, password=password, timeout_s=_DEFAULT_TIMEOUT_S)
         self._key_prefix = key_prefix.rstrip(":")
         self._ring_size = max(16, int(ring_size))
-        # Queue carries (symbol, body_bytes) tuples — immutable once enqueued,
-        # so the worker thread never reads producer-mutable state (P0-D1).
         self._queue: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=max(64, int(queue_size)))
         self._thread: threading.Thread | None = None
         self._running = False
@@ -94,10 +91,8 @@ class MonitorLivePublisher:
         self._last_heartbeat = 0.0
         self._published = 0
         self._serialize_errors = 0
-        # Pre-computed key caches (populated lazily per symbol)
         self._latest_keys: dict[str, str] = {}
         self._ring_keys: dict[str, str] = {}
-        # Reusable body dict — safe because worker is single-threaded
         self._body_template: dict[str, Any] = {
             "symbol": "",
             "ingest_ts": 0,
@@ -148,10 +143,6 @@ class MonitorLivePublisher:
         if not symbol:
             return
         try:
-            # Build a fresh normalized body and serialize while still holding
-            # the GIL on the producer thread. ``list(...)`` creates a defensive
-            # copy so orjson's internal iteration cannot observe concurrent
-            # mutation even if the underlying list is reused elsewhere.
             body = {
                 "symbol": symbol,
                 "ingest_ts": int(payload.get("ingest_ts", 0) or 0),
@@ -163,7 +154,7 @@ class MonitorLivePublisher:
                 "volume": int(payload.get("volume", 0) or 0),
             }
             body_bytes = _dumps_bytes(body)
-        except Exception as exc:  # noqa: BLE001 — never crash the engine loop
+        except Exception as exc:
             self._serialize_errors += 1
             if self._serialize_errors % 100 == 1:
                 logger.warning(
@@ -210,7 +201,7 @@ class MonitorLivePublisher:
             )
             self._client.request("SET", hb_key, hb_body, "EX", str(_HEARTBEAT_TTL_S))
             self._last_heartbeat = now
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             logger.debug("monitor_heartbeat_failed")
 
     def _publish_bytes(self, symbol: str, body_bytes: bytes) -> None:

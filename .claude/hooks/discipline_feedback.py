@@ -16,7 +16,7 @@ def main() -> None:
     if "src/hft_platform/" not in path or not path.endswith(".py"):
         sys.exit(0)
     if not os.path.exists("scripts/check_discipline.py"):
-        sys.exit(0)  # fail-open outside the repo root
+        sys.exit(0)
     try:
         r = subprocess.run(
             [sys.executable, "scripts/check_discipline.py", "--files", path],
@@ -25,7 +25,7 @@ def main() -> None:
             timeout=20,
         )
     except Exception:
-        sys.exit(0)  # fail-open: advisory hook never blocks work
+        sys.exit(0)
     if r.returncode != 0:
         warn(f"[discipline] check_discipline flagged {path}:\n{(r.stdout or r.stderr)[-1500:]}")
     sys.exit(0)

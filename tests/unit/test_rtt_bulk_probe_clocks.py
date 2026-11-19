@@ -28,7 +28,7 @@ def _load(monkeypatch: pytest.MonkeyPatch):
     spec = importlib.util.spec_from_file_location(name, SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, name, module)  # @dataclass resolves its module through sys.modules
+    monkeypatch.setitem(sys.modules, name, module)
     spec.loader.exec_module(module)
     return module
 

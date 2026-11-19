@@ -1,4 +1,3 @@
-# tests/unit/test_tca_slippage.py
 """Tests for TCA SlippageDecomposer."""
 
 from __future__ import annotations

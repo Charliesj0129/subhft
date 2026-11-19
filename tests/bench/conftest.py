@@ -58,7 +58,6 @@ def risk_engine(risk_config_path: str) -> RiskEngine:
     """Minimal RiskEngine for benchmarking evaluate()."""
     intent_q: asyncio.Queue[Any] = asyncio.Queue()
     order_q: asyncio.Queue[Any] = asyncio.Queue()
-    # Disable optional Rust/FastGate paths for deterministic benchmarking
     os.environ["HFT_RISK_FAST_GATE"] = "0"
     os.environ["HFT_RISK_RUST_VALIDATOR"] = "0"
     engine = RiskEngine(
@@ -79,7 +78,7 @@ def make_bench_intent(intent_id: int = 1) -> OrderIntent:
         symbol="2330",
         intent_type=IntentType.NEW,
         side=Side.BUY,
-        price=5_000_000,  # 500.0 * 10000
+        price=5_000_000,
         qty=1,
         tif=TIF.LIMIT,
         timestamp_ns=timebase.now_ns(),

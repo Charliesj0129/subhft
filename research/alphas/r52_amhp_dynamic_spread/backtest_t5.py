@@ -48,9 +48,7 @@ from research.backtest.maker_engine import (
 
 logger = structlog.get_logger("r52_amhp.backtest")
 
-# CK source price scale is x1_000_000 (per ClickHouseSource.load_day).
 _CK_SCALE = 1_000_000
-# AMHP modulator parameters (mirrored from impl.py for direct sim usage).
 _ALPHA_RHO = 1.6
 _ALPHA_IIR = 0.9
 
@@ -94,19 +92,15 @@ class AmhpMakerBacktestStrategy:
         "_rho_critical",
         "_iir_critical",
         "_mult_cap",
-        # day-level covariate coefficients persisted across daily resets
         "_gamma_io_persistent",
         "_gamma_us_persistent",
-        # telemetry hooks updated by the harness
         "_on_post_callback",
         "_on_modulator_active_callback",
         "_last_minute",
         "_critical_minute_count",
         "_minute_sample_count",
-        # buy/sell post tracking (for entry price → fill PnL accounting)
         "_pending_buy_price",
         "_pending_sell_price",
-        # last-seen best bid/ask for trade-direction inference
         "_last_bid",
         "_last_ask",
     )
@@ -147,7 +141,6 @@ class AmhpMakerBacktestStrategy:
         self._last_bid: int = 0
         self._last_ask: int = 0
 
-    # -- helper for day boundary reset ----------------------------------
 
     def reset_for_day(
         self, *, io_z: float = 0.0, us_overnight: float = 0.0,
@@ -156,7 +149,6 @@ class AmhpMakerBacktestStrategy:
         """Reset internal state at the start of each backtest day.  K2 / K1
         diffusion mechanism: refresh day-level covariates here."""
         self._state = _AMHPState()
-        # Preserve covariate coefficients across days
         self._state.set_mu_coefficients(
             gamma_io=self._gamma_io_persistent,
             gamma_us=self._gamma_us_persistent,
@@ -176,12 +168,10 @@ class AmhpMakerBacktestStrategy:
         self._last_ask = 0
 
     def set_persistent_gammas(self, gamma_io: float, gamma_us: float) -> None:
-        # Stash so reset_for_day preserves them.
         self._gamma_io_persistent = gamma_io
         self._gamma_us_persistent = gamma_us
         self._state.set_mu_coefficients(gamma_io=gamma_io, gamma_us=gamma_us)
 
-    # -- modulator ------------------------------------------------------
 
     def _multiplier(self, rho_hat: float, iir_abs: float) -> float:
         if rho_hat >= self._rho_critical or iir_abs >= self._iir_critical:
@@ -190,7 +180,6 @@ class AmhpMakerBacktestStrategy:
         m = 1.0 + self._alpha_rho * excess_rho + self._alpha_iir * iir_abs
         return min(self._mult_cap, max(1.0, m))
 
-    # -- MakerStrategy protocol ----------------------------------------
 
     def feed_trade(self, tick: TickData) -> None:
         """Direct trade feed — called by the custom day-runner so the AMHP
@@ -198,10 +187,6 @@ class AmhpMakerBacktestStrategy:
         does NOT pass trades to `strategy.on_tick`)."""
         if not tick.is_trade or tick.trade_volume <= 0:
             return
-        # Direction inference via last-known bid/ask comparison (tick rule).
-        # If trade_price >= last best ask → buyer-initiated (+1).
-        # If trade_price <= last best bid → seller-initiated (-1).
-        # Else within the spread: default to alternating sign (rare).
         direction = 0
         if self._last_minute_bid_ask_seen():
             if tick.trade_price >= self._last_ask:
@@ -216,17 +201,13 @@ class AmhpMakerBacktestStrategy:
         return self._last_bid > 0 and self._last_ask > 0
 
     def on_tick(self, tick: TickData) -> list:
-        # No-op for trade events (engine never calls us with them — feed_trade
-        # path is the canonical entry).
         if tick.is_trade and tick.trade_volume > 0:
             return [Hold()]
 
-        # bidask event — track best bid/ask for trade-direction inference
         if tick.bid_price > 0 and tick.ask_price > 0:
             self._last_bid = tick.bid_price
             self._last_ask = tick.ask_price
 
-        # 2) Track minute-bucket ρ̂ critical frequency (K5 telemetry).
         if self._state.warmed_up:
             minute = tick.exch_ts // (60 * 1_000_000_000)
             if minute != self._last_minute:
@@ -235,7 +216,6 @@ class AmhpMakerBacktestStrategy:
                 if self._state.rho_hat() > self._rho_critical:
                     self._critical_minute_count += 1
 
-        # 3) Compute modulator and L1 spread target.
         rho_hat = self._state.rho_hat() if self._state.warmed_up else 0.0
         iir_abs = abs(self._state.iir()) if self._state.warmed_up else 0.0
         multiplier = self._multiplier(rho_hat, iir_abs)
@@ -244,12 +224,10 @@ class AmhpMakerBacktestStrategy:
             int(self._base_spread_pts * multiplier),
         )
 
-        # 4) Quote only when observed spread >= dynamic target.
         if tick.spread_pts < spread_target_pts:
             return [Hold()]
 
         actions: list = []
-        # Buy at bid, sell at ask (R47 maker baseline pattern).
         if self._position < self._max_pos:
             actions.append(PostQuote(side="buy", price=tick.bid_price, qty=1))
             self._pending_buy_price = tick.bid_price
@@ -257,7 +235,6 @@ class AmhpMakerBacktestStrategy:
             actions.append(PostQuote(side="sell", price=tick.ask_price, qty=1))
             self._pending_sell_price = tick.ask_price
 
-        # Telemetry hook — caller can record per-tick modulator activity.
         if self._on_modulator_active_callback is not None and multiplier > 1.0:
             try:
                 self._on_modulator_active_callback(
@@ -280,7 +257,6 @@ class AmhpMakerBacktestStrategy:
         else:
             self._position -= 1
 
-    # -- telemetry surface for caller ----------------------------------
 
     @property
     def critical_minute_count(self) -> int:
@@ -295,9 +271,6 @@ class AmhpMakerBacktestStrategy:
         return self._state
 
 
-# ============================================================================
-# Backtest driver
-# ============================================================================
 
 
 def trading_dates(start: str, end: str) -> list[str]:
@@ -365,11 +338,8 @@ def _run_day_with_trade_feed(  # noqa: C901
         _apply_pending(event.exch_ts)
 
         if event.is_trade:
-            # Feed trade to strategy's AMHP estimator (this is what
-            # MakerEngine._run_day does NOT do — the gap we close here).
             strategy.feed_trade(event)
 
-            # Then check fills against the trade.
             mid = (
                 (cur_bid + cur_ask) / (2 * event.scale) if cur_bid > 0 else 0
             )
@@ -419,7 +389,6 @@ def _run_day_with_trade_feed(  # noqa: C901
                     sell_order = None
             continue
 
-        # bidask event
         cur_bid = event.bid_price
         cur_ask = event.ask_price
         cur_bid_v = event.bid_qty
@@ -477,11 +446,10 @@ def run_backtest(
     (the standard `MakerEngine._run_day` does not pass trades to the strategy).
     """
     cost = load_cost_profile(instrument)
-    fill_model = QueueDepletionFill(queue_fraction=0.5)  # CK-calibrated
-    # v2026-04-24_measured asymmetric profile.
+    fill_model = QueueDepletionFill(queue_fraction=0.5)
     latency = LatencyProfile(
-        place_ns=395_000_000,         # submit / modify P95 = 395 ms
-        cancel_ns=59_000_000,         # cancel P95 = 59 ms (asymmetric)
+        place_ns=395_000_000,
+        cancel_ns=59_000_000,
     )
 
     strategy = AmhpMakerBacktestStrategy(
@@ -516,12 +484,6 @@ def run_backtest(
         events = ck_source.load_day(instrument, date)
         if not events:
             continue
-        # P2 #10 fix: reset strategy state (position, AMHP estimator,
-        # dynamic-spread modulator, intraday counters) at each day boundary.
-        # Without this, the strategy carries stale `_position` and Hawkes
-        # state across days while `_run_day_with_trade_feed` zeroes its local
-        # `position` & FIFO accounting per day -> daily PnL diverges from
-        # actual gating decisions.
         strategy.reset_for_day()
         day_fills, day_pos = _run_day_with_trade_feed(
             strategy, events, fill_model, latency,
@@ -561,14 +523,12 @@ def run_backtest(
         dd = (peak - v) / max(abs(peak), 1e-9)
         max_dd = max(max_dd, dd)
 
-    # K5 minute-bucket frequency
     k5_freq_pct = 0.0
     if strategy.minute_sample_count > 0:
         k5_freq_pct = (
             100.0 * strategy.critical_minute_count / strategy.minute_sample_count
         )
 
-    # K4 multi-scale ACF — populate per-scale ρ_k snapshot
     rho_per_scale = strategy._state.rho_hat_per_scale()
 
     summary = _build_summary(
@@ -650,19 +610,14 @@ def _build_summary(
     winning_days = sum(1 for d in daily if d["pnl_pts"] > 0)
     distinct_fill_days = sum(1 for d in daily if d["fills"] > 0)
 
-    # K1 max_day_pct  — guard against division by zero AND signed-cancellation.
     if total_pnl > 0:
-        # use abs for the day with biggest *contribution* (positive or negative).
         max_pos_day = max((d["pnl_pts"] for d in daily), default=0.0)
         k1_max_day_pct = 100.0 * max_pos_day / total_pnl if total_pnl > 0 else 0.0
     else:
-        # Net PnL non-positive — K1 max_day_pct undefined; report concentration
-        # as max_abs_day / sum_abs_day for the scorecard.
         sum_abs = sum(abs(d["pnl_pts"]) for d in daily)
         max_abs = max((abs(d["pnl_pts"]) for d in daily), default=0.0)
         k1_max_day_pct = 100.0 * max_abs / sum_abs if sum_abs > 0 else 0.0
 
-    # Bootstrap 95% CI on total PnL across days.
     rng = np.random.default_rng(seed=20260425)
     samples = np.array([d["pnl_pts"] for d in daily], dtype=float)
     if len(samples) > 0:
@@ -673,7 +628,6 @@ def _build_summary(
         ci_lower = ci_upper = 0.0
     bootstrap_excludes_zero = (ci_lower > 0.0) or (ci_upper < 0.0)
 
-    # Jackknife sign-flip — recompute sum dropping each day, count sign flips.
     sign_flip = False
     if len(samples) > 1:
         full_sign = math.copysign(1, total_pnl) if total_pnl != 0 else 0.0
@@ -683,7 +637,6 @@ def _build_summary(
                 sign_flip = True
                 break
 
-    # Average spread at entry — derive from per-spread breakdown counts.
     per_spread = {str(k): v for k, v in spread_breakdown.items()}
     if total_fills > 0 and per_spread:
         weighted = sum(int(s) * v["fills"] for s, v in per_spread.items())
@@ -691,11 +644,6 @@ def _build_summary(
     else:
         avg_spread_at_entry = 0.0
 
-    # K3 modulator gain — derived as: when modulator active, average captured
-    # half-spread minus baseline.  Without per-fill tracking from MakerEngine,
-    # we approximate via the spread-bucket distribution: fills with spread >
-    # base × 1.0 are "modulator-active".  This is a coarse approximation; T6
-    # may want to switch to a per-fill audit hook.
     base_pt = _BASE_SPREAD_PTS
     fills_modulator_active = sum(
         v["fills"] for s, v in per_spread.items() if int(s) > base_pt
@@ -710,19 +658,16 @@ def _build_summary(
         avg_spread_baseline = sum(
             int(s) * v["fills"] for s, v in per_spread.items() if int(s) == base_pt
         ) / fills_baseline
-        # Half-spread captured under each = avg_spread / 2 minus per-side cost.
         modulator_per_fill_gain_pts = (avg_spread_modulator - avg_spread_baseline) / 2.0
     else:
         modulator_per_fill_gain_pts = 0.0
 
-    # Win-rate (Sharpe and max_dd already passed in via args).
     pnls = [d["pnl_pts"] for d in daily]
     win_rate = (sum(1 for v in pnls if v > 0) / max(1, len(pnls))) * 100
 
-    # Edge-vs-cost ratio.
     rt_cost = cost.rt_cost_pts
     if total_fills > 0:
-        net_per_trade = total_pnl / total_fills        # net pt PnL per fill
+        net_per_trade = total_pnl / total_fills
         gross_per_trade = total_gross / total_fills
     else:
         net_per_trade = 0.0
@@ -751,26 +696,20 @@ def _build_summary(
         "edge_vs_cost_ratio": round(edge_vs_cost, 3),
         "net_per_trade_pts": round(net_per_trade, 4),
         "gross_per_trade_pts": round(gross_per_trade, 4),
-        # K1
         "K1_max_day_pct": round(k1_max_day_pct, 2),
         "K1_winning_days": winning_days,
         "K1_distinct_fill_days": distinct_fill_days,
-        # K3
         "K3_modulator_per_fill_gain_pts": round(modulator_per_fill_gain_pts, 3),
         "K3_modulator_fill_count": fills_modulator_active,
-        # K5
         "K5_rho_critical_freq_pct": round(k5_freq_pct, 3),
         "K5_minute_samples": strategy.minute_sample_count,
-        # A1-tightened
         "bootstrap_ci_lower": round(ci_lower, 2),
         "bootstrap_ci_upper": round(ci_upper, 2),
         "bootstrap_excludes_zero": bootstrap_excludes_zero,
         "jackknife_sign_flip": sign_flip,
-        # Latency profile
         "latency_profile_id": "v2026-04-24_measured",
         "submit_p95_ms": latency.place_ns / 1_000_000,
         "cancel_p95_ms": latency.cancel_ns / 1_000_000,
-        # Daily breakdown
         "daily_pnl": daily,
         "per_spread_breakdown": per_spread,
     }

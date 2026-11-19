@@ -15,10 +15,6 @@ from hft_platform.feed_adapter.broker_registry import (
     register_broker,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 class _StubFactory:
     """Minimal BrokerFactory implementation for testing."""
@@ -40,11 +36,6 @@ def _clean_registry():
     yield
     _BROKER_REGISTRY.clear()
     _BROKER_REGISTRY.update(saved)
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestRegisterBroker:

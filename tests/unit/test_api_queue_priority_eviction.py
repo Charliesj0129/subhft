@@ -71,7 +71,6 @@ def _mk_cmd(
 
 class TestPriorityOrdering:
     def test_priority_table_matches_spec(self):
-        # CANCEL > FORCE_FLAT > AMEND > NEW
         pri = OrderAdapter._api_intent_priority
         assert pri(IntentType.CANCEL) > pri(IntentType.FORCE_FLAT)
         assert pri(IntentType.FORCE_FLAT) > pri(IntentType.AMEND)
@@ -101,7 +100,7 @@ class TestEvictionPolicy:
             remaining.append(adapter._api_queue.get_nowait())
         types = [c.intent.intent_type for c in remaining]
         assert IntentType.AMEND in types
-        assert types.count(IntentType.NEW) == 1  # exactly one NEW evicted
+        assert types.count(IntentType.NEW) == 1
 
     @pytest.mark.asyncio
     async def test_cancel_evicts_amend_when_no_new(self, tmp_config: str):
@@ -137,7 +136,7 @@ class TestEvictionPolicy:
         remaining = [adapter._api_queue.get_nowait() for _ in range(adapter._api_queue.qsize())]
         types = [c.intent.intent_type for c in remaining]
         assert IntentType.CANCEL in types
-        assert IntentType.AMEND in types  # AMEND survives (higher priority than NEW)
+        assert IntentType.AMEND in types
         assert IntentType.NEW not in types
 
     @pytest.mark.asyncio

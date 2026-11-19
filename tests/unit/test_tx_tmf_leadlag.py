@@ -10,7 +10,6 @@ from hft_platform.strategies.tx_tmf_leadlag import TxTmfLeadLagStrategy
 from hft_platform.strategy.base import StrategyContext
 
 _ONE_SEC_NS = 1_000_000_000
-# 09:30 TWN = 01:30 UTC
 _TS_BASE_NS = (1 * 3600 + 30 * 60) * _ONE_SEC_NS
 _PTS_SCALE = 10_000
 
@@ -119,12 +118,12 @@ def _make_ctx(position: int = 0, l1_data: tuple | None = None) -> StrategyContex
 
     default_l1 = (
         _TS_BASE_NS,
-        _scaled(4_999),  # best_bid
-        _scaled(5_001),  # best_ask
-        _scaled(4_999) + _scaled(5_001),  # mid_x2
-        _scaled(2),  # spread
-        10,  # bid_depth
-        10,  # ask_depth
+        _scaled(4_999),
+        _scaled(5_001),
+        _scaled(4_999) + _scaled(5_001),
+        _scaled(2),
+        10,
+        10,
     )
 
     def _l1_source(symbol: str):
@@ -160,18 +159,12 @@ def _seed_tx_baseline(strat: TxTmfLeadLagStrategy, ctx: StrategyContext) -> None
     strat.handle_event(ctx, _make_tx_tick(ts=_TS_BASE_NS, price_pts=20_000, total_volume=100))
 
 
-# =====================================================================
-# Signal Generation Tests
-# =====================================================================
-
-
 class TestSignalGeneration:
     def test_large_dvol_with_dp_generates_buy_signal(self) -> None:
         strat = _make_strategy()
         ctx = _make_ctx()
         _seed_tx_baseline(strat, ctx)
 
-        # TX tick: vol 100→125 (dvol=25>=20), price up
         intents = strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + _ONE_SEC_NS, price_pts=20_010, total_volume=125),
@@ -225,15 +218,12 @@ class TestSignalGeneration:
         ctx = _make_ctx()
         _seed_tx_baseline(strat, ctx)
 
-        # First signal
         strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 1 * _ONE_SEC_NS, price_pts=20_010, total_volume=125),
         )
-        # Fill it
         strat.handle_event(ctx, _make_tmf_fill(Side.BUY, 5_001, match_ts_ns=_TS_BASE_NS))
 
-        # Second signal — should be blocked
         intents = strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 2 * _ONE_SEC_NS, price_pts=20_020, total_volume=150),
@@ -246,34 +236,25 @@ class TestSignalGeneration:
         ctx = _make_ctx()
         _seed_tx_baseline(strat, ctx)
 
-        # First signal at t=1s
         intents1 = strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 1 * _ONE_SEC_NS, price_pts=20_010, total_volume=125),
         )
         assert len(intents1) == 1
 
-        # Fill entry
         strat.handle_event(ctx, _make_tmf_fill(Side.BUY, 5_001, match_ts_ns=_TS_BASE_NS + _ONE_SEC_NS))
 
-        # Second signal at t=5s — within cooldown
         intents2 = strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 5 * _ONE_SEC_NS, price_pts=20_020, total_volume=150),
         )
         assert intents2 == []
 
-        # Third signal at t=12s — after cooldown
         intents3 = strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 12 * _ONE_SEC_NS, price_pts=20_030, total_volume=180),
         )
         assert len(intents3) == 1
-
-
-# =====================================================================
-# Entry Fill Tests
-# =====================================================================
 
 
 class TestEntryFill:
@@ -315,11 +296,6 @@ class TestEntryFill:
         assert len(strat._positions_open) == 0
 
 
-# =====================================================================
-# Exit Tests: SL and Time-Kill
-# =====================================================================
-
-
 class TestExitConditions:
     def _enter_long(self, strat, ctx) -> None:
         _seed_tx_baseline(strat, ctx)
@@ -337,7 +313,6 @@ class TestExitConditions:
         ctx = _make_ctx()
         self._enter_long(strat, ctx)
 
-        # Price drops 101 pts (> 100 SL)
         exit_intents = strat.handle_event(
             ctx,
             _make_tmf_stats(ts=_TS_BASE_NS + 60 * _ONE_SEC_NS, mid_pts=4_900),
@@ -353,7 +328,6 @@ class TestExitConditions:
         ctx = _make_ctx()
         self._enter_long(strat, ctx)
 
-        # Price drops 50 pts (< 100 SL)
         intents = strat.handle_event(
             ctx,
             _make_tmf_stats(ts=_TS_BASE_NS + 60 * _ONE_SEC_NS, mid_pts=4_951),
@@ -366,7 +340,6 @@ class TestExitConditions:
         ctx = _make_ctx()
         self._enter_long(strat, ctx)
 
-        # 301 seconds later — beyond max_hold
         exit_intents = strat.handle_event(
             ctx,
             _make_tmf_stats(ts=_TS_BASE_NS + 302 * _ONE_SEC_NS, mid_pts=5_001),
@@ -388,11 +361,6 @@ class TestExitConditions:
         )
 
         assert intents == []
-
-
-# =====================================================================
-# Exit Fill and IOC Rejection
-# =====================================================================
 
 
 class TestExitFill:
@@ -430,7 +398,6 @@ class TestExitFill:
         assert pos.aggressive_exit_inflight is True
         assert pos.awaiting_exit is True
 
-        # IOC rejected
         strat.handle_event(
             ctx,
             _make_tmf_order(OrderStatus.CANCELLED, Side.SELL, filled_qty=0),
@@ -444,7 +411,6 @@ class TestExitFill:
         ctx = _make_ctx()
         self._enter_and_trigger_sl(strat, ctx)
 
-        # Reject exit IOC
         strat.handle_event(
             ctx,
             _make_tmf_order(OrderStatus.CANCELLED, Side.SELL, filled_qty=0),
@@ -452,7 +418,6 @@ class TestExitFill:
         pos = strat._positions_open[0]
         assert pos.pending_force_close is True
 
-        # Next stats tick should retry
         retry_intents = strat.handle_event(
             ctx,
             _make_tmf_stats(ts=_TS_BASE_NS + 61 * _ONE_SEC_NS, mid_pts=4_900),
@@ -464,25 +429,18 @@ class TestExitFill:
         assert retry_intents[0].intent_type == IntentType.FORCE_FLAT
 
 
-# =====================================================================
-# Multi-Position Tests
-# =====================================================================
-
-
 class TestMultiPosition:
     def test_multiple_positions_tracked_independently(self) -> None:
         strat = _make_strategy(max_position_lots=3, cooldown_ns=0)
         ctx = _make_ctx()
         _seed_tx_baseline(strat, ctx)
 
-        # First entry
         strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 1 * _ONE_SEC_NS, price_pts=20_010, total_volume=125),
         )
         strat.handle_event(ctx, _make_tmf_fill(Side.BUY, 5_001, match_ts_ns=_TS_BASE_NS + _ONE_SEC_NS))
 
-        # Second entry
         strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 2 * _ONE_SEC_NS, price_pts=20_020, total_volume=150),
@@ -498,7 +456,6 @@ class TestMultiPosition:
         ctx = _make_ctx()
         _seed_tx_baseline(strat, ctx)
 
-        # Open two long positions
         strat.handle_event(
             ctx,
             _make_tx_tick(ts=_TS_BASE_NS + 1 * _ONE_SEC_NS, price_pts=20_010, total_volume=125),
@@ -511,16 +468,10 @@ class TestMultiPosition:
         )
         strat.handle_event(ctx, _make_tmf_fill(Side.BUY, 5_002, match_ts_ns=_TS_BASE_NS + 2 * _ONE_SEC_NS))
 
-        # Exit fill — closes first (oldest) position
         strat.handle_event(ctx, _make_tmf_fill(Side.SELL, 5_010))
 
         assert len(strat._positions_open) == 1
         assert strat._positions_open[0].entry_price == _scaled(5_002)
-
-
-# =====================================================================
-# Day Boundary Tests
-# =====================================================================
 
 
 class TestDayBoundary:
@@ -528,41 +479,30 @@ class TestDayBoundary:
         strat = _make_strategy()
         ctx = _make_ctx()
 
-        day1_base = 86_400 * _ONE_SEC_NS  # day 1
-        day2_base = 2 * 86_400 * _ONE_SEC_NS  # day 2
+        day1_base = 86_400 * _ONE_SEC_NS
+        day2_base = 2 * 86_400 * _ONE_SEC_NS
 
-        # Day 1: set baseline
         strat.handle_event(ctx, _make_tx_tick(ts=day1_base, price_pts=20_000, total_volume=500))
-        # Day 1: large vol
         strat.handle_event(
             ctx,
             _make_tx_tick(ts=day1_base + _ONE_SEC_NS, price_pts=20_010, total_volume=525),
         )
-        assert strat._awaiting_entry == 1  # signal generated
-        strat._awaiting_entry = 0  # reset for test
+        assert strat._awaiting_entry == 1
+        strat._awaiting_entry = 0
 
-        # Day 2: volume resets to low value
         intents = strat.handle_event(
             ctx,
             _make_tx_tick(ts=day2_base, price_pts=20_020, total_volume=5),
         )
-        # Day boundary — volume reset, dvol = 5 < 20 threshold. No signal.
         assert intents == []
         assert strat._last_tx_vol == 5
 
 
-# =====================================================================
-# Session Gate Tests
-# =====================================================================
-
-
 class TestSessionGate:
     def test_no_entry_outside_session(self) -> None:
-        # Session: 00:45 - 05:45 UTC
         strat = _make_strategy(session_start_sec=45 * 60, session_end_sec=5 * 3600 + 45 * 60)
         ctx = _make_ctx()
 
-        # 06:00 UTC = outside session
         ts_outside = 6 * 3600 * _ONE_SEC_NS
         strat.handle_event(ctx, _make_tx_tick(ts=ts_outside, price_pts=20_000, total_volume=100))
         intents = strat.handle_event(
@@ -598,17 +538,9 @@ class TestSessionGate:
         assert len(intents) == 1
 
 
-# =====================================================================
-# EOD Force-Close Tests
-# =====================================================================
-
-
 class TestEodForceClose:
     def test_eod_force_close_triggers(self) -> None:
         """Positions are force-closed when near session end."""
-        # Use utc_offset_sec=0 so sec_of_day = raw UTC seconds.
-        # Session: 1000s - 5000s of day. Margin = 30s.
-        # Force-close zone: 4970s - 5000s.
         session_start_sec = 1_000
         session_end_sec = 5_000
         margin_ns = 30 * _ONE_SEC_NS
@@ -618,12 +550,11 @@ class TestEodForceClose:
             session_end_sec=session_end_sec,
             utc_offset_sec=0,
             force_close_margin_ns=margin_ns,
-            max_hold_ns=3600 * _ONE_SEC_NS,  # 1hr — won't trigger time-kill
-            sl_pts=10_000,  # very wide SL — won't trigger
+            max_hold_ns=3600 * _ONE_SEC_NS,
+            sl_pts=10_000,
         )
         ctx = _make_ctx()
 
-        # Enter at t=2000s — well within session
         entry_ts = 2_000 * _ONE_SEC_NS
         strat.handle_event(ctx, _make_tx_tick(ts=entry_ts, price_pts=20_000, total_volume=100))
         strat.handle_event(
@@ -636,7 +567,6 @@ class TestEodForceClose:
         )
         assert len(strat._positions_open) == 1
 
-        # Stats at t=4960s — 40s before session end, outside 30s margin
         no_close_ts = 4_960 * _ONE_SEC_NS
         intents = strat.handle_event(
             ctx,
@@ -645,7 +575,6 @@ class TestEodForceClose:
         assert intents == []
         assert len(strat._positions_open) == 1
 
-        # Stats at t=4971s — within 30s margin → force close
         force_close_ts = 4_971 * _ONE_SEC_NS
         intents = strat.handle_event(
             ctx,
@@ -677,7 +606,6 @@ class TestEodForceClose:
         entry_ts = 2_000 * _ONE_SEC_NS
         strat.handle_event(ctx, _make_tx_tick(ts=entry_ts, price_pts=20_000, total_volume=100))
 
-        # Open 2 positions
         strat.handle_event(
             ctx,
             _make_tx_tick(ts=entry_ts + 1 * _ONE_SEC_NS, price_pts=20_010, total_volume=125),
@@ -692,14 +620,12 @@ class TestEodForceClose:
 
         assert len(strat._positions_open) == 2
 
-        # Force close at t=4980s (within 30s margin)
         force_close_ts = 4_980 * _ONE_SEC_NS
         intents = strat.handle_event(
             ctx,
             _make_tmf_stats(ts=force_close_ts, mid_pts=5_001),
         )
 
-        # Both positions should have exit intents
         assert len(intents) == 2
         assert all(i.side == Side.SELL for i in intents)
         assert all(i.intent_type == IntentType.FORCE_FLAT for i in intents)

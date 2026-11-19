@@ -39,14 +39,13 @@ class WALScheduler:
         """
         self._loader = loader
         self._calendar = get_calendar()
-        self._close_buffer_s = float(os.getenv("HFT_WAL_CLOSE_BUFFER_S", "300"))  # 5 min after close
-        self._check_interval_s = float(os.getenv("HFT_WAL_SCHEDULER_INTERVAL_S", "60"))  # Check every minute
+        self._close_buffer_s = float(os.getenv("HFT_WAL_CLOSE_BUFFER_S", "300"))
+        self._check_interval_s = float(os.getenv("HFT_WAL_SCHEDULER_INTERVAL_S", "60"))
         self._running = False
         self._thread: threading.Thread | None = None
         self._last_flush_date: dt.date | None = None
         self._metrics = MetricsRegistry.get()
 
-        # Retry configuration (O2)
         self._flush_max_retries = int(os.getenv("HFT_WAL_FLUSH_MAX_RETRIES", "3"))
         self._flush_base_delay_s = float(os.getenv("HFT_WAL_FLUSH_BASE_DELAY_S", "1.0"))
         self._flush_max_delay_s = float(os.getenv("HFT_WAL_FLUSH_MAX_DELAY_S", "30.0"))
@@ -103,7 +102,6 @@ class WALScheduler:
         now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._calendar._tz)
         today = now.date()
 
-        # Non-trading day: check every hour
         if not self._calendar.is_trading_day(today):
             return 3600.0
 
@@ -113,21 +111,17 @@ class WALScheduler:
         if open_time is None or close_time is None:
             return 3600.0
 
-        # Pre-market (1 hour before open): check every 5 minutes
         pre_market = open_time - dt.timedelta(hours=1)
         if pre_market <= now < open_time:
             return 300.0
 
-        # Trading hours: check every minute
         if open_time <= now <= close_time:
             return 60.0
 
-        # Post-close buffer period: check every minute (need to catch flush trigger)
         buffer_end = close_time + dt.timedelta(seconds=self._close_buffer_s + 300)
         if close_time < now <= buffer_end:
             return 60.0
 
-        # After buffer: check every hour
         return 3600.0
 
     def _schedule_loop(self) -> None:
@@ -141,10 +135,8 @@ class WALScheduler:
             except Exception as exc:
                 logger.error("WAL scheduler error", error=str(exc))
 
-            # Get adaptive interval based on market state
             interval = self._get_check_interval()
 
-            # Sleep in short intervals to allow clean shutdown
             for _ in range(int(interval)):
                 if not self._running:
                     break
@@ -155,22 +147,18 @@ class WALScheduler:
         now = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._calendar._tz)
         today = now.date()
 
-        # Skip if not a trading day
         if not self._calendar.is_trading_day(today):
             return
 
-        # Skip if already flushed today
         if self._last_flush_date == today:
             return
 
-        # Get today's close time + buffer
         close_time = self._calendar.get_session_close(today)
         if close_time is None:
             return
 
         trigger_time = close_time + dt.timedelta(seconds=self._close_buffer_s)
 
-        # Check if we should flush
         if now >= trigger_time:
             logger.info(
                 "Market closed, triggering WAL batch flush",
@@ -192,7 +180,6 @@ class WALScheduler:
         for attempt in range(self._flush_max_retries):
             try:
                 start_ns = time.perf_counter_ns()
-                # Force immediate processing (ignore 2-second mtime check)
                 self._loader.process_files(force=True)
                 duration_ms = (time.perf_counter_ns() - start_ns) / 1e6
 

@@ -150,5 +150,4 @@ class TestBatchPromoter:
             promoter = BatchPromoter(experiments_dir=str(exp_dir))
             promoter.run_fleet(dry_run=True)
 
-        # High Sharpe should be evaluated first
         assert call_order[0] == "high_sharpe"

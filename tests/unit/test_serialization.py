@@ -67,7 +67,6 @@ class _SlottedMissing:
 
     def __init__(self, value: int) -> None:
         self.present = value
-        # 'missing' slot intentionally not set
 
 
 def test_serialize_slots_skips_unset_slot():

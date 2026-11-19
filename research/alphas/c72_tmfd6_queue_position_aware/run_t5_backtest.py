@@ -43,7 +43,7 @@ logger = structlog.get_logger("c72.t5_backtest")
 _SCALE = 1_000_000
 _MAKER_REBATE_NTD_PER_SIDE = 10
 _COST_RT_SCENARIOS_PTS: tuple[float, ...] = (1.05, 1.50, 1.95, 3.00, 4.00)
-_DEPTH_THRESHOLDS: tuple[int, ...] = (2, 5, 10)  # top1/top2/top3 proxy
+_DEPTH_THRESHOLDS: tuple[int, ...] = (2, 5, 10)
 
 
 def _cost_sensitivity(gross_pts: float, n_fills: int) -> dict:
@@ -215,7 +215,6 @@ def main() -> int:
     depths = [int(x) for x in args.depth_sweep.split(",")]
     bracket = [int(x) for x in args.max_pos_bracket.split(",")]
 
-    # --- C72 main sweep ---
     c72_runs: dict[str, dict] = {}
     for depth in depths:
         for mp in bracket:
@@ -232,7 +231,6 @@ def main() -> int:
                 days_positive=run["days_positive_inst"],
             )
 
-    # --- C60 baseline (gate OFF) per-mp ---
     c60_baseline: dict[str, dict] = {}
     for mp in bracket:
         key = f"mp{mp}"
@@ -250,7 +248,6 @@ def main() -> int:
             days_positive=run["days_positive_inst"],
         )
 
-    # --- Dominance analysis (per mp at inst RT 1.5) ---
     dominance = {}
     for mp in bracket:
         baseline = c60_baseline[f"mp{mp}"]

@@ -59,8 +59,6 @@ def test_get_positions_returns_none_when_no_trading_account_resolves() -> None:
 
     result = gateway.get_positions()
 
-    # None means "unknown"; an empty list would claim the account is flat and
-    # the reconciler would build a broker map from it.
     assert result is None
     assert client.recorded == [("positions", False)]
     assert "no trading account resolved" in (gateway._last_positions_error or "")
@@ -87,11 +85,6 @@ def test_get_positions_still_returns_empty_when_the_broker_answers_flat() -> Non
     assert result == []
     assert result is not None
     assert client.recorded == [("positions", True)]
-
-
-# ---------------------------------------------------------------------------
-# order_id_map trailing-edge persistence
-# ---------------------------------------------------------------------------
 
 
 async def _await_tokens(path: Path, expected: set[str], timeout_s: float = 2.0) -> set[str]:
@@ -148,7 +141,6 @@ async def test_second_mapping_inside_the_throttle_window_still_reaches_disk(
     adapter._order_id_map_persist_interval_s = 0.2
     adapter._order_id_map_last_persist_s = 0.0
     adapter._order_id_map_trailing_handle = None
-    # __new__ skips __init__, so the checkpoint's own state must be seeded.
     adapter._order_id_map_persist_futures = set()
     adapter.order_id_map = {}
 
@@ -162,15 +154,12 @@ async def test_second_mapping_inside_the_throttle_window_still_reaches_disk(
 
     adapter.persist_order_id_map = _persist  # type: ignore[method-assign]
 
-    # Leg 1: first write of the window persists immediately (leading edge).
     adapter.order_id_map["121"] = "R47_MAKER_TMF:121"
     adapter._maybe_persist_order_id_map()
     assert await _await_tokens(persist_path, {"121"}) == {"121"}
 
-    # Leg 2, ~0.3 s later in production terms: inside the throttle window.
     adapter.order_id_map["122"] = "R47_MAKER_TMF:122"
     adapter._maybe_persist_order_id_map()
 
-    # Nothing else ever calls persist again — the trailing edge must.
     assert await _await_tokens(persist_path, {"121", "122"}) == {"121", "122"}
     adapter._cancel_trailing_persist()

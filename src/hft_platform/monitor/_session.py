@@ -10,7 +10,6 @@ from hft_platform.core.market_calendar import get_calendar
 
 logger = get_logger("monitor.session")
 
-# Module-level cached timezone (Phase 2d)
 try:
     from zoneinfo import ZoneInfo
 
@@ -46,7 +45,6 @@ def get_session_info(
             return True, "", "Day Session"
         return True, "", "Day Session"
 
-    # Check pre-market
     current_min = now.hour * 60 + now.minute
     if product_type in ("future", "option"):
         if 8 * 60 + 30 <= current_min < 8 * 60 + 45:

@@ -18,10 +18,6 @@ import yaml
 
 from tests.unit.shioaji_contracts_helper import mark_contracts_loaded
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_client(config_path: str) -> Any:
     """Return a ShioajiClient with a mocked API."""
@@ -43,7 +39,7 @@ def symbols_config(tmp_path):
 def client_no_contracts(symbols_config):
     """ShioajiClient whose api has NO Contracts attribute."""
     c = _make_client(symbols_config)
-    mock_api = MagicMock(spec=[])  # spec=[] means no attributes
+    mock_api = MagicMock(spec=[])
     mock_api.fetch_contracts = MagicMock()
     c.api = mock_api
     return c
@@ -54,14 +50,9 @@ def client_with_contracts(symbols_config):
     """ShioajiClient whose api already has Contracts attribute."""
     c = _make_client(symbols_config)
     mock_api = MagicMock()
-    mock_api.Contracts = MagicMock()  # Contracts exists
+    mock_api.Contracts = MagicMock()
     c.api = mock_api
     return c
-
-
-# ---------------------------------------------------------------------------
-# contracts_ready property
-# ---------------------------------------------------------------------------
 
 
 class TestContractsReadyProperty:
@@ -77,11 +68,6 @@ class TestContractsReadyProperty:
         assert client_with_contracts.contracts_ready is True
 
 
-# ---------------------------------------------------------------------------
-# _ensure_contracts return value
-# ---------------------------------------------------------------------------
-
-
 class TestEnsureContracts:
     def test_returns_false_when_api_is_none(self, symbols_config):
         c = _make_client(symbols_config)
@@ -92,8 +78,6 @@ class TestEnsureContracts:
     def test_returns_false_when_fetch_contracts_not_available(self, symbols_config):
         """api exists but has no fetch_contracts method."""
         c = _make_client(symbols_config)
-        # api has Contracts already but no fetch_contracts — edge case
-        # Should still return contracts_ready (True here)
         mock_api = MagicMock(spec=["Contracts"])
         mock_api.Contracts = MagicMock()
         c.api = mock_api
@@ -103,7 +87,6 @@ class TestEnsureContracts:
     def test_returns_true_when_fetch_succeeds_and_contracts_loaded(self, client_no_contracts):
         """After a successful fetch_contracts call, Contracts is available."""
 
-        # Simulate the SDK setting Contracts after fetch
         def _side_effect(**kwargs):
             client_no_contracts.api.Contracts = MagicMock()
 
@@ -119,7 +102,7 @@ class TestEnsureContracts:
 
     def test_returns_false_when_fetch_succeeds_but_contracts_still_missing(self, client_no_contracts):
         """fetch_contracts call succeeds but SDK didn't populate Contracts."""
-        client_no_contracts.api.fetch_contracts = MagicMock()  # does nothing
+        client_no_contracts.api.fetch_contracts = MagicMock()
         result = client_no_contracts._ensure_contracts()
         assert result is False
 
@@ -130,8 +113,6 @@ class TestEnsureContracts:
         client_no_contracts.api.fetch_contracts = MagicMock(side_effect=_side_effect)
         client_no_contracts._record_api_latency = MagicMock()
         client_no_contracts._ensure_contracts()
-        # Verify latency was recorded with the right operation name and ok=True.
-        # The timestamp argument is a perf_counter_ns value — just verify it's an int.
         assert client_no_contracts._record_api_latency.call_count == 1
         call_args = client_no_contracts._record_api_latency.call_args
         assert call_args[0][0] == "fetch_contracts"
@@ -147,11 +128,6 @@ class TestEnsureContracts:
         assert call_args[0][0] == "fetch_contracts"
         assert isinstance(call_args[0][1], int)
         assert call_args[1]["ok"] is False
-
-
-# ---------------------------------------------------------------------------
-# session_runtime contracts logging
-# ---------------------------------------------------------------------------
 
 
 def _make_session_mock_client(contracts_ready: bool):
@@ -187,7 +163,7 @@ def _make_session_mock_client(contracts_ready: bool):
     if contracts_ready:
         mark_contracts_loaded(c.api)
     else:
-        c._login_contract_timeout_s = 0.0  # nothing will load; do not wait out the budget
+        c._login_contract_timeout_s = 0.0
     c._sanitize_metric_label = MagicMock(return_value="unknown")
     c.reconnect = MagicMock(return_value=True)
     return c
@@ -214,14 +190,8 @@ class TestSessionRuntimeContractsFlag:
             result = rt.login_with_retry()
 
         assert result is True
-        # Login still succeeds even without contracts
         assert c.logged_in is True
         assert c._contracts_ready is False
-
-
-# ---------------------------------------------------------------------------
-# OrderGateway.place_order — contracts_ready guard
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -244,7 +214,7 @@ def gateway_no_contracts(symbols_config, mock_sj_module):
     from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
     client = ShioajiClient(config_path=symbols_config)
-    mock_api = MagicMock(spec=[])  # no Contracts attribute
+    mock_api = MagicMock(spec=[])
     client.api = mock_api
     client.metrics = MagicMock()
     yield OrderGateway(client)
@@ -305,7 +275,7 @@ class TestPlaceOrderContractsGate:
         from hft_platform.feed_adapter.shioaji_client import ShioajiClient
 
         client = ShioajiClient(config_path=symbols_config)
-        client.api = None  # simulates SDK-not-installed path
+        client.api = None
         client.metrics = MagicMock()
         gw = OrderGateway(client)
 

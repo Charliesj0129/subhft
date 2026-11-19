@@ -30,7 +30,7 @@ class TestRustDedupStore:
         s = self._make()
         is_hit, approved, reason, cmd_id = s.check_or_reserve("key1")
         assert is_hit is False
-        assert approved == -1  # RESERVED
+        assert approved == -1
 
     def test_duplicate_key_returns_hit(self):
         s = self._make()
@@ -38,7 +38,7 @@ class TestRustDedupStore:
         s.commit("key1", True, "OK", 42)
         is_hit, approved, reason, cmd_id = s.check_or_reserve("key1")
         assert is_hit is True
-        assert approved == 1  # APPROVED
+        assert approved == 1
         assert reason == "OK"
         assert cmd_id == 42
 
@@ -48,23 +48,21 @@ class TestRustDedupStore:
         s.commit("key1", False, "RISK_REJECT", 0)
         is_hit, approved, reason, cmd_id = s.check_or_reserve("key1")
         assert is_hit is True
-        assert approved == 0  # REJECTED
+        assert approved == 0
         assert reason == "RISK_REJECT"
 
     def test_reserved_record_returned(self):
         s = self._make()
         s.check_or_reserve("key1")
-        # Before commit, should still be hit with reserved status
         is_hit, approved, _, _ = s.check_or_reserve("key1")
         assert is_hit is True
-        assert approved == -1  # still RESERVED
+        assert approved == -1
 
     def test_lru_eviction(self):
         s = self._make(window_size=3)
         s.check_or_reserve("a")
         s.check_or_reserve("b")
         s.check_or_reserve("c")
-        # 'a' is oldest, should be evicted when 'd' is added
         s.check_or_reserve("d")
         assert s.size() == 3
         assert not s.contains("a")
@@ -76,9 +74,7 @@ class TestRustDedupStore:
         s.check_or_reserve("a")
         s.check_or_reserve("b")
         s.check_or_reserve("c")
-        # Access 'a' to refresh it
         s.check_or_reserve("a")
-        # Now 'b' is oldest
         s.check_or_reserve("d")
         assert s.contains("a")
         assert not s.contains("b")
@@ -115,17 +111,14 @@ class TestRustDedupStore:
         py = IdempotencyStore(window_size=100, persist_enabled=False)
         rs = self._make(window_size=100)
 
-        # New key
         py_result = py.check_or_reserve("k1")
         rs_hit, _, _, _ = rs.check_or_reserve("k1")
-        assert py_result is None  # Python returns None for miss
+        assert py_result is None
         assert rs_hit is False
 
-        # Commit
         py.commit("k1", True, "OK", 42)
         rs.commit("k1", True, "OK", 42)
 
-        # Hit
         py_result = py.check_or_reserve("k1")
         rs_hit, rs_approved, rs_reason, rs_cmd = rs.check_or_reserve("k1")
         assert py_result is not None

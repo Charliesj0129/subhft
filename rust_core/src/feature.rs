@@ -353,7 +353,6 @@ impl RustFeaturePipelineV1 {
             l1_ask_qty,
         );
 
-        // Compute changed_mask
         let changed_mask = match &self.prev_values {
             None => (1_i64 << values.len()) - 1,
             Some(prev) => {
@@ -371,7 +370,6 @@ impl RustFeaturePipelineV1 {
             }
         };
 
-        // Compute warmup_ready_mask
         let mut warmup_mask: i64 = 0;
         for (idx, threshold) in self.warmup_thresholds.iter().enumerate() {
             if warm_count >= *threshold {
@@ -391,8 +389,6 @@ impl RustFeaturePipelineV1 {
 
 #[inline]
 fn py_round_i64(x: f64) -> i64 {
-    // Python round() uses bankers rounding (ties to even).
-    // Rust stable provides round_ties_even on f64.
     x.round_ties_even() as i64
 }
 
@@ -405,8 +401,8 @@ mod tests {
         let mut k = LobFeatureKernelV1Inner::new();
         let v = k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 100, 80);
         assert_eq!(v.len(), 16);
-        assert_eq!(v[11], 0); // ofi_l1_raw
-        assert_eq!(v[12], 0); // ofi_l1_cum
+        assert_eq!(v[11], 0);
+        assert_eq!(v[12], 0);
     }
 
     #[test]
@@ -414,8 +410,8 @@ mod tests {
         let mut k = LobFeatureKernelV1Inner::new();
         k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 100, 80);
         let v = k.compute(100_0000, 101_0000, 201_0000, 1_0000, 500, 400, 150, 80);
-        // b_flow = 150 - 100 = 50 (same price), a_flow = 80 - 80 = 0
-        assert_eq!(v[11], 50); // ofi_l1_raw
+
+        assert_eq!(v[11], 50);
     }
 
     #[test]
@@ -425,7 +421,7 @@ mod tests {
             k.compute(100_0000, 101_0000, 201_0000, 1_0000, 100, 100, 50, 50);
         }
         let v = k.compute(100_0000, 101_0000, 201_0000, 1_0000, 100, 100, 50, 50);
-        // spread_ema should converge to spread_scaled = 1_0000
+
         assert_eq!(v[14], 1_0000);
     }
 
@@ -444,8 +440,8 @@ mod tests {
         let mut p = RustFeaturePipelineV1::new(vec![0; 16]);
         let (values, changed, warmup) = p.process(100, 102, 202, 2, 50, 40, 30, 20, 0);
         assert_eq!(values.len(), 16);
-        assert_eq!(changed, (1_i64 << 16) - 1); // all changed on first tick
-        assert_eq!(warmup, (1_i64 << 16) - 1); // warm_count=0 >= threshold=0
+        assert_eq!(changed, (1_i64 << 16) - 1);
+        assert_eq!(warmup, (1_i64 << 16) - 1);
     }
 
     #[test]
@@ -453,8 +449,7 @@ mod tests {
         let thresholds: Vec<i64> = (0..16).map(|i| i * 10).collect();
         let mut p = RustFeaturePipelineV1::new(thresholds);
         let (_, _, warmup) = p.process(100, 102, 202, 2, 50, 40, 30, 20, 5);
-        // warm_count=5, thresholds: 0,10,20,...
-        // Only threshold 0 is met (5 >= 0), so warmup_mask = 1
+
         assert_eq!(warmup, 1);
     }
 
@@ -463,10 +458,8 @@ mod tests {
         let mut p = RustFeaturePipelineV1::new(vec![0; 16]);
         p.process(100, 102, 202, 2, 50, 40, 30, 20, 0);
         let (_, changed, _) = p.process(100, 102, 202, 2, 50, 40, 30, 20, 1);
-        // Same inputs → OFI raw = 0, cum = 0, no price change → most values same
-        // Only ofi_l1_ema8, spread_ema8, depth_imbalance_ema8_ppm may differ slightly
-        // But with same inputs, the mask should be small
-        assert!(changed < (1_i64 << 16) - 1); // not all changed
+
+        assert!(changed < (1_i64 << 16) - 1);
     }
 
     #[test]
@@ -480,9 +473,9 @@ mod tests {
     #[test]
     fn test_microprice_calculation() {
         let mut k = LobFeatureKernelV1Inner::new();
-        // bid=100, ask=102, bid_qty=200, ask_qty=100
+
         let v = k.compute(100, 102, 202, 2, 300, 200, 200, 100);
-        // microprice_x2 = round(2.0 * (102*200 + 100*100) / 300) = round(202.666...) = 203
+
         assert_eq!(v[7], 203);
     }
 
@@ -490,15 +483,15 @@ mod tests {
     fn test_imbalance_ppm_zero_depth() {
         let mut k = LobFeatureKernelV1Inner::new();
         let v = k.compute(100, 102, 202, 2, 0, 0, 0, 0);
-        assert_eq!(v[6], 0); // imbalance_ppm
-        assert_eq!(v[10], 0); // l1_imbalance_ppm
+        assert_eq!(v[6], 0);
+        assert_eq!(v[10], 0);
     }
 
     #[test]
     fn test_negative_inputs_clamped() {
         let mut k = LobFeatureKernelV1Inner::new();
         let v = k.compute(100, 102, 202, 2, -10, -5, -3, -2);
-        assert_eq!(v[4], 0); // bid_depth clamped to 0
-        assert_eq!(v[5], 0); // ask_depth clamped to 0
+        assert_eq!(v[4], 0);
+        assert_eq!(v[5], 0);
     }
 }

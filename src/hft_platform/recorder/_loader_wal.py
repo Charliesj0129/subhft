@@ -19,10 +19,6 @@ from hft_platform.recorder._loader_common import (
     timebase,
 )
 
-# ---------------------------------------------------------------------------
-# Manifest helpers (P1-1)
-# ---------------------------------------------------------------------------
-
 
 def manifest_sidecar_dir(manifest_path: str) -> str:
     """Directory holding manifest sidecars (``.bak`` copy and temp files).
@@ -57,12 +53,10 @@ def prune_manifest(svc: Any) -> int:
     try:
         live = {f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")}
     except OSError:
-        return 0  # cannot enumerate WAL dir -> never prune blind
+        return 0
     archive_dir = getattr(svc, "archive_dir", None)
     if archive_dir and os.path.isdir(archive_dir):
         try:
-            # Archiving preserves the basename (shutil.move into archive_dir),
-            # so archived entries must survive pruning until retention deletes them.
             live |= {f for f in os.listdir(archive_dir) if f.endswith(".jsonl")}
         except OSError:
             return 0
@@ -93,7 +87,6 @@ def load_manifest(svc: Any) -> None:
         svc._manifest = set()
         return
 
-    # EC-5: Detect stuck files still in WAL dir but marked as processed
     try:
         pending = {f for f in os.listdir(svc.wal_dir) if f.endswith(".jsonl")}
         stuck = svc._manifest & pending
@@ -117,9 +110,6 @@ def save_manifest(svc: Any) -> None:
     try:
         os.makedirs(manifest_dir, exist_ok=True)
         os.makedirs(sidecar_dir, exist_ok=True)
-        # Reclaim the pre-2026-07-25 sidecar that used to live beside the
-        # manifest; left in place it keeps inflating _wal_dir_size_mb after
-        # deploy. Nothing reads it -- it is write-only insurance.
         legacy_bak = svc._manifest_path + ".bak"
         if os.path.exists(legacy_bak):
             try:
@@ -134,16 +124,9 @@ def save_manifest(svc: Any) -> None:
                 shutil.copy2(svc._manifest_path, bak_path)
             except OSError:
                 pass
-        # Snapshot under the lock: mark_processed can add entries concurrently,
-        # and iterating a mutating set raises RuntimeError.
         with svc._manifest_lock:
             entries = sorted(svc._manifest)
-        # Same-filesystem subdirectory, so the rename below stays atomic.
         fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=sidecar_dir)
-        # M2 (2026-04-25): finally-cleanup. Manifest writer is the most likely
-        # source of the 8 orphan tmp*.tmp files seen in production /app/.wal/
-        # because it runs on the loader thread which can be killed on
-        # SIGTERM during the rare-window between fsync and rename.
         try:
             with os.fdopen(fd, "w") as f:
                 for fname in entries:
@@ -151,7 +134,6 @@ def save_manifest(svc: Any) -> None:
                 f.flush()
                 os.fsync(f.fileno())
             os.rename(tmp_path, svc._manifest_path)
-            # Directory fsync to ensure rename is durable on crash
             try:
                 dir_fd = os.open(manifest_dir, os.O_RDONLY | os.O_DIRECTORY)
                 try:
@@ -159,7 +141,7 @@ def save_manifest(svc: Any) -> None:
                 finally:
                     os.close(dir_fd)
             except OSError:
-                pass  # Best-effort; rename itself is atomic
+                pass
         finally:
             if os.path.exists(tmp_path):
                 try:
@@ -170,17 +152,12 @@ def save_manifest(svc: Any) -> None:
                         m = MetricsRegistry.get()
                         if m is not None:
                             m.wal_orphan_tmp_cleaned_total.labels(location="loader_manifest").inc()
-                    except Exception as _exc:  # noqa: BLE001
+                    except Exception as _exc:
                         pass
                 except OSError:
                     pass
     except Exception as e:
         logger.warning("Failed to save manifest", error=str(e))
-
-
-# ---------------------------------------------------------------------------
-# File discovery helpers
-# ---------------------------------------------------------------------------
 
 
 def extract_file_ts(fname: str) -> int:
@@ -232,18 +209,12 @@ def mark_processed(svc: Any, filename: str) -> None:
         svc._manifest.add(fname)
 
 
-# ---------------------------------------------------------------------------
-# Table name parsing
-# ---------------------------------------------------------------------------
-
 _AUDIT_TABLES = frozenset({"audit.orders_log", "audit.risk_log", "audit.guardrail_log"})
 
 
 def parse_table_from_filename(fname: str) -> str:
     """Extract target table name from WAL filename."""
     base = fname
-    # Emergency dump files use batch format with __wal_table__ header;
-    # filename-based parsing is not needed and would produce wrong results.
     if base.startswith("emergency"):
         return "unknown"
     stem = os.path.splitext(fname)[0]
@@ -294,11 +265,6 @@ def parse_batch_table_name(table_name: str) -> str:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Single-file processing
-# ---------------------------------------------------------------------------
-
-
 def process_single_file(svc: Any, fpath: str, force: bool = False) -> bool:
     """Process a single WAL file (CC-3: extracted for parallel use).
 
@@ -306,7 +272,6 @@ def process_single_file(svc: Any, fpath: str, force: bool = False) -> bool:
     """
     fname = os.path.basename(fpath)
 
-    # CE3-03: Shard claim
     if not svc._claim_registry.try_claim(fname):
         logger.debug("WAL file already claimed, skipping", file=fname)
         return False
@@ -322,7 +287,6 @@ def process_single_file(svc: Any, fpath: str, force: bool = False) -> bool:
 
 def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) -> bool:
     """Inner processing logic (called after claim acquired)."""
-    # Check modification time to ensure writer is done
     if not force:
         try:
             mtime = os.path.getmtime(fpath)
@@ -331,7 +295,6 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
         except OSError:
             return False
 
-    # EC-2: Strict ordering check
     if svc._strict_order:
         file_ts = extract_file_ts(fname)
         with svc._loader_stats_lock:
@@ -352,7 +315,6 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
 
     logger.info("Loading file", file=fname)
 
-    # Read all lines from file
     all_lines: list = []
     corrupt_lines = 0
     try:
@@ -369,7 +331,7 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
                         continue
                     try:
                         all_lines.append(_loads(line))
-                    except Exception as _exc:  # noqa: BLE001
+                    except Exception as _exc:
                         corrupt_lines += 1
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -395,7 +357,6 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
             pass
         return True
 
-    # CC-4: Detect multi-table batch format
     is_batch = isinstance(all_lines[0], dict) and "__wal_table__" in all_lines[0]
 
     if is_batch:
@@ -436,7 +397,6 @@ def _process_single_file_inner(svc: Any, fpath: str, fname: str, force: bool) ->
             svc._write_to_dlq(target_table, all_lines, "insert_failed_after_retries")
             return False
 
-    # Move to archive
     try:
         shutil.move(fpath, os.path.join(svc.archive_dir, fname))
         logger.info("Archived file", file=fname)

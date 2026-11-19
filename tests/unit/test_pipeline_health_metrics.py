@@ -40,7 +40,6 @@ class TestPipelineHealthMetricsRegistered:
 
     def test_pipeline_health_state_initial_value_is_zero(self):
         registry = _make_registry()
-        # Gauge should start at 0 (HEALTHY)
         value = registry.pipeline_health_state._value.get()
         assert value == 0.0
 
@@ -58,16 +57,13 @@ class TestPipelineHealthTrackerUpdatesMetrics:
         from hft_platform.observability.metrics import MetricsRegistry
         from hft_platform.recorder.health import PipelineHealthTracker
 
-        # Force fresh singleton so tracker picks up new registry
         MetricsRegistry._instance = None
         registry = MetricsRegistry()
         MetricsRegistry._instance = registry
 
         tracker = PipelineHealthTracker()
-        # Inject the registry directly to bypass any import caching
         tracker._metrics = registry
 
-        # Trigger a transition from HEALTHY -> DATA_LOSS
         tracker.record_event("data_loss")
 
         gauge_value = registry.pipeline_health_state._value.get()
@@ -87,7 +83,6 @@ class TestPipelineHealthTrackerUpdatesMetrics:
 
         before = registry.pipeline_degradation_events_total._value.get()
 
-        # HEALTHY -> DEGRADED
         tracker.record_event("wal_fallback")
         after = registry.pipeline_degradation_events_total._value.get()
 
@@ -107,11 +102,9 @@ class TestPipelineHealthTrackerUpdatesMetrics:
         tracker = PipelineHealthTracker()
         tracker._metrics = registry
 
-        # First event transitions HEALTHY -> DEGRADED
         tracker.record_event("wal_fallback")
         after_first = registry.pipeline_degradation_events_total._value.get()
 
-        # Second identical event stays DEGRADED (no new transition)
         tracker.record_event("wal_fallback")
         after_second = registry.pipeline_degradation_events_total._value.get()
 

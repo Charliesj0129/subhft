@@ -28,8 +28,6 @@ from hft_platform.alpha.experiments import ExperimentTracker
 from hft_platform.alpha.paths import repo_root
 from hft_platform.alpha.provenance import RUN_STAMP_SCHEMA, build_run_stamp
 
-# --- roots ------------------------------------------------------------------
-
 
 @pytest.mark.parametrize(("env", "resolve"), [(EVIDENCE_ROOT_ENV, evidence_root), (DATA_ROOT_ENV, data_root)])
 def test_root_required_but_unset_is_refused(monkeypatch: pytest.MonkeyPatch, env, resolve) -> None:
@@ -81,9 +79,6 @@ def test_governed_refusals_name_every_failed_precondition(monkeypatch: pytest.Mo
 def test_governed_refusals_empty_when_every_precondition_holds(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv(EVIDENCE_ROOT_ENV, str(tmp_path))
     assert governed_refusals(git_commit="c", git_dirty=False, profile_name="p") == []
-
-
-# --- sealing ----------------------------------------------------------------
 
 
 def _run_dir(root: Path, name: str = "run-1") -> Path:
@@ -149,9 +144,6 @@ def test_log_run_refuses_to_rewrite_a_sealed_run(tmp_path: Path) -> None:
         tracker.log_run(**kwargs)
 
 
-# --- ledger -----------------------------------------------------------------
-
-
 def test_ledger_appends_governed_events_in_order(tmp_path: Path) -> None:
     writer = EvidenceWriter(tmp_path)
     writer.append_verdict({"alpha_id": "a1", "stage": "gate_a", "passed": True}, mode=RunMode.GOVERNED)
@@ -182,9 +174,6 @@ def test_ledger_malformed_line_is_an_error_not_skipped(tmp_path: Path) -> None:
         list(writer.read_verdicts())
 
 
-# --- RunStamp v1 -------------------------------------------------------------
-
-
 def test_run_stamp_v1_records_mode_rules_engines_protocol_and_calibration(tmp_path: Path) -> None:
     data = tmp_path / "d.npz"
     data.write_bytes(b"npz")
@@ -204,9 +193,6 @@ def test_run_stamp_v1_records_mode_rules_engines_protocol_and_calibration(tmp_pa
     assert stamp["protocol_sha256"] == "ab" * 32
     assert stamp["calibration"] == "uncalibrated"
     assert stamp["datasets"][str(data)] is not None
-
-
-# --- governed validation ----------------------------------------------------
 
 
 def _report(gate: str, passed: bool, **details) -> GateReport:
@@ -297,7 +283,6 @@ def test_governed_validation_seals_evidence_and_appends_one_event_per_gate(gover
     assert manifests[0] == "runs/run-1/manifest.json"
     assert manifests[1].startswith("validations/a1/") and manifests[1].endswith("/manifest.json")
     assert EvidenceWriter.verify(governed_validation.root / "runs" / "run-1") == []
-    # Validation never rewrites impl.py; status comes from the ledger.
     assert governed_validation.impl.read_text(encoding="utf-8") == _IMPL
 
 
@@ -355,9 +340,6 @@ def test_governed_gate_c_unreadable_verdict_is_recorded_invalid() -> None:
     verdict, reason = validation._gate_c_ledger_verdict(_report("Gate C", False))
     assert verdict == "INVALID"
     assert reason is not None
-
-
-# --- strict pipeline --------------------------------------------------------
 
 
 def test_strict_pipeline_without_evidence_root_stops_before_any_work(monkeypatch, tmp_path: Path) -> None:
@@ -420,7 +402,6 @@ def test_governed_validation_whose_gate_c_meta_has_no_stamp_reaches_no_ledger(
     assert not EvidenceWriter(governed_validation.root).ledger_path.exists()
 
 
-# --- review fixes (PR5b dual review) ----------------------------------------
 _EVENT = {"alpha_id": "a", "stage": "gate_a", "passed": True}
 
 
@@ -471,7 +452,6 @@ def test_seal_hashes_a_nested_manifest_json_and_verifies_clean(tmp_path: Path) -
 
 
 def test_governed_validation_whose_head_moved_during_the_run_reaches_no_ledger(governed_validation) -> None:
-    # Started on c0ffee; another process moved HEAD to a clean beef before Gate C.
     governed_validation.state["git_after_gate_c"] = ("beef", False)
     governed_validation.state["stamp_commit"] = "beef"
     with pytest.raises(GovernedRunRefused, match="HEAD moved"):
@@ -564,7 +544,6 @@ def test_exploratory_promotion_rewrites_no_status(governed_promotion, tmp_path: 
 
     scorecard = _sealed_scorecard(governed_promotion.evidence)
     result = promote_alpha(_promotion_config(tmp_path, scorecard, governed_promotion.evidence, run_mode="exploratory"))
-    # Gate E passed: the removed rewriter would have written GATE_E here.
     assert result.gate_e_passed
     assert governed_promotion.impl.read_text(encoding="utf-8") == _IMPL
     assert not EvidenceWriter(governed_promotion.evidence).ledger_path.exists()

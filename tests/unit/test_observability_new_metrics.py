@@ -25,12 +25,10 @@ def test_new_metrics_exist_with_expected_types_and_labels():
 
     assert hasattr(registry, "strategy_events_received_total")
     assert isinstance(registry.strategy_events_received_total, Counter)
-    # Label set: strategy_id
     assert registry.strategy_events_received_total._labelnames == ("strategy_id",)
 
     assert hasattr(registry, "alias_resolution_coverage_ratio")
     assert isinstance(registry.alias_resolution_coverage_ratio, Gauge)
-    # No labels on the coverage gauge
     assert registry.alias_resolution_coverage_ratio._labelnames == ()
 
     assert hasattr(registry, "reconciliation_drift_streak")
@@ -59,7 +57,6 @@ def test_strategy_events_received_increments_on_dispatch():
             self.calls += 1
             return []
 
-    # Instantiate with dummy bus + queue — we won't actually run the loop, just dispatch.
     import asyncio
 
     bus = _StubBus()
@@ -68,7 +65,6 @@ def test_strategy_events_received_increments_on_dispatch():
         risk_queue=asyncio.Queue(maxsize=16),
         config_path="config/live/strategies.yaml",
     )
-    # Clear any strategies loaded from config — we want an isolated strategy.
     runner.strategies = []
     runner._strat_executors = []
     runner._strat_index = {}
@@ -76,11 +72,9 @@ def test_strategy_events_received_increments_on_dispatch():
     strat = _DummyStrategy()
     runner.register(strat)
 
-    # Grab initial counter value via exposed labels().
     counter = MetricsRegistry.get().strategy_events_received_total.labels(strategy_id="obs_test_strat")
     initial = counter._value.get()
 
-    # Build a minimal tick-like event. StrategyRunner's process_event is async; run it.
     class _Ev:
         symbol = "TXFD6"
         meta = None
@@ -99,9 +93,6 @@ def test_alias_resolution_coverage_ratio_reflects_partial_coverage():
     """Simulate _propagate_alias_map with partial coverage and assert gauge reflects ratio."""
     _fresh_registry()
 
-    # Minimal stand-in for MarketDataService._propagate_alias_map behaviour.
-    # Broker client resolved 4 aliases; SymbolMetadata receives only 2 of them
-    # (simulates a partial propagation race).
     from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
     class _Client:
@@ -113,7 +104,6 @@ def test_alias_resolution_coverage_ratio_reflects_partial_coverage():
         }
 
     metadata = SymbolMetadata()
-    # Only partial set propagated (2 of 4).
     metadata.set_alias_map({"TXFR1": "TXFE6", "TMFR1": "TMFE6"})
 
     configured = len(_Client.alias_to_actual)
@@ -127,7 +117,6 @@ def test_alias_resolution_coverage_ratio_reflects_partial_coverage():
     assert resolved == 2
     assert abs(gauge._value.get() - 0.5) < 1e-9
 
-    # Full coverage case.
     metadata.set_alias_map({"TXFR2": "TXFJ6", "TMFC0": "TMFD6"})
     resolved = len(metadata.alias_to_actual)
     gauge.set(resolved / configured)
@@ -144,6 +133,5 @@ def test_reconciliation_drift_streak_gauge_labels():
     assert registry.reconciliation_drift_streak.labels(symbol="TXFD6")._value.get() == 3
     assert registry.reconciliation_drift_streak.labels(symbol="TMFD6")._value.get() == 1
 
-    # Reset on drift resolution.
     registry.reconciliation_drift_streak.labels(symbol="TXFD6").set(0)
     assert registry.reconciliation_drift_streak.labels(symbol="TXFD6")._value.get() == 0

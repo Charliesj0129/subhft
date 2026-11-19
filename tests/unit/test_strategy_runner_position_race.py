@@ -37,9 +37,6 @@ class _PositionStore:
         self.positions = initial
 
 
-# ─── Unit: _build_positions_by_strategy ──────────────────────────────────────
-
-
 def test_empty_position_store():
     runner = _make_runner(_PositionStore({}))
     result = runner._build_positions_by_strategy()
@@ -55,7 +52,6 @@ def test_structured_position_objects():
     )
     runner = _make_runner(store)
     result = runner._build_positions_by_strategy()
-    # Structured objects go through strategy_id/symbol branch
     assert result.get("s1", {}).get("2330") == 3
     assert result.get("s2", {}).get("2317") == -1
 
@@ -88,10 +84,8 @@ def test_position_key_cache_reused():
     store = _PositionStore({"pos:s1:2330": 10})
     runner = _make_runner(store)
     runner._build_positions_by_strategy()
-    # Manually poison the key in cache — should NOT be overwritten on 2nd call
     runner._position_key_cache["pos:s1:2330"] = ("s1", "POISON")
     result = runner._build_positions_by_strategy()
-    # Cache entry is reused (not re-parsed)
     assert result.get("s1", {}).get("POISON") == 10
 
 
@@ -107,9 +101,6 @@ def test_no_position_store_returns_empty():
     runner = _make_runner(None)
     result = runner._build_positions_by_strategy()
     assert result == {}
-
-
-# ─── Race condition: dict mutation during iteration ──────────────────────────
 
 
 def test_concurrent_dict_mutation_does_not_raise():
@@ -135,7 +126,7 @@ def test_concurrent_dict_mutation_does_not_raise():
         while not stop_event.is_set():
             key = f"pos:s1:SYM{i}"
             shared_positions[key] = i
-            time.sleep(0)  # yield
+            time.sleep(0)
             shared_positions.pop(key, None)
             i += 1
 
@@ -156,9 +147,6 @@ def test_concurrent_dict_mutation_does_not_raise():
     assert not errors, f"Got exception during concurrent dict access: {errors[0]}"
 
 
-# ─── Circuit breaker 3-state FSM ─────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_circuit_breaker_normal_to_degraded():
     """After threshold/2 consecutive failures, state transitions to 'degraded'."""
@@ -172,7 +160,6 @@ async def test_circuit_breaker_normal_to_degraded():
     runner = _make_runner()
     runner._circuit_threshold = 6
     runner._circuit_recovery_threshold = 3
-    # Disable quarantine governor so failures are not masked by DECISION-08
     runner.strategy_governor = None
     strat = _BadStrategy("bad", symbols=["2330"])
     runner.register(strat)
@@ -189,7 +176,6 @@ async def test_circuit_breaker_normal_to_degraded():
         is_odd_lot=False,
     )
 
-    # Reconfigure Rust circuit breaker with updated thresholds
     if runner._rust_circuit is not None:
         try:
             from hft_platform.rust_core import RustCircuitBreaker
@@ -197,16 +183,15 @@ async def test_circuit_breaker_normal_to_degraded():
             from rust_core import RustCircuitBreaker
         runner._rust_circuit = RustCircuitBreaker(6, 3, runner._circuit_cooldown_ns)
 
-    # 3 failures → degraded (threshold // 2 = 3)
     for _ in range(3):
         await runner.process_event(event)
 
     rc = runner._rust_circuit
     if rc is not None:
-        assert rc.get_state("bad") == 1  # DEGRADED
+        assert rc.get_state("bad") == 1
     else:
         assert runner._circuit_states.get("bad") == "degraded"
-    assert strat.enabled  # still enabled in degraded
+    assert strat.enabled
 
 
 @pytest.mark.asyncio
@@ -222,9 +207,7 @@ async def test_circuit_breaker_degraded_to_halted():
     runner = _make_runner()
     runner._circuit_threshold = 4
     runner._circuit_recovery_threshold = max(1, 4 // 2)
-    # Disable quarantine governor so failures are not masked by DECISION-08
     runner.strategy_governor = None
-    # Reconfigure Rust circuit breaker with updated thresholds
     if runner._rust_circuit is not None:
         try:
             from hft_platform.rust_core import RustCircuitBreaker
@@ -251,7 +234,7 @@ async def test_circuit_breaker_degraded_to_halted():
 
     rc = runner._rust_circuit
     if rc is not None:
-        assert rc.get_state("bad2") == 2  # HALTED
+        assert rc.get_state("bad2") == 2
     else:
         assert runner._circuit_states.get("bad2") == "halted"
     assert not strat.enabled
@@ -270,7 +253,6 @@ async def test_circuit_breaker_degraded_recovery():
     runner = _make_runner()
     runner._circuit_threshold = 6
     runner._circuit_recovery_threshold = 3
-    # Reconfigure Rust circuit breaker with updated thresholds
     if runner._rust_circuit is not None:
         try:
             from hft_platform.rust_core import RustCircuitBreaker
@@ -280,11 +262,9 @@ async def test_circuit_breaker_degraded_recovery():
     strat = _GoodStrategy("good", symbols=["2330"])
     runner.register(strat)
 
-    # Manually put it in degraded state
     sid = strat.strategy_id
     rc = runner._rust_circuit
     if rc is not None:
-        # Drive to degraded via failures (half_threshold=3)
         for _ in range(3):
             rc.record_failure(sid, 1000)
     else:
@@ -304,12 +284,11 @@ async def test_circuit_breaker_degraded_recovery():
         is_odd_lot=False,
     )
 
-    # 3 successes should recover to normal
     for _ in range(3):
         await runner.process_event(event)
 
     if rc is not None:
-        assert rc.get_state(sid) == 0  # NORMAL
+        assert rc.get_state(sid) == 0
         assert rc.get_failure_count(sid) == 0
     else:
         assert runner._circuit_states.get(sid) == "normal"

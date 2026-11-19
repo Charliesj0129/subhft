@@ -67,7 +67,6 @@ def test_collect_cross_day_sql_does_not_nest_window_fn_in_aggregate():
     normalized = re.sub(r"\s+", " ", captured[0])
     assert "sumIf(volume, price_scaled > lagInFrame" not in normalized
     assert "sumIf(volume, price_scaled < lagInFrame" not in normalized
-    # The fix references a pre-computed lag column instead of nesting the window fn.
     assert "prev_price" in normalized
 
 
@@ -81,8 +80,7 @@ def test_collect_cross_day_skips_weekends():
 
     collector = _make_collector()
     with patch.object(collector, "_execute", side_effect=fake_execute):
-        collector.collect_cross_day("TXFD6", "day", "2026-03-30")  # Monday
-    # Should query Fri 27, Thu 26, Wed 25 -- NOT Sat 28 or Sun 29
+        collector.collect_cross_day("TXFD6", "day", "2026-03-30")
     if call_args:
         assert "2026-03-28" not in call_args[0]
         assert "2026-03-29" not in call_args[0]

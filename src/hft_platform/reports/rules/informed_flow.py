@@ -18,10 +18,6 @@ __all__ = [
     "score_volume_spike",
 ]
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 
 def _clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, value))
@@ -43,13 +39,7 @@ def _ratio_to_score(ratio: float) -> float:
     """Linear map: ratio 0.9 → -1.0, 1.0 → 0.0, 1.1 → +1.0 (clamped)."""
     if ratio == float("inf"):
         return 1.0
-    # slope = 1.0 / 0.1 = 10  so score = (ratio - 1.0) * 10
     return _clamp((ratio - 1.0) * 10.0)
-
-
-# ---------------------------------------------------------------------------
-# IF-01  score_session_ud
-# ---------------------------------------------------------------------------
 
 
 def score_session_ud(bars: list[FlowBar]) -> float:
@@ -64,11 +54,6 @@ def score_session_ud(bars: list[FlowBar]) -> float:
     if not bars:
         return 0.0
     return _ratio_to_score(_ud_ratio_from_bars(bars))
-
-
-# ---------------------------------------------------------------------------
-# IF-02  score_sustained_pressure
-# ---------------------------------------------------------------------------
 
 
 def score_sustained_pressure(bars: list[FlowBar]) -> float:
@@ -106,11 +91,6 @@ def score_sustained_pressure(bars: list[FlowBar]) -> float:
     return 0.0
 
 
-# ---------------------------------------------------------------------------
-# IF-03  score_large_trade_net
-# ---------------------------------------------------------------------------
-
-
 def score_large_trade_net(trades: list[LargeTrade]) -> float:
     """IF-03: Net directional volume of large trades.
 
@@ -132,15 +112,10 @@ def score_large_trade_net(trades: list[LargeTrade]) -> float:
     return _clamp((buy_vol - sell_vol) / total)
 
 
-# ---------------------------------------------------------------------------
-# IF-04  find_large_trade_clusters
-# ---------------------------------------------------------------------------
-
-
 def find_large_trade_clusters(
     trades: list[LargeTrade],
     price_tolerance: int = 30_000,
-    time_window_s: float = 60.0,  # reserved for future timestamp-aware logic
+    time_window_s: float = 60.0,
 ) -> list[tuple[int, int]]:
     """IF-04: Identify clusters of ≥3 large trades within price_tolerance.
 
@@ -157,7 +132,6 @@ def find_large_trade_clusters(
     if len(trades) < 3:
         return []
 
-    # Sort by price to make proximity checks efficient.
     sorted_trades = sorted(trades, key=lambda t: t.price)
     used = [False] * len(sorted_trades)
     clusters: list[tuple[int, int]] = []
@@ -180,11 +154,6 @@ def find_large_trade_clusters(
     return clusters
 
 
-# ---------------------------------------------------------------------------
-# IF-05  score_end_of_session_drift
-# ---------------------------------------------------------------------------
-
-
 def score_end_of_session_drift(bars: list[FlowBar]) -> float:
     """IF-05: End-of-session U/D drift vs full session.
 
@@ -204,7 +173,6 @@ def score_end_of_session_drift(bars: list[FlowBar]) -> float:
     session_ud = _ud_ratio_from_bars(bars)
     eod_ud = _ud_ratio_from_bars(eod_bars)
 
-    # Guard against inf comparisons
     if session_ud == float("inf") or eod_ud == float("inf"):
         if session_ud == eod_ud:
             return 0.0
@@ -214,11 +182,6 @@ def score_end_of_session_drift(bars: list[FlowBar]) -> float:
     if abs(drift) < 0.2:
         return 0.0
     return _clamp(drift * 3.0)
-
-
-# ---------------------------------------------------------------------------
-# IF-06  score_volume_spike
-# ---------------------------------------------------------------------------
 
 
 def score_volume_spike(

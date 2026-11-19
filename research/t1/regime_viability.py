@@ -676,38 +676,20 @@ def summarize_coverage_rows(rows: Sequence[dict[str, object]]) -> dict[str, obje
     }
 
 
-# ---------------------------------------------------------------------------
-# T1-B: volatility-compression -> directional expansion
-#
-# Mechanism (frozen V0, see research/alphas/t1b_txf_volcompress_tmf/README.md):
-# slide an anchor across the day session; at each anchor compare the realized
-# vol of a compression window against the prior baseline window. When the ratio
-# is <= ``max_compression_ratio`` (a genuine "coil"), watch for the first
-# directional break out of the compression range by >= ``min_break_points``.
-# Direction is the break side; entry is the TMF executable ask/bid at the TXF
-# trigger time (reuses ``evaluate_executable_returns``). A cooldown enforces
-# no-overlap. L2 is NOT an entry input here -- only TXF mid drives the signal
-# and TMF bid/ask provides executable fills.
-#
-# NB: ``RegimeEvent.opening_range_high``/``opening_range_low`` are reused to
-# carry the *compression* range bounds, and ``realized_vol_ratio`` carries the
-# compression ratio (compression_rv / baseline_rv, < 1 for a coil -- the
-# inverse semantics of T1-A's expansion ratio).
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class VolCompressionConfig:
     session_start_ns: int
-    session_minutes: int = 300          # 08:45-13:45 TPE day session
-    baseline_minutes: int = 30          # reference vol window
-    compression_minutes: int = 30       # coil window
-    break_window_minutes: int = 30      # break must occur within this after the coil
-    step_minutes: int = 5               # anchor slide granularity
-    max_compression_ratio: float = 0.70  # compression_rv <= 0.70 * baseline_rv
-    min_break_points: float = 8.0       # break beyond range by >= this many pts
-    cooldown_minutes: int = 60          # no overlapping entries (max hold horizon)
-    min_window_points: int = 5          # min quotes per window for a valid RV
+    session_minutes: int = 300
+    baseline_minutes: int = 30
+    compression_minutes: int = 30
+    break_window_minutes: int = 30
+    step_minutes: int = 5
+    max_compression_ratio: float = 0.70
+    min_break_points: float = 8.0
+    cooldown_minutes: int = 60
+    min_window_points: int = 5
 
 
 def detect_vol_compression_events(
@@ -861,11 +843,9 @@ def audit_vol_compression_pair(
                 direction=event.direction,
             )
         except ValueError:
-            # No TMF executable quote at/after the trigger -> not tradeable; skip.
             continue
         after = txf_bbo.ts_ns >= event.trigger_time_ns
         post_mid = txf_bbo.mid[after]
-        # Stop structure = compression-range opposite side.
         if event.direction > 0:
             reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
         else:
@@ -1045,11 +1025,6 @@ def _t1b_research_decision(
             "evidence": evidence,
             "decided_by": "t1b_v0_hard_gate",
         }
-    # Canonical risk-controlled metric gate (T1-F): when a caller declares a
-    # risk-controlled (stop-exit) edge as its canonical metric, that metric must
-    # clear the floor before the candidate can be research-eligible — otherwise
-    # a candidate failing its declared canonical metric could still pass on the
-    # legacy time-exit edge alone.  Other tracks pass None and skip this gate.
     if risk_controlled_edge_floor_cleared is False:
         return {
             "status": "failed",
@@ -1131,10 +1106,6 @@ def summarize_vol_compression_rows(
     drawdown_fail = drawdown_within_monthly_gate is False
     edge_floor_cleared = bool(mean_net_edge is not None and mean_net_edge > edge_floor_pts)
 
-    # A clearly negative net edge is a KILL regardless of sample size. A
-    # positive-but-undersized sample is NEEDS-MORE-DAYS -- dominance and
-    # stop-breach are only assessable once the sample clears the hard-gate
-    # floors (otherwise single-day/contract share is trivially 1.0).
     if median_net is not None and median_net <= 0:
         verdict = "KILL"
     elif not sample_ok:
@@ -1275,11 +1246,11 @@ def run_vol_compression_audit(args: argparse.Namespace) -> dict[str, object]:
 @dataclass(frozen=True)
 class IntradayMomentumConfig:
     session_start_ns: int
-    session_minutes: int = 300          # 08:45-13:45 TPE day session
-    open_window_minutes: int = 30       # first window: directional signal (08:45-09:15)
-    predict_window_minutes: int = 30    # last window: trade window (13:15-13:45)
-    min_open_move_pts: float = 10.0     # |first-window return| must be >= this (TXF pts)
-    min_window_points: int = 5          # min quotes per window for a valid signal/trade
+    session_minutes: int = 300
+    open_window_minutes: int = 30
+    predict_window_minutes: int = 30
+    min_open_move_pts: float = 10.0
+    min_window_points: int = 5
 
 
 def detect_intraday_momentum_events(
@@ -1306,7 +1277,6 @@ def detect_intraday_momentum_events(
     open_end = start + config.open_window_minutes * NS_PER_MINUTE
     entry_ns = session_end - config.predict_window_minutes * NS_PER_MINUTE
     if open_end > entry_ns:
-        # windows overlap -> ill-posed config for this session length
         return []
 
     ts = bbo.ts_ns
@@ -1338,8 +1308,6 @@ def detect_intraday_momentum_events(
         return []
     entry_ref = float(mid[entry_idx])
 
-    # Trend-consistency guard: entry must sit on the directional side of session
-    # VWAP (long above, short below). Mirrors the T1-A/B VWAP-alignment filter.
     vwap = _trade_vwap_until(trades, entry_ns)
     if vwap is not None:
         if direction == 1 and entry_ref <= vwap:
@@ -1402,12 +1370,9 @@ def audit_intraday_momentum_pair(
                 direction=event.direction,
             )
         except ValueError:
-            # No TMF executable quote at/after the trigger -> not tradeable; skip.
             continue
         after = txf_bbo.ts_ns >= event.trigger_time_ns
         post_mid = txf_bbo.mid[after]
-        # Stop structure = opposite side of the open-window range (full give-back
-        # of the morning directional move).
         if event.direction > 0:
             reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
         else:
@@ -1619,13 +1584,13 @@ def run_intraday_momentum_audit(args: argparse.Namespace) -> dict[str, object]:
 
 @dataclass(frozen=True)
 class OpenGapFadeConfig:
-    session_start_ns: int               # today's session start (08:45)
-    prior_session_start_ns: int         # prior available session start
-    session_minutes: int = 300          # 08:45-13:45 TPE day session
-    prior_close_window_minutes: int = 30  # average prior-session close over last N min
-    open_confirm_minutes: int = 15      # wait N min after open before entering the fade
-    min_gap_pts: float = 15.0           # outsized prior-close -> today-open gap threshold
-    stop_buffer_pts: float = 15.0       # gap-extension stop beyond today's open
+    session_start_ns: int
+    prior_session_start_ns: int
+    session_minutes: int = 300
+    prior_close_window_minutes: int = 30
+    open_confirm_minutes: int = 15
+    min_gap_pts: float = 15.0
+    stop_buffer_pts: float = 15.0
     min_window_points: int = 5
 
 
@@ -1668,7 +1633,7 @@ def detect_open_gap_fade_events(
     gap = today_open - prior_close
     if abs(gap) < config.min_gap_pts:
         return []
-    direction = -1 if gap > 0 else 1  # fade the gap
+    direction = -1 if gap > 0 else 1
 
     entry_ns = start + config.open_confirm_minutes * NS_PER_MINUTE
     entry_idx = int(np.searchsorted(today_bbo.ts_ns, entry_ns, side="left"))
@@ -1686,11 +1651,10 @@ def detect_open_gap_fade_events(
             trigger_time_ns=entry_ns,
             direction=direction,
             txf_entry_ref=entry_ref,
-            # Stop levels = today's open +/- gap-extension buffer (gap continues).
             opening_range_high=today_open + config.stop_buffer_pts,
             opening_range_low=today_open - config.stop_buffer_pts,
             trade_vwap=vwap,
-            realized_vol_ratio=float(gap),  # reused field carries the signed gap (pts)
+            realized_vol_ratio=float(gap),
         )
     ]
 
@@ -1743,10 +1707,9 @@ def audit_open_gap_fade_pair(
             continue
         after = today_bbo.ts_ns >= event.trigger_time_ns
         post_mid = today_bbo.mid[after]
-        # Stop structure = gap extends past today's open by the buffer (continuation).
-        if event.direction > 0:  # fade up (gap down): stop if price keeps falling
+        if event.direction > 0:
             reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
-        else:  # fade down (gap up): stop if price keeps rising
+        else:
             reverted = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
         gross = eval_row.get("return_30m")
         net = (float(gross) - cost_pts) if gross is not None else None
@@ -1975,25 +1938,7 @@ def run_open_gap_fade_audit(args: argparse.Namespace) -> dict[str, object]:
     return summary
 
 
-# ---------------------------------------------------------------------------
-# T1-F: expiration V-reversal (H3 from the 2026-06-03 paper x data menu)
-#
-# Mechanism (frozen V0, see research/alphas/t1f_txf_expiration_vreversal_tmf/README.md):
-# on a contract's FINAL SETTLEMENT day (3rd Wednesday), index-futures basis
-# convergence and arbitrage unwind tend to produce a directional thrust early in
-# the session followed by a partial mean-reversion (a "V" / inverted-V) into the
-# settlement.  FADE the early thrust (thrust up -> short, thrust down -> long).
-# The signal is the endogenous open->thrust-window displacement on the settlement
-# day only; L2 is used solely for executable TMF bid/ask + quote sanity.
-#
-# NOTE ON SAMPLE: this signal fires once per contract per month (one settlement
-# day each).  The V0 hard gate's >=20-trading-day / >=80-event floor is therefore
-# structurally bounded by how many monthly settlements the paired dataset spans.
-# It is the gate's job -- not the detector's -- to render NEEDS-MORE-DAYS when the
-# floor is unmet; the floor is NOT relaxed for this candidate.
-# ---------------------------------------------------------------------------
 
-# TAIFEX delivery-month letter codes: A=Jan, B=Feb, ... L=Dec.
 _TAIFEX_MONTH_CODE = "ABCDEFGHIJKL"
 
 
@@ -2001,7 +1946,7 @@ def _third_wednesday(year: int, month: int) -> str:
     """ISO date of the 3rd Wednesday of (year, month) -- TAIFEX equity-index
     futures final settlement day."""
     first = datetime(year, month, 1)
-    first_wed_offset = (2 - first.weekday()) % 7  # Mon=0 .. Wed=2
+    first_wed_offset = (2 - first.weekday()) % 7
     day = 1 + first_wed_offset + 14
     return f"{year:04d}-{month:02d}-{day:02d}"
 
@@ -2024,11 +1969,11 @@ def _settlement_date_for_month_code(month_code: str) -> str | None:
 
 @dataclass(frozen=True)
 class ExpirationVReversalConfig:
-    session_start_ns: int                # settlement-day session start (08:45)
-    session_minutes: int = 285           # 08:45-13:30 TPE settlement-day session
-    thrust_window_minutes: int = 90      # measure the early directional thrust over N min
-    min_thrust_pts: float = 20.0         # outsized open -> thrust-window displacement
-    stop_buffer_pts: float = 15.0        # thrust-continuation stop beyond the thrust extreme
+    session_start_ns: int
+    session_minutes: int = 285
+    thrust_window_minutes: int = 90
+    min_thrust_pts: float = 20.0
+    stop_buffer_pts: float = 15.0
     min_window_points: int = 5
 
 
@@ -2071,7 +2016,7 @@ def detect_expiration_v_reversal_events(
     displacement = thrust_ref - today_open
     if abs(displacement) < config.min_thrust_pts:
         return []
-    direction = -1 if displacement > 0 else 1  # fade the thrust
+    direction = -1 if displacement > 0 else 1
 
     thrust_high = float(np.max(window_mid))
     thrust_low = float(np.min(window_mid))
@@ -2086,11 +2031,10 @@ def detect_expiration_v_reversal_events(
             trigger_time_ns=thrust_end_ns,
             direction=direction,
             txf_entry_ref=thrust_ref,
-            # Stop = thrust CONTINUES past its extreme by the buffer (no reversal).
             opening_range_high=thrust_high + config.stop_buffer_pts,
             opening_range_low=thrust_low - config.stop_buffer_pts,
             trade_vwap=vwap,
-            realized_vol_ratio=float(displacement),  # signed thrust (pts)
+            realized_vol_ratio=float(displacement),
         )
     ]
 
@@ -2140,13 +2084,12 @@ def audit_expiration_v_reversal_pair(
         post_mid = today_bbo.mid[after]
         active_mid = today_bbo.mid[active]
         active_ts = today_bbo.ts_ns[active]
-        # Stop structure = thrust continues past its extreme (fade refuted).
-        if event.direction > 0:  # faded a down-thrust (long): stop if price keeps falling
+        if event.direction > 0:
             full_session_breached = (
                 bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
             )
             active_crossings = np.flatnonzero(active_mid <= event.opening_range_low)
-        else:  # faded an up-thrust (short): stop if price keeps rising
+        else:
             full_session_breached = (
                 bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
             )
@@ -2287,11 +2230,6 @@ def summarize_expiration_v_reversal_rows(
     risk_controlled_edge_floor_cleared = bool(
         mean_stop_exit_edge is not None and mean_stop_exit_edge > edge_floor_pts
     )
-    # The canonical metric for this track is the risk-controlled (stop-exit)
-    # edge.  A computable stop-exit edge below the floor is an outright failure;
-    # an uncomputable one cannot support a PROCEED claim (falls through to
-    # NEEDS-MORE-DAYS).  This stops a candidate from proceeding on the legacy
-    # time-exit edge alone while failing its declared canonical metric.
     risk_controlled_edge_floor_below = (
         mean_stop_exit_edge is not None and mean_stop_exit_edge <= edge_floor_pts
     )
@@ -2445,41 +2383,20 @@ def run_expiration_v_reversal_audit(args: argparse.Namespace) -> dict[str, objec
     return summary
 
 
-# ---------------------------------------------------------------------------
-# T1-C: VWAP-trend / session-imbalance failed-reclaim continuation
-#
-# Mechanism (frozen V0, see research/alphas/t1c_txf_vwaptrend_tmf/README.md):
-# the third frozen Track-T1 candidate (see track_t1_opened_2026_05_13).  Within
-# the day session, slide an anchor; at each anchor take the cumulative session
-# trade VWAP as the fair-value reference.  A directional *session imbalance*
-# exists when the TXF mid has stayed predominantly on one side of VWAP across a
-# trailing window AND sits >= ``min_trend_pts`` away from it.  A *failed VWAP
-# reclaim* is a pullback that approached VWAP (within ``reclaim_tolerance_pts``)
-# but did NOT cross to the other side.  Enter in the TREND direction
-# (continuation): mid above VWAP -> long, below -> short.  Stop structure = VWAP
-# reclaim (price crosses back through VWAP by ``stop_buffer_pts``).  L2 is NOT an
-# entry input -- only TXF mid + trade VWAP drive the signal and TMF bid/ask
-# provides executable fills.
-#
-# NB: ``RegimeEvent.opening_range_high``/``opening_range_low`` are reused to
-# carry the VWAP-reclaim stop band (vwap +/- buffer); ``trade_vwap`` carries the
-# anchor VWAP level; ``realized_vol_ratio`` carries the signed displacement from
-# VWAP (the imbalance magnitude, pts).
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class VwapTrendConfig:
     session_start_ns: int
-    session_minutes: int = 300           # 08:45-13:45 TPE day session
-    trend_window_minutes: int = 60       # trailing window establishing the imbalance
-    headline_horizon_minutes: int = 30   # last anchor leaves room for the 30m hold
-    min_trend_pts: float = 15.0          # mid must sit >= this far from VWAP
-    min_side_fraction: float = 0.80      # >= this fraction of the window on the trend side
-    reclaim_tolerance_pts: float = 5.0   # pullback must reach within this of VWAP, no cross
-    stop_buffer_pts: float = 15.0        # VWAP-reclaim stop band beyond VWAP
-    step_minutes: int = 5                # anchor slide granularity
-    cooldown_minutes: int = 60           # no overlapping entries (max hold horizon)
+    session_minutes: int = 300
+    trend_window_minutes: int = 60
+    headline_horizon_minutes: int = 30
+    min_trend_pts: float = 15.0
+    min_side_fraction: float = 0.80
+    reclaim_tolerance_pts: float = 5.0
+    stop_buffer_pts: float = 15.0
+    step_minutes: int = 5
+    cooldown_minutes: int = 60
     min_window_points: int = 5
 
 
@@ -2538,14 +2455,12 @@ def detect_vwap_trend_events(
             continue
         window_mid = mid[window_mask]
 
-        signed = direction * (window_mid - vwap)  # > 0 == on the trend side of VWAP
+        signed = direction * (window_mid - vwap)
         side_fraction = float(np.count_nonzero(signed > 0)) / float(len(window_mid))
         if side_fraction < config.min_side_fraction:
             anchor += step_ns
             continue
 
-        # Failed VWAP reclaim: a pullback that touched within tolerance of VWAP
-        # but never crossed past it onto the counter-trend side.
         approached = bool(np.min(np.abs(window_mid - vwap)) <= config.reclaim_tolerance_pts)
         not_crossed = bool(float(np.min(signed)) >= -config.reclaim_tolerance_pts)
         if not (approached and not_crossed):
@@ -2561,11 +2476,10 @@ def detect_vwap_trend_events(
                 trigger_time_ns=anchor,
                 direction=direction,
                 txf_entry_ref=entry_ref,
-                # Stop = price reclaims VWAP (crosses back through it by the buffer).
                 opening_range_high=vwap + config.stop_buffer_pts,
                 opening_range_low=vwap - config.stop_buffer_pts,
                 trade_vwap=vwap,
-                realized_vol_ratio=float(displacement),  # signed VWAP displacement (pts)
+                realized_vol_ratio=float(displacement),
             )
         )
         cooldown_until = anchor + cooldown_ns
@@ -2620,14 +2534,12 @@ def audit_vwap_trend_pair(
                 direction=event.direction,
             )
         except ValueError:
-            # No TMF executable quote at/after the trigger -> not tradeable; skip.
             continue
         after = txf_bbo.ts_ns >= event.trigger_time_ns
         post_mid = txf_bbo.mid[after]
-        # Stop structure = VWAP reclaim (price crosses back through VWAP by the buffer).
-        if event.direction > 0:  # long (mid above VWAP): stop if price reclaims downward
+        if event.direction > 0:
             reverted = bool(np.any(post_mid <= event.opening_range_low)) if len(post_mid) else False
-        else:  # short (mid below VWAP): stop if price reclaims upward
+        else:
             reverted = bool(np.any(post_mid >= event.opening_range_high)) if len(post_mid) else False
         gross = eval_row.get("return_30m")
         net = (float(gross) - cost_pts) if gross is not None else None
@@ -2642,8 +2554,6 @@ def audit_vwap_trend_pair(
             "trade_vwap": event.trade_vwap,
             "vwap_stop_high": event.opening_range_high,
             "vwap_stop_low": event.opening_range_low,
-            # Entry-time setup is by construction a FAILED reclaim; post-entry the
-            # stop fires iff price later RECLAIMS VWAP (continuation refuted).
             "vwap_reclaim_failed_or_passed": "failed",
             "stop_structure_breached": reverted,
             "vwap_reclaimed_post_entry": reverted,
@@ -3024,7 +2934,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-rv-ratio", type=float, default=1.25)
     parser.add_argument("--max-pairs", type=int, default=None)
     parser.add_argument("--persistence-minutes", type=int, default=5)
-    # T1-B vol-compression mode (frozen V0 defaults).
     parser.add_argument("--session-minutes", type=int, default=300)
     parser.add_argument("--baseline-minutes", type=int, default=30)
     parser.add_argument("--compression-minutes", type=int, default=30)
@@ -3032,19 +2941,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-minutes", type=int, default=5)
     parser.add_argument("--max-compression-ratio", type=float, default=0.70)
     parser.add_argument("--cooldown-minutes", type=int, default=60)
-    # T1-D intraday-session-momentum mode (frozen V0 defaults).
     parser.add_argument("--open-window-minutes", type=int, default=30)
     parser.add_argument("--predict-window-minutes", type=int, default=30)
     parser.add_argument("--min-open-move-pts", type=float, default=10.0)
-    # T1-E open-gap-fade mode (frozen V0 defaults).
     parser.add_argument("--prior-close-window-minutes", type=int, default=30)
     parser.add_argument("--open-confirm-minutes", type=int, default=15)
     parser.add_argument("--min-gap-pts", type=float, default=15.0)
     parser.add_argument("--stop-buffer-pts", type=float, default=15.0)
-    # T1-F expiration-V-reversal mode (frozen V0 defaults).
     parser.add_argument("--thrust-window-minutes", type=int, default=90)
     parser.add_argument("--min-thrust-pts", type=float, default=20.0)
-    # T1-C VWAP-trend mode (frozen V0 defaults).
     parser.add_argument("--trend-window-minutes", type=int, default=60)
     parser.add_argument("--min-trend-pts", type=float, default=15.0)
     parser.add_argument("--min-side-fraction", type=float, default=0.80)

@@ -54,9 +54,6 @@ def test_write_checkpoint_does_not_double_close_fd(tmp_path):
     with patch("hft_platform.execution.checkpoint.os.close", side_effect=counting_close):
         writer.write_checkpoint()
 
-    # The fd opened by ``tempfile.mkstemp`` is closed exactly once via the
-    # ``with os.fdopen(fd, "wb") as f`` context manager. If the legacy
-    # double-close pattern returns, the same integer would appear twice.
     assert len(closed_fds) == len(set(closed_fds)), (
         f"Double-close detected via hft_platform.execution.checkpoint.os.close: {closed_fds}"
     )

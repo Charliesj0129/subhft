@@ -36,10 +36,8 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         await service.sync_portfolio()
 
-    # Broker state is logged at DEBUG (downgraded from INFO to reduce 5 s-cadence spam)
     mock_logger.debug.assert_any_call("Portfolio Sync: Broker State", positions={"AAA": 2, "BBB": -3})
 
-    # Verify discrepancies were computed (local store is empty, so both symbols differ)
     discreps = service._last_discrepancies
     assert isinstance(discreps, list)
     assert len(discreps) == 2, f"Expected 2 discrepancies, got {len(discreps)}"
@@ -47,11 +45,9 @@ async def test_reconciliation_sync_portfolio_logs_remote_positions(tmp_path):
     by_symbol = {d.symbol: d for d in discreps}
     assert "AAA" in by_symbol
     assert "BBB" in by_symbol
-    # local=0, broker=2 → diff = 0 - 2 = -2
     assert by_symbol["AAA"].diff == -2
     assert by_symbol["AAA"].local_qty == 0
     assert by_symbol["AAA"].broker_qty == 2
-    # local=0, broker=-3 → diff = 0 - (-3) = 3
     assert by_symbol["BBB"].diff == 3
     assert by_symbol["BBB"].local_qty == 0
     assert by_symbol["BBB"].broker_qty == -3
@@ -177,7 +173,6 @@ async def test_broker_empty_snapshot_is_debounced_before_halt():
         storm_guard=StormGuard(),
     )
 
-    # Override critical debounce to 1 to test broker-zero debounce in isolation
     service._critical_drift_debounce = 1
 
     with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
@@ -215,17 +210,14 @@ async def test_critical_discrepancy_debounce_prevents_immediate_halt():
     service._critical_drift_debounce = 3
 
     with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
-        # Observation 1: debounce — no HALT
         await service.sync_portfolio()
         halt_mock.assert_not_called()
         assert service._critical_drift_streak == 1
 
-        # Observation 2: still debouncing
         await service.sync_portfolio()
         halt_mock.assert_not_called()
         assert service._critical_drift_streak == 2
 
-        # Observation 3: debounce met — HALT triggered
         await service.sync_portfolio()
         halt_mock.assert_called_once()
 
@@ -256,11 +248,9 @@ async def test_halt_not_retriggered_while_already_halted():
     service._critical_drift_debounce = 1
 
     with patch.object(service, "_trigger_halt", new_callable=AsyncMock) as halt_mock:
-        # First sync: triggers HALT
         await service.sync_portfolio()
         assert halt_mock.call_count == 1
 
-        # Second sync: discrepancy persists but _halt_triggered=True — no re-trigger
         await service.sync_portfolio()
-        assert halt_mock.call_count == 1  # still 1, NOT 2
+        assert halt_mock.call_count == 1
         assert service._critical_drift_streak == 2

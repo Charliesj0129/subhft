@@ -25,15 +25,13 @@ _ENABLED_DEFAULT = os.getenv("HFT_TRADE_CLASSIFICATION_ENABLED", "1").lower() no
     "off",
 }
 
-# Direction constants
 BUY: int = 1
 SELL: int = -1
 UNKNOWN: int = 0
 
-# Confidence levels (scaled x1000)
-CONF_AT_QUOTE: int = 1000  # Trade at bid or ask
-CONF_INSIDE: int = 800  # Trade inside spread (not at midpoint)
-CONF_TICK_RULE: int = 500  # Tick rule fallback
+CONF_AT_QUOTE: int = 1000
+CONF_INSIDE: int = 800
+CONF_TICK_RULE: int = 500
 
 
 class _SymbolState:
@@ -120,25 +118,20 @@ class TradeClassifier:
         best_bid = state.last_bid
         best_ask = state.last_ask
 
-        # Crossed market guard: bid > ask during fast markets/settlement
-        # Only trigger when both sides are present (> 0)
         if best_bid > 0 and best_ask > 0 and best_bid > best_ask:
             self.count_unknown += 1
             return (UNKNOWN, 0)
 
-        # At or above ask -> BUY
         if price >= best_ask and best_ask > 0:
             state.prev_direction = BUY
             self.count_at_quote += 1
             return (BUY, CONF_AT_QUOTE)
 
-        # At or below bid -> SELL
         if price <= best_bid and best_bid > 0:
             state.prev_direction = SELL
             self.count_at_quote += 1
             return (SELL, CONF_AT_QUOTE)
 
-        # Inside spread: compare 2*price vs (bid + ask) to avoid division
         mid_x2 = best_bid + best_ask
         trade_x2 = price * 2
 
@@ -152,7 +145,6 @@ class TradeClassifier:
             self.count_inside += 1
             return (SELL, CONF_INSIDE)
 
-        # At midpoint: tick rule fallback
         self.count_tick_rule += 1
         direction = state.prev_direction
         if direction != UNKNOWN:

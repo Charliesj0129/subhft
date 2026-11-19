@@ -22,11 +22,9 @@ class TestKillSwitchSupervisor:
         ks_path = str(tmp_path / "kill_switch")
         monkeypatch.setenv("HFT_KILL_SWITCH_PATH", ks_path)
 
-        # Write kill switch file
         with open(ks_path, "w") as f:
             json.dump({"reason": "emergency", "actor": "cli"}, f)
 
-        # Simulate the supervisor check logic
         storm_guard = MagicMock()
         storm_guard.state = StormGuardState.NORMAL
 

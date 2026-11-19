@@ -60,8 +60,6 @@ def main():
         feat=FeatureUpdateEvent(symbol=SYM,ts=ts,local_ts=ts,seq=0,feature_set_id='lob_shared_v3',
             schema_version=3,changed_mask=0xFFFFFFFF,warmup_ready_mask=0xFFFFFFFF,quality_flags=0,
             feature_ids=fids,values=tuple(v))
-        # Reset pending counters — backtest harness manages orders externally,
-        # so strategy's internal pending tracking would block after first quote.
         st._pending_buy.clear(); st._pending_sell.clear()
         st._last_bid.clear(); st._last_ask.clear()
         cap.clear(); st.handle_event(ctx,feat); st.handle_event(ctx,lob)
@@ -100,7 +98,6 @@ def main():
     pf=pnl/fills if fills>0 else 0
     r={"date":date,"pnl":round(pnl,2),"fills":fills,"quotes":q,"cancels":c,"px_chg":pxc,
        "max_dd":round(dd,2),"avg_spr":round(avs,2),"pct_spr":round(pct,2),"pnl_per_fill":round(pf,3)}
-    # Print both human readable (stderr) and JSON (stdout)
     print(f'  {date}: PnL={pnl:>+9.1f} fills={fills:>5} PnL/f={pf:>+7.2f} q={q:>6} spr={avs:.1f} spr>={spr}:{pct:>5.1f}%', file=sys.stderr)
     print(json.dumps(r))
 

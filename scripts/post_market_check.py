@@ -90,7 +90,6 @@ def _check_daily_pnl(clickhouse_url: str, password: str) -> tuple[str, str]:
         else:
             return STATUS_WARN, f"unexpected PnL response: {result!r}"
 
-    # PnL is scaled x10000, convert for display
     pnl_display = value / 10000.0
     return STATUS_PASS, f"daily fill turnover (scaled): {value:,} (approx {pnl_display:,.2f})"
 
@@ -145,7 +144,6 @@ def main(argv: list[str] | None = None) -> int:
             status, detail = STATUS_FAIL, f"unhandled error: {exc}"
         checks.append((name, status, detail))
 
-    # Print summary table
     print("")
     print("=" * 72)
     print("  POST-MARKET CHECK SUMMARY")

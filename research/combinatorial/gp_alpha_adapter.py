@@ -95,18 +95,10 @@ from research.combinatorial.canonical_ast import (
 )
 from research.combinatorial.expression_lang import CompiledExpression, compile_expression
 
-# ``ts_delta`` is a fixed-offset difference (``arr[i] - arr[i-w]``), not a
-# true rolling window (``arr[i-w+1:i+1]``) — see module docstring. Every other
-# windowed operator follows the rolling-window shape.
 _OFFSET_WINDOW_OPS = frozenset({"ts_delta"})
 
-# Whole-array (look-ahead) operators that cannot be adapted to any bounded
-# streaming buffer — see module docstring.
 _WHOLE_ARRAY_LOOKAHEAD_OPS = frozenset({"rank"})
 
-# Per-operator minimum window, mirroring internal clamps in operator_library
-# (``ts_corr``/rolling ``zscore`` need >=2 samples for a variance/covariance).
-# Ops not listed default to 1, matching operator_library's default floor.
 _MIN_OWN_WINDOW: dict[str, int] = {"ts_corr": 2, "zscore": 2}
 
 

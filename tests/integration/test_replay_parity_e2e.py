@@ -75,8 +75,6 @@ def test_dod_c1_synthetic_r47_kills_at_replay_parity_gate(
         replayed=replayed.canonical_records(),
     ).compute()
 
-    # Sanity: synthetic R47-OE1 fixtures are designed to diverge well below
-    # the 95% threshold, so the gate should fire on real diff data.
     assert report.match_pct < 95.0, report
 
     payload = _r47_payload_with(replay_parity_report=report)
@@ -123,11 +121,8 @@ def test_dod_c2_clean_echo_passes(strict_profile: Any) -> None:
     assert "replay_parity" not in failing_names, (
         f"replay_parity should NOT block on clean echo; failing={blocking['failing']}"
     )
-    # And the gate appeared in the advisory list (i.e. it was actually run).
     advisory_names = {g["name"] for g in advisory}
     assert "replay_parity" in advisory_names, advisory_names
-    # Verify _ParityReport import path is exercised (silences unused-import
-    # warning while documenting the helper relationship across both files).
     assert _ParityReport.__name__ == "_ParityReport"
 
 
@@ -138,9 +133,6 @@ def test_loose_profile_does_not_block_on_replay_parity() -> None:
     list (proving registration via `ensure_builtin_sub_gates_registered()`,
     which `_invoke_sub_gates` calls internally).
     """
-    # No replay_parity_report attached: the gate runs in advisory mode and
-    # reports failure on missing report, but MUST NOT block when profile is
-    # None — that's the loose-profile non-regression invariant.
     payload = _r47_payload_with(replay_parity_report=None)
     advisory, blocking = _invoke_sub_gates(
         strategy_type="maker",

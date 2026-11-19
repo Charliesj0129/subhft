@@ -20,8 +20,6 @@ def _make_monitor(**overrides) -> AutonomyMonitor:
     storm_guard.state = StormGuardState.NORMAL
     platform_degrade = MagicMock()
     platform_degrade.reduce_only_active = False
-    # Awaited now: the degrade transition persists off the event loop, so the
-    # double it stands in for has to be awaitable too.
     platform_degrade.enter_reduce_only_async = AsyncMock()
     platform_degrade.exit_reduce_only_async = AsyncMock()
     platform_degrade.check_auto_recovery_async = AsyncMock(return_value=False)
@@ -37,11 +35,6 @@ def _make_monitor(**overrides) -> AutonomyMonitor:
     return AutonomyMonitor(**kwargs)
 
 
-# ---------------------------------------------------------------------------
-# Lifecycle: run / start / stop
-# ---------------------------------------------------------------------------
-
-
 class TestLifecycle:
     @pytest.mark.asyncio
     async def test_run_sets_running_and_loops(self) -> None:
@@ -55,7 +48,6 @@ class TestLifecycle:
         stop_task = asyncio.create_task(_stop_after_tick())
         await monitor.run()
         await stop_task
-        # run() exited cleanly
         assert monitor._running is False
 
     @pytest.mark.asyncio
@@ -87,11 +79,6 @@ class TestLifecycle:
         assert monitor._running is False
 
 
-# ---------------------------------------------------------------------------
-# Monitor loop: error handling, flatten gate, margin
-# ---------------------------------------------------------------------------
-
-
 class TestMonitorLoop:
     @pytest.mark.asyncio
     async def test_monitor_loop_catches_evaluate_exception(self) -> None:
@@ -116,17 +103,11 @@ class TestMonitorLoop:
         assert call_count >= 2
 
 
-# ---------------------------------------------------------------------------
-# Margin checking (_check_margin)
-# ---------------------------------------------------------------------------
-
-
 class TestCheckMargin:
     @pytest.mark.asyncio
     async def test_check_margin_skips_when_no_monitor(self) -> None:
         """_check_margin returns early if margin_monitor is None (line 187-188)."""
         monitor = _make_monitor(margin_monitor=None)
-        # Should not raise
         await monitor._check_margin()
 
     @pytest.mark.asyncio
@@ -179,12 +160,6 @@ class TestCheckMargin:
         margin_mon.check = AsyncMock(return_value=result)
         monitor = _make_monitor(margin_monitor=margin_mon, notification_dispatcher=None)
         await monitor._check_margin()
-        # Should not raise -- no assertion needed beyond no exception
-
-
-# ---------------------------------------------------------------------------
-# Evaluation: infra reasons, recon drift
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateInfra:
@@ -220,7 +195,6 @@ class TestEvaluateInfra:
         type(recon).drift_streak = property(lambda self: (_ for _ in ()).throw(RuntimeError("drift boom")))
         monitor = _make_monitor(recon_service=recon)
         decisions = monitor._evaluate()
-        # Should not crash, drift defaults to 0
         assert isinstance(decisions, list)
 
     def test_recorder_data_loss_triggers_halt(self) -> None:
@@ -232,11 +206,6 @@ class TestEvaluateInfra:
         halt_decisions = [d for d in decisions if d.rule_name == "recorder_data_loss"]
         assert len(halt_decisions) == 1
         assert halt_decisions[0].action == "trigger_halt"
-
-
-# ---------------------------------------------------------------------------
-# Execution: flatten success, enter_reduce_only, evidence, notifications
-# ---------------------------------------------------------------------------
 
 
 class TestExecute:
@@ -269,7 +238,7 @@ class TestExecute:
         flattener.flatten_all.side_effect = RuntimeError("broker down")
         notifier = AsyncMock()
         monitor = _make_monitor(position_flattener=flattener, notification_dispatcher=notifier)
-        monitor._halt_flatten_attempts = 2  # one more will hit max_retries=3
+        monitor._halt_flatten_attempts = 2
         decisions = [
             MonitorDecision(
                 rule_name="halt_reaction",
@@ -303,7 +272,6 @@ class TestExecute:
                 rearm="manual",
             )
         ]
-        # Should not raise
         await monitor._execute(decisions)
         assert monitor._halt_reacted is True
 
@@ -337,7 +305,6 @@ class TestExecute:
                 rearm="manual",
             )
         ]
-        # Should not raise
         await monitor._execute(decisions)
 
     @pytest.mark.asyncio
@@ -378,13 +345,7 @@ class TestExecute:
                 rearm="manual",
             )
         ]
-        # Should not raise
         await monitor._execute(decisions)
-
-
-# ---------------------------------------------------------------------------
-# Heartbeat (_maybe_heartbeat)
-# ---------------------------------------------------------------------------
 
 
 class TestHeartbeat:
@@ -393,17 +354,15 @@ class TestHeartbeat:
         """No notification_dispatcher means no heartbeat (lines 463-464)."""
         monitor = _make_monitor(notification_dispatcher=None)
         await monitor._maybe_heartbeat()
-        # No crash, no action
 
     @pytest.mark.asyncio
     async def test_heartbeat_skips_when_interval_not_elapsed(self) -> None:
         """Heartbeat only fires after heartbeat_interval_s (lines 465-467)."""
         notifier = AsyncMock()
         monitor = _make_monitor(notification_dispatcher=notifier, heartbeat_interval_s=1800.0)
-        # Simulate recent heartbeat
         with patch("hft_platform.ops.autonomy_monitor.timebase") as tb:
             tb.now_ns.return_value = 100_000_000_000
-            monitor._last_heartbeat_ns = 100_000_000_000 - 1_000_000_000  # 1s ago
+            monitor._last_heartbeat_ns = 100_000_000_000 - 1_000_000_000
             await monitor._maybe_heartbeat()
         notifier.notify_heartbeat.assert_not_awaited()
 
@@ -444,7 +403,6 @@ class TestHeartbeat:
             tb.now_ns.return_value = 100_000_000_000
             monitor._last_heartbeat_ns = 0
             await monitor._maybe_heartbeat()
-        # Should not raise
 
     @pytest.mark.asyncio
     async def test_heartbeat_feed_status_disconnected(self) -> None:
@@ -460,18 +418,13 @@ class TestHeartbeat:
         assert call_kwargs["feed_status"] == "disconnected"
 
 
-# ---------------------------------------------------------------------------
-# Broker disconnect edge cases
-# ---------------------------------------------------------------------------
-
-
 class TestBrokerDisconnectEdgeCases:
     def test_broker_disconnect_first_detection_records_since(self) -> None:
         """First disconnect detection sets _broker_disconnect_since_ns (lines 223-224, 228-229)."""
         broker = MagicMock()
         broker.is_connected.return_value = False
         monitor = _make_monitor(broker_client=broker)
-        monitor._broker_was_connected = True  # was connected before
+        monitor._broker_was_connected = True
 
         decisions: list[MonitorDecision] = []
         now_ns = 100_000_000_000
@@ -504,6 +457,5 @@ class TestBrokerDisconnectEdgeCases:
         decisions: list[MonitorDecision] = []
         now_ns = 999_999_999_999
         monitor._check_broker_disconnect(decisions, now_ns)
-        # Exception in is_connected => connected=False => records as disconnect
         assert len(decisions) == 1
         assert decisions[0].reason == "broker_unavailable"

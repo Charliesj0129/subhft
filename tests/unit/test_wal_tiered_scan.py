@@ -40,7 +40,7 @@ class TestScanDirJsonl:
         (nested / "d.jsonl").write_text("nested\n")
 
         size, count, oldest = _scan_dir_jsonl(str(tmp_path), now=time.time())
-        assert count == 2  # a.jsonl, b.jsonl only
+        assert count == 2
         assert size == len("hello\n") + len("world\n")
 
     def test_oldest_mtime_returns_min(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
@@ -48,10 +48,9 @@ class TestScanDirJsonl:
         new = tmp_path / "new.jsonl"
         old.write_text("o")
         new.write_text("n")
-        # Force old file to have an mtime 1 hour earlier
         past = time.time() - 3600
         os.utime(str(old), (past, past))
 
         size, count, oldest_mtime = _scan_dir_jsonl(str(tmp_path), now=time.time())
         assert count == 2
-        assert oldest_mtime <= past + 1  # within 1s of the forced mtime
+        assert oldest_mtime <= past + 1

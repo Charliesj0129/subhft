@@ -46,7 +46,7 @@ def _make_service(roots_env: str | None = None) -> MarketDataService:
         if roots_env is not None:
             os.environ[_ROOTS_ENV] = roots_env
         svc = MarketDataService(MagicMock(spec=RingBufferBus), asyncio.Queue(maxsize=100), client)
-    svc._tmp = tmp  # keep the symbols file alive with the service
+    svc._tmp = tmp
     return svc
 
 

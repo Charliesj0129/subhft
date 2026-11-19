@@ -143,7 +143,6 @@ def _find_latest_rollback_drill(output_dir: Path) -> Path | None:
     """Find the latest rollback drill JSON under outputs/reliability/drills/."""
     drills_dir = output_dir.parent / "reliability" / "drills"
     if not drills_dir.is_dir():
-        # Also try relative to project root (outputs/reliability/drills)
         drills_dir = Path("outputs/reliability/drills")
     pattern = str(drills_dir / "rollback_*.json")
     return _find_latest(pattern)
@@ -346,7 +345,6 @@ def _evaluate_gate(
         )
 
         if canary_overall not in allow_statuses:
-            # Keep an explicit guard so the decision payload records accepted statuses.
             add(
                 "canary_allowed_status_set",
                 False,
@@ -411,7 +409,6 @@ def _evaluate_gate(
             message="drift check should be recent for promotion",
         )
 
-    # --- Rollback drill freshness (last 30 days) ---
     rollback_drill_path = _find_latest_rollback_drill(output_dir)
     rollback_drill_ok = False
     rollback_drill_age_days: float | None = None
@@ -436,7 +433,6 @@ def _evaluate_gate(
         allow=True,
     )
 
-    # --- Code canary evaluation ---
     code_canary_path = _find_latest_code_canary(output_dir)
     code_canary_ok = False
     code_canary_age_hours: float | None = None

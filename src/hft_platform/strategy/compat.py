@@ -7,7 +7,7 @@ from typing import Any
 @dataclass(frozen=True, slots=True)
 class StrategyFeatureCompatibilityIssue:
     strategy_id: str
-    level: str  # error|warning
+    level: str
     code: str
     message: str
 
@@ -28,7 +28,7 @@ def _safe_get_feature_set_id(feature_engine: Any) -> str | None:
         return None
     try:
         return str(fn())
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return None
 
 
@@ -40,7 +40,7 @@ def _safe_get_feature_ids(feature_engine: Any) -> set[str]:
         return set()
     try:
         return {str(x) for x in (fn() or ())}
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return set()
 
 
@@ -52,7 +52,7 @@ def _safe_get_schema_version(feature_engine: Any) -> int | None:
         return None
     try:
         return int(fn())
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return None
 
 
@@ -65,7 +65,7 @@ def _safe_get_profile_id(feature_engine: Any) -> str | None:
             try:
                 out = fn()
                 return str(out) if out else None
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 continue
     return None
 

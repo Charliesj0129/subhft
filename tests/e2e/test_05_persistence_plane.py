@@ -23,10 +23,6 @@ from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 from hft_platform.recorder.wal import WALWriter
 from tests.e2e.conftest import DEFAULT_SYMBOL, DEFAULT_TS_NS
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _METRICS_PATCH = "hft_platform.observability.metrics.MetricsRegistry"
 _WORKER_METRICS_PATCH = "hft_platform.recorder.worker.MetricsRegistry"
 _WAL_METRICS_PATCH = "hft_platform.recorder.wal.MetricsRegistry"
@@ -42,11 +38,6 @@ def _make_record(i: int = 0) -> dict:
         "volume": 100 + i,
         "type": "tick",
     }
-
-
-# ---------------------------------------------------------------------------
-# TestChain
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.e2e_chain
@@ -94,15 +85,9 @@ class TestChain:
             records = [_make_record(i) for i in range(5)]
             result = asyncio.run(wal_writer.write("hft.market_data", records))
 
-        # WAL write should succeed (fallback path)
         assert result is True
         wal_files = list(Path(wal_dir).glob("*.jsonl"))
         assert len(wal_files) > 0, "Expected WAL fallback files to exist"
-
-
-# ---------------------------------------------------------------------------
-# TestIntegration
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.e2e_integration
@@ -116,7 +101,6 @@ class TestIntegration:
 
         recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
 
-        # Pre-fill 20 market_data records
         for i in range(20):
             recorder_queue.put_nowait({"topic": "market_data", "data": _make_record(i)})
 
@@ -126,7 +110,6 @@ class TestIntegration:
             patch("hft_platform.recorder.worker.PipelineHealthTracker"),
             patch("hft_platform.recorder.worker.GlobalMemoryGuard") as MockGuard,
         ):
-            # Configure MockGuard singleton
             mock_guard_instance = MagicMock()
             mock_guard_instance.check_budget.return_value = 1
             MockGuard.get.return_value = mock_guard_instance
@@ -144,9 +127,7 @@ class TestIntegration:
 
             service = RecorderService(queue=recorder_queue)
 
-            # Run service briefly, then cancel
             task = asyncio.create_task(service.run())
-            # Give enough time for all 20 items to be processed
             await asyncio.sleep(0.3)
             task.cancel()
             try:

@@ -55,17 +55,12 @@ def _r47_payload() -> dict:
         "adverse_fill_pct": 0.30,
         "fill_rate_per_day": 1.26,
         "daily_pnl": [2325.0] + [-2.4] * 30,
-        # Slice C: passing parity report so the R47 KILL is attributable to
-        # the small-sample/single-day-dominance gates, not to missing parity.
         "replay_parity_report": _ParityReport(match_pct=99.0),
     }
 
 
 def _robust_payload() -> dict:
     rng = np.random.default_rng(0)
-    # Per-day mean 30 pts net across 2 round-trips → ~15 pts/trip,
-    # clears edge_per_round_trip > 10 floor. 5 fills/day × 60 days = 300
-    # fills, satisfies min_fills_min=300 (Slice A).
     daily_values = rng.normal(loc=30.0, scale=10.0, size=60).tolist()
     daily = []
     for i, pnl in enumerate(daily_values):
@@ -104,8 +99,6 @@ def _robust_payload() -> dict:
         "adverse_fill_pct": 0.30,
         "fill_rate_per_day": 6.0,
         "daily_pnl": daily,
-        # Slice C: passing parity report — robust path must clear the new
-        # strict replay_parity sub-gate.
         "replay_parity_report": _ParityReport(match_pct=98.5),
     }
 

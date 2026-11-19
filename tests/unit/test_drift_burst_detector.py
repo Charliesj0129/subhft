@@ -24,10 +24,6 @@ from hft_platform.risk.drift_burst_detector import (
     ToxicityResult,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_trending_prices(
     start_mid_x2: int,
@@ -66,11 +62,6 @@ def _make_random_walk_prices(
     return prices
 
 
-# ---------------------------------------------------------------------------
-# Test: Burst detection on synthetic data with known drift
-# ---------------------------------------------------------------------------
-
-
 class TestBurstDetectionKnownDrift:
     """Verify detector fires on strong upward drift."""
 
@@ -78,9 +69,7 @@ class TestBurstDetectionKnownDrift:
         detector = DriftBurstDetector(
             window_size=50, burst_threshold=2.5, cooldown_ticks=10, cooldown_ns=0, skip_zero_returns=False
         )
-        # Start with random walk for warmup
         warmup = _make_random_walk_prices(2000_0000, 60, volatility=0.0001, seed=1)
-        # Then inject strong drift
         drift_prices = _make_trending_prices(warmup[-1], 100, drift_per_tick=0.002, seed=2)
         all_prices = warmup + drift_prices[1:]
 
@@ -95,7 +84,7 @@ class TestBurstDetectionKnownDrift:
 
         assert burst_detected, "Expected burst detection on strong upward drift"
         assert burst_event is not None
-        assert burst_event.direction == 1  # upward
+        assert burst_event.direction == 1
         assert burst_event.magnitude > 2.5
         assert burst_event.t_statistic > 0
 
@@ -121,18 +110,13 @@ class TestBurstDetectionKnownDrift:
         assert burst_event.direction == -1
 
 
-# ---------------------------------------------------------------------------
-# Test: No false positives on random walk
-# ---------------------------------------------------------------------------
-
-
 class TestNoFalsePositivesRandomWalk:
     """With threshold=3.0, false positive rate on random walk should be very low."""
 
     def test_random_walk_low_false_positive_rate(self) -> None:
         detector = DriftBurstDetector(
             window_size=100,
-            burst_threshold=3.5,  # high threshold for strictness
+            burst_threshold=3.5,
             cooldown_ticks=50,
             cooldown_ns=0,
             skip_zero_returns=False,
@@ -145,9 +129,7 @@ class TestNoFalsePositivesRandomWalk:
             if result.burst_detected:
                 burst_count += 1
 
-        # With 5000 ticks and threshold 3.5, expect very few false positives
-        # (< 2% of effective windows after warmup)
-        max_expected = 5  # conservative bound
+        max_expected = 5
         assert burst_count <= max_expected, f"Too many false positives on random walk: {burst_count} > {max_expected}"
 
     def test_toxicity_score_stays_low_on_random_walk(self) -> None:
@@ -162,14 +144,7 @@ class TestNoFalsePositivesRandomWalk:
             if result.toxicity_score > max_score:
                 max_score = result.toxicity_score
 
-        # On a random walk, toxicity score should rarely exceed 0.5
-        # (it can spike occasionally but the mean should be low)
         assert max_score < 0.95, f"Toxicity score too high on random walk: {max_score:.3f}"
-
-
-# ---------------------------------------------------------------------------
-# Test: Cooldown behavior
-# ---------------------------------------------------------------------------
 
 
 class TestCooldownBehavior:
@@ -184,7 +159,6 @@ class TestCooldownBehavior:
             cooldown_ns=0,
             skip_zero_returns=False,
         )
-        # Strong continuous drift should only fire once per cooldown period
         prices = _make_trending_prices(2000_0000, 300, drift_per_tick=0.003, seed=10)
 
         burst_ticks: list[int] = []
@@ -195,7 +169,6 @@ class TestCooldownBehavior:
 
         assert len(burst_ticks) >= 1, "Expected at least one burst"
 
-        # Check spacing between bursts respects cooldown
         for i in range(1, len(burst_ticks)):
             gap = burst_ticks[i] - burst_ticks[i - 1]
             assert gap > cooldown, (
@@ -219,24 +192,23 @@ class TestCooldownBehavior:
             if result.burst_detected:
                 burst_count += 1
 
-        # With zero cooldown and strong drift, should see many bursts
         assert burst_count >= 2, f"Expected multiple bursts with zero cooldown, got {burst_count}"
 
     def test_cooldown_ns_timestamp_based(self) -> None:
         """Timestamp-based cooldown uses nanosecond elapsed time, not tick count."""
-        cooldown_ns = 1_000_000_000  # 1 second
+        cooldown_ns = 1_000_000_000
         detector = DriftBurstDetector(
             window_size=50,
             burst_threshold=2.0,
-            cooldown_ticks=0,  # tick-based would allow immediate refire
+            cooldown_ticks=0,
             cooldown_ns=cooldown_ns,
             skip_zero_returns=False,
         )
         prices = _make_trending_prices(2000_0000, 300, drift_per_tick=0.003, seed=12)
 
         burst_timestamps: list[int] = []
-        base_ts = 1_000_000_000_000  # 1000s in ns
-        tick_interval_ns = 100_000_000  # 100ms per tick
+        base_ts = 1_000_000_000_000
+        tick_interval_ns = 100_000_000
 
         for i, p in enumerate(prices):
             ts = base_ts + i * tick_interval_ns
@@ -246,7 +218,6 @@ class TestCooldownBehavior:
 
         assert len(burst_timestamps) >= 1, "Expected at least one burst"
 
-        # Check that bursts are spaced by at least cooldown_ns
         for i in range(1, len(burst_timestamps)):
             gap_ns = burst_timestamps[i] - burst_timestamps[i - 1]
             assert gap_ns >= cooldown_ns, (
@@ -277,11 +248,6 @@ class TestCooldownBehavior:
             assert gap > cooldown_ticks
 
 
-# ---------------------------------------------------------------------------
-# Test: Pre-allocated buffer doesn't grow
-# ---------------------------------------------------------------------------
-
-
 class TestPreAllocatedBuffer:
     """Verify that internal arrays don't grow during operation."""
 
@@ -294,12 +260,10 @@ class TestPreAllocatedBuffer:
         initial_returns_id = id(detector._returns)
         initial_abs_id = id(detector._abs_returns)
 
-        # Feed many ticks
         prices = _make_random_walk_prices(2000_0000, 500, seed=55)
         for p in prices:
             detector.evaluate(mid_price_x2=p)
 
-        # Verify no reallocation
         assert detector._returns.nbytes == initial_returns_nbytes
         assert detector._abs_returns.nbytes == initial_abs_returns_nbytes
         assert id(detector._returns) == initial_returns_id
@@ -315,13 +279,7 @@ class TestPreAllocatedBuffer:
             detector.evaluate(mid_price_x2=p)
 
         size_after = sys.getsizeof(detector)
-        # __slots__ class size should be identical
         assert size_after == size_before
-
-
-# ---------------------------------------------------------------------------
-# Test: Edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestEdgeCases:
@@ -344,7 +302,6 @@ class TestEdgeCases:
         for _ in range(50):
             result = detector.evaluate(mid_price_x2=2000_0000)
         assert not result.burst_detected
-        # Constant price => zero drift, zero vol => score should be 0
         assert result.toxicity_score == 0.0
 
     def test_reset_clears_state(self) -> None:
@@ -377,27 +334,17 @@ class TestEdgeCases:
         detector = DriftBurstDetector(window_size=window, cooldown_ns=0, skip_zero_returns=False)
         prices = _make_random_walk_prices(2000_0000, window + 5, seed=30)
 
-        # After 0 ticks: not warm
         assert not detector.is_warm
 
         for i, p in enumerate(prices):
             detector.evaluate(mid_price_x2=p)
-            # First tick sets last_mid_x2 (no return computed), so we need
-            # window+1 ticks total (1 seed + window returns) to fill the buffer.
             if i < window:
                 assert not detector.is_warm, f"Expected not warm after {i + 1} ticks (need {window + 1})"
 
-        # After window+1+ ticks: warm
         assert detector.is_warm
 
-        # After reset: not warm again
         detector.reset()
         assert not detector.is_warm
-
-
-# ---------------------------------------------------------------------------
-# Test: Toxicity classification
-# ---------------------------------------------------------------------------
 
 
 class TestToxicityClassification:
@@ -413,7 +360,6 @@ class TestToxicityClassification:
 
         burst_event = None
         for p in all_prices:
-            # Upward drift + negative imbalance (asks depleted) = informed
             result = detector.evaluate(
                 mid_price_x2=p,
                 spread_scaled=200,
@@ -436,7 +382,6 @@ class TestToxicityClassification:
 
         burst_event = None
         for p in all_prices:
-            # Upward drift + positive imbalance (bids present) = liquidity
             result = detector.evaluate(
                 mid_price_x2=p,
                 spread_scaled=100,
@@ -448,11 +393,6 @@ class TestToxicityClassification:
 
         assert burst_event is not None
         assert burst_event.toxicity_type == "liquidity"
-
-
-# ---------------------------------------------------------------------------
-# Test: ToxicityResult interface (for StormGuard integration)
-# ---------------------------------------------------------------------------
 
 
 class TestToxicityResultInterface:
@@ -467,19 +407,15 @@ class TestToxicityResultInterface:
     def test_toxicity_sigmoid_mapping_values(self) -> None:
         """Verify sigmoid mapping: 2/(1+exp(-|T|/scale))-1."""
         threshold = 3.0
-        # T=0 → 0
         score_0 = 2.0 / (1.0 + math.exp(0.0)) - 1.0
         assert abs(score_0) < 1e-10
 
-        # T=threshold → ~0.462
         score_t = 2.0 / (1.0 + math.exp(-1.0)) - 1.0
         assert 0.45 < score_t < 0.48, f"T=threshold score: {score_t}"
 
-        # T=2*threshold → ~0.762
         score_2t = 2.0 / (1.0 + math.exp(-2.0)) - 1.0
         assert 0.75 < score_2t < 0.78, f"T=2*threshold score: {score_2t}"
 
-        # T→∞ → 1.0
         score_inf = 2.0 / (1.0 + math.exp(-100.0)) - 1.0
         assert score_inf > 0.999
 
@@ -506,11 +442,6 @@ class TestToxicityResultInterface:
         assert event.t_statistic == 3.5
 
 
-# ---------------------------------------------------------------------------
-# Test: Skip zero returns filter (Fix 2)
-# ---------------------------------------------------------------------------
-
-
 class TestSkipZeroReturns:
     """Verify skip_zero_returns filters out flat ticks."""
 
@@ -525,16 +456,13 @@ class TestSkipZeroReturns:
         )
         base_price = 2000_0000
 
-        # 100 ticks at the same price — all zero returns, should be skipped
         for _ in range(100):
             result = detector.evaluate(mid_price_x2=base_price)
             assert not result.burst_detected
 
-        # The ring buffer should have count=0 since all returns were zero
         assert detector._count == 0
         assert not detector.is_warm
 
-        # One price change: insufficient data for burst (window not full)
         result = detector.evaluate(mid_price_x2=base_price + 100)
         assert not result.burst_detected
 
@@ -550,15 +478,13 @@ class TestSkipZeroReturns:
         )
 
         base_price = 2000_0000
-        # Alternate: 5 flat ticks, 1 move, repeat
         move_count = 0
         for i in range(200):
-            price = base_price + (i // 5)  # changes every 5 ticks
+            price = base_price + (i // 5)
             result = detector.evaluate(mid_price_x2=price)
             if price != base_price + ((i - 1) // 5 if i > 0 else -1):
                 move_count += 1
 
-        # After enough actual moves, detector should be warm
         assert detector.is_warm
 
     def test_skip_zero_returns_disabled_behaves_as_before(self) -> None:
@@ -578,11 +504,6 @@ class TestSkipZeroReturns:
         assert result.toxicity_score == 0.0
 
 
-# ---------------------------------------------------------------------------
-# Test: Minimum BPV floor (Fix 1)
-# ---------------------------------------------------------------------------
-
-
 class TestMinBpvFloor:
     """Verify min_bpv prevents T-statistic explosion."""
 
@@ -594,23 +515,18 @@ class TestMinBpvFloor:
             cooldown_ticks=0,
             cooldown_ns=0,
             min_bpv=1e-10,
-            skip_zero_returns=False,  # allow zero returns to create low BPV
+            skip_zero_returns=False,
         )
         base_price = 2000_0000
 
-        # Feed many ticks with tiny returns (BPV will be very small)
-        # Simulate: mostly flat with tiny 1-unit changes
         max_abs_t = 0.0
         for i in range(50):
-            # Alternate between base_price and base_price+1
             price = base_price + (i % 2)
             result = detector.evaluate(mid_price_x2=price)
             abs_t = abs(detector.t_statistic)
             if abs_t > max_abs_t:
                 max_abs_t = abs_t
 
-        # With min_bpv floor, T-stat should never explode to hundreds
-        # (without floor, BPV near zero causes T to spike to thousands)
         assert max_abs_t < 50.0, f"T-stat too large: {max_abs_t}, min_bpv floor not working"
 
     def test_min_bpv_zero_disables_floor(self) -> None:
@@ -623,15 +539,9 @@ class TestMinBpvFloor:
             min_bpv=0.0,
             skip_zero_returns=False,
         )
-        # Should still work — just uses _EPS as before
         for _ in range(30):
             detector.evaluate(mid_price_x2=2000_0000)
         assert detector.is_warm
-
-
-# ---------------------------------------------------------------------------
-# Test: Production cooldown_ns default (Fix 3)
-# ---------------------------------------------------------------------------
 
 
 class TestCooldownNsProductionDefault:
@@ -656,8 +566,7 @@ class TestCooldownNsProductionDefault:
 
         burst_timestamps: list[int] = []
         base_ts = 1_000_000_000_000
-        # 1ms per tick — 300 ticks = 0.3s total, so at most 1 burst
-        tick_interval_ns = 1_000_000  # 1ms
+        tick_interval_ns = 1_000_000
 
         for i, p in enumerate(prices):
             ts = base_ts + i * tick_interval_ns
@@ -665,7 +574,6 @@ class TestCooldownNsProductionDefault:
             if result.burst_detected:
                 burst_timestamps.append(ts)
 
-        # Total time span is ~300ms, so with 5s cooldown only 1 burst max
         assert len(burst_timestamps) <= 1, (
             f"Expected at most 1 burst in 300ms with 5s cooldown, got {len(burst_timestamps)}"
         )

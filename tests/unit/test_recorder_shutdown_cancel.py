@@ -15,10 +15,6 @@ import pytest
 
 from hft_platform.recorder.worker import RecorderService
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_worker() -> RecorderService:
     """Create a minimal RecorderService with mocked dependencies."""
@@ -35,13 +31,8 @@ def _make_batcher(name: str, raises: Exception | None = None) -> MagicMock:
         batcher.force_flush = AsyncMock(side_effect=raises)
     else:
         batcher.force_flush = AsyncMock()
-    batcher.__repr__ = lambda self: name  # noqa: ARG005
+    batcher.__repr__ = lambda self: name
     return batcher
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestShutdownFlushNormal:
@@ -62,7 +53,6 @@ class TestShutdownFlushNormal:
         worker.batchers["orders"].force_flush.assert_awaited_once()
         worker.writer.shutdown.assert_awaited_once()
 
-        # No error/warning about skipped batchers
         for log_call in mock_log.error.call_args_list:
             assert "recorder_shutdown_batchers_skipped" not in log_call.args
 
@@ -77,7 +67,6 @@ class TestShutdownFlushNormal:
         with patch("hft_platform.recorder.worker.logger") as mock_log:
             await worker._shutdown_flush()
 
-        # Both batchers attempted; second one still flushed
         worker.batchers["ticks"].force_flush.assert_awaited_once()
         worker.batchers["orders"].force_flush.assert_awaited_once()
         mock_log.warning.assert_called_once()
@@ -100,7 +89,6 @@ class TestShutdownFlushCancelledError:
             with pytest.raises(asyncio.CancelledError):
                 await worker._shutdown_flush()
 
-        # "ticks" was flushed before cancellation, "orders" and "fills" were not
         mock_log.error.assert_called_once()
         call_kwargs = mock_log.error.call_args
         assert call_kwargs.args[0] == "recorder_shutdown_batchers_skipped"
@@ -122,7 +110,6 @@ class TestShutdownFlushCancelledError:
 
         call_kwargs = mock_log.error.call_args
         assert call_kwargs.args[0] == "recorder_shutdown_batchers_skipped"
-        # Nothing flushed, both in skipped
         assert call_kwargs.kwargs["flushed"] == []
         assert "ticks" in call_kwargs.kwargs["skipped"]
         assert "orders" in call_kwargs.kwargs["skipped"]
@@ -142,18 +129,13 @@ class TestShutdownFlushCancelledError:
     async def test_no_error_log_when_all_flushed_before_cancel(self) -> None:
         """If CancelledError is raised but no batchers were skipped, no error is logged."""
         worker = _make_worker()
-        # Simulate CancelledError raised after all batchers are done
-        # by having no batchers but patching the outer try to raise
         worker.batchers = {}
 
-        # Patch writer.shutdown to raise CancelledError to simulate
-        # cancellation after batcher loop
         worker.writer.shutdown = AsyncMock(side_effect=asyncio.CancelledError())
 
         with patch("hft_platform.recorder.worker.logger") as mock_log:
             with pytest.raises(asyncio.CancelledError):
                 await worker._shutdown_flush()
 
-        # No skipped batchers error should be logged (skipped list is empty)
         for log_call in mock_log.error.call_args_list:
             assert "recorder_shutdown_batchers_skipped" not in (log_call.args or [])

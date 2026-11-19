@@ -25,7 +25,6 @@ def serialize(obj: Any) -> Any:
     if isinstance(obj, Enum):
         return obj.value
 
-    # Prioritize slots if present (often used for optimization/immutability)
     if hasattr(obj, "__slots__"):
         data = {}
         for k in obj.__slots__:

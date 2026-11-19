@@ -136,11 +136,6 @@ class _LateBroker:
         return self._outcome
 
 
-# --------------------------------------------------------------------------- #
-# End to end through _call_api                                                 #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.asyncio
 async def test_late_place_result_is_reported_not_dropped(tmp_config):
     broker = _LateBroker({"order": {"ordno": "A1B2C", "seqno": "000123"}})
@@ -148,7 +143,7 @@ async def test_late_place_result_is_reported_not_dropped(tmp_config):
 
     ok = await adapter._dispatch_to_api(_command(intent_id=7))
     assert ok is False, "the call timed out: the dispatch itself is unchanged"
-    broker.release.set()  # the broker answers after the timeout
+    broker.release.set()
     await _until(lambda: _rows(adapter, "late_result"))
 
     (row,) = _rows(adapter, "late_result")
@@ -218,7 +213,6 @@ async def test_a_result_inside_the_timeout_is_not_a_late_result(tmp_config):
     adapter._api_timeout_s = 2.0
 
     ok = await adapter._dispatch_to_api(_command())
-    # Let any stray call_soon_threadsafe callback run before asserting an absence.
     await asyncio.sleep(0)
 
     assert ok is True
@@ -243,11 +237,6 @@ async def test_a_timed_out_cancel_is_not_reported_as_a_late_place_result(tmp_con
     await asyncio.sleep(0)
 
     assert _rows(adapter, "late_result") == []
-
-
-# --------------------------------------------------------------------------- #
-# _run_blocking_call: the three kinds                                          #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
@@ -320,7 +309,7 @@ async def test_a_failing_late_callback_does_not_escape_into_the_loop(tmp_config)
             await asyncio.wait_for(adapter._run_blocking_call(_fn, _on_late=_boom), 0.05)
         release.set()
         await loop.run_in_executor(None, done.wait, 5.0)
-        await asyncio.sleep(0)  # an unhandled callback exception reaches the handler here
+        await asyncio.sleep(0)
     finally:
         loop.set_exception_handler(None)
 

@@ -24,18 +24,11 @@ from hft_platform.core.background_tasks import spawn_retained
 
 logger = structlog.get_logger("ops.session_governor")
 
-# ---------------------------------------------------------------------------
-# Default config path relative to project root
-# ---------------------------------------------------------------------------
 _DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "base" / "session_governor.yaml"
 
-# Phase ordering for scheduled transitions
 _PHASE_ORDER: list[str] = ["pre_open", "open", "close_only", "force_flat", "closed"]
 
 
-# ---------------------------------------------------------------------------
-# SessionPhase enum
-# ---------------------------------------------------------------------------
 class SessionPhase(IntEnum):
     """Trading session phase for a track."""
 
@@ -56,9 +49,6 @@ _PHASE_NAME_MAP: dict[str, SessionPhase] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# TrackConfig
-# ---------------------------------------------------------------------------
 @dataclass(slots=True)
 class TrackConfig:
     """Configuration for a single session track."""
@@ -69,16 +59,12 @@ class TrackConfig:
     schedule: list[dict[str, str]] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# TrackGate
-# ---------------------------------------------------------------------------
 class TrackGate:
     """Lightweight lookup: symbol -> track_name -> current SessionPhase.
 
     Designed to be read from the strategy hot path with minimal overhead.
     """
 
-    # Phase priority: OPEN > CLOSE_ONLY > FORCE_FLAT > CLOSED
     _PHASE_PRIORITY: dict[SessionPhase, int] = {
         SessionPhase.OPEN: 3,
         SessionPhase.CLOSE_ONLY: 2,
@@ -94,10 +80,6 @@ class TrackGate:
         "_default_open",
     )
 
-    # Bound on the memo built by root resolution. The live universe is ~300
-    # codes, so this is headroom, not a limit anyone should reach; past it the
-    # phase is still resolved correctly, just recomputed each call rather than
-    # letting an unbounded stream of unknown symbols grow the map.
     _MAX_RESOLVED_SYMBOLS: int = 4096
 
     def __init__(self) -> None:
@@ -157,15 +139,11 @@ class TrackGate:
                     self._warned_unknown.add(symbol)
                     logger.warning("track_gate_unknown_symbol_blocked", symbol=symbol, default_phase="CLOSED")
                 return SessionPhase.CLOSED
-            # Memoise the root resolution so the scan runs once per symbol
-            # rather than once per intent. Copy the list: the root's own list
-            # must not be mutated by a later ``register_symbol``.
             if len(self._symbol_to_tracks) < self._MAX_RESOLVED_SYMBOLS:
                 self._symbol_to_tracks[symbol] = list(tracks)
                 logger.info("track_gate_symbol_resolved_by_root", symbol=symbol, tracks=list(tracks))
         if len(tracks) == 1:
             return self._track_phases.get(tracks[0], SessionPhase.CLOSED)
-        # Multi-track: pick the most permissive phase
         best = SessionPhase.CLOSED
         best_pri = 0
         _pri = self._PHASE_PRIORITY
@@ -175,7 +153,7 @@ class TrackGate:
             if p > best_pri:
                 best = phase
                 best_pri = p
-                if best_pri == 3:  # OPEN — can't do better
+                if best_pri == 3:
                     break
         return best
 
@@ -190,9 +168,6 @@ class TrackGate:
         return dict(self._symbol_to_tracks)
 
 
-# ---------------------------------------------------------------------------
-# SessionGovernor
-# ---------------------------------------------------------------------------
 class SessionGovernor:
     """Manages per-product session phases using wall-clock scheduling.
 
@@ -243,10 +218,9 @@ class SessionGovernor:
                     self._track_gate.register_symbol(symbol, track_name)
                 for root in cfg.roots:
                     self._track_gate.register_root(root, track_name)
-                # Initialize all tracks to INIT phase
                 self._track_gate.set_track_phase(track_name, SessionPhase.INIT)
             logger.info("session_governor_config_loaded", tracks=list(self._tracks.keys()))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("session_governor_config_load_failed", error=str(exc))
 
     @property
@@ -368,7 +342,7 @@ class SessionGovernor:
         for cb in self._phase_callbacks:
             try:
                 cb(track_name, old_phase, new_phase)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("session_phase_callback_error", error=str(exc))
 
     _MAX_FLATTEN_RETRIES: int = 2
@@ -389,7 +363,6 @@ class SessionGovernor:
                 retry=retry_count,
                 track=track_name,
             )
-            # Send notification if dispatcher available
             if self._notification_dispatcher is not None:
                 try:
                     spawn_retained(
@@ -403,10 +376,9 @@ class SessionGovernor:
                         name="notify_flatten_failed",
                         track=track_name,
                     )
-                except Exception as _notify_exc:  # noqa: BLE001
+                except Exception as _notify_exc:
                     logger.warning("session_flatten_notify_failed", error=str(_notify_exc))
 
-            # Retry if under limit
             if retry_count < self._MAX_FLATTEN_RETRIES and self._position_flattener is not None:
                 track_cfg = self._tracks.get(track_name)
                 if track_cfg is not None:

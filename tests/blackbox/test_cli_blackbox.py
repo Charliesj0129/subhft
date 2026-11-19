@@ -129,7 +129,6 @@ def test_cli_ops_rearm_strategy_publishes_a_request(tmp_path):
     assert result.returncode == 0
     assert "requested" in result.stdout.lower()
 
-    # The request is a write-once file; the shared state document is untouched.
     requests = sorted((state_path.parent / "rearm_requests").glob("*.json"))
     assert len(requests) == 1
     published = json.loads(requests[0].read_text(encoding="utf-8"))
@@ -138,7 +137,6 @@ def test_cli_ops_rearm_strategy_publishes_a_request(tmp_path):
     assert published["request_id"]
 
     payload = json.loads(state_path.read_text(encoding="utf-8"))
-    # Still latched: the engine clears it when it consumes the request.
     assert payload["strategies"]["strat_a"]["manual_rearm_required"] is True
 
 

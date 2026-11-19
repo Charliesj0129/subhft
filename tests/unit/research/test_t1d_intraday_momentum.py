@@ -127,15 +127,12 @@ def test_t1d_candidate_has_governed_fixed_spec():
 def test_detects_long_momentum_from_up_morning():
     bbo, trades = extract_bbo_and_trades(_build_morning_momentum(direction=1))
 
-    events = detect_intraday_momentum_events(
-        bbo, trades, contract="TXFC6", date="2026-03-03", config=_config()
-    )
+    events = detect_intraday_momentum_events(bbo, trades, contract="TXFC6", date="2026-03-03", config=_config())
 
     assert len(events) == 1
     ev = events[0]
     assert ev.regime_type == "T1-D_intraday_session_momentum"
     assert ev.direction == 1
-    # Trigger fires at the start of the last window (entry time), not the open.
     assert ev.trigger_time_ns == ns_at(90)
     assert ev.opening_range_high >= 120.0
     assert ev.opening_range_low <= 100.0
@@ -144,9 +141,7 @@ def test_detects_long_momentum_from_up_morning():
 def test_detects_short_momentum_from_down_morning():
     bbo, trades = extract_bbo_and_trades(_build_morning_momentum(direction=-1))
 
-    events = detect_intraday_momentum_events(
-        bbo, trades, contract="TXFC6", date="2026-03-03", config=_config()
-    )
+    events = detect_intraday_momentum_events(bbo, trades, contract="TXFC6", date="2026-03-03", config=_config())
 
     assert len(events) == 1
     assert events[0].direction == -1
@@ -164,26 +159,33 @@ def test_no_event_when_morning_move_below_threshold():
         rows.extend(_quote(ts, mid - 0.5, mid + 0.5))
         prev = (mid - 0.5, mid + 0.5)
 
-    # Flat morning: |ret_open| ~ 0.1 pt << 10 pt threshold.
     for minute, mid in [
-        (1, 100.0), (5, 100.5), (10, 99.5), (15, 100.2), (20, 99.8), (25, 100.1),
-        (35, 100.0), (55, 100.0), (75, 100.0),
-        (90, 100.0), (95, 100.1), (100, 99.9), (105, 100.0), (110, 100.1), (115, 100.0),
+        (1, 100.0),
+        (5, 100.5),
+        (10, 99.5),
+        (15, 100.2),
+        (20, 99.8),
+        (25, 100.1),
+        (35, 100.0),
+        (55, 100.0),
+        (75, 100.0),
+        (90, 100.0),
+        (95, 100.1),
+        (100, 99.9),
+        (105, 100.0),
+        (110, 100.1),
+        (115, 100.0),
     ]:
         push(minute, mid)
     bbo, trades = extract_bbo_and_trades(np.array(rows, dtype=HFTBT_DTYPE))
 
-    events = detect_intraday_momentum_events(
-        bbo, trades, contract="TXFC6", date="2026-03-03", config=_config()
-    )
+    events = detect_intraday_momentum_events(bbo, trades, contract="TXFC6", date="2026-03-03", config=_config())
 
     assert events == []
 
 
 def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     txf = _build_morning_momentum(direction=1)
-    # TMF book: enter long at ask near minute 90, exit on bid path at the 30m
-    # horizon (minute 120). Clean +14pt executable move.
     tmf_rows: list[tuple] = []
     prev: tuple[float, float] | None = None
     for minute, mid in [(90, 200.0), (105, 210.0), (119, 215.0)]:
@@ -269,9 +271,7 @@ def test_summarizer_marks_undersized_sample_needs_more_days():
             "stop_structure_breached": False,
         }
     ]
-    summary = summarize_intraday_momentum_rows(
-        rows, audited_dates=["2026-03-26"], oos_start="2026-03-26"
-    )
+    summary = summarize_intraday_momentum_rows(rows, audited_dates=["2026-03-26"], oos_start="2026-03-26")
 
     assert summary["verdict"] == "NEEDS-MORE-DAYS"
     assert summary["hard_gate"]["events_ok"] is False

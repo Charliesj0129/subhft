@@ -107,10 +107,6 @@ class BaseQuoteWatchdog:
         self._last_data_ts: float = 0.0
         self._check_interval_s: float = check_interval_s if check_interval_s is not None else timeout_s
 
-    # ------------------------------------------------------------------ #
-    # Public API
-    # ------------------------------------------------------------------ #
-
     def notify_data(self) -> None:
         """Record that data has arrived (call from the data callback)."""
         self._last_data_ts = time.monotonic()
@@ -158,10 +154,6 @@ class BaseQuoteWatchdog:
     def last_data_ts(self) -> float:
         """Monotonic timestamp of the last data notification."""
         return self._last_data_ts
-
-    # ------------------------------------------------------------------ #
-    # Internal
-    # ------------------------------------------------------------------ #
 
     def _watch_loop(self) -> None:
         """Background loop that checks for data freshness."""

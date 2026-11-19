@@ -101,11 +101,6 @@ class TakerEngine:
             )
         except Exception:  # noqa: BLE001 — defensive; never break enrich.
             trips = []
-        # Round 40: if a cost_model is supplied AND no explicit
-        # total_net_pts was given, derive it via the same Protocol the
-        # maker engine uses: cost_model.apply(gross_sum, n_fills).
-        # n_fills mirrors the synthetic-unit-fill expansion in
-        # project_trade_pnl_from_position_series — sum(|deltas|).
         if (
             trips
             and cost_model is not None
@@ -116,30 +111,17 @@ class TakerEngine:
                 n_fills = 0
                 for i in range(1, len(positions)):
                     n_fills += abs(int(positions[i]) - int(positions[i - 1]))
-                # Round 41: force-flat residual adds abs(positions[-1])
-                # synthetic close fills (the projector defaults to
-                # force_flat_at_end=True so the cost must be charged
-                # for those fills too).
                 n_fills += abs(int(positions[-1]))
                 gross_sum = float(sum(trips))
                 total_net_pts = float(cost_model.apply(gross_sum, n_fills))
             except Exception:  # noqa: BLE001 — defensive; never break enrich.
                 total_net_pts = None
         if trips and total_net_pts is not None:
-            # Round 39 cost allocation: spread the run-level (net - gross)
-            # delta evenly across trips so trade-axis sub-gates see net
-            # per-trip PnL rather than mid-to-mid gross.
             gross_sum = float(sum(trips))
             delta = (float(total_net_pts) - gross_sum) / len(trips)
             trips = [t + delta for t in trips]
         trade_pnl = trips if trips else None
 
-        # Round 42: surface residual / force-flat metadata so reviewers
-        # can tell whether a candidate's edge is propped up by
-        # force-flat trips (goal 驗證標準 §3 + §5).  positions[-1] is
-        # the open position the projector force-flats away; recording
-        # it on the result lets downstream auditors / sub-gates flag
-        # candidates whose realized PnL hinges on the closing mark.
         residual_qty_signed = 0
         try:
             if positions is not None and len(positions) > 0:

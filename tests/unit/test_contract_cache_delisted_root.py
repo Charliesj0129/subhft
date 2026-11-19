@@ -30,7 +30,6 @@ def _fut(code: str, root: str, delivery: str = "2026/11/18") -> dict:
 
 
 INDEX = [_fut("TXFK6", "TXF"), _fut("MXFK6", "MXF"), _fut("TMFK6", "TMF"), _fut("TMFL6", "TMF", "2026/12/16")]
-# Twenty stock-future roots, two rows each, like the real ~250.
 STOCKS = [_fut(f"Q{i:02d}K6", f"Q{i:02d}") for i in range(20)] + [
     _fut(f"Q{i:02d}L6", f"Q{i:02d}", "2026/12/16") for i in range(20)
 ]
@@ -53,7 +52,7 @@ def test_an_index_root_missing_is_still_refused_nov_02():
 
 
 def test_many_stock_roots_missing_at_once_is_a_partial_download():
-    after = INDEX + [row for row in STOCKS if row["root"] >= "Q04"]  # four roots gone, limit is 3
+    after = INDEX + [row for row in STOCKS if row["root"] >= "Q04"]
     reasons = contract_cache_regressions(INDEX + STOCKS, after, as_of=AS_OF)
     assert reasons and reasons[0].startswith("future roots missing: 4 > 3")
 

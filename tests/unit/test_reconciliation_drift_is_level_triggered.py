@@ -111,13 +111,6 @@ async def test_a_manual_rearm_relatches_drift_because_inputs_now_report_it():
     assert "reconciliation_drift" in controller._active_reasons
 
 
-# --- Transitions, against the real service ------------------------------------
-#
-# The first version of this file toggled a SimpleNamespace boolean, which proves
-# the wiring and nothing about when the flag actually moves. The adversarial
-# review reproduced both premature de-assertions below with the real service.
-
-
 def _service(local, broker, config=None):
     """A real ReconciliationService over mocked store/client.
 
@@ -205,12 +198,9 @@ async def test_a_clean_sample_that_straddled_a_fill_does_not_clear_the_drift():
     store.snapshot_positions = MagicMock(return_value=snapshot)
     store.positions = snapshot
 
-    # The fence advances between the broker read and the local read -- exactly
-    # the window the two-phase sample opens.
     gens = iter([7, 8])
     type(store).fill_generation = property(lambda _self: next(gens))
 
-    # Broker agrees with the local book, so the cycle looks perfectly clean.
     client.get_positions = MagicMock(return_value=[{"code": "TXFA5", "quantity": 3}])
 
     with patch("hft_platform.execution.reconciliation.MetricsRegistry") as m:
@@ -306,7 +296,6 @@ async def test_a_straddled_clean_sample_does_not_release_the_reconciliation_hold
         m.get.return_value = MagicMock()
         svc = ReconciliationService(client, store, {}, storm_guard)
 
-    # Already in HALT from unresolved critical drift.
     svc._drift_reduce_only = True
     svc._halt_triggered = True
     svc._critical_drift_streak = 3
@@ -319,16 +308,6 @@ async def test_a_straddled_clean_sample_does_not_release_the_reconciliation_hold
     assert storm_guard.set_reconciliation_hold.call_count == 0, "a distrusted sample released the HALT hold"
 
     del type(store).fill_generation
-
-
-# --- A corrupt sample is not evidence in EITHER direction ---------------------
-#
-# The first fence only guarded the no-discrepancy branch, on the reasoning that
-# asserting reduce-only is always the safe direction. That was too glib. For
-# futures `is_critical` is `abs(diff) >= 1`, so a straddled fill that invents a
-# single lot of difference is CRITICAL, and one transient sample was enough to
-# enter reduce-only and start the recovery cooldown. You do not act on a
-# measurement you already know is corrupt -- in either direction.
 
 
 def _straddling_store(local_qty: int):
@@ -392,7 +371,6 @@ async def test_a_partial_broker_snapshot_is_not_treated_as_the_whole_book():
     store.fill_generation = 7
 
     client = MagicMock()
-    # The futures query failed; the stock account answered. Non-None, partial.
     client.get_positions = MagicMock(return_value=[{"code": "2330", "quantity": 1000}])
     client.account_gateway.last_positions_error = "futopt: 500 Please check param."
 
@@ -471,19 +449,9 @@ async def test_consecutive_untrusted_samples_are_visible_rather_than_silent():
         await svc.sync_portfolio()
         assert svc._untrusted_sample_streak == expected
 
-    # A trustworthy sample must reset it, or the alert would latch forever.
     client.account_gateway.last_positions_error = None
     await svc.sync_portfolio()
     assert svc._untrusted_sample_streak == 0
-
-
-# --- Sustained unverifiability must fail CLOSED, not merely log ---------------
-#
-# Skipping a corrupt sample is right per-sample and dangerous sustained: nothing
-# was watching. ReconciliationDiscrepancyDetected cannot fire, because a skipped
-# cycle never computes a discrepancy; reconciliation_last_success_ts had no
-# alert rule at all. So a broker account outage meant positions went unverified
-# indefinitely with trading fully open, and the only witness was a log line.
 
 
 def _always_partial_service(threshold: int | None = None):

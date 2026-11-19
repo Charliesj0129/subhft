@@ -10,10 +10,6 @@ from __future__ import annotations
 import inspect
 from unittest.mock import MagicMock
 
-# ---------------------------------------------------------------------------
-# Source-level structural tests (fast, no asyncio needed)
-# ---------------------------------------------------------------------------
-
 
 def test_supervise_tracks_gateway_intent_queue_depth():
     """_supervise() source must reference 'gateway_intent' label for queue depth metric."""
@@ -29,7 +25,6 @@ def test_supervise_checks_intent_channel_before_metric():
 
     source = inspect.getsource(HFTSystem._supervise)
     assert "intent_channel" in source, "_supervise() must reference intent_channel for gateway depth tracking"
-    # Guard pattern: None check must be present
     assert "intent_channel is not None" in source, (
         "_supervise() must guard intent_channel with 'is not None' before calling qsize()"
     )
@@ -40,7 +35,6 @@ def test_supervise_log_includes_gateway_intent_field():
     from hft_platform.services.system import HFTSystem
 
     source = inspect.getsource(HFTSystem._supervise)
-    # The log kwargs dict should include gateway_intent when channel is present
     assert "gateway_intent" in source, "_supervise() must log gateway_intent depth in the periodic queue log"
 
 
@@ -52,15 +46,9 @@ def test_hftsystem_exposes_intent_channel_attribute():
     assert "self.intent_channel" in source, "HFTSystem.__init__ must assign self.intent_channel from the registry"
 
 
-# ---------------------------------------------------------------------------
-# Behavioural tests: metric emission via mock
-# ---------------------------------------------------------------------------
-
-
 def _make_minimal_mock_system(with_intent_channel: bool) -> MagicMock:
     """Build a minimal mock that mimics HFTSystem state for queue-depth assertions."""
     sys = MagicMock()
-    # Standard queues
     sys.raw_queue.qsize.return_value = 1
     sys.raw_exec_queue.qsize.return_value = 2
     sys.recorder_queue.qsize.return_value = 3
@@ -80,7 +68,6 @@ def _make_minimal_mock_system(with_intent_channel: bool) -> MagicMock:
 def test_gateway_intent_depth_tracked_when_available():
     """When intent_channel is present, queue_depth metric is set with label='gateway_intent'."""
     metrics = MagicMock()
-    # Capture label calls
     label_calls: list[str] = []
     depth_values: dict[str, int] = {}
 
@@ -96,10 +83,8 @@ def test_gateway_intent_depth_tracked_when_available():
 
     metrics.queue_depth.labels.side_effect = fake_labels
 
-    # Build a mock system with an intent_channel
     sys_mock = _make_minimal_mock_system(with_intent_channel=True)
 
-    # Reproduce the metric-emission block from _supervise()
     metrics.queue_depth.labels(queue="raw").set(sys_mock.raw_queue.qsize())
     metrics.queue_depth.labels(queue="raw_exec").set(sys_mock.raw_exec_queue.qsize())
     metrics.queue_depth.labels(queue="recorder").set(sys_mock.recorder_queue.qsize())
@@ -128,7 +113,6 @@ def test_gateway_intent_depth_skipped_when_no_channel():
 
     sys_mock = _make_minimal_mock_system(with_intent_channel=False)
 
-    # Reproduce the metric-emission block — must not raise
     metrics.queue_depth.labels(queue="raw").set(sys_mock.raw_queue.qsize())
     metrics.queue_depth.labels(queue="raw_exec").set(sys_mock.raw_exec_queue.qsize())
     metrics.queue_depth.labels(queue="recorder").set(sys_mock.recorder_queue.qsize())

@@ -46,7 +46,7 @@ def test_a_repeated_manual_reason_writes_only_once(tmp_path: Path, monkeypatch) 
     writes: list[str] = []
     monkeypatch.setattr(ctrl, "_pending_write", lambda t, m: lambda: writes.append(t.reason))
 
-    ctrl.enter_reduce_only(reason="recorder_data_loss")  # re-emitted next tick
+    ctrl.enter_reduce_only(reason="recorder_data_loss")
     ctrl.enter_reduce_only(reason="clickhouse_unhealthy")
 
     assert writes == []

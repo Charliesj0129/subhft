@@ -9,7 +9,6 @@ from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
 @pytest.fixture
 def normalizer(tmp_path):
-    # Mock config loading inside SymbolMetadata
     cfg = tmp_path / "test_symbols.yaml"
     cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
 
@@ -18,7 +17,6 @@ def normalizer(tmp_path):
 
 
 def test_normalize_tick_success(normalizer):
-    # Standard Shioaji Tick
     payload = {
         "code": "2330",
         "close": 100.0,
@@ -33,13 +31,12 @@ def test_normalize_tick_success(normalizer):
 
     assert isinstance(event, TickEvent)
     assert event.symbol == "2330"
-    assert event.price == 1000000  # 100.0 * 10000
+    assert event.price == 1000000
     assert event.volume == 5
     assert event.meta.topic == "tick"
 
 
 def test_normalize_tick_missing_fields(normalizer):
-    # Minimum payload without close field — treated as zero/missing price, returns None (H4 fix)
     payload = {"code": "2330"}
     event = normalizer.normalize_tick(payload)
 
@@ -52,7 +49,6 @@ def test_normalize_tick_invalid_symbol(normalizer):
 
 
 def test_normalize_tick_string_values(normalizer):
-    # Strings instead of numbers
     payload = {"code": "2330", "close": "100.5", "volume": "10"}
     event = normalizer.normalize_tick(payload)
 
@@ -63,12 +59,12 @@ def test_normalize_tick_string_values(normalizer):
 @pytest.mark.parametrize(
     "price_float,expected_scaled",
     [
-        (100.15, 1001500),  # IEEE 754: float(100.15)*10000 = 1001499.999...
-        (100.05, 1000500),  # float(100.05)*10000 = 1000499.999...
-        (99.95, 999500),  # float(99.95)*10000  = 999499.999...
-        (0.1, 1000),  # float(0.1)*10000 = 999.999...
-        (100.0, 1000000),  # exact
-        (500.5, 5005000),  # exact
+        (100.15, 1001500),
+        (100.05, 1000500),
+        (99.95, 999500),
+        (0.1, 1000),
+        (100.0, 1000000),
+        (500.5, 5005000),
     ],
 )
 def test_normalize_tick_ieee754_precision(normalizer, price_float, expected_scaled):
@@ -95,13 +91,10 @@ def test_normalize_bidask_success(normalizer):
 
     assert isinstance(event, BidAskEvent)
     assert event.symbol == "2330"
-    # List check
-    # Bids (100.0 * 10000 -> 1000000)
-    assert len(event.bids) == 3  # Zeros filtered?
+    assert len(event.bids) == 3
     assert event.bids[0][0] == 1000000
     assert event.bids[0][1] == 1
 
-    # Asks
     assert len(event.asks) == 2
     assert event.asks[0][0] == 1005000
 
@@ -114,7 +107,6 @@ def test_normalize_bidask_empty_arrays(normalizer):
 
 
 def test_normalize_snapshot_alias(normalizer):
-    # normalize_snapshot falls back to bidask and marks snapshot
     payload = {"code": "2330", "bid_price": [100.0], "bid_volume": [1], "ask_price": [101.0], "ask_volume": [1]}
     event = normalizer.normalize_snapshot(payload)
     assert isinstance(event, BidAskEvent)
@@ -155,9 +147,6 @@ def test_normalize_snapshot_partial_bbo(normalizer):
     assert event.asks[0][0] == 1010000
 
 
-# --- Scalar timestamp tracking tests ---
-
-
 def test_scalar_ts_slots_initialized(normalizer):
     """Scalar timestamp slots should start at 0."""
     assert normalizer._last_local_ts_tick == 0
@@ -170,7 +159,6 @@ def test_scalar_ts_tick_updated(normalizer):
     payload = {"code": "2330", "close": 100.0, "volume": 1, "ts": 1620000000000000}
     normalizer.normalize_tick(payload)
     assert normalizer._last_local_ts_tick > 0
-    # bidask/snapshot should remain 0
     assert normalizer._last_local_ts_bidask == 0
     assert normalizer._last_local_ts_snapshot == 0
 
@@ -208,31 +196,27 @@ def test_no_last_local_ts_ns_dict(normalizer):
     assert not hasattr(normalizer, "_last_local_ts_ns")
 
 
-# --- Fused path tests ---
-
-
 def test_fused_path_selected_when_enabled(tmp_path):
     """When _fused is set, normalize_bidask should use fused path and set fused_stats."""
     cfg = tmp_path / "symbols.yaml"
     cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
     nm = MarketDataNormalizer(str(cfg))
 
-    # Create a mock fused instance
     mock_fused = MagicMock()
     bids_np = np.array([[1000000, 10]], dtype=np.int64)
     asks_np = np.array([[1005000, 20]], dtype=np.int64)
     mock_fused.process_bidask.return_value = (
-        bids_np,  # bids_np
-        asks_np,  # asks_np
-        1000000,  # best_bid
-        1005000,  # best_ask
-        10,  # bid_depth
-        20,  # ask_depth
-        2005000,  # mid_x2 (best_bid + best_ask)
-        5000,  # spread_scaled
-        -333333,  # imbalance_ppm
-        1,  # version
-        -0.333333,  # top_imbalance
+        bids_np,
+        asks_np,
+        1000000,
+        1005000,
+        10,
+        20,
+        2005000,
+        5000,
+        -333333,
+        1,
+        -0.333333,
     )
     nm._fused = mock_fused
 
@@ -249,13 +233,12 @@ def test_fused_path_selected_when_enabled(tmp_path):
     assert isinstance(event, BidAskEvent)
     assert event.symbol == "2330"
     assert event.fused_stats is not None
-    assert event.fused_stats[0] == 1000000  # best_bid
-    assert event.fused_stats[1] == 1005000  # best_ask
-    assert event.fused_stats[4] == 2005000  # mid_x2
-    assert event.fused_stats[5] == 5000  # spread_scaled
-    # stats (compat) should have float mid_price
+    assert event.fused_stats[0] == 1000000
+    assert event.fused_stats[1] == 1005000
+    assert event.fused_stats[4] == 2005000
+    assert event.fused_stats[5] == 5000
     assert event.stats is not None
-    assert event.stats[4] == pytest.approx(1002500.0)  # mid_x2 / 2
+    assert event.stats[4] == pytest.approx(1002500.0)
     mock_fused.process_bidask.assert_called_once()
 
 
@@ -279,10 +262,9 @@ def test_fused_path_fallback_on_error(tmp_path):
     }
     event = nm.normalize_bidask(payload)
 
-    # Should still produce a valid event via standard path
     assert isinstance(event, BidAskEvent)
     assert event.symbol == "2330"
-    assert event.fused_stats is None  # Standard path does not set fused_stats
+    assert event.fused_stats is None
 
 
 def test_fused_path_not_used_when_disabled(normalizer):
@@ -299,9 +281,6 @@ def test_fused_path_not_used_when_disabled(normalizer):
     event = normalizer.normalize_bidask(payload)
     assert isinstance(event, BidAskEvent)
     assert event.fused_stats is None
-
-
-# --- normalization_skip_total counter tests ---
 
 
 class TestNormalizationSkipCounter:
@@ -339,9 +318,7 @@ class TestNormalizationSkipCounter:
         child = normalizer._skip_tick_negative_price
         assert child is not None
 
-        # Enable Rust path
         monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        # Mock Rust normalize to return tuple with negative price
         rust_result = ("tick", "2330", -1, 100, 100, False, False, 1_000_000)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
 
@@ -368,11 +345,6 @@ class TestNormalizationSkipCounter:
         assert after == before + 1
 
 
-# ─────────────────────────────────────────────────────────────────────
-# P2-b (commit 26b4a68b): feed_time_skew gauge + 3 severity counters
-# ─────────────────────────────────────────────────────────────────────
-
-
 def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(monkeypatch, normalizer):
     """Three skews above the lag ceiling must each fire their severity bucket
     exactly once (warn_1s / high_10s / critical_60s), and the gauge must
@@ -380,8 +352,6 @@ def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(m
     """
     import hft_platform.feed_adapter.normalizer as norm
 
-    # Lower the lag ceiling to 1s so the warn_1s severity bucket is reachable
-    # via small positive deltas; cooldown 0 to bypass log throttling.
     monkeypatch.setattr(norm, "_TS_MAX_LAG_NS", 1_000_000_000)
     monkeypatch.setattr(norm, "_TS_SKEW_LOG_COOLDOWN_NS", 0)
 
@@ -396,24 +366,17 @@ def test_validate_and_sync_timestamp_emits_severity_counters_and_current_gauge(m
     high_before = high_child._value.get()
     crit_before = crit_child._value.get()
 
-    exch_ts = 100_000_000_000  # 100s in ns
+    exch_ts = 100_000_000_000
 
-    # warn_1s bucket: raw_delta = 2s > 1s ceiling, but <= 10s.
-    normalizer._last_skew_log_ns = 0  # cooldown is 0 anyway
+    normalizer._last_skew_log_ns = 0
     normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 2_000_000_000, "tick", "2330")
-    # high_10s bucket: raw_delta = 15s > 10s but <= 60s.
     normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 15_000_000_000, "tick", "2330")
-    # critical_60s bucket: raw_delta = 75s > 60s.
     normalizer._validate_and_sync_timestamp(exch_ts, exch_ts + 75_000_000_000, "tick", "2330")
 
     assert warn_child._value.get() == warn_before + 1
     assert high_child._value.get() == high_before + 1
     assert crit_child._value.get() == crit_before + 1
 
-    # Gauge must reflect the *raw* delta from the last call, not the clamped
-    # one. Asserting 1_000_000_000 here (the ceiling) is what this test used to
-    # do, and it locked in the saturation that hid a 75s skew behind a 1s
-    # reading -- exactly the production shape on 2026-08-20.
     gauge_child = metrics.feed_time_skew_ns.labels(topic="tick")
     assert gauge_child._value.get() == 75_000_000_000
 
@@ -438,7 +401,6 @@ def test_time_skew_gauge_reports_the_raw_delta_when_the_clamp_fires(monkeypatch,
 
     gauge = metrics.feed_time_skew_ns.labels(topic="snapshot")
     assert gauge._value.get() == 900_000_000_000, "gauge must not saturate at the clamp ceiling"
-    # The clamp itself is unchanged: the data path still gets the bounded value.
     assert local_ts == exch_ts + 5_000_000_000
 
 

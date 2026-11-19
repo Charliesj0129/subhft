@@ -26,16 +26,7 @@ _NULL_LOCK: _NullLock = _NullLock()
 @dataclass(slots=True)
 class OrderIdResolver:
     order_id_map: Dict[str, Any]
-    # P0-E1: optional threading.Lock injected by OrderAdapter bootstrap so
-    # broker-thread reads can briefly lock against main-loop writes. Defaults
-    # to a no-op lock for tests and callers that do not cross threads.
     lock: ContextManager[Any] = field(default_factory=lambda: _NULL_LOCK)
-    # "Is this order key still in flight?" Wired by bootstrap to the OrderAdapter.
-    # The broker recycles ``seqno`` / ``id`` (the order ack of THESHOW 2026-10-06
-    # 09:35 matched one registered by an order that ended 11 h earlier and was
-    # attributed to it), so a recycled id may only claim an order that is still
-    # live. ``ordno`` never repeats and is exempt. ``None`` = no opinion: every
-    # mapping counts, which is what a standalone resolver (tests) wants.
     is_live: Callable[[str], bool] | None = None
 
     def key_is_live(self, order_key: Optional[str]) -> bool:
@@ -44,7 +35,7 @@ class OrderIdResolver:
             return True
         try:
             return bool(check(order_key))
-        except Exception:  # noqa: BLE001 — a broken check must not hide an order: fall back to trusting the map
+        except Exception:
             return True
 
     def normalize_order_key(self, raw: Any) -> Optional[str]:
@@ -101,20 +92,12 @@ class OrderIdResolver:
         if order_id is None:
             return None
         order_id_str = str(order_id)
-        # P0-E1: hold the lock across BOTH the direct get and the prefix-match
-        # snapshot so a writer that appears between the two reads cannot leave
-        # the resolver wedged on a stale dict view. Tuple materialisation is
-        # what actually prevents `RuntimeError: dictionary changed size during
-        # iteration`; the lock additionally prevents the CPython-internal
-        # half-resized dict state that is officially undefined behaviour.
         with self.lock:
             order_key = self.normalize_order_key(self.order_id_map.get(order_id_str))
             if order_key and (not live_only or self.key_is_live(order_key)):
                 return order_key
             if not order_id_str:
                 return None
-            # Prefix-match fallback: Shioaji ordno grows from "vA0G6" (order)
-            # to "vA0G671S" (fill) — the fill ordno starts with the order ordno.
             snapshot = tuple(self.order_id_map.items())
         for registered_id, mapped_key in snapshot:
             if registered_id and order_id_str.startswith(str(registered_id)):

@@ -93,7 +93,7 @@ class TestReconnectBackstopOutlastsInnerBudgets:
 
     def test_backstop_covers_the_measured_pre_open_reconnect(self):
         """60s is the slowest reconnect login observed on the live engine."""
-        measured_worst_login_s = 59.98  # 2026-09-07T00:30:04Z, the slowest of 68
+        measured_worst_login_s = 59.98
         assert _outer_default() > measured_worst_login_s
 
     def test_there_is_only_one_reconnect_implementation_to_carry_the_budget(self):
@@ -150,8 +150,6 @@ class TestReconnectBackstopBehaviour:
         elapsed = {"s": 0.0}
 
         async def _fake_wait_for(aw, timeout):
-            # The reconnect takes 45s: past the retired 30s bound, inside both
-            # the inner budget and the new backstop.
             elapsed["s"] = 45.0
             aw.close()
             if elapsed["s"] > timeout:

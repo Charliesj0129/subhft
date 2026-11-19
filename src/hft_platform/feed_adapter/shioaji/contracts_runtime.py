@@ -32,15 +32,8 @@ except Exception:  # pragma: no cover
 if TYPE_CHECKING:
     from hft_platform.feed_adapter.shioaji.client import ShioajiClient
 
-# Month number → TAIFEX month letter (A=Jan .. L=Dec)
 _MONTH_LETTERS = "ABCDEFGHIJKL"
 
-#: Bounded label values for ``contract_update_events_total``. The SDK declares
-#: ``ContractAction`` = FORCE|CHECK and ``ContractUpdateSecurityType`` =
-#: ALL|IND|STK|FUT|OPT (``_core.pyi:116-126``), but these arrive as foreign enum
-#: objects whose ``str()`` we do not control, and a future SDK may add variants.
-#: Anything unrecognised collapses to ``other`` rather than minting a new
-#: Prometheus series — same discipline as ``classify_login_failure``.
 _CONTRACT_EVENT_ACTIONS = frozenset({"force", "check"})
 _CONTRACT_EVENT_SECURITY_TYPES = frozenset({"all", "ind", "stk", "fut", "opt"})
 
@@ -84,23 +77,9 @@ class _SharedRebuild:
     removed: tuple[str, ...]
 
 
-#: Guards ``_shared_rebuild``. Distinct from ``ShioajiClient._contract_refresh_lock``,
-#: which is *per client* and therefore serialises nothing across pooled facades.
 _shared_rebuild_lock = threading.Lock()
 _shared_rebuild: _SharedRebuild | None = None
 
-#: The right to perform this cycle's rebuild. Held for the *shareable* part of a
-#: refresh only — from before the cache read until just after the result is
-#: published — so a sibling that blocks here wakes up to a finished rebuild
-#: instead of starting a redundant one.
-#:
-#: This is the barrier, and it has to be: the first attempt at sharing (PR #392)
-#: published on completion and checked on arrival, which cannot ever trade,
-#: because the facades arrive *closer together* than one rebuild takes. Measured
-#: on THESHOW 2026-08-05: four arrivals spanning **1.494 s** (07:19:29.230 →
-#: 07:19:30.724) against a **2.028 s** time-to-publish, so all four sailed past
-#: an empty slot and did the work four times over — `ok=4`, `ok_shared` absent.
-#: A handoff must be claimed at arrival, never published at completion.
 _rebuild_slot_lock = threading.Lock()
 
 
@@ -402,7 +381,7 @@ def assert_not_expired(contract: Any, *, today: dt.date) -> None:
     """
     raw = getattr(contract, "delivery_date", None)
     if _is_undated(raw):
-        return  # contract has no delivery_date → not a dated contract
+        return
     delivery_date = _coerce_delivery_date(raw)
     if delivery_date < today:
         code = str(getattr(contract, "code", "<unknown>"))
@@ -498,32 +477,27 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
 
     Returns config_code unchanged if derivation fails or isn't needed.
     """
-    # Only attempt derivation for alias-style codes
     suffix = config_code[-2:] if len(config_code) >= 4 else ""
     is_alias = suffix in ("R1", "R2", "C0", "C1")
     if not is_alias:
-        # Regular month code — check contract.code directly
         actual = getattr(contract, "code", None)
         return actual if actual and actual != config_code else config_code
 
-    # Extract root symbol (e.g. "TMF" from "TMFR1")
     root = config_code[:-2]
 
-    # Try delivery_month first (format: "YYYY/MM" or "YYYYMM")
     dm = getattr(contract, "delivery_month", None)
     if dm:
         dm_str = str(dm).replace("/", "")
         if len(dm_str) >= 6:
             try:
                 month = int(dm_str[4:6])
-                year_digit = int(dm_str[3])  # last digit of year
+                year_digit = int(dm_str[3])
                 if 1 <= month <= 12:
                     letter = _MONTH_LETTERS[month - 1]
                     return f"{root}{letter}{year_digit}"
             except (ValueError, IndexError):
                 pass
 
-    # Fallback: try delivery_date (format: "YYYY/MM/DD" or "YYYYMMDD")
     dd = getattr(contract, "delivery_date", None)
     if dd:
         dd_str = str(dd).replace("/", "").replace("-", "")
@@ -537,7 +511,6 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
             except (ValueError, IndexError):
                 pass
 
-    # Could not derive — fall back to contract.code
     actual = getattr(contract, "code", None)
     return actual if actual else config_code
 
@@ -630,7 +603,6 @@ class ContractsRuntime:
                 )
 
         if prod in {"future", "futures"} or exch in {"FUT", "FUTURES", "TAIFEX"}:
-            # R1/R2 continuous contract alias (e.g. TXFR1 → Contracts.Futures.TXF.TXFR1)
             if len(raw_code) >= 4 and raw_code[-2:] in ("R1", "R2"):
                 root = raw_code[:-2]
                 root_group = contract_member(self._client.api.Contracts.Futures, root)
@@ -639,9 +611,6 @@ class ContractsRuntime:
                     if r_contract is not None:
                         return r_contract
 
-            # Direct product-group lookup for month codes (e.g. TMFE6 → Futures.TMF.TMFE6)
-            # Shioaji organises contracts under product groups; top-level iteration
-            # may miss them if the container isn't dict-like at the root.
             if len(raw_code) >= 5 and raw_code[-1].isdigit() and raw_code[-2].isalpha():
                 root = raw_code[:-2]
                 root_group = contract_member(self._client.api.Contracts.Futures, root)
@@ -822,7 +791,6 @@ class ContractsRuntime:
         added = set(new_map) - set(old_map)
 
         if not self._client.api or not self._client.logged_in or not self._client.tick_callback:
-            # D2: in-place reset preserves object identity for peer readers.
             self._client.subscribed_codes.clear()
             self._client.subscribed_codes.update(new_map.keys())
             self._client.subscribed_count = len(self._client.subscribed_codes)
@@ -840,7 +808,6 @@ class ContractsRuntime:
                 self._client.subscribed_codes.add(code)
         self._client.subscribed_count = len(self._client.subscribed_codes)
         self._client._refresh_quote_routes()
-        # Rebuild alias map after symbol reload
         self._client.alias_to_actual.clear()
         self.resolve_symbol_aliases()
 
@@ -923,18 +890,9 @@ class ContractsRuntime:
                 pass
             return
 
-        # Pool mode: ``config_path`` points at a QuoteConnectionPool shard, which
-        # is also the only mode where the rebuild is safely shareable — see
-        # ``_reuse_shared_rebuild``. Computed up front because the reuse decision
-        # happens before any of the expensive work.
         is_pool_shard = "/hft_quote_pool_" in str(self._client.config_path)
         rebuild_slot_held = False
         if is_pool_shard:
-            # Claim the slot *first*, then look for a result. Whoever gets here
-            # first owns the rebuild; the siblings block right here — arriving
-            # 0.2-0.7 s apart, well before the owner could publish — and wake to
-            # a finished rebuild. Checking before claiming is what made PR #392 a
-            # no-op; see ``_rebuild_slot_lock``.
             rebuild_slot_held = _acquire_rebuild_slot(
                 client_float(self._client, "_contract_refresh_share_wait_s", 30.0),
             )
@@ -943,28 +901,17 @@ class ContractsRuntime:
                     max_age_s=client_float(self._client, "_contract_refresh_share_window_s", 300.0),
                 )
                 if shared is not None:
-                    # Hand the slot on before the per-facade tail: siblings still
-                    # queued behind it must not wait for our resubscribe.
                     _release_rebuild_slot()
                     self._reuse_shared_rebuild(shared)
                     return
             else:
-                # A wedged owner must not wedge the whole pool. Rebuild alone —
-                # correct, just as expensive as before this change.
                 logger.warning(
                     "contract_refresh_slot_wait_timeout",
                     wait_s=client_float(self._client, "_contract_refresh_share_wait_s", 30.0),
                 )
 
-        # ``owner`` did the rebuild for the pool; ``fallback`` had to do it alone
-        # because the handoff failed; ``solo`` is a non-pool client, which has no
-        # siblings to share with. A field cycle should read 1x owner + 3x reused
-        # and zero fallback — anything else means the barrier is not trading.
         shared_role = "owner" if rebuild_slot_held else ("fallback" if is_pool_shard else "solo")
 
-        # Set when the rebuild below raises, so the metric and the status file
-        # stop reporting ``ok`` for a cache that was never written (THESHOW
-        # 10/28-11/01: 332 failures, all counted as ``result="ok"``).
         rebuild_error: str | None = None
         codes_before: set[str] = set()
         contracts_before: list[dict[str, Any]] = []
@@ -980,23 +927,6 @@ class ContractsRuntime:
             pass
         _ms_cache_read = (time.monotonic() - _t_phase) * 1000.0
 
-        # There is deliberately no broker fetch here any more.
-        #
-        # ``fetch_contracts`` needs sole ownership of shioaji 1.5.6's Rust
-        # ``_core`` client, and this facade's ~74 live subscriptions hold
-        # references for the entire session, so the call cannot succeed while we
-        # are subscribed. Measured on THESHOW over 24 h: 96 attempts, 96
-        # ``fetch_failed``, zero ``ok`` — the poll was pure noise, and it emitted
-        # an ERROR line per facade per hour for a call that is unimplementable by
-        # construction. Contracts are loaded by *login*, which on this platform
-        # happens roughly every 1.6 h per facade, i.e. more often than this hourly
-        # poll could have refreshed them even if it worked. Broker-announced
-        # changes now arrive as ``SYS/CONTRACT`` pushes via
-        # ``register_contract_event_callback`` instead of being polled for.
-        #
-        # What remains is still worth doing: re-read what the SDK currently
-        # holds, rebuild the on-disk cache from it, and diff so a rollover that
-        # login picked up still drives resubscription.
         logger.info(
             "contract_refresh_reading_sdk_contracts",
             status=_read_contract_status(self._client.api),
@@ -1015,13 +945,6 @@ class ContractsRuntime:
             raw_contracts: list[dict] = []
             _normalize = _normalize_contract_row
 
-            # Serialise the pooled facades. Walking the SDK's contract store is a
-            # read, not a fetch, but four facades entering it on the same hourly
-            # timer is the same process-wide contention that made concurrent
-            # fetches abort. Reuse the login slot rather than add a second
-            # primitive. ``False`` means the slot timed out: proceed
-            # unserialised (a never-rebuilt cache is worse) and do NOT release a
-            # slot we do not hold.
             slot_held = acquire_login_slot(
                 min_gap_s=client_float(self._client, "_contract_fetch_stagger_gap_s", 2.0),
                 timeout_s=client_float(self._client, "_contract_fetch_stagger_timeout_s", 300.0),
@@ -1085,9 +1008,6 @@ class ContractsRuntime:
                 except Exception as exc:
                     logger.debug("operation_fallback", error=str(exc))
                 finally:
-                    # Nothing was published, so the siblings waiting on the slot
-                    # must be released to rebuild for themselves rather than
-                    # inherit a cycle that never happened.
                     if rebuild_slot_held:
                         _release_rebuild_slot()
                         rebuild_slot_held = False
@@ -1099,16 +1019,11 @@ class ContractsRuntime:
                 write_contract_cache(
                     raw_contracts,
                     self._client._contract_cache_path,
-                    # The roots the platform trades must survive a rewrite;
-                    # any other root may leave the listing (a delisting).
                     protected_codes=[
                         sym.get("code") for sym in getattr(self._client, "symbols", []) if isinstance(sym, dict)
                     ],
                 )
             except ContractCacheRegressionError as exc:
-                # A partial SDK walk (2026-11-02: no TXF/MXF rows) must not
-                # replace the last complete cache: the universe roll and every
-                # boot read it. Same exit as the zero-derivatives branch above.
                 try:
                     logger.error(
                         "contract_refresh_integrity_failed",
@@ -1129,14 +1044,6 @@ class ContractsRuntime:
                     self._client._contract_refresh_lock.release()
                 return
             _ms_cache_write = (time.monotonic() - _t_write) * 1000.0
-            # ``contract_cache_last_success_ts`` is deliberately NOT advanced
-            # here. It means "when did we last load contracts *from the broker*",
-            # and this routine no longer talks to the broker — it re-serialises
-            # what login already loaded. Stamping it here would make
-            # ``ContractsStaleVsBrokerAnnouncement`` clear itself within an hour
-            # of every announcement without anything having been re-read, which
-            # is exactly the kind of self-satisfying metric this alert exists to
-            # avoid. Login stamps it (``session_runtime``); nothing else should.
 
             codes_after = {str(c.get("code", "")) for c in raw_contracts if c.get("code")}
             full_added = sorted(codes_after - codes_before)
@@ -1150,11 +1057,6 @@ class ContractsRuntime:
                 removed=full_removed,
                 subscribed=set(getattr(self._client, "subscribed_codes", None) or ()),
             )
-            # Publish before the symbol rebuild below, not after: the siblings
-            # are blocked on the rebuild slot right now, and everything after
-            # this point is per-facade work they must not inherit. Publish then
-            # release, in that order — releasing first would let a sibling take
-            # the slot and find it empty.
             if rebuild_slot_held:
                 _publish_shared_rebuild(
                     _SharedRebuild(
@@ -1179,11 +1081,6 @@ class ContractsRuntime:
                 relevant_count=self._client._contract_refresh_last_diff["relevant_count"],
                 shared=shared_role,
             )
-            # Phase timings decide whether narrowing the walk is worth a second
-            # change: if ``sdk_walk_ms`` dominates, the cost is crossing into the
-            # SDK's Rust contract store at all and fewer ``getattr``s per contract
-            # will not help; if ``cache_read_ms``/``cache_write_ms`` dominate, the
-            # 13 MB JSON round-trip is the target instead.
             logger.info(
                 "contract_refresh_phase_timings",
                 cache_read_ms=round(_ms_cache_read, 1),
@@ -1204,7 +1101,6 @@ class ContractsRuntime:
                 pass
 
             _t_build = time.monotonic()
-            # Same "still trading" as the universe roll (core/front_month.py).
             contract_index = ContractIndex(
                 contracts=raw_contracts,
                 as_of=taifex_delivery_cutoff(timebase.now_ns()),
@@ -1218,13 +1114,6 @@ class ContractsRuntime:
                 symbol_build_ms=round((time.monotonic() - _t_build) * 1000.0, 1),
                 rebuilt_count=len(build_result.symbols),
             )
-            # Pool mode: ``config_path`` points at a QuoteConnectionPool shard
-            # (``/tmp/hft_quote_pool_*/symbols_group_<id>.yaml``) which holds
-            # only this facade's partition (~universe/num_conns). Writing the
-            # full rebuilt universe back here corrupts the partition — the
-            # 2026-05-23 root cause where ``symbols_group_0.yaml`` was being
-            # promoted to 478 symbols every hour. The pool owns shard
-            # composition; refresh only updates the broker contract index here.
             if build_result.symbols and not is_pool_shard:
                 write_symbols_yaml(build_result.symbols, self._client.config_path)
                 logger.info(
@@ -1248,11 +1137,6 @@ class ContractsRuntime:
             self._client._load_config()
             logger.info("Symbol config reloaded after contract refresh", symbol_count=len(self._client.symbols))
         except Exception as exc:
-            # Q3-fix (2026-04-27): contract-refresh reload-failure used to be
-            # invisible. ``_load_config`` itself now bumps the metric Counter;
-            # we additionally raise this from WARNING to ERROR with a
-            # ``severity="critical"`` tag and best-effort fan out to the
-            # optional dispatcher attached to the client.
             logger.error(
                 "Symbol config reload failed after contract refresh",
                 error=str(exc),
@@ -1261,7 +1145,7 @@ class ContractsRuntime:
             dispatcher = getattr(self._client, "_notification_dispatcher", None)
             if dispatcher is not None and hasattr(dispatcher, "notify_symbol_reload_failed"):
                 try:
-                    import asyncio as _asyncio  # local import — non hot-path
+                    import asyncio as _asyncio
 
                     symbols = getattr(self._client, "symbols", None) or []
                     limit = int(
@@ -1274,30 +1158,22 @@ class ContractsRuntime:
                         count=len(symbols),
                         limit=limit,
                     )
-                    # contracts_runtime can be called from a worker thread
-                    # (contract_refresh_worker); schedule onto the running
-                    # loop if available, otherwise drop after logging.
                     try:
                         spawn_retained(coro, name="notify_symbol_reload_failed")
                     except RuntimeError:
                         try:
                             _asyncio.run(coro)
-                        except Exception as run_exc:  # noqa: BLE001
+                        except Exception as run_exc:
                             logger.warning(
                                 "symbol_reload_alert_run_failed",
                                 error=str(run_exc),
                             )
-                except Exception as notify_exc:  # noqa: BLE001
+                except Exception as notify_exc:
                     logger.warning(
                         "symbol_reload_alert_dispatch_failed",
                         error=str(notify_exc),
                     )
         finally:
-            # Backstop: the slot is normally handed on right after publishing, so
-            # reaching here still holding it means the rebuild died before that
-            # point. Release before the resubscribe below — siblings blocked on
-            # the slot have their own rebuild to do and should not queue behind
-            # our per-facade work.
             if rebuild_slot_held:
                 _release_rebuild_slot()
                 rebuild_slot_held = False
@@ -1434,9 +1310,6 @@ class ContractsRuntime:
                 missing_sample=missing_codes[:10],
             )
             errors.append(f"missing_contracts:{len(missing_codes)}")
-        # RC-1 (2026-04-27): preflight bounds the universe against the
-        # per-client ceiling (default 600). The per-conn cap (120) is enforced
-        # by QuoteConnectionPool sharding, not at preflight.
         preflight_ceiling = int(
             getattr(self._client, "MAX_SUBSCRIPTIONS_PER_CLIENT", 0) or self._client.MAX_SUBSCRIPTIONS
         )
@@ -1468,7 +1341,6 @@ class ContractsRuntime:
             code = str(code).strip()
             if not code:
                 continue
-            # Find matching symbol config for exchange/product_type
             sym_cfg = next(
                 (s for s in self._client.symbols if s.get("code") == code),
                 None,
@@ -1490,7 +1362,6 @@ class ContractsRuntime:
                         config_code=code,
                         actual_code=actual,
                     )
-        # Merge into client-level map
         self._client.alias_to_actual.update(alias_map)
         return alias_map
 
@@ -1527,7 +1398,7 @@ class ContractsRuntime:
                 gauge = getattr(metrics, "contract_update_last_event_ts", None)
                 if gauge is not None:
                     gauge.set(now_s)
-        except Exception as exc:  # never let a callback kill the SDK's thread
+        except Exception as exc:
             logger.warning("contract_update_event_handler_failed", error=str(exc))
 
     def register_contract_event_callback(self) -> bool:
@@ -1552,7 +1423,6 @@ class ContractsRuntime:
             return False
         setter = getattr(api, "set_contract_event_callback", None)
         if setter is None:
-            # Older/other SDK builds simply do not expose it.
             logger.info("contract_event_callback_unsupported")
             self._set_contract_callback_registered(False)
             return False
@@ -1587,8 +1457,6 @@ class ContractsRuntime:
     def start_contract_refresh_thread(self) -> None:
         if self._client._contract_refresh_running:
             return
-        # Register before the poll loop starts. The poll is known-broken on a
-        # subscribed facade; this callback is the only working freshness signal.
         self.register_contract_event_callback()
         self._client._contract_refresh_running = True
         self._client._set_thread_alive_metric("contract_refresh", True)

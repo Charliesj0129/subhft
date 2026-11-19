@@ -135,7 +135,7 @@ class _MakerStrategy:
     [
         ("", "latency_profile_missing"),
         ("no_such_profile_v0", "latency_profile_unresolved"),
-        ("shioaji_sim_p95", "latency_profile_unresolved"),  # a prefix used to resolve
+        ("shioaji_sim_p95", "latency_profile_unresolved"),
     ],
 )
 def test_maker_gate_c_without_usable_latency_is_invalid_before_any_data(tmp_path: Path, latency_profile, reason):
@@ -236,7 +236,7 @@ def test_run_stamp_marks_an_unreadable_dataset(tmp_path: Path):
     [
         ("", "latency_profile_missing"),
         ("no_such_profile_v0", "latency_profile_unresolved"),
-        ("shioaji_sim_p95", "latency_profile_unresolved"),  # a prefix
+        ("shioaji_sim_p95", "latency_profile_unresolved"),
     ],
 )
 def test_taker_gate_c_without_usable_latency_is_invalid_before_any_data(tmp_path: Path, latency_profile_id, reason):

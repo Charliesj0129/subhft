@@ -42,21 +42,16 @@ def _make_minimal_result(**overrides: object) -> BacktestResult:
 @pytest.mark.unit
 def test_backtest_result_carries_replay_parity_report() -> None:
     """The replay_parity_report field is preserved by identity (no copy/coerce)."""
-    # Arrange
     report = SimpleNamespace(match_pct=96.0, total_intents=100, matched=96)
 
-    # Act
     result = _make_minimal_result(replay_parity_report=report)
 
-    # Assert: identity preservation; the dataclass must not copy/transform.
     assert result.replay_parity_report is report
 
 
 @pytest.mark.unit
 def test_backtest_result_replay_parity_report_defaults_to_none() -> None:
     """Omitting replay_parity_report yields None (default value)."""
-    # Arrange + Act
     result = _make_minimal_result()
 
-    # Assert
     assert result.replay_parity_report is None

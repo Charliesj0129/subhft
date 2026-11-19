@@ -19,10 +19,6 @@ from hft_platform.contracts.strategy import Side as StrategySide
 from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_adapter(tmp_path: Path, mid_price_fn=None, cmd_tca_map=None) -> OrderAdapter:
     cfg_path = tmp_path / "order_cfg.yaml"
@@ -83,11 +79,6 @@ def _make_fill(
     )
 
 
-# ===========================================================================
-# 1. OrderAdapter._intent_to_command stamps arrival_price
-# ===========================================================================
-
-
 class TestOrderAdapterArrivalPrice:
     def test_arrival_price_from_mid_price_fn(self, tmp_path):
         """When mid_price_fn is provided, arrival_price should come from it."""
@@ -130,17 +121,11 @@ class TestOrderAdapterArrivalPrice:
         intent = _make_intent(decision_price=500_0000, strategy_id="s1", intent_id=7)
         cmd = adapter._intent_to_command(intent)
 
-        # Simulate _dispatch_to_api populating the map (we call the relevant section)
         order_key = f"{intent.strategy_id}:{intent.intent_id}"
         adapter._cmd_created_ns_map[order_key] = cmd.created_ns
         adapter._cmd_tca_map[order_key] = (int(cmd.decision_price), int(cmd.arrival_price))
 
         assert cmd_tca_map[order_key] == (500_0000, 502_0000)
-
-
-# ===========================================================================
-# 2. ExecutionRouter enriches FillEvent with TCA prices
-# ===========================================================================
 
 
 class TestExecutionRouterTCAEnrichment:
@@ -153,7 +138,6 @@ class TestExecutionRouterTCAEnrichment:
         assert fill.decision_price == 0
         assert fill.arrival_price == 0
 
-        # Simulate the enrichment logic from ExecutionRouter
         _order_key = order_id_map.get(fill.order_id)
         if _order_key is not None:
             _tca = cmd_tca_map.get(_order_key)
@@ -199,11 +183,6 @@ class TestExecutionRouterTCAEnrichment:
         assert fill.arrival_price == 0
 
 
-# ===========================================================================
-# 3. Mapper includes TCA fields in fill record
-# ===========================================================================
-
-
 class TestMapperTCAFields:
     def test_fill_record_contains_tca_prices(self):
         """map_event_to_record should include decision_price and arrival_price.
@@ -230,7 +209,6 @@ class TestMapperTCAFields:
         assert topic == "fills"
         assert payload["decision_price"] == 500_000000
         assert payload["arrival_price"] == 502_000000
-        # The invariant that matters: same scale as price_scaled in this row.
         assert payload["price_scaled"] == 501_000000
 
     def test_fill_record_tca_prices_default_zero(self):
@@ -250,11 +228,6 @@ class TestMapperTCAFields:
         _, payload = result
         assert payload["decision_price"] == 0
         assert payload["arrival_price"] == 0
-
-
-# ===========================================================================
-# 4. Worker extractor handles TCA fields
-# ===========================================================================
 
 
 class TestWorkerExtractorTCAFields:
@@ -281,10 +254,8 @@ class TestWorkerExtractorTCAFields:
         }
         values = _extract_fill_values(row)
         assert values is not None
-        # decision_price and arrival_price should be at indices 12 and 13
         assert values[12] == 500_0000
         assert values[13] == 502_0000
-        # source should be last
         assert values[14] == "shioaji"
 
     def test_extract_fill_values_dict_default_tca(self):
@@ -299,8 +270,8 @@ class TestWorkerExtractorTCAFields:
         }
         values = _extract_fill_values(row)
         assert values is not None
-        assert values[12] == 0  # decision_price
-        assert values[13] == 0  # arrival_price
+        assert values[12] == 0
+        assert values[13] == 0
 
     def test_extract_fill_values_object_with_tca(self):
         """Object-based fill extraction should include TCA fields."""
@@ -318,17 +289,11 @@ class TestWorkerExtractorTCAFields:
 
         assert "decision_price" in FILL_COLUMNS
         assert "arrival_price" in FILL_COLUMNS
-        # They should be before "source"
         dp_idx = FILL_COLUMNS.index("decision_price")
         ap_idx = FILL_COLUMNS.index("arrival_price")
         src_idx = FILL_COLUMNS.index("source")
         assert dp_idx < src_idx
         assert ap_idx < src_idx
-
-
-# ===========================================================================
-# 5. TCA map cleanup lifecycle
-# ===========================================================================
 
 
 class TestTCAMapCleanup:
@@ -339,7 +304,6 @@ class TestTCAMapCleanup:
         adapter = _make_adapter(tmp_path, cmd_tca_map=cmd_tca_map)
         order_key = "strat1:42"
 
-        # Simulate the order being registered as live
         adapter.live_orders[order_key] = MagicMock()
         adapter.order_id_map["BRK001"] = order_key
         adapter._cmd_created_ns_map[order_key] = 123456

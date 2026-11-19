@@ -52,11 +52,6 @@ def _router(norm: ExecutionNormalizer) -> Any:
     return SimpleNamespace(normalizer=norm)
 
 
-# --------------------------------------------------------------------------- #
-# The resolver                                                                 #
-# --------------------------------------------------------------------------- #
-
-
 def test_a_recycled_id_does_not_claim_an_ended_order():
     resolver = _resolver({"S1": _ENDED}, live=set())
 
@@ -104,15 +99,10 @@ def test_the_strategy_id_of_an_ended_order_is_not_borrowed_by_a_recycled_id():
     assert resolver.resolve_strategy_id_from_candidates(["14B6DE", "S1"], strong=1) == "UNKNOWN"
 
 
-# --------------------------------------------------------------------------- #
-# The order ack: the 10/6 09:35 case                                           #
-# --------------------------------------------------------------------------- #
-
-
 def test_an_ack_with_a_recycled_seqno_is_not_attributed_to_the_ended_order():
     norm = _normalizer({"S1": _ENDED}, live=set())
     raw = _ack("14B6DE", "S1")
-    raw.data["_resolved_order_key"] = _LIVE  # what _on_exec injects from the pending-fill index
+    raw.data["_resolved_order_key"] = _LIVE
 
     event = norm.normalize_order(raw)
 
@@ -157,11 +147,6 @@ def test_an_ack_with_a_recycled_seqno_does_not_borrow_the_ended_orders_strategy(
 
     assert event is not None
     assert event.strategy_id == "UNKNOWN"
-
-
-# --------------------------------------------------------------------------- #
-# The router backfill                                                          #
-# --------------------------------------------------------------------------- #
 
 
 def test_the_backfill_does_not_bind_a_new_ordno_to_an_ended_order():
@@ -210,11 +195,6 @@ def test_the_backfill_prefers_ordno_when_both_kinds_of_id_are_registered():
     assert norm.order_id_map["S1"] == _LIVE
 
 
-# --------------------------------------------------------------------------- #
-# The broker-thread gate (_on_exec)                                            #
-# --------------------------------------------------------------------------- #
-
-
 def test_on_exec_does_not_borrow_the_strategy_of_an_ended_order_for_a_recycled_seqno(tmp_path):
     import asyncio
     import collections
@@ -242,7 +222,7 @@ def test_on_exec_does_not_borrow_the_strategy_of_an_ended_order_for_a_recycled_s
     live_key = "R47_MAKER_TMF:10228"
     adapter.live_orders[live_key] = adapter_module._PENDING_SENTINEL
     asyncio.run(adapter._register_pending_fill(live_key, "TMFJ6", Side.SELL, "001F2A"))
-    adapter.order_id_map["S1"] = "OTHER_STRAT:6145"  # an order that ended; its seqno came round again
+    adapter.order_id_map["S1"] = "OTHER_STRAT:6145"
 
     system = HFTSystem.__new__(HFTSystem)
     system.order_adapter = adapter

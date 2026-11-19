@@ -18,10 +18,6 @@ from hft_platform.services._md_ingestion import (
     unwrap_md,
 )
 
-# -----------------------------------------------------------------------
-# FeedState
-# -----------------------------------------------------------------------
-
 
 class TestFeedState:
     def test_all_six_states_exist(self) -> None:
@@ -43,11 +39,6 @@ class TestFeedState:
     def test_lookup_by_value(self) -> None:
         assert FeedState("INIT") is FeedState.INIT
         assert FeedState("RECOVERING") is FeedState.RECOVERING
-
-
-# -----------------------------------------------------------------------
-# env_int
-# -----------------------------------------------------------------------
 
 
 class TestEnvInt:
@@ -81,7 +72,6 @@ class TestEnvInt:
 
     def test_default_zero_clamped_to_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_ENV_INT", "abc")
-        # default=0, but clamped to 1
         assert env_int("TEST_ENV_INT", 0) == 1
 
     def test_empty_string_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,11 +81,6 @@ class TestEnvInt:
     def test_whitespace_returns_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_ENV_INT", "  ")
         assert env_int("TEST_ENV_INT", 3) == 3
-
-
-# -----------------------------------------------------------------------
-# obs_policy
-# -----------------------------------------------------------------------
 
 
 class TestObsPolicy:
@@ -136,11 +121,6 @@ class TestObsPolicy:
         assert obs_policy() == "balanced"
 
 
-# -----------------------------------------------------------------------
-# get_trace_sampler
-# -----------------------------------------------------------------------
-
-
 class TestGetTraceSampler:
     def test_returns_none_on_import_failure(self) -> None:
         with patch.dict("sys.modules", {"hft_platform.diagnostics.trace": None}):
@@ -157,14 +137,7 @@ class TestGetTraceSampler:
             assert result is None
 
 
-# -----------------------------------------------------------------------
-# looks_like_md
-# -----------------------------------------------------------------------
-
-
 class TestLooksLikeMd:
-    # --- dict cases ---
-
     def test_dict_with_code_key(self) -> None:
         assert looks_like_md({"code": "2330"}) is True
 
@@ -207,12 +180,8 @@ class TestLooksLikeMd:
     def test_dict_with_irrelevant_keys(self) -> None:
         assert looks_like_md({"foo": "bar", "baz": 1}) is False
 
-    # --- None ---
-
     def test_none(self) -> None:
         assert looks_like_md(None) is False
-
-    # --- object cases ---
 
     def test_object_with_code_and_ts(self) -> None:
         class Tick:
@@ -283,14 +252,7 @@ class TestLooksLikeMd:
         class Obj:
             code: str = "2330"
 
-        # has_code=True, has_price=False, has_time=False => False
-        # but also has_price is checked first: bool(has_price or (has_code and (has_price or has_time)))
         assert looks_like_md(Obj()) is False
-
-
-# -----------------------------------------------------------------------
-# unwrap_md
-# -----------------------------------------------------------------------
 
 
 class TestUnwrapMd:
@@ -368,11 +330,6 @@ class TestUnwrapMd:
         assert unwrap_md(w) is inner
 
 
-# -----------------------------------------------------------------------
-# summarize_md
-# -----------------------------------------------------------------------
-
-
 class TestSummarizeMd:
     def test_none_returns_empty_dict(self) -> None:
         assert summarize_md(None) == {}
@@ -428,7 +385,6 @@ class TestSummarizeMd:
         """Present fields should follow the order: code fields, price fields, time fields."""
         d: dict[str, Any] = {"ts": 1, "price": 100, "code": "X"}
         result = summarize_md(d)
-        # Order: code, price, ts (code_fields first, then price_fields, then time_fields)
         assert result["present"] == ["code", "price", "ts"]
 
     def test_object_no_relevant_attrs(self) -> None:
@@ -444,11 +400,6 @@ class TestSummarizeMd:
         result = summarize_md(d)
         assert "bidask" in result["nested"]
         assert result["nested"]["bidask"] == "list"
-
-
-# -----------------------------------------------------------------------
-# try_fast_extract_callback_payload
-# -----------------------------------------------------------------------
 
 
 class TestTryFastExtractCallbackPayload:

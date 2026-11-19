@@ -92,7 +92,6 @@ def main() -> None:
 
     results = {}
 
-    # Market data E2E: ingest_ts - exch_ts
     md_latency_expr = "(ingest_ts - exch_ts) / 1000.0"
     md_summary = client.query(_quantile_query("hft.market_data", md_latency_expr, window_ns)).result_rows
     results["market_data_e2e_us"] = {
@@ -115,7 +114,6 @@ def main() -> None:
         for row in md_heatmap:
             fh.write(f"{row[0]},{row[1]},{row[2]}\n")
 
-    # Orders internal latency if available
     try:
         order_summary = client.query(
             _quantile_query("hft.orders", "latency_us", window_ns)
@@ -132,7 +130,6 @@ def main() -> None:
     except Exception:
         results["orders_latency_us"] = {"window_min": args.window_min, "n": 0}
 
-    # Pipeline latency spans (sampled)
     try:
         span_rows = client.query(_stage_summary_query(window_ns)).result_rows
         results["pipeline_spans"] = [

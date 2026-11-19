@@ -28,11 +28,6 @@ from hft_platform.config._symbols_types import (
 logger = get_logger("config.symbols.contracts")
 
 
-# ---------------------------------------------------------------------------
-# Metrics cache
-# ---------------------------------------------------------------------------
-
-
 def load_metrics_cache(path: str = DEFAULT_METRICS_CACHE) -> dict[str, dict[str, Any]]:
     """Load a metrics cache file (JSON or YAML) into a code-keyed dict."""
     if not path or not os.path.exists(path):
@@ -73,11 +68,6 @@ def load_metrics_cache(path: str = DEFAULT_METRICS_CACHE) -> dict[str, dict[str,
         return metrics
 
     return {}
-
-
-# ---------------------------------------------------------------------------
-# Contract cache I/O
-# ---------------------------------------------------------------------------
 
 
 def load_contract_cache(path: str = DEFAULT_CONTRACT_CACHE, metrics_path: str | None = None) -> ContractIndex | None:
@@ -125,24 +115,13 @@ def _json_cache_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-#: A rewrite that keeps less than this share of the previous cache's
-#: futures/options rows is a partial download, not a listing change. A monthly
-#: settlement moves a handful of rows; it never halves a category.
 CONTRACT_CACHE_MIN_KEEP_RATIO = 0.5
 
 _DERIVATIVE_KINDS = ("future", "option")
 
-#: Roots whose loss is always refused: the index products, including the
-#: weekly TAIEX series that live under their own roots (``TX1``, ``TXU``,
-#: ``MX1``...). Roots of the configured symbols are added per call
-#: (``protected_codes``).
 CONTRACT_CACHE_PROTECTED_ROOTS = frozenset({"TXF", "MXF", "TMF", "TXO"})
 _PROTECTED_ROOT_PREFIXES = ("TX", "MX")
 
-#: More unprotected roots than this (per category, floor 3) vanishing at once is
-#: a partial download, not delistings. Single stock futures leave the listing
-#: on their own (2026-11-05: QBF, a capital reduction halting the underlying),
-#: and that must not freeze the cache for every other contract.
 CONTRACT_CACHE_MAX_ROOT_LOSS_RATIO = 0.05
 _CONTRACT_CACHE_MIN_ROOT_LOSS = 3
 
@@ -312,7 +291,6 @@ def write_contract_cache(
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    # Read existing cache_version and increment
     cache_version = 0
     existing_contracts: list[dict[str, Any]] = []
     if dest.exists():
@@ -322,7 +300,6 @@ def write_contract_cache(
             rows = existing.get("contracts", [])
             existing_contracts = rows if isinstance(rows, list) else []
         except Exception as exc:
-            # An unreadable cache has nothing to protect: overwrite it.
             logger.debug("operation_fallback", error=str(exc))
     if not allow_regression:
         reasons = contract_cache_regressions(existing_contracts, contracts, protected_codes=protected_codes)
@@ -355,9 +332,6 @@ def write_contract_cache(
             f.flush()
             os.fsync(f.fileno())
     except BaseException:
-        # json.dump streams, so a failure part-way leaves a truncated temp file
-        # (THESHOW kept a 390 KB contracts.json.tmp). The live cache is
-        # untouched either way; do not leave the fragment beside it.
         tmp.unlink(missing_ok=True)
         raise
     tmp.rename(dest)
@@ -376,11 +350,6 @@ def write_symbols_yaml(symbols: list[dict[str, Any]], output_path: str = DEFAULT
     tmp.rename(dest)
 
 
-# ---------------------------------------------------------------------------
-# Broker fetch
-# ---------------------------------------------------------------------------
-
-
 def fetch_contracts_from_broker() -> list[dict[str, Any]]:
     """Fetch all available contracts from the broker SDK.
 
@@ -389,11 +358,6 @@ def fetch_contracts_from_broker() -> list[dict[str, Any]]:
     from hft_platform.feed_adapter.contract_fetcher import fetch_all_contracts
 
     return fetch_all_contracts()
-
-
-# ---------------------------------------------------------------------------
-# Validation & preview helpers
-# ---------------------------------------------------------------------------
 
 
 def validate_symbols(

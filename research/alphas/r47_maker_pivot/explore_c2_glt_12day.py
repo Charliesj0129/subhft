@@ -155,7 +155,6 @@ def run_one_day(data_path: Path, gamma: float, gamma_label: str) -> DayResult:
             fill_count += abs(cur_pos - prev_pos)
         prev_pos = cur_pos
 
-        # Sample equity every 10 steps (~1s)
         if step_count % 10 == 0:
             sv = hbt.state_values(0)
             mid = (best_bid + best_ask) / 2.0
@@ -216,14 +215,12 @@ def run_one_day(data_path: Path, gamma: float, gamma_label: str) -> DayResult:
 
         step_count += 1
 
-    # Final
     sv = hbt.state_values(0)
     final_pos = int(hbt.position(0))
     final_mid = (best_bid + best_ask) / 2.0
     total_pnl = sv.balance + final_pos * final_mid
     hbt.close()
 
-    # Drawdown + Sharpe from equity curve
     eq_arr = np.array(equity_curve, dtype=np.float64) if equity_curve else np.array([0.0])
     pnl_arr = eq_arr - eq_arr[0]
     running_max = np.maximum.accumulate(pnl_arr)
@@ -279,7 +276,6 @@ def main() -> None:
             )
         all_results[label] = results
 
-    # Summary
     print("\n" + "=" * 80)
     print("AGGREGATE COMPARISON")
     print("=" * 80)
@@ -325,7 +321,6 @@ def main() -> None:
         print(f"    PnL/fill:     {total_pnl / total_fills:>+.3f} pts" if total_fills else "")
         print(f"    Avg Sharpe:   {avg_sharpe:.2f}")
 
-    # Per-day comparison table
     print("\n" + "=" * 80)
     print("PER-DAY COMPARISON")
     print("=" * 80)
@@ -341,7 +336,6 @@ def main() -> None:
             row += f"  {pnl:>+12.1f}"
         print(row)
 
-    # Save
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "metadata": {

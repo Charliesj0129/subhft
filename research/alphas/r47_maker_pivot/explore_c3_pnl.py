@@ -30,7 +30,6 @@ os.environ.setdefault("HFT_STRICT_PRICE_MODE", "0")
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-# Suppress logging
 import structlog
 structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(50))
 import logging
@@ -39,14 +38,11 @@ logging.disable(logging.WARNING)
 from hftbacktest import BacktestAsset, HashMapMarketDepthBacktest
 from hftbacktest.order import GTC, LIMIT
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 TICK_SIZE = 1.0
 LOT_SIZE = 1.0
 POINT_VALUE_NTD = 10
 PRICE_SCALE = 10_000
-ELAPSE_NS = 100_000_000  # 100ms
+ELAPSE_NS = 100_000_000
 
 DATA_DIR = _REPO_ROOT / "research" / "data" / "raw" / "txfd6"
 DATA_FILES = sorted(DATA_DIR.glob("TXFD6_2026-0*_l2.hftbt.npz"))
@@ -60,7 +56,6 @@ _IDX_L1_IMBALANCE_PPM = 10
 
 
 def _load_r47_class():
-    # Use deployed r47_maker.py (impl.py has known bugs — T9 pending)
     from hft_platform.strategies.r47_maker import R47MakerStrategy
     return R47MakerStrategy
 
@@ -69,7 +64,7 @@ def _load_r47_class():
 class FillRecord:
     """A single fill event."""
     ts_ns: int
-    side: str  # "buy" or "sell"
+    side: str
     price: float
     qty: int
     position_after: int
@@ -89,10 +84,8 @@ class DayPnLAnalysis:
     crosses_minus_500: int
     crosses_minus_1500: int
     is_winning_day: bool
-    # Trajectory shape analysis
-    final_third_pnl: float  # PnL accumulated in last 1/3 of fills
-    trajectory_shape: str  # "slide", "v_shape", "w_shape", "grind_up", "grind_down"
-    # Fill-by-fill PnL curve (sampled at key points for JSON)
+    final_third_pnl: float
+    trajectory_shape: str
     pnl_curve_sampled: list[float]
     fill_timestamps_sampled: list[int]
 
@@ -169,8 +162,7 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
     active_buy_id: int | None = None
     active_sell_id: int | None = None
 
-    # Equity tracking — sample every step for proper intraday PnL curve
-    equity_curve: list[float] = []  # mark-to-market equity at each step
+    equity_curve: list[float] = []
     equity_timestamps: list[int] = []
     fill_count = 0
     prev_pos = 0
@@ -190,7 +182,6 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
 
         ts_ns = int(hbt.current_timestamp)
 
-        # Cancel previous orders
         if active_buy_id is not None:
             hbt.cancel(0, active_buy_id, False)
             active_buy_id = None
@@ -199,13 +190,11 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
             active_sell_id = None
         hbt.clear_inactive_orders(0)
 
-        # Track fills via position change
         cur_pos = int(hbt.position(0))
         if cur_pos != prev_pos:
             fill_count += abs(cur_pos - prev_pos)
         prev_pos = cur_pos
 
-        # Record mark-to-market equity every step
         sv = hbt.state_values(0)
         mid = (best_bid + best_ask) / 2.0
         equity = sv.balance + cur_pos * mid
@@ -214,7 +203,6 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
 
         positions["TXFD6"] = cur_pos
 
-        # Build events and dispatch
         bid_qty = int(getattr(dp, "best_bid_qty", 0) or 0)
         ask_qty = int(getattr(dp, "best_ask_qty", 0) or 0)
         bid_scaled = int(round(best_bid * PRICE_SCALE))
@@ -272,18 +260,16 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
     hbt.close()
     elapsed = time.monotonic() - t0
 
-    # Analyze the equity curve (convert to PnL relative to start)
     if not equity_curve:
         equity_curve = [0.0]
         equity_timestamps = [0]
 
     eq_arr = np.array(equity_curve, dtype=np.float64)
-    pnl_arr = eq_arr - eq_arr[0]  # PnL relative to session start
+    pnl_arr = eq_arr - eq_arr[0]
     total_pnl_pts = float(pnl_arr[-1])
     n_fills = fill_count
     n_steps = len(pnl_arr)
 
-    # Max drawdown from peak
     running_max = np.maximum.accumulate(pnl_arr)
     drawdowns = running_max - pnl_arr
     max_dd_idx = int(np.argmax(drawdowns))
@@ -291,7 +277,6 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
     peak_at_dd = float(running_max[max_dd_idx])
     trough_at_dd = float(pnl_arr[max_dd_idx])
 
-    # Threshold crossings (on full equity curve)
     crosses_500 = 0
     crosses_1500 = 0
     below_500 = False
@@ -309,7 +294,6 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
         elif v >= -1500:
             below_1500 = False
 
-    # Trajectory shape classification (using equity curve steps)
     if n_steps >= 10:
         third = n_steps // 3
         first_third_pnl = float(pnl_arr[third])
@@ -336,7 +320,6 @@ def run_day_with_fill_tracking(data_path: Path) -> DayPnLAnalysis:
         last_third_pnl = float(pnl_arr[-1]) if len(pnl_arr) > 0 else 0.0
         shape = "insufficient_data"
 
-    # Sample PnL curve for JSON (max 500 points to capture shape)
     if n_steps <= 500:
         sampled_pnl = [round(float(v), 2) for v in pnl_arr]
         sampled_ts = [int(t) for t in equity_timestamps]
@@ -405,17 +388,10 @@ def simulate_breaker(pnl_curve: list[float], hard_stop: float, cooldown_fills: i
         }
 
     final_actual = float(arr[-1])
-    # After breaker fires, strategy stops quoting.
-    # With cooldown, it resumes after cooldown_fills worth of fills
-    # For simplicity: hard stop = stop all quoting for rest of day
-    final_with_breaker = pnl_at_trigger  # flat from trigger point
+    final_with_breaker = pnl_at_trigger
 
-    # If cooldown mode: resume after cooldown_fills
     if cooldown_fills > 0 and trigger_idx + cooldown_fills < len(arr):
         resume_idx = trigger_idx + cooldown_fills
-        # PnL from resume to end (relative — we're flat during cooldown, so
-        # the post-cooldown PnL is the curve from resume onwards minus the
-        # resume point, added to our stopped PnL)
         post_cooldown_pnl = float(arr[-1]) - float(arr[resume_idx])
         final_with_breaker = pnl_at_trigger + post_cooldown_pnl
 
@@ -456,10 +432,8 @@ def main() -> None:
         print("ERROR: No results generated")
         sys.exit(1)
 
-    # Sort by date
     all_results.sort(key=lambda r: r.date)
 
-    # ── Analysis ──────────────────────────────────────────────────────
 
     print("\n" + "=" * 60)
     print("PER-DAY SUMMARY")
@@ -473,7 +447,6 @@ def main() -> None:
             f"{r.crosses_minus_1500:>6} {r.trajectory_shape:<12}"
         )
 
-    # ── Walk-Forward Analysis ─────────────────────────────────────────
     print("\n" + "=" * 60)
     print("WALK-FORWARD ANALYSIS (calibrate on days 1-6, test on days 7-12)")
     print("=" * 60)
@@ -483,11 +456,8 @@ def main() -> None:
     train_days = all_results[:split]
     test_days = all_results[split:]
 
-    # Calibrate: worst drawdown in training set
     train_max_dd = max(r.max_drawdown_from_peak for r in train_days)
-    # Set hard stop at negative of worst training drawdown (conservative)
     hard_stop_calibrated = -train_max_dd
-    # Also test a few fixed thresholds
     thresholds = [-500, -1000, -1500, hard_stop_calibrated]
     thresholds = sorted(set(round(t, 1) for t in thresholds))
 
@@ -557,7 +527,6 @@ def main() -> None:
             "test_false_positives": false_positives_test,
         }
 
-    # ── False Positive Analysis ───────────────────────────────────────
     print("\n" + "=" * 60)
     print("FALSE POSITIVE ANALYSIS (breaker on winning days)")
     print("=" * 60)
@@ -573,7 +542,7 @@ def main() -> None:
             sim = simulate_breaker(r.pnl_curve_sampled, threshold)
             if sim["triggered"]:
                 triggered_winners += 1
-                total_pnl_lost_on_winners += sim["pnl_saved"]  # negative = lost PnL
+                total_pnl_lost_on_winners += sim["pnl_saved"]
 
         saved_on_losers = 0.0
         triggered_losers = 0
@@ -581,7 +550,7 @@ def main() -> None:
             sim = simulate_breaker(r.pnl_curve_sampled, threshold)
             if sim["triggered"]:
                 triggered_losers += 1
-                saved_on_losers += sim["pnl_saved"]  # positive = saved PnL
+                saved_on_losers += sim["pnl_saved"]
 
         fp_rate = triggered_winners / len(winning_days) if winning_days else 0.0
         tp_rate = triggered_losers / len(losing_days) if losing_days else 0.0
@@ -602,7 +571,6 @@ def main() -> None:
             f"net={saved_on_losers + total_pnl_lost_on_winners:+.1f} pts"
         )
 
-    # ── 03-31 Deep Dive ───────────────────────────────────────────────
     print("\n" + "=" * 60)
     print("03-31 DEEP DIVE (worst day)")
     print("=" * 60)
@@ -613,16 +581,13 @@ def main() -> None:
         curve = np.array(day_0331.pnl_curve_sampled, dtype=np.float64)
         n = len(curve)
 
-        # Find min point
         min_idx = int(np.argmin(curve))
         min_pnl = float(curve[min_idx])
 
-        # After minimum, did it recover?
         post_min_max = float(np.max(curve[min_idx:])) if min_idx < n - 1 else min_pnl
         recovery = post_min_max - min_pnl
         final = float(curve[-1])
 
-        # Classify
         if recovery > abs(min_pnl) * 0.3:
             slide_or_v = "v_shape" if final > min_pnl + 200 else "partial_v"
         else:
@@ -648,7 +613,6 @@ def main() -> None:
     else:
         print("  WARNING: 03-31 data not found in results")
 
-    # ── Build output JSON ─────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "metadata": {

@@ -66,7 +66,7 @@ class AccountGateway:
             return cached
         start_ns = time.perf_counter_ns()
         if not self._client._rate_limit_api("positions"):
-            return cached  # may be None: caller treats as unknown
+            return cached
 
         positions: list[Any] = []
         errors: list[str] = []
@@ -89,14 +89,6 @@ class AccountGateway:
                 errors.append(f"futopt: {exc!s}")
 
         if not queried_any:
-            # Neither account resolved, so the broker was never asked. Returning
-            # the empty ``positions`` list here reported "the account is flat" —
-            # a fail-open the reconciler cannot see through, because it only
-            # treats ``None`` as "query unhealthy" and builds a broker map from
-            # anything else. A logged-out session, an unactivated account, or an
-            # SDK surface change all land here, and each one would have silently
-            # cleared every real position out of the reconciliation view.
-            # "I could not ask" is not "there is nothing there": return None.
             self._client._record_api_latency("positions", start_ns, ok=False)
             self._last_positions_error = "no trading account resolved (stock_account/futopt_account both unavailable)"
             logger.error(

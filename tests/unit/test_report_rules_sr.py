@@ -18,12 +18,7 @@ from hft_platform.reports.rules.support_resistance import (
     find_volume_at_price,
 )
 
-SCALE = 10_000  # PLATFORM_SCALE
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+SCALE = 10_000
 
 
 def _bar(open_: int, high: int, low: int, close: int, volume: int = 100) -> Bar5m:
@@ -59,11 +54,6 @@ def _session(high: int, low: int, session: str = "AM") -> SessionData:
         spread_dist={},
         depth_imbalance=[],
     )
-
-
-# ---------------------------------------------------------------------------
-# SR-01: find_large_trade_levels
-# ---------------------------------------------------------------------------
 
 
 class TestFindLargeTradeLevels:
@@ -110,19 +100,13 @@ class TestFindLargeTradeLevels:
         assert len(levels) == 2
 
 
-# ---------------------------------------------------------------------------
-# SR-02: find_double_bottoms_tops
-# ---------------------------------------------------------------------------
-
-
 class TestFindDoubleBottomsTops:
     def test_double_bottom_detected(self) -> None:
-        # Low at bar 0, higher low bar 1-2, second low bar 3 within tolerance
         bars = [
-            _bar(20100, 20200, 20000, 20150),  # bar 0 — first low 20000
-            _bar(20200, 20400, 20200, 20350),  # bar 1 — higher middle
-            _bar(20300, 20500, 20250, 20400),  # bar 2 — higher middle
-            _bar(20100, 20200, 20003, 20150),  # bar 3 — second low ~20000
+            _bar(20100, 20200, 20000, 20150),
+            _bar(20200, 20400, 20200, 20350),
+            _bar(20300, 20500, 20250, 20400),
+            _bar(20100, 20200, 20003, 20150),
         ]
         levels = find_double_bottoms_tops(bars)
         bottoms = [lv for lv in levels if "底" in lv.reason]
@@ -134,7 +118,7 @@ class TestFindDoubleBottomsTops:
             _bar(20100, 20200, 20000, 20150),
             _bar(20500, 20700, 20500, 20600),
             _bar(20600, 20800, 20550, 20700),
-            _bar(21000, 21200, 21000, 21100),  # second "low" way too high
+            _bar(21000, 21200, 21000, 21100),
         ]
         levels = find_double_bottoms_tops(bars)
         bottoms = [lv for lv in levels if "底" in lv.reason]
@@ -142,10 +126,10 @@ class TestFindDoubleBottomsTops:
 
     def test_double_top_detected(self) -> None:
         bars = [
-            _bar(20000, 21000, 19900, 20500),  # bar 0 — first high 21000
-            _bar(20000, 20600, 19900, 20400),  # bar 1 — lower middle high
-            _bar(19900, 20500, 19800, 20300),  # bar 2 — lower middle high
-            _bar(20000, 21002, 19950, 20500),  # bar 3 — second high ~21000
+            _bar(20000, 21000, 19900, 20500),
+            _bar(20000, 20600, 19900, 20400),
+            _bar(19900, 20500, 19800, 20300),
+            _bar(20000, 21002, 19950, 20500),
         ]
         levels = find_double_bottoms_tops(bars)
         tops = [lv for lv in levels if "頂" in lv.reason]
@@ -158,29 +142,19 @@ class TestFindDoubleBottomsTops:
         assert levels == []
 
     def test_no_gap_between_lows_not_double_bottom(self) -> None:
-        # Two adjacent lows — need at least 2 bars gap
         bars = [
             _bar(20100, 20200, 20000, 20150),
-            _bar(20100, 20200, 20001, 20150),  # adjacent — gap < 2
+            _bar(20100, 20200, 20001, 20150),
             _bar(20200, 20400, 20200, 20350),
             _bar(20100, 20200, 20002, 20150),
         ]
-        # Bars 0 and 1 are adjacent (gap=1), should NOT form double bottom;
-        # bars 0 and 3 have gap 3, should form one
         levels = find_double_bottoms_tops(bars)
         bottoms = [lv for lv in levels if "底" in lv.reason]
-        # Should find bottom for pair (0,3) but NOT for pair (0,1)
         assert len(bottoms) >= 1
-
-
-# ---------------------------------------------------------------------------
-# SR-03: find_round_numbers
-# ---------------------------------------------------------------------------
 
 
 class TestFindRoundNumbers:
     def test_round_numbers_in_range(self) -> None:
-        # Range 19000–21000 pts → 19000,19500,20000,20500,21000 should appear
         low = 19000 * SCALE
         high = 21000 * SCALE
         levels = find_round_numbers(low, high)
@@ -193,18 +167,16 @@ class TestFindRoundNumbers:
         high = 21000 * SCALE
         levels = find_round_numbers(low, high)
         level_20000 = next(lv for lv in levels if lv.price == 20000 * SCALE)
-        assert level_20000.strength == pytest.approx(1.0)  # importance 3 / 3.0
+        assert level_20000.strength == pytest.approx(1.0)
 
     def test_importance_2_for_500pt_multiples(self) -> None:
         low = 19000 * SCALE
         high = 21000 * SCALE
         levels = find_round_numbers(low, high)
-        # 19500 is 500-pt multiple but NOT 1000-pt multiple
         level_19500 = next(lv for lv in levels if lv.price == 19500 * SCALE)
         assert level_19500.strength == pytest.approx(2 / 3.0)
 
     def test_no_duplicates_at_overlapping_multiples(self) -> None:
-        # 20000 is both a 1000-pt and 500-pt and 100-pt multiple; keep only highest imp
         low = 19000 * SCALE
         high = 21000 * SCALE
         levels = find_round_numbers(low, high)
@@ -212,16 +184,10 @@ class TestFindRoundNumbers:
         assert count_20000 == 1
 
     def test_empty_range_returns_no_levels(self) -> None:
-        # If no multiples fit in range
         low = 20001 * SCALE
         high = 20099 * SCALE
         levels = find_round_numbers(low, high)
         assert levels == []
-
-
-# ---------------------------------------------------------------------------
-# SR-04: find_session_extremes
-# ---------------------------------------------------------------------------
 
 
 class TestFindSessionExtremes:
@@ -262,11 +228,6 @@ class TestFindSessionExtremes:
         assert any("19,500" in r for r in reasons)
 
 
-# ---------------------------------------------------------------------------
-# SR-05: find_volume_at_price
-# ---------------------------------------------------------------------------
-
-
 class TestFindVolumeAtPrice:
     def test_top_buckets_returned(self) -> None:
         bars = [
@@ -284,7 +245,6 @@ class TestFindVolumeAtPrice:
             _bar(21000, 21100, 20900, 21050, volume=50),
         ]
         levels = find_volume_at_price(bars, top_n=3)
-        # First level should be the high-volume bucket (~20000)
         assert levels[0].strength >= levels[-1].strength
 
     def test_strength_capped_at_one(self) -> None:
@@ -297,37 +257,30 @@ class TestFindVolumeAtPrice:
         assert levels == []
 
     def test_top_n_fewer_than_available_buckets(self) -> None:
-        # Single bar → single bucket; requesting top_n=5 should return only 1
         bars = [_bar(20000, 20100, 19900, 20050, volume=200)]
         levels = find_volume_at_price(bars, top_n=5)
         assert len(levels) == 1
 
 
-# ---------------------------------------------------------------------------
-# SR-06: find_failed_breakouts
-# ---------------------------------------------------------------------------
-
-
 class TestFindFailedBreakouts:
     def test_failed_breakout_high_creates_resistance(self) -> None:
-        # bar0: new high, bar1: reversal below bar0.open - min_reversal, sell trade near bar0.high
         bars = [
-            _bar(20000, 20100, 19900, 20050),  # bar 0
-            _bar(20100, 20200, 20000, 20150),  # bar 1 — new high vs prev
-            _bar(19800, 19900, 19700, 19750),  # bar 2 — closes well below bar1.open
+            _bar(20000, 20100, 19900, 20050),
+            _bar(20100, 20200, 20000, 20150),
+            _bar(19800, 19900, 19700, 19750),
         ]
-        large_trades = [_trade(20198, 30, "sell")]  # sell near bar1 high
+        large_trades = [_trade(20198, 30, "sell")]
         levels = find_failed_breakouts(bars, large_trades)
         resistance = [lv for lv in levels if "假突破" in lv.reason or "壓力" in lv.reason]
         assert len(resistance) >= 1
 
     def test_failed_breakout_low_creates_support(self) -> None:
         bars = [
-            _bar(20000, 20100, 19900, 20050),  # bar 0
-            _bar(19800, 19900, 19700, 19750),  # bar 1 — new low vs prev
-            _bar(20200, 20300, 20100, 20250),  # bar 2 — closes well above bar1.open
+            _bar(20000, 20100, 19900, 20050),
+            _bar(19800, 19900, 19700, 19750),
+            _bar(20200, 20300, 20100, 20250),
         ]
-        large_trades = [_trade(19702, 30, "buy")]  # buy near bar1 low
+        large_trades = [_trade(19702, 30, "buy")]
         levels = find_failed_breakouts(bars, large_trades)
         support = [lv for lv in levels if "假突破" in lv.reason or "支撐" in lv.reason]
         assert len(support) >= 1
@@ -338,11 +291,10 @@ class TestFindFailedBreakouts:
         assert levels == []
 
     def test_no_reversal_no_level(self) -> None:
-        # bar2 closes at same level as open — no reversal
         bars = [
             _bar(20000, 20100, 19900, 20050),
-            _bar(20100, 20200, 20000, 20150),  # new high
-            _bar(20100, 20300, 20000, 20200),  # no reversal — closes near open
+            _bar(20100, 20200, 20000, 20150),
+            _bar(20100, 20300, 20000, 20200),
         ]
         large_trades = [_trade(20198, 30, "sell")]
         levels = find_failed_breakouts(bars, large_trades)

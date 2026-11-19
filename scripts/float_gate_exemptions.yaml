@@ -1,18 +1,3 @@
-# Float gate exemptions (scripts/check_float_in_financial_paths.py).
-#
-# The gate flags `: float` annotations and `float(` calls in order/, risk/, execution/ and
-# feed_adapter/normalizer.py (Law 4: prices and accounting values are scaled int x10000). A line passes
-# only if it is listed here (file + exact code text, comments ignored, `count` lines at most) or carries
-# `# precision-ok: <reason>` with a non-empty reason. An entry that matches nothing fails the gate, so
-# this file cannot go stale silently; a new float line fails until someone writes down why it is fine.
-#
-# kind:
-#   not-money            duration, timestamp, dimensionless score; no currency unit
-#   offline-only         code no live path imports
-#   boundary-conversion  a float from the broker or a config file is converted to an integer right here
-#   known-violation      a float price-derived value is kept; tracked_by names where it is to be removed
-# boundary-conversion and known-violation need tracked_by.
-
 exemptions:
   - file: src/hft_platform/execution/checkpoint.py
     code: "self._interval_s = float(interval_s if interval_s is not None else os.getenv(\"HFT_CHECKPOINT_INTERVAL_S\", \"60\"))"
@@ -449,10 +434,6 @@ exemptions:
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
-    code: "drawdown_flat_release_after_s: float = 300.0"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
     code: "self._storm_entry_ts: float = 0.0"
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
@@ -517,19 +498,7 @@ exemptions:
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
-    code: "self.thresholds.drawdown_flat_release_after_s = float(risk_cfg[\"drawdown_flat_release_after_s\"])"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
-    code: "self.thresholds.feed_gap_storm_s = float(risk_cfg[\"feed_gap_storm_s\"])"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
     code: "self.thresholds.feed_gap_storm_s = float(feed_gap_storm)"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
-    code: "self.thresholds.drawdown_flat_release_after_s = float(flat_release)"
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
@@ -609,11 +578,43 @@ exemptions:
     kind: boundary-conversion
     reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
     tracked_by: "T18-F1"
-  - file: src/hft_platform/risk/validators.py
-    code: "self._peak_drawdown_pct: float = float(ipnl_cfg.get(\"peak_drawdown_pct\", 0.40))"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._phantom_lookup_timeout_s = float(os.getenv(\"HFT_PHANTOM_LOOKUP_TIMEOUT_S\", \"15\"))"
     kind: not-money
-    reason: "drawdown fraction of peak equity, not an amount"
-  - file: src/hft_platform/risk/validators.py
-    code: "self._drawdown_recovery_pct: float = float(ipnl_cfg.get(\"drawdown_recovery_pct\", 0.20))"
+    reason: "phantom-order lookup deadline or retention interval in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._phantom_lookup_max_hold_s = float(os.getenv(\"HFT_PHANTOM_LOOKUP_MAX_HOLD_S\", \"1800\"))"
     kind: not-money
-    reason: "drawdown fraction of peak equity, not an amount"
+    reason: "phantom-order lookup deadline or retention interval in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "def _due_phantoms(self, ttl_s: float) -> list[tuple[str, _PhantomEntry]]:"
+    kind: not-money
+    reason: "phantom-order lookup deadline or retention interval in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def _settle_expired_phantoms(self, ttl_s: float) -> None:"
+    kind: not-money
+    reason: "phantom-order lookup deadline or retention interval in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:"
+    kind: not-money
+    reason: "phantom-order lookup deadline or retention interval in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl_s: float) -> int:"
+    kind: not-money
+    reason: "phantom-order lookup deadline or retention interval in seconds"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "order_rtt_storm_window_s: float = 60.0"
+    kind: not-money
+    reason: "configuration for elapsed order RTT and feed-gap durations in seconds"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "order_rtt_storm_dwell_s: float = 300.0"
+    kind: not-money
+    reason: "configuration for elapsed order RTT and feed-gap durations in seconds"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "parsed[key] = float(risk_cfg[key])"
+    kind: not-money
+    reason: "configuration for elapsed order RTT and feed-gap durations in seconds"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "mtime: float | None = os.path.getmtime(self.config_path)"
+    kind: not-money
+    reason: "file modification timestamp in seconds returned by os.path.getmtime"

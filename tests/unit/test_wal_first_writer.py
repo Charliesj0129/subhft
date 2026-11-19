@@ -72,7 +72,6 @@ async def test_wal_first_critical_write_policy_still_writes():
 async def test_wal_first_no_clickhouse_calls():
     """Verify WALFirstWriter never tries to call ClickHouse."""
     writer, wal_batch = _make_writer()
-    # Monkey-patch: if ClickHouse were ever imported, fail
     with patch("clickhouse_connect.get_client", side_effect=AssertionError("CH should not be called")):
         result = await writer.write("orders", [{"order_id": "X"}])
     assert result is True

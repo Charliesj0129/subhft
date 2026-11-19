@@ -8,9 +8,6 @@ from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
 
-# ---------------------------------------------------------------------------
-# Shared mocks
-# ---------------------------------------------------------------------------
 class _Depth:
     best_bid = 10000
     best_ask = 10010
@@ -76,9 +73,6 @@ def _patch(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 def test_equity_buffers_are_numpy(monkeypatch):
     """Equity storage uses pre-allocated numpy arrays, not list."""
     _patch(monkeypatch)
@@ -145,7 +139,6 @@ def test_equity_slice_properties_zero_copy(monkeypatch):
     assert isinstance(vals, np.ndarray)
     assert len(ts) == 2
     assert len(vals) == 2
-    # Verify it's a view/slice (shares memory with buffer)
     assert np.shares_memory(ts, adapter._equity_ts_buf)
 
 
@@ -158,7 +151,6 @@ def test_equity_capacity_overflow_handled(monkeypatch):
         data="d",
         equity_sample_ns=1,
     )
-    # Force tiny capacity
     adapter._equity_ts_buf = np.zeros(2, dtype=np.int64)
     adapter._equity_val_buf = np.zeros(2, dtype=np.float64)
     adapter._equity_count = 0

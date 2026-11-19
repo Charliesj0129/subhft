@@ -79,10 +79,10 @@ def _isolated(tmp_path, monkeypatch):
 
 class TestSummaryAggregatesTriageReason:
     def test_summary_counts_categories(self, _isolated) -> None:
-        _record(run_id="ok1")  # promotable
-        _record(run_id="ok2")  # promotable
-        _record(run_id="bad", edge=5.0)  # failed
-        _record(run_id="rp", replay_match=80.0)  # blocked_by_parity
+        _record(run_id="ok1")
+        _record(run_id="ok2")
+        _record(run_id="bad", edge=5.0)
+        _record(run_id="rp", replay_match=80.0)
         out = audit_cli.summary()
         assert "triage_reason distribution (迭代規則 §5 vocabulary):" in out
         section = out.split("triage_reason distribution")[1]

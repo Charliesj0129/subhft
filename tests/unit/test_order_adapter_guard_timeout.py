@@ -20,8 +20,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.order.adapter import _GUARD_TIMEOUT, OrderAdapter
 
-# ── Fixtures ───────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def tmp_config(tmp_path):
@@ -89,15 +87,10 @@ def _make_intent(intent_id: int = 1) -> OrderIntent:
     )
 
 
-# ── Tests ──────────────────────────────────────────────────────────────────
-
-
 def _exhaust_semaphore(adapter: OrderAdapter) -> None:
     """Replace semaphore with a 1-slot version and acquire it so next acquire blocks."""
     adapter._api_semaphore = asyncio.Semaphore(1)
-    # Acquire the single slot synchronously (Semaphore.acquire is also sync-capable
-    # when not awaited, but we use the internal counter directly for reliability)
-    adapter._api_semaphore._value = 0  # noqa: SLF001
+    adapter._api_semaphore._value = 0
 
 
 @pytest.mark.asyncio
@@ -170,7 +163,6 @@ async def test_guard_timeout_increments_api_guard_timeout_metric(tmp_config):
     )
 
     adapter.metrics.api_guard_timeout_total.inc.assert_called_once()
-    # Should NOT increment order_reject_total (that's for real failures)
     adapter.metrics.order_reject_total.inc.assert_not_called()
 
 

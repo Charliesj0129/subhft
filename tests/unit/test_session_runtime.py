@@ -16,10 +16,6 @@ from hft_platform.feed_adapter.shioaji.session_runtime import (
 )
 from tests.unit.shioaji_contracts_helper import FakeClock, Sdk179ContractsApi, mark_contracts_loaded
 
-# ------------------------------------------------------------------ #
-# Phase-1 delegation tests (existing)
-# ------------------------------------------------------------------ #
-
 
 def test_session_runtime_request_reconnect_delegates():
     client = MagicMock()
@@ -40,19 +36,13 @@ def test_session_runtime_is_logged_in_reads_client_state():
     assert runtime.is_logged_in() is True
 
 
-# ------------------------------------------------------------------ #
-# Phase-2: login_with_retry tests
-# ------------------------------------------------------------------ #
-
-
 def test_login_with_retry_no_api_key_returns_false():
     """Without SHIOAJI_API_KEY in env and no args, returns False."""
     client = MagicMock()
-    client.api = MagicMock()  # SDK present but no creds
+    client.api = MagicMock()
 
     runtime = SessionRuntime(client)
     with patch.dict("os.environ", {}, clear=False):
-        # Ensure keys are not set
         import os
 
         for k in ("SHIOAJI_API_KEY", "SHIOAJI_SECRET_KEY"):
@@ -85,7 +75,6 @@ def test_login_with_retry_sdk_unavailable_with_key_returns_false():
     runtime = SessionRuntime(client)
     result = runtime.login_with_retry(api_key="key", secret_key="secret")
     assert result is False
-    # Should NOT call _ensure_session_lock since api is None
     client._ensure_session_lock.assert_not_called()
 
 
@@ -140,13 +129,7 @@ def test_login_delegates_to_login_with_retry():
         result = runtime.login(api_key="k", secret_key="s")
 
     assert result is True
-    # patch.object replaces the class attribute; instance call does NOT bind self.
     mock_lwr.assert_called_once_with(api_key="k", secret_key="s")
-
-
-# ------------------------------------------------------------------ #
-# Phase-2: do_session_refresh tests
-# ------------------------------------------------------------------ #
 
 
 def test_do_session_refresh_no_api_returns_false():
@@ -161,7 +144,7 @@ def test_do_session_refresh_login_fails_returns_false():
     """If login fails after logout, do_session_refresh returns False."""
     client = MagicMock()
     client.api = MagicMock()
-    client.logged_in = False  # After logout
+    client.logged_in = False
     client.metrics = MagicMock()
     client.metrics.session_refresh_total = MagicMock()
     client.metrics.session_refresh_total.labels.return_value = MagicMock()
@@ -224,11 +207,6 @@ def test_do_session_refresh_success_with_subscriptions():
     client.metrics.session_refresh_total.labels.assert_called_with(result="ok")
 
 
-# ------------------------------------------------------------------ #
-# Phase-2: start_session_refresh_thread tests
-# ------------------------------------------------------------------ #
-
-
 def test_start_session_refresh_thread_noop_if_already_running():
     client = MagicMock()
     client._session_refresh_running = True
@@ -236,7 +214,6 @@ def test_start_session_refresh_thread_noop_if_already_running():
     runtime = SessionRuntime(client)
     runtime.start_session_refresh_thread()
 
-    # Thread should NOT be started
     client._set_thread_alive_metric.assert_not_called()
 
 
@@ -275,11 +252,6 @@ def test_start_session_refresh_thread_starts_thread():
     mock_thread_cls.assert_called_once()
     mock_thread.start.assert_called_once()
     assert client._session_refresh_thread is mock_thread
-
-
-# ------------------------------------------------------------------ #
-# Refresh-loop survival (regression: 2026-07-25 stranded facade)
-# ------------------------------------------------------------------ #
 
 
 def _capture_refresh_loop(client) -> object:
@@ -387,8 +359,6 @@ def test_refresh_loop_keeps_retrying_while_relogin_keeps_failing():
     ):
         loop()
 
-    # Wake-ups at t=60 and t=120 each clear the backoff gate (60s then 120s);
-    # the third observes the cleared stop flag and breaks.
     assert mock_refresh.call_count == 2
     assert client.logged_in is False
 
@@ -448,7 +418,6 @@ def test_relogin_backoff_caps_at_check_interval():
     gaps = [b - a for a, b in zip(attempt_times, attempt_times[1:])]
     assert gaps[0] == pytest.approx(60.0)
     assert max(gaps) <= client._session_refresh_check_interval_s
-    # Late gaps have saturated at the cap rather than continuing to double.
     assert gaps[-1] == pytest.approx(client._session_refresh_check_interval_s)
 
 
@@ -467,7 +436,6 @@ def test_refresh_loop_clock_stub_does_not_leak_into_the_global_time_module():
 
     with _run_loop(client):
         assert _real_time.sleep is real_sleep
-        # A foreign thread's sleep must not be attributed to this client.
         _real_time.sleep(0)
         assert client._sleep_calls == 0
         assert session_runtime_mod.time.sleep is client._fake_sleep
@@ -489,7 +457,6 @@ def test_relogin_backoff_resets_after_successful_recovery():
         client.logged_in = ok
         return ok
 
-    # The facade loses its session again shortly after recovering.
     base_sleep = client._fake_sleep
 
     def _sleep(seconds: float) -> None:
@@ -506,15 +473,8 @@ def test_relogin_backoff_resets_after_successful_recovery():
         loop()
 
     assert attempt_times == [60.0, 120.0, 240.0, 300.0]
-    # Backoff had grown to 120s before the success at t=240; afterwards the
-    # next logged-out wake-up retries at the base poll instead of waiting 240s.
     assert attempt_times[2] - attempt_times[1] == 120.0
     assert attempt_times[3] - attempt_times[2] == 60.0
-
-
-# ------------------------------------------------------------------ #
-# Recovery path vs a reconnect already in flight
-# ------------------------------------------------------------------ #
 
 
 def _logged_out_warnings(mock_logger) -> list[object]:
@@ -536,7 +496,7 @@ def test_refresh_thread_does_not_relogin_while_a_reconnect_is_in_flight():
     """
     client = _loop_client(logged_in=False, iterations=2)
     lock = threading.Lock()
-    lock.acquire()  # somebody else's reconnect owns this facade right now
+    lock.acquire()
     client._reconnect_lock = lock
     _runtime, loop = _capture_refresh_loop(client)
 
@@ -548,14 +508,13 @@ def test_refresh_thread_does_not_relogin_while_a_reconnect_is_in_flight():
         loop()
 
     mock_refresh.assert_not_called()
-    # No attempt burned and no backoff advanced — this was not a failed recovery.
     assert _logged_out_warnings(mock_logger) == []
 
 
 def test_refresh_thread_still_recovers_an_abandoned_facade():
     """Guards the 2026-07-25 stranded-facade fix: a free lock means nobody is coming."""
     client = _loop_client(logged_in=False, iterations=2)
-    client._reconnect_lock = threading.Lock()  # not held
+    client._reconnect_lock = threading.Lock()
     _runtime, loop = _capture_refresh_loop(client)
 
     def _recover() -> bool:
@@ -582,7 +541,7 @@ def test_refresh_thread_stops_deferring_when_the_reconnect_lock_never_frees():
     """
     client = _loop_client(logged_in=False, iterations=3)
     lock = threading.Lock()
-    lock.acquire()  # and never released
+    lock.acquire()
     client._reconnect_lock = lock
     _runtime, loop = _capture_refresh_loop(client)
 
@@ -593,19 +552,12 @@ def test_refresh_thread_stops_deferring_when_the_reconnect_lock_never_frees():
     ):
         loop()
 
-    # t=60 defers (budget = _session_relogin_backoff_s = 60s); t=120 gives up
-    # waiting and recovers anyway.
     assert mock_refresh.call_count == 1
     assert _logged_out_warnings(mock_logger) == [1]
     assert any(
         call.args and str(call.args[0]).startswith("In-flight reconnect outlasted the defer budget")
         for call in mock_logger.warning.call_args_list
     )
-
-
-# ------------------------------------------------------------------ #
-# Snapshot helper
-# ------------------------------------------------------------------ #
 
 
 def test_snapshot_returns_correct_fields():
@@ -623,11 +575,6 @@ def test_snapshot_returns_correct_fields():
     assert snap.reconnect_backoff_s == 30.0
     assert snap.last_login_error == "timeout"
     assert snap.last_reconnect_error is None
-
-
-# ------------------------------------------------------------------ #
-# Cross-facade login staggering (2026-07-24 "451 Too Many Connections")
-# ------------------------------------------------------------------ #
 
 
 def _refresh_client() -> MagicMock:
@@ -687,8 +634,6 @@ def test_session_refresh_proceeds_unserialised_when_slot_times_out():
     runtime = SessionRuntime(client)
 
     def _login() -> bool:
-        # do_session_refresh clears logged_in before logging in; a real login
-        # sets it back, so the mock has to as well or the refresh reads as failed.
         client.logged_in = True
         return True
 
@@ -704,7 +649,6 @@ def test_session_refresh_proceeds_unserialised_when_slot_times_out():
 
     mock_login.assert_called_once()
     client.api.logout.assert_called_once()
-    # Never release a slot we do not hold: that would free another facade's.
     mock_release.assert_not_called()
 
 
@@ -727,17 +671,6 @@ def test_session_refresh_passes_configured_stagger_settings_to_slot():
     kwargs = mock_acquire.call_args.kwargs
     assert kwargs["min_gap_s"] == 7.5
     assert kwargs["timeout_s"] == 90.0
-
-
-# ------------------------------------------------------------------ #
-# Contract-aware login timeout, SDK-busy backoff, bounded failure label
-#
-# Regression for the daily 08:30 CST cascade on THESHOW: the contract-fetching
-# login exceeded a 20 s budget, its worker was abandoned inside shioaji 1.5.x's
-# Rust `_core`, and the immediate fallback re-entered the same object and failed
-# with "Already borrowed" in under 3 ms — burning the retry ladder and escalating
-# into broker 451s.
-# ------------------------------------------------------------------ #
 
 
 def _login_client(**overrides):
@@ -923,11 +856,6 @@ def test_login_failure_metric_uses_the_bounded_reason():
     client.metrics.shioaji_login_fail_total.labels.assert_called_once_with(reason="connection_limit")
 
 
-# ------------------------------------------------------------------ #
-# Preventive refresh scheduling (regression: 2026-08-02 residual 451s)
-# ------------------------------------------------------------------ #
-
-
 class _StubCalendar:
     """Calendar that records which market it was asked about."""
 
@@ -951,7 +879,6 @@ def _preventive_client(*, holiday_aware: bool, elapsed_s: float) -> MagicMock:
     """A logged-in client whose first wake-up lands on the schedule boundary."""
     client = _loop_client(logged_in=True, iterations=2)
     client._session_refresh_holiday_aware = holiday_aware
-    # One wake-up must cross next_schedule_ts (= now + check_interval).
     client._session_relogin_poll_s = 3600.0
     client._last_session_refresh_ts = 3600.0 - elapsed_s
     return client
@@ -1046,7 +973,7 @@ class _Sdk179Api:
         self.calls.append(("fetch_contracts", {"contract_download": contract_download, "timeout": contracts_timeout}))
 
     @property
-    def Contracts(self):  # noqa: N802 - SDK attribute name
+    def Contracts(self):
         return self
 
 
@@ -1054,7 +981,7 @@ def _run_login_inline(client):
     def _inline(_op, fn, _timeout):
         try:
             fn()
-        except Exception as exc:  # noqa: BLE001 - mirrors _safe_call_with_timeout's contract
+        except Exception as exc:
             return False, None, exc, False
         return True, None, None, False
 
@@ -1131,7 +1058,7 @@ def test_login_reports_contracts_unavailable_without_relogin_when_never_resolved
     metrics.contract_cache_last_success_ts = gauge
     ok, client, api, clock = _login_on_179(load_at_s=float("inf"), metrics=metrics)
 
-    assert ok is True  # the session is up; only order placement is blocked
+    assert ok is True
     assert client.logged_in is True
     assert client._contracts_ready is False
     assert api.calls == ["login", "fetch_contracts"]

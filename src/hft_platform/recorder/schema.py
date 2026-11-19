@@ -10,9 +10,6 @@ logger = get_logger("recorder.schema")
 
 MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "../migrations/clickhouse")
 
-# Markers must start a line; trailing text on the marker line is allowed and
-# discarded together with the marker. Without line anchoring, `-- Up: foo`
-# would split as `: foo` and ClickHouse would reject the leading colon.
 _MARKER_UP_RE = re.compile(r"^[ \t]*--[ \t]*Up\b.*$", re.MULTILINE)
 _MARKER_DOWN_RE = re.compile(r"^[ \t]*--[ \t]*Down\b.*$", re.MULTILINE)
 
@@ -55,8 +52,6 @@ def _extract_up_statements(content: str) -> list[str]:
         if ";" not in code:
             buf.append(line)
             continue
-        # Terminator line(s): the comment tail (if any) is dropped, which is
-        # harmless — it annotated the statement that just ended.
         while ";" in code:
             head, _, code = code.partition(";")
             buf.append(head)
@@ -87,7 +82,6 @@ def apply_schema(client, schema_path: str | None = None) -> None:
     """
     _init_migrations_table(client)
 
-    # Get all applied migrations
     try:
         result = client.query("SELECT version FROM hft.schema_migrations")
         applied_versions = {row[0] for row in result.result_rows}
@@ -98,7 +92,6 @@ def apply_schema(client, schema_path: str | None = None) -> None:
         )
         raise RuntimeError("Cannot determine applied migrations; aborting to prevent data loss") from exc
 
-    # Find migration files
     if not os.path.exists(MIGRATIONS_DIR):
         logger.warning("Migrations directory not found", path=MIGRATIONS_DIR)
         return
@@ -109,7 +102,6 @@ def apply_schema(client, schema_path: str | None = None) -> None:
         return
 
     for filename in migration_files:
-        # Expected format: YYYYMMDD_NNN_migration_name.sql
         parts = filename.split("_", 2)
         if len(parts) >= 2:
             version = f"{parts[0]}_{parts[1]}"
@@ -142,16 +134,10 @@ def apply_schema(client, schema_path: str | None = None) -> None:
                 )
                 raise
 
-        # Record successful migration
         client.insert("hft.schema_migrations", [[version, name]], column_names=["version", "name"])
         logger.info("Migration applied successfully", version=version, name=name)
 
     logger.info("Schema migrations up to date")
-
-
-# =============================================================================
-# Legacy compatibility stubs for older components
-# =============================================================================
 
 
 def _view_uses_legacy_price(client, name: str) -> bool:

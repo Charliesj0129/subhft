@@ -16,7 +16,6 @@ class TestSessionLockSuffix:
         monkeypatch.setenv("HFT_MODE", "sim")
         monkeypatch.setenv("HFT_SHIOAJI_SESSION_LOCK_DIR", str(tmp_path))
 
-        # Write minimal symbols YAML
         sym_path = tmp_path / "symbols.yaml"
         sym_path.write_text("symbols: []")
 
@@ -386,14 +385,13 @@ class TestQuoteConnectionPoolMetrics:
             mock.patch.object(qcp, "_METRIC_PUBLISHED", published),
             mock.patch.object(qcp, "_METRIC_PUBLISH_ERRORS", errors),
         ):
-            pool.update_metrics()  # must not raise
+            pool.update_metrics()
             pool.update_metrics()
 
             assert errors.inc.call_count == 2
             published.inc.assert_not_called()
             assert pool._metrics_publish_failed is True
 
-            # Recovery is counted again and the failure state clears.
             pool._slots = []
             pool.update_metrics()
 
@@ -423,8 +421,6 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         f0.reconnect.return_value = True
         f1.reconnect.return_value = True
         pool._clients = [f0, f1]
-        # H9 fix: reconnect() targets slots, not _clients directly.
-        # Create slots in CONNECTED state; force=True overrides the state filter.
         slot0 = FacadeSlot(conn_id="0", facade=f0)
         slot0.state = FacadeState.CONNECTED
         slot1 = FacadeSlot(conn_id="1", facade=f1)
@@ -444,9 +440,6 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         f0.reconnect.return_value = False
         f1.reconnect.return_value = False
         pool._clients = [f0, f1]
-        # H9 fix: slots must be non-CONNECTED so they are targeted without force=True.
-        # reconnect() returns True only if at least one facade succeeds (any_ok).
-        # With all facades failing, any_ok stays False.
         slot0 = FacadeSlot(conn_id="0", facade=f0)
         slot0.state = FacadeState.RECOVERING
         slot1 = FacadeSlot(conn_id="1", facade=f1)
@@ -463,7 +456,6 @@ class TestQuoteConnectionPoolDuckTypeMethods:
         f0 = mock.MagicMock()
         f0.reconnect.side_effect = RuntimeError("conn lost")
         pool._clients = [f0]
-        # H9 fix: slot must be non-CONNECTED to be targeted by reconnect().
         slot0 = FacadeSlot(conn_id="0", facade=f0)
         slot0.state = FacadeState.RECOVERING
         pool._slots = [slot0]
@@ -581,7 +573,6 @@ class TestQuoteConnectionPoolThreadSafety:
         """stop_options_refresh() must set _options_refresh_running to False."""
         symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool = self._make_pool_with_symbols(tmp_path, symbols, 1)
-        # Simulate thread started
         pool._options_refresh_running = True
         pool.stop_options_refresh()
         assert pool._options_refresh_running is False
@@ -646,7 +637,7 @@ class TestOptionsRefreshGuards:
         pool._clients = [mock.MagicMock()]
         pool._clients[0].logged_in = False
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         expired_opts = [
             {
@@ -675,12 +666,10 @@ class TestOptionsRefreshGuards:
         for c in pool._clients:
             c.logged_in = False
         out_path = str(tmp_path / "live_with_options.yaml")
-        # 2026-04-27 fix-rc4: writer no longer honours SYMBOLS_CONFIG; use the
-        # dedicated runtime-snapshot env var instead.
         monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         opts = []
-        for date in ("2020/01/15", "2030/04/17", "2031/04/16"):  # one expired, two active
+        for date in ("2020/01/15", "2030/04/17", "2031/04/16"):
             for s in (20000, 21000):
                 opts.append(
                     {
@@ -769,12 +758,6 @@ class TestSubscriptionLimitConstant:
     def test_limit_is_120(self):
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
-        # Cap is in *codes*. Each code subscribes to 2 broker topics
-        # (Tick + BidAsk — see subscription_manager._subscribe_symbol).
-        # SinoPac Solace per-session topic budget is ~250 (empirically
-        # confirmed 2026-04-26 when conn 0 with 163 codes / 326 topics
-        # got rejected after ~127 codes / 254 topics). 120 × 2 = 240
-        # keeps a small headroom under that ceiling.
         assert _MAX_SUBSCRIPTIONS_PER_CONN == 120
 
     def test_client_default_matches_pool_limit(self, tmp_path, monkeypatch):
@@ -806,14 +789,13 @@ class TestOptionsRoundRobinSharding:
 
     def test_round_robin_distributes_evenly_across_3_groups(self, tmp_path, monkeypatch):
         """With 60 calls + 60 puts across 30 strikes, 3 option groups should each get ~40."""
-        pool = self._make_pool(tmp_path, num_conns=4)  # group 0=base, 1/2/3=options
+        pool = self._make_pool(tmp_path, num_conns=4)
         pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool._clients = [mock.MagicMock() for _ in range(4)]
         for c in pool._clients:
             c.logged_in = False
 
-        # Mock contract fetching to return synthetic options
-        strikes = list(range(20000, 20000 + 30 * 50, 50))  # 30 strikes
+        strikes = list(range(20000, 20000 + 30 * 50, 50))
         opts = []
         for s in strikes:
             opts.append(
@@ -836,13 +818,12 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
 
         assert result is True
-        # Read the generated YAML
         with open(out_path) as f:
             data = yaml.safe_load(f)
         syms = data["symbols"]
@@ -851,9 +832,7 @@ class TestOptionsRoundRobinSharding:
             g = s.get("group", 0)
             group_counts[g] = group_counts.get(g, 0) + 1
 
-        # group 0 has 1 base symbol
         assert group_counts[0] == 1
-        # 60 options spread across 3 groups: 20 each
         assert group_counts[1] == 20
         assert group_counts[2] == 20
         assert group_counts[3] == 20
@@ -862,13 +841,12 @@ class TestOptionsRoundRobinSharding:
         """If total options exceed per-group capacity, auto-trim to fit."""
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
-        pool = self._make_pool(tmp_path, num_conns=2)  # group 0=base, 1=options
+        pool = self._make_pool(tmp_path, num_conns=2)
         pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool._clients = [mock.MagicMock() for _ in range(2)]
         for c in pool._clients:
             c.logged_in = False
 
-        # 200 calls + 200 puts = 400 options on 1 group -> exceeds 120 limit
         strikes = list(range(20000, 20000 + 200 * 50, 50))
         opts = []
         for s in strikes:
@@ -892,15 +870,13 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
 
-        # Auto-trim should succeed (not reject)
         assert result is True
 
-        # Verify trimmed YAML respects per-group limit
         with open(out_path) as f:
             data = yaml.safe_load(f)
         for g in range(2):
@@ -909,20 +885,19 @@ class TestOptionsRoundRobinSharding:
                 f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
             )
 
-        # Total options should be less than original 400
         opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
         assert opt_count < 400
-        assert opt_count > 0  # not empty
+        assert opt_count > 0
 
     def test_round_robin_interleaves_call_put_pairs_across_3_groups(self, tmp_path, monkeypatch):
         """With 3+ option groups, each group should have a mix of calls and puts."""
-        pool = self._make_pool(tmp_path, num_conns=4)  # groups 1,2,3 for options
+        pool = self._make_pool(tmp_path, num_conns=4)
         pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool._clients = [mock.MagicMock() for _ in range(4)]
         for c in pool._clients:
             c.logged_in = False
 
-        strikes = list(range(20000, 20000 + 10 * 50, 50))  # 10 strikes
+        strikes = list(range(20000, 20000 + 10 * 50, 50))
         opts = []
         for s in strikes:
             opts.append(
@@ -945,7 +920,7 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
@@ -954,8 +929,6 @@ class TestOptionsRoundRobinSharding:
         with open(out_path) as f:
             data = yaml.safe_load(f)
 
-        # With 3 option groups and strike-interleaved round-robin,
-        # at least 2 of the 3 groups must have both calls and puts
         mixed_count = 0
         for g in [1, 2, 3]:
             group_syms = [s for s in data["symbols"] if s.get("group") == g]
@@ -974,13 +947,12 @@ class TestOptionsRoundRobinSharding:
         """
         from hft_platform.feed_adapter.shioaji.quote_connection_pool import _MAX_SUBSCRIPTIONS_PER_CONN
 
-        pool = self._make_pool(tmp_path, num_conns=3)  # group 0=base, 1/2=options
+        pool = self._make_pool(tmp_path, num_conns=3)
         pool._all_symbols = [{"code": "TXFC0", "exchange": "TAIFEX", "group": 0}]
         pool._clients = [mock.MagicMock() for _ in range(3)]
         for c in pool._clients:
             c.logged_in = False
 
-        # 250 strikes × (call + put) = 500 options, exceeds 2 × 120 = 240 capacity → trim
         strikes = list(range(26500, 26500 + 250 * 50, 50))
         opts = []
         for s in strikes:
@@ -1004,32 +976,24 @@ class TestOptionsRoundRobinSharding:
             )
 
         out_path = str(tmp_path / "live_with_options.yaml")
-        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)  # fix-rc4: writer uses runtime-snapshot env
+        monkeypatch.setenv("HFT_SYMBOLS_RUNTIME_SNAPSHOT", out_path)
 
         with mock.patch.object(type(pool), "_load_options_from_cache", return_value=opts):
             result = pool.refresh_options_symbols()
 
-        # Must succeed (auto-trim), not reject
         assert result is True
 
         with open(out_path) as f:
             data = yaml.safe_load(f)
 
-        # Every group must respect limit
         for g in range(3):
             count = sum(1 for s in data["symbols"] if s.get("group") == g)
             assert count <= _MAX_SUBSCRIPTIONS_PER_CONN, (
                 f"Group {g} has {count} symbols, exceeds {_MAX_SUBSCRIPTIONS_PER_CONN}"
             )
 
-        # Options should be trimmed but non-empty (≤ 2 conns × cap = 240)
         opt_count = sum(1 for s in data["symbols"] if s.get("exchange") == "OPT")
         assert 200 <= opt_count <= 240, f"Expected 200-240 options after trim, got {opt_count}"
-
-
-# ─────────────────────────────────────────────────────────────────────
-# P1-d (commit e6edea37): pool degraded gauge + debounced CRITICAL log
-# ─────────────────────────────────────────────────────────────────────
 
 
 class TestQuoteConnectionPoolDegradedRollup:
@@ -1048,7 +1012,6 @@ class TestQuoteConnectionPoolDegradedRollup:
         sym_path.write_text(yaml.safe_dump({"symbols": symbols}))
         pool = QuoteConnectionPool(str(sym_path), {}, num_conns=4)
 
-        # Fabricate 4 slots with mock facades; default state = RECOVERING.
         pool._slots = []
         pool._clients = []
         for i in range(4):
@@ -1056,7 +1019,7 @@ class TestQuoteConnectionPoolDegradedRollup:
             facade.logged_in = True
             facade.subscribed_count = 0
             slot = FacadeSlot(conn_id=str(i), facade=facade)
-            slot.state = FacadeState.CONNECTED  # start healthy
+            slot.state = FacadeState.CONNECTED
             pool._slots.append(slot)
             pool._clients.append(facade)
         return pool
@@ -1071,47 +1034,37 @@ class TestQuoteConnectionPoolDegradedRollup:
         from hft_platform.feed_adapter.shioaji.facade_slot import FacadeState
 
         pool = self._make_pool_with_4_slots(tmp_path)
-        pool._pool_degraded_alert_after_s = 1.0  # tight threshold for the test
+        pool._pool_degraded_alert_after_s = 1.0
 
-        # Mark 3 of 4 conns DOWN.
         pool._slots[0].state = FacadeState.RECOVERING
         pool._slots[1].state = FacadeState.RECOVERING
         pool._slots[2].state = FacadeState.DISCONNECTED
         pool._slots[3].state = FacadeState.CONNECTED
 
-        # Drive time.monotonic via monkeypatch so we can step past the window
-        # deterministically (no real sleep).
         clock = {"now": 1000.0}
         monkeypatch.setattr(qcp.time, "monotonic", lambda: clock["now"])
 
-        # Patch the module-level logger to capture .critical/.warning calls.
         mock_logger = mock.MagicMock()
         monkeypatch.setattr(qcp, "logger", mock_logger)
 
-        # First tick: starts the degradation timer; gauge stays 0 (alert not raised yet).
         pool.update_metrics()
         assert pool._pool_degraded_since_mono == 1000.0
         assert pool._pool_degraded_alerted is False
         assert mock_logger.critical.call_count == 0
 
-        # Advance past the alert window — second tick should fire the CRITICAL log.
         clock["now"] = 1002.0
         pool.update_metrics()
         assert pool._pool_degraded_alerted is True
         assert mock_logger.critical.call_count == 1
         crit_args = mock_logger.critical.call_args
         assert crit_args[0][0] == "quote_pool_degraded"
-        # n_unhealthy=3 / n_slots=4 == 0.75
         assert crit_args[1].get("n_slots") == 4
         assert crit_args[1].get("n_unhealthy") == 3
         assert abs(crit_args[1].get("fraction") - 0.75) < 1e-9
 
-        # Verify the pool-level gauges directly.
         assert qcp._METRIC_POOL_DEGRADED_FRACTION._value.get() == 0.75
         assert qcp._METRIC_POOL_DEGRADED._value.get() == 1.0
 
-        # Third tick with state unchanged: must NOT re-emit the CRITICAL log
-        # (debounced — alerted flag stays True until recovery).
         clock["now"] = 1003.0
         pool.update_metrics()
         assert mock_logger.critical.call_count == 1, "CRITICAL log must be emitted exactly once until recovery"
@@ -1143,8 +1096,6 @@ class TestPoolDegradedIgnoresMarketClose:
         pool._pool_degraded_alert_after_s = 1.0
         for slot, state in zip(pool._slots, states, strict=True):
             slot.state = state
-        # ``QuoteConnectionPool`` defines __slots__, so the calendar stub has
-        # to be installed on the class rather than the instance.
         monkeypatch.setattr(qcp.QuoteConnectionPool, "session_open_now", lambda _self: session_open)
         clock = {"now": 1000.0}
         monkeypatch.setattr(qcp.time, "monotonic", lambda: clock["now"])
@@ -1164,7 +1115,7 @@ class TestPoolDegradedIgnoresMarketClose:
         pool.update_metrics()
         clock["now"] = 1002.0
         pool.update_metrics()
-        clock["now"] = 1400.0  # far past the real 300s threshold
+        clock["now"] = 1400.0
         pool.update_metrics()
 
         assert mock_logger.critical.call_count == 0, "a market close is not a pool outage"
@@ -1252,7 +1203,7 @@ class TestPoolDegradedIgnoresMarketClose:
         pool.update_metrics()
         assert pool._pool_degraded_alerted is True
 
-        session["open"] = False  # the bell
+        session["open"] = False
         clock["now"] = 1003.0
         pool.update_metrics()
 
@@ -1316,7 +1267,7 @@ class TestReconnectAllowedSessionBoundaries:
         from hft_platform.core.market_calendar import get_calendar
 
         tz = get_calendar()._tz
-        moment = dt.datetime(2026, 7, 31, hh, mm, ss, tzinfo=tz)  # Friday
+        moment = dt.datetime(2026, 7, 31, hh, mm, ss, tzinfo=tz)
         with mock.patch(
             "hft_platform.core.timebase.now_s",
             return_value=moment.timestamp(),
@@ -1326,19 +1277,19 @@ class TestReconnectAllowedSessionBoundaries:
     @pytest.mark.parametrize(
         ("hh", "mm", "ss", "expected"),
         [
-            (8, 30, 0, True),  # pre-open warmup preserved (was 08:30 env start)
-            (8, 44, 59, True),  # still warmup
-            (8, 45, 0, True),  # day open
-            (13, 44, 59, True),  # last second of day session — old gate was blind here
-            (13, 45, 0, False),  # exclusive close
-            (13, 50, 0, False),  # old env gate also off, but for the wrong reason
-            (14, 44, 0, False),  # too early for the night warmup
-            (14, 45, 0, True),  # night pre-open warmup
-            (15, 0, 0, True),  # night open
-            (4, 59, 59, True),  # last second of night session
-            (5, 0, 0, False),  # night close — storm started here
-            (5, 0, 20, False),  # first observed facade_reconnect_triggered
-            (5, 4, 59, False),  # last one, before the env window expired at 05:05
+            (8, 30, 0, True),
+            (8, 44, 59, True),
+            (8, 45, 0, True),
+            (13, 44, 59, True),
+            (13, 45, 0, False),
+            (13, 50, 0, False),
+            (14, 44, 0, False),
+            (14, 45, 0, True),
+            (15, 0, 0, True),
+            (4, 59, 59, True),
+            (5, 0, 0, False),
+            (5, 0, 20, False),
+            (5, 4, 59, False),
         ],
     )
     def test_reconnect_allowed_matches_session_boundaries(self, tmp_path, hh, mm, ss, expected):
@@ -1368,9 +1319,6 @@ class TestReconnectAllowedSessionBoundaries:
         slot.degraded_since_mono = _t.monotonic() - 60.0
         pool._slots = [slot]
 
-        # __slots__ makes instance-level patching read-only — patch the class.
-        # ``session_open_now`` is patched alongside because a feed-gap trigger
-        # now needs an open session, not just an open reconnect window.
         with mock.patch.object(QuoteConnectionPool, "_schedule_reconnect") as sched:
             with (
                 mock.patch.object(QuoteConnectionPool, "reconnect_allowed", return_value=False),
@@ -1388,13 +1336,13 @@ class TestReconnectAllowedSessionBoundaries:
     @pytest.mark.parametrize(
         ("hh", "mm", "suppress_reconnect", "suppress_gap"),
         [
-            (14, 45, False, True),  # night pre-open lead opens — storm started here
-            (14, 59, False, True),  # still shut; pre-open matching feeds nothing
-            (15, 0, False, False),  # night open — a gap is evidence again
-            (8, 30, False, True),  # day pre-open lead
-            (8, 45, False, False),  # day open
-            (13, 44, False, False),  # last minute of the day session
-            (13, 46, True, True),  # after the close, outside any lead
+            (14, 45, False, True),
+            (14, 59, False, True),
+            (15, 0, False, False),
+            (8, 30, False, True),
+            (8, 45, False, False),
+            (13, 44, False, False),
+            (13, 46, True, True),
         ],
     )
     def test_gap_reconnects_are_gated_on_the_session_not_the_pre_open_lead(
@@ -1414,7 +1362,7 @@ class TestReconnectAllowedSessionBoundaries:
 
         pool = self._pool(tmp_path)
         tz = get_calendar()._tz
-        moment = dt.datetime(2026, 7, 31, hh, mm, 0, tzinfo=tz)  # Friday
+        moment = dt.datetime(2026, 7, 31, hh, mm, 0, tzinfo=tz)
         with (
             mock.patch("hft_platform.core.timebase.now_s", return_value=moment.timestamp()),
             mock.patch.object(qcp_mod, "check_facade_health") as spy,

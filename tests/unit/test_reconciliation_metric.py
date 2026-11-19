@@ -18,7 +18,6 @@ class MockPosition:
 async def test_reconciliation_metric_updated_with_discrepancy_count() -> None:
     """When broker and local positions differ, reconciliation_discrepancy_count is set to the discrepancy count."""
     mock_client = MagicMock()
-    # Broker has 10 shares of 2330; local store is empty → 1 discrepancy
     mock_client.get_positions.return_value = [SimpleNamespace(code="2330", quantity=10, direction="Action.Buy")]
 
     mock_store = MagicMock()
@@ -69,7 +68,7 @@ async def test_reconciliation_metric_reflects_multiple_discrepancies() -> None:
     ]
 
     mock_store = MagicMock()
-    mock_store.positions = {}  # local is empty → 2 discrepancies
+    mock_store.positions = {}
 
     mock_metrics = MagicMock()
 
@@ -99,7 +98,6 @@ async def test_reconciliation_metric_not_updated_on_sync_failure() -> None:
         return_value=mock_metrics,
     ):
         service = ReconciliationService(mock_client, mock_store, {}, storm_guard=StormGuard())
-        # sync_portfolio now raises on failure (WU-04 resilience change)
         with pytest.raises(RuntimeError, match="broker unavailable"):
             await service.sync_portfolio()
 

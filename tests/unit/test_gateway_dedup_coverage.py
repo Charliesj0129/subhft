@@ -10,10 +10,6 @@ from hft_platform.gateway.dedup import (
     _load_rust_dedup,
 )
 
-# ---------------------------------------------------------------------------
-# _load_rust_dedup — module-level lazy loader (lines 29-43)
-# ---------------------------------------------------------------------------
-
 
 class TestLoadRustDedup:
     def test_early_return_when_already_loaded(self):
@@ -46,9 +42,8 @@ class TestLoadRustDedup:
             saved_hft = sys.modules.get("hft_platform.rust_core")
             saved_rc = sys.modules.get("rust_core")
 
-            # Make both imports fail
-            mock_hft_mod = MagicMock(spec=[])  # No RustDedupStore attr
-            del mock_hft_mod.RustDedupStore  # Force AttributeError -> ImportError path
+            mock_hft_mod = MagicMock(spec=[])
+            del mock_hft_mod.RustDedupStore
 
             with patch.dict(
                 "sys.modules",
@@ -58,11 +53,8 @@ class TestLoadRustDedup:
                 },
             ):
                 dedup_mod._rust_dedup_loaded = False
-                # The import will succeed but getattr for RustDedupStore will fail
-                # which triggers the ImportError fallback. Let's just force ImportError.
                 pass
 
-            # Simpler approach: just remove the modules
             dedup_mod._rust_dedup_loaded = False
             dedup_mod._RustDedupStore = None
             saved_hft_mod = sys.modules.pop("hft_platform.rust_core", "MISSING")
@@ -78,11 +70,6 @@ class TestLoadRustDedup:
         finally:
             dedup_mod._rust_dedup_loaded = original_loaded
             dedup_mod._RustDedupStore = original_cls
-
-
-# ---------------------------------------------------------------------------
-# _init_rust_store — env var + error paths (lines 109-118)
-# ---------------------------------------------------------------------------
 
 
 class TestInitRustStore:
@@ -143,11 +130,6 @@ class TestInitRustStore:
             dedup_mod._RustDedupStore = original_cls
 
 
-# ---------------------------------------------------------------------------
-# release — with rust store (lines 222-225)
-# ---------------------------------------------------------------------------
-
-
 class TestReleaseWithRustStore:
     def test_release_delegates_to_rust_store(self):
         """release() calls rs.release() when rust store is present."""
@@ -164,7 +146,7 @@ class TestReleaseWithRustStore:
     def test_release_rust_store_without_release_method(self):
         """release() handles rust store that lacks release method."""
         store = IdempotencyStore(window_size=100, persist_enabled=False)
-        mock_rs = MagicMock(spec=[])  # No release method
+        mock_rs = MagicMock(spec=[])
         store._rust_store = mock_rs
 
         store.check_or_reserve("key1")
@@ -179,7 +161,6 @@ class TestReleaseWithRustStore:
         store._rust_store = mock_rs
 
         store.check_or_reserve("key1")
-        # Should not raise
         store.release("key1")
         assert store.size() == 0
 
@@ -193,30 +174,18 @@ class TestReleaseWithRustStore:
         mock_rs.release.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# load — exception path (lines 297-298)
-# ---------------------------------------------------------------------------
-
-
 class TestLoadException:
     def test_load_handles_permission_error(self, tmp_path):
         """load() catches and logs permission errors."""
         path = str(tmp_path / "dedup.jsonl")
-        # Create a file that can be found but fails on read
         with open(path, "w") as f:
             f.write("test\n")
 
         store = IdempotencyStore(window_size=100, persist_enabled=True, persist_path=path)
 
         with patch("builtins.open", side_effect=PermissionError("access denied")):
-            # Should not raise
             store.load()
         assert store.size() == 0
-
-
-# ---------------------------------------------------------------------------
-# json fallback _dumps/_loads (lines 55-62)
-# ---------------------------------------------------------------------------
 
 
 class TestJsonFallbackDumpsLoads:
@@ -234,11 +203,6 @@ class TestJsonFallbackDumpsLoads:
         assert deserialized["cmd_id"] == 42
 
 
-# ---------------------------------------------------------------------------
-# IdempotencyRecord defaults
-# ---------------------------------------------------------------------------
-
-
 class TestIdempotencyRecordDefaults:
     def test_default_values(self):
         rec = IdempotencyRecord(key="test")
@@ -252,11 +216,6 @@ class TestIdempotencyRecordDefaults:
         assert rec.approved is True
         assert rec.reason_code == "OK"
         assert rec.cmd_id == 99
-
-
-# ---------------------------------------------------------------------------
-# _load_rust_dedup — second import fallback path (lines 36-42)
-# ---------------------------------------------------------------------------
 
 
 class TestLoadRustDedupImportPaths:
@@ -280,7 +239,6 @@ class TestLoadRustDedupImportPaths:
             fake_rc = types.ModuleType("rust_core")
             fake_rc.RustDedupStore = sentinel
 
-            # Remove cached modules so from-import re-triggers __import__
             saved_hft_rc = sys.modules.pop("hft_platform.rust_core", None)
             saved_rc = sys.modules.pop("rust_core", None)
 
@@ -302,7 +260,6 @@ class TestLoadRustDedupImportPaths:
                 assert dedup_mod._rust_dedup_loaded is True
                 assert dedup_mod._RustDedupStore is sentinel
             finally:
-                # Restore cached modules
                 sys.modules.pop("rust_core", None)
                 if saved_hft_rc is not None:
                     sys.modules["hft_platform.rust_core"] = saved_hft_rc
@@ -325,7 +282,6 @@ class TestLoadRustDedupImportPaths:
             dedup_mod._rust_dedup_loaded = False
             dedup_mod._RustDedupStore = None
 
-            # Remove cached modules so from-import re-triggers __import__
             saved_hft_rc = sys.modules.pop("hft_platform.rust_core", None)
             saved_rc = sys.modules.pop("rust_core", None)
 
@@ -385,11 +341,6 @@ class TestLoadRustDedupImportPaths:
             dedup_mod._RustDedupStore = original_cls
 
 
-# ---------------------------------------------------------------------------
-# json fallback _dumps/_loads (lines 55-62)
-# ---------------------------------------------------------------------------
-
-
 class TestJsonFallbackDirect:
     """Directly exercise the json-based _dumps/_loads fallback functions (lines 55-62)."""
 
@@ -400,7 +351,6 @@ class TestJsonFallbackDirect:
 
         import hft_platform.gateway.dedup as dedup_mod
 
-        # Save module state
         original_loaded = dedup_mod._rust_dedup_loaded
         original_cls = dedup_mod._RustDedupStore
         real_import = builtins.__import__
@@ -411,31 +361,25 @@ class TestJsonFallbackDirect:
             return real_import(name, *args, **kwargs)
 
         try:
-            # Block orjson and reload the module to trigger except ImportError path
             with patch.object(builtins, "__import__", side_effect=block_orjson):
                 importlib.reload(dedup_mod)
 
-            # The reloaded module should have json-based _dumps/_loads
             json_dumps = dedup_mod._dumps
             json_loads = dedup_mod._loads
 
-            # Verify _dumps returns bytes
             data = {"key": "fb", "approved": True, "reason_code": "OK", "cmd_id": 5}
             result = json_dumps(data)
             assert isinstance(result, bytes)
 
-            # Verify _loads roundtrips correctly from bytes
             parsed = json_loads(result)
             assert parsed["key"] == "fb"
             assert parsed["approved"] is True
             assert parsed["cmd_id"] == 5
 
-            # Verify _loads handles str input
             str_result = json_loads('{"key": "s", "cmd_id": 3}')
             assert str_result["key"] == "s"
             assert str_result["cmd_id"] == 3
         finally:
-            # Reload again to restore original orjson-backed functions
             importlib.reload(dedup_mod)
             dedup_mod._rust_dedup_loaded = original_loaded
             dedup_mod._RustDedupStore = original_cls
@@ -461,11 +405,6 @@ class TestJsonFallbackDirect:
             assert rec.cmd_id == 77
 
 
-# ---------------------------------------------------------------------------
-# commit() first-commit-wins / overwrite blocked (lines 182-190)
-# ---------------------------------------------------------------------------
-
-
 class TestCommitOverwriteBlocked:
     """Cover the first-commit-wins guard in commit()."""
 
@@ -475,10 +414,8 @@ class TestCommitOverwriteBlocked:
         store.check_or_reserve("dup-key")
         store.commit("dup-key", approved=True, reason_code="OK", cmd_id=10)
 
-        # Second commit with different values should be silently blocked
         store.commit("dup-key", approved=False, reason_code="HALT", cmd_id=20)
 
-        # Original decision preserved
         rec = store.check_or_reserve("dup-key")
         assert rec is not None
         assert rec.approved is True
@@ -491,10 +428,8 @@ class TestCommitOverwriteBlocked:
         store.check_or_reserve("rej-key")
         store.commit("rej-key", approved=False, reason_code="RISK", cmd_id=5)
 
-        # Attempt to overwrite with approved=True
         store.commit("rej-key", approved=True, reason_code="RETRY", cmd_id=6)
 
-        # Original rejection preserved
         rec = store.check_or_reserve("rej-key")
         assert rec is not None
         assert rec.approved is False
@@ -511,11 +446,6 @@ class TestCommitOverwriteBlocked:
         assert rec is not None
         assert rec.approved is True
         assert rec.reason_code == "FIRST"
-
-
-# ---------------------------------------------------------------------------
-# persist() temp file cleanup branch (line 259 -> 261)
-# ---------------------------------------------------------------------------
 
 
 class TestPersistTempFileCleanup:
@@ -537,9 +467,7 @@ class TestPersistTempFileCleanup:
             with mock_patch("os.rename", side_effect=fail_rename):
                 store.persist()
 
-            # Final file should not exist since rename failed
             assert not os.path.exists(path)
-            # Temp file should also be cleaned up
             remaining = [f for f in os.listdir(tmpdir) if f.endswith(".tmp")]
             assert len(remaining) == 0
 
@@ -558,15 +486,13 @@ class TestPersistTempFileCleanup:
             original_rename = os.rename
 
             def fail_rename_and_remove_temp(src, dst):
-                # Remove the temp file before the except clause checks for it
                 if os.path.exists(src):
                     os.unlink(src)
                 raise OSError("rename failed and temp gone")
 
             with mock_patch("os.rename", side_effect=fail_rename_and_remove_temp):
-                store.persist()  # Should not raise
+                store.persist()
 
-            # Neither the target nor any temp should exist
             assert not os.path.exists(path)
             remaining = [f for f in os.listdir(tmpdir) if f.endswith(".tmp")]
             assert len(remaining) == 0

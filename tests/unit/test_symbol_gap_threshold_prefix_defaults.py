@@ -47,11 +47,6 @@ def _stale(watchdog: Any, symbol: str, gap: float) -> bool:
     return bool(watchdog._find_stale_symbols({symbol: now - gap}, now))
 
 
-# --------------------------------------------------------------------------- #
-# Longest-prefix lookup                                                        #
-# --------------------------------------------------------------------------- #
-
-
 def test_prefix_lookup_returns_none_without_a_match():
     assert _prefix_gap_threshold("TXFF6", {"EXF": 30.0}) is None
 
@@ -68,17 +63,12 @@ def test_prefix_lookup_is_a_noop_for_an_empty_map():
     assert _prefix_gap_threshold("EXFH6", {}) is None
 
 
-# --------------------------------------------------------------------------- #
-# Threshold resolution in the watchdog                                         #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.parametrize("symbol", ["EXFH6", "EXFJ6", "EXFF6"])
 def test_gap_threshold_prefix_default_applies_across_the_quarterly_roll(symbol):
     """The root default has to hold for whichever month is trading."""
     watchdog = _Watchdog()
-    assert _stale(watchdog, symbol, 6.5) is False  # was a warning at the 6 s global
-    assert _stale(watchdog, symbol, 31.0) is True  # a genuine gap still trips
+    assert _stale(watchdog, symbol, 6.5) is False
+    assert _stale(watchdog, symbol, 31.0) is True
 
 
 def test_front_month_index_future_keeps_the_strict_global_threshold():
@@ -108,7 +98,6 @@ def test_market_open_grace_never_tightens_a_root_default():
     """Grace raises the global floor; it must not drag a relaxed root down."""
     watchdog = _Watchdog(prefix_defaults={"EXF": 90.0}, grace=True)
     assert _stale(watchdog, "EXFH6", 60.0) is False
-    # the grace floor still applies to everything else
     assert _stale(watchdog, "TXFF6", 20.0) is False
     assert _stale(watchdog, "TXFF6", 31.0) is True
 

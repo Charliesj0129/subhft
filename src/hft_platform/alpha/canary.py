@@ -20,10 +20,8 @@ from hft_platform.alpha import shadow_parity
 
 logger = get_logger("canary_monitor")
 
-# Escalation tier weights (progressive ramp-up)
 _ESCALATION_TIERS: list[float] = [0.02, 0.05, 0.07, 0.10]
 
-# Default config
 _DEFAULT_ESCALATION_SESSIONS = 10
 _DEFAULT_SHARPE_RATIO = 0.8
 
@@ -32,7 +30,7 @@ _DEFAULT_SHARPE_RATIO = 0.8
 class CanaryStatus:
     alpha_id: str
     current_weight: float
-    state: str  # "canary", "escalated", "rolled_back", "graduated"
+    state: str
     reason: str
     checks: dict[str, Any]
 
@@ -123,7 +121,7 @@ class CanaryMonitor:
         for yaml_path in sorted(self.promotions_dir.rglob("*.yaml")):
             try:
                 payload = yaml.safe_load(yaml_path.read_text())
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.warning("canary: failed to parse YAML", path=str(yaml_path))
                 continue
 
@@ -165,7 +163,6 @@ class CanaryMonitor:
         rollback = canary.get("rollback", {}).get("trigger", {})
         scorecard = canary.get("scorecard_snapshot", {})
 
-        # Extract thresholds
         max_slippage = float(rollback.get("live_slippage_bps_gt", guardrails.get("max_live_slippage_bps", 3.0)))
         max_dd_contrib = float(
             rollback.get(
@@ -180,7 +177,6 @@ class CanaryMonitor:
             )
         )
 
-        # Extract live metrics
         slippage = float(live_metrics.get("slippage_bps", 0.0))
         dd_contrib = float(live_metrics.get("drawdown_contribution", 0.0))
         error_rate = float(live_metrics.get("execution_error_rate", 0.0))
@@ -194,7 +190,6 @@ class CanaryMonitor:
             "sessions_live": sessions_live,
         }
 
-        # Check rollback triggers
         rollback_reasons: list[str] = []
         if slippage > max_slippage:
             rollback_reasons.append(f"slippage_bps {slippage} > {max_slippage}")
@@ -212,7 +207,6 @@ class CanaryMonitor:
                 checks=checks,
             )
 
-        # Check escalation eligibility
         if sessions_live >= self.escalation_sessions:
             sharpe_oos = scorecard.get("sharpe_oos")
             sharpe_threshold = float(sharpe_oos) * self.sharpe_ratio if sharpe_oos is not None else None
@@ -223,9 +217,6 @@ class CanaryMonitor:
 
             unmet, certified = _unmet_obligations(canary.get("obligations"), live_metrics, alpha_id=alpha_id)
             if escalation_eligible and unmet:
-                # A gate deferred at promotion (ADR-003) is still owed: the
-                # weight must not rise, and the canary must not graduate,
-                # until it carries passing evidence.
                 checks["unmet_obligations"] = unmet
                 return CanaryStatus(
                     alpha_id=alpha_id,
@@ -239,10 +230,8 @@ class CanaryMonitor:
                 checks["sharpe_live"] = float(sharpe_live)  # type: ignore[arg-type]
                 checks["sharpe_threshold"] = sharpe_threshold
                 if certified:
-                    # apply_decision moves these out of ``obligations``.
                     checks["certified_obligations"] = certified
 
-                # Find next tier
                 next_weight = self._next_tier_weight(current_weight)
                 if next_weight is None:
                     return CanaryStatus(
@@ -261,7 +250,6 @@ class CanaryMonitor:
                     checks=checks,
                 )
 
-        # Hold
         return CanaryStatus(
             alpha_id=alpha_id,
             current_weight=current_weight,
@@ -280,7 +268,6 @@ class CanaryMonitor:
         yaml_path = Path(canary["_path"])
         old_weight = float(canary.get("weight", 0.0))
 
-        # Build a new dict — never mutate the original (immutability rule)
         updated = {**canary}
 
         if status.state == "rolled_back":
@@ -294,16 +281,12 @@ class CanaryMonitor:
             max_tier = _ESCALATION_TIERS[-1]
             new_weight = max(old_weight, max_tier)
             updated["weight"] = new_weight
-            # Remove canary-specific guardrails to indicate graduated
             updated.pop("rollback", None)
         else:
-            # hold — no-op
             return
 
         newly_certified = status.checks.get("certified_obligations")
         if isinstance(newly_certified, list) and newly_certified:
-            # The obligations this decision's evidence certified are no longer
-            # owed; keep the record of what certified them (ADR-003).
             done = {(c.get("gate"), c.get("stage")) for c in newly_certified}
             owed = canary.get("obligations")
             updated["obligations"] = [
@@ -314,13 +297,8 @@ class CanaryMonitor:
             prior = canary.get("certified_obligations")
             updated["certified_obligations"] = [*(prior if isinstance(prior, list) else []), *newly_certified]
 
-        # Exclude internal path key from the persisted YAML
         updated_for_write = {k: v for k, v in updated.items() if k != "_path"}
 
-        # Atomic write: write to temp file then rename (POSIX-atomic).
-        # M2 (2026-04-25): switch to ``finally`` so orphan tmpfiles are removed
-        # on SIGKILL / interpreter-shutdown paths that bypass exception
-        # handlers.
         tmp_fd, tmp_path = tempfile.mkstemp(dir=yaml_path.parent, suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w") as f:
@@ -337,7 +315,6 @@ class CanaryMonitor:
             new_weight=new_weight,
         )
 
-        # Best-effort audit log
         try:
             from hft_platform.alpha.audit import log_canary_action
 
@@ -349,7 +326,7 @@ class CanaryMonitor:
                 reason=status.reason,
                 checks=status.checks,
             )
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             logger.debug("canary.apply: audit log failed", exc_info=True)
 
     def _find_canary(self, alpha_id: str) -> dict[str, Any] | None:

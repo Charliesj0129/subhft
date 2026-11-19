@@ -7,7 +7,6 @@ import importlib.util
 import sys
 from pathlib import Path
 
-# scripts/ is not a Python package; load the module by file path.
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "check_discipline.py"
 _spec = importlib.util.spec_from_file_location("check_discipline", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
@@ -22,9 +21,6 @@ Severity = _mod.Severity
 def _scan(source: str, path: str) -> list:
     tree = ast.parse(source)
     return check_no_float_money(tree, Path(path))
-
-
-# ---- positive: violations expected ----------------------------------------
 
 
 def test_class_attr_price_float_in_contracts_is_flagged() -> None:
@@ -66,9 +62,6 @@ def test_interior_pattern_max_loss_amount_is_flagged() -> None:
     assert len(vs) == 1
 
 
-# ---- negative: should NOT be flagged --------------------------------------
-
-
 def test_int_price_is_not_flagged() -> None:
     src = "class Q:\n    price: int = 0\n"
     vs = _scan(src, "src/hft_platform/contracts/order.py")
@@ -89,7 +82,6 @@ def test_non_money_float_field_is_not_flagged() -> None:
 
 def test_money_float_outside_money_domain_is_not_flagged() -> None:
     src = "class S:\n    price: float = 0.0\n"
-    # alpha/ is outside the money-precision domain
     vs = _scan(src, "src/hft_platform/alpha/scorecard.py")
     assert vs == []
 
@@ -107,7 +99,6 @@ def test_test_file_is_exempt() -> None:
 
 
 def test_money_token_field_with_ratio_suffix_is_not_flagged() -> None:
-    # A ratio of two money values is dimensionless, so Law 4 does not apply.
     src = "class A:\n    cost_sensitivity_ratio: float | None = None\n"
     vs = _scan(src, "src/hft_platform/contracts/alpha.py")
     assert vs == []
@@ -120,8 +111,6 @@ def test_money_token_field_with_pct_suffix_is_not_flagged() -> None:
 
 
 def test_dimensionless_suffix_exclusion_is_anchored_at_the_end_of_the_name() -> None:
-    # 'ratio' appearing anywhere other than the suffix must not disable the rule:
-    # ratio_adjusted_price is still a price.
     src = "class O:\n    ratio_adjusted_price: float = 0.0\n"
     vs = _scan(src, "src/hft_platform/order/intent.py")
     assert len(vs) == 1

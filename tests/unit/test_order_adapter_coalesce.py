@@ -99,7 +99,6 @@ def test_new_orders_with_different_intent_id_not_coalesced(tmp_config):
     adapter._store_pending(cmd1)
     adapter._store_pending(cmd2)
 
-    # Both commands should be in _api_pending with different keys
     keys = list(adapter._api_pending.keys())
     assert len(keys) == 2, f"Expected 2 pending commands, got {len(keys)}: {keys}"
     assert adapter._api_pending[adapter._coalesce_key(cmd1)] is cmd1
@@ -117,7 +116,7 @@ def test_cancel_orders_for_same_target_do_coalesce(tmp_config):
 
     cancel_keys = [k for k in adapter._api_pending if k[0] == "cancel"]
     assert len(cancel_keys) == 1, "CANCEL orders for same target should coalesce"
-    assert adapter._api_pending[cancel_keys[0]] is cmd2  # last wins
+    assert adapter._api_pending[cancel_keys[0]] is cmd2
 
 
 def test_coalesce_key_includes_intent_id_for_new(tmp_config):

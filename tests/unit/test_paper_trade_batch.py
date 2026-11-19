@@ -98,12 +98,11 @@ class TestBatchRecordSessions:
             alpha_ids=["test_alpha"],
             experiments_dir=str(exp_dir),
             sessions_per_alpha=3,
-            base_date="2026-03-02",  # Monday — avoids weekend edge cases
+            base_date="2026-03-02",
             seed=42,
         )
         assert len(results) == 3
         assert all(r["alpha_id"] == "test_alpha" for r in results)
-        # Verify different trading days
         days = {r["trading_day"] for r in results}
         assert len(days) == 3
 
@@ -115,7 +114,6 @@ class TestBatchRecordSessions:
         from hft_platform.alpha.experiments import ExperimentTracker
 
         tracker = ExperimentTracker(base_dir=exp_dir)
-        # Pre-record 5 sessions
         for i in range(5):
             tracker.log_paper_trade_session(
                 alpha_id="test_alpha",
@@ -129,7 +127,7 @@ class TestBatchRecordSessions:
             experiments_dir=str(exp_dir),
             sessions_per_alpha=5,
         )
-        assert len(results) == 0  # Already has enough
+        assert len(results) == 0
 
     def test_deterministic_with_seed(self, tmp_path: Path) -> None:
         exp_dir = tmp_path / "experiments"
@@ -142,7 +140,6 @@ class TestBatchRecordSessions:
             sessions_per_alpha=3,
             seed=123,
         )
-        # Reset for second run
         shutil.rmtree(exp_dir / "paper_trade", ignore_errors=True)
 
         r2 = batch_record_sessions(
@@ -165,7 +162,7 @@ class TestBatchRecordSessions:
             seed=42,
         )
         regimes = {r["regime"] for r in results}
-        assert len(regimes) >= 2  # Should cover multiple regimes with 8 sessions
+        assert len(regimes) >= 2
 
 
 class TestDiscoverGateDCandidatesAdditional:
@@ -176,7 +173,7 @@ class TestDiscoverGateDCandidatesAdditional:
         run_dir = runs_dir / "run_missing_sc"
         run_dir.mkdir(parents=True)
 
-        sc_path = run_dir / "scorecard_MISSING.json"  # deliberately absent
+        sc_path = run_dir / "scorecard_MISSING.json"
         (run_dir / "backtest_report.json").write_text("{}")
         signal = np.random.RandomState(0).randn(50)
         sig_path = run_dir / "signals.npy"
@@ -238,7 +235,6 @@ class TestDiscoverGateDCandidatesAdditional:
         runs_dir = exp_dir / "runs"
         alpha_id = "dup_alpha"
 
-        # Create two runs for the same alpha_id; both pass Gate D
         for i in range(2):
             run_dir = runs_dir / f"run_{i}"
             run_dir.mkdir(parents=True)
@@ -272,7 +268,6 @@ class TestDiscoverGateDCandidatesAdditional:
             (run_dir / "meta.json").write_text(json.dumps(meta))
 
         candidates = discover_gate_d_candidates(experiments_dir=str(exp_dir))
-        # Despite two runs, only one candidate per alpha_id
         assert len(candidates) == 1
         assert candidates[0]["alpha_id"] == alpha_id
 
@@ -282,7 +277,6 @@ class TestDiscoverGateDCandidatesAdditional:
 
         exp_dir = _setup_experiment(tmp_path, "rich_alpha", sharpe_oos=2.0)
 
-        # Pre-record 5 sessions so session_count >= 5
         tracker = ExperimentTracker(base_dir=exp_dir)
         for i in range(5):
             tracker.log_paper_trade_session(

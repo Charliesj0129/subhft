@@ -31,41 +31,33 @@ from typing import Sequence
 import numpy as np
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class FillEvent:
     """A single maker fill event with LOB context at entry time."""
 
-    # LOB state at time of entry (quote submission)
-    spread_scaled: int          # best_ask - best_bid (x10000)
-    mid_price_x2: int           # best_bid + best_ask (x10000)
-    depth_imbalance_ppm: int    # (bid_depth - ask_depth) / (bid+ask) * 1e6
-    ofi_l1_ema8: int            # EMA-smoothed L1 order flow imbalance
-    l1_bid_qty: int             # L1 bid queue size
-    l1_ask_qty: int             # L1 ask queue size
-    spread_ema8_scaled: int     # EMA-smoothed spread (x10000)
-    depth_imb_ema8_ppm: int     # EMA-smoothed depth imbalance (ppm)
+    spread_scaled: int
+    mid_price_x2: int
+    depth_imbalance_ppm: int
+    ofi_l1_ema8: int
+    l1_bid_qty: int
+    l1_ask_qty: int
+    spread_ema8_scaled: int
+    depth_imb_ema8_ppm: int
 
-    # Outcome (for training only)
-    side: int                   # +1 = buy fill, -1 = sell fill
-    post_fill_return_bps: float  # 5-second post-fill return in bps (signed)
+    side: int
+    post_fill_return_bps: float
 
 
 @dataclass(frozen=True, slots=True)
 class FilterDecision:
     """Result of the fill probability filter evaluation."""
 
-    p_adverse: float       # predicted probability of adverse fill
-    should_enter: bool     # True if entry is recommended
-    features_used: int     # number of valid features
+    p_adverse: float
+    should_enter: bool
+    features_used: int
 
 
-# ---------------------------------------------------------------------------
-# Feature extraction
-# ---------------------------------------------------------------------------
 
 _N_FEATURES: int = 7
 _FEATURE_NAMES: tuple[str, ...] = (
@@ -127,10 +119,9 @@ def extract_features(event: FillEvent) -> np.ndarray:
     features = np.empty(_N_FEATURES, dtype=np.float64)
 
     features[0] = float(event.spread_scaled)
-    features[1] = float(event.depth_imbalance_ppm) * event.side  # sign-adjusted
-    features[2] = float(event.ofi_l1_ema8) * event.side  # sign-adjusted
+    features[1] = float(event.depth_imbalance_ppm) * event.side
+    features[2] = float(event.ofi_l1_ema8) * event.side
 
-    # L1 queue ratio: near-side / far-side (small = likely to fill but adverse)
     if event.side > 0:
         near_qty = float(event.l1_bid_qty)
         far_qty = float(event.l1_ask_qty)
@@ -139,22 +130,17 @@ def extract_features(event: FillEvent) -> np.ndarray:
         far_qty = float(event.l1_bid_qty)
     features[3] = near_qty / max(far_qty, 1.0)
 
-    # Spread regime: current / EMA (> 1 means spread is widening)
     features[4] = (
         float(event.spread_scaled) / max(float(event.spread_ema8_scaled), 1.0)
     )
 
     features[5] = float(event.depth_imb_ema8_ppm) * event.side
 
-    # Interaction: wide spread * adverse imbalance
-    features[6] = features[0] * features[1] / 1e6  # scale down
+    features[6] = features[0] * features[1] / 1e6
 
     return features
 
 
-# ---------------------------------------------------------------------------
-# Logistic regression model
-# ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
 class AdverseFillModel:
@@ -175,17 +161,16 @@ class AdverseFillModel:
     )
     bias: float = 0.0
     normalizer: FeatureNormalizer = field(default_factory=FeatureNormalizer)
-    adverse_threshold_bps: float = 0.5  # post-fill return < -threshold = adverse
-    filter_threshold: float = 0.6  # reject if P(adverse) > this
+    adverse_threshold_bps: float = 0.5
+    filter_threshold: float = 0.6
     is_trained: bool = False
 
     def predict_proba(self, raw_features: np.ndarray) -> float:
         """Predict P(adverse fill) from raw feature vector."""
         if not self.is_trained:
-            return 0.5  # uninformative prior
+            return 0.5
         x = self.normalizer.normalize(raw_features)
         logit = float(np.dot(self.weights, x)) + self.bias
-        # Numerically stable sigmoid
         if logit >= 0:
             return 1.0 / (1.0 + math.exp(-logit))
         exp_logit = math.exp(logit)
@@ -216,7 +201,6 @@ class AdverseFillModel:
         if n < 50:
             return {"error": "insufficient_data", "n": float(n)}
 
-        # Extract features and labels
         X = np.empty((n, _N_FEATURES), dtype=np.float64)
         y = np.empty(n, dtype=np.float64)
 
@@ -226,41 +210,33 @@ class AdverseFillModel:
             raw = extract_features(event)
             normalizer.update(raw)
             X[i] = raw
-            # Label: 1 if adverse (post-fill return < -threshold for the maker)
             y[i] = 1.0 if event.post_fill_return_bps < -self.adverse_threshold_bps else 0.0
 
-        # Normalize features
         for i in range(n):
             X[i] = normalizer.normalize(X[i])
 
-        # Initialize weights
         w = np.zeros(_N_FEATURES, dtype=np.float64)
         b = 0.0
         prev_loss = float("inf")
 
         for iteration in range(max_iter):
-            # Forward pass
             logits = X @ w + b
-            # Numerically stable sigmoid
             p = np.where(
                 logits >= 0,
                 1.0 / (1.0 + np.exp(-logits)),
                 np.exp(logits) / (1.0 + np.exp(logits)),
             )
 
-            # Cross-entropy loss + L2
             eps = 1e-12
             loss = (
                 -np.mean(y * np.log(p + eps) + (1 - y) * np.log(1 - p + eps))
                 + 0.5 * l2_lambda * np.dot(w, w)
             )
 
-            # Gradient
             error = p - y
             grad_w = (X.T @ error) / n + l2_lambda * w
             grad_b = np.mean(error)
 
-            # Update
             w -= lr * grad_w
             b -= lr * grad_b
 
@@ -273,10 +249,8 @@ class AdverseFillModel:
         self.normalizer = normalizer
         self.is_trained = True
 
-        # Compute AUC
         auc = _compute_auc(y, X @ w + b)
 
-        # Compute adverse rate
         adverse_rate = float(np.mean(y))
 
         return {
@@ -305,7 +279,6 @@ def _compute_auc(y_true: np.ndarray, scores: np.ndarray) -> float:
     pos_scores = scores[pos_mask]
     neg_scores = scores[neg_mask]
 
-    # Count concordant pairs
     concordant = 0
     tied = 0
     for ps in pos_scores:
@@ -315,9 +288,6 @@ def _compute_auc(y_true: np.ndarray, scores: np.ndarray) -> float:
     return (concordant + 0.5 * tied) / (n_pos * n_neg)
 
 
-# ---------------------------------------------------------------------------
-# Integration point: OpportunisticMM entry filter
-# ---------------------------------------------------------------------------
 
 class FillProbabilityFilter:
     """Entry filter for OpportunisticMM based on fill quality prediction.
@@ -358,8 +328,6 @@ class FillProbabilityFilter:
         if not self._enabled or not self._model.is_trained:
             return True
 
-        # Build FillEvent for feature extraction (cold path only during training;
-        # here we inline the feature extraction for hot path)
         self._feature_buf[0] = float(spread_scaled)
         self._feature_buf[1] = float(depth_imbalance_ppm) * side
         self._feature_buf[2] = float(ofi_l1_ema8) * side

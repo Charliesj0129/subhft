@@ -111,14 +111,12 @@ class TestShioajiMetricsBridge:
         """Verify we can actually call .observe() on the cached child."""
         child = bridge.api_latency("test_op", "ok")
         assert child is not None
-        child.observe(42.0)  # Should not raise
-        # Verify the child is still the same cached instance after observe
+        child.observe(42.0)
         assert bridge.api_latency("test_op", "ok") is child
 
     def test_inc_counter(self, bridge: ShioajiMetricsBridge) -> None:
         """Verify we can actually call .inc() on a cached counter child."""
         child = bridge.api_errors("test_op")
         assert child is not None
-        child.inc()  # Should not raise
-        # Verify the child is still the same cached instance after inc
+        child.inc()
         assert bridge.api_errors("test_op") is child

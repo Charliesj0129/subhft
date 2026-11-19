@@ -12,8 +12,6 @@ from hft_platform.recorder.disk_monitor import (
     TopicPolicy,
 )
 
-# ── DiskPressureLevel enum ───────────────────────────────────────────
-
 
 class TestDiskPressureLevel:
     def test_ordering(self) -> None:
@@ -26,17 +24,11 @@ class TestDiskPressureLevel:
         assert int(DiskPressureLevel.HALT) == 3
 
 
-# ── TopicPolicy ──────────────────────────────────────────────────────
-
-
 class TestTopicPolicy:
     def test_policy_values(self) -> None:
         assert TopicPolicy.WRITE == "write"
         assert TopicPolicy.DROP == "drop"
         assert TopicPolicy.HALT == "halt"
-
-
-# ── DiskPressureMonitor: init & defaults ─────────────────────────────
 
 
 class TestDiskPressureMonitorInit:
@@ -73,9 +65,6 @@ class TestDiskPressureMonitorInit:
         assert m._interval == 3.0
 
 
-# ── _compute_level ───────────────────────────────────────────────────
-
-
 class TestComputeLevel:
     def setup_method(self) -> None:
         self.mon = DiskPressureMonitor(
@@ -102,9 +91,6 @@ class TestComputeLevel:
         assert self.mon._compute_level(9999) == DiskPressureLevel.HALT
 
 
-# ── _wal_dir_size_mb ─────────────────────────────────────────────────
-
-
 class TestWalDirSizeMb:
     def test_missing_dir_returns_zero(self, tmp_path: object) -> None:
         mon = DiskPressureMonitor(wal_dir="/nonexistent_wal_dir_xyz")
@@ -123,7 +109,6 @@ class TestWalDirSizeMb:
 
         d = pathlib.Path(str(tmp_path)) / "wal"
         d.mkdir()
-        # Create two 1 MiB files
         for i in range(2):
             (d / f"seg{i}.wal").write_bytes(b"\x00" * (1024 * 1024))
         mon = DiskPressureMonitor(wal_dir=str(d))
@@ -140,15 +125,11 @@ class TestWalDirSizeMb:
         assert mon._wal_dir_size_mb() == 0.0
 
 
-# ── _check (level transitions + hooks) ──────────────────────────────
-
-
 class TestCheck:
     def test_no_transition_no_hook(self) -> None:
         mon = DiskPressureMonitor(wal_dir="/tmp/wal", warn_mb=100)
         hook = MagicMock()
         mon.register_hook(hook)
-        # Patch to return 0 MB (stays OK)
         with patch.object(mon, "_wal_dir_size_mb", return_value=0.0):
             mon._check()
         hook.assert_not_called()
@@ -172,11 +153,9 @@ class TestCheck:
 
     def test_recovery_to_ok(self) -> None:
         mon = DiskPressureMonitor(wal_dir="/tmp/wal", warn_mb=100)
-        # First go to WARN
         with patch.object(mon, "_wal_dir_size_mb", return_value=150.0):
             mon._check()
         assert mon.get_level() == DiskPressureLevel.WARN
-        # Recover
         with patch.object(mon, "_wal_dir_size_mb", return_value=10.0):
             mon._check()
         assert mon.get_level() == DiskPressureLevel.OK
@@ -187,8 +166,7 @@ class TestCheck:
         second_hook = MagicMock()
         mon.register_hook(second_hook)
         with patch.object(mon, "_wal_dir_size_mb", return_value=150.0):
-            mon._check()  # Should not raise
-        # Second hook should still be called even if first raises
+            mon._check()
         assert second_hook.called
 
     def test_multiple_hooks_called(self) -> None:
@@ -199,9 +177,6 @@ class TestCheck:
         with patch.object(mon, "_wal_dir_size_mb", return_value=150.0):
             mon._check()
         assert calls == ["a", "b"]
-
-
-# ── get_topic_policy ─────────────────────────────────────────────────
 
 
 class TestGetTopicPolicy:
@@ -233,9 +208,6 @@ class TestGetTopicPolicy:
         monkeypatch.setenv("HFT_WAL_FIRST_POLICY_LOWTABLE", "halt")
         mon = DiskPressureMonitor(wal_dir="/tmp/wal")
         assert mon.get_topic_policy("lowtable") == "halt"
-
-
-# ── start / stop ─────────────────────────────────────────────────────
 
 
 class TestStartStop:

@@ -15,10 +15,6 @@ from hft_platform.alpha._gate_a import _FIELD_ALIASES, _field_available, run_gat
 from hft_platform.alpha._gate_b import run_gate_b
 from hft_platform.alpha._validation_types import ValidationConfig
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_npy(tmp_path: Path, name: str, fields: list[tuple[str, str]]) -> str:
     """Create a .npy file with a structured array and return its path string."""
@@ -50,11 +46,6 @@ def _manifest(**kwargs: Any) -> types.SimpleNamespace:
     }
     defaults.update(kwargs)
     return types.SimpleNamespace(**defaults)
-
-
-# ===========================================================================
-# Gate A Tests
-# ===========================================================================
 
 
 class TestGateAValidManifest:
@@ -173,7 +164,6 @@ class TestGateAAOSFormat:
         )
         manifest = _manifest()
         report = run_gate_a(manifest, [path], config=config)
-        # Should have invalid_data_formats since .npy is not .npz
         formats = report.details["data_governance"]["invalid_data_formats"]
         assert path in formats
 
@@ -235,7 +225,7 @@ class TestGateASkillsGovernance:
         report = run_gate_a(manifest, [path])
         warnings = report.details["skills_governance"]["warnings"]
         assert len(warnings) >= 2
-        assert report.passed is True  # non-blocking
+        assert report.passed is True
 
     def test_populated_skills_and_roles_no_empty_warning(self, tmp_path: Path) -> None:
         path = _make_npy(tmp_path, "feed.npy", [("bid_px", "i8"), ("ask_px", "i8"), ("trade_vol", "f8")])
@@ -260,11 +250,6 @@ class TestGateAPrecisionWarnings:
         manifest = _manifest(data_fields=("price_diff",))
         report = run_gate_a(manifest, [str(path)])
         assert len(report.details["precision_warnings"]) == 0
-
-
-# ===========================================================================
-# Gate B Tests
-# ===========================================================================
 
 
 class TestGateBSkipTests:

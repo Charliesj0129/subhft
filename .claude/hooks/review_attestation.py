@@ -50,31 +50,16 @@ from pathlib import Path
 
 REPORTS = Path(os.environ.get("DUAL_REVIEW_REPORTS") or (Path.home() / ".claude" / "review-reports"))
 
-#: Changes under these prefixes may not reach a remote unreviewed. ``config/`` is
-#: here because the two most expensive defects of 2026-08 were config, not code:
-#: the daily-loss limit enforced 10x too tight, and an expired contract seed in
-#: ``strategies.yaml`` that left a strategy bound to nothing.
 GATED_PREFIXES = (
     "src/",
     "rust_core/",
     "config/",
-    # The gate protects itself. Without these, a change that weakens or deletes
-    # the review hooks is "not source" and publishes freely -- after which
-    # nothing stops the next one.
     ".claude/hooks/",
-    # ...and the file that ACTIVATES them. Gating only the implementations left
-    # the registrations ungated: a branch deleting the PreToolUse entries touches
-    # no gated prefix, publishes freely, and disables enforcement on checkout.
     ".claude/settings.json",
 )
 
-#: Severities that must be named in ACK.md before a ``needs-attention`` review can
-#: publish. Medium and low are deliberately exempt -- friction disproportionate to
-#: severity gets routed around, and a gate nobody uses protects nothing.
 ACK_SEVERITIES = ("critical", "high", "p0", "p1")
 
-#: The four bodies ``render.mjs`` emits when the native reviewer produced nothing.
-#: ``review.md`` is 95 bytes in that state; a real report is kilobytes.
 NATIVE_FAILURES = (
     "Reviewer failed to output a response.",
     "Codex review failed.",
@@ -82,13 +67,6 @@ NATIVE_FAILURES = (
     "Codex did not return valid structured JSON.",
 )
 
-# The provider aborting the run mid-investigation. Measured over all 28 report
-# directories on 2026-08-29: this line appears in 7 of them and in every one of
-# those `review.md` is the 95-byte dead body, while all 21 without it hold a real
-# report. It is the only signal that separates the two -- and it is the signal
-# `Verdict:` alone cannot give, because a truncated adversarial reviewer still
-# renders one. Both `approve` verdicts in the entire corpus are runs carrying
-# this line; not one reviewer that ran to completion has ever said approve.
 PROVIDER_ABORT = "[codex] Codex error:"
 
 _VERDICT = re.compile(r"^Verdict:\s*(approve|needs-attention)\s*$", re.M)
@@ -273,16 +251,6 @@ def build_attestation(
             },
         },
         "findings": all_findings(native, adversarial),
-        # A working-tree review can never credit a publish, so it is never
-        # complete for the gate's purposes even when both reviewers reported.
-        # Only the adversarial reviewer is REQUIRED. Measured over 30 report
-        # directories on 2026-08-29: the native reviewer died 13 times (43%) to
-        # the adversarial one's 1, and produced a `Verdict:` line, a severity,
-        # or a file:line anchor in exactly none of them -- there is nothing in
-        # its output a gate can read. It still runs when asked and its failure
-        # is still recorded; it just no longer decides whether work can ship.
-        # A required check that fails two times in five gets switched off, and
-        # then nothing is checked at all.
         "complete": bool(adv_ok and mode != "working-tree" and sha),
     }
 
@@ -344,7 +312,6 @@ def _ack_covers(report_dir: Path, required: list[tuple[str, str]]) -> tuple[bool
     missing = [f"[{s}] {t}" for s, t in required if _normalise(t) not in entries]
     if missing:
         return False, "ACK.md does not name these findings:\n" + "\n".join(f"    - {m}" for m in missing)
-    # A named finding with no reasoning is a checkbox, not a decision.
     unreasoned = [f"[{s}] {t}" for s, t in required if len(_reason_for(body, t)) < 20]
     if unreasoned:
         listed = "\n".join(f"    - {m}" for m in unreasoned)
@@ -392,10 +359,6 @@ def _rejection(
     """
     if not att.get("complete"):
         why = att.get("failure")
-        # The producer records WHY when it refuses to build a real attestation
-        # (e.g. the verifier is not readable from origin/main). Printing only
-        # "never finished" for that case sends the reader to the reviewer logs,
-        # where there is nothing wrong to find.
         return (f"{d.name}: {why}" if why else f"{d.name}: the review never finished (complete=false)"), False
     if att.get("mode") == "working-tree":
         return (
@@ -423,14 +386,6 @@ def _rejection(
             "Amending or rebasing after the review invalidates the evidence."
         ), False
 
-    # A hash bound to the recorded base is stable while origin/main advances, but
-    # on its own it would let `--base HEAD^` shrink what "reviewed" means.
-    #
-    # Comparing the two sets of gated FILENAMES is not enough, and the reviewers
-    # reproduced why: when an unreviewed commit and a reviewed commit touch the
-    # same file, the sets are equal and the narrow attestation passes with the
-    # earlier hunks never read. Ancestry is the exact test -- the reviewed base
-    # must be at or before the canonical one, so the reviewed range is a superset.
     canonical = canonical_base(head_oid, cwd=repo_root)
     if not canonical:
         return f"{d.name}: no merge-base with origin/main for {head_oid[:8]}", False
@@ -444,17 +399,10 @@ def _rejection(
     if pr_number is not None and att.get("pr_number") not in (pr_number, None):
         return f"{d.name}: reviewed PR #{att.get('pr_number')}, not #{pr_number}", False
 
-    # Blocking findings come from the attestation, which is written once and never
-    # edited, not from the report markdown. Deleting adversarial.md used to empty
-    # the requirement list and turn a NO SHIP into an approval; and a native P1
-    # went unacknowledged whenever the adversarial reviewer happened to approve,
-    # so the requirement is per-finding rather than per-verdict.
     required = blocking_findings(att) or findings_needing_ack(d)
     if required:
         ok, why = _ack_covers(d, required)
         if not ok:
-            # FINAL: this review read exactly this diff and named a blocking
-            # finding. An older approval of the same head cannot outvote it.
             return f"{d.name}: {why}", True
     return None, False
 
@@ -479,9 +427,6 @@ def verify(repo_root: str | None, head_oid: str, *, pr_number: int | None = None
             return Decision(True, f"{head_oid[:8]} reviewed ({d.name}, verdict={verdict})", d)
         last_reason = rejection
         if final:
-            # Newest first, so this is the most recent review that actually read
-            # this diff. Falling through to an older approval would mean a
-            # re-review that FOUND something could not revoke the first one.
             return Decision(False, rejection)
 
     if not seen_head:

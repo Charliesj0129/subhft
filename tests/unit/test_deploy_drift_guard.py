@@ -202,7 +202,6 @@ def test_prepare_generates_artifacts(tmp_path):
         create_git_ref=False,
     )
 
-    # Avoid touching local docker/git in unit tests.
     mod._git_snapshot = lambda _root: {"available": False, "error": "mock"}
     mod._compose_snapshot = lambda _root, _prefixes, _services: {
         "errors": ["mock"],

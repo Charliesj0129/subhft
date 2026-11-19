@@ -47,7 +47,7 @@ from research.backtest.maker_engine import (
     TickData,
 )
 
-SCALE = 1_000_000  # x1M - matches _compute_fifo_pnl in maker_engine.py
+SCALE = 1_000_000
 
 
 def _pts(p: float) -> int:
@@ -55,9 +55,6 @@ def _pts(p: float) -> int:
     return int(round(p * SCALE))
 
 
-# ---------------------------------------------------------------------------
-# Case 1: open_pos=0 -> returns 0.0 regardless of mark
-# ---------------------------------------------------------------------------
 def test_residual_mtm_zero_position_returns_zero() -> None:
     """Zero residual position has zero MtM regardless of mark/avg."""
     result = MakerEngine._compute_residual_mtm(
@@ -68,7 +65,6 @@ def test_residual_mtm_zero_position_returns_zero() -> None:
     )
     assert result == 0.0
 
-    # Also verify with extreme mark/avg disparity - still zero.
     result_extreme = MakerEngine._compute_residual_mtm(
         open_pos=0,
         mark_price=_pts(99999.0),
@@ -78,13 +74,10 @@ def test_residual_mtm_zero_position_returns_zero() -> None:
     assert result_extreme == 0.0
 
 
-# ---------------------------------------------------------------------------
-# Case 2: long +1, mark = avg + 50 pts -> +50.0
-# ---------------------------------------------------------------------------
 def test_residual_mtm_long_one_lot_mark_above_avg() -> None:
     """Long 1 lot with mark 50 pts above avg yields +50.0 points."""
     avg = _pts(100.0)
-    mark = _pts(150.0)  # 50 points above avg
+    mark = _pts(150.0)
     result = MakerEngine._compute_residual_mtm(
         open_pos=+1,
         mark_price=mark,
@@ -94,13 +87,10 @@ def test_residual_mtm_long_one_lot_mark_above_avg() -> None:
     assert result == pytest.approx(50.0, rel=1e-9, abs=1e-9)
 
 
-# ---------------------------------------------------------------------------
-# Case 3: short -1, mark = avg + 50 pts -> -50.0 (short loses)
-# ---------------------------------------------------------------------------
 def test_residual_mtm_short_one_lot_mark_above_avg() -> None:
     """Short 1 lot with mark 50 pts above avg yields -50.0 (short loses)."""
     avg = _pts(100.0)
-    mark = _pts(150.0)  # 50 pts above avg -> bad for short
+    mark = _pts(150.0)
     result = MakerEngine._compute_residual_mtm(
         open_pos=-1,
         mark_price=mark,
@@ -110,9 +100,6 @@ def test_residual_mtm_short_one_lot_mark_above_avg() -> None:
     assert result == pytest.approx(-50.0, rel=1e-9, abs=1e-9)
 
 
-# ---------------------------------------------------------------------------
-# Case 4: caller-picks-mark contract under worse_of_mid_last_trade
-# ---------------------------------------------------------------------------
 def test_residual_mtm_caller_picks_worse_mark_for_long() -> None:
     """Helper is mark-agnostic - caller resolves which mark to pass.
 
@@ -126,9 +113,8 @@ def test_residual_mtm_caller_picks_worse_mark_for_long() -> None:
     avg = _pts(100.0)
     mid = _pts(100.0)
     last_trade = _pts(99.0)
-    # Caller's worse-of-mid-last-trade resolution for a long = min(mid, last)
     worse_mark = min(mid, last_trade)
-    assert worse_mark == last_trade  # sanity: 99 < 100
+    assert worse_mark == last_trade
 
     result = MakerEngine._compute_residual_mtm(
         open_pos=+1,
@@ -139,9 +125,6 @@ def test_residual_mtm_caller_picks_worse_mark_for_long() -> None:
     assert result == pytest.approx(-1.0, rel=1e-9, abs=1e-9)
 
 
-# ---------------------------------------------------------------------------
-# Case 5: float-precision regression - 10 lots x 1-unit diff = exact 1.0e-5
-# ---------------------------------------------------------------------------
 def test_residual_mtm_float_precision_no_artifacts() -> None:
     """Integer-divide-then-cast must produce exact 1.0e-5, not 9.999...e-6.
 
@@ -153,7 +136,6 @@ def test_residual_mtm_float_precision_no_artifacts() -> None:
     Pinning the exact value rules out e.g. 9.99...e-6 artifacts that would
     occur if the helper accidentally did float math along the way.
     """
-    # Construct prices so mark - avg = 1 (one scaled-int unit).
     avg = _pts(100.0)
     mark = avg + 1
     result = MakerEngine._compute_residual_mtm(
@@ -162,14 +144,10 @@ def test_residual_mtm_float_precision_no_artifacts() -> None:
         avg_entry_price=avg,
         mark_method="last_mid",
     )
-    expected = 10 / SCALE  # = 1.0e-5 with SCALE=1_000_000
+    expected = 10 / SCALE
     assert result == expected, f"Float-precision regression: expected exact {expected!r}, got {result!r}"
 
 
-# ---------------------------------------------------------------------------
-# Case 6 (Task 3): MakerEngine-level integration — residual MtM folded into
-# daily_pnl + equity_curve via the day loop.
-# ---------------------------------------------------------------------------
 @dataclass
 class _DeterministicFillModel:
     """Always fills once a trade sweeps the order price, ignoring queue."""
@@ -222,7 +200,6 @@ def _residual_long_events() -> list[TickData]:
     """
     scale = 1_000_000
     return [
-        # Initial bid/ask -> strategy posts BUY @100
         TickData(
             exch_ts=1_000_000_000,
             bid_price=100 * scale,
@@ -234,7 +211,6 @@ def _residual_long_events() -> list[TickData]:
             is_trade=False,
             scale=scale,
         ),
-        # Trade at 99 -> fills the BUY @100 (deterministic fill model)
         TickData(
             exch_ts=1_100_000_000,
             bid_price=100 * scale,
@@ -246,7 +222,6 @@ def _residual_long_events() -> list[TickData]:
             is_trade=True,
             scale=scale,
         ),
-        # Final bidask: bid=100/ask=120 -> last_mid = 110
         TickData(
             exch_ts=1_200_000_000,
             bid_price=100 * scale,
@@ -267,8 +242,6 @@ class _FakeCKSource:
 
     def __init__(self, events: list[TickData]) -> None:
         self._events = events
-        # Mirror the real source's host/port attrs that MakerEngine.run
-        # references for ``data_source`` metadata.
         self._host = "fake"
         self._port = 0
 
@@ -300,37 +273,22 @@ def test_run_folds_residual_mtm_into_daily_pnl_and_equity_curve() -> None:
         pipeline_mode="strict",
     )
 
-    # daily_pnl row sanity
     assert result.daily_pnl is not None
     assert len(result.daily_pnl) == 1
     row = result.daily_pnl[0]
 
-    # Day produced 1 fill, final position +1, no FIFO trips closed.
     assert row["fills"] == 1
     assert row["final_pos"] == 1
     assert row["trips"] == 0
-    # Residual MtM: +1 * (last_mid 110 - avg_entry 100) = +10.0 pts.
     assert row["residual_mtm_pts"] == pytest.approx(10.0, rel=1e-9, abs=1e-9)
     assert row["residual_qty"] == 1
     assert row["mark_method"] == "last_mid"
-    # gross alone is 0 (no FIFO close); MtM-aware day_pnl_pts == residual.
     assert row["gross_pts"] == pytest.approx(0.0, abs=1e-9)
     assert row["pnl_pts"] == pytest.approx(10.0, rel=1e-9, abs=1e-9)
 
-    # equity_curve must end at residual MtM (+10.0 pts).
     assert result.equity_curve[-1] == pytest.approx(10.0, rel=1e-9, abs=1e-9)
 
 
-# ---------------------------------------------------------------------------
-# Case 7 (Task 4): BacktestResult-level aggregation of residual fields.
-#
-# Two-day fixture: each day independently posts a single BUY that fills via a
-# trade and ends long +1 with last_mid=110, avg=100 -> residual_mtm=+10.0 pts.
-# Aggregation policy (decided after Task 3):
-#   * residual_mtm_pts -> SUM across days (mirrors total_gross accumulation)
-#   * residual_qty     -> final-day snapshot (per-day independent FIFO)
-#   * mark_method      -> single string (single-policy design)
-# ---------------------------------------------------------------------------
 class _BuyOnceStrategyMultiDay:
     """Resets ``_posted`` per call to ``on_tick`` only at start of fixture day.
 
@@ -350,8 +308,6 @@ class _BuyOnceStrategyMultiDay:
         self._last_ts = -1
 
     def on_tick(self, tick: TickData):
-        # New day boundary heuristic: a non-trade event whose ts is much
-        # earlier than our last seen ts (the fixture rewinds clocks per day).
         if not tick.is_trade and tick.exch_ts < self._last_ts:
             self._posted = False
         self._last_ts = max(self._last_ts, tick.exch_ts)
@@ -378,7 +334,6 @@ class _FakeCKSourceMultiDay:
         return None
 
     def load_day(self, symbol: str, date: str) -> list[TickData]:
-        # Each call returns a fresh copy so day loops do not share mutable refs.
         return list(self._events)
 
     def available_dates(self, symbol: str) -> list[str]:
@@ -403,19 +358,14 @@ def test_backtest_result_aggregates_residual_fields() -> None:
         pipeline_mode="strict",
     )
 
-    # Two daily rows, each with +10.0 residual_mtm.
     assert result.daily_pnl is not None
     assert len(result.daily_pnl) == 2
     daily_residuals_sum = sum(d["residual_mtm_pts"] for d in result.daily_pnl)
     assert daily_residuals_sum == pytest.approx(20.0, rel=1e-9, abs=1e-9)
 
-    # Aggregation contract:
-    # residual_mtm_pts -> sum across days (rounded to 2dp like daily rows).
     assert result.residual_mtm_pts == round(daily_residuals_sum, 2)
-    # residual_qty -> final-day snapshot (SIGNED — positive=long).
     assert result.residual_qty == result.daily_pnl[-1]["residual_qty"]
     assert result.residual_qty == 1
-    # mark_method -> default policy.
     assert result.mark_method == "last_mid"
 
 
@@ -428,9 +378,6 @@ def test_residual_qty_signed_short_position() -> None:
     """
     from research.backtest.types import BacktestResult
 
-    # Result-level contract (the maker_engine populates these fields from
-    # the signed final-day position; see maker_engine.py:413-415).  Only
-    # the residual triple matters here; everything else is filler.
     empty = np.array([])
     result = BacktestResult(
         signals=empty,
@@ -454,7 +401,7 @@ def test_residual_qty_signed_short_position() -> None:
         config_hash="",
         latency_profile={},
         residual_mtm_pts=-12.5,
-        residual_qty=-3,  # signed short
+        residual_qty=-3,
         abs_residual_qty=3,
         mark_method="last_mid",
         daily_pnl=[
@@ -468,11 +415,8 @@ def test_residual_qty_signed_short_position() -> None:
             }
         ],
     )
-    # Sign preserved at result level.
     assert result.residual_qty == -3
     assert result.abs_residual_qty == 3
-    # Sign preserved at daily-row level.
     assert result.daily_pnl[0]["residual_qty"] == -3
     assert result.daily_pnl[0]["abs_residual_qty"] == 3
-    # Display invariant: abs_residual_qty == abs(residual_qty).
     assert result.abs_residual_qty == abs(result.residual_qty)

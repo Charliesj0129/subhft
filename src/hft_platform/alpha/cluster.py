@@ -47,11 +47,6 @@ from hft_platform.alpha.pool import compute_pool_matrix
 logger = structlog.get_logger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 class EmptyCorpusError(RuntimeError):
     """Raised when ``compute_pool_matrix`` returns no alpha signals."""
 
@@ -76,8 +71,6 @@ class ClusterAssignment:
 
 
 _DEFAULT_ARTIFACT_PATH = Path("research/alphas/_cluster_assignments.json")
-#: Sidecar artifact location; ``None`` means the repo-anchored default. Tests
-#: monkeypatch this attribute to redirect writes into ``tmp_path``.
 _ARTIFACT_PATH: Path | None = None
 
 
@@ -126,11 +119,6 @@ def cluster_alphas(
     return assignments
 
 
-# ---------------------------------------------------------------------------
-# Pure helper — testable without monkeypatching ``compute_pool_matrix``.
-# ---------------------------------------------------------------------------
-
-
 def _cluster_from_payload(
     matrix_payload: dict[str, Any],
     *,
@@ -150,13 +138,10 @@ def _cluster_from_payload(
     raw_matrix = matrix_payload.get(matrix_key) or matrix_payload.get("matrix", [])
     corr = np.asarray(raw_matrix, dtype=np.float64)
 
-    # Determinism: lex-sort alpha_ids and reorder matrix accordingly.
-    # Build a position map (O(n)) instead of repeated ``list.index`` (O(n²)).
     sorted_ids = sorted(raw_ids)
     raw_id_pos = {aid: i for i, aid in enumerate(raw_ids)}
     perm = [raw_id_pos[aid] for aid in sorted_ids]
 
-    # Singleton corpus — skip linkage entirely.
     if len(sorted_ids) == 1:
         return [
             ClusterAssignment(
@@ -168,8 +153,6 @@ def _cluster_from_payload(
         ]
 
     if corr.ndim != 2 or corr.shape[0] != corr.shape[1] or corr.shape[0] != len(raw_ids):
-        # Degenerate / mismatched matrix — emit all singletons defensively.
-        # Warn so downstream alerting (Slice-D audit log + Prom) can fire.
         logger.warning(
             "cluster_degenerate_matrix",
             n_alphas=len(sorted_ids),
@@ -188,10 +171,8 @@ def _cluster_from_payload(
 
     corr = corr[np.ix_(perm, perm)]
     abs_corr = np.abs(corr)
-    # Distance matrix; clip to [0, 1] to absorb numerical noise.
     dist = np.clip(1.0 - abs_corr, 0.0, 1.0)
     np.fill_diagonal(dist, 0.0)
-    # squareform requires perfectly symmetric input.
     dist = (dist + dist.T) / 2.0
 
     condensed = squareform(dist, checks=False)
@@ -199,15 +180,10 @@ def _cluster_from_payload(
     cut = max(0.0, 1.0 - float(threshold))
     labels = fcluster(linkage_matrix, t=cut, criterion="distance")
 
-    # Group alphas by integer label (from fcluster).
     groups: dict[int, list[str]] = {}
     for idx, label in enumerate(labels):
         groups.setdefault(int(label), []).append(sorted_ids[idx])
 
-    # Determine cluster_id naming:
-    #   * size == 1: ``singleton_<alpha_id>``
-    #   * size  > 1: rank multi-clusters by their lex-min alpha and emit
-    #                ``cluster_<rank>`` for each member.
     multi_groups = sorted(
         (g for g in groups.values() if len(g) > 1),
         key=lambda g: min(g),
@@ -220,20 +196,17 @@ def _cluster_from_payload(
             cluster_id_by_alpha[aid] = cluster_id
             cluster_size_by_alpha[aid] = len(members)
 
-    # Compute max intra-cluster |corr| per multi-cluster.
     max_corr_by_alpha: dict[str, float] = {}
     id_to_perm_idx = {aid: i for i, aid in enumerate(sorted_ids)}
     for members in multi_groups:
         member_idx = [id_to_perm_idx[aid] for aid in members]
         sub = abs_corr[np.ix_(member_idx, member_idx)]
-        # Mask diagonal (self-correlation = 1.0).
         m = sub.copy()
         np.fill_diagonal(m, 0.0)
         max_corr = float(np.max(m)) if m.size else 0.0
         for aid in members:
             max_corr_by_alpha[aid] = max_corr
 
-    # Emit one ClusterAssignment per alpha, in lex-sorted order.
     out: list[ClusterAssignment] = []
     for aid in sorted_ids:
         if aid in cluster_id_by_alpha:
@@ -255,11 +228,6 @@ def _cluster_from_payload(
                 )
             )
     return out
-
-
-# ---------------------------------------------------------------------------
-# Sidecar artifact persistence
-# ---------------------------------------------------------------------------
 
 
 def _persist_artifact(

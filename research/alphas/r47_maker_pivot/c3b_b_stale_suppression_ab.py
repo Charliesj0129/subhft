@@ -44,7 +44,7 @@ TICK_SIZE = 1.0
 LOT_SIZE = 1.0
 POINT_VALUE_NTD = 10
 PRICE_SCALE = 10_000
-ELAPSE_NS = 100_000_000  # 100ms
+ELAPSE_NS = 100_000_000
 
 DATA_DIR = _REPO_ROOT / "research" / "data" / "raw" / "txfd6"
 DATA_FILES = sorted(DATA_DIR.glob("TXFD6_2026-0*_l2.hftbt.npz"))
@@ -76,21 +76,18 @@ class R47StaleSuppressionStrategy(R47MakerStrategy):
         symbol = event.symbol
         self._stats_count += 1
 
-        # Validity guard
         if (event.mid_price_x2 is None or event.spread_scaled is None
                 or event.mid_price_x2 <= 0 or event.spread_scaled <= 0):
             return
 
-        # Spread gate
         if event.spread_scaled < self._spread_thresh_scaled:
             self._spread_blocked += 1
             self._last_bid_price = 0
             self._last_ask_price = 0
             return
 
-        # Toxicity gate
         features = self._feature_cache.get(symbol)
-        if features and len(features) > 21:  # _IDX_TOXICITY_EMA50_X1000
+        if features and len(features) > 21:
             toxicity = int(features[21])
             if toxicity > self._toxicity_max:
                 self._toxicity_blocked += 1
@@ -98,7 +95,6 @@ class R47StaleSuppressionStrategy(R47MakerStrategy):
                 self._last_ask_price = 0
                 return
 
-        # D1: PE Regime Gate
         pe = self._get_pe(symbol)
         if pe.warmed_up:
             h = pe.h
@@ -108,14 +104,12 @@ class R47StaleSuppressionStrategy(R47MakerStrategy):
                 self._last_ask_price = 0
                 return
 
-        # Generate quotes with stale suppression
         self._generate_quotes_stale(symbol, event, pe)
 
     def _generate_quotes_stale(self, symbol: str, event: LOBStatsEvent, pe: object) -> None:
         """Quote generation with optional stale suppression."""
         mfg = self._get_mfg(symbol)
 
-        # MFG widening (same as parent)
         mfg_widen_bid = 0
         mfg_widen_ask = 0
         if mfg.warmed_up and mfg.capitulation_z > self._mfg_skew_z_thresh:
@@ -152,11 +146,9 @@ class R47StaleSuppressionStrategy(R47MakerStrategy):
 
         max_pos = self._max_pos
 
-        # D2 suppression check
         suppress_bid = self._suppress_bid
         suppress_ask = self._suppress_ask
 
-        # Stale suppression: skip if price unchanged since last quote
         if self._stale_suppression_enabled:
             if not suppress_bid and pos < max_pos:
                 if bid_price_scaled == self._last_bid_price:
@@ -180,7 +172,7 @@ class R47StaleSuppressionStrategy(R47MakerStrategy):
 @dataclass
 class DayResult:
     date: str
-    mode: str  # "baseline" or "treatment"
+    mode: str
     total_pnl_pts: float
     total_fills: int
     max_drawdown: float
@@ -372,7 +364,6 @@ def main() -> None:
     print(f"Queue model: PowerProbQueueModel(3.0)")
     print("=" * 90)
 
-    # Step 1: Run day 1 baseline to validate
     print("\n--- Step 1: Baseline validation on day 1 ---")
     t0 = time.monotonic()
     day1_result = run_one_day(DATA_FILES[0], stale_suppression=False)
@@ -384,7 +375,6 @@ def main() -> None:
     )
     print(f"  Reference: corrected_baseline day 1 = +685.5 pts, 193 fills, pe_blocked=432,966")
 
-    # Step 2: Full 12-day A/B
     print("\n--- Step 2: Full 12-day A/B comparison ---")
     baseline_results: list[DayResult] = []
     treatment_results: list[DayResult] = []
@@ -392,13 +382,11 @@ def main() -> None:
     for data_path in DATA_FILES:
         date_str = data_path.stem.replace("TXFD6_", "").replace("_l2.hftbt", "")
 
-        # Baseline
         t0 = time.monotonic()
         base = run_one_day(data_path, stale_suppression=False)
         e_base = time.monotonic() - t0
         baseline_results.append(base)
 
-        # Treatment
         t0 = time.monotonic()
         treat = run_one_day(data_path, stale_suppression=True)
         e_treat = time.monotonic() - t0
@@ -414,7 +402,6 @@ def main() -> None:
             f"({e_base:.0f}s+{e_treat:.0f}s)"
         )
 
-    # Step 3: Summary
     print("\n" + "=" * 90)
     print("SUMMARY")
     print("=" * 90)
@@ -449,7 +436,6 @@ def main() -> None:
             f"{t.stale_suppressed:>8d}"
         )
 
-    # Step 4: Save results
     output = {
         "metadata": {
             "script": "c3b_b_stale_suppression_ab.py",

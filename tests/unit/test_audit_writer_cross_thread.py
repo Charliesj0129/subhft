@@ -56,7 +56,6 @@ def _all_rows(writer: AuditWriter, table: str, sink: _CapturingWriter) -> list[d
     rows = list(sink.batches.get(table, []))
     q = writer._queues.get(table)
     if q is not None:
-        # Drain non-destructively — copy via internal _queue deque.
         rows.extend(list(q._queue))  # type: ignore[attr-defined]
     rows.extend(list(writer._overflow.get(table, [])))
     return rows
@@ -82,10 +81,7 @@ class TestAuditWriterCrossThread:
             with patch.object(loop, "call_soon_threadsafe", wraps=loop.call_soon_threadsafe) as spy:
                 writer.log_order({"cmd_id": 1})
             spy.assert_not_called()
-            # Loop-thread fast path — no cross-thread bump.
             assert writer._cross_thread_count == 0
-            # The flush loop will consume the item shortly; assert the row
-            # eventually reaches the sink (or is still in queue/overflow).
             for _ in range(50):
                 rows = _all_rows(writer, "audit.orders_log", sink)
                 if len(rows) == 1:
@@ -122,7 +118,6 @@ class TestAuditWriterCrossThread:
                 t.join(timeout=2.0)
                 assert done.is_set(), "worker thread did not finish"
 
-                # Allow scheduled callback to run on the loop.
                 for _ in range(50):
                     rows = _all_rows(writer, "audit.guardrail_log", sink)
                     if len(rows) == 1:
@@ -156,18 +151,14 @@ class TestAuditWriterCrossThread:
             t = threading.Thread(target=worker)
             t.start()
 
-            # Concurrently drive the loop side.
             for i in range(N):
                 writer.log_order({"src": "loop", "i": i})
-                # Yield to the loop occasionally so call_soon_threadsafe
-                # callbacks scheduled by the worker actually execute.
                 if i % 32 == 0:
                     await asyncio.sleep(0)
 
             t.join(timeout=5.0)
             assert not t.is_alive(), "worker thread did not finish"
 
-            # Drain all callbacks scheduled via call_soon_threadsafe.
             for _ in range(500):
                 rows = _all_rows(writer, "audit.orders_log", sink)
                 if len(rows) >= 2 * N:
@@ -177,11 +168,6 @@ class TestAuditWriterCrossThread:
             rows = _all_rows(writer, "audit.orders_log", sink)
             assert len(rows) == 2 * N, f"expected {2 * N} rows enqueued, got {len(rows)}"
 
-            # P1-a (2026-04-27): _flush_batch now normalizes rows to canonical
-            # DDL schema before handing to the writer. Pre-flush rows (still in
-            # queue or overflow) keep their raw shape; post-flush rows (in
-            # ``sink.batches``) have extras moved into the JSON ``details``
-            # column. Resolve both forms to recover (src, i).
             import json as _json
 
             def _src_and_i(row: dict) -> tuple[str, int] | None:
@@ -219,14 +205,10 @@ class TestAuditWriterCrossThread:
         lands rows in the thread-safe deque under the pre-start lock.
         """
         writer = AuditWriter(queue_size=100)
-        # No start() call — queues are not bound to any loop yet.
         writer.log_order({"cmd_id": 1})
         writer.log_guardrail_transition({"old_state": "NORMAL", "new_state": "WARM"})
-        # Pre-start buffers contain the rows; no asyncio.Queue or loop has
-        # been touched.
         assert len(writer._pre_start_buffer["audit.orders_log"]) == 1
         assert len(writer._pre_start_buffer["audit.guardrail_log"]) == 1
-        # Cross-thread counter is untouched (only post-start path increments).
         assert writer._cross_thread_count == 0
 
     @pytest.mark.asyncio
@@ -258,36 +240,26 @@ class TestAuditWriterCrossThread:
 
             async def write(self, table: str, batch: list[dict]) -> None:
                 self.batches.append(list(batch))
-                # Block forever so flush loop holds the items in batch and
-                # the queue stays in its observable state for assertions.
                 await self.unblock.wait()
 
         sink = _BlockingSink()
         writer = AuditWriter(queue_size=1, writer=sink, flush_interval_ms=60_000)
         await writer.start()
         try:
-            # Fill queue from the loop thread; the flush loop will get the
-            # row and block in sink.write — leaving subsequent puts to land
-            # in the queue (size 1) until that overflows too.
             writer.log_order({"a": 1})
-            # Wait until flush loop has consumed the row and is blocked in
-            # sink.write.
             for _ in range(50):
                 if len(sink.batches) == 1:
                     break
                 await asyncio.sleep(0.01)
             assert len(sink.batches) == 1, "flush loop did not pull first row"
 
-            # Push a second row from the LOOP thread so the queue has 1
-            # item (queue size = 1, full).
             writer.log_order({"a": 2})
-            # Now queue is full.
             assert writer._queues["audit.orders_log"].qsize() == 1
 
             done = threading.Event()
 
             def worker() -> None:
-                writer.log_order({"a": 3})  # should land in overflow via fallback
+                writer.log_order({"a": 3})
                 done.set()
 
             t = threading.Thread(target=worker)
@@ -295,7 +267,6 @@ class TestAuditWriterCrossThread:
             t.join(timeout=2.0)
             assert done.is_set()
 
-            # Drain scheduled callback.
             for _ in range(50):
                 if len(writer._overflow["audit.orders_log"]) == 1:
                     break
@@ -303,7 +274,6 @@ class TestAuditWriterCrossThread:
 
             assert writer._queues["audit.orders_log"].qsize() == 1
             assert len(writer._overflow["audit.orders_log"]) == 1
-            # Unblock the sink so stop() can drain.
             sink.unblock.set()
         finally:
             await writer.stop()

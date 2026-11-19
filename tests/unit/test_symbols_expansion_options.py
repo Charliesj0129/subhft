@@ -14,11 +14,6 @@ def _make_result() -> SymbolBuildResult:
     return SymbolBuildResult(symbols=[], errors=[], warnings=[])
 
 
-# ---------------------------------------------------------------------------
-# right field
-# ---------------------------------------------------------------------------
-
-
 def test_build_entry_option_populates_right_from_option_right() -> None:
     """option_right='OptionCall' in contract → entry['right'] == 'C'."""
     result = _make_result()
@@ -31,11 +26,6 @@ def test_build_entry_option_populates_right_from_option_right() -> None:
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["right"] == "C"
-
-
-# ---------------------------------------------------------------------------
-# strike field
-# ---------------------------------------------------------------------------
 
 
 def test_build_entry_option_populates_strike() -> None:
@@ -52,11 +42,6 @@ def test_build_entry_option_populates_strike() -> None:
     assert entry["strike"] == 22500
 
 
-# ---------------------------------------------------------------------------
-# expiry field
-# ---------------------------------------------------------------------------
-
-
 def test_build_entry_option_populates_expiry() -> None:
     """contract with delivery_date='2026-04-15' → entry['expiry'] == '2026-04-15'."""
     result = _make_result()
@@ -69,11 +54,6 @@ def test_build_entry_option_populates_expiry() -> None:
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry["expiry"] == "2026-04-15"
-
-
-# ---------------------------------------------------------------------------
-# point_value field
-# ---------------------------------------------------------------------------
 
 
 def test_build_entry_option_defaults_point_value() -> None:
@@ -104,11 +84,6 @@ def test_build_entry_option_point_value_from_attrs() -> None:
     assert entry["point_value"] == 100
 
 
-# ---------------------------------------------------------------------------
-# price_scale field
-# ---------------------------------------------------------------------------
-
-
 def test_build_entry_option_defaults_price_scale() -> None:
     """No price_scale in attrs or contract → defaults to 10000."""
     result = _make_result()
@@ -121,11 +96,6 @@ def test_build_entry_option_defaults_price_scale() -> None:
     entry = build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert entry is not None
     assert entry.get("price_scale", 10000) == 10000
-
-
-# ---------------------------------------------------------------------------
-# underlying field
-# ---------------------------------------------------------------------------
 
 
 def test_build_entry_option_underlying_mapping() -> None:
@@ -142,11 +112,6 @@ def test_build_entry_option_underlying_mapping() -> None:
     assert entry["underlying"] == "TX"
 
 
-# ---------------------------------------------------------------------------
-# Warning on missing strike / expiry
-# ---------------------------------------------------------------------------
-
-
 def test_build_entry_option_warns_on_missing_strike() -> None:
     """Contract with no strike_price or strike → warning contains 'strike'."""
     result = _make_result()
@@ -161,11 +126,6 @@ def test_build_entry_option_warns_on_missing_expiry() -> None:
     contract = {"code": "TXO22500C6", "option_right": "OptionCall", "strike_price": 22500}
     build_entry("TXO22500C6", {"product_type": "option"}, contract, result)
     assert any("expiry" in w for w in result.warnings), f"No expiry warning in: {result.warnings}"
-
-
-# ---------------------------------------------------------------------------
-# Non-option contract is not modified
-# ---------------------------------------------------------------------------
 
 
 def test_build_entry_non_option_unchanged() -> None:

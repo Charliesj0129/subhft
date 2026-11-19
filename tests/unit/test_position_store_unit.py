@@ -9,16 +9,12 @@ import pytest
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.positions import Position, PositionStore
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_fill(
     *,
     side: Side = Side.BUY,
     qty: int = 10,
-    price: int = 1000_0000,  # scaled x10000
+    price: int = 1000_0000,
     fee: int = 100,
     tax: int = 50,
     account_id: str = "acct1",
@@ -56,7 +52,6 @@ def _disable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture()
 def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
-    # Mock SymbolMetadata and PriceCodec to avoid file IO
     mock_metadata = MagicMock()
     mock_metadata.price_scale.return_value = 10_000
     mock_metadata.contract_multiplier.return_value = 1
@@ -82,11 +77,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
     return s
 
 
-# ---------------------------------------------------------------------------
-# Position: open / add long
-# ---------------------------------------------------------------------------
-
-
 class TestPositionLong:
     def test_open_long(self) -> None:
         pos = Position("a", "s", "2330")
@@ -101,13 +91,7 @@ class TestPositionLong:
         pos.update(_make_fill(side=Side.BUY, qty=10, price=1000_0000))
         pos.update(_make_fill(side=Side.BUY, qty=10, price=1100_0000))
         assert pos.net_qty == 20
-        # Weighted avg: (10*1000_0000 + 10*1100_0000) / 20 = 1050_0000
         assert pos.avg_price_scaled == 1050_0000
-
-
-# ---------------------------------------------------------------------------
-# Position: partial / full close long
-# ---------------------------------------------------------------------------
 
 
 class TestPositionCloseLong:
@@ -116,7 +100,6 @@ class TestPositionCloseLong:
         pos.update(_make_fill(side=Side.BUY, qty=10, price=1000_0000))
         pos.update(_make_fill(side=Side.SELL, qty=5, price=1100_0000))
         assert pos.net_qty == 5
-        # PnL = (1100_0000 - 1000_0000) * 5 = 500_0000
         assert pos.realized_pnl_scaled == 500_0000
 
     def test_full_close_long(self) -> None:
@@ -124,12 +107,7 @@ class TestPositionCloseLong:
         pos.update(_make_fill(side=Side.BUY, qty=10, price=1000_0000))
         pos.update(_make_fill(side=Side.SELL, qty=10, price=1200_0000))
         assert pos.net_qty == 0
-        assert pos.realized_pnl_scaled == 2000_0000  # (1200-1000)*10 scaled
-
-
-# ---------------------------------------------------------------------------
-# Position: open / add short
-# ---------------------------------------------------------------------------
+        assert pos.realized_pnl_scaled == 2000_0000
 
 
 class TestPositionShort:
@@ -144,13 +122,7 @@ class TestPositionShort:
         pos.update(_make_fill(side=Side.SELL, qty=10, price=1000_0000))
         pos.update(_make_fill(side=Side.SELL, qty=10, price=900_0000))
         assert pos.net_qty == -20
-        # Weighted avg: (-10*1000_0000 + -10*900_0000) / -20 = 950_0000
         assert pos.avg_price_scaled == 950_0000
-
-
-# ---------------------------------------------------------------------------
-# Position: partial / full close short
-# ---------------------------------------------------------------------------
 
 
 class TestPositionCloseShort:
@@ -159,7 +131,6 @@ class TestPositionCloseShort:
         pos.update(_make_fill(side=Side.SELL, qty=10, price=1000_0000))
         pos.update(_make_fill(side=Side.BUY, qty=5, price=900_0000))
         assert pos.net_qty == -5
-        # PnL = (1000_0000 - 900_0000) * 5 = 500_0000
         assert pos.realized_pnl_scaled == 500_0000
 
     def test_full_close_short(self) -> None:
@@ -167,12 +138,7 @@ class TestPositionCloseShort:
         pos.update(_make_fill(side=Side.SELL, qty=10, price=1000_0000))
         pos.update(_make_fill(side=Side.BUY, qty=10, price=800_0000))
         assert pos.net_qty == 0
-        assert pos.realized_pnl_scaled == 2000_0000  # (1000-800)*10 scaled
-
-
-# ---------------------------------------------------------------------------
-# Position: flip long -> short, short -> long
-# ---------------------------------------------------------------------------
+        assert pos.realized_pnl_scaled == 2000_0000
 
 
 class TestPositionFlip:
@@ -181,9 +147,7 @@ class TestPositionFlip:
         pos.update(_make_fill(side=Side.BUY, qty=5, price=1000_0000))
         pos.update(_make_fill(side=Side.SELL, qty=10, price=1100_0000))
         assert pos.net_qty == -5
-        # Close PnL: (1100_0000 - 1000_0000) * 5 = 500_0000
         assert pos.realized_pnl_scaled == 500_0000
-        # New avg_price for the short side
         assert pos.avg_price_scaled == 1100_0000
 
     def test_flip_short_to_long(self) -> None:
@@ -191,27 +155,16 @@ class TestPositionFlip:
         pos.update(_make_fill(side=Side.SELL, qty=5, price=1000_0000))
         pos.update(_make_fill(side=Side.BUY, qty=10, price=900_0000))
         assert pos.net_qty == 5
-        # Close PnL: (1000_0000 - 900_0000) * 5 = 500_0000
         assert pos.realized_pnl_scaled == 500_0000
         assert pos.avg_price_scaled == 900_0000
-
-
-# ---------------------------------------------------------------------------
-# Fee / tax accumulation
-# ---------------------------------------------------------------------------
 
 
 class TestFeeAccumulation:
     def test_fees_accumulate(self) -> None:
         pos = Position("a", "s", "2330")
-        pos.update(_make_fill(fee=150, tax=50))  # fee is all-in: it already contains the tax
+        pos.update(_make_fill(fee=150, tax=50))
         pos.update(_make_fill(fee=275, tax=75))
-        assert pos.fees_scaled == 425  # 150+275
-
-
-# ---------------------------------------------------------------------------
-# last_update_ts
-# ---------------------------------------------------------------------------
+        assert pos.fees_scaled == 425
 
 
 class TestLastUpdateTs:
@@ -222,19 +175,9 @@ class TestLastUpdateTs:
         assert pos.last_update_ts == 999_000
 
 
-# ---------------------------------------------------------------------------
-# PositionStore: key format
-# ---------------------------------------------------------------------------
-
-
 class TestPositionStoreKey:
     def test_key_format(self, store: PositionStore) -> None:
         assert store._key("acct1", "strat1", "2330") == "acct1:strat1:2330"
-
-
-# ---------------------------------------------------------------------------
-# PositionStore: on_fill creates position, returns PositionDelta
-# ---------------------------------------------------------------------------
 
 
 class TestPositionStoreOnFill:
@@ -247,51 +190,34 @@ class TestPositionStoreOnFill:
         assert "acct1:strat1:2330" in store.positions
 
 
-# ---------------------------------------------------------------------------
-# PositionStore: eviction at max_size, preserves active
-# ---------------------------------------------------------------------------
-
-
 class TestPositionStoreEviction:
     def test_eviction_at_max_size(self, store: PositionStore) -> None:
         store._positions_max_size = 3
 
-        # Create 3 flat positions
         for i in range(3):
             fill = _make_fill(symbol=f"SYM{i}", match_ts_ns=i * 1000)
             store.on_fill(fill)
-            # Close them (make flat)
             close = _make_fill(side=Side.SELL, symbol=f"SYM{i}", match_ts_ns=i * 1000 + 1)
             store.on_fill(close)
 
-        assert len(store.positions) == 3  # all flat, at limit
+        assert len(store.positions) == 3
 
-        # Adding a new one should trigger eviction of some flat positions
         new_fill = _make_fill(symbol="NEW1")
         store.on_fill(new_fill)
-        # Should have evicted at least one flat position
         assert len(store.positions) <= 3
 
     def test_preserves_active_positions(self, store: PositionStore) -> None:
         store._positions_max_size = 2
 
-        # One active position
         store.on_fill(_make_fill(symbol="ACTIVE"))
 
-        # One flat position
         store.on_fill(_make_fill(symbol="FLAT"))
         store.on_fill(_make_fill(side=Side.SELL, symbol="FLAT"))
 
-        # Trigger eviction
         store.on_fill(_make_fill(symbol="NEW"))
 
         assert "acct1:strat1:ACTIVE" in store.positions
         assert "acct1:strat1:NEW" in store.positions
-
-
-# ---------------------------------------------------------------------------
-# PositionStore: on_fill_async wrapper
-# ---------------------------------------------------------------------------
 
 
 class TestOnFillAsync:
@@ -303,44 +229,30 @@ class TestOnFillAsync:
         assert delta.net_qty == 10
 
 
-# ---------------------------------------------------------------------------
-# Portfolio: total PnL, peak equity, drawdown
-# ---------------------------------------------------------------------------
-
-
 class TestPortfolio:
     def test_total_pnl_tracking(self, store: PositionStore) -> None:
-        # Open and close with profit
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1000_0000, symbol="A"))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=1100_0000, symbol="A"))
-        assert store.total_pnl == 1000_0000  # (1100-1000)*10
+        assert store.total_pnl == 1000_0000
 
     def test_peak_equity_watermark(self, store: PositionStore) -> None:
-        # First profitable trade
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1000_0000, symbol="A"))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=1100_0000, symbol="A"))
         peak1 = store._peak_equity_scaled
         assert peak1 == 1000_0000
 
-        # Losing trade
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1200_0000, symbol="B"))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=1100_0000, symbol="B"))
-        # Peak should not decrease
         assert store._peak_equity_scaled == peak1
 
     def test_drawdown_pct(self, store: PositionStore) -> None:
-        # Profit first
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1000_0000, symbol="A"))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=1100_0000, symbol="A"))
-        assert store.get_drawdown_pct() == 0.0  # at peak
+        assert store.get_drawdown_pct() == 0.0
 
-        # Loss
         store.on_fill(_make_fill(side=Side.BUY, qty=10, price=1200_0000, symbol="B"))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, price=1100_0000, symbol="B"))
-        # total_pnl = 1000_0000 - 1000_0000 = 0
-        # drawdown = (1000_0000 - 0) / 1000_0000 = 1.0
         assert store.get_drawdown_pct() == 1.0
 
     def test_drawdown_pct_no_peak(self, store: PositionStore) -> None:
-        # No trades yet
         assert store.get_drawdown_pct() == 0.0

@@ -39,7 +39,7 @@ def _make_intent(**overrides) -> OrderIntent:
         "symbol": "2330",
         "intent_type": IntentType.NEW,
         "side": Side.BUY,
-        "price": 5950000,  # 595.0 x10000
+        "price": 5950000,
         "qty": 1,
         "tif": TIF.LIMIT,
     }
@@ -52,7 +52,7 @@ def _make_cmd(intent: OrderIntent, deadline_ns: int | None = None, cmd_id: int =
     import time
 
     if deadline_ns is None:
-        deadline_ns = time.monotonic_ns() + 5_000_000_000  # 5s in future
+        deadline_ns = time.monotonic_ns() + 5_000_000_000
     return OrderCommand(
         cmd_id=cmd_id,
         intent=intent,
@@ -94,9 +94,6 @@ def _local_rejects(adapter: OrderAdapter, reason: str) -> float:
     return adapter.metrics.order_local_reject_total.labels(reason=reason)._value.get()
 
 
-# ---------------------------------------------------------------------------
-# Test 1: Deadline expiry drops stale commands
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_deadline_expiry_drops_command(tmp_path):
     """A command whose deadline_ns < now_ns must be consumed but NOT dispatched."""
@@ -104,17 +101,14 @@ async def test_deadline_expiry_drops_command(tmp_path):
 
     adapter = _make_adapter(tmp_path)
 
-    # Create command with deadline already in the past
     import time
 
-    expired_deadline = time.monotonic_ns() - 1_000_000  # 1ms ago
+    expired_deadline = time.monotonic_ns() - 1_000_000
     intent = _make_intent()
     cmd = _make_cmd(intent, deadline_ns=expired_deadline)
 
-    # Put expired command in queue
     await adapter.order_queue.put(cmd)
 
-    # Track whether execute is called via patch.object (__slots__ class)
     execute_called = False
     original_execute = adapter.execute
 
@@ -123,7 +117,6 @@ async def test_deadline_expiry_drops_command(tmp_path):
         execute_called = True
         await original_execute(c)
 
-    # Run adapter briefly, then stop
     async def stop_after_consume():
         while not adapter.order_queue.empty():
             await asyncio.sleep(0.01)
@@ -136,51 +129,36 @@ async def test_deadline_expiry_drops_command(tmp_path):
             stop_after_consume(),
         )
 
-    # Command was consumed (queue is empty) but execute was NOT called
     assert adapter.order_queue.empty()
     assert not execute_called, "Expired command should not trigger execute()"
 
 
-# ---------------------------------------------------------------------------
-# Test 2: Rate limiter rejects when hard cap exceeded
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_rate_limiter_rejects_when_exceeded(tmp_path):
     """When rate limiter hard cap is hit, execute() must refuse the intent."""
     adapter = _make_adapter(tmp_path)
 
-    # Use a DLQ with tmp_path to avoid polluting the working directory
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"), max_buffer_size=100)
     adapter._dlq = dlq
     rejects_before = _local_rejects(adapter, "rate_limit")
 
-    # Fill rate limiter past hard cap (250 entries in the window)
     for _ in range(260):
         adapter.rate_limiter.record()
 
-    # Verify rate limiter rejects
     assert not adapter.check_rate_limit(), "Rate limiter should reject after hard cap"
 
-    # Try to execute a command
     intent = _make_intent(intent_id=42)
     cmd = _make_cmd(intent)
     await adapter.execute(cmd)
 
-    # Verify the refusal was booked under its own reason
     assert _local_rejects(adapter, "rate_limit") == rejects_before + 1
 
-    # ...and NOT as a dead letter: nothing reached the broker, so there is
-    # nothing to replay and OrderDeadLetterQueueGrowing must not fire.
     stats = await dlq.get_stats()
     assert stats["total_entries"] == 0, "a refusal is not a dead letter"
 
-    # Verify the broker was NOT called
     adapter.client.place_order.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Test 3: Circuit breaker rejects when open
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_circuit_breaker_rejects_when_open(tmp_path):
     """When circuit breaker is open, execute() must refuse the intent.
@@ -190,40 +168,31 @@ async def test_circuit_breaker_rejects_when_open(tmp_path):
     """
     adapter = _make_adapter(tmp_path)
 
-    # Use a DLQ with tmp_path
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path / "dlq"), max_buffer_size=100)
     adapter._dlq = dlq
     rejects_before = _local_rejects(adapter, "circuit_breaker")
 
-    # Force circuit breaker open by recording enough failures
     for _ in range(adapter.circuit_breaker.threshold):
         adapter.circuit_breaker.record_failure()
 
     assert adapter.circuit_breaker.is_open(), "Circuit breaker should be open after threshold failures"
 
-    # Try to execute a command
     intent = _make_intent(intent_id=99)
     cmd = _make_cmd(intent)
     await adapter.execute(cmd)
 
-    # Verify the refusal was booked under circuit_breaker, not dead-lettered
     assert _local_rejects(adapter, "circuit_breaker") == rejects_before + 1
     stats = await dlq.get_stats()
     assert stats["total_entries"] == 0, "an open breaker is a refusal, not a dead letter"
 
-    # Verify the broker was NOT called
     adapter.client.place_order.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Test 4: drain_and_cancel empties the queue
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_drain_and_cancel_empties_queue(tmp_path):
     """drain_and_cancel should remove all pending commands from the queue."""
     adapter = _make_adapter(tmp_path)
 
-    # Put several commands in the queue
     for i in range(5):
         intent = _make_intent(intent_id=i + 1)
         cmd = _make_cmd(intent, cmd_id=i + 1)
@@ -231,17 +200,12 @@ async def test_drain_and_cancel_empties_queue(tmp_path):
 
     assert adapter.order_queue.qsize() == 5
 
-    # Drain the queue
     cancelled = await adapter.drain_and_cancel()
 
-    # Queue should be empty (no live orders, so cancelled count is 0)
     assert adapter.order_queue.empty(), "Queue should be empty after drain"
     assert cancelled == 0, "No live orders to cancel"
 
 
-# ---------------------------------------------------------------------------
-# Test 5: drain_and_cancel also cancels live orders
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_drain_and_cancel_cancels_live_orders(tmp_path):
     """drain_and_cancel should cancel all live orders via broker client."""
@@ -251,12 +215,10 @@ async def test_drain_and_cancel_cancels_live_orders(tmp_path):
     client.get_exchange = MagicMock(return_value="TSE")
     adapter = _make_adapter(tmp_path, client=client)
 
-    # Add a pending command
     intent = _make_intent()
     cmd = _make_cmd(intent)
     await adapter.order_queue.put(cmd)
 
-    # Simulate live orders
     adapter.live_orders["test_strat:1"] = {"id": "T1"}
     adapter.live_orders["test_strat:2"] = {"id": "T2"}
 
@@ -267,17 +229,13 @@ async def test_drain_and_cancel_cancels_live_orders(tmp_path):
     assert client.cancel_order.call_count == 2
 
 
-# ---------------------------------------------------------------------------
-# Test 6: Valid (non-expired) command IS dispatched
-# ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_valid_deadline_command_dispatched(tmp_path):
     """A command with a future deadline should be dispatched via execute()."""
     adapter = _make_adapter(tmp_path)
 
-    # Create command with deadline 5s in the future
     intent = _make_intent()
-    cmd = _make_cmd(intent)  # default deadline is 5s ahead
+    cmd = _make_cmd(intent)
 
     await adapter.order_queue.put(cmd)
 
@@ -303,26 +261,12 @@ async def test_valid_deadline_command_dispatched(tmp_path):
     assert execute_called, "Valid command should trigger execute()"
 
 
-# ---------------------------------------------------------------------------
-# M1: Live StormGuard HALT check in execute()
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_live_stormguard_halt_rejects_even_if_cmd_stamped_normal(tmp_path):
     """execute() should reject orders when live StormGuard is HALT, even if
     cmd.storm_guard_state was stamped NORMAL at RiskEngine time (TOCTOU fix)."""
     adapter = _make_adapter(tmp_path)
 
-    # Simulate live StormGuard in HALT state.
-    #
-    # ``_intent_reduces_position`` must be stubbed explicitly: the adapter
-    # calls ``bool(sg._intent_reduces_position(intent))``, and a bare
-    # MagicMock returns a truthy MagicMock, which makes every intent look
-    # like a reducing cover order and exempt from HALT. Until 2026-09-20 this
-    # test asserted only "the DLQ grew", and it grew from the unrelated
-    # broker_codec_missing rejection further down execute() -- so it passed
-    # while proving nothing about HALT.
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
     mock_sg.is_halt_exempt.return_value = False
@@ -330,13 +274,12 @@ async def test_live_stormguard_halt_rejects_even_if_cmd_stamped_normal(tmp_path)
     adapter._storm_guard = mock_sg
 
     intent = _make_intent()
-    cmd = _make_cmd(intent)  # storm_guard_state = NORMAL (stamped at creation)
+    cmd = _make_cmd(intent)
     assert cmd.storm_guard_state == StormGuardState.NORMAL
 
     rejects_before = _local_rejects(adapter, "stormguard_halt")
     await adapter.execute(cmd)
 
-    # Should have been refused, not dispatched
     assert _local_rejects(adapter, "stormguard_halt") == rejects_before + 1
     adapter.client.place_order.assert_not_called()
 
@@ -349,8 +292,6 @@ async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
     mock_sg = MagicMock()
     mock_sg.state = StormGuardState.HALT
     mock_sg.is_halt_exempt.return_value = False
-    # Pinned so the pass comes from FORCE_FLAT's own exemption, not from a
-    # MagicMock answering "yes, this reduces the position".
     mock_sg._intent_reduces_position = MagicMock(return_value=False)
     adapter._storm_guard = mock_sg
 
@@ -358,22 +299,14 @@ async def test_live_stormguard_halt_allows_halt_flatten(tmp_path):
     cmd = _make_cmd(intent)
 
     rejects_before = _local_rejects(adapter, "stormguard_halt")
-    # Mock the dispatch path to prevent actual broker call
     from unittest.mock import AsyncMock
 
     adapter.running = True
     adapter._enqueue_api = AsyncMock(return_value=True)
     await adapter.execute(cmd)
 
-    # Not refused, and it actually reached dispatch -- asserting only "no
-    # refusal" would pass even if the intent silently vanished.
     assert _local_rejects(adapter, "stormguard_halt") == rejects_before
     adapter._enqueue_api.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# E-6: CANCEL/FORCE_FLAT bypass per-symbol rate limiter
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -383,7 +316,6 @@ async def test_cancel_bypasses_per_symbol_rate_limiter(tmp_path):
 
     adapter = _make_adapter(tmp_path)
 
-    # Force per-symbol rate limiter to reject everything
     from hft_platform.core.rate_limiter import PerSymbolRateResult
 
     mock_ps_limiter = MagicMock()
@@ -400,7 +332,6 @@ async def test_cancel_bypasses_per_symbol_rate_limiter(tmp_path):
 
     assert _local_rejects(adapter, "rate_limit") == rejects_before, "CANCEL must not be rate-limited"
     adapter._enqueue_api.assert_awaited_once()
-    # per_symbol check should not even be called for CANCEL
     mock_ps_limiter.check.assert_not_called()
 
 
@@ -439,7 +370,6 @@ async def test_cancel_bypasses_circuit_breaker(tmp_path):
     adapter.running = True
     adapter._enqueue_api = AsyncMock(return_value=True)
 
-    # Force circuit breaker open
     for _ in range(adapter.circuit_breaker.threshold):
         adapter.circuit_breaker.record_failure()
     assert adapter.circuit_breaker.is_open()
@@ -463,7 +393,6 @@ async def test_cancel_bypasses_global_rate_limiter(tmp_path):
     adapter.running = True
     adapter._enqueue_api = AsyncMock(return_value=True)
 
-    # Fill global rate limiter past hard cap
     for _ in range(260):
         adapter.rate_limiter.record()
     assert not adapter.check_rate_limit()
@@ -497,11 +426,6 @@ async def test_new_order_still_rejected_by_rate_limiter(tmp_path):
     adapter.client.place_order.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# I-4: _api_worker HALT gate — skip non-exempt orders in HALT
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_api_worker_skips_new_orders_during_halt(tmp_path):
     """_api_worker must skip NEW orders when StormGuard is HALT (I-4 fix)."""
@@ -524,13 +448,10 @@ async def test_api_worker_skips_new_orders_during_halt(tmp_path):
     cmd = _make_cmd(intent)
     await adapter._api_queue.put(cmd)
 
-    # Run worker as a task and cancel after processing
     task = asyncio.create_task(adapter._api_worker())
     await asyncio.sleep(0.1)
     adapter.running = False
     task.cancel()
-    # P1-4 follow-up: ``_api_worker`` now re-raises ``CancelledError`` after
-    # cleanup so cooperative cancellation propagates upward.
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -563,8 +484,6 @@ async def test_api_worker_allows_cancel_during_halt(tmp_path):
     await asyncio.sleep(0.1)
     adapter.running = False
     task.cancel()
-    # P1-4 follow-up: ``_api_worker`` now re-raises ``CancelledError`` after
-    # cleanup so cooperative cancellation propagates upward.
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -597,8 +516,6 @@ async def test_api_worker_allows_force_flat_during_halt(tmp_path):
     await asyncio.sleep(0.1)
     adapter.running = False
     task.cancel()
-    # P1-4 follow-up: ``_api_worker`` now re-raises ``CancelledError`` after
-    # cleanup so cooperative cancellation propagates upward.
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=1.0)
 

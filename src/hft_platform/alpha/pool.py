@@ -121,7 +121,7 @@ def compute_correlation_payload(
         spearman = np.nan_to_num(np.corrcoef(ranked), nan=0.0, posinf=0.0, neginf=0.0)
     return {
         "alpha_ids": alpha_ids,
-        "matrix": pearson.tolist(),  # Backward-compatible alias.
+        "matrix": pearson.tolist(),
         "pearson_matrix": pearson.tolist(),
         "spearman_matrix": spearman.tolist(),
         "sample_length": int(data.shape[1]),
@@ -316,9 +316,6 @@ def _aligned_signal_matrix(
     if not alpha_ids:
         return [], np.empty((0, 0), dtype=np.float64)
 
-    # F1: drop empty signals before computing min_len. A single 0-element
-    # entry would otherwise short-circuit the entire corpus to empty —
-    # see docs/runbooks/alpha-factory-dogfood-2026-05-06.md §F1.
     rows_with_ids = [(aid, np.asarray(signals[aid], dtype=np.float64)) for aid in alpha_ids]
     non_empty = [(aid, row) for aid, row in rows_with_ids if row.size > 0]
     dropped = [aid for aid, row in rows_with_ids if row.size == 0]
@@ -551,7 +548,6 @@ def recompute_pool_correlations(
             if not scorecard_path.exists():
                 continue
             if is_sealed(scorecard_path.parent):
-                # Sealed evidence is never rewritten.
                 sealed_skipped.append(run.run_id)
                 continue
             try:

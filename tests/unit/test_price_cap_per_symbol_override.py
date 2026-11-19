@@ -34,14 +34,8 @@ from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.risk.validators import PriceBandValidator
 
-# Codes covering the active rollover window: D6 = April-2026 (just expired),
-# E6 = May-2026 (front month as of 2026-04-27). TMF/TXF/MXF roots cover the
-# three TAIFEX futures families that platform strategies route through.
 ROLLOVER_SYMBOLS = ("TMFE6", "TMFD6", "TXFE6", "TXFD6", "MXFE6", "MXFD6")
 
-# The months that actually matter now, and ones that do not exist yet. The
-# 2026-08-10 outage happened because coverage was asserted only for the codes
-# above — every one of which had expired by then.
 CURRENT_AND_FUTURE_SYMBOLS = ("TMFH6", "TXFH6", "MXFH6", "TMFI6", "TXFI6", "MXFI6", "TMFA7", "TXFA7")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -71,7 +65,7 @@ def _provider_with_broken_metadata() -> SymbolMetadataPriceScaleProvider:
     """
     metadata = MagicMock()
     metadata.price_scale.return_value = 10000
-    metadata.product_type.return_value = ""  # broken: no metadata
+    metadata.product_type.return_value = ""
     return SymbolMetadataPriceScaleProvider(metadata=metadata)
 
 
@@ -126,7 +120,6 @@ def test_validator_admits_real_taiex_price_with_override() -> None:
     }
     validator = PriceBandValidator(cfg, price_scale_provider=_provider_with_broken_metadata())
 
-    # TAIEX ~40,400 pts × 10,000 = 404_000_000 scaled — real prod price.
     ok, reason = validator.check(_intent("TMFE6", price=404_000_000))
 
     assert ok, f"Expected approval with per-symbol override; got reject: {reason}"
@@ -138,7 +131,6 @@ def test_validator_without_override_rejects_due_to_global_fallback() -> None:
         "global_defaults": {
             "max_price_cap": 5000.0,
             "max_price_cap_futures": 50000.0,
-            # No TMFE6 override -> falls back to global 5000.
         }
     }
     validator = PriceBandValidator(cfg, price_scale_provider=_provider_with_broken_metadata())
@@ -198,7 +190,6 @@ def test_r47_tmfe6_price_passes_risk_cap(tmp_path: Path) -> None:
         price_scale_provider=_provider_with_broken_metadata(),
     )
 
-    # Two probe prices both above the broken 50M fallback cap.
     for raw_pts in (4_020, 40_200):
         scaled_price = raw_pts * 10_000
         decision = engine.evaluate(_intent("TMFE6", price=scaled_price))
@@ -225,7 +216,6 @@ def test_r47_tmfe6_price_rejected_without_override(tmp_path: Path) -> None:
                     "max_price_cap": 5000.0,
                     "max_price_cap_futures": 50000.0,
                     "max_price_cap_options": 10000.0,
-                    # NOTE: max_price_cap_TMFE6 deliberately absent.
                     "tick_size": 0.01,
                     "price_band_ticks": 20,
                     "max_qty": 10,

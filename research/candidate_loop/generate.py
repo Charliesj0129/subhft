@@ -38,9 +38,6 @@ class DropShapeError(ValueError):
     """A generator drop or prompt violates the §11 shape contract."""
 
 
-# ---------------------------------------------------------------------------
-# Prompt provenance.
-# ---------------------------------------------------------------------------
 
 
 def prompt_sha256(prompt_path: Path) -> str:
@@ -78,9 +75,6 @@ def build_header(
     }
 
 
-# ---------------------------------------------------------------------------
-# Drop shape validation + family file IO.
-# ---------------------------------------------------------------------------
 
 
 def ingest_jsonl(src_path: Path, expected_count: int | None = None) -> list[str]:

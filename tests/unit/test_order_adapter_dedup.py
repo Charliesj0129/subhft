@@ -125,19 +125,14 @@ async def test_duplicate_key_rejected(tmp_config, mock_deps):
     cmd1 = make_cmd(idempotency_key="order-abc-123")
     cmd2 = make_cmd(idempotency_key="order-abc-123")
 
-    # First call: should pass dedup (reserve slot)
     await adapter.execute(cmd1)
 
-    # Second call with same key: should be rejected
     await adapter.execute(cmd2)
 
     mock_deps["metrics"].order_reject_total.inc.assert_called()
     reasons = [r for r, _ in refusals]
-    # cmd1 is also refused, further down execute(), for a missing broker codec
-    # in this fixture -- the duplicate is the refusal cmd2 earned.
     assert reasons[-1] is RejectionReason.IDEMPOTENCY_DUPLICATE
     assert reasons.count(RejectionReason.IDEMPOTENCY_DUPLICATE) == 1
-    # A duplicate never reached the broker, so it is not a dead letter.
     mock_deps["dlq"].add.assert_not_called()
 
 
@@ -150,12 +145,9 @@ async def test_empty_key_bypasses_dedup(tmp_config, mock_deps):
     cmd1 = make_cmd(idempotency_key="")
     cmd2 = make_cmd(idempotency_key="")
 
-    # Both should pass dedup (empty key = no dedup)
     await adapter.execute(cmd1)
     await adapter.execute(cmd2)
 
-    # Neither should be refused for dedup (either may be refused for other
-    # reasons; only the dedup reason is under test here).
     assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
@@ -171,7 +163,6 @@ async def test_unique_key_passes(tmp_config, mock_deps):
     await adapter.execute(cmd1)
     await adapter.execute(cmd2)
 
-    # Neither should be refused for dedup
     assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
@@ -181,15 +172,12 @@ async def test_cancel_bypasses_dedup_even_with_duplicate_key(tmp_config, mock_de
     adapter = _make_adapter(tmp_config)
     refusals = _capture_refusals(adapter)
 
-    # First: reserve the key with a NEW order
     cmd_new = make_cmd(idempotency_key="cancel-key-001")
     await adapter.execute(cmd_new)
 
-    # Second: CANCEL with same key — must pass (safety-exempt)
     cmd_cancel = make_cmd(intent_type=IntentType.CANCEL, idempotency_key="cancel-key-001")
     await adapter.execute(cmd_cancel)
 
-    # The cancel must not be refused as a duplicate
     assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
@@ -199,15 +187,12 @@ async def test_force_flat_bypasses_dedup_even_with_duplicate_key(tmp_config, moc
     adapter = _make_adapter(tmp_config)
     refusals = _capture_refusals(adapter)
 
-    # First: reserve the key with a NEW order
     cmd_new = make_cmd(idempotency_key="ff-key-001")
     await adapter.execute(cmd_new)
 
-    # Second: FORCE_FLAT with same key — must pass (safety-exempt)
     cmd_ff = make_cmd(intent_type=IntentType.FORCE_FLAT, idempotency_key="ff-key-001")
     await adapter.execute(cmd_ff)
 
-    # The force-flat must not be refused as a duplicate
     assert RejectionReason.IDEMPOTENCY_DUPLICATE not in [r for r, _ in refusals]
 
 
@@ -234,15 +219,10 @@ async def test_dedup_slot_committed_false_on_unexpected_exception(tmp_config, mo
     key = "orphan-test-key-001"
     cmd = make_cmd(idempotency_key=key)
 
-    # Force an unexpected exception in the validation path after dedup reserve.
-    # Patch _platform_degrade_allows which is called after all rate/CB checks.
     with _patch.object(type(adapter), "_platform_degrade_allows", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError, match="boom"):
             await adapter.execute(cmd)
 
-    # The dedup slot should have been committed as rejected (not left as orphan).
-    # Verify by attempting to reserve the same key again — it should return the
-    # committed entry (not None which would mean it's still pending/orphaned).
     existing = adapter._dedup_store.check_or_reserve(key)
     assert existing is not None, "Dedup slot was orphaned — should have been committed as False"
     assert existing.approved is False

@@ -71,7 +71,6 @@ class TestResolver:
         fam = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         assert r.resolve_family(fam).expiry.month == 5
 
-        # Rollover: May expires, June becomes R1.
         snap_b = build_snapshot_from_calendar(
             {"TMF": [_tmf(6), _tmf(7)]},
             today=date(2026, 5, 22),
@@ -92,7 +91,6 @@ class TestResolver:
                 snapshot_ns=1000,
             )
         )
-        # First swap: both R1 and R2 are "changes" (from None).
         assert len(events) == 2
 
         events.clear()
@@ -103,7 +101,6 @@ class TestResolver:
                 snapshot_ns=2000,
             )
         )
-        # After rollover: R1 old=May, new=June; R2 old=June, new=July — both changed.
         assert len(events) == 2
         for e in events:
             assert e.old_ref is not None
@@ -119,7 +116,6 @@ class TestResolver:
         r.swap_snapshot(snap)
         events: list[FamilyBindingChanged] = []
         r.add_hook(events.append)
-        # Re-apply the same snapshot — no bindings changed.
         r.swap_snapshot(snap)
         assert events == []
 
@@ -130,7 +126,6 @@ class TestResolver:
             raise RuntimeError("hook failure")
 
         r.add_hook(_boom)
-        # Must not raise despite buggy hook.
         r.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(5)]},
@@ -178,9 +173,8 @@ class TestSnapshotRetention:
             snapshot_ns=1000,
         )
         r.swap_snapshot(snap_a)
-        consumer_view = r.snapshot  # captured at tick start
+        consumer_view = r.snapshot
 
-        # Mid-tick the resolver swaps to a new snapshot.
         r.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(6)]},
@@ -189,10 +183,8 @@ class TestSnapshotRetention:
             )
         )
 
-        # Consumer's captured view still points at May.
         fam = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         assert consumer_view.resolve_family(fam).expiry.month == 5
-        # But a fresh read reflects the new binding.
         assert r.resolve_family(fam).expiry.month == 6
 
 

@@ -35,8 +35,6 @@ class ContractWindow:
     end_date: date
 
 
-# Active front-month windows for TMF contracts in the R10 CK dataset.
-# Source: R10-T1 §3 (TMFB6 Jan-Feb, TMFC6 Feb-Mar, TMFD6 Mar+).
 DEFAULT_TMF_FRONTMONTH_WINDOWS: tuple[ContractWindow, ...] = (
     ContractWindow(
         symbol="TMFB6",

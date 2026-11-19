@@ -24,7 +24,6 @@ class TestSetTradingDate:
 
     def test_session_dir_defaults_to_today(self, tmp_path: Path) -> None:
         w = AutonomyEvidenceWriter(base_dir=tmp_path)
-        # Should not raise and should return a date-formatted dir
         session_dir = w.session_dir
         assert session_dir.name.isdigit()
         assert len(session_dir.name) == 8
@@ -60,7 +59,6 @@ class TestOnTransitionCallback:
             raise RuntimeError("boom")
 
         writer.on_transition(bad_callback)
-        # Should not raise
         record = writer.record_transition(scope="platform", mode="HALT", reason="r")
         assert record["scope"] == "platform"
 

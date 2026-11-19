@@ -30,7 +30,6 @@ def _make_position_store():
         from hft_platform.execution.positions import Position, PositionStore
 
         store = PositionStore()
-        # Seed two strategy positions for same symbol
         store.positions["acc:alpha:TXFD6"] = Position(
             account_id="acc",
             strategy_id="alpha",
@@ -54,7 +53,6 @@ def test_net_qty_for_symbol_without_filter_includes_recovery():
         "net_qty": 1,
         "strategy_id": "MANUAL",
     }
-    # No filter: alpha(+2) + beta(-1) + recovery(+1) = +2
     assert store.net_qty_for_symbol("TXFD6") == 2
 
 
@@ -66,7 +64,6 @@ def test_net_qty_for_symbol_with_filter_excludes_other_strategy_recovery():
         "net_qty": 1,
         "strategy_id": "MANUAL",
     }
-    # Filter alpha: only alpha's +2
     assert store.net_qty_for_symbol("TXFD6", strategy_id="alpha") == 2
 
 
@@ -78,7 +75,6 @@ def test_net_qty_for_symbol_manual_filter_returns_only_manual():
         "net_qty": 1,
         "strategy_id": "MANUAL",
     }
-    # Filter MANUAL: only the recovery +1
     assert store.net_qty_for_symbol("TXFD6", strategy_id="MANUAL") == 1
 
 
@@ -89,7 +85,6 @@ def test_net_qty_for_symbol_legacy_no_strategy_recovery_included_when_no_filter(
         "symbol": "TXFD6",
         "net_qty": 3,
     }
-    # No filter: alpha(+2) + beta(-1) + legacy(+3) = +4
     assert store.net_qty_for_symbol("TXFD6") == 4
 
 
@@ -99,7 +94,5 @@ def test_net_qty_for_symbol_legacy_no_strategy_recovery_excluded_with_filter():
     store._recovery_positions["acc:TXFD6"] = {
         "symbol": "TXFD6",
         "net_qty": 3,
-        # No strategy_id key
     }
-    # Filter alpha: only alpha's +2 (legacy recovery excluded)
     assert store.net_qty_for_symbol("TXFD6", strategy_id="alpha") == 2

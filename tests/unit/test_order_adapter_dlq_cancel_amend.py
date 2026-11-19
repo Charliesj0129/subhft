@@ -132,11 +132,6 @@ def _make_adapter(tmp_config: str, client=None) -> OrderAdapter:
     return OrderAdapter(config_path=tmp_config, order_queue=q, broker_client=client, broker_codec=_StubCodec())
 
 
-# ---------------------------------------------------------------------------
-# CANCEL branches
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cancel_target_not_found_routes_to_dlq(tmp_config):
     """CANCEL with missing target order routes to DLQ with CANCEL_TARGET_NOT_FOUND (Bug #37)."""
@@ -187,11 +182,6 @@ async def test_cancel_terminal_before_registered_routes_to_dlq(tmp_config):
     assert "terminated" in call_kwargs["error_message"].lower()
 
 
-# ---------------------------------------------------------------------------
-# AMEND branches
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_amend_target_not_found_routes_to_dlq(tmp_config):
     """AMEND with missing target order routes to DLQ with AMEND_TARGET_NOT_FOUND (Bug #37)."""
@@ -240,11 +230,6 @@ async def test_amend_terminal_before_registered_routes_to_dlq(tmp_config):
     call_kwargs = adapter._dlq.add.call_args.kwargs
     assert call_kwargs["reason"] == RejectionReason.AMEND_TARGET_TERMINAL
     assert "terminated" in call_kwargs["error_message"].lower()
-
-
-# ---------------------------------------------------------------------------
-# Metrics still incremented alongside DLQ
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio

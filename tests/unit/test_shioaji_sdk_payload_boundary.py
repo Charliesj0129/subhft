@@ -62,13 +62,13 @@ class SdkMapping:
     def __init__(self, d: dict[str, Any]) -> None:
         self._d = d
 
-    def keys(self):  # noqa: ANN201
+    def keys(self):
         return self._d.keys()
 
-    def values(self):  # noqa: ANN201
+    def values(self):
         return self._d.values()
 
-    def items(self):  # noqa: ANN201
+    def items(self):
         return self._d.items()
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -77,7 +77,7 @@ class SdkMapping:
     def __getitem__(self, key: str) -> Any:
         return self._d[key]
 
-    def __iter__(self):  # noqa: ANN204
+    def __iter__(self):
         return iter(self._d)
 
     def __len__(self) -> int:
@@ -186,11 +186,6 @@ def _sdk_deal_payload() -> SdkMapping:
     )
 
 
-# --------------------------------------------------------------------------- #
-# The premise                                                                  #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_the_double_is_faithful_to_the_sdk_type() -> None:
     """Pins what was measured from shioaji 1.5.6. If this drifts, every other
@@ -201,7 +196,6 @@ def test_the_double_is_faithful_to_the_sdk_type() -> None:
     assert not isinstance(payload, abc.Mapping)
     for method in ("keys", "values", "items", "get", "__getitem__", "__iter__", "__len__", "__contains__"):
         assert hasattr(payload, method), method
-    # The attribute route the normalizer falls back to yields nothing.
     assert getattr(payload, "quantity", None) is None
 
 
@@ -210,11 +204,6 @@ def test_the_sdk_double_defeats_json_serialization() -> None:
     """The other half of the reported failure: `WAL Write Failed!`."""
     with pytest.raises(TypeError):
         orjson.dumps(_sdk_order_payload())
-
-
-# --------------------------------------------------------------------------- #
-# The conversion                                                               #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
@@ -297,11 +286,6 @@ def test_to_plain_payload_stops_at_the_depth_cap_instead_of_recursing_forever() 
     assert isinstance(result, dict)
 
 
-# --------------------------------------------------------------------------- #
-# The regression the conversion is for                                         #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_normalize_order_drops_an_unconverted_sdk_payload() -> None:
     """Reproduces the silent half of the outage before asserting the fix."""
@@ -354,7 +338,6 @@ def test_futures_order_events_carry_no_custom_field_to_attribute_with() -> None:
 
     assert "custom_field" not in order
     assert "custom_field" not in deal
-    # What attribution must key off instead:
     assert order["ordno"] == deal["ordno"] == "AB123"
     assert order["seqno"] == deal["seqno"] == "000123"
 
@@ -385,15 +368,7 @@ def test_normalize_fill_reads_qty_from_a_converted_sdk_payload() -> None:
     assert fill is not None
     assert fill.qty == 2
     assert fill.symbol == "TMFH6"
-    # FuturesDealEvent carries account_id itself, which is how the fill clears
-    # the account gate — ExecutionNormalizer's default_account_id is never
-    # supplied by router.py:90, so that fallback cannot be relied on.
     assert fill.account_id == "1234567"
-
-
-# --------------------------------------------------------------------------- #
-# The wiring                                                                   #
-# --------------------------------------------------------------------------- #
 
 
 class _FakeApi:

@@ -15,10 +15,6 @@ from hft_platform.monitor._health_panel import (
     poll_health_async,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _reset_globals() -> None:
     """Reset module-level globals between tests to avoid state leakage."""
@@ -26,17 +22,10 @@ def _reset_globals() -> None:
     hp._current_health = None
 
 
-# ---------------------------------------------------------------------------
-# poll_health_async: counter / throttle behaviour
-# ---------------------------------------------------------------------------
-
-
 class TestPollHealthAsyncCounter:
     @pytest.mark.asyncio
     async def test_returns_none_before_first_fetch(self) -> None:
         _reset_globals()
-        # counter=0 → incremented to 1 → 1 % 5 == 1, so fetch fires.
-        # Patch fetch so it returns a dummy state without hitting network.
         dummy = HealthState(engine_reachable=False)
         with mock.patch.object(hp, "_fetch_from_prometheus", return_value=dummy):
             result = await poll_health_async()
@@ -47,14 +36,13 @@ class TestPollHealthAsyncCounter:
         _reset_globals()
         dummy = HealthState(engine_reachable=True)
         with mock.patch.object(hp, "_fetch_from_prometheus", return_value=dummy):
-            await poll_health_async()  # tick 1 — fetch fires (counter=1)
+            await poll_health_async()
 
-        # Ticks 2-5: counter increments but fetch should NOT fire (cached returned).
         fetch_spy = mock.MagicMock(return_value=HealthState())
         with mock.patch.object(hp, "_fetch_from_prometheus", fetch_spy):
             for _ in range(4):
                 result = await poll_health_async()
-                assert result is dummy  # still the old cached value
+                assert result is dummy
 
         fetch_spy.assert_not_called()
 
@@ -70,11 +58,6 @@ class TestPollHealthAsyncCounter:
         assert result.feed_total_count == 10
 
 
-# ---------------------------------------------------------------------------
-# poll_health_async: thread-offload (non-blocking)
-# ---------------------------------------------------------------------------
-
-
 class TestPollHealthAsyncNonBlocking:
     @pytest.mark.asyncio
     async def test_blocking_fetch_does_not_stall_event_loop(self) -> None:
@@ -83,21 +66,19 @@ class TestPollHealthAsyncNonBlocking:
 
         async def _concurrent_task() -> float:
             start = asyncio.get_event_loop().time()
-            await asyncio.sleep(0)  # yield — should complete immediately
+            await asyncio.sleep(0)
             return asyncio.get_event_loop().time() - start
 
         def _slow_fetch(**_kwargs: object) -> HealthState:
-            time.sleep(0.1)  # simulate a 100ms blocking call
+            time.sleep(0.1)
             return HealthState(engine_reachable=True)
 
         with mock.patch.object(hp, "_fetch_from_prometheus", side_effect=_slow_fetch):
-            # Run the slow poll and a concurrent no-op coroutine in parallel.
             t_noop, _ = await asyncio.gather(
                 _concurrent_task(),
                 poll_health_async(),
             )
 
-        # The no-op coroutine must finish well under the 100ms sleep.
         assert t_noop < 0.05, f"Event loop was blocked: no-op coroutine took {t_noop:.3f}s (expected < 0.05s)"
 
     @pytest.mark.asyncio
@@ -108,8 +89,6 @@ class TestPollHealthAsyncNonBlocking:
         called_from_thread: list[bool] = []
 
         def _capture_thread(**_kwargs: object) -> HealthState:
-            # If this runs in a thread-pool thread, threading.current_thread()
-            # will NOT be the main thread.
             import threading
 
             called_from_thread.append(threading.current_thread() is not threading.main_thread())
@@ -121,11 +100,6 @@ class TestPollHealthAsyncNonBlocking:
         assert called_from_thread == [True], (
             "_fetch_from_prometheus was not run in a worker thread; poll_health_async is still blocking the event loop"
         )
-
-
-# ---------------------------------------------------------------------------
-# _fetch_from_prometheus: time.monotonic() used for last_fetch_ts
-# ---------------------------------------------------------------------------
 
 
 class TestFetchTimestamp:
@@ -143,14 +117,7 @@ class TestFetchTimestamp:
         after = time.monotonic()
 
         assert state.engine_reachable is True
-        # last_fetch_ts should be a monotonic timestamp, so it must fall
-        # within the bracketed monotonic window.
         assert before <= state.last_fetch_ts <= after
-
-
-# ---------------------------------------------------------------------------
-# _fetch_from_prometheus: resilience / error paths
-# ---------------------------------------------------------------------------
 
 
 class TestFetchFromPrometheusErrors:

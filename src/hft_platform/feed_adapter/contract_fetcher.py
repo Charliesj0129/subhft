@@ -33,9 +33,6 @@ def _login_shioaji() -> Any:
         raise RuntimeError("SHIOAJI_API_KEY and SHIOAJI_SECRET_KEY env vars required")
     api = sj.Shioaji(simulation=True)
     api.login(api_key=api_key, secret_key=secret_key)
-    # From shioaji 1.7 login() loads contracts itself, and a fetch_contracts
-    # issued meanwhile fails at once with "exclusive access lost". Wait for the
-    # login's load; fetch only if nothing has arrived half-way through.
     ready, elapsed_s, fetched = wait_contracts_ready(
         api,
         timeout_s=_CONTRACTS_WAIT_S,
@@ -84,12 +81,6 @@ def _normalize_contract(contract: Any, exchange: str, kind: str) -> dict[str, An
         "strike": getattr(contract, "strike_price", None),
         "right": right,
         "reference": getattr(contract, "reference", None),
-        # Real SDK fields (see tests/golden/shioaji_sdk/surface_1.5.6.json).
-        # ``tick_size`` / ``price_scale`` / ``contract_size`` used to be read
-        # here and have never existed on a shioaji Contract in any version, so
-        # they were dropped by the None filter on every one of the 55k rows and
-        # the cache silently never carried them. ``multiplier`` and ``unit`` are
-        # the fields that actually hold the contract-size information.
         "multiplier": getattr(contract, "multiplier", None),
         "unit": getattr(contract, "unit", None),
         "limit_up": getattr(contract, "limit_up", None),

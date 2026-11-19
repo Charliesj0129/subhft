@@ -14,10 +14,6 @@ import pytest
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 from hft_platform.gateway.exposure import ExposureKey, ExposureLimitError, ExposureLimits, ExposureStore
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _key(acct="acc1", strat="s1", sym="2330"):
     return ExposureKey(account=acct, strategy_id=strat, symbol=sym)
@@ -36,11 +32,6 @@ def _intent(**kwargs):
     )
     defaults.update(kwargs)
     return OrderIntent(**defaults)
-
-
-# ---------------------------------------------------------------------------
-# Basic check_and_update
-# ---------------------------------------------------------------------------
 
 
 class TestCheckAndUpdate:
@@ -64,7 +55,7 @@ class TestCheckAndUpdate:
 
     def test_global_limit_exceeded(self):
         store = ExposureStore(global_max_notional=5000)
-        intent = _intent(price=1000, qty=10)  # notional=10000 > 5000
+        intent = _intent(price=1000, qty=10)
         ok, reason = store.check_and_update(_key(), intent)
         assert ok is False
         assert reason == "GLOBAL_EXPOSURE_LIMIT"
@@ -72,7 +63,7 @@ class TestCheckAndUpdate:
     def test_strategy_limit_exceeded(self):
         limits = {"s1": ExposureLimits(max_notional_scaled=5000)}
         store = ExposureStore(limits=limits)
-        intent = _intent(price=1000, qty=10)  # notional=10000 > 5000
+        intent = _intent(price=1000, qty=10)
         ok, reason = store.check_and_update(_key(), intent)
         assert ok is False
         assert reason == "STRATEGY_EXPOSURE_LIMIT"
@@ -87,9 +78,7 @@ class TestCheckAndUpdate:
         """Zero-balance entries are evicted before rejecting."""
         store = ExposureStore(max_symbols=1)
         store.check_and_update(_key(sym="A"), _intent(symbol="A", price=100, qty=1))
-        # Release A to zero
         store.release_exposure(_key(sym="A"), _intent(symbol="A", price=100, qty=1))
-        # Now B should succeed after eviction of zeroed A
         ok, reason = store.check_and_update(_key(sym="B"), _intent(symbol="B"))
         assert ok is True
 
@@ -97,21 +86,14 @@ class TestCheckAndUpdate:
         store = ExposureStore()
         ok, _ = store.check_and_update(_key(), _intent(price=100, qty=5), order_key="ord1")
         assert ok is True
-        # Order should be tracked
         assert "ord1" in store._order_notionals
         assert store._order_notionals["ord1"] == 500
-
-
-# ---------------------------------------------------------------------------
-# AMEND
-# ---------------------------------------------------------------------------
 
 
 class TestAmend:
     def test_amend_increases_exposure(self):
         store = ExposureStore()
         store.check_and_update(_key(), _intent(price=100, qty=5), order_key="ord1")
-        # AMEND: increase to price=100, qty=10
         amend = _intent(
             intent_type=IntentType.AMEND,
             price=100,
@@ -120,7 +102,7 @@ class TestAmend:
         )
         ok, reason = store.check_and_update(_key(), amend)
         assert ok is True
-        assert store._order_notionals["ord1"] == 1000  # Updated
+        assert store._order_notionals["ord1"] == 1000
 
     def test_amend_decreases_exposure(self):
         store = ExposureStore()
@@ -162,25 +144,17 @@ class TestAmend:
         assert reason == "STRATEGY_EXPOSURE_LIMIT"
 
 
-# ---------------------------------------------------------------------------
-# release_exposure
-# ---------------------------------------------------------------------------
-
-
 class TestReleaseExposure:
     def test_release_cancel_noop(self):  # noqa: no-assert
         store = ExposureStore()
         store.release_exposure(_key(), _intent(intent_type=IntentType.CANCEL))
-        # No crash
 
     def test_release_amend_rollback(self):  # noqa: no-assert
         store = ExposureStore()
         store.check_and_update(_key(), _intent(price=100, qty=10), order_key="ord1")
         amend = _intent(intent_type=IntentType.AMEND, price=100, qty=15, target_order_id="ord1")
         store.check_and_update(_key(), amend)
-        # Rollback the AMEND
         store.release_exposure(_key(), amend)
-        # Delta should be rolled back
 
     def test_release_new_by_order(self):
         store = ExposureStore()
@@ -193,11 +167,6 @@ class TestReleaseExposure:
         store.check_and_update(_key(), _intent(price=100, qty=10))
         store.release_exposure(_key(), _intent(price=100, qty=10))
         assert store.get_global_notional() == 0
-
-
-# ---------------------------------------------------------------------------
-# release_by_order
-# ---------------------------------------------------------------------------
 
 
 def test_release_by_order():
@@ -214,15 +183,9 @@ def test_release_by_order_unknown():
     assert released == 0
 
 
-# ---------------------------------------------------------------------------
-# expire_stale_orders
-# ---------------------------------------------------------------------------
-
-
 def test_expire_stale_orders():
     store = ExposureStore()
     store.check_and_update(_key(), _intent(price=100, qty=10), order_key="ord1")
-    # Set old timestamp
     store._order_ts["ord1"] = time.monotonic() - 100
     expired = store.expire_stale_orders(max_age_s=1)
     assert expired == 1
@@ -234,11 +197,6 @@ def test_expire_stale_orders_none_expired():
     store.check_and_update(_key(), _intent(price=100, qty=10), order_key="ord1")
     expired = store.expire_stale_orders(max_age_s=9999)
     assert expired == 0
-
-
-# ---------------------------------------------------------------------------
-# check_and_update_typed
-# ---------------------------------------------------------------------------
 
 
 class TestCheckAndUpdateTyped:
@@ -331,11 +289,6 @@ class TestCheckAndUpdateTyped:
         assert "ord1" in store._order_notionals
 
 
-# ---------------------------------------------------------------------------
-# release_exposure_typed
-# ---------------------------------------------------------------------------
-
-
 class TestReleaseExposureTyped:
     def test_typed_cancel_noop(self):  # noqa: no-assert
         store = ExposureStore()
@@ -403,11 +356,6 @@ class TestReleaseExposureTyped:
             qty=10,
         )
         assert store.get_global_notional() == 0
-
-
-# ---------------------------------------------------------------------------
-# Properties
-# ---------------------------------------------------------------------------
 
 
 def test_global_notional_property():

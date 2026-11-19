@@ -40,8 +40,6 @@ def test_supervise_reads_the_kill_switch_file_and_no_redis_key() -> None:
     assert "kill_switch_path" in source, "kill-switch file check missing from _supervise"
     assert "hft:emergency_halt" not in source
     assert "_redis_client" not in source
-    # The operator override, owned by the shared module: losing it would make
-    # the path unoverridable in a container where .state/ is not mounted.
     assert kill_switch.PATH_ENV == "HFT_KILL_SWITCH_PATH"
 
 

@@ -11,7 +11,7 @@ numba = pytest.importorskip("numba", reason="numba required for alpha_propagator
 
 
 def test_module_imports():
-    from hft_platform.strategies.alpha import alpha_propagator  # noqa: F401
+    from hft_platform.strategies.alpha import alpha_propagator
 
     assert hasattr(alpha_propagator, "strategy")
     assert callable(alpha_propagator.strategy)
@@ -32,7 +32,6 @@ def test_propagator_add_event_positive_sign():
     from hft_platform.strategies.alpha.alpha_propagator import PropagatorTracker
 
     tracker = PropagatorTracker()
-    # jitclass methods require positional arguments
     tracker.add_event(1.0, 10.0)
     assert tracker.total_impact > 0.0
 
@@ -54,10 +53,8 @@ def test_propagator_decay_reduces_impact():
     tracker.add_event(1.0, 100.0)
     impact_after_event = tracker.total_impact
 
-    # Initialize last_ts with first update call (0 is sentinel for first call)
-    tracker.update(1_000_000_000)  # initializes last_ts
-    # Now decay with a later timestamp
-    tracker.update(2_000_000_000)  # 1 second later — should decay
+    tracker.update(1_000_000_000)
+    tracker.update(2_000_000_000)
     assert abs(tracker.total_impact) < abs(impact_after_event)
 
 
@@ -107,7 +104,6 @@ def test_propagator_opposite_events_cancel():
     tracker.add_event(1.0, 10.0)
     positive_impact = tracker.total_impact
     tracker.add_event(-1.0, 10.0)
-    # Should be closer to zero than after the first event
     assert abs(tracker.total_impact) < abs(positive_impact)
 
 
@@ -117,9 +113,9 @@ def test_propagator_update_same_ts_no_change():
 
     tracker = PropagatorTracker()
     tracker.add_event(1.0, 5.0)
-    tracker.update(1_000_000_000)  # init last_ts
+    tracker.update(1_000_000_000)
     impact_before = tracker.total_impact
-    tracker.update(1_000_000_000)  # same ts → dt=0, skip decay
+    tracker.update(1_000_000_000)
     assert tracker.total_impact == pytest.approx(impact_before)
 
 
@@ -129,11 +125,8 @@ def test_propagator_fast_decay_dominates_short_timescale():
 
     tracker = PropagatorTracker()
     tracker.add_event(1.0, 1.0)
-    tracker.update(0)  # init with ts=0 (first call sets last_ts)
-    # After 1 second, beta=100 component is e^(-100) ≈ 0 (vanished)
+    tracker.update(0)
     tracker.update(1_000_000_000)
-    # Medium component (beta=10): e^(-10) ≈ 0.0000454 (nearly zero)
-    # Slow component (beta=1): e^(-1) ≈ 0.368 (remains)
     assert tracker.total_impact >= 0.0
 
 
@@ -196,7 +189,6 @@ def test_propagator_strategy_processes_trade_events():
             return 0
 
         def last_trades(self, _asset_no: int):
-            # Return a buy trade on tick 1, sell trade on tick 2
             if self._count == 1:
                 return [Trade(1.0, 10.0), Trade(1.0, 5.0)]
             if self._count == 2:

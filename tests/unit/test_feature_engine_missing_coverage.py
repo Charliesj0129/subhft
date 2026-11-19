@@ -17,10 +17,6 @@ from hft_platform.feature.engine import (
     _top_qty,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _stats(
     symbol: str = "TXFD6",
@@ -41,11 +37,6 @@ def _stats(
     )
 
 
-# ---------------------------------------------------------------------------
-# Rust import fallback — lines 29-35
-# ---------------------------------------------------------------------------
-
-
 class TestRustImportFallback:
     def test_rust_backend_available_is_bool(self) -> None:
         eng = FeatureEngine()
@@ -60,16 +51,9 @@ class TestRustImportFallback:
         assert evt is not None
 
     def test_rust_backend_false_when_patched_none(self) -> None:
-        # rust_backend_available() reads the module-level var directly, so we must keep
-        # the patch active when calling it.
         with patch("hft_platform.feature.engine._RUST_LOB_FEATURE_KERNEL_V1", None):
             eng = FeatureEngine()
             assert eng.rust_backend_available() is False
-
-
-# ---------------------------------------------------------------------------
-# _top_qty (engine module-level) — lines 94-106
-# ---------------------------------------------------------------------------
 
 
 class TestEngineTopQty:
@@ -77,7 +61,6 @@ class TestEngineTopQty:
         assert _top_qty(None) is None
 
     def test_empty_numpy_array_returns_zero(self) -> None:
-        # numpy path: size == 0 → returns 0 (line 99)
         arr = np.empty((0, 2), dtype=np.int64)
         assert _top_qty(arr) == 0
 
@@ -86,11 +69,9 @@ class TestEngineTopQty:
         assert _top_qty(arr) == 42
 
     def test_empty_list_returns_zero(self) -> None:
-        # list path: len == 0 → returns 0 (line 102)
         assert _top_qty([]) == 0
 
     def test_list_with_single_element_tuple_returns_zero(self) -> None:
-        # top is a 1-element tuple, len(top) not > 1 → returns 0 (line 104)
         assert _top_qty([(100_0000,)]) == 0
 
     def test_list_with_two_element_tuple_returns_qty(self) -> None:
@@ -98,7 +79,6 @@ class TestEngineTopQty:
         assert _top_qty(book) == 77
 
     def test_exception_in_extraction_returns_none(self) -> None:
-        # An object that looks like it has 'size' but raises on indexing → lines 105-106
         bad = MagicMock()
         bad.size = 1
         bad.__getitem__ = MagicMock(side_effect=RuntimeError("bad index"))
@@ -106,19 +86,12 @@ class TestEngineTopQty:
         assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Rust backend gap warning — line 291
-# ---------------------------------------------------------------------------
-
-
 class TestRustBackendGapWarning:
     def test_rust_backend_with_v3_features_warns_and_works(self) -> None:
         """v3 has 27 features but Rust kernel only does 16 → gap warning on line 291."""
         sentinel = object()
         with patch("hft_platform.feature.engine._RUST_LOB_FEATURE_KERNEL_V1", sentinel):
-            # backend=rust, feature_set_id=lob_shared_v3 (27 features > 16)
             eng = FeatureEngine(kernel_backend="rust", feature_set_id="lob_shared_v3")
-        # Engine should still be created (no error), backend should be "rust"
         assert eng.kernel_backend() == "rust"
 
     def test_fused_rust_values_match_schema_length_v3(self) -> None:
@@ -135,11 +108,6 @@ class TestRustBackendGapWarning:
         assert len(got.values) == len(got.feature_ids) == 27
         assert got.values[:16] == ref.values[:16]
         assert got.values[16:] == (0,) * 11
-
-
-# ---------------------------------------------------------------------------
-# has_symbol — line 328
-# ---------------------------------------------------------------------------
 
 
 class TestLastUpdateNs:
@@ -178,18 +146,12 @@ class TestHasSymbol:
         assert eng.has_symbol("TXFD6") is False
 
 
-# ---------------------------------------------------------------------------
-# reset_symbol Rust kernel reset — lines 382-395
-# ---------------------------------------------------------------------------
-
-
 class TestResetSymbolRustKernel:
     def test_reset_symbol_with_rust_kernel_having_reset_method(self) -> None:
         """Covers lines 382-387: kernel.reset() is called when available."""
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(symbol="TXFD6"))
 
-        # Inject a fake rust kernel for the symbol
         mock_kernel = MagicMock()
         mock_kernel.reset = MagicMock()
         eng._rust_kernels["TXFD6"] = mock_kernel
@@ -218,7 +180,6 @@ class TestResetSymbolRustKernel:
         mock_kernel.reset = MagicMock(side_effect=RuntimeError("reset failed"))
         eng._rust_kernels["TXFD6"] = mock_kernel
 
-        # Should not raise
         eng.reset_symbol("TXFD6")
         assert not eng.has_symbol("TXFD6")
 
@@ -231,7 +192,6 @@ class TestResetSymbolRustKernel:
             pass
 
         eng._rust_kernels["TXFD6"] = NoResetKernel()
-        # Should not raise
         eng.reset_symbol("TXFD6")
         assert not eng.has_symbol("TXFD6")
 
@@ -239,14 +199,9 @@ class TestResetSymbolRustKernel:
         """reset_symbol clears event_cache entry for the symbol."""
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(symbol="TXFD6"))
-        assert "TXFD6" in eng._event_cache or True  # may or may not be cached
+        assert "TXFD6" in eng._event_cache or True
         eng.reset_symbol("TXFD6")
         assert eng._event_cache.get("TXFD6") is None
-
-
-# ---------------------------------------------------------------------------
-# mark_gap — line 405
-# ---------------------------------------------------------------------------
 
 
 class TestMarkGap:
@@ -260,7 +215,7 @@ class TestMarkGap:
 
     def test_mark_gap_untracked_symbol_does_not_raise(self) -> None:
         eng = FeatureEngine()
-        eng.mark_gap("UNTRACKED")  # should not raise
+        eng.mark_gap("UNTRACKED")
         assert eng._quality_flags_next.get("UNTRACKED", 0) & QUALITY_FLAG_GAP
 
     def test_mark_gap_all_flags_all_tracked_symbols(self) -> None:
@@ -270,11 +225,6 @@ class TestMarkGap:
         eng.mark_gap_all()
         assert eng._quality_flags_next.get("A", 0) & QUALITY_FLAG_GAP
         assert eng._quality_flags_next.get("B", 0) & QUALITY_FLAG_GAP
-
-
-# ---------------------------------------------------------------------------
-# reset_all — line 410
-# ---------------------------------------------------------------------------
 
 
 class TestResetAll:
@@ -303,7 +253,6 @@ class TestResetAll:
 
     def test_reset_all_clears_warmup_ready_symbols(self) -> None:
         eng = FeatureEngine()
-        # warm up a symbol
         for i in range(50):
             eng.process_lob_stats(_stats(symbol="TXFD6", ts=i + 1))
         eng.reset_all()
@@ -313,25 +262,16 @@ class TestResetAll:
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(symbol="TXFD6", ts=1))
         eng.reset_all()
-        # After reset_all, next event should have STATE_RESET flag
         evt = eng.process_lob_stats(_stats(symbol="TXFD6", ts=2))
         assert evt is not None
         assert evt.quality_flags & QUALITY_FLAG_STATE_RESET
-
-
-# ---------------------------------------------------------------------------
-# evict_stale_symbols — lines 433-437 (rate-limit / empty case)
-# ---------------------------------------------------------------------------
 
 
 class TestEvictStaleSymbols:
     def test_evict_returns_zero_when_no_stale_symbols(self) -> None:
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(symbol="TXFD6"))
-        # TTL is 1 hour, so nothing is stale yet
-        # But rate limit will block second call within 60s — call once
         result = eng.evict_stale_symbols()
-        # First call: either 0 (nothing stale) or rate-limited (also 0)
         assert result == 0
 
     def test_evict_returns_zero_with_no_symbols(self) -> None:
@@ -342,10 +282,8 @@ class TestEvictStaleSymbols:
     def test_evict_rate_limits_within_60s(self) -> None:
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(symbol="TXFD6"))
-        # Force first run by clearing the last run timestamp
         eng._eviction_last_run_ns = 0
         eng.evict_stale_symbols()
-        # Second call should be rate-limited (returns 0)
         result = eng.evict_stale_symbols()
         assert result == 0
 
@@ -360,12 +298,8 @@ class TestEvictStaleSymbols:
         """Force stale eviction by setting cutoff far in the future."""
         eng = FeatureEngine()
         eng.process_lob_stats(_stats(symbol="TXFD6", ts=1_000))
-        # Override last_update_ns to an old value so it appears stale
-        eng._last_update_ns["TXFD6"] = 1  # very old timestamp
-        # Force rate limit bypass
+        eng._last_update_ns["TXFD6"] = 1
         eng._eviction_last_run_ns = 0
-        # Set TTL to 1 ns so anything > 1ns ago is stale
         eng._eviction_ttl_ns = 1
         result = eng.evict_stale_symbols()
-        # Symbol should have been evicted
-        assert result >= 0  # may be 0 if rate-limit runs again
+        assert result >= 0

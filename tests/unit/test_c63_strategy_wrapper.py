@@ -33,7 +33,7 @@ from hft_platform.strategies.c63_txfd6_tight_spread_maker import (
 def _make_stats(
     symbol: str = "TXFD6",
     best_bid: int = 17500 * 10_000,
-    best_ask: int = 17503 * 10_000,  # 3 pt spread default (hit threshold)
+    best_ask: int = 17503 * 10_000,
     spread_scaled: int | None = None,
     mid_price_x2: int | None = None,
     imbalance: float = 0.0,
@@ -55,11 +55,6 @@ def _make_stats(
         bid_depth=bid_depth,
         ask_depth=ask_depth,
     )
-
-
-# ----------------------------------------------------------------------------
-# Instantiation + slots
-# ----------------------------------------------------------------------------
 
 
 def test_instantiation_default() -> None:
@@ -103,11 +98,6 @@ def test_default_parameters_match_canonical_sp3_mp3() -> None:
     assert s._spread_threshold_pts == 3
     assert s._inventory_skew_tenths == 2
     assert s._variant_label == "R47-minimal-tight-spread"
-
-
-# ----------------------------------------------------------------------------
-# strategies.yaml — enabled=false; mutual exclusion with C33
-# ----------------------------------------------------------------------------
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -160,7 +150,7 @@ def test_strategies_yaml_c63_params_canonical() -> None:
     assert c63 is not None
     p = c63["params"]
     assert p["max_pos"] == 3
-    assert p["spread_threshold_pts"] == 3  # C63's signature lever
+    assert p["spread_threshold_pts"] == 3
     assert p["inventory_skew_tenths"] == 2
     assert p["variant"] == "R47-minimal-tight-spread"
     assert p["shadow_mode"] is True
@@ -184,13 +174,7 @@ def test_strategies_yaml_c33_c63_never_both_enabled() -> None:
     c33 = _find(cfg, "C33_TXFD6_SOLO_MAKER")
     c63 = _find(cfg, "C63_TXFD6_TIGHT_SPREAD_MAKER")
     assert c33 is not None and c63 is not None
-    # Both cannot be True at same time on TXFD6.
     assert not (c33["enabled"] and c63["enabled"]), "C33 and C63 are mutually exclusive on TXFD6 — double-book risk"
-
-
-# ----------------------------------------------------------------------------
-# strategy_limits.yaml — HARD cost gate + 7 rules
-# ----------------------------------------------------------------------------
 
 
 def _load_limits() -> dict:
@@ -220,39 +204,26 @@ def test_strategy_limits_c63_auto_disable_7_canonical_rules() -> None:
     """All 7 rules per team-lead T8 dispatch must be encoded."""
     cfg = _load_limits()
     ad = cfg["strategies"]["C63_TXFD6_TIGHT_SPREAD_MAKER"]["auto_disable"]
-    # Rule 1 (HARD) — cost gate
     assert ad["hard_cost_gate_retail_rt_max_pt"] == 2.5
     assert ad["hard_cost_gate_action"] == "ABORT_BEFORE_DEPLOY"
-    # Rule 2 — rolling PnL floor
     assert ad["rolling_pnl_window_days"] == 5
     assert ad["rolling_pnl_min_ntd_per_day"] == 20000
     assert ad["rolling_pnl_trigger_count"] == 2
-    # Rule 3 — spread regime drift 3..6 pt with 20% baseline 4
     assert ad["spread_regime_baseline_pt"] == 4
     assert ad["spread_regime_floor_pt"] == 3
     assert ad["spread_regime_ceiling_pt"] == 6
     assert ad["spread_regime_drift_pct_max"] == 20
     assert ad["spread_regime_consec_days"] == 3
-    # Rule 4 — close-maker rate
     assert ad["shadow_close_maker_rate_min"] == 0.80
     assert ad["shadow_close_maker_trailing_cycles"] == 200
-    # Rule 5 — loss tail
     assert ad["loss_tail_ratio_max"] == 2
     assert ad["loss_tail_consec_days"] == 2
-    # Rule 6 — shortfall vs projection (20% of 34,404 after 30 days)
     assert ad["shadow_pnl_vs_projection_floor_pct"] == 20
     assert ad["shadow_projection_ntd_per_day"] == 34404
     assert ad["shadow_projection_min_days"] == 30
-    # Rule 7 — walk-forward k=5
     assert ad["walk_forward_k"] == 5
     assert ad["walk_forward_min_positive"] == 3
-    # Structural: mutual exclusion docs
     assert ad["mutually_exclusive_with"] == "C33_TXFD6_SOLO_MAKER"
-
-
-# ----------------------------------------------------------------------------
-# Price scaling (Precision Law)
-# ----------------------------------------------------------------------------
 
 
 def test_price_scale_constant_is_10k() -> None:
@@ -261,12 +232,11 @@ def test_price_scale_constant_is_10k() -> None:
 
 def test_on_stats_runs_without_error() -> None:  # noqa: no-assert
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
-    s.on_stats(_make_stats())  # should not raise
+    s.on_stats(_make_stats())
 
 
 def test_on_stats_skips_invalid_spread() -> None:
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
-    # spread = 2 pt (< 3 threshold); no quote
     s.on_stats(_make_stats(best_bid=17500 * 10_000, best_ask=17502 * 10_000))
     assert s._spread_blocked == 1
     assert s._quotes_posted == 0
@@ -275,12 +245,6 @@ def test_on_stats_skips_invalid_spread() -> None:
 def test_on_stats_skips_zero_prices() -> None:  # noqa: no-assert
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
     s.on_stats(_make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0))
-    # early return; no raise
-
-
-# ----------------------------------------------------------------------------
-# Spread gate — C63's signature lever (sp=3 vs C33's sp=5)
-# ----------------------------------------------------------------------------
 
 
 def test_spread_gate_blocks_at_sp2() -> None:
@@ -305,11 +269,6 @@ def test_spread_gate_admits_at_sp5() -> None:
     assert s._quotes_posted == 2
 
 
-# ----------------------------------------------------------------------------
-# R47-minimal: all four signal layers NOT referenced
-# ----------------------------------------------------------------------------
-
-
 def test_wrapper_has_no_signal_layer_attributes() -> None:
     s = C63TxfD6TightSpreadMaker("c63_test", subscribe_symbols=["TXFD6"])
     for attr in (
@@ -321,7 +280,7 @@ def test_wrapper_has_no_signal_layer_attributes() -> None:
         "_queue_state",
         "_mfg_state",
         "_qi_state",
-        "_qi_skew_threshold",  # no D4 QI for TXFD6 (C33 precedent)
+        "_qi_skew_threshold",
         "_qi_skew_widen_ticks",
         "_enable_qi_layer",
     ):
@@ -337,11 +296,6 @@ def test_wrapper_does_not_import_r47_signal_state_classes() -> None:
         source = f.read()
     for sym in ("_PEState", "_QueueState", "_MFGState", "_QIState"):
         assert sym not in source, f"R47-minimal violation: wrapper references {sym}"
-
-
-# ----------------------------------------------------------------------------
-# max_pos gate (canonical mp=3)
-# ----------------------------------------------------------------------------
 
 
 def _make_fill(side_enum: object, qty: int = 1, price: int = 17500 * 10_000):
@@ -395,11 +349,6 @@ def test_on_gap_clears_transient_state() -> None:
     assert s._last_ask == {}
 
 
-# ----------------------------------------------------------------------------
-# Runtime mode default
-# ----------------------------------------------------------------------------
-
-
 def test_shadow_mode_defaults_to_false() -> None:
     s = C63TxfD6TightSpreadMaker("c63_test")
     assert s._shadow_mode is False
@@ -408,13 +357,7 @@ def test_shadow_mode_defaults_to_false() -> None:
 def test_queue_share_informational_only() -> None:
     s = C63TxfD6TightSpreadMaker("c63_test", queue_share=0.05, subscribe_symbols=["TXFD6"])
     s.on_stats(_make_stats())
-    # Still quotes (queue_share does not gate).
     assert s._quotes_posted == 2
-
-
-# ----------------------------------------------------------------------------
-# Cross-candidate distinction
-# ----------------------------------------------------------------------------
 
 
 def test_c63_default_threshold_lower_than_c33() -> None:

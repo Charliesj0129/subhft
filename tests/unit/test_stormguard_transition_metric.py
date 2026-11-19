@@ -16,7 +16,6 @@ def _make_guard() -> tuple[StormGuard, MagicMock]:
     mock_metrics = MagicMock()
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=mock_metrics):
         sg = StormGuard()
-    # Disable cooldowns and set de-escalation threshold to 1 for fast recovery
     sg._storm_cooldown_s = 0.0
     sg._halt_cooldown_s = 0.0
     sg._de_escalate_threshold = 1
@@ -28,7 +27,7 @@ class TestStormGuardTransitionMetric:
         """NORMAL → WARM triggers an escalation counter increment."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(order_rtt_us=1_500_000)  # NORMAL → WARM
+        sg.update(order_rtt_us=1_500_000)
 
         mock_metrics.stormguard_transitions_total.labels.assert_called_with(direction="escalation")
         mock_metrics.stormguard_transitions_total.labels().inc.assert_called()
@@ -37,12 +36,11 @@ class TestStormGuardTransitionMetric:
         """HALT → NORMAL triggers a de_escalation counter increment."""
         sg, mock_metrics = _make_guard()
 
-        sg.trigger_halt("test")  # NORMAL → HALT (escalation)
+        sg.trigger_halt("test")
 
-        # Reset call tracking so we only watch the recovery transition
         mock_metrics.reset_mock()
 
-        sg.update(latency_us=0, feed_gap_s=0.0)  # HALT → NORMAL
+        sg.update(latency_us=0, feed_gap_s=0.0)
 
         calls = mock_metrics.stormguard_transitions_total.labels.call_args_list
         directions = [c.kwargs.get("direction") or (c.args[0] if c.args else None) for c in calls]
@@ -52,9 +50,9 @@ class TestStormGuardTransitionMetric:
         """Each escalation step (NORMAL→WARM, WARM→STORM, STORM→HALT) is counted."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(order_rtt_us=1_500_000)  # NORMAL → WARM
-        sg.update(order_rtt_us=2_500_000)  # WARM → STORM
-        sg.trigger_halt("test halt")  # STORM → HALT
+        sg.update(order_rtt_us=1_500_000)
+        sg.update(order_rtt_us=2_500_000)
+        sg.trigger_halt("test halt")
 
         calls = mock_metrics.stormguard_transitions_total.labels.call_args_list
         directions = [c.kwargs.get("direction", c.args[0] if c.args else None) for c in calls]
@@ -64,7 +62,7 @@ class TestStormGuardTransitionMetric:
         """Staying in NORMAL state does not increment the counter."""
         sg, mock_metrics = _make_guard()
 
-        sg.update(latency_us=0, feed_gap_s=0.0)  # stays NORMAL
+        sg.update(latency_us=0, feed_gap_s=0.0)
 
         mock_metrics.stormguard_transitions_total.labels.assert_not_called()
 
@@ -96,7 +94,6 @@ class TestStormGuardTransitionMetric:
         sg, mock_metrics = _make_guard()
         mock_metrics.stormguard_transitions_total.labels.return_value.inc.side_effect = RuntimeError("boom")
 
-        # Should not raise; StormGuard state must change correctly
         new_state = sg.update(order_rtt_us=1_500_000)
         assert new_state == StormGuardState.WARM
         assert sg.state == StormGuardState.WARM

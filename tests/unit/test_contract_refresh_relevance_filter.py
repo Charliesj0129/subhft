@@ -75,11 +75,6 @@ def _bare_client() -> mod.ShioajiClient:
     return client
 
 
-# ---------------------------------------------------------------------------
-# B: relevance filter in the contract-refresh diff
-# ---------------------------------------------------------------------------
-
-
 class TestRelevanceFilterInDiff:
     """Diff builder must record ``relevant_count`` (intersection of
     ``added | removed`` with currently-subscribed codes), computed before
@@ -182,11 +177,6 @@ class TestResubscribeGateUsesRelevantCount:
 
         empty_legacy = {"added_codes": [], "removed_codes": []}
         assert _diff_should_resubscribe(empty_legacy) is False
-
-
-# ---------------------------------------------------------------------------
-# C: settle delay in _resubscribe_all
-# ---------------------------------------------------------------------------
 
 
 class TestResubscribeSettleDelay:

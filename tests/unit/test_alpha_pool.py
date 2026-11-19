@@ -136,7 +136,7 @@ def test_optimize_pool_weights_and_marginal(tmp_path: Path):
         alpha_id="alpha_c",
         base_dir=str(base),
         method="ridge",
-        min_uplift=-1.0,  # Force pass for deterministic test.
+        min_uplift=-1.0,
     )
     assert marginal["alpha_id"] == "alpha_c"
     assert "uplift" in marginal

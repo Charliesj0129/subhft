@@ -32,8 +32,6 @@ def generator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     spec = importlib.util.spec_from_file_location("generate_locked_compose_under_test", SCRIPT_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    # setitem, not assignment: the module must not outlive the test and leak
-    # into a later one running in the same pytest worker.
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "LOCKED_COMPOSE", tmp_path / "docker-compose.prod.locked.yml")
@@ -65,11 +63,6 @@ def _permits(generator: Any, candidate: dict[str, Any]) -> bool:
     except SystemExit:
         return False
     return True
-
-
-# --------------------------------------------------------------------------
-# Identity guard: project name and bind roots
-# --------------------------------------------------------------------------
 
 
 def test_an_unchanged_regeneration_is_permitted(generator: Any) -> None:
@@ -114,11 +107,6 @@ def test_an_unparseable_committed_file_refuses_rather_than_overwriting(generator
     with pytest.raises(SystemExit) as excinfo:
         generator._assert_matches_committed_identity(_compose())
     assert "verify identity" in str(excinfo.value)
-
-
-# --------------------------------------------------------------------------
-# Parameterized mounts must stay in short syntax
-# --------------------------------------------------------------------------
 
 
 def _parameterized(source: str, target: str, *, read_only: bool = False) -> dict[str, Any]:
@@ -183,11 +171,6 @@ def test_a_service_with_no_volumes_is_untouched(generator: Any) -> None:
     assert compose["services"]["hft-bot"] == {"image": "hft:latest"}
 
 
-# --------------------------------------------------------------------------
-# Relativization: the artifact must not name the checkout that generated it
-# --------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def rooted(generator: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """``generator`` with its repo root pointed at a scratch checkout."""
@@ -209,7 +192,6 @@ def test_an_env_file_inside_the_checkout_becomes_relative(rooted: Any) -> None:
     compose = _service(rooted, env_file=[{"path": f"{rooted.REPO_ROOT}/.env", "required": True}])
     assert rooted._relativize_repo_paths(compose) == 1
     assert compose["services"]["hft-engine"]["env_file"][0]["path"] == "./.env"
-    # The requirement must survive: a missing .env has to stay a hard failure.
     assert compose["services"]["hft-engine"]["env_file"][0]["required"] is True
 
 
@@ -255,7 +237,7 @@ def test_a_relativized_compose_passes_the_leak_check(rooted: Any) -> None:
     compose = _service(rooted, volumes=[{"type": "bind", "source": f"{rooted.REPO_ROOT}/data", "target": "/app/data"}])
     rooted._relativize_repo_paths(compose)
     assert rooted._generator_local_paths(compose) == []
-    rooted._assert_no_generator_local_paths(compose)  # therefore must not raise
+    rooted._assert_no_generator_local_paths(compose)
 
 
 def test_a_checkout_path_under_a_field_the_rewrite_does_not_know_refuses(rooted: Any) -> None:
@@ -274,4 +256,4 @@ def test_a_checkout_path_under_a_field_the_rewrite_does_not_know_refuses(rooted:
 def test_a_compose_with_no_checkout_paths_is_permitted(rooted: Any) -> None:
     compose = _service(rooted, volumes=[{"type": "bind", "source": "./data", "target": "/app/data"}])
     assert rooted._generator_local_paths(compose) == []
-    rooted._assert_no_generator_local_paths(compose)  # therefore must not raise
+    rooted._assert_no_generator_local_paths(compose)

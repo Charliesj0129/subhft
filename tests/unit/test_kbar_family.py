@@ -89,7 +89,7 @@ def test_kbar_volume_change_ratio_stays_within_the_unit_interval() -> None:
     features = _features()
     values = features["kbar_volume_change_ratio"]
     finite = values[np.isfinite(values)]
-    assert finite.size == values.size - 2  # one NaN per reset segment start
+    assert finite.size == values.size - 2
     assert np.all(np.abs(finite) <= 1.0)
 
 
@@ -111,7 +111,6 @@ def test_kbar_gap_return_never_reaches_across_a_reset_boundary() -> None:
     inputs["high"] = inputs["close"] + 2.0
     inputs["low"] = inputs["close"] - 3.0
     features = build_kbar_family_features(**inputs, reset_mask=_reset_mask(count, 6))
-    # A 50x contract-roll jump lands exactly on the reset; it must not become a signal.
     assert np.isnan(features["kbar_gap_return"][6])
     np.testing.assert_allclose(features["kbar_gap_return"][7], (5000.0 - 1.0 - 5000.0) / 5000.0)
 

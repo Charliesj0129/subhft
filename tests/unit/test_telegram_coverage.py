@@ -8,10 +8,6 @@ import pytest
 
 from hft_platform.notifications.telegram import TelegramSender
 
-# ---------------------------------------------------------------------------
-# TelegramSender.__init__ — aiohttp missing path (lines 69-73)
-# ---------------------------------------------------------------------------
-
 
 class TestTelegramSenderInit:
     def test_enabled_without_aiohttp_disables(self, monkeypatch):
@@ -43,11 +39,6 @@ class TestTelegramSenderInit:
         assert sender._enabled is True
 
 
-# ---------------------------------------------------------------------------
-# TelegramSender.send — oversized message splitting (lines 92-98)
-# ---------------------------------------------------------------------------
-
-
 class TestSendOversizedMessage:
     @pytest.mark.asyncio
     async def test_send_oversized_splits_into_chunks(self):
@@ -58,7 +49,6 @@ class TestSendOversizedMessage:
             enabled=True,
         )
 
-        # Mock the aiohttp session to return 200 for all posts
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
@@ -72,7 +62,6 @@ class TestSendOversizedMessage:
         long_text = "A" * 5000
         result = await sender.send(long_text, critical=True)
         assert result is True
-        # At least 2 POST calls (5000 / 4096 = 2 chunks)
         assert mock_session.post.call_count >= 2
 
     @pytest.mark.asyncio
@@ -109,11 +98,6 @@ class TestSendOversizedMessage:
         assert result is False
 
 
-# ---------------------------------------------------------------------------
-# TelegramSender._split_text — edge cases (lines 105-117)
-# ---------------------------------------------------------------------------
-
-
 class TestSplitText:
     def test_split_on_newline(self):
         text = "line1\nline2\nline3\nline4\nline5"
@@ -133,11 +117,6 @@ class TestSplitText:
         text = "short"
         chunks = TelegramSender._split_text(text, 100)
         assert chunks == ["short"]
-
-
-# ---------------------------------------------------------------------------
-# TelegramSender.close — session handling (lines 198, 202-206)
-# ---------------------------------------------------------------------------
 
 
 class TestTelegramSenderClose:
@@ -166,11 +145,6 @@ class TestTelegramSenderClose:
         await sender.close()
         mock_session.close.assert_not_awaited()
         assert sender._session is None
-
-
-# ---------------------------------------------------------------------------
-# TelegramSender._send_single — exception paths (lines 178-198)
-# ---------------------------------------------------------------------------
 
 
 class TestSendSingleExceptionPaths:

@@ -31,7 +31,6 @@ def load_watchlist(
     with open(wl_path) as f:
         raw = yaml.safe_load(f) or {}
 
-    # Load symbol metadata lookup
     sym_meta: dict[str, dict[str, str]] = {}
     sym_path = Path(symbols_path)
     if sym_path.exists():
@@ -44,7 +43,6 @@ def load_watchlist(
                 "product_type": entry.get("product_type", "stock"),
             }
 
-    # Parse monitor settings
     monitor_cfg = raw.get("monitor", {})
     poll_interval = float(monitor_cfg.get("poll_interval_s", 2.0))
     warmup_ticks = int(monitor_cfg.get("warmup_ticks", 64))
@@ -58,7 +56,6 @@ def load_watchlist(
     replay_ticks = int(os.getenv("HFT_MONITOR_REPLAY_TICKS") or monitor_cfg.get("replay_ticks", warmup_ticks))
 
     _ch_cfg = get_ch_config()
-    # Allow YAML-level overrides for monitor-specific deployments
     ch_host = os.getenv("HFT_CLICKHOUSE_HOST", monitor_cfg.get("ch_host", _ch_cfg["host"]))
     ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT", str(monitor_cfg.get("ch_port", _ch_cfg["port"]))))
     ch_user = (
@@ -91,16 +88,13 @@ def load_watchlist(
         os.getenv("HFT_MONITOR_HYBRID_BACKFILL_INTERVAL_S") or monitor_cfg.get("hybrid_backfill_interval_s", 30.0)
     )
 
-    # S5: auto-derive symbol_source + config
     symbol_source = str(monitor_cfg.get("symbol_source", ""))
     auto_filter_skip_expired = bool(monitor_cfg.get("auto_filter_skip_expired", True))
     pin_symbols = tuple(str(s) for s in monitor_cfg.get("pin_symbols", []))
     default_alpha_ids = tuple(str(a) for a in monitor_cfg.get("default_alpha_ids", []))
 
-    # Parse symbols
     symbols: list[WatchlistSymbol] = []
 
-    # S5: If symbol_source is set, auto-derive symbols from referenced file
     raw_symbols = raw.get("symbols", [])
     if symbol_source:
         symbols = _derive_symbols_from_source(
@@ -110,7 +104,6 @@ def load_watchlist(
             pin_symbols,
             default_alpha_ids,
         )
-        # Merge any explicitly listed symbols (they take priority)
         existing_codes = {s.code for s in symbols}
         for entry in raw_symbols:
             code = str(entry.get("code", ""))
@@ -128,7 +121,6 @@ def load_watchlist(
         raise ValueError("watchlist.yaml: no symbols defined")
 
     if not symbols:
-        # Standard path: parse symbols from watchlist.yaml
         for entry in raw_symbols:
             code = str(entry.get("code", ""))
             if not code:
@@ -144,7 +136,6 @@ def load_watchlist(
                 continue
 
             if code not in sym_meta:
-                # Infer product_type from code pattern: alpha prefix → future/option, numeric → stock
                 product_type = _infer_product_type(code)
                 name = code
                 logger.warning("symbol_not_in_symbols_yaml_using_fallback", code=code, product_type=product_type)
@@ -223,7 +214,6 @@ def _derive_symbols_from_source(
     if not raw_entries:
         return []
 
-    # Build code set for expired filtering
     all_codes = {str(e.get("code", "")) for e in raw_entries}
 
     symbols: list[WatchlistSymbol] = []
@@ -232,7 +222,6 @@ def _derive_symbols_from_source(
         if not code:
             continue
 
-        # S5: skip expired contracts (e.g., TMFC6 when TMFE6 exists)
         if auto_filter_skip_expired and code not in pin_symbols:
             if _is_expired_contract(code, all_codes):
                 logger.info("auto_derive_skip_expired", code=code)
@@ -271,7 +260,6 @@ def _is_expired_contract(code: str, all_codes: set[str]) -> bool:
     if month_ord < ord("A") or month_ord > ord("L"):
         return False
 
-    # Check if any later month exists with same prefix and year
     for later_month in range(month_ord + 1, ord("L") + 1):
         candidate = f"{prefix}{chr(later_month)}{year_char}"
         if candidate in all_codes:
@@ -283,9 +271,8 @@ def _infer_product_type(code: str) -> str:
     """Infer product_type from symbol code pattern."""
     if code.isdigit():
         return "stock"
-    # Futures/options: TX, MX, TM, TXO, etc.
     if any(code.upper().startswith(p) for p in ("TX", "MX", "TM", "SI", "ZE")):
         return "future"
     if "O" in code.upper() and any(c.isdigit() for c in code):
         return "option"
-    return "future"  # default for unknown alpha-prefix codes
+    return "future"

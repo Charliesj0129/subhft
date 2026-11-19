@@ -126,14 +126,13 @@ class TestUnifiedMetricsColumns:
         assert r["monthly_stability"] == "stable"
 
     def test_empty_when_gates_absent(self, _isolated) -> None:
-        _record(run_id="bare")  # only edge gate
+        _record(run_id="bare")
         rows, _ = _csv_rows(audit_cli.export("csv"))
         r = rows["bare"]
         assert r["drawdown_to_avg_monthly_ratio"] == ""
         assert r["worst_loss_share_pct"] == ""
         assert r["replay_match_pct"] == ""
         assert r["replay_divergence_category"] == ""
-        # monthly_stability with no monthly metrics -> "unknown"
         assert r["monthly_stability"] == "unknown"
 
     def test_drawdown_inf_serialized(self, _isolated) -> None:

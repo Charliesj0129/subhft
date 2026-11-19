@@ -35,7 +35,6 @@ from structlog import get_logger
 
 logger = get_logger("observability.code_identity")
 
-# ``.../src/hft_platform`` — the tree that is bind-mounted in production.
 _SOURCE_ROOT = Path(__file__).resolve().parent.parent
 _SHA_LEN = 12
 _UNKNOWN = "unknown"
@@ -55,7 +54,7 @@ def _blob_sha1(data: bytes) -> str:
     sha1 here is a compatibility requirement, not a security choice: the value
     is only useful because an operator can reproduce it with git.
     """
-    digest = hashlib.sha1(b"blob %d\0" % len(data), usedforsecurity=False)  # noqa: S324 - must match git's object id
+    digest = hashlib.sha1(b"blob %d\0" % len(data), usedforsecurity=False)
     digest.update(data)
     return digest.hexdigest()
 
@@ -77,12 +76,10 @@ def compute_code_identity(root: Path | str | None = None) -> CodeIdentity:
             try:
                 blob = _blob_sha1(path.read_bytes())
             except OSError:
-                # Not skipped: a file we cannot read must not hash the same as
-                # a tree that never had it.
                 blob = "UNREADABLE"
             digest.update(f"{rel} {blob}\n".encode())
         return CodeIdentity(digest.hexdigest()[:_SHA_LEN], len(paths), str(src))
-    except Exception:  # noqa: BLE001 - boot-path helper, degrade to "unknown"
+    except Exception:
         logger.warning("code_identity_failed", source_root=str(src), exc_info=True)
         return CodeIdentity(_UNKNOWN, 0, str(src))
 

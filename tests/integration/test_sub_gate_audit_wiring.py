@@ -98,14 +98,10 @@ class TestSubGateAuditWiring:
         assert row["instrument"] == "TMFD6"
         assert row["strategy_type"] == "maker"
         assert row["profile_name"] == "round9_strict"
-        # The R47 fingerprint hits min_sample_size + single_day_dominance.
-        # The FAIL is measured on a short sample, so verdict rules v1 route
-        # it to NEEDS-MORE-DAYS; the wiring must persist that triage status.
         assert row["blocking_passed"] is False
         assert row["triage_status"] == blocking["triage_status"]
         assert row["triage_status"].startswith("sample_")
         assert "min_sample_size" in row["triage_reasons"]
-        # Round 5 metric must round-trip through the writer.
         gates = {g["name"]: g for g in row["sub_gates"]}
         assert "sample_adequacy_label" in gates["min_sample_size"]["metrics"]
 
@@ -131,8 +127,6 @@ class TestSubGateAuditWiring:
         _isolated_audit: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Force the writer to raise; the gate must still return its
-        # advisory + blocking aggregate unchanged.
         monkeypatch.setenv("HFT_SUB_GATE_AUDIT_ENABLED", "1")
 
         def _boom(*_args: Any, **_kwargs: Any) -> bool:
@@ -151,8 +145,6 @@ class TestSubGateAuditWiring:
         assert len(advisory) > 0
 
     def test_missing_run_id_skips_emit_silently(self, _isolated_audit: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Payloads without run_id (legacy fixtures) must not crash the
-        # gate; we just skip the row.
         monkeypatch.setenv("HFT_SUB_GATE_AUDIT_ENABLED", "1")
         payload = _payload()
         payload.pop("run_id")

@@ -25,7 +25,7 @@ def _make_intent() -> OrderIntent:
         symbol="TMFD6",
         intent_type=IntentType.NEW,
         side=Side.BUY,
-        price=171_950_000,  # scaled int x10000
+        price=171_950_000,
         qty=1,
         tif=TIF.LIMIT,
         target_order_id=None,
@@ -44,8 +44,6 @@ class TestIntentTopicRegistration(unittest.TestCase):
     """Topic gating by ``HFT_INTENT_RECORDER_ENABLED`` (default 0)."""
 
     def setUp(self) -> None:
-        # Disable ClickHouse so RecorderService.__init__ does not open a network
-        # connection when the writer is constructed. We only exercise __init__.
         self._env = patch.dict(os.environ, {"HFT_CLICKHOUSE_ENABLED": "0"}, clear=False)
         self._env.start()
 
@@ -80,7 +78,6 @@ class TestExtractIntentValuesRoundTrip(unittest.TestCase):
         envelope = {"intent": intent, "ingest_ts": ingest_ts}
         values = worker_mod._extract_intent_values(envelope)
         self.assertIsNotNone(values)
-        # One value per declared column.
         self.assertEqual(len(values), len(worker_mod.INTENT_COLUMNS))
 
         as_dict = dict(zip(worker_mod.INTENT_COLUMNS, values))
@@ -93,7 +90,6 @@ class TestExtractIntentValuesRoundTrip(unittest.TestCase):
         self.assertEqual(as_dict["price_scaled"], intent.price)
         self.assertEqual(as_dict["qty"], intent.qty)
         self.assertEqual(as_dict["tif"], intent.tif.name)
-        # target_order_id None → empty string for ClickHouse String column.
         self.assertEqual(as_dict["target_order_id"], "")
         self.assertEqual(as_dict["timestamp_ns"], intent.timestamp_ns)
         self.assertEqual(as_dict["source_ts_ns"], intent.source_ts_ns)

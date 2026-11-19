@@ -52,9 +52,7 @@ class TAIFEXCost:
         return gross_pnl_pts - n_fills * self.cost_per_side_pts
 
 
-# Relative to the repo root, not the cwd (see ``hft_platform.alpha.paths``).
 _CONFIG_PATH = Path("config/research/cost_profiles.yaml")
-# Keyed by the resolved file, so a different file is never served from another's cache.
 _cache: dict[Path, dict[str, TAIFEXCost]] = {}
 
 
@@ -77,9 +75,7 @@ def _load_all() -> dict[str, TAIFEXCost]:
     return profiles
 
 
-# TAIFEX month codes A-L (Jan-Dec) plus the year digit: TMFJ6 is the October 2026 TMF contract.
 _CONTRACT_MONTH_CODE = re.compile(r"^(?P<root>TXF|MXF|TMF)[A-L]\d$")
-# A rolled front-month series (research/backtest/rolled_series.py) trades only that root's months.
 _ROLLED_SERIES = re.compile(r"^(?P<root>TXF|MXF|TMF)_frontmonth$")
 
 

@@ -93,7 +93,6 @@ class TestStripL7Columnar:
     """Verify columnar-payload audit-column strip behavior."""
 
     def _payload(self) -> tuple[list[str], list[list[object]]]:
-        # 4 columns, 2 rows. 'trace_id' is one of the 7 L7 audit columns.
         column_names = ["order_id", "strategy_id", "price_scaled", "trace_id"]
         column_data = [
             ["ord-1", "ord-2"],
@@ -123,12 +122,10 @@ class TestStripL7Columnar:
 
     def test_non_audit_table_always_passes_through(self) -> None:
         writer = _make_writer()
-        writer._l7_audit_active_tables = set()  # legacy mode
-        names = ["symbol", "trace_id"]  # trace_id present but table is exempt
+        writer._l7_audit_active_tables = set()
+        names = ["symbol", "trace_id"]
         data = [["TMFR1"], ["t-abc"]]
         out_names, out_data = writer._strip_l7_columnar("hft.market_data", names, data)
-        # market_data is not in _L7_AUDIT_TABLES — pass-through even though
-        # 'trace_id' shadows an audit column name.
         assert out_names == names
         assert out_data == data
 
@@ -138,7 +135,6 @@ class TestStripL7Columnar:
         names = ["order_id", "price_scaled"]
         data = [["ord-1"], [100]]
         out_names, out_data = writer._strip_l7_columnar("hft.orders", names, data)
-        # Identity since no audit columns to drop.
         assert out_names == names
         assert out_data == data
 
@@ -176,7 +172,6 @@ class TestStripL7RowDicts:
         out = writer._strip_l7_rowdicts("hft.fills", rows)
         for row in out:
             assert _L7_AUDIT_COLUMN_NAMES.isdisjoint(row.keys())
-        # Non-audit keys preserved.
         assert out[0]["order_id"] == "ord-1"
         assert out[0]["strategy_id"] == "r47_maker"
 
@@ -185,5 +180,4 @@ class TestStripL7RowDicts:
         writer._l7_audit_active_tables = set()
         rows = [{"symbol": "TMFR1", "trace_id": "t-abc"}]
         out = writer._strip_l7_rowdicts("hft.market_data", rows)
-        # market_data is exempt — even an audit-named key passes through.
         assert out == rows

@@ -28,8 +28,6 @@ def _to_date(value: object) -> date:
     return _EPOCH
 
 
-# ── CC-5: Schema extractors ──────────────────────────────────────────────
-
 MARKET_DATA_COLUMNS = [
     "symbol",
     "exchange",
@@ -44,7 +42,6 @@ MARKET_DATA_COLUMNS = [
     "asks_vol",
     "seq_no",
     "trade_direction",
-    # Multi-instrument fields (added 2026-03-30)
     "instrument_type",
     "underlying",
     "strike_scaled",
@@ -52,12 +49,6 @@ MARKET_DATA_COLUMNS = [
     "expiry",
 ]
 
-# L7 (loop_v1): canonical 7-column audit chain appended to ORDER_COLUMNS and
-# FILL_COLUMNS. These are the audit columns added by migrations
-# 20260505_001_add_audit_columns_to_orders.sql and
-# 20260505_002_add_audit_columns_to_fills.sql. Order MUST stay stable — the
-# dual-write filter in recorder/writer.py strips this exact suffix when the
-# destination table has not yet had the L7 migrations applied.
 L7_AUDIT_COLUMNS: tuple[str, ...] = (
     "trace_id",
     "feature_snapshot_id",
@@ -119,9 +110,6 @@ PNL_SNAPSHOT_COLUMNS = [
     "drawdown_pct",
 ]
 
-# L8 (loop_v1): canonical per-order explanation topic (opt-in).
-# Aligned with ``hft.order_explanations`` (migration 20260505_003).
-# Each value position MUST match _EXTRACTOR_COLUMNS["explanations"].
 EXPLANATION_COLUMNS = [
     "trace_id",
     "client_order_id",
@@ -144,10 +132,6 @@ EXPLANATION_COLUMNS = [
 ]
 
 
-# Slice C task 3: opt-in OrderIntent recorder topic (HFT_INTENT_RECORDER_ENABLED).
-# Aligned with the ``hft.order_intents`` table created by migration
-# ``20260504_001_create_order_intents.sql``. Each value position MUST match the
-# column ordering registered in ``_EXTRACTOR_COLUMNS["intents"]``.
 INTENT_COLUMNS = [
     "intent_id",
     "strategy_id",
@@ -189,7 +173,6 @@ def _extract_market_data_values(row) -> list | None:
                 get("asks_vol"),
                 get("seq_no", get("seq", 0)),
                 get("trade_direction", 0),
-                # Multi-instrument fields (added 2026-03-30)
                 get("instrument_type", ""),
                 get("underlying", ""),
                 int(get("strike_scaled", 0)),
@@ -210,7 +193,6 @@ def _extract_market_data_values(row) -> list | None:
             getattr(row, "asks_vol", None),
             getattr(row, "seq_no", None) or getattr(row, "seq", None) or 0,
             getattr(row, "trade_direction", 0),
-            # Multi-instrument fields (added 2026-03-30)
             getattr(row, "instrument_type", ""),
             getattr(row, "underlying", ""),
             int(getattr(row, "strike_scaled", 0)),
@@ -246,7 +228,6 @@ def _extract_order_values(row) -> list | None:
                 get("latency_us", 0),
                 get("instrument_type", ""),
                 get("oc_type", ""),
-                # L7 audit columns
                 get("trace_id", ""),
                 get("feature_snapshot_id", ""),
                 get("risk_decision_id", ""),
@@ -268,7 +249,6 @@ def _extract_order_values(row) -> list | None:
             getattr(row, "latency_us", 0),
             getattr(row, "instrument_type", ""),
             getattr(row, "oc_type", ""),
-            # L7 audit columns
             getattr(row, "trace_id", "") or "",
             getattr(row, "feature_snapshot_id", "") or "",
             getattr(row, "risk_decision_id", "") or "",
@@ -324,7 +304,6 @@ def _extract_fill_values(row) -> list | None:
                 get("source", ""),
                 get("instrument_type", ""),
                 get("oc_type", ""),
-                # L7 audit columns
                 get("trace_id", ""),
                 get("feature_snapshot_id", ""),
                 get("risk_decision_id", ""),
@@ -354,7 +333,6 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "source", ""),
             getattr(row, "instrument_type", ""),
             getattr(row, "oc_type", ""),
-            # L7 audit columns
             getattr(row, "trace_id", "") or "",
             getattr(row, "feature_snapshot_id", "") or "",
             getattr(row, "risk_decision_id", "") or "",
@@ -363,7 +341,7 @@ def _extract_fill_values(row) -> list | None:
             getattr(row, "git_sha", "") or "",
             getattr(row, "data_session_id", "") or "",
         ]
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return None
 
 
@@ -390,13 +368,8 @@ def _extract_pnl_snapshot_values(row) -> list | None:
         return None
 
 
-# Positional layout of the typed-intent fast-path frame built by
-# ``StrategyRunner._make_intent`` (``strategy/runner.py:891-910``) and decoded
-# by ``gateway.channel.typed_frame_to_view``. Duplicated here because the
-# recorder must not import the gateway; ``tests/unit/
-# test_intent_recorder_typed_tuple.py`` fails if the two ever drift apart.
 _TYPED_FRAME_TAG = "typed_intent_v1"
-_TYPED_FRAME_MIN_LEN = 17  # legacy frames stop at decision_price (index 16)
+_TYPED_FRAME_MIN_LEN = 17
 
 
 def _enum_name(enum_cls, value) -> str:
@@ -418,7 +391,7 @@ def _extract_typed_intent_values(frame: tuple, ingest_ts: int) -> list | None:
     """
     if len(frame) < _TYPED_FRAME_MIN_LEN:
         return None
-    from hft_platform.contracts.strategy import TIF, IntentType, Side  # noqa: PLC0415 — keeps import-time cheap
+    from hft_platform.contracts.strategy import TIF, IntentType, Side
 
     try:
         return [
@@ -427,13 +400,13 @@ def _extract_typed_intent_values(frame: tuple, ingest_ts: int) -> list | None:
             str(frame[3]),
             _enum_name(IntentType, frame[4]),
             _enum_name(Side, frame[5]),
-            int(frame[6]),  # scaled int x10000
+            int(frame[6]),
             int(frame[7]),
             _enum_name(TIF, frame[8]),
             str(frame[9] or ""),
             int(frame[10]),
             int(frame[11]),
-            int(frame[16]),  # decision_price
+            int(frame[16]),
             str(frame[17]) if len(frame) > 17 and frame[17] else "LMT",
             str(frame[13] or ""),
             str(frame[14] or ""),
@@ -477,7 +450,7 @@ def _extract_intent_values(row) -> list | None:
             str(getattr(intent, "symbol", "")),
             getattr(getattr(intent, "intent_type", None), "name", str(getattr(intent, "intent_type", ""))),
             getattr(getattr(intent, "side", None), "name", str(getattr(intent, "side", ""))),
-            int(getattr(intent, "price", 0)),  # scaled int x10000
+            int(getattr(intent, "price", 0)),
             int(getattr(intent, "qty", 0)),
             getattr(getattr(intent, "tif", None), "name", str(getattr(intent, "tif", ""))),
             str(getattr(intent, "target_order_id", "") or ""),
@@ -491,7 +464,7 @@ def _extract_intent_values(row) -> list | None:
             str(getattr(intent, "reason", "") or ""),
             int(row.get("ingest_ts", 0) if isinstance(row, dict) else 0),
         ]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
         return None
 
@@ -510,7 +483,7 @@ def _extract_explanation_values(row) -> list | None:
     if row is None:
         return None
     try:
-        import orjson  # noqa: PLC0415 — local import keeps import-time cheap
+        import orjson
     except ImportError:  # pragma: no cover
         import json as orjson  # type: ignore[no-redef]
 
@@ -522,7 +495,7 @@ def _extract_explanation_values(row) -> list | None:
         try:
             data = orjson.dumps(v)
             return data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return str(v)
 
     try:
@@ -568,7 +541,7 @@ def _extract_explanation_values(row) -> list | None:
             str(getattr(row, "lifecycle_status", "") or ""),
             int(getattr(row, "ts_emit", 0) or 0),
         ]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
         return None
 
@@ -594,15 +567,12 @@ def _extract_fill(row) -> dict | None:
     return _values_to_dict(FILL_COLUMNS, _extract_fill_values(row))
 
 
-# Map of topic -> preordered-values extractor function (CC-5)
 _EXTRACTORS = {
     "market_data": _extract_market_data_values,
     "orders": _extract_order_values,
     "fills": _extract_fill_values,
     "pnl_snapshots": _extract_pnl_snapshot_values,
-    # Slice C task 3: opt-in intents topic, gated below in RecorderService.__init__
     "intents": _extract_intent_values,
-    # L8: opt-in explanations topic, gated below in RecorderService.__init__
     "explanations": _extract_explanation_values,
 }
 
@@ -662,7 +632,7 @@ def _sweep_wal_orphan_tmpfiles(wal_dir: str, max_age_s: float = 300.0) -> int:
                 m = MetricsRegistry.get()
                 if m is not None:
                     m.wal_orphan_tmp_cleaned_total.labels(location="bootstrap_sweep").inc()
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 pass
         except OSError as exc:
             logger.warning("wal_orphan_tmp_unlink_failed", path=path, error=str(exc))
@@ -675,30 +645,21 @@ class RecorderService:
     def __init__(self, queue: asyncio.Queue, _clickhouse_client=None):
         self.queue = queue
         self.running = False
-        # H10: single-path shutdown guard. Set once run()'s finally has
-        # drained+flushed so the synchronous fallback (_sync_drain_recorder)
-        # does not race on the same writer/batchers.
         self._shutdown_drained = False
-        # Health attributes for health endpoint probes
         self.healthy: bool = True
-        self.last_write_ok: int = 0  # nanosecond timestamp of last successful write
+        self.last_write_ok: int = 0
 
-        # CE3-01: Recorder mode
         self._mode = get_recorder_mode()
-        self._wal_first_writer = None  # set in run() when mode=wal_first
+        self._wal_first_writer = None
 
-        # EC-5: Health tracker
         self.health_tracker = PipelineHealthTracker()
 
-        # EC-1: Global memory guard
         self.memory_guard = GlobalMemoryGuard.get()
         self.memory_guard.set_health_tracker(self.health_tracker)
 
-        # Init Writer
         self.writer = DataWriter()
         self.writer.set_health_tracker(self.health_tracker)
 
-        # CC-5: Schema extractors enabled flag
         extract_enabled = os.getenv("HFT_BATCHER_SCHEMA_EXTRACT", "1").lower() not in {
             "0",
             "false",
@@ -759,9 +720,6 @@ class RecorderService:
             ),
         }
 
-        # Slice C task 3: opt-in OrderIntent recorder topic. Default disabled
-        # so the existing 7-batcher layout is preserved unless an operator
-        # explicitly turns the producer on.
         intent_enabled = os.getenv("HFT_INTENT_RECORDER_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
         if intent_enabled:
             self.batchers["intents"] = Batcher(
@@ -773,11 +731,6 @@ class RecorderService:
                 health_tracker=self.health_tracker,
             )
 
-        # L8 (loop_v1): opt-in canonical-explanation recorder topic. Default
-        # disabled; auto-enabled when ``HFT_LOOP_ID`` is set (loop runs always
-        # produce explanations) or when the operator opts in via
-        # ``HFT_EXPLANATION_RECORDER_ENABLED=1``. Stays out of the existing
-        # 7-batcher layout otherwise.
         explanation_explicit = os.getenv("HFT_EXPLANATION_RECORDER_ENABLED", "0").lower() in {
             "1",
             "true",
@@ -795,13 +748,10 @@ class RecorderService:
                 health_tracker=self.health_tracker,
             )
 
-        # Register all batchers with memory guard
         for batcher in self.batchers.values():
             self.memory_guard.register(batcher)
 
-        # Counter for events routed to an unknown topic (P-03)
         self._unknown_topic_drops: int = 0
-        # Counter for unexpected processing errors in the main loop
         self._process_errors: int = 0
 
     async def recover_wal(self):
@@ -825,24 +775,16 @@ class RecorderService:
         try:
             from hft_platform.recorder.loader import WALLoaderService
 
-            # We use default config for now, assuming env vars set
             loader = WALLoaderService()
-            # ``self.metrics`` is only assigned by ``_init_run_common``, which
-            # runs from ``run``/``run_async`` -- neither of which this recovery
-            # path calls. Left unset, every ``if svc.metrics:`` guard inside the
-            # loader is dead, so a boot-time replay that dead-letters rows does
-            # so without touching dlq_size_total. The engine registry is scraped,
-            # so wiring it here makes the recovery pass observable.
             try:
                 from hft_platform.observability.metrics import MetricsRegistry
 
                 loader.metrics = MetricsRegistry.get()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("wal_recovery_metrics_unavailable", error=str(exc))
             await asyncio.to_thread(loader.connect)
             if loader.ch_client:
                 logger.info("Starting WAL Recovery...")
-                # Run in thread to avoid blocking loop if heavy
                 await asyncio.to_thread(loader.process_files)
                 logger.info("WAL Recovery Complete")
             else:
@@ -854,38 +796,21 @@ class RecorderService:
         self.running = True
         logger.info("Recorder started", mode=self._mode.value)
 
-        # M2 (2026-04-25): one-shot orphan tmpfile sweep at recorder bootstrap.
-        # Production evidence: 8 ``tmp*.tmp`` files aged 5–13 days in
-        # ``/app/.wal/``, indicating prior runs crashed between mkstemp and
-        # rename. The per-call ``finally:`` cleanup added in this commit
-        # prevents NEW orphans, but legacy orphans persist on disk. This
-        # sweep removes any tmp*.tmp older than 5 minutes (so we don't
-        # disturb in-flight writes from any peer process).
         try:
             _sweep_wal_orphan_tmpfiles(os.getenv("HFT_WAL_DIR", ".wal"))
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("wal_orphan_tmp_sweep_failed", error=str(exc))
 
-        # CE3-01: set wal_mode metric
         try:
             from hft_platform.observability.metrics import MetricsRegistry
 
             _reg = MetricsRegistry.get()
             _reg.wal_mode.set(1 if self._mode == RecorderMode.WAL_FIRST else 0)
-            # R2 (2026-04-24): in wal_first mode the engine does NOT open a
-            # direct ClickHouse connection — DataWriter.connect_async() is
-            # gated below by `self._mode != RecorderMode.WAL_FIRST`, so the
-            # gauge that DataWriter normally owns stays at its default 0 and
-            # permanently triggers ClickHouseConnectionDown. Mark healthy here
-            # since WAL-loader is the component responsible for CH ingestion
-            # in this mode. In direct-CH mode we leave the gauge alone and
-            # let DataWriter.connect_async() report actual connect health.
             if self._mode == RecorderMode.WAL_FIRST:
                 _reg.clickhouse_connection_health.set(1)
         except Exception as exc:
             logger.debug("operation_failed", error=str(exc))
 
-        # CE3-02: init WAL-first writer when in wal_first mode
         if self._mode == RecorderMode.WAL_FIRST:
             from hft_platform.recorder.disk_monitor import DiskPressureMonitor
             from hft_platform.recorder.wal import WALBatchWriter
@@ -900,10 +825,8 @@ class RecorderService:
         if self._mode != RecorderMode.WAL_FIRST:
             await self.writer.connect_async()
 
-        # Attempt recovery
         await self.recover_wal()
 
-        # Start flush ticker
         flush_task = asyncio.create_task(self._flush_loop())
 
         try:
@@ -921,7 +844,6 @@ class RecorderService:
                         )
                         continue
 
-                    # CE3-02: route to WAL-first writer or batcher depending on mode
                     if self._mode == RecorderMode.WAL_FIRST and self._wal_first_writer is not None:
                         if isinstance(data, dict):
                             rows = [data]
@@ -948,7 +870,7 @@ class RecorderService:
                         self._unknown_topic_drops += 1
                         try:
                             MetricsRegistry.get().recorder_exec_drops_total.labels(topic="unknown").inc()
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
                         logger.warning(
                             "recorder_unknown_topic_dropped",
@@ -957,7 +879,7 @@ class RecorderService:
                         )
 
                 except asyncio.CancelledError:
-                    raise  # Must propagate for shutdown
+                    raise
                 except Exception as exc:
                     self._process_errors += 1
                     self.healthy = False
@@ -983,7 +905,6 @@ class RecorderService:
         finally:
             self.running = False
             flush_task.cancel()
-            # Drain remaining queue items before flushing batchers
             await self._drain_queue_into_batchers()
             _shutdown_timeout_s = float(os.getenv("HFT_RECORDER_SHUTDOWN_TIMEOUT_S", "60"))
             try:
@@ -996,8 +917,6 @@ class RecorderService:
                 )
             except asyncio.CancelledError:
                 logger.warning("recorder_shutdown_flush_cancelled")
-            # H10: mark single-path shutdown complete so the sync fallback
-            # (_sync_drain_recorder) skips re-entry on the same writer.
             self._shutdown_drained = True
             logger.info("Recorder stopped")
 
@@ -1024,7 +943,7 @@ class RecorderService:
                     elif topic in self.batchers:
                         await self.batchers[topic].add(data)
                         drained += 1
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.error(
                         "recorder_shutdown_drain_item_error",
                         error=str(exc),
@@ -1070,10 +989,10 @@ class RecorderService:
                 except asyncio.CancelledError:
                     skipped.extend(t for t in all_topics if t not in flushed and t not in timed_out and t != topic)
                     skipped.append(topic)
-                    raise  # Re-raise to exit the loop
+                    raise
                 except Exception as exc:
                     logger.warning("recorder_batcher_flush_error", topic=topic, error=str(exc))
-                    flushed.append(topic)  # Attempted, move on
+                    flushed.append(topic)
             if timed_out:
                 logger.error(
                     "recorder_shutdown_batchers_timed_out",
@@ -1090,10 +1009,8 @@ class RecorderService:
                     timed_out=timed_out,
                     msg="Shutdown timeout — some batchers were not flushed",
                 )
-            raise  # Must re-raise for wait_for to handle
+            raise
 
-        # Flush WAL-first writer before shutting down the main writer,
-        # otherwise buffered WAL data is silently lost (INFRA-005).
         _wfw = getattr(self, "_wal_first_writer", None)
         if _wfw is not None:
             try:
@@ -1109,7 +1026,7 @@ class RecorderService:
 
     async def _flush_loop(self):
         while self.running:
-            await asyncio.sleep(0.1)  # Check every 100ms
+            await asyncio.sleep(0.1)
             for b in self.batchers.values():
                 await b.check_flush()
 

@@ -16,10 +16,6 @@ from hft_platform.ops.strategy_governor import (
     StrategyQuarantine,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_mock_metrics():
     """Create a mock metrics object with required attributes."""
@@ -67,11 +63,6 @@ def _make_intent_factory():
     return factory
 
 
-# ---------------------------------------------------------------------------
-# quarantine and is_quarantined (lines 62-67, 78-80)
-# ---------------------------------------------------------------------------
-
-
 def test_quarantine_sets_quarantine_state():
     metrics = _make_mock_metrics()
     evidence = MagicMock()
@@ -84,7 +75,6 @@ def test_quarantine_sets_quarantine_state():
     assert transition.to_mode == AutonomyMode.STRATEGY_QUARANTINED
     assert transition.manual_rearm_required is True
 
-    # Verify metrics were called
     metrics.autonomy_transitions_total.labels.assert_called()
     metrics.strategy_quarantine_active.labels.assert_called()
 
@@ -94,14 +84,8 @@ def test_quarantine_already_quarantined():
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
 
     governor.quarantine("strat1", reason="strategy_exception")
-    # Re-quarantine should use STRATEGY_QUARANTINED as from_mode
     transition = governor.quarantine("strat1", reason="strategy_reject_spike")
     assert transition.from_mode == AutonomyMode.STRATEGY_QUARANTINED
-
-
-# ---------------------------------------------------------------------------
-# rearm (lines 82-85)
-# ---------------------------------------------------------------------------
 
 
 def test_rearm_removes_quarantine():
@@ -111,9 +95,6 @@ def test_rearm_removes_quarantine():
     governor.quarantine("strat1", reason="strategy_exception")
     assert governor.is_quarantined("strat1") is True
 
-    # The token names the exact quarantine instance being cleared; a re-arm that
-    # does not name the live one is refused, so an authorization for an earlier
-    # failure cannot release a newer one.
     token = governor.quarantine_token("strat1")
     assert governor.rearm("strat1", expected_token=token) is True
     assert governor.is_quarantined("strat1") is False
@@ -122,13 +103,8 @@ def test_rearm_removes_quarantine():
 def test_rearm_not_quarantined_is_noop():
     metrics = _make_mock_metrics()
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
-    assert governor.rearm("strat1", expected_token="any") is False  # should not raise
+    assert governor.rearm("strat1", expected_token="any") is False
     assert governor.is_quarantined("strat1") is False
-
-
-# ---------------------------------------------------------------------------
-# build_cancel_intents (lines 97-99, 103, 106)
-# ---------------------------------------------------------------------------
 
 
 def test_build_cancel_intents_not_quarantined():
@@ -169,31 +145,20 @@ def test_build_cancel_intents_with_trace_info():
     assert len(intents) == 1
 
 
-# ---------------------------------------------------------------------------
-# _set_strategy_quarantine_active (line 111)
-# ---------------------------------------------------------------------------
-
-
 def test_set_strategy_quarantine_active_no_metrics():  # noqa: no-assert
     governor = StrategyHealthGovernor(metrics=None, evidence_writer=None)
-    # Should not raise even with None metrics
     governor._set_strategy_quarantine_active("strat1", active=True)
 
 
 def test_set_strategy_quarantine_active_no_metric_attr():  # noqa: no-assert
-    metrics = MagicMock(spec=[])  # empty spec, no attributes
+    metrics = MagicMock(spec=[])
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
     governor._set_strategy_quarantine_active("strat1", active=True)
 
 
-# ---------------------------------------------------------------------------
-# _set_strategy_scope_state (lines 133-134)
-# ---------------------------------------------------------------------------
-
-
 def test_set_strategy_scope_state_no_metrics():  # noqa: no-assert
     governor = StrategyHealthGovernor(metrics=None, evidence_writer=None)
-    governor._set_strategy_scope_state()  # should not raise
+    governor._set_strategy_scope_state()
 
 
 def test_set_strategy_scope_state_with_quarantine():
@@ -201,7 +166,6 @@ def test_set_strategy_scope_state_with_quarantine():
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
     governor.quarantine("strat1", reason="strategy_exception")
     governor._set_strategy_scope_state()
-    # autonomy_mode should be set to STRATEGY_QUARANTINED value
     metrics.autonomy_mode.labels.assert_called()
 
 
@@ -209,13 +173,7 @@ def test_set_strategy_scope_state_without_quarantine():
     metrics = _make_mock_metrics()
     governor = StrategyHealthGovernor(metrics=metrics, evidence_writer=None)
     governor._set_strategy_scope_state()
-    # Should set NORMAL mode
     metrics.autonomy_mode.labels.assert_called()
-
-
-# ---------------------------------------------------------------------------
-# _build_transition (lines 141-143, 146-155)
-# ---------------------------------------------------------------------------
 
 
 def test_build_transition_known_reason():
@@ -231,7 +189,6 @@ def test_build_transition_known_reason():
 def test_build_transition_unknown_reason_with_prefix_match():
     """When reason is unknown, try strategy_ prefix."""
     governor = StrategyHealthGovernor(metrics=_make_mock_metrics(), evidence_writer=None)
-    # "reject_spike" is not in _ALLOWED_REASON_CODES, but "strategy_reject_spike" is
     transition = governor._build_transition(
         from_mode=AutonomyMode.NORMAL,
         reason="reject_spike",
@@ -248,11 +205,6 @@ def test_build_transition_fully_unknown_reason():
         reason="completely_unknown_reason_xyz",
     )
     assert transition.metric_reason == "unknown"
-
-
-# ---------------------------------------------------------------------------
-# _tag_intent_reason (lines 146-155)
-# ---------------------------------------------------------------------------
 
 
 def test_tag_intent_reason_order_intent():
@@ -280,7 +232,6 @@ def test_tag_intent_reason_dict():
 
 def test_tag_intent_reason_tuple():
     governor = StrategyHealthGovernor(metrics=_make_mock_metrics(), evidence_writer=None)
-    # Create a typed_intent_v1 tuple (16+ elements)
     intent = tuple(["typed_intent_v1"] + [None] * 15)
     tagged = governor._tag_intent_reason(intent, "test_reason")
     assert tagged[12] == "test_reason"
@@ -294,12 +245,7 @@ def test_tag_intent_reason_object_without_reason():
 
     intent = DummyIntent()
     tagged = governor._tag_intent_reason(intent, "test_reason")
-    assert tagged is intent  # returned as-is
-
-
-# ---------------------------------------------------------------------------
-# StrategyQuarantine dataclass
-# ---------------------------------------------------------------------------
+    assert tagged is intent
 
 
 def test_strategy_quarantine_dataclass():
@@ -317,11 +263,6 @@ def test_strategy_quarantine_dataclass():
     assert sq.strategy_id == "s1"
     assert sq.reason == "test"
     assert sq.transition.to_mode == AutonomyMode.STRATEGY_QUARANTINED
-
-
-# ---------------------------------------------------------------------------
-# Evidence writer integration (lines 78-80)
-# ---------------------------------------------------------------------------
 
 
 def test_quarantine_with_evidence_writer():

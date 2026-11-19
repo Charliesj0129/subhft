@@ -54,11 +54,6 @@ def _make_stats(
     )
 
 
-# ----------------------------------------------------------------------------
-# Instantiation + slots
-# ----------------------------------------------------------------------------
-
-
 def test_instantiation_default() -> None:
     strat = C33TxfD6SoloMaker("c33_test")
     assert strat.strategy_id == "c33_test"
@@ -107,11 +102,6 @@ def test_default_parameters_match_exception_live_cap() -> None:
     assert strat._spread_threshold_pts == 5
     assert strat._inventory_skew_tenths == 2
     assert strat._variant_label == "R47-minimal"
-
-
-# ----------------------------------------------------------------------------
-# strategies.yaml enabled=false enforcement
-# ----------------------------------------------------------------------------
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -173,11 +163,6 @@ def test_strategies_yaml_c33_params_match_exception_live_cap() -> None:
     assert params["shadow_mode"] is False
 
 
-# ----------------------------------------------------------------------------
-# strategy_limits.yaml
-# ----------------------------------------------------------------------------
-
-
 def _load_strategy_limits() -> dict:
     path = _REPO_ROOT / "config/base/strategy_limits.yaml"
     with open(path) as f:
@@ -192,7 +177,7 @@ def test_strategy_limits_has_c33_entry() -> None:
 def test_strategy_limits_c33_max_pos_matches_strategy() -> None:
     cfg = _load_strategy_limits()
     c33 = cfg["strategies"]["C33_TXFD6_SOLO_MAKER"]
-    assert c33["max_position_lots"] == 1  # mirrors strategy max_pos
+    assert c33["max_position_lots"] == 1
 
 
 def test_strategy_limits_global_max_position_lots_exception_rollout() -> None:
@@ -215,11 +200,6 @@ def test_strategy_limits_c33_auto_disable_thresholds() -> None:
     assert ad["regime_persistence_consec_days"] == 3
 
 
-# ----------------------------------------------------------------------------
-# Price scaling — scaled-int x10000 (Precision Law)
-# ----------------------------------------------------------------------------
-
-
 def test_price_scale_constant_is_10k() -> None:
     """Wrapper must use x10000 scale (live platform convention)."""
     assert _PRICE_SCALE == 10_000
@@ -229,12 +209,11 @@ def test_on_stats_runs_without_error_on_valid_input() -> None:  # noqa: no-asser
     """No exception on well-formed LOBStatsEvent."""
     strat = C33TxfD6SoloMaker("c33_test", max_pos=3, subscribe_symbols=["TXFD6"])
     stats = _make_stats()
-    strat.on_stats(stats)  # should not raise
+    strat.on_stats(stats)
 
 
 def test_on_stats_skips_invalid_spread() -> None:
     strat = C33TxfD6SoloMaker("c33_test", subscribe_symbols=["TXFD6"])
-    # spread = 4 pt (< 5 pt threshold); no exception, no quote
     stats = _make_stats(
         best_bid=17500 * 10_000,
         best_ask=17504 * 10_000,
@@ -246,17 +225,11 @@ def test_on_stats_skips_invalid_spread() -> None:
 def test_on_stats_skips_zero_prices() -> None:  # noqa: no-assert
     strat = C33TxfD6SoloMaker("c33_test", subscribe_symbols=["TXFD6"])
     stats = _make_stats(best_bid=0, best_ask=0, mid_price_x2=0, spread_scaled=0)
-    strat.on_stats(stats)  # early return, no raise
-
-
-# ----------------------------------------------------------------------------
-# Spread gate boundary
-# ----------------------------------------------------------------------------
+    strat.on_stats(stats)
 
 
 def test_spread_gate_blocks_below_threshold() -> None:
     strat = C33TxfD6SoloMaker("c33_test", subscribe_symbols=["TXFD6"])
-    # spread 4 pt < 5 pt threshold
     stats = _make_stats(best_bid=17500 * 10_000, best_ask=17504 * 10_000)
     strat.on_stats(stats)
     assert strat._spread_blocked >= 1
@@ -265,16 +238,9 @@ def test_spread_gate_blocks_below_threshold() -> None:
 
 def test_spread_gate_admits_at_threshold() -> None:
     strat = C33TxfD6SoloMaker("c33_test", subscribe_symbols=["TXFD6"])
-    # spread 5 pt >= threshold — both sides should quote
     stats = _make_stats(best_bid=17500 * 10_000, best_ask=17505 * 10_000)
     strat.on_stats(stats)
-    # Both buy and sell quotes should be posted at pos=0
     assert strat._quotes_posted == 2
-
-
-# ----------------------------------------------------------------------------
-# R47-minimal: signal layers NOT referenced
-# ----------------------------------------------------------------------------
 
 
 def test_wrapper_has_no_signal_layer_attributes() -> None:
@@ -303,11 +269,6 @@ def test_wrapper_does_not_import_r47_signal_state_classes() -> None:
     forbidden = ("_PEState", "_QueueState", "_MFGState")
     for sym in forbidden:
         assert sym not in source, f"R47-minimal violation: wrapper references {sym}"
-
-
-# ----------------------------------------------------------------------------
-# max_pos gate
-# ----------------------------------------------------------------------------
 
 
 def _make_fill(side_enum: object, qty: int = 1, price: int = 17500 * 10_000) -> object:
@@ -361,11 +322,6 @@ def test_on_gap_clears_transient_state() -> None:
     assert strat._last_ask == {}
 
 
-# ----------------------------------------------------------------------------
-# Runtime-mode default
-# ----------------------------------------------------------------------------
-
-
 def test_shadow_mode_defaults_to_false() -> None:
     """Exception rollout defaults to live mode unless config opts into shadow."""
     strat = C33TxfD6SoloMaker("c33_test")
@@ -379,7 +335,6 @@ def test_queue_share_informational_only() -> None:
         queue_share=0.05,
         subscribe_symbols=["TXFD6"],
     )
-    # Still quotes normally — queue_share does not gate the live quote logic.
     stats = _make_stats()
     strat.on_stats(stats)
     assert strat._quotes_posted == 2

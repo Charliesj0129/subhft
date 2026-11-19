@@ -124,7 +124,6 @@ def _to_module_name(path: Path) -> str:
         try:
             rel = rel.relative_to(Path.cwd())
         except ValueError:
-            # Fallback when cwd differs: trim to "research/..." anchor if present.
             parts = rel.parts
             if "research" in parts:
                 rel = Path(*parts[parts.index("research") :])

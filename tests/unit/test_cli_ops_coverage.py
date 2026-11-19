@@ -9,21 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _ns(**kwargs) -> argparse.Namespace:
     return argparse.Namespace(**kwargs)
 
 
-# ---------------------------------------------------------------------------
-# cmd_feed_status
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_feed_status  # noqa: E402
+from hft_platform.cli._ops import cmd_feed_status
 
 
 class TestCmdFeedStatus:
@@ -50,12 +41,7 @@ class TestCmdFeedStatus:
         assert "Unable to reach metrics" in out
 
 
-# ---------------------------------------------------------------------------
-# cmd_diag
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_diag  # noqa: E402
+from hft_platform.cli._ops import cmd_diag
 
 
 class TestCmdDiag:
@@ -86,7 +72,6 @@ class TestCmdDiag:
         with patch.dict("sys.modules", {"hft_platform.diagnostics.replay": fake_replay_mod}):
             cmd_diag(args)
         out = capsys.readouterr().out
-        # JSON output should contain the event data we set up
         assert "tick" in out
         assert out_file.exists()
 
@@ -134,12 +119,7 @@ class TestCmdDiag:
         assert "Last records" in out
 
 
-# ---------------------------------------------------------------------------
-# cmd_contracts_status
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_contracts_status  # noqa: E402
+from hft_platform.cli._ops import cmd_contracts_status
 
 
 class TestCmdContractsStatus:
@@ -191,7 +171,6 @@ class TestCmdContractsStatus:
         cmd_contracts_status(_ns(contracts=str(f), stale_after_s=3600, status_file=None))
         out = capsys.readouterr().out
         data = json.loads(out)
-        # age_s ≈ 7200s > stale_after=3600s → stale=True
         assert data["stale"] is True
 
     def test_env_override_stale_after(self, tmp_path, capsys):
@@ -205,7 +184,6 @@ class TestCmdContractsStatus:
             cmd_contracts_status(_ns(contracts=str(f), stale_after_s=3600, status_file=None))
         out = capsys.readouterr().out
         data = json.loads(out)
-        # env var overrides stale_after_s
         assert data["stale_after_s"] == 10.0
 
     def test_status_file_included_when_present(self, tmp_path, capsys):
@@ -225,12 +203,7 @@ class TestCmdContractsStatus:
         assert data["runtime_status"]["running"] is True
 
 
-# ---------------------------------------------------------------------------
-# cmd_recorder_status
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_recorder_status  # noqa: E402
+from hft_platform.cli._ops import cmd_recorder_status
 
 
 class TestCmdRecorderStatus:
@@ -244,7 +217,7 @@ class TestCmdRecorderStatus:
             with patch("os.statvfs") as mock_statvfs:
                 mock_vfs = MagicMock()
                 mock_vfs.f_frsize = 4096
-                mock_vfs.f_bavail = 1024 * 1024 * 1024  # 4 GB free
+                mock_vfs.f_bavail = 1024 * 1024 * 1024
                 mock_statvfs.return_value = mock_vfs
                 cmd_recorder_status(args)
         out = capsys.readouterr().out
@@ -265,7 +238,7 @@ class TestCmdRecorderStatus:
             with patch("os.statvfs") as mock_statvfs:
                 mock_vfs = MagicMock()
                 mock_vfs.f_frsize = 4096
-                mock_vfs.f_bavail = 1024 * 1024 * 1024  # plenty of space
+                mock_vfs.f_bavail = 1024 * 1024 * 1024
                 mock_statvfs.return_value = mock_vfs
                 cmd_recorder_status(args)
         out = capsys.readouterr().out
@@ -283,7 +256,7 @@ class TestCmdRecorderStatus:
             with patch("os.statvfs") as mock_statvfs:
                 mock_vfs = MagicMock()
                 mock_vfs.f_frsize = 4096
-                mock_vfs.f_bavail = 256 * 1024  # 1 GB free
+                mock_vfs.f_bavail = 256 * 1024
                 mock_statvfs.return_value = mock_vfs
                 cmd_recorder_status(args)
         out = capsys.readouterr().out
@@ -299,7 +272,6 @@ class TestCmdRecorderStatus:
                 with patch.dict(os.environ, {"HFT_WAL_DISK_MIN_MB": "1000"}):
                     mock_vfs = MagicMock()
                     mock_vfs.f_frsize = 4096
-                    # 100 MB free (< 1000 MB threshold)
                     mock_vfs.f_bavail = 100 * 1024 * 1024 // 4096
                     mock_statvfs.return_value = mock_vfs
                     cmd_recorder_status(args)
@@ -307,12 +279,7 @@ class TestCmdRecorderStatus:
         assert "ACTIVE" in out
 
 
-# ---------------------------------------------------------------------------
-# cmd_ops_rearm_strategy
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_ops_rearm_strategy  # noqa: E402
+from hft_platform.cli._ops import cmd_ops_rearm_strategy
 
 
 class TestCmdOpsRearmStrategy:
@@ -342,12 +309,7 @@ class TestCmdOpsRearmStrategy:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_ops_rearm_platform
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_ops_rearm_platform  # noqa: E402
+from hft_platform.cli._ops import cmd_ops_rearm_platform
 
 
 class TestCmdOpsRearmPlatform:
@@ -371,12 +333,7 @@ class TestCmdOpsRearmPlatform:
         assert "does not match" in capsys.readouterr().err
 
 
-# ---------------------------------------------------------------------------
-# cmd_ops_autonomy_status
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_ops_autonomy_status  # noqa: E402
+from hft_platform.cli._ops import cmd_ops_autonomy_status
 
 
 class TestCmdOpsAutonomyStatus:
@@ -392,12 +349,7 @@ class TestCmdOpsAutonomyStatus:
         assert data["platform_token"] == "tok123"
 
 
-# ---------------------------------------------------------------------------
-# _flatten_via_gate — internal helper
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import FlattenStatus, _flatten_via_gate  # noqa: E402
+from hft_platform.cli._ops import FlattenStatus, _flatten_via_gate
 
 
 class TestFlattenViaGate:
@@ -419,11 +371,9 @@ class TestFlattenViaGate:
 
     def test_timeout_returns_none(self, capsys):
         gate = MagicMock()
-        # read_request returns PENDING forever
         pending_req = MagicMock()
         pending_req.status = FlattenStatus.PENDING
         gate.read_request.return_value = pending_req
-        # Use very small poll_timeout_s so it exits quickly
         result = _flatten_via_gate("all", None, 120, gate=gate, poll_timeout_s=0.01)
         assert result is None
         out = capsys.readouterr().out
@@ -433,19 +383,13 @@ class TestFlattenViaGate:
         gate = MagicMock()
         completed_req = MagicMock()
         completed_req.status = FlattenStatus.COMPLETED
-        # First returns None, then returns completed
         gate.read_request.side_effect = [None, completed_req]
-        with patch("time.sleep"):  # skip sleep
+        with patch("time.sleep"):
             result = _flatten_via_gate("all", None, 120, gate=gate, poll_timeout_s=5.0)
         assert result is completed_req
 
 
-# ---------------------------------------------------------------------------
-# cmd_ops_flatten
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_ops_flatten  # noqa: E402
+from hft_platform.cli._ops import cmd_ops_flatten
 
 
 class TestCmdOpsFlatten:
@@ -509,12 +453,7 @@ class TestCmdOpsFlatten:
         assert "Engine halted" in out
 
 
-# ---------------------------------------------------------------------------
-# cmd_strat_test  — import failure path
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_strat_test  # noqa: E402
+from hft_platform.cli._ops import cmd_strat_test
 
 
 class TestCmdStratTest:
@@ -537,12 +476,7 @@ class TestCmdStratTest:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_backtest  — no subcommand, convert, run import failure
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._ops import cmd_backtest  # noqa: E402
+from hft_platform.cli._ops import cmd_backtest
 
 
 class TestCmdBacktest:
@@ -610,7 +544,7 @@ class TestCmdBacktest:
                         strategy_class="Strat",
                         strategy_id="demo",
                         symbol="2330",
-                        data=["a.npz", "b.npz"],  # multiple files with strategy
+                        data=["a.npz", "b.npz"],
                         tick_size=1,
                         lot_size=1000,
                         fee_maker=0.0,

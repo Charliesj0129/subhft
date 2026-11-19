@@ -43,8 +43,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator
 
-# ── Fixtures ──────────────────────────────────────────────────────────────
-
 
 @pytest.fixture
 def risk_config(tmp_path):
@@ -95,16 +93,12 @@ def _make_intent(**kwargs):
     return OrderIntent(**defaults)
 
 
-# ── greeks_provider init: ImportError path ───────────────────────────────
-
-
 def test_init_greeks_provider_import_error(risk_config):
     """When GreeksLimitValidator import fails, _greeks_validator stays None."""
     q_in = asyncio.Queue()
     q_out = asyncio.Queue()
     greeks_provider = MagicMock()
 
-    # Remove the module from sys.modules so the lazy import inside __init__ raises ImportError
     import sys
 
     saved = sys.modules.pop("hft_platform.risk.greeks_limit_validator", None)
@@ -115,9 +109,6 @@ def test_init_greeks_provider_import_error(risk_config):
     finally:
         if saved is not None:
             sys.modules["hft_platform.risk.greeks_limit_validator"] = saved
-
-
-# ── position_provider: positions dict with net_qty=None ──────────────────
 
 
 def test_position_provider_positions_dict_net_qty_none(risk_config):
@@ -155,9 +146,6 @@ def test_position_provider_positions_dict_multiple_entries(risk_config):
     assert result == 5
 
 
-# ── reload_config: storm_guard.reload_thresholds ────────────────────────
-
-
 def test_reload_config_calls_storm_guard_reload(engine, risk_config):
     """reload_config calls storm_guard.reload_thresholds when available."""
     mock_sg = MagicMock()
@@ -189,9 +177,6 @@ strategies: {}
     assert engine.config["global_defaults"]["max_price_cap"] == 9999.0
 
 
-# ── _load_rust_risk_validator lazy init ──────────────────────────────────
-
-
 def test_load_rust_risk_validator_returns_cached():
     """_load_rust_risk_validator returns cached value on second call."""
     import hft_platform.risk.engine as eng_mod
@@ -203,9 +188,6 @@ def test_load_rust_risk_validator_returns_cached():
         assert result is eng_mod._RustRiskValidator
     finally:
         eng_mod._RustRiskValidator = original
-
-
-# ── evaluate_typed_frame ─────────────────────────────────────────────────
 
 
 def test_evaluate_typed_frame_with_intent_view(engine):
@@ -242,9 +224,6 @@ def test_evaluate_typed_frame_without_intent_view(engine):
     mock_view.assert_called_once_with(frame)
 
 
-# ── typed_frame_view fallback ────────────────────────────────────────────
-
-
 def test_typed_frame_view_fallback_on_error(engine):
     """typed_frame_view falls back to full materialization on error."""
     with (
@@ -255,9 +234,6 @@ def test_typed_frame_view_fallback_on_error(engine):
         mock_intent.return_value = _make_intent()
         result = engine.typed_frame_view("bad_frame")
     assert result is not None
-
-
-# ── create_command_from_typed_frame ──────────────────────────────────────
 
 
 def test_create_command_from_typed_frame_with_order_intent(engine):
@@ -302,21 +278,15 @@ def test_create_command_from_typed_frame_no_view(engine):
     assert isinstance(cmd, OrderCommand)
 
 
-# ── create_typed_command_frame_from_typed_frame ──────────────────────────
-
-
 def test_create_typed_command_frame_returns_tuple(engine):
     """create_typed_command_frame_from_typed_frame returns a command frame tuple."""
     frame = (1, 2, 3)
     result = engine.create_typed_command_frame_from_typed_frame(frame)
     assert isinstance(result, tuple)
     assert result[0] == "typed_order_cmd_v1"
-    assert isinstance(result[1], int)  # cmd_id
-    assert isinstance(result[2], int)  # deadline
-    assert result[5] is frame  # original frame preserved
-
-
-# ── _emit_reject_metric: exception path ──────────────────────────────────
+    assert isinstance(result[1], int)
+    assert isinstance(result[2], int)
+    assert result[5] is frame
 
 
 def test_emit_reject_metric_labels_exception(engine):
@@ -329,11 +299,7 @@ def test_emit_reject_metric_labels_exception(engine):
     engine._reject_metric_cache.clear()
     engine._reject_metric_cache_owner_id = id(mock_metrics)
     engine._emit_reject_metric("s1", "CRASH")
-    # Should not raise
     assert True
-
-
-# ── run() loop: TTL expiry with rejection_sink overflow ──────────────────
 
 
 @pytest.mark.asyncio
@@ -344,7 +310,7 @@ async def test_run_ttl_expired_rejection_sink_full(risk_config):
     q_in = asyncio.Queue()
     q_out = asyncio.Queue()
     sink = asyncio.Queue(maxsize=1)
-    sink.put_nowait(MagicMock())  # Pre-fill
+    sink.put_nowait(MagicMock())
 
     eng = RiskEngine(risk_config, q_in, q_out, rejection_sink=sink)
     eng._dlq_drain_interval = 999
@@ -362,11 +328,7 @@ async def test_run_ttl_expired_rejection_sink_full(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # TTL expired intent should have been rejected
     assert q_out.empty()
-
-
-# ── run() loop: HALT blocked post-approve with rejection_sink overflow ───
 
 
 @pytest.mark.asyncio
@@ -375,7 +337,7 @@ async def test_run_halt_blocked_rejection_sink_overflow(risk_config):
     q_in = asyncio.Queue()
     q_out = asyncio.Queue()
     sink = asyncio.Queue(maxsize=1)
-    sink.put_nowait(MagicMock())  # Pre-fill
+    sink.put_nowait(MagicMock())
 
     eng = RiskEngine(risk_config, q_in, q_out, rejection_sink=sink)
     eng._dlq_drain_interval = 999
@@ -393,11 +355,7 @@ async def test_run_halt_blocked_rejection_sink_overflow(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Should have been blocked at HALT — nothing in order_queue
     assert q_out.empty()
-
-
-# ── run() loop: order_queue full triggers storm then halt ────────────────
 
 
 @pytest.mark.asyncio
@@ -412,7 +370,6 @@ async def test_run_order_queue_full_consecutive_triggers_halt(risk_config):
     eng._dlq_drain_interval = 999
     eng._oq_full_halt_threshold = 2
 
-    # Put 3 intents to exceed threshold
     for i in range(3):
         q_in.put_nowait(_make_intent(intent_id=i))
 
@@ -425,11 +382,7 @@ async def test_run_order_queue_full_consecutive_triggers_halt(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Storm guard should have been triggered
     assert eng.storm_guard.state in (StormGuardState.STORM, StormGuardState.HALT)
-
-
-# ── run() loop: generic exception sends feedback ─────────────────────────
 
 
 @pytest.mark.asyncio
@@ -442,7 +395,6 @@ async def test_run_exception_sends_rejection_feedback(risk_config):
     eng = RiskEngine(risk_config, q_in, q_out, rejection_sink=sink)
     eng._dlq_drain_interval = 999
 
-    # Make evaluate() raise to trigger the except block
     original_evaluate = eng.evaluate
     call_count = [0]
 
@@ -466,7 +418,6 @@ async def test_run_exception_sends_rejection_feedback(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Error feedback should have been sent
     assert sink.qsize() >= 1
     fb = sink.get_nowait()
     assert fb.reason_code == "risk_engine_error"
@@ -478,7 +429,7 @@ async def test_run_exception_rejection_sink_overflow(risk_config):
     q_in = asyncio.Queue()
     q_out = asyncio.Queue()
     sink = asyncio.Queue(maxsize=1)
-    sink.put_nowait(MagicMock())  # Pre-fill
+    sink.put_nowait(MagicMock())
 
     eng = RiskEngine(risk_config, q_in, q_out, rejection_sink=sink)
     eng._dlq_drain_interval = 999
@@ -495,11 +446,7 @@ async def test_run_exception_rejection_sink_overflow(risk_config):
         await task
     except asyncio.CancelledError:
         pass
-    # Should not crash
     assert True
-
-
-# ── _drain_order_dlq: mid-drain STORM escalation ────────────────────────
 
 
 def test_drain_order_dlq_mid_drain_storm_clears(engine):
@@ -512,11 +459,9 @@ def test_drain_order_dlq_mid_drain_storm_clears(engine):
         cmd = engine.create_command(intent)
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-    # Queue accepts first entry but then escalation
     q_out = asyncio.Queue(maxsize=1)
     engine.order_queue = q_out
 
-    # Mock storm_guard to escalate to STORM after first successful drain
     call_count = [0]
     original_state = engine.storm_guard.state
 
@@ -542,11 +487,7 @@ def test_drain_order_dlq_mid_drain_storm_clears(engine):
 
     engine._drain_order_dlq()
 
-    # Should have drained one entry to queue, then queue full triggers STORM check
     assert q_out.qsize() >= 1
-
-
-# ── _check_daily_loss_halt: notification dispatch ────────────────────────
 
 
 @pytest.mark.asyncio
@@ -561,12 +502,11 @@ async def test_check_daily_loss_halt_triggers_notifications(risk_config):
 
     eng = RiskEngine(risk_config, q_in, q_out, notification_dispatcher=dispatcher)
 
-    # Force DailyLossLimitValidator to trigger halt
     from hft_platform.risk.validators import DailyLossLimitValidator
 
     for v in eng.validators:
         if isinstance(v, DailyLossLimitValidator):
-            v.halt_triggered = True  # Public attribute, not _halt_triggered
+            v.halt_triggered = True
             v._accumulated_loss = {"s1": -999999}
             v._unrealized_pnl = -100000
             v._default_max_daily_loss = 500000
@@ -575,7 +515,6 @@ async def test_check_daily_loss_halt_triggers_notifications(risk_config):
     eng._check_daily_loss_halt()
 
     assert eng.storm_guard.state == StormGuardState.HALT
-    # Give async tasks time to run
     await asyncio.sleep(0.05)
     dispatcher.notify_daily_loss.assert_called_once()
     dispatcher.notify_halt.assert_called_once()
@@ -588,16 +527,13 @@ def test_check_daily_loss_halt_no_dispatcher_no_crash(engine):
     engine._notification_dispatcher = None
     for v in engine.validators:
         if isinstance(v, DailyLossLimitValidator):
-            v.halt_triggered = True  # Public attribute
+            v.halt_triggered = True
             v._accumulated_loss = {"s1": -999999}
             v._unrealized_pnl = -100000
             break
 
     engine._check_daily_loss_halt()
     assert engine.storm_guard.state == StormGuardState.HALT
-
-
-# ── run() loop: risk-rejected sends feedback ─────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -609,7 +545,6 @@ async def test_run_risk_rejected_sends_feedback(risk_config):
     eng = RiskEngine(risk_config, q_in, q_out, rejection_sink=sink)
     eng._dlq_drain_interval = 999
 
-    # Zero price will trigger price band validator rejection
     intent = _make_intent(price=0)
     q_in.put_nowait(intent)
 
@@ -634,7 +569,7 @@ async def test_run_risk_rejected_rejection_sink_overflow(risk_config):
     q_in = asyncio.Queue()
     q_out = asyncio.Queue()
     sink = asyncio.Queue(maxsize=1)
-    sink.put_nowait(MagicMock())  # Pre-fill
+    sink.put_nowait(MagicMock())
 
     eng = RiskEngine(risk_config, q_in, q_out, rejection_sink=sink)
     eng._dlq_drain_interval = 999
@@ -650,11 +585,7 @@ async def test_run_risk_rejected_rejection_sink_overflow(risk_config):
         await task
     except asyncio.CancelledError:
         pass
-    # Should not crash even with full sink
     assert True
-
-
-# ── _send_dlq_rejection: was_approved field ──────────────────────────────
 
 
 def test_send_dlq_rejection_sets_was_approved(engine):
@@ -669,9 +600,6 @@ def test_send_dlq_rejection_sets_was_approved(engine):
     assert fb.reason_code == "dlq_expired"
 
 
-# ── _audit_risk_decision ─────────────────────────────────────────────────
-
-
 def test_audit_risk_decision_handles_import_error(engine):
     """_audit_risk_decision handles exception from get_audit_writer."""
     with patch(
@@ -681,38 +609,27 @@ def test_audit_risk_decision_handles_import_error(engine):
         intent = _make_intent()
         decision = RiskDecision(True, intent)
         engine._audit_risk_decision(intent, decision)
-    # Should not raise
     assert True
-
-
-# ── DLQ drain: successful entry + expired entry mix ──────────────────────
 
 
 def test_drain_order_dlq_mixed_expired_and_valid(engine):
     """DLQ drain handles mix of expired and valid entries."""
     engine._rejection_sink = asyncio.Queue(maxsize=1000)
 
-    # Add an expired entry
     intent_old = _make_intent(intent_id=1)
     cmd_old = engine.create_command(intent_old)
     old_ns = time.monotonic_ns() - 999_000_000_000
     engine._order_dlq.append((cmd_old, old_ns))
 
-    # Add a valid entry
     intent_new = _make_intent(intent_id=2)
     cmd_new = engine.create_command(intent_new)
     engine._order_dlq.append((cmd_new, time.monotonic_ns()))
 
-    engine._dlq_ttl_ns = 1  # 1ns TTL to expire old entry
+    engine._dlq_ttl_ns = 1
 
     engine._drain_order_dlq()
 
-    # Old entry expired, new entry may also be expired due to 1ns TTL
-    # Both should have been processed
     assert len(engine._order_dlq) == 0
-
-
-# ── DLQ drain during HALT state ─────────────────────────────────────────
 
 
 def test_drain_order_dlq_halt_clears_all(engine):
@@ -728,5 +645,4 @@ def test_drain_order_dlq_halt_clears_all(engine):
     engine._drain_order_dlq()
 
     assert len(engine._order_dlq) == 0
-    # Each entry should have generated a rejection feedback
     assert engine._rejection_sink.qsize() == 3

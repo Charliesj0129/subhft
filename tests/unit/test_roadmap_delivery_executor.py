@@ -251,8 +251,6 @@ def test_main_generates_ws_a_b_c_f_artifacts_when_tasks_present(tmp_path: Path) 
     assert (ws_f_dir / "latest_monthly_review_flow.json").exists()
 
 
-# --- unmeasured hot-path inputs are unknown, not zero ------------------------------------------
-
 _ALL_UNKNOWN = ["cpu_hotspot_pct", "p95_us", "rust_speedup_vs_python"]
 _FLAGS_ALL_EMPTY = ["benchmark_pairs_empty", "pyspy_hotspots_empty", "perf_snapshot_empty", "stage_probe_empty"]
 
@@ -303,7 +301,6 @@ def test_module_latency_us_is_unknown_without_a_measurement() -> None:
     assert mod._module_latency_us("normalizer", {}, {}) is None
     assert mod._module_latency_us("not_a_known_module", perf, probe) is None
     assert mod._module_latency_us("normalizer", perf, probe) == 14.0
-    # a measured zero is a measurement, not a gap
     assert mod._module_latency_us("normalizer", {"normalizer_bidask_us": 0.0}, {}) == 0.0
 
 
@@ -314,7 +311,6 @@ def test_hotpath_rows_mark_unmeasured_inputs_and_bound_the_score(tmp_path: Path)
     rows, _, _ = mod._hotpath_rows(tmp_path, {}, {}, {}, {})
 
     row = _row_for(rows, "strategy_runner")
-    # layer weight 30 + 25 for no Rust marker; nothing else was measured
     assert row["priority_score"] == 55
     assert row["priority"] == "P1"
     assert row["unknown_inputs"] == _ALL_UNKNOWN
@@ -426,9 +422,6 @@ def test_main_writes_null_for_unmeasured_hotpath_inputs(tmp_path: Path) -> None:
 
     summary = json.loads((tmp_path / "outputs/roadmap_execution/summary/latest.json").read_text(encoding="utf-8"))
     assert summary["ws_g"]["status"] == "warn"
-
-
-# --- the arithmetic the change kept --------------------------------------------------------------
 
 
 def test_priority_bands_start_at_45_and_65() -> None:

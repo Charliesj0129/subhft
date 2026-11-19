@@ -93,7 +93,6 @@ def _status_rows(root: Path, only: str | None) -> list[dict[str, Any]]:
             derived = derive_status(events)
             status, source, declared_value = (derived.value if derived else ""), "ledger", ""
         stats = runs.get(alpha_id, {})
-        # Matched by run identity, not the marks' event snapshot: a run can gain events after its audit.
         basis = {stale_audit.governed_run_key(e) for e in status_basis(events)} if source == "ledger" else set()
         rows.append(
             {

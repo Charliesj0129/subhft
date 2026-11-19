@@ -67,16 +67,14 @@ def test_extract_defaults_for_missing_instrument_fields():
         "asks_price": [],
         "asks_vol": [],
         "seq_no": 1,
-        # No instrument fields — should get defaults
     }
     values = _extract_market_data_values(row)
     assert values is not None
-    # Last 5 values are instrument fields with defaults
-    assert values[-5] == ""  # instrument_type
-    assert values[-4] == ""  # underlying
-    assert values[-3] == 0  # strike_scaled
-    assert values[-2] == ""  # option_right
-    assert values[-1] == datetime.date(1970, 1, 1)  # expiry
+    assert values[-5] == ""
+    assert values[-4] == ""
+    assert values[-3] == 0
+    assert values[-2] == ""
+    assert values[-1] == datetime.date(1970, 1, 1)
 
 
 def test_format_market_data_length_matches_loader_cols():
@@ -125,14 +123,12 @@ def test_format_market_data_defaults_for_missing_instrument_fields():
         "asks_price": [],
         "asks_vol": [],
         "seq_no": 1,
-        # No instrument fields — should get defaults
     }
     _cols, data = format_market_data([row])
     assert len(data) == 1
     row_data = data[0]
-    # Last 5 values are instrument fields with defaults
-    assert row_data[-5] == ""  # instrument_type
-    assert row_data[-4] == ""  # underlying
-    assert row_data[-3] == 0  # strike_scaled
-    assert row_data[-2] == ""  # option_right
-    assert row_data[-1] == datetime.date(1970, 1, 1)  # expiry
+    assert row_data[-5] == ""
+    assert row_data[-4] == ""
+    assert row_data[-3] == 0
+    assert row_data[-2] == ""
+    assert row_data[-1] == datetime.date(1970, 1, 1)

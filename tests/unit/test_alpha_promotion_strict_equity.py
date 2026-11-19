@@ -25,7 +25,6 @@ from hft_platform.alpha.promotion import (
 
 
 def _strict_profile() -> ValidationProfile:
-    # Bypass blocking-sub-gate registry validation by constructing directly.
     return ValidationProfile(
         name="strict_test",
         is_strict=True,
@@ -41,16 +40,12 @@ def _gate_d_passing_scorecard(equity_source: str | None) -> dict[str, Any]:
         "max_drawdown": -0.05,
         "turnover": 0.5,
         "correlation_pool_max": 0.3,
-        # Slice B (merged 2026-05-29): strict latency_audit now expects submit
-        # and cancel P95 fields when latency_profile is a dict under a strict
-        # validation profile.
         "latency_profile": {
             "latency_profile_id": "sim_p95_v2026-02-26",
             "submit_ack_latency_ms": 36.0,
             "cancel_ack_latency_ms": 47.0,
         },
         "replay_parity": {"match_pct": 99.0},
-        # Gate D's cost-uncertainty audit errors without this payload.
         "strategy_type": "taker",
         "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
     }
@@ -88,7 +83,6 @@ def test_gate_d_warns_on_missing_equity_source() -> None:
     cfg = _make_promotion_config()
     scorecard = _gate_d_passing_scorecard(equity_source=None)
     passed, checks = _evaluate_gate_d(scorecard, cfg)
-    # Missing is warn-only for back-compat; Gate D as a whole still passes.
     assert checks["equity_source"]["pass"] is True
     assert checks["equity_source"]["value"] is None
     assert "WARN" in checks["equity_source"]["detail"]
@@ -101,7 +95,6 @@ def test_gate_d_accepts_real_equity() -> None:
     passed, checks = _evaluate_gate_d(scorecard, cfg)
     assert checks["equity_source"]["pass"] is True
     assert checks["equity_source"]["value"] == "real"
-    # Gate D as a whole passes (every other check is set up to pass).
     assert passed is True
 
 
@@ -119,7 +112,6 @@ def test_gate_d_skips_equity_check_when_disabled() -> None:
     cfg = _make_promotion_config(require_real_equity=False)
     scorecard = _gate_d_passing_scorecard(equity_source="synthetic")
     passed, checks = _evaluate_gate_d(scorecard, cfg)
-    # equity_source check is not added when require_real_equity=False
     assert "equity_source" not in checks
     assert passed is True
 
@@ -153,11 +145,6 @@ def test_promote_alpha_screen_only_guard_can_be_disabled(tmp_path: Path) -> None
         project_root=str(tmp_path),
         reject_screen_only=False,
     )
-    # With the screen-only guard disabled, ``cannot_promote_screen_artifact``
-    # must NOT be raised. The promotion may then succeed or fail downstream
-    # depending on Gate-C/D/E state — we only care that the screen guard
-    # was bypassed. PromotionError is the only structured raiser; any other
-    # exception type is a real bug and should propagate.
     try:
         promote_alpha(cfg)
     except PromotionError as exc:

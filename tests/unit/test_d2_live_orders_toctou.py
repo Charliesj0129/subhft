@@ -26,9 +26,6 @@ class TestDeferredTerminal:
 
         a = OrderAdapter.__new__(OrderAdapter)
         a.live_orders = {}
-        # Sidecar of ``live_orders``, evicted on the same paths, so every
-        # terminal path calls ``_untrack_live_order_intent``. ``OrderAdapter``
-        # uses ``__slots__``, so ``__new__`` leaves it unset here.
         a._live_order_intents = {}
         a._live_orders_lock = asyncio.Lock()
         a._pending_order_keys = set()
@@ -40,10 +37,6 @@ class TestDeferredTerminal:
         a._pending_fill_index = {}
         a._pending_fill_registered_at = {}
         a._pending_fill_lock = threading.Lock()
-        # P1-3 follow-up: terminal trackers must be seeded so that
-        # ``on_terminal_state`` -> ``_record_recent_terminal`` ->
-        # ``_clear_cancel_inflight`` does not AttributeError. Defaults mirror
-        # ``OrderAdapter.__init__`` (env-driven; matched here as constants).
         a._recently_terminal_orders = collections.OrderedDict()
         a._recently_terminal_max = 2048
         a._recently_terminal_ttl_s = 60.0
@@ -74,7 +67,7 @@ class TestDeferredTerminal:
 
     @pytest.mark.asyncio
     async def test_normal_terminal_deletes_order(self, adapter):
-        adapter.live_orders["s1:42"] = MagicMock()  # real trade
+        adapter.live_orders["s1:42"] = MagicMock()
         adapter.order_id_resolver.resolve_order_key.return_value = "s1:42"
 
         await adapter.on_terminal_state("s1", "42")
@@ -112,7 +105,6 @@ class TestDeferredTerminal:
 
         await adapter._drain_deferred_terminals("s1:99", MagicMock())
 
-        # Should remain since "s1:DIFFERENT_KEY" is not in live_orders
         assert len(adapter._deferred_terminals) == 1
 
     @pytest.mark.asyncio
@@ -141,7 +133,6 @@ class TestPendingCloseQtySentinelFilter:
         from hft_platform.contracts.strategy import Side
 
         qty = a._pending_close_qty("2330", Side.BUY)
-        # Only real_trade counts, sentinel is skipped
         assert qty == 5
 
     def test_terminal_before_registered_sentinel_skipped(self):

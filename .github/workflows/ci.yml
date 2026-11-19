@@ -24,7 +24,7 @@ on:
         default: false
         type: boolean
   schedule:
-    - cron: "30 18 * * *" # Daily UTC nightly perf drill
+    - cron: "30 18 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -40,46 +40,40 @@ env:
   UV_CACHE_DIR: ~/.cache/uv
 
 jobs:
-  # ============================================================================
-  # Stage 1: Lint & Format
-  # ============================================================================
   lint:
     name: 🔍 Lint & Format
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
+          fetch-depth: 2
       - uses: ./.github/actions/setup-python-uv
+
+      - name: Check linting and source policy
+        env:
+          CODE_POLICY_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || format('refs/heads/{0}', github.event.repository.default_branch) }}
+        run: |
+          if ! git cat-file -e "${CODE_POLICY_BASE}^{commit}"; then
+            git fetch --no-tags --depth=1 origin "$CODE_POLICY_BASE"
+            export CODE_POLICY_BASE=FETCH_HEAD
+          fi
+          make lint
 
       - name: Check formatting
         run: make format-check
-
-      - name: Check linting
-        run: make lint
 
       - name: HFT discipline enforcement
         run: make discipline
 
       - name: Alpha latency profile audit (Gate D)
-        # Block PRs that add a promotion/validation scorecard without a
-        # latency profile reference or that fall outside Gate D 80% tolerance.
-        # Passes silently when no scorecards exist.
         run: make latency-audit
 
       - name: HFT discipline (HFT-P004 no-float-money)
-        # AST-based check that complements the legacy grep-based float
-        # detector below. HFT-P004 hard-blocks `: float` annotations on
-        # money-related fields (price/balance/fee/pnl/notional/...) inside
-        # contracts/, order/, execution/, risk/. See scripts/check_discipline.py.
         run: make discipline-hft
 
       - name: Detect float in financial paths
-        # Exemptions are explicit: scripts/float_gate_exemptions.yaml (file + exact code + kind + reason)
-        # or an inline `# precision-ok: <reason>`. The old step grepped `file:line:text` through ~49
-        # `grep -v` substrings, so a word in a path ('normalizer') or in a comment ('precision-') exempted
-        # a whole line or file. HFT-P004 (above) is the AST check for money-named fields and is unchanged.
         run: make float-gate
 
       - name: Detect print() in production code
@@ -88,7 +82,6 @@ jobs:
             | grep -v '__main__' \
             | grep -v 'cli/' \
             | grep -v 'cli.py' \
-            | grep -v '# noqa' \
             | grep -v 'testing/' \
             | grep -v 'config/wizard' \
             | grep -v 'alpha/latency_audit' \
@@ -151,7 +144,7 @@ jobs:
 
       - name: Upload roadmap delivery artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: roadmap-delivery-report
           path: |
@@ -186,25 +179,22 @@ jobs:
               print(f"  - ... and {len(failed) - 10} more failures")
           PY
 
-  # ============================================================================
-  # Stage 2a: Rust Build & Lint
-  # ============================================================================
   rust:
     name: Rust Build & Lint
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           components: rustfmt, clippy
 
       - name: Cache Cargo
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5.1.0
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: |
             ~/.cargo/registry
@@ -224,18 +214,15 @@ jobs:
         run: cargo test --manifest-path rust_core/Cargo.toml --no-default-features
 
       - name: Security audit (cargo audit)
-        continue-on-error: true  # pre-existing advisory findings
+        continue-on-error: true
         run: cargo install cargo-audit --locked && cargo audit --file rust_core/Cargo.lock
 
-  # ============================================================================
-  # Stage 2b: Type Check
-  # ============================================================================
   typecheck:
     name: 🔬 Type Check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
@@ -243,42 +230,33 @@ jobs:
       - name: Run mypy
         run: make typecheck
 
-  # ============================================================================
-  # Stage 2c: Dependency Boundaries
-  # ============================================================================
   dependency-boundary:
     name: Dependency Boundary
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
         with:
           version: "latest"
 
       - name: Enforce import contracts
         run: make dependency-boundary
 
-  # ============================================================================
-  # Stage 2d: Forced-Promotion Live Config Guard (loop_v1 L9)
-  # ============================================================================
   verify-no-forced-live-config:
     name: 🚫 Forced Promotions Out of Live Config
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
       - name: Block forced-promotion artifacts in live config
-        # config/live/ may not exist yet (created by L10); skip cleanly when absent.
-        # Otherwise, fail if any file under config/live/** references either the
-        # forced_promotions research path or stamps `forced: true`.
         run: |
           if [ ! -d config/live ]; then
             echo "config/live/ does not exist yet (L10 not landed) — guard is a no-op."
@@ -296,25 +274,12 @@ jobs:
           fi
           echo "OK: no forced-promotion references in config/live/."
 
-  # ============================================================================
-  # ============================================================================
-  # Stage 3: Unit Tests + Coverage Gates
-  # ============================================================================
   test:
     name: 🧪 Tests & Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Deliberately depends on nothing. It used to sit behind
-    # lint → [typecheck, rust, dependency-boundary], none of which it consumes:
-    # it builds its own Rust extension via ./.github/actions/setup-rust, so those
-    # edges were pure sequencing. They cost ~4.5 min of critical path on every
-    # run, and worse, they made a lint failure *skip* the tests entirely. On
-    # 2026-07-26 a stale `ruff format` diff had kept lint red on main for days,
-    # so the unit suite had silently not run at all — long enough for an
-    # os._exit(70) watchdog leak to accumulate undetected. A test gate that
-    # disappears when an unrelated gate fails is not a gate.
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
@@ -324,17 +289,12 @@ jobs:
         run: make test-unit-ci
 
       - name: Feature plane parity gate (Python/Rust/hftbacktest)
-        # Blocks merges on promoted-family feature drift across compute paths.
-        # --require-rust fails if the compiled kernel is missing (setup-rust built it above).
         run: uv run python -m hft_platform.cli feature parity --require-rust
 
       - name: Check branch coverage
         run: make coverage-branch-gate
 
       - name: Check domain coverage floors
-        # Per-package floors above the global 70% baseline for
-        # money-touching domains (risk/order/execution/gateway/recorder/alpha).
-        # Source: scripts/check_coverage_domains.py
         run: make coverage-domain
 
       - name: Upload coverage to GitHub Summary
@@ -362,22 +322,19 @@ jobs:
           fi
 
       - name: Upload Rust extension
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: rust-extension
           path: src/hft_platform/rust_core*.so
           retention-days: 1
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: coverage-report
           path: coverage.xml
 
-  # ============================================================================
-  # Stage 4: Benchmark (Darwin Gate)
-  # ============================================================================
   benchmark:
     name: ⚡ Benchmark (Darwin Gate)
     runs-on: ubuntu-latest
@@ -386,10 +343,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - uses: ./.github/actions/setup-python-uv
       - name: Download Rust extension
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: rust-extension
           path: src/hft_platform/
@@ -401,9 +358,6 @@ jobs:
         run: make benchmark-ci
 
       - name: Load benchmark baseline
-        # The rolling baseline lives on the ci-benchmark-baseline branch so the
-        # bot's updates stay out of main's history. Until that branch exists the
-        # committed tests/benchmark/.benchmark_baseline.json is the seed.
         run: |
           if git fetch --depth=1 origin ci-benchmark-baseline \
             && git show FETCH_HEAD:benchmark_baseline.json > "$RUNNER_TEMP/benchmark_baseline.json"; then
@@ -418,7 +372,7 @@ jobs:
         run: make benchmark-darwin-gate
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: benchmark-results
@@ -458,26 +412,24 @@ jobs:
             git push --force origin HEAD:refs/heads/ci-benchmark-baseline || echo "::warning::Could not push baseline update"
           fi
 
-  # ============================================================================
-  # Stage 4b: Latency Regression Gate (WU-19)
-  # ============================================================================
   latency-gate:
     name: Latency Regression Gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: test
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
       - name: Download Rust extension
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: rust-extension
           path: src/hft_platform/
 
       - name: Run latency regression benchmarks
+        shell: bash
         run: make latency-gate-ci 2>&1 | tee latency_gate.log
 
       - name: Latency Gate Summary
@@ -490,9 +442,6 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
-  # ============================================================================
-  # Stage 5: Integration Tests
-  # ============================================================================
   integration:
     name: 🔗 Integration Tests
     runs-on: ubuntu-latest
@@ -519,12 +468,12 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
       - name: Download Rust extension
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: rust-extension
           path: src/hft_platform/
@@ -570,12 +519,12 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
       - name: Download Rust extension
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: rust-extension
           path: src/hft_platform/
@@ -633,7 +582,7 @@ jobs:
 
       - name: Upload risk nightly perf artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: risk-perf-gate-nightly
           path: risk_perf_gate.json
@@ -642,7 +591,7 @@ jobs:
 
       - name: Upload gateway/WAL hardening drill log
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gateway-wal-hardening-drills
           path: gateway_wal_hardening_drills.log
@@ -651,7 +600,7 @@ jobs:
 
       - name: Upload feature nightly perf artifact
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: feature-perf-gate-nightly
           path: feature_perf_gate.json
@@ -660,7 +609,7 @@ jobs:
 
       - name: Upload research nightly artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: research-nightly-artifacts
           path: |
@@ -672,7 +621,7 @@ jobs:
 
       - name: Upload diagnostics nightly artifacts
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: diagnostics-nightly-artifacts
           path: |
@@ -755,35 +704,24 @@ jobs:
             echo "- Generated synthetic incident timeline smoke artifacts (\`diagnostics_timeline.json\`, \`diagnostics_timeline.md\`)." >> $GITHUB_STEP_SUMMARY
           fi
 
-  # ============================================================================
-  # Research gate (not a required check yet). pyproject.toml keeps research/ out
-  # of ruff and pytest (norecursedirs skips every directory named `research`, so
-  # tests/unit/research never ran either). `make research-check` runs those
-  # suites and the alpha Gate B tests with bug-class ruff and its own coverage
-  # floor; see scripts/research_check.py. It becomes required after a week of
-  # green runs on main (ADR-005, stage 2).
-  # ============================================================================
   research-check:
     name: 🔬 Research Check (not required)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-python-uv
       - name: Research ruff, tests and coverage
         run: make research-check
 
-  # ============================================================================
-  # Stage 6: Security Scanning
-  # ============================================================================
   security:
     name: 🔒 Security Scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
           fetch-depth: 0  # gitleaks scans <PR-base>^..<PR-head>; needs full history
@@ -793,12 +731,10 @@ jobs:
         run: make security-audit
 
       - name: Code security scan (bandit)
-        # Fail-closed at -ll (medium+). B608 SQL-string findings carry
-        # `# nosec B608` annotations after upstream input validation.
         run: uv run bandit -r src/hft_platform/ -c pyproject.toml -ll -q
 
       - name: Secret scanning (gitleaks)
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -815,16 +751,13 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
-  # ============================================================================
-  # Stage 7: PR Review Gate (PRs only)
-  # ============================================================================
   pr-review-gate:
     name: PR Design Review Gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 

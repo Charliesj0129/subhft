@@ -225,7 +225,6 @@ def resolve_order_mode() -> str:
 def validate_order_mode_safety() -> None:
     """Reject dangerous mode combinations and log warnings for live trading."""
     hft_mode = os.getenv("HFT_MODE", "sim").strip().lower()
-    # Normalize "real" → "live" (legacy alias)
     if hft_mode == "real":
         hft_mode = "live"
         os.environ["HFT_MODE"] = "live"
@@ -282,7 +281,7 @@ def publish_strategy_binding_liveness(strategies: Any, subscribed: set[str]) -> 
         if gauge is not None:
             try:
                 gauge.labels(strategy_id=strategy_id).set(live)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("bound_live_symbols_gauge_failed", strategy_id=strategy_id, error=str(exc))
     return counts
 
@@ -337,7 +336,7 @@ class SystemBootstrapper:
         self._lease_refresh_running: bool = False
         self._lease_refresh_thread: Any | None = None
         self._lease_refresh_lost: bool = False
-        self._on_lease_lost: Any | None = None  # callback: storm_guard.trigger_halt
+        self._on_lease_lost: Any | None = None
         self._last_role: str = "engine"
 
     def _get_runtime_role(self) -> str:
@@ -422,8 +421,6 @@ class SystemBootstrapper:
 
     @staticmethod
     def _lease_is_stale(ttl_s: int, takeover_ttl_s: int) -> bool:
-        # Redis TTL semantics:
-        # -2 = key missing, -1 = key exists without expire.
         if ttl_s in (-2, -1):
             return True
         return takeover_ttl_s > 0 and ttl_s <= takeover_ttl_s
@@ -570,7 +567,7 @@ class SystemBootstrapper:
                                     cb(f"SESSION_LEASE_LOST(owner={owner})")
                                 except Exception:
                                     pass
-                            return  # stop refresh — lease is gone
+                            return
 
                         if not owner:
                             logger.warning("session_lease_reacquire", key=key, my_id=owner_id)
@@ -635,13 +632,11 @@ class SystemBootstrapper:
             logger.debug("session_lease_release_skipped", reason=str(exc))
             self._record_lease_metric("teardown", "error")
 
-    # Default bounded queue sizes to prevent unbounded memory growth
-    # These can be overridden via environment variables
-    DEFAULT_RAW_QUEUE_SIZE = 65536  # Market data ingestion
-    DEFAULT_RAW_EXEC_QUEUE_SIZE = 8192  # Execution events
-    DEFAULT_RISK_QUEUE_SIZE = 4096  # Risk engine queue
-    DEFAULT_ORDER_QUEUE_SIZE = 2048  # Order dispatch queue
-    DEFAULT_RECORDER_QUEUE_SIZE = 16384  # Recorder/persistence queue
+    DEFAULT_RAW_QUEUE_SIZE = 65536
+    DEFAULT_RAW_EXEC_QUEUE_SIZE = 8192
+    DEFAULT_RISK_QUEUE_SIZE = 4096
+    DEFAULT_ORDER_QUEUE_SIZE = 2048
+    DEFAULT_RECORDER_QUEUE_SIZE = 16384
 
     @staticmethod
     def _resolve_broker_id() -> str:
@@ -672,7 +667,7 @@ class SystemBootstrapper:
             return _RoleGuardedNoopClient(role), _RoleGuardedNoopClient(role)
 
         if broker_id == "fubon":
-            from hft_platform.feed_adapter.fubon.facade import FubonClientFacade  # lazy import
+            from hft_platform.feed_adapter.fubon.facade import FubonClientFacade
 
             logger.info("Instantiating Fubon broker clients", broker_id=broker_id)
             fubon_md_client = FubonClientFacade(symbols_path, base_shioaji_cfg)
@@ -680,28 +675,20 @@ class SystemBootstrapper:
                 return fubon_md_client, _RoleGuardedNoopClient("order_disabled")
             return fubon_md_client, FubonClientFacade(symbols_path, order_cfg)
 
-        # Default: shioaji
-        from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade  # lazy import
+        from hft_platform.feed_adapter.shioaji.facade import ShioajiClientFacade
 
         num_conns = int(os.getenv("HFT_QUOTE_CONNECTIONS", "1"))
         if num_conns > 1:
             from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
 
             pool = QuoteConnectionPool(symbols_path, quote_cfg, num_conns)
-            # Roll before the facades exist: a settled code must never reach a
-            # subscribe call, not even to fail there. Nothing is subscribed yet,
-            # so this only rewrites the shards the facades are about to read.
             try:
                 pool.roll_universe(live=False)
-            except Exception as exc:  # noqa: BLE001 — boot must survive an unrollable universe
+            except Exception as exc:
                 logger.warning("universe_boot_roll_failed", error=str(exc))
             pool.create_facades()
             if order_mode == "disabled":
                 return pool, _RoleGuardedNoopClient("order_disabled")
-            # Order client needs the full symbol list for contract resolution
-            # but does NOT subscribe to quotes, so the per-connection subscription
-            # limit does not apply.  Temporarily raise it for the order facade
-            # to platform-total (num_conns × per-conn cap from limits.py).
             from hft_platform.feed_adapter.shioaji.limits import DEFAULT_MAX_SUBSCRIPTIONS_PER_CONN
 
             order_cfg = dict(order_cfg)
@@ -720,30 +707,11 @@ class SystemBootstrapper:
         elif role not in _FEED_ALLOWED_ROLES:
             logger.warning("Runtime role does not create feed client", role=role)
 
-        # Fail fast on unsafe live/sim combinations before wiring broker-facing services.
         validate_order_mode_safety()
 
-        # Read the persisted strategy safety latches HERE -- before the Redis
-        # session lease is taken and its refresh thread started, and before any
-        # service exists. This read is fail-closed (see
-        # ``restore_persisted_quarantines``), and a fail-closed read placed
-        # after startup side effects is a crash loop: with ``restart: always``
-        # the engine would take the lease, raise, and leave the refresh thread
-        # and the lease behind on every attempt. Nothing has been acquired yet
-        # at this point, so raising here is an ordinary refusal to start.
-        # Applied to the governor further down, once it exists.
         persisted_safety_state = ManualRearmGate().snapshot()
-        # Validate every *entry*, not just the section container. The container
-        # check lives in the strict read; the malformed shapes that actually
-        # occur live one level down, in the per-strategy records. Until this
-        # line existed they raised at the apply call ~400 lines later -- after
-        # the lease and its refresh thread -- so a single damaged record became
-        # a restart loop that leaked a lease on every pass. The return value is
-        # discarded on purpose: this call is here to raise, and the governor
-        # re-parses when it applies.
         parse_persisted_quarantines(persisted_safety_state)
 
-        # B-OPS-03: Non-blocking preflight — warn if another runtime owns the session.
         lease_owned = self._check_session_ownership(role)
         self._last_role = role
         if role in _FEED_ALLOWED_ROLES and lease_owned:
@@ -752,35 +720,26 @@ class SystemBootstrapper:
         elif role in _FEED_ALLOWED_ROLES:
             logger.warning("session_lease_refresh_not_started", role=role, reason="lease_not_owned")
 
-        # Preflight safety checks
         validate_shadow_lock(self.settings)
         log_shadow_config_summary(self.settings)
 
-        # 1. Infrastructure
-        # Note: StormGuard is created below, so we set it after creation
         try:
             from hft_platform.observability.event_bus_telemetry import PrometheusEventBusTelemetry
             from hft_platform.observability.metrics import MetricsRegistry
 
             bus_telemetry = PrometheusEventBusTelemetry(MetricsRegistry.get())
         except (ImportError, OSError, RuntimeError, ValueError) as exc:
-            # The bus falls back to a no-op sink rather than refusing to start:
-            # losing observability must not stop the hot path from carrying ticks.
             logger.warning("event_bus_telemetry_unavailable", error=str(exc))
             bus_telemetry = None
 
         bus = RingBufferBus(telemetry=bus_telemetry)
 
-        # Bounded queues with sensible defaults (prevents OOM under load)
-        # CRITICAL: Always enforce minimum bounds to prevent unbounded memory growth
-        # Setting size=0 via env var is blocked - use defaults instead
-        MIN_QUEUE_SIZE = 1024  # Minimum enforced size for safety
+        MIN_QUEUE_SIZE = 1024
 
         def get_queue_size(env_key: str, default: int) -> int:
             """Get bounded queue size from env, enforcing minimum."""
             return max(MIN_QUEUE_SIZE, int(os.getenv(env_key, str(default))))
 
-        # Scale raw and recorder queues with number of quote connections
         num_quote_conns = max(1, int(os.getenv("HFT_QUOTE_CONNECTIONS", "1")))
         raw_queue_size = get_queue_size("HFT_RAW_QUEUE_SIZE", self.DEFAULT_RAW_QUEUE_SIZE * num_quote_conns)
         raw_exec_queue_size = get_queue_size("HFT_RAW_EXEC_QUEUE_SIZE", self.DEFAULT_RAW_EXEC_QUEUE_SIZE)
@@ -790,7 +749,6 @@ class SystemBootstrapper:
             "HFT_RECORDER_QUEUE_SIZE", self.DEFAULT_RECORDER_QUEUE_SIZE * num_quote_conns
         )
 
-        # All queues are now guaranteed to be bounded
         raw_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_queue_size)
         raw_exec_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=raw_exec_queue_size)
         risk_queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=risk_queue_size)
@@ -799,17 +757,11 @@ class SystemBootstrapper:
 
         LatencyRecorder.get().configure(recorder_queue)
 
-        # 2. Shared State
         position_store = PositionStore()
         order_id_map: Dict[str, str] = {}
-        # Shared map for e2e order-to-fill latency tracking (SLO-2): order_key -> created_ns
         cmd_created_ns_map: Dict[str, int] = {}
-        # TCA: shared map for decision/arrival price enrichment: order_key -> (decision_price, arrival_price)
         cmd_tca_map: Dict[str, tuple[int, int]] = {}
-        # L8 (loop_v1): shared trace_id map (order_key -> OrderIntent.trace_id) so
-        # ExecutionRouter can enrich FillEvent.trace_id for OrderExplanationAssembler.
         cmd_trace_id_map: Dict[str, str] = {}
-        # DriftBurst detector for StormGuard (opt-in via env var)
         drift_burst_detector = None
         if os.getenv("HFT_STORMGUARD_DRIFT_BURST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}:
             from hft_platform.risk.drift_burst_detector import DriftBurstDetector
@@ -828,13 +780,10 @@ class SystemBootstrapper:
 
         storm_guard = StormGuard(drift_burst_detector=drift_burst_detector)
 
-        # Wire session lease loss to StormGuard HALT (fencing guard)
         self._on_lease_lost = storm_guard.trigger_halt
 
-        # Wire StormGuard to EventBus for overflow HALT triggering
         bus.set_storm_guard(storm_guard)
 
-        # 3. Config Paths
         paths = self.settings.get("paths", {})
         from hft_platform.config.symbols_path import (
             propagate_env as _propagate_symbols_env,
@@ -855,16 +804,11 @@ class SystemBootstrapper:
         base_shioaji_cfg = dict(self.settings.get("shioaji", {}))
         md_client, order_client = self._build_broker_clients(role, symbols_path, base_shioaji_cfg, broker_id)
 
-        # Keep pricing metadata on the universe actually subscribed. The pool
-        # rolls contracts at runtime while ``symbols.yaml`` stays the operator's
-        # file, so without this a rolled-in contract would be priced off a file
-        # that predates it.
         if hasattr(md_client, "set_universe_listener"):
             if getattr(md_client, "universe_rolled", False):
                 symbol_metadata.apply_runtime_overlay(list(md_client.symbols))
             md_client.set_universe_listener(symbol_metadata.apply_runtime_overlay)
 
-        # Position checkpoint writer (periodic serialization)
         from hft_platform.execution.checkpoint import (
             DEFAULT_POSITION_CHECKPOINT_PATH,
             PositionCheckpointWriter,
@@ -872,14 +816,12 @@ class SystemBootstrapper:
 
         checkpoint_writer = PositionCheckpointWriter(store=position_store)
 
-        # Startup position verifier (dual-source recovery)
         from hft_platform.execution.startup_recon import StartupPositionVerifier
 
         startup_verifier = StartupPositionVerifier(
             client=order_client,
             position_store=position_store,
             checkpoint_path=os.getenv("HFT_POSITION_CHECKPOINT_PATH", DEFAULT_POSITION_CHECKPOINT_PATH),
-            # Already normalized to a canonical alias by ``resolve_order_mode``.
             order_mode=os.getenv("HFT_ORDER_MODE", ""),
         )
         startup_fill_reconciler = None
@@ -900,7 +842,6 @@ class SystemBootstrapper:
         except Exception as exc:
             logger.warning("startup_fill_reconciler_init_failed", error=str(exc))
 
-        # 4. Services
         feature_engine = None
         feature_profile_registry = None
         feature_profile = None
@@ -982,7 +923,6 @@ class SystemBootstrapper:
                     logger.debug("operation_fallback", error=str(exc))
                     feature_profile = None
 
-        # WAL fallback for market data events dropped by full recorder queue
         _md_wal_writer = None
         _md_wal_dir = os.getenv("HFT_MD_WAL_DIR", os.getenv("HFT_WAL_DIR", ".wal"))
         try:
@@ -1013,7 +953,6 @@ class SystemBootstrapper:
 
             _broker_codec = ShioajiOrderCodec()
 
-        # TCA: mid-price lookup function for arrival_price stamping
         def _get_mid_price(symbol: str) -> int:
             book = md_service.lob.books.get(symbol)
             if book is not None and book.mid_price_x2 > 0:
@@ -1031,19 +970,13 @@ class SystemBootstrapper:
             cmd_trace_id_map=cmd_trace_id_map,
             mid_price_fn=_get_mid_price,
         )
-        # Inject shared SymbolMetadata so OrderAdapter resolves exchange/price_scale
-        # for alias-resolved codes (e.g. TMFE6 → exchange=FUT, not default TSE).
         order_adapter.metadata = symbol_metadata
 
-        # Wire shadow mode from YAML config (shadow.enabled: true) into ShadowOrderSink.
-        # Previously only HFT_ORDER_SHADOW_MODE env var was checked, causing a config disconnect
-        # where shadow.enabled in YAML was silently ignored.
         if _is_shadow_enabled_by_config(self.settings) and not order_adapter.shadow_sink.enabled:
             order_adapter.shadow_sink.enabled = True
             logger.info("shadow_mode_enabled_via_yaml_config")
 
         execution_gateway = ExecutionGateway(order_adapter)
-        # TCA: FeeCalculator injection into ExecutionNormalizer
         _fee_calculator = None
         try:
             from hft_platform.tca.fee_calculator import FeeCalculator
@@ -1060,7 +993,6 @@ class SystemBootstrapper:
                 logger.info("fee_calculator_loaded", path=_fee_yaml)
             else:
                 logger.warning("fee_calculator_yaml_not_found", path=_fee_yaml)
-                # X2-H1: Missing fee config → PnL tracking excludes fees/tax
                 try:
                     from hft_platform.observability.metrics import MetricsRegistry
 
@@ -1072,7 +1004,6 @@ class SystemBootstrapper:
         except Exception as exc:
             logger.warning("fee_calculator_init_failed", error=str(exc))
 
-        # WAL fallback for execution events dropped by full recorder queue
         _exec_wal_writer = None
         _exec_wal_dir = os.getenv("HFT_WAL_DIR", ".wal")
         try:
@@ -1096,20 +1027,11 @@ class SystemBootstrapper:
             symbol_metadata=symbol_metadata,
             price_scale_provider=price_scale_provider,
             wal_writer=_exec_wal_writer,
-            # Step 3 of the normalizer's account-id chain. Passed as a callable,
-            # not a value: the broker session is not authenticated yet here and
-            # get_default_account_id() would answer "".
             default_account_id_provider=getattr(order_client, "get_default_account_id", None),
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator
-        # P0-E1: share OrderAdapter's threading.Lock with the normalizer's
-        # resolver so ExecutionRouter._backfill_order_id_map and the broker
-        # thread (_on_exec) use the same mutex when reading/writing the
-        # shared order_id_map dict. Without this, router backfill and
-        # adapter writes would be serialised by different locks.
         exec_service.normalizer.order_id_resolver.lock = order_adapter._order_id_map_lock
-        # A recycled broker id (seqno / id) may only claim an order that is still live.
         exec_service.normalizer.order_id_resolver.is_live = order_adapter.is_order_live
         risk_engine = RiskEngine(
             risk_path,
@@ -1119,21 +1041,9 @@ class SystemBootstrapper:
             position_provider=position_store,
             storm_guard=storm_guard,
         )
-        # Late-bind risk_engine to router (created after router due to dependency order)
         exec_service.set_risk_engine(risk_engine)
-        # Late-bind phantom resolver for orphaned fill auto-reconciliation.
-        # When a fill arrives with UNKNOWN strategy_id, the router checks phantom
-        # order candidates (dispatch-failed orders that may have reached broker).
         exec_service.set_phantom_resolver(order_adapter.resolve_phantom_fill)
-        # Fills finish orders: Shioaji's order topic carries no fill quantity.
         exec_service.set_fill_tracker(order_adapter)
-        # ``symbol_source=md_client`` is load-bearing, not tidiness: the
-        # platform symbol universe is read from ``subscribed_codes`` /
-        # ``alias_to_actual``, which are QUOTE-side attributes. Handed only the
-        # order client, ReconciliationService fell back to the configured list
-        # -- under loop_v1 the continuous front-month aliases {TMFR1, TXFR1} --
-        # and so treated every resolved contract it actually trades as an
-        # externally placed phantom.
         recon_service = ReconciliationService(
             order_client,
             position_store,
@@ -1143,7 +1053,6 @@ class SystemBootstrapper:
             order_mode=resolve_order_mode(),
         )
 
-        # CE-M2: GatewayService wiring
         gateway_service = None
         intent_channel = None
         _gateway_enabled = os.getenv("HFT_GATEWAY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
@@ -1158,8 +1067,6 @@ class SystemBootstrapper:
             exposure_store = ExposureStore()
             dedup_store = IdempotencyStore()
             dedup_store.load()
-            # Bug 22: wire position_provider so GatewayPolicy can allow
-            # reducing orders through HALT/DEGRADE (prevents R47 cover deadlock).
             gateway_policy = GatewayPolicy(
                 storm_guard=storm_guard,
                 position_provider=risk_engine._current_strategy_symbol_net_position,
@@ -1174,7 +1081,6 @@ class SystemBootstrapper:
                 policy=gateway_policy,
             )
 
-        # StrategyRunner: use intent_channel when gateway enabled, else risk_queue
         _runner_queue = intent_channel if _gateway_enabled and intent_channel is not None else risk_queue
         strategy_runner = StrategyRunner(
             bus=bus,
@@ -1183,34 +1089,9 @@ class SystemBootstrapper:
             feature_engine=feature_engine,
             position_store=position_store,
             symbol_metadata=symbol_metadata,
-            # Slice C task 3: pass the same recorder_queue used by
-            # MarketDataService so the opt-in OrderIntent producer hook can
-            # publish to the existing recorder. Drained by RecorderService.run().
             recorder_queue=recorder_queue,
         )
-        # A strategy quarantine is a money-path safety latch, and until this call
-        # existed a restart silently released every one of them: the governor's
-        # dict starts empty, so ``manual_rearm_required{scope="strategy"}`` read
-        # 0 and ``ManualRearmRequired`` *resolved itself* while the persisted
-        # document still said the latch was set (observed in production
-        # 2026-08-25). Restored here at the composition root rather than in
-        # ``StrategyRunner.__init__`` so constructing a runner stays free of
-        # filesystem IO. The document was read and validated at the top of
-        # ``build()``, entries included, so no shape defect can raise here.
-        # It does re-read the file once, to pick up anything written since that
-        # read; the re-read cannot raise either. Note the ownership preflight
-        # above is advisory -- it does not stop ``build()`` -- so this narrows
-        # the overlapping-restart window rather than closing it. See
-        # ``restore_persisted_quarantines``.
         strategy_runner.strategy_governor.restore_persisted_quarantines(snapshot=persisted_safety_state)
-        # Phase 3: rejection feedback queue.
-        # P2 (2026-04-25): the former ``_publish_queue`` was wired into
-        # ``strategy_runner.set_publish_sink`` but nothing ever consumed it —
-        # ``BaseStrategy.publish``/``StrategyContext.publish_state`` lookups
-        # never reached this dict because the runner did not propagate its
-        # ``_publish_sink`` to per-strategy ``StrategyContext`` instances.
-        # The dead path silently drops messages after 64 events
-        # (``QueueFull``) and consumed memory for nothing. Removed.
         _rejection_queue: asyncio.Queue | None = None
         try:
             _rejection_queue = asyncio.Queue(maxsize=max(1, int(os.getenv("HFT_REJECTION_QUEUE_SIZE", "2048"))))
@@ -1227,25 +1108,15 @@ class SystemBootstrapper:
 
         strategy_runner.set_storm_guard(storm_guard)
 
-        # Option-3 Gate 1 prod: instantiate ContractFamilyResolver and wire it
-        # into the runner. Strategies that declare ``contract_families`` get
-        # ``strategy.symbols`` populated from the resolver on snapshot swap
-        # — no dependence on the ``alias_to_actual`` propagation path.
         from hft_platform.contracts.family_resolver import ContractFamilyResolver
 
         family_resolver = ContractFamilyResolver()
         strategy_runner.set_family_resolver(family_resolver)
-        # Option-3 Gate 3: OrderAdapter consults the resolver to prefer
-        # ``intent.contract.display()`` over ``_actual_to_config`` when the
-        # resolver knows the ref — decouples the order-out path from the
-        # fragile alias-dict propagation that was the Bug 12 root cause.
         if hasattr(order_adapter, "set_contract_resolver"):
             order_adapter.set_contract_resolver(family_resolver)
 
-        # After broker login+subscription, re-resolve strategy/governor symbols with alias map
         md_service._post_connect_hooks.append(strategy_runner.resolve_symbol_aliases)
 
-        # Preflight: validate symbol consistency after alias resolution
         def _preflight_symbol_consistency() -> None:
             """Warn if strategy symbols are not in the subscribed set, and
             publish the resulting overlap as ``strategy_bound_live_symbols``.
@@ -1258,7 +1129,6 @@ class SystemBootstrapper:
             operator can alert on months later; the gauge is.
             """
             subscribed: set[str] = set(getattr(md_client, "subscribed_codes", set()))
-            # Also include actual codes from alias map
             alias_map = getattr(md_client, "alias_to_actual", {})
             all_subscribed = set(subscribed) | set(alias_map.values())
             publish_strategy_binding_liveness(strategy_runner.strategies, all_subscribed)
@@ -1282,13 +1152,6 @@ class SystemBootstrapper:
                         symbols=sorted(strat_symbols),
                     )
 
-        # NOTE: registered *after* the contract-family populators below, not
-        # here. Hooks run in registration order, and this one measures the
-        # binding the populators are about to correct — registered here it
-        # published `strategy_bound_live_symbols=0` for a strategy that was
-        # rebound onto the front month microseconds later, every single connect.
-
-        # Propagate alias map to OrderAdapter for reverse resolution (TMFE6 → TMFR1)
         def _propagate_alias_to_order_adapter() -> None:
             alias_map = getattr(md_client, "alias_to_actual", None)
             if alias_map:
@@ -1296,12 +1159,6 @@ class SystemBootstrapper:
 
         md_service._post_connect_hooks.append(_propagate_alias_to_order_adapter)
 
-        # Option-3 Gate 1 prod: post-connect populator for the ContractFamily
-        # resolver. Reads the broker contract table (available after login)
-        # and swaps the resolver snapshot. Registered *after* the legacy
-        # hooks so the family rebind does not interfere with their ordering.
-        # Set for Shioaji only: its roll clock is scheduled with the other
-        # deferred tasks below, once the engine loop exists.
         shioaji_family_populator: Any = None
         if broker_id == "shioaji":
             from hft_platform.feed_adapter.shioaji.family_populator import (
@@ -1313,17 +1170,11 @@ class SystemBootstrapper:
             def _populate_families_from_shioaji() -> None:
                 try:
                     shioaji_family_populator.populate(getattr(md_client, "api", None))
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.warning("family_populator_failed", broker="shioaji", error=str(exc))
 
             md_service._post_connect_hooks.append(_populate_families_from_shioaji)
         elif broker_id == "fubon":
-            # The Fubon family_populator module isn't shipped yet (see
-            # docs/architecture/multi-broker-support.md ADR — Fubon adapter
-            # in scaffold state). Import defensively so a Fubon-broker
-            # bootstrap doesn't ModuleNotFoundError at startup; instead it
-            # falls back to the legacy non-family rebind path with a clear
-            # warning.
             try:
                 from hft_platform.feed_adapter.fubon.family_populator import (
                     populate_resolver_from_fubon,
@@ -1340,20 +1191,13 @@ class SystemBootstrapper:
                 def _populate_families_from_fubon() -> None:
                     try:
                         populate_resolver_from_fubon(family_resolver, md_client)
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         logger.warning("family_populator_failed", broker="fubon", error=str(exc))
 
                 md_service._post_connect_hooks.append(_populate_families_from_fubon)
 
-        # Trading-liveness measurement runs last, so it judges the settled
-        # post-rebind state rather than the stale config it was loaded with.
         md_service._post_connect_hooks.append(_preflight_symbol_consistency)
 
-        # Loop_v1 L2: refuse to start if any subscribed contract has
-        # delivery_date < today. Same-day expiry (rollover day) is permitted.
-        # Shioaji-only for now; Fubon hook to follow when its contract lookup
-        # interface lands. The structlog ``stale_instrument_subscription_blocked``
-        # event + raised StaleInstrumentError fail the bootstrap closed.
         if broker_id == "shioaji":
             from datetime import date as _today_date
 
@@ -1364,10 +1208,6 @@ class SystemBootstrapper:
             def _stale_instrument_gate() -> None:
                 api_lookup = getattr(md_client, "_get_contract", None)
                 if api_lookup is None:
-                    # Not "nothing to check" — "cannot check". This branch is
-                    # how the gate spent its whole life doing nothing under a
-                    # pooled client, which had no `_get_contract`, while
-                    # reporting success by saying nothing at all.
                     logger.error(
                         "stale_instrument_gate_unavailable",
                         reason="md_client exposes no _get_contract",
@@ -1391,16 +1231,7 @@ class SystemBootstrapper:
                     log=logger,
                 )
 
-            # Registered as a *gate*, not a hook. On ``_post_connect_hooks`` the
-            # runner's ``except Exception`` caught ``StaleInstrumentError`` and
-            # downgraded a fail-closed refusal to a warning line, so the one
-            # check that exists to stop the platform trading an expired contract
-            # could never actually stop it.
             md_service._post_connect_gates.append(_stale_instrument_gate)
-
-        # P2 (2026-04-25): ``set_publish_sink`` wiring removed — the runner
-        # never propagated the sink to ``StrategyContext`` instances, so the
-        # queue was unconsumed and would silently drop after 64 events.
 
         recorder = RecorderService(recorder_queue)
         _gw_api_queue = getattr(order_adapter, "_api_queue", None) if _gateway_enabled else None
@@ -1417,7 +1248,6 @@ class SystemBootstrapper:
             reconciliation=recon_service,
         )
 
-        # Opt-in: SessionGovernor (disabled by default)
         session_governor = None
         if os.environ.get("HFT_SESSION_GOVERNOR_ENABLED", "0") == "1":
             try:
@@ -1430,21 +1260,12 @@ class SystemBootstrapper:
                     evidence_writer=get_shared_autonomy_evidence_writer(),
                     position_flattener=position_flattener,
                 )
-                # Wire TrackGate into StrategyRunner for per-symbol session filtering
                 strategy_runner.track_gate = session_governor.track_gate
-                # Register alias resolution hook for session governor
-                _gov = session_governor  # capture for closure
+                _gov = session_governor
                 md_service._post_connect_hooks.append(
                     lambda: _gov.resolve_symbol_aliases(getattr(symbol_metadata, "alias_to_actual", None))
                 )
 
-                # Punch-list (2026-05-29): wire SessionGovernor FORCE_FLAT
-                # phase callback into StrategyRunner.dispatch_session_end_force_flat
-                # so the consumer-side hook actually fires on phase transition.
-                # Without this wiring, transition_track(..., FORCE_FLAT) only
-                # closes broker-side positions via PositionFlattener; the
-                # strategies' ``on_session_end(ctx)`` hooks are never invoked
-                # and no FORCE_FLAT intent reaches the risk queue.
                 from hft_platform.ops.session_governor import SessionPhase
 
                 def _force_flat_phase_callback(
@@ -1478,7 +1299,6 @@ class SystemBootstrapper:
                 logger.warning("SessionGovernor creation failed", error=str(exc))
                 session_governor = None
 
-        # Opt-in: AutonomyMonitor (disabled by default)
         autonomy_monitor = None
         if os.environ.get("HFT_AUTONOMY_MONITOR_ENABLED", "0") == "1":
             try:
@@ -1497,19 +1317,16 @@ class SystemBootstrapper:
                 logger.warning("AutonomyMonitor creation failed", error=str(exc))
                 autonomy_monitor = None
 
-        # Opt-in: DailyReportService (disabled by default)
         daily_report_service = None
         if os.environ.get("HFT_DAILY_REPORT_ENABLED", "0") == "1":
             try:
                 from hft_platform.services.daily_report import DailyReportService
 
-                # Get CH client from recorder writer if available
                 ch_client = None
                 writer = getattr(recorder, "writer", None)
                 if writer is not None:
                     ch_client = getattr(writer, "ch_client", None)
 
-                # Get or create notification dispatcher
                 notification_dispatcher = None
                 if session_governor is not None:
                     notification_dispatcher = getattr(session_governor, "_notification_dispatcher", None)
@@ -1522,32 +1339,21 @@ class SystemBootstrapper:
 
                         sender = TelegramSender(enabled=True)
                         notification_dispatcher = NotificationDispatcher(sender=sender)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                 evidence_writer = get_shared_autonomy_evidence_writer()
 
                 if notification_dispatcher is not None:
-                    # X-H1: Late-bind dispatcher to RiskEngine so daily-loss HALT alerts fire
                     if hasattr(risk_engine, "_notification_dispatcher"):
                         risk_engine._notification_dispatcher = notification_dispatcher
                         logger.info("RiskEngine notification_dispatcher wired")
 
-                    # R11-C1+C2: Wire StormGuard halt callback + state transition notifications.
-                    # H2 (2026-04-25): the original implementation called
-                    # ``asyncio.get_event_loop()`` from a daemon thread (StormGuard
-                    # ``trigger_halt`` is invoked by lease-refresh / supervisor /
-                    # ChannelGap threads). On Python 3.12 this raises ``RuntimeError``
-                    # because no current loop is bound to the calling thread, so the
-                    # bare ``except: pass`` silently dropped every Telegram alert.
-                    # Production evidence: 168h of logs with zero ``halt_callback_*``
-                    # entries despite multiple HALT events.
                     storm_guard._on_halt_callback = _make_halt_notification_callback(
                         storm_guard, notification_dispatcher
                     )
                     logger.info("StormGuard on_halt_callback wired to NotificationDispatcher")
 
-                    # R11-C3: Late-bind dispatcher + flattener into AutonomyMonitor
                     if autonomy_monitor is not None:
                         autonomy_monitor._notification_dispatcher = notification_dispatcher
                         if hasattr(self, "_position_flattener"):
@@ -1561,7 +1367,6 @@ class SystemBootstrapper:
                         position_store=position_store,
                         storm_guard=storm_guard,
                     )
-                    # Register phase callback on SessionGovernor
                     if session_governor is not None:
                         session_governor.register_phase_callback(daily_report_service.on_phase_transition)
                     logger.info("DailyReportService created and wired")
@@ -1571,9 +1376,6 @@ class SystemBootstrapper:
                 logger.warning("DailyReportService creation failed", error=str(exc))
                 daily_report_service = None
 
-        # Bug 27 (2026-04-17): PositionStuckMonitor for deadlock observability.
-        # Enabled by default; disable with HFT_POSITION_STUCK_ENABLED=0. Alert-only;
-        # does not place orders. Threshold: HFT_POSITION_STUCK_ALERT_S (default 300s).
         position_stuck_monitor = None
         if os.environ.get("HFT_POSITION_STUCK_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}:
             try:
@@ -1582,42 +1384,25 @@ class SystemBootstrapper:
                 position_stuck_monitor = PositionStuckMonitor(
                     position_store=position_store,
                     dispatcher=notification_dispatcher if "notification_dispatcher" in dir() else None,
-                    # Until 2026-09-08 neither of the next two arguments was
-                    # passed, so ``_estimate_unrealized_ntd`` returned ``None``
-                    # on every alert in every environment: the warning that
-                    # exists to tell an operator a position is stuck could not
-                    # say how much money was on it. Measured on THESHOW that
-                    # day -- ``position_stuck_alert ... net_qty=1 age_s=300
-                    # unrealized_ntd=null``. The unit test covering the field
-                    # passed throughout, because it supplied the mid-price
-                    # function that production never did.
                     mid_price_fn=_get_mid_price,
                     contract_multiplier_fn=getattr(symbol_metadata, "contract_multiplier", None),
                 )
                 logger.info("PositionStuckMonitor created")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("PositionStuckMonitor creation failed", error=str(exc))
                 position_stuck_monitor = None
 
-        # Startup config snapshot (non-blocking)
-        # NOTE: build() runs inside HFTSystem.__init__ BEFORE the engine loop starts.
-        # Python 3.12 deprecates asyncio.get_event_loop() without a running loop, and
-        # scheduling tasks on an orphan loop silently fails. Collect coroutines into
-        # ``deferred_tasks`` and let HFTSystem.run() create the tasks on the engine loop.
         from hft_platform.ops.config_snapshot import build_snapshot, write_snapshot_to_clickhouse
 
-        # HFT_GIT_SHA names the image; src/ is a bind mount in production, so it
-        # does not name the running code. Put both on one boot line.
         try:
             from hft_platform.observability.code_identity import log_code_identity
 
             log_code_identity()
-        except Exception:  # noqa: BLE001 - audit convenience must never block boot
+        except Exception:
             logger.warning("code_identity_log_failed", exc_info=True)
 
         deferred_tasks: list[Any] = []
 
-        # ch_client is only set when HFT_DAILY_REPORT_ENABLED=1; fall back to recorder writer
         if "ch_client" not in dir():
             _writer = getattr(recorder, "writer", None) if recorder is not None else None
             ch_client = getattr(_writer, "ch_client", None) if _writer is not None else None
@@ -1633,61 +1418,39 @@ class SystemBootstrapper:
                 deferred_tasks.append(write_snapshot_to_clickhouse(ch_client, _snapshot))
             else:
                 logger.info("config_snapshot_fallback", **_snapshot)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("config_snapshot_build_failed", exc_info=True)
 
-        # A contract settling is not a connect: without this clock the family
-        # binding is decided once per connect and a strategy stays on a settled
-        # contract until the next one (THESHOW, 2026-09-16 onwards).
         if shioaji_family_populator is not None:
             deferred_tasks.append(shioaji_family_populator.run_roll_clock())
 
-        # The subscription universe has the same problem one layer down: the
-        # codes were resolved when ``symbols.yaml`` was last built by hand, so a
-        # settled month stays subscribed (and pages hourly) until an operator
-        # rebuilds it. This clock rebuilds from ``symbols.list`` and adopts the
-        # result in the next closed window.
         if hasattr(md_client, "run_universe_roll_clock"):
             deferred_tasks.append(md_client.run_universe_roll_clock())
 
-        # Both clocks above can be wrong in ways neither reports (a partial
-        # contract cache, a binding that never moved). This one checks their
-        # result against the exchange rule once a minute and publishes it.
         from hft_platform.ops.front_month_watch import run_front_month_watch
 
         deferred_tasks.append(run_front_month_watch(strategy_runner, md_client))
 
-        # The order facade is idle between sessions, so its transport session
-        # lapses and the first order of the day pays the handshake (27 s on
-        # 2026-09-16) against a 30 ms retry budget. Warm it ahead of the open
-        # instead; a warm-up that fails changes nothing about how orders go out.
         if hasattr(order_client, "warm_order_session"):
             from hft_platform.services.order_session_warmup import OrderSessionWarmup
 
             deferred_tasks.append(OrderSessionWarmup(order_client).run())
 
-        # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
             from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge
 
             _alert_bridge = AlertmanagerBridge()
             deferred_tasks.append(_alert_bridge.run())
             logger.info("alertmanager_bridge_scheduled_deferred")
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning("alertmanager_bridge_start_failed", exc_info=True)
 
-        # Inject LOB + FeatureEngine into Pool for targeted warmup reset
         if hasattr(md_client, "set_reset_targets"):
             md_client.set_reset_targets(
                 lob=md_service.lob,
                 feature_engine=feature_engine,
             )
 
-        # The checkpoint says whose book it is; recovery refuses one that is not
-        # this engine's (another account, broker, or the paper/live venue).
-        # Provisional: no broker has logged in yet, so the account is usually
-        # unknown here. HFTSystem._bind_checkpoint_identity replaces it after
-        # the login, before recovery reads the checkpoint.
         account_id = getattr(order_client, "get_default_account_id", lambda: broker_id)()
         from hft_platform.execution.checkpoint import checkpoint_identity
 
@@ -1785,14 +1548,9 @@ def _make_halt_notification_callback(storm_guard: Any, dispatcher: Any) -> Calla
             )
             try:
                 MetricsRegistry.get().halt_callback_no_loop_total.inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             return
-        # Detect whether we are running on the engine loop thread itself: if so,
-        # ``asyncio.run_coroutine_threadsafe`` still works but is unnecessary —
-        # ``loop.create_task`` is the cheaper path. In practice HALT fires from
-        # daemon threads so ``threadsafe`` will be the dominant code path; we
-        # record the label so operators can see both.
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
@@ -1803,24 +1561,17 @@ def _make_halt_notification_callback(storm_guard: Any, dispatcher: Any) -> Calla
             if path == "direct":
                 spawn_retained(coro, name="notify_halt", loop=loop)
             else:
-                # run_coroutine_threadsafe takes a coroutine and schedules it on
-                # the target loop; the returned Future is intentionally not
-                # awaited here (fire-and-forget — StormGuard already logs
-                # callback errors via _halt_callback_done).
                 asyncio.run_coroutine_threadsafe(coro, loop)
             try:
                 MetricsRegistry.get().halt_callback_dispatched_total.labels(path=path).inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             logger.info("halt_callback_dispatched", path=path)
         except RuntimeError as exc:
-            # Loop closed between is_closed() check and schedule, or other
-            # transient scheduling error. Log and bump metric so operators
-            # see the failure instead of a silent drop.
             logger.warning("halt_callback_schedule_failed", error=str(exc), path=path)
             try:
                 MetricsRegistry.get().halt_callback_schedule_failed_total.inc()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     return _on_halt_cb

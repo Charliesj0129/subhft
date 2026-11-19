@@ -69,10 +69,9 @@ class TestLossConcentrationOffenders:
     def test_lists_only_rows_over_cap_sorted_desc(self, _isolated) -> None:
         _record(run_id="bad", worst_loss=72.0)
         _record(run_id="worst", worst_loss=88.0)
-        _record(run_id="ok", worst_loss=40.0)  # under cap → excluded
+        _record(run_id="ok", worst_loss=40.0)
         out = audit_cli.loss_concentration_offenders()
         body = out.split("\n")
-        # First data row is the most concentrated (88%), then 72%.
         assert body[2].startswith("worst")
         assert "88.0%" in body[2]
         assert body[3].startswith("bad")
@@ -81,7 +80,7 @@ class TestLossConcentrationOffenders:
         assert "(2 over cap 50.0%" in out
 
     def test_exactly_at_cap_not_an_offender(self, _isolated) -> None:
-        _record(run_id="edge", worst_loss=50.0)  # strict > cap, 50.0 excluded
+        _record(run_id="edge", worst_loss=50.0)
         out = audit_cli.loss_concentration_offenders()
         assert "no rows over worst-loss-share cap" in out
 
@@ -99,7 +98,6 @@ class TestLossConcentrationOffenders:
 
     def test_custom_min_share(self, _isolated) -> None:
         _record(run_id="mid", worst_loss=60.0)
-        # Raise threshold above the row → no offenders.
         out = audit_cli.loss_concentration_offenders(min_share=70.0)
         assert "no rows over worst-loss-share cap (70.0%" in out
 

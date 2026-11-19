@@ -6,10 +6,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Template tests
-# ---------------------------------------------------------------------------
-
 
 def test_render_tca_pnl_supplement_contains_both_sections() -> None:
     from hft_platform.notifications.templates import render_tca_pnl_supplement
@@ -36,7 +32,6 @@ def test_render_tca_pnl_supplement_sections_separated() -> None:
 
     result = render_tca_pnl_supplement(tca_section="SECTION_A", pnl_section="SECTION_B")
 
-    # Sections must both appear and be separated by blank line
     a_pos = result.index("SECTION_A")
     b_pos = result.index("SECTION_B")
     between = result[a_pos + len("SECTION_A") : b_pos]
@@ -50,11 +45,6 @@ def test_render_tca_pnl_supplement_empty_sections() -> None:
 
     assert isinstance(result, str)
     assert "TCA & PnL Supplement" in result
-
-
-# ---------------------------------------------------------------------------
-# Dispatcher tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

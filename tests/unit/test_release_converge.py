@@ -331,7 +331,7 @@ def _guard_returncodes(payload: dict) -> dict[str, int]:
 
 def test_allow_delete_wal_does_not_unlock_the_data_directory(monkeypatch, tmp_path: Path) -> None:
     mod = _load_module()
-    _skip_repo_tooling(monkeypatch, mod)  # so that only the guard can be the reason the run stops
+    _skip_repo_tooling(monkeypatch, mod)
     root = _project_with_wal(tmp_path)
     (root / "data").mkdir()
     (root / "data" / "ticks.parquet").write_text("rows\n", encoding="utf-8")
@@ -341,7 +341,7 @@ def test_allow_delete_wal_does_not_unlock_the_data_directory(monkeypatch, tmp_pa
     assert rc == 2
     assert _guard_returncodes(payload) == {".wal": 0, "data": 3}
     assert (root / "data" / "ticks.parquet").exists()
-    assert (root / ".wal" / "segment-000001.wal").exists()  # the whole cleanup stops, not only the data step
+    assert (root / ".wal" / "segment-000001.wal").exists()
 
 
 def test_allow_delete_data_does_not_unlock_the_wal_directory(monkeypatch, tmp_path: Path) -> None:
@@ -356,7 +356,7 @@ def test_allow_delete_data_does_not_unlock_the_wal_directory(monkeypatch, tmp_pa
     assert rc == 2
     assert _guard_returncodes(payload) == {".wal": 3, "data": 0}
     assert (root / ".wal" / "segment-000001.wal").exists()
-    assert (root / "data" / "ticks.parquet").exists()  # the whole cleanup stops, not only the wal step
+    assert (root / "data" / "ticks.parquet").exists()
 
 
 def test_clean_data_is_blocked_until_allow_delete_data(monkeypatch, tmp_path: Path) -> None:
@@ -398,7 +398,7 @@ def test_the_mvp_profile_cannot_delete_the_wal_without_the_flag(tmp_path: Path) 
 
     rc, payload = _run(mod, root, "--cleanup-profile", "mvp_release", "--dry-run")
 
-    assert rc == 2  # a dry run reports what would be blocked
+    assert rc == 2
     assert (root / ".wal" / "segment-000001.wal").exists()
     assert any(
         row.get("step") == "guard_untracked_state:.wal" and row["returncode"] == 3 for row in payload["cleanup_steps"]

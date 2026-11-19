@@ -76,22 +76,22 @@ def test_legacy_frame_without_price_type_defaults_to_lmt():
     """Frames emitted before the schema bump carry only 17 items — treat as LMT."""
     legacy_frame = (
         "typed_intent_v1",
-        1,  # intent_id
-        "s1",  # strategy_id
-        "2330",  # symbol
+        1,
+        "s1",
+        "2330",
         int(IntentType.NEW),
         int(Side.BUY),
         5_050_000,
         1,
         int(TIF.LIMIT),
-        "",  # target_order_id
-        0,  # timestamp_ns
-        0,  # source_ts_ns
-        "",  # reason
-        "",  # trace_id
-        "",  # idempotency_key
-        0,  # ttl_ns
-        0,  # decision_price
+        "",
+        0,
+        0,
+        "",
+        "",
+        "",
+        0,
+        0,
     )
     intent = typed_frame_to_intent(legacy_frame)
     assert intent.price_type == "LMT"
@@ -105,6 +105,6 @@ def test_submit_typed_nowait_rejects_wrong_marker():
 
 def test_submit_typed_nowait_rejects_short_arity():
     chan = LocalIntentChannel(maxsize=4)
-    short_frame = ("typed_intent_v1", 1, "s1", "2330")  # 4 items
+    short_frame = ("typed_intent_v1", 1, "s1", "2330")
     with pytest.raises(ValueError, match="Invalid typed intent frame"):
         chan.submit_typed_nowait(short_frame)  # type: ignore[arg-type]

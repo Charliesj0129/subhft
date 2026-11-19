@@ -20,22 +20,12 @@ from hft_platform.core.rate_limiter import (
     RateLimiter,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-# The classes live in core.rate_limiter; patch timebase there.
 _TIMEBASE_NOW_S = "hft_platform.core.rate_limiter.timebase.now_s"
 
 
 def _mock_now(value: float):
     """Return a context-manager that patches timebase.now_s to a constant."""
     return patch(_TIMEBASE_NOW_S, return_value=value)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# RateLimiter
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestRateLimiter:
@@ -46,7 +36,6 @@ class TestRateLimiter:
 
     def test_check_returns_true_at_soft_cap(self):
         rl = RateLimiter(soft_cap=3, hard_cap=10, window_s=60)
-        # Insert 3 events (== soft_cap)
         rl.rate_window.extend([999.0, 999.0, 999.0])
         with _mock_now(1000.0):
             result = rl.check()
@@ -54,21 +43,20 @@ class TestRateLimiter:
 
     def test_check_returns_false_at_hard_cap(self):
         rl = RateLimiter(soft_cap=3, hard_cap=5, window_s=60)
-        rl.rate_window.extend([999.0] * 5)  # == hard_cap
+        rl.rate_window.extend([999.0] * 5)
         with _mock_now(1000.0):
             result = rl.check()
         assert result is False
 
     def test_check_returns_false_above_hard_cap(self):
         rl = RateLimiter(soft_cap=3, hard_cap=5, window_s=60)
-        rl.rate_window.extend([999.0] * 7)  # > hard_cap
+        rl.rate_window.extend([999.0] * 7)
         with _mock_now(1000.0):
             result = rl.check()
         assert result is False
 
     def test_check_expires_old_entries_within_window(self):
         rl = RateLimiter(soft_cap=3, hard_cap=5, window_s=60)
-        # Entries from 120 s ago — all outside the 60 s window
         rl.rate_window.extend([800.0, 800.0, 800.0, 800.0, 800.0])
         with _mock_now(1000.0):
             result = rl.check()
@@ -77,7 +65,7 @@ class TestRateLimiter:
 
     def test_check_keeps_entries_inside_window(self):
         rl = RateLimiter(soft_cap=10, hard_cap=20, window_s=60)
-        rl.rate_window.extend([980.0, 990.0])  # within 60 s of t=1000
+        rl.rate_window.extend([980.0, 990.0])
         with _mock_now(1000.0):
             result = rl.check()
         assert result is True
@@ -124,11 +112,6 @@ class TestRateLimiter:
         assert rl.window_s == 60
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PerSymbolRateLimiter
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class TestPerSymbolRateLimiter:
     def test_check_unknown_symbol_returns_ok(self):
         prl = PerSymbolRateLimiter(soft_limit=10, hard_limit=20, window_s=60.0)
@@ -138,28 +121,27 @@ class TestPerSymbolRateLimiter:
 
     def test_check_below_soft_limit_returns_ok(self):
         prl = PerSymbolRateLimiter(soft_limit=10, hard_limit=20, window_s=60.0)
-        prl._windows["2330"] = deque([999.0, 999.0])  # 2 < 10
+        prl._windows["2330"] = deque([999.0, 999.0])
         with _mock_now(1000.0):
             result = prl.check("2330")
         assert result is PerSymbolRateResult.OK
 
     def test_check_at_soft_limit_returns_soft(self):
         prl = PerSymbolRateLimiter(soft_limit=3, hard_limit=10, window_s=60.0)
-        prl._windows["2330"] = deque([999.0, 999.0, 999.0])  # == soft_limit
+        prl._windows["2330"] = deque([999.0, 999.0, 999.0])
         with _mock_now(1000.0):
             result = prl.check("2330")
         assert result is PerSymbolRateResult.SOFT
 
     def test_check_at_hard_limit_returns_hard(self):
         prl = PerSymbolRateLimiter(soft_limit=3, hard_limit=5, window_s=60.0)
-        prl._windows["2330"] = deque([999.0] * 5)  # == hard_limit
+        prl._windows["2330"] = deque([999.0] * 5)
         with _mock_now(1000.0):
             result = prl.check("2330")
         assert result is PerSymbolRateResult.HARD
 
     def test_check_expires_stale_entries_before_evaluating(self):
         prl = PerSymbolRateLimiter(soft_limit=3, hard_limit=5, window_s=60.0)
-        # 6 entries older than window — all should be evicted, result is OK
         prl._windows["2330"] = deque([800.0] * 6)
         with _mock_now(1000.0):
             result = prl.check("2330")
@@ -185,7 +167,6 @@ class TestPerSymbolRateLimiter:
         with _mock_now(500.0):
             prl.record("SYM_A")
             prl.record("SYM_B")
-            # Third symbol should be silently dropped
             prl.record("SYM_C")
         assert "SYM_C" not in prl._windows
         assert len(prl._windows) == 2
@@ -195,25 +176,21 @@ class TestPerSymbolRateLimiter:
         with _mock_now(500.0):
             prl.record("SYM_A")
             prl.record("SYM_B")
-            # SYM_A already exists — should still be recorded
             prl.record("SYM_A")
         assert len(prl._windows["SYM_A"]) == 2
 
     def test_evict_idle_triggered_every_100_calls(self):
         prl = PerSymbolRateLimiter(soft_limit=10, hard_limit=20, window_s=60.0)
-        # Pre-populate a window with expired entries
-        prl._windows["STALE"] = deque([1.0, 2.0])  # old timestamps
-        # Drive _call_count to 99 so the 100th record triggers _evict_idle
+        prl._windows["STALE"] = deque([1.0, 2.0])
         prl._call_count = 99
         with _mock_now(1000.0):
             prl.record("ANY_SYMBOL")
-        # STALE's entries were outside window; _evict_idle should have removed it
         assert "STALE" not in prl._windows
 
     def test_evict_idle_removes_empty_windows_only(self):
         prl = PerSymbolRateLimiter(soft_limit=10, hard_limit=20, window_s=60.0)
-        prl._windows["LIVE"] = deque([990.0, 995.0])  # recent — should survive
-        prl._windows["STALE"] = deque([1.0])  # expired — should be removed
+        prl._windows["LIVE"] = deque([990.0, 995.0])
+        prl._windows["STALE"] = deque([1.0])
         prl._call_count = 99
         with _mock_now(1000.0):
             prl.record("ANY_SYMBOL")

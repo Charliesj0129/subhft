@@ -74,21 +74,10 @@ class PositionStuckMonitor:
         )
         self._running = False
         self._task: asyncio.Task[None] | None = None
-        # (strategy_id, symbol) keys currently in "alerted" state (dedup)
         self._alerted_keys: set[tuple[str, str]] = set()
-        # (strategy_id, symbol) keys we have observed non-flat so we can clean gauges
         self._seen_keys: set[tuple[str, str]] = set()
-        # Bug 27b (2026-04-18): track first-observed non-zero time per key so that
-        # positions restored via startup-recovery (with stale ``last_update_ts``
-        # from a prior engine run) don't generate false 24h age alerts. We use
-        # the MAX of ``last_update_ts`` and ``first_observed_ns`` as the age
-        # reference — new fills (which update last_update_ts) still take effect.
         self._first_observed_ns: dict[tuple[str, str], int] = {}
         self._get_contract_multiplier = contract_multiplier_fn
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
 
     async def run(self) -> None:
         """Supervised coroutine entry point (matches AutonomyMonitor.run signature)."""
@@ -128,13 +117,9 @@ class PositionStuckMonitor:
                 await self._tick()
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error("position_stuck_monitor_error", error=str(exc))
             await asyncio.sleep(self._interval_s)
-
-    # ------------------------------------------------------------------
-    # Core logic (pure-ish — easy to unit test)
-    # ------------------------------------------------------------------
 
     async def _tick(self) -> None:
         """One evaluation pass. Exposed for deterministic unit tests."""
@@ -157,25 +142,18 @@ class PositionStuckMonitor:
             key = (strategy_id, symbol)
             current_keys.add(key)
             self._seen_keys.add(key)
-            # Record the first tick we saw this non-zero position; used to
-            # defeat stale ``last_update_ts`` inherited from startup recovery.
             if key not in self._first_observed_ns:
                 self._first_observed_ns[key] = now_ns
 
-            # Age reference: the LATER of fresh fill time vs first-observed time.
-            # If last_update_ts is stale (recovery) but within this monitor's
-            # lifetime we use first_observed_ns → position must actually persist
-            # for ``alert_threshold_s`` within the live session before alerting.
             reference_ns = max(last_update_ts, self._first_observed_ns[key])
             age_s = max(0, (now_ns - reference_ns) // 1_000_000_000)
 
             if last_update_ts <= 0 and age_s < self._alert_threshold_s:
-                # Recovery-state position with no fill yet and not long enough to alert — skip gauge too.
                 continue
 
             try:
                 self._metrics.position_age_seconds.labels(strategy=strategy_id, symbol=symbol).set(float(age_s))
-            except Exception:  # noqa: BLE001 — metric failure must not block
+            except Exception:
                 pass
 
             if age_s >= self._alert_threshold_s and key not in self._alerted_keys:
@@ -188,16 +166,14 @@ class PositionStuckMonitor:
                 )
                 self._alerted_keys.add(key)
 
-        # Clean up stale keys (position went flat or disappeared)
         stale = self._seen_keys - current_keys
         for key in stale:
             try:
                 self._metrics.position_age_seconds.remove(*key)
-            except Exception:  # noqa: BLE001 — label may never have been set
+            except Exception:
                 pass
             self._alerted_keys.discard(key)
             self._seen_keys.discard(key)
-            # Clear first-observed so the next non-flat episode re-anchors.
             self._first_observed_ns.pop(key, None)
 
     async def _emit_alert(
@@ -220,7 +196,7 @@ class PositionStuckMonitor:
         )
         try:
             self._metrics.position_stuck_alerts_total.labels(strategy=strategy_id, symbol=symbol).inc()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         if self._dispatcher is None:
@@ -233,7 +209,7 @@ class PositionStuckMonitor:
                 age_s=age_s,
                 unrealized_ntd=unrealized_ntd,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error("position_stuck_notify_failed", error=str(exc))
 
     def _estimate_unrealized_ntd(self, symbol: str, net_qty: int, avg_price_scaled: int) -> int | None:
@@ -242,22 +218,19 @@ class PositionStuckMonitor:
             return None
         try:
             mid_scaled = int(self._mid_price_fn(symbol) or 0)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         if mid_scaled <= 0:
             return None
-        multiplier = 10  # Default for TMF mini; overridden if fn provided
+        multiplier = 10
         if self._get_contract_multiplier is not None:
             try:
                 multiplier = int(self._get_contract_multiplier(symbol) or 10)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 multiplier = 10
-        # Scaled diff; mid_scaled and avg_price_scaled are both in the same fixed-point scale.
-        # NTD ≈ (diff / scale) * qty * multiplier. Use 10000 as default scale (x10000 convention).
         try:
             diff = mid_scaled - avg_price_scaled
-            # If caller uses the x10000 scale (per CLAUDE.md), divide by 10000.
             ntd = (diff * net_qty * multiplier) // 10000
             return int(ntd)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None

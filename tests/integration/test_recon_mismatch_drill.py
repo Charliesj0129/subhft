@@ -46,12 +46,11 @@ async def test_recon_small_mismatch_detected():
         config=config,
         storm_guard=storm_guard,
     )
-    recon._critical_drift_debounce = 1  # bypass debounce for test
-    recon.broker_zero_debounce_observations = 1  # bypass broker-zero debounce
+    recon._critical_drift_debounce = 1
+    recon.broker_zero_debounce_observations = 1
 
     await recon.sync_portfolio()
 
-    # Discrepancy detected
     assert len(recon._last_discrepancies) == 1
     disc = recon._last_discrepancies[0]
     assert disc.symbol == "2330"
@@ -59,9 +58,7 @@ async def test_recon_small_mismatch_detected():
     assert disc.broker_qty == 0
     assert disc.diff == 2
 
-    # diff=2 does NOT exceed threshold max(100, 2//10)=100 → not critical
     assert not disc.is_critical
-    # StormGuard stays NORMAL (no critical discrepancy)
     assert storm_guard.state == StormGuardState.NORMAL
 
 
@@ -90,8 +87,8 @@ async def test_recon_large_mismatch_triggers_halt():
         config=config,
         storm_guard=storm_guard,
     )
-    recon._critical_drift_debounce = 1  # bypass debounce for test
-    recon.broker_zero_debounce_observations = 1  # bypass broker-zero debounce
+    recon._critical_drift_debounce = 1
+    recon.broker_zero_debounce_observations = 1
 
     await recon.sync_portfolio()
 
@@ -99,10 +96,8 @@ async def test_recon_large_mismatch_triggers_halt():
     disc = recon._last_discrepancies[0]
     assert disc.local_qty == 200
     assert disc.broker_qty == 0
-    # diff=200 > max(100, 200//10=20)=100 → critical
     assert disc.is_critical
 
-    # sync_portfolio calls _trigger_halt for critical discrepancies → HALT
     assert storm_guard.state == StormGuardState.HALT
 
 
@@ -118,11 +113,10 @@ async def test_recon_sign_mismatch_triggers_halt():
         avg_price_scaled=6_000_000,
     )
 
-    # Broker reports a short position
     mock_pos = MagicMock()
     mock_pos.code = "2330"
     mock_pos.quantity = 5
-    mock_pos.direction = "Action.Sell"  # negative qty
+    mock_pos.direction = "Action.Sell"
 
     mock_client = MagicMock()
     mock_client.get_positions.return_value = [mock_pos]
@@ -135,7 +129,7 @@ async def test_recon_sign_mismatch_triggers_halt():
         config=config,
         storm_guard=storm_guard,
     )
-    recon._critical_drift_debounce = 1  # bypass debounce for test
+    recon._critical_drift_debounce = 1
 
     await recon.sync_portfolio()
 
@@ -143,7 +137,7 @@ async def test_recon_sign_mismatch_triggers_halt():
     disc = recon._last_discrepancies[0]
     assert disc.local_qty == 5
     assert disc.broker_qty == -5
-    assert disc.is_critical  # sign mismatch always critical
+    assert disc.is_critical
 
     assert storm_guard.state == StormGuardState.HALT
 

@@ -50,24 +50,20 @@ def test_e2e_maker_sub_gates_in_advisory_format():
         },
     )
 
-    # Structural checks
     assert isinstance(results, list)
     assert len(results) > 0
 
-    # Each entry must be JSON-serializable dict with expected keys
     expected_keys = {"name", "passed", "metrics", "details"}
     for entry in results:
         assert isinstance(entry, dict)
         assert expected_keys.issubset(entry.keys())
 
-    # Specifically verify maker sub-gates ran
     names = {r["name"] for r in results}
     assert "sharpe_threshold" in names
     assert "max_drawdown" in names
     assert "winning_day_pct" in names
     assert "fill_quality" in names
     assert "fill_rate_validation" in names
-    # Taker gates must NOT run for maker
     assert "ic_evaluation" not in names
 
 
@@ -107,9 +103,8 @@ def test_e2e_taker_sub_gates_in_advisory_format():
     names = {r["name"] for r in results}
     assert "sharpe_threshold" in names
     assert "ic_evaluation" in names
-    assert "fill_quality" not in names  # maker-only
+    assert "fill_quality" not in names
 
-    # Find ic_evaluation and verify it passed with our good ICs
     ic_entry = next(r for r in results if r["name"] == "ic_evaluation")
     assert ic_entry["passed"] is True
     assert ic_entry["metrics"]["ic_is"] == pytest.approx(0.072)
@@ -150,7 +145,6 @@ def test_e2e_sub_gates_serializable_to_json():
         },
     )
 
-    # Must round-trip through JSON cleanly
     payload = json.dumps(results)
     parsed = json.loads(payload)
     assert isinstance(parsed, list)

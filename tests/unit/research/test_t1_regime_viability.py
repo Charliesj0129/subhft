@@ -293,8 +293,8 @@ def test_coverage_v0_flag_uses_detector_trigger_not_first_touch_magnitude():
         (45, 100.0, 101.0),
         (50, 101.0, 102.0),
         (55, 99.0, 100.0),
-        (60, 102.0, 103.0),  # first OR touch: only +1.0 above 101.5
-        (65, 110.0, 111.0),  # detector trigger: +9.0 above 101.5
+        (60, 102.0, 103.0),
+        (65, 110.0, 111.0),
         (70, 112.0, 113.0),
     ]:
         ts = ns_at(0 if minute < 60 else 1, minute % 60)

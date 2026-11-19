@@ -41,14 +41,8 @@ from hft_platform.reports.models import ComposedReport, MessagePart
 _TZ = ZoneInfo("Asia/Taipei")
 
 
-#: A date the market calendar agrees was open, and one it agrees was closed.
-#: The streak counter is only advanced on a trading day, so a test that lets
-#: ``resolve_trading_date`` read the real clock asserts a different thing on a
-#: Wednesday than on a Sunday -- which is how
-#: ``test_alert_fires_after_threshold_consecutive_empties`` failed with
-#: ``assert 0 >= 2`` on main every weekend while passing on weekdays.
-_TRADING_DAY = "2026-09-02"  # Wednesday
-_CLOSED_DAY = "2026-09-05"  # Saturday
+_TRADING_DAY = "2026-09-02"
+_CLOSED_DAY = "2026-09-05"
 
 
 def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
@@ -68,7 +62,7 @@ def _reset_state(monkeypatch: pytest.MonkeyPatch) -> None:
     bot_app.last_day_attempt = None
     bot_app.last_night_attempt = None
     bot_app.consecutive_empty_attempts = 0
-    bot_app.latest_manual_report_context = None  # cross-test isolation
+    bot_app.latest_manual_report_context = None
 
 
 class TestAttemptTracking:
@@ -89,8 +83,8 @@ class TestAttemptTracking:
         ):
             await _push_report(ctx, "day")
 
-        assert bot_app.last_day_report is None  # no successful sends
-        assert bot_app.last_day_attempt is not None  # but attempt logged
+        assert bot_app.last_day_report is None
+        assert bot_app.last_day_attempt is not None
         assert isinstance(bot_app.last_day_attempt, datetime)
 
     @pytest.mark.asyncio
@@ -132,7 +126,6 @@ class TestDeadDataAlert:
                 await _push_report(ctx, "day")
 
         assert bot_app.consecutive_empty_attempts >= threshold
-        # The counter is the state; the alert is what an operator actually sees.
         assert [e for e in logs if e.get("event") == "bot.dead_data_alert"]
 
     @pytest.mark.asyncio
@@ -194,7 +187,6 @@ class TestDeadDataAlert:
         import hft_platform.bot.app as bot_app
         from hft_platform.bot.scheduler import _push_report
 
-        # Pre-seed an existing streak — should be cleared once a real send happens.
         bot_app.consecutive_empty_attempts = 3
         ctx = MagicMock()
         ctx.bot.send_message = AsyncMock()
@@ -232,11 +224,7 @@ class TestErrorHandler:
         metric = MetricsRegistry.get().bot_handler_errors_total.labels(exception="ConnectError")
         before = metric._value.get()
 
-        # Simulate an httpx.ConnectError-like update + context
         ctx = SimpleNamespace(error=ConnectionError("Connect failed"))
-        # The handler should NOT raise, even though our fake error type is
-        # ConnectionError (mapped to "ConnectionError" label). Use a more
-        # realistic name to mimic httpx.ConnectError class name.
 
         class ConnectError(Exception):
             pass
@@ -258,8 +246,4 @@ class TestHeartbeatExposesNewFields:
         bot_app.consecutive_empty_attempts = 5
 
         ctx = MagicMock()
-        # Capture structlog output via a side-channel — we just need to
-        # confirm _heartbeat doesn't crash when these fields are populated.
         await _heartbeat(ctx)
-        # If we got here, heartbeat ran without raising — the new fields
-        # are in the log payload (verified by static read of source).

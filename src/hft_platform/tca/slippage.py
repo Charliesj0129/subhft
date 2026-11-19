@@ -1,4 +1,3 @@
-# src/hft_platform/tca/slippage.py
 """TCA Slippage Decomposer — 4-component breakdown.
 
 Components:

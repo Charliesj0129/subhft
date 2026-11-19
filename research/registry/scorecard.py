@@ -39,8 +39,6 @@ def compute_scorecard(
             corr_max = float(computed_corr)
     wf = wf_extra or {}
 
-    # Stage 6 cost sensitivity: prefer explicit field; else compute from
-    # avg_spread_cost and ic_mean as a proxy when both are available.
     cost_sensitivity_ratio = _as_float(result.get("cost_sensitivity_ratio"))
     if cost_sensitivity_ratio is None:
         avg_spread_cost = _as_float(result.get("avg_spread_cost"))
@@ -251,14 +249,12 @@ def compute_pool_correlation_matrix(
     if n == 0:
         return np.empty((0, 0), dtype=np.float64), []
 
-    # Determine which keys are new.
     prev_key_set: set[str] = set()
     prev_key_list: list[str] = []
     if prev_matrix is not None and prev_keys is not None:
         prev_key_list = list(prev_keys)
         prev_key_set = set(prev_key_list)
 
-    # If we can reuse the previous matrix, do an incremental update.
     if (
         prev_matrix is not None
         and prev_key_list
@@ -267,28 +263,22 @@ def compute_pool_correlation_matrix(
     ):
         new_keys = [k for k in keys if k not in prev_key_set]
         if not new_keys:
-            # No new alphas — reorder prev_matrix to match current keys
             idx = [prev_key_list.index(k) for k in keys]
             reordered = prev_matrix[np.ix_(idx, idx)]
             return reordered, keys
 
-        # Build full matrix: copy prior block, compute new rows/columns
-        # Reorder keys so prior ones come first, new ones at end
         ordered_keys = [k for k in keys if k in prev_key_set] + new_keys
         m_prev = len(prev_key_list)
         m_total = len(ordered_keys)
         matrix = np.eye(m_total, dtype=np.float64)
 
-        # Copy prior sub-block (reordered to match ordered_keys)
         prior_idx = [prev_key_list.index(k) for k in ordered_keys[:m_prev]]
         matrix[:m_prev, :m_prev] = prev_matrix[np.ix_(prior_idx, prior_idx)]
 
-        # Pre-compute arrays for all signals
         arrs: dict[str, np.ndarray] = {}
         for k in ordered_keys:
             arrs[k] = np.asarray(pool_signals[k], dtype=np.float64)
 
-        # Compute correlations for each new alpha against all others
         for i, nk in enumerate(new_keys):
             row_idx = m_prev + i
             a = arrs[nk]
@@ -305,11 +295,9 @@ def compute_pool_correlation_matrix(
                 matrix[row_idx, j] = val
                 matrix[j, row_idx] = val
 
-        # Reorder to match the original keys order
         final_idx = [ordered_keys.index(k) for k in keys]
         return matrix[np.ix_(final_idx, final_idx)], keys
 
-    # Full computation — no prior matrix or incompatible
     arrs_list: list[np.ndarray] = []
     min_len = None
     for k in keys:
@@ -324,8 +312,7 @@ def compute_pool_correlation_matrix(
     if n == 1:
         return np.ones((1, 1), dtype=np.float64), keys
 
-    stacked = np.column_stack([a[:min_len] for a in arrs_list])  # (min_len, n)
-    matrix = np.corrcoef(stacked, rowvar=False)  # (n, n)
-    # Replace NaN with 0 for safety
+    stacked = np.column_stack([a[:min_len] for a in arrs_list])
+    matrix = np.corrcoef(stacked, rowvar=False)
     matrix = np.where(np.isfinite(matrix), matrix, 0.0)
     return matrix, keys

@@ -21,7 +21,6 @@ async def test_normalizer_flow(symbols_cfg):
     q = asyncio.Queue()
     norm = ExecutionNormalizer(q)
 
-    # Test Order Normalization
     ts = time.time_ns()
     raw_order = RawExecEvent(
         "order",
@@ -42,7 +41,6 @@ async def test_normalizer_flow(symbols_cfg):
     assert event.price == 5000000
     assert event.side == Side.BUY
 
-    # Test Fill Normalization
     raw_fill = RawExecEvent(
         "deal",
         {
@@ -88,7 +86,6 @@ def test_normalizer_strategy_id_from_order_key(symbols_cfg):
 async def test_position_tracking():
     store = PositionStore()
 
-    # Buy 1 @ 500
     fill1 = FillEvent("D1", "ACC1", "O1", "S1", "2330", Side.BUY, 1, 5000000, 0, 0, 0, 0)
     delta1 = store.on_fill(fill1)
 
@@ -96,17 +93,14 @@ async def test_position_tracking():
     assert delta1.avg_price == 5000000
     assert delta1.realized_pnl == 0
 
-    # Buy 1 @ 600
     fill2 = FillEvent("D2", "ACC1", "O2", "S1", "2330", Side.BUY, 1, 6000000, 0, 0, 0, 0)
     delta2 = store.on_fill(fill2)
 
     assert delta2.net_qty == 2
-    assert delta2.avg_price == 5500000  # (500+600)/2
+    assert delta2.avg_price == 5500000
 
-    # Sell 2 @ 700 (Close all)
     fill3 = FillEvent("D3", "ACC1", "O3", "S1", "2330", Side.SELL, 2, 7000000, 0, 0, 0, 0)
     delta3 = store.on_fill(fill3)
 
     assert delta3.net_qty == 0
-    # PnL: 2 * (700 - 550) = 300
     assert delta3.realized_pnl == 3000000

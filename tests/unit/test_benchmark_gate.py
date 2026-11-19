@@ -27,7 +27,7 @@ def test_uniform_runner_slowdown_passes():
 def test_single_path_regression_flagged_despite_runner_shift():
     baseline = {"a": 0.000016, "b": 0.000017, "c": 0.000001, "d": 0.000011, "e": 0.000020}
     current = {name: mean * 1.30 for name, mean in baseline.items()}
-    current["c"] = baseline["c"] * 1.30 * 1.50  # +50% beyond the runner shift
+    current["c"] = baseline["c"] * 1.30 * 1.50
 
     regressions, _ = check_regressions(baseline, current, threshold=0.10)
 
@@ -39,7 +39,7 @@ def test_single_path_regression_flagged_despite_runner_shift():
 
 def test_uniform_catastrophic_slowdown_still_fails():
     baseline = {"a": 0.000016, "b": 0.000017, "c": 0.000001}
-    current = {name: mean * 3.5 for name, mean in baseline.items()}  # raw +250%, normalized 0%
+    current = {name: mean * 3.5 for name, mean in baseline.items()}
 
     regressions, _ = check_regressions(baseline, current, threshold=0.10)
 
@@ -95,9 +95,6 @@ def _stats_json(path: Path, stats: dict[str, dict[str, float]]) -> Path:
 
 
 def test_main_outlier_rounds_inflating_only_the_mean_pass(tmp_path: Path, capsys):
-    # A shared runner's stray slow rounds move the mean, not the median: the
-    # same code measured twice (2026-10 PR runs: mean false-failed 23 of 30
-    # cross-run pairs at 10%, median 5 of 30).
     base = {n: {"mean": m, "median": m, "min": m * 0.9} for n, m in {"a": 16e-6, "b": 17e-6, "c": 11e-6}.items()}
     noisy = {n: dict(s) for n, s in base.items()}
     noisy["c"]["mean"] = base["c"]["mean"] * 1.6

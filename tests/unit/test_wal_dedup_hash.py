@@ -11,10 +11,6 @@ import hashlib
 import sys
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _compute_hash_via_insert_with_dedup(rows: list) -> str:
     """Exercise the hash computation path in insert_with_dedup and return the hash."""
@@ -25,7 +21,6 @@ def _compute_hash_via_insert_with_dedup(rows: list) -> str:
     svc = MagicMock()
     svc._dedup_enabled = True
     svc.ch_client = MagicMock()
-    # Make _is_duplicate return False so we proceed and capture what was recorded
     svc._is_duplicate.return_value = False
     svc.insert_batch.return_value = True
 
@@ -37,11 +32,6 @@ def _compute_hash_via_insert_with_dedup(rows: list) -> str:
     insert_with_dedup(svc, "hft.market_data", rows, "test.jsonl")
     assert captured, "Expected _record_dedup to be called with the hash"
     return captured[0]
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 def test_hash_is_full_sha256_length():
@@ -88,11 +78,9 @@ def test_hash_fallback_when_orjson_unavailable():
 
     rows = [{"b": 2, "a": 1}, {"x": 99}]
 
-    # Compute expected hash manually using the fallback path
     raw = "".join(json.dumps(r, sort_keys=True, default=str) for r in rows).encode()
     expected_hash = hashlib.sha256(raw).hexdigest()
 
-    # Block orjson import inside the module under test
     with patch.dict(sys.modules, {"orjson": None}):
         result_hash = _compute_hash_via_insert_with_dedup(rows)
 

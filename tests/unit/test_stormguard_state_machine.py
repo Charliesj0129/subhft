@@ -20,11 +20,6 @@ except ImportError:
     HAS_HYPOTHESIS = False
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _guard(
     thresholds: RiskThresholds | None = None,
     on_halt_callback: Any = None,
@@ -48,15 +43,10 @@ def _guard(
     return sg
 
 
-# ---------------------------------------------------------------------------
-# RiskThresholds defaults
-# ---------------------------------------------------------------------------
-
-
 class TestRiskThresholds:
     def test_defaults(self) -> None:
         t = RiskThresholds()
-        assert not hasattr(t, "halt_drawdown_bps")  # no PnL rung (B4a)
+        assert not hasattr(t, "halt_drawdown_bps")
         assert t.latency_warm_us == 5_000
         assert t.latency_storm_us == 20_000
         assert t.feed_gap_storm_s == 1.0
@@ -64,11 +54,6 @@ class TestRiskThresholds:
     def test_custom(self) -> None:
         t = RiskThresholds(latency_warm_us=10, latency_storm_us=20)
         assert t.latency_warm_us == 10
-
-
-# ---------------------------------------------------------------------------
-# State transitions: escalation
-# ---------------------------------------------------------------------------
 
 
 class TestEscalation:
@@ -143,11 +128,6 @@ class TestEscalation:
         assert sg.state == StormGuardState.STORM
 
 
-# ---------------------------------------------------------------------------
-# State transitions: de-escalation with hysteresis
-# ---------------------------------------------------------------------------
-
-
 class TestDeEscalation:
     def test_halt_recovery_with_zero_cooldown(self) -> None:
         """HALT with zero halt_cooldown allows de-escalation after N clears."""
@@ -162,13 +142,10 @@ class TestDeEscalation:
         sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # 1st clear
         sg.update()
         assert sg.state == StormGuardState.STORM
-        # 2nd clear
         sg.update()
         assert sg.state == StormGuardState.STORM
-        # 3rd clear => de-escalate
         sg.update()
         assert sg.state == StormGuardState.NORMAL
 
@@ -177,13 +154,11 @@ class TestDeEscalation:
         sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # 2 clears, then re-trigger
         sg.update()
         sg.update()
-        sg.update(order_rtt_us=2_500_000)  # same state, resets counter
+        sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # Need full 3 again
         sg.update()
         assert sg.state == StormGuardState.STORM
         sg.update()
@@ -213,19 +188,16 @@ class TestDeEscalation:
         sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # Try to de-escalate -- cooldown hasn't elapsed
         sg.update()
         assert sg.state == StormGuardState.STORM
 
     def test_storm_cooldown_elapsed_allows_de_escalation(self) -> None:
         sg = _guard(cooldown_s=30.0, de_escalate_n=1)
 
-        # Enter STORM at monotonic=1000
         with patch("time.monotonic", return_value=1000.0):
             sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # Advance time past cooldown (D3: now uses time.monotonic)
         with patch("time.monotonic", return_value=1031.0):
             sg.update()
         assert sg.state == StormGuardState.NORMAL
@@ -244,11 +216,6 @@ class TestDeEscalation:
         assert sg.state == StormGuardState.HALT
         sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
-
-
-# ---------------------------------------------------------------------------
-# Manual HALT: trigger_halt()
-# ---------------------------------------------------------------------------
 
 
 class TestTriggerHalt:
@@ -284,13 +251,8 @@ class TestTriggerHalt:
     def test_trigger_halt_callback_exception_handled(self) -> None:
         cb = MagicMock(side_effect=RuntimeError("boom"))
         sg = _guard(on_halt_callback=cb)
-        sg.trigger_halt("test")  # should not raise
+        sg.trigger_halt("test")
         assert sg.state == StormGuardState.HALT
-
-
-# ---------------------------------------------------------------------------
-# is_safe()
-# ---------------------------------------------------------------------------
 
 
 class TestIsSafe:
@@ -307,11 +269,6 @@ class TestIsSafe:
         sg = _guard()
         sg.state = state
         assert sg.is_safe() is expected
-
-
-# ---------------------------------------------------------------------------
-# Edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestEdgeCases:
@@ -339,7 +296,6 @@ class TestEdgeCases:
         """When both signals trigger, higher severity wins."""
         sg = _guard()
         sg.update(order_rtt_us=1_500_000, latency_us=20_000)
-        # drawdown -> WARM, latency -> STORM; STORM should win
         assert sg.state == StormGuardState.STORM
 
     def test_feed_gap_does_not_halt(self) -> None:
@@ -362,7 +318,6 @@ class TestEdgeCases:
     def test_invalid_feed_gap_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "not_a_number")
         sg = StormGuard(thresholds=RiskThresholds())
-        # Should fall back to default
         assert sg.thresholds.feed_gap_storm_s == 1.0
 
     def test_last_state_change_updated(self) -> None:
@@ -378,11 +333,6 @@ class TestEdgeCases:
         assert result == StormGuardState.STORM
 
 
-# ---------------------------------------------------------------------------
-# Env var overrides
-# ---------------------------------------------------------------------------
-
-
 class TestEnvOverrides:
     def test_cooldown_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "60")
@@ -393,11 +343,6 @@ class TestEnvOverrides:
         monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "10")
         sg = StormGuard()
         assert sg._de_escalate_threshold == 10
-
-
-# ---------------------------------------------------------------------------
-# Multi-step scenarios
-# ---------------------------------------------------------------------------
 
 
 class TestMultiStep:
@@ -414,11 +359,9 @@ class TestMultiStep:
         sg.trigger_halt("test halt")
         assert sg.state == StormGuardState.HALT
 
-        # Recovery from HALT is immediate
         sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # De-escalate from STORM (cooldown=0, n=1)
         sg.update()
         assert sg.state == StormGuardState.NORMAL
 
@@ -434,17 +377,11 @@ class TestMultiStep:
         sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
 
-        # Oscillate: 2 clears then re-trigger
         for _ in range(5):
             sg.update()
             sg.update()
             sg.update(order_rtt_us=2_500_000)
         assert sg.state == StormGuardState.STORM
-
-
-# ---------------------------------------------------------------------------
-# Property-based (hypothesis)
-# ---------------------------------------------------------------------------
 
 
 if HAS_HYPOTHESIS:

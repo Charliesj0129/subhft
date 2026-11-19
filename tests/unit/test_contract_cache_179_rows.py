@@ -127,7 +127,6 @@ def test_normalize_contract_row_reads_179_option_root_strike_and_right():
         _OptionInfo179("TX141400K6", "TX1", dt.date(2026, 11, 4), 41400.0, "C"), "TAIFEX", "option"
     )
 
-    # derive_root would read this weekly code as "TX".
     assert row["root"] == "TX1"
     assert row["strike"] == 41400.0
     assert row["right"] == "C"

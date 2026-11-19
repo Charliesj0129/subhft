@@ -12,10 +12,6 @@ from unittest.mock import MagicMock, patch
 from hft_platform.events import FeatureUpdateEvent, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.services._md_observability import MarketDataObservabilityMixin
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_mixin(**kwargs):
     """Create a minimal object with mixin methods and required attributes."""
@@ -70,16 +66,10 @@ def _make_feature_update(**kwargs):
     return FeatureUpdateEvent(**defaults)
 
 
-# ---------------------------------------------------------------------------
-# _emit_trace
-# ---------------------------------------------------------------------------
-
-
 class TestEmitTrace:
     def test_no_sampler(self):  # noqa: no-assert
         obj = _make_mixin()
         obj._emit_trace("test", "trace1", {"a": 1})
-        # No crash
 
     def test_with_sampler(self):
         sampler = MagicMock()
@@ -92,12 +82,6 @@ class TestEmitTrace:
         sampler.emit.side_effect = RuntimeError("boom")
         obj = _make_mixin(_trace_sampler=sampler)
         obj._emit_trace("test", "t1", {})
-        # Should not raise
-
-
-# ---------------------------------------------------------------------------
-# _record_shioaji_crash_signature
-# ---------------------------------------------------------------------------
 
 
 class TestRecordCrashSignature:
@@ -119,11 +103,6 @@ class TestRecordCrashSignature:
         with patch("hft_platform.services._md_observability.detect_crash_signature", return_value="SEGFAULT"):
             obj._record_shioaji_crash_signature("crash text", context="test")
         metrics.shioaji_crash_signature_total.labels.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _record_feature_metrics
-# ---------------------------------------------------------------------------
 
 
 class TestRecordFeatureMetrics:
@@ -165,11 +144,6 @@ class TestRecordFeatureMetrics:
         obj._record_feature_metrics(_make_tick(), None, 100)
 
 
-# ---------------------------------------------------------------------------
-# _maybe_run_feature_shadow_parity
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureShadowParity:
     def test_no_shadow_engine(self):  # noqa: no-assert
         obj = _make_mixin()
@@ -177,7 +151,6 @@ class TestFeatureShadowParity:
             symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
         )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, None)
-        # No crash
 
     def test_shadow_update_fails(self):  # noqa: no-assert
         shadow = MagicMock()
@@ -250,22 +223,16 @@ class TestFeatureShadowParity:
             symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
         )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, _make_feature_update())
-        # Counter incremented but comparison skipped
 
     def test_shadow_with_process_lob_stats_fallback(self):  # noqa: no-assert
         """When shadow has no process_lob_update, uses process_lob_stats."""
-        shadow = MagicMock(spec=[])  # No process_lob_update attribute
+        shadow = MagicMock(spec=[])
         shadow.process_lob_stats = MagicMock(return_value=_make_feature_update())
         obj = _make_mixin(_feature_shadow_engine=shadow, _feature_shadow_sample_every=1)
         lob = LOBStatsEvent(
             symbol="TST", ts=1000, imbalance=0.0, best_bid=1000, best_ask=1001, bid_depth=10, ask_depth=10
         )
         obj._maybe_run_feature_shadow_parity(_make_tick(), lob, 1000, _make_feature_update())
-
-
-# ---------------------------------------------------------------------------
-# _emit_feature_shadow_check_metric
-# ---------------------------------------------------------------------------
 
 
 class TestShadowCheckMetric:
@@ -286,13 +253,7 @@ class TestShadowCheckMetric:
         obj = _make_mixin(metrics_registry=metrics)
         obj._emit_feature_shadow_check_metric("checked")
         obj._emit_feature_shadow_check_metric("checked")
-        # Second call uses cache
         assert ("v3", "checked") in obj._feature_shadow_checks_metric_children
-
-
-# ---------------------------------------------------------------------------
-# _emit_feature_shadow_mismatch_metric
-# ---------------------------------------------------------------------------
 
 
 class TestShadowMismatchMetric:

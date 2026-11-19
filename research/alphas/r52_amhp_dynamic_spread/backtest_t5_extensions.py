@@ -40,9 +40,6 @@ from research.backtest.maker_engine import ClickHouseSource, LatencyProfile
 logger = structlog.get_logger("r52_amhp.t5_ext")
 
 
-# ============================================================================
-# R47 baseline — modulator off (alpha_rho=0, alpha_iir=0 → no widening)
-# ============================================================================
 
 
 def run_r47_baseline(
@@ -63,11 +60,11 @@ def run_r47_baseline(
 
     strategy = AmhpMakerBacktestStrategy(
         max_pos=max_pos,
-        alpha_rho=0.0,           # disable rho contribution to multiplier
-        alpha_iir=0.0,           # disable IIR contribution
-        rho_critical=999.0,      # rho can never exceed → no critical-snap to mult_cap
+        alpha_rho=0.0,
+        alpha_iir=0.0,
+        rho_critical=999.0,
         iir_critical=999.0,
-        mult_cap=1.0,            # cap == 1 → multiplier == 1 always
+        mult_cap=1.0,
     )
     strategy.set_persistent_gammas(0.0, 0.0)
 
@@ -146,7 +143,6 @@ def k3_modulator_gain_delta(c1_summary: dict, r47_summary: dict) -> dict[str, An
         if r47_summary["total_fills"] else 0.0
     )
 
-    # Verdict: per-fill gain delta in pt; threshold 1.75 pt (T1 §3).
     return {
         "C1_avg_spread_at_entry_pts": c1_avg_spread,
         "R47_avg_spread_at_entry_pts": r47_avg_spread,
@@ -163,9 +159,6 @@ def k3_modulator_gain_delta(c1_summary: dict, r47_summary: dict) -> dict[str, An
     }
 
 
-# ============================================================================
-# K2 — daily-aggregated OLS on (γ_io, γ_us) with bootstrap CIs
-# ============================================================================
 
 
 @dataclass
@@ -197,7 +190,7 @@ def _ols_with_bootstrap_ci(
         try:
             boot_coefs[b] = np.linalg.lstsq(Xb, yb, rcond=None)[0]
         except np.linalg.LinAlgError:
-            boot_coefs[b] = coef  # fallback if singular bootstrap
+            boot_coefs[b] = coef
     lower = np.percentile(boot_coefs, 2.5, axis=0)
     upper = np.percentile(boot_coefs, 97.5, axis=0)
     se = np.std(boot_coefs, axis=0)
@@ -239,9 +232,6 @@ def fit_k2_covariates(
     pwd = os.environ.get("CLICKHOUSE_PASSWORD", "changeme")
     url = "http://localhost:8123/"
 
-    # Fetch per-day signed-trade-volume + open/close prices for proxies.
-    # signed_volume = Σ trade_direction * volume per day (using EMO field if
-    # available; fall back to tick-rule against best bid/ask captured below).
     sql = (
         f"SELECT toString(toDate(fromUnixTimestamp64Nano(exch_ts))) AS day, "
         f"  count() AS n_trades, "
@@ -267,20 +257,17 @@ def fit_k2_covariates(
                 "close": int(parts[4]),
             }
 
-    # Build proxy series for the 17 backtest days.
     days = [d["date"] for d in daily_pnl]
     pnls = np.array([d["pnl_pts"] for d in daily_pnl])
 
-    # io_z_proxy: prior-day total_volume z-score (over the 17d window).
     vol_series = np.array([daily_market.get(d, {}).get("total_volume", 0) for d in days],
                            dtype=float)
     if vol_series.std() > 0:
         vol_z = (vol_series - vol_series.mean()) / vol_series.std()
     else:
         vol_z = np.zeros_like(vol_series)
-    io_z_proxy = np.concatenate([[0.0], vol_z[:-1]])  # lag-1: prior-day z
+    io_z_proxy = np.concatenate([[0.0], vol_z[:-1]])
 
-    # us_overnight_proxy: prior-day-close → today-open log-return.
     overnight = np.zeros(len(days))
     for i, d in enumerate(days):
         if i == 0:
@@ -291,7 +278,6 @@ def fit_k2_covariates(
             overnight[i] = float(np.log(cur["open"] / prev["close"]))
     us_overnight_proxy = overnight
 
-    # Stack into design matrix X = [io_z_proxy, us_overnight_proxy].
     X = np.column_stack([io_z_proxy, us_overnight_proxy])
     fits = _ols_with_bootstrap_ci(X, pnls)
 
@@ -323,9 +309,6 @@ def fit_k2_covariates(
     }
 
 
-# ============================================================================
-# K4 — empirical multi-scale ACF on signed-trade arrival deltas
-# ============================================================================
 
 
 def measure_k4_multiscale_acf(  # noqa: C901
@@ -350,17 +333,11 @@ def measure_k4_multiscale_acf(  # noqa: C901
     url = "http://localhost:8123/"
     dates = trading_dates(start_date, end_date)
 
-    # Aggregate signed-arrival series across all days at 100-ms bins.
-    bin_ns = 100_000_000          # 100 ms
+    bin_ns = 100_000_000
     per_day_acfs: list[dict[str, float]] = []
     pooled_signed_series: list[float] = []
 
     for date in dates:
-        # Pull signed-trade events.  We don't have trade_direction stored in
-        # the platform's CK; infer via tick rule against bidask stream.  For
-        # speed we approximate by using the trade_price relative to a rolling
-        # mid (computed from the tick stream itself — coarse but adequate
-        # for ACF measurement at multi-scale lags).
         sql = (
             f"SELECT exch_ts, price_scaled, volume "
             f"FROM hft.market_data "
@@ -388,7 +365,6 @@ def measure_k4_multiscale_acf(  # noqa: C901
             if bin0 is None:
                 bin0 = ts // bin_ns
             bin_idx = (ts // bin_ns) - bin0
-            # Tick rule: up-tick → +1 buy, down-tick → -1 sell, equal → carry-forward
             if prev_price == 0:
                 d = 0
             elif p > prev_price:
@@ -396,7 +372,7 @@ def measure_k4_multiscale_acf(  # noqa: C901
             elif p < prev_price:
                 d = -1
             else:
-                d = 0   # zero-tick — uninformative
+                d = 0
             prev_price = p
             if d != 0:
                 signed_per_bin[bin_idx] = signed_per_bin.get(bin_idx, 0.0) + d * v
@@ -404,14 +380,11 @@ def measure_k4_multiscale_acf(  # noqa: C901
         if not signed_per_bin:
             continue
 
-        # Build a contiguous bin array for the day.
         max_bin = max(signed_per_bin)
         ser = np.zeros(max_bin + 1)
         for k, v in signed_per_bin.items():
             ser[k] = v
 
-        # Compute ACF at lags: 1 (≈100 ms), 600 (≈60 s), 36000 (≈3600 s).
-        # For long lags on short days, fall back to the maximum feasible lag.
         def _acf(x: np.ndarray, lag: int) -> float:
             if lag >= len(x):
                 return float("nan")
@@ -424,15 +397,13 @@ def measure_k4_multiscale_acf(  # noqa: C901
 
         per_day_acfs.append({
             "date": date,
-            "ms_acf_lag1": _acf(ser, 1),         # 100 ms
-            "min_acf_lag600": _acf(ser, 600),    # 60 s
-            "hr_acf_lag36000": _acf(ser, 36000), # 3600 s — may be NaN on short days
+            "ms_acf_lag1": _acf(ser, 1),
+            "min_acf_lag600": _acf(ser, 600),
+            "hr_acf_lag36000": _acf(ser, 36000),
             "n_bins": len(ser),
         })
         pooled_signed_series.append(ser)
 
-    # Pool across all days (simple concatenation; preserves intra-day structure
-    # while increasing N for long-lag estimates).
     if pooled_signed_series:
         pooled = np.concatenate(pooled_signed_series)
 
@@ -451,7 +422,6 @@ def measure_k4_multiscale_acf(  # noqa: C901
     else:
         ms_acf_pooled = min_acf_pooled = hr_acf_pooled = float("nan")
 
-    # K4 verdict — both min and hr |ACF| ≥ 0.05 → PASS.
     threshold = 0.05
     k4_pass = bool(
         not np.isnan(min_acf_pooled) and abs(min_acf_pooled) >= threshold
@@ -470,9 +440,6 @@ def measure_k4_multiscale_acf(  # noqa: C901
     }
 
 
-# ============================================================================
-# Entry — combined runner
-# ============================================================================
 
 
 def main() -> int:
@@ -480,23 +447,18 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
 
-    # 1) C1 backtest
     logger.info("phase_1_c1_backtest")
     c1 = run_backtest()
 
-    # 2) R47 baseline backtest (modulator off)
     logger.info("phase_2_r47_baseline")
     r47 = run_r47_baseline()
 
-    # 3) K3 delta
     logger.info("phase_3_k3_delta")
     k3 = k3_modulator_gain_delta(c1, r47)
 
-    # 4) K2 OLS fit
     logger.info("phase_4_k2_ols")
     k2 = fit_k2_covariates(daily_pnl=c1["daily_pnl"])
 
-    # 5) K4 empirical ACF
     logger.info("phase_5_k4_acf")
     k4 = measure_k4_multiscale_acf()
 

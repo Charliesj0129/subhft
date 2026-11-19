@@ -99,12 +99,12 @@ def test_two_drained_sells_unfreeze_r47_can_sell():
     system._release_halt_drained(_command(Side.SELL))
 
     strat = _r47()
-    assert not (1 - strat._pending_sell["TMFJ6"] > -1)  # frozen before the release
+    assert not (1 - strat._pending_sell["TMFJ6"] > -1)
     while not queue.empty():
         strat.on_risk_feedback(queue.get_nowait())
 
     assert strat._pending_sell["TMFJ6"] == 0
-    assert 1 - strat._pending_sell["TMFJ6"] > -1  # can_sell is True again
+    assert 1 - strat._pending_sell["TMFJ6"] > -1
 
 
 def test_item_without_a_side_is_not_fed_back_and_does_not_raise():

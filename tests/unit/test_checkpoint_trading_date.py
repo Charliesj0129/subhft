@@ -49,14 +49,12 @@ def test_checkpoint_trading_date_covered_by_sha256(tmp_path):
     )
     writer.write_checkpoint()
 
-    # Tamper with trading_date
     with open(path, "rb") as f:
         raw = json.loads(f.read())
-    raw["trading_date"] = "20260326"  # tamper
+    raw["trading_date"] = "20260326"
     with open(path, "w") as f:
         json.dump(raw, f)
 
-    # Should fail verification
     data = PositionCheckpointWriter.load_checkpoint(path)
     assert data is None, "Tampered trading_date should fail SHA-256 check"
 
@@ -68,7 +66,6 @@ def test_checkpoint_backward_compat_no_trading_date(tmp_path):
 
     path = str(tmp_path / "ckpt.json")
 
-    # Write old-format checkpoint (no trading_date)
     body = {"timestamp_ns": 123456, "positions": {}}
     body_bytes = json.dumps(body, separators=(",", ":"), sort_keys=True).encode()
     sha = hashlib.sha256(body_bytes).hexdigest()
@@ -80,7 +77,7 @@ def test_checkpoint_backward_compat_no_trading_date(tmp_path):
 
     data = PositionCheckpointWriter.load_checkpoint(path)
     assert data is not None
-    assert data.get("trading_date") is None  # missing field → None
+    assert data.get("trading_date") is None
 
 
 def test_checkpoint_default_trading_date_provider(tmp_path):
@@ -98,11 +95,6 @@ def test_checkpoint_default_trading_date_provider(tmp_path):
     assert td is not None
     assert len(td) == 8
     assert td.isdigit()
-
-
-# ---------------------------------------------------------------------------
-# M1: fees_scaled serialization
-# ---------------------------------------------------------------------------
 
 
 def _make_store_with_positions(positions=None):
@@ -165,11 +157,6 @@ def test_checkpoint_fees_scaled_zero_preserved(tmp_path):
     assert pos_data["fees_scaled"] == 0
 
 
-# ---------------------------------------------------------------------------
-# M2: portfolio aggregate persistence
-# ---------------------------------------------------------------------------
-
-
 def test_checkpoint_includes_portfolio_aggregates(tmp_path):
     """M2: peak_equity_scaled and total_realized_pnl_scaled must be in checkpoint."""
     from hft_platform.execution.checkpoint import PositionCheckpointWriter
@@ -206,11 +193,6 @@ def test_checkpoint_portfolio_aggregates_zero_written(tmp_path):
     assert "total_realized_pnl_scaled" in data
 
 
-# ---------------------------------------------------------------------------
-# M3: _fill_lock held during checkpoint serialization
-# ---------------------------------------------------------------------------
-
-
 def test_checkpoint_takes_both_views_in_one_lock_acquisition(tmp_path):
     """M3, strengthened: the writer must take positions AND recovery atomically.
 
@@ -238,10 +220,8 @@ def test_checkpoint_snapshot_positions_called_not_direct_access(tmp_path):
     from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
     pos = _make_position("TXFD6", 1, 180000000, 0, 0)
-    # snapshot returns isolated copy, positions dict returns different data
     store = _make_store_with_positions()
     store.snapshot_positions_with_recovery.return_value = ({"acc:strat:TXFD6": pos}, {})
-    # positions is intentionally empty — writer must use the snapshot, not this
     store.positions = {}
 
     path = str(tmp_path / "ckpt.json")
@@ -250,5 +230,4 @@ def test_checkpoint_snapshot_positions_called_not_direct_access(tmp_path):
 
     data = PositionCheckpointWriter.load_checkpoint(path)
     assert data is not None
-    # Must have used snapshot (has the position), not positions (empty)
     assert "acc:strat:TXFD6" in data["positions"]

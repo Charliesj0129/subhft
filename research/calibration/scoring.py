@@ -63,8 +63,6 @@ def compute_fill_rate_score(sim: float, live: float) -> float:
 
 def compute_adverse_fill_score(sim_pct: float, live_pct: float) -> float:
     """1 - |sim - live| / max(live, 1), clipped to [0, 1]."""
-    # Cap denominator at 1.0: adverse_pct is already a unit fraction,
-    # this prevents amplifying relative error when live_pct is near zero.
     denom = max(live_pct, 1.0)
     err = abs(sim_pct - live_pct) / denom
     return max(0.0, 1.0 - err)

@@ -27,8 +27,8 @@ from hft_platform.execution.reconciliation import ReconciliationService
 from hft_platform.risk.storm_guard import StormGuard, StormGuardState
 
 _STRATEGY = "R47_MAKER_TMF"
-_TRADED = "TMFI6"  # resolved front-month contract that actually trades
-_ALIAS = "TMFR1"  # continuous alias the loop config declares
+_TRADED = "TMFI6"
+_ALIAS = "TMFR1"
 
 
 @pytest.fixture
@@ -55,8 +55,7 @@ def _store_with_strategy_position(symbol: str = _TRADED, strategy_id: str = _STR
 
 def _service(store: PositionStore, guard: StormGuard, **kwargs) -> ReconciliationService:
     client = MagicMock()
-    client.get_positions.return_value = []  # broker reports nothing
-    # The ORDER client legitimately has neither attribute.
+    client.get_positions.return_value = []
     del client.subscribed_codes
     del client.alias_to_actual
     svc = ReconciliationService(

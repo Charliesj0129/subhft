@@ -66,7 +66,7 @@ def test_evaluate_rules_fails_on_shadow_mismatch():
 def test_main_writes_report_and_passes(tmp_path: Path):
     mod = _load_module()
 
-    def _ok_query(_prom_url: str, expr: str, timeout_s: int = 8):  # noqa: ARG001
+    def _ok_query(_prom_url: str, expr: str, timeout_s: int = 8):
         if "feature_shadow_parity_checks_total" in expr:
             return 20.0, None
         if "feature_plane_latency_ns_bucket" in expr:

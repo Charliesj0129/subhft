@@ -122,13 +122,11 @@ def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[objec
     argc = len(args)
     if argc == 2:
         a0, a1 = args
-        # Common Shioaji shape: (exchange/topic, msg)
         msg = _unwrap_md(a1)
         if _looks_like_md(msg):
             if exchange is None and (isinstance(a0, str) or hasattr(a0, "name")):
                 exchange = a0
             return exchange, msg
-        # Alternate order fallback
         msg = _unwrap_md(a0)
         if _looks_like_md(msg):
             if exchange is None and (isinstance(a1, str) or hasattr(a1, "name")):
@@ -139,7 +137,6 @@ def _try_fast_extract_callback_payload(*args: Any, **kwargs: Any) -> tuple[objec
         if _looks_like_md(msg):
             return exchange, msg
     elif argc >= 3:
-        # Another common shape: (topic, quote, event) — pick the last MD-like payload quickly.
         for candidate in (args[-1], args[-2], args[0]):
             msg = _unwrap_md(candidate)
             if _looks_like_md(msg):

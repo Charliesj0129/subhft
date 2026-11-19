@@ -166,11 +166,11 @@ class _FakeCKClient:
                     d["symbol"],
                     d["intent_type"],
                     d["side"],
-                    int(d["price"]),  # price_scaled in CK
+                    int(d["price"]),
                     d["qty"],
                     d["tif"],
                     d["target_order_id"],
-                    int(d["timestamp_us"]) * 1000,  # timestamp_ns
+                    int(d["timestamp_us"]) * 1000,
                     d["decision_price"],
                     d["price_type"],
                 )
@@ -224,7 +224,6 @@ def test_replay_eligible_with_divergence(tmp_path: Path, _settings: dict) -> Non
     prices = [1000000, 1000100, 1000200, 1000300]
     fixture = _build_fixture(tmp_path / "wal.tar.gz", _market_rows(prices))
     out_root = tmp_path / "out"
-    # Live intents differ from replayed by +50 on every price -> 0% match.
     fake_ck = _FakeCKClient(_live_intents_canonical(prices, offset=50))
 
     rc = run_replay_session(
@@ -252,7 +251,7 @@ def test_replay_pre_recorder_session_blocks_without_override(tmp_path: Path, _se
 
     fixture = _build_fixture(tmp_path / "wal.tar.gz", _market_rows([1000000]))
     out_root = tmp_path / "out"
-    fake_ck = _FakeCKClient(intents=[])  # CK returns 0 rows
+    fake_ck = _FakeCKClient(intents=[])
 
     rc = run_replay_session(
         _settings,
@@ -268,7 +267,6 @@ def test_replay_pre_recorder_session_blocks_without_override(tmp_path: Path, _se
     report = json.loads((out_root / "2026-04-21" / "report.json").read_text())
     assert report["eligibility_status"] == "pre_recorder"
     assert "no_intents_recorded_for_2026-04-21" in report["error"]
-    # No parity report produced when ineligible+blocked.
     assert not (out_root / "2026-04-21" / "divergence_histogram.json").exists()
 
 
@@ -295,7 +293,6 @@ def test_replay_pre_recorder_with_override_runs_with_empty_live(tmp_path: Path, 
     assert report["eligibility_status"] == "pre_recorder"
     assert report["n_live_intents"] == 0
     assert report["n_replayed_intents"] == 2
-    # Length mismatch -> all replayed entries bucketed under __missing__.
     histogram = json.loads((out_root / "2026-04-21" / "divergence_histogram.json").read_text())
     assert histogram.get("__missing__", 0) == 2
 

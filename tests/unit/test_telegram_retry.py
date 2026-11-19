@@ -8,11 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Inject a minimal aiohttp stub so the module can be imported without the
-# real dependency.  Mirror the approach in test_telegram.py.
-# ---------------------------------------------------------------------------
-
 
 def _build_aiohttp_stub() -> types.ModuleType:
     stub = types.ModuleType("aiohttp")
@@ -33,17 +28,10 @@ def _build_aiohttp_stub() -> types.ModuleType:
 if "aiohttp" not in sys.modules:
     sys.modules["aiohttp"] = _build_aiohttp_stub()
 
-# Ensure the telegram module's own aiohttp binding is set (may be None if
-# an earlier test imported telegram before the stub was installed).
-import hft_platform.notifications.telegram as _tg_mod_retry  # noqa: E402
+import hft_platform.notifications.telegram as _tg_mod_retry
 
 if _tg_mod_retry.aiohttp is None:
     _tg_mod_retry.aiohttp = sys.modules["aiohttp"]
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_sender(rate_limit_seconds: float = 0.0):
@@ -76,11 +64,6 @@ def _make_session(*responses) -> MagicMock:
     return session
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestCriticalMessageRetry:
     """Critical messages should retry on transient errors."""
 
@@ -103,7 +86,7 @@ class TestCriticalMessageRetry:
 
         assert result is True
         assert session.post.call_count == 2
-        mock_sleep.assert_awaited_once_with(1.0)  # backoff: 1.0 * 2**0
+        mock_sleep.assert_awaited_once_with(1.0)
 
     @pytest.mark.asyncio
     async def test_critical_retries_on_429_succeeds_on_second_attempt(self):
@@ -151,7 +134,6 @@ class TestCriticalMessageRetry:
     async def test_critical_exhausts_all_retries_returns_false(self):
         """If every attempt fails, returns False after MAX_CRITICAL_RETRIES+1 tries."""
         sender = _make_sender()
-        # 3 total attempts (initial + 2 retries), all 503
         resp_503a = _make_response(503)
         resp_503b = _make_response(503)
         resp_503c = _make_response(503)
@@ -167,11 +149,8 @@ class TestCriticalMessageRetry:
             result = await sender.send("HALT", critical=True)
 
         assert result is False
-        # 3 total POST calls (attempt 0, 1, 2)
         assert session.post.call_count == 3
-        # 2 sleeps between attempts (after attempt 0 and after attempt 1)
         assert mock_sleep.await_count == 2
-        # Exponential backoff: 1.0 * 2**0 = 1.0, 1.0 * 2**1 = 2.0
         mock_sleep.assert_has_awaits([call(1.0), call(2.0)])
 
     @pytest.mark.asyncio
@@ -191,7 +170,7 @@ class TestCriticalMessageRetry:
             result = await sender.send("HALT", critical=True)
 
         assert result is False
-        assert session.post.call_count == 1  # no retry
+        assert session.post.call_count == 1
         mock_sleep.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -233,7 +212,6 @@ class TestCriticalMessageRetry:
             result = await sender.send("HALT", critical=True)
 
         assert result is True
-        # attempt 0 fails → sleep(1.0), attempt 1 fails → sleep(2.0), attempt 2 succeeds
         mock_sleep.assert_has_awaits([call(1.0), call(2.0)])
 
 

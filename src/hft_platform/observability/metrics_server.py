@@ -37,7 +37,7 @@ def _resilient_metrics_app(
     ``MetricsRegistry.__init__`` unregister+rebuild cycle cannot mutate
     ``REGISTRY._names_to_collectors`` mid-iteration.
     """
-    global _corruption_logged  # noqa: PLW0603
+    global _corruption_logged
 
     accept_header = environ.get("HTTP_ACCEPT", "")
     accept_encoding = environ.get("HTTP_ACCEPT_ENCODING", "")
@@ -55,7 +55,6 @@ def _resilient_metrics_app(
         start_response(status, headers)
         return [output]
     except TypeError as exc:
-        # Heap corruption from Shioaji Solace C library — collect individually
         if not _corruption_logged:
             logger.warning(
                 "metrics_collector_corruption_detected",
@@ -77,7 +76,6 @@ def _collect_partial(start_response: Any) -> list[bytes]:
     skipped = 0
 
     with registry_rw_lock:
-        # Direct access to the registry's internal collector list
         collectors = list(REGISTRY._names_to_collectors.values())
     seen = set()
 
@@ -108,7 +106,7 @@ def _collect_partial(start_response: Any) -> list[bytes]:
 class _SilentHandler(WSGIRequestHandler):
     """Suppress request logging."""
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:
         pass
 
 

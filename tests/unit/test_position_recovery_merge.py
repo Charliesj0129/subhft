@@ -18,11 +18,6 @@ from hft_platform.execution.positions import PositionStore
 SCALE = 10_000
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _make_fill(
     symbol: str = "2330",
     side: Side = Side.SELL,
@@ -64,7 +59,7 @@ class _MockRustTracker:
     """Minimal mock of RustPositionTracker that mirrors Python Position.update logic."""
 
     def __init__(self) -> None:
-        self._positions: dict[str, list] = {}  # key -> [net_qty, avg_price, rpnl, fees]
+        self._positions: dict[str, list] = {}
 
     def update(
         self,
@@ -135,11 +130,6 @@ def _make_store_with_mock_rust() -> PositionStore:
     return store
 
 
-# ---------------------------------------------------------------------------
-# Tests: Python path
-# ---------------------------------------------------------------------------
-
-
 class TestRecoveryMergePythonPath:
     """Recovery merge via the Python position update path."""
 
@@ -163,10 +153,8 @@ class TestRecoveryMergePythonPath:
         )
         delta = store.on_fill(fill)
 
-        # PnL = (110 - 100) * 10 * SCALE = 1_000_000
         assert delta.realized_pnl == 10 * 10 * SCALE
         assert delta.net_qty == 0
-        # Position should exist under the strategy key
         key = "acc1:strat_a:2330"
         assert key in store.positions
         assert store.positions[key].realized_pnl_scaled == 10 * 10 * SCALE
@@ -193,7 +181,6 @@ class TestRecoveryMergePythonPath:
         )
         delta = store.on_fill(fill)
 
-        # New PnL from this fill = (110-100)*5*SCALE = 500_000
         new_pnl = 10 * 5 * SCALE
         assert delta.realized_pnl == historical_rpnl + new_pnl
         assert store.positions["acc1:strat_a:2330"].realized_pnl_scaled == historical_rpnl + new_pnl
@@ -216,13 +203,12 @@ class TestRecoveryMergePythonPath:
             price_scaled=110 * SCALE,
             account_id="acc1",
             strategy_id="strat_a",
-            fee=150,  # all-in: already contains the 50 tax
+            fee=150,
             tax=50,
         )
         store.on_fill(fill)
 
         pos = store.positions["acc1:strat_a:2330"]
-        # Recovery fees + fill fees
         assert pos.fees_scaled == 2000 + 150
 
     def test_no_merge_when_no_recovery(self):
@@ -263,11 +249,8 @@ class TestRecoveryMergePythonPath:
         )
         store.on_fill(fill)
 
-        # Recovery entry consumed
         assert "acc1:2330" not in store._recovery_positions
-        # No stale empty-strategy key
         assert "acc1::2330" not in store.positions
-        # Only the proper strategy key
         assert "acc1:strat_a:2330" in store.positions
 
     def test_zero_qty_recovery_is_ignored(self):
@@ -301,7 +284,6 @@ class TestRecoveryMergePythonPath:
         )
         delta = store.on_fill(fill)
 
-        # PnL for covering short = (avg_price - fill_price) * qty = (200-190)*5*SCALE
         assert delta.realized_pnl == 10 * 5 * SCALE
         assert delta.net_qty == 0
 
@@ -315,7 +297,6 @@ class TestRecoveryMergePythonPath:
             avg_price_scaled=100 * SCALE,
         )
 
-        # First fill: partial close
         fill1 = _make_fill(
             symbol="2330",
             side=Side.SELL,
@@ -326,7 +307,6 @@ class TestRecoveryMergePythonPath:
         )
         store.on_fill(fill1)
 
-        # Second fill: close remaining
         fill2 = _make_fill(
             symbol="2330",
             side=Side.SELL,
@@ -338,17 +318,9 @@ class TestRecoveryMergePythonPath:
         fill2.fill_id = "f002"
         delta2 = store.on_fill(fill2)
 
-        # First close: (110-100)*5*SCALE = 500_000
-        # Second close: (120-100)*5*SCALE = 1_000_000
-        # Total = 1_500_000
         pos = store.positions["acc1:strat_a:2330"]
         assert pos.realized_pnl_scaled == 10 * 5 * SCALE + 20 * 5 * SCALE
         assert pos.net_qty == 0
-
-
-# ---------------------------------------------------------------------------
-# Tests: Rust (mock) path
-# ---------------------------------------------------------------------------
 
 
 class TestRecoveryMergeRustPath:
@@ -422,7 +394,7 @@ class TestRecoveryMergeRustPath:
             price_scaled=110 * SCALE,
             account_id="acc1",
             strategy_id="strat_a",
-            fee=300,  # all-in: already contains the 100 tax
+            fee=300,
             tax=100,
         )
         store.on_fill(fill)
@@ -442,7 +414,6 @@ class TestRecoveryMergeRustPath:
             realized_pnl_scaled=historical_rpnl,
         )
 
-        # First fill: partial close
         fill1 = _make_fill(
             symbol="2330",
             side=Side.SELL,
@@ -453,7 +424,6 @@ class TestRecoveryMergeRustPath:
         )
         store.on_fill(fill1)
 
-        # Second fill: close remaining
         fill2 = _make_fill(
             symbol="2330",
             side=Side.SELL,
@@ -466,14 +436,8 @@ class TestRecoveryMergeRustPath:
         store.on_fill(fill2)
 
         pos = store.positions["acc1:strat_a:2330"]
-        # Rust computes: first close (110-100)*5*SCALE + second close (120-100)*5*SCALE
         rust_rpnl = 10 * 5 * SCALE + 20 * 5 * SCALE
         assert pos.realized_pnl_scaled == historical_rpnl + rust_rpnl
-
-
-# ---------------------------------------------------------------------------
-# Tests: startup_recon integration
-# ---------------------------------------------------------------------------
 
 
 class TestStartupReconWriteToStore:
@@ -497,10 +461,9 @@ class TestStartupReconWriteToStore:
         count = verifier._write_to_store(positions, "acc1")
 
         assert count == 2
-        # Should be in _recovery_positions, NOT in positions directly
         assert "acc1:2330" in store._recovery_positions
         assert "acc1:2317" in store._recovery_positions
-        assert len(store.positions) == 0  # nothing written directly
+        assert len(store.positions) == 0
 
     def test_write_to_store_zero_qty_skipped(self):
         """Zero-qty positions are skipped by load_recovery."""
@@ -518,5 +481,5 @@ class TestStartupReconWriteToStore:
         }
         count = verifier._write_to_store(positions, "acc1")
 
-        assert count == 1  # _write_to_store counts iterations, not stored
+        assert count == 1
         assert len(store._recovery_positions) == 0

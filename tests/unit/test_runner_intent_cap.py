@@ -7,11 +7,6 @@ StrategyRunner instantiation.
 import os
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Helpers — replicate the truncation logic extracted from runner.py so tests
-# remain fast and isolated.
-# ---------------------------------------------------------------------------
-
 
 def _apply_intent_cap(intents, max_intents_per_event, strategy_id, logger_fn):
     """Mirror of the cap logic in StrategyRunner._process_event."""
@@ -24,11 +19,6 @@ def _apply_intent_cap(intents, max_intents_per_event, strategy_id, logger_fn):
         )
         return intents[:max_intents_per_event]
     return intents
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestIntentCapLogic:
@@ -55,7 +45,7 @@ class TestIntentCapLogic:
         result = _apply_intent_cap(intents, cap, "strat_b", mock_logger)
 
         assert len(result) == 20
-        assert result == list(range(20))  # first 20 preserved
+        assert result == list(range(20))
         mock_logger.assert_called_once()
         _call_kwargs = mock_logger.call_args
         assert _call_kwargs[0][0] == "strategy_intent_flood"

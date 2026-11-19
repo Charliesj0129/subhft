@@ -18,7 +18,6 @@ def test_facade_exposes_runtimes_and_gateways(tmp_path):
         assert facade.contracts_runtime is not None
         assert facade.order_gateway is not None
         assert facade.account_gateway is not None
-        # Facade reuses the runtime instances created by ShioajiClient.__init__.
         assert facade.session_runtime is facade._client._session_runtime
         assert facade.quote_runtime is facade._client._quote_runtime
         assert facade._client._session_policy is facade.session_runtime
@@ -77,11 +76,6 @@ def test_facade_explicit_delegation_without_getattr(tmp_path):
             assert facade.place_order("2330", "TSE", "Buy", 100.0, 1, "ROD", "Regular") == {"seq_no": "S1"}
             mock_reconnect.assert_called_once_with(reason="unit", force=True)
             mock_place.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# 1.5.6 pre-login account property regression (full-engine boot crash 2026-07-19)
-# ---------------------------------------------------------------------------
 
 
 class _FakeAuthError(Exception):

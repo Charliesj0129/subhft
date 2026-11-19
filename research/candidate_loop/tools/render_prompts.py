@@ -27,7 +27,6 @@ from research.candidate_loop.schema import (
 PROMPTS_DIR = Path("research/candidate_loop/prompts/v1")
 SCHEMA_FILENAME = "candidate.schema.json"
 
-# Family-specific guidance + a known-valid example candidate each.
 FAMILY_GUIDANCE: dict[str, str] = {
     "order_book_imbalance": (
         "Bet on multi-level book pressure: `book_imbalance(L)` across L, depth\n"

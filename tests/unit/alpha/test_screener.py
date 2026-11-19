@@ -30,10 +30,6 @@ from hft_platform.alpha.screener import (
     cheap_screen,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_alpha_dir(root: Path, alpha_id: str, *, with_manifest: bool = True) -> Path:
     """Create ``root/research/alphas/<alpha_id>/`` with optional manifest stub."""
@@ -64,11 +60,6 @@ def _write_signal(
     return path
 
 
-# ---------------------------------------------------------------------------
-# Dataclass shape
-# ---------------------------------------------------------------------------
-
-
 def test_screen_result_dataclass_frozen_slots() -> None:
     assert is_dataclass(ScreenResult)
     inst = ScreenResult(
@@ -83,7 +74,6 @@ def test_screen_result_dataclass_frozen_slots() -> None:
     )
     with pytest.raises(Exception):
         inst.alpha_id = "y"  # type: ignore[misc]
-    # slots ⇒ no __dict__
     assert not hasattr(inst, "__dict__")
     field_names = tuple(f.name for f in fields(ScreenResult))
     assert field_names == (
@@ -110,11 +100,6 @@ def test_screen_result_verdict_domain_documented() -> None:
             reason="",
             duration_s=0.0,
         )
-
-
-# ---------------------------------------------------------------------------
-# Unknown paths (advisory, never kill)
-# ---------------------------------------------------------------------------
 
 
 def test_cheap_screen_missing_manifest_returns_unknown(tmp_path: Path) -> None:
@@ -154,7 +139,7 @@ def test_cheap_screen_signal_shape_invalid_returns_unknown_not_kill(
     _make_alpha_dir(tmp_path, "alpha_1d")
     exp_dir = tmp_path / "research" / "experiments" / "alpha_1d"
     exp_dir.mkdir(parents=True, exist_ok=True)
-    np.save(exp_dir / "signal.npy", np.zeros(100))  # 1-D; (100, 1) after reshape
+    np.save(exp_dir / "signal.npy", np.zeros(100))
 
     out = cheap_screen("alpha_1d", project_root=tmp_path)
     assert out.verdict == "unknown"
@@ -168,7 +153,7 @@ def test_cheap_screen_insufficient_observations_returns_unknown_not_kill(
     """<_MIN_OBS rows ⇒ IC and turnover both NaN ⇒ verdict='unknown', never 'kill'."""
     _make_alpha_dir(tmp_path, "alpha_tiny")
     rng = np.random.default_rng(99)
-    n = 10  # well below _MIN_OBS=50
+    n = 10
     sig = rng.normal(size=n)
     prices = 100.0 + np.cumsum(rng.normal(size=n) * 0.01)
     _write_signal(tmp_path, "alpha_tiny", signal=sig, prices=prices)
@@ -197,11 +182,6 @@ def test_cheap_screen_budget_exceeded_returns_unknown(tmp_path: Path, monkeypatc
     out = cheap_screen("alpha_slow", project_root=tmp_path)
     assert out.verdict == "unknown"
     assert "timeout" in out.reason or "budget" in out.reason
-
-
-# ---------------------------------------------------------------------------
-# Kill paths
-# ---------------------------------------------------------------------------
 
 
 def test_cheap_screen_high_turnover_kills(tmp_path: Path) -> None:
@@ -233,11 +213,6 @@ def test_cheap_screen_cost_floor_breach_kills(tmp_path: Path, monkeypatch: pytes
     assert out.verdict == "kill"
     assert out.cost_floor_breach is True
     assert "cost" in out.reason.lower()
-
-
-# ---------------------------------------------------------------------------
-# Pass paths
-# ---------------------------------------------------------------------------
 
 
 def test_cheap_screen_low_ic_does_not_kill_returns_pass_with_low_ic(
@@ -274,11 +249,6 @@ def test_cheap_screen_happy_path_returns_pass(tmp_path: Path) -> None:
         assert out.turnover <= TURNOVER_KILL
         assert out.cost_floor_breach is False
         assert np.isfinite(out.ic_mean)
-
-
-# ---------------------------------------------------------------------------
-# Duration
-# ---------------------------------------------------------------------------
 
 
 def test_cheap_screen_duration_s_populated(tmp_path: Path) -> None:

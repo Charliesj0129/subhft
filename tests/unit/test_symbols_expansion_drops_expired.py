@@ -39,9 +39,9 @@ def test_build_symbols_drops_expired_front_month(tmp_path):
     )
 
     contracts = [
-        _fake_future("TXFE6", dte_days=-2),  # settled
-        _fake_future("TXFF6", dte_days=20),  # active front
-        _fake_future("TXFG6", dte_days=50),  # active next
+        _fake_future("TXFE6", dte_days=-2),
+        _fake_future("TXFF6", dte_days=20),
+        _fake_future("TXFG6", dte_days=50),
     ]
     index = ContractIndex(contracts=contracts)
 
@@ -68,7 +68,4 @@ def test_build_symbols_warns_when_only_expired_contracts_exist(tmp_path):
 
     result = build_symbols(str(list_path), index)
     assert all(s["code"] != "TXFE6" for s in result.symbols)
-    # The expander pushes the "no active expiries" condition into errors —
-    # whether it lands in errors or warnings, the empty result is what
-    # matters for the operator-facing build CLI.
     assert not any(s["code"] == "TXFE6" for s in result.symbols)

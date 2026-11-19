@@ -19,7 +19,6 @@ class TestTelegramSenderEnabled:
     def test_enabled_true_with_env_vars_activates_sender(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token-123")
         monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", "99999")
-        # Ensure aiohttp presence check passes (may be None in test env)
         monkeypatch.setattr(_tg_mod, "aiohttp", MagicMock())
 
         sender = TelegramSender(enabled=True)

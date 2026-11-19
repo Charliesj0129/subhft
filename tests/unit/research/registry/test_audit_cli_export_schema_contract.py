@@ -119,8 +119,6 @@ class TestExportSchemaContract:
             assert field in export_cols, f"scorecard axis {field!r} missing from export schema"
 
     def test_csv_writer_roundtrips_full_row(self, _isolated) -> None:
-        # End-to-end: a fully-populated row exports without DictWriter error
-        # and every column header is present.
         import csv
         import io
 

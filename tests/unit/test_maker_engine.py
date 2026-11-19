@@ -20,10 +20,6 @@ def test_maker_engine_properties():
 
 
 def test_ck_health_check_raises_on_failure(monkeypatch):
-    # The behaviour under test is the error *wrapping*, not the network. Letting
-    # this reach a real resolver made it a >10 s test whenever the machine was
-    # busy (it timed out under a parallel run on 2026-07-26), and it would fail
-    # outright on a resolver that answers wildcard NXDOMAIN with an address.
     import clickhouse_connect
 
     def _refuse(*_args, **_kwargs):

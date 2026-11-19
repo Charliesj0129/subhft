@@ -34,8 +34,6 @@ class TestThePipelineHistogramReachesPastTheStormThreshold:
     def test_a_three_second_broker_call_is_not_pushed_into_the_infinity_bucket(self):
         MetricsRegistry._instance = None
         bounds = _bucket_bounds(MetricsRegistry.get().pipeline_latency_ns)
-        # 3.013641 s is the real worst order RTT recorded on THESHOW, exported
-        # as stormguard_latency_input_max_us{input="order_rtt"} on 2026-09-09.
         worst_seen_ns = 3_013_641_000
         assert any(b >= worst_seen_ns for b in bounds), (
             f"the worst observed broker call ({worst_seen_ns / 1e9:.2f}s) lands in +Inf; "
@@ -83,8 +81,6 @@ class TestThePipelineHistogramReachesPastTheStormThreshold:
         probe = Histogram("probe_ns", "doc", ["stage"], buckets=bounds, registry=registry)
         probe.labels(stage="api_place_order").observe(3_013_641_000)
 
-        # Read the buckets back off the collector rather than guessing how
-        # prometheus_client formats a float in an ``le`` label.
         counts = {s.labels["le"]: s.value for m in probe.collect() for s in m.samples if s.name.endswith("_bucket")}
         assert counts.get("+Inf") == 1.0, "the observation was not recorded at all"
         finite = {le: v for le, v in counts.items() if le != "+Inf"}

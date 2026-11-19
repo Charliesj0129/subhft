@@ -82,14 +82,13 @@ class TestAuditCliSummary:
         assert "PASS=2 FAIL=1" in out
 
     def test_edge_floor_and_percentiles(self, _isolated) -> None:
-        # 5 edges: 6, 9, 11, 14, 22 -> above floor: 3; p50=11, p95~20.4
         for i, e in enumerate([6.0, 9.0, 11.0, 14.0, 22.0]):
             _record(run_id=f"s_p_{i}", edge=e)
         out = audit_cli.summary()
         assert "rows with edge : 5 / 5" in out
         assert "rows > floor   : 3" in out
         assert "edge p50/p95" in out
-        assert "11.000" in out  # p50
+        assert "11.000" in out
 
     def test_rows_without_edge_count_separately(self, _isolated) -> None:
         _record(run_id="s_e", edge=12.0)
@@ -133,15 +132,13 @@ class TestSummaryAggregatesDayDominance:
         out = audit_cli.summary()
         assert "single_day_dominance" in out
         assert "rows with metric: 3 / 3" in out
-        assert "rows over cap   : 1" in out  # only 40 % exceeds 25 %
+        assert "rows over cap   : 1" in out
         assert "share min/max" in out
 
     def test_summary_handles_rows_without_dominance(self, _isolated) -> None:
         _record(run_id="dd_x", edge=12.0, day_dom=12.0)
         _record(run_id="dd_y", edge=12.0, day_dom=None)
         out = audit_cli.summary()
-        # The force_flat block also says "rows with metric"; assert against
-        # the dominance section specifically.
         dom_section = out.split("single_day_dominance")[1]
         assert "rows with metric: 1 / 2" in dom_section
 

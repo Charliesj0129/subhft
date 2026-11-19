@@ -26,11 +26,6 @@ def _make_client(mode: str = "live") -> MagicMock:
     return client
 
 
-# ---------------------------------------------------------------------------
-# get_trading_limits
-# ---------------------------------------------------------------------------
-
-
 class TestGetTradingLimits:
     def test_simulation_returns_empty_dict(self) -> None:
         client = _make_client(mode="simulation")
@@ -83,11 +78,6 @@ class TestGetTradingLimits:
         assert kwargs.get("ok") is False or client._record_api_latency.call_args[0][2] is False
 
 
-# ---------------------------------------------------------------------------
-# get_settlements
-# ---------------------------------------------------------------------------
-
-
 class TestGetSettlements:
     def test_simulation_returns_empty_list(self) -> None:
         client = _make_client(mode="simulation")
@@ -131,11 +121,6 @@ class TestGetSettlements:
         assert gw.get_settlements() == []
 
 
-# ---------------------------------------------------------------------------
-# list_profit_loss_summary
-# ---------------------------------------------------------------------------
-
-
 class TestListProfitLossSummary:
     def test_simulation_returns_empty_list(self) -> None:
         client = _make_client(mode="simulation")
@@ -174,11 +159,6 @@ class TestListProfitLossSummary:
         client.api.list_profit_loss_summary.side_effect = RuntimeError("err")
         gw = AccountGateway(client)
         assert gw.list_profit_loss_summary() == []
-
-
-# ---------------------------------------------------------------------------
-# list_profit_loss_detail
-# ---------------------------------------------------------------------------
 
 
 class TestListProfitLossDetail:
@@ -222,7 +202,6 @@ class TestListProfitLossDetail:
         client.api.list_profit_loss_detail.return_value = []
         gw = AccountGateway(client)
         gw.list_profit_loss_detail(detail_id=7)
-        # unit should NOT appear in the call kwargs
         call_kwargs = client.api.list_profit_loss_detail.call_args
         assert "unit" not in call_kwargs.kwargs
 
@@ -238,11 +217,6 @@ class TestListProfitLossDetail:
         client.api.list_profit_loss_detail.side_effect = RuntimeError("x")
         gw = AccountGateway(client)
         assert gw.list_profit_loss_detail() == []
-
-
-# ---------------------------------------------------------------------------
-# get_positions — decoupled stock / futopt failure handling
-# ---------------------------------------------------------------------------
 
 
 def _make_positions_client() -> MagicMock:
@@ -321,11 +295,6 @@ class TestGetPositionsDecoupled:
         assert result == stock_pos
         assert gw.last_positions_error is not None
         assert "futopt" in gw.last_positions_error.lower()
-
-
-# ---------------------------------------------------------------------------
-# 1.5.6 pre-login account property regression (full-engine boot crash 2026-07-19)
-# ---------------------------------------------------------------------------
 
 
 class _FakeAuthError(Exception):

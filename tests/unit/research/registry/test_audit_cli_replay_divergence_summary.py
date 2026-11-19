@@ -72,7 +72,6 @@ class TestSummaryReplayDivergenceDistribution:
         block = out.split("replay divergence (驗證標準 §8")[1]
         assert "3 rows" in block.split("\n")[0]
         body = [ln for ln in block.split("\n")[1:] if ln.strip()]
-        # latency_shift (2) dominates, sorted before data_mismatch (1).
         assert body[0].strip().startswith("latency_shift")
         assert "latency_shift" in body[0] and ": 2" in body[0]
         assert any("data_mismatch" in ln and ": 1" in ln for ln in body)

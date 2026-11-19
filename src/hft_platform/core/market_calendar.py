@@ -24,7 +24,6 @@ from hft_platform.core import timebase
 
 logger = get_logger("core.market_calendar")
 
-# Lazy import exchange_calendars to avoid import-time overhead
 _xcals = None
 
 
@@ -93,7 +92,7 @@ class MarketCalendar:
 
             self._tz = ZoneInfo(self._tz_name)
         except Exception as exc:
-            self._tz = dt.timezone(dt.timedelta(hours=8))  # Fallback to UTC+8
+            self._tz = dt.timezone(dt.timedelta(hours=8))
             logger.warning(
                 "market_calendar_timezone_invalid",
                 requested_tz=self._tz_name,
@@ -121,7 +120,6 @@ class MarketCalendar:
         else:
             logger.warning("Market calendar unavailable (no exchange_calendars)")
 
-        # Create instance-bound cached method
         self._get_session_times_cached = lru_cache(maxsize=self._session_cache_size)(self._get_session_times_uncached)
 
     def _warn_if_timezone_disagrees_with_timebase(self) -> bool:
@@ -165,7 +163,6 @@ class MarketCalendar:
         date = dt.date.fromisoformat(date_str)
 
         if not self._cal:
-            # Fallback: weekdays only with fixed times
             if date.weekday() >= 5:
                 return None, None
             open_time = dt.datetime.combine(date, dt.time(9, 0), tzinfo=self._tz)
@@ -218,7 +215,6 @@ class MarketCalendar:
             True if trading day, False if holiday/weekend
         """
         if not self._cal:
-            # Fallback: weekdays only
             if date is None:
                 date = dt.datetime.now(self._tz).date()
             return date.weekday() < 5
@@ -234,28 +230,13 @@ class MarketCalendar:
             logger.debug("is_trading_day check failed", date=str(date), error=str(exc))
             return date.weekday() < 5
 
-    # ------------------------------------------------------------------ #
-    # Session boundaries (minutes from midnight, TST)                    #
-    # TWSE day:            09:00–13:30                                   #
-    # TAIFEX day session:  08:45–13:45                                   #
-    # TAIFEX night:        15:00–(next day)05:00  (cross-midnight)       #
-    # ------------------------------------------------------------------ #
-    _FUT_DAY_OPEN_MIN: int = 8 * 60 + 45  # 08:45
-    _FUT_DAY_CLOSE_MIN: int = 13 * 60 + 45  # 13:45
-    _FUT_NIGHT_OPEN_MIN: int = 15 * 60  # 15:00
-    _FUT_NIGHT_CLOSE_MIN: int = 5 * 60  # 05:00 (next calendar day)
-    _TWSE_OPEN_MIN: int = 9 * 60  # 09:00
-    _TWSE_CLOSE_MIN: int = 13 * 60 + 30  # 13:30
+    _FUT_DAY_OPEN_MIN: int = 8 * 60 + 45
+    _FUT_DAY_CLOSE_MIN: int = 13 * 60 + 45
+    _FUT_NIGHT_OPEN_MIN: int = 15 * 60
+    _FUT_NIGHT_CLOSE_MIN: int = 5 * 60
+    _TWSE_OPEN_MIN: int = 9 * 60
+    _TWSE_CLOSE_MIN: int = 13 * 60 + 30
 
-    # Second-granularity forms, derived so the minute constants above stay the
-    # single readable source of truth.
-    #
-    # The OPEN bound is inclusive and the CLOSE bound is EXCLUSIVE.  Comparing
-    # at minute granularity with an inclusive close made the entire closing
-    # minute (13:45:00–13:45:59, 05:00:00–05:00:59) read as "trading hours"
-    # after the feed had already gone quiet, which is long enough for the
-    # 15 s quote watchdog to declare the feed dead and force a relogin on
-    # every facade at every session close.  13:45:30 is not trading hours.
     _FUT_DAY_OPEN_SEC: int = _FUT_DAY_OPEN_MIN * 60
     _FUT_DAY_CLOSE_SEC: int = _FUT_DAY_CLOSE_MIN * 60
     _FUT_NIGHT_OPEN_SEC: int = _FUT_NIGHT_OPEN_MIN * 60
@@ -313,7 +294,6 @@ class MarketCalendar:
         if product_type in ("future", "option"):
             return self._is_futures_trading_hours(ts)
 
-        # ---- stock / default: TWSE 09:00–13:30 -------------------------
         if not self.is_trading_day(ts.date()):
             return False
 
@@ -335,10 +315,8 @@ class MarketCalendar:
     def _is_futures_trading_hours(self, ts: dt.datetime) -> bool:
         """Return True if *ts* is within any TAIFEX session (day or night)."""
         current_s = self._seconds_of_day(ts)
-        # Day session: 08:45:00 (inclusive) – 13:45:00 (exclusive) on a trading day
         if self._FUT_DAY_OPEN_SEC <= current_s < self._FUT_DAY_CLOSE_SEC and self.is_trading_day(ts.date()):
             return True
-        # Night session: 15:00–(next day)05:00
         return self._is_futures_night_session(ts)
 
     def seconds_since_futures_session_open(self, ts: dt.datetime | None = None) -> float | None:
@@ -363,8 +341,6 @@ class MarketCalendar:
             return float(current_s - self._FUT_DAY_OPEN_SEC)
         if current_s >= self._FUT_NIGHT_OPEN_SEC:
             return float(current_s - self._FUT_NIGHT_OPEN_SEC)
-        # Past midnight: the session opened at 15:00 on the previous calendar
-        # day, so the elapsed time carries the whole evening with it.
         return float(current_s + (86400 - self._FUT_NIGHT_OPEN_SEC))
 
     def get_session_open(self, date: dt.date | None = None) -> dt.datetime | None:
@@ -414,7 +390,6 @@ class MarketCalendar:
             date = dt.datetime.now(self._tz).date()
 
         if not self._cal:
-            # Fallback: skip weekends
             next_date = date + dt.timedelta(days=1)
             while next_date.weekday() >= 5:
                 next_date += dt.timedelta(days=1)
@@ -424,8 +399,6 @@ class MarketCalendar:
             import pandas as pd
 
             ts = pd.Timestamp(date)
-            # next_session requires an existing session label. For weekends/holidays,
-            # resolve to the nearest next session first to avoid noisy exceptions.
             if self._cal.is_session(ts):
                 next_session = self._cal.next_session(ts)
                 return next_session.date()
@@ -452,7 +425,6 @@ class MarketCalendar:
             date = dt.datetime.now(self._tz).date()
 
         if not self._cal:
-            # Fallback: skip weekends
             prev_date = date - dt.timedelta(days=1)
             while prev_date.weekday() >= 5:
                 prev_date -= dt.timedelta(days=1)
@@ -462,8 +434,6 @@ class MarketCalendar:
             import pandas as pd
 
             ts = pd.Timestamp(date)
-            # previous_session requires an existing session label. For weekends/holidays,
-            # resolve to the nearest previous session first to avoid noisy exceptions.
             if self._cal.is_session(ts):
                 prev_session = self._cal.previous_session(ts)
                 return prev_session.date()
@@ -494,7 +464,7 @@ class MarketCalendar:
 
         next_day = self.next_trading_day(date)
         if next_day is None:
-            return 1  # Fallback
+            return 1
 
         return (next_day - date).days
 
@@ -515,7 +485,6 @@ class MarketCalendar:
         return self.days_until_trading(today) >= min_consecutive_days
 
 
-# Singleton instance
 _instance: MarketCalendar | None = None
 
 
@@ -537,16 +506,6 @@ def reset_calendar() -> None:
     _instance = None
 
 
-# -- TAIFEX monthly contract expiry --------------------------------------------
-#
-# A monthly TAIFEX future stops trading at 13:30 on its delivery date: its final
-# session is the day session, cut short, and it has no night session. The next
-# month is the front month from that instant, not from midnight. So "has this
-# contract expired" is a question about exchange-local *time*, and answering it
-# with a date alone is wrong for the rest of the delivery day. On 2026-09-16 that
-# covered the whole expiry-day night session.
-
-#: Close of a monthly contract's final session, on its delivery date.
 TAIFEX_FINAL_SESSION_CLOSE = dt.time(13, 30)
 
 
@@ -566,16 +525,12 @@ def taifex_delivery_cutoff(now_ns: int) -> dt.date:
     return local.date()
 
 
-#: How far a holiday can push a delivery date. Taiwan's longest closure (Lunar
-#: New Year) is under ten calendar days; past this the calendar is wrong, and
-#: the unadjusted third Wednesday is returned rather than a guess.
 _MAX_DELIVERY_HOLIDAY_SHIFT_DAYS = 14
 
 
 def taifex_third_wednesday(year: int, month: int) -> dt.date:
     """The third Wednesday of ``year``-``month``, with no holiday adjustment."""
     first = dt.date(year, month, 1)
-    # weekday(): Monday=0 ... Wednesday=2
     first_wednesday = 1 + (2 - first.weekday()) % 7
     return dt.date(year, month, first_wednesday + 14)
 
@@ -603,6 +558,6 @@ def taifex_monthly_delivery_date(year: int, month: int, *, calendar: MarketCalen
             if cal.is_trading_day(day):
                 return day
             day += dt.timedelta(days=1)
-    except Exception as exc:  # noqa: BLE001 — an unanswerable calendar keeps the plain rule
+    except Exception as exc:
         logger.debug("operation_fallback", error=str(exc))
     return wednesday

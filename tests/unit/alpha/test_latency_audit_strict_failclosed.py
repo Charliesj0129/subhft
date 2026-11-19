@@ -18,10 +18,6 @@ import pytest
 
 from hft_platform.alpha.latency_audit import latency_audit
 
-# ---------------------------------------------------------------------------
-# Test 1: Profile missing submit/cancel P95 + strict=True → fails closed.
-# ---------------------------------------------------------------------------
-
 
 def test_strict_fails_closed_when_profile_p95_missing():
     """Profile dict lacks submit_ack_latency_ms / cancel_ack_latency_ms.
@@ -31,7 +27,6 @@ def test_strict_fails_closed_when_profile_p95_missing():
     """
     profile_missing_p95 = {
         "latency_profile_id": "shioaji_sim_p95_v2026-03-04",
-        # Note: submit_ack_latency_ms and cancel_ack_latency_ms intentionally absent.
     }
 
     result = latency_audit(profile_missing_p95, strict=True)
@@ -39,11 +34,6 @@ def test_strict_fails_closed_when_profile_p95_missing():
     assert result["passed"] is False
     assert "submit" in result["reason"] or "cancel" in result["reason"]
     assert "strict" in result["reason"].lower() or "missing" in result["reason"].lower()
-
-
-# ---------------------------------------------------------------------------
-# Test 2: Profile missing submit/cancel P95 + strict=False → advisory PASS.
-# ---------------------------------------------------------------------------
 
 
 def test_loose_returns_advisory_pass_when_profile_p95_missing():
@@ -62,11 +52,6 @@ def test_loose_returns_advisory_pass_when_profile_p95_missing():
     assert "advisory" in result["reason"].lower()
 
 
-# ---------------------------------------------------------------------------
-# Test 3: Profile present + submit P95 within budget → PASS.
-# ---------------------------------------------------------------------------
-
-
 def test_strict_passes_when_profile_p95_within_budget():
     """Profile populates both submit and cancel P95 fields → PASS under strict."""
     profile = {
@@ -80,11 +65,6 @@ def test_strict_passes_when_profile_p95_within_budget():
     assert result["passed"] is True
 
 
-# ---------------------------------------------------------------------------
-# Test 4: Profile present but P95 above budget → FAIL.
-# ---------------------------------------------------------------------------
-
-
 def test_strict_fails_when_profile_p95_above_budget():
     """Profile populates fields but submit P95 exceeds the configured max budget."""
     profile = {
@@ -93,16 +73,10 @@ def test_strict_fails_when_profile_p95_above_budget():
         "cancel_ack_latency_ms": 5_000.0,
     }
 
-    # Tight 100 ms budget — both fields exceed it.
     result = latency_audit(profile, strict=True, max_submit_ms=100.0, max_cancel_ms=100.0)
 
     assert result["passed"] is False
     assert "budget" in result["reason"].lower() or "exceed" in result["reason"].lower()
-
-
-# ---------------------------------------------------------------------------
-# Test 5: v2026-04-24_measured asymmetric profile — informational only.
-# ---------------------------------------------------------------------------
 
 
 def test_v20260424_measured_profile_passes_under_strict():
@@ -119,15 +93,8 @@ def test_v20260424_measured_profile_passes_under_strict():
 
     result = latency_audit(profile, strict=True)
 
-    # No explicit budget → fields-present check passes; asymmetry is not auto-fail.
     assert result["passed"] is True
-    # The audit must echo the canonical ID so test fixtures can certify provenance.
     assert result.get("profile_id") == "r47_maker_shioaji_p95_v2026-04-24_measured"
-
-
-# ---------------------------------------------------------------------------
-# Edge: keyword-only enforcement for ``strict`` parameter.
-# ---------------------------------------------------------------------------
 
 
 def test_strict_must_be_keyword_only():

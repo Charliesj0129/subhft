@@ -18,7 +18,6 @@ fn compute_vol_regime(returns: &VecDeque<f64>, short_window: usize, long_window:
 
     let n = returns.len();
 
-    // Short vol
     let short_start = n.saturating_sub(short_window);
     let short_slice: Vec<f64> = returns.iter().skip(short_start).copied().collect();
     let short_mean: f64 = short_slice.iter().sum::<f64>() / short_slice.len() as f64;
@@ -29,7 +28,6 @@ fn compute_vol_regime(returns: &VecDeque<f64>, short_window: usize, long_window:
         / short_slice.len() as f64;
     let short_vol = short_var.sqrt();
 
-    // Long vol
     let long_start = n.saturating_sub(long_window);
     let long_slice: Vec<f64> = returns.iter().skip(long_start).copied().collect();
     let long_mean: f64 = long_slice.iter().sum::<f64>() / long_slice.len() as f64;
@@ -43,11 +41,11 @@ fn compute_vol_regime(returns: &VecDeque<f64>, short_window: usize, long_window:
     if long_vol > 1e-10 {
         let vol_ratio = short_vol / long_vol;
         if vol_ratio > 1.5 {
-            1.0 // High vol
+            1.0
         } else if vol_ratio < 0.7 {
-            -1.0 // Low vol
+            -1.0
         } else {
-            0.0 // Normal
+            0.0
         }
     } else {
         0.0
@@ -63,39 +61,32 @@ fn compute_vol_regime(returns: &VecDeque<f64>, short_window: usize, long_window:
 /// - Confirmation boost
 #[pyclass]
 pub struct MetaAlpha {
-    // Windows
     fast_window: usize,
     slow_window: usize,
     vol_short_window: usize,
     vol_long_window: usize,
 
-    // Weights
     dynamic_weight: f64,
     interaction_weight: f64,
     confirmation_boost: f64,
 
-    // State - Trade Flow
     trade_vol_history: VecDeque<f64>,
     trade_side_history: VecDeque<f64>,
     sum_signed_flow_fast: f64,
     sum_vol_slow: f64,
 
-    // State - OFI (simplified)
     bid_qty_history: VecDeque<f64>,
     ask_qty_history: VecDeque<f64>,
     ofi_sum: f64,
 
-    // State - Hawkes-like intensity tracker
     hawkes_intensity: f64,
     hawkes_mu: f64,
     hawkes_alpha: f64,
     hawkes_beta: f64,
 
-    // State - Returns for vol regime
     returns_history: VecDeque<f64>,
     last_price: f64,
 
-    // Output signals
     signal_dynamic: f64,
     signal_interaction: f64,
 }
@@ -152,12 +143,11 @@ impl MetaAlpha {
     pub fn update(
         &mut self,
         trade_vol: f64,
-        trade_side: f64, // +1 buy, -1 sell
+        trade_side: f64,
         bid_qty: f64,
         ask_qty: f64,
         mid_price: f64,
     ) -> f64 {
-        // --- Update returns history ---
         if self.last_price > 0.0 {
             let ret = (mid_price - self.last_price) / (self.last_price + 1e-10);
             self.returns_history.push_back(ret);
@@ -167,25 +157,20 @@ impl MetaAlpha {
         }
         self.last_price = mid_price;
 
-        // --- Hawkes intensity update (O(1)) ---
-        // λ(t+dt) = μ + (λ(t) - μ) * e^(-β*dt) + α * (event)
         let decay = (-self.hawkes_beta).exp();
         let event_indicator = if trade_vol > 0.0 { 1.0 } else { 0.0 };
         self.hawkes_intensity = self.hawkes_mu
             + (self.hawkes_intensity - self.hawkes_mu) * decay
             + self.hawkes_alpha * event_indicator;
 
-        // Normalize Hawkes to [0, 1] range
         let hawkes_signal = (self.hawkes_intensity.min(2.0) / 2.0).max(0.0);
 
-        // --- Trade Flow (MatchedFilter style) ---
         let signed_flow = trade_vol * trade_side;
         self.trade_vol_history.push_back(trade_vol);
         self.trade_side_history.push_back(trade_side);
         self.sum_signed_flow_fast += signed_flow;
         self.sum_vol_slow += trade_vol;
 
-        // Remove old (fast)
         if self.trade_vol_history.len() > self.fast_window {
             let idx = self.trade_vol_history.len() - 1 - self.fast_window;
             let old_vol = self.trade_vol_history[idx];
@@ -193,7 +178,6 @@ impl MetaAlpha {
             self.sum_signed_flow_fast -= old_vol * old_side;
         }
 
-        // Remove old (slow)
         if self.trade_vol_history.len() > self.slow_window {
             let old_vol = self.trade_vol_history.pop_front().unwrap_or(0.0);
             let _ = self.trade_side_history.pop_front().unwrap_or(0.0);
@@ -211,7 +195,6 @@ impl MetaAlpha {
             0.0
         };
 
-        // --- OFI update ---
         let prev_bid = self.bid_qty_history.back().copied().unwrap_or(bid_qty);
         let prev_ask = self.ask_qty_history.back().copied().unwrap_or(ask_qty);
 
@@ -224,24 +207,20 @@ impl MetaAlpha {
         self.ofi_sum += ofi_tick;
 
         if self.bid_qty_history.len() > self.fast_window {
-            // Remove oldest contribution (approximate)
             self.bid_qty_history.pop_front();
             self.ask_qty_history.pop_front();
-            // Recalculate OFI sum would be O(n), so we approximate
-            self.ofi_sum *= 0.95; // Decay factor for approximation
+
+            self.ofi_sum *= 0.95;
         }
 
         let ofi_signal = self.ofi_sum / (self.fast_window as f64);
 
-        // --- Volatility regime ---
         let vol_regime = compute_vol_regime(
             &self.returns_history,
             self.vol_short_window,
             self.vol_long_window,
         );
 
-        // --- Dynamic Ensemble Signal ---
-        // Weight trade_flow more in high vol, OFI more in low vol
         let flow_weight = if vol_regime > 0.5 {
             0.6
         } else if vol_regime < -0.5 {
@@ -252,18 +231,14 @@ impl MetaAlpha {
         let ofi_weight = 1.0 - flow_weight;
         self.signal_dynamic = flow_weight * trade_flow_signal + ofi_weight * ofi_signal;
 
-        // --- Interaction Signal ---
-        // Hawkes x OFI: When Hawkes is high (critical), flip OFI impact
         let hawkes_interaction = -hawkes_signal * ofi_signal;
-        // TradeFlow when not in critical regime
+
         let dampened_flow = trade_flow_signal * (1.0 - hawkes_signal);
         self.signal_interaction = 0.5 * hawkes_interaction + 0.5 * dampened_flow;
 
-        // --- Meta combination ---
         let mut combined = self.dynamic_weight * self.signal_dynamic
             + self.interaction_weight * self.signal_interaction;
 
-        // Confirmation boost
         if self.signal_dynamic.signum() == self.signal_interaction.signum()
             && self.signal_dynamic.abs() > 0.5
             && self.signal_interaction.abs() > 0.5

@@ -30,8 +30,6 @@ from structlog import get_logger
 
 logger = get_logger("config.symbols_path")
 
-# ``symbols_path.py`` lives at src/hft_platform/config/symbols_path.py —
-# four .parent hops reach the repository root.
 _PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent.parent.parent
 
 

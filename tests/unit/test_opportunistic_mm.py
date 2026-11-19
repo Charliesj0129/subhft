@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 from hft_platform.events import FeatureUpdateEvent
 from hft_platform.strategies.opportunistic_mm import OpportunisticMM
 
-# Price scale factor (same as production)
 _SCALE = 10000
 
 
@@ -51,7 +50,6 @@ def _make_tmfd6_event(spread_pts: int, price: int = 23000, imbalance: float = 0.
     )
 
 
-# --- Construction ---
 def test_default_threshold() -> None:
     mm = OpportunisticMM()
     assert mm.spread_threshold_pts == 5
@@ -73,13 +71,12 @@ def test_inherits_simple_mm() -> None:
     assert issubclass(OpportunisticMM, SimpleMarketMaker)
 
 
-# --- Spread gate (points-based) ---
 def test_tight_spread_does_not_quote() -> None:
     """Spread 3 pts < threshold 5 pts → blocked."""
     mm = OpportunisticMM(spread_threshold_pts=5)
     mm.ctx = MagicMock()
     mm._generated_intents = []
-    ev = _make_tmfd6_event(spread_pts=3)  # 3 < 5
+    ev = _make_tmfd6_event(spread_pts=3)
     mm.on_stats(ev)
     assert len(mm._generated_intents) == 0
     assert mm._gate_blocked_count == 1
@@ -93,7 +90,7 @@ def test_exact_threshold_passes() -> None:
     mm._generated_intents = []
     mm.position = MagicMock(return_value=0)
 
-    ev = _make_tmfd6_event(spread_pts=5)  # 5 >= 5
+    ev = _make_tmfd6_event(spread_pts=5)
     mm.on_stats(ev)
     assert mm.position.called
     assert mm._gate_passed_count == 1
@@ -121,12 +118,10 @@ def test_threshold_independent_of_price_level() -> None:
         mm._generated_intents = []
         mm.position = MagicMock(return_value=0)
 
-        # 4 pts → blocked
         ev_tight = _make_tmfd6_event(spread_pts=4, price=price)
         mm.on_stats(ev_tight)
         assert mm._gate_blocked_count == 1, f"Price {price}: 4 pts should be blocked"
 
-        # 5 pts → passed
         ev_wide = _make_tmfd6_event(spread_pts=5, price=price, imbalance=0.1)
         mm.on_stats(ev_wide)
         assert mm._gate_passed_count == 1, f"Price {price}: 5 pts should pass"
@@ -135,12 +130,10 @@ def test_threshold_independent_of_price_level() -> None:
 def test_integer_comparison_no_float() -> None:
     """The spread gate uses integer comparison (spread_scaled vs threshold_scaled)."""
     mm = OpportunisticMM(spread_threshold_pts=5)
-    # Verify internal state is int, not float
     assert isinstance(mm._spread_threshold_scaled, int)
     assert mm._spread_threshold_scaled == 50000
 
 
-# --- None/invalid guards ---
 def test_none_mid_price_returns_early() -> None:
     mm = OpportunisticMM()
     ev = MagicMock()
@@ -165,7 +158,6 @@ def test_negative_mid_returns_early() -> None:
     assert mm._invalid_data_count == 1
 
 
-# --- Observability ---
 def test_observability_counters() -> None:
     """Verify internal counters track gate decisions correctly."""
     mm = OpportunisticMM(spread_threshold_pts=5)
@@ -174,19 +166,16 @@ def test_observability_counters() -> None:
     mm._generated_intents = []
     mm.position = MagicMock(return_value=0)
 
-    # Tight spread — blocked
     ev_tight = _make_tmfd6_event(spread_pts=3)
     mm.on_stats(ev_tight)
     assert mm._gate_blocked_count == 1
     assert mm._gate_passed_count == 0
 
-    # Wide spread — passed
     ev_wide = _make_tmfd6_event(spread_pts=7, imbalance=0.1)
     mm.on_stats(ev_wide)
     assert mm._gate_passed_count == 1
     assert mm._stats_count == 2
 
-    # Invalid data — None
     ev_none = MagicMock()
     ev_none.mid_price_x2 = None
     ev_none.spread_scaled = 10
@@ -195,16 +184,13 @@ def test_observability_counters() -> None:
     assert mm._invalid_data_count == 1
 
 
-# --- Reversal filter ---
-
-
 def _make_feature_tuple(
     *,
     l1_bid_qty: int = 50,
     l1_ask_qty: int = 50,
     ofi_depth_norm_ppm: int = 100_000,
-    ret_autocov_5s_x1e6: int = -500_000,  # negative = oscillating (reversal)
-    tob_survival_ms: int = 500,  # short = volatile TOB
+    ret_autocov_5s_x1e6: int = -500_000,
+    tob_survival_ms: int = 500,
 ) -> tuple[int, ...]:
     """Build a minimal v2 feature tuple (19 elements)."""
     v1 = (0, 0, 0, 0, 0, 0, 0, 0, l1_bid_qty, l1_ask_qty, 0, 0, 0, 0, 0, 0)

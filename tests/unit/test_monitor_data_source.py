@@ -10,8 +10,6 @@ import pytest
 
 from hft_platform.monitor._types import RowView
 
-# ── Stub classes ────────────────────────────────────────────────────────────
-
 
 class _StubPoller:
     """Minimal stub implementing the poller interface for CHDataSource."""
@@ -118,9 +116,6 @@ def _row(
     return RowView(symbol, ts, [price], [price + 1000], [10], [20], price, 1)
 
 
-# ── _snapshot_to_row_view ───────────────────────────────────────────────────
-
-
 class TestSnapshotToRowView:
     def test_price_scale_conversion(self) -> None:
         from hft_platform.monitor._data_source import _snapshot_to_row_view
@@ -133,7 +128,6 @@ class TestSnapshotToRowView:
         )
         row = _snapshot_to_row_view("2330", snap)
 
-        # Platform x10000 * 100 = CH x1000000
         assert row.bids_price == [210_000_000]
         assert row.asks_price == [210_500_000]
         assert row.bids_vol == [10]
@@ -162,8 +156,8 @@ class TestSnapshotToRowView:
         row = _snapshot_to_row_view("2317", snap)
 
         assert row.bids_price == [500_000]
-        assert row.asks_price == [0]  # no ask field
-        assert row.bids_vol == [0]  # no qty fields
+        assert row.asks_price == [0]
+        assert row.bids_vol == [0]
         assert row.asks_vol == [0]
 
     def test_lob_fields_with_seven_elements(self) -> None:
@@ -175,9 +169,6 @@ class TestSnapshotToRowView:
 
         assert row.bids_vol == [50]
         assert row.asks_vol == [0]
-
-
-# ── CHDataSource ────────────────────────────────────────────────────────────
 
 
 class TestCHDataSource:
@@ -232,9 +223,6 @@ class TestCHDataSource:
         assert ds.remaining_backoff_seconds() == 0.0
 
 
-# ── ShmDataSource (stubbed reader) ──────────────────────────────────────────
-
-
 class TestShmDataSourceStubbed:
     """Tests using injected stub reader — no real SHM needed."""
 
@@ -257,7 +245,6 @@ class TestShmDataSourceStubbed:
         ds._last_error = ""
         ds._next_retry_at = 0.0
 
-        # Build symbol→slot mapping like __init__ does
         sym_hashes = {_symbol_hash(s): s for s in symbols}
         for slot_idx in range(reader.max_symbols):
             snap = reader.read_slot(slot_idx)
@@ -297,10 +284,8 @@ class TestShmDataSourceStubbed:
 
         ds = self._make_source(reader, ("2330",))
 
-        # First poll consumes version 1
         ds.poll({"2330": 0})
 
-        # Second poll — same version, should be empty
         result = ds.poll({"2330": 0})
         assert len(result["2330"]) == 0
 
@@ -318,7 +303,6 @@ class TestShmDataSourceStubbed:
 
         ds = self._make_source(reader, ("2330",))
 
-        # Cursor at 5000, data at 3000 — skip
         result = ds.poll({"2330": 5000})
         assert len(result["2330"]) == 0
 
@@ -343,7 +327,6 @@ class TestShmDataSourceStubbed:
 
         reader = _StubReader(max_symbols=4)
         h = _symbol_hash("2330")
-        # Slot 0 mapped during init, but then becomes None
         reader._slots[0] = _StubSnapshotSlot(
             version=1,
             ts_ns=1000,
@@ -352,7 +335,6 @@ class TestShmDataSourceStubbed:
         )
         ds = self._make_source(reader, ("2330",))
 
-        # Now remove the slot data
         reader._slots[0] = None
         result = ds.poll({"2330": 0})
         assert len(result["2330"]) == 0
@@ -362,11 +344,9 @@ class TestShmDataSourceStubbed:
 
         reader = _StubReader(max_symbols=4)
         h = _symbol_hash("2881")
-        # Slot 2 has 2881 but was not mapped at init (init only scanned existing slots)
         ds = self._make_source(reader, ("2881",))
         assert "2881" not in ds._symbol_to_slot
 
-        # Now the slot appears
         reader._slots[2] = _StubSnapshotSlot(
             version=1,
             ts_ns=9000,
@@ -412,11 +392,8 @@ class TestShmDataSourceStubbed:
     def test_connect_is_noop(self) -> None:
         reader = _StubReader()
         ds = self._make_source(reader)
-        ds.connect()  # should not raise
+        ds.connect()
         assert ds.connected is True
-
-
-# ── Constants ───────────────────────────────────────────────────────────────
 
 
 class TestConstants:

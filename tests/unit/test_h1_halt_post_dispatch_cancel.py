@@ -79,7 +79,6 @@ class TestStormGuardDispatchTickets:
 
     def test_end_dispatch_idempotent_unknown_ticket(self):
         sg = StormGuard()
-        # Never issued — must not raise.
         assert sg.end_dispatch(99999) is False
 
     def test_trigger_halt_marks_all_outstanding_tickets(self):
@@ -106,7 +105,7 @@ class TestStormGuardDispatchTickets:
                     _, _, ticket = sg.begin_dispatch(_intent())
                     if ticket is not None:
                         sg.end_dispatch(ticket)
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         def halter() -> None:
@@ -118,7 +117,7 @@ class TestStormGuardDispatchTickets:
                     else:
                         sg.state = StormGuardState.NORMAL
                     i += 1
-            except BaseException as exc:  # noqa: BLE001
+            except BaseException as exc:
                 errors.append(exc)
 
         d = threading.Thread(target=dispatcher, daemon=True)
@@ -132,8 +131,6 @@ class TestStormGuardDispatchTickets:
             d.join(timeout=2)
             h.join(timeout=2)
         assert not errors, f"concurrent dispatch raised: {errors[0]!r}"
-        # All begin/end pairs must clear the inflight dict eventually.
-        # (Some may still be in-flight at stop time; allow small slack.)
         assert len(sg._inflight_dispatch_tickets) <= 1
 
 
@@ -156,7 +153,6 @@ class TestOrderAdapterPostDispatchCancel:
 
     async def test_no_storm_guard_skips_ticket_path(self, tmp_config):
         adapter = self._make_adapter(tmp_config)
-        # No storm_guard wired — ticket helper returns None and end is a no-op.
         ticket = adapter._begin_dispatch_ticket(_intent())
         assert ticket is None
         await adapter._end_dispatch_ticket(None, _intent(), MagicMock(), 1)
@@ -171,7 +167,6 @@ class TestOrderAdapterPostDispatchCancel:
 
         ticket = adapter._begin_dispatch_ticket(intent)
         assert ticket is not None
-        # No HALT — end_dispatch returns False, no cancel issued.
         await adapter._end_dispatch_ticket(ticket, intent, trade, cmd_id=42)
         assert adapter.client.cancel_order.call_count == 0
 
@@ -184,11 +179,8 @@ class TestOrderAdapterPostDispatchCancel:
         trade = MagicMock(name="placed_trade")
 
         ticket = adapter._begin_dispatch_ticket(intent)
-        # Simulate HALT trigger between begin_dispatch and end_dispatch
-        # (i.e. while broker.place_order is awaiting).
         sg.trigger_halt("simulated_mid_dispatch_halt")
 
-        # Snapshot metric before / after
         metrics = MetricsRegistry.get()
         before = metrics.order_halt_post_dispatch_cancel_total._value.get()  # type: ignore[attr-defined]
         await adapter._end_dispatch_ticket(ticket, intent, trade, cmd_id=99)

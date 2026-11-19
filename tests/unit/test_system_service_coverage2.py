@@ -26,10 +26,6 @@ from hft_platform.execution.mtm import MtMSnapshot
 from hft_platform.risk.storm_guard import StormGuardState
 from hft_platform.services.system import HFTSystem
 
-# ---------------------------------------------------------------------------
-# Shared stub builder
-# ---------------------------------------------------------------------------
-
 
 def _make_stub(**overrides) -> HFTSystem:
     """Return an HFTSystem instance with all dependencies stubbed out."""
@@ -102,21 +98,14 @@ def _make_stub(**overrides) -> HFTSystem:
     sys_obj._recorder_bridge_drops = 0
     sys_obj._pnl_snapshot_drops = 0
     sys_obj._halt_log_mono = 0.0
-    # Mirrors HFTSystem.__init__: None means "not currently halted".
     sys_obj._halt_episode_start_mono = None
     sys_obj._halt_checkpoint_written = False
     sys_obj._recovery_halted = False
     sys_obj._audit_writer = None
     sys_obj.loop = None
-    # Apply overrides
     for k, v in overrides.items():
         setattr(sys_obj, k, v)
     return sys_obj
-
-
-# ===========================================================================
-# _sync_drain_recorder — success path
-# ===========================================================================
 
 
 class TestSyncDrainRecorderSuccess:
@@ -149,14 +138,8 @@ class TestSyncDrainRecorderSuccess:
         mock_recorder._shutdown_flush = AsyncMock()
         sys_obj.recorder = mock_recorder
 
-        # Should not raise — timeout is caught
         sys_obj._sync_drain_recorder()
         assert mock_recorder.running is False
-
-
-# ===========================================================================
-# stop_async — bus drain paths
-# ===========================================================================
 
 
 class TestStopAsyncBusDrain:
@@ -190,7 +173,6 @@ class TestStopAsyncBusDrain:
         await sys_obj.stop_async()
 
         assert sys_obj.running is False
-        # Drain was called and returned with skipped events
         sys_obj.strategy_runner.drain_to_cursor.assert_called_once()
 
     @pytest.mark.asyncio
@@ -223,7 +205,6 @@ class TestStopAsyncBusDrain:
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
 
-        # Should not raise
         await sys_obj.stop_async()
         assert sys_obj.running is False
 
@@ -232,7 +213,6 @@ class TestStopAsyncBusDrain:
         sys_obj = _make_stub()
         sys_obj.running = True
         sys_obj.bus.cursor = 10
-        # strategy_runner has no drain_to_cursor attr
         del sys_obj.strategy_runner.drain_to_cursor
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
@@ -268,7 +248,6 @@ class TestStopAsyncCheckpointWriter:
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
 
-        # Should not raise
         await sys_obj.stop_async()
         assert sys_obj.running is False
 
@@ -331,7 +310,6 @@ class TestStopAsyncExecServiceDrain:
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
         sys_obj.tasks = {}
 
-        # Should not raise — timeout caught
         await sys_obj.stop_async()
         assert sys_obj.running is False
 
@@ -363,10 +341,6 @@ class TestStopAsyncExecServiceDrain:
         sys_obj.running = True
 
         async def _drain_raises_timeout():
-            # Raise TimeoutError directly to exercise the except branch without
-            # waiting; system.py:1404 hardcodes timeout=10.0 which equals the
-            # pytest-timeout ceiling, so a real asyncio.sleep(100) would deadlock
-            # against the test harness.
             raise asyncio.TimeoutError()
 
         sys_obj.order_adapter.drain_and_cancel = _drain_raises_timeout
@@ -412,7 +386,6 @@ class TestStopAsyncRecorderShutdown:
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
 
-        # Create a recorder_bridge task that respects cancellation
         async def _bridge():
             try:
                 await asyncio.sleep(999)
@@ -421,7 +394,6 @@ class TestStopAsyncRecorderShutdown:
 
         bridge_task = asyncio.create_task(_bridge())
 
-        # Create a recorder task that stops on running=False
         stop_event = asyncio.Event()
 
         async def _recorder():
@@ -430,7 +402,6 @@ class TestStopAsyncRecorderShutdown:
         recorder_task = asyncio.create_task(_recorder())
 
         sys_obj.tasks = {"recorder_bridge": bridge_task, "recorder": recorder_task}
-        # Make recorder.running a settable attribute that also signals the event
         original_running = True
 
         class _RecorderMock:
@@ -462,12 +433,11 @@ class TestStopAsyncRecorderShutdown:
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
 
-        # Create a recorder task that resists cancellation briefly
         async def _stuck_recorder():
             try:
                 await asyncio.sleep(999)
             except asyncio.CancelledError:
-                return  # eventually yields
+                return
 
         recorder_task = asyncio.create_task(_stuck_recorder())
         sys_obj.tasks = {"recorder": recorder_task}
@@ -553,14 +523,13 @@ class TestStopAsyncTaskCleanup:
         sys_obj.exec_service.stop = AsyncMock(return_value=0)
         sys_obj.exec_service.persist_fill_dedup = MagicMock()
 
-        # Create a task that ignores cancellation
         _shield = asyncio.Future()
 
         async def _uncancellable():
             try:
                 await _shield
             except asyncio.CancelledError:
-                await asyncio.sleep(100)  # resist cancel
+                await asyncio.sleep(100)
 
         task = asyncio.create_task(_uncancellable())
         sys_obj.tasks = {"stubborn": task}
@@ -568,11 +537,6 @@ class TestStopAsyncTaskCleanup:
         await sys_obj.stop_async()
 
         assert len(sys_obj.tasks) == 0
-
-
-# ===========================================================================
-# _supervise — HALT enforcement paths
-# ===========================================================================
 
 
 class TestSuperviseHaltGateway:
@@ -635,7 +599,6 @@ class TestSuperviseHaltGateway:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # Checkpoint written exactly once despite multiple HALT iterations
         sys_obj.checkpoint_writer.write_checkpoint.assert_called_once()
         assert sys_obj._halt_checkpoint_written is True
 
@@ -666,7 +629,6 @@ class TestSuperviseHaltGateway:
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
                             with patch("hft_platform.services.system.write_heartbeat"):
-                                # Should not raise
                                 await sys_obj._supervise()
 
         assert sys_obj._halt_checkpoint_written is True
@@ -681,7 +643,6 @@ class TestSuperviseHaltRiskQueueDrain:
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.HALT
 
-        # Put a CANCEL intent and a NEW intent
         cancel_intent = MagicMock()
         cancel_intent.intent_type = IntentType.CANCEL
         cancel_intent.strategy_id = "strat1"
@@ -713,7 +674,6 @@ class TestSuperviseHaltRiskQueueDrain:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # CANCEL intent should be re-queued, NEW intent drained
         assert sys_obj.risk_queue.qsize() == 1
         preserved = sys_obj.risk_queue.get_nowait()
         assert preserved.intent_type == IntentType.CANCEL
@@ -751,7 +711,6 @@ class TestSuperviseHaltRiskQueueDrain:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # Halt-exempt intent should be preserved
         assert sys_obj.risk_queue.qsize() == 1
 
 
@@ -767,7 +726,6 @@ class TestSuperviseHaltOrderQueueDrain:
         sys_obj.order_adapter._background_tasks = set()
         sys_obj.order_adapter.drain_and_cancel = AsyncMock()
 
-        # Put a CANCEL command in the order queue
         cancel_cmd = MagicMock()
         cancel_cmd.intent = MagicMock()
         cancel_cmd.intent.intent_type = IntentType.CANCEL
@@ -785,7 +743,6 @@ class TestSuperviseHaltOrderQueueDrain:
         async def _mock_sleep(s):
             nonlocal iteration
             iteration += 1
-            # Yield control so dispatched tasks can run
             await _real_sleep(0)
             if iteration >= 2:
                 sys_obj.running = False
@@ -809,7 +766,6 @@ class TestSuperviseHaltOrderQueueDrain:
         sys_obj.order_adapter.drain_and_cancel = AsyncMock()
         sys_obj.order_adapter._background_tasks = set()
 
-        # Put a NEW command (not safety)
         new_cmd = MagicMock()
         new_cmd.intent = MagicMock()
         new_cmd.intent.intent_type = IntentType.NEW
@@ -837,7 +793,6 @@ class TestSuperviseHaltOrderQueueDrain:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # Order queue should be empty (NEW drained)
         assert sys_obj.order_queue.empty()
 
 
@@ -852,7 +807,6 @@ class TestSuperviseHaltIntentChannelDrain:
         sys_obj.order_adapter.drain_and_cancel = AsyncMock()
         sys_obj.order_adapter._background_tasks = set()
 
-        # Set up intent_channel with function-based mocks (not side_effect iterators)
         ic = MagicMock()
         cancel_envelope = MagicMock()
         new_envelope = MagicMock()
@@ -899,7 +853,6 @@ class TestSuperviseHaltIntentChannelDrain:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # CANCEL envelope re-queued
         assert ic._queue.qsize() == 1
 
 
@@ -937,11 +890,6 @@ class TestSuperviseNonHaltRecovery:
 
         sys_obj.gateway_service.set_normal.assert_called()
         assert sys_obj._halt_checkpoint_written is False
-
-
-# ===========================================================================
-# _supervise — kill switch detection
-# ===========================================================================
 
 
 class TestSuperviseKillSwitch:
@@ -989,7 +937,6 @@ class TestSuperviseKillSwitch:
         sys_obj.storm_guard.state = StormGuardState.NORMAL
 
         ks_path = str(tmp_path / "kill_switch")
-        # Write invalid JSON so reason read fails
         ks_file = tmp_path / "kill_switch"
         ks_file.write_text("not valid json")
 
@@ -1019,11 +966,6 @@ class TestSuperviseKillSwitch:
         assert "kill_switch_file_present" in call_arg
 
 
-# ===========================================================================
-# _supervise — service health checks
-# ===========================================================================
-
-
 class TestSuperviseServiceHealth:
     """Cover service task crash detection and restart logic."""
 
@@ -1033,12 +975,11 @@ class TestSuperviseServiceHealth:
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
 
-        # Create a task that immediately fails
         async def _fail():
             raise RuntimeError("service crashed")
 
         failed_task = asyncio.create_task(_fail())
-        await asyncio.sleep(0)  # let it fail
+        await asyncio.sleep(0)
 
         sys_obj.tasks = {"md": failed_task}
 
@@ -1073,7 +1014,6 @@ class TestSuperviseServiceHealth:
 
         sys_obj.storm_guard.trigger_halt.assert_called()
 
-        # Cleanup
         for t in sys_obj.tasks.values():
             if not t.done():
                 t.cancel()
@@ -1122,7 +1062,6 @@ class TestSuperviseServiceHealth:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # No halt triggered for cancelled task
         sys_obj.storm_guard.trigger_halt.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1134,12 +1073,11 @@ class TestSuperviseServiceHealth:
         sys_obj.order_adapter.drain_and_cancel = AsyncMock()
         sys_obj.order_adapter._background_tasks = set()
 
-        # A completed order task (returned without exception)
         async def _done():
             pass
 
         task = asyncio.create_task(_done())
-        await asyncio.sleep(0)  # let it complete
+        await asyncio.sleep(0)
 
         sys_obj.tasks = {"order": task}
 
@@ -1165,8 +1103,6 @@ class TestSuperviseServiceHealth:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # No new halt triggered for this expected stop
-        # (trigger_halt is NOT called for order task done in HALT)
         halt_calls = [c for c in sys_obj.storm_guard.trigger_halt.call_args_list if "OrderAdapter" in str(c)]
         assert len(halt_calls) == 0
 
@@ -1188,7 +1124,6 @@ class TestSuperviseImmediateFailDetection:
 
         sys_obj.tasks = {"md": failed_task}
 
-        # Started at < 2s ago
         from hft_platform.core import timebase
 
         sys_obj._task_started_at["md"] = timebase.now_s()
@@ -1222,10 +1157,8 @@ class TestSuperviseImmediateFailDetection:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # Extra penalty: attempts should be 2 (1 from immediate_fail + 1 from restart)
         assert sys_obj._task_restart_attempts.get("md", 0) >= 2
 
-        # Cleanup
         for t in sys_obj.tasks.values():
             if not t.done():
                 t.cancel()
@@ -1233,11 +1166,6 @@ class TestSuperviseImmediateFailDetection:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-
-
-# ===========================================================================
-# _supervise — StormGuard update and MTM integration
-# ===========================================================================
 
 
 class TestSuperviseStormGuardUpdate:
@@ -1281,9 +1209,6 @@ class TestSuperviseStormGuardUpdate:
         sys_obj.storm_guard.state = StormGuardState.NORMAL
 
         mtm_calc = MagicMock()
-        # 500K NTD unrealized loss, scaled int (x10000) — Bug 11 fix descales before dividing.
-        # The supervisor reads snapshot() rather than total_unrealized_pnl(), because a bare
-        # total cannot say whether the book was fully priced; a complete one is asserted here.
         mtm_calc.snapshot.return_value = MtMSnapshot(total_scaled=-500_000 * 10_000, priced=1, unpriced=0)
         sys_obj._mtm_calculator = mtm_calc
 
@@ -1353,11 +1278,6 @@ class TestSuperviseLobDriftBurst:
         sys_obj.storm_guard.update_with_lob.assert_called()
 
 
-# ===========================================================================
-# _supervise — session governor phase check
-# ===========================================================================
-
-
 class TestSuperviseSessionGovernor:
     """Cover session governor phase → StormGuard session active check."""
 
@@ -1367,9 +1287,8 @@ class TestSuperviseSessionGovernor:
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
 
-        # Simulate a SessionGovernor with track_gate
         mock_gate = MagicMock()
-        mock_gate.track_phases = {"TXFD6": MagicMock()}  # Will trigger any() check
+        mock_gate.track_phases = {"TXFD6": MagicMock()}
         sys_obj.session_governor = MagicMock()
         sys_obj.session_governor.track_gate = mock_gate
 
@@ -1394,11 +1313,6 @@ class TestSuperviseSessionGovernor:
                                 await sys_obj._supervise()
 
         sys_obj.storm_guard.set_session_active.assert_called()
-
-
-# ===========================================================================
-# _supervise — periodic tasks (heartbeat, feature eviction, order sweep)
-# ===========================================================================
 
 
 class TestSupervisePeriodicTasks:
@@ -1494,11 +1408,6 @@ class TestSupervisePeriodicTasks:
         sys_obj.order_adapter.sweep_stale_live_orders.assert_called()
 
 
-# ===========================================================================
-# _supervise — per-symbol feed gap + pool metrics
-# ===========================================================================
-
-
 class TestSuperviseFeedGapMetrics:
     """Cover per-symbol feed gap metric and connection pool metric update."""
 
@@ -1562,11 +1471,6 @@ class TestSuperviseFeedGapMetrics:
                                 await sys_obj._supervise()
 
         sys_obj.md_client.update_metrics.assert_called()
-
-
-# ===========================================================================
-# _supervise — facade health check
-# ===========================================================================
 
 
 class TestSuperviseFacadeHealth:
@@ -1649,11 +1553,6 @@ class TestSuperviseFacadeHealth:
         mock_client.check_facade_health.assert_called()
 
 
-# ===========================================================================
-# _supervise — queue depth logging
-# ===========================================================================
-
-
 class TestSuperviseQueueLogging:
     """Cover periodic queue depth log with intent_channel."""
 
@@ -1663,7 +1562,7 @@ class TestSuperviseQueueLogging:
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
         sys_obj._last_queue_log_s = 0.0
-        sys_obj._queue_log_every_s = 0.0  # Force log every iteration
+        sys_obj._queue_log_every_s = 0.0
 
         ic = MagicMock()
         ic.qsize.return_value = 3
@@ -1693,13 +1592,7 @@ class TestSuperviseQueueLogging:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # Verify intent_channel.qsize() was called for metrics
         ic.qsize.assert_called()
-
-
-# ===========================================================================
-# _supervise — order/exec_gateway HALT de-escalation restart
-# ===========================================================================
 
 
 class TestSuperviseDeescalationRestart:
@@ -1709,9 +1602,8 @@ class TestSuperviseDeescalationRestart:
     async def test_order_task_restarts_after_halt_deescalation(self):
         sys_obj = _make_stub()
         sys_obj.running = True
-        sys_obj.storm_guard.state = StormGuardState.NORMAL  # De-escalated
+        sys_obj.storm_guard.state = StormGuardState.NORMAL
 
-        # Order task completed without error (exited during HALT)
         async def _done():
             pass
 
@@ -1719,7 +1611,7 @@ class TestSuperviseDeescalationRestart:
         await asyncio.sleep(0)
 
         sys_obj.tasks = {"order": task}
-        sys_obj.order_adapter.running = False  # Was stopped during HALT
+        sys_obj.order_adapter.running = False
 
         mock_factory = MagicMock()
 
@@ -1750,10 +1642,8 @@ class TestSuperviseDeescalationRestart:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # Service re-enabled and restarted
         assert sys_obj.order_adapter.running is True
 
-        # Cleanup
         for t in sys_obj.tasks.values():
             if not t.done():
                 t.cancel()
@@ -1761,11 +1651,6 @@ class TestSuperviseDeescalationRestart:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-
-
-# ===========================================================================
-# graceful_reset — STORM/HALT reset + DLQ error
-# ===========================================================================
 
 
 class TestGracefulResetStormGuard:
@@ -1777,7 +1662,6 @@ class TestGracefulResetStormGuard:
         sys_obj.checkpoint_writer = None
         sys_obj.position_store._recovery_positions = None
 
-        # Simulate StormGuard in STORM state
         sys_obj.storm_guard.state = StormGuardState.STORM
         sys_obj.storm_guard._halt_entry_ts = 100.0
         sys_obj.storm_guard._storm_entry_ts = 50.0
@@ -1826,11 +1710,6 @@ class TestGracefulResetStormGuard:
         assert results["reconciliation"] == "no service"
 
 
-# ===========================================================================
-# _recorder_bridge — non-early-exit paths (event routing)
-# ===========================================================================
-
-
 class TestRecorderBridgeEventRouting:
     """Cover _recorder_bridge with actual event consumption (non-batch)."""
 
@@ -1847,10 +1726,8 @@ class TestRecorderBridgeEventRouting:
         tick = MagicMock(spec=TickEvent)
         tick.symbol = "2330"
 
-        # Create async generator for bus.consume
         async def _consumer(**kwargs):
             yield tick
-            # After yielding, cancel
             sys_obj.running = False
             raise asyncio.CancelledError()
 
@@ -1873,7 +1750,6 @@ class TestRecorderBridgeEventRouting:
         sys_obj._fill_record_direct = True
         sys_obj._order_record_direct = True
 
-        # Should exit early
         await sys_obj._recorder_bridge()
         assert sys_obj.recorder_queue.qsize() == 0
 
@@ -1937,7 +1813,6 @@ class TestRecorderBridgeEventRouting:
         event1 = MagicMock()
         event2 = MagicMock()
 
-        # Batch mode yields lists
         async def _consumer(*args, **kwargs):
             yield [event1, event2]
             raise asyncio.CancelledError()
@@ -1979,11 +1854,6 @@ class TestRecorderBridgeEventRouting:
         assert sys_obj.recorder_queue.qsize() == 1
 
 
-# ===========================================================================
-# _supervise — StormGuard exception isolation
-# ===========================================================================
-
-
 class TestSuperviseExceptionIsolation:
     """Cover exception isolation in StormGuard metric computation."""
 
@@ -2013,7 +1883,6 @@ class TestSuperviseExceptionIsolation:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # StormGuard.update() still called despite feed_gap exception
         sys_obj.storm_guard.update.assert_called()
 
     @pytest.mark.asyncio
@@ -2071,15 +1940,9 @@ class TestSuperviseExceptionIsolation:
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
                             with patch("hft_platform.services.system.write_heartbeat"):
-                                # Should not raise
                                 await sys_obj._supervise()
 
         assert sys_obj.running is False
-
-
-# ===========================================================================
-# _supervise — HALT drain_and_cancel
-# ===========================================================================
 
 
 class TestSuperviseHaltDrainAndCancel:
@@ -2102,7 +1965,7 @@ class TestSuperviseHaltDrainAndCancel:
         async def _mock_sleep(s):
             nonlocal iteration
             iteration += 1
-            await _real_sleep(0)  # let tasks run
+            await _real_sleep(0)
             if iteration >= 2:
                 sys_obj.running = False
 
@@ -2115,8 +1978,6 @@ class TestSuperviseHaltDrainAndCancel:
                             with patch("hft_platform.services.system.write_heartbeat"):
                                 await sys_obj._supervise()
 
-        # drain_and_cancel was called as a task
-        # Verify order_adapter.running was set False
         assert sys_obj.order_adapter.running is False
 
     @pytest.mark.asyncio
@@ -2125,7 +1986,7 @@ class TestSuperviseHaltDrainAndCancel:
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.HALT
         sys_obj.order_adapter.drain_and_cancel = AsyncMock(side_effect=RuntimeError("cancel fail"))
-        sys_obj.order_adapter._background_tasks = None  # no bg tasks set
+        sys_obj.order_adapter._background_tasks = None
 
         mock_metrics = MagicMock()
         mock_metrics.cap_symbol = MagicMock(return_value="X")
@@ -2145,15 +2006,9 @@ class TestSuperviseHaltDrainAndCancel:
                     with patch.object(sys_obj, "_update_platform_degrade_state"):
                         with patch.object(sys_obj, "_get_max_feed_gap_s", return_value=0.0):
                             with patch("hft_platform.services.system.write_heartbeat"):
-                                # Should not raise
                                 await sys_obj._supervise()
 
         assert sys_obj.running is False
-
-
-# ===========================================================================
-# _supervise — execution router/gateway heartbeat metrics
-# ===========================================================================
 
 
 class TestSuperviseHeartbeatMetrics:
@@ -2165,7 +2020,6 @@ class TestSuperviseHeartbeatMetrics:
         sys_obj.running = True
         sys_obj.storm_guard.state = StormGuardState.NORMAL
 
-        # Use Futures that won't complete (no sleep recursion risk)
         _stop_router = asyncio.Event()
         _stop_gateway = asyncio.Event()
 
@@ -2202,7 +2056,6 @@ class TestSuperviseHeartbeatMetrics:
         mock_metrics.execution_router_heartbeat_ts.set.assert_called()
         mock_metrics.execution_gateway_heartbeat_ts.set.assert_called()
 
-        # Cleanup
         _stop_router.set()
         _stop_gateway.set()
         router_task.cancel()
@@ -2214,20 +2067,13 @@ class TestSuperviseHeartbeatMetrics:
                 pass
 
 
-# ===========================================================================
-# _reset_restart_backoff_if_healthy — no started_at recorded
-# ===========================================================================
-
-
 class TestResetRestartBackoff:
     def test_no_reset_when_no_started_at(self):
         sys_obj = _make_stub()
         mock_task = MagicMock()
         mock_task.done.return_value = False
         sys_obj._task_restart_attempts["md"] = 3
-        # No _task_started_at entry
         sys_obj._reset_restart_backoff_if_healthy("md", mock_task)
-        # Should NOT reset because no started_at
         assert sys_obj._task_restart_attempts["md"] == 3
 
     def test_no_reset_when_task_done(self):
@@ -2252,14 +2098,9 @@ class TestResetRestartBackoff:
         mock_task = MagicMock()
         mock_task.done.return_value = False
         sys_obj._task_restart_attempts["md"] = 3
-        sys_obj._task_started_at["md"] = timebase.now_s() - 1  # only 1s uptime < 60s
+        sys_obj._task_started_at["md"] = timebase.now_s() - 1
         sys_obj._reset_restart_backoff_if_healthy("md", mock_task)
         assert sys_obj._task_restart_attempts["md"] == 3
-
-
-# ===========================================================================
-# _persist_lost_exec_event — orjson fallback
-# ===========================================================================
 
 
 class TestPersistLostExecEventJsonFallback:
@@ -2272,7 +2113,6 @@ class TestPersistLostExecEventJsonFallback:
 
         event = SimpleNamespace(topic="deal", data={"price": 42}, ingest_ts_ns=999)
 
-        # Temporarily make orjson import fail in the method
         import builtins
 
         original_import = builtins.__import__
@@ -2291,11 +2131,6 @@ class TestPersistLostExecEventJsonFallback:
             line = f.readline()
         parsed = json.loads(line)
         assert parsed["topic"] == "deal"
-
-
-# ===========================================================================
-# _recorder_bridge — BidAsk first-seen logging
-# ===========================================================================
 
 
 class TestRecorderBridgeBidAskFirstSeen:
@@ -2330,11 +2165,6 @@ class TestRecorderBridgeBidAskFirstSeen:
         assert sys_obj._recorder_seen_bidask is True
 
 
-# ===========================================================================
-# _recorder_bridge — FillEvent/OrderEvent skipped when direct
-# ===========================================================================
-
-
 class TestRecorderBridgeDirectSkip:
     """Cover fill/order event skip when direct recording is on."""
 
@@ -2364,7 +2194,6 @@ class TestRecorderBridgeDirectSkip:
                 MockMR.get.return_value = MagicMock()
                 await sys_obj._recorder_bridge()
 
-        # Only the other_event should have been recorded (fill skipped)
         assert sys_obj.recorder_queue.qsize() == 1
 
     @pytest.mark.asyncio
@@ -2394,11 +2223,6 @@ class TestRecorderBridgeDirectSkip:
                 await sys_obj._recorder_bridge()
 
         assert sys_obj.recorder_queue.qsize() == 1
-
-
-# ===========================================================================
-# _supervise / _probe_event_loop_lag — loop-lag attribution
-# ===========================================================================
 
 
 class TestLoopLagAttribution:
@@ -2452,8 +2276,6 @@ class TestLoopLagAttribution:
         assert tick_values, "the tick body must be timed"
         assert lag_values[0] == pytest.approx(500.0, abs=1e-6)
         assert tick_values[0] == pytest.approx(30.0, abs=1e-6)
-        # The point of the split: the remainder is congestion this loop did not
-        # cause, and is what the probe measures independently.
         assert lag_values[0] - tick_values[0] == pytest.approx(470.0, abs=1e-6)
 
     @pytest.mark.asyncio
@@ -2477,13 +2299,9 @@ class TestLoopLagAttribution:
             with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
                 MockMR.get.return_value = mock_metrics
                 probe = asyncio.create_task(sys_obj._probe_event_loop_lag())
-                # Idle phase: yield repeatedly so the probe accumulates a baseline.
                 for _ in range(10):
                     await asyncio.sleep(0.01)
                 idle = list(observed)
-                # Congestion phase: a synchronous block the loop cannot preempt.
-                # 40 ms is 4x the probe interval and under the 50 ms cap for a
-                # deliberate sleep; the block IS the behaviour under test.
                 time.sleep(0.04)
                 await asyncio.sleep(0.02)
                 sys_obj.running = False
@@ -2538,7 +2356,7 @@ class TestPeriodicGen2GC:
 
         def _record_collect(generation):
             collected.append(generation)
-            return 0  # the caller compares the result to 100; None would raise
+            return 0
 
         mock_metrics = MagicMock()
         mock_metrics.cap_symbol = MagicMock(return_value="X")
@@ -2573,9 +2391,6 @@ class TestPeriodicGen2GC:
         finally:
             os.environ.pop("HFT_GC_DISABLE_TRADING", None)
 
-        # Positive control first. gen-0 and gen-2 share one enable gate, so
-        # "no gen-2 ran" is indistinguishable from "the whole block was off"
-        # without this — and an assertion that cannot fail proves nothing.
         assert 0 in collected, "periodic GC was disabled outright; the gen-2 assertion below would be vacuous"
         assert 2 not in collected, f"gen-2 GC ran within 400 ticks of the default cadence: {collected}"
 
@@ -2587,7 +2402,7 @@ class TestPeriodicGen2GC:
         a change that silently stopped it from ever running would trade a latency
         problem for a leak.
         """
-        os.environ["HFT_GC_GEN2_INTERVAL_TICKS"] = "60"  # floor of the max(60, ...) clamp
+        os.environ["HFT_GC_GEN2_INTERVAL_TICKS"] = "60"
         os.environ["HFT_GC_DISABLE_TRADING"] = "1"
         try:
             sys_obj = _make_stub()

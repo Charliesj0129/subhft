@@ -25,9 +25,9 @@ from hft_platform.risk.loss_exit import (
 
 TPE = dt.timezone(dt.timedelta(hours=8))
 SCALE = 10_000
-TICK = 1 * SCALE  # TMF tick: 1 point
+TICK = 1 * SCALE
 BID, ASK = 46_600 * SCALE, 46_602 * SCALE
-LIMIT = 5_000 * SCALE  # 5,000 NTD in accumulator units
+LIMIT = 5_000 * SCALE
 
 
 def _tpe(y: int, mo: int, d: int, h: int, mi: int, s: int = 0) -> int:
@@ -80,7 +80,6 @@ def test_a_short_is_closed_with_a_buy_through_the_ask():
 
 @pytest.mark.parametrize(("entry", "fires"), [(47_101, True), (47_100, False)])
 def test_the_position_loss_trigger_fires_at_the_limit(entry, fires):
-    # mid 46,601; long 1 x 10 NTD/pt: entry 47,101 -> -5,000 NTD, 47,100 -> -4,990 NTD
     intents = _plan(LossExitController(), [_long(entry=entry)])
 
     assert bool(intents) is fires
@@ -117,13 +116,10 @@ def test_without_a_two_sided_book_nothing_is_sent_and_it_is_retried_later():
     ctrl = LossExitController(retry_interval_s=10)
     assert _plan(ctrl, [_long()], daily_halt=True, book=None) == []
     assert _plan(ctrl, [_long()], daily_halt=True, book=(BID, 0)) == []
-    # Being unpriced does not start the retry clock: the first priced tick sends.
     assert len(_plan(ctrl, [_long()], daily_halt=True, now=NOW + 1)) == 1
 
 
 def _unpriced_count() -> float:
-    # Read the counter object the controller increments: other tests rebuild
-    # MetricsRegistry and unregister its collectors from the default REGISTRY.
     counter = MetricsRegistry.get().loss_exit_unpriced_total
     return sum(
         sample.value
@@ -139,10 +135,10 @@ def test_an_unpriced_exit_logs_once_a_minute_while_it_is_retried_every_tick(modu
     ctrl = LossExitController(retry_interval_s=10)
     before = _unpriced_count()
 
-    for second in range(120):  # two minutes of 1 Hz supervisor ticks, no two-sided book
+    for second in range(120):
         assert _plan(ctrl, [_long()], daily_halt=True, now=NOW + second * 1_000_000_000, book=None) == []
 
-    assert [e["event"] for e in logs].count("loss_exit_unpriced") == 2  # t=0 s and t=60 s
+    assert [e["event"] for e in logs].count("loss_exit_unpriced") == 2
     assert _unpriced_count() - before == 120
 
 
@@ -151,10 +147,10 @@ def test_a_new_unpriced_episode_is_logged_at_once(module_log_sink):
     ctrl = LossExitController(retry_interval_s=10)
 
     _plan(ctrl, [_long()], daily_halt=True, book=None)
-    assert len(_plan(ctrl, [_long()], daily_halt=True, now=NOW + 1_000_000_000)) == 1  # priced: exit sent
-    _plan(ctrl, [_long()], daily_halt=True, now=NOW + 2_000_000_000, book=None)  # inside the retry interval
-    _plan(ctrl, [], daily_halt=True, now=NOW + 3_000_000_000)  # flat
-    _plan(ctrl, [_long()], daily_halt=True, now=NOW + 4_000_000_000, book=None)  # a new lot, no book
+    assert len(_plan(ctrl, [_long()], daily_halt=True, now=NOW + 1_000_000_000)) == 1
+    _plan(ctrl, [_long()], daily_halt=True, now=NOW + 2_000_000_000, book=None)
+    _plan(ctrl, [], daily_halt=True, now=NOW + 3_000_000_000)
+    _plan(ctrl, [_long()], daily_halt=True, now=NOW + 4_000_000_000, book=None)
 
     assert [e["event"] for e in logs].count("loss_exit_unpriced") == 2
 
@@ -172,7 +168,7 @@ def test_a_due_exit_is_resent_only_after_the_retry_interval():
 def test_a_closed_position_starts_fresh():
     ctrl = LossExitController(retry_interval_s=10)
     _plan(ctrl, [_long()], daily_halt=True)
-    _plan(ctrl, [], daily_halt=True, now=NOW + 1)  # flat: bookkeeping cleared
+    _plan(ctrl, [], daily_halt=True, now=NOW + 1)
 
     assert len(_plan(ctrl, [_long()], daily_halt=True, now=NOW + 2)) == 1
 
@@ -195,7 +191,6 @@ def test_strategies_that_net_to_flat_need_no_exit():
 @pytest.mark.parametrize(("second_entry", "fires"), [(47_602, True), (47_600, False)])
 def test_the_position_loss_is_valued_on_the_netted_entry(second_entry, fires):
     """Two entries of one strategy (two accounts) value as one position at the average entry."""
-    # mid 46,601. Entries 46,600 + 47,602 average 47,101: 2 lots x -500 pt x 10 = -10,000 NTD.
     positions = [_long(entry=46_600, strategy="A"), _long(entry=second_entry, strategy="A")]
 
     intents = _plan(LossExitController(), positions, limit=10_000 * SCALE)

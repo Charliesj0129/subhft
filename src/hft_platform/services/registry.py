@@ -18,7 +18,6 @@ from hft_platform.risk.storm_guard import StormGuard
 from hft_platform.services.market_data import MarketDataService
 from hft_platform.strategy.runner import StrategyRunner
 
-# TODO: replace with BrokerClientProtocol once WU-1 merges
 BrokerClient = Any
 
 
@@ -54,7 +53,6 @@ class ServiceRegistry:
     feature_profile: Optional[Any] = field(default=None)
     feature_rollout_controller: Optional[Any] = field(default=None)
     feature_rollout_assignment: Optional[Any] = field(default=None)
-    # CE-M2: GatewayService wiring (appended at end for slots safety)
     gateway_service: Optional[Any] = field(default=None)
     intent_channel: Optional[Any] = field(default=None)
     strategy_governor: Optional[Any] = field(default=None)
@@ -69,7 +67,4 @@ class ServiceRegistry:
     checkpoint_writer: Optional[Any] = field(default=None)
     startup_verifier: Optional[Any] = field(default=None)
     startup_fill_reconciler: Optional[Any] = field(default=None)
-    # Coroutines scheduled by HFTSystem.run() once the engine loop is running.
-    # build() must NOT call asyncio.get_event_loop() (deprecated in Python 3.12+);
-    # collect coroutines here and let the system create tasks post-loop-bind.
     deferred_tasks: list[Any] = field(default_factory=list)

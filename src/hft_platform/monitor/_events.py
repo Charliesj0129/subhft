@@ -9,7 +9,6 @@ import math
 
 from hft_platform.monitor._types import EventFlag, SymbolState
 
-# Short display labels for alpha IDs
 _ALPHA_SHORT: dict[str, str] = {
     "sqrt_ofi": "sOFI",
     "depth_depletion_asym": "DA",
@@ -21,9 +20,7 @@ def snapshot_prev(ss: SymbolState) -> None:
     ss.prev_composite = ss.composite
     ss.prev_spread_bps = ss.spread_bps
     ss.prev_is_stale = ss.is_stale
-    # S2: save price for delta flash
     ss.prev_poll_price = ss.last_price
-    # Derive agree direction from current alpha_states
     pos = neg = 0
     for astate in ss.alpha_states.values():
         if astate.disabled or math.isnan(astate.signal):
@@ -44,12 +41,10 @@ def detect_events(ss: SymbolState, now_ns: int) -> None:
     """Compare current vs prev, set event_flags bitmask + last_event_ns."""
     flags = EventFlag.NONE
 
-    # Composite sign flip
     if ss.prev_composite != 0.0 and ss.composite != 0.0:
         if (ss.prev_composite > 0) != (ss.composite > 0):
             flags |= EventFlag.COMPOSITE_CROSS
 
-    # Sigma breaks
     prev_sigma = abs(ss.prev_composite)
     curr_sigma = abs(ss.composite)
     if prev_sigma < 1.0 <= curr_sigma or prev_sigma < 2.0 <= curr_sigma:
@@ -57,7 +52,6 @@ def detect_events(ss: SymbolState, now_ns: int) -> None:
     if curr_sigma < 1.0 <= prev_sigma or curr_sigma < 2.0 <= prev_sigma:
         flags |= EventFlag.SIGMA_BREAK_DOWN
 
-    # Agree direction flip
     pos = neg = 0
     for astate in ss.alpha_states.values():
         if astate.disabled or math.isnan(astate.signal):
@@ -70,7 +64,6 @@ def detect_events(ss: SymbolState, now_ns: int) -> None:
     if ss.prev_agree_direction != 0 and curr_dir != 0 and curr_dir != ss.prev_agree_direction:
         flags |= EventFlag.AGREE_FLIP
 
-    # Spread convergence / widening
     if ss.prev_spread_bps > 0 and ss.spread_bps > 0:
         ratio = ss.spread_bps / ss.prev_spread_bps
         if ratio < 0.7:
@@ -78,7 +71,6 @@ def detect_events(ss: SymbolState, now_ns: int) -> None:
         elif ratio > 1.5:
             flags |= EventFlag.SPREAD_WIDEN
 
-    # Stale transitions
     if ss.is_stale and not ss.prev_is_stale:
         flags |= EventFlag.STALE_ENTER
     elif not ss.is_stale and ss.prev_is_stale:
@@ -134,10 +126,8 @@ def compute_opportunity_score(ss: SymbolState, warmup_ticks: int) -> float:
     if ss.tick_count < warmup_ticks:
         return -100.0
 
-    # |composite| strength
     comp_abs = abs(ss.composite)
 
-    # Agreement ratio
     total = 0
     dominant = 0
     pos = neg = 0
@@ -152,7 +142,6 @@ def compute_opportunity_score(ss: SymbolState, warmup_ticks: int) -> float:
     dominant = max(pos, neg)
     agree_ratio = dominant / max(total, 1)
 
-    # Spread penalty (higher spread = less actionable)
     spread_penalty = min(ss.spread_bps / 100.0, 1.0) if ss.spread_bps > 0 else 0.0
 
     return comp_abs * agree_ratio * (1.0 - spread_penalty * 0.5)

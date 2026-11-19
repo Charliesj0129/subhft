@@ -24,11 +24,6 @@ def mock_quote_runtime() -> MagicMock:
     return rt
 
 
-# ------------------------------------------------------------------ #
-# subscribe_basket
-# ------------------------------------------------------------------ #
-
-
 class TestSubscribeBasket:
     def test_registers_callbacks_and_subscribes(self, mock_quote_runtime: MagicMock) -> None:
         symbols = ["2330", "2317", "2454"]
@@ -66,11 +61,6 @@ class TestSubscribeBasket:
         assert len(subscribed) == 200
 
 
-# ------------------------------------------------------------------ #
-# resubscribe
-# ------------------------------------------------------------------ #
-
-
 class TestResubscribe:
     def test_resubscribe_success(self, mock_quote_runtime: MagicMock) -> None:
         mgr = FubonSubscriptionManager(mock_quote_runtime, ["2330", "2317"])
@@ -87,11 +77,9 @@ class TestResubscribe:
         first = mgr.resubscribe()
         assert first is True
 
-        # Immediate second call should be rejected
         second = mgr.resubscribe()
         assert second is False
 
-        # stop() should have been called only once (first call)
         assert mock_quote_runtime.stop.call_count == 1
 
     def test_resubscribe_succeeds_after_cooldown(
@@ -99,11 +87,9 @@ class TestResubscribe:
     ) -> None:
         mgr = FubonSubscriptionManager(mock_quote_runtime, ["2330"])
 
-        # First call succeeds
         first = mgr.resubscribe()
         assert first is True
 
-        # Simulate cooldown elapsed by backdating _last_resubscribe_ts
         mgr._last_resubscribe_ts = time.monotonic() - _RESUBSCRIBE_COOLDOWN_S - 1.0
 
         second = mgr.resubscribe()
@@ -118,11 +104,6 @@ class TestResubscribe:
         mock_quote_runtime.stop.assert_not_called()
 
 
-# ------------------------------------------------------------------ #
-# set_execution_callbacks
-# ------------------------------------------------------------------ #
-
-
 class TestSetExecutionCallbacks:
     def test_stores_callbacks(self, mock_quote_runtime: MagicMock) -> None:
         mgr = FubonSubscriptionManager(mock_quote_runtime, ["2330"])
@@ -133,11 +114,6 @@ class TestSetExecutionCallbacks:
 
         assert mgr._on_order_cb is on_order
         assert mgr._on_deal_cb is on_deal
-
-
-# ------------------------------------------------------------------ #
-# _extract_codes
-# ------------------------------------------------------------------ #
 
 
 class TestExtractCodes:
@@ -166,7 +142,6 @@ class TestExtractCodes:
         assert codes == []
 
     def test_mixed_types(self) -> None:
-        # Even though type hint says list[str] | list[dict], handle mixed gracefully
         symbols: list = ["2330", {"code": "2317"}]
         codes = FubonSubscriptionManager._extract_codes(symbols)
         assert codes == ["2330", "2317"]

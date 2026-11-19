@@ -153,7 +153,6 @@ class TestTTLSweep:
         emitted: list[OrderExplanation] = []
         asm = _make_assembler(sink=emitted.append, ttl_s=10.0)
 
-        # Register an intent at "t=100"
         import hft_platform.order.explanation as expl_mod
 
         monkeypatch.setattr(expl_mod.time, "monotonic", lambda: 100.0)
@@ -164,7 +163,6 @@ class TestTTLSweep:
             symbol="TMFR1",
         )
 
-        # Sweep at "t=200" — well past TTL=10s
         monkeypatch.setattr(expl_mod.time, "monotonic", lambda: 200.0)
         swept = asm.sweep_stale(now_monotonic_ts=200.0, now_ns=1_700_000_000_000_000_003)
 
@@ -177,7 +175,6 @@ class TestTTLSweep:
         emitted: list[OrderExplanation] = []
         asm = _make_assembler(sink=emitted.append, ttl_s=1.0)
 
-        # Pin monotonic so insert and sweep share the same logical timeline.
         import hft_platform.order.explanation as expl_mod
 
         monkeypatch.setattr(expl_mod.time, "monotonic", lambda: 100.0)
@@ -187,10 +184,7 @@ class TestTTLSweep:
             strategy_id="R47_MAKER_TMF",
             symbol="TMFR1",
         )
-        # First sweep at t=1000 runs (cutoff = 999, entry at 100 → stale).
         first = asm.sweep_stale(now_monotonic_ts=1000.0, now_ns=0)
-        # Second sweep within 60s of the first is rate-limited even with
-        # additional stale entries; returns 0.
         second = asm.sweep_stale(now_monotonic_ts=1010.0, now_ns=0)
         assert first == 1
         assert second == 0
@@ -202,7 +196,7 @@ class TestGuards:
         asm = _make_assembler(sink=emitted.append)
         asm.on_intent(
             client_order_id="R47:47",
-            trace_id="",  # phantom-DLQ replay shape
+            trace_id="",
             strategy_id="R47_MAKER_TMF",
             symbol="TMFR1",
         )
@@ -236,7 +230,6 @@ class TestGuards:
             symbol="TMFR1",
         )
         asm.on_fill(client_order_id="R47:48", fill_payload={"fill_id": "f-pre-reconnect"})
-        # Re-register (e.g. broker reconnect) — must NOT clobber the fill.
         asm.on_intent(
             client_order_id="R47:48",
             trace_id="trace-reconnect",
@@ -262,8 +255,6 @@ class TestGuards:
             strategy_id="R47_MAKER_TMF",
             symbol="TMFR1",
         )
-        # Must not raise even though sink raises; assembler still returns the
-        # emitted explanation so the caller can route it elsewhere.
         result = asm.on_terminal(
             client_order_id="R47:49",
             lifecycle_status="filled",
@@ -287,7 +278,6 @@ class TestCapacity:
         emitted: list[OrderExplanation] = []
         asm = _make_assembler(sink=emitted.append, max_in_flight=2)
 
-        # Fill capacity then add one more — oldest should be evicted as incomplete.
         for i in range(3):
             asm.on_intent(
                 client_order_id=f"R47:{100 + i}",
@@ -296,7 +286,6 @@ class TestCapacity:
                 symbol="TMFR1",
             )
 
-        # One eviction event was finalized as 'incomplete'.
         incomplete_events = [e for e in emitted if e.lifecycle_status == "incomplete"]
         assert len(incomplete_events) == 1
         assert asm.in_flight == 2

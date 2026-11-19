@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Final
 
-# Known crash/abort precursor signatures observed in production logs.
-# Keep patterns lowercase for case-insensitive matching.
 CRASH_SIGNATURE_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
     ("none_subscribe", "nonetype' object has no attribute 'subscribe"),
     ("none_callable", "nonetype' object is not callable"),

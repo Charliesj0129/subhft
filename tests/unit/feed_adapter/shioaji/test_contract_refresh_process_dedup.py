@@ -46,9 +46,6 @@ class _CountingContracts(list):
     def __init__(self, items):
         super().__init__(items)
         self.walks = 0
-        #: Set the instant a walk begins, so a concurrent test can wait for
-        #: "this facade started rebuilding" instead of sleeping a guessed
-        #: interval and hoping.
         self.walk_started = threading.Event()
 
     def __iter__(self):
@@ -107,10 +104,6 @@ def _seed_cache(tmp_path, codes: list[str], *, kind: str = "stock") -> Path:
         json.dumps(
             {
                 "cache_version": 1,
-                # Stocks by default, matching the fake SDK store below: a cache
-                # full of derivatives against a stock-only store trips the
-                # "broker returned no derivative contracts" integrity guard.
-                # ``kind="future"`` deliberately trips it.
                 "contracts": [{"code": c, "exchange": exchange, "type": kind} for c in codes],
             }
         ),
@@ -157,7 +150,7 @@ def _refresh_in_thread(client, errors: list) -> threading.Thread:
     def _run() -> None:
         try:
             client._contracts_runtime.refresh_contracts_and_symbols()
-        except BaseException as exc:  # noqa: BLE001 - surfaced by the caller's assert
+        except BaseException as exc:
             errors.append(exc)
 
     thread = threading.Thread(target=_run, name="test-refresh", daemon=True)
@@ -202,7 +195,6 @@ def test_second_pooled_facade_reuses_the_first_facades_rebuild(tmp_path):
 
 def test_reusing_facade_computes_relevance_against_its_own_subscriptions(tmp_path):
     """The contract delta is shared; the subscription shard it is judged against is not."""
-    # Cache holds a code the SDK no longer does -> a one-code removal delta.
     cache = _seed_cache(tmp_path, ["TXFH6", "TXFI6"])
     tse_a = _CountingContracts([_contract("TXFH6")])
     tse_b = _CountingContracts([_contract("TXFH6")])
@@ -214,7 +206,6 @@ def test_reusing_facade_computes_relevance_against_its_own_subscriptions(tmp_pat
             for client, tse in ((a, tse_a), (b, tse_b)):
                 client._contract_cache_path = str(cache)
                 _attach_sdk(client, tse)
-            # Only facade B subscribes to the code that disappeared.
             a.subscribed_codes = {"TXFH6"}
             b.subscribed_codes = {"TXFI6"}
 
@@ -307,7 +298,6 @@ def test_sibling_arriving_before_the_owner_publishes_waits_and_reuses(tmp_path):
                 thread_a = _refresh_in_thread(a, errors)
                 assert tse_a.entered.wait(timeout=5.0), "the owner never reached the SDK walk"
 
-                # A is now mid-rebuild and has published nothing. B must park.
                 thread_b = _refresh_in_thread(b, errors)
                 assert not tse_b.walk_started.wait(timeout=1.0), (
                     "the sibling started its own walk while the owner was still rebuilding"
@@ -349,7 +339,7 @@ def test_sibling_rebuilds_itself_when_the_owners_cycle_aborts(tmp_path):
         try:
             for client, tse in ((a, tse_a), (b, tse_b)):
                 client._contract_cache_path = str(cache)
-                client._contract_fetch_stagger_gap_s = 0.0  # the login slot is not under test here
+                client._contract_fetch_stagger_gap_s = 0.0
                 _attach_sdk(client, tse)
 
             with _patched_symbol_io():
@@ -357,7 +347,7 @@ def test_sibling_rebuilds_itself_when_the_owners_cycle_aborts(tmp_path):
                 assert tse_a.entered.wait(timeout=5.0)
                 thread_b = _refresh_in_thread(b, errors)
 
-                tse_a.release.set()  # the owner now walks, then trips the guard
+                tse_a.release.set()
                 thread_a.join(timeout=10.0)
                 thread_b.join(timeout=10.0)
                 assert not thread_a.is_alive(), "the aborted owner never released the slot"
@@ -390,9 +380,6 @@ def test_sibling_gives_up_and_rebuilds_after_the_slot_wait_timeout(tmp_path):
                 client._contract_cache_path = str(cache)
                 _attach_sdk(client, tse)
             b._contract_refresh_share_wait_s = 0.05
-            # The walk has a second, pre-existing gate: ``acquire_login_slot``,
-            # which the parked owner is also holding. Time B out of that one too,
-            # or this test measures the login stagger instead of the rebuild slot.
             b._contract_fetch_stagger_timeout_s = 0.2
             b._contract_fetch_stagger_gap_s = 0.0
 
@@ -401,8 +388,6 @@ def test_sibling_gives_up_and_rebuilds_after_the_slot_wait_timeout(tmp_path):
                 assert tse_a.entered.wait(timeout=5.0)
 
                 thread_b = _refresh_in_thread(b, errors)
-                # B waits 50 ms for the slot, gives up, and rebuilds alone —
-                # while A is still parked, so nothing was ever published.
                 assert tse_b.walk_started.wait(timeout=5.0), (
                     "the sibling waited on the wedged owner instead of timing out"
                 )

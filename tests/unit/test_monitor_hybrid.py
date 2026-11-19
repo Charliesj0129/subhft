@@ -95,7 +95,7 @@ def test_hybrid_poll_delegates_to_redis() -> None:
     hybrid.connect()
 
     result = hybrid.poll({"TMFC6": 0})
-    assert result["TMFC6"][0].ingest_ts == 100  # Redis data, not CH
+    assert result["TMFC6"][0].ingest_ts == 100
 
 
 def test_hybrid_fetch_recent_delegates_to_ch() -> None:
@@ -120,7 +120,6 @@ def test_hybrid_falls_back_to_ch_on_redis_failure() -> None:
     hybrid = RedisHybridSource(redis_poller=redis, ch_source=ch)
     hybrid.connect()
 
-    # Redis connect failed, but CH OK
     assert hybrid.connected is True
     assert hybrid.mode_label == "CH"
 
@@ -136,9 +135,8 @@ def test_hybrid_mode_label_updates_on_degradation() -> None:
     hybrid.connect()
     assert hybrid.mode_label == "REDIS+CH"
 
-    # Simulate Redis poll failure
     redis._should_fail = True
-    hybrid.poll({"TMFC6": 0})  # Redis fails, falls back to CH
+    hybrid.poll({"TMFC6": 0})
     assert hybrid.mode_label == "CH"
 
 
@@ -149,12 +147,10 @@ def test_hybrid_try_reconnect_restores_redis() -> None:
     hybrid = RedisHybridSource(redis_poller=redis, ch_source=ch)
     hybrid.connect()
 
-    # Simulate Redis down
     hybrid._redis_ok = False
     hybrid._update_mode_label()
     assert hybrid.mode_label == "CH"
 
-    # Reconnect restores Redis
     redis._should_fail = False
     result = hybrid.try_reconnect()
     assert result is True

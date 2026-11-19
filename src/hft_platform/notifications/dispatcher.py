@@ -48,13 +48,9 @@ class NotificationDispatcher:
         self._fallback_sender: WebhookSender | None = fallback_sender
         self._alert_router: AlertRouter | None = None
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     async def _send_critical(self, msg: str) -> None:
         """Send to primary (telegram) and fallback (webhook) channels."""
-        import asyncio  # noqa: PLC0415
+        import asyncio
 
         coros = [self._sender.send(msg, critical=True)]
         if self._fallback_sender is not None:
@@ -69,10 +65,6 @@ class NotificationDispatcher:
             await self._send_critical(legacy_msg)
         else:
             await self._sender.send(legacy_msg, critical=False)
-
-    # ------------------------------------------------------------------
-    # Critical events
-    # ------------------------------------------------------------------
 
     async def notify_halt(self, reason: str) -> None:
         """Notify operator that trading has been halted.
@@ -139,10 +131,6 @@ class NotificationDispatcher:
             metadata={"ratio": ratio, "used": used, "available": available},
         )
         await self._emit_or_legacy(alert, msg, critical=True)
-
-    # ------------------------------------------------------------------
-    # Non-critical events
-    # ------------------------------------------------------------------
 
     async def notify_position_stuck(
         self,

@@ -48,7 +48,6 @@ def test_quote_callback_registration(sim_api):
         received.append(tick)
 
     result = sim_api.quote.set_on_tick_stk_v1_callback(on_tick)
-    # Callback registered without error — verify quote object is still valid
     assert sim_api.quote is not None
 
 
@@ -59,7 +58,6 @@ def test_event_callback_registration(sim_api):
         events.append((resp_code, event_code))
 
     sim_api.quote.set_event_callback(on_event)
-    # Event callback registered without error
     assert sim_api.quote is not None
 
 
@@ -71,7 +69,6 @@ def test_subscribe_symbol(sim_api):
         quote_type=sj.constant.QuoteType.Tick,
         version=sj.constant.QuoteVersion.v1,
     )
-    # Subscription completes without error
     sim_api.quote.unsubscribe(
         contract,
         quote_type=sj.constant.QuoteType.Tick,

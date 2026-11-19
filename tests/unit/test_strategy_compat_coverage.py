@@ -15,10 +15,6 @@ from hft_platform.strategy.compat import (
     check_strategy_feature_compat,
 )
 
-# ---------------------------------------------------------------------------
-# _safe_get_* helpers
-# ---------------------------------------------------------------------------
-
 
 class TestSafeGetFeatureSetId:
     def test_returns_none_for_none_engine(self):
@@ -108,11 +104,6 @@ class TestSafeGetProfileId:
         engine.active_profile_id.side_effect = RuntimeError("boom")
         engine.profile_id.side_effect = RuntimeError("boom")
         assert _safe_get_profile_id(engine) is None
-
-
-# ---------------------------------------------------------------------------
-# check_strategy_feature_compat
-# ---------------------------------------------------------------------------
 
 
 class TestCheckStrategyFeatureCompat:
@@ -219,11 +210,6 @@ class TestCheckStrategyFeatureCompat:
         assert issues[0].level == "warning"
 
 
-# ---------------------------------------------------------------------------
-# check_strategies_feature_compat (batch)
-# ---------------------------------------------------------------------------
-
-
 class TestCheckStrategiesBatch:
     def test_aggregates_issues_from_multiple_strategies(self):
         s1 = SimpleNamespace(
@@ -251,11 +237,6 @@ class TestCheckStrategiesBatch:
         issues = check_strategies_feature_compat([s1, s2], engine)
         strategy_ids = {i.strategy_id for i in issues}
         assert "s2" in strategy_ids
-
-
-# ---------------------------------------------------------------------------
-# StrategyFeatureCompatibilityIssue.to_dict
-# ---------------------------------------------------------------------------
 
 
 class TestIssueToDict:

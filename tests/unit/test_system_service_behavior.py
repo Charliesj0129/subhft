@@ -108,11 +108,6 @@ def _make_system():
             return sys_obj
 
 
-# ---------------------------------------------------------------------------
-# Static helpers
-# ---------------------------------------------------------------------------
-
-
 def test_env_float_valid(monkeypatch):
     from hft_platform.services.system import HFTSystem
 
@@ -197,13 +192,8 @@ def test_set_service_running_no_attr():
     from hft_platform.services.system import HFTSystem
 
     svc = SimpleNamespace()
-    HFTSystem._set_service_running(svc, False)  # Should not raise
+    HFTSystem._set_service_running(svc, False)
     assert not hasattr(svc, "running")
-
-
-# ---------------------------------------------------------------------------
-# Instance methods
-# ---------------------------------------------------------------------------
 
 
 def test_close_broker_client_has_close():
@@ -219,20 +209,20 @@ def test_close_broker_client_close_raises():
     mock_client = MagicMock()
     mock_client.close.side_effect = RuntimeError("logout failed")
     sys_obj.my_client = mock_client
-    sys_obj._close_broker_client("my_client")  # Should not raise
+    sys_obj._close_broker_client("my_client")
     mock_client.close.assert_called_once_with(logout=True)
 
 
 def test_close_broker_client_no_close():
     sys_obj = _make_system()
     sys_obj.no_close_client = SimpleNamespace()
-    sys_obj._close_broker_client("no_close_client")  # Should not raise
+    sys_obj._close_broker_client("no_close_client")
     assert hasattr(sys_obj, "no_close_client")
 
 
 def test_close_broker_client_missing():
     sys_obj = _make_system()
-    sys_obj._close_broker_client("nonexistent_client")  # Should not raise
+    sys_obj._close_broker_client("nonexistent_client")
     assert not hasattr(sys_obj, "nonexistent_client")
 
 
@@ -247,7 +237,7 @@ def test_on_sighup_raises():
     sys_obj = _make_system()
     sys_obj.risk_engine = MagicMock()
     sys_obj.risk_engine.reload_config.side_effect = RuntimeError("oops")
-    sys_obj._on_sighup()  # Should not raise
+    sys_obj._on_sighup()
     sys_obj.risk_engine.reload_config.assert_called_once()
 
 
@@ -277,7 +267,7 @@ def test_teardown_bootstrap_teardown_raises():
     sys_obj.order_client = MagicMock()
     sys_obj.bootstrapper = MagicMock()
     sys_obj.bootstrapper.teardown.side_effect = RuntimeError("fail")
-    sys_obj._teardown_bootstrap()  # Should not raise
+    sys_obj._teardown_bootstrap()
     assert sys_obj._bootstrap_torn_down is True
 
 
@@ -332,10 +322,6 @@ async def test_run_starts_health_before_live_order_login_and_stops_on_false(monk
 @pytest.mark.asyncio
 async def test_run_disabled_order_mode_skips_order_startup_work(monkeypatch):
     monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
-    # stop_async is mocked below, so it never reaches the real watchdog.stop();
-    # without disabling the watchdog here, run() starts a real LoopStallWatchdog
-    # thread that outlives this test and force-exits the whole pytest process
-    # with os._exit(70) ~60s later (see loop_watchdog.py, STALL_KILL_EXIT_CODE).
     monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
     sys_obj = _make_system()
 
@@ -347,9 +333,6 @@ async def test_run_disabled_order_mode_skips_order_startup_work(monkeypatch):
 
     sys_obj.health_server.run = _health_run
     sys_obj._start_service = _start_service
-    # G2/R8 fix: session_governor is now itself skipped in disabled mode, so
-    # it can no longer double as the "stop run() after broker startup" hook —
-    # patch _supervise directly to stop right before the supervisor loop.
     sys_obj.session_governor = SimpleNamespace(start=AsyncMock())
     sys_obj.startup_verifier = AsyncMock()
     sys_obj.startup_fill_reconciler = AsyncMock()
@@ -379,10 +362,6 @@ async def test_run_disabled_order_mode_never_starts_order_risk_strategy_plane(mo
     at the facade layer. Assert exactly which services start in quote-only
     mode — the crash-fix files alone are not sufficient reconciliation."""
     monkeypatch.setenv("HFT_ORDER_MODE", "disabled")
-    # stop_async is mocked below, so it never reaches the real watchdog.stop();
-    # without disabling the watchdog here, run() starts a real LoopStallWatchdog
-    # thread that outlives this test and force-exits the whole pytest process
-    # with os._exit(70) ~60s later (see loop_watchdog.py, STALL_KILL_EXIT_CODE).
     monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "0")
     sys_obj = _make_system()
     started: list[str] = []
@@ -409,8 +388,6 @@ async def test_run_disabled_order_mode_never_starts_order_risk_strategy_plane(mo
     with pytest.raises(RuntimeError, match="stop before supervisor loop"):
         await HFTSystem.run(sys_obj)
 
-    # loop_probe is a measurement task, not part of the trading plane; it starts
-    # in every mode, including this one.
     assert started == ["health_server", "recorder", "md", "loop_probe"]
     for forbidden in (
         "exec_router",
@@ -454,7 +431,6 @@ def test_reset_restart_backoff_if_healthy_task_running_with_sufficient_uptime():
     sys_obj = _make_system()
     sys_obj._task_restart_attempts["md"] = 3
     sys_obj._task_restart_until_s["md"] = 9999.0
-    # Simulate task started 120s ago (well past default 60s threshold)
     from hft_platform.core import timebase
 
     sys_obj._task_started_at["md"] = timebase.now_s() - 120
@@ -469,14 +445,12 @@ def test_reset_restart_backoff_if_healthy_task_running_insufficient_uptime():
     sys_obj = _make_system()
     sys_obj._task_restart_attempts["md"] = 3
     sys_obj._task_restart_until_s["md"] = 9999.0
-    # Simulate task started only 5s ago — not enough uptime
     from hft_platform.core import timebase
 
     sys_obj._task_started_at["md"] = timebase.now_s() - 5
     task = MagicMock()
     task.done.return_value = False
     sys_obj._reset_restart_backoff_if_healthy("md", task)
-    # Counter must NOT be cleared
     assert sys_obj._task_restart_attempts["md"] == 3
 
 
@@ -486,7 +460,6 @@ def test_reset_restart_backoff_no_started_at_no_reset():
     sys_obj._task_restart_attempts["md"] = 3
     task = MagicMock()
     task.done.return_value = False
-    # No _task_started_at entry → counter preserved
     sys_obj._reset_restart_backoff_if_healthy("md", task)
     assert sys_obj._task_restart_attempts["md"] == 3
 
@@ -502,7 +475,7 @@ def test_reset_restart_backoff_if_healthy_task_done():
 
 def test_reset_restart_backoff_none_task():
     sys_obj = _make_system()
-    sys_obj._reset_restart_backoff_if_healthy("md", None)  # Should not raise
+    sys_obj._reset_restart_backoff_if_healthy("md", None)
     assert sys_obj._task_restart_attempts == {}
 
 
@@ -513,7 +486,6 @@ def test_slow_flap_service_counter_survives_short_uptime():
     sys_obj._task_healthy_uptime_s = 60.0
     from hft_platform.core import timebase
 
-    # Simulate: counter at 5, task restarted 10s ago (insufficient uptime)
     sys_obj._task_restart_attempts["md"] = 5
     sys_obj._task_restart_until_s["md"] = 9999.0
     sys_obj._task_started_at["md"] = timebase.now_s() - 10
@@ -522,14 +494,8 @@ def test_slow_flap_service_counter_survives_short_uptime():
     task.done.return_value = False
     sys_obj._reset_restart_backoff_if_healthy("md", task)
 
-    # Counter must be preserved — not cleared
     assert sys_obj._task_restart_attempts["md"] == 5
     assert sys_obj._task_restart_until_s["md"] == 9999.0
-
-
-# ---------------------------------------------------------------------------
-# Bug #10: _sync_drain_recorder must drain queue before flush
-# ---------------------------------------------------------------------------
 
 
 def test_sync_drain_recorder_drains_queue_before_flush():
@@ -537,19 +503,16 @@ def test_sync_drain_recorder_drains_queue_before_flush():
     before calling _shutdown_flush, so items pending in the queue are not lost."""
     sys_obj = _make_system()
 
-    # Create a mock recorder with a real asyncio.Queue containing pending items
     mock_recorder = MagicMock()
     mock_recorder.running = True
     mock_recorder.queue = asyncio.Queue()
     mock_recorder.queue.put_nowait({"topic": "ticks", "data": {"price": 100}})
     mock_recorder.queue.put_nowait({"topic": "bidask", "data": {"bid": 99}})
 
-    # Track call order to verify drain-before-flush
     call_order: list[str] = []
 
     async def mock_drain():
         call_order.append("drain")
-        # Actually drain the queue to verify it's consumed
         while not mock_recorder.queue.empty():
             mock_recorder.queue.get_nowait()
             mock_recorder.queue.task_done()
@@ -567,11 +530,6 @@ def test_sync_drain_recorder_drains_queue_before_flush():
     assert call_order == ["drain", "flush"]
     assert mock_recorder.queue.empty()
     assert mock_recorder.running is False
-
-
-# ---------------------------------------------------------------------------
-# _recorder_bridge tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -606,7 +564,6 @@ async def test_recorder_bridge_cancelled():
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
-    # Bridge consumed the bus — cancellation was handled without propagating
     sys_obj.bus.consume.assert_called_once()
 
 
@@ -621,12 +578,9 @@ async def test_recorder_bridge_drop_increments_prometheus_counter():
     sys_obj._recorder_bridge_drops = 0
     sys_obj._recorder_drop_on_full = True
 
-    # Use a queue with maxsize=0 (no capacity) so every put_nowait raises QueueFull
     sys_obj.recorder_queue = asyncio.Queue(maxsize=1)
-    # Pre-fill so it's full
     sys_obj.recorder_queue.put_nowait({"topic": "dummy", "data": {}})
 
-    # Produce one event then cancel
     from hft_platform.events import TickEvent
 
     tick = MagicMock(spec=TickEvent)
@@ -649,7 +603,6 @@ async def test_recorder_bridge_drop_increments_prometheus_counter():
     with patch("hft_platform.observability.metrics.MetricsRegistry") as MockMR:
         MockMR.get.return_value = mock_metrics
 
-        # map_event_to_record must return a (topic, payload) tuple
         with patch(
             "hft_platform.recorder.mapper.map_event_to_record",
             return_value=("tick", {"price": 100}),
@@ -661,15 +614,9 @@ async def test_recorder_bridge_drop_increments_prometheus_counter():
             except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
 
-    # The Prometheus counter should have been incremented for the drop
     mock_metrics.recorder_bridge_drops_total.labels.assert_called_once_with(topic="tick")
     mock_counter.inc.assert_called_once()
     assert sys_obj._recorder_bridge_drops == 1
-
-
-# ---------------------------------------------------------------------------
-# stop
-# ---------------------------------------------------------------------------
 
 
 def test_stop():

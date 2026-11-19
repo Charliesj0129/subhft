@@ -60,9 +60,6 @@ from research.registry.schemas import (
 logger = get_logger("alpha.c32b_tob_survival_refresh_regime_gate")
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,9 +105,6 @@ class C32bParams:
     min_events_per_minute: int = 20
 
 
-# ----------------------------------------------------------------------------
-# Event shape — minimal structural LOB event the modulator consumes.
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +125,6 @@ class LobRefreshEvent:
     tob_changed: bool
 
 
-# ----------------------------------------------------------------------------
-# _RollingTobSurvivalTracker — 5-minute rolling median of per-minute median
-# TOB survival (in ms). Samples are (minute_idx, median_ms); minutes with
-# fewer than `min_events_per_minute` TOB changes are skipped (insufficient
-# resolution for a robust median).
-# ----------------------------------------------------------------------------
 
 
 class _RollingTobSurvivalTracker:
@@ -162,7 +150,6 @@ class _RollingTobSurvivalTracker:
         self._current_minute: int = -1
         self._current_survivals_ms: list[int] = []
         self._prev_tob_change_ts_ns: int | None = None
-        # Rolling window of per-minute medians (ms). Deque auto-discards old.
         self._per_minute_medians: deque[float] = deque(maxlen=tob_window_minutes)
         self._last_roll_median_ms: float = 0.0
 
@@ -178,26 +165,19 @@ class _RollingTobSurvivalTracker:
 
         if self._prev_tob_change_ts_ns is not None:
             survival_ns = event.exch_ts_ns - self._prev_tob_change_ts_ns
-            # Negative delta is a monotonicity violation; skip.
             if survival_ns >= 0:
                 survival_ms = survival_ns // 1_000_000
-                # Still in the same minute: append to running list.
                 if minute_idx == self._current_minute:
                     self._current_survivals_ms.append(int(survival_ms))
                 else:
-                    # Minute boundary crossed: finalize previous minute first.
                     self._finalize_minute()
                     self._current_minute = minute_idx
                     self._current_survivals_ms = [int(survival_ms)]
         else:
-            # First ever TOB change — open the current minute bucket.
             self._current_minute = minute_idx
             self._current_survivals_ms = []
 
         self._prev_tob_change_ts_ns = event.exch_ts_ns
-        # Compute a fresh rolling median reflecting whatever minutes are
-        # already finalized; the in-progress minute doesn't contribute
-        # until it is closed.
         self._last_roll_median_ms = self._compute_roll_median()
         return self._last_roll_median_ms
 
@@ -228,9 +208,6 @@ class _RollingTobSurvivalTracker:
         return self._last_roll_median_ms
 
 
-# ----------------------------------------------------------------------------
-# C32bModulator — the refresh-delay hook
-# ----------------------------------------------------------------------------
 
 
 class C32bModulator:
@@ -289,7 +266,6 @@ class C32bModulator:
     def hold_in_progress(self) -> bool:
         return self._hold_start_ns is not None
 
-    # ---- Main hook --------------------------------------------------------
 
     def should_delay_refresh(self, event: LobRefreshEvent) -> bool:
         """Return True iff the caller should HOLD the current quote.
@@ -314,11 +290,9 @@ class C32bModulator:
           - hold duration within cap,
           - regime was active at the start of the current hold (no flip).
         """
-        # 1) Update the regime tracker (only TOB-changing events contribute).
         roll_ms = self._tracker.feed(event)
         regime_active = roll_ms > self._params.tob_median_threshold_ms
 
-        # 2) Validate book; degenerate books release (pass through).
         if event.bid_price <= 0 or event.ask_price <= 0:
             return self._release()
         if event.ask_price <= event.bid_price:
@@ -327,39 +301,29 @@ class C32bModulator:
         mid_scaled = (event.bid_price + event.ask_price) // 2
         half_tick_scaled = (event.scale * self._params.tick_size_pts) // 2
 
-        # 3) Regime inactive — cannot delay. Release any in-progress hold.
         if not regime_active:
             return self._release()
 
-        # 4) Regime active and no hold in progress: open a new hold and
-        #    signal delay for this event.
         if self._hold_start_ns is None:
             self._open_hold(event.exch_ts_ns, mid_scaled, regime_active)
             self._delay_count += 1
             return True
 
-        # 5) A hold is in progress — evaluate release conditions.
-        # 5a) Regime flipped inactive after hold started → release.
         if not self._hold_anchor_regime_active:
-            # Defensive; should match regime_active branch above.
             return self._release()
 
-        # 5b) Mid moved by > 0.5 tick vs anchor → release.
         if self._hold_anchor_mid_scaled is not None:
             mid_delta = abs(mid_scaled - self._hold_anchor_mid_scaled)
             if mid_delta > half_tick_scaled:
                 return self._release()
 
-        # 5c) Hold duration exceeded cap → release.
         elapsed_ms = (event.exch_ts_ns - self._hold_start_ns) // 1_000_000
         if elapsed_ms > self._params.max_delay_hold_ms:
             return self._release()
 
-        # 6) All guards pass: continue the hold.
         self._delay_count += 1
         return True
 
-    # ---- Helpers ----------------------------------------------------------
 
     def _open_hold(
         self,
@@ -395,12 +359,8 @@ class C32bModulator:
         self._hold_start_ns = None
         self._hold_anchor_mid_scaled = None
         self._hold_anchor_regime_active = False
-        # Tracker survives gap; it's stateless vs ordering once minutes close.
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C32bAlpha:

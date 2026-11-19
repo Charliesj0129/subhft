@@ -118,9 +118,8 @@ async def test_intent_carries_source_ts_and_trace_id():
         is_odd_lot=False,
     )
 
-    # Patch timebase.now_ns so the event appears fresh (within staleness threshold)
     with patch("hft_platform.strategy.runner.timebase") as tb:
-        tb.now_ns.return_value = event_ts + 100_000  # 100μs after event → fresh
+        tb.now_ns.return_value = event_ts + 100_000
         await runner.process_event(event)
     intent = await risk_queue.get()
 

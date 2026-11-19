@@ -19,7 +19,6 @@ import numpy as np
 try:
     from numba import njit
 except ImportError:
-    # Fallback if numba is missing
     def njit(func):
         return func
 
@@ -66,9 +65,6 @@ class FactorBase(ABC):
         pass
 
 
-# =============================================================================
-# Factor Implementations
-# =============================================================================
 
 
 class OFIFactor(FactorBase):
@@ -90,8 +86,8 @@ class OFIFactor(FactorBase):
         return "Order Flow Imbalance: bid_flow - ask_flow based on price/size changes"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        bid_p = data["bid_prices"][:, 0]  # L1 bid price
-        ask_p = data["ask_prices"][:, 0]  # L1 ask price
+        bid_p = data["bid_prices"][:, 0]
+        ask_p = data["ask_prices"][:, 0]
         bid_v = data["bid_volumes"][:, 0]
         ask_v = data["ask_volumes"][:, 0]
 
@@ -99,7 +95,6 @@ class OFIFactor(FactorBase):
         ofi = np.zeros(n)
 
         for t in range(1, n):
-            # Bid flow
             if bid_p[t] > bid_p[t - 1]:
                 bid_flow = bid_v[t]
             elif bid_p[t] < bid_p[t - 1]:
@@ -107,7 +102,6 @@ class OFIFactor(FactorBase):
             else:
                 bid_flow = bid_v[t] - bid_v[t - 1]
 
-            # Ask flow
             if ask_p[t] < ask_p[t - 1]:
                 ask_flow = ask_v[t]
             elif ask_p[t] > ask_p[t - 1]:
@@ -163,7 +157,7 @@ class WeightedOBIFactor(FactorBase):
         return "Weighted OBI across 5 levels with geometric decay"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        bid_v = data["bid_volumes"]  # (N, 5)
+        bid_v = data["bid_volumes"]
         ask_v = data["ask_volumes"]
 
         n_levels = bid_v.shape[1]
@@ -302,7 +296,6 @@ class VolatilityFactor(FactorBase):
         mid = (bid_p + ask_p) / 2
 
         returns = np.diff(np.log(mid + 1e-10), prepend=0)
-        # O(n) Welford sliding-window std instead of O(n*w) numpy slicing loop
         return _rolling_std_welford(returns.astype(np.float64), window=20)
 
 
@@ -330,7 +323,7 @@ class SquareRootImpactFactor(FactorBase):
 
         n = len(trade_v)
         impact = np.zeros(n)
-        decay = 0.95  # Decay factor
+        decay = 0.95
 
         for t in range(1, n):
             signed_vol = trade_side[t] * trade_v[t]
@@ -390,7 +383,7 @@ class PriceReversalFactor(FactorBase):
         window = 20
         ma = np.convolve(mid, np.ones(window) / window, mode="same")
         deviation = (mid - ma) / (ma + 1e-10)
-        return -deviation  # Negative for reversal signal
+        return -deviation
 
 
 class VolumeRatioFactor(FactorBase):
@@ -476,39 +469,26 @@ class DepthSlopeFactor(FactorBase):
         bid_v = data["bid_volumes"]
         ask_v = data["ask_volumes"]
 
-        # Vectorized Slope Calculation
-        # x = [1, 2, 3, 4, 5]
-        # slope = cov(x, y) / var(x)
-        # sum(x) = 15, mean(x) = 3
-        # var(x) = 2
-        # cov(x, y) = mean(xy) - mean(x)mean(y)
 
         n_levels = bid_v.shape[1]
         x = np.arange(1, n_levels + 1)
         mean_x = np.mean(x)
         var_x = np.var(x)
 
-        # y = log(v + 1)
         log_bid = np.log(bid_v + 1)
         log_ask = np.log(ask_v + 1)
 
-        # Mean(y) per time step
         mean_log_bid = np.mean(log_bid, axis=1, keepdims=True)
         mean_log_ask = np.mean(log_ask, axis=1, keepdims=True)
 
-        # Mean(xy)
-        # Einsum: (t, n) * (n,) -> (t,)
         mean_xy_bid = np.dot(log_bid, x) / n_levels
         mean_xy_ask = np.dot(log_ask, x) / n_levels
 
-        # Slope = (Mean(xy) - Mean(x)Mean(y)) / Var(x)
         slope_bid = (mean_xy_bid - mean_x * mean_log_bid.flatten()) / var_x
         slope_ask = (mean_xy_ask - mean_x * mean_log_ask.flatten()) / var_x
 
         raw_signal = slope_bid - slope_ask
 
-        # EWMA Smoothing (span=100 from grid-search; best OOS Sharpe = 0.88)
-        # Delegates to @njit kernel — ~50x faster than pure Python loop.
         return _ewma_1d(raw_signal, 100)
 
 
@@ -533,7 +513,7 @@ class SpreadTicksFactor(FactorBase):
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         bid_p = data["bid_prices"][:, 0]
         ask_p = data["ask_prices"][:, 0]
-        spread_ticks = ask_p - bid_p  # Assumes tick_size normalization
+        spread_ticks = ask_p - bid_p
         return spread_ticks
 
 
@@ -556,11 +536,9 @@ class OFI_LagFactor(FactorBase):
         return "Lagged OFI signal (5-period lag)"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # First compute OFI
         ofi_factor = OFIFactor()
         ofi = ofi_factor.compute(data)
 
-        # Apply lag
         lag = 5
         lagged = np.zeros_like(ofi)
         lagged[lag:] = ofi[:-lag]
@@ -638,7 +616,6 @@ class EWMA_OBI_Factor(FactorBase):
         obi_factor = OBIFactor()
         obi = obi_factor.compute(data)
 
-        # EWMA with span=20
         alpha = 2 / (20 + 1)
         ewma = np.zeros_like(obi)
         ewma[0] = obi[0]
@@ -691,17 +668,14 @@ class TransientRepriceFactor(FactorBase):
         return "Short-term mean reversion after trade impact"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # Reversion: if price moved up, predict down
         bid_p = data["bid_prices"][:, 0]
         ask_p = data["ask_prices"][:, 0]
         mid = (bid_p + ask_p) / 2
 
-        # 10-step return
         k = 10
         ret = np.zeros_like(mid)
         ret[k:] = (mid[k:] - mid[:-k]) / mid[:-k]
 
-        # Signal is negative of recent return (mean reversion)
         return -ret
 
 
@@ -728,7 +702,6 @@ class SlowFastMomentumFactor(FactorBase):
         ask_p = data["ask_prices"][:, 0]
         mid = (bid_p + ask_p) / 2
 
-        # Use JIT-compiled _ewma_1d instead of nested Python loop
         arr = mid.astype(np.float64)
         fast = _ewma_1d(arr, 10)
         slow = _ewma_1d(arr, 100)
@@ -754,7 +727,6 @@ class LiquidityRecoveryFactor(FactorBase):
         return "Rate of depth recovery after trades"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # Change in total depth relative to recent volume
         bid_v = data["bid_volumes"].sum(axis=1)
         ask_v = data["ask_volumes"].sum(axis=1)
         total_depth = bid_v + ask_v
@@ -762,8 +734,6 @@ class LiquidityRecoveryFactor(FactorBase):
         depth_change = np.zeros_like(total_depth)
         depth_change[1:] = total_depth[1:] - total_depth[:-1]
 
-        # Positive depth change = recovery
-        # Smooth it
         window = 20
         recovery = np.convolve(depth_change, np.ones(window) / window, mode="same")
         return recovery
@@ -789,9 +759,6 @@ class TradeClusteringFactor(FactorBase):
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         times = data["timestamp"]
-        # Find trade indices (where trade_price is non-zero)
-        # Note: current data doesn't explicitly flag trade timestamps easily in array form
-        # But we have 'trade_volume' > 0
         trade_v = data["trade_volume"]
         is_trade = trade_v > 0
         trade_times = times[is_trade]
@@ -801,18 +768,10 @@ class TradeClusteringFactor(FactorBase):
 
         inter_arrival = np.diff(trade_times)
 
-        # We need to map this back to full time series.
-        # We'll use a rolling window on the last N inter-arrival times.
-        # This is expensive to do perfectly in vectorized way, so we approximation:
-        # Count trades in windows, effectively intensity variance.
 
-        # Simpler: Rolling std of Volume. High variance = clustering.
         vol_std = np.zeros_like(trade_v)
         window = 50
 
-        # Manual rolling std
-        # (Using pandas would be easier but we stick to numpy)
-        # rolling_std(X) approx sqrt(E[X^2] - E[X]^2)
 
         v2 = trade_v**2
 
@@ -826,9 +785,6 @@ class TradeClusteringFactor(FactorBase):
         return clustering
 
 
-# =============================================================================
-# Registry
-# =============================================================================
 
 
 class HybridFactor(FactorBase):
@@ -849,11 +805,9 @@ class HybridFactor(FactorBase):
         return "Combination of DepthSlope (w=100) and EWMA_OBI (w=100)"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # 1. DepthSlope
         ds_factor = DepthSlopeFactor()
         slope = ds_factor.compute(data)
 
-        # 2. EWMA OBI (Reimplementing with w=100)
         obi_factor = OBIFactor()
         obi = obi_factor.compute(data)
 
@@ -862,19 +816,12 @@ class HybridFactor(FactorBase):
 
         ewma_obi = np.zeros_like(obi)
         ewma_obi[0] = obi[0]
-        # Fast vectorized approximate or loop? Loop is safe
-        # Logic: We can trust the loop speed as seen in DepthSlope optimization
         for i in range(1, len(obi)):
             ewma_obi[i] = alpha * obi[i] + (1 - alpha) * ewma_obi[i - 1]
 
-        # 3. Combine
-        # Simple equal weight of raw signals (both roughly range -1 to 1)
         return (slope + ewma_obi) / 2
 
 
-# =============================================================================
-# Batch 5: Experimental Factors (Entropy, RSI, Volatility, Rate)
-# =============================================================================
 
 
 class OrderBookEntropyFactor(FactorBase):
@@ -898,21 +845,18 @@ class OrderBookEntropyFactor(FactorBase):
         bid_v = data["bid_volumes"]
         ask_v = data["ask_volumes"]
 
-        # Normalize to probability distribution
         total_bid = np.sum(bid_v, axis=1, keepdims=True) + 1e-10
         total_ask = np.sum(ask_v, axis=1, keepdims=True) + 1e-10
 
         p_bid = bid_v / total_bid
         p_ask = ask_v / total_ask
 
-        # H = -sum(p * log(p))
         p_bid_safe = np.where(p_bid > 0, p_bid, 1.0)
         p_ask_safe = np.where(p_ask > 0, p_ask, 1.0)
 
         h_bid = -np.sum(p_bid * np.log(p_bid_safe), axis=1)
         h_ask = -np.sum(p_ask * np.log(p_ask_safe), axis=1)
 
-        # Signal: Difference in entropy (Dispersion Imbalance)
         return h_bid - h_ask
 
 
@@ -1018,9 +962,6 @@ class TradeArrivalRateFactor(FactorBase):
         return count
 
 
-# =============================================================================
-# Batch 6: 2026 Propagator Factors (Impact Reversion, OFI Propagator)
-# =============================================================================
 
 
 class ImpactReversionFactor(FactorBase):
@@ -1046,16 +987,11 @@ class ImpactReversionFactor(FactorBase):
         trade_side = data["trade_side"]
         signed_vol = trade_vol * trade_side
 
-        # Power-law kernel: t^-0.5
-        # Truncated at 100 lags
         window = 100
         kernel = (np.arange(window) + 1.0) ** -0.5
 
-        # Convolve: returns causal signal if we slice correctly
-        # impact[t] = sum(signed_vol[t-k] * kernel[k])
         impact = np.convolve(signed_vol, kernel, mode="full")[: len(signed_vol)]
 
-        # Signal is POSITIVE Impact (Momentum) based on backtest failure of Reversion
         return impact
 
 
@@ -1090,13 +1026,9 @@ class PowerLawImbalanceFactor(FactorBase):
         buy_pressure = np.convolve(buy_vol, kernel, mode="full")[: len(buy_vol)]
         sell_pressure = np.convolve(sell_vol, kernel, mode="full")[: len(sell_vol)]
 
-        # Signal flipped to Reversion (Contra-OFI) to diversify
         return -(buy_pressure - sell_pressure)
 
 
-# =============================================================================
-# Batch 7: 2026 Microstructure Factors (Markov, Liquidity Resistance)
-# =============================================================================
 
 
 class MarkovTransitionFactor(FactorBase):
@@ -1121,21 +1053,19 @@ class MarkovTransitionFactor(FactorBase):
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
         mid_prices = (data["bid_prices"][:, 0] + data["ask_prices"][:, 0]) / 2.0
         returns = np.diff(mid_prices, prepend=mid_prices[0])
-        states = np.sign(returns).astype(int)  # -1, 0, 1
+        states = np.sign(returns).astype(int)
 
         n = len(states)
         est_up = 0.0
         est_dn = 0.0
         est_flat = 0.0
-        alpha = 0.02  # Window ~ 100
+        alpha = 0.02
 
         signal = np.zeros(n)
 
-        # Target is next return (Predictive)
         targets = np.roll(returns, -1)
         targets[-1] = 0.0
 
-        # Loop
         for i in range(n - 1):
             s = states[i]
 
@@ -1173,7 +1103,6 @@ class LiquidityResistanceFactor(FactorBase):
         return "Depth normalized by trade volume (Resistance Time)"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # Paper suggests resistance of the book. Let's use Top 5 levels sum.
         bid_v = np.sum(data["bid_volumes"], axis=1)
         ask_v = np.sum(data["ask_volumes"], axis=1)
 
@@ -1183,23 +1112,17 @@ class LiquidityResistanceFactor(FactorBase):
         buy_vol = np.where(trade_side > 0, trade_vol, 0)
         sell_vol = np.where(trade_side < 0, trade_vol, 0)
 
-        # Rolling Volume (Turnover)
         window = 100
         kernel = np.ones(window)
-        # Add epsilon to avoid div by zero
         roll_buy = np.convolve(buy_vol, kernel, mode="same") + 1.0
         roll_sell = np.convolve(sell_vol, kernel, mode="same") + 1.0
 
-        # Resistance = Depth / Rate
-        res_bid = bid_v / roll_sell  # Selling eats Bid liquidity
-        res_ask = ask_v / roll_buy  # Buying eats Ask liquidity
+        res_bid = bid_v / roll_sell
+        res_ask = ask_v / roll_buy
 
         return -(res_bid - res_ask)
 
 
-# =============================================================================
-# Batch 9: Strategic & Institutional Flow (MeanRevertingOFI, InstitutionalOFI)
-# =============================================================================
 
 
 class MeanRevertingOFI(FactorBase):
@@ -1235,11 +1158,8 @@ def _compute_mean_reverting_ofi(trade_vol, trade_side, timestamps):
     n = len(timestamps)
     alpha = 0.0
 
-    # Mean reversion speed k.
-    # Half-life of 1 second? k = ln(2) / 1.0 approx 0.69
     k = 0.69
 
-    # Impact gamma.
     gamma = 1.0
 
     signal = np.zeros(n, dtype=np.float64)
@@ -1247,17 +1167,13 @@ def _compute_mean_reverting_ofi(trade_vol, trade_side, timestamps):
 
     for i in range(n):
         t = timestamps[i]
-        dt = (t - last_t) * 1e-9  # ns to seconds
+        dt = (t - last_t) * 1e-9
 
-        # Decay
         alpha *= np.exp(-k * dt)
 
-        # Add Impact from trade
         vol = trade_vol[i]
         if vol > 0:
             side = trade_side[i]
-            # Impact linear in sign, or could be log(vol)... paper says "dM" (counting process)
-            # which usually implies unit jumps.
             alpha += side * gamma
 
         signal[i] = alpha
@@ -1291,15 +1207,11 @@ class InstitutionalOFI(FactorBase):
         trade_side = data["trade_side"]
         mid_prices = (data["bid_prices"][:, 0] + data["ask_prices"][:, 0]) / 2.0
 
-        # Signed Dollar Volume
         signed_dollar_vol = trade_side * trade_vol * mid_prices
 
-        # Rolling Sum window
-        window = 1000  # ticks
+        window = 1000
         kernel = np.ones(window)
 
-        # Convolution for rolling sum
-        # Output size same as input
         signal = np.convolve(signed_dollar_vol, kernel, mode="same")
 
         return signal
@@ -1325,7 +1237,6 @@ class CompositeAlpha(FactorBase):
         return "Weighted Ensemble: Reversal(40%) + InstOFI(30%) + WOBI(30%)"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # 1. Compute Components
         f_reversal = PriceReversalFactor()
         f_flow = InstitutionalOFI()
         f_state = WeightedOBIFactor()
@@ -1334,8 +1245,6 @@ class CompositeAlpha(FactorBase):
         s_flow = f_flow.compute(data)
         s_state = f_state.compute(data)
 
-        # 2. Normalize (Robust Z-Score)
-        # We need to handle static data or initial zeros carefully
         def robust_zscore(x):
             med = np.median(x)
             mad = np.median(np.abs(x - med))
@@ -1347,20 +1256,12 @@ class CompositeAlpha(FactorBase):
         z_flow = robust_zscore(s_flow)
         z_state = robust_zscore(s_state)
 
-        # 3. Combine
-        # Note: Reversal is usually counter-trend, so sign is already handled in PriceReversalFactor?
-        # Let's check: PriceReversalFactor returns -(Mid - SMA) so it IS a directional alpha (buy when low).
-        # InstitutionalOFI is directional (buy when flow > 0).
-        # WOBI is directional (buy when Bids > Asks).
 
         final_signal = (0.4 * z_reversal) + (0.3 * z_flow) + (0.3 * z_state)
 
         return final_signal
 
 
-# =============================================================================
-# Batch 8: Deep Learning & Hawkes (T-KAN, HawkesOFI, Propagator)
-# =============================================================================
 
 
 class NonLinearImbalanceFactor(FactorBase):
@@ -1383,20 +1284,14 @@ class NonLinearImbalanceFactor(FactorBase):
         return "Order Book Imbalance with noise filtering (dead-zone)"
 
     def compute(self, data: Dict[str, np.ndarray]) -> np.ndarray:
-        # Standard OBI first
         bid_v = data["bid_volumes"][:, 0]
         ask_v = data["ask_volumes"][:, 0]
         total = bid_v + ask_v
 
-        # Avoid div zero
         raw_imb = np.divide(bid_v - ask_v, total, out=np.zeros_like(bid_v, dtype=float), where=total > 0)
 
-        # Dead-zone threshold (e.g., 0.1)
-        # T-KAN learns this, we define it heuristically or based on noise level.
         threshold = 0.1
 
-        # Apply Logic: sign(x) * max(0, abs(x) - th)
-        # Vectorized:
         abs_imb = np.abs(raw_imb)
         clamped = np.maximum(0.0, abs_imb - threshold)
         signal = np.sign(raw_imb) * clamped
@@ -1428,7 +1323,6 @@ class HawkesOFI(FactorBase):
         trade_side = data["trade_side"]
         timestamps = data["timestamp"]
 
-        # We need a numba kernel for event-based intensity update
         return _compute_hawkes_ofi(trade_vol, trade_side, timestamps)
 
 
@@ -1438,40 +1332,30 @@ def _compute_hawkes_ofi(trade_vol, trade_side, timestamps):
     lambda_buy = 0.0
     lambda_sell = 0.0
 
-    # Decay rate (beta). Time in seconds.
-    # Suppose we want half-life of 0.1s => beta = ln(2)/0.1 ~= 6.9
-    # Paper implies "high frequency", let's pick beta=10.0 (100ms decay)
     beta = 10.0
 
     signal = np.zeros(n, dtype=np.float64)
 
-    # Timestamps are typically monotonic.
-    # Unit: internal hftbacktest format often ns.
-    # We convert to seconds for beta.
 
     last_t = timestamps[0]
 
     for i in range(n):
         t = timestamps[i]
-        dt = (t - last_t) * 1e-9  # ns to seconds
+        dt = (t - last_t) * 1e-9
 
         decay = np.exp(-beta * dt)
         lambda_buy *= decay
         lambda_sell *= decay
 
-        # Update measures if trade occurred
         vol = trade_vol[i]
         side = trade_side[i]
 
         if vol > 0:
-            # Impact of event: +1 or +log(vol) to intensity
-            # Using +1 for pure "arrival rate"
             if side > 0:
                 lambda_buy += 1.0
             elif side < 0:
                 lambda_sell += 1.0
 
-        # Compute imbalance
         total = lambda_buy + lambda_sell
         if total > 1e-6:
             signal[i] = (lambda_buy - lambda_sell) / total
@@ -1514,13 +1398,9 @@ class PropagatorFactor(FactorBase):
 def _compute_propagator(trade_vol, trade_side, timestamps):
     n = len(timestamps)
 
-    # 3 Components: Fast, Medium, Slow
-    # Betas from alpha_propagator.py: [100.0, 10.0, 1.0]
-    # Weights: [0.5, 0.3, 0.2]
     betas = np.array([100.0, 10.0, 1.0], dtype=np.float64)
     weights = np.array([0.5, 0.3, 0.2], dtype=np.float64)
 
-    # State S_k
     s = np.zeros(3, dtype=np.float64)
 
     signal = np.zeros(n, dtype=np.float64)
@@ -1530,21 +1410,17 @@ def _compute_propagator(trade_vol, trade_side, timestamps):
         t = timestamps[i]
         dt = (t - last_t) * 1e-9
 
-        # Decay
         for k in range(3):
             s[k] *= np.exp(-betas[k] * dt)
 
-        # Add Impact
         vol = trade_vol[i]
         if vol > 0:
             side = trade_side[i]
-            # Impact Function: sign * log(1 + vol)
             impact = side * np.log(1.0 + vol)
 
             for k in range(3):
                 s[k] += weights[k] * impact
 
-        # Total
         total_impact = 0.0
         for k in range(3):
             total_impact += s[k]
@@ -1606,31 +1482,26 @@ class HawkesCriticalityFactor(FactorBase):
             vol_sum += trade_vol[i]
             rolling_mean = vol_sum / (i + 1)
 
-            # Detect event: current volume exceeds threshold * rolling mean
             event = 1.0 if (i > 0 and trade_vol[i] > self.vol_threshold * rolling_mean) else 0.0
 
-            # Discrete-time Hawkes intensity update
             lam = self.mu + (lam - self.mu) * decay + self.alpha * event
 
             if i < self.warmup:
                 signal[i] = 0.0
             elif lam > self.intensity_threshold:
-                signal[i] = -trade_side[i]  # Contrarian in herding regime
+                signal[i] = -trade_side[i]
             else:
-                signal[i] = trade_side[i]  # Trend-following in normal regime
+                signal[i] = trade_side[i]
 
         return signal
 
 
-# Registry
-# =============================================================================
 
 
 class FactorRegistry:
     """Central registry of all factors"""
 
     _factors: Dict[str, Type[FactorBase]] = {
-        # Original 8 factors
         "OFI": OFIFactor,
         "OBI": OBIFactor,
         "WOBI": WeightedOBIFactor,
@@ -1639,48 +1510,37 @@ class FactorRegistry:
         "DepthImbalance": DepthImbalanceFactor,
         "MidMomentum": MidPriceMomentumFactor,
         "RealizedVol": VolatilityFactor,
-        # Batch 2: 6 factors
         "SqrtImpact": SquareRootImpactFactor,
         "QueuePressure": QueuePressureFactor,
         "PriceReversal": PriceReversalFactor,
         "VolumeRatio": VolumeRatioFactor,
         "MicroPrice": MicroPriceFactor,
         "DepthSlope": DepthSlopeFactor,
-        # Batch 3: 6 more factors
         "SpreadTicks": SpreadTicksFactor,
         "OFI_Lag": OFI_LagFactor,
         "TotalDepth": TotalDepthFactor,
         "BidAskRatio": BidAskRatioFactor,
         "EWMA_OBI": EWMA_OBI_Factor,
         "TradeIntensity": TradeIntensityFactor,
-        # Batch 4: 4 factors
         "TransientReprice": TransientRepriceFactor,
         "SlowFastMomentum": SlowFastMomentumFactor,
         "LiquidityRecovery": LiquidityRecoveryFactor,
         "TradeClustering": TradeClusteringFactor,
-        # Hybrid
         "Hybrid_Slope_OBI": HybridFactor,
-        # Batch 5 (Experimental)
         "OrderBookEntropy": OrderBookEntropyFactor,
         "HighFreqRSI": HighFreqRSIFactor,
         "SpreadVolatility": SpreadVolatilityFactor,
         "TradeArrivalRate": TradeArrivalRateFactor,
-        # Batch 6 (2026 Propagator)
         "ImpactReversion": ImpactReversionFactor,
         "PowerLawImbalance": PowerLawImbalanceFactor,
-        # Batch 7 (Microstructure)
         "MarkovTransition": MarkovTransitionFactor,
         "LiquidityResistance": LiquidityResistanceFactor,
-        # Batch 8 (Deep Learning/Hawkes)
         "NonLinearImbalance": NonLinearImbalanceFactor,
         "HawkesOFI": HawkesOFI,
         "Propagator": PropagatorFactor,
-        # Batch 9 (Strategic/Institutional Flow)
         "MeanRevertingOFI": MeanRevertingOFI,
         "InstitutionalOFI": InstitutionalOFI,
-        # Batch 10 (Composite)
         "CompositeAlpha": CompositeAlpha,
-        # Batch 11 (Hawkes Criticality / Phase Transition)
         "HawkesCriticality": HawkesCriticalityFactor,
     }
 
@@ -1811,18 +1671,15 @@ def _compute_matched_filter_flow(
     result = np.zeros(n, dtype=np.float64)
 
     for i in range(n):
-        # Not enough history yet (warmup — mirrors Rust: len < slow_window)
         if i < slow_w - 1:
             result[i] = 0.0
             continue
 
-        # Fast window: rolling sum of signed flow
         fast_start = max(0, i - fast_w + 1)
         sum_signed = 0.0
         for j in range(fast_start, i + 1):
             sum_signed += trade_vol[j] * trade_side[j]
 
-        # Slow window: rolling sum of volume
         slow_start = i - slow_w + 1
         sum_vol = 0.0
         for j in range(slow_start, i + 1):

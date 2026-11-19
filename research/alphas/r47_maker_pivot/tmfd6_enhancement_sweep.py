@@ -32,18 +32,16 @@ CK_PORT = os.environ.get("CLICKHOUSE_PORT", "8123")
 CK_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "")
 CK_URL = f"http://{CK_HOST}:{CK_PORT}/"
 
-SCALE = 1_000_000  # Golden data scale
+SCALE = 1_000_000
 
-# TMFD6 economics
 POINT_VALUE_NTD = 10
-FEE_PER_SIDE_NTD = 20  # 13 comm + 7 tax
-FEE_RT_PTS = 2 * FEE_PER_SIDE_NTD / POINT_VALUE_NTD  # 4.0 pts
+FEE_PER_SIDE_NTD = 20
+FEE_RT_PTS = 2 * FEE_PER_SIDE_NTD / POINT_VALUE_NTD
 
 BASE_SPREAD_THRESHOLD = 5
-QUEUE_FRAC = 0.5  # Half-queue (validated match to live)
+QUEUE_FRAC = 0.5
 
 
-# ── CK Helpers ───────────────────────────────────────────────────────
 
 
 def ck_query(sql: str) -> str:
@@ -117,7 +115,6 @@ def load_day(date: str) -> tuple[dict, dict]:
     return ck_query_numpy(ba_sql), ck_query_numpy(tick_sql)
 
 
-# ── Data Structures ──────────────────────────────────────────────────
 
 
 @dataclass
@@ -143,42 +140,31 @@ class EnhancementConfig:
     max_pos: int = 1
     spread_threshold: int = BASE_SPREAD_THRESHOLD
     queue_frac: float = QUEUE_FRAC
-    # E1: Volatility-Adaptive Spread Gate
     e1_enabled: bool = False
     e1_k: float = 2.0
     e1_vol_window: int = 100
-    # E2: Dynamic max_pos (Vol-Gated)
     e2_enabled: bool = False
     e2_vol_window: int = 500
-    # E3: Time-of-Day Spread Multiplier
     e3_enabled: bool = False
-    # E4: Spread Persistence Filter
     e4_enabled: bool = False
     e4_n_consecutive: int = 3
 
 
-# ── Configs ──────────────────────────────────────────────────────────
 
 CONFIGS = [
-    # Baselines
     EnhancementConfig(name="baseline_max1", max_pos=1),
     EnhancementConfig(name="baseline_max3", max_pos=3),
-    # E1: Volatility-Adaptive Spread Gate
     EnhancementConfig(name="E1_k1.5", max_pos=1, e1_enabled=True, e1_k=1.5),
     EnhancementConfig(name="E1_k2.0", max_pos=1, e1_enabled=True, e1_k=2.0),
     EnhancementConfig(name="E1_k3.0", max_pos=1, e1_enabled=True, e1_k=3.0),
-    # E2: Dynamic max_pos (Vol-Gated)
     EnhancementConfig(name="E2_dynamic", max_pos=3, e2_enabled=True),
-    # E3: Time-of-Day Spread Multiplier
     EnhancementConfig(name="E3_ToD", max_pos=1, e3_enabled=True),
-    # E4: Spread Persistence Filter
     EnhancementConfig(name="E4_N3", max_pos=1, e4_enabled=True, e4_n_consecutive=3),
     EnhancementConfig(name="E4_N5", max_pos=1, e4_enabled=True, e4_n_consecutive=5),
     EnhancementConfig(name="E4_N10", max_pos=1, e4_enabled=True, e4_n_consecutive=10),
 ]
 
 
-# ── Session time helper ──────────────────────────────────────────────
 
 
 def _get_session_phase(ts_ns: int) -> str:
@@ -188,7 +174,7 @@ def _get_session_phase(ts_ns: int) -> str:
     First 30 min = 08:45 - 09:15, Last 30 min = 13:15 - 13:45.
     """
     ts_s = ts_ns / 1e9
-    local_s = ts_s + 8 * 3600  # UTC+8
+    local_s = ts_s + 8 * 3600
     day_s = local_s % 86400
     hour = int(day_s // 3600)
     minute = int((day_s % 3600) // 60)
@@ -201,7 +187,6 @@ def _get_session_phase(ts_ns: int) -> str:
     return "mid"
 
 
-# ── Core Backtest Engine ─────────────────────────────────────────────
 
 
 def run_backtest(
@@ -232,12 +217,10 @@ def run_backtest(
     sell_order: Optional[OpenOrder] = None
     fills: list[FillRecord] = []
 
-    # Enhancement state
-    mid_history: list[float] = []  # For E1/E2 volatility
-    vol_history: list[float] = []  # For E2 percentile tracking
-    consecutive_above = 0  # For E4
+    mid_history: list[float] = []
+    vol_history: list[float] = []
+    consecutive_above = 0
 
-    # Stats
     spread_sum = 0.0
     spread_count = 0
     spread_above_base = 0
@@ -266,10 +249,8 @@ def run_backtest(
             spread_count += 1
             mid = (cur_bid + cur_ask) / (2.0 * SCALE)
 
-            # ── Compute effective spread threshold ──
             effective_threshold = cfg.spread_threshold
 
-            # E1: Volatility-Adaptive Spread Gate
             if cfg.e1_enabled:
                 mid_history.append(mid)
                 if len(mid_history) > cfg.e1_vol_window + 1:
@@ -278,13 +259,11 @@ def run_backtest(
                     arr = np.array(mid_history)
                     returns = np.diff(arr) / arr[:-1]
                     rolling_std = float(np.std(returns))
-                    # k * vol * mid gives threshold in absolute price points
                     adaptive_pts = cfg.e1_k * rolling_std * mid
                     effective_threshold = max(
                         BASE_SPREAD_THRESHOLD, int(round(adaptive_pts))
                     )
 
-            # E3: Time-of-Day Spread Multiplier
             if cfg.e3_enabled:
                 phase = _get_session_phase(cur_ts)
                 if phase == "first30":
@@ -296,7 +275,6 @@ def run_backtest(
                         1, int(round(effective_threshold * 1.3))
                     )
 
-            # E2: Dynamic max_pos (Vol-Gated)
             effective_max_pos = cfg.max_pos
             if cfg.e2_enabled:
                 if not cfg.e1_enabled:
@@ -319,7 +297,6 @@ def run_backtest(
                         else:
                             effective_max_pos = 1
 
-            # E4: Spread Persistence Filter
             e4_allow = True
             if cfg.e4_enabled:
                 if spread_pts >= effective_threshold:
@@ -332,13 +309,11 @@ def run_backtest(
             if spread_pts >= BASE_SPREAD_THRESHOLD:
                 spread_above_base += 1
 
-            # Cancel if price moved
             if buy_order is not None and buy_order.price != cur_bid:
                 buy_order = None
             if sell_order is not None and sell_order.price != cur_ask:
                 sell_order = None
 
-            # Quote only if spread >= effective_threshold AND e4 allows
             if spread_pts >= effective_threshold and e4_allow:
                 quote_opportunities += 1
                 if buy_order is None and position < effective_max_pos:
@@ -408,7 +383,6 @@ def run_backtest(
     return fills, position, stats
 
 
-# ── PnL Computation ──────────────────────────────────────────────────
 
 
 def compute_fifo_pnl(
@@ -468,7 +442,6 @@ def compute_equity_curve(
     return max_dd, sharpe
 
 
-# ── Main ─────────────────────────────────────────────────────────────
 
 
 def main():
@@ -481,11 +454,9 @@ def main():
         f"{'=' * 120}\n"
     )
 
-    # Get trading days
     dates = get_trading_days()
     sys.stdout.write(f"\nAvailable trading days: {len(dates)}\n")
 
-    # Load all days upfront
     sys.stdout.write("\nLoading data from ClickHouse...\n")
     day_data: dict[str, tuple[dict, dict]] = {}
     for date in dates:
@@ -505,7 +476,6 @@ def main():
     n_days = len(day_data)
     sys.stdout.write(f"\nLoaded {n_days} days.\n")
 
-    # Spread distribution per day
     sys.stdout.write(
         f"\nSpread distribution per day:\n"
         f"  {'Date':>12} {'Min':>6} {'P25':>6} {'Med':>6} {'Mean':>7} {'P75':>6} "
@@ -525,13 +495,11 @@ def main():
             f"{pct5:>6.1f}% {pct6:>6.1f}%\n"
         )
 
-    # Run all configs
     sys.stdout.write(
         f"\nRunning {len(CONFIGS)} configs x {n_days} days "
         f"= {len(CONFIGS) * n_days} backtests...\n"
     )
 
-    # Results: config_name -> {daily_nets, daily_gross, fills, trips, wins, ...}
     results: dict[str, dict] = {}
     for cfg in CONFIGS:
         results[cfg.name] = {
@@ -571,7 +539,6 @@ def main():
             r["total_quotes"] += stats["quote_opportunities"]
             r["trip_pnls"].extend(trip_pnls)
 
-        # Print baseline_max1 result for this day
         b1_net = results["baseline_max1"]["daily_nets"][-1]
         b1_fills = results["baseline_max1"]["daily_fills"][-1]
         sys.stdout.write(
@@ -584,7 +551,6 @@ def main():
     sweep_elapsed = time.time() - sweep_t0
     sys.stdout.write(f"\nSweep completed in {sweep_elapsed:.1f}s\n")
 
-    # ── Build summary table ──────────────────────────────────────────
     summary_rows = []
     for cfg in CONFIGS:
         r = results[cfg.name]
@@ -638,7 +604,6 @@ def main():
             }
         )
 
-    # ── Print ranked table ───────────────────────────────────────────
     sys.stdout.write(
         f"\n{'=' * 140}\n"
         f"  RESULTS TABLE ({n_days} days, queue_frac={QUEUE_FRAC})\n"
@@ -667,7 +632,6 @@ def main():
 
     sys.stdout.write("-" * 140 + "\n")
 
-    # ── Markdown table ───────────────────────────────────────────────
     sys.stdout.write(f"\n\nMARKDOWN TABLE:\n\n")
     sys.stdout.write(
         "| Config | Total PnL | PnL/Day | MaxDD | Trades | WinRate | PnL/Trade | t-stat |\n"
@@ -687,7 +651,6 @@ def main():
             f"{pnl_per_trade:+.3f} | {row['t_stat']:+.2f} |\n"
         )
 
-    # ── Enhancement delta vs baseline ────────────────────────────────
     baseline_max1 = next(
         (r for r in summary_rows if r["name"] == "baseline_max1"), None
     )
@@ -743,7 +706,6 @@ def main():
                 f"DD delta={ddd:>+.0f}\n"
             )
 
-    # ── Per-day breakdown for top configs ─────────────────────────────
     sys.stdout.write(
         f"\n{'=' * 120}\n"
         f"PER-DAY BREAKDOWN (baseline_max1 vs baseline_max3)\n"

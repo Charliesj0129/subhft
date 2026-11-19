@@ -56,7 +56,6 @@ class MakerStrategyBridge(BaseStrategy):
         self._inner = inner
         self._symbol = symbol
         self._intent_counter: int = 0
-        # Track active order IDs per side for CancelQuote translation
         self._active_by_side: dict[Side, str] = {}
 
     def _next_intent_id(self) -> int:
@@ -75,7 +74,6 @@ class MakerStrategyBridge(BaseStrategy):
         if isinstance(action, PostQuote):
             side = _side_from_str(action.side)
             intent_id = self._next_intent_id()
-            # Track active order id for this side (str form used as target_order_id placeholder)
             self._active_by_side[side] = f"{self.strategy_id}-{intent_id}"
             return [
                 OrderIntent(
@@ -100,7 +98,7 @@ class MakerStrategyBridge(BaseStrategy):
                     symbol=symbol,
                     intent_type=IntentType.CANCEL,
                     side=side,
-                    price=0,  # CANCEL intents ignore price/qty
+                    price=0,
                     qty=0,
                     tif=TIF.LIMIT,
                     target_order_id=target,
@@ -137,15 +135,11 @@ class MakerStrategyBridge(BaseStrategy):
 
         opposite_side = Side.SELL if residual_qty > 0 else Side.BUY
 
-        # Best-effort mid price from L1 snapshot. MARKET intents do not depend
-        # on price for execution, but we populate it for telemetry/TCA.
         cur_mid = 0
         get_l1 = getattr(ctx, "get_l1_scaled", None)
         if callable(get_l1):
             l1 = get_l1(symbol)
             if l1 is not None:
-                # Tuple shape: (ts, best_bid, best_ask, mid_x2, spread, bd, ad).
-                # mid_x2 is mid * 2 (scaled int); divide by 2 for mid.
                 try:
                     cur_mid = int(l1[3]) // 2
                 except (IndexError, TypeError, ValueError):

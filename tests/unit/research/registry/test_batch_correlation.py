@@ -24,7 +24,7 @@ class TestMaxPoolCorrelation:
         sig = np.random.randn(1000)
         pool = {"a": sig, "b": np.random.randn(1000)}
         corr = _max_pool_correlation(sig, pool, "a")
-        assert corr < 0.15  # should be near zero for random signals
+        assert corr < 0.15
 
     def test_empty_pool(self) -> None:
         sig = np.array([1.0, 2.0, 3.0])
@@ -41,7 +41,7 @@ class TestMaxPoolCorrelation:
         sig = np.array([1.0, 1.0, 1.0, 1.0])
         pool = {"a": sig, "b": np.array([1.0, 2.0, 3.0, 4.0])}
         corr = _max_pool_correlation(sig, pool, "a")
-        assert corr == 0.0  # zero std => skip
+        assert corr == 0.0
 
 
 class TestBatchComputeCorrelations:
@@ -56,7 +56,6 @@ class TestBatchComputeCorrelations:
         assert results == {}
 
     def test_dry_run_no_patch(self, tmp_path: Path) -> None:
-        # Setup experiment directory with two runs
         exp_dir = tmp_path / "experiments"
         runs_dir = exp_dir / "runs"
 
@@ -96,7 +95,6 @@ class TestBatchComputeCorrelations:
         assert "alpha_a" in results
         assert "alpha_b" in results
 
-        # Verify scorecards were NOT patched in dry_run
         for run_dir in runs_dir.iterdir():
             sc = json.loads((run_dir / "scorecard.json").read_text())
             assert "correlation_pool_max" not in sc
@@ -141,7 +139,6 @@ class TestBatchComputeCorrelations:
         )
         assert len(results) == 2
 
-        # Verify scorecards were patched
         for run_dir in runs_dir.iterdir():
             sc = json.loads((run_dir / "scorecard.json").read_text())
             assert "correlation_pool_max" in sc
@@ -160,7 +157,6 @@ class TestBatchComputeCorrelations:
             signal = np.random.RandomState(i).randn(100)
             np.save(run_dir / "signals.npy", signal)
 
-            # Deliberately point scorecard_path at a non-existent file
             sc_path = run_dir / "scorecard_MISSING.json"
             (run_dir / "backtest_report.json").write_text("{}")
 
@@ -184,7 +180,6 @@ class TestBatchComputeCorrelations:
             project_root=str(tmp_path),
             dry_run=False,
         )
-        # Results are computed even when scorecards can't be patched
         assert len(results) == 2
 
     def test_scorecard_invalid_json_no_crash(self, tmp_path: Path) -> None:
@@ -224,7 +219,7 @@ class TestBatchComputeCorrelations:
             project_root=str(tmp_path),
             dry_run=False,
         )
-        assert len(results) == 2  # correlations still computed despite JSON error
+        assert len(results) == 2
 
     def test_duplicate_runs_keeps_first_per_alpha(self, tmp_path: Path) -> None:
         """Lines 64->63: duplicate alpha_id in runs — only first run is kept."""
@@ -264,14 +259,12 @@ class TestBatchComputeCorrelations:
             project_root=str(tmp_path),
             dry_run=False,
         )
-        # Both runs share the same alpha_id; result has exactly one entry
         assert len(results) == 1
         assert alpha_id in results
 
     def test_other_signal_too_short_skipped(self) -> None:
         """Line 31: other signal with < 2 elements is skipped (min_len < 2 branch)."""
         sig = np.array([1.0, 2.0, 3.0, 4.0])
-        # "other" has only 1 element — min_len < 2 → continue
         pool = {"self": sig, "short": np.array([5.0])}
         corr = _max_pool_correlation(sig, pool, "self")
         assert corr == 0.0
@@ -279,15 +272,11 @@ class TestBatchComputeCorrelations:
     def test_lower_corr_not_replacing_max(self) -> None:
         """Line 37->25 false branch: when corr <= max_corr, max_corr is NOT updated."""
         sig = np.array([1.0, 2.0, 3.0, 4.0])
-        # "perfect" is perfectly correlated (will set max_corr=1.0)
-        # "anti" is also perfectly anti-correlated (abs=1.0); same max
-        # "weak" has lower correlation — tests the else branch of `if corr > max_corr`
-        weak = np.array([1.0, 1.1, 0.9, 1.0])  # low correlation
+        weak = np.array([1.0, 1.1, 0.9, 1.0])
         pool = {
             "self": sig,
-            "perfect": np.array([2.0, 4.0, 6.0, 8.0]),  # corr=1.0 first
+            "perfect": np.array([2.0, 4.0, 6.0, 8.0]),
             "weak": weak,
         }
         corr = _max_pool_correlation(sig, pool, "self")
-        # max should be 1.0 from "perfect"; "weak" does not replace it
         assert corr == pytest.approx(1.0, abs=1e-6)

@@ -11,20 +11,14 @@ from __future__ import annotations
 import warnings
 from unittest.mock import patch
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_writer(monkeypatch, **env_overrides):
     """Build a DataWriter with mocked externals and optional env overrides."""
-    # Disable CH by default to avoid real connections
     monkeypatch.setenv("HFT_CLICKHOUSE_ENABLED", env_overrides.pop("HFT_CLICKHOUSE_ENABLED", "0"))
 
     for key, val in env_overrides.items():
         monkeypatch.setenv(key, str(val))
 
-    # Clear vars that should not be set unless explicitly provided
     for var in (
         "HFT_CLICKHOUSE_USER",
         "HFT_CLICKHOUSE_USERNAME",
@@ -49,11 +43,6 @@ def _make_writer(monkeypatch, **env_overrides):
         writer = DataWriter(ch_host="localhost", ch_port=9000)
         writer.metrics = None
         return writer
-
-
-# ===================================================================
-# Credential resolution chain
-# ===================================================================
 
 
 class TestCredentialResolution:
@@ -94,11 +83,6 @@ class TestCredentialResolution:
         assert writer.ch_params["password"] == ""
 
 
-# ===================================================================
-# Deprecated env var warnings
-# ===================================================================
-
-
 class TestDeprecatedEnvVars:
     """Deprecated env vars emit DeprecationWarning."""
 
@@ -130,11 +114,6 @@ class TestDeprecatedEnvVars:
             assert any("HFT_DISABLE_CLICKHOUSE" in str(x.message) for x in deprecation_msgs)
 
 
-# ===================================================================
-# HFT_CLICKHOUSE_ENABLED opt-in
-# ===================================================================
-
-
 class TestClickHouseEnabled:
     """ClickHouse is opt-in via HFT_CLICKHOUSE_ENABLED."""
 
@@ -157,11 +136,6 @@ class TestClickHouseEnabled:
         """CH disabled with '0'."""
         writer = _make_writer(monkeypatch, HFT_CLICKHOUSE_ENABLED="0")
         assert writer.ch_enabled is False
-
-
-# ===================================================================
-# Port-based protocol selection
-# ===================================================================
 
 
 class TestProtocolSelection:
@@ -213,11 +187,6 @@ class TestProtocolSelection:
         assert "interface" not in writer.ch_params
 
 
-# ===================================================================
-# Host/port env overrides
-# ===================================================================
-
-
 class TestHostPortOverrides:
     """HFT_CLICKHOUSE_HOST and HFT_CLICKHOUSE_PORT override constructor args."""
 
@@ -230,11 +199,6 @@ class TestHostPortOverrides:
         """HFT_CLICKHOUSE_PORT overrides constructor arg."""
         writer = _make_writer(monkeypatch, HFT_CLICKHOUSE_PORT="19000")
         assert writer.ch_params["port"] == 19000
-
-
-# ===================================================================
-# Per-table lock striping
-# ===================================================================
 
 
 class TestLockStriping:
@@ -255,11 +219,6 @@ class TestLockStriping:
         assert lock_a is lock_b
 
 
-# ===================================================================
-# Connection flags
-# ===================================================================
-
-
 class TestConnectionFlags:
     """Connection state flags."""
 
@@ -273,11 +232,6 @@ class TestConnectionFlags:
         """Compression is enabled in CH params."""
         writer = _make_writer(monkeypatch)
         assert writer.ch_params["compress"] is True
-
-
-# ===================================================================
-# WAL fallback
-# ===================================================================
 
 
 class TestWALFallback:
@@ -297,11 +251,6 @@ class TestWALFallback:
         assert writer.connected is False
 
 
-# ===================================================================
-# Backoff computation
-# ===================================================================
-
-
 class TestBackoffComputation:
     """Exponential backoff delay computation."""
 
@@ -309,10 +258,8 @@ class TestBackoffComputation:
         """Backoff delay increases with attempt number."""
         writer = _make_writer(monkeypatch)
         delays = [writer._compute_backoff_delay(i) for i in range(5)]
-        # First delay should be smaller than last (on average, modulo jitter)
-        # Check that max backoff is respected
         for d in delays:
-            assert d >= 0.1  # minimum 100ms
+            assert d >= 0.1
             assert d <= writer._max_backoff_s + writer._max_backoff_s * writer._jitter_factor + 0.01
 
     def test_backoff_minimum(self, monkeypatch):
@@ -320,11 +267,6 @@ class TestBackoffComputation:
         writer = _make_writer(monkeypatch)
         for _ in range(20):
             assert writer._compute_backoff_delay(0) >= 0.1
-
-
-# ===================================================================
-# get_status
-# ===================================================================
 
 
 class TestGetStatus:
@@ -355,11 +297,6 @@ class TestGetStatus:
         assert writer.get_status()["wal_only_mode"] is True
 
 
-# ===================================================================
-# Native interface fallback
-# ===================================================================
-
-
 class TestNativeInterfaceFallback:
     """Native interface fallback detection."""
 
@@ -386,11 +323,6 @@ class TestNativeInterfaceFallback:
         assert result is True
         assert "interface" not in writer.ch_params
         assert writer._native_interface_fallback_used is True
-
-
-# ===================================================================
-# Chunking
-# ===================================================================
 
 
 class TestChunking:
@@ -422,13 +354,8 @@ class TestChunking:
         col_data = [[1, 2, 3, 4, 5], [10, 20, 30, 40, 50]]
         chunks = writer._iter_columnar_chunks(col_data, 5)
         assert len(chunks) == 3
-        assert chunks[0][1] == 2  # row count
-        assert chunks[2][1] == 1  # last chunk
-
-
-# ===================================================================
-# Transpose helpers
-# ===================================================================
+        assert chunks[0][1] == 2
+        assert chunks[2][1] == 1
 
 
 class TestTransposeHelpers:
@@ -456,11 +383,6 @@ class TestTransposeHelpers:
         col_data = [[1, 2], [10, 20]]
         result = DataWriter._columnar_to_row_dicts(names, col_data, 2)
         assert result == [{"id": 1, "value": 10}, {"id": 2, "value": 20}]
-
-
-# ===================================================================
-# ClickHouse insert latency histogram
-# ===================================================================
 
 
 class TestCHInsertLatencyMetric:

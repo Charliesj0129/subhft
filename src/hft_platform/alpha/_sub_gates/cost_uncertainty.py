@@ -32,7 +32,6 @@ from hft_platform.alpha._sub_gates.common import _to_traded_daily_series
 from hft_platform.alpha._sub_gates.registry import SubGateResult
 from hft_platform.alpha.outcomes import Outcome
 
-# One-sided 95% normal CI z-score.
 _Z_95_ONE_SIDED: float = 1.645
 
 
@@ -58,21 +57,12 @@ class CostUncertaintyGate:
     ) -> SubGateResult:
         floor = thresholds.get("cost_uncertainty_p95_lower_bound_min_pts")
         is_strict = bool(thresholds.get("_is_strict_profile", False))
-        # Minimum sample size under strict profile: variance from <5 days
-        # is too unstable to gate promotion on.  Loose profile keeps n>=2
-        # to preserve the back-compat advisory branch.
         min_n_strict = int(thresholds.get("cost_uncertainty_min_days_strict", 5))
 
-        # Accept both Slice B dict rows ({pnl_pts, fills, ...}) and legacy
-        # float rows (raw daily PnL). Float rows are assumed to be traded
-        # days; dict rows with fills==0 are excluded as non-traded days.
-        # Rows are collapsed per date first -- ``daily_pnl`` is one row per
-        # (instrument, date), and ``n_days`` has to mean days.
         pnl_series: list[float] = _to_traded_daily_series(getattr(result, "daily_pnl", None))
 
         n_days = len(pnl_series)
 
-        # Strict profile: insufficient sample → FAIL.  Loose: keep advisory PASS.
         if (is_strict and n_days < min_n_strict) or n_days < 2:
             metrics_short: dict[str, Any] = {
                 "n_days": n_days,
@@ -99,7 +89,7 @@ class CostUncertaintyGate:
             )
 
         mu = mean(pnl_series)
-        sigma = stdev(pnl_series)  # sample std (ddof=1)
+        sigma = stdev(pnl_series)
         sem = sigma / math.sqrt(n_days)
         p95_lower = mu - _Z_95_ONE_SIDED * sem
 

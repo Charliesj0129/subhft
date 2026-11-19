@@ -113,9 +113,7 @@ class TCAAnalyzer:
         symbol_to_product: dict[str, str] | None = None,
     ) -> None:
         self._ch_client = ch_client
-        # Maps product code (e.g. "TX", "MTX", "XMT") → point value (NTD per point).
         self._point_value_map: dict[str, int] = point_value_map or {}
-        # Optional: maps symbol (e.g. "TXFD6") → product code (e.g. "TX").
         self._symbol_to_product: dict[str, str] = symbol_to_product or {}
 
     def daily_report(self, date_str: str) -> list[TCADailyReport]:
@@ -145,8 +143,6 @@ class TCAAnalyzer:
                 exec_p95,
             ) = row
 
-            # Resolve point_value for this symbol.
-            # SQL gives price_scaled * qty; multiply by point_value to get true NTD notional.
             product = self._symbol_to_product.get(symbol, symbol)
             point_value = self._point_value_map.get(product, 1)
             if point_value == 1 and (self._point_value_map or self._symbol_to_product):
@@ -157,12 +153,9 @@ class TCAAnalyzer:
                     defaulting_to=1,
                 )
 
-            # All scaled values are x10000. Apply point_value then convert to real NTD.
             corrected_notional_scaled = sum_notional_scaled * point_value if sum_notional_scaled else 0
             notional_real = corrected_notional_scaled / 10000.0 if corrected_notional_scaled else 0.0
 
-            # fee_scaled is combined (commission + tax); tax_scaled is tax only
-            # commission = fee - tax
             tax_real = total_tax_scaled / 10000.0 if total_tax_scaled else 0.0
             commission_real = (total_fee_scaled / 10000.0 - tax_real) if total_fee_scaled else 0.0
 
@@ -173,14 +166,11 @@ class TCAAnalyzer:
                 commission_bps = 0.0
                 tax_bps = 0.0
 
-            # Coerce TCA aggregates — ClickHouse returns NaN/None when no
-            # qualifying fills exist (all decision_price=0 AND arrival_price=0).
             delay_cost_bps_mean = _safe_float(delay_mean)
             delay_cost_bps_p95 = _safe_float(delay_p95)
             exec_cost_bps_mean = _safe_float(exec_mean)
             exec_cost_bps_p95 = _safe_float(exec_p95)
 
-            # market_impact_bps is 0.0 for single-lot trades (negligible impact).
             impact_bps_mean = 0.0
 
             total_cost_bps_mean = commission_bps + tax_bps + delay_cost_bps_mean + exec_cost_bps_mean + impact_bps_mean

@@ -10,7 +10,7 @@ pub fn normalize_tick_v2(
     price_scale: i64,
 ) -> PyResult<PyObject> {
     let dict = PyDict::new_bound(_py);
-    // Round, do not truncate -- see the note in fast_lob/normalize_tick.rs.
+
     dict.set_item(
         "price",
         (price * price_scale as f64).round_ties_even() as i64,

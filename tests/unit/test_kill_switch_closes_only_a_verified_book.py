@@ -145,7 +145,7 @@ def test_without_the_switch_nothing_is_cancelled() -> None:
 
 
 def test_an_order_still_waiting_for_the_broker_is_taken_on_a_later_tick() -> None:
-    live = {"R47_MAKER_TMF:42": object()}  # pending sentinel: no contract yet
+    live = {"R47_MAKER_TMF:42": object()}
 
     items = _run(_system(kill=True, verified_age_s=None, live=live))
 

@@ -4,16 +4,11 @@ from unittest.mock import patch
 
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _ONE_MINUTE_NS = 60_000_000_000
 _ONE_HOUR_NS = 3_600_000_000_000
 _TWO_HOURS_NS = 7_200_000_000_000
 
-# Fake "now" base used across tests
-_BASE_NOW_NS = 1_000_000_000_000_000_000  # arbitrary large value
+_BASE_NOW_NS = 1_000_000_000_000_000_000
 
 
 def _make_engine(ttl_s: int = 3600) -> LOBEngine:
@@ -30,25 +25,18 @@ def _add_book(engine: LOBEngine, symbol: str, exch_ts: int) -> None:
     book.exch_ts = exch_ts
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestEvictStaleSymbolsRemovesOld:
     """Stale books (exch_ts older than TTL) must be evicted."""
 
     def test_evict_stale_symbols_removes_old(self):
         engine = _make_engine(ttl_s=3600)
 
-        old_ts = _BASE_NOW_NS - _TWO_HOURS_NS  # 2 hours ago → stale
+        old_ts = _BASE_NOW_NS - _TWO_HOURS_NS
         _add_book(engine, "OLD1", old_ts)
         _add_book(engine, "OLD2", old_ts)
 
         assert len(engine.books) == 2
 
-        # Advance _eviction_last_run_ns far enough into the past so the rate
-        # limiter allows the scan.
         engine._eviction_last_run_ns = _BASE_NOW_NS - _ONE_MINUTE_NS - 1
 
         with patch(
@@ -68,7 +56,7 @@ class TestEvictStaleSymbolsKeepsFresh:
     def test_evict_stale_symbols_keeps_fresh(self):
         engine = _make_engine(ttl_s=3600)
 
-        fresh_ts = _BASE_NOW_NS - 1_000  # 1 µs ago → fresh
+        fresh_ts = _BASE_NOW_NS - 1_000
         _add_book(engine, "FRESH", fresh_ts)
 
         engine._eviction_last_run_ns = _BASE_NOW_NS - _ONE_MINUTE_NS - 1
@@ -92,7 +80,6 @@ class TestEvictStaleSymbolsRateLimited:
         old_ts = _BASE_NOW_NS - _TWO_HOURS_NS
         _add_book(engine, "STALE", old_ts)
 
-        # First call — rate-limiter allows it (last run is 0)
         engine._eviction_last_run_ns = 0
 
         with patch(
@@ -101,20 +88,17 @@ class TestEvictStaleSymbolsRateLimited:
         ):
             first = engine.evict_stale_symbols()
 
-        # Restore the stale book to test the second call
         _add_book(engine, "STALE2", old_ts)
 
-        # Second call — last run was just updated to _BASE_NOW_NS, so it's too
-        # soon; should be skipped entirely.
         with patch(
             "hft_platform.feed_adapter.lob_engine.timebase.now_ns",
-            return_value=_BASE_NOW_NS + 1,  # only 1 ns later
+            return_value=_BASE_NOW_NS + 1,
         ):
             second = engine.evict_stale_symbols()
 
-        assert first == 1  # first call evicted the stale book
-        assert second == 0  # second call was rate-limited
-        assert "STALE2" in engine.books  # not touched
+        assert first == 1
+        assert second == 0
+        assert "STALE2" in engine.books
 
 
 class TestEvictionClearsLastSymbolCache:
@@ -126,7 +110,6 @@ class TestEvictionClearsLastSymbolCache:
         old_ts = _BASE_NOW_NS - _TWO_HOURS_NS
         _add_book(engine, "CACHED", old_ts)
 
-        # Simulate the engine having cached this symbol
         engine._last_symbol = "CACHED"
         engine._last_book = engine.books["CACHED"]
 

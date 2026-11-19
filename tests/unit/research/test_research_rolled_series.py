@@ -61,9 +61,6 @@ def _ns(day: dt.date, hh: int, mm: int = 0) -> int:
     return int(dt.datetime.combine(day, dt.time(hh, mm), tzinfo=_TZ).timestamp()) * 1_000_000_000
 
 
-# --- protocol -----------------------------------------------------------------
-
-
 def test_shipped_roll_protocol_loads_and_is_hashed_over_its_bytes(protocol) -> None:
     assert protocol.protocol_id == "front_month_roll_v1"
     assert protocol.sha256 == hashlib.sha256(_PROTOCOL.read_bytes()).hexdigest()
@@ -102,11 +99,7 @@ def test_rolled_root_recognises_only_the_frontmonth_alias() -> None:
         rolled_root("tmf'; DROP_frontmonth")
 
 
-# --- delivery dates and the quoted contract -------------------------------------
-
-
 def test_delivery_date_moves_off_a_holiday_wednesday(calendar) -> None:
-    # 2026-02-18 falls in the Lunar New Year closure; the next session is 02-23.
     assert delivery_date(2026, 2, calendar) == dt.date(2026, 2, 23)
     assert delivery_date(2026, 3, calendar) == dt.date(2026, 3, 18)
 
@@ -115,11 +108,11 @@ def test_delivery_date_moves_off_a_holiday_wednesday(calendar) -> None:
     ("day", "code"),
     [
         (dt.date(2026, 3, 17), "TMFC6"),
-        (dt.date(2026, 3, 18), "TMFC6"),  # delivery day: still the expiring month
+        (dt.date(2026, 3, 18), "TMFC6"),
         (dt.date(2026, 3, 19), "TMFD6"),
-        (dt.date(2026, 2, 23), "TMFB6"),  # moved delivery day
+        (dt.date(2026, 2, 23), "TMFB6"),
         (dt.date(2026, 2, 24), "TMFC6"),
-        (dt.date(2026, 12, 17), "TMFA7"),  # past December delivery: next January
+        (dt.date(2026, 12, 17), "TMFA7"),
     ],
 )
 def test_quoted_contract_is_the_earliest_delivery_on_or_after_the_day(calendar, protocol, day, code) -> None:
@@ -129,14 +122,14 @@ def test_quoted_contract_is_the_earliest_delivery_on_or_after_the_day(calendar, 
 @pytest.mark.parametrize(
     "instant",
     [
-        (dt.date(2026, 3, 18), 10, 0),  # delivery-day morning: expiring month
+        (dt.date(2026, 3, 18), 10, 0),
         (dt.date(2026, 3, 18), 13, 29),
-        (dt.date(2026, 3, 18), 13, 30),  # delivery cutoff: next month
+        (dt.date(2026, 3, 18), 13, 30),
         (dt.date(2026, 3, 18), 13, 40),
-        (dt.date(2026, 3, 18), 15, 30),  # delivery-day night: next month
+        (dt.date(2026, 3, 18), 15, 30),
         (dt.date(2026, 3, 17), 22, 0),
         (dt.date(2026, 3, 19), 2, 0),
-        (dt.date(2026, 2, 23), 13, 29),  # holiday-moved delivery day
+        (dt.date(2026, 2, 23), 13, 29),
         (dt.date(2026, 2, 23), 13, 30),
         (dt.date(2026, 2, 23), 13, 40),
         (dt.date(2026, 2, 23), 15, 5),
@@ -148,18 +141,13 @@ def test_series_contract_matches_the_live_r1_binding(calendar, protocol, instant
     refs = [FutureRef("TMF", delivery_date(2026, m, calendar)) for m in range(1, 13)]
     live = build_snapshot_from_calendar({"TMF": refs}, today=taifex_delivery_cutoff(now_ns), snapshot_ns=now_ns)
     (bound,) = [ref for family, ref in live.family_map.items() if family.family is FamilyCode.R1]
-    # The segment of the series an event at this instant falls in.
     local = dt.datetime.fromtimestamp(now_ns / 1e9, _TZ)
     (trading_day,) = trading_days_of_slots([(local.date(), local.time() >= dt.time(14))], calendar)
     (segment,) = [s for s in day_segments("TMF", trading_day, protocol, calendar) if s.start_ns <= now_ns < s.end_ns]
     assert segment.symbol == bound.display()
 
 
-# --- trading-day windows and the schedule ------------------------------------------
-
-
 def test_trading_day_window_runs_from_the_previous_session_afternoon(calendar, protocol) -> None:
-    # Monday 2026-03-16: the window opens Friday 03-13 14:00, so it holds Friday's night session.
     start, end = trading_day_window(dt.date(2026, 3, 16), protocol, calendar)
     assert (start, end) == (_ns(dt.date(2026, 3, 13), 14), _ns(dt.date(2026, 3, 16), 14))
 
@@ -195,12 +183,12 @@ def test_build_schedule_counts_trading_days_across_contracts(calendar, protocol)
 @pytest.mark.parametrize(
     ("slot", "trading_day"),
     [
-        ((dt.date(2026, 3, 13), False), dt.date(2026, 3, 13)),  # Friday day session
-        ((dt.date(2026, 3, 13), True), dt.date(2026, 3, 16)),  # Friday night session: Monday
-        ((dt.date(2026, 3, 14), False), dt.date(2026, 3, 16)),  # Saturday-morning tail: Monday
+        ((dt.date(2026, 3, 13), False), dt.date(2026, 3, 13)),
+        ((dt.date(2026, 3, 13), True), dt.date(2026, 3, 16)),
+        ((dt.date(2026, 3, 14), False), dt.date(2026, 3, 16)),
         ((dt.date(2026, 3, 17), True), dt.date(2026, 3, 18)),
-        ((dt.date(2026, 2, 13), True), dt.date(2026, 2, 23)),  # night before the holiday closure
-        ((dt.date(2026, 2, 18), False), dt.date(2026, 2, 23)),  # a holiday
+        ((dt.date(2026, 2, 13), True), dt.date(2026, 2, 23)),
+        ((dt.date(2026, 2, 18), False), dt.date(2026, 2, 23)),
     ],
 )
 def test_trading_days_of_slots_dates_an_event_by_its_window(calendar, slot, trading_day) -> None:
@@ -208,7 +196,6 @@ def test_trading_days_of_slots_dates_an_event_by_its_window(calendar, slot, trad
 
 
 def test_schedule_from_source_keeps_a_night_session_with_no_next_day_rows(calendar, protocol) -> None:
-    # Friday-night and Saturday-morning events only: they belong to Monday, whose window holds them.
     source = _Source(slots=[(dt.date(2026, 3, 13), True), (dt.date(2026, 3, 14), False)])
     schedule = rolled_series.schedule_from_source("TMF_frontmonth", source, protocol=protocol, calendar=calendar)
     (day,) = schedule.days
@@ -224,9 +211,6 @@ def test_build_schedule_refuses_a_day_that_is_not_a_session(calendar, protocol) 
 def test_calendar_refuses_a_day_outside_its_range(calendar) -> None:
     with pytest.raises(RollProtocolError, match="outside the XTAI calendar"):
         calendar.is_session(dt.date(2099, 1, 5))
-
-
-# --- MakerEngine.run_rolled ------------------------------------------------------------
 
 
 class _Source:
@@ -287,12 +271,11 @@ def test_run_rolled_emits_one_dated_row_per_trading_day_on_its_contract(calendar
         ("2026-03-18", "TMFC6"),
         ("2026-03-19", "TMFD6"),
     ]
-    # The delivery day sums its two segments, each on its own contract.
     assert [seg["contract"] for seg in result.daily_pnl[1]["segments"]] == ["TMFC6", "TMFD6"]
     assert "segments" not in result.daily_pnl[0]
     assert result.maker_scorecard["n_days"] == 3
     assert result.instrument == "TMF_frontmonth"
-    assert strategy.contracts == ["TMFC6", "TMFD6"]  # told once per contract, before its first event
+    assert strategy.contracts == ["TMFC6", "TMFD6"]
     assert source.windows == [(s.symbol, s.start_ns, s.end_ns) for d in schedule.days for s in d.segments]
 
 
@@ -327,7 +310,6 @@ class _OneLotStrategy(_Strategy):
 
 
 def test_run_rolled_starts_the_strategy_flat_every_day(calendar, protocol) -> None:
-    # Two ordinary days on one contract: the engine starts day two flat, so must the strategy.
     source = _Source(slots=[(dt.date(2026, 3, 16), False), (dt.date(2026, 3, 17), False)])
     schedule = rolled_series.schedule_from_source("TMF_frontmonth", source, protocol=protocol, calendar=calendar)
     result = _engine(source).run_rolled(_OneLotStrategy(), schedule)
@@ -366,9 +348,6 @@ def test_rolled_cost_profile_is_the_root_profile() -> None:
     rolled, root = load_cost_profile("TMF_frontmonth"), load_cost_profile("TMF")
     assert rolled.instrument == "TMF_frontmonth"
     assert rolled.apply(10.0, 2) == root.apply(10.0, 2)
-
-
-# --- maker Gate C ------------------------------------------------------------------------
 
 
 def _gate_c_runtime(source: _Source, rolled_schedule) -> types.SimpleNamespace:
@@ -482,7 +461,6 @@ def test_maker_gate_c_rolled_series_that_cannot_be_built_is_invalid(tmp_path: Pa
 
 
 def test_maker_gate_c_rolled_series_missing_a_month_is_invalid(tmp_path: Path) -> None:
-    # The next month has no events: the series must not quietly shrink to the expiring contract.
     report, run_id, *_ = run_gate_c(
         _maker_alpha("TMF_frontmonth"),
         ValidationConfig(alpha_id="maker_x", data_paths=[]),

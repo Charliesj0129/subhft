@@ -10,7 +10,6 @@ from hft_platform.observability.metrics_server import start_resilient_metrics_se
 from hft_platform.services.system import HFTSystem
 from hft_platform.utils.sdk_stdout import isolate_sdk_stdout
 
-# Configure structlog globally? HFTSystem does it.
 logger = get_logger("launcher")
 
 
@@ -40,9 +39,6 @@ def _refuse_non_sim_without_loop(settings: dict) -> None:
 
 
 async def main():
-    # Ensure MetricsRegistry is fully constructed BEFORE the Prometheus
-    # scrape thread starts, preventing race conditions where a scrape
-    # sees a partially-populated REGISTRY during __init__ re-registration.
     MetricsRegistry.get()
 
     prom_port_raw = os.getenv("HFT_PROM_PORT", "9090")
@@ -54,16 +50,12 @@ async def main():
     start_resilient_metrics_server(prom_port, addr=prom_addr)
     logger.info("Prometheus metrics started", port=prom_port, addr=prom_addr)
 
-    # Loop_v1: route Docker entrypoint through the CLI's loader so the
-    # `loop_id` binding (and strict-mode validation) is honored. Without
-    # this, `python -m hft_platform.main` bypassed loop binding entirely.
     settings, _ = load_settings()
     _refuse_non_sim_without_loop(settings)
     system = HFTSystem(settings)
 
     main_logger = get_logger("main")
 
-    # Setup signal handlers
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
 
@@ -80,12 +72,10 @@ async def main():
     system_task = asyncio.create_task(system.run())
 
     try:
-        # Wait for stop signal or system crash
         done, pending = await asyncio.wait(
             [system_task, asyncio.create_task(stop_event.wait())], return_when=asyncio.FIRST_COMPLETED
         )
 
-        # If system_task finished first (Validation error or crash)
         if system_task in done:
             exc = system_task.exception()
             if exc:
@@ -99,12 +89,6 @@ async def main():
         if not system_task.done():
             system_task.cancel()
 
-        # P1 fix: wait for the detached stop_async() task so recorder drain,
-        # final position checkpoint, and in-flight order cancellation actually
-        # complete before the event loop is torn down. Without this, the
-        # signal-handler path (SIGTERM/SIGINT) was fire-and-forget and could
-        # leave the position checkpoint in a partial state, or drop buffered
-        # audit rows that still needed to be flushed.
         stop_task = getattr(system, "_stop_async_task", None)
         tasks_to_await: list[asyncio.Task] = [system_task]
         if stop_task is not None and not stop_task.done():
@@ -120,7 +104,5 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Before any SDK object exists: the SDK prints session events, which carry
-    # the login person ID, to fd 1 (see utils/sdk_stdout.py).
     isolate_sdk_stdout()
     asyncio.run(main())

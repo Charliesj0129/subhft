@@ -15,10 +15,6 @@ import pytest
 
 from hft_platform.execution.gateway import ExecutionGateway
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_adapter(running: bool = True) -> MagicMock:
     """Return a mock OrderAdapter with the minimal surface used by gateway."""
@@ -51,11 +47,6 @@ def _make_gateway(adapter: MagicMock | None = None) -> tuple[ExecutionGateway, M
     return gw, metrics
 
 
-# ---------------------------------------------------------------------------
-# Test: run() must NOT call adapter.run()
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_run_does_not_call_adapter_run() -> None:
     """ExecutionGateway.run() must be a heartbeat loop, not a delegate to adapter.run()."""
@@ -63,15 +54,11 @@ async def test_run_does_not_call_adapter_run() -> None:
     gw, _ = _make_gateway(adapter)
 
     async def _stop_after_one_tick() -> None:
-        # Let the event loop tick once so the while-loop body executes at least
-        # once, then stop the gateway.
         await asyncio.sleep(0)
         gw.running = False
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-        # Make asyncio.sleep a no-op so the loop terminates quickly.
         mock_sleep.return_value = None
-        # Stop on the second iteration.
         call_count = 0
 
         async def _sleep_side_effect(delay: float) -> None:
@@ -84,11 +71,6 @@ async def test_run_does_not_call_adapter_run() -> None:
         await gw.run()
 
     adapter.run.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Test: heartbeat loop updates metrics on each iteration
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -110,13 +92,7 @@ async def test_run_updates_heartbeat_metric() -> None:
         mock_sleep.side_effect = _sleep_side_effect
         await gw.run()
 
-    # heartbeat_ts.set() should have been called at least twice (once per loop)
     assert metrics.execution_gateway_heartbeat_ts.set.call_count >= 2
-
-
-# ---------------------------------------------------------------------------
-# Test: run() sets alive metric on entry and clears on exit
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -132,16 +108,10 @@ async def test_run_sets_alive_metric() -> None:
         mock_sleep.side_effect = _sleep_side_effect
         await gw.run()
 
-    # alive=1 on start, alive=0 on exit
     calls = [c.args[0] for c in metrics.execution_gateway_alive.set.call_args_list]
     assert 1 in calls, "expected alive=1 set at start"
     assert 0 in calls, "expected alive=0 set at exit"
     assert calls[-1] == 0, "last call must set alive=0 (cleanup)"
-
-
-# ---------------------------------------------------------------------------
-# Test: run() exits when adapter.running becomes False
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -157,19 +127,13 @@ async def test_run_exits_when_adapter_stops() -> None:
         async def _sleep_side_effect(delay: float) -> None:
             nonlocal call_count
             call_count += 1
-            # Simulate adapter stopping after first sleep
             adapter.running = False
 
         mock_sleep.side_effect = _sleep_side_effect
-        await gw.run()  # must return, not hang
+        await gw.run()
 
     assert call_count == 1
-    assert gw.running is True  # gateway didn't self-stop; adapter did
-
-
-# ---------------------------------------------------------------------------
-# Test: stop() sets running=False on both gateway and adapter
-# ---------------------------------------------------------------------------
+    assert gw.running is True
 
 
 def test_stop_sets_running_false_on_both() -> None:
@@ -183,15 +147,10 @@ def test_stop_sets_running_false_on_both() -> None:
     assert adapter.running is False
 
 
-# ---------------------------------------------------------------------------
-# Test: stop() before run() leaves gateway in a clean state
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_run_exits_immediately_if_stopped_before_start() -> None:
     """If stop() is called before run(), the loop should not iterate."""
-    adapter = _make_adapter(running=False)  # adapter already stopped
+    adapter = _make_adapter(running=False)
     gw, _ = _make_gateway(adapter)
 
     with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:

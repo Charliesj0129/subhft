@@ -45,7 +45,7 @@ class TestValidStagesAllowlist:
         LatencyRecorder.reset_for_tests()
         recorder = LatencyRecorder()
         recorder.metrics_enabled = True
-        recorder._metrics_sample_every = 1  # always sample
+        recorder._metrics_sample_every = 1
         recorder._metrics_counter = 0
 
         mock_histogram = MagicMock()

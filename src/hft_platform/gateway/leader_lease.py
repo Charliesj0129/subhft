@@ -119,5 +119,4 @@ class FileLeaderLease:
             os.write(fd, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
             os.fsync(fd)
         except OSError:
-            # Heartbeat failure should not crash gateway processing.
             pass

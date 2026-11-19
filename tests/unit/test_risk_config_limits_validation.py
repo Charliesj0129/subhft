@@ -14,20 +14,13 @@ from structlog import get_logger
 
 logger = get_logger("test_risk_config_limits")
 
-# ---------------------------------------------------------------------------
-# Risk config validation logic (mirrors what RiskEngine / StormGuard expect)
-# ---------------------------------------------------------------------------
 
-# Required top-level sections in a risk config
 _REQUIRED_SECTIONS = ("global_limits", "stormguard", "rate_limiter")
 
-# Required fields within global_limits
 _REQUIRED_GLOBAL_LIMITS_FIELDS = ("max_position_lots", "max_order_size", "daily_loss_limit")
 
-# Required fields within stormguard
 _REQUIRED_STORMGUARD_FIELDS = ("degrade_threshold", "halt_threshold")
 
-# Required fields within rate_limiter
 _REQUIRED_RATE_LIMITER_FIELDS = ("max_orders_per_second",)
 
 
@@ -42,12 +35,10 @@ def validate_risk_config(config: Dict[str, Any]) -> List[str]:
     """
     errors: List[str] = []
 
-    # --- Section presence ---
     for section in _REQUIRED_SECTIONS:
         if section not in config:
             errors.append(f"missing required section: '{section}'")
 
-    # Early return if sections are missing — further checks would KeyError
     if errors:
         return errors
 
@@ -55,12 +46,10 @@ def validate_risk_config(config: Dict[str, Any]) -> List[str]:
     sg = config["stormguard"]
     rl = config["rate_limiter"]
 
-    # --- global_limits required fields ---
     for field in _REQUIRED_GLOBAL_LIMITS_FIELDS:
         if field not in gl:
             errors.append(f"global_limits missing required field: '{field}'")
 
-    # --- global_limits value checks ---
     if "daily_loss_limit" in gl:
         if not isinstance(gl["daily_loss_limit"], (int, float)):
             errors.append("global_limits.daily_loss_limit must be numeric")
@@ -79,12 +68,10 @@ def validate_risk_config(config: Dict[str, Any]) -> List[str]:
         elif gl["max_order_size"] <= 0:
             errors.append(f"global_limits.max_order_size must be positive, got {gl['max_order_size']}")
 
-    # --- stormguard required fields ---
     for field in _REQUIRED_STORMGUARD_FIELDS:
         if field not in sg:
             errors.append(f"stormguard missing required field: '{field}'")
 
-    # --- stormguard threshold ordering ---
     if "degrade_threshold" in sg and "halt_threshold" in sg:
         if sg["halt_threshold"] < sg["degrade_threshold"]:
             errors.append(
@@ -92,7 +79,6 @@ def validate_risk_config(config: Dict[str, Any]) -> List[str]:
                 f"degrade_threshold ({sg['degrade_threshold']})"
             )
 
-    # --- rate_limiter required fields ---
     for field in _REQUIRED_RATE_LIMITER_FIELDS:
         if field not in rl:
             errors.append(f"rate_limiter missing required field: '{field}'")
@@ -111,11 +97,6 @@ def validate_risk_config_strict(config: Dict[str, Any]) -> None:
     errors = validate_risk_config(config)
     if errors:
         raise RiskConfigValidationError("Risk config validation failed:\n  - " + "\n  - ".join(errors))
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 def _valid_risk_config() -> Dict[str, Any]:
@@ -152,11 +133,6 @@ def _valid_risk_config() -> Dict[str, Any]:
     }
 
 
-# ===================================================================
-# Valid config
-# ===================================================================
-
-
 class TestValidRiskConfig:
     """A well-formed risk config must pass validation."""
 
@@ -167,13 +143,8 @@ class TestValidRiskConfig:
 
     def test_valid_config_strict_no_raise(self):
         cfg = _valid_risk_config()
-        validate_risk_config_strict(cfg)  # should not raise
-        assert True  # reached without exception
-
-
-# ===================================================================
-# Negative / zero value rejection
-# ===================================================================
+        validate_risk_config_strict(cfg)
+        assert True
 
 
 class TestNegativeAndZeroValues:
@@ -223,11 +194,6 @@ class TestNegativeAndZeroValues:
         assert any("max_order_size" in e and "positive" in e for e in errors)
 
 
-# ===================================================================
-# StormGuard threshold ordering
-# ===================================================================
-
-
 class TestStormGuardThresholdOrdering:
     """halt_threshold must be >= degrade_threshold."""
 
@@ -260,11 +226,6 @@ class TestStormGuardThresholdOrdering:
             validate_risk_config_strict(cfg)
 
 
-# ===================================================================
-# Rate limiter edge cases
-# ===================================================================
-
-
 class TestRateLimiterEdgeCases:
     """Rate limiter with 0 or negative orders/sec must be rejected."""
 
@@ -291,11 +252,6 @@ class TestRateLimiterEdgeCases:
         cfg["rate_limiter"]["max_orders_per_second"] = 0
         with pytest.raises(RiskConfigValidationError, match="max_orders_per_second"):
             validate_risk_config_strict(cfg)
-
-
-# ===================================================================
-# Missing required fields
-# ===================================================================
 
 
 class TestMissingRequiredFields:
@@ -358,15 +314,9 @@ class TestMissingRequiredFields:
             validate_risk_config_strict({})
 
 
-# ===================================================================
-# Sane range checks for small capital (5-wan NTD account)
-# ===================================================================
-
-
 class TestSmallCapitalSaneRanges:
     """For a 5-wan (50,000 NTD) account, config values should be conservative."""
 
-    # Maximum daily loss should not exceed account capital
     SMALL_CAPITAL_NTD = 50000
 
     def test_daily_loss_limit_within_capital(self):
@@ -377,12 +327,9 @@ class TestSmallCapitalSaneRanges:
     def test_daily_loss_limit_exceeding_capital_is_dangerous(self):
         """Detect when daily_loss_limit > capital — a configuration risk."""
         cfg = _valid_risk_config()
-        cfg["global_limits"]["daily_loss_limit"] = 100000  # 2x capital
-        # This is valid syntactically but dangerously large
+        cfg["global_limits"]["daily_loss_limit"] = 100000
         errors = validate_risk_config(cfg)
-        # Validation passes (no structural error), but caller should check
         assert errors == []
-        # The risk is semantic — daily_loss_limit > SMALL_CAPITAL
         assert cfg["global_limits"]["daily_loss_limit"] > self.SMALL_CAPITAL_NTD
 
     def test_max_position_lots_conservative(self):
@@ -410,24 +357,15 @@ class TestSmallCapitalSaneRanges:
         sg = cfg["stormguard"]
         rl = cfg["rate_limiter"]
 
-        # Position limits
         assert gl["max_position_lots"] == 2
         assert gl["max_order_size"] == 1
 
-        # Loss limits within capital
         assert gl["daily_loss_limit"] == 50000
         assert gl["daily_loss_limit"] <= self.SMALL_CAPITAL_NTD
 
-        # StormGuard ordering: degrade < halt
         assert sg["degrade_threshold"] < sg["halt_threshold"]
 
-        # Rate limiter: reasonable for futures
         assert 1 <= rl["max_orders_per_second"] <= 50
-
-
-# ===================================================================
-# Type validation
-# ===================================================================
 
 
 class TestTypeValidation:
@@ -456,11 +394,6 @@ class TestTypeValidation:
         cfg["rate_limiter"]["max_orders_per_second"] = "fast"
         errors = validate_risk_config(cfg)
         assert any("max_orders_per_second" in e and "numeric" in e for e in errors)
-
-
-# ===================================================================
-# Multiple errors accumulated
-# ===================================================================
 
 
 class TestMultipleErrors:

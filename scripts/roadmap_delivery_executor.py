@@ -68,8 +68,6 @@ HOTPATH_PRIORITY_WEIGHT: dict[str, int] = {
     "feed_adapter": 15,
 }
 
-# Points a measured input adds to a row's priority score. An input that was not measured adds nothing, but its
-# points are what the row could still gain, so they bound the score from above (priority_score_max).
 HOTPATH_MEASURED_POINTS: dict[str, int] = {
     "rust_speedup_vs_python": 20,
     "cpu_hotspot_pct": 10,
@@ -143,9 +141,6 @@ WS_C_METRICS: tuple[str, ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
 
 
 def _now_utc() -> dt.datetime:
@@ -278,9 +273,6 @@ def _task_for_ws(tasks: list[dict[str, str]], ws: str) -> dict[str, str]:
     return {"owner": "", "deadline": "", "output": "", "acceptance": "", "raw": ""}
 
 
-# ---------------------------------------------------------------------------
-# WS-G helpers
-# ---------------------------------------------------------------------------
 
 
 def _parse_benchmark_pairs(benchmark_path: Path) -> dict[str, dict[str, float | None]]:
@@ -444,8 +436,6 @@ def _hotpath_rows(
         cpu_hotspot_pct = _module_hotspot_pct(item["module"], hotspots)
         p95_us = _module_latency_us(item["module"], perf_results, stage_probe)
 
-        # An input that was not measured is unknown, never 0: it adds no points, but it is listed and its
-        # points are kept apart as the most the row could still gain.
         unknown_inputs = sorted(
             name
             for name, value in (
@@ -506,7 +496,6 @@ def _hotpath_rows(
             }
         )
 
-    # Equal measured scores: the row with more still unmeasured goes first, so a gap never ranks a row lower.
     rows.sort(key=lambda r: (int(r["priority_score"]), int(r["priority_score_max"])), reverse=True)
     return rows, warnings, data_quality_flags
 
@@ -601,9 +590,6 @@ def _render_cutover_backlog(cutover_payload: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-# ---------------------------------------------------------------------------
-# WS-H helpers
-# ---------------------------------------------------------------------------
 
 
 def _has_header_line(text: str, key: str) -> bool:
@@ -1293,9 +1279,6 @@ def _build_ws_f_monthly_review_flow(
     return payload, status
 
 
-# ---------------------------------------------------------------------------
-# CLI / main
-# ---------------------------------------------------------------------------
 
 
 def _build_parser() -> argparse.ArgumentParser:

@@ -31,8 +31,8 @@ class SnapshotSlot:
     version: int
     ts_ns: int
     symbol_hash: int
-    lob_fields: tuple[int, ...]  # 9 LOB stats (platform x10000 convention)
-    features: tuple[int, ...]  # 16 feature values
+    lob_fields: tuple[int, ...]
+    features: tuple[int, ...]
 
 
 def _symbol_hash(symbol: str) -> int:
@@ -94,13 +94,13 @@ class ShmSnapshotWriter:
         """Release the SHM segment. Safe to call multiple times."""
         if self._table is not None:
             logger.info("shm_snapshot_writer_closing", name=self._name)
-            self._table = None  # Drop reference; Rust Drop trait should handle unlink
+            self._table = None
 
     def __del__(self) -> None:
         """Best-effort cleanup on GC."""
         try:
             self.close()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     def __enter__(self) -> "ShmSnapshotWriter":
@@ -152,7 +152,7 @@ class ShmSnapshotReader:
     def close(self) -> None:
         """Release the reference to the SHM segment. Safe to call multiple times."""
         if self._table is not None:
-            self._table = None  # Readers do not own/unlink the segment
+            self._table = None
 
     def __enter__(self) -> "ShmSnapshotReader":
         return self

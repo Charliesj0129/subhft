@@ -81,7 +81,6 @@ def _isolated(tmp_path, monkeypatch):
 
 def _ranked_run_ids(out: str) -> list[str]:
     lines = out.split("\n")
-    # Skip header + separator; stop before the trailing "(... READY ...)" line.
     return [ln.split()[1] for ln in lines[2:] if ln and not ln.startswith("(")]
 
 
@@ -95,9 +94,8 @@ class TestLeaderboard:
         assert "(1 READY of 2 ranked)" in out
 
     def test_fewer_fails_ranks_higher_among_not_ready(self, _isolated) -> None:
-        # one failing axis vs two failing axes
-        _record(run_id="one_fail", edge=5.0)  # only edge fails
-        _record(run_id="two_fail", edge=5.0, worst_loss=80.0)  # edge + worst_loss
+        _record(run_id="one_fail", edge=5.0)
+        _record(run_id="two_fail", edge=5.0, worst_loss=80.0)
         out = audit_cli.leaderboard()
         order = _ranked_run_ids(out)
         assert order.index("one_fail") < order.index("two_fail")

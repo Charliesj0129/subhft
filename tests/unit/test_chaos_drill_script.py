@@ -33,7 +33,7 @@ exit 0
 @pytest.fixture()
 def sandbox(tmp_path: Path) -> Path:
     """A repository-shaped directory holding a copy of the script, plus a ``bin`` with a fake ``uv``."""
-    tmp_path = tmp_path.resolve()  # the script prints physical paths
+    tmp_path = tmp_path.resolve()
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     shutil.copy(SCRIPT, repo / "scripts" / "run-chaos-drill.sh")
@@ -98,7 +98,7 @@ def test_second_run_the_same_day_appends_instead_of_replacing_the_evidence(sandb
     (log,) = _logs(sandbox)
     body = log.read_text()
     assert body.count("=== Quarterly Chaos Drill ===") == 2
-    assert "DRILL RESULT: 1 FAILURES" in body  # the failed first run is still there
+    assert "DRILL RESULT: 1 FAILURES" in body
     assert "DRILL RESULT: ALL PASS" in body
 
 
@@ -111,7 +111,7 @@ def test_script_runs_the_playbooks_from_the_repo_root_whatever_the_caller_direct
     assert result.returncode == 0, result.stdout + result.stderr
     seen = {line for line in (sandbox / "uv_cwd.log").read_text().splitlines()}
     assert seen == {str(sandbox / "repo")}
-    assert len(_logs(sandbox)) == 1  # the log is in the repo, not in the caller's directory
+    assert len(_logs(sandbox)) == 1
     assert not (elsewhere / "outputs").exists()
 
 

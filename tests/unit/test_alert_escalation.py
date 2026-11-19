@@ -46,14 +46,11 @@ class TestEscalationTracker:
         from hft_platform.notifications.escalation import EscalationTracker
 
         tracker = EscalationTracker(intervals_ns=[300_000_000_000], max_escalations=3)
-        # ts_ns at epoch; interval is 300 seconds (300_000_000_000 ns)
-        # 100 seconds later → not yet due
-        # 301 seconds later → due
         alert = _make_alert(ts_ns=1_000_000_000_000)
         tracker.track(alert)
-        due = tracker.get_due(now_ns=1_100_000_000_000)  # +100 s — below threshold
+        due = tracker.get_due(now_ns=1_100_000_000_000)
         assert len(due) == 0
-        due = tracker.get_due(now_ns=1_301_000_000_000)  # +301 s — above threshold
+        due = tracker.get_due(now_ns=1_301_000_000_000)
         assert len(due) == 1
         assert due[0].alert_id == "a-001"
 

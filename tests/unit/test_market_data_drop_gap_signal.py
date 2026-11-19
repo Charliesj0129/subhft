@@ -61,17 +61,15 @@ def _make_service():
 
     with patch.dict(os.environ, env):
         svc = MarketDataService(bus, raw_queue, client)
-    svc._tmp = tmp  # keep TemporaryDirectory alive
+    svc._tmp = tmp
     return svc
 
 
 def _force_drop_state(svc) -> None:
     """Configure svc so that calls to ``_enqueue_raw`` always hit ``QueueFull``."""
     svc.raw_queue = asyncio.Queue(maxsize=1)
-    svc.raw_queue.put_nowait(("seed", "seed"))  # block any further put_nowait
+    svc.raw_queue.put_nowait(("seed", "seed"))
     svc._storm_guard = None
-    # Push StormGuard thresholds far above what the test will reach so they
-    # don't interfere with mark_gap_all observation.
     svc._raw_drop_halt_threshold = 10_000
     svc._raw_drop_window_threshold = 10_000
     svc._raw_drop_window_count = 0.0
@@ -92,12 +90,9 @@ def test_mark_gap_all_fires_on_every_drop_past_threshold():
     svc._raw_drop_degrade_threshold = 3
     svc._raw_consecutive_drops = 0
 
-    # Simulate 5 consecutive drops.
     for _ in range(5):
         svc._enqueue_raw("TSE", {"code": "2330"})
 
-    # Drops 1, 2 are below threshold (no fire).
-    # Drops 3, 4, 5 are >= threshold (must fire each time).
     assert fe.mark_gap_all.call_count == 3, (
         f"Expected mark_gap_all to fire on every drop >= threshold "
         f"(drops 3, 4, 5 => 3 calls); got {fe.mark_gap_all.call_count}. "
@@ -115,8 +110,8 @@ def test_mark_gap_all_not_fired_below_threshold():
     svc._raw_drop_degrade_threshold = 3
     svc._raw_consecutive_drops = 0
 
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #1
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #2
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    svc._enqueue_raw("TSE", {"code": "2330"})
 
     assert fe.mark_gap_all.call_count == 0, (
         f"mark_gap_all must not fire below threshold (threshold=3, drops=2); got {fe.mark_gap_all.call_count}"
@@ -136,23 +131,19 @@ def test_mark_gap_all_resets_on_success():
     svc._raw_drop_degrade_threshold = 2
     svc._raw_consecutive_drops = 0
 
-    # First burst: 3 drops -> mark_gap_all fires twice (drops 2 and 3).
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #1
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #2 -> fire
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #3 -> fire
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    svc._enqueue_raw("TSE", {"code": "2330"})
     assert fe.mark_gap_all.call_count == 2
     assert svc._raw_consecutive_drops == 3
 
-    # Drain the queue and successfully enqueue -> resets counter.
     svc.raw_queue.get_nowait()
-    svc._enqueue_raw("TSE", {"code": "2330"})  # success
+    svc._enqueue_raw("TSE", {"code": "2330"})
     assert svc._raw_consecutive_drops == 0
 
-    # Re-saturate the queue and run another burst.
-    # raw_queue still has the new item we just put. Drops will resume.
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #1 (post-reset)
-    assert fe.mark_gap_all.call_count == 2  # no new fire yet
-    svc._enqueue_raw("TSE", {"code": "2330"})  # drop #2 -> fire
+    svc._enqueue_raw("TSE", {"code": "2330"})
+    assert fe.mark_gap_all.call_count == 2
+    svc._enqueue_raw("TSE", {"code": "2330"})
     assert fe.mark_gap_all.call_count == 3, (
         "After reset and re-crossing threshold, mark_gap_all must fire again. "
         f"Expected 3 total calls (2 pre-reset + 1 post-reset); got {fe.mark_gap_all.call_count}"

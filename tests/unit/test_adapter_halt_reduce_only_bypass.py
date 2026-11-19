@@ -132,14 +132,9 @@ class TestAdapterHaltReduceOnlyBypass:
         cover_intent = _make_intent(intent_type=IntentType.NEW, side=Side.BUY, qty=1)
         cmd = _make_cmd(cover_intent, sg_state=StormGuardState.HALT)
 
-        # Short-circuit the rest of execute() — we only need to test the HALT branch.
-        # The simplest black-box is that no refusal carried the HALT reason.
-        # We stub downstream paths so execute() returns cleanly.
         adapter._dedup_store = None
         adapter.per_symbol_rate_limiter = MagicMock()
         adapter.per_symbol_rate_limiter.check = MagicMock(return_value=MagicMock(name="OK"))
-        # Force a subsequent bail-out after HALT check, so we don't drag the full pipeline in.
-        # We patch _platform_degrade_allows to return False to stop execution cleanly.
         adapter._platform_degrade_allows = MagicMock(return_value=False)
         adapter.strategy_cb_mgr = MagicMock()
         adapter.strategy_cb_mgr.is_open = MagicMock(return_value=False)
@@ -151,7 +146,6 @@ class TestAdapterHaltReduceOnlyBypass:
 
         await adapter.execute(cmd)
 
-        # Assert: no refusal used the "StormGuard HALT" reason.
         halt_rejects = _halt_refusals(adapter)
         assert not halt_rejects, (
             f"Adapter still blocks cover order under HALT (Bug 24 not fixed): "
@@ -169,6 +163,5 @@ class TestAdapterHaltReduceOnlyBypass:
 
         await adapter.execute(cmd)
 
-        # Opening orders must still be refused with "StormGuard HALT"
         halt_rejects = _halt_refusals(adapter)
         assert halt_rejects, "Opening order must still be blocked under HALT — fix over-reached"

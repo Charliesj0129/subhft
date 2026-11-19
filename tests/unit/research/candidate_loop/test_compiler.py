@@ -59,7 +59,6 @@ class TestSignalEvaluation:
     def test_book_imbalance_through_validated_ast(self) -> None:
         valid = _signal_ast("imb_l1")
         out = evaluate_signal(valid.signal_ast, _cols())
-        # bid 1 vs ask 2 -> (1-2)/(1+2)
         np.testing.assert_allclose(out, np.full(4, -1.0 / 3.0))
 
     def test_arithmetic_over_primitives(self) -> None:
@@ -72,7 +71,7 @@ class TestSignalEvaluation:
         cols["bid_qty_1"] = np.array([0.0, 4.0, 4.0, 4.0])
         valid = _signal_ast("spread_ticks() / depth_sum('bid', 1)")
         out = evaluate_signal(valid.signal_ast, cols)
-        assert out[0] == 0.0  # zero depth -> safe divide
+        assert out[0] == 0.0
         assert out[1] == pytest.approx(0.5)
 
     def test_unary_minus(self) -> None:
@@ -90,14 +89,13 @@ class TestSignalEvaluation:
         np.testing.assert_allclose(nz, -z)
 
     def test_time_window_survives_canonical_ns_format(self) -> None:
-        # Validator canonicalizes '1s' -> '1000000000ns'; compiler must parse it.
         valid = _signal_ast(
             "dd_bid",
             features=[{"name": "dd_bid", "formula": "depth_delta('bid', 1, '1s')"}],
         )
         out = evaluate_signal(valid.signal_ast, _cols())
         assert np.isnan(out[0])
-        np.testing.assert_allclose(out[1:], np.zeros(3))  # constant book
+        np.testing.assert_allclose(out[1:], np.zeros(3))
 
     def test_clip_in_compiled_formula(self) -> None:
         valid = _signal_ast("clip(imb_l1 * 9, -1, 1)")
@@ -129,7 +127,6 @@ class TestRegimeEvaluation:
         valid = _signal_ast("imb_l1", regime_filter="spread_ticks() <= 2")
         assert valid.regime_ast is not None
         mask = evaluate_regime(valid.regime_ast, _cols())
-        # spreads 1,2,3,NaN -> True,True,False,False
         np.testing.assert_array_equal(mask, [True, True, False, False])
 
     @pytest.mark.parametrize(

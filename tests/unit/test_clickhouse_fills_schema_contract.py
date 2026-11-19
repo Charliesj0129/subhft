@@ -63,7 +63,6 @@ def _create_columns(body: str) -> list[str]:
         if not token:
             continue
         head = token[0]
-        # Skip table-level clauses that can appear inside the parenthesis.
         if head.upper() in {"INDEX", "PRIMARY", "ORDER", "PARTITION", "CONSTRAINT", "PROJECTION"}:
             continue
         if re.fullmatch(r"\w+", head):
@@ -114,8 +113,6 @@ def _replay_migrations() -> dict[str, set[str]]:
     return tables
 
 
-# The keys recorder/mapper.py writes into a ("fills", record) tuple. Kept as a
-# literal so a mapper change that adds a key without a migration fails here.
 MAPPER_FILL_KEYS = {
     "ts_exchange",
     "ts_local",
@@ -134,9 +131,6 @@ MAPPER_FILL_KEYS = {
     "source",
     "instrument_type",
     "oc_type",
-    # L7 audit column, stamped by ExecutionRouter from the originating
-    # OrderIntent. The other six L7 columns are still unpopulated by the
-    # mapper and default to '' in ClickHouse.
     "trace_id",
 }
 

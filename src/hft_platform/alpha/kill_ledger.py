@@ -66,9 +66,6 @@ class SampleInsufficientKillError(VerdictNotKillError):
     """
 
 
-# Excluded from stable_artifact_hash (plan §5 idempotency contract).
-# Defensive even though the §5 narrow already removed kill_reason / cluster_id
-# from the manifest — re-add here if any future schema mutation lands.
 _HASH_EXCLUDED_KEYS: frozenset[str] = frozenset({"kill_reason", "cluster_id"})
 
 _DEFAULT_JSONL_PATH = Path("research/alphas/_kill_ledger.jsonl")
@@ -95,7 +92,7 @@ class KillRecord:
     stable_artifact_hash: str = ""
     scorecard_id: str = ""
     killed_by: str = "system"
-    killed_at: int = 0  # ns; 0 means "fill in now_ns()"
+    killed_at: int = 0
     run_id: str = ""
 
     def __post_init__(self) -> None:
@@ -276,7 +273,7 @@ _CACHE = _JsonlCache()
 
 def _reset_cache_for_tests() -> None:
     """Test-only hook: clear the in-memory cache."""
-    global _CACHE  # noqa: PLW0603
+    global _CACHE
     _CACHE = _JsonlCache()
 
 
@@ -293,14 +290,13 @@ def append_kill(record: KillRecord) -> bool:
     finalized = record if record.killed_at != 0 else replace(record, killed_at=timebase.now_ns())
     kill_id = finalized.kill_id()
 
-    if audit._is_enabled():  # noqa: SLF001 — audit is the canonical gate
+    if audit._is_enabled():
         ch_result = _try_append_ch(finalized, kill_id)
         if ch_result == "inserted":
             _emit_lifecycle_advisory(finalized)
             return True
         if ch_result == "duplicate":
             return False
-        # "failed" → fall through to jsonl
 
     inserted = _try_append_jsonl(finalized, kill_id)
     if inserted:
@@ -319,12 +315,6 @@ def _emit_lifecycle_advisory(record: KillRecord) -> None:
     to filesystem moves — ``make research-audit-lifecycle`` is the gate that
     actually flags drift.
     """
-    # Opt-in advisory: only emit when the operator explicitly asks for it,
-    # so CLI commands that serialize JSON payloads on stdout (e.g.
-    # `hft alpha kill`) stay clean by default. ``make research-audit-lifecycle``
-    # is the actual drift gate; this log line is purely an operator
-    # breadcrumb listing the manual commands to keep filesystem placement
-    # + manifest status in sync.
     if os.getenv("HFT_KILL_LIFECYCLE_ADVISORY_LOG", "0") == "1":
         logger.info(
             "alpha_kill_recorded",
@@ -341,8 +331,8 @@ def _emit_lifecycle_advisory(record: KillRecord) -> None:
 def _try_append_ch(record: KillRecord, kill_id: str) -> str:
     """Returns 'inserted', 'duplicate', or 'failed'."""
     try:
-        client = audit._get_client()  # noqa: SLF001
-    except Exception:  # noqa: BLE001
+        client = audit._get_client()
+    except Exception:
         logger.warning("kill_ledger CH client init failed", exc_info=True)
         return "failed"
     try:
@@ -352,7 +342,7 @@ def _try_append_ch(record: KillRecord, kill_id: str) -> str:
         ).result_rows
         if existing and existing[0] and int(existing[0][0]) > 0:
             return "duplicate"
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("kill_ledger CH dedupe pre-check failed", alpha_id=record.alpha_id, exc_info=True)
         return "failed"
 
@@ -382,7 +372,7 @@ def _try_append_ch(record: KillRecord, kill_id: str) -> str:
                 "killed_by",
             ],
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning("kill_ledger CH insert failed", alpha_id=record.alpha_id, exc_info=True)
         return "failed"
     return "inserted"

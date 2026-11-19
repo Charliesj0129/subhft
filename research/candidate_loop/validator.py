@@ -86,8 +86,8 @@ class ValidCandidate:
     candidate: Candidate
     alpha_id: str
     formula_hash: str
-    signal_ast: Node  # feature-inlined, argument-canonicalized
-    regime_ast: Node | None  # canonicalized Compare, or None when always-on
+    signal_ast: Node
+    regime_ast: Node | None
     uses_trade_imbalance: bool
     signal_node_count: int
     raw_json: str
@@ -98,16 +98,13 @@ class InvalidCandidate:
     death_reason: DeathReason
     detail: str
     raw_json: str
-    alpha_id: str = ""  # set when the line at least decoded
+    alpha_id: str = ""
     candidate: Candidate | None = None
 
 
 ValidationResult = ValidCandidate | InvalidCandidate
 
 
-# ---------------------------------------------------------------------------
-# Stage 1: schema / field validation.
-# ---------------------------------------------------------------------------
 
 
 def _decode(raw: str) -> Candidate:
@@ -192,9 +189,6 @@ def _validate_label_format(cand: Candidate) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Stage 2: formula parsing.
-# ---------------------------------------------------------------------------
 
 
 def _parse_formulas(cand: Candidate) -> tuple[dict[str, Node], Node, Node | None]:
@@ -224,9 +218,6 @@ def _parse_formulas(cand: Candidate) -> tuple[dict[str, Node], Node, Node | None
     return feature_asts, signal_ast, regime_ast
 
 
-# ---------------------------------------------------------------------------
-# Stage 3: call names + references.
-# ---------------------------------------------------------------------------
 
 
 def _check_names(node: Node, allowed_idents: frozenset[str], proposed: frozenset[str], ctx: str) -> None:
@@ -266,7 +257,6 @@ def _check_names(node: Node, allowed_idents: frozenset[str], proposed: frozenset
                 f"{ctx}: {LABEL_PRIMITIVE} is label-only and may not appear in formulas",
             )
         if node.name in TRANSFORM_SIGNATURES:
-            # x is expression-position: first positional or kwarg 'x'.
             if node.args:
                 _check_names(node.args[0], allowed_idents, proposed, ctx)
             for key, val in node.kwargs:
@@ -305,9 +295,6 @@ def _check_call_name_only(call: Call, proposed: frozenset[str], ctx: str) -> Non
         )
 
 
-# ---------------------------------------------------------------------------
-# Stage 4: argument domains + canonicalization.
-# ---------------------------------------------------------------------------
 
 
 def _canonicalize(node: Node, ctx: str) -> Node:
@@ -445,9 +432,6 @@ def _validate_clip_bounds(node: Node, ctx: str) -> None:
                 )
 
 
-# ---------------------------------------------------------------------------
-# Stage 5: feature inlining + complexity.
-# ---------------------------------------------------------------------------
 
 
 def _inline(node: Node, features: dict[str, Node]) -> Node:
@@ -470,9 +454,6 @@ def _inline(node: Node, features: dict[str, Node]) -> Node:
     raise TypeError(f"Unknown node type {type(node).__name__}")  # pragma: no cover
 
 
-# ---------------------------------------------------------------------------
-# Stage 6: formula hash.
-# ---------------------------------------------------------------------------
 
 
 def canonical_ast_str(node: Node) -> str:
@@ -505,9 +486,6 @@ def compute_formula_hash(signal_ast: Node, regime_ast: Node | None, horizon: str
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-# ---------------------------------------------------------------------------
-# Entry points.
-# ---------------------------------------------------------------------------
 
 
 def validate_line(
@@ -540,7 +518,6 @@ def validate_line(
         for name, ast in canon_features.items():
             _validate_clip_bounds(ast, f"feature {name!r}")
         _validate_clip_bounds(canon_signal, "signal_formula")
-        # Horizon range check (format already passed in stage 1).
         _canonical_window(String(cand.horizon), "horizon", is_horizon=True)
 
         inlined_signal = _inline(canon_signal, canon_features)

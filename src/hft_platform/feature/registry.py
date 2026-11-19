@@ -3,23 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable
 
-# Feature flag bits (``FeatureSpec.flags``).
-# PROMOTED marks a feature as part of the minimal cross-path "promoted family"
-# that research / replay / live / Rust must agree on within ``parity_atol``.
 FEATURE_FLAG_PROMOTED = 1 << 0
 
 
 @dataclass(frozen=True, slots=True)
 class FeatureSpec:
     feature_id: str
-    dtype: str  # "i64" | "f64" | etc.
+    dtype: str
     scale: int = 0
     warmup_min_events: int = 1
     source_kind: str = "book"
     flags: int = 0
-    # Max absolute difference tolerated when comparing this feature across
-    # compute backends (Python / Rust / hftbacktest). 0 means exact equality.
-    # Non-zero only for float-accumulated features rounded to int (rounding ULP).
     parity_atol: int = 0
 
     @property
@@ -113,19 +107,11 @@ class FeatureRegistry:
         return reg
 
 
-# Canonical version string for the default LOB feature set.
-# Bump this (and create a new build_default_lob_feature_set_vN function) whenever
-# the feature layout or semantics change incompatibly.  Alpha manifests that declare
-# feature_set_version must match this constant before Gate D promotion.
 FEATURE_SET_VERSION = "lob_shared_v3"
 
 
 def build_default_lob_feature_set_v1() -> FeatureSet:
     """Default shared LOB-derived feature set for the initial FeatureEngine prototype."""
-    # Promoted family: the minimal cross-path microstructure primitives that
-    # research / replay / live / Rust must agree on (see feature/parity.py).
-    # All members are within v1 indices so the 16-feature Rust kernel can compute
-    # them. EMA features carry parity_atol=1 (float accumulate -> i64 rounding ULP).
     _P = FEATURE_FLAG_PROMOTED
     return FeatureSet(
         feature_set_id="lob_shared_v1",
@@ -137,19 +123,14 @@ def build_default_lob_feature_set_v1() -> FeatureSet:
             FeatureSpec("spread_scaled", "i64", scale=10_000, source_kind="book", flags=_P),
             FeatureSpec("bid_depth", "i64", source_kind="book"),
             FeatureSpec("ask_depth", "i64", source_kind="book"),
-            # ratio in parts-per-million to keep integer semantics in v1
             FeatureSpec("depth_imbalance_ppm", "i64", scale=1_000_000, source_kind="book", flags=_P),
-            # microprice*2 in scaled price units (rounded int)
             FeatureSpec("microprice_x2", "i64", scale=10_000, source_kind="book", flags=_P),
-            # L1 queue quantities (preferred for microstructure deltas/OFI)
             FeatureSpec("l1_bid_qty", "i64", source_kind="book"),
             FeatureSpec("l1_ask_qty", "i64", source_kind="book"),
             FeatureSpec("l1_imbalance_ppm", "i64", scale=1_000_000, source_kind="book", flags=_P),
-            # OFI-style bounded-state features
             FeatureSpec("ofi_l1_raw", "i64", source_kind="book", warmup_min_events=2, flags=_P),
             FeatureSpec("ofi_l1_cum", "i64", source_kind="book", warmup_min_events=2, flags=_P),
             FeatureSpec("ofi_l1_ema8", "i64", source_kind="book", warmup_min_events=2, flags=_P, parity_atol=1),
-            # Rolling-like bounded-state filters (EMA proxies)
             FeatureSpec(
                 "spread_ema8_scaled",
                 "i64",
@@ -191,16 +172,9 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
         schema_version=2,
         features=v1.features
         + (
-            # [16] OFI EMA8 normalized by avg L1 depth (ppm scale).
-            # Captures depth-dependent price impact: thin book → OFI matters more.
             FeatureSpec("ofi_depth_norm_ppm", "i64", scale=1_000_000, source_kind="book", warmup_min_events=8),
-            # [17] Return autocovariance over ~40 ticks (5s at 125ms cadence).
-            # Negative autocov → oscillating prices → reversal likely. Scaled x1e6.
             FeatureSpec("ret_autocov_5s_x1e6", "i64", scale=1_000_000, source_kind="book", warmup_min_events=42),
-            # [18] Milliseconds since last best price (bid or ask) change.
-            # Short survival → volatile TOB → reversal conditions.
             FeatureSpec("tob_survival_ms", "i64", source_kind="book", warmup_min_events=2),
-            # [19] Impact Surprise Signal (EMA baseline), scaled x1000.
             FeatureSpec(
                 "impact_surprise_x1000",
                 "i64",
@@ -208,7 +182,6 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
                 source_kind="book",
                 warmup_min_events=400,
             ),
-            # [20] Multi-Level Depth Momentum (L2-L5), scaled x1000.
             FeatureSpec(
                 "deep_depth_momentum_x1000",
                 "i64",
@@ -216,8 +189,6 @@ def build_default_lob_feature_set_v2() -> FeatureSet:
                 source_kind="book",
                 warmup_min_events=128,
             ),
-            # [21] Trade-signed toxicity: EMA of signed-trade imbalance / total volume, scaled x1000.
-            # High toxicity = informed flow dominance = adverse fill likely. Gate signal for MM.
             FeatureSpec(
                 "toxicity_ema50_x1000",
                 "i64",

@@ -32,7 +32,6 @@ import numpy as np
 
 from research.candidate_loop.schema import Window, parse_window_spec
 
-# Below this many finite values in a rolling window the moments are noise.
 ZSCORE_MIN_VALID = 2
 
 Columns = dict[str, np.ndarray]
@@ -82,9 +81,6 @@ def _delta_from_anchor(values: np.ndarray, anchors: np.ndarray) -> np.ndarray:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Primitives.
-# ---------------------------------------------------------------------------
 
 
 def mid_price(cols: Columns) -> np.ndarray:
@@ -150,9 +146,6 @@ def future_mid_return(cols: Columns, horizon: Window) -> np.ndarray:
     return out
 
 
-# ---------------------------------------------------------------------------
-# Transforms.
-# ---------------------------------------------------------------------------
 
 
 def rolling_zscore(x: np.ndarray, local_ts: np.ndarray, window: Window) -> np.ndarray:
@@ -204,7 +197,7 @@ def ema(x: np.ndarray, local_ts: np.ndarray, window: Window) -> np.ndarray:
         alpha = 2.0 / (window.count + 1.0)
         for i in range(n):
             xi = xs[i]
-            if xi == xi:  # finite-or-NaN gate: NaN != NaN
+            if xi == xi:
                 prev = xi if prev != prev else prev + alpha * (xi - prev)
             out[i] = prev
     else:

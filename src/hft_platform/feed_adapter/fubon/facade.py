@@ -15,13 +15,11 @@ from typing import Any, Callable
 
 import structlog
 
-# Lazy SDK import — fubon_neo may not be installed.
 try:
     from fubon_neo.sdk import FubonSDK
 except ImportError:
     FubonSDK = None
 
-# Sub-component imports with inline stub fallbacks for independent mergeability.
 try:
     from hft_platform.feed_adapter.fubon.session import FubonSessionRuntime as _RawSessionRT
 except ImportError:
@@ -213,11 +211,9 @@ class FubonClientFacade:
         self._broker_config = broker_config or {}
         self.log = logger
 
-        # Instantiate SDK (None if fubon_neo not installed).
         sdk = FubonSDK() if FubonSDK is not None and broker_config else None
         self._sdk = sdk
 
-        # Compose sub-components.
         self._session_runtime = _SessionAdapter(sdk)
         self._quote_runtime = _QuoteRT(sdk)
         self._order_gateway = _OrderGW(sdk=sdk)
@@ -231,17 +227,9 @@ class FubonClientFacade:
             sdk_available=sdk is not None,
         )
 
-    # ------------------------------------------------------------------ #
-    # Properties
-    # ------------------------------------------------------------------ #
-
     @property
     def logged_in(self) -> bool:
         return self._session_runtime.is_logged_in
-
-    # ------------------------------------------------------------------ #
-    # Session lifecycle
-    # ------------------------------------------------------------------ #
 
     def login(self, *args: Any, **kwargs: Any) -> bool:
         return self._session_runtime.login_with_retry(*args, **kwargs)
@@ -257,10 +245,6 @@ class FubonClientFacade:
 
     def shutdown(self, logout: bool = False) -> None:
         self.close(logout=logout)
-
-    # ------------------------------------------------------------------ #
-    # Market data
-    # ------------------------------------------------------------------ #
 
     def subscribe_basket(self, cb: Callable[..., Any]) -> None:
         self._subscription_manager.subscribe_basket(cb)
@@ -284,10 +268,6 @@ class FubonClientFacade:
     ) -> None:
         self._subscription_manager.set_execution_callbacks(on_order, on_deal)
 
-    # ------------------------------------------------------------------ #
-    # Orders
-    # ------------------------------------------------------------------ #
-
     def place_order(self, **kwargs: Any) -> Any:
         return self._order_gateway.place_order(**kwargs)
 
@@ -301,10 +281,6 @@ class FubonClientFacade:
         qty: int | None = None,
     ) -> Any:
         return self._order_gateway.update_order(trade, price=price, qty=qty)
-
-    # ------------------------------------------------------------------ #
-    # Account
-    # ------------------------------------------------------------------ #
 
     def get_positions(self) -> list[Any]:
         return self._account_gateway.get_inventories()
@@ -325,10 +301,6 @@ class FubonClientFacade:
         end_date: str | None = None,
     ) -> list[Any]:
         return []
-
-    # ------------------------------------------------------------------ #
-    # Symbols / contracts
-    # ------------------------------------------------------------------ #
 
     def validate_symbols(self) -> list[str]:
         return self._contracts_runtime.validate_symbols()

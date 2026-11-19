@@ -58,7 +58,7 @@ def _default_ck_client() -> Any:
     implementation mirrored ``alpha.audit._get_client`` and propagated its
     auth-bypass bug — see ``docs/runbooks/alpha-factory-dogfood-2026-05-06.md`` §F2.
     """
-    from hft_platform.infra.ch_client import get_ch_client  # noqa: PLC0415  (heavy import; defer)
+    from hft_platform.infra.ch_client import get_ch_client
 
     return get_ch_client()
 
@@ -111,24 +111,17 @@ def check_eligibility(
     if not fp.exists():
         return IneligibleNoFixture(fixture_path=str(fp))
 
-    # Codex adversarial-review (2026-05-07) finding [HIGH]: building the
-    # default client outside the exception boundary lets connection / auth /
-    # import / env-parse failures from get_ch_client() propagate out of
-    # ``check_eligibility`` instead of degrading to ``IneligiblePreRecorder``.
-    # Distinct ``intent_recorder_client_init_failed:`` reason prefix so
-    # operators can tell client-construction failures apart from query
-    # failures during incident triage.
     if ck_client is not None:
         client = ck_client
     else:
         try:
             client = _default_ck_client()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return IneligiblePreRecorder(reason=f"intent_recorder_client_init_failed: {type(exc).__name__}: {exc}")
 
     try:
         n = _count_live_intents(client, session_date, strategy_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return IneligiblePreRecorder(reason=f"intent_recorder_query_failed: {type(exc).__name__}: {exc}")
 
     if n == 0:

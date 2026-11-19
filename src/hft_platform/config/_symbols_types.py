@@ -14,10 +14,6 @@ from typing import Any
 
 from hft_platform.core.timebase import TZINFO
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 DEFAULT_LIST_PATH = "config/symbols.list"
 DEFAULT_OUTPUT_PATH = "config/symbols.yaml"
 DEFAULT_CONTRACT_CACHE = "config/contracts.json"
@@ -72,11 +68,6 @@ METRIC_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Dataclasses
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class SymbolBuildResult:
     symbols: list[dict[str, Any]] = field(default_factory=list)
@@ -111,11 +102,6 @@ class FilterSpec:
             if month not in seen:
                 self.months.append(month)
                 seen.add(month)
-
-
-# ---------------------------------------------------------------------------
-# Tiny pure helpers used by multiple sibling modules
-# ---------------------------------------------------------------------------
 
 
 def derive_root(code: str) -> str:
@@ -199,13 +185,7 @@ class ContractIndex:
     by_code: dict[str, dict[str, Any]] = field(default_factory=dict)
     futures_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     options_by_root: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
-    # Operator builds set this so an option window with no underlying price is an error instead of a
-    # median-strike guess. Runtime rebuilds (universe roll, contract refresh) leave it off: an error there
-    # would refuse the roll, so they keep the warning.
     require_underlying: bool = False
-    # The earliest delivery date still trading (``taifex_delivery_cutoff``).
-    # Runtime rebuilds set it so ``@front`` and ``validate_universe`` use one
-    # definition; None falls back to the exchange date.
     as_of: date | None = None
 
     def __post_init__(self) -> None:

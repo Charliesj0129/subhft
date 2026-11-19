@@ -10,10 +10,6 @@ from hft_platform.config.schema import (
     validate_config_or_exit,
 )
 
-# ---------------------------------------------------------------------------
-# Minimal valid config fixture
-# ---------------------------------------------------------------------------
-
 
 def _minimal_config() -> dict:
     return {
@@ -33,11 +29,6 @@ def _minimal_config() -> dict:
         "prometheus_port": 9090,
         "replay": {"start_date": None, "end_date": None},
     }
-
-
-# ===================================================================
-# Structural validation
-# ===================================================================
 
 
 class TestConfigSchemaStructural:
@@ -91,11 +82,6 @@ class TestConfigSchemaStructural:
         cfg = validate_config(d)
         assert cfg.strategy is not None
         assert cfg.strategy.params == {"custom_key": 42}
-
-
-# ===================================================================
-# Semantic validation
-# ===================================================================
 
 
 class TestConfigSchemaSemantic:
@@ -152,11 +138,6 @@ class TestConfigSchemaSemantic:
             assert cfg.broker == broker
 
 
-# ===================================================================
-# validate_config_or_exit
-# ===================================================================
-
-
 class TestValidateConfigOrExit:
     """Tests for the exit-on-failure wrapper."""
 
@@ -174,11 +155,6 @@ class TestValidateConfigOrExit:
         monkeypatch.delenv("HFT_SKIP_CONFIG_VALIDATION", raising=False)
         cfg = validate_config_or_exit(_minimal_config())
         assert isinstance(cfg, HftConfig)
-
-
-# ===================================================================
-# Integration with loader.load_settings
-# ===================================================================
 
 
 class TestLoaderIntegration:
@@ -248,7 +224,6 @@ class TestLoaderIntegration:
         monkeypatch.delenv("HFT_MODE", raising=False)
         monkeypatch.delenv("HFT_SYMBOLS", raising=False)
 
-        # Should not raise despite bad mode
         settings, _ = loader.load_settings()
         assert settings["mode"] == "bad_mode"
 

@@ -22,11 +22,6 @@ from hft_platform.config._symbols_types import (
 logger = get_logger("config.symbols.parsing")
 
 
-# ---------------------------------------------------------------------------
-# Primitive value parsers
-# ---------------------------------------------------------------------------
-
-
 def parse_bool_value(raw: str) -> bool | None:
     """Parse a boolean from common truthy/falsy string representations."""
     text = str(raw or "").strip().lower()
@@ -106,11 +101,6 @@ def merge_tags(*tag_sets: Any) -> list[str]:
             seen.add(key)
             merged.append(tag)
     return merged
-
-
-# ---------------------------------------------------------------------------
-# Filter-token helpers
-# ---------------------------------------------------------------------------
 
 
 def looks_like_filter(token: str) -> bool:
@@ -221,11 +211,6 @@ def parse_filter_token(token: str, filters: FilterSpec, result: SymbolBuildResul
     else:
         _merge_numeric_bounds(filters, key, num_val, num_val)
     return True
-
-
-# ---------------------------------------------------------------------------
-# KV-token and CSV-spec parsing
-# ---------------------------------------------------------------------------
 
 
 def parse_kv_tokens(tokens: list[str]) -> dict[str, Any]:

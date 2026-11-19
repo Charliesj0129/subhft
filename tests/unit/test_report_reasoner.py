@@ -29,10 +29,6 @@ from hft_platform.reports.reasoner import (
     reason_all,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 SCALE = 10_000
 
 _DUMMY_FLOW_BAR = FlowBar(
@@ -188,11 +184,6 @@ def _fact_report(**kwargs: object) -> FactReport:
     return FactReport(**defaults)  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
-# BiasReasoner
-# ---------------------------------------------------------------------------
-
-
 class TestBiasReasoner:
     """Tests for evidence-driven bias determination."""
 
@@ -260,8 +251,6 @@ class TestBiasReasoner:
         )
         result = BiasReasoner().judge(fr)
 
-        # Bull from flow.session_ud (0.20) vs bear from chips.net_ratio (0.20)
-        # Should be neutral or very close
         assert result.bias in ("neutral", "bullish", "bearish")
         assert len(result.evidences) == 8
 
@@ -307,33 +296,24 @@ class TestBiasReasoner:
         assert len(result.evidences) == 8
 
 
-# ---------------------------------------------------------------------------
-# LevelReasoner
-# ---------------------------------------------------------------------------
-
-
 class TestLevelReasoner:
     """Tests for level enrichment and confluence merging."""
 
     def test_confluence_merge(self) -> None:
         """Two levels within proximity merge into one with confluence=2."""
-        # Session high at 205 and a double top at 205.2 (within 5 pts)
         fr = _fact_report(
             session_data=_session_data(close=200),
             structure=_structure_facts(
                 double_tops=[PriceLevel(price=2052000, strength=0.8, reason="雙頂")],
             ),
         )
-        # session_high is 205*SCALE = 2050000, double_top at 2052000 → within 50000
         levels = LevelReasoner().analyze(fr)
 
-        # Should have merged levels with confluence >= 2
         merged = [lv for lv in levels if lv.confluence_count >= 2]
         assert len(merged) >= 1
 
     def test_buffer_zone_pivot(self) -> None:
         """Level within ±50000 of close is classified as pivot."""
-        # close=200, session_high=201 (within buffer)
         fr = _fact_report(
             session_data=_session_data(close=200, high=201, low=199),
             structure=StructureFacts(
@@ -347,15 +327,11 @@ class TestLevelReasoner:
         )
         levels = LevelReasoner().analyze(fr)
 
-        # 201 * 10000 = 2010000, close = 200 * 10000 = 2000000
-        # diff = 10000 < 50000 → pivot
         pivot_levels = [lv for lv in levels if lv.side == "pivot"]
-        # Both session high and low are within buffer
         assert len(pivot_levels) >= 1
 
     def test_no_hard_limit(self) -> None:
         """No artificial 3-level limit per side."""
-        # Create many levels far from close
         many_levels = [PriceLevel(price=(210 + i * 10) * SCALE, strength=0.8, reason=f"level_{i}") for i in range(5)]
         fr = _fact_report(
             session_data=_session_data(close=200),
@@ -364,7 +340,6 @@ class TestLevelReasoner:
         levels = LevelReasoner().analyze(fr)
 
         resistance_count = sum(1 for lv in levels if lv.side == "resistance")
-        # We should get more than 3 if they all qualify
         assert resistance_count >= 3
 
     def test_weak_singleton_filtered(self) -> None:
@@ -383,9 +358,6 @@ class TestLevelReasoner:
         )
         levels = LevelReasoner().analyze(fr)
 
-        # Both are at same price, so they merge with confluence=2 → kept
-        # But if all at same price, confluence >= 2 → kept regardless of strength
-        # This tests the filter logic works
         assert all(lv.confluence_count >= 2 or lv.strength >= 0.7 for lv in levels)
 
     def test_chip_clusters_converted(self) -> None:
@@ -409,11 +381,6 @@ class TestLevelReasoner:
 
         cluster_sources = [lv for lv in levels if any("大單群聚" in s for s in lv.sources)]
         assert len(cluster_sources) >= 1
-
-
-# ---------------------------------------------------------------------------
-# ScenarioReasoner
-# ---------------------------------------------------------------------------
 
 
 class TestScenarioReasoner:
@@ -440,7 +407,7 @@ class TestScenarioReasoner:
 
         bb = [s for s in scenarios if s.id == "break_below"][0]
         assert bb.label == "破底加速"
-        assert bb.probability == "高"  # bearish + confidence > 0.6
+        assert bb.probability == "高"
 
     def test_hold_bounce_with_support_and_bull_evidence(self) -> None:
         """hold_bounce generated when support exists and bull evidence present."""
@@ -451,13 +418,12 @@ class TestScenarioReasoner:
         scenarios = ScenarioReasoner().generate(fr, bias, levels)
 
         ids = [s.id for s in scenarios]
-        # bias has a bull evidence in its evidences list
         assert "hold_bounce" in ids
 
     def test_gap_fill_on_gap(self) -> None:
         """gap_fill generated when gap >= 0.3%."""
         prev_close = 200 * SCALE
-        open_price = 201 * SCALE  # 0.5% gap
+        open_price = 201 * SCALE
         fr = _fact_report(
             session_data=_session_data(close=201, open_=201),
             cross_day=_cross_day(
@@ -552,11 +518,6 @@ class TestScenarioReasoner:
         scenarios = ScenarioReasoner().generate(fr, bias, levels)
         bb = [s for s in scenarios if s.id == "break_below"][0]
         assert bb.probability == "高"
-
-
-# ---------------------------------------------------------------------------
-# NarrativeReasoner
-# ---------------------------------------------------------------------------
 
 
 class TestNarrativeReasoner:
@@ -661,11 +622,6 @@ class TestNarrativeReasoner:
         assert "量能萎縮" in result.storyline[0]
 
 
-# ---------------------------------------------------------------------------
-# reason_all
-# ---------------------------------------------------------------------------
-
-
 class TestReasonAll:
     """Tests for the orchestrator function."""
 
@@ -702,7 +658,6 @@ class TestReasonAll:
         result = reason_all(fr)
 
         assert result.bias.bias == "bearish"
-        # With bearish bias and support levels from structure, break_below should appear
         if any(lv.side == "support" for lv in result.levels):
             ids = [s.id for s in result.scenarios]
             assert "break_below" in ids

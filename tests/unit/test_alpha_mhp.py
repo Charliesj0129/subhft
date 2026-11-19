@@ -11,7 +11,7 @@ numba = pytest.importorskip("numba", reason="numba required for alpha_mhp")
 
 
 def test_module_imports():
-    from hft_platform.strategies.alpha import alpha_mhp  # noqa: F401
+    from hft_platform.strategies.alpha import alpha_mhp
 
     assert hasattr(alpha_mhp, "strategy")
     assert callable(alpha_mhp.strategy)
@@ -40,11 +40,8 @@ def test_mhp_tracker_decay_reduces_intensity():
     beta = np.array([10.0, 10.0], dtype=np.float64)
     tracker = MHPTracker(mu, alpha, beta)
 
-    # Initialize last_ts[0] to a non-zero value (0 is first-call sentinel)
-    tracker.update_decay(0, 1_000_000_000)  # first call: sets last_ts[0]
-    # Manually elevate intensity for the actual decay test
+    tracker.update_decay(0, 1_000_000_000)
     tracker.intensities[0] = 5.0
-    # Now decay 1 second later (from 1_000_000_000)
     tracker.update_decay(0, 2_000_000_000)
     assert tracker.intensities[0] < 5.0
     assert tracker.intensities[0] >= 1.0 - 1e-9
@@ -60,7 +57,7 @@ def test_mhp_tracker_excitation_raises_all():
     tracker = MHPTracker(mu, alpha, beta)
 
     before = tracker.intensities.copy()
-    tracker.trigger_excitation(0)  # Event on asset 0
+    tracker.trigger_excitation(0)
     assert tracker.intensities[0] > before[0]
     assert tracker.intensities[1] > before[1]
 
@@ -81,8 +78,7 @@ def test_mhp_tracker_excitation_source_1():
     tracker = MHPTracker(mu, alpha, beta)
 
     before = tracker.intensities.copy()
-    tracker.trigger_excitation(1)  # Event on asset 1
-    # alpha[0,1]=0.1, alpha[1,1]=0.5 → both intensities increase
+    tracker.trigger_excitation(1)
     assert tracker.intensities[0] > before[0]
     assert tracker.intensities[1] > before[1]
 
@@ -96,9 +92,9 @@ def test_mhp_tracker_update_decay_same_ts_no_change():
     beta = np.array([10.0, 10.0], dtype=np.float64)
     tracker = MHPTracker(mu, alpha, beta)
 
-    tracker.update_decay(0, 1_000_000_000)  # init
+    tracker.update_decay(0, 1_000_000_000)
     tracker.intensities[0] = 3.0
-    tracker.update_decay(0, 1_000_000_000)  # same ts → dt=0, no change
+    tracker.update_decay(0, 1_000_000_000)
     assert tracker.intensities[0] == pytest.approx(3.0)
 
 
@@ -111,13 +107,10 @@ def test_mhp_tracker_decay_both_dimensions():
     beta = np.array([10.0, 10.0], dtype=np.float64)
     tracker = MHPTracker(mu, alpha, beta)
 
-    # Initialize both dimensions
     tracker.update_decay(0, 1_000_000_000)
     tracker.update_decay(1, 1_000_000_000)
-    # Elevate both
     tracker.intensities[0] = 4.0
     tracker.intensities[1] = 5.0
-    # Decay both 1 second later
     tracker.update_decay(0, 2_000_000_000)
     tracker.update_decay(1, 2_000_000_000)
     assert tracker.intensities[0] < 4.0
@@ -176,7 +169,6 @@ def test_mhp_strategy_runs_with_trades():
             return 0
 
         def last_trades(self, asset_id: int):
-            # Return a trade on asset 0 at tick 1, asset 1 at tick 2
             if asset_id == 0 and self._count == 1:
                 return [object()]
             if asset_id == 1 and self._count == 2:

@@ -47,7 +47,7 @@ class TestShmSnapshotRustRoundtrip:
         assert sym_hash == 42
         assert r_lob == lob
         assert r_feat == feat
-        assert version % 2 == 0  # even = stable
+        assert version % 2 == 0
 
     def test_unwritten_slot_returns_none(self, _cleanup_shm: list[str]) -> None:
         from hft_platform.rust_core import ShmSnapshotTable
@@ -90,7 +90,6 @@ class TestShmSnapshotRustRoundtrip:
             assert result is not None
             versions.append(result[0])
 
-        # Each write bumps version by 2 (odd → even)
         for i in range(1, len(versions)):
             assert versions[i] > versions[i - 1]
 

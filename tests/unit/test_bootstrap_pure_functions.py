@@ -18,10 +18,6 @@ from hft_platform.services.bootstrap import (
     wait_for_readiness,
 )
 
-# ---------------------------------------------------------------------------
-# _encode_resp()
-# ---------------------------------------------------------------------------
-
 
 class TestEncodeResp:
     def test_single_part(self) -> None:
@@ -39,11 +35,6 @@ class TestEncodeResp:
     def test_numeric_part(self) -> None:
         result = _encode_resp("SETEX", "k", "300", "v")
         assert b"$3\r\n300\r\n" in result
-
-
-# ---------------------------------------------------------------------------
-# _read_resp()
-# ---------------------------------------------------------------------------
 
 
 class TestReadResp:
@@ -78,11 +69,6 @@ class TestReadResp:
     def test_unsupported_prefix(self) -> None:
         with pytest.raises(RuntimeError, match="unsupported redis response prefix"):
             _read_resp(self._stream(b"~unexpected\r\n"))
-
-
-# ---------------------------------------------------------------------------
-# _RoleGuardedNoopClient
-# ---------------------------------------------------------------------------
 
 
 class TestRoleGuardedNoopClient:
@@ -187,11 +173,6 @@ class TestRoleGuardedNoopClient:
         assert result["status"] == "blocked"
 
 
-# ---------------------------------------------------------------------------
-# SystemBootstrapper._get_runtime_role()
-# ---------------------------------------------------------------------------
-
-
 class TestGetRuntimeRole:
     def _make(self) -> SystemBootstrapper:
         return SystemBootstrapper(settings={})
@@ -218,11 +199,6 @@ class TestGetRuntimeRole:
         assert self._make()._get_runtime_role() == "wal_loader"
 
 
-# ---------------------------------------------------------------------------
-# SystemBootstrapper._resolve_broker_id()
-# ---------------------------------------------------------------------------
-
-
 class TestResolveBrokerId:
     def test_default_shioaji(self, monkeypatch) -> None:
         monkeypatch.delenv("HFT_BROKER", raising=False)
@@ -236,11 +212,6 @@ class TestResolveBrokerId:
         monkeypatch.setenv("HFT_BROKER", "unknown_broker")
         with pytest.raises(ValueError, match="Unknown HFT_BROKER"):
             SystemBootstrapper._resolve_broker_id()
-
-
-# ---------------------------------------------------------------------------
-# SystemBootstrapper._read_int_resp()
-# ---------------------------------------------------------------------------
 
 
 class TestReadIntResp:
@@ -257,11 +228,6 @@ class TestReadIntResp:
         assert SystemBootstrapper._read_int_resp("abc", default=-99) == -99
 
 
-# ---------------------------------------------------------------------------
-# SystemBootstrapper._lease_is_stale()
-# ---------------------------------------------------------------------------
-
-
 class TestLeaseIsStale:
     def test_key_missing(self) -> None:
         assert SystemBootstrapper._lease_is_stale(ttl_s=-2, takeover_ttl_s=0) is True
@@ -276,7 +242,6 @@ class TestLeaseIsStale:
         assert SystemBootstrapper._lease_is_stale(ttl_s=100, takeover_ttl_s=30) is False
 
     def test_takeover_zero_not_stale(self) -> None:
-        # takeover_ttl_s=0 means stale takeover is disabled
         assert SystemBootstrapper._lease_is_stale(ttl_s=50, takeover_ttl_s=0) is False
 
 
@@ -296,4 +261,4 @@ async def test_wait_for_readiness_returns_when_health_server_reports_ready(monke
     monkeypatch.setattr(bootstrap_mod.asyncio, "sleep", _no_sleep)
 
     result = await wait_for_readiness(object(), timeout_s=0.01)
-    assert result is None  # completed without timeout
+    assert result is None

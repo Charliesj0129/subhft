@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 class _MinuteAccumulator:
     """Running state for the minute currently being accumulated."""
 
-    minute_id: int = -1  # session-minute key, -1 = not yet seeded
+    minute_id: int = -1
     last_mid: float = 0.0
     n_returns: int = 0
     sum_ret: float = 0.0
@@ -46,7 +46,7 @@ class _MinuteAccumulator:
 
     def observe(self, mid: float) -> None:
         if self.last_mid > 0.0 and mid > 0.0:
-            r = mid - self.last_mid  # in raw scaled units; magnitude-only
+            r = mid - self.last_mid
             self.n_returns += 1
             self.sum_ret += r
             self.sum_ret_sq += r * r
@@ -130,7 +130,6 @@ class VolPercentileGate:
         self._updates += 1
         day_key = _day_from_ts_ns(ts_ns)
         if day_key != self._day_key:
-            # Day boundary → reset history (per design).
             self._day_key = day_key
             self._completed_vols.clear()
             self._current = _MinuteAccumulator()
@@ -138,15 +137,10 @@ class VolPercentileGate:
 
         minute_id = _minute_from_ts_ns(ts_ns)
         if minute_id != self._current.minute_id:
-            # Close prior minute — append to history and re-evaluate state.
             prior_std = self._current.running_std()
             if self._current.minute_id >= 0 and self._current.n_returns >= 2:
-                # Evaluate percentile of the just-CLOSED minute against
-                # the history BEFORE it (not including itself), then
-                # append.
                 if len(self._completed_vols) >= self.warmup_minutes:
                     pct = self._percentile_rank(prior_std)
-                    # Hysteresis: switch at HIGH, release at LOW, hold otherwise.
                     if pct >= self.threshold_high:
                         self._amplified = True
                     elif pct < self.threshold_low:

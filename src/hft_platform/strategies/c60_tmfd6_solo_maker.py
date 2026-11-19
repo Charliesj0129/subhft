@@ -50,7 +50,7 @@ from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.c60_tmfd6_solo_maker")
 
-_PRICE_SCALE = 10_000  # live runtime convention (CK is x1_000_000 — not used here)
+_PRICE_SCALE = 10_000
 _LOG_INTERVAL = 500
 
 
@@ -64,7 +64,6 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
     """
 
     __slots__ = (
-        # parameters
         "_max_pos",
         "_spread_threshold_pts",
         "_inventory_skew_tenths",
@@ -75,13 +74,11 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
         "_queue_share_info",
         "_variant_label",
         "_symbols_set",
-        # runtime state
         "_local_pos",
         "_pending_buy",
         "_pending_sell",
         "_last_bid",
         "_last_ask",
-        # counters
         "_stats_count",
         "_spread_blocked",
         "_qi_widen_events",
@@ -114,7 +111,6 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
                     return default
             return default
 
-        # Canonical T8 defaults: mp=2, spread=5, skew_tenths=2, QI active.
         self._max_pos: int = _as_int(kwargs.get("max_pos", 2), 2)
         self._spread_threshold_pts: int = _as_int(kwargs.get("spread_threshold_pts", 5), 5)
         self._inventory_skew_tenths: int = _as_int(kwargs.get("inventory_skew_tenths", 2), 2)
@@ -162,15 +158,10 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
             symbols=sorted(self._symbols_set),
         )
 
-    # ---- Hot-path event handlers ------------------------------------------
-
     def on_tick(self, event: TickEvent) -> None:  # pragma: no cover
-        # Trade events are not drivers in R47-minimal (signal layers off).
         return
 
     def on_book_update(self, event: BidAskEvent) -> None:  # pragma: no cover
-        # LOBStatsEvent is richer and arrives after BidAskEvent; all decision
-        # logic is in on_stats().
         return
 
     def on_stats(self, event: LOBStatsEvent) -> None:
@@ -188,7 +179,6 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
         ):
             return
 
-        # L1 spread gate (cost viability). scaled-int units, x10000.
         spread_threshold_scaled = self._spread_threshold_pts * _PRICE_SCALE
         if event.spread_scaled < spread_threshold_scaled:
             self._spread_blocked += 1
@@ -200,21 +190,16 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
         pending_b = self._pending_buy.get(symbol, 0)
         pending_s = self._pending_sell.get(symbol, 0)
 
-        # L2 D4 QI skew (top-of-book imbalance; NOT |pos|-modulated).
         widen_bid_ticks, widen_ask_ticks = self._compute_qi_skew(event)
         if widen_bid_ticks or widen_ask_ticks:
             self._qi_widen_events += 1
 
-        # Fixed inventory skew (R47: 0.X ticks/contract; 1 tick = _PRICE_SCALE)
         skew = (pos * self._inventory_skew_tenths * _PRICE_SCALE) // 10
         bid_quote = best_bid - skew - widen_bid_ticks * _PRICE_SCALE
         ask_quote = best_ask - skew + widen_ask_ticks * _PRICE_SCALE
 
         bid_moved = bid_quote != self._last_bid.get(symbol, -1)
         ask_moved = ask_quote != self._last_ask.get(symbol, -1)
-
-        # Shadow-mode: still emit OrderIntents — system routes through
-        # HFT_ORDER_SHADOW_MODE=1 gate, which suppresses broker dispatch.
 
         if bid_moved and (pos + pending_b) < self._max_pos:
             self.buy(symbol, bid_quote, 1)
@@ -263,8 +248,6 @@ class C60TmfD6SoloMakerMinimal(BaseStrategy):
         if imbalance < -threshold:
             return widen, 0
         return 0, 0
-
-    # ---- Fill / order / gap / risk feedback --------------------------------
 
     def on_fill(self, event: FillEvent) -> None:
         symbol = event.symbol

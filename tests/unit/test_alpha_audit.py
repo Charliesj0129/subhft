@@ -45,7 +45,6 @@ class TestAuditDisabledByDefault:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise, should not call clickhouse
             result = log_gate_result("alpha1", "run1", _make_gate_report(), "hash123")
             assert result is None
 
@@ -96,9 +95,9 @@ class TestAuditEnabled:
         call_args = mock_client.insert.call_args
         assert call_args[0][0] == "audit.alpha_gate_log"
         row = call_args[0][1][0]
-        assert row[1] == "alpha1"  # alpha_id
-        assert row[3] == "B"  # gate letter
-        assert row[4] == 0  # passed = False
+        assert row[1] == "alpha1"
+        assert row[3] == "B"
+        assert row[4] == 0
 
     @patch("hft_platform.alpha.audit._get_client")
     def test_log_promotion_result_inserts_row(self, mock_get_client):
@@ -118,8 +117,8 @@ class TestAuditEnabled:
         call_args = mock_client.insert.call_args
         assert call_args[0][0] == "audit.alpha_promotion_log"
         row = call_args[0][1][0]
-        assert row[1] == "test_alpha"  # alpha_id
-        assert row[3] == 1  # approved
+        assert row[1] == "test_alpha"
+        assert row[3] == 1
 
     @patch("hft_platform.alpha.audit._get_client")
     def test_log_canary_action_inserts_row(self, mock_get_client):
@@ -140,8 +139,8 @@ class TestAuditEnabled:
         row = call_args[0][1][0]
         assert row[1] == "alpha1"
         assert row[2] == "rollback"
-        assert row[3] == 0.05  # old_weight
-        assert row[4] == 0.0  # new_weight
+        assert row[3] == 0.05
+        assert row[4] == 0.0
 
     @patch("hft_platform.alpha.audit._get_client")
     def test_log_gate_result_fails_silently(self, mock_get_client):
@@ -153,7 +152,6 @@ class TestAuditEnabled:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise — fails silently on connection error
             result = log_gate_result("alpha1", "run1", _make_gate_report(), "hash")
             assert result is None
 
@@ -167,14 +165,8 @@ class TestAuditEnabled:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise — fails silently on connection error
             result = log_promotion_result(_make_promotion_result(), "hash")
             assert result is None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Slice-D Task 5: log_kill() + reason_class coarsening
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _make_kill_record(**overrides):
@@ -249,7 +241,6 @@ class TestLogKill:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise; metrics counter increment is best-effort.
             result = log_kill(_make_kill_record())
             assert result is None
 
@@ -285,9 +276,9 @@ class TestLogKill:
         call_args = mock_client.insert.call_args
         assert call_args[0][0] == "audit.alpha_kill_ledger"
         row = call_args[0][1][0]
-        assert row[0] == record.kill_id()  # kill_id
-        assert row[2] == "alpha1"  # alpha_id
-        assert row[3] == "C"  # gate
+        assert row[0] == record.kill_id()
+        assert row[2] == "alpha1"
+        assert row[3] == "C"
 
     @patch("hft_platform.alpha.audit._get_client")
     def test_log_kill_fails_silently(self, mock_get_client):
@@ -299,7 +290,6 @@ class TestLogKill:
             import hft_platform.alpha.audit as mod
 
             mod._ENABLED = None
-            # Should not raise — falls back to local jsonl via _write_fallback.
             result = log_kill(_make_kill_record())
             assert result is None
 

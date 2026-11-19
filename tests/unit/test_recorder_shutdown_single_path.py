@@ -44,9 +44,7 @@ def test_sync_drain_skips_when_recorder_already_drained():
     )
 
     system = SimpleNamespace(recorder=rec)
-    # Call the bound method directly on the namespace (mimicking HFTSystem behaviour).
     HFTSystem._sync_drain_recorder(system)
 
-    # Neither drain nor flush should have been invoked.
     rec._drain_queue_into_batchers.assert_not_called()
     rec._shutdown_flush.assert_not_called()

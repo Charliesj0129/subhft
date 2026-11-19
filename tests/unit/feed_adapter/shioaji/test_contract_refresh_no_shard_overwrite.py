@@ -70,7 +70,6 @@ def _refresh(client):
         patch("hft_platform.config.symbols.write_symbols_yaml") as mock_write,
         patch("hft_platform.config.symbols.write_contract_cache"),
     ):
-        # Avoid broker API enumeration — point Contracts at empty mocks
         client.api = MagicMock()
         client.api.Contracts.Stocks.TSE = []
         client.api.Contracts.Stocks.OTC = []
@@ -94,7 +93,6 @@ def test_pool_shard_not_overwritten_by_contract_refresh(tmp_path):
                 "write_symbols_yaml must NOT be invoked when config_path lives under "
                 f"/hft_quote_pool_/. Called with: {mock_write.call_args_list}"
             )
-            # Shard must be byte-identical
             assert shard.read_bytes() == original_bytes
             assert shard.stat().st_mtime_ns == original_mtime
         finally:
@@ -116,9 +114,8 @@ def test_canonical_path_still_writes_symbols_yaml(tmp_path):
                 "write_symbols_yaml MUST still run for canonical (non-pool) "
                 "config paths; otherwise single-facade deployments lose symbol updates."
             )
-            # First positional arg is the rebuilt symbol list, second is the path
             args = mock_write.call_args.args
-            assert len(args[0]) == 50  # the fabricated rebuilt universe
+            assert len(args[0]) == 50
             assert os.fspath(args[1]) == str(cfg)
         finally:
             client.close()

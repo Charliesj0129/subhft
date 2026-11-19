@@ -31,10 +31,6 @@ from hft_platform.alpha.cluster import EmptyCorpusError, cluster_alphas
 from hft_platform.alpha.promotion import PromotionConfig, promote_alpha
 from hft_platform.alpha.screener import BUDGET_S, cheap_screen
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _repo_root() -> Path:
     """tests/integration/<file> -> repo root is two parents up."""
@@ -86,8 +82,6 @@ def _write_scorecard(
         "correlation_pool_max": corr,
         "latency_profile": latency_profile,
         "replay_parity": {"match_pct": replay_parity_match_pct},
-        # Gate C persists these for Gate D's audits; without them Gate D is
-        # INVALID (unmeasured), which writes no kill.
         "strategy_type": "taker",
         "cost_uncertainty": {"passed": True, "outcome": "pass", "metrics": {"p95_lower_bound_pts": 0.5}},
     }
@@ -120,7 +114,6 @@ def _setup_alpha_fixture(
         json.dumps({"run_id": f"run-{alpha_id}", "gate_status": {"gate_c": gate_c_passed}})
     )
     if not gate_c_passed:
-        # A Gate C failure is a kill only when its stored verdict is KILL.
         (alpha_dir / "backtest_report.json").write_text(
             json.dumps(
                 {
@@ -163,11 +156,6 @@ def _read_ledger(path: Path) -> list[dict]:
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Shared isolation fixture for the T19 (Gate C/D auto-kill) tests.
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def isolated_kill_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Redirect kill-ledger writes into ``tmp_path`` and reset cache.
@@ -182,14 +170,9 @@ def isolated_kill_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(jsonl))
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
     monkeypatch.setenv("HFT_KILL_LEDGER_ENABLED", "1")
-    audit._ENABLED = None  # noqa: SLF001 -- re-read env on next call
+    audit._ENABLED = None
     kill_ledger._reset_cache_for_tests()
     return jsonl
-
-
-# ---------------------------------------------------------------------------
-# T17 — DoD-D1: cheap screener finishes for all 15 alphas within 60 s.
-# ---------------------------------------------------------------------------
 
 
 def test_dod_d1_screen_15_alphas() -> None:
@@ -209,27 +192,16 @@ def test_dod_d1_screen_15_alphas() -> None:
         result = cheap_screen(alpha_id, project_root=repo_root)
         dt = time.monotonic() - t0
         durations.append((alpha_id, dt, result.verdict))
-        # Per-alpha hard budget.
         assert dt < BUDGET_S, f"alpha {alpha_id} took {dt:.2f}s (>= {BUDGET_S:.0f}s budget)"
-        # Closed verdict domain.
         assert result.verdict in {"pass", "kill", "unknown"}, (
             f"alpha {alpha_id} returned unexpected verdict {result.verdict!r}"
         )
 
-    # 95th-percentile sanity check. With no committed signals the screener
-    # short-circuits in well under a millisecond; this guards against a
-    # regression where one alpha silently drags the budget close to the
-    # ceiling.
     times = sorted(dt for _, dt, _ in durations)
     p95_idx = max(0, int(0.95 * len(times)) - 1)
     p95 = times[p95_idx]
     max_dur = max(dt for _, dt, _ in durations)
     assert p95 < BUDGET_S, f"P95 {p95:.2f}s exceeds {BUDGET_S:.0f}s budget; max={max_dur:.4f}s; details={durations}"
-
-
-# ---------------------------------------------------------------------------
-# T18 — DoD-D3: cluster pair detection finds the R47 family.
-# ---------------------------------------------------------------------------
 
 
 def test_dod_d3_cluster_finds_r47_family() -> None:
@@ -258,8 +230,6 @@ def test_dod_d3_cluster_finds_r47_family() -> None:
             matched_siblings = members & siblings
             break
     assert found, f"R47 cluster not detected with r47_maker_pivot + any of {sorted(siblings)}; clusters: {by_cluster}"
-    # Surface which siblings landed in the cluster — useful when this
-    # assertion drifts after corpus regeneration.
     assert matched_siblings, "matched siblings unexpectedly empty"
 
 
@@ -272,11 +242,6 @@ def test_dod_d3_empty_corpus_raises(tmp_path: Path) -> None:
             metric="pearson",
             write_artifact=False,
         )
-
-
-# ---------------------------------------------------------------------------
-# T19 — DoD-D4: ledger row from Gate-C raise / Gate-D reject + idempotency.
-# ---------------------------------------------------------------------------
 
 
 def test_dod_d4_kill_ledger_row_on_gate_c_raise(
@@ -309,8 +274,6 @@ def test_dod_d4_kill_ledger_row_on_gate_d_reject(
     isolated_kill_ledger: Path,
 ) -> None:
     """Gate-D rejection (sharpe < threshold) records gate='D' without raising."""
-    # sharpe=0.2 < min_sharpe_oos=1.0 -> Gate D fails, promote_alpha
-    # returns approved=False (no exception).
     root, sc_path = _setup_alpha_fixture(tmp_path, "alpha_d4_d", gate_c_passed=True, sharpe=0.2)
     cfg = PromotionConfig(
         alpha_id="alpha_d4_d",
@@ -327,7 +290,6 @@ def test_dod_d4_kill_ledger_row_on_gate_d_reject(
     assert len(rows) == 1, f"expected exactly 1 ledger row, got {rows}"
     assert rows[0]["alpha_id"] == "alpha_d4_d"
     assert rows[0]["gate"] == "D"
-    # The reason includes the failed sharpe_oos sub-check.
     assert "sharpe_oos" in rows[0]["reason"]
     assert rows[0]["killed_by"] == "promote_alpha:auto"
 
@@ -351,5 +313,4 @@ def test_dod_d4_kill_ledger_idempotent_under_retry(
 
     rows = _read_ledger(isolated_kill_ledger)
     assert len(rows) == 1, f"expected idempotent single ledger row, got {len(rows)}: {rows}"
-    # kill_id is deterministic; both retries collapse onto the same one.
     assert rows[0]["kill_id"], "kill_id must be populated"

@@ -88,8 +88,6 @@ class TestShowSurfacesForceFlatLine:
         assert "force_flat_share: (n/a" in out
 
     def test_show_line_order_edge_then_force_flat(self, _isolated) -> None:
-        # Reviewer expectation: edge metric immediately above the
-        # force-flat metric so the relationship is visible at a glance.
         _record(run_id="s_order", ff_share=15.0, edge=12.0)
         out = audit_cli.show("s_order")
         i_edge = out.index("mean_net_edge")
@@ -105,7 +103,7 @@ class TestSummaryAggregatesForceFlat:
         out = audit_cli.summary()
         assert "force_flat_residual" in out
         assert "rows with metric: 3 / 3" in out
-        assert "rows over cap   : 1" in out  # only 40 % exceeds 30 %
+        assert "rows over cap   : 1" in out
         assert "share min/max" in out
 
     def test_summary_handles_rows_without_metric(self, _isolated) -> None:
@@ -115,8 +113,6 @@ class TestSummaryAggregatesForceFlat:
         assert "rows with metric: 1 / 2" in out
 
     def test_summary_share_block_absent_metrics_still_renders_header(self, _isolated) -> None:
-        # Even when no row has the metric, the header should be present
-        # so reviewers know the gate wasn't run (vs gate ran and passed).
         _record(run_id="empty_a", ff_share=None)
         _record(run_id="empty_b", ff_share=None)
         out = audit_cli.summary()

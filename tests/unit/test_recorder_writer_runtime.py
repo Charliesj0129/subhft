@@ -13,13 +13,11 @@ async def test_writer_write_fallback_on_insert_error(tmp_path, monkeypatch):
     writer.connected = True
     writer.ch_client = MagicMock()
     writer._ts_max_future_ns = 0
-    # Disable WAL batch writer so direct wal.write is used
     writer._wal_batch_enabled = False
 
     writer._ch_insert = MagicMock(side_effect=RuntimeError("boom"))
     writer.wal.write = AsyncMock()
 
-    # Patch run_in_executor to call synchronously
     async def fake_run_in_executor(executor, func, *args):
         return func(*args)
 
@@ -42,7 +40,6 @@ async def test_writer_write_success_no_wal(tmp_path, monkeypatch):
     writer._ch_insert = MagicMock()
     writer.wal.write = AsyncMock()
 
-    # Patch run_in_executor to call synchronously
     async def fake_run_in_executor(executor, func, *args):
         return func(*args)
 
@@ -61,7 +58,7 @@ async def test_writer_write_empty_is_noop(tmp_path):
     writer.wal.write = AsyncMock()
     await writer.write("hft.market_data", [])
     writer.wal.write.assert_not_awaited()
-    assert not writer.connected  # empty write leaves connection state unchanged
+    assert not writer.connected
 
 
 @pytest.mark.asyncio
@@ -77,7 +74,7 @@ async def test_writer_write_drops_all_rows(tmp_path, monkeypatch):
     )
 
     writer.wal.write.assert_not_awaited()
-    assert not writer.connected  # all rows filtered means no CH insert attempted
+    assert not writer.connected
 
 
 def test_ch_insert_noop_on_empty(tmp_path):

@@ -14,10 +14,6 @@ from hft_platform.services.market_data import (
     _unwrap_md,
 )
 
-# ---------------------------------------------------------------------------
-# _parse_symbol_gap_overrides (Bug #36)
-# ---------------------------------------------------------------------------
-
 
 class TestParseSymbolGapOverrides:
     def test_empty_string_returns_empty(self) -> None:
@@ -31,12 +27,10 @@ class TestParseSymbolGapOverrides:
         assert result == {"TXFG6": 60.0, "2207": 120.0, "TMFE6": 10.0}
 
     def test_skips_malformed_pair_keeps_others(self) -> None:
-        # "BAD" has no '=' → skipped; "TXFG6=abc" has invalid float → skipped
         result = _parse_symbol_gap_overrides("TXFG6=60,BAD,2207=abc,TMFE6=10")
         assert result == {"TXFG6": 60.0, "TMFE6": 10.0}
 
     def test_skips_non_positive_seconds(self) -> None:
-        # negative and zero values are rejected (a 0s threshold would always-fire)
         assert _parse_symbol_gap_overrides("X=-5,Y=0,Z=1") == {"Z": 1.0}
 
     def test_strips_whitespace(self) -> None:
@@ -44,11 +38,6 @@ class TestParseSymbolGapOverrides:
             "TXFG6": 60.0,
             "2207": 120.0,
         }
-
-
-# ---------------------------------------------------------------------------
-# _looks_like_md
-# ---------------------------------------------------------------------------
 
 
 class TestLooksLikeMd:
@@ -74,11 +63,6 @@ class TestLooksLikeMd:
         assert _looks_like_md({}) is False
 
 
-# ---------------------------------------------------------------------------
-# _unwrap_md
-# ---------------------------------------------------------------------------
-
-
 class TestUnwrapMd:
     def test_none_returns_none(self) -> None:
         assert _unwrap_md(None) is None
@@ -101,11 +85,6 @@ class TestUnwrapMd:
         assert result is obj
 
 
-# ---------------------------------------------------------------------------
-# _try_fast_extract_callback_payload
-# ---------------------------------------------------------------------------
-
-
 class TestTryFastExtractCallbackPayload:
     def test_kwargs_with_quote_key(self) -> None:
         quote = {"code": "2330", "price": 500}
@@ -125,11 +104,6 @@ class TestTryFastExtractCallbackPayload:
         assert payload is None
 
 
-# ---------------------------------------------------------------------------
-# _env_int
-# ---------------------------------------------------------------------------
-
-
 class TestEnvInt:
     def test_valid_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_TEST_INT", "42")
@@ -144,11 +118,6 @@ class TestEnvInt:
         assert _env_int("HFT_TEST_BAD", 7) == 7
 
 
-# ---------------------------------------------------------------------------
-# _obs_policy
-# ---------------------------------------------------------------------------
-
-
 class TestObsPolicy:
     def test_valid_policy_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_OBS_POLICY", "minimal")
@@ -157,11 +126,6 @@ class TestObsPolicy:
     def test_invalid_policy_falls_back_to_balanced(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_OBS_POLICY", "turbo")
         assert _obs_policy() == "balanced"
-
-
-# ---------------------------------------------------------------------------
-# FeedState enum
-# ---------------------------------------------------------------------------
 
 
 class TestFeedState:

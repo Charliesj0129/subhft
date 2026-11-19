@@ -15,7 +15,7 @@ def _utc_now_iso() -> str:
 @dataclass(frozen=True, slots=True)
 class FeatureRolloutAssignment:
     feature_set_id: str
-    state: str = "active"  # active|shadow|disabled
+    state: str = "active"
     active_profile_id: str | None = None
     shadow_profile_id: str | None = None
     prev_active_profile_id: str | None = None
@@ -109,15 +109,13 @@ class FeatureRolloutController:
             if shadow_profile_id is not None:
                 next_shadow = str(shadow_profile_id) if shadow_profile_id else None
         elif state == "shadow":
-            # shadow can reuse the current active profile as primary if no profile_id specified
             if profile_id:
                 next_shadow = str(profile_id)
             elif shadow_profile_id:
                 next_shadow = str(shadow_profile_id)
             elif not cur_shadow:
                 raise ValueError("profile_id (shadow profile) is required for first shadow rollout")
-        else:  # disabled
-            # preserve current IDs for rollback/inspection; just mark disabled
+        else:
             pass
 
         self._version += 1
@@ -174,13 +172,13 @@ class FeatureRolloutController:
             return ctrl
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             return ctrl
         if not isinstance(data, dict):
             return ctrl
         try:
             ctrl._version = int(data.get("version", 0) or 0)
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             ctrl._version = 0
         for entry in data.get("sets", []) or []:
             if not isinstance(entry, dict):

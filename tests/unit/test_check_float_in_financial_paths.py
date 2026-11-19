@@ -62,9 +62,6 @@ def _run(root: Path, exemptions: Path, capsys: pytest.CaptureFixture[str]) -> tu
     return code, out.out, out.err
 
 
-# --- what is flagged -----------------------------------------------------------------------------------------------
-
-
 def test_an_unexempted_float_annotation_and_call_are_flagged(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -138,31 +135,16 @@ def test_a_float_mentioned_only_in_a_comment_is_ignored(tmp_path: Path, capsys: 
     assert "float-gate: OK" in out
 
 
-# --- inline markers --------------------------------------------------------------------------------------------------
-
-
-def test_an_inline_marker_with_a_reason_passes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    root = _tree(tmp_path, {"order/a.py": "ttl: float = 5.0  # precision-ok: seconds, not an amount\n"})
-
-    code, out, _ = _run(root, _exemptions(tmp_path, []), capsys)
-
-    assert code == 0
-    assert "inline-marker=1" in out
-
-
-@pytest.mark.parametrize(
-    "comment", ["# precision-ok", "# precision-ok:", "# precision-ok:   ", "# precision-ok seconds"]
-)
-def test_a_marker_without_a_reason_is_reported_as_needing_one(
+@pytest.mark.parametrize("comment", ["# precision-ok", "# precision-ok:", "# precision-ok: seconds"])
+def test_an_inline_marker_cannot_exempt_a_float(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], comment: str
 ) -> None:
-    root = _tree(tmp_path, {"order/a.py": f"ttl: float = 5.0  {comment}\n"})
+    root = _tree(tmp_path, {"order/a.py": f"price: float = 5.0  {comment}\n"})
 
     code, _, err = _run(root, _exemptions(tmp_path, []), capsys)
 
     assert code == 1
-    assert "order/a.py:1" in err
-    assert "'# precision-ok' needs ': <reason>'" in err
+    assert "order/a.py:1: price: float = 5.0" in err
 
 
 @pytest.mark.parametrize("comment", ["# precision- seconds", "# precision-config", "# noqa", "# precision-okay: x"])
@@ -176,15 +158,14 @@ def test_a_look_alike_comment_does_not_exempt(tmp_path: Path, capsys: pytest.Cap
 
 
 @pytest.mark.parametrize("separator", [" ", " ", "\x85", "\x0b", "\x0c", "\x1c"])
-def test_a_line_separator_inside_a_string_does_not_move_a_marker_to_the_line_above(
+def test_a_line_separator_inside_a_string_does_not_move_comment_stripping(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], separator: str
 ) -> None:
-    """``str.splitlines()`` breaks on these characters and the tokenizer does not: the lines after one were numbered
-    one too high, so the unmarked float on line 3 took the ``# precision-ok`` comment of line 4 and passed."""
-    body = f'DOC = "a{separator}b"\nx = 1\nprice: float = 0.0\nttl: float = 1.0  # precision-ok: seconds\n'
+    """Historical regression in aligning comment columns with physical lines."""
+    body = f'DOC = "a{separator}b"\nx = 1\nprice: float = 0.0\nttl: float = 1.0  # seconds\n'
     root = _tree(tmp_path, {"order/a.py": body})
 
-    code, _, err = _run(root, _exemptions(tmp_path, []), capsys)
+    code, _, err = _run(root, _exemptions(tmp_path, [_entry("order/a.py", "ttl: float = 1.0")]), capsys)
 
     assert code == 1
     assert "order/a.py:3: price: float = 0.0" in err
@@ -192,14 +173,14 @@ def test_a_line_separator_inside_a_string_does_not_move_a_marker_to_the_line_abo
 
 
 @pytest.mark.parametrize("newline", ["\r\n", "\r"])
-def test_windows_and_old_mac_line_endings_keep_the_line_numbers_and_markers(
+def test_windows_and_old_mac_line_endings_keep_the_line_numbers_and_comment_columns(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], newline: str
 ) -> None:
-    lines = ["x = 1", "price: float = 0.0", "ttl: float = 1.0  # precision-ok: seconds", ""]
+    lines = ["x = 1", "price: float = 0.0", "ttl: float = 1.0  # seconds", ""]
     root = _tree(tmp_path)
     (root / PKG / "order" / "a.py").write_bytes(newline.join(lines).encode("utf-8"))
 
-    code, _, err = _run(root, _exemptions(tmp_path, []), capsys)
+    code, _, err = _run(root, _exemptions(tmp_path, [_entry("order/a.py", "ttl: float = 1.0")]), capsys)
 
     assert code == 1
     assert "order/a.py:2: price: float = 0.0" in err
@@ -225,9 +206,6 @@ def test_a_marker_inside_a_string_literal_is_not_a_marker(tmp_path: Path, capsys
 
     assert code == 1
     assert "order/a.py:1" in err
-
-
-# --- the exemption list ----------------------------------------------------------------------------------------------
 
 
 def test_a_listed_line_passes_and_the_comment_is_not_part_of_the_match(
@@ -357,9 +335,6 @@ def test_the_same_line_listed_twice_is_rejected(tmp_path: Path, capsys: pytest.C
     assert "listed twice" in err
 
 
-# --- unusable input exits 2, never 0 ---------------------------------------------------------------------------------
-
-
 def test_a_missing_exemption_file_is_an_input_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = _tree(tmp_path)
 
@@ -404,9 +379,6 @@ def test_a_python_file_that_cannot_be_tokenized_is_an_input_error(
     assert "cannot tokenize" in err
 
 
-# --- the real repository and its wiring ------------------------------------------------------------------------------
-
-
 def test_the_repository_passes_its_own_float_gate(capsys: pytest.CaptureFixture[str]) -> None:
     code = gate.main([])
     out = capsys.readouterr()
@@ -419,7 +391,7 @@ def test_every_committed_exemption_names_a_reason_and_a_known_kind() -> None:
     table, errors = gate.load_exemptions(gate.DEFAULT_EXEMPTIONS)
 
     assert errors == []
-    assert table  # an empty list would mean the gate scans nothing it is told about
+    assert table
     assert {entry["kind"] for entry in table.values()} <= gate.KINDS
 
 

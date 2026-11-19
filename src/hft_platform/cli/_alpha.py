@@ -79,7 +79,7 @@ def _load_strict_validation_profile(profile_arg: str | None) -> Any:
     except FileNotFoundError as exc:
         print(f"[hft alpha validate] profile not found: {exc}", file=sys.stderr)
         sys.exit(2)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[hft alpha validate] profile load failed: {exc}", file=sys.stderr)
         sys.exit(2)
     if not getattr(profile, "is_strict", False):
@@ -107,7 +107,7 @@ def _refuse_screen_or_synthetic_scorecard(scorecard_arg: str | None) -> None:
         return
     try:
         payload = json.loads(path.read_text())
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"[hft alpha promote] failed to read scorecard {path}: {exc}", file=sys.stderr)
         return
     if bool(payload.get("screen_only", False)):
@@ -256,7 +256,6 @@ def cmd_alpha_pool(args: argparse.Namespace) -> None:
             try:
                 payload["redundant"] = pool_mod.flag_redundant_pairs(matrix, threshold=threshold, metric=metric)
             except TypeError:
-                # Backward compatibility for legacy helper signature without metric arg.
                 payload["redundant"] = pool_mod.flag_redundant_pairs(matrix, threshold=threshold)
             payload["threshold"] = threshold
             payload["metric"] = metric
@@ -378,7 +377,6 @@ def cmd_alpha_ab_compare(args: argparse.Namespace) -> None:
     run_a = rows[0]
     run_b = rows[1]
 
-    # Collect numeric metrics from both runs
     all_metric_keys: list[str] = []
     seen: set[str] = set()
     for key in list(run_a.keys()) + list(run_b.keys()):
@@ -528,13 +526,6 @@ def cmd_alpha_experiments_best(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
-# ---------------------------------------------------------------------------
-# Slice-D Task 11: cmd_alpha_cheap_screen
-# (Renamed during rebase onto #341 — `alpha screen` is the loose-mode validate
-# verb from #341, so the cheap pre-screener registers as `alpha cheap-screen`.)
-# ---------------------------------------------------------------------------
-
-
 def cmd_alpha_cheap_screen(args: argparse.Namespace) -> None:
     """Run the cheap pre-screener (IC + turnover + cost-floor) for one alpha.
 
@@ -546,7 +537,7 @@ def cmd_alpha_cheap_screen(args: argparse.Namespace) -> None:
     """
     try:
         from hft_platform.alpha.screener import cheap_screen
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"Failed to import alpha screener: {exc}")
         sys.exit(1)
 
@@ -567,8 +558,6 @@ def cmd_alpha_cheap_screen(args: argparse.Namespace) -> None:
         "cost_floor_breach": result.cost_floor_breach,
         "reason": result.reason,
         "duration_s": result.duration_s,
-        # A cheap screen is not a powered verdict: a screen "kill" means the
-        # candidate is screened out, not that it is dead.
         "research_outcome": "SCREENED_OUT" if result.verdict == "kill" else "SCREENED_IN",
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -582,11 +571,6 @@ def cmd_alpha_cheap_screen(args: argparse.Namespace) -> None:
 
     if result.verdict == "kill":
         sys.exit(2)
-
-
-# ---------------------------------------------------------------------------
-# Slice-D Task 12: cmd_alpha_kill
-# ---------------------------------------------------------------------------
 
 
 def cmd_alpha_kill(args: argparse.Namespace) -> None:
@@ -606,7 +590,7 @@ def cmd_alpha_kill(args: argparse.Namespace) -> None:
 
     try:
         from hft_platform.alpha.kill_ledger import KillRecord, append_kill
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"Failed to import kill ledger: {exc}")
         sys.exit(1)
 
@@ -629,12 +613,6 @@ def cmd_alpha_kill(args: argparse.Namespace) -> None:
         "inserted": bool(inserted),
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
-    # Duplicate kill is idempotent success — exit 0 either way.
-
-
-# ---------------------------------------------------------------------------
-# Slice-D Task 13: cmd_alpha_cluster
-# ---------------------------------------------------------------------------
 
 
 def cmd_alpha_cluster(args: argparse.Namespace) -> None:
@@ -651,7 +629,7 @@ def cmd_alpha_cluster(args: argparse.Namespace) -> None:
     """
     try:
         from hft_platform.alpha.cluster import EmptyCorpusError, cluster_alphas
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"Failed to import alpha cluster: {exc}")
         sys.exit(1)
 
@@ -684,9 +662,3 @@ def cmd_alpha_cluster(args: argparse.Namespace) -> None:
     print("-" * len(header))
     for a in assignments:
         print(f"{a.alpha_id:<40} {a.cluster_id:<28} {a.cluster_size:<5} {a.max_intra_cluster_corr:<10.4f}")
-
-
-# ── Stage 5: canonical pipeline orchestrator wrappers (D2) ──────────────────
-# Thin delegates onto research.pipeline._run_pipeline so that
-# `hft alpha pipeline {run,triage}` and `make research[-triage]` share a single
-# orchestration codepath. Do NOT duplicate orchestration logic here.

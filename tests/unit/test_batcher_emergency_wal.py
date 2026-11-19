@@ -12,10 +12,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from hft_platform.recorder.batcher import Batcher, ColumnarBuffer, GlobalMemoryGuard
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_batcher(writer, table_name: str = "hft.test_table") -> Batcher:
     GlobalMemoryGuard.reset()
@@ -25,11 +21,6 @@ def _make_batcher(writer, table_name: str = "hft.test_table") -> Batcher:
 def _fill_buffer(batcher: Batcher, rows: list[dict[str, Any]]) -> None:
     for row in rows:
         batcher._active.append_row(row)
-
-
-# ---------------------------------------------------------------------------
-# _wal_emergency_dump: success path
-# ---------------------------------------------------------------------------
 
 
 class TestWalEmergencyDump:
@@ -47,7 +38,6 @@ class TestWalEmergencyDump:
         fname = files[0].name
         assert fname.startswith("emergency_")
         assert fname.endswith(".jsonl")
-        # Table name must NOT appear in filename (batch format uses __wal_table__ header)
         assert "hft.test_table" not in fname
 
     def test_file_contains_correct_row_count(self, tmp_path) -> None:
@@ -62,7 +52,6 @@ class TestWalEmergencyDump:
         files = list(tmp_path.iterdir())
         assert len(files) == 1
         lines = [ln for ln in files[0].read_text().splitlines() if ln.strip()]
-        # 1 header line + 5 data rows
         assert len(lines) == 6
         header = json.loads(lines[0])
         assert header["__wal_table__"] == "hft.test_table"
@@ -79,14 +68,12 @@ class TestWalEmergencyDump:
 
         files = list(tmp_path.iterdir())
         all_lines = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
-        # First line is the __wal_table__ header; remainder are the data rows
         assert "__wal_table__" in all_lines[0]
         assert all_lines[1:] == rows
 
     def test_empty_buffer_writes_no_file(self, tmp_path) -> None:
         writer = MagicMock()
         batcher = _make_batcher(writer)
-        # active buffer has 0 rows
 
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             batcher._wal_emergency_dump(batcher._active)
@@ -114,7 +101,6 @@ class TestWalEmergencyDump:
         buf = MagicMock(spec=ColumnarBuffer)
         buf.to_row_dicts.side_effect = RuntimeError("boom")
 
-        # Must not raise
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             batcher._wal_emergency_dump(buf)
 
@@ -126,12 +112,10 @@ class TestWalEmergencyDump:
         rows = [{"k": "v"}]
         _fill_buffer(batcher, rows)
 
-        # Make makedirs succeed but open() fail
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("builtins.open", side_effect=OSError("disk full")):
-                result = batcher._wal_emergency_dump(batcher._active)  # must not raise
+                result = batcher._wal_emergency_dump(batcher._active)
 
-        # File write failure returns False (WAL dump failed)
         assert result is False
 
     def test_returns_true_on_success(self, tmp_path) -> None:
@@ -176,11 +160,6 @@ class TestWalEmergencyDump:
             result = batcher._wal_emergency_dump(buf)
 
         assert result is False
-
-
-# ---------------------------------------------------------------------------
-# _write_flush_buffer: exception handlers call emergency dump
-# ---------------------------------------------------------------------------
 
 
 class TestWriteFlushBufferEmergencyFallback:
@@ -232,7 +211,6 @@ class TestWriteFlushBufferEmergencyFallback:
         files = list(tmp_path.iterdir())
         assert len(files) == 1
         lines = [ln for ln in files[0].read_text().splitlines() if ln.strip()]
-        # 1 header line + 3 data rows
         assert len(lines) == 4
 
     def test_emergency_dump_file_contains_correct_data(self, tmp_path) -> None:
@@ -248,7 +226,6 @@ class TestWriteFlushBufferEmergencyFallback:
 
         files = list(tmp_path.iterdir())
         all_lines = [json.loads(ln) for ln in files[0].read_text().splitlines() if ln.strip()]
-        # First line is the __wal_table__ header; remainder are the data rows
         assert "__wal_table__" in all_lines[0]
         assert all_lines[0]["__wal_table__"] == "hft.test_table"
         assert all_lines[1:] == rows
@@ -290,15 +267,12 @@ class TestWriteFlushBufferEmergencyFallback:
         _fill_buffer(batcher, rows)
         flush_buf = batcher._active
 
-        # Ensure active buffer is empty before re-injection
         batcher._active = batcher._new_buffer()
 
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("builtins.open", side_effect=OSError("disk full")):
-                # Must not raise despite double fault
                 self._run(batcher._write_flush_buffer(flush_buf))
 
-        # Rows re-injected into active buffer, NOT cleared from flush_buf
         assert batcher._active.row_count == 2
         reinjected = batcher._active.to_row_dicts()
         assert reinjected == rows
@@ -311,7 +285,6 @@ class TestWriteFlushBufferEmergencyFallback:
         rows = [{"ts": 1}]
         _fill_buffer(batcher, rows)
 
-        # Use a MagicMock buffer that fails on second to_row_dicts call (reinject)
         flush_buf = MagicMock(spec=ColumnarBuffer)
         flush_buf.row_count = 1
         flush_buf.to_row_dicts = MagicMock(side_effect=[rows, RuntimeError("extract fail")])
@@ -320,17 +293,9 @@ class TestWriteFlushBufferEmergencyFallback:
 
         with patch.dict(os.environ, {"HFT_WAL_DIR": str(tmp_path)}):
             with patch("builtins.open", side_effect=OSError("disk full")):
-                # Must not raise despite triple fault
                 self._run(batcher._write_flush_buffer(flush_buf))
 
-        # Both WAL dump and reinject failed — active buffer row count is unchanged
-        # (no rows from flush_buf were added via reinject)
         assert batcher._active.row_count == row_count_before
-
-
-# ---------------------------------------------------------------------------
-# _reinject_failed_buffer
-# ---------------------------------------------------------------------------
 
 
 class TestReinjectFailedBuffer:
@@ -344,7 +309,6 @@ class TestReinjectFailedBuffer:
         _fill_buffer(batcher, rows)
         flush_buf = batcher._active
 
-        # Reset active to empty
         batcher._active = batcher._new_buffer()
         assert batcher._active.row_count == 0
 
@@ -386,8 +350,6 @@ class TestReinjectFailedBuffer:
         buf = MagicMock(spec=ColumnarBuffer)
         buf.to_row_dicts.side_effect = RuntimeError("extract fail")
 
-        # Must not raise
         self._run(batcher._reinject_failed_buffer(buf))
 
-        # Reinject failed — active buffer remains empty (no rows added)
         assert batcher._active.row_count == 0

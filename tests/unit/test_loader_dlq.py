@@ -58,12 +58,6 @@ class TestLoaderInsertRetry(unittest.TestCase):
     @patch("time.sleep")
     def test_insert_batch_retry_on_failure(self, mock_sleep):
         """Test insert retries on transient failure."""
-        # ``patch("time.sleep")`` replaces the attribute on the *stdlib* module,
-        # so the mock records every sleep in the process for as long as the
-        # patch is active -- including ones made by background threads other
-        # tests left running. ``mock_sleep.call_count`` was therefore a count of
-        # unrelated work: 80 instead of 2 in CI on 2026-09-01, green locally.
-        # Attribute the sleeps by thread instead.
         own_sleeps: list[float] = []
         this_thread = threading.get_ident()
 
@@ -78,7 +72,7 @@ class TestLoaderInsertRetry(unittest.TestCase):
         loader.ch_client.insert.side_effect = [
             ConnectionError("Connection lost"),
             ConnectionError("Connection lost"),
-            None,  # Success on third attempt
+            None,
         ]
 
         rows = [
@@ -113,8 +107,7 @@ class TestLoaderInsertRetry(unittest.TestCase):
         delay_1 = loader._compute_insert_backoff(1)
         delay_2 = loader._compute_insert_backoff(2)
 
-        # Delays should increase (approximately exponential with some jitter)
-        self.assertGreater(delay_1, delay_0 * 0.5)  # Allow for jitter
+        self.assertGreater(delay_1, delay_0 * 0.5)
         self.assertGreater(delay_2, delay_1 * 0.5)
 
     def test_insert_batch_no_client_returns_false(self):
@@ -154,11 +147,9 @@ class TestLoaderDLQ(unittest.TestCase):
 
         loader._write_to_dlq("market_data", rows, "test_error")
 
-        # Check DLQ directory was created
         dlq_dir = os.path.join(self.wal_dir, "dlq")
         self.assertTrue(os.path.exists(dlq_dir))
 
-        # Check file was created
         dlq_files = os.listdir(dlq_dir)
         self.assertEqual(len(dlq_files), 1)
         self.assertTrue(dlq_files[0].startswith("market_data_"))
@@ -181,14 +172,12 @@ class TestLoaderDLQ(unittest.TestCase):
         with open(dlq_path, "r") as f:
             lines = f.readlines()
 
-        # First line should be metadata
         meta = json.loads(lines[0])
         self.assertTrue(meta.get("_dlq_meta"))
         self.assertEqual(meta.get("table"), "market_data")
         self.assertEqual(meta.get("error"), "connection_failed")
         self.assertEqual(meta.get("row_count"), 1)
 
-        # Second line should be the row
         row = json.loads(lines[1])
         self.assertEqual(row.get("symbol"), "2330")
 
@@ -210,18 +199,15 @@ class TestLoaderCorruptFileQuarantine(unittest.TestCase):
         """Test corrupt file is moved to quarantine directory."""
         loader = WALLoaderService(wal_dir=self.wal_dir, archive_dir=self.archive_dir)
 
-        # Create a corrupt file
         corrupt_file = os.path.join(self.wal_dir, "test_corrupt.jsonl")
         with open(corrupt_file, "w") as f:
             f.write("not valid json\n")
 
         loader._quarantine_corrupt_file(corrupt_file, "test_corrupt.jsonl", "JSON decode error")
 
-        # Check corrupt directory was created
         corrupt_dir = os.path.join(self.wal_dir, "corrupt")
         self.assertTrue(os.path.exists(corrupt_dir))
 
-        # Check file was moved
         self.assertFalse(os.path.exists(corrupt_file))
         quarantined = os.path.join(corrupt_dir, "test_corrupt.jsonl")
         self.assertTrue(os.path.exists(quarantined))
@@ -234,7 +220,6 @@ class TestLoaderCorruptFileQuarantine(unittest.TestCase):
         with open(corrupt_file, "w") as f:
             f.write("corrupt\n")
 
-        # Ensure corrupt dir doesn't exist
         corrupt_dir = os.path.join(self.wal_dir, "corrupt")
         self.assertFalse(os.path.exists(corrupt_dir))
 

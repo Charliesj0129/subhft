@@ -75,26 +75,10 @@ class PromotionConfig:
     max_abs_drawdown: float = 0.2
     max_turnover: float = 2.0
     max_correlation: float = 0.7
-    # Slice C: minimum replay-parity match percentage required for Gate D promotion.
-    # Scorecards under a strict validation profile must populate
-    # ``scorecard.replay_parity.match_pct``; missing or below-threshold values
-    # fail closed (see _evaluate_gate_d).
     min_replay_parity_match_pct: float = 95.0
-    # ADR-003: ``report.json`` files written by ``hft run --mode replay``. A
-    # replay_parity obligation deferred to Shadow exit can be certified at
-    # Gate E by these (``alpha/shadow_parity.py``); without them it stays owed
-    # and holds the canary. ``replay_strategy_id`` is the runtime strategy id
-    # the reports must name (default: ``alpha_id``); ``replay_strategy`` is its
-    # ``module:Class``, whose source sha256 the obligation pins so only reports
-    # that replayed this code can certify it.
     replay_parity_report_paths: tuple[str, ...] = ()
     replay_strategy_id: str | None = None
     replay_strategy: str | None = None
-    # Slice B Task 12: belt-and-suspenders Gate D audits that mirror the
-    # ``inventory_mtm`` and ``cost_uncertainty`` Gate C sub-gates. The audits
-    # read sub-gate metrics that Gate C wrote to the scorecard and re-check
-    # them at promotion time. Defaults preserve current behaviour for
-    # scorecards that do not carry the Slice B sub-gate payloads.
     min_inventory_mtm_safety_margin_pct: float = 5.0
     min_cost_uncertainty_p95_lower_bound_pts: float = 0.0
     enable_rust_readiness_gate: bool = False
@@ -118,28 +102,11 @@ class PromotionConfig:
     write_promotion_config: bool = True
     config_version: str = "v1"
     parent_config_version: str | None = None
-    # Feature set version from the alpha manifest.  When set, Gate D warns
-    # (warn-only, non-blocking) if it doesn't match the live engine version.
     manifest_feature_set_version: str | None = None
-    # Strict validation profile required for Gate D entry.
     validation_profile: Any | None = None
-    # L6: equity provenance guard. When True (default) Gate D fails closed if
-    # the scorecard reports ``equity_source="synthetic"`` or omits the field.
-    # ``real`` and ``real_no_trade`` are accepted (a confirmed no-fill
-    # session is a legitimate observation, not a synthetic fallback).
     require_real_equity: bool = True
-    # L6: artifact provenance guard. When True (default) promotion refuses
-    # scorecards stamped ``screen_only=true`` (produced by ``hft alpha screen``).
     reject_screen_only: bool = True
-    # Loop_v1 L11 stabilization: ``--dry-run`` runs Gate D evaluation without
-    # any durable side effects -- no kill-ledger row, no
-    # ``config/strategy_promotions/`` YAML write. Research artifacts (decision
-    # JSON, integration report) still land under the experiments dir for
-    # auditability. Set via ``hft alpha promote --dry-run``.
     dry_run: bool = False
-    # ``governed`` promotes only a sealed scorecard under the evidence root,
-    # writes its reports there, appends Gate D/E/F events to the verdict
-    # ledger and never rewrites ``impl.py`` (ADR-005 section 6).
     run_mode: str = "exploratory"
 
 
@@ -205,7 +172,6 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     _verify_sealed_scorecard(scorecard_path)
     scorecard = json.loads(scorecard_path.read_text())
 
-    # L6 (#341): refuse screen-only artifacts before any further gate evaluation.
     if config.reject_screen_only and bool(scorecard.get("screen_only", False)):
         raise PromotionError(
             f"cannot_promote_screen_artifact: scorecard {scorecard_path} is stamped "
@@ -213,13 +179,6 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
             "a promotion-eligible artifact"
         )
 
-    # Verify Gate C passed before evaluating promotion gates.
-    # Slice-D T14: on raise, log a kill-ledger row (gate='C') before re-raising
-    # so the rejected alpha is recorded in the durable ledger. The original
-    # ``ValueError`` is preserved for backward compatibility with existing
-    # callers that match on its message.
-    # A kill is recorded only when the stored Gate C verdict is KILL; an
-    # INVALID / NEEDS-MORE-DAYS / INCONCLUSIVE run is refused without one.
     try:
         _verify_gate_c_passed(scorecard_path)
     except GateCNotPassedError as exc:
@@ -246,14 +205,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     }
     gate_d_verdict, gate_d_checks = _evaluate_gate_d_verdict(scorecard, config)
     gate_d_passed = gate_d_verdict.passed
-    # Status is derived from the verdict ledger; promotion never rewrites impl.py.
     if not gate_d_passed and not config.dry_run and gate_d_verdict.verdict is Verdict.KILL:
-        # Slice-D T14: log a kill-ledger row (gate='D') for a KILL verdict.
-        # Gate D failure does not raise here -- promote_alpha returns a
-        # PromotionResult with approved=False -- so this is the *only* path
-        # where the kill is recorded for the Gate-D outcome. A Gate D check
-        # that could not be evaluated (missing scorecard field) is INVALID,
-        # not a kill. Dry-run mode (Loop_v1 L11) suppresses the write.
         _auto_kill(
             alpha_id=config.alpha_id,
             gate="D",
@@ -314,9 +266,7 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         "alpha_id": config.alpha_id,
         "gate_d_passed": gate_d_passed,
         "gate_d_verdict": gate_d_verdict.verdict.value,
-        # Deferred gates this approval still owes to a later stage (ADR-003).
         "obligations": obligations,
-        # Deferred gates certified here, with the stage and the evidence.
         "certified_obligations": certified_obligations,
         "gate_e_passed": gate_e_passed,
         "gate_f_passed": gate_f_passed,
@@ -333,7 +283,6 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
     }
     decision_path = artifact_dir / "promotion_decision.json"
     _write_json(decision_path, decision_payload)
-    # A dry run records nothing in the ledger: status is derived from it (Loop_v1 L11).
     if writer is not None and not config.dry_run:
         _publish_governed_promotion(
             writer,
@@ -384,7 +333,6 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         checklist=checklist,
     )
 
-    # Best-effort audit logging (guarded by HFT_ALPHA_AUDIT_ENABLED)
     try:
         from hft_platform.alpha.audit import log_gate_result, log_promotion_result
         from hft_platform.alpha.validation import GateReport
@@ -396,21 +344,15 @@ def promote_alpha(config: PromotionConfig) -> PromotionResult:  # noqa: C901
         for gate_report in (gate_d_report, gate_e_report, gate_f_report):
             log_gate_result(config.alpha_id, None, gate_report, cfg_hash)
         log_promotion_result(result, cfg_hash, scorecard)
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         _log.debug("audit_log_failed", alpha_id=config.alpha_id, exc_info=True)
 
     return result
 
 
-# Gate D checks whose input is a scorecard value: a missing value means the
-# check could not be evaluated (ERROR), not that the candidate failed it.
 _GATE_D_VALUE_REQUIRED: frozenset[str] = frozenset(
     {"sharpe_oos", "max_drawdown", "turnover", "correlation_pool_max", "latency_profile", "replay_parity_audit"}
 )
-# Gate D checks that audit the evidence (latency assumptions, equity
-# provenance, replay fidelity, feature-set version) rather than the
-# candidate. Failing one makes the evidence unusable (ERROR): it does not
-# show the candidate is dead.
 _GATE_D_EVIDENCE_CHECKS: frozenset[str] = frozenset(
     {"latency_profile", "latency_audit_strict", "equity_source", "replay_parity_audit", "feature_set_version"}
 )
@@ -432,8 +374,6 @@ def _evaluate_gate_d_verdict(
     checks = _gate_d_checks(scorecard, config)
     for name, check in checks.items():
         if "outcome" in check:
-            # An outcome set by the check must agree with its pass flag;
-            # a contradiction is an ERROR, never whichever side says PASS.
             try:
                 resolve_outcome(bool(check["pass"]), check["outcome"])
             except ValueError:
@@ -444,8 +384,6 @@ def _evaluate_gate_d_verdict(
                 check["outcome"] = Outcome.ERROR.value
             else:
                 check["outcome"] = (Outcome.PASS if check["pass"] else Outcome.FAIL).value
-    # Gate D audits re-check Gate C sub-gates under ``<sub_gate>_audit``; a
-    # sub-gate the profile defers is deferred here under the audit's name.
     profile = getattr(config, "validation_profile", None)
     deferrable = {f"{gate}_audit": stage for gate, stage in (getattr(profile, "deferrable", None) or {}).items()}
     verdict = derive_verdict(
@@ -467,9 +405,6 @@ def _replay_parity_audit(scorecard: dict[str, Any], config: PromotionConfig) -> 
             match_pct = None
     min_match_pct = getattr(config, "min_replay_parity_match_pct", 95.0)
     if replay_parity is not None and match_pct is None:
-        # A report exists but carries no usable match_pct (malformed, or an
-        # error record): that is broken evidence, not absent evidence, so it
-        # must not be deferred as NOT_APPLICABLE.
         return {
             "value": None,
             "min": min_match_pct,
@@ -479,9 +414,6 @@ def _replay_parity_audit(scorecard: dict[str, Any], config: PromotionConfig) -> 
             "detail": "INVALID — scorecard.replay_parity present but has no numeric match_pct",
         }
     if match_pct is None:
-        # No parity report: a research candidate has no live intents yet
-        # (ADR-003). NOT_APPLICABLE is deferred to Shadow exit only when the
-        # profile says so; otherwise the run is INVALID.
         return {
             "value": None,
             "min": min_match_pct,
@@ -507,10 +439,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
     turnover = _to_float(scorecard.get("turnover"))
     corr = _to_float(scorecard.get("correlation_pool_max"))
     latency_profile = scorecard.get("latency_profile") or None
-    # Slice B Task 12 — strict-mode P95 fail-closed check. Only triggered when
-    # the scorecard carries a *resolved* profile dict (i.e. expanded from
-    # config/research/latency_profiles.yaml). String-only metadata preserves
-    # the existing latency_profile-presence check below.
     profile_obj = getattr(config, "validation_profile", None)
     profile_is_strict = bool(getattr(profile_obj, "is_strict", False))
     if isinstance(latency_profile, dict):
@@ -545,9 +473,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
                 else "MISSING — scorecard.correlation_pool_max must be populated before promotion"
             ),
         },
-        # Latency realism governance (CLAUDE.md constitution requirement).
-        # Missing latency_profile in the scorecard = NOT promotion-ready.
-        # Blocks Gate D: alpha must record P95 broker RTT assumptions before promotion.
         "latency_profile": {
             "value": latency_profile,
             "required": True,
@@ -560,11 +485,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             ),
         },
     }
-    # L6: equity provenance audit — ``synthetic`` (HTML-report fallback) is
-    # fail-closed; ``real`` and ``real_no_trade`` (confirmed no-fill session,
-    # length-valid + zero P&L motion + zero fills) are accepted; missing is
-    # warn-only for back-compat with legacy scorecards (the field was
-    # introduced in loop_v1 L6 and older runs lack it).
     if config.require_real_equity:
         allowed_sources = ("real", "real_no_trade")
         equity_source_raw = scorecard.get("equity_source")
@@ -579,7 +499,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             equity_pass = True
             equity_detail = "OK"
         elif equity_source is None:
-            # Legacy scorecard predating L6 — pass with warning.
             equity_pass = True
             equity_detail = (
                 "WARN — scorecard.equity_source missing (legacy); future runs "
@@ -595,10 +514,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             "pass": equity_pass,
             "detail": equity_detail,
         }
-    # Slice B Task 12 — surface the strict P95 fail-closed audit when a
-    # resolved profile dict is attached. String-only metadata leaves only
-    # the legacy latency_profile-presence check above (advisory until a
-    # resolved dict is provided upstream).
     if _audit is not None:
         checks["latency_audit_strict"] = {
             "value": _audit.get("profile_id"),
@@ -606,19 +521,10 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             "pass": bool(_audit.get("passed", False)),
             "detail": str(_audit.get("reason", "")),
         }
-    # Slice C: replay-parity audit — mirrors latency_profile fail-closed semantics.
-    # Promotion-time check that the scorecard recorded a passing replay_parity_report
-    # (live → backtest intent reconstruction within tolerance under a strict profile).
     checks["replay_parity_audit"] = _replay_parity_audit(scorecard, config)
 
-    # Slice B Task 12: inventory_mtm + cost_uncertainty audits.
-    # Belt-and-suspenders re-check of the Gate C sub-gate results that the
-    # strict profile elevates to blocking. The audits read the sub-gate
-    # payloads Gate C wrote to the scorecard (passed/metrics) — they do NOT
-    # re-evaluate from raw daily_pnl. Pattern mirrors replay_parity_audit above.
     strategy_type = str(scorecard.get("strategy_type") or "").strip().lower()
 
-    # --- inventory_mtm_audit (maker-only; advisory PASS for taker) ---
     inventory_mtm_payload = scorecard.get("inventory_mtm")
     if strategy_type == "taker":
         checks["inventory_mtm_audit"] = {
@@ -648,8 +554,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             ),
         }
     else:
-        # Maker / unknown strategy with no inventory_mtm payload: the audit
-        # cannot be evaluated, which is an ERROR, not a default PASS.
         checks["inventory_mtm_audit"] = {
             "value": None,
             "required": True,
@@ -658,7 +562,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             "detail": "MISSING — scorecard.inventory_mtm absent; the audit cannot be evaluated",
         }
 
-    # --- cost_uncertainty_audit (applies to maker + taker) ---
     cost_uncertainty_payload = scorecard.get("cost_uncertainty")
     min_p95_lower = float(config.min_cost_uncertainty_p95_lower_bound_pts)
     if isinstance(cost_uncertainty_payload, dict):
@@ -679,7 +582,6 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             ),
         }
     else:
-        # No cost_uncertainty payload: the audit cannot be evaluated (ERROR).
         checks["cost_uncertainty_audit"] = {
             "value": None,
             "min": min_p95_lower,
@@ -688,12 +590,11 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             "pass": False,
             "detail": "MISSING — scorecard.cost_uncertainty absent; the audit cannot be evaluated",
         }
-    # Feature set version parity check (warn-only: does NOT block Gate D).
     manifest_fsv = str(config.manifest_feature_set_version or "").strip() or None
     _LIVE_FSV: str | None = None
     try:
         from hft_platform.feature.registry import FEATURE_SET_VERSION as _LIVE_FSV
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         pass
     if manifest_fsv is not None and _LIVE_FSV is not None:
         fsv_match = manifest_fsv == _LIVE_FSV
@@ -701,7 +602,7 @@ def _gate_d_checks(scorecard: dict[str, Any], config: PromotionConfig) -> dict[s
             "manifest": manifest_fsv,
             "live_engine": _LIVE_FSV,
             "match": fsv_match,
-            "pass": fsv_match,  # blocking: mismatch fails Gate D
+            "pass": fsv_match,
             "detail": (
                 "OK"
                 if fsv_match
@@ -724,7 +625,6 @@ def _resolve_scorecard_path(root: Path, config: PromotionConfig, alpha_dir: Path
     if latest is not None:
         return latest
 
-    # Backward-compatible fallback for legacy/manual runs.
     return alpha_dir / "scorecard.json"
 
 
@@ -826,7 +726,7 @@ def _latest_scorecard_from_runs(
             scorecard = Path(row.scorecard_path)
             if scorecard.exists():
                 return scorecard
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return None
     return None
 
@@ -922,8 +822,6 @@ def _evaluate_gate_e(
     )
     summary_drift_alerts = int(paper_summary.get("drift_alerts_total", 0)) if paper_summary else 0
     summary_reject_rate_mean = float(paper_summary.get("execution_reject_rate_mean", 0.0)) if paper_summary else 0.0
-    # Prefer P95 reject rate over mean per CLAUDE.md latency realism policy.
-    # Falls back to mean if P95 not recorded (legacy sessions).
     _p95_raw = paper_summary.get("execution_reject_rate_p95") if paper_summary else None
     summary_reject_rate = float(_p95_raw) if _p95_raw is not None else summary_reject_rate_mean
 
@@ -982,8 +880,6 @@ def _evaluate_gate_e(
             ),
         }
 
-    # Regime-span check (warn-only: does NOT block Gate E).
-    # Sessions should cover ≥2 distinct regimes for adequate test diversity.
     regimes_covered = list(paper_summary.get("regimes_covered", [])) if paper_summary else []
     regime_span_check: dict[str, object] = {"covered": regimes_covered, "pass": True}
     if len(regimes_covered) < 2:
@@ -1013,8 +909,6 @@ def _evaluate_gate_f(config: PromotionConfig, root: Path) -> tuple[bool, dict[st
     profile = getattr(config, "validation_profile", None)
     na_reason = (getattr(profile, "not_applicable_gates", None) or {}).get("gate_f")
     if na_reason:
-        # The profile declares Gate F not applicable (Rust is paused): it
-        # does not block, and it is recorded as NOT_APPLICABLE, not as a PASS.
         return True, {
             "skipped": True,
             "outcome": Outcome.NOT_APPLICABLE.value,
@@ -1226,7 +1120,7 @@ def _load_rust_module_name(root: Path, alpha_id: str) -> str:
             return ""
         rust_module = getattr(alpha.manifest, "rust_module", None)
         return str(rust_module or "").strip()
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return ""
 
 
@@ -1334,7 +1228,6 @@ def build_promotion_checklist(
             ]
         )
     if (gate_f_checks or {}).get("outcome") == Outcome.NOT_APPLICABLE.value:
-        # The profile declared Gate F not applicable; there are no Rust checks to list.
         items.append(
             PromotionChecklistItem(
                 label="Gate F: not applicable",
@@ -1392,10 +1285,7 @@ def _promotion_obligations(verdict: VerdictResult, config: PromotionConfig) -> l
         entry: dict[str, Any] = {"gate": gate, "stage": stage}
         if gate == shadow_parity.PARITY_GATE:
             entry["min_match_pct"] = float(getattr(config, "min_replay_parity_match_pct", 95.0))
-            # The runtime strategy id the replay reports must name.
             entry["strategy_id"] = str(config.replay_strategy_id or config.alpha_id)
-            # None when --replay-strategy is absent or does not resolve; Gate E
-            # then fails, since no report could ever be bound to this candidate.
             entry["strategy_code"] = shadow_parity.pin_strategy(config.replay_strategy)
         obligations.append(entry)
     return obligations
@@ -1488,10 +1378,6 @@ def _write_promotion_config(
 ) -> Path:
     day = datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc).strftime("%Y%m%d")
     if forced:
-        # L9 (loop_v1): forced promotions are research-only escape hatches.
-        # They MUST NOT live under config/strategy_promotions/ — that path is
-        # consumed by live promotion config. CI guard blocks
-        # config/live/** from referencing research/forced_promotions/.
         out = root / "research" / "forced_promotions" / day / f"{config.alpha_id}.yaml"
     else:
         out = root / "config" / "strategy_promotions" / day / f"{config.alpha_id}.yaml"
@@ -1534,10 +1420,7 @@ def _write_promotion_config(
             "enable_rust_readiness_gate": bool(config.enable_rust_readiness_gate),
             "rust_module_name": config.rust_module_name,
         },
-        # Deferred gates still owed (ADR-003); CanaryMonitor will not raise
-        # the weight until each one carries passing evidence.
         "obligations": list(obligations or []),
-        # Deferred gates already certified, with the stage that certified them.
         "certified_obligations": list(certified_obligations or []),
         "rollback": {
             "trigger": {
@@ -1566,7 +1449,7 @@ def _git_commit(root: Path) -> str:
         )
         if proc.returncode == 0:
             return proc.stdout.strip()
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         pass
     return "unknown"
 
@@ -1605,7 +1488,7 @@ def _load_manifest_artifact_hash(alpha_dir: Path) -> str:
             return ""
         manifest = AlphaManifest.from_dict(payload)
         return stable_artifact_hash(manifest)
-    except Exception:  # noqa: BLE001 -- best-effort; degraded-key kill row is acceptable
+    except Exception:
         return ""
 
 
@@ -1650,7 +1533,7 @@ def _auto_kill(
                 killed_by="promote_alpha:auto",
             )
         )
-    except Exception:  # noqa: BLE001 -- best-effort; never block promotion error path
+    except Exception:
         _log.warning(
             "auto_kill_log_failed",
             alpha_id=alpha_id,

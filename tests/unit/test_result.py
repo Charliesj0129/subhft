@@ -48,4 +48,4 @@ def test_backtest_result_to_provenance_dict():
     prov = r.to_provenance_dict()
     assert prov["engine"] == "hftbacktest"
     assert prov["queue_model"] == "power_prob(1.5)"
-    assert "equity_curve" not in prov  # arrays excluded
+    assert "equity_curve" not in prov

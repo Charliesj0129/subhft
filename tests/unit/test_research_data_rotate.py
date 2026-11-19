@@ -62,7 +62,7 @@ def repo(tmp_path: Path) -> Path:
     _stale_dir(processed / "archived_gate_c")
     _manifest(root, "research/archive", "archived_gate_c", "GATE_C")
     rewritten = _stale_dir(processed / "rewritten_in_place")
-    (rewritten / "data.npy").write_text("rewritten today\n", encoding="utf-8")  # directory mtime stays old
+    (rewritten / "data.npy").write_text("rewritten today\n", encoding="utf-8")
     _age(rewritten, 120)
     _stale_dir(data / "synthetic" / "set_a", "old.npy", "new.npy", days=1)
     _age(data / "synthetic" / "set_a" / "old.npy", 5)
@@ -97,7 +97,7 @@ def test_without_apply_nothing_is_archived_deleted_or_created(repo: Path, args: 
     proc = _run(repo, *args)
 
     assert proc.returncode == 0, proc.stderr
-    assert _present(repo) == before  # includes the archive directory that --apply would create
+    assert _present(repo) == before
     assert "mode: DRY-RUN" in proc.stdout
     assert "[DRY-RUN] rm -rf" in proc.stdout
 
@@ -130,9 +130,9 @@ def test_apply_removes_only_stale_directories_of_alphas_below_gate_b(repo: Path)
     assert proc.returncode == 0, proc.stderr
     assert not (processed / "no_manifest").exists()
     assert not (processed / "early_alpha").exists()
-    assert not (processed / "killed_alpha").exists()  # status read from research/archive/
+    assert not (processed / "killed_alpha").exists()
     assert (processed / "gate_b_alpha/data.npy").exists()
-    assert (processed / "archived_gate_c/data.npy").exists()  # a manifest under research/archive/ protects too
+    assert (processed / "archived_gate_c/data.npy").exists()
     assert "PROTECTED" in proc.stdout and "alpha status: GATE_B" in proc.stdout
 
 

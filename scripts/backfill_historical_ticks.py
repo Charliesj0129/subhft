@@ -17,15 +17,14 @@ import time
 import urllib.request
 from datetime import datetime
 
-PRICE_SCALE = 1_000_000  # CK uses x1e6
-TZ_OFFSET_NS = 8 * 3600 * 1_000_000_000  # Shioaji historical ts is local (TST), CK needs UTC epoch
+PRICE_SCALE = 1_000_000
+TZ_OFFSET_NS = 8 * 3600 * 1_000_000_000
 CH_HOST = os.getenv("HFT_CLICKHOUSE_HOST", "clickhouse")
 CH_PORT = os.getenv("HFT_CLICKHOUSE_PORT", "8123")
 CH_USER = os.getenv("HFT_CLICKHOUSE_USER", "default")
 CH_PASSWORD = os.getenv("HFT_CLICKHOUSE_PASSWORD", os.getenv("CLICKHOUSE_PASSWORD", ""))
 CH_TABLE = "hft.market_data"
 
-# Symbol → (exchange, instrument_type, category)
 FUTURES = {
     "TXFD6": ("FUT", "future", "TXF"),
     "TMFD6": ("FUT", "future", "TMF"),
@@ -45,7 +44,6 @@ STOCKS = [
     "3008", "3034", "3045", "3711", "4904", "4938", "5871", "5880",
 ]
 
-# Rate limiter: 50 requests per 5 seconds
 _req_times: list[float] = []
 RATE_LIMIT = 50
 RATE_WINDOW = 5.0
@@ -130,7 +128,7 @@ def fetch_and_insert(
     batch_size = 5000
 
     for i in range(n):
-        ts_ns = ticks.ts[i] - TZ_OFFSET_NS  # convert local epoch → UTC epoch
+        ts_ns = ticks.ts[i] - TZ_OFFSET_NS
         price = ticks.close[i]
         vol = ticks.volume[i]
         tt = ticks.tick_type[i] if hasattr(ticks, "tick_type") and i < len(ticks.tick_type) else 0
@@ -140,7 +138,7 @@ def fetch_and_insert(
             "exchange": exchange,
             "type": "Tick",
             "exch_ts": ts_ns,
-            "ingest_ts": ts_ns,  # use exch_ts as proxy for backfill
+            "ingest_ts": ts_ns,
             "price_scaled": int(price * PRICE_SCALE),
             "volume": vol,
             "bids_price": [],
@@ -178,7 +176,6 @@ def resolve_contract(api, symbol: str):
             return cat_obj[symbol]
         except (KeyError, AttributeError, IndexError):
             return None
-    # Stock
     try:
         return api.Contracts.Stocks[symbol]
     except (KeyError, AttributeError):
@@ -204,7 +201,6 @@ def main():
     if args.time_start or args.time_end:
         print(f"Time filter: {args.time_start} - {args.time_end}")
 
-    # Login
     api = sj.Shioaji()
     api_key = os.getenv("SHIOAJI_API_KEY")
     secret_key = os.getenv("SHIOAJI_SECRET_KEY")
@@ -220,7 +216,6 @@ def main():
         sys.exit(1)
     print("Login OK")
 
-    # Build symbol list
     if args.symbols:
         target_symbols = [s.strip() for s in args.symbols.split(",")]
     elif args.futures_only:

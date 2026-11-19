@@ -29,10 +29,6 @@ from hft_platform.recorder._loader_wal import (
     save_manifest,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_svc(tmp_path) -> MagicMock:
     """Build a minimal mock service compatible with _loader_wal functions."""
@@ -68,11 +64,6 @@ def _make_wal_file(wal_dir: str, filename: str, content: str, age_s: float = 10)
     return fpath
 
 
-# ---------------------------------------------------------------------------
-# extract_file_ts
-# ---------------------------------------------------------------------------
-
-
 class TestExtractFileTs:
     def test_valid_filename(self):
         assert extract_file_ts("market_data_1234567890.jsonl") == 1234567890
@@ -91,11 +82,6 @@ class TestExtractFileTs:
 
     def test_empty_string(self):
         assert extract_file_ts("") == 0
-
-
-# ---------------------------------------------------------------------------
-# parse_table_from_filename
-# ---------------------------------------------------------------------------
 
 
 class TestParseTableFromFilename:
@@ -122,14 +108,8 @@ class TestParseTableFromFilename:
 
     def test_unknown_table(self):
         result = parse_table_from_filename("completely_unknown_table_999.jsonl")
-        # Should return something (the base prefix), not crash
         assert isinstance(result, str)
         assert len(result) > 0
-
-
-# ---------------------------------------------------------------------------
-# parse_batch_table_name
-# ---------------------------------------------------------------------------
 
 
 class TestParseBatchTableName:
@@ -165,11 +145,6 @@ class TestParseBatchTableName:
             parse_batch_table_name("nonexistent_table")
 
 
-# ---------------------------------------------------------------------------
-# load_manifest / save_manifest
-# ---------------------------------------------------------------------------
-
-
 class TestLoadManifest:
     def test_empty_manifest_when_file_missing(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -187,7 +162,6 @@ class TestLoadManifest:
         """EC-5: files still in WAL dir but in manifest should be removed from manifest."""
         svc = _make_svc(tmp_path)
         os.makedirs(svc.wal_dir)
-        # Create a WAL file that is still present
         stuck_fname = "market_data_stuck.jsonl"
         with open(os.path.join(svc.wal_dir, stuck_fname), "w") as f:
             f.write("{}\n")
@@ -198,8 +172,7 @@ class TestLoadManifest:
 
     def test_corrupt_manifest_resets_to_empty(self, tmp_path):
         svc = _make_svc(tmp_path)
-        # Write a manifest that causes an OS error on open (simulate by making dir not file)
-        os.makedirs(svc._manifest_path)  # path exists as directory
+        os.makedirs(svc._manifest_path)
         load_manifest(svc)
         assert svc._manifest == set()
 
@@ -276,9 +249,9 @@ class TestSaveManifest:
         _make_archived(svc, "a.jsonl")
         svc._manifest = {"a.jsonl"}
 
-        save_manifest(svc)  # creates the manifest
+        save_manifest(svc)
         svc._manifest = {"a.jsonl"}
-        save_manifest(svc)  # second save is the one that writes a .bak
+        save_manifest(svc)
 
         root_files = sorted(f for f in os.listdir(svc.wal_dir) if os.path.isfile(os.path.join(svc.wal_dir, f)))
         assert root_files == ["manifest.txt"]
@@ -317,11 +290,6 @@ class TestSaveManifest:
         assert content == ""
 
 
-# ---------------------------------------------------------------------------
-# get_new_files
-# ---------------------------------------------------------------------------
-
-
 class TestGetNewFiles:
     def test_returns_files_not_in_manifest(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -348,7 +316,7 @@ class TestGetNewFiles:
         os.makedirs(svc.wal_dir)
         with open(os.path.join(svc.wal_dir, "market_data_10.jsonl"), "w") as f:
             f.write("{}\n")
-        svc._manifest = {"market_data_10.jsonl"}  # should be ignored
+        svc._manifest = {"market_data_10.jsonl"}
 
         files = get_new_files(svc)
         fnames = [os.path.basename(f) for f in files]
@@ -367,11 +335,6 @@ class TestGetNewFiles:
         assert ts_values == sorted(ts_values)
 
 
-# ---------------------------------------------------------------------------
-# mark_processed
-# ---------------------------------------------------------------------------
-
-
 class TestMarkProcessed:
     def test_adds_basename_to_manifest(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -387,11 +350,6 @@ class TestMarkProcessed:
         assert len(svc._manifest) == 0
 
 
-# ---------------------------------------------------------------------------
-# process_single_file
-# ---------------------------------------------------------------------------
-
-
 class TestProcessSingleFile:
     def test_skips_when_claim_fails(self, tmp_path):
         svc = _make_svc(tmp_path)
@@ -404,7 +362,6 @@ class TestProcessSingleFile:
     def test_skips_recent_file(self, tmp_path):
         svc = _make_svc(tmp_path)
         os.makedirs(svc.wal_dir)
-        # Write file with NOW as mtime (not old enough)
         fpath = os.path.join(svc.wal_dir, "market_data_999.jsonl")
         with open(fpath, "w") as f:
             f.write("{}\n")
@@ -426,7 +383,6 @@ class TestProcessSingleFile:
     def test_skips_file_with_unknown_table(self, tmp_path):
         svc = _make_svc(tmp_path)
         os.makedirs(svc.wal_dir)
-        # Filename that maps to "unknown"
         fpath = _make_wal_file(svc.wal_dir, "zzz.jsonl", '{"x":1}\n')
         result = process_single_file(svc, fpath, force=True)
         assert result is False
@@ -473,7 +429,6 @@ class TestProcessSingleFile:
         os.makedirs(svc.wal_dir)
         os.makedirs(svc.archive_dir)
 
-        # Build a multi-table batch WAL file
         lines = [
             json.dumps({"__wal_table__": "market_data"}),
             json.dumps({"symbol": "2330", "price": 100}),
@@ -504,18 +459,12 @@ class TestProcessSingleFile:
         assert result is False
 
 
-# ---------------------------------------------------------------------------
-# process_files
-# ---------------------------------------------------------------------------
-
-
 class TestProcessFiles:
     def test_noop_when_no_ch_client(self, tmp_path):
         svc = _make_svc(tmp_path)
         svc.ch_client = None
         os.makedirs(svc.wal_dir)
         _make_wal_file(svc.wal_dir, "market_data_1.jsonl", '{"x":1}\n')
-        # Should return without processing
         process_files(svc)
         svc._insert_with_dedup.assert_not_called()
 
@@ -533,6 +482,5 @@ class TestProcessFiles:
     def test_noop_when_no_files(self, tmp_path):
         svc = _make_svc(tmp_path)
         os.makedirs(svc.wal_dir)
-        # Empty WAL dir
         process_files(svc)
         svc._insert_with_dedup.assert_not_called()

@@ -79,8 +79,6 @@ class FacadeSlot:
     def __init__(self, conn_id: str, facade: Any) -> None:
         self.conn_id: str = conn_id
         self.facade: Any = facade
-        # Start in RECOVERING — transitions to CONNECTED after first data arrives
-        # via subscribe_all(). Prevents premature DEGRADED transitions during startup.
         self.state: FacadeState = FacadeState.RECOVERING
         self.symbols: set[str] = set()
         self.last_data_mono: float = time.monotonic()
@@ -88,17 +86,7 @@ class FacadeSlot:
         self.reconnect_failures: int = 0
         self.degraded_since_mono: float | None = None
         self._pending_warmup_reset: bool = False
-        # Throttles the "reconnect suppressed" log. The supervisor evaluates
-        # facade health at 1 Hz, and a slot stays past its reconnect trigger for
-        # the entire time the market is shut, so an unthrottled log would emit
-        # ~4 lines/second all night and all weekend. 0.0 means "never logged".
         self._suppress_logged_mono: float = 0.0
-        # Guards compound state transitions (state + reconnect_failures +
-        # degraded_since_mono + _pending_warmup_reset) across the event-loop
-        # supervisor and the daemon reconnect threads spawned in
-        # QuoteConnectionPool._schedule_reconnect. Without this lock the
-        # `reconnect_failures += 1` RMW on the daemon thread can lose updates
-        # visible to the supervisor reading on the event loop (P1, 2026-04-24).
         self._lock: threading.Lock = threading.Lock()
 
     @property

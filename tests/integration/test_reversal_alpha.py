@@ -6,8 +6,6 @@ from hft_platform.rust_core import AlphaRegimeReversal, LimitOrderBook
 def test_reversal_logic():
     print("Testing Rust AlphaRegimeReversal...")
 
-    # 1. Initialize
-    # VolWindow=100, VolThreshold=0.001, SMAWindow=20
     alpha = AlphaRegimeReversal(100, 0.001, 20)
     lob = LimitOrderBook("ETHUSDT")
 
@@ -15,7 +13,6 @@ def test_reversal_logic():
     prev_bid = None
     prev_ask = None
 
-    # helper
     def update_price(price):
         nonlocal prev_bid, prev_ask, mid
         if prev_bid:
@@ -31,7 +28,6 @@ def test_reversal_logic():
         prev_ask = ask
         mid = price
 
-    # 2. Phase 1: Low Volatility (Constant)
     print("Phase 1: Low Volatility")
     for i in range(150):
         update_price(1000.0)
@@ -43,13 +39,8 @@ def test_reversal_logic():
     assert vol < 0.001, "Vol should be low"
     assert signal == 0.0, "Signal should be gated"
 
-    # 3. Phase 2: High Volatility (Oscillation)
-    # We want to create High Volatility, but trigger Reversion.
-    # Reversion Signal = -(Mid - MA) / MA
-    # If Price Jumps UP, Signal should be DOWN (Negative).
     print("\nPhase 2: High Volatility")
 
-    # Create Volatility first
     for i in range(150):
         p = 1000.0 + (5.0 if i % 2 == 0 else -5.0)
         update_price(p)
@@ -57,11 +48,6 @@ def test_reversal_logic():
 
     print(f"High Vol Check: Vol={alpha.current_vol:.6f}")
     assert alpha.current_vol > 0.001, "Vol should be high"
-
-    # Now create a divergence
-    # MA is around 1000.0 (average of +/- 5)
-    # Jump Price to 1020.0 (Large Up Move)
-    # Expectation: Signal should be Negative (Sell)
 
     update_price(1020.0)
     signal = alpha.calculate(lob)

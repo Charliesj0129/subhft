@@ -17,10 +17,6 @@ from hft_platform.recorder._loader_common import (
 )
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
 
-# ---------------------------------------------------------------------------
-# Connection helpers
-# ---------------------------------------------------------------------------
-
 
 def connect(svc: Any) -> None:
     """Establish a ClickHouse connection and ensure schema exists."""
@@ -70,11 +66,6 @@ def compute_connect_backoff(svc: Any, attempt: int) -> float:
     delay = min(svc._connect_base_delay_s * (2**attempt), svc._connect_max_backoff_s)
     jitter = delay * 0.25 * (random.random() * 2 - 1)
     return max(1.0, delay + jitter)
-
-
-# ---------------------------------------------------------------------------
-# Insert helpers
-# ---------------------------------------------------------------------------
 
 
 def compute_insert_backoff(svc: Any, attempt: int) -> float:
@@ -158,11 +149,6 @@ def insert_with_retry(
     return True
 
 
-# ---------------------------------------------------------------------------
-# Dedup helpers (EC-1)
-# ---------------------------------------------------------------------------
-
-
 def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
     """Check if WAL content hash was already inserted."""
     try:
@@ -172,7 +158,7 @@ def is_duplicate(svc: Any, table: str, content_hash: str) -> bool:
                 parameters={"table_name": table, "hash": content_hash},
             )
         return int(result) > 0
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         return False
 
 
@@ -205,7 +191,6 @@ def insert_with_dedup(svc: Any, target_table: str, rows: list, fname: str) -> bo
 
             raw = b"".join(orjson.dumps(r, option=orjson.OPT_SORT_KEYS) for r in rows)
         except (ImportError, TypeError):
-            # Fallback: use json with sorted keys for determinism
             import json
 
             raw = "".join(json.dumps(r, sort_keys=True, default=str) for r in rows).encode()

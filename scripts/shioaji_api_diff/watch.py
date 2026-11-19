@@ -41,29 +41,19 @@ from .paths import GOLDEN_DIR, REPO_ROOT
 PYPI_URL = "https://pypi.org/pypi/shioaji/json"
 _HTTP_TIMEOUT_S = 20
 
-# Releases are only comparable when they are plain ``X.Y.Z``. Shioaji's history
-# also contains ``0.3.6.dev4``-style pre-releases; those are never upgrade
-# candidates for a production pin, so they are dropped rather than ordered.
 _RELEASE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
-# What the gap between a candidate and the pin means for the upgrade decision.
-PATCH = "PATCH"  # same major.minor as the pin -- fixes only, cheapest to adopt
-MINOR = "MINOR"  # a new feature line -- needs a full surface diff first
-MAJOR = "MAJOR"  # a new major line
+PATCH = "PATCH"
+MINOR = "MINOR"
+MAJOR = "MAJOR"
 
-# Ordered by how adoptable the gap is, not by how severe it is. This report
-# exists to answer "what should move next", and the answer is nearly always the
-# patch on the pinned line: it carries fixes only, needs no adapter work, and is
-# the one row a stabilization freeze is meant to still allow through. Sorting by
-# severity buries it under a feature line nobody is going to take this quarter.
 _RANK = {PATCH: 0, MINOR: 1, MAJOR: 2}
 
 
-# Why a release still needs someone's attention. Ordered by what to do about it.
-NO_SURFACE = "NO_SURFACE"  # nobody has captured its API surface -- no evidence yet
-UNDECIDED = "UNDECIDED"  # evidence exists, but nothing was ever decided
-EXPIRED = "EXPIRED"  # a deferral came due
-SETTLED = "SETTLED"  # captured, decided, and the decision still stands
+NO_SURFACE = "NO_SURFACE"
+UNDECIDED = "UNDECIDED"
+EXPIRED = "EXPIRED"
+SETTLED = "SETTLED"
 
 
 class DecisionLike(Protocol):
@@ -128,7 +118,6 @@ def read_pin(pyproject: Any = None) -> str:
         data = tomllib.load(handle)
     for spec in (data.get("project") or {}).get("dependencies") or []:
         name, _, requirement = str(spec).partition("==")
-        # ``shioaji[speed]`` -- the extras are part of the name, not the version.
         if name.split("[")[0].strip() == "shioaji" and requirement:
             return requirement.strip()
     raise SystemExit("no pinned shioaji requirement found in pyproject.toml [project.dependencies]")
@@ -145,8 +134,6 @@ def releases_from_payload(payload: dict[str, Any]) -> list[str]:
     """Non-yanked, installable version strings from a PyPI JSON payload."""
     out: list[str] = []
     for version, files in (payload.get("releases") or {}).items():
-        # A version with no files, or whose every file is yanked, is not
-        # installable -- offering it as a candidate would waste a capture run.
         usable = [f for f in files or [] if not f.get("yanked")]
         if usable:
             out.append(version)

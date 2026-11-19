@@ -103,9 +103,6 @@ def _load_live_intents(
         "decision_price",
         "price_type",
     ]
-    # `columns` is a hardcoded module-level list of canonical intent fields;
-    # user-controlled values (session_date, strategy_id) are bound via
-    # clickhouse-connect parameters (%(d)s, %(s)s) — not interpolated.
     query = (
         f"SELECT {', '.join(columns)} FROM hft.order_intents "  # nosec B608
         "WHERE toDate(toDateTime64(ingest_ts/1e9, 3)) = %(d)s "
@@ -135,15 +132,13 @@ def _build_strategy_factory(settings: dict[str, Any]) -> Any | None:
     try:
         module = importlib.import_module(module_name)
         cls = getattr(module, class_name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
-    def factory(rng: Any) -> Any:  # rng kw is the Slice C contract
+    def factory(rng: Any) -> Any:
         try:
             return cls(strategy_id=strategy_id, rng=rng)
         except TypeError:
-            # Strategies that don't accept rng kw still satisfy the harness
-            # contract as long as their handle_event(ctx, event) is sync.
             return cls(strategy_id=strategy_id)
 
     return factory
@@ -210,8 +205,6 @@ def run_replay_session(
         "first_divergence_idx": None,
         "harness_version": HARNESS_VERSION,
         "fixture_sha256": "",
-        # The code and settings replayed, so a Shadow-exit certification
-        # (ADR-003) can tell this strategy version from an earlier one.
         "strategy_fingerprint": _strategy_fingerprint(strategy_cfg),
     }
 
@@ -267,7 +260,6 @@ def run_replay_session(
         )
         eligibility_status = "eligible"
     else:
-        # pre-recorder + --allow-pre-recorder: live stream is empty by definition.
         live_records = []
         eligibility_status = "pre_recorder"
 
@@ -311,5 +303,5 @@ def _client_or_none() -> Any | None:
 
     try:
         return _default_ck_client()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None

@@ -34,7 +34,6 @@ class SubGateResult:
     outcome: Outcome | None = None
 
     def __post_init__(self) -> None:
-        # frozen=True prevents assignment, so use object.__setattr__
         object.__setattr__(self, "passed", bool(self.passed))
         object.__setattr__(self, "outcome", resolve_outcome(self.passed, self.outcome))
 
@@ -62,7 +61,7 @@ class SubGate(Protocol):
     """Protocol for sub-gates in Gate C."""
 
     name: str
-    applies_to: set[str]  # {"maker"}, {"taker"}, or {"maker", "taker"}
+    applies_to: set[str]
 
     def evaluate(
         self,
@@ -72,7 +71,6 @@ class SubGate(Protocol):
     ) -> SubGateResult: ...
 
 
-# Module-level registry. Mutable by design; use register_sub_gate / clear_registry.
 _REGISTRY: list[SubGate] = []
 
 

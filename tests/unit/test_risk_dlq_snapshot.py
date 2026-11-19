@@ -45,12 +45,8 @@ def test_storm_clear_survives_reentrant_mutation(engine) -> None:
     for cmd in cmds:
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-    # Force STORM so the clear-and-rebuild branch fires.
     engine.storm_guard.state = StormGuardState.STORM
 
-    # Re-entrant mutation: the first rejection appends a poison cmd back into
-    # the DLQ. Without snapshotting, this raises "deque mutated during
-    # iteration" on the next loop iteration.
     poison_cmd = engine.create_command(_make_intent(99))
     original_send = engine._send_dlq_rejection
     appended: list = []
@@ -63,16 +59,8 @@ def test_storm_clear_survives_reentrant_mutation(engine) -> None:
 
     engine._send_dlq_rejection = _reentrant_send  # type: ignore[assignment]
 
-    # MUST NOT raise: snapshot makes the iteration immune to re-entrant append.
     engine._drain_order_dlq()
 
-    # Snapshot semantics: the mid-loop append must remain in _order_dlq because
-    # `clear()` runs after the snapshot iteration and the post-clear rebuild
-    # only re-appends the kept items from the snapshot. The poison cmd that
-    # was appended inside the loop is therefore wiped — but that's the design:
-    # mid-loop appends are visible to the *next* drain, not this one.
-    # Verify behavior: at least one rejection feedback was emitted, and no
-    # RuntimeError fell through.
     assert engine._rejection_sink.qsize() >= 1
 
 
@@ -100,8 +88,6 @@ def test_storm_clear_processes_full_snapshot_even_with_concurrent_append(engine)
 
     engine._drain_order_dlq()
 
-    # All 3 snapshot items got rejected; the 4th appended mid-loop is not
-    # in the snapshot so was not iterated. Total feedbacks == 3.
     assert call_count["n"] == 3
     assert engine._rejection_sink.qsize() == 3
 
@@ -113,13 +99,12 @@ def test_drain_no_runtime_error_on_concurrent_clear(engine) -> None:
     for cmd in cmds:
         engine._order_dlq.append((cmd, time.monotonic_ns()))
 
-    engine.storm_guard.state = StormGuardState.HALT  # HALT also goes through STORM branch
+    engine.storm_guard.state = StormGuardState.HALT
 
     extra = engine.create_command(_make_intent(900))
     original_send = engine._send_dlq_rejection
 
     def _every_send_appends(cmd, reason):
-        # Append on every callback to maximise chance of triggering the bug.
         try:
             engine._order_dlq.append((extra, time.monotonic_ns()))
         except (RuntimeError, AttributeError):
@@ -128,7 +113,5 @@ def test_drain_no_runtime_error_on_concurrent_clear(engine) -> None:
 
     engine._send_dlq_rejection = _every_send_appends  # type: ignore[assignment]
 
-    # Must complete without RuntimeError.
     engine._drain_order_dlq()
-    # Each of the 8 seeded entries was iterated and produced a feedback.
     assert engine._rejection_sink.qsize() == 8

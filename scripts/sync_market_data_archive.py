@@ -47,21 +47,14 @@ from typing import Any, Sequence
 TABLE = "hft.market_data"
 DATABASE, TABLE_NAME = TABLE.split(".", 1)
 
-# Matches the table's own PARTITION BY expression, so a partition is selected by the
-# same rule that defined it. Deliberately not an ingest_ts range: that would reintroduce
-# the boundary ambiguity the partition key already resolves.
 PARTITION_EXPR = "toYYYYMMDD(toDateTime(ingest_ts / 1000000000))"
 
-# The documented digest for this table. Covers identity, both timestamps, and the
-# payload fields that a partial transfer would truncate.
 ROW_DIGEST_EXPR = "sum(cityHash64(symbol, exch_ts, ingest_ts, price_scaled, volume, seq_no))"
 
 REMOTE_ENV_VAR = "HFT_ARCHIVE_REMOTE"
 SSH_OPTS = ("-o", "BatchMode=yes", "-o", "ConnectTimeout=15")
 COPY_CHUNK_BYTES = 1 << 20
 
-# A missing partition whose remote TTL fires within this horizon is not merely "behind" --
-# it is actively about to become unrecoverable.
 URGENT_HORIZON_DAYS = 30
 
 
@@ -69,9 +62,6 @@ class SyncError(RuntimeError):
     """Raised when an invariant that protects the archive is violated."""
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 
 def _env_or_dotenv(key: str, *, env_path: Path = Path(".env")) -> str:
@@ -142,9 +132,6 @@ class Inventory:
         return sorted(name for name in self.local if name not in self.remote)
 
 
-# ---------------------------------------------------------------------------
-# ClickHouse transports
-# ---------------------------------------------------------------------------
 
 
 def _local_argv(container: str) -> list[str]:
@@ -152,8 +139,6 @@ def _local_argv(container: str) -> list[str]:
 
 
 def _remote_argv(remote: str, container: str) -> list[str]:
-    # -C compresses the Native stream in transit. The remote command string is a fixed
-    # literal and the SQL travels on stdin, so no query text is ever shell-quoted.
     return ["ssh", "-C", *SSH_OPTS, remote, f"docker exec -i {container} clickhouse-client"]
 
 
@@ -212,9 +197,6 @@ def _partition_digest(argv: Sequence[str], partition: str) -> tuple[int, str]:
     return int(rows), digest
 
 
-# ---------------------------------------------------------------------------
-# Transfer
-# ---------------------------------------------------------------------------
 
 
 def _partial_write_warning(local_argv: Sequence[str], partition: str) -> str:
@@ -285,9 +267,6 @@ def transfer_partition(
     remote.wait(timeout=1800)
     local.wait(timeout=1800)
     if remote.returncode != 0 or local.returncode != 0:
-        # A remote failure mid-stream looks like a clean EOF to the local INSERT, which
-        # then commits a *partial* partition and exits 0. Never report a transfer failure
-        # without first saying whether rows landed.
         which = "remote SELECT" if remote.returncode != 0 else "local INSERT"
         code = remote.returncode if remote.returncode != 0 else local.returncode
         detail = (remote_err if remote.returncode != 0 else local_err)[:500]
@@ -307,7 +286,6 @@ def transfer_partition(
         "verified": verified,
     }
     if not verified:
-        # Never auto-drop: dropping a partition is destructive and is the operator's call.
         result["remediation"] = (
             f"ALTER TABLE {TABLE} DROP PARTITION '{partition}'  -- then re-run this script"
         )
@@ -319,9 +297,6 @@ def transfer_partition(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Reporting
-# ---------------------------------------------------------------------------
 
 
 def build_inventory_payload(inventory: Inventory, *, remote_label: str) -> dict[str, Any]:
@@ -378,9 +353,6 @@ def render_diff(inventory: Inventory) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def _build_parser() -> argparse.ArgumentParser:

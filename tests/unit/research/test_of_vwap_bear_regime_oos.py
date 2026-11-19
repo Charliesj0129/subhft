@@ -89,8 +89,6 @@ def test_classify_regime_flags_genuine_bear_when_bottom_quartile_is_actually_neg
 
 
 def test_classify_regime_does_not_force_bear_label_on_all_bullish_data():
-    # Every day is positive -- the bottom quartile is merely "less bullish",
-    # not an actual down day. Must NOT be reported as a genuine bear regime.
     rows = [
         _row("c", f"2026-01-{d:02d}", ret_pts, 300.0)
         for d, ret_pts in enumerate([50, 100, 150, 200, 250, 300, 350, 400], start=1)
@@ -114,8 +112,6 @@ def test_classify_regime_flags_genuine_highvol_when_top_quartile_meaningfully_el
 
 
 def test_classify_regime_does_not_force_highvol_label_on_flat_dispersion():
-    # RV barely varies day to day -- the top quartile is not meaningfully
-    # more volatile than the median, so it must not be flagged as genuine.
     rows = [
         _row("c", f"2026-01-{d:02d}", 0.0, rv) for d, rv in enumerate([295, 298, 300, 302, 305, 308, 310, 312], start=1)
     ]
@@ -142,17 +138,15 @@ def test_consecutive_negative_runs_detects_run_length_and_bounds():
 
 
 def test_consecutive_negative_runs_dedupes_overlapping_contract_dates_by_bar_count():
-    # Same calendar date from two concurrently-traded contracts: the row with
-    # more bars (more reliable) must win the dedup, not an arbitrary one.
     rows = [
         _row("txfb6", "2026-01-01", -50, 100, n_bars=57),
-        _row("txfd6", "2026-01-01", 50, 100, n_bars=10),  # sparse day, should lose
+        _row("txfd6", "2026-01-01", 50, 100, n_bars=10),
     ]
 
     runs = _consecutive_negative_runs(rows)
 
     assert runs["n_merged_calendar_days"] == 1
-    assert runs["max_consecutive_negative_run"] == 0  # the winning (txfb6) row is negative alone -> no run of >=2
+    assert runs["max_consecutive_negative_run"] == 0
 
 
 def test_dates_by_contract_groups_dates_under_their_own_contract_only():
@@ -172,8 +166,6 @@ def test_pooled_subset_only_keeps_trades_on_that_contracts_own_regime_dates():
         "txfb6": [{"date": "2026-01-01", "gross": 5.0}, {"date": "2026-01-02", "gross": -5.0}],
         "txfd6": [{"date": "2026-01-01", "gross": 7.0}],
     }
-    # txfd6's regime date (2026-01-01) must not leak into txfb6's filter, and
-    # vice versa -- each contract is judged only by its own regime days.
     dates_by_contract = {"txfb6": {"2026-01-02"}, "txfd6": set()}
 
     pooled = _pooled_subset(trades_by_contract, dates_by_contract)

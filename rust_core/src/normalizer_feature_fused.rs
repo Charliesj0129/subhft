@@ -346,7 +346,6 @@ impl RustNormalizerFeatureFusedV1 {
             .entry(symbol.to_owned())
             .or_insert_with(|| SymbolFusedState::new(ema_alpha));
 
-        // Build bid levels
         let n_bids = bp.len().min(bv.len());
         state.book.bids.clear();
         for i in 0..n_bids {
@@ -360,12 +359,11 @@ impl RustNormalizerFeatureFusedV1 {
             }
             state.book.bids.push([scaled, bv[i]]);
         }
-        // Sort bids descending by price — skip if already sorted (broker pre-sorted fast path)
+
         if !is_sorted_desc(&state.book.bids) {
             state.book.bids.sort_unstable_by(|a, b| b[0].cmp(&a[0]));
         }
 
-        // Build ask levels
         let n_asks = ap.len().min(av.len());
         state.book.asks.clear();
         for i in 0..n_asks {
@@ -379,16 +377,14 @@ impl RustNormalizerFeatureFusedV1 {
             }
             state.book.asks.push([scaled, av[i]]);
         }
-        // Sort asks ascending by price — skip if already sorted (broker pre-sorted fast path)
+
         if !is_sorted_asc(&state.book.asks) {
             state.book.asks.sort_unstable_by(|a, b| a[0].cmp(&b[0]));
         }
 
-        // Compute book stats
         state.book.recompute_stats();
         state.book.version += 1;
 
-        // Extract L1 quantities for feature kernel
         let l1_bid_qty = if state.book.bids.is_empty() {
             0
         } else {
@@ -400,7 +396,6 @@ impl RustNormalizerFeatureFusedV1 {
             state.book.asks[0][1]
         };
 
-        // Compute features in the same GIL crossing
         let features = state.feature.compute(
             state.book.best_bid,
             state.book.best_ask,
@@ -415,7 +410,6 @@ impl RustNormalizerFeatureFusedV1 {
         let bids_np = levels_to_numpy(py, &state.book.bids);
         let asks_np = levels_to_numpy(py, &state.book.asks);
 
-        // Return book stats + feature values as a single tuple
         Ok((
             bids_np,
             asks_np,
@@ -461,22 +455,21 @@ mod tests {
 
     #[test]
     fn test_is_sorted_helpers() {
-        // Bids descending — already sorted
         assert!(is_sorted_desc(&[
             [1_050_000, 100],
             [1_040_000, 200],
             [1_030_000, 50]
         ]));
-        // Asks ascending — already sorted
+
         assert!(is_sorted_asc(&[
             [1_060_000, 150],
             [1_070_000, 50],
             [1_080_000, 30]
         ]));
-        // Unsorted
+
         assert!(!is_sorted_desc(&[[1_030_000, 50], [1_050_000, 100]]));
         assert!(!is_sorted_asc(&[[1_080_000, 30], [1_060_000, 150]]));
-        // Empty and single-element are always sorted
+
         assert!(is_sorted_desc(&[]));
         assert!(is_sorted_asc(&[]));
         assert!(is_sorted_desc(&[[100, 1]]));
@@ -485,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_py_round_i64() {
-        assert_eq!(py_round_i64(2.5), 2); // ties-even rounds to even
+        assert_eq!(py_round_i64(2.5), 2);
         assert_eq!(py_round_i64(3.5), 4);
         assert_eq!(py_round_i64(-0.5), 0);
         assert_eq!(py_round_i64(1.6), 2);
@@ -505,7 +498,7 @@ mod tests {
         assert_eq!(book.spread_scaled, 10_000);
         assert_eq!(book.bid_depth, 300);
         assert_eq!(book.ask_depth, 200);
-        // imbalance_ppm = (300 - 200) * 1_000_000 / 500 = 200_000
+
         assert_eq!(book.imbalance_ppm, 200_000);
     }
 
@@ -527,7 +520,7 @@ mod tests {
         book.recompute_stats();
         assert_eq!(book.best_bid, 1_000_000);
         assert_eq!(book.best_ask, 0);
-        assert_eq!(book.mid_x2, 0); // needs both sides
+        assert_eq!(book.mid_x2, 0);
     }
 
     #[test]
@@ -535,43 +528,36 @@ mod tests {
         let mut kernel = FeatureKernelInner::new(DEFAULT_EMA_ALPHA);
         let features = kernel.compute(1_000_000, 1_010_000, 2_010_000, 10_000, 300, 200, 100, 150);
 
-        // First tick: OFI should be 0 (no previous data)
-        assert_eq!(features[0], 1_000_000); // best_bid
-        assert_eq!(features[1], 1_010_000); // best_ask
-        assert_eq!(features[2], 2_010_000); // mid_price_x2
-        assert_eq!(features[3], 10_000); // spread_scaled
-        assert_eq!(features[11], 0); // ofi_l1_raw = 0 on first tick
-        assert_eq!(features[12], 0); // ofi_l1_cum = 0 on first tick
+        assert_eq!(features[0], 1_000_000);
+        assert_eq!(features[1], 1_010_000);
+        assert_eq!(features[2], 2_010_000);
+        assert_eq!(features[3], 10_000);
+        assert_eq!(features[11], 0);
+        assert_eq!(features[12], 0);
         assert!(kernel.initialized);
     }
 
     #[test]
     fn test_feature_kernel_ofi_computation() {
         let mut kernel = FeatureKernelInner::new(DEFAULT_EMA_ALPHA);
-        // First tick (initialization)
+
         kernel.compute(1_000_000, 1_010_000, 2_010_000, 10_000, 300, 200, 100, 150);
 
-        // Second tick: bid qty increases by 50 (same price), ask unchanged
         let f2 = kernel.compute(1_000_000, 1_010_000, 2_010_000, 10_000, 350, 200, 150, 150);
 
-        // b_flow = 150 - 100 = 50 (same price), a_flow = 150 - 150 = 0
-        // ofi_raw = 50 - 0 = 50
-        assert_eq!(f2[11], 50); // ofi_l1_raw
-        assert_eq!(f2[12], 50); // ofi_l1_cum
+        assert_eq!(f2[11], 50);
+        assert_eq!(f2[12], 50);
     }
 
     #[test]
     fn test_feature_kernel_microprice() {
         let mut kernel = FeatureKernelInner::new(DEFAULT_EMA_ALPHA);
-        // bid=100, ask=102, bid_qty=200, ask_qty=100
-        // microprice_x2 = 2 * (102*200 + 100*100) / 300 = 2 * 30400 / 300 = 202.666... → 203 (rounded)
+
         let features = kernel.compute(100, 102, 202, 2, 300, 200, 200, 100);
-        let mp_x2 = features[7]; // microprice_x2
-                                 // microprice_x2 = round(2.0 * (102*200 + 100*100) / 300) = round(202.666...) = 203
+        let mp_x2 = features[7];
+
         assert_eq!(mp_x2, 203);
     }
-
-    // --- Additional BookStateInner tests ---
 
     #[test]
     fn test_book_state_top_imbalance() {
@@ -579,7 +565,7 @@ mod tests {
         book.bids = vec![[1_050_000, 100]];
         book.asks = vec![[1_060_000, 100]];
         book.recompute_stats();
-        assert_eq!(book.top_imbalance, 0.0); // Equal top vol
+        assert_eq!(book.top_imbalance, 0.0);
 
         let mut book2 = BookStateInner::new();
         book2.bids = vec![[1_050_000, 80]];
@@ -606,39 +592,34 @@ mod tests {
         assert_eq!(book.version, 1);
     }
 
-    // --- Additional FeatureKernelInner tests ---
-
     #[test]
     fn test_feature_kernel_ofi_direction() {
         let mut kernel = FeatureKernelInner::new(DEFAULT_EMA_ALPHA);
-        // Init
+
         kernel.compute(100_0000, 101_0000, 201_0000, 1_0000, 50, 40, 50, 40);
-        // Bid price up → b_flow = l1_bid_qty; ask price up → a_flow = -prev_l1_ask_qty
+
         let features = kernel.compute(101_0000, 102_0000, 203_0000, 1_0000, 60, 35, 60, 35);
-        // b_flow = 60 (bid up), a_flow = -40 (ask up) → ofi = 60 - (-40) = 100
+
         assert_eq!(features[11], 100);
-        assert_eq!(features[12], 100); // cum
+        assert_eq!(features[12], 100);
     }
 
     #[test]
     fn test_feature_kernel_ema_convergence() {
         let mut kernel = FeatureKernelInner::new(DEFAULT_EMA_ALPHA);
-        // Feed identical inputs many times — EMA should converge to the constant input
+
         for _ in 0..200 {
             kernel.compute(100_0000, 101_0000, 201_0000, 1_0000, 100, 100, 50, 50);
         }
         let features = kernel.compute(100_0000, 101_0000, 201_0000, 1_0000, 100, 100, 50, 50);
-        // spread_ema should converge to spread_scaled = 1_0000
+
         assert_eq!(features[14], 1_0000);
     }
-
-    // --- Fused pipeline end-to-end test (pure Rust, no Python) ---
 
     #[test]
     fn test_fused_pipeline_sorted_input() {
         let mut state = SymbolFusedState::new(DEFAULT_EMA_ALPHA);
 
-        // Build sorted bids (desc) and asks (asc)
         state.book.bids = vec![[100_0000, 50], [99_0000, 30]];
         state.book.asks = vec![[101_0000, 40], [102_0000, 20]];
         state.book.recompute_stats();
@@ -658,25 +639,22 @@ mod tests {
             l1_ask_qty,
         );
 
-        assert_eq!(features[0], 100_0000); // best_bid
-        assert_eq!(features[1], 101_0000); // best_ask
-        assert_eq!(features[2], 201_0000); // mid_x2
-        assert_eq!(features[3], 1_0000); // spread
-        assert_eq!(features[4], 80); // bid_depth (50+30)
-        assert_eq!(features[5], 60); // ask_depth (40+20)
+        assert_eq!(features[0], 100_0000);
+        assert_eq!(features[1], 101_0000);
+        assert_eq!(features[2], 201_0000);
+        assert_eq!(features[3], 1_0000);
+        assert_eq!(features[4], 80);
+        assert_eq!(features[5], 60);
     }
-
-    // --- Additional py_round_i64 tests ---
 
     #[test]
     fn test_py_round_ties_even_extended() {
-        // Banker's rounding: 0.5 rounds to even
-        assert_eq!(py_round_i64(0.5), 0); // rounds to 0 (even)
-        assert_eq!(py_round_i64(1.5), 2); // rounds to 2 (even)
-        assert_eq!(py_round_i64(2.5), 2); // rounds to 2 (even)
-        assert_eq!(py_round_i64(3.5), 4); // rounds to 4 (even)
-        assert_eq!(py_round_i64(-0.5), 0); // rounds to 0 (even)
-        assert_eq!(py_round_i64(-1.5), -2); // rounds to -2 (even)
+        assert_eq!(py_round_i64(0.5), 0);
+        assert_eq!(py_round_i64(1.5), 2);
+        assert_eq!(py_round_i64(2.5), 2);
+        assert_eq!(py_round_i64(3.5), 4);
+        assert_eq!(py_round_i64(-0.5), 0);
+        assert_eq!(py_round_i64(-1.5), -2);
     }
 
     #[test]

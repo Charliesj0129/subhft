@@ -7,7 +7,7 @@ Hygiene:
 - Preserve user work; inspect status before staging or committing.
 - Stage/commit intentional files only.
 - Never commit secrets, `.env*`, `config/settings.py`, data/WAL/report exports, caches, `.benchmarks/`, IDE files.
-- No new `type: ignore` or `noqa` without a specific justification.
+- Follow the source comment and lint policy in `docs/guides/source-code-policy.md`.
 - Rust changes require clippy/test; Python changes require verification matching blast radius.
 - Worktrees/stashes/branches are temporary; clean up agent-created worktrees before session end.
 - Never push ephemeral `worktree-agent-*` branches.

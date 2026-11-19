@@ -34,7 +34,6 @@ def split_days(
         n_train = int(len(days) * ratio)
         return days[:n_train], days[n_train:]
     else:
-        # LOO: last day is test
         return days[:-1], days[-1:]
 
 

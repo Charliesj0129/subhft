@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 _EPOCH = date(1970, 1, 1)
 
-# ClickHouse scale factor for price_scaled columns (1_000_000 = 6 decimal places)
 CLICKHOUSE_PRICE_SCALE = 1_000_000
 
 
@@ -68,10 +67,9 @@ def _to_ch_price_scaled(
     if isinstance(value, int):
         try:
             scale = int(metadata.price_scale(symbol))
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             scale = 0
         if scale > 0:
-            # Internal normalized events often carry scaled ints; convert directly.
             return int(round((value * CLICKHOUSE_PRICE_SCALE) / scale))
     descaled = _descale(symbol, value, metadata, price_codec)
     return _to_scaled_int(descaled)
@@ -81,7 +79,7 @@ def _descale(symbol: str, value: int | float, metadata: SymbolMetadata, price_co
     if price_codec:
         try:
             return price_codec.descale(symbol, int(value))
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             return float(value)
     scale = metadata.price_scale(symbol)
     if not scale:
@@ -110,7 +108,6 @@ def _book_to_arrays_scaled(
             vol = row[1] if len(row) > 1 else 0
         if price is None:
             continue
-        # Descale from internal format, then scale to ClickHouse format
         prices.append(_to_ch_price_scaled(symbol, price, metadata, price_codec))
         vols.append(int(vol or 0))
 
@@ -200,27 +197,13 @@ def map_event_to_record(
             "side": str(event.side.name if hasattr(event.side, "name") else event.side),
             "qty": int(event.qty),
             "price_scaled": _to_ch_price_scaled(symbol, event.price, metadata, price_codec),
-            "fee_scaled": int(event.fee),  # NTD x10000 (flat amount, not instrument price)
-            "tax_scaled": int(event.tax),  # NTD x10000 (tax portion of fee)
-            # TCA divides these against ``price_scaled`` in the same row
-            # (tca/analyzer.py: (price_scaled - arrival_price) / price_scaled),
-            # so they must carry the SAME scale. ``event.decision_price`` and
-            # ``event.arrival_price`` are platform x10000 (contracts/execution.py)
-            # while ``price_scaled`` above is converted to ClickHouse x1000000 --
-            # writing them raw leaves two scales in one row and makes every
-            # exec_cost_bps come out as ~9900 and every delay_cost_bps 100x small.
+            "fee_scaled": int(event.fee),
+            "tax_scaled": int(event.tax),
             "decision_price": _to_ch_price_scaled(symbol, event.decision_price, metadata, price_codec),
             "arrival_price": _to_ch_price_scaled(symbol, event.arrival_price, metadata, price_codec),
             "source": os.getenv("HFT_BROKER", "shioaji"),
             "instrument_type": _instrument_fields(symbol, metadata).get("instrument_type", ""),
             "oc_type": "",
-            # L8: ExecutionRouter stamps ``FillEvent.trace_id`` from the
-            # originating OrderIntent (router.py: _cmd_trace_id_map) precisely
-            # so hft.fills can be joined to hft.order_explanations on
-            # (trace_id, client_order_id). Omitting the key here made
-            # ``_extract_fill_values`` fall through to its ``get("trace_id","")``
-            # default, so the value was computed on every fill and then thrown
-            # away at the last step before the insert.
             "trace_id": event.trace_id,
         }
         return ("fills", fill_record)

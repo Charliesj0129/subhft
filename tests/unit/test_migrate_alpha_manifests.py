@@ -41,7 +41,7 @@ def _isolated_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     jsonl = tmp_path / "_kill_ledger.jsonl"
     monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(jsonl))
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
-    audit._ENABLED = None  # noqa: SLF001 -- re-read env on next call
+    audit._ENABLED = None
     kill_ledger._reset_cache_for_tests()
     return jsonl
 
@@ -119,9 +119,8 @@ def test_apply_inserts_ledger_rows(
     assert ledger_lines[0]["gate"] == "manual"
     assert ledger_lines[0]["killed_by"] == "migration:archive_2026_04_17"
     assert ledger_lines[0]["killed_at"] == script.KILLED_AT_NS
-    # "notes: synthetic test fixture" picked up by _derive_reason.
     assert "synthetic test fixture" in ledger_lines[0]["reason"]
-    assert ledger_lines[0]["stable_artifact_hash"]  # non-empty hex
+    assert ledger_lines[0]["stable_artifact_hash"]
 
     assert summary.exists()
     summary_lines = [json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -147,7 +146,6 @@ def test_re_run_is_idempotent(
     ledger_after_first = _isolated_jsonl.read_text(encoding="utf-8")
     summary_after_first = summary.read_text(encoding="utf-8")
 
-    # Reset the kill_ledger in-memory cache so the second run must re-read disk.
     kill_ledger._reset_cache_for_tests()
 
     rc2 = _run_main(monkeypatch, script, archive_dir=archive, summary_path=summary, apply=True)
@@ -166,7 +164,6 @@ def test_corrupt_manifest_falls_back_to_default_reason(
     archive.mkdir()
     bad = archive / "bad_alpha"
     bad.mkdir()
-    # Malformed YAML (unclosed bracket).
     (bad / "manifest.yaml").write_text("alpha_id: [oops\n", encoding="utf-8")
     summary = tmp_path / "summary.jsonl"
 
@@ -178,7 +175,6 @@ def test_corrupt_manifest_falls_back_to_default_reason(
     assert len(ledger_lines) == 1
     assert ledger_lines[0]["alpha_id"] == "bad_alpha"
     assert ledger_lines[0]["reason"] == "archived_2026_04_17"
-    # Hash is empty when parse failed.
     assert ledger_lines[0]["stable_artifact_hash"] == ""
 
 
@@ -208,9 +204,7 @@ def test_summary_dedupes_on_alpha_id(
     rows = [json.loads(line) for line in summary.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(rows) == 2
     by_alpha = {r["alpha_id"]: r for r in rows}
-    # Pre-existing row preserved verbatim.
     assert by_alpha["alpha_x"]["reason"] == "preexisting"
-    # New row for alpha_y has the migration reason.
     assert by_alpha["alpha_y"]["reason"] == "archived_2026_04_17_no_manifest"
 
 

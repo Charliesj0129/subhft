@@ -11,10 +11,6 @@ import yaml
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 
-# ---------------------------------------------------------------------------
-# Config helpers
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _disable_live_monitor_publisher(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,10 +85,6 @@ def module_log_sink(monkeypatch: pytest.MonkeyPatch):
             def bind(self, **kw):
                 return self
 
-            # Positional-only: structlog treats every keyword as a log field,
-            # and real call sites use names that would otherwise collide with
-            # the recorder's own parameters — ``storm_guard.py:331`` logs
-            # ``level=`` as a field.
             def _emit(self, level: str, event=None, /, **kw) -> None:
                 entries.append({"event": event, "log_level": level, **kw})
 
@@ -158,11 +150,6 @@ def risk_yaml(tmp_path):
     return str(p)
 
 
-# ---------------------------------------------------------------------------
-# Factory fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def make_fill():
     """Factory that returns FillEvent instances with sensible defaults."""
@@ -179,7 +166,7 @@ def make_fill():
             symbol="2330",
             side=Side.BUY,
             qty=1,
-            price=1_000_000,  # 100.0 scaled x10000
+            price=1_000_000,
             fee=0,
             tax=0,
             ingest_ts_ns=_counter * 1_000_000,
@@ -205,7 +192,7 @@ def make_intent():
             symbol="2330",
             intent_type=IntentType.NEW,
             side=Side.BUY,
-            price=1_000_000,  # 100.0 scaled x10000
+            price=1_000_000,
             qty=1,
             tif=TIF.LIMIT,
             timestamp_ns=_counter * 1_000_000,
@@ -214,11 +201,6 @@ def make_intent():
         return OrderIntent(**defaults)
 
     return _factory
-
-
-# ---------------------------------------------------------------------------
-# Component fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()

@@ -29,8 +29,6 @@ from research.calibration.validate import (
     validate_on_heldout,
 )
 
-# Optional: ClickHouse streaming when CLICKHOUSE_PASSWORD env var is set.
-# Initialised at module load so the try/except stays outside any function.
 _ch_source = None
 _use_ch_streaming = False
 try:
@@ -40,7 +38,6 @@ try:
     if _ch_password:
         from research.data_pipeline.reader import GovernedHbtSource, GovernedReader  # noqa: PLC0415
 
-        # The governed reader (research v2 C1): trading-day windows, session rule, dedup v1.
         _ch_source = GovernedHbtSource(
             GovernedReader.connect(
                 host=_os.getenv("CLICKHOUSE_HOST", "localhost"),
@@ -53,14 +50,10 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-# Literature defaults per `docs/architecture/why-custom-maker-backtest.md`:
-# "Exponent 1.5-2.0 appropriate for shallow books (5-50 queue depth) like TAIFEX,
-# vs. default 3.0 suited to deep US equity books (500-5000)."
 LITERATURE_DEFAULT_EXPONENT = 1.5
 
-# The sweep this CLI runs, named once so the provenance block records what ran.
 _QUEUE_MODELS = ("power_prob", "power_prob2", "power_prob3", "log_prob")
-_EXPONENT_GRID = (0.5, 3.0, 0.25)  # min, max, step
+_EXPONENT_GRID = (0.5, 3.0, 0.25)
 _PROBE: dict[str, int] = {"qty": 1, "max_pos": 3}
 
 
@@ -77,8 +70,6 @@ def _load_live_fills_from_audit(
     report = json.loads(audit_path.read_text())
     bucket = report["per_instrument"].get(instrument, {})
     days = bucket.get("usable_calibration_days", [])
-    # NOTE: Real per-day fill counts require extending audit to emit DailyFillSummary
-    # per day. For now, we return empty fills dict — caller will detect insufficiency.
     fills: dict[str, DailyFillSummary] = {}
     return days, fills
 
@@ -230,8 +221,6 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         f"[{args.instrument}] validation composite={composite:.3f} confidence={confidence}"
     )
 
-    # Co-locate artifacts with output profile: <output_parent>/../calibration/artifacts/<instrument>/
-    # Default: config/research/calibration_profiles.yaml → research/calibration/artifacts/<instrument>/
     artifacts_dir = Path(args.artifacts_dir) / args.instrument
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     (artifacts_dir / "sweep_results.json").write_text(

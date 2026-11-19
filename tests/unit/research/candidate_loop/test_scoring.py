@@ -55,7 +55,7 @@ def _val(**overrides: float) -> dict:
 class TestConfig:
     def test_frozen_taker_threshold_and_maker_block(self) -> None:
         assert CFG.scoring_version == "score_v1"
-        assert CFG.cost_survival_min == 0.3  # taifex_v1, FROZEN
+        assert CFG.cost_survival_min == 0.3
         assert CFG.maker_cost_survival_min == 0.3
         assert CFG.q_hat_symbol == "TXFD6"
         assert CFG.maker_cost_assumption_version == "taifex_maker_qhat_v1"
@@ -102,7 +102,6 @@ class TestHardGates:
         assert set(outcome.gates_failed) >= {"no_signal", "cost_proxy_taker", "one_day_only"}
 
     def test_maker_rescuable_trace(self) -> None:
-        # Dead at taker, alive under maker: COST_KILLED but maker gate passes.
         outcome = apply_hard_gates(_train(cost_survival_score=0.2, maker_cost_survival_score=0.5), _val(), CFG)
         assert outcome.death_reason == DeathReason.COST_KILLED
         assert "cost_proxy_taker" in outcome.gates_failed
@@ -122,12 +121,12 @@ class TestHardGates:
 class TestFinalScore:
     def test_components_and_weighted_sum(self) -> None:
         val = _val(
-            ic_tstat=2.0,  # predictive 0.5 (cap 4)
+            ic_tstat=2.0,
             sign_consistency=0.7,
             cost_survival_score=0.5,
             latency_1ms_score=0.7,
             one_day_concentration=0.3,
-            turnover_proxy=50.0,  # 0.25 of 200 cap
+            turnover_proxy=50.0,
         )
         final, comp = compute_final_score(val, signal_node_count=16, cfg=CFG)
         assert comp["predictive_score"] == pytest.approx(0.5)
@@ -144,7 +143,7 @@ class TestFinalScore:
         _, comp = compute_final_score(val, signal_node_count=200, cfg=CFG)
         assert comp["predictive_score"] == 1.0
         assert comp["cost_survival_score"] == 1.0
-        assert comp["latency_survival_score"] == 0.0  # negative clamped
+        assert comp["latency_survival_score"] == 0.0
         assert comp["turnover_penalty"] == 1.0
         assert comp["complexity_penalty"] == 1.0
 
@@ -166,7 +165,7 @@ class TestPromotion:
         statuses = assign_statuses(rows, CFG)
         assert statuses["a000"] == Status.SHORTLISTED
         assert sum(1 for s in statuses.values() if s == Status.SHORTLISTED) == 1
-        for i in range(1, 11):  # next decile (10 of 100)
+        for i in range(1, 11):
             assert statuses[f"a{i:03d}"] == Status.WATCHLIST
         assert statuses["a011"] == Status.REJECTED
 
@@ -180,7 +179,7 @@ class TestPromotion:
         rows = [_scored("dead0", score=99.0, survived=False, tstat=3.0), _scored("live0", score=1.0)]
         statuses = assign_statuses(rows, CFG)
         assert statuses["dead0"] == Status.REJECTED
-        assert statuses["live0"] == Status.SHORTLISTED  # only survivor -> top 1%
+        assert statuses["live0"] == Status.SHORTLISTED
 
     def test_no_survivors_everything_rejected(self) -> None:
         rows = [_scored("dead0", score=1.0, survived=False)]
@@ -189,8 +188,8 @@ class TestPromotion:
     def test_deterministic_tie_break_by_alpha_id(self) -> None:
         rows = [_scored("bbb", score=1.0), _scored("aaa", score=1.0)]
         statuses = assign_statuses(rows, CFG)
-        assert statuses["aaa"] == Status.SHORTLISTED  # ceil(0.01*2)=1; tie -> lower alpha_id
-        assert statuses["bbb"] == Status.WATCHLIST  # next decile of 2 -> 1
+        assert statuses["aaa"] == Status.SHORTLISTED
+        assert statuses["bbb"] == Status.WATCHLIST
 
 
 class TestDirectionMatch:

@@ -50,10 +50,6 @@ class ReconnectOrchestrator:
         self._client = client
         self._consecutive_failures: int = 0
 
-    # ------------------------------------------------------------------ #
-    # Reconnect sequence (RESILIENCE-CRITICAL)
-    # ------------------------------------------------------------------ #
-
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
         """Full reconnect: logout → login → callbacks → subscribe.
 
@@ -73,13 +69,6 @@ class ReconnectOrchestrator:
             return False
         if not c._reconnect_lock.acquire(blocking=False):
             return False
-        # ``_reconnect_lock`` only guards THIS facade. The 2026-06-21 incident was
-        # all four quote facades reconnecting at once: each logs out and back in
-        # with no wait for the broker's server-side session release, so the pool
-        # transiently needs more sessions than the account allows and every facade
-        # gets 451. The process-wide login slot serialises them and enforces the
-        # release gap. Shorter timeout than a scheduled refresh — feed recovery is
-        # time-critical, and proceeding unserialised beats not reconnecting.
         slot_held = acquire_login_slot(
             min_gap_s=client_float(c, "_session_refresh_stagger_gap_s", 5.0),
             timeout_s=client_float(c, "_reconnect_stagger_timeout_s", 60.0),
@@ -90,7 +79,6 @@ class ReconnectOrchestrator:
             c._last_reconnect_error = None
 
             try:
-                # Hard reconnect: recreate API object after repeated failures
                 hard_threshold = int(os.getenv("HFT_HARD_RECONNECT_THRESHOLD", "3"))
                 if self._consecutive_failures >= hard_threshold:
                     logger.warning(
@@ -121,16 +109,12 @@ class ReconnectOrchestrator:
                     c.logged_in = False
                     c._callbacks_registered = False
                     c._clear_quote_pending()
-                    # D2: in-place clear (don't rebind — preserves identity).
                     c.subscribed_codes.clear()
                     c.subscribed_count = 0
                     c._refresh_quote_routes()
 
                 login_ok = bool(c.login())
             finally:
-                # Released once the connection exists: subscribe_basket below no
-                # longer holds a *login* slot, so one facade's subscribe timeout
-                # cannot stall the rest of the pool's recovery.
                 if slot_held:
                     release_login_slot()
             if not login_ok or not c.logged_in:
@@ -194,7 +178,7 @@ class ReconnectOrchestrator:
             if c.metrics:
                 c.metrics.feed_reconnect_total.labels(result="exception").inc()
                 try:
-                    from hft_platform.observability.metrics import cap_exception_type  # noqa: PLC0415
+                    from hft_platform.observability.metrics import cap_exception_type
 
                     c.metrics.feed_reconnect_exception_total.labels(
                         reason=reason or "unknown",
@@ -207,10 +191,6 @@ class ReconnectOrchestrator:
             return False
         finally:
             c._reconnect_lock.release()
-
-    # ------------------------------------------------------------------ #
-    # SessionPolicy routing
-    # ------------------------------------------------------------------ #
 
     def request_reconnect_via_policy(self, reason: str, force: bool = True) -> bool:
         """Route a reconnect intent through the SessionPolicy interface.
@@ -225,12 +205,7 @@ class ReconnectOrchestrator:
             except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 return False
-        # Fallback: direct call (only in legacy/test contexts)
         return bool(self.reconnect(reason=reason, force=force))
-
-    # ------------------------------------------------------------------ #
-    # Quote health verification
-    # ------------------------------------------------------------------ #
 
     def verify_quotes_flowing(self, timeout_s: float | None = None) -> bool:
         """Verify quotes are flowing after refresh (O5).
@@ -275,10 +250,6 @@ class ReconnectOrchestrator:
         )
         return False
 
-    # ------------------------------------------------------------------ #
-    # Trading hours / market calendar guards
-    # ------------------------------------------------------------------ #
-
     def is_trading_hours(self) -> bool:
         """Return True if currently within TAIFEX futures/options trading hours.
 
@@ -294,21 +265,13 @@ class ReconnectOrchestrator:
             return calendar.is_trading_hours(now_dt, product_type="future")
         except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
-            # Conservative fallback: weekdays TAIFEX hours Asia/Taipei.
             now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=dt.timezone(dt.timedelta(hours=8)))
             if now_dt.weekday() >= 5:
                 return False
             second = now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second
-            # Day: [08:45, 13:45), Night: [15:00, 05:00) — closes are exclusive
-            # so the closing minute is not read as an open market (which is what
-            # made the quote watchdog force a relogin at every session close).
             day_session = (8 * 3600 + 45 * 60) <= second < (13 * 3600 + 45 * 60)
             night_session = second >= (15 * 3600) or second < (5 * 3600)
             return day_session or night_session
-
-    # ------------------------------------------------------------------ #
-    # Quote version helpers
-    # ------------------------------------------------------------------ #
 
     def get_quote_version(self) -> Any:
         """Return the appropriate QuoteVersion enum value, or None."""
@@ -324,8 +287,6 @@ class ReconnectOrchestrator:
         except AttributeError:
             return None
         c = self._client
-        # H13: snapshot under the dedicated lock so the watchdog thread
-        # cannot flip _quote_version between the two comparisons below.
         lock = getattr(c, "_quote_version_lock", None)
         if lock is not None:
             with lock:

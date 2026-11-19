@@ -10,10 +10,6 @@ import pytest
 
 from hft_platform.feature.profile import FeatureProfile, FeatureProfileRegistry
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_profile(
     profile_id: str = "p1",
@@ -35,11 +31,6 @@ def _make_profile(
         owner=owner,
         notes=notes,
     )
-
-
-# ---------------------------------------------------------------------------
-# FeatureProfile.to_dict — line 23
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureProfileToDict:
@@ -81,11 +72,6 @@ class TestFeatureProfileToDict:
         assert d["state"] == "disabled"
 
 
-# ---------------------------------------------------------------------------
-# FeatureProfileRegistry.register — line 58: make_default=True when already has default
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureProfileRegistryRegister:
     def test_first_registered_becomes_default(self) -> None:
         reg = FeatureProfileRegistry()
@@ -96,7 +82,6 @@ class TestFeatureProfileRegistryRegister:
         reg = FeatureProfileRegistry()
         reg.register(_make_profile("p1"))
         reg.register(_make_profile("p2"))
-        # default should still be p1 since make_default=False by default
         assert reg.get_default().profile_id == "p1"
 
     def test_make_default_true_overrides_existing_default(self) -> None:
@@ -113,11 +98,6 @@ class TestFeatureProfileRegistryRegister:
         assert reg.ids() == ("p1", "p2", "p3")
 
 
-# ---------------------------------------------------------------------------
-# FeatureProfileRegistry.get — lines 66-67: KeyError wrapping
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureProfileRegistryGet:
     def test_get_existing_profile(self) -> None:
         reg = FeatureProfileRegistry()
@@ -128,11 +108,6 @@ class TestFeatureProfileRegistryGet:
         reg = FeatureProfileRegistry()
         with pytest.raises(KeyError, match="Unknown feature profile"):
             reg.get("nonexistent")
-
-
-# ---------------------------------------------------------------------------
-# FeatureProfileRegistry.get_default — line 71
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureProfileRegistryGetDefault:
@@ -146,11 +121,6 @@ class TestFeatureProfileRegistryGetDefault:
         default = reg.get_default()
         assert default is not None
         assert default.profile_id == "px"
-
-
-# ---------------------------------------------------------------------------
-# FeatureProfileRegistry.get_active_for_set — lines 78-87: env var path
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureProfileRegistryGetActiveForSet:
@@ -185,7 +155,6 @@ class TestFeatureProfileRegistryGetActiveForSet:
         reg.register(_make_profile("p1", feature_set_id="lob_shared_v3"))
         with patch.dict(os.environ, {"HFT_FEATURE_PROFILE_ID": "nonexistent"}):
             result = reg.get_active_for_set("lob_shared_v3")
-        # falls through to default
         assert result is not None
         assert result.profile_id == "p1"
 
@@ -195,7 +164,6 @@ class TestFeatureProfileRegistryGetActiveForSet:
         reg.register(_make_profile("p_wrong", feature_set_id="lob_shared_v1"))
         with patch.dict(os.environ, {"HFT_FEATURE_PROFILE_ID": "p_wrong"}):
             result = reg.get_active_for_set("lob_shared_v3")
-        # p_wrong is for v1, not v3, so fallback to default p1
         assert result is not None
         assert result.profile_id == "p1"
 
@@ -213,22 +181,11 @@ class TestFeatureProfileRegistryGetActiveForSet:
         assert result.profile_id == "p1"
 
     def test_disabled_state_profile_skipped(self) -> None:
-        # state="disabled" AND enabled=True: the fallback loop filters on state in {"active","shadow"},
-        # so a "disabled" state profile is not returned via the loop.
-        # But it IS returned as the default since it's the first registered.
-        # To test the loop path, register it as non-default (first register a different set):
         reg = FeatureProfileRegistry()
-        # Register a default profile for a different feature_set_id
         reg.register(_make_profile("p0", feature_set_id="lob_shared_v1", state="active"))
-        # Register a disabled-state profile for v3 — the loop skips it
         reg.register(_make_profile("p1", feature_set_id="lob_shared_v3", state="disabled"))
         result = reg.get_active_for_set("lob_shared_v3")
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# FeatureProfileRegistry.validate — lines 92-103: edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureProfileRegistryValidate:
@@ -239,7 +196,6 @@ class TestFeatureProfileRegistryValidate:
 
     def test_empty_feature_set_id_reported(self) -> None:
         reg = FeatureProfileRegistry()
-        # directly inject a bad profile
         prof = FeatureProfile(profile_id="p1", feature_set_id="")
         reg._profiles["p1"] = prof
         reg._default_id = "p1"
@@ -257,7 +213,6 @@ class TestFeatureProfileRegistryValidate:
     def test_default_not_in_registry_reported(self) -> None:
         reg = FeatureProfileRegistry()
         reg.register(_make_profile("p1"))
-        # Manually point default to a non-existent ID
         reg._default_id = "ghost"
         errors = reg.validate()
         assert any("default profile" in e and "ghost" in e for e in errors)
@@ -267,11 +222,6 @@ class TestFeatureProfileRegistryValidate:
             reg = FeatureProfileRegistry()
             reg.register(_make_profile("p1", state=state))
             assert reg.validate() == [], f"state={state} should not produce errors"
-
-
-# ---------------------------------------------------------------------------
-# FeatureProfileRegistry.from_file — lines 78-87: YAML parsing
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureProfileRegistryFromFile:

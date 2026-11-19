@@ -32,34 +32,18 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-# Per-package line-rate floors (percent): measured minus 2 points, rounded
-# down (measured 2026-10-15, main tree with the Rust extension built; the
-# measured rate is in each comment). Bump these up as coverage improves; do
-# not lower them without an architecture review.
 PACKAGE_FLOORS: dict[str, float] = {
-    # Critical risk/execution domains - aspirational 95%
-    "risk": 92.0,  # measured 94.14
-    "order": 90.0,  # measured 92.48
-    "execution": 92.0,  # measured 94.23
-    "gateway": 94.0,  # measured 96.11
-    # Recorder - aspirational 90%
-    "recorder": 87.0,  # measured 89.53
-    # Alpha governance - target 80%
-    "alpha": 90.0,  # measured 92.99
-    # Ratchet anchors for the entry-point glue (".") and the low-level IPC
-    # primitives, and for strategies.alpha below. Their explicit floors
-    # prevent regression while we incrementally add unit coverage. Bump as
-    # coverage grows.
-    ".": 88.0,  # measured 90.80
-    "ipc": 81.0,  # measured 83.82
-    # strategies.alpha is live alpha strategy bindings exercised primarily
-    # via integration / promotion gates rather than unit tests. Pinned
-    # ratchet anchor (measured 22.78, already within 2 points); raise once
-    # unit coverage lands.
+    "risk": 92.0,
+    "order": 90.0,
+    "execution": 92.0,
+    "gateway": 94.0,
+    "recorder": 87.0,
+    "alpha": 90.0,
+    ".": 88.0,
+    "ipc": 81.0,
     "strategies.alpha": 22.0,
 }
 
-# Floor applied to packages not listed in PACKAGE_FLOORS.
 DEFAULT_FLOOR: float = 70.0
 
 

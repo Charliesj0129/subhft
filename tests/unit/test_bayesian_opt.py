@@ -17,10 +17,6 @@ from research.tools.bayesian_opt import (
     run_bayesian_opt,
 )
 
-# ---------------------------------------------------------------------------
-# Unit tests for _optimization_objective
-# ---------------------------------------------------------------------------
-
 
 class TestOptimizationObjective:
     def test_sharpe_oos_mode(self) -> None:
@@ -33,8 +29,8 @@ class TestOptimizationObjective:
 
     def test_risk_adjusted_mode_with_penalties(self) -> None:
         result = _optimization_objective(3.0, -0.20, 2.0, "risk_adjusted")
-        dd_penalty = max(0.0, 0.20 - 0.10) * 2.0  # 0.2
-        turnover_penalty = max(0.0, 2.0 - 1.0) * 0.25  # 0.25
+        dd_penalty = max(0.0, 0.20 - 0.10) * 2.0
+        turnover_penalty = max(0.0, 2.0 - 1.0) * 0.25
         expected = 3.0 - dd_penalty - turnover_penalty
         assert abs(result - expected) < 1e-10
 
@@ -42,11 +38,6 @@ class TestOptimizationObjective:
         result = _optimization_objective(2.0, -0.05, 0.8, "ic_first")
         expected = 2.0 - 0.1 * 0.8
         assert abs(result - expected) < 1e-10
-
-
-# ---------------------------------------------------------------------------
-# Config tests
-# ---------------------------------------------------------------------------
 
 
 class TestBayesianOptConfig:
@@ -65,11 +56,6 @@ class TestBayesianOptConfig:
         assert config.n_startup_trials == 10
         assert config.is_oos_split == 0.7
         assert config.objective == "risk_adjusted"
-
-
-# ---------------------------------------------------------------------------
-# Result tests
-# ---------------------------------------------------------------------------
 
 
 class TestBayesianOptResult:
@@ -91,7 +77,6 @@ class TestBayesianOptResult:
         assert d["n_trials"] == 5
         assert len(d["trials"]) == 2
 
-        # Verify JSON-serializable
         serialized = json.dumps(d)
         assert isinstance(serialized, str)
 
@@ -108,11 +93,6 @@ class TestBayesianOptResult:
         loaded = json.loads(json.dumps(d))
         assert loaded["best_params"] == {"a": 0.1, "b": 0.5}
         assert loaded["param_importance"] == {"a": 0.7, "b": 0.3}
-
-
-# ---------------------------------------------------------------------------
-# Helpers for mocking
-# ---------------------------------------------------------------------------
 
 
 def _make_mock_backtest_result(
@@ -140,11 +120,6 @@ _MOCK_LATENCY = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Integration test with mocked runner
-# ---------------------------------------------------------------------------
-
-
 try:
     import optuna  # noqa: F401
 
@@ -168,11 +143,9 @@ class TestRunBayesianOpt:
         mock_discover: MagicMock,
         mock_load_latency: MagicMock,
     ) -> None:
-        # Setup alpha registry
         mock_alpha = MagicMock()
         mock_discover.return_value = {"test_alpha": mock_alpha}
 
-        # Runner: objective peaks at threshold=0.25
         def _make_runner(alpha: Any, config: Any) -> MagicMock:
             threshold = float(config.signal_threshold)
             sharpe = 5.0 - 40.0 * (threshold - 0.25) ** 2
@@ -230,7 +203,6 @@ class TestRunBayesianOpt:
         result = run_bayesian_opt(config)
 
         assert result.deflated_sharpe < result.best_objective
-        # Identical trials: SR0 for the best of 5 uses the null spread over the fallback n_oos=100.
         expected_penalty = expected_max_sharpe(5, null_sharpe_std(100) * math.sqrt(252.0))
         assert abs((result.best_objective - result.deflated_sharpe) - expected_penalty) < 1e-6
 

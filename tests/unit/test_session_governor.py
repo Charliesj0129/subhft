@@ -81,7 +81,7 @@ class TestTrackGate:
         snapshot = gate.track_phases
         gate.set_track_phase("stock", SessionPhase.CLOSED)
         assert snapshot["stock"] == SessionPhase.OPEN
-        assert gate.get_phase("2330") == SessionPhase.CLOSED  # unknown symbol, default CLOSED
+        assert gate.get_phase("2330") == SessionPhase.CLOSED
 
     def test_symbol_to_track_snapshot(self) -> None:
         gate = TrackGate()
@@ -99,22 +99,18 @@ class TestTrackGate:
         gate = TrackGate()
         gate.register_symbol("TMFD6", "futures_day")
         gate.register_symbol("TMFD6", "futures_night")
-        # Day session: futures_day=OPEN, futures_night=CLOSED
         gate.set_track_phase("futures_day", SessionPhase.OPEN)
         gate.set_track_phase("futures_night", SessionPhase.CLOSED)
         assert gate.get_phase("TMFD6") == SessionPhase.OPEN
 
-        # Night session: futures_day=CLOSED, futures_night=OPEN
         gate.set_track_phase("futures_day", SessionPhase.CLOSED)
         gate.set_track_phase("futures_night", SessionPhase.OPEN)
         assert gate.get_phase("TMFD6") == SessionPhase.OPEN
 
-        # Both CLOSED
         gate.set_track_phase("futures_day", SessionPhase.CLOSED)
         gate.set_track_phase("futures_night", SessionPhase.CLOSED)
         assert gate.get_phase("TMFD6") == SessionPhase.CLOSED
 
-        # CLOSE_ONLY vs CLOSED → CLOSE_ONLY (more permissive)
         gate.set_track_phase("futures_day", SessionPhase.CLOSE_ONLY)
         gate.set_track_phase("futures_night", SessionPhase.CLOSED)
         assert gate.get_phase("TMFD6") == SessionPhase.CLOSE_ONLY
@@ -224,10 +220,8 @@ class TestFlattenTaskDoneCallback:
 
         gov = SessionGovernor(config_path=_write_config(tmp_path), position_flattener=flattener)
 
-        # Transition to FORCE_FLAT — this creates the task with the callback
         gov.transition_track("futures_day", SessionPhase.FORCE_FLAT)
 
-        # Let the task run and the callback fire
         await asyncio.sleep(0.05)
 
         captured = capsys.readouterr()
@@ -255,15 +249,14 @@ class TestFlattenTaskDoneCallback:
         flatten_started = asyncio.Event()
         flattener = AsyncMock()
 
-        async def _slow_flatten(*args, **kwargs):  # noqa: ANN002, ANN003
+        async def _slow_flatten(*args, **kwargs):
             flatten_started.set()
-            await asyncio.sleep(10)  # will be cancelled before finishing
+            await asyncio.sleep(10)
 
         flattener.flatten_track = _slow_flatten
 
         gov = SessionGovernor(config_path=_write_config(tmp_path), position_flattener=flattener)
 
-        # Patch transition_track to capture the created task
         created_tasks: list[asyncio.Task] = []  # type: ignore[type-arg]
         _orig_transition = gov.transition_track
 
@@ -276,15 +269,12 @@ class TestFlattenTaskDoneCallback:
         gov.transition_track = _patched_transition  # type: ignore[method-assign]
 
         gov.transition_track("futures_day", SessionPhase.FORCE_FLAT)
-        # Wait for the flatten coroutine to start
         await flatten_started.wait()
 
-        # Cancel only the flatten task
         assert created_tasks, "Expected a task to be created"
         for t in created_tasks:
             t.cancel()
 
-        # Wait for cancellation and callback to fire
         try:
             await asyncio.gather(*created_tasks, return_exceptions=True)
         except asyncio.CancelledError:

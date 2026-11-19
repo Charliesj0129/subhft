@@ -51,11 +51,8 @@ from research.registry import legacy_evidence
 DEFECTS_RELPATH = "config/research/defects.yaml"
 DEFECTS_SCHEMA = "research_defects.v1"
 REQUIREMENTS = frozenset({"dataset_dedup"})
-# Components every research run carries: no run record names its lane, so both Gate C paths apply.
 RUN_COMPONENTS = frozenset({"dataset", "verdict", "gate_c.taker", "gate_c.maker"})
-# Legacy rows that are not evidence at all; every other quarantine reason is still audited.
 _NOT_EVIDENCE = frozenset({"pytest_tmp_path"})
-# The suffix of a hftbacktest file: a primary L2 export, or one the taker runner converted from an input.
 _HFTBT_SUFFIX = "hftbt.npz"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _GIT_TIMEOUT_S = 10.0
@@ -211,7 +208,7 @@ def _converted_outputs(inputs: Iterable[Path]) -> frozenset[Path]:
         try:
             declared = _declared_bundle_pair(str(data))
         except ValueError:
-            declared = None  # a broken bundle declares nothing; its npz then needs a sidecar
+            declared = None
         if declared is not None:
             out.add(Path(declared).resolve())
     return frozenset(out)

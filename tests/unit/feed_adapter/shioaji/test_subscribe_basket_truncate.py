@@ -50,12 +50,6 @@ def _make_symbols(count: int) -> List[Dict[str, Any]]:
     return [{"code": f"S{i:04d}", "exchange": "TWSE"} for i in range(count)]
 
 
-# ---------------------------------------------------------------------------
-# Stub harness for subscribe_basket — mirrors the small surface the manager
-# touches so we can drive the truncate path without bringing up the real SDK.
-# ---------------------------------------------------------------------------
-
-
 class _NoopMetric:
     """Fallback metric stub for attributes the manager pokes opportunistically."""
 
@@ -80,7 +74,7 @@ class _ClientStub:
         max_subscriptions: int,
         notification_dispatcher: Any | None = None,
     ) -> None:
-        self.api = object()  # truthy
+        self.api = object()
         self.logged_in = True
         self.tick_callback = None
         self.symbols = symbols
@@ -94,11 +88,10 @@ class _ClientStub:
         self._quote_version = None
         self._quote_version_mode = "auto"
         self.fetch_contract = False
-        self._last_quote_data_ts = 1.0  # skip first-set branch
+        self._last_quote_data_ts = 1.0
         self.metrics = MetricsRegistry.get()
         self._notification_dispatcher = notification_dispatcher
 
-    # subscribe_basket touches the following ↓ — return harmless stubs.
     def _start_quote_dispatch_worker(self) -> None: ...
     def _ensure_callbacks(self, cb: Any) -> None: ...
     def _start_quote_watchdog(self) -> None: ...
@@ -109,8 +102,6 @@ class _ClientStub:
     def _refresh_quote_routes(self) -> None: ...
 
     def _quote_api(self) -> Any:
-        # Return a truthy object that has subscribe attribute so the early
-        # bailout in subscribe_basket does not trigger.
         class _QuoteAPI:
             def subscribe(self, *a: Any, **kw: Any) -> None: ...
 
@@ -122,11 +113,6 @@ def _patched_subscribe_symbol(self: SubscriptionManager, sym: Dict[str, Any], cb
     return True
 
 
-# ---------------------------------------------------------------------------
-# Tests — Strategy A: subscribe-time truncation guard
-# ---------------------------------------------------------------------------
-
-
 def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch):
     """P2 #8: 200 symbols + per-conn cap 120 → metric + critical log."""
     metrics = MetricsRegistry.get()
@@ -136,7 +122,6 @@ def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch):
     client = _ClientStub(symbols=_make_symbols(200), max_subscriptions=120)
     mgr = SubscriptionManager(client)  # type: ignore[arg-type]
 
-    # Skip real broker subscribe — we only test the guard.
     monkeypatch.setattr(SubscriptionManager, "_subscribe_symbol", _patched_subscribe_symbol)
 
     with capture_logs() as records:
@@ -145,18 +130,8 @@ def test_subscribe_basket_bumps_truncate_metric_and_logs_critical(monkeypatch):
     after = _counter_value(counter, reason="conn_limit")
     assert after - before == 1.0, "truncate guard must bump metric exactly once"
 
-    # Per-conn cap honored: subscribed_count never exceeds limit.
     assert client.subscribed_count == 120
 
-    # Per-facade log emitted at the truncation site. 2026-05-23 rewrite:
-    # template renamed to ``subscription_limit_reached`` with explicit
-    # ``shard_size``/``dropped_this_facade`` fields and downgraded to
-    # warning; the misleading ``severity="critical"`` string was dropped.
-    #
-    # Read as a structured record, not as rendered text: asserting on
-    # ``capsys`` made this depend on whichever renderer the process-wide
-    # structlog config happened to have, so it passed only when an earlier
-    # test in the run had installed the key-value one.
     truncate = [r for r in records if r.get("event") == "subscription_limit_reached"]
     assert truncate, "truncate event must be logged"
     assert truncate[-1]["shard_size"] == 200
@@ -205,15 +180,12 @@ def test_subscribe_basket_invokes_dispatcher_on_truncate(monkeypatch):
         max_subscriptions=120,
         notification_dispatcher=_DispatcherSpy(),
     )
-    # Simulate a pool-attached facade so dispatcher receives conn_id.
     client.conn_id = "0"
     mgr = SubscriptionManager(client)  # type: ignore[arg-type]
     monkeypatch.setattr(SubscriptionManager, "_subscribe_symbol", _patched_subscribe_symbol)
 
     mgr.subscribe_basket(cb=lambda *a, **kw: None)
 
-    # subscribe_basket runs synchronously (no live loop), so the helper
-    # falls back to ``asyncio.run`` and the spy MUST observe the call.
     assert captured == {
         "reason": "conn_limit",
         "requested": 200,
@@ -221,11 +193,6 @@ def test_subscribe_basket_invokes_dispatcher_on_truncate(monkeypatch):
         "limit": 120,
         "conn_id": "0",
     }
-
-
-# ---------------------------------------------------------------------------
-# Tests — Strategy B: _load_config preflight pool-capacity advisory
-# ---------------------------------------------------------------------------
 
 
 def test_load_config_exceeds_pool_capacity_single_conn(tmp_path, monkeypatch):
@@ -245,8 +212,6 @@ def test_load_config_exceeds_pool_capacity_single_conn(tmp_path, monkeypatch):
 
     client = ShioajiClient(config_path=str(config_path))
 
-    # 588 ≤ 600 (per-client ceiling, no truncate) AND 588 > 120 × 1
-    # (per-conn × num_conns) → preflight advisory fires.
     assert len(client.symbols) == 588
     after_pool = _counter_value(counter, result="exceeds_pool_capacity")
     after_ok = _counter_value(counter, result="ok")

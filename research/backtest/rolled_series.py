@@ -36,7 +36,6 @@ PROTOCOL_SCHEMA = "research_protocol.v1"
 DEFAULT_PROTOCOL_PATH = Path("config/research/protocols/front_month_roll_v1.yaml")
 ROLLED_SUFFIX = "_frontmonth"
 
-# The values of the protocol this module implements. Anything else is refused.
 _IMPLEMENTED = {
     "kind": "roll_rule",
     "calendar": "XTAI",

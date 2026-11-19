@@ -144,8 +144,6 @@ def _assert_released(feedbacks: list[RiskFeedback], reason_code: str) -> None:
     assert fb.reason_code == reason_code
     assert fb.strategy_id == "R47_MAKER_TMF"
     assert fb.symbol == "TMFI6"
-    # A sideless release decrements neither counter; an approved one makes
-    # ``on_risk_feedback`` return early, so both are releases that do nothing.
     assert fb.side == Side.SELL
     assert fb.was_approved is False
 
@@ -206,7 +204,6 @@ class TestEveryPreDispatchGuardReleases:
     @pytest.mark.asyncio
     async def test_per_strategy_circuit_breaker_releases_the_pending_slot(self, tmp_config):
         adapter, sink = _armed(tmp_config)
-        # The manager has __slots__, so replace the object rather than an attribute.
         adapter.strategy_cb_mgr = MagicMock()
         adapter.strategy_cb_mgr.is_open = MagicMock(return_value=True)
 
@@ -219,7 +216,6 @@ class TestEveryPreDispatchGuardReleases:
         from hft_platform.order.adapter import PerSymbolRateResult
 
         adapter, sink = _armed(tmp_config)
-        # The limiter has __slots__, so replace the object rather than an attribute.
         adapter.per_symbol_rate_limiter = MagicMock()
         adapter.per_symbol_rate_limiter.check = MagicMock(return_value=PerSymbolRateResult.HARD)
 

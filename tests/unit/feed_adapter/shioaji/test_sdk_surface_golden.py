@@ -21,11 +21,11 @@ import pytest
 
 shioaji = pytest.importorskip("shioaji")
 
-from scripts.shioaji_api_diff._capture_entrypoint import (  # noqa: E402
+from scripts.shioaji_api_diff._capture_entrypoint import (
     build_surface_snapshot,
     canonical_json,
 )
-from scripts.shioaji_api_diff.paths import GOLDEN_DIR  # noqa: E402
+from scripts.shioaji_api_diff.paths import GOLDEN_DIR
 
 
 def _strip_volatile(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -68,13 +68,6 @@ def test_installed_shioaji_surface_matches_committed_golden() -> None:
             f"tests/golden/shioaji_sdk/surface_{version}.json."
         )
     expected = _strip_volatile(json.loads(golden.read_text(encoding="utf-8")))
-    # ``include_nm_symbols=False``: the nm sweep of the shioaji ``_core`` .so is
-    # the slowest part of a capture and ``_strip_volatile`` drops its output
-    # anyway. Paying for it here made this test exceed CI's per-test budget --
-    # `make test-unit-ci` runs with `--timeout=10` while the nm subprocess sets
-    # its own `timeout=30`, so on a contended runner pytest-timeout could only
-    # ever kill it mid-poll. Observed twice on PR #408, which changes nothing
-    # but an actions/checkout pin.
     actual = _strip_volatile(build_surface_snapshot(include_nm_symbols=False))
     if actual != expected:
         delta = "\n".join(
@@ -127,6 +120,5 @@ def test_strip_volatile_ignores_ambient_pydantic_runtime() -> None:
     installed_like = {"capture": {"pydantic_runtime": "2", "python": "3.12"}, "constants": {"A": 1}}
     assert _strip_volatile(golden_like) == _strip_volatile(installed_like)
 
-    # A REAL surface change (a constant differs) must still be detected.
     drifted = {"capture": {"pydantic_runtime": "2", "python": "3.12"}, "constants": {"A": 2}}
     assert _strip_volatile(golden_like) != _strip_volatile(drifted)

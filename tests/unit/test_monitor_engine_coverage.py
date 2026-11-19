@@ -33,10 +33,6 @@ from hft_platform.monitor._types import (
     WatchlistSymbol,
 )
 
-# ---------------------------------------------------------------------------
-# Shared helpers (mirror pattern from test_monitor_engine.py)
-# ---------------------------------------------------------------------------
-
 
 class _StubDispatcher:
     def load_alphas(self, *args, **kwargs) -> list[str]:
@@ -162,11 +158,6 @@ def _make_initialized_engine(monkeypatch, fake_ds=None, warmup_ticks=2):
     return engine
 
 
-# ---------------------------------------------------------------------------
-# _create_data_source paths
-# ---------------------------------------------------------------------------
-
-
 def test_create_data_source_ch_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     """data_source='ch' returns a CHDataSource backed by CHPoller."""
     from dataclasses import replace
@@ -253,11 +244,6 @@ def test_create_data_source_auto_uses_hybrid_when_shm_connected(monkeypatch: pyt
     assert result is mock_hybrid
 
 
-# ---------------------------------------------------------------------------
-# toggle_pause
-# ---------------------------------------------------------------------------
-
-
 def test_toggle_pause_pauses_and_resumes(monkeypatch: pytest.MonkeyPatch) -> None:
     """toggle_pause flips paused state and restores previous state on resume."""
     engine = _make_initialized_engine(monkeypatch)
@@ -282,11 +268,6 @@ def test_toggle_pause_noop_in_error_state(monkeypatch: pytest.MonkeyPatch) -> No
     engine.toggle_pause()
     assert engine.state == MonitorState.ERROR
     assert engine._paused_by_user is False
-
-
-# ---------------------------------------------------------------------------
-# toggle_help / toggle_warning_filter / toggle_event_log / toggle_problem_log
-# ---------------------------------------------------------------------------
 
 
 def test_toggle_help(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -333,11 +314,6 @@ def test_toggle_detail(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine._detail_visible is False
 
 
-# ---------------------------------------------------------------------------
-# clear_warnings
-# ---------------------------------------------------------------------------
-
-
 def test_clear_warnings_resets_invalid_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _make_initialized_engine(monkeypatch)
     ss = engine._sym_states[0]
@@ -353,11 +329,6 @@ def test_clear_warnings_resets_invalid_counts(monkeypatch: pytest.MonkeyPatch) -
     assert "cleared" in ss.problem_log[0].message.lower()
 
 
-# ---------------------------------------------------------------------------
-# request_force_poll
-# ---------------------------------------------------------------------------
-
-
 def test_request_force_poll_sets_flag_and_toast(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _make_initialized_engine(monkeypatch)
     assert engine._force_poll is False
@@ -366,11 +337,6 @@ def test_request_force_poll_sets_flag_and_toast(monkeypatch: pytest.MonkeyPatch)
 
     assert engine._force_poll is True
     assert engine._toast is not None
-
-
-# ---------------------------------------------------------------------------
-# request_reconnect success / failure
-# ---------------------------------------------------------------------------
 
 
 def test_request_reconnect_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,14 +373,8 @@ def test_request_reconnect_no_data_source(monkeypatch: pytest.MonkeyPatch) -> No
     engine = _make_initialized_engine(monkeypatch)
     engine._data_source = None
 
-    # Should not raise; toast is set then no-op
     engine.request_reconnect()
     assert engine._toast is not None
-
-
-# ---------------------------------------------------------------------------
-# _handle_reconnect edge: no data source
-# ---------------------------------------------------------------------------
 
 
 def test_handle_reconnect_no_data_source_sets_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -444,20 +404,13 @@ def test_handle_reconnect_runtime_error_sets_error(monkeypatch: pytest.MonkeyPat
     assert "permanent failure" in engine._error_msg
 
 
-# ---------------------------------------------------------------------------
-# get_header_context — state-specific extra branches
-# ---------------------------------------------------------------------------
-
-
 def test_header_context_initializing_shows_step(monkeypatch: pytest.MonkeyPatch) -> None:
     """INITIALIZING state shows Step N/5 in extra."""
     from hft_platform.monitor import _engine as engine_mod
 
-    # Don't call initialize, so state stays INITIALIZING
     cfg = _config()
     engine = MonitorEngine(cfg)
     engine._dispatcher = _StubDispatcher()
-    # engine state is INITIALIZING by default
     assert engine.state == MonitorState.INITIALIZING
 
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 0)
@@ -508,11 +461,6 @@ def test_header_context_paused_shows_next_open(monkeypatch: pytest.MonkeyPatch) 
     assert "Opens" in ctx.extra
 
 
-# ---------------------------------------------------------------------------
-# _build_event_ticker
-# ---------------------------------------------------------------------------
-
-
 def test_build_event_ticker_empty_returns_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _make_initialized_engine(monkeypatch)
     assert engine._event_ring_len == 0
@@ -523,10 +471,9 @@ def test_build_event_ticker_shows_recent_events(monkeypatch: pytest.MonkeyPatch)
     from hft_platform.monitor import _engine as engine_mod
 
     engine = _make_initialized_engine(monkeypatch)
-    now_ns = 10_000_000_000  # 10s reference
+    now_ns = 10_000_000_000
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: now_ns)
 
-    # Push a recent event (5s ago)
     engine._push_event("TMFC6", "SPIKE", now_ns - 5_000_000_000)
 
     result = engine._build_event_ticker()
@@ -538,10 +485,9 @@ def test_build_event_ticker_skips_old_events(monkeypatch: pytest.MonkeyPatch) ->
     from hft_platform.monitor import _engine as engine_mod
 
     engine = _make_initialized_engine(monkeypatch)
-    now_ns = 100_000_000_000  # 100s reference
+    now_ns = 100_000_000_000
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: now_ns)
 
-    # Push event 60s ago — older than 30s cutoff
     engine._push_event("TMFC6", "OLD_EVENT", now_ns - 60_000_000_000)
 
     result = engine._build_event_ticker()
@@ -555,19 +501,12 @@ def test_build_event_ticker_max_three(monkeypatch: pytest.MonkeyPatch) -> None:
     now_ns = 10_000_000_000
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: now_ns)
 
-    # Push 5 events, all recent
     for i in range(5):
         engine._push_event("TMFC6", f"EVT{i}", now_ns - i * 1_000_000_000)
 
     result = engine._build_event_ticker()
-    # Max 3 events shown, separated by "|"
     parts = [p for p in result.split("|") if p.strip()]
     assert len(parts) <= 3
-
-
-# ---------------------------------------------------------------------------
-# _format_runtime_summary — no_data path
-# ---------------------------------------------------------------------------
 
 
 def test_format_runtime_summary_no_data_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -576,15 +515,13 @@ def test_format_runtime_summary_no_data_path(monkeypatch: pytest.MonkeyPatch) ->
 
     engine = _make_initialized_engine(monkeypatch)
 
-    # Simulate a symbol that started a session long ago but has no ticks
     ss = engine._sym_states[0]
     ss.session_active = True
     ss.tick_count = 0
     ss.invalid_row_count = 0
-    ss.session_started_ns = 1  # started very early → huge age
+    ss.session_started_ns = 1
     ss.is_stale = False
 
-    # now_ns well past no_data_warn_s (1.0s configured)
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 10_000_000_000)
 
     summary = engine._format_runtime_summary()
@@ -595,17 +532,11 @@ def test_format_runtime_summary_all_ready(monkeypatch: pytest.MonkeyPatch) -> No
     from hft_platform.monitor import _engine as engine_mod
 
     engine = _make_initialized_engine(monkeypatch)
-    # Both ticks filled already from init
     assert engine._sym_states[0].tick_count == 2
 
     monkeypatch.setattr(engine_mod.timebase, "now_ns", lambda: 2)
     summary = engine._format_runtime_summary()
     assert "ready 1" in summary
-
-
-# ---------------------------------------------------------------------------
-# _process_row exception path
-# ---------------------------------------------------------------------------
 
 
 def test_process_row_enrich_exception_increments_invalid_count(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -624,21 +555,16 @@ def test_process_row_enrich_exception_increments_invalid_count(monkeypatch: pyte
     assert "bad row" in ss.last_invalid_reason
 
 
-# ---------------------------------------------------------------------------
-# _maybe_refresh_cost / _get_ch_client
-# ---------------------------------------------------------------------------
-
-
 def test_maybe_refresh_cost_skips_when_too_soon(monkeypatch: pytest.MonkeyPatch) -> None:
     """_maybe_refresh_cost does nothing when within 60s cooldown."""
     engine = _make_initialized_engine(monkeypatch)
-    engine._cost_last_fetch_ns = 5_000_000_000  # 5s ago (< 60s)
+    engine._cost_last_fetch_ns = 5_000_000_000
 
     get_ch_client_called = []
 
     monkeypatch.setattr(MonitorEngine, "_get_ch_client", lambda self: (get_ch_client_called.append(True) or None))
 
-    engine._maybe_refresh_cost(now_ns=6_000_000_000)  # only 1s later
+    engine._maybe_refresh_cost(now_ns=6_000_000_000)
 
     assert len(get_ch_client_called) == 0
 
@@ -649,7 +575,6 @@ def test_maybe_refresh_cost_no_client_noop(monkeypatch: pytest.MonkeyPatch) -> N
     engine._cost_last_fetch_ns = 0
     engine._data_source = None
 
-    # Should not raise
     engine._maybe_refresh_cost(now_ns=100_000_000_000)
     assert engine._cost_lines == []
 
@@ -690,19 +615,12 @@ def test_get_ch_client_with_hybrid_data_source(monkeypatch: pytest.MonkeyPatch) 
 
     mock_hybrid_ds = MagicMock()
     mock_hybrid_ds._ch_source = mock_ch_source
-    # spec=CHDataSource would trigger isinstance check, so use plain MagicMock
-    del mock_hybrid_ds._poller  # remove poller attr to force hybrid path
+    del mock_hybrid_ds._poller
 
-    # Simulate non-CHDataSource (so isinstance check fails) with _ch_source
     engine._data_source = mock_hybrid_ds
 
     result = engine._get_ch_client()
     assert result is mock_client
-
-
-# ---------------------------------------------------------------------------
-# get_selected_symbol_state
-# ---------------------------------------------------------------------------
 
 
 def test_get_selected_symbol_state_empty_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -715,7 +633,6 @@ def test_get_selected_symbol_state_empty_returns_none(monkeypatch: pytest.Monkey
 
 def test_get_selected_symbol_state_returns_clamped(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _make_initialized_engine(monkeypatch)
-    # Only 1 symbol; set selected_idx to out-of-range value
     engine._selected_idx = 100
 
     result = engine.get_selected_symbol_state()
@@ -728,11 +645,6 @@ def test_get_selected_symbol_state_normal(monkeypatch: pytest.MonkeyPatch) -> No
 
     result = engine.get_selected_symbol_state()
     assert result is engine._sym_states_sorted[0]
-
-
-# ---------------------------------------------------------------------------
-# _bootstrap_new_sessions with ConnectionError
-# ---------------------------------------------------------------------------
 
 
 def test_bootstrap_new_sessions_connection_error_sets_disconnected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -751,12 +663,10 @@ def test_bootstrap_new_sessions_connection_error_sets_disconnected(monkeypatch: 
     engine._dispatcher = _StubDispatcher()
     engine.initialize()
 
-    # Mark symbol as just entered active session
     ss = engine._sym_states[0]
     ss.was_session_active = False
     ss.session_active = True
 
-    # Make bootstrap_symbol raise ConnectionError
     def _raise_conn(self, sym_state):
         raise ConnectionError("broken pipe")
 
@@ -765,11 +675,6 @@ def test_bootstrap_new_sessions_connection_error_sets_disconnected(monkeypatch: 
     engine._bootstrap_new_sessions()
 
     assert engine.state == MonitorState.DISCONNECTED
-
-
-# ---------------------------------------------------------------------------
-# Bad-data summary tiers in get_header_context
-# ---------------------------------------------------------------------------
 
 
 def _engine_with_bad_rows(monkeypatch, invalid: int, total: int) -> MonitorEngine:
@@ -826,11 +731,6 @@ def test_header_context_bad_summary_pre_market(monkeypatch: pytest.MonkeyPatch) 
     assert ctx.bad_style == "dim"
 
 
-# ---------------------------------------------------------------------------
-# _sort_symbols — config order path
-# ---------------------------------------------------------------------------
-
-
 def test_sort_symbols_config_order(monkeypatch: pytest.MonkeyPatch) -> None:
     """SORT_CONFIG preserves original insertion order."""
     from hft_platform.monitor._engine import SORT_CONFIG
@@ -848,13 +748,7 @@ def test_sort_symbols_composite_order(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _make_initialized_engine(monkeypatch)
     engine._sort_mode = SORT_COMPOSITE
     engine._sort_symbols()
-    # With one symbol, order is unchanged
     assert len(engine._sym_states_sorted) == 1
-
-
-# ---------------------------------------------------------------------------
-# request_stop
-# ---------------------------------------------------------------------------
 
 
 def test_request_stop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -862,11 +756,6 @@ def test_request_stop(monkeypatch: pytest.MonkeyPatch) -> None:
     assert engine._running is True
     engine.request_stop()
     assert engine._running is False
-
-
-# ---------------------------------------------------------------------------
-# initialize failure paths
-# ---------------------------------------------------------------------------
 
 
 def test_initialize_fails_with_no_symbols() -> None:
@@ -924,11 +813,6 @@ def test_initialize_fails_when_no_alphas_loaded(monkeypatch: pytest.MonkeyPatch)
     assert engine.state == MonitorState.ERROR
 
 
-# ---------------------------------------------------------------------------
-# _update_state — PAUSED when no active symbols
-# ---------------------------------------------------------------------------
-
-
 def test_update_state_pauses_when_no_active_symbols(monkeypatch: pytest.MonkeyPatch) -> None:
     engine = _make_initialized_engine(monkeypatch)
     engine._sym_states[0].session_active = False
@@ -937,11 +821,6 @@ def test_update_state_pauses_when_no_active_symbols(monkeypatch: pytest.MonkeyPa
     engine._update_state()
 
     assert engine.state == MonitorState.PAUSED
-
-
-# ---------------------------------------------------------------------------
-# poll_and_update — user-paused path and DISCONNECTED reconnect flow
-# ---------------------------------------------------------------------------
 
 
 def test_poll_and_update_respects_user_pause(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -960,7 +839,6 @@ def test_poll_and_update_respects_user_pause(monkeypatch: pytest.MonkeyPatch) ->
     engine._dispatcher = _StubDispatcher()
     engine.initialize()
 
-    # User pauses before poll
     engine._paused_by_user = True
     engine.poll_and_update()
 

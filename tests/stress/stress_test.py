@@ -1,6 +1,4 @@
 import asyncio
-
-# Configure logging to suppress debug noise during stress logic
 import logging
 import os
 import time
@@ -67,7 +65,6 @@ async def _run_gateway_stress(n_intents: int = 10_000, timeout_s: float = 10.0) 
     """Submit n_intents through LocalIntentChannel → GatewayService and measure throughput."""
     channel, svc, api_queue = _build_gateway_pipeline()
 
-    # Pre-fill channel (up to maxsize); remainder submitted during run
     batch = min(n_intents, 4096)
     for i in range(batch):
         channel.submit_nowait(
@@ -87,7 +84,6 @@ async def _run_gateway_stress(n_intents: int = 10_000, timeout_s: float = 10.0) 
     t0 = time.perf_counter()
     svc_task = asyncio.create_task(svc.run())
 
-    # Wait until all submitted intents are dispatched or timeout
     deadline = t0 + timeout_s
     while svc._dispatched < batch and time.perf_counter() < deadline:
         await asyncio.sleep(0.001)
@@ -120,7 +116,7 @@ async def monitor_resources(pid: int, duration: float) -> None:
     start = time.time()
     max_mem = 0.0
     while time.time() - start < duration:
-        mem = proc.memory_info().rss / 1024 / 1024  # MB
+        mem = proc.memory_info().rss / 1024 / 1024
         max_mem = max(max_mem, mem)
         await asyncio.sleep(1)
     logger.info("Monitor Finished", max_mem_mb=round(max_mem, 2))
@@ -147,7 +143,6 @@ async def main() -> None:
         intents_per_sec=result["intents_per_sec"],
     )
 
-    # Sanity assertion: must have dispatched at least the pre-filled batch
     assert result["dispatched"] > 0, "No intents were dispatched — pipeline is broken"
     assert result["rejected"] == 0, f"Unexpected rejections: {result['rejected']}"
 

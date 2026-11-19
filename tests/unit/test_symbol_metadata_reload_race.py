@@ -60,7 +60,6 @@ def test_lookup_during_worker_reload_is_not_cached_empty(tmp_path: Path, monkeyp
     worker.start()
     try:
         assert gate.in_window.wait(5)
-        # Event-loop reads while the worker is mid-parse.
         during = (meta.product_type("TMFK6"), meta.exchange("TMFK6"), meta.price_scale("2330"))
     finally:
         gate.release.set()
@@ -124,8 +123,6 @@ def test_alias_recorded_after_the_build_copy_survives_the_publish(
         real_copy(table)
         calls["n"] += 1
         if calls["n"] == 1:
-            # Another thread's set_alias_map lands after the in-build copy and
-            # writes into the table that is about to be replaced.
             meta.set_alias_map({"TMFR1": "TMFK6"})
 
     monkeypatch.setattr(meta, "_copy_alias_entries", copy_then_alias_arrives)

@@ -74,10 +74,6 @@ def normalizer(tmp_path) -> MarketDataNormalizer:
     return MarketDataNormalizer(str(cfg))
 
 
-# --------------------------------------------------------------------------- #
-# Payload builders — both dict-shaped and attribute-object-shaped, because the
-# normalizer reads either, and real 1.5.3 stream objects are attribute-shaped.
-# --------------------------------------------------------------------------- #
 def _tick_dict(code: str, close: Any, volume: int = 10) -> dict[str, Any]:
     return {
         "code": code,
@@ -136,18 +132,10 @@ _SHAPE = [
     pytest.param(_tick_obj, id="obj"),
 ]
 
-# Tick-grid prices (no sub-tick ambiguity): every path agrees exactly with the
-# documented ``int(round(float(price) * scale))`` contract.
 _GRID_PRICES = ["100.5", "580", "0.0001", "12345.6789", "7777.7777", "1.2345"]
-# Sub-tick half-ties: the Decimal-vs-float invariant still holds on each path,
-# but the Rust *tick* kernel and Python disagree by one scaled unit (see the
-# characterization test below). Real feeds never emit these.
 _TIE_PRICES = ["100.50005", "100.49995", "580.00005", "999.99995"]
 
 
-# --------------------------------------------------------------------------- #
-# The #367-critical invariant: Decimal == float == int, on every path.
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("rust_enabled", _RUST_TOGGLE)
 @pytest.mark.parametrize("build", _SHAPE)
 @pytest.mark.parametrize("raw", _GRID_PRICES)
@@ -199,11 +187,6 @@ def test_bidask_decimal_matches_float_book(normalizer):
     assert _levels(ev_d, "ask") == _levels(ev_f, "ask")
 
 
-# --------------------------------------------------------------------------- #
-# Characterization of the two pre-existing, SDK-independent divergences.
-# These assert the CURRENT behaviour as a documented tripwire; they are evidence
-# captured during #367 validation, not a sanctioning of the behaviour.
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("raw", _TIE_PRICES)
 def test_finding_rust_tick_kernel_tie_rounding_diverges_from_python_by_at_most_one(normalizer, monkeypatch, raw):
     """FINDING (pre-existing, SDK-independent): the Rust *tick* kernel truncates
@@ -215,7 +198,7 @@ def test_finding_rust_tick_kernel_tie_rounding_diverges_from_python_by_at_most_o
     monkeypatch.setattr(normalizer_mod, "_RUST_ENABLED", False)
     py = normalizer.normalize_tick(_tick_dict("2330", float(raw)))
     assert isinstance(py, TickEvent)
-    assert py.price == contract  # Python path == documented contract, always.
+    assert py.price == contract
 
     monkeypatch.setattr(normalizer_mod, "_RUST_ENABLED", True)
     ru = normalizer.normalize_tick(_tick_dict("2330", float(raw)))
@@ -233,15 +216,10 @@ def test_finding_rust_tick_kernel_passes_infinity_as_saturated_int(normalizer, m
 
     monkeypatch.setattr(normalizer_mod, "_RUST_ENABLED", True)
     rust_inf = normalizer.normalize_tick(_tick_dict("2330", float("inf")))
-    # Current Rust behaviour: a TickEvent with a saturated (huge, positive) price.
     assert rust_inf is None or (isinstance(rust_inf, TickEvent) and rust_inf.price > 0)
-    # NaN is dropped on both paths regardless of toggle.
     assert normalizer.normalize_tick(_tick_dict("2330", float("nan"))) is None
 
 
-# --------------------------------------------------------------------------- #
-# Degenerate safety: never raise out of a callback; drop to None on Python path.
-# --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("rust_enabled", _RUST_TOGGLE)
 @pytest.mark.parametrize("build", _SHAPE)
 @pytest.mark.parametrize("bad", [None, 0, -1, Decimal("0"), Decimal("-5"), float("nan"), Decimal("NaN")])
@@ -257,9 +235,6 @@ def test_tick_missing_symbol_returns_none(normalizer):
     assert normalizer.normalize_tick(payload) is None
 
 
-# --------------------------------------------------------------------------- #
-# BidAsk book shapes and the Decimal scaling path.
-# --------------------------------------------------------------------------- #
 def _levels(event: BidAskEvent, side: str) -> list[list[int]]:
     raw = event.bids if side == "bid" else event.asks
     return [[int(p), int(v)] for p, v in raw]
@@ -313,7 +288,7 @@ def test_bidask_decimal_rust_path_is_correct_and_observable(normalizer, monkeypa
     assert _levels(event, "bid") == [[1002500, 3], [1002000, 7]]
     assert _levels(event, "ask") == [[1003000, 4], [1003500, 6]]
     if before is not None and after is not None:
-        assert after >= before  # fallback may be 0 (direct consume) or >0, never negative.
+        assert after >= before
 
 
 @pytest.mark.parametrize("rust_enabled", _RUST_TOGGLE)
@@ -365,4 +340,4 @@ def test_no_float_leaks_into_scaled_prices(normalizer):
     assert isinstance(book, BidAskEvent)
     for p, _v in list(book.bids) + list(book.asks):
         assert not math.isnan(float(p))
-        assert int(p) == p  # integral value, no fractional remainder
+        assert int(p) == p

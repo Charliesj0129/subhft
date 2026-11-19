@@ -123,6 +123,16 @@ by StormGuard's broker back-pressure (`order/broker_stall.py`), not the breaker;
 a broker that answers every order in 3-10 s trips neither the breaker nor the
 10 s STORM and is surfaced by the `BrokerPathMostlySilent` alert.
 
+### Late fills and pending slots
+
+`_bind_late_trade` registers a late accepted order under its own key before
+attempting cancellation. A fill or terminal update can race the late response.
+The phantom record and terminal bookkeeping let the terminal return the
+pending slot once. `release_stale_phantom_pendings` checks broker status before
+settling expired records. When a lookup fails, it can keep the slot held
+through the configured maximum hold to account for orders still live at the
+broker.
+
 ## Configuration
 
 | Variable | Default | Purpose |

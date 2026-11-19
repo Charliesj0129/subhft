@@ -41,7 +41,7 @@ def _prod_like_validator() -> DailyLossLimitValidator:
         "global_defaults": {"max_daily_loss": 500_000_000},
         "intraday_pnl": {
             "scope": "global",
-            "soft_limit_ntd": 5000,  # out of the way: this test is about the peak rule
+            "soft_limit_ntd": 5000,
             "hard_limit_ntd": 15000,
             "peak_drawdown_pct": 0.40,
             "soft_recovery_ntd": 300,
@@ -76,7 +76,7 @@ class TestTheDailyLossValidatorHasNoPeakRule:
         v = _prod_like_validator()
         v.record_pnl("R47", _ntd(3760))
         assert v.check(_intent())[0] is True
-        v.record_pnl("R47", _ntd(-2490))  # +1,270 on the day
+        v.record_pnl("R47", _ntd(-2490))
 
         ok, reason = v.check(_intent())
 

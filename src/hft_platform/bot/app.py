@@ -18,23 +18,16 @@ from hft_platform.utils.logging import configure_logging
 _log = structlog.get_logger(__name__)
 _TZ = ZoneInfo("Asia/Taipei")
 
-# ---------------------------------------------------------------------------
-# Shared state (module-level, updated by handlers/scheduler)
-# ---------------------------------------------------------------------------
 
 start_time: datetime = datetime.now(_TZ)
 last_day_report: datetime | None = None
 last_night_report: datetime | None = None
 last_ch_ok: datetime | None = None
 
-# P1-c (2026-04-27): track ATTEMPTS separately from successes so a heartbeat
-# that says `last_day=None last_night=None` after 8.7 days isn't ambiguous —
-# we can distinguish "scheduler never fired" from "scheduler fired but every
-# symbol returned no_data". Used by scheduler.py.
 last_day_attempt: datetime | None = None
 last_night_attempt: datetime | None = None
 consecutive_empty_attempts: int = 0
-DEAD_DATA_ALERT_THRESHOLD: int = 2  # warn after this many consecutive empty pushes
+DEAD_DATA_ALERT_THRESHOLD: int = 2
 
 
 @dataclass(slots=True)
@@ -48,15 +41,12 @@ class LatestReportContext:
 
 latest_manual_report_context: LatestReportContext | None = None
 
-# ---------------------------------------------------------------------------
-# Owner-only access control
-# ---------------------------------------------------------------------------
 
 _OWNER_CHAT_ID: int = 0
 
 
 def _get_owner_chat_id() -> int:
-    global _OWNER_CHAT_ID  # noqa: PLW0603
+    global _OWNER_CHAT_ID
     if _OWNER_CHAT_ID == 0:
         raw = os.environ.get("HFT_TELEGRAM_CHAT_ID", "")
         _OWNER_CHAT_ID = int(raw) if raw else 0
@@ -79,11 +69,6 @@ def owner_only(func: HandlerFunc) -> HandlerFunc:
         await func(update, context)
 
     return wrapper
-
-
-# ---------------------------------------------------------------------------
-# Symbol configuration
-# ---------------------------------------------------------------------------
 
 
 def get_report_symbols() -> list[str]:
@@ -112,11 +97,6 @@ def _start_health_server_background() -> None:
     thread.start()
 
 
-# ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
-
-
 async def _telegram_error_handler(update: Any, context: Any) -> None:
     """P1-c (2026-04-27): catch otherwise-uncaught handler exceptions.
 
@@ -142,7 +122,7 @@ async def _telegram_error_handler(update: Any, context: Any) -> None:
         from hft_platform.observability.metrics import MetricsRegistry
 
         MetricsRegistry.get().bot_handler_errors_total.labels(exception=err_type).inc()
-    except Exception:  # noqa: BLE001 — never crash the error handler itself
+    except Exception:
         pass
 
 
@@ -179,9 +159,6 @@ def create_app() -> Any:
     app.add_handler(CommandHandler("pos", cmd_pos))
     app.add_handler(CommandHandler("stop", cmd_stop))
 
-    # P1-c: register error handler so httpx.ConnectError etc. are caught,
-    # logged via structlog (with secret scrubber), and counted in metrics
-    # instead of polluting logs and risking wedge state.
     app.add_error_handler(_telegram_error_handler)
 
     schedule_jobs(app.job_queue)
@@ -192,14 +169,9 @@ def create_app() -> Any:
 
 def main() -> None:
     """Entry point: create app and start polling."""
-    global start_time  # noqa: PLW0603
+    global start_time
     start_time = datetime.now(_TZ)
 
-    # This process is its own entry point (`python -m hft_platform.bot`) and used to
-    # run on structlog's DEFAULT chain: no credential scrubber, and python-telegram-bot
-    # (which carries the bot token in every request URL) logging through stdlib with
-    # no scrubbing at all. The comments below claim a scrubber; this call is what makes
-    # that true. It must run before anything can log, so before the health server.
     configure_logging()
 
     _start_health_server_background()

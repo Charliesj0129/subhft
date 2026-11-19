@@ -23,7 +23,7 @@ def test_storm_guard_halt_route_repeats_slower_than_the_critical_default():
     halt_idx = next(i for i, r in enumerate(routes) if r.get("match", {}).get("alertname") == "StormGuardHalt")
     critical_idx = next(i for i, r in enumerate(routes) if r.get("match", {}).get("severity") == "critical")
 
-    assert halt_idx < critical_idx  # first match wins; after the critical route it is dead config
+    assert halt_idx < critical_idx
     assert routes[halt_idx]["repeat_interval"] == "4h"
     assert routes[critical_idx]["repeat_interval"] == "15m"
     assert routes[halt_idx]["continue"] is False

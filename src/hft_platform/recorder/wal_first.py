@@ -64,7 +64,6 @@ class WALFirstWriter:
                     count=len(rows),
                 )
                 return False
-            # policy == "write": fall through to normal write
 
         return await self._wal.add(table, rows)
 

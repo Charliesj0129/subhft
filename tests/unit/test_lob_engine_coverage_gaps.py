@@ -15,10 +15,6 @@ import numpy as np
 from hft_platform.events import BidAskEvent, BookStats, LOBStatsEvent, MetaData, TickEvent
 from hft_platform.feed_adapter.lob_engine import BookState, LOBEngine, _NoopLock
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _np_bids():
     return np.array([[1000000, 10], [999000, 5]], dtype=np.int64)
@@ -40,23 +36,18 @@ def _make_meta(seq=1, ts=1_000_000_000):
     return MetaData(seq=seq, source_ts=ts, local_ts=ts)
 
 
-# ---------------------------------------------------------------------------
-# BookState: _recompute with pure-Python list data
-# ---------------------------------------------------------------------------
-
-
 class TestBookStateRecompute:
     def test_recompute_with_lists(self):
         """Pure-Python _recompute path when bids/asks are lists."""
         book = BookState("TST")
-        book._rust_state = None  # Disable Rust
+        book._rust_state = None
         book.bids = _list_bids()
         book.asks = _list_asks()
         book._recompute()
         assert book.mid_price_x2 == 1000000 + 1001000
         assert book.spread == 1001000 - 1000000
-        assert book.bid_depth_total == 15  # 10+5
-        assert book.ask_depth_total == 11  # 8+3
+        assert book.bid_depth_total == 15
+        assert book.ask_depth_total == 11
 
     def test_recompute_with_empty_lists(self):
         book = BookState("TST")
@@ -80,7 +71,6 @@ class TestBookStateRecompute:
         """When best_bid > best_ask (crossed book), stats are zeroed."""
         book = BookState("TST")
         book._rust_state = None
-        # Crossed: bid > ask
         book.bids = [[1010000, 10]]
         book.asks = [[1000000, 8]]
         book._recompute()
@@ -108,11 +98,6 @@ class TestBookStateRecompute:
         assert book.bid_depth_total == 15
 
 
-# ---------------------------------------------------------------------------
-# BookState: apply_update stale packet rejection
-# ---------------------------------------------------------------------------
-
-
 class TestBookStateApplyUpdate:
     def test_stale_packet_rejected(self):
         """apply_update skips updates with older exch_ts."""
@@ -120,8 +105,8 @@ class TestBookStateApplyUpdate:
         book._rust_state = None
         book.apply_update(_np_bids(), _np_asks(), 2000)
         old_version = book.version
-        book.apply_update(_np_bids(), _np_asks(), 1000)  # Stale
-        assert book.version == old_version  # Not incremented
+        book.apply_update(_np_bids(), _np_asks(), 1000)
+        assert book.version == old_version
 
     def test_zero_ts_preserves_existing(self):
         """When new update has ts=0, existing valid ts is preserved."""
@@ -130,7 +115,7 @@ class TestBookStateApplyUpdate:
         book.apply_update(_np_bids(), _np_asks(), 5000)
         assert book.exch_ts == 5000
         book.apply_update(_np_bids(), _np_asks(), 0)
-        assert book.exch_ts == 5000  # Preserved
+        assert book.exch_ts == 5000
 
     def test_apply_update_empty_bids_clears(self):
         book = BookState("TST")
@@ -141,28 +126,18 @@ class TestBookStateApplyUpdate:
         assert book.asks == []
 
 
-# ---------------------------------------------------------------------------
-# BookState: update_tick
-# ---------------------------------------------------------------------------
-
-
 class TestBookStateUpdateTick:
     def test_update_tick_stale_rejected(self):
         book = BookState("TST")
         book.update_tick(1000, 10, 2000)
-        book.update_tick(999, 5, 1000)  # Stale
-        assert book.last_price == 1000  # Not overwritten
+        book.update_tick(999, 5, 1000)
+        assert book.last_price == 1000
 
     def test_update_tick_normal(self):
         book = BookState("TST")
         book.update_tick(5000, 100, 1000)
         assert book.last_price == 5000
         assert book.last_volume == 100
-
-
-# ---------------------------------------------------------------------------
-# BookState: get_stats with list data
-# ---------------------------------------------------------------------------
 
 
 class TestBookStateGetStats:
@@ -185,11 +160,6 @@ class TestBookStateGetStats:
         assert stats.best_ask == 0
 
 
-# ---------------------------------------------------------------------------
-# BookState: get_stats_tuple
-# ---------------------------------------------------------------------------
-
-
 class TestBookStateGetStatsTuple:
     def test_get_stats_tuple_with_lists(self):
         book = BookState("TST")
@@ -206,13 +176,8 @@ class TestBookStateGetStatsTuple:
         book._rust_state = None
         t = book.get_stats_tuple()
         assert t[0] == "lobstats"
-        assert t[6] == 0  # best_bid
-        assert t[7] == 0  # best_ask
-
-
-# ---------------------------------------------------------------------------
-# BookState: apply_update_with_stats_fields
-# ---------------------------------------------------------------------------
+        assert t[6] == 0
+        assert t[7] == 0
 
 
 class TestBookStateApplyUpdateWithStatsFields:
@@ -225,7 +190,7 @@ class TestBookStateApplyUpdateWithStatsFields:
             _list_asks(),
             1000,
             best_bid=1010000,
-            best_ask=1000000,  # Crossed
+            best_ask=1000000,
             bid_depth=15,
             ask_depth=11,
             _mid_price=0.0,
@@ -254,7 +219,7 @@ class TestBookStateApplyUpdateWithStatsFields:
         book.apply_update_with_stats_fields(
             _list_bids(),
             _list_asks(),
-            1000,  # Stale
+            1000,
             1000000,
             1001000,
             15,
@@ -284,11 +249,6 @@ class TestBookStateApplyUpdateWithStatsFields:
         assert book.asks == []
 
 
-# ---------------------------------------------------------------------------
-# LOBEngine: get_book cardinality guard
-# ---------------------------------------------------------------------------
-
-
 class TestLOBEngineGetBook:
     def test_cardinality_guard_rejects_new_symbol(self):
         engine = LOBEngine()
@@ -296,18 +256,13 @@ class TestLOBEngineGetBook:
         engine.get_book("SYM1")
         engine.get_book("SYM2")
         result = engine.get_book("SYM3")
-        assert result is None  # Rejected
+        assert result is None
 
     def test_get_book_cached(self):
         engine = LOBEngine()
         b1 = engine.get_book("TST")
         b2 = engine.get_book("TST")
-        assert b1 is b2  # Cached
-
-
-# ---------------------------------------------------------------------------
-# LOBEngine: process_event tuple paths
-# ---------------------------------------------------------------------------
+        assert b1 is b2
 
 
 class TestLOBEngineProcessEvent:
@@ -347,7 +302,7 @@ class TestLOBEngineProcessEvent:
         engine = LOBEngine()
         event = ("tick", "TST", 1000000, 100, 500, False, False, 1000)
         result = engine.process_event(event)
-        assert result is None  # Ticks don't emit stats
+        assert result is None
 
     def test_tuple_unknown_tag(self):
         engine = LOBEngine()
@@ -409,11 +364,6 @@ class TestLOBEngineProcessEvent:
         assert result is None
 
 
-# ---------------------------------------------------------------------------
-# LOBEngine: get_book_snapshot
-# ---------------------------------------------------------------------------
-
-
 class TestLOBEngineGetBookSnapshot:
     def test_get_book_snapshot_with_data(self):
         engine = LOBEngine()
@@ -448,11 +398,6 @@ class TestLOBEngineGetBookSnapshot:
         assert snap["best_bid"] == 1000000
 
 
-# ---------------------------------------------------------------------------
-# LOBEngine: get_l1_scaled
-# ---------------------------------------------------------------------------
-
-
 class TestLOBEngineGetL1Scaled:
     def test_get_l1_scaled_normal(self):
         engine = LOBEngine()
@@ -461,9 +406,9 @@ class TestLOBEngineGetL1Scaled:
         book.apply_update(_np_bids(), _np_asks(), 5000)
         l1 = engine.get_l1_scaled("TST")
         assert l1 is not None
-        assert l1[0] == 5000  # timestamp
-        assert l1[1] == 1000000  # best_bid
-        assert l1[2] == 1001000  # best_ask
+        assert l1[0] == 5000
+        assert l1[1] == 1000000
+        assert l1[2] == 1001000
 
     def test_get_l1_scaled_nonexistent(self):
         engine = LOBEngine()
@@ -488,11 +433,6 @@ class TestLOBEngineGetL1Scaled:
         assert l1[2] == 0
 
 
-# ---------------------------------------------------------------------------
-# LOBEngine: get_mid_price
-# ---------------------------------------------------------------------------
-
-
 class TestLOBEngineGetMidPrice:
     def test_get_mid_price_normal(self):
         engine = LOBEngine()
@@ -512,18 +452,13 @@ class TestLOBEngineGetMidPrice:
         assert engine.get_mid_price("TST") is None
 
 
-# ---------------------------------------------------------------------------
-# LOBEngine: evict_stale_symbols
-# ---------------------------------------------------------------------------
-
-
 class TestLOBEngineEviction:
     def test_evict_stale_symbols(self):
         engine = LOBEngine()
-        engine._eviction_ttl_ns = 1  # Very short TTL
+        engine._eviction_ttl_ns = 1
         engine._eviction_last_run_ns = 0
         book = engine.get_book("OLD")
-        book.exch_ts = 1  # Very old timestamp
+        book.exch_ts = 1
         count = engine.evict_stale_symbols()
         assert count == 1
         assert "OLD" not in engine.books
@@ -531,7 +466,7 @@ class TestLOBEngineEviction:
     def test_evict_stale_symbols_rate_limited(self):
         engine = LOBEngine()
         engine._eviction_ttl_ns = 1
-        engine._eviction_last_run_ns = 99999999999999999999  # Far future
+        engine._eviction_last_run_ns = 99999999999999999999
         count = engine.evict_stale_symbols()
         assert count == 0
 
@@ -550,11 +485,6 @@ class TestLOBEngineEviction:
         engine._last_symbol = "OLD"
         engine.evict_stale_symbols()
         assert engine._last_symbol is None
-
-
-# ---------------------------------------------------------------------------
-# LOBEngine: reset_books and reset_books_for_symbols
-# ---------------------------------------------------------------------------
 
 
 class TestLOBEngineReset:
@@ -584,12 +514,7 @@ class TestLOBEngineReset:
         engine.get_book("B")
         engine._last_symbol = "B"
         engine.reset_books_for_symbols({"A"})
-        assert engine._last_symbol == "B"  # Not cleared
-
-
-# ---------------------------------------------------------------------------
-# LOBEngine: _NoopLock
-# ---------------------------------------------------------------------------
+        assert engine._last_symbol == "B"
 
 
 def test_noop_lock():
@@ -599,22 +524,12 @@ def test_noop_lock():
     assert lock.__exit__(None, None, None) is False
 
 
-# ---------------------------------------------------------------------------
-# LOBEngine: stop
-# ---------------------------------------------------------------------------
-
-
 def test_lob_engine_stop():
     engine = LOBEngine()
-    engine.stop()  # No-op when no task
+    engine.stop()
     engine._metrics_task = MagicMock()
     engine.stop()
     engine._metrics_task.cancel.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# LOBEngine: _record_lob_metrics cardinality guard
-# ---------------------------------------------------------------------------
 
 
 class TestLOBEngineMetrics:
@@ -624,11 +539,10 @@ class TestLOBEngineMetrics:
         engine._metrics_max_label_symbols = 2
         engine._metrics_known_symbols = {"A", "B"}
         engine._record_lob_metrics("C", False)
-        # "C" should be mapped to "_other"
         assert ("_other", "BidAsk") in engine._metrics_pending_updates
 
     def test_flush_metrics_disabled(self):  # noqa: no-assert
         engine = LOBEngine()
         engine._metrics_enabled = False
         engine.metrics = None
-        engine._flush_metrics()  # Should not raise
+        engine._flush_metrics()

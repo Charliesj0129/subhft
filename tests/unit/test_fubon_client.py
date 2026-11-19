@@ -18,11 +18,6 @@ def _new_client() -> FubonClient:
         return FubonClient()
 
 
-# ------------------------------------------------------------------ #
-# Init / properties
-# ------------------------------------------------------------------ #
-
-
 class TestFubonClientInit:
     def test_fubon_client_init(self) -> None:
         client = _new_client()
@@ -44,11 +39,6 @@ class TestFubonClientInit:
         assert client._order_gateway is not None
         assert client._account_gateway is not None
         assert client._quote_runtime is not None
-
-
-# ------------------------------------------------------------------ #
-# Order delegation
-# ------------------------------------------------------------------ #
 
 
 class TestFubonClientOrderDelegation:
@@ -92,11 +82,6 @@ class TestFubonClientOrderDelegation:
         assert result == "updated"
 
 
-# ------------------------------------------------------------------ #
-# Account delegation
-# ------------------------------------------------------------------ #
-
-
 class TestFubonClientAccountDelegation:
     def test_get_positions_delegates(self) -> None:
         client = _new_client()
@@ -127,11 +112,6 @@ class TestFubonClientAccountDelegation:
         result = client.get_margin()
         mock_acct.get_margin.assert_called_once()
         assert result == {"margin": 50}
-
-
-# ------------------------------------------------------------------ #
-# Quote delegation
-# ------------------------------------------------------------------ #
 
 
 class TestFubonClientQuoteDelegation:
@@ -176,11 +156,6 @@ class TestFubonClientQuoteDelegation:
         assert client.logged_in is False
 
 
-# ------------------------------------------------------------------ #
-# Execution callbacks
-# ------------------------------------------------------------------ #
-
-
 class TestFubonClientCallbacks:
     def test_set_execution_callbacks_stores(self) -> None:
         client = _new_client()
@@ -190,11 +165,6 @@ class TestFubonClientCallbacks:
         client.set_execution_callbacks(on_order, on_deal)
         assert client._on_order_cb is on_order
         assert client._on_deal_cb is on_deal
-
-
-# ------------------------------------------------------------------ #
-# Placeholders return sensible defaults
-# ------------------------------------------------------------------ #
 
 
 class TestFubonClientPlaceholders:
@@ -227,11 +197,6 @@ class TestFubonClientPlaceholders:
         assert client.resubscribe() is True
 
 
-# ------------------------------------------------------------------ #
-# Session runtime (stub fallback)
-# ------------------------------------------------------------------ #
-
-
 class TestFubonSessionRuntime:
     def test_fubon_session_runtime_init(self) -> None:
         runtime = FubonSessionRuntime(sdk=None)
@@ -246,11 +211,6 @@ class TestFubonSessionRuntime:
         assert runtime._logged_in is False
 
 
-# ------------------------------------------------------------------ #
-# Legacy stub modules still importable
-# ------------------------------------------------------------------ #
-
-
 class TestCanonicalImports:
     """Verify canonical account_gateway / quote_runtime modules are importable."""
 
@@ -261,11 +221,6 @@ class TestCanonicalImports:
     def test_quote_runtime_importable(self) -> None:
         rt = StubQuoteRuntime(sdk=None)
         assert rt._sdk is None
-
-
-# ------------------------------------------------------------------ #
-# Order gateway (existing tests preserved)
-# ------------------------------------------------------------------ #
 
 
 class TestFubonOrderGateway:
@@ -286,11 +241,6 @@ class TestFubonOrderGateway:
             gw.cancel_order("ORD-001")
         with pytest.raises(NotImplementedError):
             gw.batch_place_orders([])
-
-
-# ------------------------------------------------------------------ #
-# Account gateway (existing tests preserved)
-# ------------------------------------------------------------------ #
 
 
 class TestFubonAccountGateway:

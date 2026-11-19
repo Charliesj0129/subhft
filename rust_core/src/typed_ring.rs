@@ -68,11 +68,10 @@ impl FastTypedRingBuffer {
 
     /// Retrieve frame by seq. Returns None if seq is out of range or overwritten.
     pub fn get(&self, py: Python<'_>, seq: u64) -> PyResult<Option<PyObject>> {
-        // seq 0 is sentinel "no data"
         if seq == 0 || seq >= self.next_seq {
             return Ok(None);
         }
-        // Check if seq has been overwritten
+
         let oldest = self.next_seq.saturating_sub(self.cap as u64).max(1);
         if seq < oldest {
             return Ok(None);
@@ -126,7 +125,7 @@ mod tests {
     fn test_basic_publish_and_fields() {
         let mut ring = FastTypedRingBuffer::new(8);
         assert_eq!(ring.capacity(), 8);
-        assert_eq!(ring.cursor(), 1); // next_seq starts at 1
+        assert_eq!(ring.cursor(), 1);
 
         let seq = ring.publish(1, 2, 42, 100, 200, 10, 20, 30, 40, 50, 60, 0.5);
         assert_eq!(seq, 1);
@@ -145,13 +144,13 @@ mod tests {
     #[test]
     fn test_overwrite_detection() {
         let mut ring = FastTypedRingBuffer::new(4);
-        // Publish 6 frames (capacity 4), so seq 1 and 2 should be overwritten
+
         for i in 0..6u64 {
             ring.publish(1, 0, i as u32, i, i, 0, 0, 0, 0, 0, 0, 0.0);
         }
-        // oldest should be 3 (next_seq=7, 7-4=3)
+
         assert_eq!(ring.next_seq, 7);
-        // seq 1 and 2 are gone
+
         let oldest = ring.next_seq.saturating_sub(ring.cap as u64).max(1);
         assert_eq!(oldest, 3);
     }

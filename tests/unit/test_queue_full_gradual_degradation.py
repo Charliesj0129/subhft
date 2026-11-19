@@ -22,10 +22,6 @@ from hft_platform.contracts.strategy import (
 from hft_platform.risk.engine import RiskEngine
 from hft_platform.risk.storm_guard import StormGuard
 
-# ---------------------------------------------------------------------------
-# StormGuard.trigger_storm() tests
-# ---------------------------------------------------------------------------
-
 
 class TestTriggerStorm:
     """Verify trigger_storm() escalates to STORM but not HALT."""
@@ -40,7 +36,7 @@ class TestTriggerStorm:
         assert self.guard.state == StormGuardState.STORM
 
     def test_trigger_storm_from_warm(self):
-        self.guard.update(order_rtt_us=1_500_000)  # -> WARM
+        self.guard.update(order_rtt_us=1_500_000)
         assert self.guard.state == StormGuardState.WARM
         self.guard.trigger_storm("queue_backpressure")
         assert self.guard.state == StormGuardState.STORM
@@ -48,17 +44,14 @@ class TestTriggerStorm:
     def test_trigger_storm_noop_when_already_storm(self):
         self.guard.trigger_storm("first")
         ts_after_first = self.guard.last_state_change
-        # Second call should be a no-op (state already >= STORM)
         self.guard.trigger_storm("second")
         assert self.guard.state == StormGuardState.STORM
-        # last_state_change unchanged because no transition happened
         assert self.guard.last_state_change == ts_after_first
 
     def test_trigger_storm_noop_when_halt(self):
         self.guard.trigger_halt("critical")
         assert self.guard.state == StormGuardState.HALT
         self.guard.trigger_storm("backpressure")
-        # Must remain HALT, not downgrade to STORM
         assert self.guard.state == StormGuardState.HALT
 
     def test_trigger_storm_does_not_fire_halt_callback(self):
@@ -68,11 +61,6 @@ class TestTriggerStorm:
         guard.trigger_storm("queue_backpressure")
         assert guard.state == StormGuardState.STORM
         cb.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# RiskEngine gradual degradation tests
-# ---------------------------------------------------------------------------
 
 
 def _make_intent(intent_id: int = 1, price: int = 100, qty: int = 1) -> OrderIntent:
@@ -102,7 +90,6 @@ class TestRiskEngineGradualDegradation:
         engine._oq_full_consecutive = 0
         engine._oq_full_halt_threshold = 3
 
-        # Simulate queue-full path
         engine._oq_full_consecutive += 1
         if engine._oq_full_consecutive >= engine._oq_full_halt_threshold:
             engine.storm_guard.trigger_halt("order_queue_full_persistent")
@@ -129,7 +116,6 @@ class TestRiskEngineGradualDegradation:
     def test_successful_put_resets_counter(self, engine: RiskEngine):
         """Successful order_queue.put_nowait should reset consecutive counter."""
         engine._oq_full_consecutive = 2
-        # Simulate successful put
         engine._oq_full_consecutive = 0
         assert engine._oq_full_consecutive == 0
 
@@ -149,11 +135,6 @@ class TestRiskEngineGradualDegradation:
         assert eng._oq_full_halt_threshold == 5
 
 
-# ---------------------------------------------------------------------------
-# StrategyRunner gradual degradation tests
-# ---------------------------------------------------------------------------
-
-
 class TestStrategyRunnerGradualDegradation:
     """StrategyRunner risk_queue_full should escalate STORM then HALT."""
 
@@ -164,7 +145,6 @@ class TestStrategyRunnerGradualDegradation:
         with patch("hft_platform.strategy.runner.StrategyRegistry") as mock_reg:
             mock_reg.return_value.instantiate.return_value = []
             runner = StrategyRunner.__new__(StrategyRunner)
-            # Manually set what __init__ would set for relevant attrs
             runner._queue_full_consecutive = 0
             runner._queue_full_halt_threshold = 3
 
@@ -179,7 +159,6 @@ class TestStrategyRunnerGradualDegradation:
         consecutive = 0
         threshold = 3
 
-        # Simulate first drop
         consecutive += 1
         if consecutive >= threshold:
             guard.trigger_halt("risk_queue_full_persistent")
@@ -211,7 +190,6 @@ class TestStrategyRunnerGradualDegradation:
         consecutive = 2
         dropped = 0
 
-        # Simulate successful batch (no drops)
         if dropped > 0:
             consecutive += 1
         else:

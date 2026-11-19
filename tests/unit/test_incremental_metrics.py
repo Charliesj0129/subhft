@@ -15,10 +15,6 @@ from research.registry.scorecard import (
     compute_pool_correlation_matrix,
 )
 
-# ---------------------------------------------------------------------------
-# Incremental IC
-# ---------------------------------------------------------------------------
-
 
 class TestComputeICIncremental:
     """Tests for compute_ic_incremental."""
@@ -47,7 +43,6 @@ class TestComputeICIncremental:
         signals = rng.standard_normal(n_total)
         fwd = signals * 0.3 + rng.standard_normal(n_total) * 0.2
 
-        # First half
         half = n_total // 2
         _, _, _, state1 = compute_ic_incremental(
             signals[:half],
@@ -56,7 +51,6 @@ class TestComputeICIncremental:
             prev_state=None,
         )
 
-        # Full window with prev_state from first half
         inc_mean, inc_std, inc_series, state2 = compute_ic_incremental(
             signals,
             fwd,
@@ -64,7 +58,6 @@ class TestComputeICIncremental:
             prev_state=state1,
         )
 
-        # Full window from scratch
         full_mean, full_std, full_series = compute_ic(signals, fwd, buckets=10)
 
         assert state2 is not None
@@ -92,7 +85,6 @@ class TestComputeICIncremental:
             buckets=10,
         )
 
-        # Different bucket count changes chunk size -> prev_state discarded
         inc_mean, _, _, state_b5 = compute_ic_incremental(
             signals,
             fwd,
@@ -102,11 +94,6 @@ class TestComputeICIncremental:
         full_mean, _, _ = compute_ic(signals, fwd, buckets=5)
         np.testing.assert_allclose(inc_mean, full_mean, atol=1e-12)
         assert state_b5 is not None
-
-
-# ---------------------------------------------------------------------------
-# Incremental Metrics
-# ---------------------------------------------------------------------------
 
 
 class TestComputeMetricsIncremental:
@@ -138,16 +125,12 @@ class TestComputeMetricsIncremental:
             fwd[half:],
         )
 
-        # Compare with full-window non-incremental
         full_sharpe = compute_sharpe(equity)
         full_dd = compute_max_drawdown(equity)
         full_turnover = compute_turnover(signals)
 
-        # Sharpe should be in the same ballpark (not exact due to online vs batch variance)
         assert abs(m2["sharpe"] - full_sharpe) / (abs(full_sharpe) + 1e-9) < 0.15
-        # Max drawdown should match closely
         assert abs(m2["max_drawdown"] - full_dd) < 0.01
-        # Turnover should match exactly
         np.testing.assert_allclose(m2["turnover"], full_turnover, atol=1e-10)
 
     def test_empty_equity_no_crash(self) -> None:
@@ -156,12 +139,10 @@ class TestComputeMetricsIncremental:
         assert state.n == 0
 
     def test_max_drawdown_tracks_across_slices(self) -> None:
-        # First slice goes up, second slice has a big drop
         eq1 = [100.0, 110.0, 120.0]
         eq2 = [80.0, 70.0, 130.0]
         _, state1 = compute_metrics_incremental(None, eq1)
         m2, _ = compute_metrics_incremental(state1, eq2)
-        # Peak was 120, bottom was 70 → dd = (70-120)/120 = -0.4167
         assert m2["max_drawdown"] < -0.4
 
     def test_turnover_bridges_slices(self) -> None:
@@ -169,14 +150,8 @@ class TestComputeMetricsIncremental:
         sig2 = [5.0, 5.5]
         _, state1 = compute_metrics_incremental(None, [100, 101, 102], sig1)
         m2, _ = compute_metrics_incremental(state1, [103, 104], sig2)
-        # Expected diffs: |2-1|=1, |3-2|=1, |5-3|=2, |5.5-5|=0.5 → mean=4.5/4=1.125
         np.testing.assert_allclose(m2["turnover"], 1.125, atol=1e-10)
         assert "turnover" in m2
-
-
-# ---------------------------------------------------------------------------
-# Pool correlation (incremental matrix)
-# ---------------------------------------------------------------------------
 
 
 class TestPoolCorrelationIncremental:
@@ -202,9 +177,7 @@ class TestPoolCorrelationIncremental:
         matrix, keys = compute_pool_correlation_matrix(pool)
         assert matrix.shape == (2, 2)
         assert keys == ["x", "y"]
-        # Diagonal should be 1.0
         np.testing.assert_allclose(np.diag(matrix), 1.0, atol=1e-10)
-        # Symmetric
         np.testing.assert_allclose(matrix, matrix.T, atol=1e-12)
 
     def test_incremental_matches_full(self) -> None:
@@ -215,11 +188,9 @@ class TestPoolCorrelationIncremental:
         }
         new_signal = rng.standard_normal(80).tolist()
 
-        # Full computation
         pool_full = {**pool_prev, "c": new_signal}
         full_matrix, full_keys = compute_pool_correlation_matrix(pool_full)
 
-        # Incremental: compute prior matrix, then add "c"
         prev_matrix, prev_keys = compute_pool_correlation_matrix(pool_prev)
         inc_matrix, inc_keys = compute_pool_correlation_matrix(
             pool_full,
@@ -228,7 +199,6 @@ class TestPoolCorrelationIncremental:
         )
 
         assert set(inc_keys) == set(full_keys)
-        # Reorder full_matrix to match inc_keys
         idx = [full_keys.index(k) for k in inc_keys]
         full_reordered = full_matrix[np.ix_(idx, idx)]
         np.testing.assert_allclose(inc_matrix, full_reordered, atol=1e-10)
@@ -245,7 +215,6 @@ class TestPoolCorrelationIncremental:
             "b": rng.standard_normal(50).tolist(),
         }
         prev_matrix, prev_keys = compute_pool_correlation_matrix(pool)
-        # Same pool, no new keys
         matrix, keys = compute_pool_correlation_matrix(
             pool,
             prev_matrix=prev_matrix,

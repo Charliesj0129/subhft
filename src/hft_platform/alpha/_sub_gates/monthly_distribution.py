@@ -43,7 +43,7 @@ def _month_key(entry: Any) -> str | None:
     date = entry.get("date")
     if not isinstance(date, str) or len(date) < 7:
         return None
-    return date[:7]  # "YYYY-MM"
+    return date[:7]
 
 
 def _max_drawdown(equity: list[float]) -> float:
@@ -70,7 +70,6 @@ class MonthlyDistributionGate:
         dd_max_ratio = float(thresholds.get("drawdown_to_avg_monthly_max_ratio", 2.0))
         min_months = int(thresholds.get("monthly_distribution_min_months", 2))
 
-        # Aggregate by month, skipping entries without a usable date.
         monthly: dict[str, float] = defaultdict(float)
         for e in daily:
             key = _month_key(e)
@@ -96,7 +95,7 @@ class MonthlyDistributionGate:
                 details="no dated daily_pnl entries to evaluate",
             )
 
-        ordered = sorted(monthly.items())  # chronological by YYYY-MM string
+        ordered = sorted(monthly.items())
         values = [v for _, v in ordered]
 
         abs_total = sum(abs(v) for v in values)

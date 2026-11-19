@@ -14,7 +14,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-# scripts/ is not a Python package; load the module by file path.
 _SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "similar_mechanism_hint.py"
 _spec = importlib.util.spec_from_file_location("similar_mechanism_hint", _SCRIPT)
 assert _spec is not None and _spec.loader is not None

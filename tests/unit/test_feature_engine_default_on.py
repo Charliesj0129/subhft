@@ -89,7 +89,7 @@ class TestFeatureEngineDefaultOn(unittest.TestCase):
         custom_fe = MagicMock(spec=FeatureEngine)
 
         env = {k: v for k, v in os.environ.items() if k != "HFT_FEATURE_ENGINE_ENABLED"}
-        env["HFT_FEATURE_ENGINE_ENABLED"] = "0"  # disabled, but explicit arg wins
+        env["HFT_FEATURE_ENGINE_ENABLED"] = "0"
 
         with patch.dict(os.environ, env, clear=True):
             svc = MarketDataService(bus, raw_queue, client, feature_engine=custom_fe)

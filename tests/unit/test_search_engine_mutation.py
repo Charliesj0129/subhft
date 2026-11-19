@@ -39,10 +39,10 @@ def _shape(expression: str) -> str:
     tree = ast.parse(expression, mode="eval")
 
     class Blank(ast.NodeTransformer):
-        def visit_Name(self, node: ast.Name) -> ast.AST:  # noqa: N802 - ast visitor API
+        def visit_Name(self, node: ast.Name) -> ast.AST:
             return node if isinstance(node.ctx, ast.Load) and node.id in _OPERATORS else ast.Name(id="F", ctx=node.ctx)
 
-        def visit_Constant(self, node: ast.Constant) -> ast.AST:  # noqa: N802
+        def visit_Constant(self, node: ast.Constant) -> ast.AST:
             return ast.Constant(value=0)
 
     return ast.dump(Blank().visit(tree))
@@ -66,7 +66,7 @@ def test_mutation_yields_compilable_expressions_of_the_same_shape() -> None:
         try:
             compile_expression(child)
             compiled += 1
-        except Exception:  # noqa: BLE001 - counting failures is the assertion
+        except Exception:
             continue
         same_shape += _shape(child) == _shape(parent)
     assert len(pairs) == TRIALS
@@ -114,7 +114,7 @@ def test_trial_summary_counts_every_scored_expression_and_each_identity_once() -
     engine = _engine()
 
     engine.evaluate_expression("add(f0, f1)")
-    engine.evaluate_expression("add(f1, f0)")  # same canonical identity
+    engine.evaluate_expression("add(f1, f0)")
     engine.evaluate_expression("sign(ts_delta(f2, 5))")
 
     summary = engine.trial_summary()
@@ -125,7 +125,7 @@ def test_effective_trials_count_a_rescaled_expression_as_one_test() -> None:
     engine = _engine()
 
     engine.evaluate_expression("ts_delta(f0, 5)")
-    engine.evaluate_expression("ts_delta(f0, 5) * 3")  # distinct text, the same signal up to scale
+    engine.evaluate_expression("ts_delta(f0, 5) * 3")
 
     assert engine.trial_summary() == {"evaluated": 2, "distinct": 2, "effective": 1}
 

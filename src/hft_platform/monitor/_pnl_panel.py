@@ -13,9 +13,6 @@ from structlog import get_logger
 
 logger = get_logger("monitor.pnl_panel")
 
-# ---------------------------------------------------------------------------
-# Data contract
-# ---------------------------------------------------------------------------
 
 _COST_QUERY = (
     "SELECT "
@@ -47,11 +44,6 @@ class CostPanelData:
         return self.total_fee_scaled - self.tax_scaled
 
 
-# ---------------------------------------------------------------------------
-# ClickHouse fetch
-# ---------------------------------------------------------------------------
-
-
 def fetch_cost_attribution(ch_client: Any, date_str: str) -> list[CostPanelData]:
     """Query ``hft.fills`` for daily cost attribution.
 
@@ -71,7 +63,7 @@ def fetch_cost_attribution(ch_client: Any, date_str: str) -> list[CostPanelData]
     try:
         result = ch_client.query(_COST_QUERY, parameters={"date": date_str})
         rows = getattr(result, "result_rows", None) or []
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("cost_attribution_query_failed", error=str(exc))
         return []
 
@@ -88,10 +80,6 @@ def fetch_cost_attribution(ch_client: Any, date_str: str) -> list[CostPanelData]
         )
     return out
 
-
-# ---------------------------------------------------------------------------
-# Text rendering
-# ---------------------------------------------------------------------------
 
 _HDR_FMT = "{:<12s} {:<8s} {:>5s} {:>10s} {:>10s} {:>10s}"
 _ROW_FMT = "{:<12s} {:<8s} {:>5d} {:>10s} {:>10s} {:>10s}"
@@ -147,11 +135,6 @@ def render_cost_table(data: Sequence[CostPanelData]) -> list[str]:
         )
     )
     return lines
-
-
-# ---------------------------------------------------------------------------
-# Renderer helper (called from _renderer.py)
-# ---------------------------------------------------------------------------
 
 
 def build_cost_section(cost_lines: list[str], width: int) -> list[str]:

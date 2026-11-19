@@ -14,10 +14,6 @@ from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 from hft_platform.contracts.strategy import Side as StrategySide
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _risk_config(tmp_path):
     data = {
@@ -112,11 +108,6 @@ def _make_position_store():
 
         store = PositionStore()
     return store
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -307,10 +298,10 @@ class TestStormGuardConcurrency:
                     errors.append(exc)
 
             threads = [
-                threading.Thread(target=updater, args=(9_000_000,)),  # Try STORM (far past)
-                threading.Thread(target=updater, args=(1_500_000,)),  # Try WARM
-                threading.Thread(target=updater, args=(0,)),  # Try NORMAL
-                threading.Thread(target=updater, args=(2_500_000,)),  # Try STORM
+                threading.Thread(target=updater, args=(9_000_000,)),
+                threading.Thread(target=updater, args=(1_500_000,)),
+                threading.Thread(target=updater, args=(0,)),
+                threading.Thread(target=updater, args=(2_500_000,)),
             ]
             for t in threads:
                 t.start()
@@ -338,10 +329,8 @@ class TestCallSoonThreadsafe:
         thread.start()
         thread.join(timeout=10)
 
-        # Yield control so the event loop processes the scheduled callbacks
         await asyncio.sleep(0.05)
 
-        # Drain queue
         items = []
         while not queue.empty():
             items.append(queue.get_nowait())
@@ -445,7 +434,6 @@ class TestMetricsConcurrentAccess:
                 for _ in range(50):
                     m = MetricsRegistry.get()
                     if m is not None:
-                        # Access some attributes
                         _ = hasattr(m, "feed_events_total")
             except Exception as exc:
                 errors.append(exc)
@@ -533,12 +521,11 @@ class TestQueueConcurrentPutGet:
                 except asyncio.TimeoutError:
                     break
 
-        # 3 producers, 2 consumers
         producers = [asyncio.create_task(producer(i * 100)) for i in range(3)]
         consumers = [asyncio.create_task(consumer()) for _ in range(2)]
 
         await asyncio.gather(*producers)
-        await asyncio.sleep(0.5)  # Let consumers drain
+        await asyncio.sleep(0.5)
 
         for c in consumers:
             c.cancel()
@@ -548,7 +535,7 @@ class TestQueueConcurrentPutGet:
                 pass
 
         assert len(produced) == 150
-        assert len(consumed) >= 100  # At least most should be consumed
+        assert len(consumed) >= 100
 
 
 @pytest.mark.integration
@@ -583,7 +570,7 @@ class TestFillLockContention:
 
             assert not errors
             key = "ACC1:strat1:2330"
-            assert store.positions[key].net_qty == 1000  # 20 * 50 buys
+            assert store.positions[key].net_qty == 1000
 
 
 @pytest.mark.integration
@@ -599,7 +586,6 @@ class TestPortfolioAggregatesRace:
             def worker(thread_id):
                 try:
                     symbol = f"SYM{thread_id}"
-                    # Buy then sell to generate realized PnL
                     buy = _make_fill(
                         fill_id=f"BUY{thread_id}",
                         symbol=symbol,
@@ -615,12 +601,11 @@ class TestPortfolioAggregatesRace:
                         symbol=symbol,
                         side=Side.SELL,
                         qty=10,
-                        price=1_100_000,  # Profit
+                        price=1_100_000,
                         match_ts_ns=thread_id * 1000 + 1,
                     )
                     store.on_fill(sell)
 
-                    # Read aggregate (must not crash)
                     _ = store.total_pnl
                     _ = store.get_drawdown_pct()
                 except Exception as exc:
@@ -633,10 +618,8 @@ class TestPortfolioAggregatesRace:
                 t.join(timeout=30)
 
             assert not errors
-            # All positions should be flat
             for pos in store.positions.values():
                 assert pos.net_qty == 0
-            # Total PnL should be positive (all trades were profitable)
             assert store.total_pnl > 0
 
 
@@ -669,7 +652,6 @@ class TestAtomicPositionUpdate:
                     key = "ACC1:strat1:ATOM"
                     pos = store.positions.get(key)
                     if pos is not None:
-                        # Snapshot check: if we have qty, avg_price must be set
                         net_qty = pos.net_qty
                         avg_price = pos.avg_price_scaled
                         if net_qty > 0 and avg_price <= 0:
@@ -686,5 +668,4 @@ class TestAtomicPositionUpdate:
             for t in reader_threads:
                 t.join(timeout=5)
 
-            # Fill lock ensures atomic updates, so no inconsistencies expected
             assert not inconsistencies, f"Saw partial state: {inconsistencies[:5]}"

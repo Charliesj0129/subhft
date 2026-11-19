@@ -60,7 +60,7 @@ def configure_universe() -> List[Dict[str, Any]]:
     if choice == "1":
         raw = get_input("Enter symbols (e.g. 2330,2317)", "2330")
         codes = [c.strip() for c in raw.split(",") if c.strip()]
-        symbols = [{"code": c, "exchange": "TSE"} for c in codes]  # Default to TSE
+        symbols = [{"code": c, "exchange": "TSE"} for c in codes]
 
     elif choice == "2":
         print("\nAvailable Presets:")
@@ -125,7 +125,6 @@ def configure_strategy() -> Dict[str, Any]:
         fname = name.lower().replace(" ", "_")
         cname = "".join(x.title() for x in fname.split("_"))
 
-        # Generator
         path = f"src/hft_platform/strategies/{fname}.py"
         if not os.path.exists(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -154,25 +153,18 @@ class {cname}(BaseStrategy):
 
 
 def run_wizard():
-    # clear_screen()
     print_header()
 
-    # Configuration State
     config_state = {}
 
-    # 1. Mode
     config_state["mode"] = get_input("Execution Mode", "sim", ["sim", "live", "backtest"])
 
-    # 2. Universe
     config_state["symbols"] = configure_universe()
 
-    # 3. Risk
     config_state["risk"] = configure_risk()
 
-    # 4. Strategy
     config_state["strategy"] = configure_strategy()
 
-    # Summary
     print("\n" + "-" * 60)
     print(" Configuration Summary ")
     print("-" * 60)
@@ -189,23 +181,18 @@ def run_wizard():
     if get_input("Save configurations?", "Y", ["Y", "N"]).upper() == "Y":
         os.makedirs("config", exist_ok=True)
 
-        # 1. symbols.yaml
         with open("config/symbols.yaml", "w") as f:
             yaml.dump({"symbols": config_state["symbols"]}, f)
         print("✅ Saved config/symbols.yaml")
 
-        # 2. strategies.yaml (New Standard)
         with open("config/strategies.yaml", "w") as f:
-            # We wrap in a list for registry
             yaml.dump({"strategies": [config_state["strategy"]]}, f)
         print("✅ Saved config/strategies.yaml")
 
-        # 3. risk.yaml
         with open("config/risk.yaml", "w") as f:
             yaml.dump(config_state["risk"], f)
         print("✅ Saved config/risk.yaml")
 
-        # 4. system.json (Env override replacements)
         sys_conf = {"mode": config_state["mode"]}
         with open("config/system.json", "w") as f:
             json.dump(sys_conf, f, indent=2)

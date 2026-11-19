@@ -25,10 +25,6 @@ from research.backtest.gate_c_runtime import build_gate_c_runtime
 from research.backtest.types import BacktestConfig
 from research.registry.schemas import Scorecard
 
-# ---------------------------------------------------------------------------
-# Statistical helper tests
-# ---------------------------------------------------------------------------
-
 
 def test_compute_oos_returns_extracts_tail_returns():
     equity = np.array([100.0, 101.0, 102.0, 101.5, 103.0, 104.0], dtype=np.float64)
@@ -87,11 +83,6 @@ def test_statistical_tests_bds_detects_dependence():
     )
     assert report["tests"]["bds_independence"]["reject_iid"] is True
     assert report["diagnostic_gate_passed"] is False
-
-
-# ---------------------------------------------------------------------------
-# Gate C tests
-# ---------------------------------------------------------------------------
 
 
 def test_gate_c_walk_forward_fail(monkeypatch, tmp_path: Path):
@@ -243,7 +234,6 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
         "hft_platform.alpha._gate_c._evaluate_trend_contamination",
         lambda **kwargs: {"passed": True},
     )
-    # A profitable fill-priced taker backtest (research v2 C2c): Gate C's PnL check reads it.
     fill = types.SimpleNamespace(
         method="taker_ioc_touch_v1",
         daily_rows=lambda: [
@@ -281,11 +271,6 @@ def test_gate_c_skip_walk_forward(monkeypatch, tmp_path: Path):
     assert report.details["walk_forward"]["skipped"] is True
 
 
-# ---------------------------------------------------------------------------
-# ValidationConfig defaults
-# ---------------------------------------------------------------------------
-
-
 def test_validation_config_defaults():
     cfg = ValidationConfig(alpha_id="x", data_paths=["y.npy"])
     assert cfg.enable_walk_forward is True
@@ -301,11 +286,6 @@ def test_validation_config_defaults():
     assert cfg.require_data_meta is False
     assert cfg.stat_correction_method == "bh"
     assert cfg.min_stat_tests_bh_pass == 1
-
-
-# ---------------------------------------------------------------------------
-# _optimize_parameters tests
-# ---------------------------------------------------------------------------
 
 
 class _InteriorPeakRunner:
@@ -436,11 +416,6 @@ def test_optimize_parameters_flags_boundary_risk():
         runner_cls=_Runner,
     )
     assert out["passed"] is False
-
-
-# ---------------------------------------------------------------------------
-# P0-B: BDS p-value → Scorecard propagation
-# ---------------------------------------------------------------------------
 
 
 def test_statistical_tests_bds_pvalue_key_present():

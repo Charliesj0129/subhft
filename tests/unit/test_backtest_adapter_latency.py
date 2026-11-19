@@ -12,10 +12,6 @@ from unittest.mock import MagicMock, patch
 from hft_platform.backtest import adapter as hbt_adapter
 from hft_platform.strategy.base import BaseStrategy
 
-# ---------------------------------------------------------------------------
-# Minimal stubs for hftbacktest objects
-# ---------------------------------------------------------------------------
-
 
 class _BacktestAssetStub:
     """Records calls to constant_order_latency for assertions."""
@@ -33,7 +29,6 @@ class _BacktestAssetStub:
         self.constant_latency_calls.append((entry_ns, resp_ns))
         return self
 
-    # queue / exchange / misc builder methods
     def power_prob_queue_model(self, *_a, **_kw):
         return self
 
@@ -57,7 +52,7 @@ class _HbtStub:
     current_timestamp = 0
 
     def wait_next_feed(self, *_a, **_kw):
-        return 1  # immediately signals end-of-data
+        return 1
 
     def depth(self, *_a, **_kw):
         m = MagicMock()
@@ -75,11 +70,6 @@ class _HbtStub:
 class _NoopStrategy(BaseStrategy):
     def on_stats(self, event):
         pass
-
-
-# ---------------------------------------------------------------------------
-# Helper to patch hftbacktest references in the adapter module
-# ---------------------------------------------------------------------------
 
 
 def _make_asset_stub():
@@ -110,11 +100,6 @@ def _build_adapter(monkeypatch, *, latency_us=100, modify_latency_us=0, cancel_l
         cancel_latency_us=cancel_latency_us,
     )
     return asset_stub
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 class TestLatencyPassThrough:

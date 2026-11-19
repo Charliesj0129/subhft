@@ -12,10 +12,6 @@ from hft_platform.contracts.execution import FillEvent
 from hft_platform.contracts.strategy import Side
 from hft_platform.execution.positions import Position, PositionStore
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_fill(
     *,
@@ -47,11 +43,6 @@ def _make_fill(
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 1: Single fill updates position with scaled int
-# ---------------------------------------------------------------------------
-
-
 class TestFillUpdatesPosition:
     """Verify that a single BUY fill creates a position with correct scaled-int fields."""
 
@@ -61,8 +52,8 @@ class TestFillUpdatesPosition:
         fill = _make_fill(
             side=Side.BUY,
             qty=1,
-            price=6_000_000,  # 600.0000 in x10000
-            fee=1_425,  # 0.1425 in x10000
+            price=6_000_000,
+            fee=1_425,
             tax=0,
         )
 
@@ -76,15 +67,9 @@ class TestFillUpdatesPosition:
         assert pos.fees_scaled == 1_425
         assert pos.realized_pnl_scaled == 0
 
-        # PositionDelta should mirror the position state
         assert delta.net_qty == 1
         assert delta.avg_price == 6_000_000
         assert delta.realized_pnl == 0
-
-
-# ---------------------------------------------------------------------------
-# Test 2: Buy then sell computes PnL
-# ---------------------------------------------------------------------------
 
 
 class TestBuyThenSellPnL:
@@ -108,7 +93,7 @@ class TestBuyThenSellPnL:
             side=Side.SELL,
             qty=1,
             price=6_100_000,
-            fee=1_425 + 9_000,  # fee is all-in: it already contains the tax
+            fee=1_425 + 9_000,
             tax=9_000,
             fill_id="F002",
             order_id="ORD002",
@@ -119,9 +104,7 @@ class TestBuyThenSellPnL:
         pos = store.positions[key]
 
         assert pos.net_qty == 0
-        # PnL = (sell_price - buy_price) * qty = (6_100_000 - 6_000_000) * 1
         assert pos.realized_pnl_scaled == 100_000
-        # Total fees: 1425 + (1425 + 9000)
         assert pos.fees_scaled == 1_425 + 1_425 + 9_000
 
         assert delta.net_qty == 0
@@ -141,14 +124,8 @@ class TestBuyThenSellPnL:
         pos = store.positions[key]
 
         assert pos.net_qty == 0
-        # Short PnL = (entry - exit) * qty = (6_100_000 - 6_000_000) * 1
         assert pos.realized_pnl_scaled == 100_000
         assert delta.realized_pnl == 100_000
-
-
-# ---------------------------------------------------------------------------
-# Test 3: Multiple fills weighted average price
-# ---------------------------------------------------------------------------
 
 
 class TestMultipleFillsWeightedAverage:
@@ -179,51 +156,29 @@ class TestMultipleFillsWeightedAverage:
         pos = store.positions[key]
 
         assert pos.net_qty == 5
-        # Weighted avg = (2 * 6_000_000 + 3 * 6_200_000) / 5 = 6_120_000
         assert pos.avg_price_scaled == 6_120_000
         assert pos.realized_pnl_scaled == 0
-
-
-# ---------------------------------------------------------------------------
-# Test 4: Portfolio-level drawdown tracking
-# ---------------------------------------------------------------------------
 
 
 class TestPortfolioDrawdown:
     """Verify portfolio-level PnL aggregation and drawdown calculation."""
 
     def test_drawdown_after_loss(self, monkeypatch):
-        # Bug B (2026-04-20) raised _MIN_PEAK_SCALED from 2_000_000 (200 NTD)
-        # to 100_000_000 (10,000 NTD) in positions.py. Peak in this scenario
-        # is 200_000 (20 NTD), well below the new cold-start guard, so
-        # get_drawdown_pct() returns 0.0 unconditionally and never reaches
-        # the math under test. Lower the guard to 0 to exercise the actual
-        # peak-vs-current calculation. Same monkeypatch pattern as
-        # tests/unit/test_position_store_unit.py:54.
         import hft_platform.execution.positions as _positions
 
         monkeypatch.setattr(_positions, "_MIN_PEAK_SCALED", 0)
         store = PositionStore()
 
-        # Profitable round-trip on symbol A
         store.on_fill(_make_fill(side=Side.BUY, qty=1, price=6_000_000, symbol="A", fill_id="F1"))
         store.on_fill(_make_fill(side=Side.SELL, qty=1, price=6_200_000, symbol="A", fill_id="F2"))
         assert store.total_pnl == 200_000
         assert store.get_drawdown_pct() == 0.0
 
-        # Losing round-trip on symbol B
         store.on_fill(_make_fill(side=Side.BUY, qty=1, price=6_000_000, symbol="B", fill_id="F3"))
         store.on_fill(_make_fill(side=Side.SELL, qty=1, price=5_500_000, symbol="B", fill_id="F4"))
 
-        # Net PnL = 200_000 - 500_000 = -300_000, peak was 200_000
         assert store.total_pnl == -300_000
-        # Drawdown = (200_000 - (-300_000)) / 200_000 = 500_000 / 200_000 = 2.5
         assert store.get_drawdown_pct() == pytest.approx(2.5)
-
-
-# ---------------------------------------------------------------------------
-# Test 5: Partial close with remaining position
-# ---------------------------------------------------------------------------
 
 
 class TestPartialClose:
@@ -239,16 +194,9 @@ class TestPartialClose:
         pos = store.positions[key]
 
         assert pos.net_qty == 3
-        # avg_price should remain 6_000_000 (only closing, not opening new)
         assert pos.avg_price_scaled == 6_000_000
-        # PnL on closed portion: (6_100_000 - 6_000_000) * 2 = 200_000
         assert pos.realized_pnl_scaled == 200_000
         assert delta.net_qty == 3
-
-
-# ---------------------------------------------------------------------------
-# Test 6: Position.update directly (unit-level)
-# ---------------------------------------------------------------------------
 
 
 class TestPositionUpdateDirect:
@@ -268,7 +216,7 @@ class TestPositionUpdateDirect:
         pos.update(_make_fill(side=Side.SELL, qty=2, price=5_500_000, fill_id="F2"))
 
         assert pos.net_qty == 0
-        assert pos.realized_pnl_scaled == 1_000_000  # (5_500_000 - 5_000_000) * 2
+        assert pos.realized_pnl_scaled == 1_000_000
 
     def test_flip_long_to_short(self):
         """BUY 2 @ 5M, SELL 5 @ 5.1M => close 2 (PnL = +200k), open short 3 @ 5.1M."""
@@ -278,13 +226,7 @@ class TestPositionUpdateDirect:
 
         assert pos.net_qty == -3
         assert pos.avg_price_scaled == 5_100_000
-        # PnL from closing 2 long: (5_100_000 - 5_000_000) * 2 = 200_000
         assert pos.realized_pnl_scaled == 200_000
-
-
-# ---------------------------------------------------------------------------
-# Test 7: All prices are int (Precision Law enforcement)
-# ---------------------------------------------------------------------------
 
 
 class TestPrecisionLaw:

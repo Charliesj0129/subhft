@@ -9,18 +9,9 @@ import pytest
 
 from hft_platform.feature.rollout import FeatureRolloutAssignment, FeatureRolloutController
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_ctrl(tmp_path: Path, name: str = "rollout.json") -> FeatureRolloutController:
     return FeatureRolloutController(tmp_path / name)
-
-
-# ---------------------------------------------------------------------------
-# resolve_profile_id — lines 74-78: disabled/shadow states
-# ---------------------------------------------------------------------------
 
 
 class TestResolveProfileId:
@@ -35,7 +26,6 @@ class TestResolveProfileId:
             state="active",
             profile_id="p1",
         )
-        # Now disable it
         ctrl.set_assignment(
             feature_set_id="lob_shared_v3",
             state="disabled",
@@ -64,19 +54,17 @@ class TestResolveProfileId:
             state="active",
             profile_id="p_active",
         )
-        # Enter shadow state via shadow_profile_id arg
         ctrl.set_assignment(
             feature_set_id="lob_shared_v3",
             state="shadow",
             shadow_profile_id="p_shad",
         )
-        # Now manually set shadow_profile_id to None to test fallback to active_profile_id
         cur = ctrl.get("lob_shared_v3")
         ctrl._sets["lob_shared_v3"] = FeatureRolloutAssignment(
             feature_set_id="lob_shared_v3",
             state="shadow",
             active_profile_id="p_active",
-            shadow_profile_id=None,  # explicitly None
+            shadow_profile_id=None,
             version=cur.version + 1,
         )
         result = ctrl.resolve_profile_id("lob_shared_v3")
@@ -90,11 +78,6 @@ class TestResolveProfileId:
             profile_id="p1",
         )
         assert ctrl.resolve_profile_id("lob_shared_v3") == "p1"
-
-
-# ---------------------------------------------------------------------------
-# set_assignment — lines 94/105/110-118: invalid state, shadow edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestSetAssignment:
@@ -146,7 +129,6 @@ class TestSetAssignment:
 
     def test_shadow_without_any_profile_and_no_existing_raises(self, tmp_path: Path) -> None:
         ctrl = _make_ctrl(tmp_path)
-        # No prior assignment, no profile_id/shadow_profile_id provided
         with pytest.raises(ValueError, match="profile_id.*required for first shadow rollout"):
             ctrl.set_assignment(
                 feature_set_id="lob_shared_v3",
@@ -160,13 +142,11 @@ class TestSetAssignment:
             state="active",
             profile_id="p_active",
         )
-        # Set an initial shadow profile
         ctrl.set_assignment(
             feature_set_id="lob_shared_v3",
             state="shadow",
             profile_id="p_shad_v1",
         )
-        # Shadow again without specifying new profile — should reuse existing
         a = ctrl.set_assignment(
             feature_set_id="lob_shared_v3",
             state="shadow",
@@ -185,7 +165,7 @@ class TestSetAssignment:
             state="disabled",
         )
         assert a.state == "disabled"
-        assert a.active_profile_id == "p1"  # preserved
+        assert a.active_profile_id == "p1"
 
     def test_version_increments_on_each_assignment(self, tmp_path: Path) -> None:
         ctrl = _make_ctrl(tmp_path)
@@ -227,11 +207,6 @@ class TestSetAssignment:
         assert a.shadow_profile_id == "p_shad"
 
 
-# ---------------------------------------------------------------------------
-# rollback — lines 143-145
-# ---------------------------------------------------------------------------
-
-
 class TestRollback:
     def test_rollback_restores_previous_active(self, tmp_path: Path) -> None:
         ctrl = _make_ctrl(tmp_path)
@@ -260,14 +235,8 @@ class TestRollback:
             state="active",
             profile_id="p1",
         )
-        # No second assignment, so prev_active_profile_id is None
         with pytest.raises(ValueError, match="No previous active profile"):
             ctrl.rollback(feature_set_id="lob_shared_v3")
-
-
-# ---------------------------------------------------------------------------
-# from_file — lines 177-190: JSON parsing
-# ---------------------------------------------------------------------------
 
 
 class TestFromFile:
@@ -341,7 +310,7 @@ class TestFromFile:
         data = {
             "version": 0,
             "sets": [
-                {"state": "active"},  # no feature_set_id
+                {"state": "active"},
                 {
                     "feature_set_id": "lob_shared_v3",
                     "state": "active",

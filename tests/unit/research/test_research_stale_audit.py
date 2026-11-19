@@ -67,9 +67,6 @@ def _run(
     return stale_audit.AuditedRun(key, "governed", "a", "r1", commit, datasets, ("e1",))
 
 
-# --- registry ---------------------------------------------------------------
-
-
 def test_shipped_registry_loads_and_names_the_planned_defects() -> None:
     registry = stale_audit.load_registry(SHIPPED)
     ids = {d.id for d in registry.defects}
@@ -110,9 +107,6 @@ def test_load_registry_rejects_another_schema(tmp_path: Path) -> None:
     path.write_text("schema: other\n", encoding="utf-8")
     with pytest.raises(ValueError, match="research_defects.v1"):
         stale_audit.load_registry(path)
-
-
-# --- staleness rules (S8) ---------------------------------------------------
 
 
 def test_run_before_the_fix_is_stale_and_after_it_is_not(history: dict[str, str], tmp_path: Path) -> None:
@@ -243,9 +237,6 @@ def test_audit_refuses_when_a_fix_commit_is_not_in_the_checkout(history: dict[st
         stale_audit.audit([_run(history["after"])], registry, stale_audit.GitHistory(Path(history["repo"])))
 
 
-# --- runs audited -----------------------------------------------------------
-
-
 def _verdict(root: Path, **event: object) -> dict:
     return EvidenceWriter(root).append_verdict({"stage": "gate_c", "passed": True, **event}, mode=RunMode.GOVERNED)
 
@@ -287,9 +278,6 @@ def test_append_stale_marks_without_a_defect_id_raises_and_writes_nothing(tmp_pa
     with pytest.raises(ValueError, match="defect_id"):
         EvidenceWriter(tmp_path).append_stale_marks([{"mark_id": "m", "run_key": "k"}])
     assert not (tmp_path / STALE_RELPATH).exists()
-
-
-# --- CLI --------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -360,7 +348,6 @@ def test_status_flags_a_status_resting_on_a_stale_run_without_changing_it(audit_
     assert [r["status"] for r in after] == [r["status"] for r in before]
     row = after[0]
     assert (row["alpha_id"], row["stale_run_count"]) == ("real", 2)
-    # The latest gate_c event is from the fixed run, so the status does not rest on the stale one.
     assert row["status_on_stale_run"] is False
 
 
@@ -423,7 +410,6 @@ def test_legacy_runs_name_a_run_without_run_id_by_its_directory(tmp_path: Path) 
 
 def test_status_flags_an_event_a_stale_run_gained_after_its_audit(audit_env: Path, history, capsys) -> None:
     assert status_cli.main(["evidence", "audit-stale"]) == 0
-    # The stale run publishes again after the audit; its new gate_a event is what the status climbs on.
     _verdict(audit_env, alpha_id="real", run_id="old", git_commit=history["before"], stage="gate_a", verdict="PASS")
     assert status_cli.main(["evidence", "audit-stale"]) == 0
     assert "0 new marks" in capsys.readouterr().out
@@ -432,8 +418,6 @@ def test_status_flags_an_event_a_stale_run_gained_after_its_audit(audit_env: Pat
 
 
 def test_status_ignores_a_stale_stage_the_derived_status_does_not_use(audit_env: Path, history, capsys) -> None:
-    # A stale run once reached gate_d; a newer clean run passes gate_a..gate_c, so the status is GATE_C
-    # and the old gate_d no longer counts toward it.
     _verdict(audit_env, alpha_id="real", run_id="old", git_commit=history["before"], stage="gate_d", verdict="PASS")
     for stage in ("gate_a", "gate_b", "gate_c"):
         _verdict(audit_env, alpha_id="real", run_id="clean", git_commit=history["after"], stage=stage, verdict="PASS")
@@ -447,7 +431,6 @@ def test_status_ignores_a_stale_stage_the_derived_status_does_not_use(audit_env:
 def test_status_on_stale_run_when_a_stale_failure_demoted_the_alpha(audit_env: Path, history, capsys) -> None:
     for stage in ("gate_a", "gate_b", "gate_c"):
         _verdict(audit_env, alpha_id="real", run_id="clean", git_commit=history["after"], stage=stage, verdict="PASS")
-    # A stale run's later gate_a failure replaces the clean pass, so the status falls to DRAFT because of it.
     _verdict(
         audit_env,
         alpha_id="real",

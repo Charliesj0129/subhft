@@ -46,11 +46,6 @@ from hft_platform.order.adapter import OrderAdapter
 _TTL_S = 300.0
 
 
-# --------------------------------------------------------------------------- #
-# Harness                                                                      #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.fixture()
 def tmp_config(tmp_path):
     cfg = tmp_path / "order.yaml"
@@ -130,11 +125,6 @@ def _drain(sink: asyncio.Queue) -> list[RiskFeedback]:
 def _arm_sweep(adapter: OrderAdapter) -> None:
     """Clear the 60s rate limit so a sweep actually runs."""
     adapter._live_orders_last_sweep_s = 0.0
-
-
-# --------------------------------------------------------------------------- #
-# The release itself                                                           #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
@@ -318,11 +308,6 @@ async def test_the_sidecar_is_bounded_by_the_live_order_cap(tmp_config):
     await adapter.sweep_stale_live_orders()
 
     assert len(adapter._live_order_intents) <= 3
-
-
-# --------------------------------------------------------------------------- #
-# What the strategy does with it — the three incident defences                 #
-# --------------------------------------------------------------------------- #
 
 
 def _r47() -> Any:

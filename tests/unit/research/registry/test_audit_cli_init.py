@@ -37,7 +37,6 @@ class TestAuditCliInit:
         audit_cli.init_candidate("demo_two", template=TEMPLATE_SRC, root=_tmproot)
         body = (_tmproot / "demo_two" / "spec.yaml").read_text()
         assert "strategy_name: demo_two" in body
-        # The template's literal placeholder must be gone.
         assert "exemplar_txfd6_demo" not in body
 
     def test_explicit_strategy_name_override(self, _tmproot: Path) -> None:
@@ -86,8 +85,6 @@ class TestAuditCliInit:
         assert "refused" in out
 
     def test_runs_spec_check_and_reports_pass(self, _tmproot: Path) -> None:
-        # The shipped template populates every required field, so the
-        # scaffold straight off the template should pass spec_check.
         out = audit_cli.init_candidate("fresh_pass", template=TEMPLATE_SRC, root=_tmproot)
         assert "spec_check: PASS" in out
 
@@ -106,9 +103,6 @@ class TestAuditCliInit:
         captured = capsys.readouterr().out
         assert "created" in captured
         assert (_tmproot / "from_main" / "spec.yaml").is_file()
-
-
-# --- Round 37: --shape selector across exemplars --------------------
 
 
 class TestAuditCliInitShape:
@@ -135,11 +129,8 @@ class TestAuditCliInitShape:
         body = path.read_text()
         assert "strategy_name: c_pair" in body
         assert "txf_tmf_hedged_pair_demo" not in body
-        # Parse YAML so we test the actual mapping, not a comment
-        # that happens to mention `greeks_exposure:` as documentation.
         spec = yaml.safe_load(body)
         assert "legs" in spec
-        # futures_pair intentionally has NO greeks_exposure block.
         assert "greeks_exposure" not in spec
         assert "spec_check: PASS" in out
 
@@ -154,7 +145,6 @@ class TestAuditCliInitShape:
         assert "either" in out
 
     def test_no_args_falls_back_to_default_template(self, _tmproot: Path) -> None:
-        # No --template, no --shape -> single-leg default (back-compat).
         out = audit_cli.init_candidate("c_default", root=_tmproot)
         assert "created" in out
         body = (_tmproot / "c_default" / "spec.yaml").read_text()

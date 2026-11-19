@@ -252,7 +252,6 @@ class TestBootstrapWiresTheMode:
         from hft_platform.services import bootstrap
 
         src = inspect.getsource(bootstrap)
-        # The construction, not the import line above it.
         call_start = src.index("startup_verifier = StartupPositionVerifier(")
         call = src[call_start : call_start + 500]
         assert "order_mode=" in call, "bootstrap constructs the verifier without an order mode"

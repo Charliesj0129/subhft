@@ -43,7 +43,6 @@ class _FakeMD(MarketDataReconnectMixin):
         self.metrics_registry = None
         self.client = None
         self._market_open_grace_s: float = 0.0
-        # Heartbeat rate limit state
         self._last_heartbeat_missing_log_ts: float = 0.0
         self._last_heartbeat_off_hours_log_ts: float = 0.0
         self._heartbeat_log_cooldown_s: float = 60.0
@@ -61,20 +60,18 @@ async def test_heartbeat_warning_suppressed_within_cooldown(md):
     """Second call within 60s must not re-emit the warning."""
     md.last_event_mono = 100.0
     md.last_event_ts = 1.0
-    # Stub resubscribe/reconnect to avoid side effects
     md._attempt_resubscribe = AsyncMock()
     md._request_reconnect = AsyncMock()
     md._should_rollover_reconnect = MagicMock(return_value=False)
     md._is_trading_hours = MagicMock(return_value=True)
 
     with patch("hft_platform.services._md_reconnect.timebase") as tb:
-        tb.now_s.return_value = 150.0  # 50s wall clock
+        tb.now_s.return_value = 150.0
         with patch("hft_platform.services._md_reconnect.logger") as log:
             await md._run_monitor_reconnect_checks(gap=10.0)
             first_warn_calls = [c for c in log.warning.call_args_list if c.args and c.args[0] == "Heartbeat missing"]
             assert len(first_warn_calls) == 1
 
-            # Second call 10s later (within 60s cooldown) → no new warning
             tb.now_s.return_value = 160.0
             await md._run_monitor_reconnect_checks(gap=10.0)
             all_warn_calls = [c for c in log.warning.call_args_list if c.args and c.args[0] == "Heartbeat missing"]
@@ -93,7 +90,7 @@ async def test_heartbeat_warning_resumes_after_cooldown(md):
         tb.now_s.return_value = 150.0
         with patch("hft_platform.services._md_reconnect.logger") as log:
             await md._run_monitor_reconnect_checks(gap=10.0)
-            tb.now_s.return_value = 211.0  # 61s later
+            tb.now_s.return_value = 211.0
             await md._run_monitor_reconnect_checks(gap=10.0)
             warn_calls = [c for c in log.warning.call_args_list if c.args and c.args[0] == "Heartbeat missing"]
             assert len(warn_calls) == 2, "warning should resume after cooldown"

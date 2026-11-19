@@ -23,7 +23,6 @@ logger = get_logger("strategy.tx_tmf_leadlag")
 _PTS_SCALE = 10_000
 _TERMINAL_ORDER_STATUSES = {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.FAILED}
 
-# Session defaults (UTC seconds): 08:45-13:45 TWN = 00:45-05:45 UTC
 _DEFAULT_SESSION_START_SEC = 0 * 3600 + 45 * 60
 _DEFAULT_SESSION_END_SEC = 5 * 3600 + 45 * 60
 _UTC_OFFSET_SEC = 8 * 3600
@@ -82,13 +81,13 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         trade_symbol: str = "TMFD6",
         dvol_threshold: int = 20,
         sl_pts: int = 100,
-        max_hold_ns: int = 900_000_000_000,  # 15 min
+        max_hold_ns: int = 900_000_000_000,
         max_position_lots: int = 3,
-        cooldown_ns: int = 5_000_000_000,  # 5s between entries
+        cooldown_ns: int = 5_000_000_000,
         session_start_sec: int = _DEFAULT_SESSION_START_SEC,
         session_end_sec: int = _DEFAULT_SESSION_END_SEC,
         utc_offset_sec: int = _UTC_OFFSET_SEC,
-        force_close_margin_ns: int = 30_000_000_000,  # 30s before session end
+        force_close_margin_ns: int = 30_000_000_000,
         **kwargs: object,
     ) -> None:
         super().__init__(
@@ -108,19 +107,15 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         self._utc_offset_sec = int(utc_offset_sec)
         self._force_close_margin_ns = int(force_close_margin_ns)
 
-        # TX volume tracking for dvol computation
         self._last_tx_vol: int = 0
         self._last_tx_price: int = 0
-        self._tx_day: int = 0  # day number for reset detection
+        self._tx_day: int = 0
 
-        # Position management: list of open positions
         self._positions_open: list[_OpenPosition] = []
-        # Entry fill tracking: direction of pending entry
-        self._awaiting_entry: int = 0  # 0=none, +1=buy pending, -1=sell pending
+        self._awaiting_entry: int = 0
         self._next_allowed_ts: int = 0
 
     def _in_session(self, now_ns: int) -> bool:
-        # Config thresholds are UTC seconds-of-day; compare in UTC (no offset)
         sec_of_day = (now_ns // 1_000_000_000) % 86400
         start = self._session_start_sec
         end = self._session_end_sec
@@ -131,11 +126,7 @@ class TxTmfLeadLagStrategy(BaseStrategy):
     def _current_lots(self) -> int:
         return len(self._positions_open) + (1 if self._awaiting_entry != 0 else 0)
 
-    # -----------------------------------------------------------------
-    # TX Tick → Signal Detection / TMF Tick → Exit Check
-    # -----------------------------------------------------------------
     def on_tick(self, event: TickEvent) -> None:
-        # Bug 3 fix: check exits on TMF tick events (not just LOBStats)
         if event.symbol == self._trade_symbol:
             self._check_exits_on_tmf_event(event)
             return
@@ -147,14 +138,12 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         price = int(event.price)
         vol = int(event.total_volume) if event.total_volume > 0 else int(event.volume)
 
-        # Day boundary detection: volume resets
         day = now_ns // 86_400_000_000_000
         if day != self._tx_day:
             self._tx_day = day
             self._last_tx_vol = 0
             self._last_tx_price = price
 
-        # Compute dvol
         if self._last_tx_vol == 0:
             self._last_tx_vol = vol
             self._last_tx_price = price
@@ -162,14 +151,12 @@ class TxTmfLeadLagStrategy(BaseStrategy):
 
         dvol = vol - self._last_tx_vol
         if dvol < 0:
-            # Day boundary in cumulative volume
             dvol = vol
         dp = price - self._last_tx_price
 
         self._last_tx_vol = vol
         self._last_tx_price = price
 
-        # Signal check
         if dvol < self._dvol_threshold or dp == 0:
             return
 
@@ -182,7 +169,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         if self._current_lots() >= self._max_position_lots:
             return
 
-        # Generate entry on TMF
         direction = 1 if dp > 0 else -1
         self._enter_tmf(direction, now_ns)
 
@@ -195,7 +181,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         if l1 is None:
             return
 
-        # l1 = (ts, best_bid, best_ask, mid_x2, spread, bid_depth, ask_depth)
         best_bid = l1[1]
         best_ask = l1[2]
 
@@ -220,9 +205,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
             entry_price_pts=price / _PTS_SCALE,
         )
 
-    # -----------------------------------------------------------------
-    # TMF Tick/BidAsk → Exit Check (Bug 3 fix)
-    # -----------------------------------------------------------------
     def _check_exits_on_tmf_event(self, event: TickEvent) -> None:
         """Check SL / time-kill / EOD exits on any TMF event.
 
@@ -236,13 +218,11 @@ class TxTmfLeadLagStrategy(BaseStrategy):
 
         now_ns = int(event.meta.source_ts or timebase.now_ns())
 
-        # Use L1 cache for bid/ask (more accurate than tick price alone)
         l1 = self.ctx.get_l1_scaled(self._trade_symbol)
         if l1 is not None:
             best_bid = l1[1]
             best_ask = l1[2]
         else:
-            # Fallback: use tick price as both bid and ask (conservative)
             best_bid = int(event.price)
             best_ask = int(event.price)
 
@@ -293,9 +273,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
 
             self._emit_aggressive_exit(pos, best_bid, best_ask)
 
-    # -----------------------------------------------------------------
-    # TMF LOBStats → SL / Time-Kill Monitoring
-    # -----------------------------------------------------------------
     def _near_session_end(self, now_ns: int) -> bool:
         """Return True if current time is within force_close_margin of session end."""
         sec_of_day = (now_ns // 1_000_000_000) % 86400
@@ -303,7 +280,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         cutoff = self._session_end_sec - margin_sec
         if cutoff < 0:
             cutoff += 86400
-        # Handle wrap-around
         if cutoff <= self._session_end_sec:
             return cutoff <= sec_of_day <= self._session_end_sec
         return sec_of_day >= cutoff or sec_of_day <= self._session_end_sec
@@ -318,10 +294,8 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         best_bid = int(event.best_bid or 0)
         best_ask = int(event.best_ask or 0)
 
-        # EOD force-close: if near session end, close ALL open positions
         eod_force = self._near_session_end(now_ns)
 
-        # Check each open position for exit conditions
         for pos in list(self._positions_open):
             if pos.pending_force_close and not pos.exit_order_id:
                 self._emit_aggressive_exit(pos, best_bid, best_ask)
@@ -334,7 +308,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
             if entry_price <= 0:
                 continue
 
-            # Mark-to-market using opposing side
             mark_price = best_bid if pos.direction > 0 else best_ask
             if mark_price <= 0:
                 mark_price = (best_bid + best_ask) // 2
@@ -356,18 +329,11 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                     mark_price_pts=mark_price / _PTS_SCALE,
                 )
 
-            # Cancel resting exit if exists
             if pos.exit_order_id:
                 self.cancel(self._trade_symbol, pos.exit_order_id)
                 pos.pending_force_close = True
                 pos.exit_order_id = ""
                 pos.awaiting_exit = False
-                # Do NOT clear aggressive_exit_inflight here — the cancel
-                # hasn't been ACK'd yet.  Clearing it prematurely allows a
-                # duplicate FORCE_FLAT IOC if the next tick re-enters
-                # _force_close_all before the cancel ACK arrives.  The
-                # on_order() terminal-status handler (line ~500) resets the
-                # flag safely after the broker confirms the cancellation.
                 continue
 
             self._emit_aggressive_exit(pos, best_bid, best_ask)
@@ -395,14 +361,10 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         pos.awaiting_exit = True
         pos.pending_force_close = False
 
-    # -----------------------------------------------------------------
-    # Fill / Order Handling
-    # -----------------------------------------------------------------
     def on_fill(self, event: FillEvent) -> None:
         if event.symbol != self._trade_symbol:
             return
 
-        # Entry fill
         if self._awaiting_entry != 0:
             entry_side = Side.BUY if self._awaiting_entry > 0 else Side.SELL
             if event.side == entry_side:
@@ -421,8 +383,6 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                 )
                 return
 
-        # Exit fill — match by order_id first, then awaiting_exit flag, then side
-        # Priority: exact order_id match > inflight exit with no order_id yet > side-only
         best_match = None
         for pos in self._positions_open:
             exit_side = Side.SELL if pos.direction > 0 else Side.BUY
@@ -430,11 +390,11 @@ class TxTmfLeadLagStrategy(BaseStrategy):
                 continue
             if pos.exit_order_id and pos.exit_order_id == event.order_id:
                 best_match = pos
-                break  # exact match — use immediately
+                break
             if pos.aggressive_exit_inflight and not pos.exit_order_id and best_match is None:
-                best_match = pos  # inflight but order_id not yet set — best guess
+                best_match = pos
             elif not best_match:
-                best_match = pos  # fallback: side-only
+                best_match = pos
         if best_match is not None:
             pos = best_match
             pnl_pts = pos.direction * (int(event.price) - pos.entry_price) // _PTS_SCALE
@@ -450,14 +410,12 @@ class TxTmfLeadLagStrategy(BaseStrategy):
         if event.symbol != self._trade_symbol:
             return
 
-        # Entry order rejection/cancellation
         if self._awaiting_entry != 0:
             entry_side = Side.BUY if self._awaiting_entry > 0 else Side.SELL
             if event.side == entry_side and event.status in _TERMINAL_ORDER_STATUSES and event.filled_qty == 0:
                 self._awaiting_entry = 0
                 return
 
-        # Exit order tracking
         for pos in self._positions_open:
             exit_side = Side.SELL if pos.direction > 0 else Side.BUY
             if event.side != exit_side:

@@ -23,16 +23,10 @@ def _ensure_project_root_on_path() -> None:
 
 _ensure_project_root_on_path()
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-_FORWARD_HORIZON: int = 5   # ticks ahead for forward-return computation
-_MIN_OBS: int = 50           # minimum usable observations after warmup/NaN drop
+_FORWARD_HORIZON: int = 5
+_MIN_OBS: int = 50
 
 
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class FeatureResult:
@@ -40,7 +34,7 @@ class FeatureResult:
     ic: float
     sharpe: float
     turnover: float
-    score: float    # |ic| * |sharpe|
+    score: float
     n_obs: int
 
 
@@ -48,14 +42,11 @@ class FeatureResult:
 class InteractionResult:
     feature_a: str
     feature_b: str
-    interaction: str  # "product" | "ratio"
+    interaction: str
     ic: float
     n_obs: int
 
 
-# ---------------------------------------------------------------------------
-# Data loading
-# ---------------------------------------------------------------------------
 
 def _load_data(path: str) -> np.ndarray:
     """Load .npy or .npz to a float64 2-D array."""
@@ -96,9 +87,6 @@ def _stack_data(data_paths: list[str]) -> np.ndarray:
     return np.vstack(compatible)
 
 
-# ---------------------------------------------------------------------------
-# Signal metrics
-# ---------------------------------------------------------------------------
 
 def _forward_returns(prices: np.ndarray, horizon: int = _FORWARD_HORIZON) -> np.ndarray:
     fwd = np.full(len(prices), np.nan)
@@ -145,9 +133,6 @@ def _price_col(arr: np.ndarray, n_features: int) -> int:
     return min(2, arr.shape[1] - 1)
 
 
-# ---------------------------------------------------------------------------
-# Feature ID list
-# ---------------------------------------------------------------------------
 
 def _feature_ids() -> list[str]:
     try:
@@ -164,9 +149,6 @@ def _feature_ids() -> list[str]:
         ]
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def screen_features(
     data_paths: list[str],
@@ -254,13 +236,11 @@ def screen_interactions(
                 continue
             sa, sb = arr[:, ca], arr[:, cb]
 
-            # Product
             prod = sa * sb
             ic_p = _ic(prod, fwd)
             n_p = int((np.isfinite(prod) & np.isfinite(fwd)).sum())
             interactions.append(InteractionResult(a, b, "product", ic_p, n_p))
 
-            # Ratio
             denom = sb.copy()
             denom[np.abs(denom) < 1e-9] = np.nan
             ratio = sa / denom
@@ -276,9 +256,6 @@ def screen_interactions(
             for r in interactions]
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def _fmt(v: float, w: int = 8, p: int = 4) -> str:
     return f"{'NaN':>{w}}" if not np.isfinite(v) else f"{v:>{w}.{p}f}"

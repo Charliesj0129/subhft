@@ -85,15 +85,11 @@ def _resample_to_minutes(
     txf_by_min = _bucket_last(txf_events, _SCALE)
     tmf_by_min = _bucket_last(tmf_events, _SCALE)
 
-    # Only emit minutes where BOTH sides have data (clean pair).
     joint_minutes = sorted(set(txf_by_min.keys()) & set(tmf_by_min.keys()))
     merged: list[tuple[int, str, TickData]] = []
     for m in joint_minutes:
-        # Emit TXF first, then TMF; both at same minute exch_ts for alignment
-        # (use the bucket boundary ts, which is deterministic).
         txf_tick = txf_by_min[m]
         tmf_tick = tmf_by_min[m]
-        # Reconstruct TickData with bucket-aligned exch_ts
         aligned_txf = TickData(
             exch_ts=m,
             bid_price=txf_tick.bid_price,
@@ -106,7 +102,7 @@ def _resample_to_minutes(
             scale=txf_tick.scale,
         )
         aligned_tmf = TickData(
-            exch_ts=m + 1,  # +1 ns so update order deterministic
+            exch_ts=m + 1,
             bid_price=tmf_tick.bid_price,
             ask_price=tmf_tick.ask_price,
             bid_qty=tmf_tick.bid_qty,
@@ -175,7 +171,6 @@ def _run_one_config_resampled(
         })
         all_trips.extend(day_trips)
 
-    # Per-trip PnL
     for t in all_trips:
         t["gross_pnl_ntd"] = _compute_trip_pnl_ntd(t)
         t["net_pnl_ntd_inst"] = _apply_cost_per_trip(
@@ -236,7 +231,6 @@ def _summarize(run: dict) -> dict:
     short_trips = [t for t in trips if t["side"] == "short_basis"]
     long_trips = [t for t in trips if t["side"] == "long_basis"]
 
-    # 2x2 direction x sigma-quartile grid
     sorted_by_sig = sorted(trips, key=lambda t: t.get("session_end_sigma_pts", 0))
     half = len(sorted_by_sig) // 2
     low_sig_ids = {id(t) for t in sorted_by_sig[:half]}
@@ -375,8 +369,6 @@ def main() -> int:
     print(f"C74 T5 resampled: {len(dates)} days {dates[0]}..{dates[-1]}",
           flush=True)
 
-    # Parameter sweeps (minute-scale)
-    # window_minutes {5, 30, 60}, entry_sigma {1.5, 2.0, 2.5}
     sweeps = [
         (window_min, entry_sig)
         for window_min in (5, 30, 60)
@@ -385,13 +377,12 @@ def main() -> int:
     configs: dict[str, dict] = {}
     for window_min, entry_sig in sweeps:
         key = f"win{window_min}m_ent{entry_sig}"
-        # min_samples scaled to window (but capped reasonable)
         min_samples = min(window_min, 30)
         params = C74Params(
             window_seconds=window_min * 60,
             entry_sigma=entry_sig,
             stop_sigma=4.0,
-            timeout_seconds=1800,   # 30 min
+            timeout_seconds=1800,
             min_samples_for_entry=min_samples,
         )
         print(f"  config {key}...", flush=True)
@@ -403,7 +394,6 @@ def main() -> int:
               f"sharpe={summary.get('sharpe_daily_annualized', 0)}",
               flush=True)
 
-    # Best config at inst RT 1.5 (combined 3.0 pt scenario)
     best_key = None
     best_score = float("-inf")
     for key, c in configs.items():

@@ -14,10 +14,6 @@ from hft_platform.notifications.alertmanager_bridge import (
 )
 from hft_platform.notifications.telegram import TelegramSender
 
-# ---------------------------------------------------------------------------
-# Sample payloads
-# ---------------------------------------------------------------------------
-
 SAMPLE_FIRING: dict = {
     "status": "firing",
     "alerts": [
@@ -45,11 +41,6 @@ SAMPLE_RESOLVED: dict = {
         }
     ],
 }
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: format_alert_message
-# ---------------------------------------------------------------------------
 
 
 class TestFormatAlertMessage:
@@ -113,11 +104,6 @@ class TestFormatAlertMessage:
         msg = format_alert_message(payload)
         assert "SlowFeed" in msg
         assert "warning" in msg
-
-
-# ---------------------------------------------------------------------------
-# Integration-style tests: AlertmanagerBridge HTTP server
-# ---------------------------------------------------------------------------
 
 
 class TestAlertmanagerBridgeServer:
@@ -252,7 +238,6 @@ class TestAlertmanagerBridgeServer:
             assert b"200 OK" in response
             mock_sender.send.assert_called_once()
             call_args = mock_sender.send.call_args
-            # warning severity → critical=False
             assert call_args[1]["critical"] is False
         finally:
             bridge.stop()

@@ -27,7 +27,7 @@ def ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     path = tmp_path / "_kill_ledger.jsonl"
     monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(path))
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
-    audit._ENABLED = None  # noqa: SLF001 -- re-read env on next call
+    audit._ENABLED = None
     kill_ledger._reset_cache_for_tests()
     return path
 
@@ -338,8 +338,6 @@ def test_deferred_parity_obligation_reaches_the_canary_config_and_blocks_graduat
     canary_yaml = yaml.safe_load(promo_path.read_text())
     assert canary_yaml["obligations"] == expected
 
-    # At the top tier with a strong live Sharpe the canary would graduate;
-    # without parity evidence it must hold.
     canary_yaml["weight"] = 0.10
     promo_path.write_text(yaml.safe_dump(canary_yaml))
     monitor = CanaryMonitor(promotions_dir=str(tmp_path / "config" / "strategy_promotions"))
@@ -348,8 +346,6 @@ def test_deferred_parity_obligation_reaches_the_canary_config_and_blocks_graduat
     held = monitor.evaluate("alpha_v", live)
     assert held.state == "canary"
     assert held.checks["unmet_obligations"] == ["replay_parity_audit: no replay parity report"]
-    # A typed-in percentage is not evidence; only replay reports are
-    # (tests/unit/alpha/test_shadow_exit_parity.py).
     assert monitor.evaluate("alpha_v", {**live, "replay_parity_match_pct": 99.0}).state == "canary"
 
 

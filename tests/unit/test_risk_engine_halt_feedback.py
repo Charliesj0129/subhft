@@ -58,7 +58,7 @@ def _make_intent(
         symbol=symbol,
         intent_type=intent_type,
         side=Side.BUY,
-        price=1000000,  # scaled x10000
+        price=1000000,
         qty=1,
         tif=TIF.ROD,
         idempotency_key=None,
@@ -77,7 +77,6 @@ class _RaceHaltStormGuard(StormGuard):
     """
 
     def validate(self, intent: OrderIntent) -> tuple[bool, str]:  # type: ignore[override]
-        # Simulate: StormGuard was NORMAL when evaluate() ran → approved
         return (True, "OK")
 
 
@@ -97,7 +96,6 @@ def _make_engine_with_race_halt(risk_config: str, rejection_sink: asyncio.Queue 
     validate() says OK (NORMAL), but storm_guard.state is HALT at dispatch check.
     """
     storm_guard = _RaceHaltStormGuard()
-    # Set state to HALT so the post-approve check in run() blocks the command
     storm_guard.state = StormGuardState.HALT
 
     q_in: asyncio.Queue[OrderIntent] = asyncio.Queue()
@@ -128,10 +126,8 @@ async def test_halt_blocked_sends_risk_feedback(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Order queue must be empty — command was blocked
     assert engine.order_queue.empty(), "NEW intent should be blocked during post-approve HALT"
 
-    # Rejection sink must have received feedback
     assert not rejection_sink.empty(), "RiskFeedback must be sent when HALT blocks post-approved intent"
     feedback: RiskFeedback = rejection_sink.get_nowait()
 
@@ -148,7 +144,6 @@ async def test_halt_blocked_increments_metric(risk_config):
     rejection_sink: asyncio.Queue[RiskFeedback] = asyncio.Queue()
     engine = _make_engine_with_race_halt(risk_config, rejection_sink)
 
-    # Capture initial counter value via the prometheus client internal API
     initial_count = engine.metrics.risk_halt_blocked_total._value.get()  # type: ignore[attr-defined]
 
     intent = _make_intent(IntentType.NEW)
@@ -191,12 +186,10 @@ async def test_cancel_not_blocked_by_halt_sends_no_feedback(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Safety order must reach order_queue via the _is_safety_order exemption
     assert not engine.order_queue.empty(), "CANCEL must pass through post-approve HALT check"
     cmd = engine.order_queue.get_nowait()
     assert cmd.intent.intent_type == IntentType.CANCEL
 
-    # No feedback for safety orders
     assert rejection_sink.empty(), "CANCEL must not send rejection feedback"
 
 
@@ -223,12 +216,10 @@ async def test_force_flat_not_blocked_by_halt_sends_no_feedback(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Safety order must reach order_queue via the _is_safety_order exemption
     assert not engine.order_queue.empty(), "FORCE_FLAT must pass through post-approve HALT check"
     cmd = engine.order_queue.get_nowait()
     assert cmd.intent.intent_type == IntentType.FORCE_FLAT
 
-    # No feedback for safety orders
     assert rejection_sink.empty(), "FORCE_FLAT must not send rejection feedback"
 
 
@@ -268,7 +259,6 @@ async def test_halt_blocked_no_rejection_sink_does_not_raise(risk_config):
     engine.intent_queue.put_nowait(intent)
 
     task = asyncio.create_task(engine.run())
-    # No rejection_sink to poll — use short sleep (intent processed in <1ms)
     await asyncio.sleep(0.01)
 
     engine.running = False
@@ -278,5 +268,4 @@ async def test_halt_blocked_no_rejection_sink_does_not_raise(risk_config):
     except asyncio.CancelledError:
         pass
 
-    # Verify command was still blocked
     assert engine.order_queue.empty(), "Command must be blocked even without rejection_sink"

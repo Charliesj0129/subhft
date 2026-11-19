@@ -32,11 +32,6 @@ def _cleanup_shm():
         pass
 
 
-# ---------------------------------------------------------------------------
-# _check_order numba function (lines 29-30, 33-34, 36-37, 40-41, 43-44, 46)
-# ---------------------------------------------------------------------------
-
-
 def test_check_order_ok():
     kill_flag = np.array([0], dtype=np.uint8)
     ok, code = _check_order(100_000_000, 1, 10_000_000_000, 100, kill_flag)
@@ -93,11 +88,6 @@ def test_check_order_zero_qty():
     assert code == 5
 
 
-# ---------------------------------------------------------------------------
-# FastGate init and check (lines 79, 81-82, 95, 100, 109, 112)
-# ---------------------------------------------------------------------------
-
-
 def test_fast_gate_init_and_check(_cleanup_shm):
     gate = FastGate(create_shm=True)
     try:
@@ -118,11 +108,6 @@ def test_fast_gate_default_price_scale(_cleanup_shm):
         gate.close()
 
 
-# ---------------------------------------------------------------------------
-# Kill switch (lines 116, 121-124, 126, 128-130)
-# ---------------------------------------------------------------------------
-
-
 def test_fast_gate_kill_switch(_cleanup_shm):
     gate = FastGate(create_shm=True)
     try:
@@ -140,23 +125,12 @@ def test_fast_gate_kill_switch(_cleanup_shm):
         gate.close()
 
 
-# ---------------------------------------------------------------------------
-# Context manager (lines 147, 153, 171, 180-181)
-# ---------------------------------------------------------------------------
-
-
 def test_fast_gate_context_manager(_cleanup_shm):
     with FastGate(create_shm=True) as gate:
         ok, code = gate.check(100_000_000, 1)
         assert ok is True
         gate.unlink()
-    # After __exit__, shm should be closed
     assert gate.ks_shm is None
-
-
-# ---------------------------------------------------------------------------
-# close and unlink (lines 187, 189, 191)
-# ---------------------------------------------------------------------------
 
 
 def test_fast_gate_close(_cleanup_shm):
@@ -171,20 +145,15 @@ def test_fast_gate_double_close(_cleanup_shm):
     gate = FastGate(create_shm=True)
     gate.unlink()
     gate.close()
-    gate.close()  # second close should not raise
+    gate.close()
     assert gate.ks_shm is None
 
 
 def test_fast_gate_unlink_missing(_cleanup_shm):  # noqa: no-assert
     gate = FastGate(create_shm=True)
     gate.unlink()
-    gate.unlink()  # should not raise even if already unlinked
+    gate.unlink()
     gate.close()
-
-
-# ---------------------------------------------------------------------------
-# check raises when not initialized
-# ---------------------------------------------------------------------------
 
 
 def test_fast_gate_check_raises_when_not_initialized(_cleanup_shm):
@@ -203,27 +172,16 @@ def test_fast_gate_set_kill_switch_raises_when_not_initialized(_cleanup_shm):
         gate.set_kill_switch(True)
 
 
-# ---------------------------------------------------------------------------
-# Destructor (lines 187, 189, 191)
-# ---------------------------------------------------------------------------
-
-
 def test_fast_gate_destructor(_cleanup_shm):
     gate = FastGate(create_shm=True)
     gate.unlink()
-    gate.__del__()  # should not raise
+    gate.__del__()
     assert gate.ks_shm is None
-
-
-# ---------------------------------------------------------------------------
-# Existing SHM (line 100 — FileExistsError path)
-# ---------------------------------------------------------------------------
 
 
 def test_fast_gate_existing_shm(_cleanup_shm):
     gate1 = FastGate(create_shm=True)
     try:
-        # Second create=True should handle FileExistsError
         gate2 = FastGate(create_shm=True)
         ok, code = gate2.check(100_000_000, 1)
         assert ok is True
@@ -231,11 +189,6 @@ def test_fast_gate_existing_shm(_cleanup_shm):
     finally:
         gate1.unlink()
         gate1.close()
-
-
-# ---------------------------------------------------------------------------
-# Non-create mode (line 109 — auto-create fallback)
-# ---------------------------------------------------------------------------
 
 
 def test_fast_gate_auto_create_fallback(_cleanup_shm):

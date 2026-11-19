@@ -69,8 +69,6 @@ def replay_to_panel(data: np.ndarray, tick_size: float) -> dict[str, np.ndarray]
         return {}
 
     ev = data["ev"].astype(np.int64)
-    # .tolist() conversions: python-list scalar access is much faster than
-    # np scalar indexing inside the per-event loop.
     base = cast("list[int]", (ev & 0xFF).astype(np.int8).tolist())
     is_bid = cast("list[bool]", (((ev >> 29) & 1) == 1).tolist())
     is_ask = cast("list[bool]", (((ev >> 28) & 1) == 1).tolist())
@@ -81,7 +79,6 @@ def replay_to_panel(data: np.ndarray, tick_size: float) -> dict[str, np.ndarray]
     exch_ts_list = cast("list[int]", exch_ts.tolist())
     n_events = len(exch_ts_list)
 
-    # Batch starts: index 0 plus every exch_ts change.
     change = np.flatnonzero(np.diff(exch_ts) != 0) + 1
     starts = np.concatenate(([0], change))
     n_batches = int(starts.size)
@@ -250,8 +247,6 @@ def build_panel(
         "data_fingerprint": fingerprint,
         "source_npz": str(npz_path),
         "source_generator": str(source_meta.get("generator", "")),
-        # Jan-era exports carry local_ts==exch_ts (no real latency info);
-        # latency-shift realism per day depends on this fraction.
         "local_ts_equals_exch_ts_fraction": float(np.mean(local == exch)) if data.size else 1.0,
         "dir_coverage": coverage,
         "dir_coverage_source": dir_coverage_source if dir_coverage is not None else "not_queried",

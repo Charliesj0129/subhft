@@ -184,7 +184,6 @@ class TestTheLoopLagInputReadsTheIdleProbe:
         system = self._system()
         system._loop_probe_samples = 42
         system._loop_probe_peak_ms = 12.5
-        # lag_s would have reported 5 s; the probe says 12.5 ms of real congestion.
         assert system._stormguard_latency_us(5.0) == 12_500
 
     def test_the_peak_is_drained_so_a_spike_is_evaluated_once(self) -> None:
@@ -192,7 +191,7 @@ class TestTheLoopLagInputReadsTheIdleProbe:
         system._loop_probe_samples = 42
         system._loop_probe_peak_ms = 900.0
         assert system._stormguard_latency_us(0.0) == 900_000
-        system._loop_probe_samples = 42  # the probe is still running
+        system._loop_probe_samples = 42
         assert system._stormguard_latency_us(0.0) == 0
 
     def test_a_probe_that_stopped_reporting_falls_back_instead_of_reading_zero(self) -> None:
@@ -206,15 +205,12 @@ class TestTheLoopLagInputReadsTheIdleProbe:
         system._loop_probe_samples = 42
         system._loop_probe_peak_ms = 3.0
         assert system._stormguard_latency_us(5.0) == 3_000
-        # No new samples arrived: the probe is gone. Fall back to the
-        # supervisor's own signal rather than reporting a healthy loop.
         assert system._stormguard_latency_us(5.0) == 5_000_000
 
     def test_a_clean_loop_reports_zero_rather_than_the_supervisors_own_work(self) -> None:
         system = self._system()
         system._loop_probe_samples = 42
         system._loop_probe_peak_ms = 0.0
-        # 5.36 ms was THESHOW's median composite; 89.3% of it was the supervisor.
         assert system._stormguard_latency_us(0.00536) == 0
 
     def test_it_falls_back_while_the_probe_has_produced_nothing(self) -> None:

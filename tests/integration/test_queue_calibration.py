@@ -46,10 +46,6 @@ _FIXTURE_ROOT = _REPO_ROOT / "tests" / "fixtures" / "q_hat_calibration"
 _QHAT_ROOT = _REPO_ROOT / "research" / "backtest" / "q_hat_data"
 
 
-# Match research/backtest/calibrate_queue_fill.py + ch_data_source._event_dtype
-# at the field subset the harness consumes. The committed replay-actual fixtures
-# only carry (ev, exch_ts, px, qty); the rest of the dtype fields are zero-filled
-# so the structured array shape lines up with what _ingest_day expects.
 _EVENT_DTYPE = np.dtype(
     [
         ("ev", "u8"),
@@ -83,7 +79,6 @@ class _LocalReplaySource:
         out["exch_ts"] = df["exch_ts"].to_numpy()
         out["px"] = df["px"].to_numpy()
         out["qty"] = df["qty"].to_numpy()
-        # local_ts/order_id/ival/fval not used by the harness — leave as zero.
         return out
 
     def available_dates(self) -> list[str]:
@@ -116,7 +111,6 @@ def test_predicted_qhat_matches_committed_fixture(
     redo_path = tmp_path / parquet_name
     result = calibrate(symbol, dates, redo_path, ch_source=source)
 
-    # Every committed cell must be reproducible from the same fixtures.
     missing_in_redo: list[tuple] = []
     diffs: list[str] = []
     for key, actual in committed._data.items():
@@ -131,7 +125,7 @@ def test_predicted_qhat_matches_committed_fixture(
                     f"{symbol} cell {key}: predicted={predicted:.6f} actual={actual:.6f}"
                     f" rel_err={abs(predicted - actual) / denom:.4f}"
                 )
-        else:  # absolute
+        else:
             if abs(predicted - actual) >= tolerance:
                 diffs.append(
                     f"{symbol} cell {key}: predicted={predicted:.6f} actual={actual:.6f}"

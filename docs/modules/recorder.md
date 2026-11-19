@@ -103,3 +103,13 @@ await loader.replay()  # Dedup-aware replay
 - Recording MUST NEVER block the hot path (use `put_nowait()` with drop policy)
 - ClickHouse failure must not drop data silently (WAL fallback mandatory)
 - WAL replay must be idempotent-safe or dedup-aware
+
+## WAL manifest durability
+
+`_loader_wal.save_manifest` snapshots the manifest set under the same lock
+used by `mark_processed`. It writes and fsyncs a temporary file on the same
+filesystem, renames that file over the manifest, and attempts to fsync the
+manifest directory. Temporary files and the backup stay in the sidecar
+directory so they do not accumulate alongside replayable WAL files. On startup,
+`load_manifest` removes still-pending WAL files from the in-memory processed
+set so the loader can replay them.

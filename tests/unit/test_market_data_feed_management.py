@@ -58,11 +58,6 @@ def _make_service(env_overrides: dict | None = None):
     return svc
 
 
-# ---------------------------------------------------------------------------
-# 1. FeedState enum values
-# ---------------------------------------------------------------------------
-
-
 class TestFeedState:
     def test_feed_state_values(self, _symbols_config):
         """FeedState enum contains the expected set of states."""
@@ -76,11 +71,6 @@ class TestFeedState:
         assert svc.state is FeedState.INIT
 
 
-# ---------------------------------------------------------------------------
-# 2. _set_state transitions
-# ---------------------------------------------------------------------------
-
-
 class TestSetState:
     def test_state_transition(self, _symbols_config):
         """_set_state updates the state attribute."""
@@ -92,13 +82,7 @@ class TestSetState:
         """_set_state with the current state should not log (no-op branch)."""
         svc = _make_service()
         svc._set_state(FeedState.INIT)
-        # State unchanged
         assert svc.state is FeedState.INIT
-
-
-# ---------------------------------------------------------------------------
-# 3. get_max_feed_gap_s
-# ---------------------------------------------------------------------------
 
 
 class TestGetMaxFeedGapS:
@@ -121,7 +105,7 @@ class TestGetMaxFeedGapS:
         past = time.monotonic() - 5.0
         svc._symbol_last_tick["2330"] = past
         gap = svc.get_max_feed_gap_s()
-        assert 4.5 < gap < 6.0  # Allow small timing variance
+        assert 4.5 < gap < 6.0
 
     def test_max_across_symbols(self, _symbols_config):
         """Returns the maximum gap when multiple symbols are tracked."""
@@ -132,11 +116,6 @@ class TestGetMaxFeedGapS:
         svc._symbol_last_tick["C"] = now_mono - 1.0
         gap = svc.get_max_feed_gap_s()
         assert 9.5 < gap < 11.0
-
-
-# ---------------------------------------------------------------------------
-# 4. get_feed_gaps_by_symbol
-# ---------------------------------------------------------------------------
 
 
 class TestGetFeedGapsBySymbol:
@@ -158,11 +137,6 @@ class TestGetFeedGapsBySymbol:
         assert 6.5 < gaps["Y"] < 8.0
 
 
-# ---------------------------------------------------------------------------
-# 5. within_reconnect_window / _within_reconnect_window
-# ---------------------------------------------------------------------------
-
-
 class TestReconnectWindow:
     def test_no_constraints_always_open(self, _symbols_config):
         """With no days/hours configured, window is always open."""
@@ -175,7 +149,7 @@ class TestReconnectWindow:
     def test_wrong_day_blocks(self, _symbols_config):
         """If reconnect_days is set and today is not in the set, returns False."""
         svc = _make_service()
-        svc.reconnect_days = {"zzz"}  # No real weekday matches this
+        svc.reconnect_days = {"zzz"}
         svc.reconnect_hours = ""
         svc.reconnect_hours_2 = ""
         assert svc._within_reconnect_window() is False
@@ -183,7 +157,6 @@ class TestReconnectWindow:
     def test_correct_day_no_hours_passes(self, _symbols_config, monkeypatch):
         """If today's weekday is in the set but no hour window, returns True."""
         svc = _make_service()
-        # Freeze time to a known Wednesday at 03:00 UTC (outside TAIFEX hours)
         frozen_now = dt.datetime(2024, 1, 3, 3, 0, 0, tzinfo=dt.timezone.utc).astimezone(svc._reconnect_tzinfo)
         today_abbr = frozen_now.strftime("%a").lower()
         svc.reconnect_days = {today_abbr}
@@ -191,8 +164,6 @@ class TestReconnectWindow:
         svc.reconnect_hours_2 = ""
         monkeypatch.setenv("HFT_RECONNECT_USE_CALENDAR", "0")
         frozen_ts = frozen_now.timestamp()
-        # _within_reconnect_window lives in the mixin module, so the clock must be
-        # frozen there — patching market_data.timebase silently uses the real clock.
         with patch("hft_platform.services._md_reconnect.timebase") as mock_tb:
             mock_tb.now_s.return_value = frozen_ts
             assert svc._within_reconnect_window() is True
@@ -201,9 +172,7 @@ class TestReconnectWindow:
         """If current time falls in reconnect_hours window, returns True."""
         svc = _make_service()
         svc.reconnect_days = set()
-        # Freeze time to a known Wednesday at 03:00 UTC (outside TAIFEX hours)
         frozen_now = dt.datetime(2024, 1, 3, 3, 0, 0, tzinfo=dt.timezone.utc).astimezone(svc._reconnect_tzinfo)
-        # Build a window that spans the frozen time
         start = (frozen_now - dt.timedelta(minutes=5)).strftime("%H:%M")
         end = (frozen_now + dt.timedelta(minutes=5)).strftime("%H:%M")
         svc.reconnect_hours = f"{start}-{end}"
@@ -218,7 +187,6 @@ class TestReconnectWindow:
         svc = _make_service()
         svc.reconnect_days = set()
         now_local = dt.datetime.now(tz=svc._reconnect_tzinfo)
-        # Build a window 4-5 hours in the past
         start = (now_local - dt.timedelta(hours=5)).strftime("%H:%M")
         end = (now_local - dt.timedelta(hours=4)).strftime("%H:%M")
         svc.reconnect_hours = f"{start}-{end}"
@@ -226,16 +194,11 @@ class TestReconnectWindow:
         assert svc._within_reconnect_window() is False
 
 
-# ---------------------------------------------------------------------------
-# 6. _should_rollover_reconnect
-# ---------------------------------------------------------------------------
-
-
 class TestRolloverReconnect:
     def test_same_day_no_rollover(self, _symbols_config):
         """If last_event_ts is today, no rollover needed."""
         svc = _make_service()
-        svc.last_event_ts = time.time()  # Now
+        svc.last_event_ts = time.time()
         assert svc._should_rollover_reconnect() is False
 
     def test_different_day_triggers_rollover(self, _symbols_config):
@@ -253,13 +216,7 @@ class TestRolloverReconnect:
         svc.last_event_ts = yesterday
         svc._last_rollover_seen_date = None
         assert svc._should_rollover_reconnect() is True
-        # Second call: _last_rollover_seen_date was set to today
         assert svc._should_rollover_reconnect() is False
-
-
-# ---------------------------------------------------------------------------
-# 7. _mark_pending_reconnect
-# ---------------------------------------------------------------------------
 
 
 class TestPendingReconnect:
@@ -286,11 +243,6 @@ class TestPendingReconnect:
         assert svc._pending_reconnect_since == first_since
 
 
-# ---------------------------------------------------------------------------
-# 8. Feature engine enable/disable via env var
-# ---------------------------------------------------------------------------
-
-
 class TestFeatureEngineEnv:
     def test_feature_engine_disabled(self, _symbols_config):
         """HFT_FEATURE_ENGINE_ENABLED=0 results in feature_engine=None."""
@@ -299,10 +251,7 @@ class TestFeatureEngineEnv:
 
     def test_feature_engine_enabled_default_creates_engine(self, _symbols_config):
         """HFT_FEATURE_ENGINE_ENABLED=1 attempts to create a FeatureEngine."""
-        # FeatureEngine() may fail in test env -- we just verify the intent
         svc = _make_service({"HFT_FEATURE_ENGINE_ENABLED": "1"})
-        # Either successfully created or failed gracefully (set to None with log)
-        # Just verify it tried -- the attribute exists either way
         assert hasattr(svc, "feature_engine")
 
     def test_explicit_engine_injected(self, _symbols_config):
@@ -316,11 +265,6 @@ class TestFeatureEngineEnv:
             client = MagicMock()
             svc = MarketDataService(bus, raw_queue, client, feature_engine=mock_engine)
         assert svc.feature_engine is mock_engine
-
-
-# ---------------------------------------------------------------------------
-# 9. _looks_like_md helper
-# ---------------------------------------------------------------------------
 
 
 class TestLooksLikeMd:
@@ -346,11 +290,6 @@ class TestLooksLikeMd:
         assert _looks_like_md(obj) is True
 
 
-# ---------------------------------------------------------------------------
-# 10. Symbol gap tracking
-# ---------------------------------------------------------------------------
-
-
 class TestSymbolGapTracking:
     def test_symbol_last_tick_initially_empty(self, _symbols_config):
         svc = _make_service()
@@ -362,12 +301,7 @@ class TestSymbolGapTracking:
         svc._symbol_last_tick["2330"] = time.monotonic()
         gaps = svc.get_feed_gaps_by_symbol()
         assert "2330" in gaps
-        assert gaps["2330"] < 1.0  # Just set, gap is near zero
-
-
-# ---------------------------------------------------------------------------
-# 11. Resubscribe / reconnect cooldown defaults
-# ---------------------------------------------------------------------------
+        assert gaps["2330"] < 1.0
 
 
 class TestCooldownDefaults:
@@ -379,10 +313,6 @@ class TestCooldownDefaults:
         assert svc.reconnect_gap_s == 60.0
         assert svc.reconnect_cooldown_s == 60.0
         assert svc.force_reconnect_gap_s == 300.0
-        # Raised from 30s: the wrapper must outlast the broker client's own
-        # stage budgets (195s with shipped defaults), or it reports a false
-        # failure on a reconnect that is still running. The ordering itself is
-        # pinned in test_md_reconnect_timeout_budget.py.
         assert svc.reconnect_timeout_s == 240.0
 
     def test_custom_gap_thresholds(self, _symbols_config):
@@ -397,11 +327,6 @@ class TestCooldownDefaults:
         assert svc.reconnect_gap_s == 120.0
 
 
-# ---------------------------------------------------------------------------
-# 12. Recorder degradation config
-# ---------------------------------------------------------------------------
-
-
 class TestRecorderDegradationConfig:
     def test_default_degrade_threshold(self, _symbols_config):
         svc = _make_service()
@@ -411,11 +336,6 @@ class TestRecorderDegradationConfig:
     def test_custom_degrade_threshold(self, _symbols_config):
         svc = _make_service({"HFT_RECORD_DEGRADE_THRESHOLD": "1000"})
         assert svc._record_degrade_threshold == 1000
-
-
-# ---------------------------------------------------------------------------
-# 13. Heartbeat threshold and running state
-# ---------------------------------------------------------------------------
 
 
 class TestHeartbeatAndRunning:

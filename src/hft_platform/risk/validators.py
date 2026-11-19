@@ -30,9 +30,6 @@ class RiskValidator:
         self.lob = lob
         self._position_provider = position_provider
         self._shared_scale_cache: Dict[str, int] = {}
-        # Point value per symbol (TMF 10, MXF 50, TXF 200), read from the same
-        # SymbolMetadata that prices it. Not cached: the runtime universe overlay
-        # can add a symbol after boot, and the lookup is one dict get.
         self._multiplier_fn: Any = getattr(getattr(provider, "metadata", None), "contract_multiplier", None)
 
     def _derive_from_defaults(self) -> None:
@@ -105,14 +102,14 @@ class RiskValidator:
         if callable(provider):
             try:
                 return int(provider(symbol, strategy_id) or 0)
-            except Exception:  # noqa: BLE001 — provider errors are non-fatal
+            except Exception:
                 return 0
 
         nq_fn = getattr(provider, "net_qty_for_symbol", None)
         if nq_fn is not None:
             try:
                 return int(nq_fn(symbol, strategy_id))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 return 0
 
         positions = getattr(provider, "positions", {})
@@ -147,7 +144,7 @@ class RiskValidator:
             return False
         try:
             current = self._current_position(intent.symbol, intent.strategy_id)
-        except Exception:  # noqa: BLE001 — never raise from a predicate
+        except Exception:
             return False
         if current == 0:
             return False
@@ -173,18 +170,13 @@ class PriceBandValidator(RiskValidator):
         self._derive_from_defaults()
 
     def _derive_from_defaults(self) -> None:
-        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))  # precision-config
-        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))  # precision-config
+        self._max_price_cap_raw = float(self.defaults.get("max_price_cap", 5000.0))
+        self._tick_size_raw = float(self.defaults.get("tick_size", 0.01))
         self._product_caps_raw: Dict[str, float] = {}
         for ptype, key in self._PRODUCT_CAP_KEYS.items():
             val = self.defaults.get(key)
             if val is not None:
                 self._product_caps_raw[ptype] = float(val)
-        # Per-root caps (``max_price_cap_root_TMF``). A per-*symbol* key names a
-        # delivery month and therefore expires: on 2026-08-10 the live TMFH6 had
-        # no entry and silently fell through to the futures default of 50,000
-        # while TAIEX traded near 45,033 — ~11% from rejecting every order. A
-        # root outlives every roll.
         self._root_caps_raw: Dict[str, float] = {}
         _root_prefix = "max_price_cap_root_"
         for key, val in self.defaults.items():
@@ -231,7 +223,6 @@ class PriceBandValidator(RiskValidator):
         if qty <= 0:
             return False, "QTY_ZERO_OR_NEG"
 
-        # Fat Finger Protection: Absolute price cap
         scale = self._scale_factor(intent.symbol)
         max_price_scaled = self._max_price_scaled_cache.get(intent.symbol)
         if max_price_scaled is None:
@@ -242,7 +233,6 @@ class PriceBandValidator(RiskValidator):
         if intent.price > max_price_scaled:
             return False, f"PRICE_EXCEEDS_CAP({intent.symbol}): {intent.price} > {max_price_scaled}"
 
-        # LOB-relative price band validation
         if self.lob is not None:
             mid_price = self._get_mid_price(intent.symbol)
             if mid_price is not None and mid_price > 0:
@@ -256,7 +246,6 @@ class PriceBandValidator(RiskValidator):
                     tick_size_scaled = int(self._tick_size_raw * scale)
                     self._tick_size_scaled_cache[intent.symbol] = tick_size_scaled
 
-                # Calculate allowed band: mid_price +/- band_ticks * tick_size
                 band_width = band_ticks * tick_size_scaled
                 lower_bound = mid_price - band_width
                 upper_bound = mid_price + band_width
@@ -278,12 +267,11 @@ class PriceBandValidator(RiskValidator):
         if self.lob is None:
             return None
         try:
-            # Check freshness before returning any mid_price value
             book_state = self.lob.get_book(symbol) if hasattr(self.lob, "get_book") else None
             if book_state is not None and hasattr(book_state, "exch_ts") and book_state.exch_ts > 0:
                 age_ns = timebase.now_ns() - book_state.exch_ts
                 if age_ns > self._mid_price_max_age_ns:
-                    return None  # Stale — treat as unknown during feed gaps
+                    return None
 
             get_l1_scaled = getattr(self.lob, "get_l1_scaled", None)
             if callable(get_l1_scaled):
@@ -294,8 +282,6 @@ class PriceBandValidator(RiskValidator):
                         return mid_price_x2 // 2
             book = self.lob.get_book_snapshot(symbol)
             if book and book.get("mid_price"):
-                # mid_price from LOB is already in scaled units (as float)
-                # Just convert to int
                 return int(book["mid_price"])
         except Exception as e:
             logger.warning("Failed to get mid price from LOB", symbol=symbol, error=str(e))
@@ -324,8 +310,6 @@ class MaxNotionalValidator(RiskValidator):
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
 
-        # Bug 21: allow orders that strictly reduce |net_position| to bypass
-        # notional cap so a stuck position can always be closed.
         if self.reduces_position(intent):
             return True, "REDUCE_ONLY_BYPASS"
 
@@ -351,7 +335,6 @@ class PositionLimitValidator(RiskValidator):
     __slots__ = ("_default_max_position_lots", "_max_position_cache")
 
     def __init__(self, *args: Any, position_provider: Any | None = None, **kwargs: Any) -> None:
-        # position_provider is now on the base class; forward it.
         kwargs.setdefault("position_provider", position_provider)
         super().__init__(*args, **kwargs)
         self._max_position_cache: Dict[str, int] = {}
@@ -380,20 +363,6 @@ class PositionLimitValidator(RiskValidator):
         signed_qty = int(intent.qty if intent.side == Side.BUY else -intent.qty)
         resulting_qty = current_qty + signed_qty
         if abs(resulting_qty) > max_lots:
-            # Bug 21 applies here too, and this was the one safety gate missing
-            # it: MaxNotional, DailyLossLimit and PerSymbolNotional all bypass
-            # for cover orders, so a position already over its cap was rejected
-            # in *both* directions and could never be unwound. Live evidence
-            # 2026-09-04: TMFI6 sat at -5 lots against max_position_lots=1 for
-            # 59 min while 21 covering intents were rejected as
-            # "POSITION_LIMIT_EXCEEDED: abs(-4) > 1".
-            #
-            # reduces_position() is strictly monotone toward flat
-            # (abs(current + signed) < abs(current)) and returns False for an
-            # over-cover that flips sign and matches or grows magnitude, so this
-            # can never open or grow exposure -- it only lets the strategy walk
-            # back to flat. Evaluated on the reject path only, so the approving
-            # path costs no extra position lookup.
             if self.reduces_position(intent):
                 return True, "REDUCE_ONLY_BYPASS"
             return False, f"POSITION_LIMIT_EXCEEDED: abs({resulting_qty}) > {max_lots}"
@@ -439,7 +408,6 @@ class DailyLossLimitValidator(RiskValidator):
         "_unrealized_pnl",
         "halt_triggered",
         "_halt_release_pending",
-        # Intraday watermark state
         "_intraday_pnl_enabled",
         "soft_limit_active",
         "_soft_limit_cooldown_until_ns",
@@ -458,125 +426,52 @@ class DailyLossLimitValidator(RiskValidator):
         "_position_loss_limit_scaled",
     )
 
-    # How long the last time-consistent PnL total may stand in for the live
-    # sum. The supervisor feeds ``update_unrealized`` at 1 Hz, so the real gap
-    # after a fill is under a second; five seconds is five missed ticks, which
-    # is a dead mark-to-market rather than normal jitter.
     _STALE_GRACE_NS: int = 5 * 1_000_000_000
 
-    # Nanoseconds per calendar day
     _NS_PER_DAY: int = 86_400 * 1_000_000_000
-    # 05:00 Taiwan (UTC+8) = 21:00 UTC = 21 * 3600 seconds into the UTC day
     _RESET_OFFSET_NS: int = 21 * 3600 * 1_000_000_000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        # Stored as a positive threshold; loss is compared as abs value
-        # Accumulated realized PnL per strategy (negative = loss, positive = gain); scaled int
         self._accumulated_loss: Dict[str, int] = {}
-        # Epoch-ns of the last 21:00 UTC reset boundary (cached)
         self._current_reset_boundary_ns: int = self._current_boundary_ns()
-        # Platform-wide unrealized PnL (scaled int, updated externally)
         self._unrealized_pnl: int = 0
-        # Set to True when limit is breached. Cleared by the 21:00 UTC daily
-        # boundary in _maybe_reset(); _force_reset() is a test/manual override
-        # with no production caller, so it is not a recovery path.
         self.halt_triggered: bool = False
-        # True when the calendar boundary passed while the stop was latched but
-        # no PnL snapshot was available to justify releasing it. The stop stands
-        # until a fresh snapshot arrives; see roll_daily_boundary().
         self._halt_release_pending: bool = False
 
         self._derive_from_defaults()
 
-        # Runtime watermark state
         self.soft_limit_active: bool = False
         self._soft_limit_cooldown_until_ns: int = 0
 
-        # Two-clock consistency. ``_accumulated_loss`` is fed at the fill;
-        # ``_unrealized_pnl`` is fed by the 1 Hz mark-to-market tick. Between a
-        # closing fill and the next tick the same money sits in both halves, so
-        # a naive sum counts it twice. THESHOW 2026-09-11T00:45:41Z: a book that
-        # only ever rose, +795 -> +1045 -> +2320, recorded a peak of +4270 and
-        # halted for 20 h on a 45.7% "drawdown" that was exactly the stale mark.
-        # (That gate, the peak watermark, is gone; the soft and hard limits
-        # still read this total.)
         self._unrealized_stale: bool = False
         self._last_consistent_total_pnl: int = 0
         self._last_consistent_ts_ns: int = 0
 
-        # Which branch latched the stop: ``DAILY_LOSS_LIMIT`` or "". Kept as a
-        # field so the persisted state and the manual latch can name it.
         self._halt_reason: str = ""
 
-        # The daily limit judges what the book did TODAY. ``_unrealized_pnl``
-        # is each position's PnL since entry, so a lot carried overnight
-        # brought every previous day's loss into every new day: on THESHOW one
-        # TMFJ6 long re-latched the 5,000 NTD stop at every 05:00 reset from
-        # 10/16 to its settlement on 10/21, while the stop itself kept the lot
-        # from being closed. ``_unrealized_day_open`` is the since-entry figure
-        # at the start of the trading day (the first complete snapshot after
-        # the 05:00 boundary); today's unrealized is the difference. Exact for
-        # closes too: a carried lot closed today realizes (exit - entry), and
-        # subtracting (open - entry) leaves (exit - open).
-        #
-        # Until a day-open figure is known (boot, or a boundary rolled with no
-        # complete snapshot) the since-entry figure is used unchanged, which is
-        # the old and more conservative reading.
         self._unrealized_day_open: int = 0
         self._day_open_known: bool = False
         self._unrealized_complete: bool = False
-        # True from a restore of the day's opening mark until the first
-        # mark-to-market after it. ``_unrealized_pnl`` is not persisted, so it
-        # reads 0 there, and 0 minus the opening mark is a loss the book never
-        # made: an opening order in that window latched the stop (Codex review
-        # of B0-B6, 2026-10-24). Until the mark arrives the unrealized half
-        # counts as nothing and opening orders wait for it.
         self._mark_pending: bool = False
 
     def _derive_from_defaults(self) -> None:
         """Thresholds only. Runtime state (accumulated loss, latched HALT,
         cooldown deadline) is untouched, so a SIGHUP reload
         cannot clear a live halt or reset the drawdown watermark."""
-        # Stored as a positive threshold; loss is compared as abs value
         self._default_max_daily_loss: int = int(self.defaults.get("max_daily_loss", 500_000_000))
 
-        # --- Intraday watermark config ---
         ipnl_cfg = self.config.get("intraday_pnl", {})
         self._intraday_pnl_enabled: bool = bool(ipnl_cfg)
 
         if self._intraday_pnl_enabled:
             price_scale: int = int(ipnl_cfg.get("price_scale", 10000))
-            # 1 NTD == price_scale accumulator units.
-            #
-            # The accumulator is fed by ``record_pnl`` (realized, from
-            # PositionStore) and ``update_unrealized`` (from MtMCalculator).
-            # Both producers compute ``delta_price_scaled * qty *
-            # contract_multiplier`` where ``contract_multiplier`` IS the
-            # instrument's point value (positions.py PositionState.update,
-            # mtm.py MtMCalculator._unrealized). So the point value is already
-            # inside the number that arrives here, and its unit is
-            # ``NTD * price_scale`` for futures and stocks alike.
-            #
-            # This used to divide by ``point_value`` a second time
-            # (``price_scale // point_value``), which enforced every threshold
-            # at 1/point_value of its configured value: on 2026-08-21 in
-            # production ``hard_limit_ntd: 5000`` halted at 670 NTD of realized
-            # loss and ``soft_limit_ntd: 500`` fired at 50 NTD. The error
-            # factor was the point value itself -- 10x for TMF, 50x for MXF,
-            # 200x for TXF. It was unreachable until fills started recording
-            # again, which is why it survived this long.
             ntd_to_scaled: int = price_scale
 
             self._soft_limit_threshold_scaled: int = int(ipnl_cfg.get("soft_limit_ntd", 500) * ntd_to_scaled)
             self._hard_limit_threshold_scaled: int = int(ipnl_cfg.get("hard_limit_ntd", 1000) * ntd_to_scaled)
             self._soft_recovery_threshold_scaled: int = int(ipnl_cfg.get("soft_recovery_ntd", 300) * ntd_to_scaled)
             self._soft_limit_cooldown_ns: int = int(ipnl_cfg.get("soft_limit_cooldown_s", 60) * 1_000_000_000)
-            # Loss on one position since its entry, across days, at which the
-            # platform closes it (``risk/loss_exit.py``). The daily limit no
-            # longer sees a carried lot's earlier losses, so this is what bounds
-            # them. Defaults to the hard daily limit, the figure that bounded
-            # them before.
             self._position_loss_limit_scaled: int = int(
                 ipnl_cfg.get("position_loss_limit_ntd", ipnl_cfg.get("hard_limit_ntd", 1000)) * ntd_to_scaled
             )
@@ -593,7 +488,6 @@ class DailyLossLimitValidator(RiskValidator):
         now_ns = timebase.now_ns()
         ns_per_day = 86_400 * 1_000_000_000
         offset = 21 * 3600 * 1_000_000_000
-        # Shift time back by offset so that floor-to-day gives us the last 21:00 UTC
         return ((now_ns - offset) // ns_per_day) * ns_per_day + offset
 
     def _maybe_reset(self, *, release_halt: bool = False) -> None:
@@ -625,10 +519,7 @@ class DailyLossLimitValidator(RiskValidator):
             )
             self._accumulated_loss.clear()
             self._current_reset_boundary_ns = boundary_ns
-            # A new trading day: its opening figure is the next complete
-            # snapshot, which ``update_unrealized`` records.
             self._day_open_known = False
-            # Reset soft-limit state on daily boundary
             self.soft_limit_active = False
             self._soft_limit_cooldown_until_ns = 0
             if release_halt:
@@ -637,22 +528,10 @@ class DailyLossLimitValidator(RiskValidator):
                 self._halt_release_pending = False
                 self._halt_reason = ""
             else:
-                # Calendar rolled, but this caller brought no complete PnL to
-                # justify reopening.
                 if self.halt_triggered:
                     self._halt_release_pending = True
-                # Yesterday's unrealized figure must not be carried into the new
-                # day as evidence. Zeroing it outright would let a dead
-                # mark-to-market look like a flat book, so clamp instead: a
-                # stale GAIN is dropped, a stale LOSS is kept. Both directions
-                # then fail closed -- a leftover +10,000 cannot offset today's
-                # -5,500 into looking safe, and a leftover loss cannot be
-                # erased by the calendar. The first complete snapshot overwrites
-                # this value anyway.
                 if self._unrealized_pnl > 0:
                     self._unrealized_pnl = 0
-            # The accumulator was just cleared, so whatever unrealized survived
-            # the roll IS the total, and both halves now carry the same stamp.
             self._unrealized_stale = False
             self._last_consistent_total_pnl = self.daily_unrealized()
             self._last_consistent_ts_ns = timebase.now_ns()
@@ -743,10 +622,6 @@ class DailyLossLimitValidator(RiskValidator):
             "soft_limit_cooldown_until_ns": self._soft_limit_cooldown_until_ns,
             "unrealized_day_open": self._unrealized_day_open,
             "day_open_known": self._day_open_known,
-            # Read by nothing here. The pre-B4a restore_state requires both as
-            # ints and drops the whole document without them, so a same-day
-            # rollback would start the day's realized loss from zero. Remove
-            # once no deployable build predates B4a.
             "peak_drawdown_halt_ts_ns": 0,
             "peak_pnl_scaled": 0,
         }
@@ -819,15 +694,6 @@ class DailyLossLimitValidator(RiskValidator):
                       flat one. A partial total may still LATCH the stop (that
                       direction is safe); only a complete one may release it.
         """
-        # The daily reset runs BEFORE the latch is consulted, because the latch
-        # gates every other way of reaching it. ``check()`` needs an intent and
-        # StormGuard HALT rejects intents upstream of the validator;
-        # ``record_pnl()`` needs a fill and HALT blocks the orders that make
-        # one. This supervisor tick is the only caller left, so reaching the
-        # reset through ``if not self.halt_triggered`` made the stop permanent:
-        # on THESHOW the hard limit latched 2026-08-26 14:24:35Z and HALT was
-        # still held at 09:32Z the next day, 12.5 h past the 21:00Z boundary,
-        # with the gateway down the whole time.
         self._maybe_reset(release_halt=complete)
         self._unrealized_pnl = unrealized_scaled
         self._unrealized_complete = complete
@@ -835,18 +701,10 @@ class DailyLossLimitValidator(RiskValidator):
         if complete and not self._day_open_known:
             self._unrealized_day_open = unrealized_scaled
             self._day_open_known = True
-        # This snapshot is read from the position store the fill has already
-        # updated, so it restores time-consistency between the two feeds
-        # regardless of whether every position could be priced. Completeness is
-        # a separate axis, carried by ``complete``.
         self._unrealized_stale = False
         self._last_consistent_total_pnl = sum(self._accumulated_loss.values()) + self.daily_unrealized()
         self._last_consistent_ts_ns = timebase.now_ns()
         if self._halt_release_pending and complete:
-            # A supervisor tick already rolled the calendar while the stop was
-            # latched, but had no PnL to justify lifting it. This call carries
-            # the fresh snapshot that was missing, so the stop lifts now and the
-            # new day is judged on the new number below.
             self._halt_release_pending = False
             self.halt_triggered = False
             self._halt_reason = ""
@@ -895,12 +753,6 @@ class DailyLossLimitValidator(RiskValidator):
         current = self._accumulated_loss.get(strategy_id, 0)
         self._accumulated_loss[strategy_id] = current + pnl_delta
         if self._unrealized_pnl != 0:
-            # A realizing fill landed while a mark is outstanding. Until the
-            # next mark-to-market tick the two feeds disagree about the same
-            # money, so the gates fall back to the last total whose halves were
-            # sampled together. When unrealized is zero there is nothing to
-            # double-count and the sum is already consistent, which is why the
-            # flag is conditional rather than unconditional.
             self._unrealized_stale = True
         else:
             self._last_consistent_total_pnl = sum(self._accumulated_loss.values())
@@ -923,9 +775,7 @@ class DailyLossLimitValidator(RiskValidator):
             return None
 
         now_ns = timebase.now_ns()
-        # Recovery: loss must be below recovery threshold AND cooldown must
-        # have elapsed.
-        recovery_loss = -total_pnl  # positive = loss, negative = gain
+        recovery_loss = -total_pnl
         if recovery_loss < self._soft_recovery_threshold_scaled and now_ns >= self._soft_limit_cooldown_until_ns:
             logger.info(
                 "DailyLossLimitValidator: soft limit recovered",
@@ -940,13 +790,8 @@ class DailyLossLimitValidator(RiskValidator):
         if self._position_provider is not None:
             try:
                 current_pos = self._current_position(intent.symbol, intent.strategy_id)
-            except Exception:  # noqa: BLE001 — fail closed if position lookup breaks
+            except Exception:
                 current_pos = None
-        # Bug #39: maker-style strategies can deadlock in SOFT_LIMIT when
-        # flat because no intent qualifies as reduce-only, so PnL never
-        # moves and recovery_loss never improves. After the cooldown
-        # expires, allow new orders again only while flat. Once exposed,
-        # the existing SOFT_LIMIT reduce-only behavior still applies.
         if current_pos == 0 and now_ns >= self._soft_limit_cooldown_until_ns:
             logger.info(
                 "DailyLossLimitValidator: soft limit flat cooldown bypass",
@@ -957,55 +802,23 @@ class DailyLossLimitValidator(RiskValidator):
         return False, (f"SOFT_LIMIT: loss={-total_pnl} >= threshold={self._soft_limit_threshold_scaled}")
 
     def check(self, intent: OrderIntent) -> Tuple[bool, str]:
-        # a. Bypass CANCEL and FORCE_FLAT for all checks
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True, "OK"
 
-        # Bug 21 (2026-04-17): cover orders must bypass SOFT_LIMIT
-        # / DAILY_LOSS_LIMIT so a strategy stuck in adverse PnL can always reduce
-        # risk. Without this R47 deadlocked short -1 TMFE6 while drawdown grew
-        # from -120 NTD to -2680 NTD (realized on manual cover).
         if self.reduces_position(intent):
             return True, "REDUCE_ONLY_BYPASS"
 
-        # b. Daily reset check
         self._maybe_reset()
 
-        # b2. Restored opening mark, no mark since: today's unrealized is not
-        # known yet. Wait for it (the next 1 Hz tick) rather than open blind;
-        # this is a refusal, not a latch.
         if self._mark_pending:
             return False, "DAILY_LOSS_AWAITING_MARK"
 
-        # c. Compute total PnL (realized + unrealized)
-        # NOTE: accumulated is per-strategy realized, _unrealized_pnl is platform-wide.
-        # When _intraday_pnl_enabled=True, global limits are used — consistent.
-        # When False (legacy), per-strategy limits apply to this mixed total, meaning
-        # strategy A can be blocked by strategy B's unrealized losses. This is an
-        # intentionally conservative design — see docstring. Per-strategy unrealized
-        # tracking would require a per-strategy feed from ExecutionRouter.
         if self._intraday_pnl_enabled:
-            # Global scope: sum ALL strategies' realized PnL
             accumulated = sum(self._accumulated_loss.values())
         else:
-            # Legacy per-strategy scope
             accumulated = self._accumulated_loss.get(intent.strategy_id, 0)
         total_pnl = accumulated + self.daily_unrealized()
 
-        # c2. Two-clock guard. ``record_pnl`` books a realized delta at the fill;
-        # ``update_unrealized`` refreshes the mark on the 1 Hz supervisor tick.
-        # In the window between them the closing fill's PnL sits in both halves,
-        # so the sum counts it twice -- upward after a winning close, downward
-        # after a losing one. Gate on the last total whose halves were sampled
-        # together: at most one tick old, on a series only sampled once a tick.
-        #
-        # Bounded by ``_STALE_GRACE_NS``. The substitution is only ever right
-        # while the next tick really is coming. If mark-to-market dies -- it is
-        # wrapped in a try in the supervisor loop -- no tick arrives, and
-        # holding the last consistent total indefinitely would hide every
-        # subsequent realized loss from these gates. Past the grace the raw sum
-        # comes back, which is exactly the pre-fix behaviour: still the
-        # fail-closed direction, on a book whose valuation is already unknown.
         if (
             self._intraday_pnl_enabled
             and self._unrealized_stale
@@ -1013,23 +826,18 @@ class DailyLossLimitValidator(RiskValidator):
         ):
             total_pnl = self._last_consistent_total_pnl
 
-        # e. Hard halt is sticky — no recovery (only when intraday watermark is enabled;
-        #    when disabled the original per-strategy evaluation runs each check)
         if self.halt_triggered and self._intraday_pnl_enabled:
             return False, "DAILY_LOSS_HALT_TRIGGERED"
 
-        # f. Soft limit recovery / rejection (extracted helper).
         soft_decision = self._evaluate_soft_limit(intent, total_pnl)
         if soft_decision is not None:
             return soft_decision
 
-        # h. Net gain or breakeven — no further loss checks needed
         if total_pnl >= 0:
             return True, "OK"
 
-        loss_magnitude = -total_pnl  # positive value representing combined loss
+        loss_magnitude = -total_pnl
 
-        # i. Hard limit check — evaluated before soft limit so hard limit always wins
         strat_cfg = self.strat_configs.get(intent.strategy_id, {})
         if self._intraday_pnl_enabled:
             max_daily_loss = self._hard_limit_threshold_scaled
@@ -1050,7 +858,6 @@ class DailyLossLimitValidator(RiskValidator):
             )
             return False, f"DAILY_LOSS_LIMIT_EXCEEDED: loss={loss_magnitude} >= limit={max_daily_loss}"
 
-        # j. Soft limit trigger
         if self._intraday_pnl_enabled and loss_magnitude >= self._soft_limit_threshold_scaled:
             now_ns = timebase.now_ns()
             self.soft_limit_active = True
@@ -1090,9 +897,6 @@ class ExpiringContractValidator(RiskValidator):
         cfg = self.config.get("expiry_guard", {}) or {}
         self._enabled: bool = bool(cfg.get("enabled", True))
         self._cutoff_minute: int = parse_cutoff_minute(cfg.get("cutoff"))
-        # symbol -> expiry window [start, end) in epoch-ns (``NEVER_NS`` for
-        # non-monthly codes). Rebuilt here rather than cleared by ``reload``:
-        # that walks ``vars(self)``, which does not see ``__slots__``.
         self._window_ns_cache: Dict[str, Tuple[int, int]] = {}
 
     @property
@@ -1151,14 +955,12 @@ class PerSymbolNotionalValidator(RiskValidator):
         if intent.intent_type == IntentType.CANCEL:
             return True, "OK"
 
-        # Bug 21: cover orders bypass per-symbol notional cap.
         if self.reduces_position(intent):
             return True, "REDUCE_ONLY_BYPASS"
 
         cache_key = (intent.strategy_id, intent.symbol)
         max_notional_scaled = self._per_symbol_notional_cache.get(cache_key)
         if max_notional_scaled is None:
-            # Resolve config: strategy-level symbol_limits > global default
             strat_cfg = self.strat_configs.get(intent.strategy_id, {})
             symbol_limits = strat_cfg.get("symbol_limits", {})
             sym_cfg = symbol_limits.get(intent.symbol, {})
@@ -1170,7 +972,6 @@ class PerSymbolNotionalValidator(RiskValidator):
             scale = self._scale_factor(intent.symbol)
             max_notional_scaled = int(int(max_notional_raw) * scale)
 
-            # Bounded cache — evict all on overflow (simple, safe)
             if len(self._per_symbol_notional_cache) >= self._MAX_CACHE_ENTRIES:
                 logger.warning(
                     "PerSymbolNotionalValidator cache overflow, clearing",
@@ -1181,8 +982,6 @@ class PerSymbolNotionalValidator(RiskValidator):
 
             self._per_symbol_notional_cache[cache_key] = max_notional_scaled
 
-        # NTD * scale on both sides: price_scaled * qty * point value vs
-        # max_notional_ntd * scale.
         notional_scaled = intent.price * intent.qty * self._contract_multiplier(intent.symbol)
         if notional_scaled > max_notional_scaled:
             return False, (f"PER_SYMBOL_NOTIONAL_EXCEEDED: {notional_scaled} > {max_notional_scaled}")

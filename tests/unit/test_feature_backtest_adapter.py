@@ -5,8 +5,6 @@ from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.lob_engine import LOBEngine
 from hft_platform.strategy.base import BaseStrategy
 
-# --- Shared stubs ---
-
 
 class _Depth:
     best_bid = 100.0
@@ -25,7 +23,7 @@ class _Hbt:
         if self._ran:
             return 1
         self._ran = True
-        return 2  # modern: 2=feed available
+        return 2
 
     def run(self):
         return True
@@ -87,9 +85,6 @@ def _patch_hftbacktest(monkeypatch):
     monkeypatch.setattr(hbt_adapter, "_detect_wait_status_mode", lambda: "modern", raising=False)
 
 
-# --- Test strategies ---
-
-
 class _RecordFeaturesStrategy(BaseStrategy):
     def __init__(self, strategy_id: str, **kwargs):
         super().__init__(strategy_id, **kwargs)
@@ -107,9 +102,6 @@ class _RecordFeaturesStrategy(BaseStrategy):
 class _SimpleStrategy(BaseStrategy):
     def on_stats(self, event):
         self.buy(event.symbol, event.best_bid, 1)
-
-
-# --- Tests ---
 
 
 def test_lob_feature_mode_instantiates_lob_and_feature_engines(monkeypatch):
@@ -149,7 +141,6 @@ def test_lob_feature_mode_feature_source_in_ctx(monkeypatch):
         data="dummy",
         feature_mode="lob_feature",
     )
-    # ctx._feature_source must be a callable bound to the feature engine instance
     assert callable(adapter.ctx._feature_source)
     assert adapter.ctx._feature_source.__self__ is adapter._feature_engine
 
@@ -190,7 +181,6 @@ def test_lob_feature_mode_populates_spread_scaled(monkeypatch):
         price_scale=10_000,
     )
     adapter.run()
-    # spread should be non-None after lob_feature mode processes one event
     assert strategy.recorded_spread is not None
 
 
@@ -205,7 +195,6 @@ def test_lob_feature_mode_spread_value_is_integer(monkeypatch):
         price_scale=10_000,
     )
     adapter.run()
-    # spread_scaled must be an int (Precision Law)
     if strategy.recorded_spread is not None:
         assert isinstance(strategy.recorded_spread, int)
 
@@ -220,9 +209,7 @@ def test_lob_feature_mode_feature_tuple_available_via_ctx(monkeypatch):
         feature_mode="lob_feature",
     )
     adapter.run()
-    # feature_tuple should be populated after one iteration
     assert strategy.recorded_tuple is not None
-    # tuple length matches default feature set (v3 = 27 features)
     from hft_platform.feature.registry import build_default_lob_feature_set_v3
 
     fs = build_default_lob_feature_set_v3()
@@ -240,10 +227,5 @@ def test_lob_feature_mode_mid_price_x2_is_sum_of_bid_ask(monkeypatch):
         price_scale=10_000,
     )
     adapter.run()
-    # _Depth has best_bid=100.0, best_ask=100.1 (native hftbacktest float prices)
-    # After rescaling by price_scale=10_000:
-    #   bid_scaled = int(round(100.0 * 10_000)) = 1_000_000
-    #   ask_scaled = int(round(100.1 * 10_000)) = 1_001_000
-    # mid_price_x2 = bid_scaled + ask_scaled = 2_001_000
     if strategy.recorded_mid is not None:
         assert strategy.recorded_mid == 1_000_000 + 1_001_000

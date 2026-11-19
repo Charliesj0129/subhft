@@ -87,7 +87,6 @@ class HaltFlattener:
             symbol = getattr(pos, "symbol", "")
             strategy_id = getattr(pos, "strategy_id", "")
 
-            # Determine closing side: sell if long, buy if short
             if net_qty > 0:
                 close_side = Side.SELL
                 close_qty = net_qty
@@ -101,11 +100,11 @@ class HaltFlattener:
                 symbol=symbol,
                 intent_type=IntentType.FORCE_FLAT,
                 side=close_side,
-                price=0,  # Market order — price=0 signals MKT
+                price=0,
                 qty=close_qty,
                 timestamp_ns=now_ns,
                 source_ts_ns=now_ns,
-                reason="halt_flatten",  # Tagged to bypass HALT check in risk engine
+                reason="halt_flatten",
             )
 
             try:

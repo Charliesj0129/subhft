@@ -26,8 +26,6 @@ from hft_platform.feed_adapter.shioaji._compat import (
     resolve_quote_enum,
 )
 
-# --- synthetic SDK shapes (plain objects, real hasattr) ---------------------
-
 
 def _sj_153() -> types.SimpleNamespace:
     """1.5.3: enums top-level (and a deprecated .constant shim still present)."""
@@ -71,9 +69,6 @@ def _api_133() -> types.SimpleNamespace:
     return types.SimpleNamespace(quote=proxy)
 
 
-# --- resolve_quote_enum -----------------------------------------------------
-
-
 def test_resolve_quote_enum_prefers_top_level_on_153():
     sj = _sj_153()
     assert resolve_quote_enum(sj, "QuoteType") is sj.QuoteType
@@ -91,9 +86,6 @@ def test_resolve_quote_enum_raises_when_absent():
         resolve_quote_enum(types.SimpleNamespace(), "QuoteType")
 
 
-# --- resolve_quote_api ------------------------------------------------------
-
-
 def test_resolve_quote_api_prefers_top_level_on_153():
     api = _api_153()
     assert resolve_quote_api(api) is api
@@ -109,29 +101,19 @@ def test_resolve_quote_api_none_when_api_is_none():
 
 
 def test_resolve_quote_api_none_when_no_subscribe_surface():
-    # Logged-out / malformed api with neither top-level subscribe nor a usable proxy.
     assert resolve_quote_api(types.SimpleNamespace()) is None
     assert resolve_quote_api(types.SimpleNamespace(quote=types.SimpleNamespace())) is None
-
-
-# --- dispatch_tick_cb arity bridge ------------------------------------------
-# 1.5.3 invokes v1 quote callbacks with a single (data) arg; 1.3.3 invokes them
-# with (topic, data). The router hot path is a concrete 2-arg function, so the
-# client wrapper must normalise both arities or a 1-arg call raises TypeError on
-# the hot path before the router's own try/except can catch it.
 
 
 def test_dispatch_tick_cb_bridges_single_arg_v1(monkeypatch):
     seen = []
     monkeypatch.setattr(client_mod._router, "dispatch_tick_cb", lambda topic, quote: seen.append((topic, quote)))
     tick = types.SimpleNamespace(code="2330")
-    client_mod.dispatch_tick_cb(tick)  # 1-arg (1.5.3 v1)
-    client_mod.dispatch_tick_cb("L/TFE/TXF", tick)  # 2-arg (1.3.3)
+    client_mod.dispatch_tick_cb(tick)
+    client_mod.dispatch_tick_cb("L/TFE/TXF", tick)
     assert seen == [(None, tick), ("L/TFE/TXF", tick)]
 
 
 def test_dispatch_tick_cb_single_arg_does_not_raise(monkeypatch):
-    # Pre-fix a 1-arg call raised TypeError (missing 'quote') before the router
-    # body's try/except — disconnecting the feed on the first 1.5.3 tick.
     monkeypatch.setattr(client_mod._router, "dispatch_tick_cb", lambda topic, quote: None)
-    client_mod.dispatch_tick_cb(types.SimpleNamespace(code="2330"))  # must not raise
+    client_mod.dispatch_tick_cb(types.SimpleNamespace(code="2330"))

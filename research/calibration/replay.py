@@ -34,12 +34,10 @@ class ReplayNotReadyError(NotImplementedError):
     """
 
 
-# hftbacktest order-status integer constants (from hftbacktest source).
 _STATUS_NEW = 1
 _STATUS_FILLED = 3
 _STATUS_CANCELED = 4
 
-# 100 ms in nanoseconds — elapse step size
 _ELAPSE_NS = 100_000_000
 
 
@@ -74,7 +72,6 @@ def build_probe_replay_fn(  # noqa: C901
         HashMapMarketDepthBacktest,
     )
 
-    # Sanity-check that the imported constant matches our local copy.
     assert int(_HBT_FILLED) == _STATUS_FILLED, (
         f"hftbacktest FILLED={_HBT_FILLED} != expected {_STATUS_FILLED}; "
         "update _STATUS_FILLED constant in replay.py"
@@ -122,7 +119,6 @@ def build_probe_replay_fn(  # noqa: C901
     def replay(candidate: QueueModelCandidate, date: str) -> DailyFillSummary:  # noqa: C901
         data = _load_events(date)
 
-        # --- Legacy stub path ---
         if allow_stub_execution:
             asset = _build_asset(candidate, data)
             hbt = HashMapMarketDepthBacktest([asset])
@@ -131,21 +127,18 @@ def build_probe_replay_fn(  # noqa: C901
             hbt.close()
             return DailyFillSummary(date=date, n_fills=0, adverse_pct=0.0, pnl=0.0)
 
-        # --- Real execution path ---
         asset = _build_asset(candidate, data)
         hbt = HashMapMarketDepthBacktest([asset])
         probe = probe_factory()
 
-        # Per-side state: one resting order per side at a time.
         active_bid_id: int | None = None
         active_ask_id: int | None = None
         active_bid_price: float | None = None
         active_ask_price: float | None = None
         next_order_id: int = 1
 
-        # Fill accounting
         n_fills: int = 0
-        total_buy_cost: float = 0.0   # sum of fill_price * fill_qty for buys
+        total_buy_cost: float = 0.0
         total_sell_revenue: float = 0.0
         total_buy_qty: float = 0.0
         total_sell_qty: float = 0.0
@@ -187,7 +180,6 @@ def build_probe_replay_fn(  # noqa: C901
             best_bid = depth.best_bid
             best_ask = depth.best_ask
 
-            # Check bid order for fill
             bid_fill_qty, bid_exec_price, _ = _check_and_collect_fill(active_bid_id)
             if bid_fill_qty > 0:
                 n_fills += bid_fill_qty
@@ -196,7 +188,6 @@ def build_probe_replay_fn(  # noqa: C901
                 active_bid_id = None
                 active_bid_price = None
 
-            # Check ask order for fill
             ask_fill_qty, ask_exec_price, _ = _check_and_collect_fill(active_ask_id)
             if ask_fill_qty > 0:
                 n_fills += ask_fill_qty
@@ -205,7 +196,6 @@ def build_probe_replay_fn(  # noqa: C901
                 active_ask_id = None
                 active_ask_price = None
 
-            # Skip if book is not valid
             if (
                 math.isnan(best_bid)
                 or math.isnan(best_ask)
@@ -215,10 +205,8 @@ def build_probe_replay_fn(  # noqa: C901
             ):
                 continue
 
-            # Get current position for probe
             current_position = int(round(float(hbt.position(0))))
 
-            # Compute tick-space prices for the probe
             tick_bid = int(round(best_bid / tick_size))
             tick_ask = int(round(best_ask / tick_size))
             mid = (best_bid + best_ask) / 2.0
@@ -230,7 +218,6 @@ def build_probe_replay_fn(  # noqa: C901
                 position=current_position,
             )
 
-            # Desired prices in float space (or None to stand-back)
             target_bid: float | None = (
                 action.post_bid_price * tick_size
                 if action.post_bid_price is not None
@@ -243,7 +230,6 @@ def build_probe_replay_fn(  # noqa: C901
             )
             qty = float(action.qty)
 
-            # ---- Manage bid side ----
             if target_bid is not None:
                 need_repost = (
                     active_bid_id is None
@@ -261,7 +247,6 @@ def build_probe_replay_fn(  # noqa: C901
                     active_bid_id = None
                     active_bid_price = None
 
-            # ---- Manage ask side ----
             if target_ask is not None:
                 need_repost = (
                     active_ask_id is None
@@ -281,8 +266,6 @@ def build_probe_replay_fn(  # noqa: C901
 
         hbt.close()
 
-        # PnL in points: realized_sells - realized_buys (matched pairs only)
-        # Use matched-quantity approach: realized PnL on min(buy_qty, sell_qty) lots
         matched_qty = min(total_buy_qty, total_sell_qty)
         if matched_qty > 0.0 and total_buy_qty > 0.0 and total_sell_qty > 0.0:
             avg_buy = total_buy_cost / total_buy_qty
@@ -291,10 +274,6 @@ def build_probe_replay_fn(  # noqa: C901
         else:
             pnl_pts = 0.0
 
-        # adverse_pct: fraction of fills that moved against us (heuristic: buys at ask or
-        # sells at bid indicate adverse fills).  With passive-only quoting the fill is never
-        # adverse in the classical sense; use zero as placeholder.  Sweep scoring uses
-        # fill_count as the primary signal, not adverse_pct.
         adverse_pct = 0.0
 
         return DailyFillSummary(

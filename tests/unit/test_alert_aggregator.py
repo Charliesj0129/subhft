@@ -40,7 +40,6 @@ class TestAlertAggregator:
 
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(ts_ns=1_000_000_000_000_000_000)
-        # a2 arrives 1 second later — well within the 300-second window
         a2 = _make_alert(ts_ns=1_000_000_001_000_000_000, alert_id="a-002")
         assert agg.process(a1) is not None
         assert agg.process(a2) is None
@@ -50,7 +49,6 @@ class TestAlertAggregator:
 
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(ts_ns=1_000_000_000_000_000_000)
-        # a2 arrives 301 seconds later — just past the 300-second window
         a2 = _make_alert(ts_ns=1_000_000_301_000_000_000, alert_id="a-002")
         assert agg.process(a1) is not None
         assert agg.process(a2) is not None
@@ -78,13 +76,11 @@ class TestAlertAggregator:
 
         agg = AlertAggregator(window_ns=300_000_000_000)
         a1 = _make_alert(ts_ns=1_000_000_000_000_000_000)
-        # a2 and a3 arrive within the 300-second window (1s and 2s after a1)
         a2 = _make_alert(ts_ns=1_000_000_001_000_000_000, alert_id="a-002")
         a3 = _make_alert(ts_ns=1_000_000_002_000_000_000, alert_id="a-003")
         agg.process(a1)
         agg.process(a2)
         agg.process(a3)
-        # flush after window expires: now_ns > window_end = a1.ts_ns + 300_000_000_000
         summaries = agg.flush_expired(now_ns=1_000_000_301_000_000_000)
         assert len(summaries) == 1
         assert summaries[0].suppressed_count == 2

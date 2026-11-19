@@ -16,8 +16,6 @@ from hft_platform.events import LOBStatsEvent
 from hft_platform.feature.engine import FeatureEngine
 from hft_platform.feed_adapter.lob_engine import BookState
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-
 
 def _make_book_state(symbol: str = "2330") -> BookState:
     bs = BookState(symbol)
@@ -51,9 +49,6 @@ def _lob_stats(
     )
 
 
-# ── BookState.get_stats() — object identity ───────────────────────────────────
-
-
 class TestBookStateGetStatsObjectIdentity:
     def test_consecutive_calls_return_different_objects(self):
         """Two consecutive get_stats() calls must return distinct objects."""
@@ -72,11 +67,9 @@ class TestBookStateGetStatsObjectIdentity:
         bs = _make_book_state()
         first = bs.get_stats()
 
-        # R8: LOBStatsEvent is now frozen=True, so mutation is structurally impossible
         with pytest.raises(dataclasses.FrozenInstanceError):
             first.ts = 999_999_999_999
 
-        # The next tick updates the book state timestamp
         bs.exch_ts = 2_000_000_000
         second = bs.get_stats()
 
@@ -104,19 +97,14 @@ class TestBookStateGetStatsObjectIdentity:
         bs.exch_ts = 100
         snap1 = bs.get_stats()
 
-        # Simulate next tick
         bs.exch_ts = 200
         bs.spread = 2000
         snap2 = bs.get_stats()
 
-        # Each snapshot must be independent
         assert snap1 is not snap2
         assert snap1.ts == 100
         assert snap2.ts == 200
         assert snap1.spread_scaled != snap2.spread_scaled
-
-
-# ── FeatureEngine — object identity ──────────────────────────────────────────
 
 
 class TestFeatureEngineObjectIdentity:
@@ -142,7 +130,6 @@ class TestFeatureEngineObjectIdentity:
         first = eng.process_lob_stats(_lob_stats(ts=1_000), local_ts_ns=1_000)
         assert first is not None
 
-        # Consumer mutates the returned event (e.g., tagging for later use)
         first.ts = 999_999
 
         second = eng.process_lob_stats(_lob_stats(ts=2_000), local_ts_ns=2_000)
@@ -151,7 +138,6 @@ class TestFeatureEngineObjectIdentity:
         assert second.ts == 2_000, (
             "next FeatureUpdateEvent has corrupted ts; consumer mutation of the first event bled through."
         )
-        # First event retains the consumer's mutation
         assert first.ts == 999_999
 
     def test_multiple_symbols_return_independent_events(self):
@@ -173,9 +159,7 @@ class TestFeatureEngineObjectIdentity:
         """The same symbol on consecutive ticks must produce independent event objects."""
         eng = FeatureEngine()
         events = [eng.process_lob_stats(_lob_stats(ts=i * 1000), local_ts_ns=i * 1000) for i in range(1, 4)]
-        # All events must be non-None
         assert all(e is not None for e in events)
-        # All events must be distinct objects
         for i in range(len(events)):
             for j in range(i + 1, len(events)):
                 assert events[i] is not events[j], (
@@ -187,7 +171,6 @@ class TestFeatureEngineObjectIdentity:
         eng = FeatureEngine()
         last = eng.process_lob_stats(_lob_stats(symbol="2330", ts=5_000), local_ts_ns=5_000)
         assert last is not None
-        # The cache should hold the last emitted event for this symbol
         cached = eng._event_cache.get("2330")
         assert cached is last, (
             "_event_cache should store (not replace with a fresh copy) the last emitted event for debugging purposes."

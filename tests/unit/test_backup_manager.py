@@ -64,7 +64,6 @@ def test_cleanup_removes_old_backups(tmp_path):
 
     from hft_platform.ops.backup import BackupManager
 
-    # Use relative-to-today dates so this test does not rot as time advances.
     today = datetime.now()
     recent_name = f"daily_{(today - timedelta(days=5)).strftime('%Y%m%d')}"
     old_names = [

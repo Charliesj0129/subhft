@@ -27,7 +27,6 @@ def test_strategy_context_place_order():
 
     res = ctx.place_order(symbol="AAPL", side=Side.BUY, price=10000, qty=1)
     assert res == "intent"
-    # int prices are already scaled — scaler is not called
     scaler.assert_not_called()
     intent_factory.assert_called_once()
     assert intent_factory.call_args[1]["price"] == 10000
@@ -55,7 +54,6 @@ def test_base_strategy_dispatch_and_helpers():
     ctx.place_order.return_value = "order_intent"
     ctx.positions = {"AAPL": 50}
 
-    # Tick Event
     event = TickEvent(
         symbol="AAPL",
         price=100,
@@ -71,14 +69,11 @@ def test_base_strategy_dispatch_and_helpers():
     assert len(intents) == 1
     assert intents[0] == "order_intent"
 
-    # Test helpers via the dummy strat call
-    # strat.buy was called in on_tick
     strat.sell("AAPL", 101, 1)
     strat.cancel("AAPL", "order_1")
 
-    assert len(strat._generated_intents) == 3  # 1 from on_tick + sell + cancel
+    assert len(strat._generated_intents) == 3
 
-    # Position helper
     assert strat.position("AAPL") == 50
     assert strat.position("MSFT") == 0
 
@@ -90,7 +85,6 @@ def test_base_strategy_other_events():
 
     meta = MagicMock()
 
-    # Fill
     fill = FillEvent(
         fill_id="f1",
         account_id="acc1",
@@ -108,7 +102,6 @@ def test_base_strategy_other_events():
     result_fill = strat.handle_event(ctx, fill)
     assert isinstance(result_fill, list)
 
-    # Order
     order = OrderEvent(
         order_id="o1",
         strategy_id="test_strat",
@@ -125,7 +118,6 @@ def test_base_strategy_other_events():
     result_order = strat.handle_event(ctx, order)
     assert isinstance(result_order, list)
 
-    # LOBStats - backward-compatible interface auto-computes mid_price/spread
     stats = LOBStatsEvent(
         symbol="AAPL",
         ts=0,
@@ -138,7 +130,6 @@ def test_base_strategy_other_events():
     result_stats = strat.handle_event(ctx, stats)
     assert isinstance(result_stats, list)
 
-    # BidAsk
     ba = BidAskEvent(meta=meta, symbol="AAPL", bids=[], asks=[], is_snapshot=False)
     result_ba = strat.handle_event(ctx, ba)
     assert isinstance(result_ba, list)
@@ -175,7 +166,6 @@ def test_strategy_symbol_filtering():
     ctx = Mock(spec=StrategyContext)
     strat.ctx = ctx
 
-    # 1. Market Data for UNKNOWN symbol -> Should be ignored
     tick_bad = TickEvent(
         symbol="MSFT",
         price=100,
@@ -190,8 +180,6 @@ def test_strategy_symbol_filtering():
     res = strat.handle_event(ctx, tick_bad)
     assert len(res) == 0
 
-    # 2. Execution Event for UNKNOWN symbol -> Should be PROCESSED
-    # Strategy might hold legacy positions in symbols it no longer subscribes to
     fill_unknown = FillEvent(
         fill_id="f2",
         account_id="acc1",
@@ -206,9 +194,6 @@ def test_strategy_symbol_filtering():
         ingest_ts_ns=0,
         match_ts_ns=0,
     )
-    # This calls on_fill. Dummy doesn't implement it but handle_event returns list.
-    # Since on_fill is pass, no intents generated, but we verify it didn't return early.
-    # We can spy on on_fill
     with patch.object(strat, "on_fill") as mock_fill:
         strat.handle_event(ctx, fill_unknown)
         mock_fill.assert_called_once()
@@ -235,7 +220,6 @@ strategies:
 @pytest.mark.asyncio
 async def test_strategy_runner_flow():
     bus = MagicMock()
-    # Async iterator mock
     events = [
         TickEvent(
             symbol="AAPL",
@@ -246,7 +230,7 @@ async def test_strategy_runner_flow():
             ask_side_total_vol=500,
             is_simtrade=False,
             is_odd_lot=False,
-            meta=None,  # None → _extract_event_trace falls back to now_ns() → always fresh
+            meta=None,
         )
     ]
 
@@ -283,16 +267,13 @@ def test_runner_error_handling():
         with patch.dict(os.environ, {"HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST": "0"}):
             runner = StrategyRunner(bus, risk_queue, config_path="dummy")
 
-        # Should not raise — error is caught internally
         asyncio.run(runner.process_event(MagicMock()))
-        # Risk queue should remain empty since strategy raised or was skipped
         assert risk_queue.empty()
 
 
 def test_helpers_without_context():
     strat = DummyStrategy("test")
-    # No ctx set
-    strat.buy("A", 100, 1)  # Should return early
+    strat.buy("A", 100, 1)
     assert len(strat._generated_intents) == 0
     strat.sell("A", 100, 1)
     assert len(strat._generated_intents) == 0
@@ -302,15 +283,13 @@ def test_helpers_without_context():
 
 
 def test_runner_register_and_run():
-    # Test register
     runner = StrategyRunner(bus=MagicMock(), risk_queue=asyncio.Queue(), lob_engine=None, config_path="dummy")
-    runner.symbol_metadata.price_scale = Mock(return_value=1.0)  # Mock scaling
+    runner.symbol_metadata.price_scale = Mock(return_value=1.0)
 
     strat = DummyStrategy("algo2", symbols=["A"])
     runner.register(strat)
     assert strat in runner.strategies
 
-    # Test run() loop
     bus = MagicMock()
     evt = TickEvent(
         symbol="A",
@@ -321,45 +300,33 @@ def test_runner_register_and_run():
         ask_side_total_vol=500,
         is_simtrade=False,
         is_odd_lot=False,
-        meta=None,  # None → _extract_event_trace falls back to now_ns() → always fresh
+        meta=None,
     )
 
     async def fast_gen():
         yield evt
-        # finish
 
     bus.consume.return_value = fast_gen()
     runner.bus = bus
 
-    # We rely on configured strategies. Runner creates context for us.
-    # We must ensure no exception in process_event
-
     asyncio.run(runner.run())
 
-    # Verify strat logic executed
-    # DummyStrategy on_tick calls buy -> place_order -> intent factory
-    # Intent factory increments seq.
     assert runner._intent_seq > 0
 
 
 def test_runner_internals():
-    # Test disabled strategy
     runner = StrategyRunner(MagicMock(), asyncio.Queue(), "dummy")
     strat_disabled = DummyStrategy("disabled")
     strat_disabled.enabled = False
     runner.register(strat_disabled)
 
-    # Process event
-    # Mock event
     evt = MagicMock()
     evt.strategy_id = None
 
-    # Should skip dispatch
     with patch.object(strat_disabled, "handle_event") as mock_handle:
         asyncio.run(runner.process_event(evt))
         mock_handle.assert_not_called()
 
-    # Test scale price directly
     runner.symbol_metadata.price_scale = Mock(return_value=100.0)
     price_int = runner._scale_price("A", 1.5)
     assert price_int == 150
@@ -408,7 +375,7 @@ def test_strategy_runner_positions_view():
         ask_side_total_vol=0,
         is_simtrade=False,
         is_odd_lot=False,
-        meta=None,  # None → _extract_event_trace falls back to now_ns() → always fresh
+        meta=None,
     )
 
     asyncio.run(runner.process_event(event))

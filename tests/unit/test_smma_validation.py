@@ -51,7 +51,7 @@ def test_execution_crosses_bid_ask_on_next_bar_and_charges_profile_cost() -> Non
     )
     assert result.entry_indices.tolist() == [1]
     assert result.exit_indices.tolist() == [3]
-    assert result.trade_pnl.tolist() == [3.0]  # 108 close bid - 102 open ask - 3 point RT profile
+    assert result.trade_pnl.tolist() == [3.0]
 
 
 def test_execution_uses_entry_contract_profile_and_fails_on_unknown_contract() -> None:
@@ -95,7 +95,7 @@ def test_short_execution_sells_bid_and_covers_ask() -> None:
     )
     assert result.entry_indices.tolist() == [1]
     assert result.exit_indices.tolist() == [3]
-    assert result.trade_pnl.tolist() == [2.0]  # 100 open bid - 92 close ask - 6 point RT profile (3.0 per side)
+    assert result.trade_pnl.tolist() == [2.0]
 
 
 def test_execution_forces_flat_before_reset() -> None:
@@ -112,7 +112,7 @@ def test_execution_forces_flat_before_reset() -> None:
         instrument_profile="TMFD6",
     )
     assert result.exit_indices.tolist() == [2]
-    assert result.trade_pnl.tolist() == [2.0]  # 110 close bid - 102 open ask - 6 point RT profile (3.0 per side)
+    assert result.trade_pnl.tolist() == [2.0]
 
 
 def test_recent_kill_rejects_constant_or_trend_contaminated_signal() -> None:

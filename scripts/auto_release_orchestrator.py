@@ -44,19 +44,15 @@ def _evaluate_promotion_readiness(project_root: Path) -> dict[str, bool | str]:
     """Evaluate basic promotion readiness checks."""
     checks: dict[str, bool | str] = {}
 
-    # Check if release_channel_guard exists and can be imported
     guard_path = project_root / "scripts" / "release_channel_guard.py"
     checks["guard_script_exists"] = guard_path.exists()
 
-    # Check for strategy promotions directory
     promotions_dir = project_root / "config" / "strategy_promotions"
     checks["promotions_dir_exists"] = promotions_dir.exists()
 
-    # Check for passing CI (basic: just check if tests exist)
     tests_dir = project_root / "tests"
     checks["tests_dir_exists"] = tests_dir.exists()
 
-    # All checks pass
     checks["ready"] = all(
         v for k, v in checks.items() if isinstance(v, bool) and k != "ready"
     )
@@ -149,7 +145,6 @@ def main() -> int:
     project_root = Path(args.project_root).resolve()
     result = run_orchestrator(project_root, dry_run=args.dry_run)
 
-    # Output for GitHub Actions step summary
     summary = json.dumps(result, indent=2)
     print(summary)
 

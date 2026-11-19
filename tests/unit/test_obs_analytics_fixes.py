@@ -19,10 +19,6 @@ import unittest.mock as mock
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# T3: distributor.py — get_running_loop() usage
-# ---------------------------------------------------------------------------
-
 
 def test_distributor_uses_get_running_loop_not_get_event_loop() -> None:
     """ReportSender._do_post must call get_running_loop, not get_event_loop."""
@@ -40,11 +36,6 @@ def test_distributor_multipart_post_uses_get_running_loop() -> None:
     source = inspect.getsource(distributor_module.ReportSender._do_multipart_post)
     assert "get_running_loop" in source
     assert "get_event_loop" not in source
-
-
-# ---------------------------------------------------------------------------
-# T4: latency.py — Thread-safe singleton with double-checked locking
-# ---------------------------------------------------------------------------
 
 
 def test_latency_recorder_singleton_has_instance_lock() -> None:
@@ -92,16 +83,10 @@ def test_latency_recorder_double_checked_locking_in_source() -> None:
     from hft_platform.observability.latency import LatencyRecorder
 
     source = inspect.getsource(LatencyRecorder.get)
-    # Expect two checks: outer `if cls._instance is None` and inner after lock acquisition
     assert source.count("_instance is None") >= 2, (
         "get() must contain double-checked locking (two _instance is None checks)"
     )
     assert "_instance_lock" in source, "get() must acquire _instance_lock"
-
-
-# ---------------------------------------------------------------------------
-# T5: dispatcher.py — _send_critical() parallel delivery via asyncio.gather
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -178,13 +163,7 @@ async def test_send_critical_fallback_exception_does_not_raise() -> None:
     fallback.send = failing_fallback_send
 
     dispatcher = NotificationDispatcher(sender=primary, fallback_sender=fallback)
-    # Should not raise — gather uses return_exceptions=True
     await dispatcher._send_critical("message")
-
-
-# ---------------------------------------------------------------------------
-# T6: templates.py — heartbeat pnl_scaled displays NTD with // 10000
-# ---------------------------------------------------------------------------
 
 
 def test_render_heartbeat_pnl_displays_ntd_conversion() -> None:
@@ -237,13 +216,7 @@ def test_render_heartbeat_pnl_not_raw_scaled_value() -> None:
         strategies_active=2,
         feed_status="ok",
     )
-    # The raw scaled value (50000) must not appear in the output
     assert "50000" not in result, f"Raw pnl_scaled value must not appear in output, got: {result!r}"
-
-
-# ---------------------------------------------------------------------------
-# T7: alertmanager_bridge.py — Content-Length cap constant exists
-# ---------------------------------------------------------------------------
 
 
 def test_alertmanager_bridge_max_body_constant_is_one_mb() -> None:
@@ -272,7 +245,7 @@ def test_alertmanager_bridge_returns_413_on_oversized_content_length() -> None:
         def close(self) -> None:
             pass
 
-    oversized = 1_048_577  # 1 byte over the 1 MB cap
+    oversized = 1_048_577
     request = (f"POST /webhook/alertmanager HTTP/1.1\r\nContent-Length: {oversized}\r\n\r\n").encode("utf-8")
 
     async def run() -> None:
@@ -287,11 +260,6 @@ def test_alertmanager_bridge_returns_413_on_oversized_content_length() -> None:
     assert b"413" in combined, f"Expected 413 response for oversized payload, got: {combined!r}"
 
 
-# ---------------------------------------------------------------------------
-# T9: latency.py — Integer division latency_ns // 1000
-# ---------------------------------------------------------------------------
-
-
 def test_latency_recorder_uses_integer_division_for_microseconds(monkeypatch) -> None:
     """latency_us in the payload must be latency_ns // 1000 (integer, truncated)."""
     from hft_platform.observability.latency import LatencyRecorder
@@ -303,7 +271,6 @@ def test_latency_recorder_uses_integer_division_for_microseconds(monkeypatch) ->
     queue: asyncio.Queue = asyncio.Queue()
     rec.configure(queue)
 
-    # 5500 ns // 1000 = 5 (integer division truncates, not rounds)
     rec.record("normalize", 5500, ts_ns=100_000_000)
 
     item = queue.get_nowait()
@@ -336,14 +303,7 @@ def test_latency_recorder_source_uses_floor_division() -> None:
 
     source = inspect.getsource(LatencyRecorder.record)
     assert "// 1000" in source, "record() must use integer floor division (// 1000)"
-    # Verify no float division idiom like `/ 1000`
-    # We look for the specific assignment pattern
     assert "latency_ns / 1000" not in source, "record() must not use float division (/ 1000) for latency_us"
-
-
-# ---------------------------------------------------------------------------
-# T10: slippage.py — commission fallback uses max(0, fee_ntd - tax_ntd)
-# ---------------------------------------------------------------------------
 
 
 def test_slippage_decomposer_commission_is_zero_when_fee_equals_tax() -> None:
@@ -352,12 +312,12 @@ def test_slippage_decomposer_commission_is_zero_when_fee_equals_tax() -> None:
 
     decomposer = SlippageDecomposer(point_value=10, tick_size=1.0)
     result = decomposer.decompose(
-        decision_price=180_000_0000,  # 180,000 NTD (scaled x10000)
+        decision_price=180_000_0000,
         arrival_price=180_000_0000,
         fill_price=180_000_0000,
         notional_ntd=100_000,
         fee_ntd=50,
-        tax_ntd=50,  # fee == tax → commission should be 0
+        tax_ntd=50,
     )
     assert result.commission_bps == 0.0, f"When fee_ntd == tax_ntd, commission must be 0.0, got {result.commission_bps}"
 
@@ -373,7 +333,7 @@ def test_slippage_decomposer_commission_is_zero_when_fee_less_than_tax() -> None
         fill_price=180_000_0000,
         notional_ntd=100_000,
         fee_ntd=30,
-        tax_ntd=50,  # fee < tax → commission must not be fee_ntd (30), must be 0
+        tax_ntd=50,
     )
     assert result.commission_bps == 0.0, f"When fee_ntd < tax_ntd, commission must be 0.0, got {result.commission_bps}"
     assert result.commission_bps >= 0.0, "commission_bps must never be negative"
@@ -390,7 +350,7 @@ def test_slippage_decomposer_commission_positive_when_fee_exceeds_tax() -> None:
         fill_price=180_000_0000,
         notional_ntd=100_000,
         fee_ntd=100,
-        tax_ntd=40,  # commission = 60 NTD
+        tax_ntd=40,
     )
     expected_commission_ntd = 60.0
     expected_commission_bps = (expected_commission_ntd / 100_000) * 10_000.0

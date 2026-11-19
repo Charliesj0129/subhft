@@ -83,8 +83,6 @@ class TestRequiredFields:
         assert any(field in e for e in errors)
 
     def test_zero_is_not_treated_as_empty(self) -> None:
-        # max_drawdown_pts=0 is a degenerate spec but not "missing";
-        # only None / "" / [] / {} count as empty so 0 must pass.
         spec = _valid_spec()
         spec["risk_control"]["max_drawdown_pts"] = 0
         errors = validate_spec(spec)
@@ -186,7 +184,6 @@ class TestSubBlocks:
 
 class TestNetEdgeFloorGuard:
     def test_floor_below_10_rejected(self) -> None:
-        # 限制 §3: cannot relax the > 10 pts/trade bar.
         spec = _valid_spec()
         spec["validation_plan"]["net_edge_floor_pts"] = 5.0
         errors = validate_spec(spec)
@@ -208,8 +205,6 @@ class TestLoader:
     def test_load_repo_template_returns_dict(self) -> None:
         spec = load_spec(REPO_TEMPLATE)
         assert isinstance(spec, dict)
-        # Template is intentionally blank in every required field — it's
-        # a starting point, not a valid candidate — so it should fail.
         errors = validate_spec(spec)
         assert len(errors) > 0
 
@@ -238,8 +233,6 @@ class TestDefensive:
         validate_spec(spec)
         assert spec == before
 
-
-# --- Round 18: extract_provenance helper (goal §4) ------------------
 
 from hft_platform.alpha.strategy_spec import extract_provenance
 
@@ -274,7 +267,6 @@ class TestExtractProvenance:
         spec = _valid_spec()
         spec["validation_plan"]["required_gates"] = ["min_sample_size", None, 7]
         prov = extract_provenance(spec)
-        # Strings kept, ints coerced, None dropped (non str/int/float).
         assert "min_sample_size" in prov["required_gates"]
         assert "7" in prov["required_gates"]
         assert None not in prov["required_gates"]
@@ -284,13 +276,11 @@ class TestExtractProvenance:
         assert prov == {"data_range": "", "cost_model_id": "", "required_gates": []}
 
     def test_timeframe_and_holding_period_carried_when_present(self) -> None:
-        # Round 72: additive §3 fields land in provenance when the spec has them.
         prov = extract_provenance(_valid_spec())
         assert prov["timeframe"] == "5m"
         assert prov["holding_period"] == "intraday <2h"
 
     def test_missing_timeframe_omits_key(self) -> None:
-        # Back-compatible: absent/empty fields are not added, triple shape kept.
         spec = _valid_spec()
         spec.pop("timeframe")
         spec["holding_period"] = ""
@@ -301,19 +291,16 @@ class TestExtractProvenance:
     def test_cost_model_id_changes_when_any_knob_drifts(self) -> None:
         a = extract_provenance(_valid_spec())
         b_spec = _valid_spec()
-        b_spec["cost_model"]["fee_bps"] = 0.5  # was 0.4
+        b_spec["cost_model"]["fee_bps"] = 0.5
         b = extract_provenance(b_spec)
         assert a["cost_model_id"] != b["cost_model_id"]
 
-
-# --- Round 20: load_spec_provenance one-call helper -----------------
 
 from hft_platform.alpha.strategy_spec import load_spec_provenance
 
 
 class TestLoadSpecProvenance:
     def test_returns_none_for_missing_alpha_id(self, tmp_path: Path) -> None:
-        # Empty root; unknown id should resolve to None, not raise.
         assert load_spec_provenance("c99_missing", root=tmp_path) is None
 
     def test_resolves_alpha_id_under_root(self, tmp_path: Path) -> None:
@@ -335,7 +322,6 @@ class TestLoadSpecProvenance:
         assert "shioaji_measured_p95" in prov["cost_model_id"]
 
     def test_repo_exemplar_resolves(self) -> None:
-        # The Round-13 exemplar must produce a non-None provenance row.
         prov = load_spec_provenance("_templates", root="research/alphas")
         assert prov is not None
         assert prov["data_range"]
@@ -352,8 +338,6 @@ class TestLoadSpecProvenance:
         path.write_text("- one\n- two\n", encoding="utf-8")
         assert load_spec_provenance(path) is None
 
-
-# --- Round 82: template_field_audit (完成狀態 §3 + §9 固定模板) -----------
 
 _SHAPE_TEMPLATE_PATHS = [
     "research/alphas/_templates/spec.yaml",
@@ -398,7 +382,6 @@ class TestTemplateFieldAudit:
 
     @pytest.mark.parametrize("template_path", _SHAPE_TEMPLATE_PATHS)
     def test_shipped_templates_cover_all_required_fields(self, template_path: str) -> None:
-        # SOP guard: every scaffolding template must carry the full §3 field set.
         path = Path(template_path)
         if not path.is_file():
             pytest.skip(f"template not present: {template_path}")

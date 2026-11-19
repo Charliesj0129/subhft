@@ -24,10 +24,6 @@ class StrategyConfig:
     required_feature_profile_id: str | None = None
     required_feature_ids: list[str] = field(default_factory=list)
     optional_feature_ids: list[str] = field(default_factory=list)
-    # Option-3 Gate 1 prod. Each entry is a dict {product, root, family}
-    # parsed at instantiate() time into ``ContractFamily`` instances.
-    # Coexists with ``symbols``: both populate ``strategy.symbols`` at
-    # registration — legacy str path plus family-bound path.
     contract_families: List[Dict[str, str]] = field(default_factory=list)
 
 
@@ -105,16 +101,6 @@ class StrategyRegistry:
         strategies = []
         for cfg in self.configs:
             if not cfg.enabled:
-                # R3 structural fix (2026-04-24): config-disabled strategies must
-                # not be instantiated. A disabled strategy reaching
-                # ``StrategyRunner.register()`` called ``_build_executor_entry``,
-                # which called ``alpha_last_signal_ts.labels(...)`` and created
-                # a child gauge stuck at 0. ``AlphaSignalSilent`` then fired
-                # forever (``time() - 0 > 300``). Skipping here is consistent
-                # with the ``strategy_scaffold_placeholder_skipped`` path below
-                # which already elides disabled strategies whose module is
-                # missing. Runtime enable/disable (circuit breaker, manual
-                # operator toggle) is unaffected — only the initial config.
                 logger.info(
                     "strategy_disabled_in_config_skipped",
                     id=cfg.strategy_id,
@@ -140,10 +126,6 @@ class StrategyRegistry:
                 strategy.contract_families = _parse_contract_families(cfg.contract_families)
                 strategies.append(strategy)
             except (ModuleNotFoundError, AttributeError) as exc:
-                # Bug #34: config entries often pre-declare strategies whose
-                # live wrapper class isn't merged yet (e.g. C17/C27 post-PROMOTE
-                # scaffolds). Per-startup ERROR noise drowns real failures —
-                # scaffold gaps are expected, so downgrade them to INFO.
                 if cfg.enabled:
                     logger.warning(
                         "strategy_scaffold_missing_but_enabled",

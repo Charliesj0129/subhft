@@ -86,11 +86,6 @@ def _system(**attrs) -> HFTSystem:
     return system
 
 
-# ---------------------------------------------------------------------------
-# 1. The latch itself
-# ---------------------------------------------------------------------------
-
-
 class TestKillSwitchLatch:
     def test_activate_creates_the_directory_and_records_the_reason(self, latch_path):
         assert not latch_path.parent.exists()
@@ -132,11 +127,6 @@ class TestKillSwitchLatch:
         assert kill_switch.kill_switch_path() == "/custom/latch"
 
 
-# ---------------------------------------------------------------------------
-# 2. The halt latches instead of returning
-# ---------------------------------------------------------------------------
-
-
 class TestStartupRecoveryHalt:
     def test_halt_latches_the_kill_switch_and_halts_stormguard(self, latch_path):
         system = _system()
@@ -153,8 +143,6 @@ class TestStartupRecoveryHalt:
         assert system.storm_guard.halts == ["STARTUP_POSITION_RECOVERY: dual"]
 
     def test_halt_still_halts_in_memory_when_the_latch_cannot_be_written(self, tmp_path, monkeypatch):
-        # A file the latch cannot be created under: the cross-restart latch is
-        # lost, but refusing to trade *this* boot must not depend on it.
         blocker = tmp_path / "not-a-dir"
         blocker.write_text("")
         monkeypatch.setenv(kill_switch.PATH_ENV, str(blocker / "kill_switch"))
@@ -166,17 +154,10 @@ class TestStartupRecoveryHalt:
         assert system.storm_guard.halts == ["STARTUP_POSITION_RECOVERY: exception"]
 
     def test_recovery_halt_branch_no_longer_returns_out_of_run(self):
-        # The defect was a bare ``return``: it exited run() with status 0, which
-        # a restart policy reads as success. Nothing may reintroduce it.
         source = SYSTEM_SRC.read_text()
         halt_call = source.index("self._on_startup_recovery_halt(")
         window = source[halt_call : halt_call + 400]
         assert "return" not in window, "the recovery halt must latch and keep booting, never return"
-
-
-# ---------------------------------------------------------------------------
-# 3. A halted recovery never overwrites the checkpoint it halted on
-# ---------------------------------------------------------------------------
 
 
 class TestCheckpointIsPreservedAcrossARecoveryHalt:
@@ -206,7 +187,7 @@ class TestCheckpointIsPreservedAcrossARecoveryHalt:
 
         system = _system(checkpoint_writer=_Boom())
 
-        system._write_final_checkpoint()  # a failed checkpoint must not abort shutdown
+        system._write_final_checkpoint()
 
         assert _Boom.attempts == 1
 
@@ -239,16 +220,8 @@ class TestCheckpointIsPreservedAcrossARecoveryHalt:
         )
 
 
-# ---------------------------------------------------------------------------
-# 4. The latch is read before anything can dispatch
-# ---------------------------------------------------------------------------
-
-
 class TestBootReadsTheLatchBeforeTrading:
     def test_kill_switch_is_read_before_any_order_service_starts(self):
-        # Source-level ordering assertion, in the style of
-        # test_startup_recovery_ordering.py: driving the whole of run() to
-        # observe the order is brittle and invites a false green.
         source = SYSTEM_SRC.read_text()
         boot_check = source.index("kill_switch.is_active()")
         order_service = source.index('self._start_service("order"')
@@ -256,11 +229,6 @@ class TestBootReadsTheLatchBeforeTrading:
 
         assert boot_check < order_service, "the boot latch check must precede the order adapter service"
         assert boot_check < supervise, "_supervise() reads the latch far too late to gate a boot"
-
-
-# ---------------------------------------------------------------------------
-# 5. The operator surface and the engine share one latch shape
-# ---------------------------------------------------------------------------
 
 
 class TestOperatorAndEngineAgreeOnTheLatch:
@@ -294,11 +262,6 @@ class TestOperatorAndEngineAgreeOnTheLatch:
         assert os.path.exists(latch_path)
 
 
-# ---------------------------------------------------------------------------
-# 6. The halt has to hold
-# ---------------------------------------------------------------------------
-
-
 class TestTheHaltActuallyHolds:
     """``trigger_halt()`` alone de-escalates; only a hold makes it a latch.
 
@@ -328,8 +291,6 @@ class TestTheHaltActuallyHolds:
         guard = StormGuard()
         guard.trigger_halt("KILL_SWITCH_FILE: operator")
         guard.set_kill_switch_hold(True)
-        # Cooldown long elapsed and every input clean -- the exact condition
-        # that used to de-escalate.
         guard._halt_entry_ts = 0.0
 
         for _ in range(10):

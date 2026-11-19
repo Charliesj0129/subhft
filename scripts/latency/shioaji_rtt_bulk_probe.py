@@ -76,9 +76,6 @@ except Exception as exc:  # pragma: no cover
     raise SystemExit(f"shioaji not available: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Safety guards
-# ---------------------------------------------------------------------------
 
 _TW_TZ_NAME = "Asia/Taipei"
 _DAY_SESSION = (dtime(8, 45), dtime(13, 45))
@@ -99,15 +96,11 @@ def _in_trading_hours(now: datetime | None = None) -> bool:
     t = now.time()
     if _DAY_SESSION[0] <= t < _DAY_SESSION[1]:
         return True
-    # Night session wraps midnight
     if t >= _NIGHT_SESSION_START or t < _NIGHT_SESSION_END:
         return True
     return False
 
 
-# ---------------------------------------------------------------------------
-# Stats
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -159,9 +152,6 @@ def _summarize(op: str, samples_us: list[int], errors: int) -> OpStats:
     )
 
 
-# ---------------------------------------------------------------------------
-# Probe core
-# ---------------------------------------------------------------------------
 
 
 def _snapshot_bidask(api: Any, contract: Any) -> tuple[int, int] | None:
@@ -282,14 +272,10 @@ def _probe_one_cycle(
         return (None, None, None, None)
 
     if _trade_filled(trade):
-        # Far-from-market price → should be impossible. Abort signal.
         return (place_us, None, None, trade)
 
-    # Wait for real ordno to propagate so cancel_order has a valid target.
     submitted_ack_us = _wait_for_ordno(api, trade, timeout_s=2.0)
     if not _ordno_ready(trade):
-        # Broker never returned a real ordno — treat cancel as unmeasurable
-        # but leave the trade alone for later sweep.
         return (place_us, submitted_ack_us, None, trade)
 
     t1 = time.perf_counter_ns()
@@ -302,9 +288,6 @@ def _probe_one_cycle(
     return (place_us, submitted_ack_us, cancel_us, trade)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def main() -> int:
@@ -343,14 +326,12 @@ def main() -> int:
             raise SystemExit("Real mode requires SHIOAJI_CA_PATH + SHIOAJI_CA_PASSWORD in env.")
         api.activate_ca(ca_path=ca_path, ca_passwd=ca_pass)
 
-    # Resolve futures contract
     contract = None
     try:
         contract = api.Contracts.Futures[args.symbol]
     except Exception:
         pass
     if contract is None:
-        # Try R1 / R2 continuous
         for fallback in ("TXFR1", "TXFR2", "MXFR1"):
             try:
                 contract = getattr(api.Contracts.Futures.TXF, fallback, None)
@@ -361,14 +342,12 @@ def main() -> int:
     if contract is None:
         raise SystemExit(f"Cannot resolve futures contract for symbol={args.symbol!r}")
 
-    # Warmup
     sides = ["Buy", "Sell"] if args.side == "alternate" else [args.side]
     for i in range(args.warmup):
         side = sides[i % len(sides)]
         _probe_one_cycle(api, contract, sj, args.qty, side, args.offset_ticks)
         time.sleep(args.sleep)
 
-    # Main loop
     place_samples: list[int] = []
     submitted_ack_samples: list[int] = []
     cancel_samples: list[int] = []
@@ -434,7 +413,6 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2, default=str))
 
-    # Human-readable summary
     def _line(label: str, s: OpStats) -> str:
         return (
             f"{label:<20} n={s.count:<5} err={s.errors:<3} "

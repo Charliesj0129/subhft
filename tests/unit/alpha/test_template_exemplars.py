@@ -57,7 +57,6 @@ class TestStraddleExemplar:
         }
 
     def test_net_edge_floor_honors_goal_floor(self, spec: dict) -> None:
-        # 限制 §3 floor must not be relaxed in the exemplar.
         floor = spec["validation_plan"]["net_edge_floor_pts"]
         assert floor >= 10.0
 
@@ -84,8 +83,6 @@ class TestFuturesPairExemplar:
         assert classify_strategy_shape(spec) == "multi_leg_futures"
 
     def test_no_greeks_exposure_block(self, spec: dict) -> None:
-        # No option legs -> greeks_exposure intentionally absent so
-        # the example doesn't teach authors to copy a dummy block.
         assert "greeks_exposure" not in spec
 
     def test_legs_carry_required_fields(self, spec: dict) -> None:

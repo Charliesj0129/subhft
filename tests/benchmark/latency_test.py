@@ -34,20 +34,17 @@ async def benchmark():
     PRODUCER_WATERMARK = 2000
     PRODUCER_YIELD_EVERY = 250
 
-    # 1. Setup
     bus = RingBufferBus(size=65536)
     lob_engine = LOBEngine()
     client = MagicMock()
     client.place_order.return_value = {"status": "Submitted"}
 
     raw_queue = asyncio.Queue(maxsize=RAW_QUEUE_SIZE)
-    # Mock client with valid symbols for normalization if needed
     client = MagicMock(spec=ShioajiClient)
     client.symbols = [{"code": "2330", "price_scale": 1, "exchange": "TSE"}]
 
     md_service = MarketDataService(bus, raw_queue, client)
-    md_service.normalizer = MarketDataNormalizer()  # Ensure fresh
-    # Assign same LOB engine if needed for shared access test?
+    md_service.normalizer = MarketDataNormalizer()
     md_service.lob = lob_engine
 
     risk_queue = asyncio.Queue()
@@ -58,10 +55,8 @@ async def benchmark():
     runner = StrategyRunner(bus, risk_queue, lob_engine=lob_engine, config_path="tests/manual/empty_strat.yaml")
     runner.register(strat)
 
-    # 2. Start Services
     md_service.running = True
 
-    # Better: Just spawn md_service.run() and ensure client mocks don't hang.
     client.login.return_value = None
     client.fetch_snapshots.return_value = []
     client.subscribe_basket.return_value = None
@@ -69,11 +64,9 @@ async def benchmark():
     feed_loop = asyncio.create_task(md_service.run())
     runner_loop = asyncio.create_task(runner.run())
 
-    # Allow spinning up
     await asyncio.sleep(1.0)
     print("Services Started. Pre-warming...")
 
-    # 3. Pre-warm (ensure subscriptions active)
     for _ in range(PREWARM):
         raw_queue.put_nowait(
             {"code": "2330", "ts": 1000, "bid_price": [100], "bid_volume": [1], "ask_price": [101], "ask_volume": [1]}
@@ -84,10 +77,9 @@ async def benchmark():
         await asyncio.sleep(0.01)
 
     print(f"Pre-warm complete. Strat processed: {strat.count}/{PREWARM}")
-    strat.count = 0  # Reset
+    strat.count = 0
     strat.start_times.clear()
 
-    # 4. Burst Test
     print(f"Injecting {NUM} events...")
 
     start_t = time.perf_counter()
@@ -129,7 +121,6 @@ async def benchmark():
         print(f"E2E Inject->Strategy P95: {p95:.2f} us")
         print(f"E2E Inject->Strategy P99: {p99:.2f} us")
 
-    # Cleanup
     md_service.running = False
     runner.running = False
     feed_loop.cancel()
@@ -139,5 +130,5 @@ async def benchmark():
 if __name__ == "__main__":
     from hft_platform.utils.logging import configure_logging
 
-    configure_logging()  # Optional
+    configure_logging()
     asyncio.run(benchmark())

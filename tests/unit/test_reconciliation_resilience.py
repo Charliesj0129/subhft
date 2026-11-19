@@ -87,11 +87,6 @@ class TestReconciliationResilience:
 
         with (
             patch.object(svc, "_update_failure_gauge"),
-            # Bug #38 added an off-session gate at reconciliation.py:235 that
-            # skips the failure counter when outside TAIFEX trading hours.
-            # CI runs in UTC (≈22:00 Taipei), which is off-session, so without
-            # this patch _consecutive_failures stays at 0 forever, HALT never
-            # fires, and asyncio.wait_for(timeout=5.0) raises TimeoutError.
             patch.object(svc, "_in_trading_hours", return_value=True),
         ):
             await asyncio.wait_for(svc.run(), timeout=5.0)

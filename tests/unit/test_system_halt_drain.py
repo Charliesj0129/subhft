@@ -55,7 +55,6 @@ class TestHaltDrainSafetyDispatch:
         adapter = MagicMock()
         adapter.execute = AsyncMock()
 
-        # Simulate the drain logic from system.py lines 699-730
         _cmd_requeue = []
         while not order_queue.empty():
             try:
@@ -69,11 +68,9 @@ class TestHaltDrainSafetyDispatch:
             except asyncio.QueueEmpty:
                 break
 
-        # Dispatch directly (the fix)
         for cmd in _cmd_requeue:
             asyncio.create_task(adapter.execute(cmd))
 
-        # Let the task run
         await asyncio.sleep(0)
 
         adapter.execute.assert_called_once_with(cancel_cmd)
@@ -197,13 +194,10 @@ class TestHaltDrainRiskQueueSafetyLog:
         """When risk_queue is full during re-queue, log at CRITICAL (not WARNING)."""
         cancel_intent = _make_intent(IntentType.CANCEL)
 
-        # Queue of size 0 - will always be full
         risk_queue = asyncio.Queue(maxsize=1)
-        # Fill it so put_nowait raises QueueFull
         await risk_queue.put("blocker")
 
         with patch("hft_platform.services.system.logger") as mock_logger:
-            # Simulate the risk drain re-queue path
             try:
                 risk_queue.put_nowait(cancel_intent)
             except asyncio.QueueFull:
@@ -232,8 +226,7 @@ class TestOnExecOverflowGuard:
         stub._exec_overflow_evicted = 0
         stub._exec_startup_overflow_lost = False
         stub.running = True
-        stub.loop = None  # force broker-thread fallback path
-        # Stub out DLQ persistence (tested separately)
+        stub.loop = None
         stub._persist_lost_exec_event = lambda event: None
         return stub
 
@@ -242,7 +235,6 @@ class TestOnExecOverflowGuard:
         from hft_platform.services.system import HFTSystem
 
         stub = self._make_stub(maxlen=4)
-        # Bind the real method to our stub
         bound = HFTSystem._on_exec.__get__(stub, type(stub))
 
         bound("test_topic", {"price": 100})
@@ -256,14 +248,12 @@ class TestOnExecOverflowGuard:
         stub = self._make_stub(maxlen=4)
         bound = HFTSystem._on_exec.__get__(stub, type(stub))
 
-        # Fill buffer to capacity
         for i in range(4):
             bound(f"topic_{i}", {"price": i})
 
         assert len(stub._exec_overflow_buf) == 4
         assert stub._exec_overflow_evicted == 0
 
-        # Next call should be dropped, not silently evicted
         with patch("hft_platform.services.system.logger") as mock_logger:
             bound("overflow_topic", {"price": 999})
 
@@ -281,11 +271,9 @@ class TestOnExecOverflowGuard:
         stub = self._make_stub(maxlen=2)
         bound = HFTSystem._on_exec.__get__(stub, type(stub))
 
-        # Fill
         bound("t1", {"p": 1})
         bound("t2", {"p": 2})
 
-        # 3 overflow attempts
         with patch("hft_platform.services.system.logger"):
             bound("t3", {"p": 3})
             bound("t4", {"p": 4})
@@ -369,7 +357,6 @@ class TestGracefulReset:
         recon._broker_zero_streak = 3
         recon._noncritical_drift_streak = 4
 
-        # Create a temporary checkpoint file
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             f.write(b'{"test": true}')
             ckpt_path = f.name
@@ -377,7 +364,6 @@ class TestGracefulReset:
         ckpt_writer = MagicMock()
         ckpt_writer._path = ckpt_path
 
-        # Build minimal system stub
         system = MagicMock()
         system.checkpoint_writer = ckpt_writer
         system.position_store = store
@@ -385,12 +371,10 @@ class TestGracefulReset:
         system.platform_degrade_controller = pdc
         system.recon_service = recon
 
-        # Call the actual method
         from hft_platform.services.system import HFTSystem
 
         results = await HFTSystem.graceful_reset(system, reason="test_reset")
 
-        # Verify all components reset
         assert "deleted" in results["checkpoint"]
         assert not os.path.exists(ckpt_path)
         assert store._recovery_positions == {}
@@ -400,11 +384,6 @@ class TestGracefulReset:
         assert recon._broker_zero_streak == 0
         assert recon._noncritical_drift_streak == 0
         assert sg.state == StormGuardState.NORMAL
-
-
-# ---------------------------------------------------------------------------
-# Stale event counter reset (Issue #12)
-# ---------------------------------------------------------------------------
 
 
 class TestStaleEventCounterReset:

@@ -15,7 +15,7 @@ else:
 
 print("\n--- Testing SymbolMetadata ---")
 try:
-    meta = SymbolMetadata()  # Default path
+    meta = SymbolMetadata()
     print(f"Loaded Meta Count: {len(meta.meta)}")
     if len(meta.meta) > 0:
         print("SUCCESS: SymbolMetadata loaded symbols")

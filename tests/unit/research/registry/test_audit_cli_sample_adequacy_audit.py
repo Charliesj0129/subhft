@@ -108,7 +108,7 @@ class TestSampleAdequacyAudit:
         assert "days_below_min" in reasons
 
     def test_adequate_but_evidence_missing_discrepant(self, _isolated) -> None:
-        _record(run_id="em", label="adequate")  # no counts at all
+        _record(run_id="em", label="adequate")
         verdict, reasons = audit_cli.sample_adequacy_audit(_row("em"))
         assert verdict == "discrepant"
         assert "fills_evidence_missing" in reasons

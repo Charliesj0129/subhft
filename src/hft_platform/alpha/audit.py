@@ -23,7 +23,7 @@ from hft_platform.core import timebase
 
 
 def _now_utc() -> _dt.datetime:
-    """UTC-aware datetime via timebase (no direct datetime.now)."""  # noqa: E501
+    """UTC-aware datetime via timebase (no direct datetime.now)."""
     return _dt.datetime.fromtimestamp(timebase.now_s(), tz=_dt.timezone.utc)
 
 
@@ -39,8 +39,6 @@ if TYPE_CHECKING:
 logger = get_logger("alpha_audit")
 
 _DEFAULT_FALLBACK_DIR = Path("research/experiments/.audit_fallback")
-# ``None`` means: resolve at write time from the env var, else the repo-anchored
-# default. Tests may set a path here directly.
 _FALLBACK_DIR: Path | None = None
 
 
@@ -63,7 +61,7 @@ def _write_fallback(table: str, row: dict[str, Any]) -> None:
         fallback_file = fallback_dir / f"{table}.jsonl"
         with fallback_file.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(payload, default=str) + "\n")
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.error("alpha_audit._write_fallback failed", table=table, exc_info=True)
 
 
@@ -71,17 +69,13 @@ _ENABLED: bool | None = None
 
 
 def _is_enabled() -> bool:
-    global _ENABLED  # noqa: PLW0603
+    global _ENABLED
     if _ENABLED is None:
         _ENABLED = os.getenv("HFT_ALPHA_AUDIT_ENABLED", "0") == "1"
     return _ENABLED
 
 
 def _get_client() -> Any:
-    # F2: delegate to the canonical CH client factory (full env precedence
-    # for username/password). Direct clickhouse_connect.get_client(host,port)
-    # silently dropped auth and broke the kill-ledger 365-day TTL durability
-    # promise — see docs/runbooks/alpha-factory-dogfood-2026-05-06.md §F2.
     from hft_platform.infra.ch_client import get_ch_client
 
     return get_ch_client()
@@ -106,8 +100,8 @@ def log_gate_result(
                 gate=gate_letter,
                 result=result,
             ).inc()
-    except Exception:  # noqa: BLE001
-        pass  # metrics are best-effort
+    except Exception:
+        pass
 
     if not _is_enabled():
         return
@@ -138,7 +132,7 @@ def log_gate_result(
                 "details",
             ],
         )
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         logger.warning("alpha_audit.log_gate_result failed", alpha_id=alpha_id, exc_info=True)
         gate_letter = gate_report.gate.replace("Gate ", "")
         _write_fallback(
@@ -176,8 +170,8 @@ def log_promotion_result(
                 alpha_id=promotion_result.alpha_id,
                 result=result,
             ).inc()
-    except Exception:  # noqa: BLE001
-        pass  # metrics are best-effort
+    except Exception:
+        pass
 
     if not _is_enabled():
         return
@@ -215,7 +209,7 @@ def log_promotion_result(
                 "scorecard",
             ],
         )
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         logger.warning(
             "alpha_audit.log_promotion_result failed",
             alpha_id=promotion_result.alpha_id,
@@ -239,8 +233,6 @@ def log_promotion_result(
         )
 
 
-# Coarse reason buckets keep `alpha_kill_results_total` label cardinality bounded.
-# Mapping is by substring; first match wins; default falls back to gate-derived class.
 _REASON_CLASS_PATTERNS: tuple[tuple[str, str], ...] = (
     ("inventory_mtm", "inventory_mtm"),
     ("cost_uncertainty", "cost_uncertainty"),
@@ -286,7 +278,7 @@ def log_kill(record: Any) -> None:
     should prefer ``kill_ledger.append_kill``; ``log_kill`` is exported
     for compatibility with the existing audit-pattern boundary.
     """
-    from hft_platform.alpha.kill_ledger import KillRecord  # local import → avoid cycles
+    from hft_platform.alpha.kill_ledger import KillRecord
 
     if not isinstance(record, KillRecord):
         raise TypeError(f"log_kill requires a KillRecord, got {type(record)!r}")
@@ -304,8 +296,8 @@ def log_kill(record: Any) -> None:
                 gate=record.gate,
                 reason_class=reason_class,
             ).inc()
-    except Exception:  # noqa: BLE001
-        pass  # metrics are best-effort
+    except Exception:
+        pass
 
     if not _is_enabled():
         return
@@ -339,7 +331,7 @@ def log_kill(record: Any) -> None:
                 "killed_by",
             ],
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.warning(
             "alpha_audit.log_kill failed",
             alpha_id=record.alpha_id,
@@ -379,8 +371,8 @@ def log_canary_action(
                 alpha_id=alpha_id,
                 action=action,
             ).inc()
-    except Exception:  # noqa: BLE001
-        pass  # metrics are best-effort
+    except Exception:
+        pass
 
     if not _is_enabled():
         return
@@ -410,7 +402,7 @@ def log_canary_action(
                 "checks",
             ],
         )
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         logger.warning("alpha_audit.log_canary_action failed", alpha_id=alpha_id, exc_info=True)
         _write_fallback(
             "alpha_canary_log",

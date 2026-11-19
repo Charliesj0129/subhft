@@ -9,10 +9,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _ns(**kwargs) -> argparse.Namespace:
     """Build a Namespace with defaults that won't accidentally trigger optional paths."""
@@ -30,12 +26,7 @@ def _strict_profile_loader_module() -> SimpleNamespace:
     return SimpleNamespace(load_profile=MagicMock(return_value=SimpleNamespace(name="vm_ul6_strict", is_strict=True)))
 
 
-# ---------------------------------------------------------------------------
-# _parse_param_grid
-# ---------------------------------------------------------------------------
-
-
-from research.registry.alpha_cli import _parse_param_grid  # noqa: E402
+from research.registry.alpha_cli import _parse_param_grid
 
 
 class TestParseParamGrid:
@@ -75,12 +66,7 @@ class TestParseParamGrid:
             _parse_param_grid("no_equals_sign")
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_scaffold
-# ---------------------------------------------------------------------------
-
-
-from research.registry.alpha_cli import cmd_alpha_scaffold  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_scaffold
 
 
 class TestCmdAlphaScaffold:
@@ -123,12 +109,7 @@ class TestCmdAlphaScaffold:
         assert "ref2" in cmd
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_list
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_list  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_list
 
 
 class TestCmdAlphaList:
@@ -183,12 +164,7 @@ class TestCmdAlphaList:
         assert "warn1" in out
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_canary_status
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_canary_status  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_canary_status
 
 
 class TestCmdAlphaCanaryStatus:
@@ -223,12 +199,7 @@ class TestCmdAlphaCanaryStatus:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_canary_evaluate
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_canary_evaluate  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_canary_evaluate
 
 
 class TestCmdAlphaCanaryEvaluate:
@@ -300,12 +271,7 @@ class TestCmdAlphaCanaryEvaluate:
         assert json.loads(out_file.read_text())["decision"] == "rollback"
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_ab_compare
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_ab_compare  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_ab_compare
 
 
 class TestCmdAlphaAbCompare:
@@ -356,12 +322,7 @@ class TestCmdAlphaAbCompare:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_experiments_compare / list / best
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import (  # noqa: E402
+from hft_platform.cli._alpha import (
     cmd_alpha_experiments_best,
     cmd_alpha_experiments_compare,
     cmd_alpha_experiments_list,
@@ -434,12 +395,7 @@ class TestCmdAlphaExperiments:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_pool
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_pool  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_pool
 
 
 class TestCmdAlphaPool:
@@ -492,7 +448,6 @@ class TestCmdAlphaPool:
         pool_mod.flag_redundant_pairs.side_effect = [TypeError("unexpected kwarg"), []]
         with patch.dict("sys.modules", {"hft_platform.alpha.pool": pool_mod}):
             cmd_alpha_pool(self._pool_args("redundant", threshold=0.7))
-        # Should have called twice: first with metric (TypeError), then without
         assert pool_mod.flag_redundant_pairs.call_count == 2
 
     def test_optimize_subcommand(self, capsys):
@@ -525,12 +480,7 @@ class TestCmdAlphaPool:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_batch_correlation
-# ---------------------------------------------------------------------------
-
-
-from research.registry.alpha_cli import cmd_alpha_batch_correlation  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_batch_correlation
 
 
 class TestCmdAlphaBatchCorrelation:
@@ -558,12 +508,7 @@ class TestCmdAlphaBatchCorrelation:
         assert out_file.exists()
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_paper_trade_batch
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_paper_trade_batch  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_paper_trade_batch
 
 
 class TestCmdAlphaPaperTradeBatch:
@@ -620,12 +565,7 @@ class TestCmdAlphaPaperTradeBatch:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_promote_batch
-# ---------------------------------------------------------------------------
-
-
-from research.registry.alpha_cli import cmd_alpha_promote_batch  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_promote_batch
 
 
 class TestCmdAlphaPromoteBatch:
@@ -633,9 +573,6 @@ class TestCmdAlphaPromoteBatch:
         defaults = dict(
             experiments_dir="e",
             owner="batch",
-            # Stage 2 (D9) made --profile mandatory for promote-batch so the
-            # unified strict-profile contract is enforced. Tests that exercise
-            # the CLI dispatch surface must therefore supply one.
             profile="vm_ul6_strict",
             min_sharpe_oos=1.0,
             max_abs_drawdown=0.2,
@@ -656,8 +593,6 @@ class TestCmdAlphaPromoteBatch:
         with patch.dict("sys.modules", {"research.registry.batch_promote": fake_mod}):
             cmd_alpha_promote_batch(self._make_args())
         out = capsys.readouterr().out
-        # Stage 2: profile loader emits a structlog info line on stdout before
-        # the JSON payload; skip preamble to the first '{'.
         data = json.loads(out[out.find("{") :])
         assert data["approved"] == 1
 
@@ -677,9 +612,8 @@ class TestCmdAlphaPromoteBatch:
         fake_mod = MagicMock()
         fake_mod.BatchPromoter = MagicMock(return_value=promoter)
         with patch.dict("sys.modules", {"research.registry.batch_promote": fake_mod}):
-            cmd_alpha_promote_batch(self._make_args())  # no SystemExit
+            cmd_alpha_promote_batch(self._make_args())
         out = capsys.readouterr().out
-        # Stage 2: skip profile-loader stdout preamble.
         data = json.loads(out[out.find("{") :])
         assert data["total"] == 0
 
@@ -690,17 +624,11 @@ class TestCmdAlphaPromoteBatch:
         assert exc_info.value.code == 1
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_validate  — import failure path
-# ---------------------------------------------------------------------------
-
-
-from research.registry.alpha_cli import cmd_alpha_validate  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_validate
 
 
 class TestCmdAlphaValidate:
     def test_import_failure_exits(self, monkeypatch):
-        # L6: bypass the strict-profile guard so we can test the import failure.
         from hft_platform.cli import _alpha as _alpha_mod
 
         monkeypatch.setattr(_alpha_mod, "_load_strict_validation_profile", lambda _arg: MagicMock(is_strict=True))
@@ -780,12 +708,7 @@ class TestCmdAlphaValidate:
         assert exc_info.value.code == 2
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_promote — import failure path
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_promote  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_promote
 
 
 class TestCmdAlphaPromote:
@@ -885,12 +808,7 @@ class TestCmdAlphaPromote:
         assert "PASS" in out
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_canary_auto_evaluate — import failure / success
-# ---------------------------------------------------------------------------
-
-
-from hft_platform.cli._alpha import cmd_alpha_canary_auto_evaluate  # noqa: E402
+from hft_platform.cli._alpha import cmd_alpha_canary_auto_evaluate
 
 
 class TestCmdAlphaCanaryAutoEvaluate:
@@ -929,12 +847,7 @@ class TestCmdAlphaCanaryAutoEvaluate:
         assert data["dry_run"] is True
 
 
-# ---------------------------------------------------------------------------
-# cmd_alpha_validate_batch — key branches
-# ---------------------------------------------------------------------------
-
-
-from research.registry.alpha_cli import cmd_alpha_validate_batch  # noqa: E402
+from research.registry.alpha_cli import cmd_alpha_validate_batch
 
 
 class TestCmdAlphaValidateBatch:
@@ -1006,7 +919,6 @@ class TestCmdAlphaValidateBatch:
             {"hft_platform.alpha.validation": val_mod, "hft_platform.alpha.discovery": reg_mod},
         ):
             cmd_alpha_validate_batch(self._base_args(alpha_ids=["a1"]))
-        # Only 1 alpha validated
         out = capsys.readouterr().out
         assert "1 alphas" in out
 

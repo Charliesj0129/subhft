@@ -26,11 +26,6 @@ from hft_platform.config._symbols_types import (
 logger = get_logger("config.symbols.filters")
 
 
-# ---------------------------------------------------------------------------
-# Metric resolution
-# ---------------------------------------------------------------------------
-
-
 def _coerce_numeric(value: Any) -> float | None:
     if value is None:
         return None
@@ -95,11 +90,6 @@ def resolve_metric(
     return value
 
 
-# ---------------------------------------------------------------------------
-# Exclude-flag helper
-# ---------------------------------------------------------------------------
-
-
 def _has_exclude_flag(metrics: dict[str, Any], flags: set[str]) -> bool:
     if not metrics:
         return False
@@ -120,11 +110,6 @@ def _has_exclude_flag(metrics: dict[str, Any], flags: set[str]) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Filter predicate helpers
-# ---------------------------------------------------------------------------
-
-
 def filters_active(filters: FilterSpec) -> bool:
     """Return *True* when any filter criterion is set."""
     if filters.bools or filters.enums or filters.numeric_min or filters.numeric_max:
@@ -136,11 +121,6 @@ def filters_active(filters: FilterSpec) -> bool:
     if filters.exclude_dte_max is not None:
         return True
     return False
-
-
-# ---------------------------------------------------------------------------
-# Main filter application
-# ---------------------------------------------------------------------------
 
 
 def apply_filters(

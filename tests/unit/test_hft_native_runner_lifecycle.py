@@ -19,7 +19,6 @@ from research.backtest.hft_native_runner import (
 )
 from research.backtest.types import BacktestConfig, WalkForwardConfig
 
-# Standard research.npy dtype (from synth_lob_gen._DTYPE)
 _RESEARCH_DTYPE = np.dtype(
     [
         ("bid_qty", "f8"),
@@ -34,9 +33,6 @@ _RESEARCH_DTYPE = np.dtype(
 )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def _make_event_array(n: int = 100) -> np.ndarray:
     """Create a minimal synthetic array that _split_npz can load."""
     dt = np.dtype(
@@ -52,7 +48,7 @@ def _make_event_array(n: int = 100) -> np.ndarray:
         ]
     )
     arr = np.zeros(n, dtype=dt)
-    arr["exch_ts"] = np.arange(n) * 1_000_000  # 1ms steps
+    arr["exch_ts"] = np.arange(n) * 1_000_000
     arr["local_ts"] = arr["exch_ts"]
     arr["px"] = 100.0 + np.sin(np.arange(n) * 0.1) * 0.5
     arr["qty"] = 10.0
@@ -76,13 +72,10 @@ def _make_research_npy(path: str, n: int = 100) -> None:
     np.save(path, arr)
 
 
-# ---------------------------------------------------------------------------
-# NpzFile handle leak — close() must be called
-# ---------------------------------------------------------------------------
 class _FakeNpzFile(np.lib.npyio.NpzFile):
     """Minimal NpzFile stand-in that tracks close() calls without real zip IO."""
 
-    def __init__(self, arr: np.ndarray) -> None:  # noqa: D107
+    def __init__(self, arr: np.ndarray) -> None:
         self._arr = arr
         self.closed = False
         self.close_count = 0
@@ -93,7 +86,7 @@ class _FakeNpzFile(np.lib.npyio.NpzFile):
     def __contains__(self, key: object) -> bool:
         return key == "data"
 
-    def close(self) -> None:  # noqa: D102
+    def close(self) -> None:
         self.closed = True
         self.close_count += 1
 
@@ -108,7 +101,6 @@ class TestSplitNpzClosesHandle:
         fake = _FakeNpzFile(arr)
         with patch("research.backtest.hft_native_runner.np.load", return_value=fake):
             is_path, oos_path = _split_npz(npz_path, 0.7)
-            # Clean up temp files
             for p in (is_path, oos_path):
                 try:
                     os.unlink(p)
@@ -135,7 +127,6 @@ class TestEnsureHftbtNpzClosesHandle:
             try:
                 ensure_hftbt_npz(npy)
             except (ImportError, Exception):
-                # Conversion may fail without hftbacktest; we only care about close()
                 pass
 
         assert fake.close_count == 1, "NpzFile.close() must be called exactly once"
@@ -156,9 +147,6 @@ class TestCollectHbtDataClosesHandles:
         assert fake.close_count >= 1, "NpzFile.close() must be called for loaded files"
 
 
-# ---------------------------------------------------------------------------
-# _run_single_fold
-# ---------------------------------------------------------------------------
 class TestRunSingleFold:
     def test_returns_none_when_train_too_small(self):
         """Fold is skipped when train size < min_train_samples."""
@@ -181,7 +169,6 @@ class TestRunSingleFold:
     def test_returns_none_when_test_too_small(self):
         """Fold is skipped when test slice has fewer than 2 rows."""
         alpha = MagicMock()
-        # fold_size=1, fold_idx=0: train[:1]=1 row, test[1:2]=1 row < 2
         full_data = _make_event_array(3)
         config = BacktestConfig(data_paths=[])
         result, tmp_path = _run_single_fold(
@@ -224,10 +211,9 @@ class TestRunSingleFold:
 
         assert result is not None
         assert result.fold_idx == 1
-        assert result.train_size == 50  # fold_size * (1+1)
+        assert result.train_size == 50
         assert result.test_size == 25
         assert tmp_npz is not None
-        # Clean up
         try:
             os.unlink(tmp_npz)
             os.rmdir(os.path.dirname(tmp_npz))
@@ -235,9 +221,6 @@ class TestRunSingleFold:
             pass
 
 
-# ---------------------------------------------------------------------------
-# Parallel walk-forward helpers
-# ---------------------------------------------------------------------------
 _DEFAULT_ADAPTER_RETURN = (
     np.array([1.0, 1.01], dtype=np.float64),
     np.array([0.1, 0.2], dtype=np.float64),
@@ -284,9 +267,6 @@ def _wf_runner_context(
         yield
 
 
-# ---------------------------------------------------------------------------
-# Parallel walk-forward tests
-# ---------------------------------------------------------------------------
 class TestWalkForwardParallel:
     def test_walk_forward_returns_sorted_folds(self):
         """Folds are returned in fold_idx order regardless of completion order."""
@@ -322,7 +302,6 @@ class TestWalkForwardParallel:
             wf_config = WalkForwardConfig(n_splits=4, min_train_samples=1)
             result = runner.run_walk_forward(alpha, wf_config)
 
-        # Should complete without error; folds should be ordered
         assert len(result.folds) > 0
         assert result.folds == sorted(result.folds, key=lambda f: f.fold_idx)
 
@@ -383,7 +362,6 @@ class TestWalkForwardParallel:
 
         with _wf_runner_context(full_data, adapter_side_effect=_failing_adapter):
             wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
-            # The error from the thread should propagate
             with pytest.raises(RuntimeError, match="simulated fold failure"):
                 runner.run_walk_forward(alpha, wf_config)
 
@@ -407,6 +385,5 @@ class TestWalkForwardParallel:
             wf_config = WalkForwardConfig(n_splits=3, min_train_samples=1)
             runner.run_walk_forward(alpha, wf_config)
 
-        # All alpha object IDs should be unique (deep copies)
         assert len(seen_alphas) == 3
         assert len(set(seen_alphas)) == 3, "Each fold should receive a unique alpha copy"

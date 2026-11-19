@@ -28,17 +28,13 @@ async def test_recon_sync_portfolio():
 
 @pytest.mark.asyncio
 async def test_recon_discrepancy_logging():
-    # Patch the logger module where ReconciliationService gets it
     with patch("hft_platform.execution.reconciliation.logger") as mock_logger:
         mock_client = MagicMock()
-        # Ensure it is awaitable if run in thread? implementation uses asyncio.to_thread
-        # but to_thread runs sync function in thread.
         mock_client.get_positions.return_value = [MockPosition("2330", 10, "Action.Buy")]
 
         service = ReconciliationService(mock_client, MagicMock(), {}, storm_guard=StormGuard())
 
         await service.sync_portfolio()
 
-        # Broker state logged at DEBUG (downgraded from INFO to reduce 5 s-cadence spam).
         calls = [c[0][0] for c in mock_logger.debug.call_args_list]
         assert "Portfolio Sync: Broker State" in calls

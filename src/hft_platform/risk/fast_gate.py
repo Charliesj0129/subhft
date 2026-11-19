@@ -5,8 +5,6 @@ from typing import Any, Literal, Optional
 import numpy as np
 from numba import njit
 
-# Kill Switch Shared Memory
-# 1 Byte Flag: 0 = OK, 1 = KILL
 KILL_SWITCH_SHM_NAME = "hft_kill_switch"
 
 
@@ -24,19 +22,15 @@ def _check_order(
     Returns (Passed: bool, ErrorCode: int)
     ErrorCodes: 0=OK, 1=KILL_SWITCH, 2=BAD_PRICE_NEG, 3=BAD_PRICE_MAX, 4=BAD_QTY_MAX, 5=BAD_QTY_NEG
     """
-    # 1. Kill Switch (Read directly from memory)
-    # ptr is a numpy array view of uint8
     if kill_flag_ptr[0] > 0:
         return False, 1
 
-    # 2. Price Sanity (using scaled integers)
     if price_scaled <= 0:
         return False, 2
 
     if price_scaled > max_price_scaled:
         return False, 3
 
-    # 3. Qty Sanity (Fat Finger)
     if qty <= 0:
         return False, 5
 
@@ -46,7 +40,6 @@ def _check_order(
     return True, 0
 
 
-# Default price scale factor (1_000_000 = 6 decimal places)
 DEFAULT_PRICE_SCALE = 1_000_000
 
 
@@ -73,15 +66,12 @@ class FastGate:
         self.ks_shm: Optional[shared_memory.SharedMemory] = None
         self.ks_array: Optional[np.ndarray] = None
 
-        # Setup Kill Switch SHM with proper cleanup on failure
         try:
             self._init_shared_memory(create_shm)
-        except Exception as _exc:  # noqa: BLE001
-            # Ensure cleanup if initialization fails partway through
+        except Exception as _exc:
             self._cleanup_shm()
             raise
 
-        # JIT Warmup with scaled integer values
         _check_order(100_000_000, 1, self.max_price_scaled, self.max_qty, self.ks_array)
 
     def _init_shared_memory(self, create_shm: bool) -> None:
@@ -99,9 +89,7 @@ class FastGate:
         except FileExistsError:
             self.ks_shm = shared_memory.SharedMemory(name=KILL_SWITCH_SHM_NAME)
         except FileNotFoundError:
-            # Fallback if not created yet (e.g. unit test mode)
             if not create_shm:
-                # Auto create for safety in dev
                 self.ks_shm = shared_memory.SharedMemory(name=KILL_SWITCH_SHM_NAME, create=True, size=1)
                 assert self.ks_shm is not None
                 buf = self.ks_shm.buf
@@ -111,7 +99,6 @@ class FastGate:
             else:
                 raise
 
-        # Create numpy view for Numba
         if self.ks_shm is None:
             raise RuntimeError("Kill switch shared memory not initialized")
         self.ks_array = np.ndarray((1,), dtype=np.uint8, buffer=self.ks_shm.buf)
@@ -122,7 +109,6 @@ class FastGate:
             try:
                 self.ks_shm.close()
             except Exception as e:
-                # Log cleanup failures for debugging SHM issues
                 import logging
 
                 logging.getLogger("risk.fast_gate").debug("SHM cleanup failed: %s", e)
@@ -142,7 +128,6 @@ class FastGate:
             Tuple of (passed: bool, error_code: int)
             ErrorCodes: 0=OK, 1=KILL_SWITCH, 2=BAD_PRICE_NEG, 3=BAD_PRICE_MAX, 4=BAD_QTY_MAX, 5=BAD_QTY_NEG
         """
-        # We invoke Numba function with scaled integers
         if self.ks_array is None:
             raise RuntimeError("Kill switch shared memory not initialized")
         ok, code = _check_order(int(price_scaled), int(qty), self.max_price_scaled, self.max_qty, self.ks_array)
@@ -185,7 +170,6 @@ class FastGate:
         try:
             self.close()
         except Exception as e:
-            # Log destructor failures for debugging (use standard logging to avoid structlog issues)
             import logging
 
             logging.getLogger("risk.fast_gate").debug("FastGate destructor error: %s", e)

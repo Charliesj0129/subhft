@@ -197,9 +197,6 @@ def plan_shards(
         added[target].append(str(entry.get("code") or ""))
 
     for group_id, entries in groups.items():
-        # Reachable without any new code: a connection can already hold more
-        # than the cap if the cap was lowered, or if a shard was written by an
-        # older build. Refuse rather than carry the overflow into a roll.
         if len(entries) > per_conn_cap:
             raise UniversePlanError(
                 f"connection {group_id} would hold {len(entries)} subscriptions, cap is {per_conn_cap}"

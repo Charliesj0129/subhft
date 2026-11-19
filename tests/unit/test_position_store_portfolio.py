@@ -60,13 +60,8 @@ def _lower_drawdown_threshold(monkeypatch):
 def store():
     """PositionStore with metrics disabled for unit testing."""
     s = PositionStore()
-    s.metrics = None  # avoid Prometheus side-effects in unit tests
+    s.metrics = None
     return s
-
-
-# ---------------------------------------------------------------------------
-# test_get_drawdown_pct_no_fills
-# ---------------------------------------------------------------------------
 
 
 def test_get_drawdown_pct_no_fills(store):
@@ -75,15 +70,8 @@ def test_get_drawdown_pct_no_fills(store):
     assert store.total_pnl == 0
 
 
-# ---------------------------------------------------------------------------
-# test_get_drawdown_pct_at_peak
-# ---------------------------------------------------------------------------
-
-
 def test_get_drawdown_pct_at_peak(store):
     """After a profit fill with no subsequent loss, drawdown must be 0.0."""
-    # Buy 10 @ 100.0000 (1_000_000 scaled), sell 10 @ 100.5000 (1_005_000 scaled)
-    # PnL = (1_005_000 - 1_000_000) * 10 = 50_000 scaled
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_005_000))
 
@@ -91,96 +79,66 @@ def test_get_drawdown_pct_at_peak(store):
     assert store.get_drawdown_pct() == 0.0
 
 
-# ---------------------------------------------------------------------------
-# test_get_drawdown_pct_after_profit_then_loss
-# ---------------------------------------------------------------------------
-
-
 def test_get_drawdown_pct_after_profit_then_loss(store):
     """After profit then loss, drawdown fraction must be positive and <= 1.0."""
-    # Round 1: Buy 10 @ 1_000_000, sell 10 @ 1_300_000 -> PnL = 3_000_000 (peak)
-    # Peak must exceed cold-start threshold (2_000_000) for drawdown to be reported.
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000, symbol="SYM_A"))
     store.on_fill(_make_fill(Side.SELL, 10, 1_300_000, symbol="SYM_A"))
     assert store.total_pnl == 3_000_000
-    assert store.get_drawdown_pct() == 0.0  # still at peak
+    assert store.get_drawdown_pct() == 0.0
 
-    # Round 2: Buy 10 @ 1_300_000, sell 10 @ 1_000_000 -> PnL = -3_000_000
-    # Total PnL becomes 3_000_000 + (-3_000_000) = 0, peak stays at 3_000_000
     store.on_fill(_make_fill(Side.BUY, 10, 1_300_000, symbol="SYM_A"))
     store.on_fill(_make_fill(Side.SELL, 10, 1_000_000, symbol="SYM_A"))
     assert store.total_pnl == 0
 
     dd = store.get_drawdown_pct()
-    # Drawdown = (3_000_000 - 0) / 3_000_000 = 1.0
     assert dd == pytest.approx(1.0, rel=1e-6)
 
 
 def test_get_drawdown_pct_partial_drawdown(store):
     """Partial drawdown: lose half the peak equity."""
-    # Build peak: PnL = 3_000_000 (above cold-start threshold of 2_000_000)
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_300_000))
     assert store.total_pnl == 3_000_000
 
-    # Lose half: open and close at a 1_500_000 loss
     store.on_fill(_make_fill(Side.BUY, 10, 1_300_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_150_000))
     assert store.total_pnl == 1_500_000
 
     dd = store.get_drawdown_pct()
-    # (3_000_000 - 1_500_000) / 3_000_000 = 0.5
     assert dd == pytest.approx(0.5, rel=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# test_total_pnl_aggregates_across_positions
-# ---------------------------------------------------------------------------
 
 
 def test_total_pnl_aggregates_across_positions(store):
     """total_pnl must be the sum of realized PnL across all symbol positions."""
-    # SYM_A: buy 5 @ 1_000_000, sell 5 @ 1_010_000 -> PnL = 50_000
     store.on_fill(_make_fill(Side.BUY, 5, 1_000_000, symbol="SYM_A"))
     store.on_fill(_make_fill(Side.SELL, 5, 1_010_000, symbol="SYM_A"))
 
-    # SYM_B: buy 10 @ 2_000_000, sell 10 @ 2_005_000 -> PnL = 50_000
     store.on_fill(_make_fill(Side.BUY, 10, 2_000_000, symbol="SYM_B"))
     store.on_fill(_make_fill(Side.SELL, 10, 2_005_000, symbol="SYM_B"))
 
-    # SYM_C: buy 3 @ 500_000, sell 3 @ 490_000 -> PnL = -30_000
     store.on_fill(_make_fill(Side.BUY, 3, 500_000, symbol="SYM_C"))
     store.on_fill(_make_fill(Side.SELL, 3, 490_000, symbol="SYM_C"))
 
     expected_total = 50_000 + 50_000 + (-30_000)
     assert store.total_pnl == expected_total
 
-    # Also verify individual position PnLs from Python cache
     pnl_a = store.positions["ACC:STRAT:SYM_A"].realized_pnl_scaled
     pnl_b = store.positions["ACC:STRAT:SYM_B"].realized_pnl_scaled
     pnl_c = store.positions["ACC:STRAT:SYM_C"].realized_pnl_scaled
     assert pnl_a + pnl_b + pnl_c == expected_total
 
 
-# ---------------------------------------------------------------------------
-# test_peak_equity_tracking
-# ---------------------------------------------------------------------------
-
-
 def test_peak_equity_tracking(store):
     """Peak equity must track the high watermark and never decrease."""
-    # Step 1: first profit — peak = 100_000
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_010_000))
     peak_after_step1 = store._peak_equity_scaled
     assert peak_after_step1 == 100_000
 
-    # Step 2: loss — peak must stay at 100_000
     store.on_fill(_make_fill(Side.BUY, 10, 1_010_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_005_000))
-    assert store._peak_equity_scaled == peak_after_step1  # unchanged
+    assert store._peak_equity_scaled == peak_after_step1
 
-    # Step 3: new profit that exceeds old peak — peak should update
     store.on_fill(_make_fill(Side.BUY, 10, 1_005_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_020_000))
     assert store._peak_equity_scaled > peak_after_step1
@@ -188,54 +146,35 @@ def test_peak_equity_tracking(store):
 
 def test_peak_equity_never_negative_start(store):
     """If first trades are losing, peak stays 0 and drawdown reports loss-based fraction."""
-    # Buy @ 1_010_000 and sell @ 1_000_000: immediate loss
     store.on_fill(_make_fill(Side.BUY, 10, 1_010_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_000_000))
 
     assert store.total_pnl == -100_000
-    # No positive peak was ever established
     assert store._peak_equity_scaled == 0
-    # Cold-start guard: peak=0 is below 2_000_000 threshold, so drawdown returns 0.0
     assert store.get_drawdown_pct() == 0.0
-
-
-# ---------------------------------------------------------------------------
-# test_drawdown_resets_on_new_peak
-# ---------------------------------------------------------------------------
 
 
 def test_drawdown_resets_on_new_peak(store):
     """Drawdown should return to 0.0 when equity recovers to a new peak."""
-    # Build peak: 3_000_000 (above cold-start threshold of 2_000_000)
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_300_000))
     assert store.get_drawdown_pct() == 0.0
 
-    # Drawdown: lose 1_500_000
     store.on_fill(_make_fill(Side.BUY, 10, 1_300_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_150_000))
     assert store.get_drawdown_pct() > 0.0
 
-    # Recover and exceed old peak: gain 3_000_000 more
     store.on_fill(_make_fill(Side.BUY, 10, 1_150_000))
     store.on_fill(_make_fill(Side.SELL, 10, 1_450_000))
-    # New total PnL = 3_000_000 - 1_500_000 + 3_000_000 = 4_500_000 > old peak 3_000_000
     assert store.get_drawdown_pct() == 0.0
-
-
-# ---------------------------------------------------------------------------
-# test_multiple_strategies_independent_positions
-# ---------------------------------------------------------------------------
 
 
 def test_multiple_strategies_independent_positions(store):
     """Fills for different strategy IDs must produce independent positions
     that all contribute to the portfolio total_pnl."""
-    # Strategy A profits
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000, strategy_id="ALPHA"))
     store.on_fill(_make_fill(Side.SELL, 10, 1_010_000, strategy_id="ALPHA"))
 
-    # Strategy B loses
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000, strategy_id="BETA"))
     store.on_fill(_make_fill(Side.SELL, 10, 990_000, strategy_id="BETA"))
 
@@ -247,24 +186,12 @@ def test_multiple_strategies_independent_positions(store):
     assert store.total_pnl == 0
 
 
-# ---------------------------------------------------------------------------
-# Trading-date rollover of the peak-equity high-water mark
-#
-# ``_peak_equity_scaled`` only ever ratchets up, and the sole writer that lowers
-# it (``reset()``) also wipes every position and has no production caller. The
-# startup path already scopes it to a trading date -- ``StartupReconciler``
-# restores it only while the checkpoint's ``trading_date`` is still current --
-# so a process that runs *through* a rollover was the one case that never got
-# the reset.
-# ---------------------------------------------------------------------------
-
-
 def _build_drawdown(store) -> None:
     """Take the store to a peak, then give part of it back."""
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 1_500_000))  # +5_000_000 = peak
+    store.on_fill(_make_fill(Side.SELL, 10, 1_500_000))
     store.on_fill(_make_fill(Side.BUY, 10, 1_000_000))
-    store.on_fill(_make_fill(Side.SELL, 10, 900_000))  # -1_000_000
+    store.on_fill(_make_fill(Side.SELL, 10, 900_000))
 
 
 def test_peak_equity_rebases_at_the_trading_date_rollover(store, monkeypatch):
@@ -313,7 +240,6 @@ def test_drawdown_releases_at_the_rollover_while_flat_and_idle(store, monkeypatc
 
     monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260908")
 
-    # No fill, no restart -- the rollover alone must clear it.
     assert store.get_drawdown_pct() == 0.0
     assert store.net_qty_for_symbol("SYM") == 0
 
@@ -328,7 +254,7 @@ def test_first_read_adopts_the_restored_watermark_without_rebasing(store, monkey
 
     monkeypatch.setattr(_ckpt, "_taifex_trading_date", lambda: "20260908")
     store._total_realized_pnl_scaled = 4_000_000
-    store._peak_equity_scaled = 5_000_000  # as StartupReconciler restores it
+    store._peak_equity_scaled = 5_000_000
 
     assert store.get_drawdown_pct() == pytest.approx(0.2)
     assert store._peak_equity_scaled == 5_000_000
@@ -364,7 +290,7 @@ def test_fill_path_drawdown_does_not_consult_the_clock(store, monkeypatch):
         raise AssertionError("trading-date lookup reached the fill path")
 
     monkeypatch.setattr(_ckpt, "_taifex_trading_date", _boom)
-    _build_drawdown(store)  # exercises _get_drawdown_pct_locked via on_fill
+    _build_drawdown(store)
     assert store._get_drawdown_pct_locked() == pytest.approx(0.2)
 
 
@@ -382,7 +308,6 @@ class _Metrics:
     def __init__(self) -> None:
         self.portfolio_drawdown_pct = _RecordingGauge()
 
-    # The fill path also touches these; keep them harmless.
     def cap_symbol(self, symbol: str) -> str:
         return symbol
 

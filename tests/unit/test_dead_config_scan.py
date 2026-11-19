@@ -33,8 +33,6 @@ def _details(findings, category: str) -> list[str]:
     )
 
 
-# ---------------------------------------------------------------------------------------- dead keys
-
 KEYS_YAML = """\
 limits:
   read_by_literal: 1
@@ -120,9 +118,6 @@ def test_a_yaml_file_that_does_not_parse_or_is_empty_is_skipped(keys_tree):
     assert {f.file for f in mod.find_dead_keys(keys_tree)} == {"config/env/prod/limits.yaml"}
 
 
-# ----------------------------------------------------------------------------- unreferenced files
-
-
 @pytest.fixture
 def files_tree(tmp_path: Path) -> Path:
     _write(
@@ -150,7 +145,7 @@ def test_a_path_template_with_a_placeholder_matches_the_file(files_tree):
 
 
 def test_a_bare_name_counts_only_while_it_is_unique_among_config_files(files_tree):
-    _write(files_tree, "config/env/prod/solo.yaml")  # the name is now shared
+    _write(files_tree, "config/env/prod/solo.yaml")
 
     findings = mod.find_unreferenced_files(files_tree)
 
@@ -268,8 +263,6 @@ def test_examples_and_monitoring_are_not_reported_as_unreferenced(files_tree):
     assert [f.file for f in findings] == ["config/orphan.yaml"]
 
 
-# ---------------------------------------------------------------------------- Prometheus rule files
-
 PROM_YML = "rule_files:\n  - /etc/prometheus/alerts/rules.yaml\n"
 GROUPS = "groups:\n  - name: g\n    rules:\n      - alert: A\n        expr: up == 0\n      - alert: B\n        expr: up == 1\n"
 COMPOSE = """\
@@ -359,15 +352,12 @@ def test_each_compose_file_is_judged_on_its_own_mounts(prom_tree):
     findings = mod.find_unloaded_rule_files(prom_tree)
 
     prod = [f for f in findings if "docker-compose.prod.yml" in f.detail]
-    assert "config/monitoring/alerts/rules.yaml" in {f.file for f in prod}  # its directory is not mounted there
+    assert "config/monitoring/alerts/rules.yaml" in {f.file for f in prod}
     assert all("is not mounted" in f.detail for f in prod)
 
 
 def test_no_rule_files_means_nothing_to_report(tmp_path):
     assert mod.find_unloaded_rule_files(tmp_path) == []
-
-
-# ------------------------------------------------------------------------------------------- main
 
 
 def test_report_mode_exits_zero_and_writes_the_json(keys_tree, capsys):

@@ -57,10 +57,6 @@ class TestMonthlyDistributionGate:
 
     def test_fails_when_drawdown_exceeds_two_times_avg_monthly(self) -> None:
         gate = MonthlyDistributionGate()
-        # 4 months: +50, +50, -300 (big DD), +50 — avg = -37.5 (negative, ratio undefined → fail).
-        # Use: +100, +100, -150, +100 — avg = +37.5, mdd-from-equity peak.
-        # Equity: 100, 200, 50, 150 → peak=200, trough-after=50, mdd=150.
-        # ratio = 150 / 37.5 = 4.0 > 2.0 → FAIL.
         daily = [
             _entry("2026-01-15", 100.0),
             _entry("2026-02-15", 100.0),
@@ -96,7 +92,6 @@ class TestMonthlyDistributionGate:
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
         assert out.metrics["worst_monthly_pnl_pts"] == -50.0
-        # median of [100, 200, -50, 300] = (100+200)/2 = 150
         assert out.metrics["median_monthly_net_pnl_pts"] == 150.0
 
     def test_fails_when_too_few_months_to_evaluate(self) -> None:
@@ -118,13 +113,12 @@ class TestMonthlyDistributionGate:
     def test_skips_entries_missing_date(self) -> None:
         gate = MonthlyDistributionGate()
         daily = [
-            {"pnl_pts": 100.0},  # no date — must be ignored, not crash
+            {"pnl_pts": 100.0},
             _entry("2026-02-15", 50.0),
             _entry("2026-03-15", 50.0),
         ]
         r = _FakeResult(daily_pnl=daily)
         out = gate.evaluate(r, config=None, thresholds=_THRESHOLDS)
-        # 2 valid months, balanced
         assert out.metrics["n_months"] == 2.0
 
     def test_attribute_name(self) -> None:

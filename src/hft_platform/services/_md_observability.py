@@ -46,11 +46,6 @@ class _SupportsObservability(Protocol):
     def _emit_trace(self, stage: str, trace_id: str, payload: dict[str, Any]) -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# Mixin: observability methods extracted from MarketDataService
-# ---------------------------------------------------------------------------
-
-
 class MarketDataObservabilityMixin:
     """Methods for metrics, tracing, and feature-shadow parity checks.
 
@@ -61,8 +56,6 @@ class MarketDataObservabilityMixin:
     feature_engine: FeatureEngine | None
     _feature_shadow_engine: FeatureEngine | None
 
-    # -- trace helpers -------------------------------------------------------
-
     def _emit_trace(self: Any, stage: str, trace_id: str, payload: dict[str, Any]) -> None:
         sampler = getattr(self, "_trace_sampler", None)
         if sampler is None:
@@ -71,8 +64,6 @@ class MarketDataObservabilityMixin:
             sampler.emit(stage=stage, trace_id=str(trace_id or ""), payload=payload)
         except Exception:
             return
-
-    # -- crash signature recording -------------------------------------------
 
     def _record_shioaji_crash_signature(self: Any, text: str | None, *, context: str) -> None:
         metrics_registry: MetricsRegistry | None = getattr(self, "metrics_registry", None)
@@ -85,8 +76,6 @@ class MarketDataObservabilityMixin:
             metrics_registry.shioaji_crash_signature_total.labels(signature=signature, context=context).inc()
         except Exception:
             return
-
-    # -- feature engine metrics -----------------------------------------------
 
     def _record_feature_metrics(  # noqa: C901
         self: Any,
@@ -148,8 +137,6 @@ class MarketDataObservabilityMixin:
                             qchild.inc()
             except Exception:
                 pass
-
-    # -- feature shadow parity -----------------------------------------------
 
     def _maybe_run_feature_shadow_parity(  # noqa: C901
         self: Any,

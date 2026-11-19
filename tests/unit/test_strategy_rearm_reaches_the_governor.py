@@ -40,9 +40,6 @@ def tick(rig) -> None:
     asyncio.run(rig.system._consume_strategy_rearm_requests())
 
 
-# --- the behaviour ------------------------------------------------------------
-
-
 def test_an_operator_rearm_clears_the_live_quarantine(rig):
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
     assert rig.governor.is_quarantined(STRATEGY)
@@ -99,9 +96,6 @@ def test_a_rearm_clears_the_persisted_flag(rig):
     tick(rig)
 
     assert rig.gate.snapshot()["strategies"][STRATEGY]["manual_rearm_required"] is False
-
-
-# --- round 1: a level-triggered flag is not an authorization ------------------
 
 
 def test_a_stale_cleared_flag_does_not_rearm_a_later_quarantine(rig):
@@ -162,14 +156,10 @@ def test_the_cli_refuses_to_request_a_rearm_for_a_healthy_strategy(rig):
         rig.gate.rearm_strategy(STRATEGY)
 
 
-# --- round 3/4: an authorization must never release a different quarantine ----
-
-
 def test_a_request_naming_another_quarantine_is_refused_and_retired(rig):
     rig.governor.quarantine(STRATEGY, reason="first")
     rig.gate.rearm_strategy(STRATEGY)
 
-    # A re-quarantine mints a new token while the request is in flight.
     rig.governor.quarantine(STRATEGY, reason="second")
     live = rig.governor.quarantine_token(STRATEGY)
     tick(rig)
@@ -214,7 +204,6 @@ def test_a_request_written_before_a_restart_still_clears_the_restored_latch(rig)
     token = rig.governor.quarantine_token(STRATEGY)
     rig.gate.rearm_strategy(STRATEGY)
 
-    # A restart: fresh governor, then the boot restore the engine performs.
     fresh = StrategyHealthGovernor(evidence_writer=rig.writer)
     assert fresh.restore_persisted_quarantines(state_path=rig.gate.state_path) == [STRATEGY]
     assert fresh.quarantine_token(STRATEGY) == token, "the restore must reuse the persisted token"
@@ -241,7 +230,6 @@ def test_a_request_for_another_engines_quarantine_is_left_alone(rig):
     foreign_token = other.quarantine_token(STRATEGY)
     rig.gate.rearm_strategy(STRATEGY)
 
-    # This engine has its own, different, live quarantine for the same strategy.
     rig.governor.quarantine(STRATEGY, reason="our failure")
     ours = rig.governor.quarantine_token(STRATEGY)
     assert ours != foreign_token
@@ -263,19 +251,11 @@ def test_a_foreign_request_is_reported_once_not_once_per_tick(rig, monkeypatch):
 
     seen: list[str] = []
 
-    # The module's ``logger``, not a structlog processor. ``utils.logging``
-    # configures structlog with ``cache_logger_on_first_use=True``, so
-    # ``system.py``'s module-level proxy binds its processor chain the first
-    # time anything in the worker logs through it -- after which a later
-    # ``structlog.configure()`` is invisible to it. A processor-based capture
-    # therefore passes when this test runs first and records nothing when it
-    # does not; it failed exactly that way in CI on 2026-09-01 while passing
-    # locally. Substituting the module attribute cannot be order-dependent.
     class _Recorder:
         def warning(self, event: str, **_kwargs) -> None:
             seen.append(event)
 
-        def __getattr__(self, _name):  # info/debug/error: recorded as no-ops
+        def __getattr__(self, _name):
             return lambda *_a, **_k: None
 
     monkeypatch.setattr(system_module, "logger", _Recorder())
@@ -283,9 +263,6 @@ def test_a_foreign_request_is_reported_once_not_once_per_tick(rig, monkeypatch):
         tick(rig)
 
     assert seen.count("strategy_rearm_request_foreign_token") == 1, seen
-
-
-# --- failure handling ---------------------------------------------------------
 
 
 def test_an_evidence_failure_does_not_block_an_authorized_recovery(rig):
@@ -308,7 +285,7 @@ def test_a_tick_does_not_raise_when_the_request_dir_is_unreadable(rig, monkeypat
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
     monkeypatch.setattr(rearm_requests, "pending", lambda _base: (_ for _ in ()).throw(OSError("EACCES")))
 
-    tick(rig)  # must not raise
+    tick(rig)
 
     assert rig.governor.is_quarantined(STRATEGY)
 
@@ -335,9 +312,6 @@ def test_a_request_without_a_token_is_never_treated_as_authorization(rig):
     tick(rig)
 
     assert rig.governor.is_quarantined(STRATEGY)
-
-
-# --- the channel itself -------------------------------------------------------
 
 
 def test_publishing_the_same_request_id_twice_is_refused(rig):
@@ -416,9 +390,6 @@ class TestQuarantineDurabilityIsVisible:
         gov = StrategyHealthGovernor(evidence_writer=AutonomyEvidenceWriter(base_dir=tmp_path))
         await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
 
-        # ``quarantine_async`` deliberately does not await the write -- it is
-        # called from the only bus consumer -- so the flag flips in the done
-        # callback. Drain the executor future the way the loop eventually does.
         for pending in list(gov._persist_tasks):
             await pending
 
@@ -437,8 +408,6 @@ class TestQuarantineDurabilityIsVisible:
         writer.record_transition = explode  # type: ignore[method-assign]
         gov = StrategyHealthGovernor(evidence_writer=writer)
 
-        # The latch must still be applied: a disk problem is not a reason to let
-        # a failing strategy keep trading.
         await gov.quarantine_async("R47_MAKER_TMF", reason="repeated_rejects")
 
         assert gov.is_quarantined("R47_MAKER_TMF") is True
@@ -463,10 +432,6 @@ class TestQuarantineDurabilityIsVisible:
 
         def slow(**kwargs):
             loop.call_soon_threadsafe(started.set)
-            # Bounded. An unbounded spin means a failing assertion below leaves a
-            # non-daemon executor thread running and pytest hangs at teardown
-            # instead of reporting the failure -- which is what an earlier
-            # version of this test did.
             deadline = time.monotonic() + 5.0
             while not release.is_set() and time.monotonic() < deadline:
                 time.sleep(0.005)
@@ -480,10 +445,9 @@ class TestQuarantineDurabilityIsVisible:
             await _asyncio.wait_for(started.wait(), timeout=5)
             assert "R47_MAKER_TMF" in gov.undurable_quarantines, "in flight is not yet durable"
         finally:
-            # Always, so a failure above reports as a failure and not as a hang.
             loop.call_soon_threadsafe(release.set)
         await task
-        for _ in range(200):  # the write completes on a worker thread
+        for _ in range(200):
             if gov.undurable_quarantines == frozenset():
                 break
             await _asyncio.sleep(0.01)
@@ -508,8 +472,6 @@ async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_pa
     real = writer.record_transition
 
     def blocking_record(**kw):
-        # Only the QUARANTINE writes are held; the re-arm's own record must run
-        # freely or the test would be measuring its own scaffolding.
         if kw.get("reason") == "manual_rearm":
             return real(**kw)
         gate = threading.Event()
@@ -519,18 +481,13 @@ async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_pa
 
     writer.record_transition = blocking_record
 
-    # A: latched, write blocked in the thread pool.
     a = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="first"))
     while not released:
         await asyncio.sleep(0.005)
     token_a = governor._quarantined[STRATEGY].token
     assert STRATEGY in governor.undurable_quarantines
-    # The persist future itself, so the assertions below can wait on the write
-    # instead of on a sleep: ``quarantine_async`` deliberately does not await it,
-    # so awaiting the coroutine proves nothing about the write's completion.
     (persist_a,) = tuple(governor._persist_tasks)
 
-    # The operator re-arms A, and the strategy fails immediately back into B.
     assert await governor.rearm_async(STRATEGY, expected_token=token_a) is True
     assert STRATEGY not in governor.undurable_quarantines, "re-arm must retire the state it can no longer match"
     b = asyncio.create_task(governor.quarantine_async(STRATEGY, reason="second"))
@@ -541,10 +498,9 @@ async def test_a_stale_persist_completion_cannot_bless_a_newer_quarantine(tmp_pa
     assert token_b != token_a
     assert STRATEGY in governor.undurable_quarantines
 
-    # A's write now succeeds -- for a quarantine that no longer exists.
     released[0].set()
     await a
-    await persist_a  # the done callbacks are registered first, so they run first
+    await persist_a
 
     assert STRATEGY in governor.undurable_quarantines, "A's stale completion marked B durable while B was pending"
 

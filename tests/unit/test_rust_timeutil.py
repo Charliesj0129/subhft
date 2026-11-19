@@ -26,19 +26,16 @@ def _get_funcs():
 class TestCoerceNsInt:
     def test_seconds(self):
         ci, _ = _get_funcs()
-        # 1_700_000_000 seconds → nanoseconds
         result = ci(1_700_000_000)
         assert result == 1_700_000_000 * 1_000_000_000
 
     def test_milliseconds(self):
         ci, _ = _get_funcs()
-        # 1_700_000_000_000 ms → ns
         result = ci(1_700_000_000_000)
         assert result == 1_700_000_000_000 * 1_000_000
 
     def test_microseconds(self):
         ci, _ = _get_funcs()
-        # 1_700_000_000_000_000 us → ns
         result = ci(1_700_000_000_000_000)
         assert result == 1_700_000_000_000_000 * 1_000
 
@@ -82,10 +79,10 @@ class TestParityWithPython:
         ci, _ = _get_funcs()
         test_values = [
             0,
-            1_700_000_000,  # seconds
-            1_700_000_000_000,  # milliseconds
-            1_700_000_000_000_000,  # microseconds
-            1_700_000_000_000_000_000,  # nanoseconds
+            1_700_000_000,
+            1_700_000_000_000,
+            1_700_000_000_000_000,
+            1_700_000_000_000_000_000,
         ]
         for val in test_values:
             py_result = coerce_ns(val)

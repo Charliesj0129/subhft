@@ -28,13 +28,10 @@ def _load_rust_tracker():
     return RustPositionTracker
 
 
-# ---------------------------------------------------------------------------
-# Python reference implementation (mirrors positions.py Position.update)
-# ---------------------------------------------------------------------------
 class PyPosition:
     def __init__(self):
         self.net_qty = 0
-        self.avg_price_scaled = 0  # i64 fixed-point
+        self.avg_price_scaled = 0
         self.realized_pnl_scaled = 0
         self.fees_scaled = 0
 
@@ -42,8 +39,6 @@ class PyPosition:
         is_buy = side == 0
         signed_fill_qty = qty if is_buy else -qty
 
-        # Kernel contract: ``fee`` and ``tax`` are additive. PositionStore passes the all-in fee as ``fee`` and
-        # 0 as ``tax`` (FillEvent.fee already contains its tax), see test_positions_fee_counts_tax_once.py.
         self.fees_scaled += fee + tax
 
         current_sign = 1 if self.net_qty > 0 else (-1 if self.net_qty < 0 else 0)
@@ -71,7 +66,6 @@ class PyPosition:
                 total_val = self.net_qty * self.avg_price_scaled + signed_fill_qty * price_scaled
                 self.net_qty += signed_fill_qty
                 if self.net_qty != 0:
-                    # Round-to-nearest matching production Position.update()
                     self.avg_price_scaled = (2 * total_val + self.net_qty) // (2 * self.net_qty)
 
 
@@ -242,7 +236,6 @@ def test_futures_multiplier_tmf():
         multiplier=10,
     )
     assert py.net_qty == 0
-    # PnL = (10100 - 10000) * 3 * 10 = 3000
     assert py.realized_pnl_scaled == 3000
 
 
@@ -256,7 +249,6 @@ def test_futures_multiplier_txf():
         multiplier=200,
     )
     assert py.net_qty == 0
-    # PnL = (200000 - 199500) * 2 * 200 = 200000
     assert py.realized_pnl_scaled == 200000
 
 

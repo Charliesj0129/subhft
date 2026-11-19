@@ -67,14 +67,10 @@ from research.registry.schemas import (
 
 logger = get_logger("alpha.c63_txfd6_r47_tight_spread")
 
-# TXFD6 instrument constants (immutable per contract specs).
-_TXF_POINT_VALUE_NTD = 200              # NTD per pt on TXF (vs TMF 10)
-_TXF_INST_RT_COST_PTS = 1.5             # shared-context.yaml#cost_model.TXF (inst est.)
-_TXF_RETAIL_RT_COST_PTS = 3.0           # retail reference (memory/feedback_taifex_fee_structure)
+_TXF_POINT_VALUE_NTD = 200
+_TXF_INST_RT_COST_PTS = 1.5
+_TXF_RETAIL_RT_COST_PTS = 3.0
 
-# All four R47 signal layers are hard-disabled (R47-minimal, C33 precedent).
-# C63 keeps C33's discipline — no D4 QI on TXFD6 (TMFD6-calibrated thresholds
-# do NOT transfer per R7 T1 counterfactual).
 _DISABLED_SIGNAL_LAYERS = (
     "_update_pe",
     "_update_queue",
@@ -87,9 +83,6 @@ _DISABLED_SIGNAL_LAYERS = (
 )
 
 
-# ----------------------------------------------------------------------------
-# Parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,9 +116,6 @@ class C63Params:
     enable_qi_layer: bool = False
 
 
-# ----------------------------------------------------------------------------
-# TxfD6R47TightSpreadMaker — MakerEngine-compatible strategy
-# ----------------------------------------------------------------------------
 
 
 class TxfD6R47TightSpreadMaker:
@@ -164,7 +154,6 @@ class TxfD6R47TightSpreadMaker:
         self._quotes_posted = 0
         self._active_symbol = active_symbol
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def position(self) -> int:
@@ -194,7 +183,6 @@ class TxfD6R47TightSpreadMaker:
     def active_symbol(self) -> str:
         return self._active_symbol
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -219,14 +207,11 @@ class TxfD6R47TightSpreadMaker:
             self._spread_blocked += 1
             return [Hold()]
 
-        # R47-minimal: signal-layer gates are intentionally NOT evaluated.
-        # (See _DISABLED_SIGNAL_LAYERS — enforced by test; attribute absence.)
 
         actions: list[PostQuote | CancelQuote | Hold] = []
         pos = self._position
         max_pos = params.max_pos
 
-        # Inventory skew (scaled-integer, R47 best practice; LINEAR in pos).
         skew = (pos * params.inventory_skew_tenths * scale) // 10
         bid_quote = tick.bid_price - skew
         ask_quote = tick.ask_price - skew
@@ -234,14 +219,12 @@ class TxfD6R47TightSpreadMaker:
         bid_moved = bid_quote != self._last_bid
         ask_moved = ask_quote != self._last_ask
 
-        # Buy side: only if inventory not at +max_pos cap.
         if pos < max_pos and bid_moved:
             actions.append(PostQuote(side="buy", price=bid_quote, qty=1))
             self._last_bid = bid_quote
             self._quotes_posted += 1
         elif pos >= max_pos:
             self._max_pos_blocked += 1
-        # Sell side: only if inventory not at -max_pos cap.
         if pos > -max_pos and ask_moved:
             actions.append(PostQuote(side="sell", price=ask_quote, qty=1))
             self._last_ask = ask_quote
@@ -273,9 +256,6 @@ class TxfD6R47TightSpreadMaker:
         self._quotes_posted = 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim
-# ----------------------------------------------------------------------------
 
 
 class C63Alpha:

@@ -24,10 +24,8 @@ from hft_platform.monitor._types import (
     Toast,
 )
 
-# Sparkline Unicode blocks (8 levels)
 _SPARK_CHARS = "▁▂▃▄▅▆▇█"
 
-# Color thresholds
 _BRIGHT_GREEN = Style(color="bright_green", bold=True)
 _GREEN = Style(color="green")
 _WHITE = Style(color="white")
@@ -39,7 +37,6 @@ _ERROR_STYLE = Style(color="red", bold=True)
 _CYAN = Style(color="cyan")
 _BOLD_WHITE = Style(color="bright_white", bold=True)
 
-# Source badge styles (module-level to avoid per-render allocation)
 _SRC_STYLES: dict[str, Style] = {
     "CH": Style(dim=True),
     "SHM": Style(dim=True),
@@ -48,11 +45,9 @@ _SRC_STYLES: dict[str, Style] = {
     "SHM+CH": Style(color="yellow"),
 }
 
-# Row flash styles (Phase 4)
 _FLASH_BOLD = Style(bold=True)
 _FLASH_BRIGHT = Style(color="bright_white")
 
-# Pre-built state badge styles (avoid per-render dict creation)
 _STATE_STYLES: dict[MonitorState, Style] = {
     MonitorState.INITIALIZING: Style(color="cyan"),
     MonitorState.WARMING_UP: Style(color="yellow"),
@@ -63,7 +58,6 @@ _STATE_STYLES: dict[MonitorState, Style] = {
     MonitorState.ERROR: Style(color="bright_red", bold=True),
 }
 
-# Selected row background (Phase 3)
 _SELECTED_BG = Style(bgcolor="grey23")
 
 
@@ -71,7 +65,6 @@ def build_header(ctx: HeaderContext) -> Text:
     """Build the status header line from a HeaderContext."""
     parts = Text()
 
-    # Line 1: State badge + session + time + CH + sort mode
     parts.append(f"[{ctx.state.name}]", _STATE_STYLES.get(ctx.state, _WHITE))
     parts.append(f" {ctx.session_display}  ", _WHITE)
 
@@ -80,7 +73,6 @@ def build_header(ctx: HeaderContext) -> Text:
 
     parts.append(f"|  {ctx.time_str}  |  {ctx.ch_status}", _DIM)
 
-    # S1: Heartbeat indicator
     if ctx.poll_count > 0:
         age = ctx.poll_age_s
         if age < 1.0:
@@ -96,17 +88,14 @@ def build_header(ctx: HeaderContext) -> Text:
 
     parts.append(f"  |  sorted: {ctx.sort_mode}", _DIM)
 
-    # Source badge
     if ctx.source_label:
         src_style = _SRC_STYLES.get(ctx.source_label, _DIM)
         parts.append(f"  |  src: {ctx.source_label}", src_style)
 
-    # Bad-data summary
     if ctx.bad_summary:
         _bad_style = Style.parse(ctx.bad_style) if ctx.bad_style else _DIM
         parts.append(f" | {ctx.bad_summary}", _bad_style)
 
-    # Line 2: Event ticker (Phase 1)
     if ctx.event_ticker:
         parts.append(f"\n{ctx.event_ticker}")
 
@@ -130,17 +119,14 @@ def build_table(
         expand=True,
     )
 
-    # Define columns — Phase 2: add rank column, Phase 1: Action+Drivers replace individual alphas
     table.add_column("#", justify="right", width=2)
     table.add_column("Symbol", style="bold", width=8)
     table.add_column("Name", width=6)
     table.add_column("State", width=7)
     table.add_column("Last", justify="right", width=8)
-    # S2: Price delta column
     table.add_column("\u0394", justify="right", width=6)
     table.add_column("Sprd", justify="right", width=6)
 
-    # Dynamic alpha columns — use pre-computed list when provided
     if alpha_cols is None:
         alpha_cols_list: list[str] = []
         if symbol_states:
@@ -161,12 +147,10 @@ def build_table(
     table.add_column("Agree", justify="center", width=7)
     table.add_column("Action", justify="center", width=10)
     table.add_column("Drivers", justify="center", width=8)
-    # S7: price sparkline instead of composite sparkline
     table.add_column("Spark", width=20)
 
     now_ns = timebase.now_ns()
 
-    # S3: partition into active and closed for optional collapse
     active_states: list[SymbolState] = []
     closed_states: list[SymbolState] = []
     for ss in symbol_states:
@@ -185,10 +169,8 @@ def build_table(
         else:
             table.add_row(*row)
 
-    # S3: closed symbols — collapsed or expanded
     if closed_states:
         if closed_collapsed:
-            # Single summary row
             n_cols = len(table.columns)
             cells: list[Text] = [Text("", style=_DIM)] * n_cols
             cells[0] = Text("", style=_DIM)
@@ -216,10 +198,8 @@ def _build_symbol_row(
     row: list[Text] = []
     row_style = _get_row_style(ss, state, now_ns)
 
-    # Rank
     row.append(Text(str(rank), style=_DIM))
 
-    # Symbol + quality badges (Phase 4)
     sym_text = Text(ss.symbol.code)
     if ss.session_label:
         sym_text.append(f" {ss.session_label}", _DIM)
@@ -229,24 +209,20 @@ def _build_symbol_row(
         sym_text.append(" \u26a0", _YELLOW)
     row.append(sym_text)
 
-    # Name -- CJK-aware truncation + futures contract labels
     if ss.symbol.product_type == "future":
         name_display = format_contract_name(ss.symbol.code, ss.symbol.name)
     else:
         name_display = truncate_display(ss.symbol.name, 10)
     row.append(Text(name_display))
 
-    # State — compact badges (Phase 2)
     status_text, status_style = _render_symbol_status(ss, config, state, now_ns)
     row.append(Text(status_text, style=status_style))
 
-    # Last price
     if ss.last_price > 0:
         row.append(Text(_format_price(ss.last_price)))
     else:
         row.append(Text("--", style=_DIM))
 
-    # S2: Price delta column
     if ss.prev_poll_price > 0 and ss.last_price > 0:
         delta = ss.last_price - ss.prev_poll_price
         if abs(delta) > 1e-8:
@@ -258,47 +234,38 @@ def _build_symbol_row(
     else:
         row.append(Text("--", style=_DIM))
 
-    # Spread
     if ss.spread_bps > 0:
         row.append(Text(f"{ss.spread_bps:.1f}", style=row_style))
     else:
         row.append(Text("--", style=_DIM))
 
-    # Alpha signals — colored by z-score (Phase 4)
     for aid in alpha_cols:
         astate = ss.alpha_states.get(aid)
         row.append(_render_alpha_cell(astate, ss.tick_count, config.warmup_ticks))
 
-    # Composite
     if ss.tick_count >= config.warmup_ticks:
         comp_text = _format_signal(ss.composite)
         row.append(Text(comp_text, style=_signal_style(ss.composite)))
     else:
         row.append(Text("--", style=_DIM))
 
-    # Strength (sigma)
     strength = abs(ss.composite)
     if ss.tick_count >= config.warmup_ticks:
         row.append(Text(f"{strength:.1f}\u03c3", style=_signal_style_sigma(strength)))
     else:
         row.append(Text("--", style=_DIM))
 
-    # Count directions once for agreement, action, and drivers
     pos, neg, total = _count_directions(ss, alpha_cols, config.warmup_ticks)
 
-    # Agreement
     agreement_text, agreement_style = _format_agreement(pos, neg, total, ss.tick_count, config.warmup_ticks)
     row.append(Text(agreement_text, style=agreement_style))
 
-    # Action — Phase 1: actionable suggestion with alpha names
     action_text, action_style = _format_action(ss, pos, neg, total, config.warmup_ticks)
     row.append(Text(action_text, style=action_style))
 
-    # Drivers — Phase 1: compact alpha direction indicators
     drivers_text = _format_drivers(ss, alpha_cols, config.warmup_ticks)
     row.append(drivers_text)
 
-    # S7: price sparkline instead of composite sparkline
     row.append(Text(_render_sparkline(ss.price_sparkline_values())))
 
     return row
@@ -595,7 +562,6 @@ def _get_row_style(ss: SymbolState, state: MonitorState, now_ns: int = 0) -> Sty
     if ss.is_closed:
         return _DIM
 
-    # Phase 4: row flash for recent events
     if ss.last_event_ns > 0 and now_ns > 0:
         age_s = (now_ns - ss.last_event_ns) / 1e9
         if age_s < 2.0:
@@ -645,11 +611,6 @@ def _render_symbol_status(
     return "WAIT", _DIM
 
 
-# ------------------------------------------------------------------ #
-# Task 8: Footer help bar                                             #
-# ------------------------------------------------------------------ #
-
-
 def build_footer(
     *,
     detail_visible: bool,
@@ -696,11 +657,6 @@ def build_footer(
     t.append("[?]", _WHITE)
     t.append(" all keys", _DIM)
     return t
-
-
-# ------------------------------------------------------------------ #
-# Task 9: Help overlay (? key)                                        #
-# ------------------------------------------------------------------ #
 
 
 def build_help_overlay() -> Panel:
@@ -754,11 +710,6 @@ def build_help_overlay() -> Panel:
     return Panel(content, title="Keyboard Shortcuts", border_style="dim")
 
 
-# ------------------------------------------------------------------ #
-# Task 10: Toast rendering in header                                  #
-# ------------------------------------------------------------------ #
-
-
 def build_cost_section(cost_lines: list[str], width: int) -> list[str]:
     """Build section lines with a header for the cost attribution panel.
 
@@ -788,11 +739,6 @@ def build_header_with_toast(ctx: HeaderContext, toast: Toast | None = None) -> T
     return parts
 
 
-# ------------------------------------------------------------------ #
-# Task 15: CJK-aware truncation                                      #
-# ------------------------------------------------------------------ #
-
-
 def truncate_display(text: str, max_width: int) -> str:
     """Truncate string to max_width display columns, CJK-aware."""
     if not text:
@@ -801,8 +747,6 @@ def truncate_display(text: str, max_width: int) -> str:
     for i, ch in enumerate(text):
         w = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
         if width + w > max_width:
-            # Need to truncate: go back and add ellipsis
-            # Find the cut point where we can fit ellipsis (1 col)
             cut_width = 0
             for j, c in enumerate(text):
                 cw = 2 if unicodedata.east_asian_width(c) in ("W", "F") else 1
@@ -813,10 +757,6 @@ def truncate_display(text: str, max_width: int) -> str:
         width += w
     return text
 
-
-# ------------------------------------------------------------------ #
-# Task 16: Contract month readable labels                             #
-# ------------------------------------------------------------------ #
 
 _PRODUCT_NAMES: dict[str, str] = {
     "TXF": "\u53f0\u6307\u671f",
@@ -839,11 +779,6 @@ def format_contract_name(code: str, raw_name: str) -> str:
         if product and month:
             return f"{product} {month}\u6708"
     return truncate_display(raw_name, 10)
-
-
-# ------------------------------------------------------------------ #
-# Task 17: Adaptive column widths                                     #
-# ------------------------------------------------------------------ #
 
 
 def compute_column_profile(terminal_width: int) -> ColumnProfile:

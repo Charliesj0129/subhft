@@ -33,15 +33,12 @@ class TestSplitFailureFlags:
         sg.report_feature_failure(3)
         assert sg.state == StormGuardState.STORM
 
-        # Bypass anti-flap hold for feature recovery
         sg._feature_failure_storm_ts = time.monotonic() - 10.0
         sg.report_feature_recovery()
 
-        # Feature flag cleared, but norm flag still active
         assert not sg._feature_failure_active
         assert sg._norm_failure_active
 
-        # update() should keep STORM due to norm failure
         result = sg.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.STORM
 
@@ -53,11 +50,9 @@ class TestSplitFailureFlags:
         sg.report_norm_failure(3)
         assert sg.state == StormGuardState.STORM
 
-        # Bypass anti-flap hold for norm recovery
         sg._norm_failure_storm_ts = time.monotonic() - 10.0
         sg.report_norm_recovery()
 
-        # Norm flag cleared, but feature flag still active
         assert not sg._norm_failure_active
         assert sg._feature_failure_active
 
@@ -72,7 +67,6 @@ class TestSplitFailureFlags:
         assert sg._norm_failure_active
         assert sg._feature_failure_active
 
-        # Bypass anti-flap for both
         past = time.monotonic() - 10.0
         sg._norm_failure_storm_ts = past
         sg._feature_failure_storm_ts = past
@@ -83,7 +77,6 @@ class TestSplitFailureFlags:
         assert not sg._norm_failure_active
         assert not sg._feature_failure_active
 
-        # With no other STORM conditions, update should de-escalate
         result = sg.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.NORMAL
 
@@ -102,12 +95,10 @@ class TestSplitFailureFlags:
         sg.report_norm_failure(5)
         assert sg._norm_failure_active
 
-        # Bypass anti-flap hold
         sg._norm_failure_storm_ts = time.monotonic() - 10.0
         sg.report_norm_recovery()
 
         assert not sg._norm_failure_active
-        # Feature flag unchanged
         assert not sg._feature_failure_active
 
     def test_norm_recovery_anti_flap_suppressed(self, sg: StormGuard) -> None:
@@ -115,9 +106,8 @@ class TestSplitFailureFlags:
         sg.report_norm_failure(5)
         assert sg._norm_failure_active
 
-        # Do NOT bypass anti-flap -- recovery should be suppressed
         sg.report_norm_recovery()
-        assert sg._norm_failure_active  # still active
+        assert sg._norm_failure_active
 
     def test_evaluate_target_state_reason_norm_only(self, sg: StormGuard) -> None:
         """Reason string should say 'Normalizer failure active' when only norm fails."""

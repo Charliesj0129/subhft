@@ -94,11 +94,6 @@ def emit(module_log_sink):
     return _emit
 
 
-# --------------------------------------------------------------------------- #
-# The diagnostic must outlive the gate                                         #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_stats_are_logged_on_the_first_tick_even_when_the_spread_gate_blocks(r47, emit) -> None:
     """The regression: a sub-threshold spread used to produce no diagnostic at
@@ -141,11 +136,6 @@ def test_the_spread_gate_still_suppresses_quoting(r47) -> None:
 @pytest.mark.unit
 def test_a_passing_tick_still_produces_quotes(r47) -> None:
     assert r47.handle_event(_ctx(), _lob_stats(spread_scaled=5 * _PRICE_SCALE)) != []
-
-
-# --------------------------------------------------------------------------- #
-# The metrics                                                                  #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit

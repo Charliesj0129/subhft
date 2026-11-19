@@ -16,15 +16,14 @@ const MAX_NOTIONAL_EXCEEDED: u8 = 4;
 
 #[pyclass]
 pub struct RustRiskValidator {
-    // PriceBand config
     max_price_cap_scaled: i64,
     tick_size_scaled: i64,
     default_band_ticks: i64,
-    // MaxNotional config
+
     default_max_notional_scaled: i64,
-    // Per-strategy band ticks cache: strategy_id -> band_ticks
+
     band_ticks_cache: HashMap<String, i64>,
-    // Per-(strategy, symbol) max notional cache
+
     max_notional_cache: HashMap<(String, String), i64>,
 }
 
@@ -90,12 +89,9 @@ impl RustRiskValidator {
         symbol: &str,
         mid_price: i64,
     ) -> (bool, u8) {
-        // CANCEL always passes
         if intent_type == 2 {
             return (true, OK);
         }
-
-        // --- PriceBand checks ---
 
         if price <= 0 {
             return (false, PRICE_ZERO_OR_NEG);
@@ -105,7 +101,6 @@ impl RustRiskValidator {
             return (false, PRICE_EXCEEDS_CAP);
         }
 
-        // LOB-relative price band (only when mid_price available)
         if mid_price > 0 {
             let band_ticks = self
                 .band_ticks_cache
@@ -119,8 +114,6 @@ impl RustRiskValidator {
                 return (false, PRICE_OUTSIDE_BAND);
             }
         }
-
-        // --- MaxNotional check ---
 
         let notional = price * qty;
         let max_notional = self
@@ -172,21 +165,11 @@ mod tests {
     use super::*;
 
     fn make_validator() -> RustRiskValidator {
-        RustRiskValidator::new(
-            10_000_000_000,  // max_price_cap = 1M at x10000
-            100,             // tick_size = 0.01 at x10000
-            500,             // default_band_ticks
-            100_000_000_000, // default_max_notional = 10M at x10000
-        )
+        RustRiskValidator::new(10_000_000_000, 100, 500, 100_000_000_000)
     }
 
     fn make_tight_notional_validator() -> RustRiskValidator {
-        RustRiskValidator::new(
-            10_000_000_000,
-            100,
-            500,
-            10_000_000, // tight max_notional = 1000 at x10000
-        )
+        RustRiskValidator::new(10_000_000_000, 100, 500, 10_000_000)
     }
 
     #[test]
@@ -232,7 +215,7 @@ mod tests {
     #[test]
     fn test_price_outside_band() {
         let v = make_validator();
-        // mid=100_0000, band=500*100=50000, range=[50000, 150000]
+
         let (ok, code) = v.check(0, 200_0000, 1, "s1", "2330", 100_0000);
         assert!(!ok);
         assert_eq!(code, PRICE_OUTSIDE_BAND);
@@ -241,7 +224,7 @@ mod tests {
     #[test]
     fn test_max_notional_exceeded() {
         let v = make_tight_notional_validator();
-        // price=100_0000, qty=200 → notional=200_000_000 > 10_000_000
+
         let (ok, code) = v.check(0, 100_0000, 200, "s1", "2330", 100_0000);
         assert!(!ok);
         assert_eq!(code, MAX_NOTIONAL_EXCEEDED);
@@ -250,7 +233,7 @@ mod tests {
     #[test]
     fn test_no_band_check_without_mid() {
         let v = make_validator();
-        // mid_price=0 → skip band check; price very far but passes
+
         let (ok, _) = v.check(0, 5_000_000_000, 1, "s1", "2330", 0);
         assert!(ok);
     }
@@ -259,11 +242,11 @@ mod tests {
     fn test_per_strategy_band_ticks() {
         let mut v = make_validator();
         v.set_band_ticks("tight_strat", 10);
-        // band = 10 * 100 = 1000; mid=100_0000, range=[99_9000, 100_1000]
+
         let (ok, code) = v.check(0, 100_2000, 1, "tight_strat", "2330", 100_0000);
         assert!(!ok);
         assert_eq!(code, PRICE_OUTSIDE_BAND);
-        // But default strategy with 500 ticks still passes
+
         let (ok, _) = v.check(0, 100_2000, 1, "s1", "2330", 100_0000);
         assert!(ok);
     }
@@ -272,11 +255,11 @@ mod tests {
     fn test_per_strategy_symbol_notional() {
         let mut v = make_validator();
         v.set_max_notional("s1", "2330", 500_0000);
-        // notional = 100_0000 * 10 = 1000_0000 > 500_0000
+
         let (ok, code) = v.check(0, 100_0000, 10, "s1", "2330", 100_0000);
         assert!(!ok);
         assert_eq!(code, MAX_NOTIONAL_EXCEEDED);
-        // Different symbol uses default
+
         let (ok, _) = v.check(0, 100_0000, 10, "s1", "2317", 100_0000);
         assert!(ok);
     }
@@ -287,7 +270,7 @@ mod tests {
         v.set_band_ticks("s1", 10);
         v.set_max_notional("s1", "2330", 1);
         v.reset();
-        // After reset, defaults should apply
+
         let (ok, _) = v.check(0, 100_0000, 1, "s1", "2330", 100_0000);
         assert!(ok);
     }
@@ -303,7 +286,7 @@ mod tests {
     #[test]
     fn test_modify_order_checked() {
         let v = make_validator();
-        // intent_type=1 (MODIFY) should also be checked
+
         let (ok, code) = v.check(1, 0, 10, "s1", "2330", 100_0000);
         assert!(!ok);
         assert_eq!(code, PRICE_ZERO_OR_NEG);

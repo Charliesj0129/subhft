@@ -19,5 +19,4 @@ from __future__ import annotations
 
 __all__ = ["__version__"]
 
-# Bumped when the snapshot JSON format or classification semantics change.
 __version__ = "1.0.0"

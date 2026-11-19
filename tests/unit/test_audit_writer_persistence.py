@@ -31,10 +31,6 @@ from hft_platform.recorder.audit import (
     _normalize_row,
 )
 
-# ---------------------------------------------------------------------------
-# set_writer wiring
-# ---------------------------------------------------------------------------
-
 
 class TestSetWriter:
     def test_set_writer_attaches_post_construction(self) -> None:
@@ -64,7 +60,6 @@ class TestSetWriter:
         audit = AuditWriter(queue_size=100, flush_interval_ms=10, writer=None)
         audit.set_writer(mock_writer)
 
-        # Simulate a RiskDecision audit emit (fields match RiskEngine producer)
         audit.log_risk_decision(
             {
                 "strategy_id": "r47",
@@ -82,24 +77,16 @@ class TestSetWriter:
         await audit.stop()
 
         mock_writer.write.assert_awaited()
-        # First positional arg is the table name
         tables = [c.args[0] for c in mock_writer.write.await_args_list]
         assert "audit.risk_log" in tables
-        # Locate the risk_log call and inspect its rows
         risk_call = next(c for c in mock_writer.write.await_args_list if c.args[0] == "audit.risk_log")
         rows = risk_call.args[1]
         assert len(rows) >= 1
         row = rows[0]
-        # Schema-aligned fields present
         assert row["strategy_id"] == "r47"
         assert row["symbol"] == "TXFD6"
-        assert row["approved"] == 1  # bool→UInt8 coercion
+        assert row["approved"] == 1
         assert "reason_code" in row
-
-
-# ---------------------------------------------------------------------------
-# _normalize_row schema enforcement
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeRow:
@@ -124,7 +111,6 @@ class TestNormalizeRow:
         assert out["new_price"] == 0
         assert out["error"] == ""
         assert out["details"] == ""
-        # Original fields preserved
         assert out["event"] == "dispatched"
         assert out["price"] == 1730000
 
@@ -139,8 +125,8 @@ class TestNormalizeRow:
             "symbol": "TXFD6",
             "strategy_id": "r47",
             "cmd_id": 100,
-            "cancel_outcome": "already_inflight",  # extra
-            "extra_metadata": {"foo": "bar"},  # extra, non-string
+            "cancel_outcome": "already_inflight",
+            "extra_metadata": {"foo": "bar"},
         }
         out = _normalize_row("audit.orders_log", row)
         assert out["event"] == "cancel_no_op_already_inflight"
@@ -186,12 +172,7 @@ class TestNormalizeRow:
     def test_normalize_unknown_table_passthrough(self) -> None:
         row = {"foo": "bar"}
         out = _normalize_row("audit.unknown_table", row)
-        assert out is row  # no-op identity
-
-
-# ---------------------------------------------------------------------------
-# persist_failures metric
-# ---------------------------------------------------------------------------
+        assert out is row
 
 
 class TestPersistFailureMetric:
@@ -202,7 +183,6 @@ class TestPersistFailureMetric:
         from hft_platform.observability.metrics import MetricsRegistry
 
         metrics = MetricsRegistry.get()
-        # Snapshot before
         before_metric = metrics.audit_persist_failures_total.labels(table="audit.risk_log", reason="ConnectionError")
         before_val = before_metric._value.get()
 

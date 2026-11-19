@@ -122,7 +122,7 @@ def test_cleanup_keeps_newest_complete_backup_when_every_backup_is_old(tmp_path:
 
 def test_make_room_removes_failed_debris_but_keeps_a_name_that_once_succeeded(monkeypatch, tmp_path: Path) -> None:
     debris = _name(1)
-    rerun = _name(2)  # created at 06:30, then a manual rerun failed with BACKUP_ALREADY_EXISTS
+    rerun = _name(2)
     _seed(tmp_path, debris, rerun)
     history = [(rerun, "BACKUP_CREATED"), (rerun, "BACKUP_FAILED"), (debris, "BACKUP_FAILED")]
     mgr = _make_manager(tmp_path)
@@ -138,7 +138,6 @@ def test_make_room_refuses_backup_without_space_for_it(enabled, monkeypatch, tmp
     _seed(tmp_path, _name(1))
     history = [(_name(1), "BACKUP_CREATED")]
     mgr = _make_manager(tmp_path, min_free_after_bytes=10 * _GIB)
-    # 17 GiB of data needs 17 + 10 GiB free; only 3.3 GiB is (THESHOW, 2026-10-22).
     monkeypatch.setattr("hft_platform.ops.backup.shutil.disk_usage", lambda p: MagicMock(free=int(3.3 * _GIB)))
     started: list[str] = []
     monkeypatch.setattr(BackupManager, "_execute_backup", lambda self, name: started.append(name))

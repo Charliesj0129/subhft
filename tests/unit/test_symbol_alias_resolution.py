@@ -130,7 +130,6 @@ class TestFeeCalculatorPrefixFallback:
         from hft_platform.tca.fee_calculator import FeeCalculator
 
         calc = FeeCalculator.from_yaml("config/base/fees/futures.yaml")
-        # TMF is in symbol_map → XMT
         result = calc._resolve_product("TMF")
         assert result == "XMT"
 
@@ -138,7 +137,6 @@ class TestFeeCalculatorPrefixFallback:
         from hft_platform.tca.fee_calculator import FeeCalculator
 
         calc = FeeCalculator.from_yaml("config/base/fees/futures.yaml")
-        # TMFE6 is NOT in symbol_map, but TMF is → XMT
         result = calc._resolve_product("TMFE6")
         assert result == "XMT"
 
@@ -160,7 +158,6 @@ class TestFeeCalculatorPrefixFallback:
         from hft_platform.tca.fee_calculator import FeeCalculator
 
         calc = FeeCalculator.from_yaml("config/base/fees/futures.yaml")
-        # Short symbols (< 5 chars) don't trigger prefix fallback
         result = calc._resolve_product("2330")
         assert result is None
 
@@ -172,11 +169,9 @@ class TestSessionGovernorAliasResolution:
         from hft_platform.ops.session_governor import SessionGovernor
 
         gov = SessionGovernor()
-        # Original config uses TMFR1
         alias_map = {"TMFR1": "TMFE6"}
         gov.resolve_symbol_aliases(alias_map)
 
-        # Verify tracks were updated
         for track in gov._tracks.values():
             for sym in track.symbols:
                 assert sym != "TMFR1", f"Alias TMFR1 should have been resolved to TMFE6 in track {track.name}"
@@ -185,14 +180,12 @@ class TestSessionGovernorAliasResolution:
         from hft_platform.ops.session_governor import SessionGovernor, SessionPhase
 
         gov = SessionGovernor()
-        # Set a track phase first
         for track_name in gov._tracks:
             gov._track_gate.set_track_phase(track_name, SessionPhase.OPEN)
 
         alias_map = {"TMFR1": "TMFE6"}
         gov.resolve_symbol_aliases(alias_map)
 
-        # The actual code should now be registered in the gate
         phase = gov._track_gate.get_phase("TMFE6")
         assert phase == SessionPhase.OPEN
 

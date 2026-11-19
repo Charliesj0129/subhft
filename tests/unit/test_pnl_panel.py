@@ -97,11 +97,9 @@ class TestRenderCostTable:
         ]
         lines = render_cost_table(data)
 
-        assert len(lines) >= 4  # header + 2 data + total
-        # Header line should contain column names
+        assert len(lines) >= 4
         assert "Strategy" in lines[0]
         assert "Total" in lines[0]
-        # Total line
         total_line = lines[-1]
         assert "TOTAL" in total_line
 

@@ -30,10 +30,6 @@ class FakePositionStore:
 class TestHaltFlattener:
     """Unit tests for HaltFlattener."""
 
-    # ------------------------------------------------------------------
-    # Construction / config
-    # ------------------------------------------------------------------
-
     def test_disabled_by_default(self) -> None:
         store = FakePositionStore()
         submit = AsyncMock()
@@ -46,10 +42,6 @@ class TestHaltFlattener:
         flattener = HaltFlattener(store, submit, enabled=True)
         assert flattener.enabled
 
-    # ------------------------------------------------------------------
-    # on_halt when disabled
-    # ------------------------------------------------------------------
-
     @pytest.mark.asyncio
     async def test_on_halt_disabled_returns_zero(self) -> None:
         store = FakePositionStore({"k": FakePosition("2330", "s1", 10)})
@@ -59,10 +51,6 @@ class TestHaltFlattener:
         assert result == 0
         submit.assert_not_called()
 
-    # ------------------------------------------------------------------
-    # on_halt with no positions
-    # ------------------------------------------------------------------
-
     @pytest.mark.asyncio
     async def test_on_halt_no_positions(self) -> None:
         store = FakePositionStore()
@@ -70,10 +58,6 @@ class TestHaltFlattener:
         flattener = HaltFlattener(store, submit, enabled=True)
         result = await flattener.on_halt()
         assert result == 0
-
-    # ------------------------------------------------------------------
-    # on_halt with zero-qty positions (skip)
-    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_on_halt_skips_flat_positions(self) -> None:
@@ -88,10 +72,6 @@ class TestHaltFlattener:
         result = await flattener.on_halt()
         assert result == 0
         submit.assert_not_called()
-
-    # ------------------------------------------------------------------
-    # on_halt with long position -> SELL
-    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_on_halt_long_emits_sell(self) -> None:
@@ -112,10 +92,6 @@ class TestHaltFlattener:
         assert intent.intent_type == IntentType.FORCE_FLAT
         assert intent.reason == "halt_flatten"
 
-    # ------------------------------------------------------------------
-    # on_halt with short position -> BUY
-    # ------------------------------------------------------------------
-
     @pytest.mark.asyncio
     async def test_on_halt_short_emits_buy(self) -> None:
         store = FakePositionStore(
@@ -132,17 +108,13 @@ class TestHaltFlattener:
         assert intent.qty == 3
         assert intent.symbol == "2454"
 
-    # ------------------------------------------------------------------
-    # on_halt with multiple positions
-    # ------------------------------------------------------------------
-
     @pytest.mark.asyncio
     async def test_on_halt_multiple_positions(self) -> None:
         store = FakePositionStore(
             {
                 "k1": FakePosition("2330", "s1", 10),
                 "k2": FakePosition("2317", "s1", -5),
-                "k3": FakePosition("2454", "s2", 0),  # Flat, should skip
+                "k3": FakePosition("2454", "s2", 0),
             }
         )
         submit = AsyncMock()
@@ -150,10 +122,6 @@ class TestHaltFlattener:
         result = await flattener.on_halt()
         assert result == 2
         assert submit.call_count == 2
-
-    # ------------------------------------------------------------------
-    # submit_fn error handling
-    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_on_halt_continues_on_submit_error(self) -> None:
@@ -175,13 +143,8 @@ class TestHaltFlattener:
 
         flattener = HaltFlattener(store, flaky_submit, enabled=True)
         result = await flattener.on_halt()
-        # First fails, second succeeds
         assert result == 1
         assert call_count == 2
-
-    # ------------------------------------------------------------------
-    # Intent ID uniqueness
-    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_intent_ids_are_unique(self) -> None:

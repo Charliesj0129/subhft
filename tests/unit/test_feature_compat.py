@@ -20,10 +20,6 @@ from hft_platform.feature.compat import (
 from hft_platform.feature.profile import FeatureProfile
 from hft_platform.feature.registry import FeatureRegistry, default_feature_registry
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_registry() -> FeatureRegistry:
     return default_feature_registry()
@@ -41,11 +37,6 @@ def _profile(
         schema_version=schema_version,
         params=params or {},
     )
-
-
-# ---------------------------------------------------------------------------
-# FeatureCompatibilityIssue
-# ---------------------------------------------------------------------------
 
 
 class TestFeatureCompatibilityIssue:
@@ -71,11 +62,6 @@ class TestFeatureCompatibilityIssue:
         assert a != b
 
 
-# ---------------------------------------------------------------------------
-# check_feature_profile_compat — unknown feature set
-# ---------------------------------------------------------------------------
-
-
 class TestCheckFeatureProfileCompatUnknownSet:
     def test_unknown_feature_set_returns_single_error(self):
         reg = _make_registry()
@@ -98,11 +84,6 @@ class TestCheckFeatureProfileCompatUnknownSet:
         assert any(i.code == "unknown_feature_set" for i in issues)
 
 
-# ---------------------------------------------------------------------------
-# check_feature_profile_compat — schema version
-# ---------------------------------------------------------------------------
-
-
 class TestCheckFeatureProfileCompatSchemaVersion:
     def test_no_schema_version_produces_no_issues(self):
         reg = _make_registry()
@@ -112,7 +93,6 @@ class TestCheckFeatureProfileCompatSchemaVersion:
 
     def test_schema_version_equal_to_runtime_is_ok(self):
         reg = _make_registry()
-        # lob_shared_v3 has schema_version=3
         profile = _profile(schema_version=3)
         issues = check_feature_profile_compat(profile, reg)
         assert all(i.code != "schema_too_new" for i in issues)
@@ -138,15 +118,9 @@ class TestCheckFeatureProfileCompatSchemaVersion:
 
     def test_schema_version_bump_by_one_produces_error(self):
         reg = _make_registry()
-        # v3 → profile claims v4
         profile = _profile(schema_version=4)
         issues = check_feature_profile_compat(profile, reg)
         assert any(i.code == "schema_too_new" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# check_feature_profile_compat — ema_window param
-# ---------------------------------------------------------------------------
 
 
 class TestCheckFeatureProfileCompatEmaWindow:
@@ -199,7 +173,6 @@ class TestCheckFeatureProfileCompatEmaWindow:
 
     def test_ema_window_as_string_int_is_ok(self):
         reg = _make_registry()
-        # params may come from YAML as strings
         profile = _profile(params={"ema_window": "64"})
         issues = check_feature_profile_compat(profile, reg)
         assert all(i.code not in {"invalid_ema_window", "large_ema_window"} for i in issues)
@@ -240,11 +213,6 @@ class TestCheckFeatureProfileCompatEmaWindow:
         assert "2048" in warn.message
 
 
-# ---------------------------------------------------------------------------
-# check_feature_profile_compat — combined scenarios
-# ---------------------------------------------------------------------------
-
-
 class TestCheckFeatureProfileCompatCombined:
     def test_valid_profile_no_issues(self):
         reg = _make_registry()
@@ -254,7 +222,6 @@ class TestCheckFeatureProfileCompatCombined:
 
     def test_multiple_issues_returned_together(self):
         reg = _make_registry()
-        # schema_too_new + large_ema_window
         profile = _profile(schema_version=999, params={"ema_window": 9999})
         issues = check_feature_profile_compat(profile, reg)
         codes = {i.code for i in issues}
@@ -268,7 +235,6 @@ class TestCheckFeatureProfileCompatCombined:
         assert issues == []
 
     def test_profile_schema_newer_than_v1_runtime(self):
-        # Registry only has v1
         reg = FeatureRegistry()
         from hft_platform.feature.registry import build_default_lob_feature_set_v1
 
@@ -276,11 +242,6 @@ class TestCheckFeatureProfileCompatCombined:
         profile = _profile(feature_set_id="lob_shared_v1", schema_version=99)
         issues = check_feature_profile_compat(profile, reg)
         assert any(i.code == "schema_too_new" for i in issues)
-
-
-# ---------------------------------------------------------------------------
-# check_runtime_feature_engine_compat
-# ---------------------------------------------------------------------------
 
 
 class TestCheckRuntimeFeatureEngineCompatNone:
@@ -307,7 +268,7 @@ class TestCheckRuntimeFeatureEngineCompatMissingApi:
 
     def test_missing_single_attribute_produces_one_error(self):
         engine = MagicMock()
-        del engine.get_feature_view  # remove one attribute
+        del engine.get_feature_view
         issues = check_runtime_feature_engine_compat(engine)
         missing = [i for i in issues if i.code == "missing_api"]
         assert len(missing) == 1
@@ -315,7 +276,7 @@ class TestCheckRuntimeFeatureEngineCompatMissingApi:
 
     def test_non_callable_attribute_is_flagged(self):
         engine = MagicMock()
-        engine.feature_set_id = "lob_shared_v3"  # not callable
+        engine.feature_set_id = "lob_shared_v3"
         issues = check_runtime_feature_engine_compat(engine)
         missing = [i for i in issues if i.code == "missing_api"]
         assert any("feature_set_id" in i.message for i in missing)
@@ -336,7 +297,6 @@ class TestCheckRuntimeFeatureEngineCompatMissingApi:
 class TestCheckRuntimeFeatureEngineCompatValid:
     def test_fully_compliant_engine_has_no_issues(self):
         engine = MagicMock()
-        # All required attributes present and callable
         engine.feature_set_id = MagicMock()
         engine.schema_version = MagicMock()
         engine.get_feature = MagicMock()
@@ -357,5 +317,4 @@ class TestCheckRuntimeFeatureEngineCompatValid:
     def test_returns_empty_list_for_valid_engine(self):
         engine = MagicMock()
         issues = check_runtime_feature_engine_compat(engine)
-        # MagicMock provides callables for everything by default
         assert isinstance(issues, list)

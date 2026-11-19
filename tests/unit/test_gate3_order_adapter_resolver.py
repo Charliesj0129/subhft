@@ -90,14 +90,12 @@ class TestResolverPath:
         a = _adapter()
         a.set_contract_resolver(_populated_resolver())
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
-        # Alias dict is present but resolver path should win.
         a._actual_to_config = {"TMFE6": "TMFR1"}
         assert a._resolve_broker_contract_code(_intent("TMFE6", contract=ref)) == "TMFE6"
 
     def test_contract_with_resolver_miss_falls_back_to_alias(self) -> None:
         """Ref not in resolver's native_hints — adapter falls back."""
         a = _adapter()
-        # Empty resolver: no native hints.
         a.set_contract_resolver(ContractFamilyResolver())
         a._actual_to_config = {"TMFE6": "TMFR1"}
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
@@ -107,7 +105,6 @@ class TestResolverPath:
         a = _adapter()
         a.set_contract_resolver(_populated_resolver())
         a._actual_to_config = {"TMFE6": "TMFR1"}
-        # intent.contract is None — resolver doesn't apply.
         assert a._resolve_broker_contract_code(_intent("TMFE6")) == "TMFR1"
 
     def test_resolver_snapshot_exception_falls_back(self) -> None:
@@ -128,7 +125,6 @@ class TestResolverPath:
         """Snapshot exists but native_hint returns None — fall back."""
         a = _adapter()
         resolver = ContractFamilyResolver()
-        # Build a snapshot with family_map but no native_hints at all.
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
         snapshot = build_snapshot_from_calendar(
             {"TMF": [ref]},
@@ -162,7 +158,6 @@ class TestObservability:
 
     def test_symbol_raw_increments_symbol_raw_label(self) -> None:
         a = _adapter()
-        # Neither resolver nor alias dict has anything.
         before = _counter_sum(a.metrics.order_contract_code_resolution_total, "symbol_raw")
         a._resolve_broker_contract_code(_intent("TMFE6"))
         after = _counter_sum(a.metrics.order_contract_code_resolution_total, "symbol_raw")

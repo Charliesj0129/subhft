@@ -68,14 +68,12 @@ def ensure_builtin_sub_gates_registered() -> None:
 
     existing_names = {g.name for g in get_registered_sub_gates()}
     candidates: list[SubGate] = [
-        # Existing
         SharpeThresholdGate(),
         MaxDrawdownGate(),
         WinningDayPctGate(),
         FillQualityGate(),
         FillRateValidationGate(),
         ICEvaluationGate(),
-        # New (Slice A)
         MinSampleSizeGate(),
         SingleDayDominanceGate(),
         LOODaySensitivityGate(),
@@ -83,21 +81,13 @@ def ensure_builtin_sub_gates_registered() -> None:
         DayLevelBootstrapCIGate(),
         StationaryBlockBootstrapGate(),
         DeflatedSharpeForMakerGate(),
-        # New (Slice C)
         ReplayParityGate(),
-        # New (Slice B)
         InventoryMtMGate(),
         CostUncertaintyGate(),
-        # Monthly-distribution credibility gate (goal §6)
         MonthlyDistributionGate(),
-        # Per-round-trip net edge floor (goal §5: > 10 pts/trade)
         EdgePerRoundTripGate(),
-        # Trade-level concentration (goal §5: loss-distribution + dominance)
         TradeConcentrationGate(),
-        # Force-flat residual dominance (goal §3 + §5): flag edges
-        # propped up by inventory closed at end-of-window mark.
         ForceFlatResidualGate(),
-        # Selection bias of the search that picked the alpha (research v2)
         SelectionDeflatedSharpeGate(),
     ]
     for gate in candidates:
@@ -105,7 +95,6 @@ def ensure_builtin_sub_gates_registered() -> None:
             register_sub_gate(gate)
 
 
-# Register built-in gates once at import time.
 ensure_builtin_sub_gates_registered()
 
 

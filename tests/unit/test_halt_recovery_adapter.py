@@ -55,14 +55,9 @@ class TestHaltRecoveryOrderAdapter:
 
         from hft_platform.contracts.strategy import StormGuardState
 
-        # Simulate HALT: disable order adapter
         system.order_adapter.running = False
         system.storm_guard.state = StormGuardState.NORMAL
 
-        # The else branch at line 724 fires when sg.state != HALT
-        # We can't easily run _supervise() (it's an infinite loop),
-        # so test the logic directly: when state is not HALT,
-        # set_normal() + order_adapter re-enable should happen.
         system._set_service_running(system.order_adapter, True)
         assert system.order_adapter.running is True
 

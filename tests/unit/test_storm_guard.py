@@ -13,7 +13,6 @@ pytestmark = pytest.mark.usefixtures("order_rtt_single_sample")
 class TestStormGuard(unittest.TestCase):
     def setUp(self):
         self.temp_metrics = MagicMock()
-        # Mock MetricsRegistry.get() to avoid side effects
         patcher = patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=self.temp_metrics)
         self.addCleanup(patcher.stop)
         patcher.start()
@@ -23,23 +22,19 @@ class TestStormGuard(unittest.TestCase):
         self.assertEqual(self.guard.state, StormGuardState.NORMAL)
 
     def test_transition_to_warm(self):
-        # Drawdown -60 bps (< -50 bps) -> WARM
         state = self.guard.update(order_rtt_us=1_500_000)
         self.assertEqual(state, StormGuardState.WARM)
         self.assertEqual(self.guard.state, StormGuardState.WARM)
 
     def test_transition_to_storm(self):
-        # Latency 21000 (> 20000) -> STORM
         state = self.guard.update(latency_us=21000)
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_transition_to_halt(self):
-        # Feed Gap 1.1 (> 1.0) -> STORM (should not HALT)
         state = self.guard.update(feed_gap_s=1.1)
         self.assertEqual(state, StormGuardState.STORM)
 
     def test_priority(self):
-        # STORM and WARM conditions together -> STORM; no health input reaches HALT
         state = self.guard.update(latency_us=20000, order_rtt_us=1_500_000)
         self.assertEqual(state, StormGuardState.STORM)
 
@@ -50,27 +45,17 @@ class TestStormGuard(unittest.TestCase):
 
     def test_recovery(self):
         self.guard.trigger_halt("Manual")
-        # With default halt_cooldown, bypass by setting cooldown=0 and n=1
         self.guard._halt_cooldown_s = 0.0
         self.guard._de_escalate_threshold = 1
-        # Update with safe values
         state = self.guard.update(latency_us=0, feed_gap_s=0)
         self.assertEqual(state, StormGuardState.NORMAL)
         self.assertTrue(self.guard.is_safe())
-
-
-# ---------------------------------------------------------------------------
-# pytest-style tests for uncovered branches
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
 def guard():
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
         yield StormGuard()
-
-
-# ── reload_thresholds ───────────────────────────────────────────────────────
 
 
 def test_reload_thresholds_updates_risk_sub_dict(guard):
@@ -101,9 +86,6 @@ def test_reload_thresholds_ignores_unknown_keys(guard):
     assert not hasattr(guard.thresholds, "halt_drawdown_bps")
 
 
-# ── _apply_env_overrides ────────────────────────────────────────────────────
-
-
 def test_apply_env_override_feed_gap(monkeypatch):
     monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "5.0")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
@@ -114,13 +96,8 @@ def test_apply_env_override_feed_gap(monkeypatch):
 def test_apply_env_override_feed_gap_invalid_value_logs_warning(monkeypatch):
     monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "not_a_float")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
-        # Should not raise; invalid value is ignored and a warning is logged
         g = StormGuard()
-    # Default value remains unchanged (ValueError path taken)
     assert g.thresholds.feed_gap_storm_s == 1.0
-
-
-# ── canonical HFT_STORMGUARD_FEED_GAP_STORM_S env var ──────────────────────
 
 
 def test_feed_gap_storm_env_override(monkeypatch):
@@ -137,7 +114,6 @@ def test_feed_gap_deprecated_halt_env_still_works(monkeypatch, capfd):
     monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "60")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
         g = StormGuard()
-    # Deprecated alias is still honoured
     assert g.thresholds.feed_gap_storm_s == 60.0
 
 
@@ -147,7 +123,6 @@ def test_feed_gap_storm_env_takes_precedence(monkeypatch):
     monkeypatch.setenv("HFT_STORMGUARD_FEED_GAP_HALT_S", "99")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
         g = StormGuard()
-    # STORM_S should win over the deprecated HALT_S
     assert g.thresholds.feed_gap_storm_s == 45.0
 
 
@@ -162,7 +137,7 @@ def test_apply_env_override_latency_storm_invalid(monkeypatch):
     monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "bad")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
         g = StormGuard()
-    assert g.thresholds.latency_storm_us == 20000  # default unchanged
+    assert g.thresholds.latency_storm_us == 20000
 
 
 def test_apply_env_override_latency_warm(monkeypatch):
@@ -176,48 +151,41 @@ def test_apply_env_override_latency_warm_invalid(monkeypatch):
     monkeypatch.setenv("HFT_STORMGUARD_LATENCY_WARM_US", "bad")
     with patch("hft_platform.risk.storm_guard.MetricsRegistry.get", return_value=MagicMock()):
         g = StormGuard()
-    assert g.thresholds.latency_warm_us == 5000  # default unchanged
-
-
-# ── _evaluate_target_state edge cases ──────────────────────────────────────
+    assert g.thresholds.latency_warm_us == 5000
 
 
 def test_evaluate_target_state_storm_drawdown_path(guard):
     """Drawdown between storm and halt threshold triggers STORM, not HALT."""
-    state = guard.update(order_rtt_us=2_500_000)  # storm=-100, halt=-200
+    state = guard.update(order_rtt_us=2_500_000)
     assert state == StormGuardState.STORM
 
 
 def test_evaluate_target_state_warm_latency_path(guard):
     """Latency between warm and storm threshold triggers WARM."""
-    state = guard.update(latency_us=6000)  # warm=5000, storm=20000
+    state = guard.update(latency_us=6000)
     assert state == StormGuardState.WARM
-
-
-# ── de-escalation with cooldown (STORM path) ───────────────────────────────
 
 
 def test_de_escalation_blocked_during_storm_cooldown(guard):
     """De-escalation count resets to 0 if cooldown not yet elapsed."""
-    guard._storm_cooldown_s = 9999.0  # effectively infinite cooldown
+    guard._storm_cooldown_s = 9999.0
     guard._de_escalate_threshold = 1
-    guard.update(latency_us=25000)  # enter STORM
+    guard.update(latency_us=25000)
     assert guard.state == StormGuardState.STORM
-    # Attempt recovery before cooldown expires
     guard.update(latency_us=0)
     assert guard.state == StormGuardState.STORM
-    assert guard._de_escalate_count == 0  # reset because cooldown not met
+    assert guard._de_escalate_count == 0
 
 
 def test_de_escalation_allowed_after_storm_cooldown(guard):
     """De-escalation succeeds once cooldown has elapsed."""
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 2
-    guard.update(latency_us=25000)  # enter STORM
+    guard.update(latency_us=25000)
     assert guard.state == StormGuardState.STORM
-    guard.update(latency_us=0)  # count = 1, not yet threshold
+    guard.update(latency_us=0)
     assert guard.state == StormGuardState.STORM
-    guard.update(latency_us=0)  # count = 2 → transition
+    guard.update(latency_us=0)
     assert guard.state == StormGuardState.NORMAL
 
 
@@ -225,13 +193,9 @@ def test_de_escalation_count_not_incremented_when_staying_in_storm(guard):
     """When state stays in STORM, de-escalate count resets."""
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 5
-    guard.update(latency_us=25000)  # enter STORM
-    # Keep sending storm conditions — count should stay 0
+    guard.update(latency_us=25000)
     guard.update(latency_us=25000)
     assert guard._de_escalate_count == 0
-
-
-# ── validate method ─────────────────────────────────────────────────────────
 
 
 def _make_intent(intent_type: IntentType) -> OrderIntent:
@@ -268,7 +232,7 @@ def test_validate_force_flat_allowed_during_halt(guard):
 
 
 def test_validate_new_order_blocked_during_storm(guard):
-    guard.update(latency_us=25000)  # enter STORM
+    guard.update(latency_us=25000)
     assert guard.state == StormGuardState.STORM
     ok, reason = guard.validate(_make_intent(IntentType.NEW))
     assert not ok
@@ -288,9 +252,6 @@ def test_validate_any_order_allowed_during_normal(guard):
     assert reason == "OK"
 
 
-# ── on_halt_callback ────────────────────────────────────────────────────────
-
-
 def test_halt_callback_sync_called_on_halt(guard):
     called = []
 
@@ -307,7 +268,6 @@ def test_halt_callback_exception_does_not_propagate(guard):
         raise RuntimeError("oops")
 
     guard._on_halt_callback = bad_cb
-    # Should not raise
     guard.trigger_halt("cb error test")
     assert guard.state == StormGuardState.HALT
 
@@ -325,21 +285,14 @@ def test_halt_callback_coroutine_no_running_loop(guard, recwarn):
     assert guard.state == StormGuardState.HALT
 
 
-# ── transition audit failure ────────────────────────────────────────────────
-
-
 def test_transition_audit_failure_does_not_propagate(guard):
     """If audit writer raises, transition should complete without error."""
     with patch(
         "hft_platform.recorder.audit.get_audit_writer",
         side_effect=RuntimeError("audit unavailable"),
     ):
-        # Should not raise — audit is best-effort
         guard._transition(StormGuardState.WARM, "test reason")
     assert guard.state == StormGuardState.WARM
-
-
-# ── update_with_lob ─────────────────────────────────────────────────────────
 
 
 class _FakeToxicityResult(NamedTuple):
@@ -403,7 +356,7 @@ def test_drift_burst_never_raises_the_halt_callback():
 
 def test_update_with_lob_crossed_book_escalates_to_storm():
     """Crossed book (spread < 0) must escalate to STORM immediately."""
-    g = _guard_with_detector(toxicity=0.1)  # low toxicity — but crossed book overrides
+    g = _guard_with_detector(toxicity=0.1)
     result = g.update_with_lob(mid_price_x2=2000000, spread_scaled=-100)
     assert result == StormGuardState.STORM
 
@@ -412,7 +365,6 @@ def test_update_with_lob_empty_book_skips_detector():
     """Empty book (mid_price_x2 <= 0) must skip DriftBurst and return current state."""
     g = _guard_with_detector(toxicity=0.95, burst=True)
     result = g.update_with_lob(mid_price_x2=0, spread_scaled=0)
-    # Should NOT escalate despite high toxicity detector — empty book skips it
     assert result == StormGuardState.NORMAL
 
 
@@ -422,9 +374,6 @@ def test_update_with_lob_does_not_de_escalate():
     g.trigger_halt("manual halt")
     result = g.update_with_lob(mid_price_x2=1000000, spread_scaled=100)
     assert result == StormGuardState.HALT
-
-
-# ── halt_exempt_strategies ──────────────────────────────────────────────────
 
 
 def _make_intent_with_strategy(intent_type: IntentType, strategy_id: str) -> OrderIntent:
@@ -509,9 +458,6 @@ def test_env_var_halt_exempt_strategies():
     assert g._halt_exempt_strategies == frozenset({"spike_fader", "event_momentum"})
 
 
-# ── is_halt_exempt public API ──────────────────────────────────────────────
-
-
 def test_is_halt_exempt_returns_true_for_exempt(exempt_guard):
     """is_halt_exempt returns True for registered strategy."""
     assert exempt_guard.is_halt_exempt("spike_fader") is True
@@ -525,9 +471,6 @@ def test_is_halt_exempt_returns_false_for_non_exempt(exempt_guard):
 def test_is_halt_exempt_empty_guard(guard):
     """is_halt_exempt returns False when no strategies are exempt."""
     assert guard.is_halt_exempt("any_strategy") is False
-
-
-# ── revoke_halt_exemption runtime kill switch ──────────────────────────────
 
 
 def test_revoke_halt_exemption_removes_strategy(exempt_guard):
@@ -547,36 +490,27 @@ def test_revoke_halt_exemption_returns_false_for_unknown(exempt_guard):
 def test_revoke_halt_exemption_blocks_previously_exempt_orders(exempt_guard):
     """After revocation, previously exempt strategy is blocked during HALT."""
     exempt_guard.trigger_halt("test")
-    # Before revocation: exempt
     ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert ok
     assert reason == "HALT_EXEMPT"
 
-    # Revoke
     exempt_guard.revoke_halt_exemption("spike_fader")
 
-    # After revocation: blocked
     ok, reason = exempt_guard.validate(_make_intent_with_strategy(IntentType.NEW, "spike_fader"))
     assert not ok
     assert reason == "STORMGUARD_HALT"
 
 
-# ── grant_halt_exemption ──────────────────────────────────────────────────
-
-
 def test_grant_halt_exemption_adds_strategy(guard):
     """Granting exemption allows strategy through HALT."""
     guard.trigger_halt("test")
-    # Before grant: blocked
     ok, _ = guard.validate(_make_intent_with_strategy(IntentType.NEW, "new_mm"))
     assert not ok
 
-    # Grant
     result = guard.grant_halt_exemption("new_mm")
     assert result is True
     assert guard.is_halt_exempt("new_mm") is True
 
-    # After grant: allowed
     ok, reason = guard.validate(_make_intent_with_strategy(IntentType.NEW, "new_mm"))
     assert ok
     assert reason == "HALT_EXEMPT"
@@ -587,9 +521,6 @@ def test_grant_halt_exemption_idempotent(guard):
     guard.grant_halt_exemption("mm_strategy")
     guard.grant_halt_exemption("mm_strategy")
     assert guard.is_halt_exempt("mm_strategy") is True
-
-
-# ── stormguard_halt_exempt_bypass_total counter ───────────────────────────
 
 
 def test_halt_exempt_bypass_increments_dedicated_counter(exempt_guard):
@@ -603,36 +534,26 @@ def test_halt_exempt_bypass_increments_dedicated_counter(exempt_guard):
     assert reason == "HALT_EXEMPT"
 
     metrics = exempt_guard.metrics
-    # Dedicated bypass counter must be incremented
     metrics.stormguard_halt_exempt_bypass_total.inc.assert_called()
-    # Transition counter must NOT be called with "halt_exempt_bypass"
     for call in metrics.stormguard_transitions_total.labels.call_args_list:
         assert call.kwargs.get("direction") != "halt_exempt_bypass", (
             "stormguard_transitions_total must not use direction='halt_exempt_bypass'"
         )
 
 
-# ── report_feature_recovery does NOT transition (Fix 4) ───────────────────
-
-
 def test_feature_recovery_does_not_transition_when_other_storm_active(guard):
     """Feature recovery only clears flag; does not de-escalate if other
     STORM conditions (latency) are still active."""
-    # Latency causes STORM
     guard.update(latency_us=25000)
     assert guard.state == StormGuardState.STORM
 
-    # Feature failure also fires (state already STORM)
     guard.report_feature_failure(count=10)
     assert guard._feature_failure_active is True
 
-    # Bypass anti-flap hold
     guard._feature_failure_storm_ts -= 10.0
 
-    # Feature recovers — but latency is still elevated
     guard.report_feature_recovery()
     assert guard._feature_failure_active is False
-    # State MUST remain STORM (latency still elevated)
     assert guard.state == StormGuardState.STORM
 
 
@@ -644,17 +565,12 @@ def test_feature_recovery_clears_flag_only(guard):
 
     guard.report_feature_recovery()
     assert guard._feature_failure_active is False
-    # State is still STORM until update() clears it
     assert guard.state == StormGuardState.STORM
 
-    # Now update() with clear inputs de-escalates via hysteresis
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
     guard.update(latency_us=0, feed_gap_s=0)
     assert guard.state == StormGuardState.NORMAL
-
-
-# ── _feature_failure_active blocks de-escalation ───────────────────────────
 
 
 def test_feature_failure_prevents_normal_deescalation(guard):
@@ -682,9 +598,6 @@ def test_feature_failure_does_not_lift_a_halt(guard):
     assert guard.state == StormGuardState.HALT
 
 
-# ── Feed gap re-escalation cooldown ──────────────────────────────────────────
-
-
 def test_feed_gap_reescalation_suppressed_after_deescalation(guard):
     """After de-escalating from a feed-gap STORM, re-escalation via feed gap
     should be suppressed for a cooldown period to prevent flapping.
@@ -696,32 +609,28 @@ def test_feed_gap_reescalation_suppressed_after_deescalation(guard):
     guard._de_escalate_threshold = 1
     guard._feed_gap_reescalation_cooldown_s = 120.0
 
-    # Enter STORM via feed gap
     state = guard.update(feed_gap_s=2.0)
     assert state == StormGuardState.STORM
 
-    # De-escalate
     state = guard.update(feed_gap_s=0.0)
     assert state == StormGuardState.NORMAL
 
-    # Immediately re-trigger feed gap — should be suppressed
     state = guard.update(feed_gap_s=2.0)
-    assert state == StormGuardState.NORMAL  # suppressed, NOT STORM
+    assert state == StormGuardState.NORMAL
 
 
 def test_feed_gap_reescalation_allowed_after_cooldown(guard):
     """Feed gap re-escalation is allowed once the cooldown period expires."""
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
-    guard._feed_gap_reescalation_cooldown_s = 0.0  # no cooldown
+    guard._feed_gap_reescalation_cooldown_s = 0.0
 
-    # Enter STORM, de-escalate, re-trigger
     guard.update(feed_gap_s=2.0)
     guard.update(feed_gap_s=0.0)
     assert guard.state == StormGuardState.NORMAL
 
     state = guard.update(feed_gap_s=2.0)
-    assert state == StormGuardState.STORM  # allowed, cooldown is 0
+    assert state == StormGuardState.STORM
 
 
 def test_non_feed_gap_escalation_not_suppressed(guard):
@@ -729,14 +638,12 @@ def test_non_feed_gap_escalation_not_suppressed(guard):
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
     guard._feed_gap_reescalation_cooldown_s = 9999.0
-    guard._latency_reescalation_cooldown_s = 0.0  # disable latency cooldown
+    guard._latency_reescalation_cooldown_s = 0.0
 
-    # Enter STORM via feed gap, de-escalate
     guard.update(feed_gap_s=2.0)
     guard.update(feed_gap_s=0.0)
     assert guard.state == StormGuardState.NORMAL
 
-    # Latency-triggered STORM should NOT be suppressed (latency cooldown is 0)
     state = guard.update(latency_us=25000)
     assert state == StormGuardState.STORM
 
@@ -745,32 +652,28 @@ def test_latency_reescalation_suppressed_by_own_cooldown(guard):
     """After de-escalation from latency STORM, re-escalation is suppressed."""
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
-    guard._latency_reescalation_cooldown_s = 9999.0  # long cooldown
+    guard._latency_reescalation_cooldown_s = 9999.0
 
-    # Enter STORM via latency, de-escalate
     guard.update(latency_us=25000)
     assert guard.state == StormGuardState.STORM
     guard.update(latency_us=0)
     assert guard.state == StormGuardState.NORMAL
 
-    # Re-escalation should be suppressed during cooldown
     state = guard.update(latency_us=25000)
-    assert state == StormGuardState.NORMAL  # suppressed
+    assert state == StormGuardState.NORMAL
 
 
 def test_latency_reescalation_allowed_after_cooldown_expires(guard):
     """After latency cooldown expires, re-escalation is allowed."""
     guard._storm_cooldown_s = 0.0
     guard._de_escalate_threshold = 1
-    guard._latency_reescalation_cooldown_s = 0.0  # instant expiry
+    guard._latency_reescalation_cooldown_s = 0.0
 
-    # Enter STORM via latency, de-escalate
     guard.update(latency_us=25000)
     assert guard.state == StormGuardState.STORM
     guard.update(latency_us=0)
     assert guard.state == StormGuardState.NORMAL
 
-    # Re-escalation should proceed (cooldown = 0)
     state = guard.update(latency_us=25000)
     assert state == StormGuardState.STORM
 
@@ -782,11 +685,9 @@ def test_drawdown_escalation_not_suppressed_by_latency_cooldown(guard):
     guard._latency_reescalation_cooldown_s = 9999.0
     guard._feed_gap_reescalation_cooldown_s = 9999.0
 
-    # Enter STORM via latency, de-escalate
     guard.update(latency_us=25000)
     guard.update(latency_us=0)
     assert guard.state == StormGuardState.NORMAL
 
-    # Drawdown-triggered STORM should NOT be suppressed
     state = guard.update(order_rtt_us=2_500_000)
     assert state == StormGuardState.STORM

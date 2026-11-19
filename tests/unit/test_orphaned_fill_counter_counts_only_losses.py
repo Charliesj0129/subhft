@@ -67,7 +67,7 @@ def _stub_metrics() -> MagicMock:
 class _StubFillEvent:
     fill_id: str = "FILL_PHANTOM_1"
     order_id: str = "BROKER_v002PHANTOM"
-    strategy_id: str = "UNKNOWN"  # the condition that sends it down the phantom path
+    strategy_id: str = "UNKNOWN"
     symbol: str = "TMFI6"
     account_id: str = "acct_test"
     ingest_ts_ns: int = 1_000_000_000

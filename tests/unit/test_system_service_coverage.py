@@ -13,10 +13,6 @@ import pytest
 
 from hft_platform.services.system import HFTSystem
 
-# ---------------------------------------------------------------------------
-# Helper: lightweight HFTSystem stub (bypass __init__ / SystemBootstrapper)
-# ---------------------------------------------------------------------------
-
 
 def _make_stub() -> HFTSystem:
     """Return an HFTSystem instance with all dependencies stubbed out."""
@@ -61,8 +57,6 @@ def _make_stub() -> HFTSystem:
     sys_obj.daily_report_service = None
     sys_obj.evidence_writer = MagicMock()
     sys_obj.platform_degrade_controller = MagicMock()
-    # The degrade transitions persist off the event loop now, so the three
-    # moved methods have to be awaitable on the double as well.
     sys_obj.platform_degrade_controller.enter_reduce_only_async = AsyncMock()
     sys_obj.platform_degrade_controller.exit_reduce_only_async = AsyncMock()
     sys_obj.platform_degrade_controller.check_auto_recovery_async = AsyncMock(return_value=False)
@@ -91,15 +85,9 @@ def _make_stub() -> HFTSystem:
     sys_obj._recorder_bridge_drops = 0
     sys_obj._pnl_snapshot_drops = 0
     sys_obj._halt_log_mono = 0.0
-    # Mirrors HFTSystem.__init__: None means "not currently halted".
     sys_obj._halt_episode_start_mono = None
     sys_obj._halt_checkpoint_written = False
     return sys_obj
-
-
-# ===========================================================================
-# Module-level functions (lines 25-38)
-# ===========================================================================
 
 
 class TestReadKillSwitchReason:
@@ -134,7 +122,6 @@ class TestLogSafetyDispatchError:
         task.cancelled.return_value = False
         task.exception.return_value = RuntimeError("dispatch failed")
 
-        # Should not raise; exercises the logger.critical path
         _log_safety_dispatch_error(task)
         task.exception.assert_called_once()
 
@@ -144,7 +131,6 @@ class TestLogSafetyDispatchError:
         task = MagicMock()
         task.cancelled.return_value = True
 
-        # exc is None when cancelled -> no critical log
         _log_safety_dispatch_error(task)
         task.exception.assert_not_called()
 
@@ -157,11 +143,6 @@ class TestLogSafetyDispatchError:
 
         _log_safety_dispatch_error(task)
         task.exception.assert_called_once()
-
-
-# ===========================================================================
-# _get_max_feed_gap_s — client.get_healthy_feed_gap_s path (line 53)
-# ===========================================================================
 
 
 class TestGetMaxFeedGapClientPath:
@@ -186,11 +167,6 @@ class TestGetMaxFeedGapClientPath:
         assert result == 7.0
 
 
-# ===========================================================================
-# _try_restart_service (lines 608-642)
-# ===========================================================================
-
-
 class TestTryRestartService:
     """Cover _try_restart_service including max-attempts HALT path."""
 
@@ -211,7 +187,6 @@ class TestTryRestartService:
         assert "md" in sys_obj.tasks
         coro_factory.assert_called_once()
 
-        # Cleanup
         sys_obj.tasks["md"].cancel()
         try:
             await sys_obj.tasks["md"]
@@ -222,7 +197,6 @@ class TestTryRestartService:
         sys_obj = _make_stub()
         from hft_platform.core import timebase
 
-        # Set allowed_at far in the future
         sys_obj._task_restart_until_s["md"] = timebase.now_s() + 9999
         coro_factory = MagicMock()
 
@@ -233,7 +207,7 @@ class TestTryRestartService:
     def test_triggers_halt_on_max_attempts_exceeded(self):
         sys_obj = _make_stub()
         sys_obj._task_restart_max_attempts = 3
-        sys_obj._task_restart_attempts["md"] = 3  # next will be 4 > 3
+        sys_obj._task_restart_attempts["md"] = 3
 
         coro_factory = MagicMock()
         sys_obj._try_restart_service("md", "MarketDataService", coro_factory)
@@ -246,7 +220,7 @@ class TestTryRestartService:
         sys_obj = _make_stub()
         sys_obj._task_restart_base_delay_s = 2.0
         sys_obj._task_restart_max_delay_s = 30.0
-        sys_obj._task_restart_attempts["md"] = 2  # next attempt = 3
+        sys_obj._task_restart_attempts["md"] = 2
 
         async def _noop():
             await asyncio.sleep(100)
@@ -254,24 +228,17 @@ class TestTryRestartService:
         coro_factory = MagicMock(return_value=_noop())
         sys_obj._try_restart_service("md", "MarketDataService", coro_factory)
 
-        # attempt 3 -> delay = 2.0 * 2^(3-1) = 8.0
         assert sys_obj._task_restart_attempts["md"] == 3
         from hft_platform.core import timebase
 
         expected_delay = 8.0
         assert sys_obj._task_restart_until_s["md"] == pytest.approx(timebase.now_s() + expected_delay, abs=2.0)
 
-        # Cleanup
         sys_obj.tasks["md"].cancel()
         try:
             await sys_obj.tasks["md"]
         except asyncio.CancelledError:
             pass
-
-
-# ===========================================================================
-# _update_platform_degrade_state (lines 644-655)
-# ===========================================================================
 
 
 class TestUpdatePlatformDegradeState:
@@ -288,7 +255,6 @@ class TestUpdatePlatformDegradeState:
         sys_obj = _make_stub()
         sys_obj.platform_degrade_controller = None
 
-        # Should not raise
         asyncio.run(sys_obj._update_platform_degrade_state())
 
     def test_skips_when_inputs_is_none(self):  # noqa: no-assert
@@ -296,11 +262,6 @@ class TestUpdatePlatformDegradeState:
         sys_obj.platform_degrade_inputs = None
 
         asyncio.run(sys_obj._update_platform_degrade_state())
-
-
-# ===========================================================================
-# _persist_lost_exec_event (lines 1353-1383)
-# ===========================================================================
 
 
 class TestPersistLostExecEvent:
@@ -322,17 +283,10 @@ class TestPersistLostExecEvent:
 
     def test_handles_write_failure_gracefully(self, monkeypatch):  # noqa: no-assert
         sys_obj = _make_stub()
-        # Point to an invalid directory that cannot be created
         monkeypatch.setenv("HFT_STATE_DIR", "/dev/null/impossible")
 
         event = SimpleNamespace(topic="deal", data={}, ingest_ts_ns=0)
-        # Should not raise
         sys_obj._persist_lost_exec_event(event)
-
-
-# ===========================================================================
-# _safe_enqueue_exec (lines 1385-1413)
-# ===========================================================================
 
 
 class TestSafeEnqueueExec:
@@ -382,7 +336,7 @@ class TestSafeEnqueueExec:
         sys_obj = _make_stub()
         sys_obj.raw_exec_queue = asyncio.Queue(maxsize=1)
         sys_obj.raw_exec_queue.put_nowait("filler")
-        sys_obj._exec_overflow_counter = 2  # next will be 3
+        sys_obj._exec_overflow_counter = 2
 
         event = SimpleNamespace(topic="deal", data={})
         mock_metrics = MagicMock()
@@ -392,11 +346,6 @@ class TestSafeEnqueueExec:
 
         assert sys_obj._exec_overflow_counter == 3
         sys_obj.storm_guard.trigger_halt.assert_called_once_with("exec_queue_overflow_repeated")
-
-
-# ===========================================================================
-# _on_exec (lines 1415-1541) — broker thread callback
-# ===========================================================================
 
 
 class TestOnExec:
@@ -411,7 +360,7 @@ class TestOnExec:
     def test_buffers_event_pre_start_overflow_full_persists_to_dlq(self, tmp_path, monkeypatch):
         sys_obj = _make_stub()
         sys_obj.running = False
-        sys_obj._EXEC_OVERFLOW_MAX = 0  # immediately full
+        sys_obj._EXEC_OVERFLOW_MAX = 0
         monkeypatch.setenv("HFT_STATE_DIR", str(tmp_path / "state"))
 
         sys_obj._on_exec("deal", {"payload": {"price": 42}})
@@ -513,11 +462,6 @@ class TestOnExec:
         assert len(sys_obj._exec_overflow_buf) == 1
 
 
-# ===========================================================================
-# _start_service (lines 374-387) — exec_router/exec_gateway metrics
-# ===========================================================================
-
-
 class TestStartService:
     @pytest.mark.asyncio
     async def test_start_service_sets_exec_router_metric(self):
@@ -532,7 +476,6 @@ class TestStartService:
             sys_obj._start_service("exec_router", _noop())
 
         assert "exec_router" in sys_obj.tasks
-        # Clean up
         sys_obj.tasks["exec_router"].cancel()
         try:
             await sys_obj.tasks["exec_router"]
@@ -559,22 +502,16 @@ class TestStartService:
             pass
 
 
-# ===========================================================================
-# graceful_reset (lines 528-606)
-# ===========================================================================
-
-
 class TestGracefulReset:
     @pytest.mark.asyncio
     async def test_resets_all_components(self):
         sys_obj = _make_stub()
         sys_obj.checkpoint_writer = MagicMock()
         sys_obj.checkpoint_writer._path = "/tmp/test_ckpt.json"
-        # No actual file to delete -> "no file" path
 
         sys_obj.position_store._recovery_positions = {"sym1": MagicMock()}
         sys_obj.storm_guard.state = MagicMock()
-        sys_obj.storm_guard.state.__ge__ = lambda self, other: False  # not in STORM
+        sys_obj.storm_guard.state.__ge__ = lambda self, other: False
         sys_obj.platform_degrade_controller.reduce_only_active = False
         sys_obj.recon_service._halt_triggered = True
         sys_obj.recon_service._consecutive_failures = 5
@@ -638,11 +575,6 @@ class TestGracefulReset:
         sys_obj.platform_degrade_controller.exit_reduce_only_async.assert_awaited_once_with(reason="operator_manual")
 
 
-# ===========================================================================
-# _recorder_bridge — early exit path (lines 1546-1551)
-# ===========================================================================
-
-
 class TestRecorderBridgeEarlyExit:
     @pytest.mark.asyncio
     async def test_exits_when_all_direct_recording_enabled(self):
@@ -651,14 +583,8 @@ class TestRecorderBridgeEarlyExit:
         sys_obj._fill_record_direct = True
         sys_obj._order_record_direct = True
 
-        # Should return immediately without consuming bus
         await sys_obj._recorder_bridge()
         sys_obj.bus.consume.assert_not_called()
-
-
-# ===========================================================================
-# _pnl_snapshot_exporter (lines 458-494)
-# ===========================================================================
 
 
 class TestPnlSnapshotExporter:
@@ -681,7 +607,6 @@ class TestPnlSnapshotExporter:
         sys_obj.position_store.get_drawdown_pct.return_value = 0.01
         sys_obj.position_store.snapshot_open_positions.return_value = {"TXFD6": pos}
 
-        # Run one iteration then stop
         iteration = 0
 
         original_sleep = asyncio.sleep
@@ -740,11 +665,6 @@ class TestPnlSnapshotExporter:
         assert sys_obj._pnl_snapshot_drops >= 1
 
 
-# ===========================================================================
-# _iter_supervised_services — recorder_bridge inclusion (lines 505-509)
-# ===========================================================================
-
-
 class TestIterSupervisedServicesRecorderBridge:
     def test_includes_recorder_bridge_when_not_all_direct(self):
         sys_obj = _make_stub()
@@ -778,17 +698,11 @@ class TestIterSupervisedServicesRecorderBridge:
         assert "autonomy_monitor" in names
 
 
-# ===========================================================================
-# _sync_drain_recorder — no recorder (line 426-427)
-# ===========================================================================
-
-
 class TestSyncDrainRecorderNone:
     def test_returns_early_when_no_recorder(self):  # noqa: no-assert
         sys_obj = _make_stub()
         sys_obj.recorder = None
 
-        # Should return immediately without error
         sys_obj._sync_drain_recorder()
 
     def test_handles_drain_exception(self):
@@ -803,24 +717,17 @@ class TestSyncDrainRecorderNone:
         mock_recorder._shutdown_flush = AsyncMock()
         sys_obj.recorder = mock_recorder
 
-        # Should not raise — exception is caught
         sys_obj._sync_drain_recorder()
         assert mock_recorder.running is False
-
-
-# ===========================================================================
-# stop() — sync fallback path (lines 1321-1337)
-# ===========================================================================
 
 
 class TestStopSyncFallback:
     def test_stop_sync_fallback_no_loop(self):
         sys_obj = _make_stub()
         sys_obj.running = True
-        sys_obj.recorder = None  # skip drain
+        sys_obj.recorder = None
         sys_obj._bootstrap_torn_down = False
 
-        # No loop attribute -> sync fallback
         sys_obj.stop()
 
         assert sys_obj.running is False
@@ -841,15 +748,10 @@ class TestStopSyncFallback:
         mock_ct.assert_called_once()
 
 
-# ===========================================================================
-# _on_exec — loop not assigned, overflow full (lines 1522-1540)
-# ===========================================================================
-
-
 class TestOnExecNoLoopOverflow:
     def test_overflow_full_no_loop_persists_and_flags(self, tmp_path, monkeypatch):
         sys_obj = _make_stub()
-        sys_obj.running = True  # running but no loop
+        sys_obj.running = True
         sys_obj._EXEC_OVERFLOW_MAX = 0
         monkeypatch.setenv("HFT_STATE_DIR", str(tmp_path / "state"))
 
@@ -860,16 +762,11 @@ class TestOnExecNoLoopOverflow:
 
     def test_overflow_normal_no_loop_buffers(self):
         sys_obj = _make_stub()
-        sys_obj.running = True  # running but no loop
+        sys_obj.running = True
 
         sys_obj._on_exec("order", {"state": "submitted", "payload": {}})
 
         assert len(sys_obj._exec_overflow_buf) == 1
-
-
-# ===========================================================================
-# _on_exec — deal with nested dict order (line 1441-1452)
-# ===========================================================================
 
 
 class TestOnExecDealDictOrder:
@@ -893,15 +790,9 @@ class TestOnExecDealDictOrder:
         sys_obj._on_exec("deal", data)
 
         assert data["_resolved_strategy_id"] == "strat_D"
-        # Verify inner order fields were passed to resolver
         call_args = resolver.resolve_strategy_id_from_candidates.call_args[0][0]
         assert "ORD_INNER" in call_args
         assert "CF_123" in call_args
-
-
-# ===========================================================================
-# _on_exec — loop closing RuntimeError then overflow full (lines 1515-1521)
-# ===========================================================================
 
 
 class TestOnExecLoopClosingOverflowFull:
@@ -917,11 +808,6 @@ class TestOnExecLoopClosingOverflowFull:
         sys_obj._on_exec("deal", {"payload": {"price": 99}})
 
         assert sys_obj._exec_overflow_evicted == 1
-
-
-# ===========================================================================
-# stop() — gateway_service branch (line 1316)
-# ===========================================================================
 
 
 class TestStopWithGateway:
@@ -947,11 +833,6 @@ class TestStopWithGateway:
         assert sys_obj.running is False
 
 
-# ===========================================================================
-# _pnl_snapshot_exporter — exception handling path (line 493-494)
-# ===========================================================================
-
-
 class TestPnlSnapshotExporterException:
     @pytest.mark.asyncio
     async def test_handles_position_store_exception(self):
@@ -959,7 +840,6 @@ class TestPnlSnapshotExporterException:
         sys_obj.running = True
         sys_obj.position_store.total_pnl = property(lambda s: (_ for _ in ()).throw(RuntimeError("boom")))
 
-        # total_pnl raises -> exception caught, loop continues
         iteration = 0
         original_sleep = asyncio.sleep
 
@@ -972,16 +852,9 @@ class TestPnlSnapshotExporterException:
 
         with patch("asyncio.sleep", side_effect=_short_sleep):
             with patch.dict(os.environ, {"HFT_PNL_SNAPSHOT_INTERVAL_S": "0.001"}):
-                # Should not raise — exception is caught inside
                 await sys_obj._pnl_snapshot_exporter()
 
-        # Survived without crashing
         assert sys_obj.running is False
-
-
-# ===========================================================================
-# _on_exec — deal fallback to resolve_strategy_from_deal_candidates (dict)
-# ===========================================================================
 
 
 class TestOnExecDealDictFallback:
@@ -1026,11 +899,6 @@ class TestOnExecDealDictFallback:
         assert "_resolved_strategy_id" not in data
 
 
-# ===========================================================================
-# _start_service — non-exec service path (no metrics set)
-# ===========================================================================
-
-
 class TestStartServiceNonExec:
     @pytest.mark.asyncio
     async def test_start_service_regular_does_not_set_metrics(self):
@@ -1049,11 +917,6 @@ class TestStartServiceNonExec:
             pass
 
 
-# ===========================================================================
-# _cleanup_tasks — task that raises non-CancelledError (line 1348-1349)
-# ===========================================================================
-
-
 class TestCleanupTasksExceptionPath:
     @pytest.mark.asyncio
     async def test_cleanup_handles_task_exception(self):
@@ -1064,17 +927,11 @@ class TestCleanupTasksExceptionPath:
             raise RuntimeError("unexpected")
 
         task = asyncio.create_task(_erroring())
-        # Let it fail
         await asyncio.sleep(0.01)
         sys_obj.tasks = {"bad_task": task}
 
         await sys_obj._cleanup_tasks()
         assert len(sys_obj.tasks) == 0
-
-
-# ===========================================================================
-# _on_exec — deal with no order_adapter (skip resolution)
-# ===========================================================================
 
 
 class TestOnExecNoOrderAdapter:
@@ -1084,16 +941,10 @@ class TestOnExecNoOrderAdapter:
         sys_obj.order_adapter = None
 
         data = {"payload": {"ordno": "12345"}}
-        # Should not raise even with order_adapter=None
         sys_obj._on_exec("deal", data)
 
         assert "_resolved_strategy_id" not in data
         assert len(sys_obj._exec_overflow_buf) == 1
-
-
-# ===========================================================================
-# _on_exec — non-deal topic (order) skips resolution
-# ===========================================================================
 
 
 class TestOnExecOrderTopicWithNoCandidates:

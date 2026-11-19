@@ -45,8 +45,7 @@ class _FakeClient:
     def generate_candidates(self, *, base_prompt: str, brief_body: str, n: int) -> list[str]:
         self.calls += 1
         return [
-            json.dumps({"family": "trade_flow", "name": f"tf_{i}", "formula": "x"}, sort_keys=True)
-            for i in range(n)
+            json.dumps({"family": "trade_flow", "name": f"tf_{i}", "formula": "x"}, sort_keys=True) for i in range(n)
         ]
 
 
@@ -106,7 +105,6 @@ def test_generate_from_approved_brief_freezes_drop_and_writes_manifest(tmp_path)
     assert fam["focus"] == "amplify"
     assert fam["model"] == "deepseek-chat"
     assert len(fam["steering_sha256"]) == 64
-    # raw drop frozen + family file written through the existing generate path
     assert (candidates_root / "gen_001" / "_governor_raw" / "trade_flow.jsonl").exists()
     family_file = candidates_root / "gen_001" / "family=trade_flow.jsonl"
     assert family_file.exists()
@@ -138,7 +136,7 @@ def test_generate_is_idempotent_reuses_frozen_drop(tmp_path):
     second = _FakeClient()
     manifest = generate_from_briefs(client=second, **kwargs)
     assert first.calls == 1
-    assert second.calls == 0  # reused frozen drop
+    assert second.calls == 0
     assert manifest["families"]["trade_flow"]["reused"] is True
 
 
@@ -177,7 +175,6 @@ def test_generate_mixed_approved_and_unapproved(tmp_path):
     summary_path = tmp_path / "fs.json"
     summary_path.write_text(json.dumps(_summary_two()))
     draft_briefs(summary_path=summary_path, out_dir=steering, cfg=CFG, generated_at=FIXED_TS)
-    # approve trade_flow only; leave microprice unapproved
     tf = steering / "trade_flow.md"
     tf.write_text(tf.read_text().replace("approved: false", "approved: true"))
     client = _FakeClient()
@@ -204,8 +201,6 @@ def test_generate_rejects_family_filename_mismatch(tmp_path):
     draft_briefs(summary_path=summary_path, out_dir=steering, cfg=CFG, generated_at=FIXED_TS)
     src = steering / "trade_flow.md"
     src.write_text(src.read_text().replace("approved: false", "approved: true"))
-    # rename so the filename stem (microprice) no longer matches the frontmatter
-    # family (trade_flow) — an approval-intent divergence that must fail closed.
     src.rename(steering / "microprice.md")
     client = _FakeClient()
     with pytest.raises(ValueError):
@@ -218,7 +213,7 @@ def test_generate_rejects_family_filename_mismatch(tmp_path):
             candidates_root=tmp_path / "candidates",
             generated_at=FIXED_TS,
         )
-    assert client.calls == 0  # rejected before any spend
+    assert client.calls == 0
 
 
 def test_manifest_persisted_when_later_family_fails(tmp_path):
@@ -242,7 +237,6 @@ def test_manifest_persisted_when_later_family_fails(tmp_path):
             candidates_root=candidates_root,
             generated_at=FIXED_TS,
         )
-    # microprice (sorted first) succeeded and is recorded despite trade_flow failing
     manifest = json.loads((candidates_root / "gen_001" / "governor_manifest.json").read_text())
     assert "microprice" in manifest["families"]
     assert "trade_flow" not in manifest["families"]

@@ -31,10 +31,6 @@ def test_recover_precedes_exec_router_start():
     source = SYSTEM_SRC.read_text()
     lines = source.splitlines()
 
-    # Locate the first exec_router start and the first recover() call
-    # inside the run() coroutine. The full block is inside a single
-    # try/except inside run(); scanning the whole file is sufficient
-    # because no other location uses those tokens.
     def first_line(token: str) -> int:
         for i, line in enumerate(lines):
             if token in line:

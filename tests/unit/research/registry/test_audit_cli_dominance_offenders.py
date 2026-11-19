@@ -71,7 +71,7 @@ def _isolated(tmp_path, monkeypatch):
 
 class TestDominanceOffenders:
     def test_day_breach_listed_with_axis(self, _isolated) -> None:
-        _record(run_id="daybad", day=40.0, month=30.0)  # day over 25, month under 50
+        _record(run_id="daybad", day=40.0, month=30.0)
         res = audit_cli.dominance_offenders()
         line = [r for r in res.split("\n") if r.startswith("daybad")][0]
         assert "40.0%" in line
@@ -79,7 +79,7 @@ class TestDominanceOffenders:
         assert "month" not in line.split()[-1]
 
     def test_month_breach_listed_with_axis(self, _isolated) -> None:
-        _record(run_id="monbad", day=10.0, month=70.0)  # month over 50, day under 25
+        _record(run_id="monbad", day=10.0, month=70.0)
         res = audit_cli.dominance_offenders()
         line = [r for r in res.split("\n") if r.startswith("monbad")][0]
         assert "70.0%" in line
@@ -97,12 +97,11 @@ class TestDominanceOffenders:
         assert "no rows over dominance caps" in res
 
     def test_exactly_at_caps_not_offenders(self, _isolated) -> None:
-        _record(run_id="atcap", day=25.0, month=50.0)  # strict > required
+        _record(run_id="atcap", day=25.0, month=50.0)
         res = audit_cli.dominance_offenders()
         assert "no rows over dominance caps" in res
 
     def test_sorted_by_worst_excess_ratio(self, _isolated) -> None:
-        # month 70/50 = 1.4 excess; day 40/25 = 1.6 excess → day row first.
         _record(run_id="monrow", day=10.0, month=70.0)
         _record(run_id="dayrow", day=40.0, month=10.0)
         res = audit_cli.dominance_offenders()

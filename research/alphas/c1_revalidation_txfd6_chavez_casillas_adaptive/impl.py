@@ -56,12 +56,9 @@ logger = get_logger("alpha.c1_revalidation_txfd6_chavez_casillas")
 _TXF_POINT_VALUE_NTD = 200
 _TXF_RT_COST_PTS = 3.0
 _SCALE = 1_000_000
-_TICK_SIZE_SCALED = 1 * _SCALE  # TXFD6 tick = 1 pt
+_TICK_SIZE_SCALED = 1 * _SCALE
 
 
-# ---------------------------------------------------------------------------
-# Parameters
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,18 +95,10 @@ class C1Params:
     fit_min_samples: int = 50
     delta_min_ticks: int = 0
     delta_max_ticks: int = 3
-    # Cold-start exploration: post randomly in {0,1,2} ticks for the first
-    # cold_start_n_quotes per side per day to seed delta-variance for the
-    # demand-function regression. Required by Chávez-Casillas math (β cannot
-    # be fit without δ-variance); not a hypothesis change. Documented in
-    # scorecard "Implementation note" section per team-lead 2026-04-27.
     cold_start_n_quotes: int = 50
     cold_start_seed: int = 42
 
 
-# ---------------------------------------------------------------------------
-# Adaptive demand-function estimator (Chávez-Casillas eq. 2.3 / 3.2)
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -159,15 +148,12 @@ def _exponential_weighted_fit(
         w * (x - mx) * (y - my) for w, x, y in zip(weights, xs, ys)
     )
     if sxx <= 1e-9:
-        return my, 0.0, True  # constant-x degenerate; intercept-only
+        return my, 0.0, True
     beta = sxy / sxx
     alpha = my - beta * mx
     return alpha, beta, True
 
 
-# ---------------------------------------------------------------------------
-# C1 Adaptive Maker — MakerEngine-compatible
-# ---------------------------------------------------------------------------
 
 
 class C1ChavezCasillasAdaptiveMaker:
@@ -220,20 +206,16 @@ class C1ChavezCasillasAdaptiveMaker:
         self._window_ns = self._params.fit_window_sec * 1_000_000_000
         self._decay_ns = self._params.fit_decay_tau_sec * 1_000_000_000
         self._refresh_ns = self._params.fit_refresh_sec * 1_000_000_000
-        # Quote history: (delta_pts, ts_ns, filled_yet) for fit-sample feedback.
         self._quote_history_buy: list[tuple[float, int, bool]] = []
         self._quote_history_sell: list[tuple[float, int, bool]] = []
         self._fit_used_count = 0
         self._fit_fallback_count = 0
-        # Cold-start exploration counters (reset per-day via reset()/on_gap()).
         self._cold_start_buy_remaining = self._params.cold_start_n_quotes
         self._cold_start_sell_remaining = self._params.cold_start_n_quotes
         self._cold_start_used_count = 0
-        # Deterministic RNG for reproducibility.
         import random
         self._rng = random.Random(self._params.cold_start_seed)
 
-    # ---- Observability ---------------------------------------------------
 
     @property
     def position(self) -> int:
@@ -279,7 +261,6 @@ class C1ChavezCasillasAdaptiveMaker:
             "cold_start_sell_remaining": self._cold_start_sell_remaining,
         }
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -305,22 +286,14 @@ class C1ChavezCasillasAdaptiveMaker:
             self._spread_blocked += 1
             return [Hold()]
 
-        # Microprice (Stoikov 2014): weighted-mid by far-side qty.
         bid_q = max(1, tick.bid_qty)
         ask_q = max(1, tick.ask_qty)
         microprice = (
             tick.bid_price * ask_q + tick.ask_price * bid_q
         ) / (bid_q + ask_q)
 
-        # Refresh demand-function fit on cadence.
         self._maybe_refit(tick.exch_ts)
 
-        # Per-side delta selection:
-        #   - Cold-start phase (first cold_start_n_quotes per side): random
-        #     exploration in {delta_min..delta_max} to seed the demand-function
-        #     regression with delta-variance (β cannot be fit otherwise).
-        #   - Adaptive phase: Chávez-Casillas closed-form δ* from the fit.
-        #   - Fallback: touch quoting (delta_min) when fit not yet valid.
         if self._cold_start_buy_remaining > 0:
             delta_buy_ticks = self._rng.randint(
                 params.delta_min_ticks, params.delta_max_ticks
@@ -336,14 +309,9 @@ class C1ChavezCasillasAdaptiveMaker:
         else:
             delta_sell_ticks = self._adaptive_delta(self._sell_fit)
 
-        # Inventory skew (R47 best practice) — fixed 0.X ticks per contract.
         pos = self._position
         skew_scaled = (pos * params.inventory_skew_tenths * scale) // 10
 
-        # Compute quote prices.
-        # buy_quote = bid - delta_buy_ticks * tick (snap below touch when
-        #   delta>0 means more passive); sell_quote = ask + delta_sell_ticks.
-        # Tick-grid snap: scaled int division.
         bid_quote = (
             tick.bid_price
             - delta_buy_ticks * _TICK_SIZE_SCALED
@@ -355,10 +323,8 @@ class C1ChavezCasillasAdaptiveMaker:
             - skew_scaled
         )
 
-        # Sanity: don't cross.
         if bid_quote >= ask_quote:
             return [Hold()]
-        # Sanity: bid <= touch bid; ask >= touch ask.
         if bid_quote > tick.bid_price:
             bid_quote = tick.bid_price
         if ask_quote < tick.ask_price:
@@ -367,13 +333,11 @@ class C1ChavezCasillasAdaptiveMaker:
         actions: list[PostQuote | object] = []
         max_pos = params.max_pos
 
-        # Buy side
         if pos < max_pos:
             if bid_quote != self._last_bid:
                 actions.append(PostQuote(side="buy", price=bid_quote, qty=1))
                 self._last_bid = bid_quote
                 self._quotes_posted += 1
-                # Record posting for demand-function fit feedback.
                 delta_pts_buy = (tick.bid_price - bid_quote) / scale
                 self._quote_history_buy.append(
                     (delta_pts_buy, tick.exch_ts, False)
@@ -381,7 +345,6 @@ class C1ChavezCasillasAdaptiveMaker:
         else:
             self._max_pos_blocked += 1
 
-        # Sell side
         if pos > -max_pos:
             if ask_quote != self._last_ask:
                 actions.append(PostQuote(side="sell", price=ask_quote, qty=1))
@@ -392,7 +355,6 @@ class C1ChavezCasillasAdaptiveMaker:
                     (delta_pts_sell, tick.exch_ts, False)
                 )
 
-        # Trim quote history to fit window.
         cutoff_ns = tick.exch_ts - self._window_ns
         self._quote_history_buy = [
             (d, t, f) for d, t, f in self._quote_history_buy if t >= cutoff_ns
@@ -444,8 +406,6 @@ class C1ChavezCasillasAdaptiveMaker:
         if not fit.valid:
             self._fit_fallback_count += 1
             return self._params.delta_min_ticks
-        # When beta >= 0, demand is non-decreasing in delta — degenerate.
-        # Chávez-Casillas requires beta<0 (downward-sloping demand).
         if fit.beta >= -1e-6:
             self._fit_fallback_count += 1
             return self._params.delta_min_ticks
@@ -461,7 +421,6 @@ class C1ChavezCasillasAdaptiveMaker:
         if side == "buy":
             self._position += 1
             self._last_bid = None
-            # Mark most recent buy quote as filled for fit feedback.
             if self._quote_history_buy:
                 d, t, _ = self._quote_history_buy[-1]
                 self._quote_history_buy[-1] = (d, t, True)
@@ -515,9 +474,6 @@ class C1ChavezCasillasAdaptiveMaker:
         self._cold_start_used_count = 0
 
 
-# ---------------------------------------------------------------------------
-# AlphaProtocol shim
-# ---------------------------------------------------------------------------
 
 
 class C1Alpha:

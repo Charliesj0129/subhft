@@ -44,11 +44,6 @@ _FROZEN_FILENAME = "frozen_candidates.jsonl"
 _ACCESS_LOG_FILENAME = "locked_access_log.jsonl"
 _DATASET_FINGERPRINT_DOMAIN = b"hft.alpha.mine.dataset.v2\x00"
 
-# v1 hashed only the partitioning arithmetic, so two manifests that differed in
-# `symbols`, `feature_schema_version` or `target_definition` collided and the
-# immutability check in `write_manifest` waved the second one through. v2 folds
-# those three into the hash. Manifests already on disk carry no version field
-# and are validated against the v1 algorithm so in-flight runs keep resuming.
 MANIFEST_SCHEMA_VERSION = 2
 
 
@@ -65,7 +60,7 @@ class _PartitionSpan:
     name: str
     session_count: int
     raw_row_count: int
-    row_indices: np.ndarray  # post-embargo, ascending
+    row_indices: np.ndarray
 
 
 def dataset_fingerprint(array: Any) -> str:
@@ -156,7 +151,6 @@ class DatasetPartitionManager:
             feature_schema_version=self.feature_schema_version,
             target_definition=self.target_definition,
         )
-        # Kept only to recognise manifests written before MANIFEST_SCHEMA_VERSION 2.
         self._legacy_manifest_hash = _compute_manifest_hash(**structural)
 
     @property
@@ -366,7 +360,7 @@ def _build_spans(
 ) -> dict[str, _PartitionSpan]:
     row_partition = np.array([session_assignment[sid] for sid in sessions_arr.tolist()])
 
-    raw_ranges: dict[str, tuple[int, int, int]] = {}  # name -> (min_idx, max_idx, row_count)
+    raw_ranges: dict[str, tuple[int, int, int]] = {}
     for name in PARTITION_ORDER:
         rows = np.flatnonzero(row_partition == name)
         if rows.size == 0:

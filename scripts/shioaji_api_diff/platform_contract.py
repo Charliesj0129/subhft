@@ -15,43 +15,30 @@ Stdlib-only (no ``hft_platform`` import) so it can be imported anywhere.
 
 from __future__ import annotations
 
-# --------------------------------------------------------------------------- #
-# Enum members the adapter references by literal name. A removal/rename of any
-# of these is a silent runtime break: ``getattr(Enum, key, DEFAULT)`` fallbacks
-# in order_gateway.py mask the absence (wrong order encoding), and the
-# no-fallback QuoteType lookups in subscription_manager.py raise outright.
-# --------------------------------------------------------------------------- #
 ENUM_MEMBERS: dict[str, set[str]] = {
-    "Action": {"Buy", "Sell"},                       # order_gateway.py:104
-    "StockPriceType": {"LMT"},                        # order_gateway.py:126,269 (default)
-    "OrderType": {"ROD", "IOC", "FOK"},               # order_gateway.py:127-131,276,326
-    "StockOrderCond": {"Cash"},                       # order_gateway.py:283,293 (default)
-    "StockOrderLot": {"Common"},                      # order_gateway.py:300,309 (default)
-    "FuturesPriceType": {"LMT"},                      # order_gateway.py:316 (default)
-    "FuturesOCType": {"Auto"},                        # order_gateway.py:333,337 (default)
-    "QuoteType": {"Tick", "BidAsk"},                  # subscription_manager.py:245-284 (no fallback)
-    "QuoteVersion": {"v0", "v1"},                     # reconnect_orchestrator.py:296-298
-    "OrderState": {"StockDeal", "FuturesDeal"},       # subscription_manager.py:437 (+downstream)
-    "Exchange": {"TSE", "TAIFEX"},                    # contracts_runtime.py:438
-    "SecurityType": {"Stock", "Futures"},             # contracts_runtime.py:_build_synthetic_contract
+    "Action": {"Buy", "Sell"},
+    "StockPriceType": {"LMT"},
+    "OrderType": {"ROD", "IOC", "FOK"},
+    "StockOrderCond": {"Cash"},
+    "StockOrderLot": {"Common"},
+    "FuturesPriceType": {"LMT"},
+    "FuturesOCType": {"Auto"},
+    "QuoteType": {"Tick", "BidAsk"},
+    "QuoteVersion": {"v0", "v1"},
+    "OrderState": {"StockDeal", "FuturesDeal"},
+    "Exchange": {"TSE", "TAIFEX"},
+    "SecurityType": {"Stock", "Futures"},
 }
 
-# Enums resolved wholesale via ``getattr(sdk.constant, "<Name>", None)`` — the
-# CLASS existing is what matters (a rename of the enum type breaks the lookup).
 DYNAMIC_ENUM_CLASSES: set[str] = {
-    "OrderState",        # subscription_manager.py:437
-    "TicksQueryType",    # historical_gateway.py:41
-    "ScannerType",       # scanner_gateway.py:126
-    "FuturesOrderType",  # order_gateway.py:323 (optional, falls back to OrderType)
+    "OrderState",
+    "TicksQueryType",
+    "ScannerType",
+    "FuturesOrderType",
     "StockPriceType", "OrderType", "StockOrderCond", "StockOrderLot",
-    "FuturesPriceType", "FuturesOCType",  # order_gateway.py getattr() key lookups
+    "FuturesPriceType", "FuturesOCType",
 }
 
-# --------------------------------------------------------------------------- #
-# Methods the adapter calls WITHOUT a hasattr guard — removal is a hard break.
-# (update_price/update_qty are intentionally absent: order_gateway.py guards
-# them with hasattr and falls back to update_order, so their removal is benign.)
-# --------------------------------------------------------------------------- #
 EXISTENCE_CRITICAL_METHODS: dict[str, set[str]] = {
     "Shioaji": {
         "login", "logout", "place_order", "cancel_order", "update_order",
@@ -64,22 +51,16 @@ EXISTENCE_CRITICAL_METHODS: dict[str, set[str]] = {
     "Quote": {"subscribe", "unsubscribe"},
 }
 
-# Keyword arguments the adapter passes by name (a removed/renamed param we pass
-# raises TypeError). Positional-only callers are covered by method existence.
 METHOD_PARAMS: dict[str, set[str]] = {
-    "place_order": {"timeout", "cb"},                 # order_gateway.py:142,240
-    "cancel_order": {"timeout", "cb"},                # order_gateway.py:352
-    "update_order": {"trade", "price", "qty", "timeout", "cb"},  # order_gateway.py:376-398
-    "subscribe": {"quote_type", "version"},           # subscription_manager.py:245-249
-    "unsubscribe": {"quote_type", "version"},         # subscription_manager.py:280-284
-    "login": {"api_key", "secret_key", "subscribe_trade"},  # session_runtime.py:_do_login
-    # 1.7.0 moved contract loading out of login(); _do_login and _ensure_contracts call it.
+    "place_order": {"timeout", "cb"},
+    "cancel_order": {"timeout", "cb"},
+    "update_order": {"trade", "price", "qty", "timeout", "cb"},
+    "subscribe": {"quote_type", "version"},
+    "unsubscribe": {"quote_type", "version"},
+    "login": {"api_key", "secret_key", "subscribe_trade"},
     "fetch_contracts": {"contract_download", "contracts_timeout", "contracts_cb"},
 }
 
-# --------------------------------------------------------------------------- #
-# Order constructor fields the adapter passes (order_gateway.py:132-236).
-# --------------------------------------------------------------------------- #
 CTOR_FIELDS: dict[str, set[str]] = {
     "Order": {"price", "quantity", "action", "price_type", "order_type", "custom_field"},
     "StockOrder": {"price", "quantity", "action", "price_type", "order_type",
@@ -88,12 +69,6 @@ CTOR_FIELDS: dict[str, set[str]] = {
                      "octype", "account", "custom_field"},
 }
 
-# --------------------------------------------------------------------------- #
-# The six Solace callback-wrap symbols the arity shim monkeypatches
-# (client.py:73-144). Removal/rename silently no-ops the shim -> the documented
-# ~hourly SIGABRT crash-loop returns. Values are the expected param arity (incl.
-# self) that the shim forwards; an arity change means the shim may be removable.
-# --------------------------------------------------------------------------- #
 SOL_WRAP_SYMBOLS: dict[str, int] = {
     "onreply_callback_wrap": 4,
     "reply_callback_wrap": 4,
@@ -103,27 +78,17 @@ SOL_WRAP_SYMBOLS: dict[str, int] = {
     "session_down_callback_wrap": 1,
 }
 
-# SOL_* config keys: a default change is BEHAVIORAL (ops-relevant; ties to the
-# 451 reconnect incident), never auto-blocking.
 SOL_CONFIG_KEYS: set[str] = {
     "SOL_CONNECT_TIMEOUT_MS", "SOL_RECONNECT_RETRIES", "SOL_KEEP_ALIVE_MS",
     "SOL_RECONNECT_RETRY_WAIT", "SOL_KEEP_ALIVE_LIMIT",
 }
 
-# Stream data-classes consumed field-by-name on the hot path (tick_dispatcher.py,
-# quote_runtime.py normalize callbacks by attribute). A removed/type-changed
-# field on these is BREAKING wholesale; an added field is additive.
 READ_MODEL_QUALS: set[str] = {
     "TickSTKv1", "TickFOPv1", "BidAskSTKv1", "BidAskFOPv1", "QuoteSTKv1", "QuoteFOPv1",
 }
 
-# The adapter catches builtin/own exceptions (KeyError, ImportError, OSError,
-# StaleInstrumentError) and bare ``Exception`` — it does NOT depend on any
-# ``shioaji.error`` class by name (``_infra.py`` raises the *builtin*
-# TimeoutError). So exception-class removals are benign for the platform.
 EXCEPTIONS_CAUGHT: set[str] = set()
 
-# Remediation pointers surfaced on BREAKING findings (kind -> file:symbol).
 REMEDIATION: dict[str, str] = {
     "enum:Action": "order_gateway.py:_place_order",
     "enum:StockPriceType": "order_gateway.py:_map_stock_price_type",
@@ -156,9 +121,6 @@ REMEDIATION: dict[str, str] = {
 }
 
 
-# --------------------------------------------------------------------------- #
-# Lookup helpers used by classify.py.
-# --------------------------------------------------------------------------- #
 def enum_member_used(enum_name: str, member: str) -> bool:
     return member in ENUM_MEMBERS.get(enum_name, set())
 

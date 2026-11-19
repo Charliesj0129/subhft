@@ -109,7 +109,6 @@ class TestSummaryAggregatesProvenance:
         assert "spec_provenance (goal §4 traceability):" in out
         section = out.split("spec_provenance (goal")[1]
         assert "complete rows  : 1 / 3" in section
-        # bare rows miss all three keys; ties resolve to a real missing key.
         assert "top missing key:" in section
 
     def test_summary_all_complete_has_no_top_missing(self, _isolated) -> None:

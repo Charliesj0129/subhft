@@ -14,7 +14,7 @@ from research.candidate_loop.maker_cost import (
     hour_of_day_utc,
 )
 
-COST_PER_SIDE = 1.5  # comm 0.3 + tax 1.2 (TXF profile)
+COST_PER_SIDE = 1.5
 SPREAD = 1.0
 
 
@@ -39,14 +39,12 @@ class TestHourConvention:
         "ts_ns",
         [
             0,
-            1_736_900_000_000_000_000,  # 2025-01 era
-            1_775_000_000_123_456_789,  # 2026-04 era, sub-second noise
-            3_599_999_999_999,  # just under one hour
+            1_736_900_000_000_000_000,
+            1_775_000_000_123_456_789,
+            3_599_999_999_999,
         ],
     )
     def test_matches_calibration_harness_exactly(self, ts_ns: int) -> None:
-        # The q_hat table is keyed by calibrate_queue_fill's UTC epoch-modulo
-        # hour; any divergence silently swaps day/night liquidity regimes.
         assert hour_of_day_utc(ts_ns) == _hour_of_day(ts_ns)
 
 
@@ -60,7 +58,7 @@ class TestLookup:
             table,
             "TXFD6",
         )
-        np.testing.assert_allclose(probs, [0.2, 0.1])  # depth<5 shallow, >=5 deep
+        np.testing.assert_allclose(probs, [0.2, 0.1])
 
     def test_missing_cell_falls_back_to_default(self) -> None:
         probs = fill_probs_for_flips(np.asarray([0], dtype=np.int64), np.asarray([3.0]), _table(), "TXFD6")
@@ -82,9 +80,8 @@ class TestRequiredMoveBounds:
 
     def test_maker_required_move_never_exceeds_taker(self) -> None:
         taker_required = 2.0 * COST_PER_SIDE + SPREAD
-        res = _result(_table(), ts=[0], depth=[1.0])  # fallback p=0.5
+        res = _result(_table(), ts=[0], depth=[1.0])
         assert res.maker_required_move_threshold_pts <= taker_required
-        # And therefore the maker score is never below the taker score.
         taker_score = 3.0 / taker_required
         assert res.maker_cost_survival_score >= taker_score
 

@@ -30,10 +30,6 @@ from hft_platform.feed_adapter.shioaji._infra import (
     update_quote_pending_metrics,
 )
 
-# ---------------------------------------------------------------------------
-# sanitize_metric_label
-# ---------------------------------------------------------------------------
-
 
 class TestSanitizeMetricLabel:
     def test_string_passthrough(self) -> None:
@@ -68,17 +64,11 @@ class TestSanitizeMetricLabel:
         assert result == "object"
 
 
-# ---------------------------------------------------------------------------
-# record_api_latency
-# ---------------------------------------------------------------------------
-
-
 class TestRecordApiLatency:
     def test_no_metrics_noop(self) -> None:
-        # Should not raise
         last_map: dict[str, float] = {}
         record_api_latency(None, last_map, "login", time.perf_counter_ns())
-        assert len(last_map) == 0  # no metrics object means no state change
+        assert len(last_map) == 0
 
     def test_records_latency_ok(self) -> None:
         hist = MagicMock()
@@ -131,14 +121,8 @@ class TestRecordApiLatency:
             shioaji_api_jitter_ms=MagicMock(),
             shioaji_api_errors_total=MagicMock(),
         )
-        # Should not raise even with invalid start_ns
         record_api_latency(metrics, {}, "op", "not_a_number", ok=True)  # type: ignore[arg-type]
         hist.labels().observe.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# record_crash_signature
-# ---------------------------------------------------------------------------
 
 
 class TestRecordCrashSignature:
@@ -162,11 +146,6 @@ class TestRecordCrashSignature:
         )
         counter.labels.assert_called_once()
         counter.labels().inc.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# safe_call_with_timeout
-# ---------------------------------------------------------------------------
 
 
 class TestSafeCallWithTimeout:
@@ -204,17 +183,6 @@ class TestSafeCallWithTimeout:
         assert result == "x"
 
 
-# ---------------------------------------------------------------------------
-# safe_call_with_timeout — abandoned-guard-thread bound
-#
-# Regression for the 2026-06-15 THESHOW 18h hang: a timed-out SDK call leaves
-# its daemon worker thread running (Python cannot kill it). If that thread is
-# inside a spinning SDK reconnect/login it pegs a core and starves the asyncio
-# loop. The wrapper must (a) track such abandoned threads, (b) refuse to spawn
-# new ones past a cap so the leak is bounded and fail-closed.
-# ---------------------------------------------------------------------------
-
-
 class TestSafeCallAbandonedGuard:
     def _drain(self, release: threading.Event) -> None:
         """Release blocked workers and wait until the registry prunes them."""
@@ -233,11 +201,9 @@ class TestSafeCallAbandonedGuard:
             assert ok is False
             assert isinstance(err, TimeoutError)
             assert timed_out is True
-            # The worker is still blocked → counted as abandoned.
             assert abandoned_guard_thread_count() == 1
         finally:
             self._drain(release)
-        # Once the worker finishes, the registry prunes it.
         assert abandoned_guard_thread_count() == 0
 
     def test_successful_call_is_not_registered(self) -> None:
@@ -253,7 +219,6 @@ class TestSafeCallAbandonedGuard:
         release = threading.Event()
         entered = threading.Event()
         try:
-            # First call times out and leaks one abandoned worker (reaches cap=1).
             safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, max_abandoned=1)
             assert abandoned_guard_thread_count() == 1
 
@@ -262,13 +227,11 @@ class TestSafeCallAbandonedGuard:
                 release.wait(5.0)
 
             ok, _, err, timed_out = safe_call_with_timeout("login", _fn, 0.1, max_abandoned=1)
-            # Fail closed: refused WITHOUT spawning a new worker thread.
             assert ok is False
             assert timed_out is True
             assert isinstance(err, RuntimeError)
             assert not isinstance(err, TimeoutError)
             assert entered.is_set() is False
-            # Still only the one leaked thread — the leak is bounded.
             assert abandoned_guard_thread_count() == 1
         finally:
             self._drain(release)
@@ -279,25 +242,18 @@ class TestSafeCallAbandonedGuard:
         release = threading.Event()
         entered = threading.Event()
         try:
-            # Leak one abandoned worker first.
             safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1, max_abandoned=0)
             assert abandoned_guard_thread_count() == 1
 
             def _fn() -> None:
                 entered.set()
 
-            # With the gate disabled (0), a new worker is still spawned and runs.
             ok, _, _, _ = safe_call_with_timeout("login", _fn, 5.0, max_abandoned=0)
             assert ok is True
             assert entered.is_set() is True
         finally:
             self._drain(release)
         assert abandoned_guard_thread_count() == 0
-
-
-# ---------------------------------------------------------------------------
-# set_thread_alive_metric
-# ---------------------------------------------------------------------------
 
 
 class TestSetThreadAliveMetric:
@@ -328,11 +284,6 @@ class TestSetThreadAliveMetric:
         gauge.labels().set.assert_called_with(0)
 
 
-# ---------------------------------------------------------------------------
-# update_quote_pending_metrics
-# ---------------------------------------------------------------------------
-
-
 class TestUpdateQuotePendingMetrics:
     def test_no_metrics_returns_flag(self) -> None:
         result = update_quote_pending_metrics(None, True, 1.0, 10.0, False, "reason")
@@ -352,15 +303,9 @@ class TestUpdateQuotePendingMetrics:
             shioaji_quote_pending_age_seconds=gauge,
             shioaji_quote_pending_stall_total=stall_counter,
         )
-        # pending_ts far in the past -> large age -> stall
         result = update_quote_pending_metrics(metrics, True, 0.001, 0.001, False, "test_reason")
         assert result is True
         stall_counter.labels.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# ensure_session_lock / release_session_lock
-# ---------------------------------------------------------------------------
 
 
 class TestSessionLock:
@@ -383,13 +328,8 @@ class TestSessionLock:
         release_session_lock(fd, None)
 
     def test_release_none_noop(self) -> None:
-        result = release_session_lock(None, None)  # Should not raise
+        result = release_session_lock(None, None)
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# cache_get / cache_set
-# ---------------------------------------------------------------------------
 
 
 class TestCache:
@@ -408,8 +348,6 @@ class TestCache:
         cache: dict[str, tuple[float, object]] = {}
         lock = threading.Lock()
         cache_set(cache, lock, 100, "key1", 0.0, "value1")
-        # TTL=0 means expires immediately at next check
-        # Force expiry by manipulating cache directly
         cache["key1"] = (0.0, "value1")
         assert cache_get(cache, lock, "key1") is None
 
@@ -419,14 +357,8 @@ class TestCache:
         max_size = 2
         cache_set(cache, lock, max_size, "a", 100.0, 1)
         cache_set(cache, lock, max_size, "b", 100.0, 2)
-        # Third insert should evict something
         cache_set(cache, lock, max_size, "c", 100.0, 3)
         assert len(cache) <= max_size
-
-
-# ---------------------------------------------------------------------------
-# rate_limit_api
-# ---------------------------------------------------------------------------
 
 
 class TestRateLimitApi:
@@ -443,17 +375,11 @@ class TestRateLimitApi:
         limiter.record.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# refresh_sleep_s / login slot (2026-07-24 "451 Too Many Connections")
-# ---------------------------------------------------------------------------
-
-
 class TestRefreshSleepJitter:
     def test_lowest_random_draw_shortens_interval_by_jitter_fraction(self) -> None:
         assert refresh_sleep_s(3600.0, 0.15, lambda: 0.0) == 3060.0
 
     def test_highest_random_draw_lengthens_interval_by_jitter_fraction(self) -> None:
-        # random.random() is [0, 1), so 1.0 is the open bound: the +15% edge.
         assert refresh_sleep_s(3600.0, 0.15, lambda: 1.0) == 4140.0
 
     def test_midpoint_draw_leaves_interval_unchanged(self) -> None:
@@ -484,8 +410,6 @@ class TestLoginSlot:
         order.append("first-acquired")
         t = threading.Thread(target=_second)
         t.start()
-        # Give the contender a chance to block on the slot rather than sleeping
-        # a fixed interval and hoping: it must not get in while we hold it.
         t.join(timeout=0.2)
         assert order == ["first-acquired"]
         order.append("first-released")
@@ -503,7 +427,7 @@ class TestLoginSlot:
         assert acquire_login_slot(min_gap_s=5.0, timeout_s=5.0, clock=lambda: now[0]) is True
         release_login_slot(clock=lambda: now[0])
 
-        now[0] = 1002.0  # only 2s since the previous login released
+        now[0] = 1002.0
         assert (
             acquire_login_slot(
                 min_gap_s=5.0,
@@ -553,7 +477,7 @@ class TestLoginSlot:
 
     def test_release_without_hold_does_not_raise(self) -> None:
         reset_login_slot_for_tests()
-        release_login_slot()  # must not raise even though nothing was acquired
+        release_login_slot()
 
     def test_missing_metric_attribute_does_not_break_timeout_path(self) -> None:
         reset_login_slot_for_tests()
@@ -570,7 +494,6 @@ class TestLoginSlot:
         t.start()
         assert holder_ready.wait(timeout=5.0) is True
         try:
-            # Registry without the counter (older deployment) must still work.
             assert acquire_login_slot(min_gap_s=0.0, timeout_s=0.05, metrics=SimpleNamespace()) is False
         finally:
             may_release.set()
@@ -625,19 +548,6 @@ class TestScrubBrokerError:
         assert scrub_broker_error("contracts timeout") == "contracts timeout"
 
 
-# ---------------------------------------------------------------------------
-# safe_call_with_timeout — per-client in-flight guard
-#
-# Regression for the daily 08:30 CST "Already borrowed" cascade on THESHOW: the
-# contract-fetching login exceeded its 20 s budget, its worker was abandoned
-# *inside* shioaji 1.5.x's Rust `_core`, and the immediate no-contract fallback
-# re-entered the same object. PyO3's borrow check rejected it in under 3 ms, the
-# retry ladder burned its attempts, and the forced reconnects escalated into
-# broker `451 Too Many Connections`. The guard must make that re-entry
-# impossible while still letting nested calls through.
-# ---------------------------------------------------------------------------
-
-
 class TestSafeCallInflightGuard:
     @staticmethod
     def _drain(release: threading.Event, guard: InflightGuard) -> None:
@@ -656,7 +566,6 @@ class TestSafeCallInflightGuard:
             assert isinstance(err, TimeoutError)
             assert guard.live_count() == 1
 
-            # The second call must not even enter the SDK.
             entered = threading.Event()
 
             def _would_reenter() -> None:  # pragma: no cover — must never run
@@ -668,7 +577,6 @@ class TestSafeCallInflightGuard:
             assert ok2 is False
             assert isinstance(err2, SDKBusyError)
             assert err2.blocking_op == "login"
-            # Reported as timed out so existing backoff paths apply unchanged.
             assert timed_out2 is True
             assert entered.is_set() is False
         finally:
@@ -696,7 +604,6 @@ class TestSafeCallInflightGuard:
         assert ok is False
         assert guard.live_count() == 1
 
-        # Free the SDK shortly after the next call starts waiting on the grace.
         threading.Timer(0.05, release.set).start()
         ok2, result, err2, _ = safe_call_with_timeout(
             "login", lambda: "connected", 5.0, inflight=guard, busy_grace_s=3.0
@@ -736,7 +643,6 @@ class TestSafeCallInflightGuard:
             ok, _, err, _ = safe_call_with_timeout("login", lambda: release.wait(5.0), 0.1)
             assert ok is False
             assert isinstance(err, TimeoutError)
-            # No SDKBusyError path without a guard: a second call still enters.
             ok2, result, _, _ = safe_call_with_timeout("login", lambda: 5, 5.0)
             assert ok2 is True
             assert result == 5

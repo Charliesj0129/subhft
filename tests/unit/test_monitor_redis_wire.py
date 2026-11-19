@@ -73,6 +73,6 @@ def test_client_connected_property() -> None:
 
 
 def test_client_request_raises_without_connection() -> None:
-    client = RedisClient(host="127.0.0.1", port=1)  # invalid port
+    client = RedisClient(host="127.0.0.1", port=1)
     with pytest.raises((RuntimeError, OSError)):
         client.request("PING")

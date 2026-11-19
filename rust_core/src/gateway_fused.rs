@@ -17,17 +17,14 @@ const DEDUP_MAX_SIZE: usize = 10_000;
 /// roundtrips in the gateway service.
 #[pyclass]
 pub struct RustGatewayFusedCheck {
-    // Dedup state: idempotency_key -> timestamp_ns
     dedup: HashMap<String, u64>,
     dedup_ttl_ns: u64,
 
-    // Exposure state
     symbol_exposure: HashMap<String, i64>,
     global_exposure: i64,
     global_limit: i64,
     per_symbol_limit: i64,
 
-    // Risk limits
     max_notional: i64,
     price_band_bps: i64,
     max_order_qty: i64,
@@ -46,7 +43,7 @@ impl RustGatewayFusedCheck {
     pub fn new() -> Self {
         Self {
             dedup: HashMap::with_capacity(1024),
-            dedup_ttl_ns: 5_000_000_000, // 5s default
+            dedup_ttl_ns: 5_000_000_000,
             symbol_exposure: HashMap::with_capacity(64),
             global_exposure: 0,
             global_limit: 0,
@@ -92,28 +89,23 @@ impl RustGatewayFusedCheck {
         reference_price: i64,
         now_ns: u64,
     ) -> (bool, u8) {
-        // LRU eviction when map is too large
         if self.dedup.len() > DEDUP_MAX_SIZE {
             self.evict_expired(now_ns);
         }
 
-        // 1. Dedup check
         if let Some(&stored_ts) = self.dedup.get(idempotency_key) {
             if now_ns.wrapping_sub(stored_ts) < self.dedup_ttl_ns {
                 return (false, REASON_DUPLICATE);
             }
         }
 
-        // 2. Qty limit
         if self.max_order_qty > 0 && qty > self.max_order_qty {
             return (false, REASON_QTY_LIMIT);
         }
 
-        // 3. Price band
         if reference_price > 0 {
             let deviation = (price - reference_price).abs();
-            // deviation * 10000 / reference_price > price_band_bps
-            // Rearranged to avoid division: deviation * 10000 > price_band_bps * reference_price
+
             if self.price_band_bps > 0
                 && deviation.saturating_mul(10_000)
                     > self.price_band_bps.saturating_mul(reference_price)
@@ -124,7 +116,6 @@ impl RustGatewayFusedCheck {
 
         let notional = price.saturating_mul(qty);
 
-        // 4. Per-symbol exposure
         if self.per_symbol_limit > 0 {
             let current = self.symbol_exposure.get(symbol).copied().unwrap_or(0);
             if current.saturating_add(notional) > self.per_symbol_limit {
@@ -132,19 +123,16 @@ impl RustGatewayFusedCheck {
             }
         }
 
-        // 5. Global exposure
         if self.global_limit > 0
             && self.global_exposure.saturating_add(notional) > self.global_limit
         {
             return (false, REASON_EXPOSURE_LIMIT);
         }
 
-        // 6. Risk notional
         if self.max_notional > 0 && notional > self.max_notional {
             return (false, REASON_RISK_LIMIT);
         }
 
-        // All checks passed: update state
         self.dedup.insert(idempotency_key.to_string(), now_ns);
         *self.symbol_exposure.entry(symbol.to_string()).or_insert(0) += notional;
         self.global_exposure += notional;

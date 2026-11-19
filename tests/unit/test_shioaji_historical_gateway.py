@@ -5,15 +5,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest  # noqa: F811
+import pytest
 
 from hft_platform.feed_adapter.shioaji.historical_gateway import (
     HistoricalGateway,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_client(
@@ -41,11 +37,6 @@ def _make_sdk() -> SimpleNamespace:
 
 
 SDK_PATCH = "hft_platform.feed_adapter.shioaji.historical_gateway.HistoricalGateway._sdk"
-
-
-# ---------------------------------------------------------------------------
-# get_ticks — happy path
-# ---------------------------------------------------------------------------
 
 
 class TestGetTicks:
@@ -133,11 +124,6 @@ class TestGetTicks:
         )
 
 
-# ---------------------------------------------------------------------------
-# get_ticks — error paths
-# ---------------------------------------------------------------------------
-
-
 class TestGetTicksErrors:
     def test_returns_none_when_api_missing(self) -> None:
         client = _make_client(api=None)
@@ -198,11 +184,6 @@ class TestGetTicksErrors:
         assert client._record_api_latency.call_args.kwargs.get("ok") is False
 
 
-# ---------------------------------------------------------------------------
-# get_kbars — happy path
-# ---------------------------------------------------------------------------
-
-
 class TestGetKbars:
     def test_returns_kbars(self) -> None:
         client = _make_client()
@@ -247,11 +228,6 @@ class TestGetKbars:
         )
 
 
-# ---------------------------------------------------------------------------
-# get_kbars — error paths
-# ---------------------------------------------------------------------------
-
-
 class TestGetKbarsErrors:
     def test_returns_none_when_api_missing(self) -> None:
         client = _make_client(api=None)
@@ -294,11 +270,6 @@ class TestGetKbarsErrors:
         assert client._record_api_latency.call_args.kwargs.get("ok") is False
 
 
-# ---------------------------------------------------------------------------
-# _resolve_query_type
-# ---------------------------------------------------------------------------
-
-
 class TestResolveQueryType:
     def test_all_valid_types(self) -> None:
         gw = HistoricalGateway(_make_client())
@@ -311,7 +282,7 @@ class TestResolveQueryType:
 
     def test_missing_ticks_query_type_constant(self) -> None:
         gw = HistoricalGateway(_make_client())
-        sdk = SimpleNamespace(constant=SimpleNamespace())  # no TicksQueryType
+        sdk = SimpleNamespace(constant=SimpleNamespace())
 
         with patch(SDK_PATCH, return_value=sdk):
             with pytest.raises(RuntimeError, match="TicksQueryType"):

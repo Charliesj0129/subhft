@@ -19,7 +19,6 @@ from typing import Any
 
 import structlog
 
-# Must add src to path when running as a script
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from hft_platform.core import timebase
@@ -27,19 +26,14 @@ from hft_platform.core.market_calendar import get_calendar
 
 logger = structlog.get_logger("reconcile.daily")
 
-# Tolerance in scaled-int units (x10000): 100_000 = 10 NTD
 _PNL_TOLERANCE_SCALED: int = 100_000
 
-# ClickHouse connection defaults (override via env)
 _CH_HOST = os.environ.get("HFT_CLICKHOUSE_HOST", "localhost")
 _CH_PORT = int(os.environ.get("HFT_CLICKHOUSE_PORT", "8123"))
 _CH_USER = os.environ.get("HFT_CLICKHOUSE_USER", "default")
 _CH_PASSWORD = os.environ.get("HFT_CLICKHOUSE_PASSWORD", "")
 
 
-# ---------------------------------------------------------------------------
-# Pure comparison logic (unit-testable, no I/O)
-# ---------------------------------------------------------------------------
 
 
 def compare_positions(
@@ -66,7 +60,6 @@ def compare_positions(
     """
     all_symbols: set[str] = set(broker) | set(platform) | set(ch)
 
-    # Empty positions on all sides is an explicit match
     if not all_symbols:
         return True, []
 
@@ -110,9 +103,6 @@ def compare_positions(
     return len(mismatches) == 0, mismatches
 
 
-# ---------------------------------------------------------------------------
-# ClickHouse helpers
-# ---------------------------------------------------------------------------
 
 
 def _get_ch_client() -> Any:
@@ -231,9 +221,6 @@ def _write_reconciliation_result(
         logger.error("reconciliation_write_failed", error=str(exc))
 
 
-# ---------------------------------------------------------------------------
-# Broker query
-# ---------------------------------------------------------------------------
 
 
 def _query_broker_positions() -> dict[str, dict[str, Any]]:
@@ -253,12 +240,10 @@ def _query_broker_positions() -> dict[str, dict[str, Any]]:
         positions: dict[str, dict[str, Any]] = {}
 
         for pos in positions_raw:
-            # Shioaji Position object has: code, quantity, price (avg), pnl
             symbol = str(getattr(pos, "code", "") or getattr(pos, "symbol", ""))
             if not symbol:
                 continue
             qty: int = int(getattr(pos, "quantity", 0))
-            # pnl from broker is typically in NTD; scale to x10000 for comparison
             broker_pnl_raw = getattr(pos, "pnl", 0) or 0
             pnl_scaled: int = int(float(broker_pnl_raw) * 10_000)
             positions[symbol] = {"qty": qty, "pnl": pnl_scaled}
@@ -275,9 +260,6 @@ def _query_broker_positions() -> dict[str, dict[str, Any]]:
         return {}
 
 
-# ---------------------------------------------------------------------------
-# Main async entrypoint
-# ---------------------------------------------------------------------------
 
 
 async def run_reconciliation(
@@ -291,7 +273,6 @@ async def run_reconciliation(
     log = logger.bind(date=date.isoformat(), dry_run=dry_run)
     log.info("reconciliation_start")
 
-    # --- Fetch data ---
     broker_positions = _query_broker_positions()
 
     ch_client: Any = None
@@ -304,13 +285,10 @@ async def run_reconciliation(
     platform_positions = _query_platform_positions(ch_client, date)
     ch_order_positions = _query_ch_order_positions(ch_client, date)
 
-    # --- Aggregate scalar PnL for notification ---
     broker_pnl_total: int = sum(v["pnl"] for v in broker_positions.values())
     platform_pnl_total: int = sum(v["pnl"] for v in platform_positions.values())
     ch_pnl_total: int = sum(v["pnl"] for v in ch_order_positions.values())
 
-    # --- Compare (ch_order_positions is qty-only; use platform for PnL) ---
-    # Build unified ch view: qty from orders, pnl from platform snapshot
     ch_unified: dict[str, dict[str, Any]] = {}
     all_syms = set(platform_positions) | set(ch_order_positions)
     for sym in all_syms:
@@ -336,7 +314,6 @@ async def run_reconciliation(
         ch_pnl=ch_pnl_total,
     )
 
-    # --- Persist result ---
     if not dry_run:
         _write_reconciliation_result(
             client=ch_client,
@@ -348,7 +325,6 @@ async def run_reconciliation(
             details=details_str,
         )
 
-    # --- Notifications ---
     telegram_enabled = bool(
         os.environ.get("HFT_TELEGRAM_BOT_TOKEN")
         and os.environ.get("HFT_TELEGRAM_CHAT_ID")
@@ -363,7 +339,6 @@ async def run_reconciliation(
 
         try:
             if not is_match:
-                # Report each mismatch individually so operator sees all symbols
                 for mm in mismatches:
                     await dispatcher.notify_reconciliation_mismatch(
                         platform_pnl=mm["platform_pnl"],
@@ -419,7 +394,6 @@ def main() -> None:
     if args.date:
         target_date = dt.date.fromisoformat(args.date)
     else:
-        # Use timebase for consistency; convert ns epoch to date
         ts_ns = timebase.now_ns()
         ts_s = ts_ns / 1_000_000_000
         target_date = dt.datetime.fromtimestamp(ts_s, tz=dt.timezone.utc).date()

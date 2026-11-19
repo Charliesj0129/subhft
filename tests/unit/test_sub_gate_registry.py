@@ -95,7 +95,6 @@ def test_get_registered_returns_copy():
     register_sub_gate(G())
     result = get_registered_sub_gates()
     result.clear()
-    # Registry should still have the gate
     assert len(get_registered_sub_gates()) == 1
 
 
@@ -115,8 +114,5 @@ def test_protocol_runtime_check():
 def test_protocol_runtime_check_missing_attr():
     class IncompleteGate:
         name = "i"
-        # missing applies_to and evaluate
 
-    # Runtime-checkable Protocol checks for presence of attributes
-    # (methods + annotations). Without all of them, isinstance returns False.
     assert not isinstance(IncompleteGate(), SubGate)

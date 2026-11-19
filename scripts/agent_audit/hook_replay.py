@@ -55,7 +55,7 @@ def _parse(mod: ModuleType, cmd: str) -> tuple:
         git = tuple((sub, tuple(rest)) for sub, rest, _cwd in mod.git_invocations(cmd))
         gh = tuple((group, sub) for group, sub, _rest, _repo in mod.gh_invocations(cmd))
         return git, gh, tuple(mod.unattributed_segments(cmd))
-    except Exception as exc:  # a parser crash is itself a difference worth seeing
+    except Exception as exc:
         return ("crash", type(exc).__name__)
 
 
@@ -139,7 +139,6 @@ def main() -> int:
     print("  subcommands in block->allow commands:", allowed_subs.most_common())
     print("review gate, (old, new) exit codes:", dict(gate))
 
-    # A verdict can also change with the parse unchanged (an edited allow list).
     unchanged: collections.Counter = collections.Counter()
     for cmd in cmds.difference(changed):
         if not any(True for _ in new.git_invocations(cmd)):

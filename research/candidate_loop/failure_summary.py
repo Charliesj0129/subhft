@@ -25,9 +25,8 @@ import numpy as np
 from research.candidate_loop.schema import LEGACY_STATUS_LABELS, Status
 from research.candidate_loop.scoring import ScoringConfig
 
-SPLITS_INCLUDED: tuple[str, ...] = ("train", "validation")  # FROZEN; never widened
+SPLITS_INCLUDED: tuple[str, ...] = ("train", "validation")
 
-# Hard-coded split filter (spec §15): no parameter exists to widen it.
 FETCH_RESULTS_SQL = (
     "SELECT alpha_id, family, split, ic, ic_tstat, final_score, status, "
     "gates_passed, gates_failed, day_count, effective_day_count, "
@@ -203,8 +202,8 @@ def build_failure_summary(
             "duplicate_rate": deaths.get("DUPLICATE_ALPHA", 0) / n if n else 0.0,
             "latency_failure_rate": _gate_rate("latency_1ms"),
             "cost_failure_rate": _gate_rate("cost_proxy_taker"),
-            "maker_cost_failure_rate": _gate_rate("cost_proxy_maker"),  # extension
-            "maker_rescuable_count": maker_rescuable,  # extension
+            "maker_cost_failure_rate": _gate_rate("cost_proxy_maker"),
+            "maker_rescuable_count": maker_rescuable,
             "reduced_day_coverage_count": reduced_coverage,
             "ic_distribution_survivors": ic_dist,
             "common_failure_patterns": common_patterns,

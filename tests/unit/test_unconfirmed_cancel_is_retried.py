@@ -161,7 +161,7 @@ async def test_a_cancel_whose_order_disappeared_is_confirmed_and_dropped(tmp_con
     adapter = _adapter(tmp_config)
     key, _ = await _dispatch_cancel(adapter)
     _age_watch(adapter, key, _CONFIRM_S + 5)
-    del adapter.live_orders[key]  # CANCELLED arrived, or the fill completed it
+    del adapter.live_orders[key]
 
     assert await adapter.check_unconfirmed_cancels() == 0
 

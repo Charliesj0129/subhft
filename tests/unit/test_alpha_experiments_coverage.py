@@ -26,10 +26,6 @@ from hft_platform.alpha.experiments import (
     gc_experiment_runs,
 )
 
-# ---------------------------------------------------------------------------
-# list_runs: corrupt meta files are skipped (lines 137-139, 141)
-# ---------------------------------------------------------------------------
-
 
 def test_list_runs_skips_corrupt_meta(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path)
@@ -68,11 +64,6 @@ def test_list_runs_filters_by_alpha_id(tmp_path: Path):
     assert rows[0].alpha_id == "alpha_x"
 
 
-# ---------------------------------------------------------------------------
-# compare: run_id not in target set is skipped (line 151)
-# ---------------------------------------------------------------------------
-
-
 def test_compare_skips_unknown_run_ids(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path)
     tracker.log_run(
@@ -89,11 +80,6 @@ def test_compare_skips_unknown_run_ids(tmp_path: Path):
     assert result == []
 
 
-# ---------------------------------------------------------------------------
-# best_by_metric: metric missing from run (line 174)
-# ---------------------------------------------------------------------------
-
-
 def test_best_by_metric_skips_missing_metric(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path)
     tracker.log_run(
@@ -108,11 +94,6 @@ def test_best_by_metric_skips_missing_metric(tmp_path: Path):
     )
     best = tracker.best_by_metric("sharpe_oos")
     assert best == []
-
-
-# ---------------------------------------------------------------------------
-# latest_signals/equity: no signals_path (lines 198, 201, 218, 225)
-# ---------------------------------------------------------------------------
 
 
 def test_latest_signals_by_alpha_no_signals_path(tmp_path: Path):
@@ -160,7 +141,6 @@ def test_latest_signals_returns_none_for_missing_file(tmp_path: Path):
         backtest_report_payload={},
         signals=np.array([1.0, 2.0]),
     )
-    # Delete the signals file to trigger _load_numpy returning None (line 415)
     signals_file = tracker.runs_dir / "r1" / "signals.npy"
     signals_file.unlink()
     result = tracker.latest_signals_by_alpha()
@@ -180,16 +160,10 @@ def test_latest_equity_returns_none_for_corrupt_file(tmp_path: Path):
         backtest_report_payload={},
         equity=np.array([100.0, 101.0]),
     )
-    # Corrupt the equity file (line 418-420)
     eq_file = tracker.runs_dir / "r1" / "equity.npy"
     eq_file.write_bytes(b"NOT A NPY FILE")
     result = tracker.latest_equity_by_alpha()
     assert result == {}
-
-
-# ---------------------------------------------------------------------------
-# proxy_returns: empty, single-element equity, min_len<2 (lines 224-225, 231, 237-238)
-# ---------------------------------------------------------------------------
 
 
 def test_proxy_returns_empty_equities(tmp_path: Path):
@@ -215,11 +189,6 @@ def test_proxy_returns_single_element_equity(tmp_path: Path):
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# Paper trade sessions: corrupt session files (lines 306-312)
-# ---------------------------------------------------------------------------
-
-
 def test_list_paper_trade_sessions_skips_corrupt(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path)
     sessions_dir = tracker.paper_trade_dir / "alpha_x" / "sessions"
@@ -228,11 +197,6 @@ def test_list_paper_trade_sessions_skips_corrupt(tmp_path: Path):
 
     rows = tracker.list_paper_trade_sessions("alpha_x")
     assert rows == []
-
-
-# ---------------------------------------------------------------------------
-# Paper trade session: duration_seconds parsing (lines 436-437, 443-444)
-# ---------------------------------------------------------------------------
 
 
 def test_paper_session_from_dict_invalid_duration_seconds(tmp_path: Path):
@@ -280,11 +244,6 @@ def test_paper_session_from_dict_invalid_session_duration_minutes(tmp_path: Path
     assert rows[0].session_duration_minutes == 60
 
 
-# ---------------------------------------------------------------------------
-# Paper trade: legacy zero-duration fallback (lines 468-469, 475-476, 481)
-# ---------------------------------------------------------------------------
-
-
 def test_legacy_zero_duration_session_fallback(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path)
     sessions_dir = tracker.paper_trade_dir / "alpha_x" / "sessions"
@@ -299,17 +258,11 @@ def test_legacy_zero_duration_session_fallback(tmp_path: Path):
         "pnl_bps": 0.0,
         "drift_alerts": 0,
         "execution_reject_rate": 0.0,
-        # No duration_seconds, no session_duration_minutes -> legacy zero
     }
     (sessions_dir / "2026-01-01_s1.json").write_text(json.dumps(payload))
     rows = tracker.list_paper_trade_sessions("alpha_x")
     assert len(rows) == 1
-    assert rows[0].duration_seconds == 3600  # 60 min fallback
-
-
-# ---------------------------------------------------------------------------
-# summarize_paper_trade: with sessions (lines 355-356, 361, 375-387)
-# ---------------------------------------------------------------------------
+    assert rows[0].duration_seconds == 3600
 
 
 def test_summarize_paper_trade_with_sessions(tmp_path: Path):
@@ -351,11 +304,6 @@ def test_summarize_paper_trade_empty(tmp_path: Path):
     summary = tracker.summarize_paper_trade("nonexistent")
     assert summary["session_count"] == 0
     assert summary["regimes_covered"] == []
-
-
-# ---------------------------------------------------------------------------
-# log_paper_trade_session edge cases (lines 497, 499, 509, 513-516, 519-520)
-# ---------------------------------------------------------------------------
 
 
 def test_log_paper_trade_session_no_timestamps(tmp_path: Path):
@@ -425,11 +373,6 @@ def test_log_paper_trade_session_equal_start_end(tmp_path: Path):
     assert data["duration_seconds"] == 3600
 
 
-# ---------------------------------------------------------------------------
-# _session_duration_seconds strict mode (lines 543-545, 547-549)
-# ---------------------------------------------------------------------------
-
-
 def test_session_duration_seconds_strict_bad_start():
     with pytest.raises(ValueError, match="invalid_started_at"):
         _session_duration_seconds("INVALID", "2026-01-01T10:00:00+00:00", strict=True)
@@ -454,29 +397,14 @@ def test_session_duration_seconds_end_before_start_nonstrict():
     assert result == 0
 
 
-# ---------------------------------------------------------------------------
-# _parse_day invalid (lines 468-469)
-# ---------------------------------------------------------------------------
-
-
 def test_parse_day_invalid_returns_none():
     result = _parse_day("not-a-date")
     assert result is None
 
 
-# ---------------------------------------------------------------------------
-# _trading_day_from_iso invalid (lines 475-476)
-# ---------------------------------------------------------------------------
-
-
 def test_trading_day_from_iso_invalid_returns_today():
     result = _trading_day_from_iso("NOT_VALID")
-    assert len(result) == 10  # YYYY-MM-DD format
-
-
-# ---------------------------------------------------------------------------
-# _coerce_utc naive vs aware (lines 481)
-# ---------------------------------------------------------------------------
+    assert len(result) == 10
 
 
 def test_coerce_utc_naive_datetime():
@@ -491,11 +419,6 @@ def test_coerce_utc_aware_datetime():
     dt = datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone(timedelta(hours=8)))
     result = _coerce_utc(dt)
     assert result.tzinfo == timezone.utc
-
-
-# ---------------------------------------------------------------------------
-# _is_legacy_zero_duration_session branches (lines 529, 531, 535)
-# ---------------------------------------------------------------------------
 
 
 def test_is_legacy_zero_duration_has_duration_seconds():
@@ -527,11 +450,6 @@ def test_is_legacy_zero_duration_true():
     assert result is True
 
 
-# ---------------------------------------------------------------------------
-# gc_experiment_runs (lines 415, 418-420, 436-437, 443-444)
-# ---------------------------------------------------------------------------
-
-
 def test_gc_experiment_runs_dry_run(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path)
     tracker.log_run(
@@ -544,7 +462,6 @@ def test_gc_experiment_runs_dry_run(tmp_path: Path):
         scorecard_payload={},
         backtest_report_payload={},
     )
-    # Rewrite meta.json with an old timestamp
     meta_path = tracker.runs_dir / "old-run" / "meta.json"
     meta_data = json.loads(meta_path.read_text())
     meta_data["timestamp"] = "2020-01-01T00:00:00+00:00"
@@ -614,11 +531,6 @@ def test_gc_preserves_gate_c_passed(tmp_path: Path):
     )
     assert result["preserved"] >= 1
     assert (tracker.runs_dir / "good-run").exists()
-
-
-# ---------------------------------------------------------------------------
-# PaperTradeSession.to_dict
-# ---------------------------------------------------------------------------
 
 
 def test_paper_trade_session_to_dict():

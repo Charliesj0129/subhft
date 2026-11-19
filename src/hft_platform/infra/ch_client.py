@@ -48,9 +48,6 @@ from structlog import get_logger
 
 logger = get_logger("infra.ch_client")
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 _DEPRECATED_HFT_USERNAME = "HFT_CLICKHOUSE_USERNAME"
 _DEPRECATED_PLAIN_USERNAME = "CLICKHOUSE_USERNAME"
@@ -60,12 +57,10 @@ _TODO_DEPRECATION_REMOVE = "TODO(2026-Q3): remove deprecated env var fallbacks �
 
 def _resolve_username() -> str:
     """Resolve ClickHouse username with deprecation fallback chain."""
-    # 1. Canonical
     value = os.getenv("HFT_CLICKHOUSE_USER")
     if value:
         return value
 
-    # 2. Deprecated HFT-prefixed alias
     value = os.getenv(_DEPRECATED_HFT_USERNAME)
     if value:
         warnings.warn(
@@ -76,16 +71,13 @@ def _resolve_username() -> str:
         logger.warning(
             "Deprecated env var used; migrate to HFT_CLICKHOUSE_USER",
             deprecated_var=_DEPRECATED_HFT_USERNAME,
-            # _TODO_DEPRECATION_REMOVE
         )
         return value
 
-    # 3. Generic fallback (no deprecation warning — still reasonably common)
     value = os.getenv("CLICKHOUSE_USER")
     if value:
         return value
 
-    # 4. Deprecated generic alias
     value = os.getenv(_DEPRECATED_PLAIN_USERNAME)
     if value:
         warnings.warn(
@@ -96,7 +88,6 @@ def _resolve_username() -> str:
         logger.warning(
             "Deprecated env var used; migrate to HFT_CLICKHOUSE_USER",
             deprecated_var=_DEPRECATED_PLAIN_USERNAME,
-            # _TODO_DEPRECATION_REMOVE
         )
         return value
 
@@ -106,11 +97,6 @@ def _resolve_username() -> str:
 def _resolve_password() -> str:
     """Resolve ClickHouse password with fallback chain."""
     return os.getenv("HFT_CLICKHOUSE_PASSWORD") or os.getenv("CLICKHOUSE_PASSWORD") or ""
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def get_ch_config() -> dict[str, Any]:
@@ -150,6 +136,5 @@ def get_ch_client(**kwargs: Any) -> Any:
         raise RuntimeError("clickhouse_connect is not installed — run: pip install clickhouse-connect") from exc
 
     cfg = get_ch_config()
-    # Caller overrides win; pop database if not supported by the client call
     merged = {**cfg, **kwargs}
     return clickhouse_connect.get_client(**merged)

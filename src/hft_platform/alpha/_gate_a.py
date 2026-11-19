@@ -46,7 +46,6 @@ def run_gate_a(
         if missing:
             missing_fields_by_path[path] = missing
 
-        # V2 AOS format validation — only blocking when data governance is enforced
         enforce_dg = bool(config.enforce_data_governance) if config is not None else False
         backtest_engine = str(getattr(config, "backtest_engine", "")) if config is not None else ""
         if enforce_dg or backtest_engine == "hftbacktest_v2":
@@ -137,11 +136,6 @@ def run_gate_a(
                 except Exception as exc:
                     data_ul_warnings.append(f"data_ul_validation_error:{type(exc).__name__}:{exc}")
 
-                # Provenance fields are required whenever the run names them,
-                # at every UL: a higher UL target asks for more evidence, so it
-                # must not switch this check off. A seed identifies a generated
-                # dataset; recorded market data has none, so only a dataset
-                # that declares itself real is excused from it.
                 provenance_fields = required_data_provenance_fields
                 if str(meta_payload.get("source_type", "")).strip().lower() == "real":
                     provenance_fields = tuple(key for key in provenance_fields if key != "seed")
@@ -154,10 +148,7 @@ def run_gate_a(
     data_governance_passed = (not enforce_data_governance) or (
         not invalid_data_roots and (not require_data_meta or (not missing_data_metadata and not invalid_data_metadata))
     )
-    # Note: invalid_data_formats is advisory in Gate A (reported in details).
-    # V2 format enforcement is handled at Gate C by HftNativeRunner/ensure_hftbt_npz.
 
-    # Skills / roles attribution governance (warn-only, non-blocking).
     roles_used = list(str(r) for r in getattr(manifest, "roles_used", ()))
     skills_used = list(str(s) for s in getattr(manifest, "skills_used", ()))
     skills_warnings: list[str] = []
@@ -186,7 +177,6 @@ def run_gate_a(
             f"(valid skills are defined in hft_platform.contracts.alpha.VALID_SKILLS)"
         )
 
-    # Latency profile advisory check
     enforce_latency = bool(config.enforce_latency_profile) if config is not None else False
     latency_warnings: list[str] = []
     latency_profile_present = False
@@ -216,11 +206,9 @@ def run_gate_a(
                     )
             else:
                 latency_warnings.append("latency_profiles.yaml has no profiles; the reference cannot be resolved")
-        except Exception as _exc:  # noqa: BLE001 -- reported as a warning; the profile stays invalid
+        except Exception as _exc:
             latency_warnings.append(f"latency profile lookup failed: {type(_exc).__name__}: {_exc}")
 
-    # A reference that does not resolve is not a latency profile: the run
-    # would be costed with whatever a later fallback picks.
     latency_profile_passed = (not enforce_latency) or (latency_profile_present and latency_profile_valid)
 
     passed = (
@@ -339,15 +327,6 @@ def _check_hftbacktest_v2_data_format(path: str) -> list[str]:
         if "ev" in names:
             if arr.dtype["ev"].kind not in ("i", "u"):
                 errors.append("'ev' flag must be an integer field")
-            # Note: previous versions of this check additionally asserted that
-            # ``first_ev & DEPTH_SNAPSHOT_EVENT`` was set. That assertion was
-            # never satisfied by real CK exports (which start with regular
-            # DEPTH+BUY/SELL events), so it produced spurious errors for every
-            # valid corpus file -- bypassed only by alphas with empty
-            # ``data_fields`` (e.g. c75). The check has been removed in favour
-            # of ``research/backtest/_npz_format.py::detect_npz_format``,
-            # which is consumed by the runner when ``feature_mode`` requires
-            # L5 depth. See docs/runbooks/npz-formats-2026-05-06.md.
         else:
             errors.append("Missing required field 'ev'")
 

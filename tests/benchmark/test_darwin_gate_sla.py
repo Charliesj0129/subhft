@@ -11,7 +11,6 @@ import time
 
 import pytest
 
-# Skip if ClickHouse not available
 clickhouse_connect = pytest.importorskip("clickhouse_connect")
 
 
@@ -34,10 +33,9 @@ def ch_client():
     return client
 
 
-# Darwin Gate SLA thresholds (microseconds)
-SLA_P99_US = 1000  # 1ms = 1000us
-SLA_P95_US = 500  # 500us
-SLA_P50_US = 100  # 100us
+SLA_P99_US = 1000
+SLA_P95_US = 500
+SLA_P50_US = 100
 
 
 @pytest.mark.benchmark
@@ -52,7 +50,6 @@ class TestDarwinGateSLA:
 
     def test_recent_latency_p99_under_sla(self, ch_client):
         """Check P99 latency from recent data is under SLA."""
-        # Query last hour of data
         query = """
         SELECT
             strategy_id,
@@ -147,7 +144,6 @@ class TestDarwinGateOrders:
         peak = max(counts) if counts else 0
         avg_per_min = sum(counts) / len(counts) if counts else 0
 
-        # Log metrics (no assertion, just reporting)
         print(f"Order throughput - Peak: {peak}/min, Avg: {avg_per_min:.1f}/min")
 
 
@@ -169,8 +165,6 @@ class TestDarwinGateMarketData:
         latest_ts_ns = result.result_rows[0][0]
         age_s = (time.time_ns() - latest_ts_ns) / 1e9
 
-        # Data should be fresher than 1 hour for active markets
-        # (relaxed threshold for testing)
         assert age_s < 3600, f"Market data is {age_s:.0f}s old (> 1 hour)"
 
     def test_ohlcv_aggregation(self, ch_client):  # noqa: no-assert
@@ -183,6 +177,5 @@ class TestDarwinGateMarketData:
         result = ch_client.query(query)
 
         count = result.result_rows[0][0]
-        # OHLCV might be empty if no tick data, that's ok
         if count > 0:
             print(f"OHLCV candles in last day: {count}")

@@ -18,10 +18,6 @@ from hft_platform.alpha._param_opt import (
 )
 from hft_platform.alpha._validation_types import ValidationConfig
 
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class FakeResult:
@@ -85,40 +81,26 @@ def _default_vcfg(**overrides: Any) -> ValidationConfig:
     return ValidationConfig(**defaults)
 
 
-# ---------------------------------------------------------------------------
-# _optimization_objective
-# ---------------------------------------------------------------------------
-
-
 class TestOptimizationObjective:
     def test_sharpe_oos_mode(self) -> None:
         val = _optimization_objective(1.5, -0.08, 0.5, "sharpe_oos")
         assert val == pytest.approx(1.5)
 
     def test_risk_adjusted_mode_no_penalties(self) -> None:
-        # drawdown < 10% and turnover < 1.0 → no penalties
         val = _optimization_objective(1.5, -0.08, 0.5, "risk_adjusted")
         assert val == pytest.approx(1.5)
 
     def test_risk_adjusted_mode_with_drawdown_penalty(self) -> None:
-        # drawdown = -0.20 → penalty = (0.20 - 0.10) * 2.0 = 0.2
         val = _optimization_objective(1.5, -0.20, 0.5, "risk_adjusted")
         assert val == pytest.approx(1.3)
 
     def test_risk_adjusted_mode_with_turnover_penalty(self) -> None:
-        # turnover = 2.0 → penalty = (2.0 - 1.0) * 0.25 = 0.25
         val = _optimization_objective(1.5, -0.05, 2.0, "risk_adjusted")
         assert val == pytest.approx(1.25)
 
     def test_ic_first_mode(self) -> None:
         val = _optimization_objective(1.5, -0.05, 2.0, "ic_first")
-        # 1.5 - 0.1 * 2.0 = 1.3
         assert val == pytest.approx(1.3)
-
-
-# ---------------------------------------------------------------------------
-# _build_grid_row
-# ---------------------------------------------------------------------------
 
 
 class TestBuildGridRow:
@@ -138,15 +120,8 @@ class TestBuildGridRow:
         result = FakeResult(sharpe_oos=2.0, max_drawdown=-0.05, turnover=0.3)
         row_ra = _build_grid_row(result, 0.3, "risk_adjusted")
         row_so = _build_grid_row(result, 0.3, "sharpe_oos")
-        # sharpe_oos mode returns raw sharpe
         assert row_so["objective"] == pytest.approx(2.0)
-        # risk_adjusted with small dd/turnover also returns raw sharpe (no penalties)
         assert row_ra["objective"] == pytest.approx(2.0)
-
-
-# ---------------------------------------------------------------------------
-# _run_single_grid_point
-# ---------------------------------------------------------------------------
 
 
 class TestRunSingleGridPoint:
@@ -172,11 +147,6 @@ class TestRunSingleGridPoint:
         _run_single_grid_point("alpha_obj", _CapturingRunner, base_cfg, 0.55, "risk_adjusted")
         assert len(captured) == 1
         assert captured[0].signal_threshold == pytest.approx(0.55)
-
-
-# ---------------------------------------------------------------------------
-# _optimize_parameters
-# ---------------------------------------------------------------------------
 
 
 class TestOptimizeParameters:
@@ -206,7 +176,6 @@ class TestOptimizeParameters:
             def run(self) -> FakeResult:
                 nonlocal call_count
                 call_count += 1
-                # Vary sharpe_oos by threshold to create a clear winner
                 t = self.cfg.signal_threshold
                 sharpe = 2.0 if abs(t - 0.3) < 0.01 else 1.0
                 return FakeResult(sharpe_oos=sharpe, sharpe_is=sharpe + 0.1)
@@ -233,7 +202,6 @@ class TestOptimizeParameters:
         """Large IS-OOS gap triggers overfit_gap_risk."""
         vcfg = _default_vcfg(opt_max_is_oos_gap=0.5)
         base_cfg = FakeBacktestConfig(signal_threshold=0.3)
-        # sharpe_is=3.0, sharpe_oos=1.0 → gap=2.0 > 0.5
         big_gap_result = FakeResult(sharpe_is=3.0, sharpe_oos=1.0)
 
         class _Runner:
@@ -267,11 +235,6 @@ class TestOptimizeParameters:
         assert out["objective"] == "sharpe_oos"
 
 
-# ---------------------------------------------------------------------------
-# _evaluate_parameter_robustness
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluateParameterRobustness:
     def test_stable_neighbors_pass(self) -> None:
         base_cfg = FakeBacktestConfig(signal_threshold=0.3)
@@ -290,7 +253,6 @@ class TestEvaluateParameterRobustness:
         """Neighbor sharpe drops sharply → cliff_risk."""
         base_cfg = FakeBacktestConfig(signal_threshold=0.3)
         base_result = FakeResult(sharpe_oos=2.0, max_drawdown=-0.05, turnover=0.5)
-        # Neighbor sharpe much lower
         out = _evaluate_parameter_robustness(
             alpha="a",
             base_cfg=base_cfg,
@@ -329,11 +291,6 @@ class TestEvaluateParameterRobustness:
         assert out["selection_penalty"] > 0.0
 
 
-# ---------------------------------------------------------------------------
-# _evaluate_stress_backtest
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluateStressBacktest:
     def test_stress_pass_with_resilient_sharpe(self) -> None:
         base_cfg = FakeBacktestConfig()
@@ -360,7 +317,6 @@ class TestEvaluateStressBacktest:
     def test_stress_fail_sharpe_drops_too_much(self) -> None:
         base_cfg = FakeBacktestConfig()
         base_result = FakeResult(sharpe_oos=2.0)
-        # stress sharpe < base * min_ratio (2.0 * 0.5 = 1.0)
         stress_result = FakeResult(sharpe_oos=0.5)
         vcfg = _default_vcfg(min_stress_sharpe_ratio=0.5)
         out = _evaluate_stress_backtest(

@@ -53,7 +53,6 @@ def test_promoted_family_is_minimal_microstructure_set(feature_set) -> None:
         "depth_imbalance_ema8_ppm",
     }
     assert ids == expected
-    # Promoted family must live within the v1 (first 16) indices the Rust kernel covers.
     assert max(promoted_indices(feature_set)) < 16
 
 
@@ -96,7 +95,6 @@ def test_reset_rewarm_parity(frames) -> None:
     py_masks = [f.warmup_ready_mask for f in py]
     hb_masks = [f.warmup_ready_mask for f in hb]
     assert py_masks == hb_masks
-    # The reset must visibly drop warmup readiness then climb back (not stuck full).
     assert min(py_masks) < max(py_masks)
     rust = run_rust_engine(frames)
     if rust is not None:
@@ -106,12 +104,11 @@ def test_reset_rewarm_parity(frames) -> None:
 def test_divergence_report_pinpoints_first_mismatch(frames, feature_set) -> None:
     """Inject a perturbation and confirm the report names the right coordinates."""
     py = run_python_engine(frames)
-    # Find the index of microprice_x2 and corrupt it on frame 7 of a copied path.
     mp_idx = feature_set.index_by_id["microprice_x2"]
     corrupted = list(py)
     bad_frame = py[7]
     bad_values = list(bad_frame.values)
-    bad_values[mp_idx] = bad_values[mp_idx] + 5  # exceeds tolerance 0
+    bad_values[mp_idx] = bad_values[mp_idx] + 5
     corrupted[7] = dataclasses.replace(bad_frame, values=tuple(bad_values))
 
     report = compare_paths({"python": py, "perturbed": corrupted}, feature_set=feature_set)
@@ -125,7 +122,6 @@ def test_divergence_report_pinpoints_first_mismatch(frames, feature_set) -> None
     assert div.timestamp == bad_frame.timestamp
     assert div.abs_diff == 5
     assert div.tolerance == 0
-    # The human-readable message carries every coordinate.
     msg = report.format()
     assert "microprice_x2" in msg
     assert str(bad_frame.timestamp) in msg
@@ -140,5 +136,4 @@ def test_run_self_test_passes_and_is_json_serializable() -> None:
     assert result["n_frames"] > 0
     assert result["feature_set_id"] == "lob_shared_v3"
     assert "hftbacktest_shared" in {c["pair"].split(" vs ")[1] for c in result["comparisons"]}
-    # Must round-trip through JSON for CLI emission.
     json.dumps(result)

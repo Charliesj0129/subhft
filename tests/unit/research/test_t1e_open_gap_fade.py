@@ -44,7 +44,6 @@ SPEC_PATH = Path("research/alphas/t1e_txf_opengap_fade_tmf/spec.yaml")
 
 
 def session_ns(date: str, minute: float) -> int:
-    # Local 08:45 TPE == 00:45 UTC; matches _session_start_ns(tz_offset=8).
     base = datetime.fromisoformat(f"{date}T00:45:00+00:00")
     return int(base.timestamp() * 1_000_000_000) + int(minute * NS_PER_MINUTE)
 
@@ -89,27 +88,29 @@ def _config(today: str, prior: str) -> OpenGapFadeConfig:
     )
 
 
-# Prior session closes ~17000 over its final 30 min (270-300m).
 _PRIOR = [(1, 16980.0), (100, 16990.0), (275, 17000.0), (285, 17000.0), (295, 17000.0)]
 
 
 def test_detects_short_fade_on_gap_up():
     prior = extract_bbo_and_trades(_session_array("2026-03-02", _PRIOR))[0]
-    # Today opens 40pt above prior close -> outsized gap up -> FADE short.
     today_bbo, today_trades = extract_bbo_and_trades(
         _session_array("2026-03-03", [(0, 17040.0), (5, 17042.0), (15, 17041.0), (30, 17035.0), (60, 17020.0)])
     )
 
     events = detect_open_gap_fade_events(
-        prior, today_bbo, today_trades, contract="TXFC6", date="2026-03-03",
+        prior,
+        today_bbo,
+        today_trades,
+        contract="TXFC6",
+        date="2026-03-03",
         config=_config("2026-03-03", "2026-03-02"),
     )
 
     assert len(events) == 1
     ev = events[0]
     assert ev.regime_type == "T1-E_open_gap_overreaction_fade"
-    assert ev.direction == -1  # fade the gap up
-    assert ev.realized_vol_ratio > 15.0  # signed gap carried in reused field
+    assert ev.direction == -1
+    assert ev.realized_vol_ratio > 15.0
     assert ev.trigger_time_ns == session_ns("2026-03-03", 15)
 
 
@@ -120,23 +121,30 @@ def test_detects_long_fade_on_gap_down():
     )
 
     events = detect_open_gap_fade_events(
-        prior, today_bbo, today_trades, contract="TXFC6", date="2026-03-03",
+        prior,
+        today_bbo,
+        today_trades,
+        contract="TXFC6",
+        date="2026-03-03",
         config=_config("2026-03-03", "2026-03-02"),
     )
 
     assert len(events) == 1
-    assert events[0].direction == 1  # fade the gap down
+    assert events[0].direction == 1
 
 
 def test_no_event_when_gap_below_threshold():
     prior = extract_bbo_and_trades(_session_array("2026-03-02", _PRIOR))[0]
-    # Today opens only 5pt above prior close -> below 15pt threshold.
     today_bbo, today_trades = extract_bbo_and_trades(
         _session_array("2026-03-03", [(0, 17005.0), (5, 17004.0), (15, 17006.0), (30, 17005.0), (60, 17007.0)])
     )
 
     events = detect_open_gap_fade_events(
-        prior, today_bbo, today_trades, contract="TXFC6", date="2026-03-03",
+        prior,
+        today_bbo,
+        today_trades,
+        contract="TXFC6",
+        date="2026-03-03",
         config=_config("2026-03-03", "2026-03-02"),
     )
 
@@ -148,8 +156,6 @@ def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     today_txf = tmp_path / "TXFC6_2026-03-03_l2.hftbt.npz"
     today_tmf = tmp_path / "TMFC6_2026-03-03_l2.hftbt.npz"
     np.savez(prior_txf, data=_session_array("2026-03-02", _PRIOR))
-    # Gap up -> short. Today TXF stays below the 17055 gap-extension stop (no
-    # breach); TMF reverts down so a short profits on the executable exit path.
     np.savez(
         today_txf,
         data=_session_array(
@@ -158,9 +164,7 @@ def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     )
     np.savez(
         today_tmf,
-        data=_session_array(
-            "2026-03-03", [(15, 17040.0), (20, 17038.0), (30, 17030.0), (40, 17025.0), (44, 17020.0)]
-        ),
+        data=_session_array("2026-03-03", [(15, 17040.0), (20, 17038.0), (30, 17030.0), (40, 17025.0), (44, 17020.0)]),
     )
 
     rows = audit_open_gap_fade_pair(
@@ -189,7 +193,9 @@ def test_run_audit_pairs_consecutive_days_and_writes_summary(tmp_path):
     np.savez(txf_dir / "TXFC6_2026-03-02_l2.hftbt.npz", data=_session_array("2026-03-02", _PRIOR))
     np.savez(
         txf_dir / "TXFC6_2026-03-03_l2.hftbt.npz",
-        data=_session_array("2026-03-03", [(0, 17040.0), (5, 17041.0), (15, 17041.0), (30, 17039.0), (45, 17038.0), (60, 17036.0)]),
+        data=_session_array(
+            "2026-03-03", [(0, 17040.0), (5, 17041.0), (15, 17041.0), (30, 17039.0), (45, 17038.0), (60, 17036.0)]
+        ),
     )
     np.savez(
         tmf_dir / "TMFC6_2026-03-03_l2.hftbt.npz",

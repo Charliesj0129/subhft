@@ -20,8 +20,6 @@ def test_order_intent_session_phase_defaults_none():
 
 
 def test_filter_stamps_session_phase_on_order_intent_objects():
-    # §7 groundwork: OrderIntent objects passing the phase filter are stamped
-    # with the phase they were emitted under. Filtering behaviour is unchanged.
     from hft_platform.strategy.runner import StrategyRunner
 
     gate = TrackGate()
@@ -44,8 +42,6 @@ def test_filter_stamps_session_phase_on_order_intent_objects():
 
 
 def test_filter_leaves_typed_intent_tuple_unstamped():
-    # The typed_intent_v1 tuple fast-path is immutable; stamping is a no-op and
-    # must not raise or alter the tuple (honest limitation, documented).
     from hft_platform.strategy.runner import StrategyRunner
 
     gate = TrackGate()
@@ -108,7 +104,6 @@ def test_close_only_allows_cancel_and_force_flat():
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
     phase = gate.get_phase("2330")
     assert phase == SessionPhase.CLOSE_ONLY
-    # CANCEL and FORCE_FLAT always allowed; IOC NEW also allowed (aggressive exits)
     always_allowed = {IntentType.CANCEL, IntentType.FORCE_FLAT}
     assert IntentType.CANCEL in always_allowed
     assert IntentType.FORCE_FLAT in always_allowed
@@ -137,12 +132,6 @@ def test_track_gate_runner_has_attribute():
     assert runner.track_gate is None
 
 
-# ---------------------------------------------------------------------------
-# Runner filtering tests for FORCE_FLAT phase
-# ---------------------------------------------------------------------------
-
-# typed_intent_v1 tuple layout: (tag, version, strategy_id, symbol, intent_type, ...)
-# IntentType: NEW=0, AMEND=1, CANCEL=2, FORCE_FLAT=3
 _SYMBOL = "TSMC"
 _TAG = "typed_intent_v1"
 
@@ -254,11 +243,6 @@ def test_closed_phase_blocks_all_intents():
     assert result == []
 
 
-# ---------------------------------------------------------------------------
-# CLOSE_ONLY IOC exit allowance tests
-# ---------------------------------------------------------------------------
-
-
 def test_close_only_allows_ioc_sell_when_long_position():
     """During CLOSE_ONLY, IOC SELL is allowed when long position exists (reduces exposure)."""
     from hft_platform.strategy.runner import StrategyRunner
@@ -266,7 +250,7 @@ def test_close_only_allows_ioc_sell_when_long_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=10)  # long position
+    ps = _make_position_store(net_qty=10)
     ioc_intent = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.SELL))
     result = StrategyRunner.filter_intents_by_phase([ioc_intent], gate, position_store=ps)
     assert result == [ioc_intent]
@@ -291,7 +275,7 @@ def test_close_only_mixed_intents_allows_cancel_force_flat_and_reducing_ioc():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=10)  # long position, SELL reduces
+    ps = _make_position_store(net_qty=10)
     intents = [
         _make_typed_intent(IntentType.NEW, tif=TIF.LIMIT),
         _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.SELL)),
@@ -318,11 +302,6 @@ def test_force_flat_still_blocks_ioc_new_intent():
     assert result == []
 
 
-# ---------------------------------------------------------------------------
-# CLOSE_ONLY IOC position-aware check tests
-# ---------------------------------------------------------------------------
-
-
 def test_close_only_ioc_buy_allowed_when_short_position():
     """IOC BUY in CLOSE_ONLY is allowed when net_qty < 0 (closing a short)."""
     from hft_platform.strategy.runner import StrategyRunner
@@ -330,7 +309,7 @@ def test_close_only_ioc_buy_allowed_when_short_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=-5)  # short position
+    ps = _make_position_store(net_qty=-5)
     ioc_buy = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.BUY))
     result = StrategyRunner.filter_intents_by_phase([ioc_buy], gate, position_store=ps)
     assert result == [ioc_buy]
@@ -343,7 +322,7 @@ def test_close_only_ioc_sell_allowed_when_long_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=10)  # long position
+    ps = _make_position_store(net_qty=10)
     ioc_sell = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.SELL))
     result = StrategyRunner.filter_intents_by_phase([ioc_sell], gate, position_store=ps)
     assert result == [ioc_sell]
@@ -356,7 +335,7 @@ def test_close_only_ioc_buy_blocked_when_no_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=0)  # flat
+    ps = _make_position_store(net_qty=0)
     ioc_buy = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.BUY))
     result = StrategyRunner.filter_intents_by_phase([ioc_buy], gate, position_store=ps)
     assert result == []
@@ -369,7 +348,7 @@ def test_close_only_ioc_buy_blocked_when_long_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=10)  # long — BUY would add, not reduce
+    ps = _make_position_store(net_qty=10)
     ioc_buy = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.BUY))
     result = StrategyRunner.filter_intents_by_phase([ioc_buy], gate, position_store=ps)
     assert result == []
@@ -382,7 +361,7 @@ def test_close_only_ioc_sell_blocked_when_no_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=0)  # flat
+    ps = _make_position_store(net_qty=0)
     ioc_sell = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.SELL))
     result = StrategyRunner.filter_intents_by_phase([ioc_sell], gate, position_store=ps)
     assert result == []
@@ -395,7 +374,7 @@ def test_close_only_ioc_sell_blocked_when_short_position():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=-5)  # short — SELL would add, not reduce
+    ps = _make_position_store(net_qty=-5)
     ioc_sell = _make_typed_intent(IntentType.NEW, tif=TIF.IOC, side=int(Side.SELL))
     result = StrategyRunner.filter_intents_by_phase([ioc_sell], gate, position_store=ps)
     assert result == []
@@ -420,7 +399,7 @@ def test_close_only_cancel_and_force_flat_always_pass():
     gate = TrackGate()
     gate.register_symbol(_SYMBOL, "stock")
     gate.set_track_phase("stock", SessionPhase.CLOSE_ONLY)
-    ps = _make_position_store(net_qty=0)  # flat — no position
+    ps = _make_position_store(net_qty=0)
     cancel = _make_typed_intent(IntentType.CANCEL)
     force_flat = _make_typed_intent(IntentType.FORCE_FLAT)
     result = StrategyRunner.filter_intents_by_phase([cancel, force_flat], gate, position_store=ps)

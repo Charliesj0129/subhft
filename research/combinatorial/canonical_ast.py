@@ -64,9 +64,6 @@ _BINOP_NAMES: dict[type[ast.AST], str] = {
     ast.Div: "div",
 }
 
-# (min_args, max_args) per operator, mirroring operator_library.OPERATORS'
-# actual positional-arg signatures (keyword-only out=/eps= excluded). "sub"
-# has no OPERATORS callable (no Call form exists) but is reachable via BinOp.
 OPERATOR_ARITY: dict[str, tuple[int, int]] = {
     "abs": (1, 1),
     "add": (2, 2),
@@ -86,11 +83,6 @@ OPERATOR_ARITY: dict[str, tuple[int, int]] = {
     "zscore": (1, 2),
 }
 
-# Per-positional-arg role for every operator: "signal" (array-valued, may be
-# any subtree) or "window" (consumed via int(window) at runtime by
-# operator_library — must stay a scalar constant). Covers OPERATOR_ARITY's 16
-# keys plus "neg" (reachable only via UnaryOp, never Call, so it has no arity
-# entry). zscore's 1-arg call form takes roles[:1], a valid prefix slice.
 OPERATOR_ARG_ROLES: dict[str, tuple[str, ...]] = {
     "abs": ("signal",),
     "add": ("signal", "signal"),
@@ -254,14 +246,14 @@ def _convert(node: ast.AST) -> Node:
         operand = _convert(node.operand)
         if isinstance(node.op, ast.USub):
             return OpNode("neg", (operand,))
-        return operand  # UAdd is a semantic no-op, same as in _eval_node
+        return operand
     if isinstance(node, ast.BinOp):
         op_name = _BINOP_NAMES.get(type(node.op))
         if op_name is None:
             raise ValueError(f"Unsupported binary operator: {type(node.op).__name__}")
         return OpNode(op_name, (_convert(node.left), _convert(node.right)))
     if isinstance(node, ast.Call):
-        assert isinstance(node.func, ast.Name)  # guaranteed by _validate_tree
+        assert isinstance(node.func, ast.Name)
         name = node.func.id
         args = tuple(_convert(arg) for arg in node.args)
         _check_arity(name, len(args))

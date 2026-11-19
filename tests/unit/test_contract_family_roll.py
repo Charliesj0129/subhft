@@ -66,7 +66,7 @@ def _api_on_2026_09_15() -> SimpleNamespace:
         ("TMFJ6", "2026/10/21"),
         ("TMFK6", "2026/11/18"),
         ("TMFL6", "2026/12/16"),
-        ("TMFR1", "2026/09/16"),  # alias rows carry a date too; they must be ignored
+        ("TMFR1", "2026/09/16"),
     ]
     contracts = [SimpleNamespace(code=c, delivery_date=d, delivery_month=None) for c, d in listed]
     return SimpleNamespace(Contracts=SimpleNamespace(Futures=_Futures({"TMF": contracts})))
@@ -81,11 +81,6 @@ def _runner_with_r47(resolver: ContractFamilyResolver):
     runner._family_resolver = None
     runner.set_family_resolver(resolver)
     return strategy
-
-
-# --------------------------------------------------------------------------- #
-# 1. The cutoff is exchange time, and it moves at 13:30, not at midnight       #
-# --------------------------------------------------------------------------- #
 
 
 class TestDeliveryCutoff:
@@ -115,11 +110,6 @@ class TestDeliveryCutoff:
         assert taifex_monthly_delivery_date(year, month) == expected
 
 
-# --------------------------------------------------------------------------- #
-# 2. A connect on the delivery day binds by the clock, not the date            #
-# --------------------------------------------------------------------------- #
-
-
 class TestPopulateOnDeliveryDay:
     @pytest.mark.parametrize(
         ("when", "front", "second"),
@@ -147,11 +137,6 @@ class TestPopulateOnDeliveryDay:
         assert resolver.resolve_family(_TMF_R1).display() == "TMFJ6"
 
 
-# --------------------------------------------------------------------------- #
-# 3. The binding moves when the contract settles, with no connect in between   #
-# --------------------------------------------------------------------------- #
-
-
 class TestRollWithoutReconnect:
     def test_r47_is_rebound_to_the_next_month_when_its_contract_settles(self) -> None:
         """The production sequence: connect 09-15, then only the clock moves."""
@@ -163,7 +148,7 @@ class TestRollWithoutReconnect:
 
         rolled = populator.roll_if_due(now_ns=_ns(2026, 9, 16, 13, 31))
 
-        assert rolled == 2  # R1 and R2 both moved
+        assert rolled == 2
         assert r47.symbols == {"TMFJ6"}
 
     def test_nothing_moves_before_the_final_close(self) -> None:
@@ -249,11 +234,6 @@ class TestRollWithoutReconnect:
 
         rolled = {e["old_ref"]: e["new_ref"] for e in logs if e["event"] == "contract_family_rolled"}
         assert rolled == {"TMFI6": "TMFJ6", "TMFJ6": "TMFK6"}
-
-
-# --------------------------------------------------------------------------- #
-# 4. The clock keeps running through a failing pass                             #
-# --------------------------------------------------------------------------- #
 
 
 def test_roll_clock_survives_a_failing_check(module_log_sink) -> None:

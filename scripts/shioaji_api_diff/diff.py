@@ -24,7 +24,6 @@ def _rec(section: str, qualname: str, kind: str, before: Any, after: Any,
     return rec
 
 
-# --------------------------------------------------------------------------- #
 def _diff_layout(a: dict[str, Any], b: dict[str, Any]) -> list[ChangeRecord]:
     out: list[ChangeRecord] = []
     if not (_present(a) and _present(b)):
@@ -94,9 +93,6 @@ def _diff_models(a: dict[str, Any], b: dict[str, Any]) -> list[ChangeRecord]:
         if ma.get("kind") != mb.get("kind"):
             out.append(_rec("model", f"{name}.__kind__", "model_kind_changed",
                             ma.get("kind"), mb.get("kind"), model=name))
-        # Compare the field-NAME surface as fields ∪ attributes, so a field that
-        # moved from a pydantic/annotated field to a compiled-struct attribute
-        # (1.5.x PyO3 rewrite) is NOT reported as a spurious removal.
         fa, fb = ma.get("fields", {}), mb.get("fields", {})
         names_a = set(fa) | set(ma.get("attributes", []))
         names_b = set(fb) | set(mb.get("attributes", []))
@@ -104,7 +100,6 @@ def _diff_models(a: dict[str, Any], b: dict[str, Any]) -> list[ChangeRecord]:
             out.append(_rec("model", f"{name}.{f}", "field_removed", fa.get(f), None, model=name))
         for f in sorted(names_b - names_a):
             out.append(_rec("model", f"{name}.{f}", "field_added", None, fb.get(f), model=name))
-        # Type/required drift only where both sides expose typed field metadata.
         for f in sorted(set(fa) & set(fb)):
             if fa[f].get("type") != fb[f].get("type"):
                 out.append(_rec("model", f"{name}.{f}", "field_type_changed",

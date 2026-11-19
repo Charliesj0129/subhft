@@ -30,8 +30,6 @@ from hft_platform.alpha.provenance import file_sha256
 
 PARITY_GATE = "replay_parity_audit"
 SHADOW_EXIT = "shadow_exit"
-# ``replay/cli_runner.HARNESS_VERSION``; a report from any other harness is
-# not Shadow-exit evidence (a test keeps the two equal).
 REPLAY_HARNESS = "slice-c.v1+l4.v1"
 _CERTIFIED_REPORT_KEYS = ("path", "sha256", "session", "match_pct", "n_live_intents", "config_sha256")
 _PINNED_KEYS = ("module", "class", "code_sha256")
@@ -52,7 +50,6 @@ def strategy_fingerprint(module: Any, class_name: Any) -> dict[str, str] | None:
     origin = Path(spec.origin) if spec is not None and spec.origin else None
     if origin is None or not origin.is_file():
         return None
-    # Uncached: an edit that keeps the file size within one mtime tick keeps the cache key.
     return {"module": module, "class": class_name, "code_sha256": file_sha256(origin, cached=False)}
 
 
@@ -104,7 +101,7 @@ def judge_report(
     except (OSError, ValueError) as exc:
         row["problem"] = f"unreadable: {type(exc).__name__}"
         return row
-    row["sha256"] = hashlib.sha256(raw).hexdigest()  # the bytes judged, not a cached hash
+    row["sha256"] = hashlib.sha256(raw).hexdigest()
     if not isinstance(payload, dict):
         row["problem"] = "not a JSON object"
         return row
@@ -122,8 +119,6 @@ def judge_report(
             "config_sha256": fingerprint.get("config_sha256"),
         }
     )
-    # Each check fails closed: a report that cannot show it compared this
-    # strategy's live intents is not evidence that the replay reproduces them.
     if payload.get("error"):
         row["problem"] = f"replay error: {payload.get('error')}"
     elif payload.get("harness_version") != REPLAY_HARNESS:
@@ -142,7 +137,6 @@ def judge_report(
             f"code {str(fingerprint.get('code_sha256'))[:12]}, not the promoted strategy code"
         )
     elif isinstance(n_live, bool) or not isinstance(n_live, int) or n_live <= 0:
-        # IntentDiff reports 100% when both streams are empty.
         row["problem"] = "no live intents compared"
     elif match_pct is None:
         row["problem"] = "no numeric match_pct"

@@ -42,9 +42,6 @@ def gate():
         g.close()
 
 
-# ---------------------------------------------------------------------------
-# FastGate.check() Benchmarks
-# ---------------------------------------------------------------------------
 def test_bench_fast_gate_check_pass(benchmark, gate):
     """Benchmark FastGate.check() for passing orders."""
     result = benchmark(gate.check, 500.0, 10.0)
@@ -70,9 +67,6 @@ def test_bench_fast_gate_check_kill_switch(benchmark, gate):
     assert result == (False, 1)
 
 
-# ---------------------------------------------------------------------------
-# Raw Numba Function Benchmarks
-# ---------------------------------------------------------------------------
 @pytest.fixture
 def numba_arrays():
     """Create numpy arrays for direct Numba function calls."""
@@ -87,9 +81,6 @@ def test_bench_check_order_numba_direct(benchmark, numba_arrays):
     assert result == (True, 0)
 
 
-# ---------------------------------------------------------------------------
-# Batch Validation Benchmarks
-# ---------------------------------------------------------------------------
 def test_bench_fast_gate_batch_100(benchmark, gate):  # noqa: no-assert
     """Benchmark 100 consecutive checks."""
 

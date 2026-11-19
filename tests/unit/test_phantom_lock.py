@@ -83,16 +83,14 @@ def test_phantom_insert_and_capacity_evict_under_concurrent_clear(tmp_path):
     random keys. Without the lock, the eviction's list-comprehension or
     ``del`` could raise. Must complete without exception."""
     adapter = _make_adapter(tmp_path)
-    # Shrink the bound so eviction fires frequently.
     adapter._phantom_order_max = 50
 
     stop = threading.Event()
     errors: list[BaseException] = []
 
-    # Pre-seed with some entries so clearer has targets.
     import time as _time
 
-    old_ts = _time.monotonic() - 7200.0  # stale — eligible for eviction
+    old_ts = _time.monotonic() - 7200.0
     with adapter._phantom_lock:
         for i in range(40):
             adapter._phantom_order_keys[f"Spre:{i}"] = (old_ts, "TMFD6")
@@ -103,7 +101,6 @@ def test_phantom_insert_and_capacity_evict_under_concurrent_clear(tmp_path):
             i = 0
             while not stop.is_set():
                 intent = _intent("Swrite", i)
-                # Directly simulate the _call_api phantom-insert path.
                 phantom_key = f"{intent.strategy_id}:{intent.intent_id}"
                 with adapter._phantom_lock:
                     adapter._phantom_order_keys[phantom_key] = (
@@ -118,7 +115,7 @@ def test_phantom_insert_and_capacity_evict_under_concurrent_clear(tmp_path):
                             adapter._phantom_order_keys.pop(_sk, None)
                             adapter._phantom_intents.pop(_sk, None)
                 i += 1
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     def clearer() -> None:
@@ -127,9 +124,9 @@ def test_phantom_insert_and_capacity_evict_under_concurrent_clear(tmp_path):
             while not stop.is_set():
                 adapter.clear_phantom_candidate(f"Spre:{i % 40}")
                 adapter.clear_phantom_candidate(f"Swrite:{i}")
-                adapter.get_phantom_candidates()  # snapshot read
+                adapter.get_phantom_candidates()
                 i += 1
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     w = threading.Thread(target=writer, daemon=True)
@@ -156,7 +153,6 @@ async def test_release_stale_phantoms_is_reentry_safe(tmp_path):
 
     from hft_platform.order.adapter import _PhantomEntry
 
-    # Seed an expired phantom (M4: canonical store + legacy view).
     aged_ts = _time.monotonic() - 1000.0
     intent_x = _intent("SX", 1)
     with adapter._phantom_lock:
@@ -171,15 +167,12 @@ async def test_release_stale_phantoms_is_reentry_safe(tmp_path):
         adapter._phantom_order_keys["SX:1"] = (aged_ts, "TMFD6")
         adapter._phantom_intents["SX:1"] = intent_x
 
-    # Install a no-op rejection sink so _send_dispatch_rejection works.
     adapter._rejection_sink = asyncio.Queue()
 
     r1_task = asyncio.create_task(adapter.release_stale_phantom_pendings(ttl_s=0.5))
     r2_task = asyncio.create_task(adapter.release_stale_phantom_pendings(ttl_s=0.5))
     r1, r2 = await asyncio.gather(r1_task, r2_task)
 
-    # At most one of the two concurrent invocations should report the release.
-    # The other must see an empty phantom dict (entry already popped under lock).
     assert (r1, r2) in {(1, 0), (0, 1)}, f"expected single release, got r1={r1} r2={r2}"
     assert "SX:1" not in adapter._phantom_order_keys
     assert "SX:1" not in adapter._phantom_intents
@@ -202,18 +195,17 @@ def test_get_phantom_candidates_snapshot_is_consistent(tmp_path):
                 with adapter._phantom_lock:
                     adapter._phantom_order_keys[f"M:{i}"] = (_time.monotonic(), "X")
                     if len(adapter._phantom_order_keys) > 100:
-                        # Drop half
                         for k in list(adapter._phantom_order_keys.keys())[:50]:
                             adapter._phantom_order_keys.pop(k, None)
                 i += 1
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     def reader() -> None:
         try:
             while not stop.is_set():
                 _ = adapter.get_phantom_candidates()
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     m = threading.Thread(target=mutator, daemon=True)

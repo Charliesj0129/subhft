@@ -113,7 +113,7 @@ class ReconcileResult:
     errors: list[str] = field(default_factory=list)
 
 
-_PRICE_SCALE = 1_000_000  # ClickHouse hft.fills.price_scaled = x1M (matches recorder/mapper.py)
+_PRICE_SCALE = 1_000_000
 
 
 def _normalize_action(raw: Any) -> str:
@@ -173,7 +173,7 @@ class StartupReconciler:
         result = ReconcileResult()
         try:
             broker_fills = self._collect_broker_fills(result)
-        except Exception as exc:  # noqa: BLE001 - fail-soft per Q5
+        except Exception as exc:
             logger.error(
                 "startup_reconciler.broker_query_failed",
                 error_type=type(exc).__name__,
@@ -189,7 +189,7 @@ class StartupReconciler:
         result.broker_fills = len(broker_fills)
         try:
             existing_keys = await self._ch.fetch_existing_fill_keys(self._today)
-        except Exception as exc:  # noqa: BLE001 - fail-soft per Q5
+        except Exception as exc:
             logger.error(
                 "startup_reconciler.ch_query_failed",
                 error_type=type(exc).__name__,
@@ -212,9 +212,9 @@ class StartupReconciler:
             try:
                 await self._ch.insert_fill(row)
                 result.inserted += 1
-                existing_keys.add(key)  # local dedup against intra-batch dup
+                existing_keys.add(key)
                 self._metrics.startup_reconciler_missing_fills_total.labels(result="inserted").inc()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error(
                     "startup_reconciler.insert_failed",
                     error_type=type(exc).__name__,
@@ -246,7 +246,6 @@ class StartupReconciler:
         seen: set[tuple[str, str]] = set()
         out: list[_NormalizedFill] = []
 
-        # Closed round-trips: list_profit_loss → list_profit_loss_detail per pnl_id
         pnl_summaries = (
             self._broker.list_profit_loss(account=self._broker_account, begin_date=today_iso, end_date=today_iso) or []
         )
@@ -258,7 +257,7 @@ class StartupReconciler:
                 detail_rows = (
                     self._broker.list_profit_loss_detail(account=self._broker_account, detail_id=int(pnl_id)) or []
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "startup_reconciler.pnl_detail_failed",
                     pnl_id=pnl_id,
@@ -277,10 +276,9 @@ class StartupReconciler:
                 seen.add(key)
                 out.append(fill)
 
-        # Open positions: list_position_detail (each FIFO entry is a fill)
         try:
             open_rows = self._broker.list_position_detail(account=self._broker_account) or []
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning(
                 "startup_reconciler.position_detail_failed",
                 error_type=type(exc).__name__,

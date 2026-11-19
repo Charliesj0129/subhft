@@ -27,8 +27,6 @@ import pytest
 
 from hft_platform.recorder.wal import WALBatchWriter, WALWriter, _dumps, _loads
 
-# -- Shared fixtures ----------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _disable_fsync(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,9 +56,6 @@ def batch_writer(tmp_path: Path, mock_metrics: MagicMock) -> WALBatchWriter:
     writer.stop()
 
 
-# -- WALWriter: write() with real disk space check (forced low threshold) -----
-
-
 class TestWALWriterWriteDiskCheck:
     @pytest.mark.asyncio
     async def test_write_skips_when_disk_full_via_check(self, tmp_path: Path) -> None:
@@ -69,7 +64,7 @@ class TestWALWriterWriteDiskCheck:
             cls.get.return_value = MagicMock()
             w = WALWriter(str(tmp_path))
         w._last_disk_check_ts = 0.0
-        w._disk_min_mb = 999_999_999  # impossibly high threshold
+        w._disk_min_mb = 999_999_999
         result = await w.write("test_table", [{"row": 1}])
         assert result is False
         assert w._disk_full is True
@@ -83,9 +78,6 @@ class TestWALWriterWriteDiskCheck:
         assert result is True
 
 
-# -- WALWriter: _write_sync_atomic temp cleanup on failure --------------------
-
-
 class TestWriteSyncAtomicCleanup:
     def test_temp_file_cleaned_on_rename_failure(self, tmp_path: Path, wal_writer: WALWriter) -> None:
         """If rename fails, temp file is cleaned up."""
@@ -93,7 +85,6 @@ class TestWriteSyncAtomicCleanup:
         with patch("os.rename", side_effect=OSError("rename failed")):
             with pytest.raises(OSError, match="rename failed"):
                 wal_writer._write_sync_atomic(filename, [{"x": 1}])
-        # Temp files should be cleaned up
         tmp_files = list(tmp_path.glob("*.tmp"))
         assert len(tmp_files) == 0
 
@@ -109,9 +100,6 @@ class TestWriteSyncAtomicCleanup:
             assert parsed["id"] == data[i]["id"]
 
 
-# -- WALWriter: _maybe_fsync_dir with zero threshold -------------------------
-
-
 class TestMaybeFsyncDirZeroThreshold:
     def test_fsync_dir_runs_and_records_latency(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """_maybe_fsync_dir runs fsync and records latency when threshold is 0."""
@@ -119,11 +107,7 @@ class TestMaybeFsyncDirZeroThreshold:
         w._dir_fsync_min_ms = 0
         w._last_dir_fsync_ts = 0.0
         w._maybe_fsync_dir(str(tmp_path), writer="wal")
-        # Verify the timestamp was updated
         assert w._last_dir_fsync_ts > 0
-
-
-# -- WALBatchWriter: _check_disk_space recovery path --------------------------
 
 
 class TestBatchWriterDiskSpaceRecovery:
@@ -131,14 +115,11 @@ class TestBatchWriterDiskSpaceRecovery:
         """When disk was full and now recovers, _disk_full flips back to False."""
         batch_writer._last_disk_check_ts = 0.0
         batch_writer._disk_full = True
-        batch_writer._disk_min_mb = 0.001  # tiny threshold, real disk will exceed
+        batch_writer._disk_min_mb = 0.001
 
         result = batch_writer._check_disk_space()
         assert result is True
         assert batch_writer._disk_full is False
-
-
-# -- WALBatchWriter: flush failure with columnar data merge-back --------------
 
 
 class TestBatchWriterFlushFailureMergeBack:
@@ -147,7 +128,6 @@ class TestBatchWriterFlushFailureMergeBack:
         self, batch_writer: WALBatchWriter, mock_metrics: MagicMock
     ) -> None:
         """When flush write fails, columnar data is merged back into buffer."""
-        # Add columnar data
         await batch_writer.add_columnar("hft.ticks", ["sym", "px"], [["ABC"], [100]], 1)
         assert batch_writer._buffer_rows == 1
 
@@ -155,7 +135,6 @@ class TestBatchWriterFlushFailureMergeBack:
             result = await batch_writer.flush()
 
         assert result is False
-        # Data should be merged back
         assert batch_writer._buffer_rows == 1
         assert "hft.ticks" in batch_writer._columnar_buffer
 
@@ -177,9 +156,6 @@ class TestBatchWriterFlushFailureMergeBack:
         assert "hft.market_data" in batch_writer._columnar_buffer
 
 
-# -- WALBatchWriter: _flush_timer_loop circuit breaker (data dropped) ---------
-
-
 class TestBatchWriterTimerLoopCircuitBreaker:
     def test_timer_loop_drops_data_after_max_failures(self, tmp_path: Path, monkeypatch) -> None:
         """After N consecutive failures, data is dropped instead of merged back."""
@@ -188,11 +164,10 @@ class TestBatchWriterTimerLoopCircuitBreaker:
             cls.get.return_value = MagicMock()
             writer = WALBatchWriter(str(tmp_path))
         try:
-            # Stop auto-started timer
             writer._timer_running = False
             writer._timer_thread.join(timeout=1.0)
 
-            writer._merge_back_max_failures = 1  # trip after first failure
+            writer._merge_back_max_failures = 1
             writer._merge_back_consecutive_failures = 0
 
             flush_event = threading.Event()
@@ -203,14 +178,12 @@ class TestBatchWriterTimerLoopCircuitBreaker:
 
             writer._write_batch_sync = MagicMock(side_effect=_always_fail)
 
-            # Populate buffer
             with writer._lock:
                 writer._buffer = {"hft.ticks": [{"sym": "X"}]}
                 writer._buffer_rows = 1
                 writer._buffer_bytes = 50
                 writer._last_flush_ts = 0
 
-            # Run one iteration
             writer._timer_running = True
             timer = threading.Thread(target=writer._flush_timer_loop, daemon=True)
             timer.start()
@@ -220,14 +193,9 @@ class TestBatchWriterTimerLoopCircuitBreaker:
             writer._timer_running = False
             timer.join(timeout=1.0)
 
-            # After circuit breaker trips, data is dropped (buffer_rows stays 0)
-            # because merge-back is skipped
             assert writer._write_batch_sync.call_count >= 1
         finally:
             writer._timer_running = False
-
-
-# -- WALBatchWriter: _write_batch_sync edge cases ----------------------------
 
 
 class TestWriteBatchSyncEdgeCases:
@@ -235,7 +203,6 @@ class TestWriteBatchSyncEdgeCases:
         """_write_batch_sync with empty rows list in a table skips that table."""
         data = {"hft.market_data": []}
         batch_writer._write_batch_sync(data, 0)
-        # No files should be produced (empty data)
         jsonl_files = list(tmp_path.glob("batch_*.jsonl"))
         assert len(jsonl_files) == 0
 
@@ -243,7 +210,7 @@ class TestWriteBatchSyncEdgeCases:
         """Columnar segment with row_count=0 is skipped."""
         columnar = {
             "hft.ticks": [
-                (["sym"], [["A"]], 0),  # zero row_count
+                (["sym"], [["A"]], 0),
             ]
         }
         batch_writer._write_batch_sync({}, 0, columnar)
@@ -260,38 +227,26 @@ class TestWriteBatchSyncEdgeCases:
         jsonl_files = list(tmp_path.glob("batch_*.jsonl"))
         assert len(jsonl_files) == 1
         lines = jsonl_files[0].read_text().strip().splitlines()
-        # 2 headers + 2 data rows = 4 lines
         assert len(lines) == 4
-        # Verify both table headers present
         headers = [_loads(l) for l in lines if "__wal_table__" in l]
         table_names = {h["__wal_table__"] for h in headers}
         assert "hft.orders" in table_names
         assert "hft.fills" in table_names
 
 
-# -- WALBatchWriter: stop with timer_thread None guard -----------------------
-
-
 class TestBatchWriterStopNullTimer:
     def test_stop_when_timer_thread_none(self, tmp_path: Path, mock_metrics: MagicMock) -> None:
         """stop() handles _timer_thread being None gracefully."""
         writer = WALBatchWriter(str(tmp_path))
-        # Stop normally first to get a clean state
         writer._timer_running = False
         writer._timer_thread.join(timeout=1.0)
         writer._timer_thread = None
-        # Populate buffer
         with writer._lock:
             writer._buffer = {"t": [{"x": 1}]}
             writer._buffer_rows = 1
             writer._buffer_bytes = 30
-        # stop() should not crash even with _timer_thread=None
         writer.stop()
-        # Data should be flushed (written to file) since buffer was non-empty
         assert writer._buffer_rows == 0 or len(list(tmp_path.glob("batch_*.jsonl"))) >= 1
-
-
-# -- WALBatchWriter: add_columnar with negative/zero row_count ---------------
 
 
 class TestBatchWriterAddColumnarEdge:
@@ -308,9 +263,6 @@ class TestBatchWriterAddColumnarEdge:
         result = await batch_writer.add_columnar("t", ["a"], [], 5)
         assert result is True
         assert batch_writer._buffer_rows == 0
-
-
-# -- JSON codec: verify _dumps and _loads work correctly ---------------------
 
 
 class TestJsonCodec:
@@ -333,19 +285,12 @@ class TestJsonCodec:
         assert deserialized == original
 
 
-# -- WALBatchWriter: _maybe_fsync_file disabled path -------------------------
-
-
 class TestBatchWriterFsyncFileDisabled:
     def test_maybe_fsync_file_disabled_is_noop(self, batch_writer: WALBatchWriter) -> None:
         """_maybe_fsync_file does nothing when fsync is disabled."""
         batch_writer._fsync_file_enabled = False
-        # Should not raise or call os.fsync
         batch_writer._maybe_fsync_file(0)
         assert batch_writer._fsync_file_enabled is False
-
-
-# -- WALBatchWriter: _maybe_fsync_dir throttled path -------------------------
 
 
 class TestBatchWriterFsyncDirThrottled:

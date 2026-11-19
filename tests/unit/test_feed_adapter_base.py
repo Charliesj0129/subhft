@@ -7,10 +7,6 @@ from typing import Any
 
 import pytest
 
-# ------------------------------------------------------------------ #
-# BaseBrokerSessionRuntime
-# ------------------------------------------------------------------ #
-
 
 class TestBaseBrokerSessionRuntime:
     """Tests for the abstract session runtime base class."""
@@ -118,11 +114,9 @@ class TestBaseBrokerSessionRuntime:
                 return {}
 
         s = StubSession()
-        # First reconnect should succeed
         assert s.reconnect(reason="test")
         assert s.reconnect_count == 1
 
-        # Second reconnect within cooldown should be blocked
         assert not s.reconnect(reason="test2")
         assert s.reconnect_count == 1
 
@@ -199,11 +193,6 @@ class TestBaseBrokerSessionRuntime:
         assert snap["reconnect_cooldown_s"] == 5.0
 
 
-# ------------------------------------------------------------------ #
-# CooldownManager
-# ------------------------------------------------------------------ #
-
-
 class TestCooldownManager:
     """Tests for the reusable cooldown manager."""
 
@@ -226,9 +215,9 @@ class TestCooldownManager:
         """try_acquire should succeed after cooldown has elapsed."""
         from hft_platform.feed_adapter._base.subscription_manager import CooldownManager
 
-        cd = CooldownManager(cooldown_s=0.01, name="test")  # cooldown delay - cannot use event-based
+        cd = CooldownManager(cooldown_s=0.01, name="test")
         assert cd.try_acquire()
-        time.sleep(0.02)  # cooldown delay - cannot use event-based
+        time.sleep(0.02)
         assert cd.try_acquire()
 
     def test_reset_allows_immediate_acquire(self) -> None:
@@ -245,11 +234,11 @@ class TestCooldownManager:
         """is_ready should reflect whether the cooldown has elapsed."""
         from hft_platform.feed_adapter._base.subscription_manager import CooldownManager
 
-        cd = CooldownManager(cooldown_s=0.01, name="test")  # cooldown delay - cannot use event-based
-        assert cd.is_ready  # never acquired
+        cd = CooldownManager(cooldown_s=0.01, name="test")
+        assert cd.is_ready
         cd.try_acquire()
         assert not cd.is_ready
-        time.sleep(0.02)  # cooldown delay - cannot use event-based
+        time.sleep(0.02)
         assert cd.is_ready
 
     def test_cooldown_s_property(self) -> None:
@@ -265,11 +254,6 @@ class TestCooldownManager:
 
         cd = CooldownManager(cooldown_s=1.0)
         assert cd.elapsed_s == 0.0
-
-
-# ------------------------------------------------------------------ #
-# BaseQuoteWatchdog
-# ------------------------------------------------------------------ #
 
 
 class TestBaseQuoteWatchdog:
@@ -325,10 +309,9 @@ class TestBaseQuoteWatchdog:
             on_stall=on_stall,
             check_interval_s=0.03,
         )
-        # Simulate data then stop feeding
         wd.notify_data()
         wd.start()
-        stall_event.wait(timeout=0.5)  # event-based: wait until stall fires
+        stall_event.wait(timeout=0.5)
         wd.stop()
 
         assert len(stall_detected) > 0
@@ -350,18 +333,12 @@ class TestBaseQuoteWatchdog:
         )
         wd.notify_data()
         wd.start()
-        # Keep feeding data
         for _ in range(5):
             time.sleep(0.04)
             wd.notify_data()
         wd.stop()
 
         assert len(stall_detected) == 0
-
-
-# ------------------------------------------------------------------ #
-# QuoteRuntimeProtocol
-# ------------------------------------------------------------------ #
 
 
 class TestQuoteRuntimeProtocol:
@@ -400,11 +377,6 @@ class TestQuoteRuntimeProtocol:
         assert not isinstance(Incomplete(), QuoteRuntimeProtocol)
 
 
-# ------------------------------------------------------------------ #
-# SubscriptionManagerProtocol
-# ------------------------------------------------------------------ #
-
-
 class TestSubscriptionManagerProtocol:
     """Tests for SubscriptionManagerProtocol runtime checking."""
 
@@ -425,11 +397,6 @@ class TestSubscriptionManagerProtocol:
                 pass
 
         assert isinstance(FakeMgr(), SubscriptionManagerProtocol)
-
-
-# ------------------------------------------------------------------ #
-# Protocol re-exports from protocol.py
-# ------------------------------------------------------------------ #
 
 
 class TestProtocolReExports:

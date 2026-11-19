@@ -92,7 +92,6 @@ class TestDepthAndImbalance:
         np.testing.assert_allclose(out[2:], [5.0, 7.0, 9.0])
 
     def test_depth_delta_time_window_anchors_at_or_before_cutoff(self) -> None:
-        # Rows at 0,1,2,5 s; window 2s at t=5 anchors to the row at t=2.
         sec = 1_000_000_000
         cols = _cols(local_ts=[0, sec, 2 * sec, 5 * sec], bid_qty={1: [1.0, 2.0, 4.0, 7.0]})
         out = depth_delta(cols, "bid", 1, Window(kind="time", duration_ns=2 * sec))
@@ -121,7 +120,6 @@ class TestTradeImbalance:
         )
         out = trade_imbalance(cols, Window(kind="events", count=1))
         assert np.isnan(out[0])
-        # deltas: (3-1)/(3+1), no trades -> 0, (3-1)/(3+1)
         np.testing.assert_allclose(out[1:], [0.5, 0.0, 0.5])
 
     def test_no_trades_in_window_is_zero_not_nan(self) -> None:
@@ -142,9 +140,7 @@ class TestFutureMidReturn:
         sec = 1_000_000_000
         cols = _cols(local_ts=[0, sec, 3 * sec], mid=[100.0, 110.0, 120.0])
         out = future_mid_return(cols, Window(kind="time", duration_ns=2 * sec))
-        # t=0 + 2s lands between rows 1 (1s) and 2 (3s) -> asof row 1.
         assert out[0] == pytest.approx(0.1)
-        # t=1s + 2s == 3s -> row 2 exactly.
         assert out[1] == pytest.approx(120.0 / 110.0 - 1.0)
         assert np.isnan(out[2])
 
@@ -165,15 +161,14 @@ class TestRollingZscore:
         x = np.array([1.0, 2.0, 3.0, 4.0])
         out = rolling_zscore(x, ts, Window(kind="events", count=3))
         assert np.isnan(out[0]) and np.isnan(out[1])
-        std = math.sqrt(2.0 / 3.0)  # population std of 3 consecutive ints
+        std = math.sqrt(2.0 / 3.0)
         np.testing.assert_allclose(out[2:], [1.0 / std, 1.0 / std])
 
     def test_nan_inputs_excluded_from_moments(self) -> None:
         ts = np.arange(4, dtype=np.int64)
         x = np.array([1.0, np.nan, 3.0, 4.0])
         out = rolling_zscore(x, ts, Window(kind="events", count=3))
-        assert np.isnan(out[1])  # current value NaN
-        # window [nan,3,4]: mean 3.5, population std 0.5 -> (4-3.5)/0.5
+        assert np.isnan(out[1])
         assert out[3] == pytest.approx(1.0)
 
     def test_constant_window_is_nan_not_inf(self) -> None:
@@ -185,9 +180,7 @@ class TestRollingZscore:
         ts = np.array([0, 10, 20, 30], dtype=np.int64)
         x = np.array([1.0, 2.0, 3.0, 4.0])
         out = rolling_zscore(x, ts, Window(kind="time", duration_ns=20))
-        # Rows 0/1: window reaches before the first row -> warmup NaN.
         assert np.isnan(out[0]) and np.isnan(out[1])
-        # Window is (t-d, t]: at t=20 it holds rows [2,3] -> mean 2.5, std 0.5.
         assert out[2] == pytest.approx(1.0)
         assert out[3] == pytest.approx(1.0)
 
@@ -196,7 +189,7 @@ class TestRollingZscore:
         ts = np.arange(3, dtype=np.int64)
         x = np.array([np.nan, np.nan, 1.0])
         out = rolling_zscore(x, ts, Window(kind="events", count=3))
-        assert np.isnan(out[2])  # only 1 finite value in the window
+        assert np.isnan(out[2])
 
 
 class TestEma:

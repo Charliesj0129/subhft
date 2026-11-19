@@ -134,7 +134,6 @@ class TestBuildBrokerClientsSelection:
             base_shioaji_cfg={},
             broker_id="shioaji",
         )
-        # _RoleGuardedNoopClient has runtime_role attribute
         assert hasattr(md, "runtime_role")
         assert md.runtime_role == "maintenance"
 

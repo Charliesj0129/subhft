@@ -16,7 +16,6 @@ STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 
-# Exit code of a step that exited 0 but whose own report does not say "pass" (the tracked-change boundary uses 97).
 RC_REPORT_NOT_PASS = 98
 
 SKILLS_USED: tuple[str, ...] = (
@@ -576,8 +575,6 @@ def main(argv: list[str] | None = None) -> int:
         report_path = _resolve_report_path(root, step)
         row["report_path"] = str(report_path) if report_path else ""
         row["report_overall"] = _extract_overall(report_path)
-        # Exit 0 is not enough for a step that writes a report: a missing, unreadable or non-pass report fails
-        # the gate. (A step that already failed keeps its own exit code and stderr.)
         if int(row.get("returncode", 1)) == 0 and _step_expects_report(step) and row["report_overall"] != STATUS_PASS:
             row["returncode"] = RC_REPORT_NOT_PASS
             stderr = str(row.get("stderr", ""))

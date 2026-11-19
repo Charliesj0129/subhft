@@ -52,11 +52,6 @@ def _guard(**thresholds: object) -> StormGuard:
     return guard
 
 
-# --------------------------------------------------------------------------- #
-# Two inputs, two thresholds                                                   #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 @pytest.mark.usefixtures("order_rtt_single_sample")
 def test_an_order_round_trip_can_escalate_on_its_own_threshold() -> None:
@@ -101,11 +96,6 @@ def test_the_reason_names_which_input_escalated() -> None:
     assert "rtt" in reason.lower()
 
 
-# --------------------------------------------------------------------------- #
-# Unarmed by default, and it says so                                           #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_the_order_rtt_input_ships_armed_at_the_operator_set_thresholds() -> None:
     """Armed 2026-08-24 from the n=300 direct live probe
@@ -114,8 +104,6 @@ def test_the_order_rtt_input_ships_armed_at_the_operator_set_thresholds() -> Non
     those numbers had not been connected to this breaker; a zero was the honest
     answer then and would be a dead branch now."""
     assert RiskThresholds().order_rtt_warm_us == 1_500_000
-    # STORM side disarmed 2026-11-02: broker back-pressure replaced it (see
-    # RiskThresholds). WARM stays armed, so the input still reports armed.
     assert RiskThresholds().order_rtt_storm_us == 0
 
 
@@ -178,11 +166,6 @@ def test_an_armed_order_rtt_input_reports_itself_armed() -> None:
     assert guard.metrics.stormguard_latency_input_armed.labels(input="order_rtt")._value.get() == 1.0
 
 
-# --------------------------------------------------------------------------- #
-# The headroom evidence the recalibration needs                                #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_each_input_publishes_the_largest_value_it_has_seen() -> None:
     """A threshold 1000x above its input is only visible if the input's range is
@@ -207,11 +190,6 @@ def test_the_observed_maximum_does_not_fall_back_down() -> None:
     guard.update(order_rtt_us=12_000)
 
     assert guard.metrics.stormguard_latency_input_max_us.labels(input="order_rtt")._value.get() == 395_000
-
-
-# --------------------------------------------------------------------------- #
-# Environment configuration                                                    #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
@@ -250,7 +228,7 @@ def test_a_loop_lag_threshold_above_the_stall_watchdog_is_flagged_as_dead(monkey
 
     events = module_log_sink(storm_guard)
     monkeypatch.setenv("HFT_LOOP_STALL_KILL_S", "60")
-    monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "90000000")  # 90 s
+    monkeypatch.setenv("HFT_STORMGUARD_LATENCY_STORM_US", "90000000")
 
     StormGuard()
 
@@ -268,11 +246,6 @@ def test_a_reachable_loop_lag_threshold_is_not_flagged(monkeypatch, module_log_s
     StormGuard()
 
     assert not any(entry.get("event") == "stormguard_latency_threshold_unreachable" for entry in events)
-
-
-# --------------------------------------------------------------------------- #
-# Nothing about the deployed configuration changes                             #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit

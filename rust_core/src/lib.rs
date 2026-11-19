@@ -1,9 +1,9 @@
 use pyo3::prelude::*;
 
 mod alpha;
-mod alpha_flow; // New module
-mod alpha_markov; // New module
-mod alpha_meta; // Meta Alpha module
+mod alpha_flow;
+mod alpha_markov;
+mod alpha_meta;
 mod alpha_ofi;
 mod alpha_pressure;
 mod alpha_reversal;
@@ -29,10 +29,10 @@ pub mod risk;
 mod risk_validator;
 mod shm_snapshot;
 mod storm_guard;
-mod strategy; // New Strategy
+mod strategy;
 mod symbol_intern;
 mod timeutil;
-// Wave 4 modules
+
 mod gateway_fused;
 mod md_event_frame;
 mod normalizer_feature_fused;
@@ -95,13 +95,13 @@ fn rust_core(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<feature::RustFeaturePipelineV1>()?;
     m.add_class::<feature_engine::RustFeatureEngineV2>()?;
     m.add_class::<metrics_sampler::RustMetricsSampler>()?;
-    // Wave 4 classes
+
     m.add_class::<symbol_intern::SymbolInternTable>()?;
     m.add_class::<typed_ring::FastTypedRingBuffer>()?;
     m.add_class::<gateway_fused::RustGatewayFusedCheck>()?;
     m.add_class::<normalizer_lob_fused::RustNormalizerLobFused>()?;
     m.add_class::<normalizer_feature_fused::RustNormalizerFeatureFusedV1>()?;
-    // Backtest kernels
+
     m.add_function(wrap_pyfunction!(backtest_kernels::signals_to_positions, m)?)?;
     m.add_function(wrap_pyfunction!(
         backtest_kernels::apply_latency_to_positions,

@@ -8,10 +8,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 _PROFILES_YAML = {
     "profiles": {
         "shioaji_sim_p95_v2026-03-04": {
@@ -38,7 +34,6 @@ _COMPLIANT_SCORECARD = {
 
 _NO_PROFILE_SCORECARD = {
     "alpha_id": "no_profile_alpha",
-    # no latency_profile key at all
     "stress_test": {"passed": True},
 }
 
@@ -46,7 +41,6 @@ _INVALID_PROFILE_SCORECARD = {
     "alpha_id": "invalid_profile_alpha",
     "latency_profile": {
         "latency_profile_id": "shioaji_sim_p95_v2026-03-04",
-        # submit_ack_latency_ms is below 80% of 36.0 (= 28.8)
         "submit_ack_latency_ms": 10.0,
         "modify_ack_latency_ms": 43.0,
         "cancel_ack_latency_ms": 47.0,
@@ -73,7 +67,6 @@ _MISSING_STRESS_SCORECARD = {
         "modify_ack_latency_ms": 43.0,
         "cancel_ack_latency_ms": 47.0,
     },
-    # no stress_test key
 }
 
 _FAILED_STRESS_SCORECARD = {
@@ -105,11 +98,6 @@ def _write_scorecard(base: Path, alpha_id: str, scorecard: dict, sub: str = "val
     return path
 
 
-# ---------------------------------------------------------------------------
-# Import check
-# ---------------------------------------------------------------------------
-
-
 def test_module_imports() -> None:
     """Module imports without error and exposes expected public API."""
     from hft_platform.alpha import latency_audit
@@ -118,11 +106,6 @@ def test_module_imports() -> None:
     assert hasattr(latency_audit, "LatencyAuditResult")
     assert hasattr(latency_audit, "audit_alphas")
     assert hasattr(latency_audit, "format_audit_report")
-
-
-# ---------------------------------------------------------------------------
-# LatencyAuditResult dataclass
-# ---------------------------------------------------------------------------
 
 
 class TestLatencyAuditResult:
@@ -153,17 +136,11 @@ class TestLatencyAuditResult:
         assert len(r.issues) == 2
 
 
-# ---------------------------------------------------------------------------
-# audit_alphas — empty directory
-# ---------------------------------------------------------------------------
-
-
 class TestAuditAlphasEmpty:
     def test_empty_returns_empty_list(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
 
         _write_profiles(tmp_path)
-        # Create the directories but put no scorecard.json files
         (tmp_path / "research" / "experiments" / "validations").mkdir(parents=True)
         (tmp_path / "research" / "experiments" / "promotions").mkdir(parents=True)
 
@@ -178,31 +155,22 @@ class TestAuditAlphasEmpty:
         assert results == []
 
 
-# ---------------------------------------------------------------------------
-# audit_alphas — missing profiles YAML
-# ---------------------------------------------------------------------------
-
-
 class TestAuditAlpasMissingProfilesYaml:
     def test_missing_yaml_all_has_profile_false(self, tmp_path: Path) -> None:
         """When latency_profiles.yaml is missing, profiles cannot be validated."""
         from hft_platform.alpha.latency_audit import audit_alphas
 
-        # No profiles YAML written
         _write_scorecard(tmp_path, "alpha_a", _COMPLIANT_SCORECARD)
         _write_scorecard(tmp_path, "alpha_b", _NO_PROFILE_SCORECARD)
 
         results = audit_alphas(tmp_path)
         assert len(results) == 2
 
-        # alpha_a has a latency_profile dict, so has_profile=True;
-        # but profile_valid=False because we can't look up the reference.
         alpha_a = next(r for r in results if r.alpha_id == "good_alpha")
         assert alpha_a.has_profile is True
         assert alpha_a.profile_valid is False
         assert any("unavailable" in issue.lower() for issue in alpha_a.issues)
 
-        # alpha_b has no latency_profile at all
         alpha_b = next(r for r in results if r.alpha_id == "no_profile_alpha")
         assert alpha_b.has_profile is False
         assert alpha_b.profile_valid is False
@@ -220,11 +188,6 @@ class TestAuditAlpasMissingProfilesYaml:
         assert len(results) == 1
         assert results[0].has_profile is True
         assert results[0].profile_valid is False
-
-
-# ---------------------------------------------------------------------------
-# audit_alphas — compliant alpha
-# ---------------------------------------------------------------------------
 
 
 class TestAuditAlphasCompliant:
@@ -253,11 +216,6 @@ class TestAuditAlphasCompliant:
         assert len(results) == 1
         assert results[0].has_profile is True
         assert results[0].profile_valid is True
-
-
-# ---------------------------------------------------------------------------
-# audit_alphas — non-compliant cases
-# ---------------------------------------------------------------------------
 
 
 class TestAuditAlphasNonCompliant:
@@ -312,7 +270,6 @@ class TestAuditAlphasNonCompliant:
         assert len(results) == 1
         r = results[0]
         assert r.stress_tested is False
-        # Profile itself is compliant
         assert r.profile_valid is True
 
     def test_failed_stress_test(self, tmp_path: Path) -> None:
@@ -326,11 +283,6 @@ class TestAuditAlphasNonCompliant:
         r = results[0]
         assert r.stress_tested is False
         assert any("stress_test" in issue for issue in r.issues)
-
-
-# ---------------------------------------------------------------------------
-# audit_alphas — mixed batch
-# ---------------------------------------------------------------------------
 
 
 class TestAuditAlphasMixedBatch:
@@ -368,7 +320,6 @@ class TestAuditAlphasMixedBatch:
         from hft_platform.alpha.latency_audit import audit_alphas
 
         _write_profiles(tmp_path)
-        # Nest: validations/my_alpha/20260318T.../scorecard.json
         run_dir = tmp_path / "research" / "experiments" / "validations" / "my_alpha" / "20260318T000000Z_abc"
         run_dir.mkdir(parents=True)
         (run_dir / "scorecard.json").write_text(
@@ -380,17 +331,11 @@ class TestAuditAlphasMixedBatch:
         assert results[0].alpha_id == "my_alpha"
 
 
-# ---------------------------------------------------------------------------
-# Gate D tolerance boundary
-# ---------------------------------------------------------------------------
-
-
 class TestGateDTolerance:
     def test_exactly_at_80_percent_threshold_passes(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
 
         _write_profiles(tmp_path)
-        # 36.0 * 0.8 = 28.8 — exactly at threshold should pass
         sc = {
             "alpha_id": "threshold_alpha",
             "latency_profile": {
@@ -410,7 +355,6 @@ class TestGateDTolerance:
         from hft_platform.alpha.latency_audit import audit_alphas
 
         _write_profiles(tmp_path)
-        # 28.7 < 28.8 should fail
         sc = {
             "alpha_id": "below_threshold_alpha",
             "latency_profile": {
@@ -425,11 +369,6 @@ class TestGateDTolerance:
 
         results = audit_alphas(tmp_path)
         assert results[0].profile_valid is False
-
-
-# ---------------------------------------------------------------------------
-# format_audit_report
-# ---------------------------------------------------------------------------
 
 
 class TestFormatAuditReport:
@@ -550,11 +489,6 @@ class TestFormatAuditReport:
         assert "issue three" in report
 
 
-# ---------------------------------------------------------------------------
-# Malformed scorecard handling
-# ---------------------------------------------------------------------------
-
-
 class TestMalformedScorecard:
     def test_invalid_json_scorecard(self, tmp_path: Path) -> None:
         from hft_platform.alpha.latency_audit import audit_alphas
@@ -593,11 +527,6 @@ class TestMalformedScorecard:
         results = audit_alphas(tmp_path)
         assert len(results) == 1
         assert results[0].has_profile is False
-
-
-# =============================================================================
-# _strict_exit_code — CI gate exit semantics
-# =============================================================================
 
 
 class TestStrictExitCode:

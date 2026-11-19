@@ -23,10 +23,6 @@ from hft_platform.backtest.ch_data_source import (
     validate_events,
 )
 
-# ---------------------------------------------------------------------------
-# B1 — Basic infrastructure
-# ---------------------------------------------------------------------------
-
 
 def test_data_validation_error_is_exception():
     assert issubclass(DataValidationError, Exception)
@@ -43,7 +39,6 @@ def test_ch_data_source_default_config():
     assert src.ch_host == "localhost"
     assert src.ch_port == 8123
     assert src.ch_user == "default"
-    # password comes from env (empty if CLICKHOUSE_PASSWORD not set)
     assert isinstance(src.ch_password, str)
 
 
@@ -51,11 +46,6 @@ def test_ch_data_source_explicit_credentials():
     src = ChDataSource(ch_user="admin", ch_password="secret")
     assert src.ch_user == "admin"
     assert src.ch_password == "secret"
-
-
-# ---------------------------------------------------------------------------
-# B2 — build_bidask_events / build_tick_event
-# ---------------------------------------------------------------------------
 
 
 def test_build_bidask_events_emits_clear_first():
@@ -68,9 +58,7 @@ def test_build_bidask_events_emits_clear_first():
         ask_volumes=[3, 7],
         price_scale=1_000_000,
     )
-    # First event should be DEPTH_CLEAR
     assert events[0]["ev"] & DEPTH_CLEAR_EVENT
-    # Plus 2 bid events + 2 ask events = 5 total
     assert len(events) == 5
 
 
@@ -84,7 +72,6 @@ def test_build_bidask_events_bid_side_flagged():
         ask_volumes=[3],
         price_scale=1_000_000,
     )
-    # events[0] = clear, events[1] = bid, events[2] = ask
     assert events[1]["ev"] & DEPTH_EVENT
     assert events[1]["ev"] & BUY_EVENT
     assert events[2]["ev"] & DEPTH_EVENT
@@ -110,12 +97,11 @@ def test_build_bidask_events_skips_zero_volume():
         exch_ts=1,
         local_ts=2,
         bid_prices=[17000_000_000, 16999_000_000],
-        bid_volumes=[5, 0],  # second level zero
+        bid_volumes=[5, 0],
         ask_prices=[17001_000_000],
         ask_volumes=[3],
         price_scale=1_000_000,
     )
-    # 1 clear + 1 bid + 1 ask = 3 (not 4)
     assert len(events) == 3
 
 
@@ -147,11 +133,6 @@ def test_build_tick_event_sell():
     assert event["ev"] & SELL_EVENT
 
 
-# ---------------------------------------------------------------------------
-# B3 — assemble_day_events
-# ---------------------------------------------------------------------------
-
-
 def test_assemble_day_events_sorts_by_exch_ts():
     """Rows out-of-order by exch_ts must be re-sorted; uses trade_direction column."""
     df = pd.DataFrame(
@@ -169,7 +150,6 @@ def test_assemble_day_events_sorts_by_exch_ts():
         }
     )
     events = assemble_day_events(df, price_scale=1_000_000)
-    # Timestamps must be monotonically non-decreasing
     assert np.all(events["exch_ts"][1:] >= events["exch_ts"][:-1])
 
 
@@ -204,7 +184,7 @@ def test_assemble_day_events_skips_trade_direction_zero():
             "event_type": ["BidAsk", "Tick", "Tick"],
             "price": [0, 17000_000_000, 17001_000_000],
             "volume": [0, 1, 2],
-            "trade_direction": [0, 0, 1],  # second Tick has direction=0 → skip
+            "trade_direction": [0, 0, 1],
             "bid_prices": [[17000_000_000], None, None],
             "bid_volumes": [[5], None, None],
             "ask_prices": [[17001_000_000], None, None],
@@ -213,14 +193,8 @@ def test_assemble_day_events_skips_trade_direction_zero():
     )
     events = assemble_day_events(df, price_scale=1_000_000)
     trade_events = events[(events["ev"] & EV_TYPE_MASK) == TRADE_EVENT]
-    # Only 1 trade event (trade_direction=1 Tick); direction=0 is skipped
     assert len(trade_events) == 1
     assert trade_events[0]["ev"] & BUY_EVENT
-
-
-# ---------------------------------------------------------------------------
-# B4 — validate_events
-# ---------------------------------------------------------------------------
 
 
 def _make_events(items):
@@ -237,7 +211,6 @@ def test_validate_events_accepts_valid_data():
         ]
     )
     validate_events(events, instrument="TMFD6")
-    # No exception raised; assert postcondition: array is unchanged
     assert len(events) == 4
 
 
@@ -294,7 +267,6 @@ def test_validate_events_inverted_book_raises():
     events = _make_events(
         [
             (DEPTH_CLEAR_EVENT | EXCH_EVENT, 1, 2, 0.0, 0.0, 0, 0, 0.0),
-            # bid at 17005, ask at 17000 — strictly inverted book
             (DEPTH_EVENT | EXCH_EVENT | BUY_EVENT, 2, 3, 17005.0, 5, 0, 0, 0.0),
             (DEPTH_EVENT | EXCH_EVENT | SELL_EVENT, 2, 3, 17000.0, 3, 0, 0, 0.0),
             (TRADE_EVENT | EXCH_EVENT | BUY_EVENT, 3, 4, 17002.0, 1, 0, 0, 0.0),
@@ -329,18 +301,7 @@ def test_validate_events_valid_book_not_inverted():
         ]
     )
     validate_events(events, instrument="TMFD6")
-    # No exception raised; assert postcondition
     assert len(events) == 4
-
-
-# ---------------------------------------------------------------------------
-# B4 — load_day (mocked ClickHouse)
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# B5 — Incremental depth diff (queue-model-preserving)
-# ---------------------------------------------------------------------------
 
 
 def test_build_bidask_events_diff_unchanged_emits_nothing():
@@ -454,13 +415,12 @@ def test_assemble_day_events_diff_chain_preserves_queue_signal():
             "volume": [0, 0, 0],
             "trade_direction": [0, 0, 0],
             "bid_prices": [[17000_000_000], [17000_000_000], [17000_000_000]],
-            "bid_volumes": [[5], [5], [7]],  # volume changed only at t=300
+            "bid_volumes": [[5], [5], [7]],
             "ask_prices": [[17001_000_000], [17001_000_000], [17001_000_000]],
             "ask_volumes": [[3], [3], [3]],
         }
     )
     events = assemble_day_events(df, price_scale=1_000_000)
-    # t=100: 1 clear + 1 bid + 1 ask = 3; t=200: 0; t=300: 1 bid diff = 1. Total 4.
     assert len(events) == 4
     events_at_300 = events[events["exch_ts"] == 300]
     assert len(events_at_300) == 1

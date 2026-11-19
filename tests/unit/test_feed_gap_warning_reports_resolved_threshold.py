@@ -25,9 +25,6 @@ import pytest
 from hft_platform.services._md_ingestion import FeedState
 from hft_platform.services._md_reconnect import MarketDataReconnectMixin
 
-# A population with one symbol in each threshold class, shaped after the field
-# window: two TSE equities on the 60 s class default, one sector future on the
-# 30 s root default, one front-month index future on the strict 6 s global.
 _GAPS: dict[str, float] = {
     "2207": 89.7,
     "1102": 61.5,
@@ -55,18 +52,12 @@ class _Watchdog(MarketDataReconnectMixin):
         self._symbol_gap_threshold_prefix_defaults = {"EXF": 30.0}
         self._market_open_grace_s = 0.0
         self._market_open_grace_gap_threshold_s = 30.0
-        # Real monotonic, as the loop reads it — patching ``time`` in a module
-        # mutates the stdlib module process-wide and breaks unrelated tests
-        # under xdist. The lookback is held well above the widest gap so the
-        # microseconds between here and the loop cannot evict a symbol.
         self.now_mono = time.monotonic()
         self._symbol_last_tick = {s: self.now_mono - gap for s, gap in (gaps or _GAPS).items()}
         self._symbol_gap_consecutive_hits = 0
         self._watchdog_interval_s = 0.001
         self._symbol_gap_active_lookback_s = 120.0
         self._symbol_gap_min_active_symbols = 2
-        # Held above the stale count so the escalation branch never runs; this
-        # test is about what the warning says, not about resubscribing.
         self._symbol_gap_min_stale_count = 99
 
     def _is_market_open_grace_period(self) -> bool:  # type: ignore[override]
@@ -87,8 +78,6 @@ async def _run_one_cycle(watchdog: _Watchdog) -> dict[str, Any]:
     original_sleep = asyncio.sleep
 
     async def stop_after_first(delay: float) -> None:
-        # Ends the loop at its next condition check, so the body below runs
-        # exactly once.
         watchdog.running = False
         await original_sleep(0)
 
@@ -103,11 +92,6 @@ async def _run_one_cycle(watchdog: _Watchdog) -> dict[str, Any]:
     return captured
 
 
-# --------------------------------------------------------------------------- #
-# The decision carries its own threshold                                       #
-# --------------------------------------------------------------------------- #
-
-
 def test_stale_hits_carry_the_threshold_they_were_judged_against() -> None:
     watchdog = _Watchdog()
     stale = watchdog._find_stale_symbols(watchdog._symbol_last_tick, watchdog.now_mono)
@@ -119,15 +103,10 @@ def test_grace_period_threshold_is_the_one_carried() -> None:
     watchdog = _Watchdog(grace=True)
     now = watchdog.now_mono
 
-    assert watchdog._find_stale_symbols({"TXFI6": now - 8.0}, now) == []  # under the raised floor
+    assert watchdog._find_stale_symbols({"TXFI6": now - 8.0}, now) == []
 
     stale = watchdog._find_stale_symbols({"TXFI6": now - 41.0}, now)
     assert [threshold for _, _, threshold in stale] == [30.0]
-
-
-# --------------------------------------------------------------------------- #
-# The warning reports it                                                       #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.asyncio
@@ -135,9 +114,6 @@ async def test_warning_reports_the_resolved_thresholds_not_the_global_one() -> N
     kwargs = await _run_one_cycle(_Watchdog())
 
     assert kwargs["thresholds_s"] == [6.0, 30.0, 60.0]
-    # The regression itself: a scalar field reporting the global setting. It
-    # read 6.0 on every one of the 695 measured lines, including those judged
-    # at 60 s and 30 s.
     assert "threshold_s" not in kwargs
 
 
@@ -164,5 +140,5 @@ async def test_warning_describes_every_stale_symbol_not_only_the_named_five() ->
     kwargs = await _run_one_cycle(_Watchdog(gaps=gaps))
 
     assert kwargs["stale_count"] == 7
-    assert kwargs["symbols"].count(",") == 4  # only five are named
-    assert kwargs["thresholds_s"] == [30.0, 60.0]  # all seven are described
+    assert kwargs["symbols"].count(",") == 4
+    assert kwargs["thresholds_s"] == [30.0, 60.0]

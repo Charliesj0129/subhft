@@ -84,7 +84,7 @@ class OpenRouterClient:
 
                     try:
                         body = await response.json()
-                    except Exception as exc:  # noqa: BLE001
+                    except Exception as exc:
                         msg = "OpenRouter response body was not valid JSON"
                         raise RuntimeError(msg) from exc
             except RuntimeError:
@@ -95,7 +95,7 @@ class OpenRouterClient:
                     continue
                 msg = "OpenRouter transport failed after retries"
                 raise RuntimeError(msg) from exc
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 msg = "OpenRouter request failed before receiving a response"
                 raise RuntimeError(msg) from exc
 

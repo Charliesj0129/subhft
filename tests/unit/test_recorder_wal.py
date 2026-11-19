@@ -22,11 +22,6 @@ def test_wal_write_sync_atomic_creates_file(tmp_path: Path):
     assert json.loads(lines[0]) == payload[0]
 
 
-# ---------------------------------------------------------------------------
-# WALWriter disk pressure: raise policy
-# ---------------------------------------------------------------------------
-
-
 def test_wal_writer_disk_pressure_raise_policy(tmp_path: Path):
     """_handle_disk_pressure_skip raises RuntimeError when policy is 'raise'."""
     writer = WALWriter(str(tmp_path))
@@ -45,11 +40,6 @@ def test_wal_writer_disk_pressure_halt_policy_returns_false(tmp_path: Path):
 
     result = writer._handle_disk_pressure_skip("hft.market_data", 5, writer="wal")
     assert result is False
-
-
-# ---------------------------------------------------------------------------
-# WALBatchWriter disk pressure: raise policy
-# ---------------------------------------------------------------------------
 
 
 def test_wal_batch_writer_disk_pressure_raise_policy(tmp_path: Path, monkeypatch):
@@ -78,11 +68,6 @@ def test_wal_batch_writer_disk_pressure_halt_returns_false(tmp_path: Path, monke
         writer.stop()
 
 
-# ---------------------------------------------------------------------------
-# WALBatchWriter: flush with empty buffer is a no-op
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_wal_batch_writer_flush_empty_buffer_no_op(tmp_path: Path, monkeypatch):
     """flush() returns True immediately when buffer is empty without writing any file."""
@@ -91,15 +76,9 @@ async def test_wal_batch_writer_flush_empty_buffer_no_op(tmp_path: Path, monkeyp
     try:
         result = await writer.flush()
         assert result is True
-        # No WAL files should have been written
         assert list(tmp_path.glob("*.jsonl")) == []
     finally:
         writer.stop()
-
-
-# ---------------------------------------------------------------------------
-# WALBatchWriter: stop() flushes buffered rows synchronously
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -114,16 +93,10 @@ async def test_wal_batch_writer_stop_flushes_buffered_rows(tmp_path: Path, monke
         1,
     )
     assert ok is True
-    # Intentionally do NOT call flush() — stop() must flush
     writer.stop()
 
     files = list(tmp_path.glob("*.jsonl"))
     assert len(files) >= 1, "stop() must have written at least one WAL file"
-
-
-# ---------------------------------------------------------------------------
-# WALBatchWriter EC-3: file splitting on size limit
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -132,10 +105,8 @@ async def test_wal_batch_writer_ec3_file_splitting(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
     writer = WALBatchWriter(str(tmp_path))
     try:
-        # Set a tiny file size limit to force splitting (128 bytes)
         writer._file_max_bytes = 128
 
-        # Write enough rows to exceed the limit
         rows = [{"symbol": f"SYM{i:04d}", "price": i * 10000} for i in range(30)]
         data = {"hft.market_data": rows}
         writer._write_batch_sync(data, 0)
@@ -146,23 +117,14 @@ async def test_wal_batch_writer_ec3_file_splitting(tmp_path: Path, monkeypatch):
         writer.stop()
 
 
-# ---------------------------------------------------------------------------
-# WALBatchWriter: data retained on flush failure (RC-2)
-# ---------------------------------------------------------------------------
-
-
 def test_wal_batch_writer_timer_flush_retains_data_on_failure(tmp_path: Path, monkeypatch):
     """When _write_batch_sync fails in timer loop, production code merges data back."""
-    # Use very short interval so the timer fires quickly
     monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "10")
     writer = WALBatchWriter(str(tmp_path))
     try:
-        # Stop the auto-started timer first to prevent races
         writer._timer_running = False
         writer._timer_thread.join(timeout=1.0)
 
-        # Make _write_batch_sync always fail; raise circuit breaker limit
-        # so data is always merged back (not dropped)
         writer._merge_back_max_failures = 999
         flush_event = threading.Event()
 
@@ -172,32 +134,24 @@ def test_wal_batch_writer_timer_flush_retains_data_on_failure(tmp_path: Path, mo
 
         writer._write_batch_sync = MagicMock(side_effect=_always_fail)
 
-        # Populate buffer
         with writer._lock:
             writer._buffer = {"hft.ticks": [{"sym": "A", "price": 100}]}
             writer._buffer_rows = 1
             writer._buffer_bytes = 50
-            # Force the timer to think enough time has elapsed
             writer._last_flush_ts = 0
 
-        # Start a new timer thread (production code path)
         writer._timer_running = True
         timer_thread = threading.Thread(target=writer._flush_timer_loop, daemon=True)
         timer_thread.start()
 
-        # Wait for at least one flush attempt
         flush_event.wait(timeout=1.0)
-        # Brief additional wait for merge-back to complete
         time.sleep(0.05)
 
-        # Stop the timer
         writer._timer_running = False
         timer_thread.join(timeout=1.0)
 
-        # Verify: _write_batch_sync was called (flush attempted)
         assert writer._write_batch_sync.call_count >= 1
 
-        # Verify: data was merged back into the buffer by production code
         with writer._lock:
             assert writer._buffer_rows >= 1
             assert "hft.ticks" in writer._buffer
@@ -211,7 +165,6 @@ def test_wal_batch_writer_stop_retains_data_on_failure(tmp_path: Path, monkeypat
     monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
     writer = WALBatchWriter(str(tmp_path))
     try:
-        # Populate buffer
         with writer._lock:
             writer._buffer = {
                 "hft.orders": [{"id": "O1"}, {"id": "O2"}],
@@ -219,12 +172,10 @@ def test_wal_batch_writer_stop_retains_data_on_failure(tmp_path: Path, monkeypat
             writer._buffer_rows = 2
             writer._buffer_bytes = 100
 
-        # Make write fail
         writer._write_batch_sync = lambda *a, **kw: (_ for _ in ()).throw(IOError("write fail"))
 
         writer.stop()
 
-        # Data should be merged back into buffer for potential recovery
         with writer._lock:
             assert writer._buffer_rows == 2
             assert writer._buffer["hft.orders"] == [{"id": "O1"}, {"id": "O2"}]
@@ -237,7 +188,6 @@ def test_wal_batch_writer_stop_clears_on_success(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("HFT_WAL_BATCH_INTERVAL_MS", "999999")
     writer = WALBatchWriter(str(tmp_path))
     try:
-        # Populate buffer
         with writer._lock:
             writer._buffer = {"hft.ticks": [{"sym": "X"}]}
             writer._buffer_rows = 1
@@ -245,17 +195,11 @@ def test_wal_batch_writer_stop_clears_on_success(tmp_path: Path, monkeypatch):
 
         writer.stop()
 
-        # Data should be gone (written to WAL successfully)
         with writer._lock:
             assert writer._buffer_rows == 0
             assert writer._buffer == {}
     finally:
         writer._timer_running = False
-
-
-# ---------------------------------------------------------------------------
-# disk_pressure_level ownership
-# ---------------------------------------------------------------------------
 
 
 def test_disk_pressure_level_not_clobbered_by_free_space_writer(tmp_path: Path):

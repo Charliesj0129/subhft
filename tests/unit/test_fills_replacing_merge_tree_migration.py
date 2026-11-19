@@ -34,9 +34,6 @@ def test_migration_uses_replacing_merge_tree():
 
 def test_migration_order_by_includes_fill_id():
     src = MIGRATION.read_text()
-    # ORDER BY must end with fill_id so the dedup key uniquely identifies
-    # the row. Without fill_id in ORDER BY, ReplacingMergeTree collapses
-    # by (strategy_id, symbol, ts_exchange) which is not unique per fill.
     assert "ORDER BY (strategy_id, symbol, ts_exchange, fill_id)" in src, (
         "fill_id must be the last ORDER BY column for unique-per-fill dedup"
     )
@@ -44,8 +41,6 @@ def test_migration_order_by_includes_fill_id():
 
 def test_migration_preserves_legacy_for_rollback():
     src = MIGRATION.read_text()
-    # Explicit rename keeps the old table around for at least one day so
-    # operators can cross-check row counts before dropping.
     assert "hft.fills_legacy_pre_rmt" in src, (
         "legacy table must be preserved under hft.fills_legacy_pre_rmt for rollback"
     )
@@ -54,7 +49,5 @@ def test_migration_preserves_legacy_for_rollback():
 
 def test_migration_copies_existing_rows():
     src = MIGRATION.read_text()
-    # INSERT INTO hft.fills_new SELECT ... FROM hft.fills must be present
-    # so the RENAME does not leave a truncated fills table.
     assert "INSERT INTO hft.fills_new" in src
     assert "FROM hft.fills" in src

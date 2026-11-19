@@ -3,6 +3,7 @@
 Focuses on the fallback paths (data gap, missing audit, stub blocked) since the
 full sweep path requires ClickHouse + hftbacktest integration (covered by A8+).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,18 +52,21 @@ def test_calibrate_missing_audit_writes_fallback(tmp_path, capsys):
 
 
 def test_calibrate_instrument_not_in_audit_writes_fallback(tmp_path):
-    # Create audit with only TXFD6
     audit_path = tmp_path / "audit.json"
-    audit_path.write_text(json.dumps({
-        "per_instrument": {
-            "TXFD6": {"usable_calibration_days": ["2026-03-01"]},
-        },
-        "summary": {},
-    }))
+    audit_path.write_text(
+        json.dumps(
+            {
+                "per_instrument": {
+                    "TXFD6": {"usable_calibration_days": ["2026-03-01"]},
+                },
+                "summary": {},
+            }
+        )
+    )
     output = tmp_path / "profiles.yaml"
     result = cli.cmd_calibrate(
         _make_args(
-            instrument="TMFD6",  # not in audit
+            instrument="TMFD6",
             audit_report=audit_path,
             output=output,
             artifacts_dir=tmp_path / "artifacts",
@@ -75,12 +79,16 @@ def test_calibrate_instrument_not_in_audit_writes_fallback(tmp_path):
 
 def test_calibrate_few_days_writes_fallback(tmp_path):
     audit_path = tmp_path / "audit.json"
-    audit_path.write_text(json.dumps({
-        "per_instrument": {
-            "TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]},
-        },
-        "summary": {},
-    }))
+    audit_path.write_text(
+        json.dumps(
+            {
+                "per_instrument": {
+                    "TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]},
+                },
+                "summary": {},
+            }
+        )
+    )
     output = tmp_path / "profiles.yaml"
     result = cli.cmd_calibrate(
         _make_args(
@@ -136,23 +144,31 @@ def test_load_live_fills_from_audit_missing_file():
 
 def test_load_live_fills_from_audit_instrument_present(tmp_path):
     audit_path = tmp_path / "audit.json"
-    audit_path.write_text(json.dumps({
-        "per_instrument": {
-            "TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]},
-        },
-        "summary": {},
-    }))
+    audit_path.write_text(
+        json.dumps(
+            {
+                "per_instrument": {
+                    "TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]},
+                },
+                "summary": {},
+            }
+        )
+    )
     days, fills = cli._load_live_fills_from_audit(audit_path, "TMFD6")
     assert days == ["2026-03-01", "2026-03-02"]
-    assert fills == {}  # placeholder — aggregation deferred
+    assert fills == {}
 
 
 def test_calibrate_fallback_profile_records_why_and_what_produced_it(tmp_path):
     audit_path = tmp_path / "audit.json"
-    audit_path.write_text(json.dumps({
-        "per_instrument": {"TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]}},
-        "summary": {},
-    }))
+    audit_path.write_text(
+        json.dumps(
+            {
+                "per_instrument": {"TMFD6": {"usable_calibration_days": ["2026-03-01", "2026-03-02"]}},
+                "summary": {},
+            }
+        )
+    )
     output = tmp_path / "profiles.yaml"
 
     cli.cmd_calibrate(_make_args(audit_report=audit_path, output=output, artifacts_dir=tmp_path / "artifacts"))

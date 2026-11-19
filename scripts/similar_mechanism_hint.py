@@ -45,11 +45,10 @@ NOTE = (
 _TEXT_KEYS = ("name", "hypothesis", "signal", "signal_type", "formula", "dsl_formula", "data_source")
 _REASON_KEYS = ("kill_reason", "correction_note")
 _MIN_TOKEN_LEN = 2
-_WORD = re.compile(r"(?<![a-z0-9])[a-z][a-z0-9]*")  # a word that starts with a letter: "15min" and "30m" yield nothing
+_WORD = re.compile(r"(?<![a-z0-9])[a-z][a-z0-9]*")
 _CONTRACT_CODE = re.compile(r"(txf|tmf|mtx)[a-z]?\d?")
 _REASON_CHARS = 200
 
-# Function words plus words every manifest uses; nothing that names a mechanism (reversion, imbalance, momentum, ...).
 _STOPWORDS = frozenset(
     """
     a about above across after against all also an and any are as at be been before between both but by can could
@@ -66,13 +65,13 @@ _STOPWORDS = frozenset(
 @dataclass(frozen=True)
 class ManifestDoc:
     alpha_id: str
-    path: str  # repo-relative, posix
-    location: str  # "active" | "archive"
+    path: str
+    location: str
     status: str | None
     instrument: str | None
     tokens: frozenset[str]
     data_fields: frozenset[str]
-    reason: str | None  # kill_reason (or correction_note), whitespace collapsed and truncated
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -83,7 +82,7 @@ class Hint:
     shared_tokens: tuple[str, ...]
     shared_data_fields: tuple[str, ...]
     instrument: str | None
-    same_instrument: bool | None  # None when either side names no instrument
+    same_instrument: bool | None
     reason: str | None
 
 

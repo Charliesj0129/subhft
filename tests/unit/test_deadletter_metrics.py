@@ -32,7 +32,7 @@ async def test_add_increments_dlq_size_total(dlq, metrics):
         strategy_id="strat-a",
         symbol="2330",
         side="BUY",
-        price=5000000,  # 500.0000 scaled x10000
+        price=5000000,
         qty=100,
         reason=RejectionReason.CIRCUIT_BREAKER,
         error_message="breaker tripped",

@@ -35,7 +35,7 @@ def test_local_ts_clamp_on_skew(monkeypatch, normalizer):
         "code": "2330",
         "close": 100.0,
         "volume": 1,
-        "ts": 1,  # seconds -> 1e9 ns
+        "ts": 1,
     }
     event = normalizer.normalize_tick(payload)
     assert event.meta.local_ts == 1_000_000_010

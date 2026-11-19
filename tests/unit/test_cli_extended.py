@@ -297,8 +297,6 @@ def test_cmd_backtest_run_runner_rejects_multi_data_without_strategy():
 
 
 def test_cmd_run_replay_exits(monkeypatch, capsys):
-    # L4: replay mode now requires --session and --fixture. Without them
-    # cmd_run prints a usage hint to stderr and exits with code 2.
     monkeypatch.setattr("hft_platform.cli._run.load_settings", lambda *_a, **_k: ({"mode": "replay"}, {}))
     args = Namespace(
         mode=None,

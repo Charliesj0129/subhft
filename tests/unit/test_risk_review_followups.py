@@ -35,11 +35,6 @@ def _ntd(n: int) -> int:
     return n * SCALE
 
 
-# ---------------------------------------------------------------------------
-# 1. A recovered lot's history is not today's PnL
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _isolate_dedup(monkeypatch, tmp_path):
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "dedup.jsonl"))
@@ -82,7 +77,7 @@ def _close_at_entry(entry: int) -> FillEvent:
 async def _route_one(router: ExecutionRouter, store: PositionStore, key: str) -> None:
     router.raw_queue.put_nowait(RawExecEvent("deal", {"payload": {}}, 0))
     task = asyncio.create_task(router.run())
-    for _ in range(400):  # bounded: 400 x 5 ms
+    for _ in range(400):
         if key in store.positions:
             break
         await asyncio.sleep(0.005)
@@ -101,7 +96,7 @@ def test_a_recovered_lots_history_is_not_booked_as_todays_pnl_on_its_first_fill(
         symbol="TMFJ6",
         net_qty=1,
         avg_price_scaled=entry,
-        realized_pnl_scaled=_ntd(20_000),  # realized before the restart
+        realized_pnl_scaled=_ntd(20_000),
         strategy_id="R47",
     )
     risk_engine = MagicMock()
@@ -118,7 +113,6 @@ def test_a_recovered_lots_history_is_not_booked_as_todays_pnl_on_its_first_fill(
     asyncio.run(_route_one(router, store, "acc:R47:TMFJ6"))
 
     assert store.positions["acc:R47:TMFJ6"].net_qty == 0
-    # Closed at its entry price with no fee: today's PnL is zero.
     booked = [c.args[1] for c in risk_engine.notify_fill_pnl.call_args_list]
     assert sum(booked) == 0, booked
 
@@ -128,12 +122,7 @@ def test_the_realized_baseline_includes_the_recovered_lot_the_fill_will_take(sto
         account_id="acc", symbol="TMFJ6", net_qty=1, avg_price_scaled=_ntd(47_426), realized_pnl_scaled=_ntd(7)
     )
     assert store.realized_before_fill(_close_at_entry(_ntd(47_426))) == _ntd(7)
-    assert "acc:TMFJ6" in store._recovery_positions  # a peek, not a take
-
-
-# ---------------------------------------------------------------------------
-# 2. No mark yet after a restore is not a loss
-# ---------------------------------------------------------------------------
+    assert "acc:TMFJ6" in store._recovery_positions
 
 
 def _validator() -> DailyLossLimitValidator:
@@ -162,7 +151,7 @@ def _open() -> OrderIntent:
 
 def _restored_with_day_open(mark: int) -> DailyLossLimitValidator:
     before = _validator()
-    before.update_unrealized(mark, complete=True)  # the day's opening mark
+    before.update_unrealized(mark, complete=True)
     after = _validator()
     assert after.restore_state(before.export_state())
     return after
@@ -180,7 +169,7 @@ def test_an_opening_order_before_the_first_mark_after_a_restore_does_not_latch_t
 def test_the_first_mark_after_a_restore_reopens_trading_on_the_real_number():
     validator = _restored_with_day_open(_ntd(20_000))
 
-    validator.update_unrealized(_ntd(20_000), complete=True)  # unchanged since the open
+    validator.update_unrealized(_ntd(20_000), complete=True)
 
     assert validator.check(_open()) == (True, "OK")
     assert validator.halt_triggered is False
@@ -189,14 +178,9 @@ def test_the_first_mark_after_a_restore_reopens_trading_on_the_real_number():
 def test_a_real_loss_after_a_restore_still_latches_the_stop():
     validator = _restored_with_day_open(_ntd(20_000))
 
-    validator.update_unrealized(_ntd(14_000), complete=True)  # 6,000 NTD down on the day
+    validator.update_unrealized(_ntd(14_000), complete=True)
 
     assert validator.halt_triggered is True
-
-
-# ---------------------------------------------------------------------------
-# 4. The checkpoint names the account that logged in
-# ---------------------------------------------------------------------------
 
 
 def _digest(account: str) -> str:

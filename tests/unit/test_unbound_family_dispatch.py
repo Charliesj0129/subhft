@@ -41,10 +41,10 @@ class _Recorder(BaseStrategy):
         super().__init__(strategy_id, **kwargs)
         self.seen: list[str] = []
 
-    def on_stats(self, event: LOBStatsEvent) -> None:  # noqa: D102
+    def on_stats(self, event: LOBStatsEvent) -> None:
         self.seen.append(event.symbol)
 
-    def on_fill(self, event: FillEvent) -> None:  # noqa: D102
+    def on_fill(self, event: FillEvent) -> None:
         self.seen.append(event.symbol)
 
 
@@ -82,7 +82,6 @@ class TestUnboundFamilyIsNotAWildcard:
         strat.handle_event(ctx, _stats("TMFI6", 1_000_000, 1_000_100))
         assert strat.seen == []
 
-        # What StrategyRunner._on_family_rebind does when the resolver lands.
         strat.symbols = {FutureRef("TMF", date(2026, 9, 16), FamilyCode.R1).display()}
 
         strat.handle_event(ctx, _stats("TMFI6", 1_000_000, 1_000_100))

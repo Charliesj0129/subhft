@@ -33,16 +33,6 @@ class ReplayParityGate:
     name = "replay_parity"
     applies_to = {"maker", "taker"}
 
-    # Goal §7 parity dimension recorded on OrderIntent but not yet in the
-    # comparison digest: the live side (hft.order_intents) has no session_phase
-    # column, so it is UNCHECKED until that migration lands. We surface that as
-    # coverage rather than letting absence read as agreement. Advisory only:
-    # failing the gate here would block every real strategy until the migration,
-    # which is a promotion-policy decision, not the gate's.
-    #
-    # ``force_flat_triggered`` is intentionally absent — it is already covered
-    # by ``intent_type == FORCE_FLAT`` in the digest. ``risk_filter_active`` is
-    # absent too — it is a RiskDecision property, outside intent-level parity.
     expected_parity_dimensions = ("session_phase",)
 
     def evaluate(
@@ -54,11 +44,6 @@ class ReplayParityGate:
         threshold = float(thresholds.get("replay_parity_match_pct_min", 95.0))
 
         report = getattr(result, "replay_parity_report", None)
-        # Parity certifies the backtest, not the candidate. With no report
-        # there are no live intents to replay against yet (ADR-003): the gate
-        # is NOT_APPLICABLE here, which a profile may defer to Shadow exit and
-        # which is otherwise an INVALID run. A replay that does not reproduce
-        # live intents leaves the edge unverified (ERROR); it does not refute it.
         if report is None:
             return SubGateResult(
                 name=self.name,
@@ -69,17 +54,11 @@ class ReplayParityGate:
             )
 
         match_pct = float(getattr(report, "match_pct", 0.0))
-        # `or -1` guards against first_divergence_idx=None; explicit cast
-        # keeps the metrics dict json-serializable.
         first_div = float(getattr(report, "first_divergence_idx", -1) or -1)
         histogram = getattr(report, "divergence_histogram", None) or {}
         category_counts = categorize_histogram(histogram)
         dominant_category = max(category_counts, key=lambda k: category_counts[k]) if category_counts else ""
 
-        # Coverage honesty (goal §7): a field absent from BOTH streams was not
-        # checked, so a high match_pct must not be mistaken for verified
-        # session/risk/force-flat parity. Report which expected dimensions the
-        # producer never emitted.
         observed_fields = set(getattr(report, "observed_fields", ()) or ())
         uncovered = [f for f in self.expected_parity_dimensions if f not in observed_fields]
 
@@ -90,14 +69,7 @@ class ReplayParityGate:
             "first_divergence_idx": first_div,
             "divergence_categories": category_counts,
             "dominant_divergence_category": dominant_category,
-            # Preserve the raw per-field histogram (goal §7): the category
-            # rollup above collapses field identity, so an operator can no
-            # longer see *which* intent field (price/qty/side/session_phase/...)
-            # diverged. Keep it so the per-field audit view can re-derive each
-            # field's §8 category without re-running the replay.
             "per_field_divergences": dict(histogram),
-            # Expected §7 dimensions the producer never emitted ⇒ NOT verified
-            # by this run (advisory; does not flip `passed`).
             "uncovered_parity_dimensions": uncovered,
         }
         suffix = f", dominant_category={dominant_category}" if dominant_category else ""

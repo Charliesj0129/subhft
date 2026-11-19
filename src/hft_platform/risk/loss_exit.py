@@ -68,18 +68,10 @@ TRIGGER_EXPIRY = "expiry"
 TRIGGER_OPERATOR = "operator_flatten"
 TRIGGER_KILL_SWITCH = "kill_switch"
 
-# Books an exit for a position that names no strategy (a legacy recovery entry).
-# Its fill seeds the recovered lot under this id and closes it.
 UNATTRIBUTED_STRATEGY_ID = "__loss_exit__"
 
-# Intent ids for platform exits start here so their order keys
-# (``strategy_id:intent_id``) cannot collide with a strategy's own counter,
-# which restarts daily and has reached ~50,000 on THESHOW. Below 2**31.
 INTENT_ID_BASE = 1_900_000_000
 
-# An unpriced exit is retried every supervisor tick (1 Hz). Logging each retry
-# wrote ``loss_exit_unpriced`` 62,946 times on THESHOW 10/30-10/31 while the
-# HALT waited for a book; the counter still counts every tick.
 UNPRICED_LOG_INTERVAL_NS = 60 * 1_000_000_000
 
 
@@ -118,11 +110,9 @@ class LossExitController:
     def __init__(self, *, protection_ticks: int = 5, retry_interval_s: float = 10.0) -> None:
         self._protection_ticks = max(0, int(protection_ticks))
         self._retry_interval_ns = int(retry_interval_s * 1_000_000_000)
-        # symbol -> when an exit was last submitted for it.
         self._last_submit_ns: dict[str, int] = {}
         self._next_intent_id = INTENT_ID_BASE
         self._window_ns_cache: dict[tuple[str, int], tuple[int, int]] = {}
-        # symbol -> when ``loss_exit_unpriced`` was last logged for it.
         self._unpriced_logged_ns: dict[str, int] = {}
 
     def _expiry_passed(self, symbol: str, now_ns: int, cutoff_minute: int) -> bool:
@@ -156,7 +146,6 @@ class LossExitController:
         ``kill_switch`` closes everything; the caller passes it only with
         verified positions.
         """
-        # symbol -> [net_qty, signed qty x entry, {strategy_id: net_qty}, basis_known]
         by_symbol: dict[str, list] = {}
         for pos in positions:
             if pos.net_qty == 0:
@@ -164,8 +153,6 @@ class LossExitController:
             acc = by_symbol.setdefault(pos.symbol, [0, 0, {}, True])
             acc[0] += pos.net_qty
             acc[1] += pos.net_qty * pos.avg_price_scaled
-            # A lot recovered from the broker alone has no entry price (-1); the
-            # symbol's loss since entry is then unknown, not zero.
             if pos.avg_price_scaled < 0:
                 acc[3] = False
             holders = acc[2]
@@ -215,8 +202,6 @@ class LossExitController:
             intents.append(self._build(strategy_id, symbol, net_qty, bid, ask, tick_size(symbol), trigger, now_ns))
             self._last_submit_ns[key] = now_ns
             MetricsRegistry.get().loss_exit_orders_total.labels(trigger=trigger).inc()
-        # A position that no longer triggers (closed, or recovered) starts fresh next time.
-        # (Cancel bookkeeping is ``cancel_intents``' own.)
         for key in [k for k in self._last_submit_ns if k not in due and not k.startswith("cancel:")]:
             del self._last_submit_ns[key]
         for key in [k for k in self._unpriced_logged_ns if k not in due]:
@@ -290,7 +275,6 @@ class LossExitController:
         if expiry_enabled and self._expiry_passed(symbol, now_ns, expiry_cutoff_minute):
             return TRIGGER_EXPIRY
         if position_loss_limit_scaled > 0 and mid > 0:
-            # Same formula as MarkToMarketCalculator._unrealized: NTD x price scale.
             unrealized = (mid - avg_price_scaled) * net_qty * multiplier(symbol)
             if unrealized <= -position_loss_limit_scaled:
                 return TRIGGER_POSITION_LOSS

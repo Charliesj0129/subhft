@@ -69,11 +69,6 @@ def _ack(rig: SimpleNamespace, *, token: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# A stale acknowledgement must not clear a newer latch
-# ---------------------------------------------------------------------------
-
-
 def test_a_stale_rearm_ack_does_not_clear_a_newer_quarantine(rig: SimpleNamespace) -> None:
     """Two engines can overlap: session ownership is advisory.
 
@@ -122,11 +117,6 @@ def test_a_rearm_ack_clears_a_latch_that_predates_tokens(rig: SimpleNamespace) -
     assert _persisted(rig)["manual_rearm_required"] is False
 
 
-# ---------------------------------------------------------------------------
-# A failed delete must not stop supervision
-# ---------------------------------------------------------------------------
-
-
 def test_a_failed_request_delete_does_not_stop_supervision(
     rig: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -138,11 +128,8 @@ def test_a_failed_request_delete_does_not_stop_supervision(
 
     monkeypatch.setattr(rearm_requests, "consume", _explode)
 
-    asyncio.run(rig.system._consume_strategy_rearm_requests())  # must not raise
+    asyncio.run(rig.system._consume_strategy_rearm_requests())
 
-    # Fail-closed: the latch is still held and the request is still on disk, so
-    # the next tick retries rather than the engine dying and the request
-    # re-killing it on every boot.
     assert rig.governor.is_quarantined(STRATEGY)
     assert rearm_requests.pending(rig.gate.state_path.parent)
 
@@ -155,11 +142,6 @@ def test_the_request_is_applied_once_the_delete_succeeds_again(rig: SimpleNamesp
 
     assert not rig.governor.is_quarantined(STRATEGY)
     assert not rearm_requests.pending(rig.gate.state_path.parent)
-
-
-# ---------------------------------------------------------------------------
-# The durable write must not run on the event loop
-# ---------------------------------------------------------------------------
 
 
 class _ThreadRecordingWriter:
@@ -231,11 +213,6 @@ def test_a_failed_durable_write_is_reported_without_taking_down_dispatch(
     assert governor.is_quarantined(STRATEGY)
     emitted = capsys.readouterr().err
     assert "strategy_quarantine_persist_failed" in emitted, f"the failure was swallowed: {emitted!r}"
-
-
-# ---------------------------------------------------------------------------
-# The durable write must survive a crash, not just a concurrent reader
-# ---------------------------------------------------------------------------
 
 
 def test_the_payload_is_fsynced_before_the_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,11 +288,6 @@ def test_a_directory_that_refuses_fsync_does_not_fail_the_write(
     assert json.loads(path.read_text(encoding="utf-8"))["strategies"] == {}
 
 
-# ---------------------------------------------------------------------------
-# A latch written after boot must still be adopted
-# ---------------------------------------------------------------------------
-
-
 def _document(*, token: str | None, latched: bool = True) -> dict[str, Any]:
     entry: dict[str, Any] = {"manual_rearm_required": latched, "reason": "written_elsewhere"}
     if token is not None:
@@ -369,9 +341,8 @@ def test_an_unparseable_document_does_not_stop_supervision(
     rig.governor.quarantine(STRATEGY, reason="handler_exception")
     rig.gate.rearm_strategy(STRATEGY)
 
-    asyncio.run(rig.system._consume_strategy_rearm_requests({"platform": {}, "strategies": {}}))  # must not raise
+    asyncio.run(rig.system._consume_strategy_rearm_requests({"platform": {}, "strategies": {}}))
 
-    # The tick adopted nothing, but everything after the reconcile still ran.
     assert not rig.governor.is_quarantined(STRATEGY)
 
 
@@ -382,7 +353,7 @@ def test_rearm_async_writes_the_durable_record_off_the_event_loop() -> None:
     governor.quarantine(STRATEGY, reason="handler_exception")
     token = governor.quarantine_token(STRATEGY)
     assert token is not None
-    writer.thread_ident = None  # the sync quarantine above wrote on this thread
+    writer.thread_ident = None
 
     async def _run() -> int:
         assert await governor.rearm_async(STRATEGY, expected_token=token, request_id="req-1")
@@ -406,12 +377,6 @@ def test_rearm_async_refuses_a_token_that_does_not_match() -> None:
     assert writer.thread_ident is None, "a refused re-arm must not write a recovery record"
 
 
-# --------------------------------------------------------------------------- #
-# Round 4: the durable latch must not be hostage to the audit trail, and the
-# write must not be able to stall -- or kill -- the strategy consumer.
-# --------------------------------------------------------------------------- #
-
-
 def test_a_corrupt_summary_file_does_not_prevent_the_durable_latch(rig: SimpleNamespace) -> None:
     """summary.json is audit trail; runtime_state.json is the safety state.
 
@@ -426,7 +391,7 @@ def test_a_corrupt_summary_file_does_not_prevent_the_durable_latch(rig: SimpleNa
     summary = rig.writer.session_dir
     summary.mkdir(parents=True, exist_ok=True)
     (summary / "summary.json").write_text('{"transition_count": "not-a-number"}', encoding="utf-8")
-    assert session is not None  # keeps the fixture's tmp dir explicit in the test body
+    assert session is not None
 
     rig.governor.quarantine(STRATEGY, reason="strategy_exception")
 
@@ -464,7 +429,7 @@ def test_a_directory_fsync_io_error_is_reported_rather_than_reported_as_durable(
     real_fsync = os.fsync
 
     def _fail_on_directory(fd: int) -> None:
-        if os.fstat(fd).st_mode & 0o040000:  # S_IFDIR
+        if os.fstat(fd).st_mode & 0o040000:
             raise OSError(errno_mod.EIO, "input/output error")
         real_fsync(fd)
 
@@ -589,8 +554,6 @@ def test_a_stalled_durable_write_does_not_hold_the_strategy_consumer(rig: Simple
 
     elapsed = asyncio.run(_run())
     assert entered.is_set(), "the write never started"
-    # Launched and left. 50 ms is generous for "did not wait at all" while
-    # staying far below the 200 ms the old version spent here on purpose.
     assert elapsed < 0.05, f"consumer held for {elapsed:.3f}s"
 
 
@@ -667,7 +630,7 @@ def test_an_in_flight_durable_write_is_strongly_referenced(rig: SimpleNamespace)
     async def _run() -> tuple[int, int]:
         await rig.governor.quarantine_async(STRATEGY, reason="strategy_exception")
         assert entered.wait(timeout=5.0), "the write never started"
-        gc.collect()  # a weakly-referenced task would die exactly here
+        gc.collect()
         in_flight = len(rig.governor._persist_tasks)
         released.set()
         for _ in range(500):

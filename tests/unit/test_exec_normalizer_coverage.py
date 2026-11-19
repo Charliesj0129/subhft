@@ -5,10 +5,6 @@ from __future__ import annotations
 from hft_platform.contracts.execution import FillEvent, OrderEvent, OrderStatus, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_raw(topic: str, data: dict, ts: int = 1_000_000_000) -> RawExecEvent:
     return RawExecEvent(topic=topic, data=data, ingest_ts_ns=ts)
@@ -62,11 +58,6 @@ def _order_data(
     return d
 
 
-# ---------------------------------------------------------------------------
-# normalize_fill
-# ---------------------------------------------------------------------------
-
-
 class TestNormalizeFill:
     def test_basic_buy_fill(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
@@ -77,7 +68,6 @@ class TestNormalizeFill:
         assert fill.side == Side.BUY
         assert fill.qty == 10
         assert fill.symbol == "2330"
-        # price must be scaled int (x10000 default for unknown symbol)
         assert isinstance(fill.price, int)
         assert fill.price > 0
 
@@ -122,9 +112,9 @@ class TestNormalizeFill:
         """
         norm = ExecutionNormalizer(default_account_id="test-acct")
         data = _fill_data(seqno="", ordno="O1", price=100.5, qty=1)
-        data.pop("seqno", None)  # force synthetic path
+        data.pop("seqno", None)
         raw1 = _make_raw("deal", dict(data, ts=1))
-        raw2 = _make_raw("deal", dict(data, ts=1))  # same ts, same everything
+        raw2 = _make_raw("deal", dict(data, ts=1))
         fill1 = norm.normalize_fill(raw1)
         fill2 = norm.normalize_fill(raw2)
         assert fill1 is not None and fill2 is not None
@@ -161,7 +151,6 @@ class TestNormalizeFill:
         data = {"price": 100.0, "action": "Buy", "code": "2330"}
         raw = _make_raw("deal", data)
         fill = norm.normalize_fill(raw)
-        # R8: zero/missing qty now returns None (reject instead of default)
         assert fill is None
 
     def test_fill_with_contract_dict_for_symbol(self) -> None:
@@ -199,13 +188,7 @@ class TestNormalizeFill:
         norm = ExecutionNormalizer(default_account_id="test-acct")
         raw = _make_raw("deal", {"price": "not_a_number_at_all!!!!", "quantity": "bad"})
         fill = norm.normalize_fill(raw)
-        # Should gracefully return None on parse failure
         assert fill is None
-
-
-# ---------------------------------------------------------------------------
-# normalize_order
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeOrder:
@@ -291,13 +274,7 @@ class TestNormalizeOrder:
         raw = _make_raw("order", _order_data(price=100.0))
         order = norm.normalize_order(raw)
         assert order is not None
-        # Price should be scaled integer
         assert isinstance(order.price, int)
-
-
-# ---------------------------------------------------------------------------
-# _normalize_ts_ns
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeTsNs:
@@ -309,27 +286,23 @@ class TestNormalizeTsNs:
 
     def test_nanosecond_passthrough(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
-        # > 1e17 -> ns passthrough
         ts = norm._normalize_ts_ns(1_700_000_000_000_000_000)
         assert ts == 1_700_000_000_000_000_000
 
     def test_microsecond_conversion(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
-        # > 1e14 -> us * 1000
         us = 1_700_000_000_000_000
         ts = norm._normalize_ts_ns(us)
         assert ts == us * 1000
 
     def test_millisecond_conversion(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
-        # > 1e11 -> ms * 1_000_000
         ms = 1_700_000_000_000
         ts = norm._normalize_ts_ns(ms)
         assert ts == ms * 1_000_000
 
     def test_second_conversion(self) -> None:
         norm = ExecutionNormalizer(default_account_id="test-acct")
-        # <= 1e11 -> s * 1_000_000_000
         s = 1_700_000_000
         ts = norm._normalize_ts_ns(s)
         assert ts == s * 1_000_000_000
@@ -349,11 +322,6 @@ class TestNormalizeTsNs:
         norm = ExecutionNormalizer(default_account_id="test-acct")
         ts = norm._normalize_ts_ns(-100)
         assert ts > 0
-
-
-# ---------------------------------------------------------------------------
-# Strategy ID resolution
-# ---------------------------------------------------------------------------
 
 
 class TestStrategyIdResolution:
@@ -407,11 +375,6 @@ class TestStrategyIdResolution:
         fill = norm.normalize_fill(raw)
         assert fill is not None
         assert fill.strategy_id == "UNKNOWN"
-
-
-# ---------------------------------------------------------------------------
-# _map_status edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestMapStatus:

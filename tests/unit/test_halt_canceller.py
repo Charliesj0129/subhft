@@ -39,7 +39,6 @@ async def test_cancels_all_live_orders() -> None:
     assert count == 3
     assert adapter.order_queue.qsize() == 3
 
-    # Verify all enqueued commands are CANCEL
     while not adapter.order_queue.empty():
         cmd = adapter.order_queue.get_nowait()
         assert cmd.intent.intent_type == IntentType.CANCEL

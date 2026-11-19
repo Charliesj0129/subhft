@@ -6,10 +6,6 @@ import pytest
 
 from research.tools.bayesian_opt import BayesianOptConfig, MultiObjectiveResult
 
-# ---------------------------------------------------------------------------
-# MultiObjectiveResult dataclass
-# ---------------------------------------------------------------------------
-
 
 def _make_pareto_front() -> list[dict]:
     return [
@@ -51,7 +47,7 @@ def test_multi_objective_result_is_frozen() -> None:
         n_trials=10,
         neighbor_consistency=0.0,
     )
-    with pytest.raises(Exception):  # FrozenInstanceError (dataclasses.FrozenInstanceError)
+    with pytest.raises(Exception):
         result.n_trials = 99  # type: ignore[misc]
 
 
@@ -73,7 +69,6 @@ def test_multi_objective_result_to_dict_roundtrip() -> None:
     assert isinstance(d["pareto_front"], list)
     assert len(d["pareto_front"]) == len(front)
 
-    # Pareto front entries should match original structure.
     for original, serialized in zip(front, d["pareto_front"]):
         assert serialized["trial_number"] == original["trial_number"]
         assert serialized["sharpe_oos"] == original["sharpe_oos"]
@@ -93,13 +88,6 @@ def test_multi_objective_result_empty_pareto_front() -> None:
     d = result.to_dict()
     assert d["pareto_front"] == []
     assert d["n_trials"] == 0
-
-
-# ---------------------------------------------------------------------------
-# Neighbor consistency logic — tested directly on Pareto front structures.
-# The full multi_objective_optimize function requires Optuna + alpha
-# discovery infrastructure; this isolates the consistency computation.
-# ---------------------------------------------------------------------------
 
 
 def _compute_neighbor_consistency(pareto_front: list[dict], first_param: str) -> float:
@@ -136,14 +124,10 @@ def test_neighbor_consistency_all_consistent() -> None:
 def test_neighbor_consistency_none_consistent() -> None:
     """When Sharpe improves AND both other objectives strictly improve, consistency = 0."""
     front = [
-        # Sharpe: 1.0→1.5 (improved), drawdown: 0.3→0.1 (not worsened),
-        # turnover: 0.5→0.1 (not worsened, strictly lower). No trade-off → inconsistent.
         {"params": {"p": 0.1}, "sharpe_oos": 1.0, "abs_drawdown": 0.3, "turnover_dist": 0.5},
         {"params": {"p": 0.2}, "sharpe_oos": 1.5, "abs_drawdown": 0.1, "turnover_dist": 0.1},
     ]
     nc = _compute_neighbor_consistency(front, "p")
-    # sharpe_improved=True, drawdown_worsened=False (0.1 < 0.3), turnover_worsened=False (0.1 < 0.5)
-    # Condition: True AND (False OR False) = False → NOT consistent → nc = 0.0
     assert nc == 0.0
 
 
@@ -163,23 +147,12 @@ def test_neighbor_consistency_empty_front() -> None:
 def test_neighbor_consistency_mixed() -> None:
     """Mixed pairs: first consistent, second inconsistent → 0.5."""
     front = [
-        # pair 0→1: Sharpe up, drawdown up (worsened), turnover strictly lower (not worsened)
-        # → sharpe_improved=True AND (drawdown_worsened=True OR turnover_worsened=False)
-        # → True AND True → consistent
         {"params": {"p": 0.1}, "sharpe_oos": 1.0, "abs_drawdown": 0.1, "turnover_dist": 0.5},
         {"params": {"p": 0.2}, "sharpe_oos": 1.5, "abs_drawdown": 0.2, "turnover_dist": 0.1},
-        # pair 1→2: Sharpe up, drawdown strictly down (not worsened), turnover strictly down (not worsened)
-        # → sharpe_improved=True AND (drawdown_worsened=False OR turnover_worsened=False)
-        # → True AND False → inconsistent
         {"params": {"p": 0.3}, "sharpe_oos": 2.0, "abs_drawdown": 0.05, "turnover_dist": 0.0},
     ]
     nc = _compute_neighbor_consistency(front, "p")
     assert nc == 0.5
-
-
-# ---------------------------------------------------------------------------
-# BayesianOptConfig (shared config used by multi-objective path)
-# ---------------------------------------------------------------------------
 
 
 def test_bayesian_opt_config_defaults() -> None:

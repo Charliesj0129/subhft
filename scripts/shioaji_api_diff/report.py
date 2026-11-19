@@ -29,9 +29,6 @@ def canonical_json(doc: dict[str, Any]) -> str:
     return json.dumps(doc, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
 
 
-# --------------------------------------------------------------------------- #
-# Markdown rendering.
-# --------------------------------------------------------------------------- #
 _VERDICT_BLURB = {
     "SAFE": "No platform-impacting breaking change detected — safe to adopt "
             "(review any behavioral/config notes below).",

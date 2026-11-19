@@ -55,11 +55,8 @@ class TestCmdHealthPreflight:
         monkeypatch.setenv("HFT_KILL_SWITCH_PATH", str(tmp_path / "m"))
         monkeypatch.setenv("HFT_CHECKPOINT_PATH", str(tmp_path / "m"))
         monkeypatch.setenv("HFT_WAL_DIR", str(tmp_path / "m"))
-        # Isolate from env leakage that may affect config loading
         monkeypatch.delenv("HFT_REDIS_PASSWORD", raising=False)
         monkeypatch.delenv("REDIS_PASSWORD", raising=False)
-        # Patch _check_config_valid to avoid cross-test pollution from
-        # cached config loader state in full suite runs with coverage
         monkeypatch.setattr(
             "hft_platform.cli._health._check_config_valid",
             lambda: {"name": "config_valid", "ok": True, "detail": "mocked"},

@@ -11,9 +11,8 @@ def test_on_risk_feedback_default_noop():
 
     s = DummyStrategy.__new__(DummyStrategy)
     fb = RiskFeedback(intent_id=1, strategy_id="s", symbol="X", reason_code="R", timestamp_ns=0)
-    result = s.on_risk_feedback(fb)  # should not raise
+    result = s.on_risk_feedback(fb)
 
-    # Default implementation is a no-op — returns None with no side effects
     assert result is None
 
 
@@ -44,7 +43,6 @@ def test_publish_state_drops_silently_when_no_sink():
     ctx._publish_sink = None
     result = ctx.publish_state("channel", {"key": "value"})
 
-    # No sink configured — call is silently dropped, returns None
     assert result is None
 
 
@@ -71,7 +69,6 @@ def test_publish_state_swallows_exception():
 
     ctx = StrategyContext.__new__(StrategyContext)
     ctx._publish_sink = failing_sink
-    result = ctx.publish_state("ch", {})  # should not raise
+    result = ctx.publish_state("ch", {})
 
-    # Exception from sink is swallowed — publish_state returns None
     assert result is None

@@ -1629,10 +1629,10 @@ def _locked_with_restored_pvalue(tmp_path, *, prior_locked_ids: tuple[str, ...])
 def test_locked_bh_counts_only_the_candidates_in_hand_on_a_fresh_ledger(tmp_path) -> None:
     row = _locked_with_restored_pvalue(tmp_path, prior_locked_ids=())
     assert row["bh_n_tests"] == 1
-    assert row["bh_q10_passed"] is True  # 0.05 <= 0.10 * 1/1
+    assert row["bh_q10_passed"] is True
 
 
 def test_locked_bh_counts_ledger_tests_whose_pvalues_are_not_in_hand(tmp_path) -> None:
     row = _locked_with_restored_pvalue(tmp_path, prior_locked_ids=("earlier-1", "earlier-2"))
     assert row["bh_n_tests"] == 3
-    assert row["bh_q10_passed"] is False  # 0.05 > 0.10 * 1/3
+    assert row["bh_q10_passed"] is False

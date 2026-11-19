@@ -29,10 +29,6 @@ from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason
 from hft_platform.order.halt_canceller import _BATCH_SIZE, cancel_all_live_orders
 from hft_platform.order.shadow import ShadowOrderSink
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Shared adapter fixture helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 @pytest.fixture()
 def tmp_config(tmp_path):
@@ -101,26 +97,17 @@ def _make_intent(strategy_id: str = "s1", symbol: str = "2330", intent_id: int =
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 62-64: _get_trace_sampler ImportError fallback
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 def test_get_trace_sampler_returns_none_on_import_error():
     """_get_trace_sampler must return None and log debug when ImportError is raised."""
     import hft_platform.order.adapter as adapter_mod
 
     with patch.dict("sys.modules", {"hft_platform.diagnostics.trace": None}):
-        # Force reimport of the function's inner import to raise ImportError
         with patch("hft_platform.order.adapter._get_trace_sampler", wraps=None) as _mock:
-            # Directly call with patched import to trigger the ImportError path
             pass
 
-    # Simulate ImportError by patching sys.modules to make the submodule unavailable
     import sys
 
     original = sys.modules.pop("hft_platform.diagnostics.trace", None)
-    # Inject a broken module sentinel
     sys.modules["hft_platform.diagnostics.trace"] = None  # type: ignore[assignment]
     try:
         result = adapter_mod._get_trace_sampler()
@@ -138,11 +125,9 @@ def test_get_trace_sampler_import_error_path_directly():
 
     import hft_platform.order.adapter as adapter_mod
 
-    # Temporarily shadow the inner import to raise ImportError
     saved = sys.modules.pop("hft_platform.diagnostics", None)
     saved_trace = sys.modules.pop("hft_platform.diagnostics.trace", None)
 
-    # Replace with a module that raises ImportError on attribute access
     class _BrokenModule:
         def __getattr__(self, name):
             raise ImportError("diagnostics not available")
@@ -160,22 +145,12 @@ def test_get_trace_sampler_import_error_path_directly():
             sys.modules["hft_platform.diagnostics"] = saved
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — line 248: set_storm_guard (trivial setter coverage)
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 def test_set_storm_guard_stores_reference(tmp_config):
     """set_storm_guard stores the provided storm_guard object."""
     adapter = _make_adapter(tmp_config)
     sg = MagicMock()
     adapter.set_storm_guard(sg)
     assert adapter._storm_guard is sg
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 269-270: _send_dispatch_rejection QueueFull + generic
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 def test_send_dispatch_rejection_queue_full_increments_metric(tmp_config):
@@ -199,10 +174,8 @@ def test_send_dispatch_rejection_generic_exception_swallowed(tmp_config):
     adapter._rejection_sink = sink
 
     intent = _make_intent()
-    # Must not raise
     adapter._send_dispatch_rejection(intent, "CB_OPEN")
 
-    # Generic exception path does not call inc
     adapter.metrics.rejection_sink_overflow_total.inc.assert_not_called()
 
 
@@ -212,14 +185,8 @@ def test_send_dispatch_rejection_no_sink_is_noop(tmp_config):
     adapter._rejection_sink = None
 
     intent = _make_intent()
-    # Must not raise and must not attempt any metric update
     adapter._send_dispatch_rejection(intent, "NOOP")
-    assert True  # reached without error
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 314/325-334: sweep_stale_live_orders TTL eviction
-# ═════════════════════════════════════════════════════════════════════════════
+    assert True
 
 
 @pytest.mark.asyncio
@@ -227,9 +194,9 @@ async def test_sweep_stale_live_orders_evicts_expired_entries(tmp_config):
     """sweep_stale_live_orders evicts entries older than TTL."""
     adapter = _make_adapter(tmp_config)
     adapter._live_orders_ttl_s = 60.0
-    adapter._live_orders_last_sweep_s = 0.0  # force sweep
+    adapter._live_orders_last_sweep_s = 0.0
 
-    old_ts = time.monotonic() - 120.0  # 2 minutes ago, past TTL
+    old_ts = time.monotonic() - 120.0
     adapter._live_orders_inserted_at["stale_key"] = old_ts
     adapter.live_orders["stale_key"] = {"status": "open"}
 
@@ -243,7 +210,6 @@ async def test_sweep_stale_live_orders_evicts_expired_entries(tmp_config):
 async def test_sweep_stale_live_orders_rate_limited(tmp_config):
     """sweep_stale_live_orders is rate-limited: returns 0 if called too soon."""
     adapter = _make_adapter(tmp_config)
-    # Pretend we swept just now
     adapter._live_orders_last_sweep_s = time.monotonic()
 
     adapter.live_orders["key1"] = {"status": "open"}
@@ -251,7 +217,6 @@ async def test_sweep_stale_live_orders_rate_limited(tmp_config):
 
     evicted = await adapter.sweep_stale_live_orders()
     assert evicted == 0
-    # Order should still be there (sweep was rate-limited)
     assert "key1" in adapter.live_orders
 
 
@@ -259,20 +224,13 @@ async def test_sweep_stale_live_orders_rate_limited(tmp_config):
 async def test_sweep_stale_live_orders_prunes_orphaned_timestamps(tmp_config):
     """Orphaned _live_orders_inserted_at entries (key not in live_orders) are pruned."""
     adapter = _make_adapter(tmp_config)
-    adapter._live_orders_last_sweep_s = 0.0  # force sweep
+    adapter._live_orders_last_sweep_s = 0.0
 
-    # Orphan: timestamp exists but not in live_orders
     adapter._live_orders_inserted_at["orphan_key"] = time.monotonic()
-    # live_orders is empty, so orphan_key is truly orphaned
 
     await adapter.sweep_stale_live_orders()
 
     assert "orphan_key" not in adapter._live_orders_inserted_at
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 342-353: sweep_stale_live_orders hard cap overflow
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
@@ -280,26 +238,19 @@ async def test_sweep_stale_live_orders_hard_cap_evicts_oldest(tmp_config):
     """Hard cap path evicts oldest entries when live_orders exceeds max_size after TTL sweep."""
     adapter = _make_adapter(tmp_config)
     adapter._live_orders_max_size = 3
-    adapter._live_orders_last_sweep_s = 0.0  # force sweep
-    adapter._live_orders_ttl_s = 9999.0  # do not TTL-evict any
+    adapter._live_orders_last_sweep_s = 0.0
+    adapter._live_orders_ttl_s = 9999.0
 
     now = time.monotonic()
-    # Insert 5 entries, all within TTL so they survive the first pass
     for i in range(5):
         key = f"strat:{i}"
         adapter.live_orders[key] = {"status": "open"}
-        adapter._live_orders_inserted_at[key] = now - (5 - i)  # oldest first
+        adapter._live_orders_inserted_at[key] = now - (5 - i)
 
     evicted = await adapter.sweep_stale_live_orders()
 
-    # Hard cap: should reduce to max_size
     assert len(adapter.live_orders) <= adapter._live_orders_max_size
-    assert evicted >= 2  # at least 2 evicted to get from 5 to 3
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 358-383: sweep pending-fill orphan sweep
-# ═════════════════════════════════════════════════════════════════════════════
+    assert evicted >= 2
 
 
 @pytest.mark.asyncio
@@ -309,7 +260,6 @@ async def test_sweep_stale_live_orders_clears_expired_pending_fill(tmp_config):
     adapter._live_orders_last_sweep_s = 0.0
     adapter._pending_fill_ttl_s = 60.0
 
-    # Register a pending fill entry that has expired
     old_ts = time.monotonic() - 120.0
     order_key = "s1:99"
     pf_key = "2330:BUY"
@@ -323,11 +273,6 @@ async def test_sweep_stale_live_orders_clears_expired_pending_fill(tmp_config):
         assert order_key not in adapter._pending_fill_registered_at
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 409-410: _run_blocking_call RuntimeError on closed loop
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 @pytest.mark.asyncio
 async def test_run_blocking_call_handles_runtimeerror_on_closed_loop(tmp_config):
     """_run_blocking_call must handle RuntimeError from call_soon_threadsafe gracefully."""
@@ -338,8 +283,6 @@ async def test_run_blocking_call_handles_runtimeerror_on_closed_loop(tmp_config)
     def _raise_immediately():
         raise ValueError("broker failure")
 
-    # The RuntimeError in call_soon_threadsafe is handled inside the thread's _set_exception path.
-    # We simulate that by checking the future gets the exception and nothing crashes.
     with pytest.raises(ValueError, match="broker failure"):
         await adapter._run_blocking_call(_raise_immediately)
 
@@ -354,11 +297,6 @@ async def test_run_blocking_call_succeeds_with_return_value(tmp_config):
 
     result = await adapter._run_blocking_call(_return_42)
     assert result == 42
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — line 445: resolve_phantom_fill empty phantom keys
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 def test_resolve_phantom_fill_returns_none_with_empty_phantom_keys(tmp_config):
@@ -381,11 +319,6 @@ def test_resolve_phantom_fill_returns_none_for_empty_symbol(tmp_config):
     assert result is None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — line 478: resolve_phantom_fill via pending_fill_index
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 def test_resolve_phantom_fill_via_pending_fill_index(tmp_config):
     """resolve_phantom_fill resolves via _pending_fill_index when available."""
     adapter = _make_adapter(tmp_config)
@@ -393,17 +326,15 @@ def test_resolve_phantom_fill_via_pending_fill_index(tmp_config):
     order_key = "s1:42"
     adapter._phantom_order_keys[order_key] = (now, "2330")
 
-    # Register in pending fill index
     pf_key = "2330:BUY"
     with adapter._pending_fill_lock:
         adapter._pending_fill_index[pf_key] = [order_key]
         adapter._pending_fill_registered_at[order_key] = now
 
-    fill = SimpleNamespace(symbol="2330", side=0)  # 0 = BUY
+    fill = SimpleNamespace(symbol="2330", side=0)
     result = adapter.resolve_phantom_fill(fill)
 
     assert result == "s1"
-    # order_key should be removed from phantom candidates
     assert order_key not in adapter._phantom_order_keys
 
 
@@ -414,16 +345,10 @@ def test_resolve_phantom_fill_via_fallback_phantom_keys(tmp_config):
     order_key = "strategy_a:99"
     adapter._phantom_order_keys[order_key] = (now, "2330")
 
-    # No pending fill index entry
     fill = SimpleNamespace(symbol="2330", side=0)
     result = adapter.resolve_phantom_fill(fill)
 
     assert result == "strategy_a"
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/adapter.py — lines 568-569/581-582: run() finally block cleanup
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
@@ -432,7 +357,7 @@ async def test_run_finally_cleans_up_api_worker_task(tmp_config):
     adapter = _make_adapter(tmp_config)
 
     task = asyncio.create_task(adapter.run())
-    await asyncio.sleep(0.05)  # let run() start and set _api_worker_task
+    await asyncio.sleep(0.05)
     assert adapter._api_worker_task is not None
 
     task.cancel()
@@ -448,7 +373,7 @@ async def test_run_finally_cleans_up_api_worker_task(tmp_config):
 async def test_run_finally_cleans_up_when_api_worker_already_none(tmp_config):
     """run() finally block handles _api_worker_task=None gracefully (no cancel attempt)."""
     adapter = _make_adapter(tmp_config)
-    adapter._api_worker_task = None  # pre-set to None
+    adapter._api_worker_task = None
 
     task = asyncio.create_task(adapter.run())
     await asyncio.sleep(0.02)
@@ -458,7 +383,6 @@ async def test_run_finally_cleans_up_when_api_worker_already_none(tmp_config):
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
-    # Should be None without crashing
     assert adapter._api_worker_task is None
 
 
@@ -470,36 +394,26 @@ async def test_run_finally_handles_timeout_on_api_worker_cancel(tmp_config):
     task = asyncio.create_task(adapter.run())
     await asyncio.sleep(0.03)
 
-    # Verify _api_worker_task was created
     assert adapter._api_worker_task is not None
 
-    # Cancel the outer run task; finally block cancels the api_worker_task
     task.cancel()
     try:
         await asyncio.wait_for(task, timeout=3.0)
     except (asyncio.CancelledError, asyncio.TimeoutError):
         pass
 
-    # Finally block must have set _api_worker_task to None
     assert adapter._api_worker_task is None
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — lines 142-143: metrics exception swallowed in add()
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
 async def test_deadletter_add_continues_when_metrics_raise(tmp_path):
     """DLQ add() must continue even if metrics update raises an exception."""
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path), max_buffer_size=100)
-    # Replace metrics with one that raises on inc()
     broken_metrics = MagicMock()
     broken_metrics.dlq_size_total = MagicMock()
     broken_metrics.dlq_size_total.labels.return_value.inc = MagicMock(side_effect=RuntimeError("metrics exploded"))
     dlq._metrics = broken_metrics
 
-    # Must not raise despite metrics failure
     await dlq.add(
         order_id="o1",
         strategy_id="s1",
@@ -515,23 +429,16 @@ async def test_deadletter_add_continues_when_metrics_raise(tmp_path):
     assert stats["total_entries"] == 1
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — lines 151-153: buffer overflow drop in add()
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 @pytest.mark.asyncio
 async def test_deadletter_buffer_overflow_drops_oldest_entries(tmp_path):
     """When buffer still exceeds max after failed flush, oldest entries are dropped."""
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path), max_buffer_size=3)
 
-    # Override _flush_locked to simulate flush failure (returns 0 but does not clear buffer)
     async def _failing_flush():
-        return 0  # pretend flush failed — buffer not cleared
+        return 0
 
     dlq._flush_locked = _failing_flush  # type: ignore[method-assign]
 
-    # Pre-fill the buffer beyond max via direct manipulation
     from hft_platform.order.deadletter import DeadLetterEntry
 
     for i in range(5):
@@ -549,8 +456,6 @@ async def test_deadletter_buffer_overflow_drops_oldest_entries(tmp_path):
             )
         )
 
-    # Now add one more — should trigger overflow drop
-    # Temporarily set max to 3 to ensure overflow after adding
     dlq.max_buffer_size = 3
     await dlq.add(
         order_id="overflow",
@@ -563,13 +468,7 @@ async def test_deadletter_buffer_overflow_drops_oldest_entries(tmp_path):
         error_message="overflow",
     )
 
-    # Buffer must not exceed max after overflow path
-    assert len(dlq._buffer) <= dlq.max_buffer_size + 1  # 1 new entry + max
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — line 175: empty buffer in _flush_locked returns 0
-# ═════════════════════════════════════════════════════════════════════════════
+    assert len(dlq._buffer) <= dlq.max_buffer_size + 1
 
 
 @pytest.mark.asyncio
@@ -582,18 +481,11 @@ async def test_deadletter_flush_empty_buffer_returns_zero(tmp_path):
     assert flushed == 0
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — lines 198-200: _write_entries exception path
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 @pytest.mark.asyncio
 async def test_deadletter_write_entries_exception_returns_zero(tmp_path):
     """_write_entries returns 0 and logs error when file write fails."""
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path), max_buffer_size=2)
 
-    # Add two entries to fill the buffer and trigger a flush
-    # Make the directory read-only to force IOError
     tmp_path.chmod(0o444)
     try:
         await dlq.add(
@@ -650,19 +542,12 @@ async def test_deadletter_write_entries_exception_direct(tmp_path):
     assert result == 0
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — lines 210-215: _cleanup_old_files deletion + exception
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 def test_deadletter_cleanup_old_files_deletes_expired(tmp_path):
     """_cleanup_old_files deletes DLQ files with mtime older than retain_days."""
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path))
 
-    # Create a fake old DLQ file
     old_file = tmp_path / "dlq_old.jsonl"
     old_file.write_text("{}\n")
-    # Set mtime to 30 days ago
     old_mtime = time.time() - 30 * 86400
     os.utime(old_file, (old_mtime, old_mtime))
 
@@ -685,16 +570,9 @@ def test_deadletter_cleanup_old_files_exception_per_file_is_swallowed(tmp_path):
         patch.dict(os.environ, {"HFT_DLQ_RETAIN_DAYS": "7"}),
         patch.object(Path, "unlink", side_effect=OSError("permission denied")),
     ):
-        # Must not raise even if unlink fails
         dlq._cleanup_old_files()
 
-    # File still exists because unlink was mocked to fail
     assert old_file.exists()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — line 233: read_all with no files
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 def test_deadletter_read_all_empty_dir_returns_empty_list(tmp_path):
@@ -704,16 +582,10 @@ def test_deadletter_read_all_empty_dir_returns_empty_list(tmp_path):
     assert entries == []
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/deadletter.py — lines 244-246: read_all file open exception continues
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 def test_deadletter_read_all_skips_unreadable_files(tmp_path):
     """read_all skips files that raise an exception on open."""
     dlq = DeadLetterQueue(dlq_dir=str(tmp_path))
 
-    # Create a valid file
     valid_entry = {
         "timestamp_ns": 1,
         "order_id": "o_valid",
@@ -733,7 +605,6 @@ def test_deadletter_read_all_skips_unreadable_files(tmp_path):
     valid_file = tmp_path / "dlq_200.jsonl"
     valid_file.write_text(json.dumps(valid_entry) + "\n")
 
-    # Create an "unreadable" file (will be skipped via exception)
     bad_file = tmp_path / "dlq_100.jsonl"
     bad_file.write_text("irrelevant")
 
@@ -747,23 +618,15 @@ def test_deadletter_read_all_skips_unreadable_files(tmp_path):
     with patch("builtins.open", side_effect=_selective_open):
         entries = dlq.read_all()
 
-    # valid_file should still be read
     assert any(e.order_id == "o_valid" for e in entries)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/halt_canceller.py — lines 91-94: batch overflow path
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 @pytest.mark.asyncio
 async def test_halt_canceller_batch_overflow_flushes_and_sleeps():
     """When live orders exceed _BATCH_SIZE, commands are flushed per batch with sleep."""
-    # Build more orders than _BATCH_SIZE to trigger the batch overflow path
     n_orders = _BATCH_SIZE + 5
     orders = {f"strat_a:{i}": {"status": "open"} for i in range(n_orders)}
 
-    # Use a small queue to confirm all commands are enqueued
     adapter = SimpleNamespace(
         live_orders=orders,
         _live_orders_lock=asyncio.Lock(),
@@ -776,7 +639,6 @@ async def test_halt_canceller_batch_overflow_flushes_and_sleeps():
 
     assert count == n_orders
     assert adapter.order_queue.qsize() == n_orders
-    # Sleep must have been called at least once (batch boundary was crossed)
     mock_sleep.assert_called()
 
 
@@ -798,24 +660,16 @@ async def test_halt_canceller_exact_batch_size_triggers_sleep():
     mock_sleep.assert_called_once()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# order/shadow.py — lines 23-24: _get_metrics ImportError branch
-# ═════════════════════════════════════════════════════════════════════════════
-
-
 def test_shadow_get_metrics_returns_none_on_import_error(monkeypatch):
     """_get_metrics must return None when MetricsRegistry import raises."""
     import hft_platform.order.shadow as shadow_mod
 
     with patch("hft_platform.order.shadow._get_metrics", side_effect=Exception("import fail")):
-        # The shadow module wraps _get_metrics calls in None-check; simulate directly
         pass
 
-    # Test _get_metrics directly with patched MetricsRegistry that raises
     with patch("hft_platform.observability.metrics.MetricsRegistry") as mock_reg:
         mock_reg.get.side_effect = RuntimeError("metrics unavailable")
         result = shadow_mod._get_metrics()
-        # The except clause in _get_metrics catches Exception and returns None
         assert result is None
 
 
@@ -827,11 +681,6 @@ def test_shadow_get_metrics_swallows_all_exceptions():
         mock_reg.get.side_effect = ImportError("circular import")
         result = shadow_mod._get_metrics()
         assert result is None
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/shadow.py — line 82: intercept() calls _writer.add when writer is set
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 def test_shadow_intercept_calls_writer_add_when_writer_set():
@@ -871,14 +720,8 @@ def test_shadow_intercept_does_not_call_writer_when_writer_is_none():
     intent.intent_id = "id1"
 
     record = sink.intercept(intent)
-    # writer is None — just verify the record is returned and counter incremented
     assert record["shadow"] is True
     assert sink.counter == 1
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# order/shadow.py — lines 87-88: flush() delegates to _writer.flush()
-# ═════════════════════════════════════════════════════════════════════════════
 
 
 def test_shadow_flush_delegates_to_writer():
@@ -894,5 +737,5 @@ def test_shadow_flush_delegates_to_writer():
 def test_shadow_flush_noop_when_no_writer():
     """flush() is a no-op when _writer is None (must not raise)."""
     sink = ShadowOrderSink(enabled=True, writer=None)
-    sink.flush()  # should not raise
-    assert True  # reached without error
+    sink.flush()
+    assert True

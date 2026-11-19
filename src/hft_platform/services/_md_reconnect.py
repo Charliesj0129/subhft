@@ -21,8 +21,6 @@ from ._md_ingestion import FeedState
 
 logger = get_logger("service.market_data")
 
-# Option symbol prefixes excluded from the per-symbol gap watchdog.
-# Must stay in sync with MarketDataService._FEED_GAP_EXCLUDE_PREFIXES.
 _WATCHDOG_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
 
 
@@ -122,7 +120,7 @@ def _in_night_session_tail(now: dt.datetime, windows: list[str], reconnect_days:
             logger.debug("operation_fallback", error=str(exc))
             continue
         if start <= end:
-            continue  # not a cross-midnight window; it has no tail
+            continue
         if now_t <= end and _night_session_owner_traded(now.date()):
             return True
     return False
@@ -137,8 +135,6 @@ class MarketDataReconnectMixin:
     _pending_reconnect_gap: float
     _pending_reconnect_since: float | None
     _on_reconnect_callbacks: list[Any]
-
-    # -- rollover / window checks -------------------------------------------
 
     def _should_rollover_reconnect(self: Any) -> bool:
         tz = getattr(self, "_reconnect_tzinfo", dt.timezone.utc)
@@ -164,9 +160,6 @@ class MarketDataReconnectMixin:
         now = dt.datetime.fromtimestamp(timebase.now_s(), tz=tz)
         windows = [w for w in (reconnect_hours, reconnect_hours_2) if w]
 
-        # The after-midnight tail of a night session is the previous day's
-        # trading, so neither the calendar distance nor the weekday list may
-        # judge it by the wall-clock date. See _in_night_session_tail.
         if _in_night_session_tail(now, windows, reconnect_days):
             return True
 
@@ -195,9 +188,6 @@ class MarketDataReconnectMixin:
                     if start <= now_t <= end:
                         return True
                 else:
-                    # Cross-midnight window: the evening leg is unconditional, but
-                    # the after-midnight tail only counts if the session that owns
-                    # it actually opened yesterday.
                     if now_t >= start:
                         return True
                     if now_t <= end and _night_session_owner_traded(now.date()):
@@ -206,8 +196,6 @@ class MarketDataReconnectMixin:
                 logger.debug("operation_fallback", error=str(exc))
                 continue
         return False
-
-    # -- reconnect / resubscribe actions ------------------------------------
 
     async def _attempt_resubscribe(self: Any, gap: float, reason: str = "heartbeat_gap") -> None:
         if not self._within_reconnect_window():
@@ -240,15 +228,6 @@ class MarketDataReconnectMixin:
             return
         self._mark_pending_reconnect(gap, reason=reason)
 
-    # ``_trigger_reconnect`` intentionally lives only in ``MarketDataService``
-    # (``market_data.py``). A copy used to sit here, shadowed by the class body
-    # and therefore dead, and the two had drifted apart in two ways that matter
-    # on a reconnect: only the live one drains the stale pre-reconnect
-    # raw_queue (DATA-010), and this one skipped the LOB/Feature reset for any
-    # client exposing ``get_healthy_feed_gap_s``. A duplicate is where a fix
-    # goes to be silently ignored -- the same reasoning that already collapsed
-    # ``_within_reconnect_window`` to a single implementation.
-
     def _apply_post_reconnect_resets(self: Any) -> None:
         """Apply deferred LOB/Feature resets after reconnect (thread-safe on event loop)."""
         client: Any = getattr(self, "client", None)
@@ -271,8 +250,6 @@ class MarketDataReconnectMixin:
         if getattr(self, "_pending_reconnect_since", None) is None:
             self._pending_reconnect_since = timebase.now_s()
 
-    # -- public helpers ------------------------------------------------------
-
     def register_on_reconnect(self: Any, callback: Any) -> None:
         """Register a callback to invoke after successful reconnect.
 
@@ -287,8 +264,6 @@ class MarketDataReconnectMixin:
     def within_reconnect_window(self: Any) -> bool:
         """Public hook for supervisors."""
         return self._within_reconnect_window()
-
-    # -- trading hours / grace period ----------------------------------------
 
     def _is_trading_hours(self: Any) -> bool:
         product_type = os.getenv("HFT_WATCHDOG_PRODUCT_TYPE", "future")
@@ -340,8 +315,6 @@ class MarketDataReconnectMixin:
         except Exception:
             return False
 
-    # -- watchdog helpers ------------------------------------------------------
-
     def _find_stale_symbols(self: Any, active_snapshot: dict[str, float], now: float) -> list[tuple[str, float, float]]:
         """Return (symbol, gap, threshold) triples exceeding the per-symbol gap threshold.
 
@@ -384,22 +357,12 @@ class MarketDataReconnectMixin:
             if threshold is None:
                 prefix_threshold = _prefix_gap_threshold(symbol, prefix_defaults)
                 if prefix_threshold is None and symbol.isdigit():
-                    # TSE equities are numeric codes, so no product root can key
-                    # them and they sat on the strict futures threshold. Their
-                    # measured p99.9 inter-arrival is 24 s against a 6 s
-                    # threshold, which is why they generated essentially the
-                    # engine's entire warning volume. Class default, resolved
-                    # after an exact override and after any root default.
                     prefix_threshold = equity_threshold
-                # ``max`` so the market-open grace period can only ever relax a
-                # root default, never tighten one.
                 threshold = global_threshold if prefix_threshold is None else max(prefix_threshold, global_threshold)
             gap = now - last_ts
             if gap > threshold:
                 stale.append((symbol, gap, threshold))
         return stale
-
-    # -- watchdog loop -------------------------------------------------------
 
     async def _watchdog_loop(self: Any) -> None:
         """Per-symbol feed gap watchdog."""
@@ -443,10 +406,6 @@ class MarketDataReconnectMixin:
 
             if stale_symbols:
                 self._symbol_gap_consecutive_hits += 1
-                # ``gap>threshold`` per symbol: one line can name symbols in
-                # different threshold classes (an equity at 60 s beside an EXF
-                # future at 30 s), so a single scalar field cannot describe the
-                # bar any of them cleared.
                 symbols_str = ", ".join(f"{s}({g:.1f}s>{t:g}s)" for s, g, t in stale_symbols[:5])
                 active_count = len(active_snapshot)
                 stale_ratio = (len(stale_symbols) / active_count) if active_count > 0 else 0.0
@@ -479,8 +438,6 @@ class MarketDataReconnectMixin:
                     await self._attempt_resubscribe(max_stale_gap, reason="symbol_gap")
             else:
                 self._symbol_gap_consecutive_hits = 0
-
-    # -- monitor loop (reconnect portion) ------------------------------------
 
     async def _run_monitor_reconnect_checks(self: Any, gap: float) -> None:
         """Reconnection checks called from the monitor loop each cycle."""

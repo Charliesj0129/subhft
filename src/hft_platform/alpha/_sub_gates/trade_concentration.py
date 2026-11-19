@@ -67,9 +67,6 @@ class TradeConcentrationGate:
         biggest_win = max(trade_pnl)
         biggest_loss = min(trade_pnl)
 
-        # Use abs(total) as denominator — relative share is the question;
-        # division by zero collapses to a clamped 100 % so a zero-sum
-        # strategy with non-trivial trades reads as 100 % concentrated.
         if abs_total == 0.0:
             top_share = 100.0 if biggest_win > 0 else 0.0
             worst_share = 100.0 if biggest_loss < 0 else 0.0
@@ -81,13 +78,6 @@ class TradeConcentrationGate:
         worst_passed = worst_share <= worst_max
         passed = top_passed and worst_passed
 
-        # §5 虧損分布: the worst_loss_share above only sees the single worst
-        # loss. These additive metrics describe the distribution ACROSS losing
-        # trades so the OOS audit can see whether the downside is a fat tail of
-        # a few losers (fragile on a small sample) vs broadly spread.
-        # Advisory only — they do NOT change pass/fail (no new blocking
-        # condition, so the promotion pipeline and frozen live registry are
-        # unaffected).
         loss_dist = _loss_distribution_metrics(trade_pnl)
 
         return SubGateResult(
@@ -122,7 +112,7 @@ def _loss_distribution_metrics(trade_pnl: list[float]) -> dict[str, float]:
     * ``loss_fat_tail_ratio`` — mean(|loss|) / median(|loss|); >~2 flags a
       fat-tailed loss distribution. 1.0 when fewer than 2 losers (no shape).
     """
-    losers = sorted((-p for p in trade_pnl if p < 0), reverse=True)  # magnitudes, desc
+    losers = sorted((-p for p in trade_pnl if p < 0), reverse=True)
     n = len(trade_pnl)
     loss_count = len(losers)
     if loss_count == 0:

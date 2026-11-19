@@ -59,7 +59,7 @@ from hft_platform.strategy.base import BaseStrategy
 
 logger = get_logger("strategy.c63_txfd6_tight_spread_maker")
 
-_PRICE_SCALE = 10_000  # live runtime convention (CK is x1_000_000 — not used here)
+_PRICE_SCALE = 10_000
 _LOG_INTERVAL = 500
 
 
@@ -78,7 +78,6 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
     """
 
     __slots__ = (
-        # parameters
         "_max_pos",
         "_spread_threshold_pts",
         "_inventory_skew_tenths",
@@ -86,13 +85,11 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
         "_queue_share_info",
         "_variant_label",
         "_symbols_set",
-        # runtime state
         "_local_pos",
         "_pending_buy",
         "_pending_sell",
         "_last_bid",
         "_last_ask",
-        # counters
         "_stats_count",
         "_spread_blocked",
         "_quotes_posted",
@@ -124,7 +121,6 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
                     return default
             return default
 
-        # Canonical T8 defaults: spread=3 (lowered from C33), mp=3, skew=2.
         self._max_pos: int = _as_int(kwargs.get("max_pos", 3), 3)
         self._spread_threshold_pts: int = _as_int(kwargs.get("spread_threshold_pts", 3), 3)
         self._inventory_skew_tenths: int = _as_int(kwargs.get("inventory_skew_tenths", 2), 2)
@@ -165,15 +161,10 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
             symbols=sorted(self._symbols_set),
         )
 
-    # ---- Hot-path event handlers ------------------------------------------
-
     def on_tick(self, event: TickEvent) -> None:  # pragma: no cover
-        # Trade events are not drivers in R47-minimal (all signal layers off).
         return
 
     def on_book_update(self, event: BidAskEvent) -> None:  # pragma: no cover
-        # LOBStatsEvent is richer and arrives after BidAskEvent; all decision
-        # logic is in on_stats().
         return
 
     def on_stats(self, event: LOBStatsEvent) -> None:
@@ -191,7 +182,6 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
         ):
             return
 
-        # L1 spread gate — C63's signature lever (threshold=3 vs C33's 5).
         spread_threshold_scaled = self._spread_threshold_pts * _PRICE_SCALE
         if event.spread_scaled < spread_threshold_scaled:
             self._spread_blocked += 1
@@ -203,16 +193,12 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
         pending_b = self._pending_buy.get(symbol, 0)
         pending_s = self._pending_sell.get(symbol, 0)
 
-        # Linear inventory skew (R47: 0.X ticks/contract; NOT |pos|-gated).
         skew = (pos * self._inventory_skew_tenths * _PRICE_SCALE) // 10
         bid_quote = best_bid - skew
         ask_quote = best_ask - skew
 
         bid_moved = bid_quote != self._last_bid.get(symbol, -1)
         ask_moved = ask_quote != self._last_ask.get(symbol, -1)
-
-        # Shadow-mode: still emit OrderIntents; system routes through
-        # HFT_ORDER_SHADOW_MODE=1 gate to suppress broker dispatch.
 
         if bid_moved and (pos + pending_b) < self._max_pos:
             self.buy(symbol, bid_quote, 1)
@@ -237,8 +223,6 @@ class C63TxfD6TightSpreadMaker(BaseStrategy):
                 spread_blk=self._spread_blocked,
                 now_ns=_now_ns(),
             )
-
-    # ---- Fill / order / gap / risk feedback --------------------------------
 
     def on_fill(self, event: FillEvent) -> None:
         symbol = event.symbol

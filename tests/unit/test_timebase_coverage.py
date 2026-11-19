@@ -9,16 +9,11 @@ from zoneinfo import ZoneInfo
 
 from hft_platform.core import timebase
 
-# ---------------------------------------------------------------------------
-# _load_rust_coerce — disabled via env var (line 27)
-# ---------------------------------------------------------------------------
-
 
 class TestLoadRustCoerceDisabled:
     def test_rust_coerce_disabled_by_env(self, monkeypatch):
         """HFT_TIMEBASE_RUST_COERCE=0 skips rust loading."""
         monkeypatch.setenv("HFT_TIMEBASE_RUST_COERCE", "0")
-        # Reset the loaded flag to force re-evaluation
         original = timebase._rust_coerce_loaded
         timebase._rust_coerce_loaded = False
         timebase._coerce_ns_int = None
@@ -52,17 +47,11 @@ class TestLoadRustCoerceDisabled:
             timebase._rust_coerce_loaded = True
             timebase._coerce_ns_int = "sentinel"
             timebase._load_rust_coerce()
-            # Should not have changed
             assert timebase._coerce_ns_int == "sentinel"
         finally:
             timebase._rust_coerce_loaded = original_loaded
             timebase._coerce_ns_int = original_int
             timebase._coerce_ns_float = original_float
-
-
-# ---------------------------------------------------------------------------
-# _load_rust_coerce — fallback import path (lines 33-40)
-# ---------------------------------------------------------------------------
 
 
 class TestLoadRustCoerceFallbackImport:
@@ -110,10 +99,9 @@ class TestLoadRustCoerceFallbackImport:
         try:
             self._reset_loader()
 
-            sentinel_int = lambda x: x  # noqa: E731
-            sentinel_float = lambda x: x  # noqa: E731
+            sentinel_int = lambda x: x
+            sentinel_float = lambda x: x
 
-            # Build a fake rust_core module with the two functions
             import types
 
             fake_rc = types.ModuleType("rust_core")
@@ -141,15 +129,9 @@ class TestLoadRustCoerceFallbackImport:
             timebase._coerce_ns_float = saved_float
 
 
-# ---------------------------------------------------------------------------
-# coerce_ns — int paths without rust (lines 96-103)
-# ---------------------------------------------------------------------------
-
-
 class TestCoerceNsIntWithoutRust:
     def test_int_seconds_range(self):
         """Int in seconds range: multiply by 1e9."""
-        # Force Python path
         original_int = timebase._coerce_ns_int
         timebase._coerce_ns_int = None
         try:
@@ -187,11 +169,6 @@ class TestCoerceNsIntWithoutRust:
             assert result == 1_700_000_000_000_000_000
         finally:
             timebase._coerce_ns_int = original_int
-
-
-# ---------------------------------------------------------------------------
-# coerce_ns — float paths without rust (lines 107-114)
-# ---------------------------------------------------------------------------
 
 
 class TestCoerceNsFloatWithoutRust:
@@ -236,11 +213,6 @@ class TestCoerceNsFloatWithoutRust:
             timebase._coerce_ns_float = original_float
 
 
-# ---------------------------------------------------------------------------
-# coerce_ns — datetime with existing tzinfo (line 89->91)
-# ---------------------------------------------------------------------------
-
-
 class TestCoerceNsDatetime:
     def test_datetime_with_tzinfo_preserves_tz(self):
         """Datetime with tzinfo should not be replaced."""
@@ -257,11 +229,6 @@ class TestCoerceNsDatetime:
         assert result == expected
 
 
-# ---------------------------------------------------------------------------
-# now_ns and now_s — basic type checks (lines 57, 62)
-# ---------------------------------------------------------------------------
-
-
 class TestNowFunctions:
     def test_now_ns_returns_int(self):
         result = timebase.now_ns()
@@ -272,11 +239,6 @@ class TestNowFunctions:
         result = timebase.now_s()
         assert isinstance(result, float)
         assert result > 0.0
-
-
-# ---------------------------------------------------------------------------
-# _resolve_tz — various env scenarios
-# ---------------------------------------------------------------------------
 
 
 class TestResolveTz:

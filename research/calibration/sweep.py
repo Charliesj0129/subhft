@@ -20,8 +20,8 @@ from research.calibration.scoring import (
 class QueueModelCandidate:
     """One candidate queue model configuration."""
 
-    queue_model: str         # "power_prob", "power_prob2", "power_prob3", "log_prob"
-    exponent: float | None   # None for log_prob
+    queue_model: str
+    exponent: float | None
 
     def label(self) -> str:
         if self.exponent is None:

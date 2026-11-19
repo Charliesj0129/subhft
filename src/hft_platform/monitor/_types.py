@@ -25,12 +25,12 @@ class EventFlag(IntFlag):
     """Bitmask for per-symbol events detected each poll cycle."""
 
     NONE = 0
-    COMPOSITE_CROSS = auto()  # signal flipped sign
-    SIGMA_BREAK_UP = auto()  # crossed 1σ or 2σ upward
-    SIGMA_BREAK_DOWN = auto()  # fell below 1σ or 2σ
-    AGREE_FLIP = auto()  # dominant direction changed
-    SPREAD_CONVERGE = auto()  # spread dropped >30%
-    SPREAD_WIDEN = auto()  # spread increased >50%
+    COMPOSITE_CROSS = auto()
+    SIGMA_BREAK_UP = auto()
+    SIGMA_BREAK_DOWN = auto()
+    AGREE_FLIP = auto()
+    SPREAD_CONVERGE = auto()
+    SPREAD_WIDEN = auto()
     STALE_ENTER = auto()
     STALE_RESOLVE = auto()
 
@@ -89,7 +89,7 @@ class WatchlistSymbol:
 
     code: str
     name: str
-    product_type: str  # "stock" | "future" | "option"
+    product_type: str
     alpha_ids: tuple[str, ...] = ()
 
 
@@ -116,10 +116,9 @@ class MonitorConfig:
     redis_key_prefix: str = "monitor:l1"
     redis_ring_size: int = 256
     promotions_dir: str = "config/strategy_promotions"
-    data_source: str = "auto"  # "ch" | "shm" | "auto" (hybrid)
+    data_source: str = "auto"
     hybrid_backfill_interval_s: float = 30.0
-    # S5: Watchlist auto-derive
-    symbol_source: str = ""  # path to symbols.yaml for auto-derive
+    symbol_source: str = ""
     auto_filter_skip_expired: bool = True
     pin_symbols: tuple[str, ...] = ()
     default_alpha_ids: tuple[str, ...] = ()
@@ -131,10 +130,10 @@ class RowView:
 
     symbol: str
     ingest_ts: int
-    bids_price: Any  # list[int] from CH
-    asks_price: Any  # list[int] from CH
-    bids_vol: Any  # list[int] from CH
-    asks_vol: Any  # list[int] from CH
+    bids_price: Any
+    asks_price: Any
+    bids_vol: Any
+    asks_vol: Any
     price_scaled: int
     volume: int
 
@@ -149,18 +148,13 @@ class AlphaState:
     error_count: int = 0
     disabled: bool = False
     z_score: float = 0.0
-    # EMA-64 for rolling sigma
     _ema_signal: float = 0.0
     _ema_abs_dev: float = 1e-8
-    # Pre-probed dispatch keys (None = full payload, tuple = filtered keys)
     _dispatch_keys: tuple[str, ...] | None = None
-    # Pre-allocated filtered payload buffer (avoids per-tick dict allocation)
     _filtered_buf: dict[str, Any] = field(default_factory=dict)
-    # Per-alpha sparkline ring buffer (Phase 3)
     _signal_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
     _signal_spark_idx: int = 0
     _signal_spark_len: int = 0
-    # Z-score sparkline for detail dashboard
     _zscore_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
     _zscore_spark_idx: int = 0
     _zscore_spark_len: int = 0
@@ -194,7 +188,6 @@ class AlphaState:
         self._signal_spark_idx = 0
         self._signal_spark_len = 0
 
-    # Z-score sparkline for detail dashboard
     def zscore_sparkline_append(self, value: float) -> None:
         self._zscore_spark_buf[self._zscore_spark_idx] = value
         self._zscore_spark_idx = (self._zscore_spark_idx + 1) % _SPARKLINE_SIZE
@@ -228,7 +221,6 @@ class SymbolState:
     was_session_active: bool = False
     session_display: str = "Closed"
 
-    # Latest enriched values
     last_price: float = 0.0
     spread_bps: float = 0.0
     bid_qty: float = 0.0
@@ -237,36 +229,29 @@ class SymbolState:
     prev_ask_qty: float = 0.0
     ofi_l1_cum: float = 0.0
 
-    # Alpha signals
     alpha_states: dict[str, AlphaState] = field(default_factory=dict)
 
-    # Composite
     composite: float = 0.0
     composite_sigma: float = 0.0
 
-    # Delta tracking — snapshot before each poll cycle (Phase 1)
     prev_composite: float = 0.0
-    prev_agree_direction: int = 0  # -1, 0, +1
+    prev_agree_direction: int = 0
     prev_spread_bps: float = 0.0
     prev_is_stale: bool = False
     composite_delta: float = 0.0
     composite_delta_abs: float = 0.0
 
-    # Event flags — reset each cycle (Phase 1)
-    event_flags: int = 0  # bitmask of EventFlag
+    event_flags: int = 0
     last_event_ns: int = 0
 
-    # Opportunity score — updated each cycle (Phase 1/2)
     opportunity_score: float = 0.0
 
-    # Sparkline ring buffer (fixed-size list)
     _spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
     _spark_idx: int = 0
     _spark_len: int = 0
     _spark_cache: list[float] = field(default_factory=list)
     _spark_dirty: bool = True
 
-    # Pre-allocated payload buffer for enrich_tick (12 keys)
     _payload_buf: dict[str, Any] = field(
         default_factory=lambda: {
             "bid_px": 0.0,
@@ -284,26 +269,21 @@ class SymbolState:
         }
     )
 
-    # S2: previous poll price for delta flash
     prev_poll_price: float = 0.0
 
-    # S7: price sparkline ring buffer (mirrors composite sparkline pattern)
     _price_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
     _price_spark_idx: int = 0
     _price_spark_len: int = 0
 
-    # Session status
     is_stale: bool = False
     is_closed: bool = False
-    session_label: str = ""  # "", "[PRE]", "[CLOSED]"
+    session_label: str = ""
     invalid_row_count: int = 0
     last_invalid_reason: str = ""
 
-    # Problem log and severity (Production Readiness)
     problem_log: deque[ProblemEntry] = field(default_factory=lambda: deque(maxlen=32))
     max_severity: Severity = field(default=Severity.INFO)
 
-    # History sparklines — volume, spread, imbalance (same pattern as _spark_buf)
     _vol_spark_buf: list[float] = field(default_factory=lambda: [0.0] * _SPARKLINE_SIZE)
     _vol_spark_idx: int = 0
     _vol_spark_len: int = 0
@@ -314,7 +294,6 @@ class SymbolState:
     _imbal_spark_idx: int = 0
     _imbal_spark_len: int = 0
 
-    # Multi-timeframe deltas
     delta_snapshots: dict[str, deque] = field(default_factory=dict)
 
     def sparkline_append(self, value: float) -> None:
@@ -334,7 +313,6 @@ class SymbolState:
         elif self._spark_len < _SPARKLINE_SIZE:
             self._spark_cache = self._spark_buf[: self._spark_len]
         else:
-            # Full buffer: read from _spark_idx (oldest) wrapping around
             start = self._spark_idx
             self._spark_cache = self._spark_buf[start:] + self._spark_buf[:start]
         self._spark_dirty = False
@@ -346,7 +324,6 @@ class SymbolState:
         self._spark_len = 0
         self._spark_dirty = True
 
-    # S7: Price sparkline methods
     def price_sparkline_append(self, value: float) -> None:
         """Append a value to the price sparkline ring buffer."""
         self._price_spark_buf[self._price_spark_idx] = value
@@ -369,7 +346,6 @@ class SymbolState:
         self._price_spark_idx = 0
         self._price_spark_len = 0
 
-    # Volume sparkline
     def vol_sparkline_append(self, value: float) -> None:
         self._vol_spark_buf[self._vol_spark_idx] = value
         self._vol_spark_idx = (self._vol_spark_idx + 1) % _SPARKLINE_SIZE
@@ -385,7 +361,6 @@ class SymbolState:
         start = self._vol_spark_idx
         return self._vol_spark_buf[start:] + self._vol_spark_buf[:start]
 
-    # Spread sparkline
     def spread_sparkline_append(self, value: float) -> None:
         self._spread_spark_buf[self._spread_spark_idx] = value
         self._spread_spark_idx = (self._spread_spark_idx + 1) % _SPARKLINE_SIZE
@@ -401,7 +376,6 @@ class SymbolState:
         start = self._spread_spark_idx
         return self._spread_spark_buf[start:] + self._spread_spark_buf[:start]
 
-    # Imbalance sparkline
     def imbal_sparkline_append(self, value: float) -> None:
         self._imbal_spark_buf[self._imbal_spark_idx] = value
         self._imbal_spark_idx = (self._imbal_spark_idx + 1) % _SPARKLINE_SIZE
@@ -431,18 +405,14 @@ class HeaderContext:
     sort_mode: str = "opportunity"
     event_ticker: str = ""
     source_label: str = ""
-    # S1: heartbeat
     poll_count: int = 0
     poll_age_s: float = 0.0
-    # S3: collapsed closed symbols
     closed_collapsed: bool = True
     n_closed: int = 0
-    # Production readiness: bad-data summary
     bad_summary: str = ""
     bad_style: str = ""
 
 
-# CH → platform price scale constants
 CH_PRICE_SCALE = 1_000_000
 PLATFORM_SCALE = 10_000
-CH_TO_PLATFORM_DIVISOR = CH_PRICE_SCALE // PLATFORM_SCALE  # 100
+CH_TO_PLATFORM_DIVISOR = CH_PRICE_SCALE // PLATFORM_SCALE

@@ -10,9 +10,7 @@ STANDARD_VALIDATION_PROFILE = "standard"
 VM_UL6_VALIDATION_PROFILE = "vm_ul6"
 VM_UL6_STRICT_VALIDATION_PROFILE = "vm_ul6_strict"
 VM_UL6_STRICT_V2_VALIDATION_PROFILE = "vm_ul6_strict_v2"
-# Governed (strict-mode) runs use this profile unless one is named.
 GOVERNED_DEFAULT_VALIDATION_PROFILE = VM_UL6_STRICT_V2_VALIDATION_PROFILE
-# Relative to --project-root.
 DEFAULT_OUT_DIR = "outputs/research_pipeline"
 DEFAULT_EXPERIMENTS_DIR = "research/experiments"
 DEFAULT_ALLOWED_DATA_ROOTS: tuple[str, ...] = (
@@ -49,8 +47,6 @@ def add_common_research_pipeline_args(
     cmd.add_argument("--alpha-id", required=True, help="Alpha id under research/alphas/<alpha_id>")
     cmd.add_argument("--owner", required=True, help="Promotion owner")
     cmd.add_argument("--data", nargs="+", required=True, help="Input data paths for Gate A-C validation")
-    # Path defaults are None and filled from the repo root by research.pipeline,
-    # so a run behaves the same whatever the cwd. Paths given here are used as given.
     cmd.add_argument("--project-root", default=None, help="Project root path (default: the repo root)")
     cmd.add_argument(
         "--out-dir",

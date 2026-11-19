@@ -10,10 +10,6 @@ import pytest
 from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.router import ExecutionRouter
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
@@ -104,11 +100,6 @@ def _make_router(
     return router
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def _patch_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     stub = _stub_metrics()
@@ -123,7 +114,7 @@ async def test_counter_increments_on_order_recorder_queue_full() -> None:
     """recorder_exec_drops_total with topic='orders' increments when recorder queue is full."""
     metrics = _stub_metrics()
     recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-    recorder_queue.put_nowait("prefill")  # fill it so subsequent puts raise QueueFull
+    recorder_queue.put_nowait("prefill")
     router = _make_router(metrics, recorder_queue)
 
     order_event = MagicMock()
@@ -139,7 +130,6 @@ async def test_counter_increments_on_order_recorder_queue_full() -> None:
         raw = _make_order_raw()
         router.raw_queue.put_nowait(raw)
 
-        # Run one iteration of the router loop
         router.running = True
         task = asyncio.create_task(router.run())
         await asyncio.sleep(0)
@@ -159,7 +149,7 @@ async def test_counter_increments_on_fill_recorder_queue_full() -> None:
     """recorder_exec_drops_total with topic='fills' increments when recorder queue is full on fill path."""
     metrics = _stub_metrics()
     recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
-    recorder_queue.put_nowait("prefill")  # fill it so subsequent puts raise QueueFull
+    recorder_queue.put_nowait("prefill")
     router = _make_router(metrics, recorder_queue)
 
     fill_event = MagicMock()
@@ -201,7 +191,7 @@ async def test_counter_increments_on_fill_recorder_queue_full() -> None:
 async def test_no_drop_counter_when_recorder_queue_has_space() -> None:
     """recorder_exec_drops_total is NOT incremented when the recorder queue has room."""
     metrics = _stub_metrics()
-    recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=100)  # not full — plenty of space
+    recorder_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     router = _make_router(metrics, recorder_queue)
 
     order_event = MagicMock()
@@ -227,16 +217,10 @@ async def test_no_drop_counter_when_recorder_queue_has_space() -> None:
         except asyncio.CancelledError:
             pass
 
-    # labels() should never have been called with topic="orders" for a drop
     for call in metrics.recorder_exec_drops_total.labels.call_args_list:
         assert call != ((), {"topic": "orders"}), "Drop counter was unexpectedly incremented"
 
-    assert recorder_queue.qsize() == 1  # the item was successfully enqueued
-
-
-# ---------------------------------------------------------------------------
-# WAL fallback tests
-# ---------------------------------------------------------------------------
+    assert recorder_queue.qsize() == 1
 
 
 @pytest.mark.asyncio
@@ -269,7 +253,6 @@ async def test_wal_fallback_called_on_order_recorder_queue_full() -> None:
         task = asyncio.create_task(router.run())
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        # Let the ensure_future WAL write complete
         await asyncio.sleep(0)
         task.cancel()
         try:
@@ -362,5 +345,4 @@ async def test_no_wal_fallback_when_wal_writer_is_none() -> None:
         except asyncio.CancelledError:
             pass
 
-    # Should not raise — drop metric still incremented
     metrics.recorder_exec_drops_total.labels.assert_called_with(topic="orders")

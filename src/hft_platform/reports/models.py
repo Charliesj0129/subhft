@@ -23,7 +23,6 @@ __all__ = [
     "KeyLevel",
     "ScenarioReport",
     "ChannelConfig",
-    # Layer 1: Facts
     "SegmentFact",
     "ChipCluster",
     "ChipFacts",
@@ -33,13 +32,11 @@ __all__ = [
     "DaySnapshot",
     "CrossDayFacts",
     "FactReport",
-    # Layer 2: Reasoning
     "Evidence",
     "BiasJudgment",
     "EnrichedLevel",
     "NarrativeReport",
     "ReasoningReport",
-    # Layer 3: Composition
     "MessagePart",
     "ComposedReport",
 ]
@@ -196,16 +193,11 @@ class ChannelConfig:
     enabled: bool
 
 
-# ---------------------------------------------------------------------------
-# Three-Layer Architecture Models (Layer 1: Facts)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class SegmentFact:
     """Facts about a single time segment within a session."""
 
-    name: str  # "pre_open" / "opening" / "midday" / "closing"
+    name: str
     time_range: str
     ud_ratio: float
     net_flow: int
@@ -215,7 +207,7 @@ class SegmentFact:
     large_sell_count: int
     high: int
     low: int
-    dominant_side: str  # "bull" / "bear" / "neutral"
+    dominant_side: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -321,11 +313,6 @@ class FactReport:
     cross_day: CrossDayFacts
 
 
-# ---------------------------------------------------------------------------
-# Three-Layer Architecture Models (Layer 2: Reasoning)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class Evidence:
     """A single piece of evidence for bias determination."""
@@ -374,11 +361,6 @@ class ReasoningReport:
     levels: list[EnrichedLevel]
     scenarios: list[Scenario]
     narrative: NarrativeReport
-
-
-# ---------------------------------------------------------------------------
-# Three-Layer Architecture Models (Layer 3: Composition)
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)

@@ -73,7 +73,7 @@ def test_evaluate_rules_fails_on_ingress_latency():
 def test_main_writes_report_and_passes(tmp_path: Path):
     mod = _load_module()
 
-    def _ok_query(_prom_url: str, expr: str, timeout_s: int = 8):  # noqa: ARG001
+    def _ok_query(_prom_url: str, expr: str, timeout_s: int = 8):
         if "shioaji_quote_callback_ingress_latency_ns_bucket" in expr:
             return 20_000.0, None
         if "callback_queue_depth" in expr:

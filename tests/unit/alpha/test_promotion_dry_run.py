@@ -63,7 +63,6 @@ def _write_alpha_fixture(
                 "correlation_pool_max": corr,
                 "latency_profile": "sim_p95_v2026-02-26",
                 "replay_parity": {"match_pct": 100.0},
-                # Gate D's cost-uncertainty audit errors without this payload.
                 "strategy_type": "taker",
                 "cost_uncertainty": {"passed": True, "metrics": {"p95_lower_bound_pts": 0.5}},
             },
@@ -87,11 +86,6 @@ def _make_config(tmp_path: Path, alpha_id: str, *, dry_run: bool) -> PromotionCo
         validation_profile=_strict_profile(),
         dry_run=dry_run,
     )
-
-
-# ---------------------------------------------------------------------------
-# dry_run=True: impl.py must NOT be mutated on Gate D / Gate E pass
-# ---------------------------------------------------------------------------
 
 
 def test_dry_run_gate_d_pass_does_not_mutate_impl_status(tmp_path: Path) -> None:
@@ -130,11 +124,6 @@ def test_dry_run_does_not_write_promotion_config(tmp_path: Path) -> None:
 
     assert result.approved
     assert result.promotion_config_path is None, "dry_run should not write promotion YAML"
-
-
-# ---------------------------------------------------------------------------
-# dry_run=False: the promotion runs for real and still leaves impl.py alone
-# ---------------------------------------------------------------------------
 
 
 def test_non_dry_run_promotion_pass_does_not_mutate_impl_status(tmp_path: Path) -> None:

@@ -94,7 +94,6 @@ async def test_service_dispatches_approved_intent():
     intent = _make_intent(1, "k1")
     ch.submit_nowait(intent)
 
-    # Run one iteration
     task = asyncio.create_task(svc.run())
     await asyncio.sleep(0.05)
     task.cancel()
@@ -145,7 +144,6 @@ async def test_service_dedup_hit_does_not_redispatch():
     except asyncio.CancelledError:
         pass
 
-    # First intent dispatched; 2 dedup hits
     assert api_queue.qsize() == 1
     assert svc._dedup_hits == 2
 
@@ -229,13 +227,11 @@ async def test_exposure_symbol_limit_commits_dedup():
     """
     exposure = ExposureStore(max_symbols=1)
 
-    # Directly inject a non-zero entry so eviction cannot free the slot
     with exposure._lock:
         exposure._exposure.setdefault("", {}).setdefault("s1", {})["TSE:SYM_A"] = 1_000_000
         exposure._symbol_count = 1
         exposure._global_notional = 1_000_000
 
-    # Second intent with a new symbol should hit ExposureLimitError
     ch2 = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc2, _ = _make_service(channel=ch2, exposure_store=exposure)
     ch2.submit_nowait(_make_intent(2, "k2", symbol="TSE:SYM_B"))
@@ -360,9 +356,6 @@ async def test_service_typed_intent_path_goes_through_order_gate():
     assert svc._dispatched == 1
 
 
-# ── P1-A: set_halt / set_normal delegation ───────────────────────────────────
-
-
 def test_set_halt_transitions_policy_to_halt():
     """GatewayService.set_halt() must delegate to policy and set mode to HALT."""
     svc, _ = _make_service()
@@ -390,11 +383,8 @@ def test_set_halt_is_idempotent():
     from hft_platform.gateway.policy import GatewayPolicyMode
 
     svc.set_halt()
-    svc.set_halt()  # second call must be no-op
+    svc.set_halt()
     assert svc._policy.mode == GatewayPolicyMode.HALT
-
-
-# ── H6: DLQ size metric + H10: exposure notional metric ────────────────────
 
 
 def _make_mock_metrics():
@@ -412,7 +402,7 @@ def _inject_metrics(svc, mock_metrics) -> None:
     svc._metrics_owner_id = id(mock_metrics)
     svc._metrics_enabled = True
     svc._gateway_depth_counter = 0
-    svc._gateway_depth_sample_every = 1  # emit on every call
+    svc._gateway_depth_sample_every = 1
     svc._gateway_depth_metric = mock_metrics.gateway_intent_channel_depth
     svc._gateway_dlq_metric = mock_metrics.gateway_dlq_size
     svc._gateway_exposure_metric = mock_metrics.gateway_exposure_global_notional_scaled
@@ -474,15 +464,12 @@ def test_update_channel_depth_skips_when_metrics_disabled():
 
     mock_metrics = _make_mock_metrics()
     _inject_metrics(svc, mock_metrics)
-    svc._metrics_enabled = False  # override back to disabled after inject
+    svc._metrics_enabled = False
 
     svc._update_channel_depth_metric()
 
     mock_metrics.gateway_dlq_size.set.assert_not_called()
     mock_metrics.gateway_exposure_global_notional_scaled.set.assert_not_called()
-
-
-# ── Rejection feedback tests ─────────────────────────────────────────────────
 
 
 def _make_service_with_rejection_sink(channel=None, approve=True, queue_full=False, exposure_store=None):
@@ -615,7 +602,7 @@ async def test_approved_dispatch_sends_no_feedback():
 async def test_no_rejection_sink_does_not_raise():
     """When rejection_sink is None, rejection must not raise."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
-    svc, _ = _make_service(channel=ch, approve=False)  # no rejection_sink
+    svc, _ = _make_service(channel=ch, approve=False)
     assert svc._rejection_sink is None
 
     ch.submit_nowait(_make_intent(46, "k-no-sink"))
@@ -626,10 +613,7 @@ async def test_no_rejection_sink_does_not_raise():
     with suppress(asyncio.CancelledError):
         await task
 
-    assert svc._rejected == 1  # rejection counted, no crash
-
-
-# ── CF-1: Dedup slot release on evaluate() exception ────────────────────────
+    assert svc._rejected == 1
 
 
 @pytest.mark.asyncio
@@ -643,7 +627,6 @@ async def test_evaluate_exception_releases_dedup_slot():
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     svc, api_queue, rejection_sink = _make_service_with_rejection_sink(channel=ch, approve=True)
 
-    # Make evaluate() throw on first call, succeed on second
     call_count = 0
     original_return = svc._risk_engine.evaluate.return_value
 
@@ -656,7 +639,6 @@ async def test_evaluate_exception_releases_dedup_slot():
 
     svc._risk_engine.evaluate.side_effect = evaluate_side_effect
 
-    # Submit intent that will fail
     ch.submit_nowait(_make_intent(100, "retry-key"))
 
     task = asyncio.create_task(svc.run())
@@ -665,15 +647,12 @@ async def test_evaluate_exception_releases_dedup_slot():
     with suppress(asyncio.CancelledError):
         await task
 
-    # After exception, dedup slot should be released (key removed from store)
     rec = svc._dedup.check_or_reserve("retry-key")
     assert rec is None, (
         "Dedup slot should have been released after evaluate() exception, "
         f"but found record with approved={getattr(rec, 'approved', '?')}"
     )
 
-    # Retry with same key should succeed (slot was released, so check_or_reserve returns None = new)
-    # The check_or_reserve above already re-reserved it; commit it to prove the slot is usable
     svc._dedup.commit("retry-key", True, "OK", 999)
     rec2 = svc._dedup.check_or_reserve("retry-key")
     assert rec2 is not None
@@ -685,14 +664,11 @@ async def test_rejection_sink_overflow_increments_metric():
     """CF-3: When rejection_sink is full, _send_rejection_feedback must
     increment rejection_sink_overflow_total metric (not just log)."""
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
-    # Create service with a rejection_sink of size 0 to force QueueFull
     svc, api_queue = _make_service(channel=ch, approve=False)
     rejection_sink = asyncio.Queue(maxsize=1)
-    # Pre-fill the sink so next put_nowait raises QueueFull
     rejection_sink.put_nowait(MagicMock())
     svc.set_rejection_sink(rejection_sink)
 
-    # Inject mock metrics with rejection_sink_overflow_total counter
     mock_metrics = _make_mock_metrics()
     mock_metrics.rejection_sink_overflow_total = MagicMock()
     _inject_metrics(svc, mock_metrics)

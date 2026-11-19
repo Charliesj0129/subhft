@@ -18,10 +18,6 @@ from hft_platform.recorder.batcher import (
     GlobalMemoryGuard,
 )
 
-# ---------------------------------------------------------------------------
-# ColumnarBuffer
-# ---------------------------------------------------------------------------
-
 
 class TestColumnarBuffer:
     """Tests for the column-oriented batch buffer."""
@@ -49,9 +45,9 @@ class TestColumnarBuffer:
     def test_append_row_missing_key_fills_none(self) -> None:
         buf = ColumnarBuffer()
         buf.append_row({"a": 1, "b": 2})
-        buf.append_row({"a": 3})  # missing "b"
+        buf.append_row({"a": 3})
         cols, data = buf.to_columnar()
-        assert data[1] == [2, None]  # column "b"
+        assert data[1] == [2, None]
 
     def test_set_schema_before_data(self) -> None:
         buf = ColumnarBuffer()
@@ -62,7 +58,7 @@ class TestColumnarBuffer:
     def test_set_schema_noop_when_data_exists(self) -> None:
         buf = ColumnarBuffer()
         buf.append_row({"a": 1})
-        buf.set_schema(["x", "y"])  # should be ignored
+        buf.set_schema(["x", "y"])
         assert buf.column_names == ["a"]
 
     def test_append_values_requires_schema(self) -> None:
@@ -82,7 +78,7 @@ class TestColumnarBuffer:
     def test_append_values_short_list_pads_none(self) -> None:
         buf = ColumnarBuffer()
         buf.set_schema(["a", "b", "c"])
-        buf.append_values([1])  # only 1 of 3
+        buf.append_values([1])
         cols, data = buf.to_columnar()
         assert data == [[1], [None], [None]]
 
@@ -116,13 +112,13 @@ class TestColumnarBuffer:
     def test_sort_by_column_noop_for_missing_col(self) -> None:
         buf = ColumnarBuffer()
         buf.append_row({"a": 1})
-        buf.sort_by_column("nonexistent")  # should not raise
+        buf.sort_by_column("nonexistent")
         assert buf.row_count == 1
 
     def test_sort_by_column_noop_for_single_row(self) -> None:
         buf = ColumnarBuffer()
         buf.append_row({"ts": 1, "v": "a"})
-        buf.sort_by_column("ts")  # row_count < 2
+        buf.sort_by_column("ts")
         assert buf.row_count == 1
 
     def test_drop_oldest(self) -> None:
@@ -153,19 +149,13 @@ class TestColumnarBuffer:
         buf.clear()
         assert buf.row_count == 0
         assert buf.column_names == ["a", "b"]
-        # Can still append after clear
         buf.append_row({"a": 3, "b": 4})
         assert buf.row_count == 1
 
     def test_clear_empty_buffer(self) -> None:
         buf = ColumnarBuffer()
-        buf.clear()  # should not raise
+        buf.clear()
         assert buf.row_count == 0
-
-
-# ---------------------------------------------------------------------------
-# GlobalMemoryGuard
-# ---------------------------------------------------------------------------
 
 
 class TestGlobalMemoryGuard:
@@ -179,7 +169,7 @@ class TestGlobalMemoryGuard:
 
     def test_singleton(self) -> None:
         g1 = GlobalMemoryGuard.get(max_rows=100)
-        g2 = GlobalMemoryGuard.get(max_rows=999)  # ignored, already created
+        g2 = GlobalMemoryGuard.get(max_rows=999)
         assert g1 is g2
 
     def test_reset_clears_singleton(self) -> None:
@@ -194,7 +184,6 @@ class TestGlobalMemoryGuard:
         assert guard.total_rows == 10
         guard.note_rows_removed(3)
         assert guard.total_rows == 7
-        # Remove more than total should clamp to 0
         guard.note_rows_removed(100)
         assert guard.total_rows == 0
 
@@ -211,14 +200,12 @@ class TestGlobalMemoryGuard:
 
     def test_check_budget_drops_lower_priority(self) -> None:
         guard = GlobalMemoryGuard(max_rows=20)
-        # Create a low-priority batcher with data
         low_batcher = Batcher("hft.latency_spans", flush_limit=100, max_buffer_size=100)
         for i in range(10):
             low_batcher._active.append_row({"i": i})
         guard.register(low_batcher)
         guard.note_rows_added(10)
 
-        # Request from high-priority table should drop from low-priority
         allowed = guard.check_budget("hft.market_data", 15)
         assert allowed > 0
 
@@ -233,7 +220,7 @@ class TestGlobalMemoryGuard:
 
     def test_unregister_nonexistent_table(self) -> None:
         guard = GlobalMemoryGuard(max_rows=100)
-        guard.unregister("nonexistent")  # should not raise
+        guard.unregister("nonexistent")
         assert guard.total_rows == 0
         assert "nonexistent" not in guard._batchers
 
@@ -242,11 +229,6 @@ class TestGlobalMemoryGuard:
         tracker = MagicMock()
         guard.set_health_tracker(tracker)
         assert guard._health_tracker is tracker
-
-
-# ---------------------------------------------------------------------------
-# Batcher
-# ---------------------------------------------------------------------------
 
 
 class TestBatcher:
@@ -279,7 +261,7 @@ class TestBatcher:
         b = Batcher("hft.orders", flush_limit=3, writer=writer)
         await b.add({"a": 1})
         await b.add({"a": 2})
-        await b.add({"a": 3})  # should trigger flush
+        await b.add({"a": 3})
         writer.write_columnar.assert_called_once()
         assert b.total_count == 3
 
@@ -321,7 +303,6 @@ class TestBatcher:
         writer = self._make_writer()
         b = Batcher("hft.orders", flush_limit=100, flush_interval_ms=0, writer=writer)
         await b.add({"a": 1})
-        # Set the last flush far in the past on the monotonic clock
         b.last_flush_monotonic_ns = 0
         await b.check_flush()
         writer.write_columnar.assert_called_once()
@@ -344,9 +325,7 @@ class TestBatcher:
         writer = self._make_writer()
         b = Batcher("hft.orders", flush_limit=100, flush_interval_ms=10, writer=writer)
         await b.add({"a": 1})
-        # Monotonic time says the buffer is well past its flush interval.
         b.last_flush_monotonic_ns = _time.monotonic_ns() - 50_000_000
-        # The wall clock jumps an hour backwards.
         monkeypatch.setattr(timebase, "now_s", lambda: _time.time() - 3600.0)
 
         await b.check_flush()
@@ -381,7 +360,6 @@ class TestBatcher:
         )
         for i in range(5):
             await b.add({"a": i})
-        # Buffer capped at max_buffer_size
         assert b._active.row_count == 3
         assert b.dropped_count == 2
 
@@ -397,7 +375,6 @@ class TestBatcher:
         )
         for i in range(5):
             await b.add({"a": i})
-        # Should have kept latest 3
         assert b._active.row_count == 3
         rows = b._active.to_row_dicts()
         assert rows[-1]["a"] == 4
@@ -437,7 +414,6 @@ class TestBatcher:
             extractor_columns=["a"],
         )
         await b.add({"a": 1})
-        # Should fall back to serialize path and still add
         assert b._active.row_count == 1
 
     @pytest.mark.asyncio
@@ -461,7 +437,7 @@ class TestBatcher:
         writer.write_columnar.side_effect = asyncio.TimeoutError()
         b = Batcher("hft.orders", flush_limit=2, writer=writer)
         await b.add({"a": 1})
-        await b.add({"a": 2})  # triggers flush; timeout should be caught
+        await b.add({"a": 2})
         assert writer.write_columnar.call_count >= 1
         assert b.total_count == 2
 
@@ -471,7 +447,7 @@ class TestBatcher:
         writer.write_columnar.side_effect = ConnectionError("refused")
         b = Batcher("hft.orders", flush_limit=2, writer=writer)
         await b.add({"a": 1})
-        await b.add({"a": 2})  # should not raise
+        await b.add({"a": 2})
         assert writer.write_columnar.call_count >= 1
         assert b.total_count == 2
 
@@ -481,7 +457,7 @@ class TestBatcher:
         writer.write_columnar.side_effect = RuntimeError("unexpected")
         b = Batcher("hft.orders", flush_limit=2, writer=writer)
         await b.add({"a": 1})
-        await b.add({"a": 2})  # should not raise
+        await b.add({"a": 2})
         assert writer.write_columnar.call_count >= 1
         assert b.total_count == 2
 
@@ -505,7 +481,6 @@ class TestBatcher:
         await b.add({"exch_ts": 2, "v": "b"})
         await b.force_flush()
         call_args = writer.write_columnar.call_args
-        # Column data should be sorted by exch_ts
         col_names = call_args[0][1]
         col_data = call_args[0][2]
         ts_idx = col_names.index("exch_ts")
@@ -523,7 +498,6 @@ class TestBatcher:
         col_names = call_args[0][1]
         col_data = call_args[0][2]
         ts_idx = col_names.index("exch_ts")
-        # Should NOT be sorted since it's not market_data
         assert col_data[ts_idx] == [3, 1]
 
     @pytest.mark.asyncio
@@ -536,7 +510,6 @@ class TestBatcher:
         for i in range(10):
             await b.add({"a": i})
 
-        # Should be capped by global budget
         assert b._active.row_count <= 5
 
     @pytest.mark.asyncio
@@ -548,7 +521,6 @@ class TestBatcher:
 
         rows = [{"a": i} for i in range(10)]
         await b.add_many(rows)
-        # Should be constrained by global budget
         assert b._active.row_count <= 3
 
     @pytest.mark.asyncio
@@ -556,10 +528,8 @@ class TestBatcher:
         """Row that cannot be serialized is silently skipped."""
         writer = self._make_writer()
         b = Batcher("hft.orders", flush_limit=100, writer=writer)
-        # Mock serialize to return something that can't be converted to dict
         with patch("hft_platform.recorder.batcher.serialize", return_value=42):
             await b.add(object())
-        # The row fails dict() conversion, so nothing added
         assert b._active.row_count == 0
 
     @pytest.mark.asyncio
@@ -569,8 +539,6 @@ class TestBatcher:
         await b.add({"a": 1})
         standby_before = b._standby
         await b.force_flush()
-        # After swap, the old standby should have become active (or new buffer created)
-        # Just verify flush worked
         assert b._active.row_count == 0
 
     @pytest.mark.asyncio
@@ -588,8 +556,7 @@ class TestBatcher:
         guard.register(b)
 
         await b.add({"a": 1})
-        await b.add({"a": 2})  # should be dropped
-        # Tracker should have been called for the drop
+        await b.add({"a": 2})
         assert b.dropped_count >= 1
 
 

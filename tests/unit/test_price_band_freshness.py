@@ -7,9 +7,8 @@ from hft_platform.risk.validators import PriceBandValidator
 
 SCALE = 10_000
 
-# A mid_price_x2 value of 2_000_000 means mid_price = 1_000_000 (i.e. $100.00 scaled)
 MID_PRICE_X2 = 2_000_000
-MID_PRICE = MID_PRICE_X2 // 2  # 1_000_000
+MID_PRICE = MID_PRICE_X2 // 2
 
 
 def _make_validator(mid_price_max_age_s: float = 10.0) -> PriceBandValidator:
@@ -33,7 +32,6 @@ def _make_lob_with_book(exch_ts: int) -> MagicMock:
     book_state = SimpleNamespace(exch_ts=exch_ts)
     lob.get_book.return_value = book_state
 
-    # l1 tuple: index 3 = mid_price_x2
     l1 = (None, None, None, MID_PRICE_X2)
     lob.get_l1_scaled.return_value = l1
     return lob
@@ -49,8 +47,8 @@ class TestMidPriceFreshness:
 
     def test_fresh_mid_price_returned(self):
         """When book is fresh (within max age), mid_price is returned normally."""
-        now = 1_000_000_000_000  # arbitrary ns
-        age_ns = 5 * 1_000_000_000  # 5 seconds — within 10s limit
+        now = 1_000_000_000_000
+        age_ns = 5 * 1_000_000_000
         exch_ts = now - age_ns
         self.mock_now.return_value = now
 
@@ -64,7 +62,7 @@ class TestMidPriceFreshness:
     def test_stale_mid_price_returns_none(self):
         """When book is stale (older than max age), mid_price is rejected — returns None."""
         now = 1_000_000_000_000
-        age_ns = 15 * 1_000_000_000  # 15 seconds — exceeds 10s limit
+        age_ns = 15 * 1_000_000_000
         exch_ts = now - age_ns
         self.mock_now.return_value = now
 
@@ -81,8 +79,7 @@ class TestMidPriceFreshness:
         self.mock_now.return_value = now
 
         lob = MagicMock()
-        # get_book returns object without exch_ts
-        book_state = SimpleNamespace()  # no exch_ts attribute
+        book_state = SimpleNamespace()
         lob.get_book.return_value = book_state
 
         l1 = (None, None, None, MID_PRICE_X2)
@@ -100,7 +97,7 @@ class TestMidPriceFreshness:
         now = 1_000_000_000_000
         self.mock_now.return_value = now
 
-        lob = MagicMock(spec=["get_l1_scaled"])  # no get_book
+        lob = MagicMock(spec=["get_l1_scaled"])
         l1 = (None, None, None, MID_PRICE_X2)
         lob.get_l1_scaled.return_value = l1
 
@@ -126,11 +123,10 @@ class TestMidPriceFreshness:
     def test_custom_max_age_respected(self):
         """Custom mid_price_max_age_s config value is respected."""
         now = 1_000_000_000_000
-        age_ns = 3 * 1_000_000_000  # 3 seconds
+        age_ns = 3 * 1_000_000_000
         exch_ts = now - age_ns
         self.mock_now.return_value = now
 
-        # With 2s max age, a 3s-old book should be stale
         validator = _make_validator(mid_price_max_age_s=2.0)
         validator.lob = _make_lob_with_book(exch_ts=exch_ts)
 

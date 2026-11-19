@@ -44,11 +44,9 @@ def main() -> int:
     source = ClickHouseSource(password=os.environ["CLICKHOUSE_PASSWORD"])
     source.health_check()
 
-    # Joint dates
     txf = set(source.available_dates("TXFD6"))
     tmf = set(source.available_dates("TMFD6"))
     joint = sorted(txf & tmf)
-    # Take 10 most-recent days (manageable load)
     dates = joint[-10:]
     print(f"Running C74 T5 on {len(dates)} days: {dates[0]}..{dates[-1]}",
           flush=True)
@@ -65,7 +63,6 @@ def main() -> int:
     n_trips = len(trips)
     n_days = run["n_days"]
 
-    # Per-trip PnL at inst RT
     for t in trips:
         t["gross_pnl_ntd"] = _compute_trip_pnl_ntd(t)
         t["net_pnl_ntd_inst"] = _apply_cost_per_trip(
@@ -101,7 +98,6 @@ def main() -> int:
         idx = max(0, min(n_trips - 1, int(p * n_trips)))
         return pct[idx]
 
-    # Cost sensitivity
     cost_sens = {}
     for rt in _RT_SCENARIOS_PT_COMBINED:
         nets = [
@@ -116,16 +112,13 @@ def main() -> int:
             "mean_per_trip": round(sum(nets) / n_trips, 1),
         }
 
-    # Direction split
     short_trips = [t for t in trips if t["side"] == "short_basis"]
     long_trips = [t for t in trips if t["side"] == "long_basis"]
 
-    # Exit reason counts
     exits_reversion = sum(1 for t in trips if t.get("exit_reason") == "reversion")
     exits_timeout = sum(1 for t in trips if t.get("exit_reason") == "timeout")
     exits_stop_loss = sum(1 for t in trips if t.get("exit_reason") == "stop_loss")
 
-    # Daily PnL for Sharpe
     days_pnl: dict[str, float] = {}
     for t in trips:
         d = t.get("session_date", "unknown")

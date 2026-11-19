@@ -112,7 +112,7 @@ def test_a_metric_reached_only_through_getattr_is_dynamic_not_dead(tree):
     assert _by_category(findings, "dynamic_only_metric") == ["dyn_gauge", "stringy_gauge"]
     assert "dyn_gauge" not in _by_category(findings, "unreferenced_metric")
     dyn = next(f for f in findings if f.detail.startswith("dyn_gauge"))
-    assert "only 1 getattr and 0 string reference(s)" in dyn.detail  # the getattr argument is not counted twice
+    assert "only 1 getattr and 0 string reference(s)" in dyn.detail
 
 
 def test_a_string_literal_in_another_module_counts_as_a_reference_but_a_dynamic_one(tree):
@@ -120,7 +120,7 @@ def test_a_string_literal_in_another_module_counts_as_a_reference_but_a_dynamic_
 
     stringy = [f for f in findings if f.detail.startswith("stringy_gauge")]
     assert [f.category for f in stringy] == ["dynamic_only_metric"]
-    assert "0 getattr and 2 string reference(s)" in stringy[0].detail  # the key and the value
+    assert "0 getattr and 2 string reference(s)" in stringy[0].detail
 
 
 def test_the_name_list_inside_the_registry_is_not_a_reference(tree):
@@ -142,7 +142,7 @@ def test_an_active_alert_on_a_dead_metric_is_reported_with_its_line(tree):
     assert sorted(f.detail.split(" uses ")[0] for f in alerts) == ["alert DeadAlert", "alert LatencyAlert"]
     dead = next(f for f in alerts if "DeadAlert" in f.detail)
     assert dead.file == "config/monitoring/alerts/rules.yaml"
-    assert dead.line == 4  # the line of ``- alert: DeadAlert``
+    assert dead.line == 4
 
 
 def test_an_alert_on_a_live_metric_is_not_reported(tree):
@@ -163,9 +163,9 @@ def test_series_suffixes_fold_but_longer_names_do_not_match(tree):
     findings, _ = mod.evaluate(tree)
 
     latency = [f for f in findings if f.category == "alert_on_unreferenced_metric" and "dead_latency_ns" in f.detail]
-    assert [f.detail.split(" uses ")[0] for f in latency] == ["alert LatencyAlert"]  # via _bucket
+    assert [f.detail.split(" uses ")[0] for f in latency] == ["alert LatencyAlert"]
     near_miss = [f for f in findings if "NearMiss" in f.detail]
-    assert near_miss == []  # my_dead_alerted_total / dead_alerted_total_other are other series
+    assert near_miss == []
 
 
 def test_a_dashboard_that_reads_a_dead_metric_is_named_in_the_finding(tree):
@@ -233,7 +233,7 @@ def test_report_mode_exits_zero_and_writes_the_json(tree, capsys):
     assert payload["summary"]["unreferenced_metric"] == 3
     assert {f["category"] for f in payload["findings"]} == set(mod.CATEGORIES)
     printed = capsys.readouterr().out
-    assert "dead_alerted_total" in printed and "dyn_gauge" not in printed  # dynamic rows are opt-in on the console
+    assert "dead_alerted_total" in printed and "dyn_gauge" not in printed
 
 
 def test_show_dynamic_lists_the_dynamic_rows(tree, capsys):

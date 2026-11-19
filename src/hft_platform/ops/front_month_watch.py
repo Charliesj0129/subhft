@@ -49,7 +49,6 @@ __all__ = [
     "run_front_month_watch",
 ]
 
-#: ``HFT_FRONT_MONTH_WATCH_S``: seconds between checks; 0 disables the watch.
 DEFAULT_INTERVAL_S = 60.0
 
 
@@ -58,14 +57,9 @@ class FrontMonthReport:
     """The front-month state of one futures root."""
 
     root: str
-    #: The rule's front contract, e.g. ``TMFK6``.
     expected: str
-    #: The feed carries ``expected``.
     subscribed: bool
-    #: ``strategy_id -> True`` when every symbol it holds for this root is the
-    #: front month (or an R1 family), ``False`` otherwise.
     strategies_on_front: Mapping[str, bool]
-    #: ``(strategy_id, symbol)`` pairs holding another month of this root.
     off_front: tuple[tuple[str, str], ...]
 
 
@@ -110,7 +104,6 @@ def evaluate_front_month(
             if isinstance(ref, FutureRef):
                 on_front = (ref.expiry.year, ref.expiry.month) == (expected_delivery.year, expected_delivery.month)
             elif ref.family is not FamilyCode.R1:
-                # R2 and pinned families trade another month on purpose.
                 on_front = True
             if not on_front:
                 off.setdefault(root, []).append((strategy_id, str(symbol)))
@@ -143,7 +136,7 @@ def publish_front_month(reports: Iterable[FrontMonthReport], metrics: Any, *, no
                     1 if on_front else 0
                 )
         metrics.front_month_check_timestamp_seconds.set(now_s)
-    except Exception as exc:  # noqa: BLE001 — observability must not stop the watch
+    except Exception as exc:
         logger.warning("front_month_watch_publish_failed", error=str(exc))
 
 
@@ -207,7 +200,7 @@ async def run_front_month_watch(
             reports = await asyncio.to_thread(evaluate_front_month, strategies, subscribed, now_ns=now_ns)
             publish_front_month(reports, metrics_getter(), now_s=now_ns / 1e9)
             _log(reports, previous)
-        except Exception as exc:  # noqa: BLE001 — the watch outlives any single failure
+        except Exception as exc:
             logger.warning("front_month_watch_failed", error=str(exc))
         await asyncio.sleep(interval_s)
 

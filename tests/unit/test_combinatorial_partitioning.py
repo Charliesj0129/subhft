@@ -138,7 +138,6 @@ def test_get_rows_locked_partition_denied_before_freeze_and_granted_after(tmp_pa
     manager = _manager(tmp_path)
     features = {"x": np.arange(200, dtype=np.float64)}
 
-    # Discovery/selection are open by default.
     open_rows = manager.get_rows("discovery", features)
     assert open_rows["x"].size == 98
 
@@ -151,7 +150,6 @@ def test_get_rows_locked_partition_denied_before_freeze_and_granted_after(tmp_pa
     locked_rows = manager.get_rows("locked_validation", features, frozen_candidate_id=candidate_id)
     assert locked_rows["x"].size == 26
 
-    # A different, unfrozen candidate is still denied.
     with pytest.raises(LockedPartitionAccessError):
         manager.get_rows("final_holdout", features, frozen_candidate_id="candidate-2")
 
@@ -186,7 +184,6 @@ def test_freeze_candidate_is_idempotent_on_resume(tmp_path):
     rows = [line for line in frozen_path.read_text().splitlines() if line.strip()]
     assert len(rows) == 1
 
-    # A fresh manager instance pointed at the same manifest_dir sees the freeze too.
     manager2 = _manager(tmp_path)
     assert manager2.freeze_candidate("candidate-1") is False
 
@@ -299,8 +296,6 @@ def test_manifest_written_before_schema_version_2_still_resumes(tmp_path):
     path.write_text(json.dumps(legacy_payload), encoding="utf-8")
 
     assert manager.write_manifest(path) == str(path)
-    # Left byte-for-byte alone: rewriting it would be the mutation the
-    # immutability rule exists to prevent.
     assert json.loads(path.read_text(encoding="utf-8")) == legacy_payload
     assert manager.manifest_hash != manager._legacy_manifest_hash
     assert partitioning_module.MANIFEST_SCHEMA_VERSION == 2

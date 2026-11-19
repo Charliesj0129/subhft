@@ -10,9 +10,6 @@ import pytest
 
 from hft_platform.recorder.batcher import Batcher, GlobalMemoryGuard
 
-# The lazy import inside batcher._write_flush_buffer is:
-#   from hft_platform.observability.metrics import MetricsRegistry
-# We patch the class on the module so the `from … import` gets our mock.
 _METRICS_MODULE = "hft_platform.observability.metrics.MetricsRegistry"
 
 
@@ -99,10 +96,8 @@ class TestRecorderFlushMetrics:
 
         with patch(_METRICS_MODULE) as mock_cls:
             mock_cls.get.side_effect = RuntimeError("Prometheus exploded")
-            # Must complete without raising
             await b.force_flush()
 
-        # Buffer should be cleared (flush completed successfully despite metrics crash)
         assert b._active.row_count == 0
         assert b._standby.row_count == 0
 
@@ -131,10 +126,9 @@ class TestRecorderFlushMetrics:
         registry, mock_batches, mock_rows = _mock_registry()
         with patch(_METRICS_MODULE) as mock_cls:
             mock_cls.get.return_value = registry
-            # Third add triggers the auto-flush
             await b.add({"price": 100_000, "qty": 1})
             await b.add({"price": 101_000, "qty": 2})
-            await b.add({"price": 102_000, "qty": 3})  # triggers flush at limit
+            await b.add({"price": 102_000, "qty": 3})
 
         mock_batches.labels.return_value.inc.assert_called_once()
         mock_rows.labels.return_value.inc.assert_called_once_with(3)

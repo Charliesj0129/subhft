@@ -36,9 +36,6 @@ def _logged(logger_mock: MagicMock, level: str) -> list[str]:
     return [call.args[0] for call in getattr(logger_mock, level).call_args_list]
 
 
-# ── HFT_CALENDAR_CACHE_SIZE ──────────────────────────────────────────────
-
-
 @pytest.mark.parametrize("raw", ["", "   ", "abc", "3.5", "-1"])
 def test_an_unusable_cache_size_builds_the_calendar_with_the_default(monkeypatch, raw):
     monkeypatch.setenv("HFT_CALENDAR_CACHE_SIZE", raw)
@@ -82,9 +79,6 @@ def test_the_supervisor_reads_seconds_since_open_when_the_cache_size_is_empty(mo
     monkeypatch.setattr(MarketCalendar, "_is_futures_trading_hours", lambda self, ts: True)
 
     assert platform_inputs._seconds_since_session_open() is not None
-
-
-# ── the supervisor's calendar read ───────────────────────────────────────
 
 
 def _failing_calendar(monkeypatch, message: str) -> None:
@@ -138,12 +132,9 @@ def test_a_recovered_calendar_warns_again_when_it_fails_again(monkeypatch):
     assert _logged(logger, "warning") == ["platform_inputs_calendar_unavailable"] * 2
 
 
-# ── HFT_TS_TZ ────────────────────────────────────────────────────────────
-
-
 def test_an_invalid_timezone_falls_back_to_utc_plus_8_and_says_so(monkeypatch):
     monkeypatch.setenv("HFT_TS_TZ", "Asia/Taipai")
-    monkeypatch.setattr(timebase, "TZINFO", _TAIPEI)  # isolate: timebase itself is not what is under test
+    monkeypatch.setattr(timebase, "TZINFO", _TAIPEI)
     logger = MagicMock()
     monkeypatch.setattr(market_calendar, "logger", logger)
 
@@ -222,7 +213,7 @@ def test_the_once_flag_is_checked_and_set_while_holding_a_lock(monkeypatch):
     with session_hooks._tz_fallback_lock:
         worker.start()
         assert entered.wait(timeout=5)
-        worker.join(timeout=0.05)  # bounded wait for a thread that must be blocked on the lock
+        worker.join(timeout=0.05)
         assert worker.is_alive()
         assert session_hooks._tz_fallback_warned is False
         assert _logged(logger, "warning") == []

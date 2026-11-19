@@ -26,7 +26,6 @@ class TestTheOldSpellingLeaks:
         real_sleep = time.sleep
 
         with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep") as leaked:
-            # `session_runtime.time` IS the stdlib module, so this is `time.sleep`.
             assert time.sleep is leaked
             assert time.sleep is not real_sleep
 
@@ -35,7 +34,7 @@ class TestTheOldSpellingLeaks:
     def test_an_unrelated_sleep_lands_in_the_leaked_mock(self) -> None:
         """The 722-calls failure, in miniature."""
         with patch("hft_platform.feed_adapter.fubon.session_runtime.time.sleep") as leaked:
-            time.sleep(0)  # stands in for any other test in the same worker
+            time.sleep(0)
 
             assert leaked.call_count == 1
 

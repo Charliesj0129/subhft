@@ -108,8 +108,6 @@ def _build_service(channel, api_queue, storm_guard=None):
     order_adapter = MagicMock()
     order_adapter._api_queue = api_queue
 
-    # The gateway dispatches through the order gate, OrderAdapter.execute; an
-    # accepted command lands on the adapter's API queue, as in the real adapter.
     async def execute(cmd):
         api_queue.put_nowait(cmd)
         return True
@@ -208,7 +206,6 @@ async def test_halt_blocks_new_allows_cancel():
     except asyncio.CancelledError:
         pass
 
-    # NEW should be rejected, CANCEL dispatched
     assert svc._rejected >= 1
     assert svc._dispatched == 1
 
@@ -248,7 +245,6 @@ async def test_gateway_ha_failover_no_duplicate_dispatch():
             svc1 = _build_service(ch1, shared_api_queue)
             svc2 = _build_service(ch2, shared_api_queue)
 
-            # Deterministic cmd_id for duplicate detection across gateways.
             for svc in (svc1, svc2):
 
                 def _create_command(intent):
@@ -279,19 +275,16 @@ async def test_gateway_ha_failover_no_duplicate_dispatch():
                 f"leader dispatched only {shared_api_queue.qsize()} of 50"
             )
 
-            # Only one gateway should have dispatched each unique intent.
             assert shared_api_queue.qsize() == 50
 
             leader_first = svc1 if svc1.get_health().get("leader_active") else svc2
             standby = svc2 if leader_first is svc1 else svc1
             leader_task = t1 if leader_first is svc1 else t2
 
-            # Simulate gateway outage (leader dies).
             leader_task.cancel()
             with suppress(asyncio.CancelledError):
                 await leader_task
 
-            # The standby must hold the lease *before* the next batch arrives.
             assert await _await_condition(lambda: bool(standby.get_health().get("leader_active"))), (
                 f"standby never acquired the leader lease after the leader died -- {_lease_debug(svc1, svc2)}"
             )

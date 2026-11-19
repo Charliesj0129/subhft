@@ -14,6 +14,7 @@ to ~10s. The 0.10 band corresponds to typical L-BFGS-B finite-window noise on
 2K-event simulations; ρ̂ accuracy improves with √n so 10K+ events comfortably
 clears 0.05.
 """
+
 from __future__ import annotations
 
 import time
@@ -30,10 +31,6 @@ from research.alphas.r52_amhp_dynamic_spread.vmr_estimator import (
     vmr_rho_hat,
 )
 
-# ----------------------------------------------------------------------------
-# OnlineHawkesMLE — closed-form exp-Hawkes MLE recovery
-# ----------------------------------------------------------------------------
-
 
 def test_synthetic_recovery_default_seed_passes_at_010_tolerance() -> None:
     """ρ̂ recovers ρ_true=0.5 within ±0.10 on a 2000-sec / ~2K-event simulation.
@@ -41,13 +38,16 @@ def test_synthetic_recovery_default_seed_passes_at_010_tolerance() -> None:
     Tightening to 0.05 requires longer duration; tested separately.
     """
     res = synthetic_recovery_test(
-        mu_true=1.0, alpha_true=0.5, beta_true=1.0,
-        duration_sec=2000.0, seed=20260425, tolerance=0.10,
+        mu_true=1.0,
+        alpha_true=0.5,
+        beta_true=1.0,
+        duration_sec=2000.0,
+        seed=20260425,
+        tolerance=0.10,
     )
     assert res["passes"] is True
     assert res["rho_true"] == pytest.approx(0.5)
     assert res["abs_err"] <= 0.10
-    # Sanity: estimator should not collapse to ρ̂ = 0.
     assert res["rho_hat"] > 0.20
 
 
@@ -58,8 +58,12 @@ def test_synthetic_recovery_tightens_to_005_at_high_n() -> None:
     is fast.
     """
     res = synthetic_recovery_test(
-        mu_true=1.0, alpha_true=0.5, beta_true=1.0,
-        duration_sec=10000.0, seed=20260425, tolerance=0.05,
+        mu_true=1.0,
+        alpha_true=0.5,
+        beta_true=1.0,
+        duration_sec=10000.0,
+        seed=20260425,
+        tolerance=0.05,
     )
     assert res["abs_err"] <= 0.05
     assert res["n_synthetic_events"] >= 10000
@@ -69,11 +73,11 @@ def test_synthetic_recovery_multi_seed_robust_at_010_tolerance() -> None:
     """Across several seeds, ±0.10 is the worst-case finite-sample band."""
     for seed in [1, 2, 3, 7, 11]:
         res = synthetic_recovery_test(
-            duration_sec=2000.0, seed=seed, tolerance=0.10,
+            duration_sec=2000.0,
+            seed=seed,
+            tolerance=0.10,
         )
-        assert res["abs_err"] <= 0.10, (
-            f"seed={seed} ρ̂={res['rho_hat']:.3f} err={res['abs_err']:.3f}"
-        )
+        assert res["abs_err"] <= 0.10, f"seed={seed} ρ̂={res['rho_hat']:.3f} err={res['abs_err']:.3f}"
 
 
 def test_mle_returns_fit_ok_false_on_short_window() -> None:
@@ -87,15 +91,13 @@ def test_mle_returns_fit_ok_false_on_short_window() -> None:
 def test_mle_branching_ratio_clipped_to_subcritical() -> None:
     """ρ̂ must be ∈ [0, 0.99] regardless of MLE result."""
     res = synthetic_recovery_test(
-        mu_true=0.1, alpha_true=0.95, beta_true=1.0,
-        duration_sec=2000.0, seed=42,
+        mu_true=0.1,
+        alpha_true=0.95,
+        beta_true=1.0,
+        duration_sec=2000.0,
+        seed=42,
     )
     assert 0.0 <= res["rho_hat"] <= 0.99
-
-
-# ----------------------------------------------------------------------------
-# VMR estimator — fast live ρ̂ approximation
-# ----------------------------------------------------------------------------
 
 
 def test_vmr_rho_hat_returns_zero_on_poisson() -> None:
@@ -142,12 +144,11 @@ def test_vmr_estimator_class_p99_under_1ms() -> None:
     for t in times_ns:
         est.update(int(t))
 
-    # Force refit on 1000 evenly-spaced timestamps.
     refit_targets = times_ns[-1000:]
     latencies_ns: list[int] = []
     for t in refit_targets:
         t0 = time.perf_counter_ns()
-        est._last_fit_ns = -1  # force refit
+        est._last_fit_ns = -1
         est.maybe_refit(int(t))
         latencies_ns.append(time.perf_counter_ns() - t0)
     latencies_ms = np.array(latencies_ns) / 1e6
@@ -160,7 +161,7 @@ def test_online_hawkes_vmr_basic_api() -> None:
     est = OnlineHawkesVMR(window_sec=60, subwindow_sec=2, refit_every_ns=int(1e8))
     base = 1_700_000_000_000_000_000
     for i in range(200):
-        est.update(base + i * 100_000_000)  # 100ms apart -> 10/sec
+        est.update(base + i * 100_000_000)
     rho = est.maybe_refit(base + 200 * 100_000_000)
     assert 0.0 <= rho <= 0.99
     assert est.n_events_in_window > 0

@@ -60,10 +60,6 @@ from hft_platform.recorder.schema import (
     ensure_price_scaled_views,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 def _make_svc(tmp_path) -> SimpleNamespace:
     wal_dir = str(tmp_path / "wal")
@@ -135,11 +131,6 @@ def _make_wal_file(wal_dir: str, filename: str, content: str, age_s: float = 10)
     past = time.time() - age_s
     os.utime(fpath, (past, past))
     return fpath
-
-
-# ===========================================================================
-# _loader_batch.py tests
-# ===========================================================================
 
 
 class TestFormatMarketDataEdgeCases:
@@ -282,8 +273,8 @@ class TestFormatPnlSnapshotsEdgeCases:
     def test_all_defaults(self) -> None:
         rows = [{}]
         cols, data = format_pnl_snapshots(rows)
-        assert data[0][4] == 0  # net_qty
-        assert data[0][10] == 0.0  # drawdown_pct
+        assert data[0][4] == 0
+        assert data[0][10] == 0.0
 
 
 class TestFormatLatencySpansEdgeCases:
@@ -295,8 +286,8 @@ class TestFormatLatencySpansEdgeCases:
     def test_missing_fields_default(self) -> None:
         rows = [{}]
         cols, data = format_latency_spans(rows)
-        assert data[0][1] == ""  # stage
-        assert data[0][2] == 0  # latency_us
+        assert data[0][1] == ""
+        assert data[0][2] == 0
 
 
 class TestInsertBatchForTable:
@@ -329,11 +320,6 @@ class TestInsertBatchForTable:
             assert result is True
 
 
-# ===========================================================================
-# _loader_ch.py tests
-# ===========================================================================
-
-
 class TestConnect:
     def test_connect_success(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
@@ -360,7 +346,6 @@ class TestConnect:
         original_client = svc.ch_client
         with patch("hft_platform.recorder._loader_ch.get_ch_client", side_effect=FileNotFoundError("no schema")):
             connect(svc)
-        # FileNotFoundError only logs and preserves the existing client handle.
         assert svc.ch_client is original_client
 
     def test_connect_generic_exception(self, tmp_path) -> None:
@@ -522,11 +507,6 @@ class TestDedupHelpers:
         svc.insert_batch.assert_called_once()
 
 
-# ===========================================================================
-# _loader_wal.py: process_single_file edge cases
-# ===========================================================================
-
-
 class TestProcessSingleFileEdgeCases:
     def test_connection_error_returns_false(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
@@ -566,7 +546,6 @@ class TestProcessSingleFileEdgeCases:
     def test_mtime_check_oserror_returns_false(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
         fpath = os.path.join(svc.wal_dir, "market_data_500.jsonl")
-        # File does not exist, getmtime will raise OSError
         result = process_single_file(svc, fpath, force=False)
         assert result is False
 
@@ -591,19 +570,12 @@ class TestProcessFilesNoop:
         svc._insert_with_dedup.assert_not_called()
 
 
-# ===========================================================================
-# _loader_dlq.py: replay and cleanup edge cases
-# ===========================================================================
-
-
 class TestReplayDlqEdgeCases:
     def test_exception_during_file_read_counts_as_failed(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
-        # Create a valid-looking DLQ file
         fpath = os.path.join(svc.dlq_dir, "market_data_100.jsonl")
         with open(fpath, "w") as f:
             f.write(json.dumps({"symbol": "X"}) + "\n")
-        # Make insert_batch raise an unexpected exception
         svc.insert_batch = MagicMock(side_effect=RuntimeError("unexpected"))
         result = replay_dlq(svc)
         assert result["failed"] == 1
@@ -620,7 +592,6 @@ class TestCleanupEdgeCases:
             f.write("{}\n")
         os.utime(fpath, (0, 0))
         cleanup_old_dlq_files(svc)
-        # File should still be deleted despite metrics failure
         assert not os.path.exists(fpath)
 
     def test_corrupt_cleanup_keeps_recent(self, tmp_path) -> None:
@@ -644,7 +615,7 @@ class TestCleanupEdgeCases:
 class TestCheckWalAccumulationEdgeCases:
     def test_critical_threshold_logged(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
-        svc._wal_size_critical_mb = 0  # any size is "critical"
+        svc._wal_size_critical_mb = 0
         svc._wal_size_warning_mb = 0
         svc.metrics = MagicMock()
 
@@ -668,11 +639,6 @@ class TestCheckWalAccumulationEdgeCases:
         svc.metrics.wal_drain_eta_seconds.set.assert_called()
 
 
-# ===========================================================================
-# schema.py tests
-# ===========================================================================
-
-
 class TestSchemaEdgeCases:
     def test_apply_schema_skips_already_applied(self, tmp_path) -> None:
         migrations_dir = tmp_path / "migrations"
@@ -685,7 +651,6 @@ class TestSchemaEdgeCases:
         with patch("hft_platform.recorder.schema.MIGRATIONS_DIR", str(migrations_dir)):
             apply_schema(client)
 
-        # Only init calls, no migration insert
         client.insert.assert_not_called()
 
     def test_apply_schema_no_migration_files(self, tmp_path) -> None:
@@ -752,13 +717,7 @@ class TestSchemaEdgeCases:
         with patch("hft_platform.recorder.schema.MIGRATIONS_DIR", str(migrations_dir)):
             apply_schema(client)
 
-        # Should have inserted the migration record
         client.insert.assert_called_once()
-
-
-# ===========================================================================
-# _loader_wal.py: emergency and pnl_snapshots table parsing
-# ===========================================================================
 
 
 class TestParseTableFromFilenameMore:
@@ -788,16 +747,10 @@ class TestParseBatchTableNameMore:
         assert parse_batch_table_name("hft.fills") == "fills"
 
 
-# ===========================================================================
-# _loader_wal.py: save_manifest error handling
-# ===========================================================================
-
-
 class TestSaveManifestErrorHandling:
     def test_save_manifest_handles_write_error(self, tmp_path) -> None:
         svc = _make_svc(tmp_path)
         svc._manifest = {"file.jsonl"}
-        # Make the manifest path a directory to cause write failure
         os.makedirs(svc._manifest_path, exist_ok=True)
         save_manifest(svc)
         assert os.path.isdir(svc._manifest_path)

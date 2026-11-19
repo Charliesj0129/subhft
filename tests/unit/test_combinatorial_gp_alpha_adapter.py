@@ -24,8 +24,6 @@ def _synthetic_series(n: int, seed: int) -> np.ndarray:
     return rng.normal(loc=0.0, scale=3.0, size=n)
 
 
-# Covers every operator in operator_library.OPERATORS at least once, plus the
-# BinOp/UnaryOp forms, plus a nested-window composition.
 _STREAMABLE_EXPRESSIONS = [
     "abs(x)",
     "add(x, y)",
@@ -89,7 +87,7 @@ def test_nested_window_buffer_sizing_matches_batch_not_naive_max_constant() -> N
     for value in x:
         last = alpha.update(x=float(value))
     assert last == pytest.approx(float(batch_out[-1]), abs=1e-8)
-    assert last != pytest.approx(1.414, abs=0.05)  # the wrong, under-sized-buffer answer
+    assert last != pytest.approx(1.414, abs=0.05)
 
 
 def test_max_window_for_expression_pointwise_only_returns_one() -> None:
@@ -98,7 +96,6 @@ def test_max_window_for_expression_pointwise_only_returns_one() -> None:
 
 
 def test_max_window_for_expression_ts_delta_uses_offset_plus_window() -> None:
-    # ts_delta[i] = x[i] - x[i-w]: needs w+1 trailing samples, not w.
     assert max_window_for_expression("ts_delta(x, 5)") == 6
 
 

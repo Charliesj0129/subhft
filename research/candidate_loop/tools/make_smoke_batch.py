@@ -84,8 +84,6 @@ def _microprice() -> list[dict[str, Any]]:
         "spr": "(microprice() - mid_price()) / (spread_ticks() + 1)",
     }
     out = []
-    # raw norm at window 2000 would collide with the fixture's
-    # microprice_dev_pull; 2000 is excluded from the grid entirely.
     for norm_key, formula in norms.items():
         for window in (500, 1000, 2500, 5000, 10000):
             for horizon in ("500ms", "1s"):
@@ -157,7 +155,6 @@ def _trade_flow() -> list[dict[str, Any]]:
 
 def _spread_regime() -> list[dict[str, Any]]:
     out = []
-    # zscore window 3000 avoids the fixture's tight_spread_obi_regime (2000).
     for levels in (1, 2, 3, 4, 5):
         for threshold in (1, 2):
             for horizon in ("500ms", "1s"):

@@ -9,8 +9,6 @@ import pytest
 
 from hft_platform.recorder.health import PipelineHealthTracker, PipelineState
 
-# ── PipelineState enum ───────────────────────────────────────────────
-
 
 class TestPipelineState:
     def test_ordering(self) -> None:
@@ -23,9 +21,6 @@ class TestPipelineState:
         assert int(PipelineState.DEGRADED) == 1
         assert int(PipelineState.CRITICAL) == 2
         assert int(PipelineState.DATA_LOSS) == 3
-
-
-# ── PipelineHealthTracker: init ──────────────────────────────────────
 
 
 class TestPipelineHealthTrackerInit:
@@ -42,9 +37,6 @@ class TestPipelineHealthTrackerInit:
         assert t._critical_disconnect_s == 90.0
 
 
-# ── State transitions: DEGRADED ─────────────────────────────────────
-
-
 class TestDegradedState:
     def test_wal_fallback_triggers_degraded(self) -> None:
         t = PipelineHealthTracker()
@@ -58,16 +50,12 @@ class TestDegradedState:
 
     def test_recovery_after_window_expires(self) -> None:
         t = PipelineHealthTracker()
-        t._window_s = 0.05  # 50ms window
+        t._window_s = 0.05
         t.record_event("drop")
         assert t.state == PipelineState.DEGRADED
         time.sleep(0.1)
-        # Record a benign event to trigger recompute
         t.record_event("ch_connected")
         assert t.state == PipelineState.HEALTHY
-
-
-# ── State transitions: DATA_LOSS ─────────────────────────────────────
 
 
 class TestDataLossState:
@@ -84,13 +72,10 @@ class TestDataLossState:
         assert t.state == PipelineState.DATA_LOSS
 
 
-# ── State transitions: CRITICAL ──────────────────────────────────────
-
-
 class TestCriticalState:
     def test_ch_disconnect_plus_wal_fallback(self) -> None:
         t = PipelineHealthTracker()
-        t._critical_disconnect_s = 0  # Instant critical threshold
+        t._critical_disconnect_s = 0
         t.record_event("ch_disconnected")
         t.record_event("wal_fallback")
         assert t.state == PipelineState.CRITICAL
@@ -107,7 +92,6 @@ class TestCriticalState:
         t = PipelineHealthTracker()
         t._critical_disconnect_s = 0
         t.record_event("ch_disconnected")
-        # No wal_fallback/ch_error events, so not CRITICAL
         assert t.state == PipelineState.HEALTHY
 
     def test_ch_reconnect_resets_disconnect_timer(self) -> None:
@@ -116,17 +100,8 @@ class TestCriticalState:
         t.record_event("ch_disconnected")
         t.record_event("ch_error")
         assert t.state == PipelineState.CRITICAL
-        # Reconnect
         t.record_event("ch_connected")
-        # ch_error is still in window but CH is now connected, so duration=0
-        # wal_fallback absent, drops absent => HEALTHY
-        # But ch_error still counts as a ch_warn event in window...
-        # Re-check: only CRITICAL if ch_down_duration > threshold AND (wal/ch_warn)
-        # After reconnect ch_down_duration is 0, so not CRITICAL
         assert t.state != PipelineState.CRITICAL
-
-
-# ── CH connectivity tracking ─────────────────────────────────────────
 
 
 class TestChConnectivity:
@@ -151,9 +126,6 @@ class TestChConnectivity:
         assert t._ch_connected is False
         t.record_event("ch_connected")
         assert t._ch_connected is True
-
-
-# ── get_health ───────────────────────────────────────────────────────
 
 
 class TestGetHealth:
@@ -200,13 +172,10 @@ class TestGetHealth:
         assert health["events_in_window"] == 0
 
 
-# ── prune ────────────────────────────────────────────────────────────
-
-
 class TestPrune:
     def test_prune_removes_old_events(self) -> None:
         t = PipelineHealthTracker()
-        t._window_s = 0.05  # 50ms
+        t._window_s = 0.05
         t.record_event("drop")
         time.sleep(0.1)
         t.prune()
@@ -214,7 +183,7 @@ class TestPrune:
 
     def test_prune_keeps_recent_events(self) -> None:
         t = PipelineHealthTracker()
-        t._window_s = 60  # Large window
+        t._window_s = 60
         t.record_event("drop")
         t.prune()
         assert len(t._events) == 1
@@ -224,12 +193,9 @@ class TestPrune:
         t._window_s = 0.05
         t.record_event("drop")
         time.sleep(0.1)
-        t.record_event("wal_fallback")  # Recent
+        t.record_event("wal_fallback")
         t.prune()
         assert len(t._events) == 1
-
-
-# ── Metrics integration ─────────────────────────────────────────────
 
 
 class TestMetrics:
@@ -258,9 +224,6 @@ class TestMetrics:
             t.record_event("data_loss")
             mock_set.assert_called_once_with(int(PipelineState.DATA_LOSS))
             mock_inc.assert_called_once()
-
-
-# ── Edge: deque maxlen ───────────────────────────────────────────────
 
 
 class TestDequeMaxlen:

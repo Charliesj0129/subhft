@@ -21,10 +21,6 @@ def _armed_thresholds() -> RiskThresholds:
     return RiskThresholds(order_rtt_storm_us=2_500_000)
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 _MOCK_TIME = 1_000_000.0
 
 
@@ -47,7 +43,6 @@ def _patch_externals():
         patch("hft_platform.risk.storm_guard.time") as mock_time,
     ):
         mock_time.monotonic = _now_s
-        # Expose helpers via the fixture indirectly through closure
         _patch_externals.advance = _advance  # type: ignore[attr-defined]
         _patch_externals.time_val = time_val  # type: ignore[attr-defined]
         _patch_externals.mock_metrics = mock_metrics  # type: ignore[attr-defined]
@@ -58,16 +53,10 @@ def _advance_time(seconds: float) -> None:
     _patch_externals.advance(seconds)  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.chaos
 class TestStormGuardChaos:
     """Chaos engineering tests for StormGuard."""
 
-    # 1. Concurrent HALT propagation -----------------------------------------
     def test_concurrent_halt_propagation(self):
         """10 threads trigger_halt concurrently; final state must be HALT."""
         guard = StormGuard()
@@ -91,7 +80,6 @@ class TestStormGuardChaos:
         assert guard.state == StormGuardState.HALT
         assert not guard.is_safe()
 
-    # 2. HALT blocks order flow under load -----------------------------------
     def test_halt_blocks_order_flow_under_load(self):
         """50 threads verify is_safe() returns False after HALT."""
         guard = StormGuard()
@@ -115,7 +103,6 @@ class TestStormGuardChaos:
         assert len(results) == 50
         assert all(r is False for r in results)
 
-    # 3. Callback exception isolation ----------------------------------------
     def test_callback_exception_isolation(self):
         """on_halt_callback raises; guard must still reach HALT."""
 
@@ -126,18 +113,14 @@ class TestStormGuardChaos:
         guard.trigger_halt("chaos-exc")
         assert guard.state == StormGuardState.HALT
 
-    # 4. Rapid state oscillation ---------------------------------------------
     def test_rapid_state_oscillation(self):
         """Oscillate NORMAL/WARM 1000 times without crash."""
         guard = StormGuard(thresholds=_armed_thresholds())
         for _ in range(1000):
-            guard.update(order_rtt_us=1_500_000)  # -> WARM
-            # WARM -> NORMAL requires de-escalation threshold; force via transition
+            guard.update(order_rtt_us=1_500_000)
             guard._transition(StormGuardState.NORMAL, "reset")
-        # Should be NORMAL after last manual transition
         assert guard.state == StormGuardState.NORMAL
 
-    # 5. Recovery under concurrent load --------------------------------------
     def test_recovery_under_concurrent_load(self):
         """HALT->NORMAL while concurrent readers check is_safe()."""
         guard = StormGuard()
@@ -158,18 +141,14 @@ class TestStormGuardChaos:
         threads = [threading.Thread(target=_reader) for _ in range(10)]
         for t in threads:
             t.start()
-        # Trigger recovery then signal readers
         guard.update(latency_us=0, feed_gap_s=0.0)
         go_event.set()
         for t in threads:
             t.join(timeout=10)
 
-        # After recovery, guard should be NORMAL (safe=True)
         assert guard.state == StormGuardState.NORMAL
-        # At least some readers should see safe=True
         assert any(r is True for r in saw_safe)
 
-    # 6. Concurrent state reads with single writer ---------------------------
     def test_concurrent_state_reads(self):
         """10 readers + 1 writer; readers always see a valid StormGuardState."""
         guard = StormGuard()
@@ -206,7 +185,6 @@ class TestStormGuardChaos:
 
         assert not invalid_states, f"Invalid states observed: {invalid_states}"
 
-    # 7. HALT callback invoked at least once per transition ------------------
     def test_halt_callback_called_per_transition(self):
         """Callback fires on each HALT transition."""
         call_count = 0
@@ -224,17 +202,15 @@ class TestStormGuardChaos:
 
         assert call_count >= 5
 
-    # 8. De-escalation under concurrent load ---------------------------------
     def test_deescalation_under_load(self):
         """Concurrent clear evaluations eventually de-escalate from STORM."""
         guard = StormGuard(thresholds=_armed_thresholds())
-        guard._storm_cooldown_s = 0.0  # disable cooldown for test speed
+        guard._storm_cooldown_s = 0.0
         guard._de_escalate_threshold = 3
-        # Escalate to STORM
         guard.update(order_rtt_us=2_500_000)
         assert guard.state == StormGuardState.STORM
 
-        _advance_time(1.0)  # ensure cooldown passes
+        _advance_time(1.0)
 
         barrier = threading.Barrier(5)
         results: list[StormGuardState] = []
@@ -253,10 +229,8 @@ class TestStormGuardChaos:
         for t in threads:
             t.join(timeout=10)
 
-        # After many clear evaluations, should de-escalate
         assert guard.state.value <= StormGuardState.WARM.value
 
-    # 9. Threshold update during active checking -----------------------------
     def test_threshold_update_during_active_checking(self):
         """Reload thresholds while update() is being called."""
         guard = StormGuard()
@@ -268,17 +242,14 @@ class TestStormGuardChaos:
 
         t = threading.Thread(target=_updater)
         t.start()
-        # Change thresholds mid-flight
         guard.reload_thresholds({"risk": {"order_rtt_warm_us": 1_000, "order_rtt_storm_us": 1_000_000}})
         time.sleep(0.05)
         stop.set()
         t.join(timeout=10)
 
-        # 1.5 s is now past the reloaded 1 s STORM threshold
         guard.update(order_rtt_us=1_500_000)
         assert guard.state == StormGuardState.STORM
 
-    # 10. Storm cooldown timing (mock time) ----------------------------------
     def test_storm_cooldown_timing(self):
         """STORM does not de-escalate before cooldown period elapses."""
         guard = StormGuard(thresholds=_armed_thresholds())
@@ -288,24 +259,20 @@ class TestStormGuardChaos:
         guard.update(order_rtt_us=2_500_000)
         assert guard.state == StormGuardState.STORM
 
-        # Before cooldown: clear eval should NOT de-escalate
         for _ in range(10):
             guard.update(latency_us=0, feed_gap_s=0.0)
         assert guard.state == StormGuardState.STORM
 
-        # Advance time past cooldown
         _advance_time(31.0)
         guard.update(latency_us=0, feed_gap_s=0.0)
         assert guard.state == StormGuardState.NORMAL
 
-    # 11. Feed gap triggers STORM (not HALT) ---------------------------------
     def test_feed_gap_storm_trigger(self):
         """Feed gap >= threshold triggers STORM (architecture: feed gap does not HALT)."""
         guard = StormGuard(thresholds=RiskThresholds(feed_gap_storm_s=1.0))
         state = guard.update(feed_gap_s=1.5)
         assert state == StormGuardState.STORM
 
-    # 12. Escalation cascade WARM -> STORM -> HALT ---------------------------
     def test_escalation_cascade(self):
         """Worsening health escalates to STORM; HALT needs trigger_halt."""
         guard = StormGuard(thresholds=_armed_thresholds())
@@ -318,7 +285,6 @@ class TestStormGuardChaos:
         guard.trigger_halt("test halt")
         assert guard.state == StormGuardState.HALT
 
-    # 13. Concurrent health updates ------------------------------------------
     def test_concurrent_health_updates(self):
         """Multiple threads update order RTT; state must be a valid StormGuardState."""
         guard = StormGuard()
@@ -342,13 +308,11 @@ class TestStormGuardChaos:
         for t in threads:
             t.join(timeout=10)
 
-        # All observed states must be valid
         valid = set(StormGuardState)
-        assert len(final_states) == 500  # every update returned; none raised
+        assert len(final_states) == 500
         assert all(s in valid for s in final_states)
         assert StormGuardState.HALT not in final_states
 
-    # 14. State metric consistency -------------------------------------------
     def test_state_metric_consistency(self):
         """Metric set() value matches guard.state after each transition."""
         mock_metrics = _patch_externals.mock_metrics  # type: ignore[attr-defined]
@@ -357,18 +321,10 @@ class TestStormGuardChaos:
         guard.trigger_halt("metric-test")
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.HALT))
 
-        # ``_transition`` is half a protocol: it only *queues* the metric and
-        # audit side-effects, because emitting them would take the Prometheus
-        # and audit locks while ``_state_lock`` is held, and the scrape thread
-        # takes those in the opposite order. Its docstring requires every caller
-        # to flush with ``_emit_pending_transition()`` after releasing the lock;
-        # ``trigger_halt`` above does, which is why its assertion passed. This
-        # one called the first half only and read the gauge before it moved.
         guard._transition(StormGuardState.NORMAL, "reset")
         guard._emit_pending_transition()
         mock_metrics.stormguard_mode.labels.return_value.set.assert_called_with(int(StormGuardState.NORMAL))
 
-    # 15. HALT -> NORMAL recovery cycle --------------------------------------
     def test_halt_normal_recovery_cycle(self):
         """Full HALT -> NORMAL -> HALT -> NORMAL cycle; verify state correctness."""
         guard = StormGuard()

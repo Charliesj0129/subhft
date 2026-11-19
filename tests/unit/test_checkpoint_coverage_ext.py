@@ -13,10 +13,6 @@ from hft_platform.execution.checkpoint import (
     PositionCheckpointWriter,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_store(positions=None, recovery=None):
     store = MagicMock()
@@ -40,17 +36,9 @@ def _make_store(positions=None, recovery=None):
     return store
 
 
-# ---------------------------------------------------------------------------
-# json fallback (lines 37-44) — test without orjson
-# ---------------------------------------------------------------------------
-
-
 class TestJsonFallbackPaths:
     def test_dumps_and_loads_without_orjson(self, tmp_path):
         """Verify checkpoint write/load works with json fallback (no orjson)."""
-        # We test the actual write/read round-trip; the json fallback is used
-        # if orjson is unavailable. Since we can't easily unimport orjson,
-        # we test that the checkpoint works correctly regardless.
         ckpt_path = str(tmp_path / "ckpt.json")
         store = _make_store(positions={"acc:strat:SYM": {"symbol": "SYM", "net_qty": 10, "avg_price_scaled": 50000}})
         writer = PositionCheckpointWriter(store, path=ckpt_path, interval_s=60)
@@ -60,11 +48,6 @@ class TestJsonFallbackPaths:
         assert loaded is not None
         assert loaded["positions"]["acc:strat:SYM"]["net_qty"] == 10
         assert loaded["positions"]["acc:strat:SYM"]["avg_price_scaled"] == 50000
-
-
-# ---------------------------------------------------------------------------
-# write_checkpoint — atomic write failure cleanup (lines 189-193)
-# ---------------------------------------------------------------------------
 
 
 class TestWriteCheckpointAtomicFailure:
@@ -83,7 +66,6 @@ class TestWriteCheckpointAtomicFailure:
             with pytest.raises(OSError, match="rename failed"):
                 writer.write_checkpoint()
 
-        # The temp file should have been cleaned up
         tmp_files = [f for f in os.listdir(str(tmp_path)) if f.startswith(".ckpt_")]
         assert len(tmp_files) == 0
 
@@ -131,11 +113,6 @@ class TestWriteCheckpointAtomicFailure:
         assert len(tmp_files) == 0
 
 
-# ---------------------------------------------------------------------------
-# run() loop — exception in write_checkpoint (lines 112-113)
-# ---------------------------------------------------------------------------
-
-
 class TestRunLoopExceptionHandling:
     @pytest.mark.asyncio
     async def test_run_continues_after_write_checkpoint_error(self, tmp_path):
@@ -146,12 +123,6 @@ class TestRunLoopExceptionHandling:
 
         call_count = 0
 
-        # Stop on the second call rather than after a wall-clock delay. The old
-        # version slept 0.15 s and asserted `call_count >= 2`, betting that a
-        # 0.005 s loop got scheduled at least twice in that window — a bet the
-        # event loop loses whenever the machine is loaded (it failed under a
-        # parallel run on 2026-07-26). Counting the calls tests the same
-        # behaviour ("the loop survives a raising snapshot") with no clock in it.
         def failing_snapshot():
             nonlocal call_count
             call_count += 1
@@ -160,20 +131,12 @@ class TestRunLoopExceptionHandling:
             writer.running = False
             return ({}, {})
 
-        # Use the store's snapshot method to cause write_checkpoint to fail
         store.snapshot_positions_with_recovery = failing_snapshot
 
         await asyncio.wait_for(writer.run(), timeout=5.0)
 
-        # Should have survived the exception and eventually stopped
         assert writer.running is False
-        # At least the failing call + one successful call
         assert call_count >= 2
-
-
-# ---------------------------------------------------------------------------
-# Recovery positions — missing symbol key fallback (line 150)
-# ---------------------------------------------------------------------------
 
 
 class TestRecoveryPositionSymbolFallback:
@@ -187,7 +150,6 @@ class TestRecoveryPositionSymbolFallback:
                     "avg_price_scaled": 0,
                     "realized_pnl_scaled": 0,
                     "fees_scaled": 0,
-                    # Note: no "symbol" key
                 }
             }
         )
@@ -218,13 +180,7 @@ class TestRecoveryPositionSymbolFallback:
 
         with open(ckpt_path, "rb") as f:
             data = json.loads(f.read())
-        # Live position should take precedence
         assert data["positions"]["acc:strat:SYM"]["net_qty"] == 5
-
-
-# ---------------------------------------------------------------------------
-# PositionCheckpointWriter.__init__ — env var defaults
-# ---------------------------------------------------------------------------
 
 
 class TestCheckpointInitDefaults:
@@ -247,11 +203,6 @@ class TestCheckpointInitDefaults:
         assert writer._interval_s == 30.0
 
 
-# ---------------------------------------------------------------------------
-# load_checkpoint — stale tmp cleanup with permission error
-# ---------------------------------------------------------------------------
-
-
 class TestLoadCheckpointStaleTmpPermissionError:
     def test_stale_tmp_unlink_oserror_ignored(self, tmp_path):
         """OSError during stale tmp cleanup is silently ignored."""
@@ -262,5 +213,4 @@ class TestLoadCheckpointStaleTmpPermissionError:
         with patch("os.unlink", side_effect=OSError("permission denied")):
             result = PositionCheckpointWriter.load_checkpoint(ckpt_path)
 
-        # Should return None (file doesn't exist) without raising
         assert result is None

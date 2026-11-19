@@ -35,11 +35,6 @@ class TestScheduleJobs:
         assert job_queue.run_daily.call_count == 2
         assert job_queue.run_repeating.call_count == 1
 
-    # python-telegram-bot maps run_daily(days=...) 0-6 to SUNDAY-SATURDAY; it
-    # mapped them to Monday-Sunday before v20.0. These tests name the weekdays
-    # rather than asserting raw ints, because the previous versions asserted
-    # {0,1,2,3,4} and {0,1,2,3,4,5} -- which is what the code shipped, and which
-    # under PTB 22.8 means Sun-Thu and Sun-Fri. The tests were pinning the bug.
     _PTB_WEEKDAY = {
         "sunday": 0,
         "monday": 1,
@@ -168,7 +163,6 @@ class TestMultiSymbolPush:
             mock_asyncio.sleep = AsyncMock()
             await _push_report(ctx, "day")
 
-        # build_hybrid_report_async should be called 3 times (one per symbol)
         assert mock_build.call_count == 3
         symbols_called = [call[0][2] for call in mock_build.call_args_list]
         assert symbols_called == ["TXFD6", "TMFD6", "2330"]
@@ -199,7 +193,6 @@ class TestMultiSymbolPush:
             mock_asyncio.sleep = AsyncMock()
             await _push_report(ctx, "day")
 
-        # Only 1 message sent (TXFD6), NOSYMBOL skipped
         assert ctx.bot.send_message.call_count == 1
 
 
@@ -386,6 +379,6 @@ class TestDeadDataAlertRespectsTheCalendar:
         """The real calendar, not a mock -- weekends are the whole point."""
         from hft_platform.bot.scheduler import _is_trading_day
 
-        assert _is_trading_day("2026-08-23") is False  # Sunday
-        assert _is_trading_day("2026-08-22") is False  # Saturday
-        assert _is_trading_day("2026-08-24") is True  # Monday
+        assert _is_trading_day("2026-08-23") is False
+        assert _is_trading_day("2026-08-22") is False
+        assert _is_trading_day("2026-08-24") is True

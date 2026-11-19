@@ -9,16 +9,12 @@ import pytest
 
 from hft_platform.recorder.loader import WALLoaderService
 
-# These tests exercise WAL edge cases, not dedup logic.
 pytestmark = pytest.mark.usefixtures("_disable_wal_dedup")
 
 
 @pytest.fixture(autouse=False)
 def _disable_wal_dedup(monkeypatch):
     monkeypatch.setenv("HFT_WAL_DEDUP_ENABLED", "0")
-
-
-# Shared helpers (local copies — not in conftest)
 
 
 def _make_wal_file(wal_dir, filename, row, age_s=10):
@@ -49,9 +45,6 @@ def _run_and_capture_warnings(loader):
     return captured
 
 
-# Error path: corrupt / invalid JSON
-
-
 def test_wal_loader_invalid_json_archives(tmp_path):
     wal_dir = tmp_path / "wal"
     archive_dir = tmp_path / "archive"
@@ -68,13 +61,9 @@ def test_wal_loader_invalid_json_archives(tmp_path):
 
     loader.process_files()
 
-    # Phase 5: Corrupt files now go to quarantine instead of archive
     corrupt_dir = wal_dir / "corrupt"
     assert corrupt_dir.exists()
     assert (corrupt_dir / fpath.name).exists()
-
-
-# Error path: insert failure → DLQ
 
 
 def test_wal_loader_insert_failure_still_archives(tmp_path):
@@ -109,8 +98,6 @@ def test_wal_loader_insert_failure_still_archives(tmp_path):
 
     loader.process_files()
 
-    # Phase 5: Failed inserts now go to DLQ after retry exhaustion
-    # File should NOT be archived (stays for retry or DLQ written)
     dlq_dir = wal_dir / "dlq"
     assert dlq_dir.exists()
     dlq_files = list(dlq_dir.glob("market_data_*.jsonl"))
@@ -144,9 +131,6 @@ def test_insert_with_retry_records_failed_after_retry_outcome(tmp_path):
         table="market_data", result="failed_after_retry"
     )
     loader.metrics.recorder_insert_retry_total.labels.assert_any_call(table="market_data", result="failed")
-
-
-# DLQ write and cleanup
 
 
 def test_write_to_dlq_writes_metadata(tmp_path):
@@ -197,9 +181,6 @@ def test_cleanup_old_dlq_files_archives(tmp_path):
     assert (dlq_archive / dlq_file.name).exists()
 
 
-# Corrupt file cleanup
-
-
 def test_cleanup_old_corrupt_files(tmp_path):
     wal_dir = tmp_path / "wal"
     wal_dir.mkdir()
@@ -220,9 +201,6 @@ def test_cleanup_old_corrupt_files(tmp_path):
     loader._cleanup_old_corrupt_files()
 
     assert not corrupt_file.exists()
-
-
-# Archive cleanup (retention policy)
 
 
 def test_cleanup_old_archive_files(tmp_path):
@@ -248,9 +226,6 @@ def test_cleanup_old_archive_files(tmp_path):
 
     assert not old_archive.exists()
     assert new_archive.exists()
-
-
-# Dedup paths
 
 
 def test_dedup_skips_duplicate_and_archives(tmp_path):
@@ -332,9 +307,6 @@ def test_dedup_records_hash_after_insert(tmp_path):
     assert (archive_dir / fpath.name).exists()
 
 
-# Strict-order and unknown-table skips
-
-
 def test_process_single_file_strict_order_skips(tmp_path):
     wal_dir = tmp_path / "wal"
     wal_dir.mkdir()
@@ -350,7 +322,6 @@ def test_process_single_file_strict_order_skips(tmp_path):
 
     processed = loader._process_single_file(str(fpath), force=True)
     assert processed is False
-    # R7: out-of-order files are now quarantined (moved to corrupt/ dir), not kept in place
     assert not fpath.exists()
 
 
@@ -368,9 +339,6 @@ def test_process_single_file_unknown_table_skips(tmp_path):
 
     assert processed is False
     assert fpath.exists()
-
-
-# Orderbook warning edge cases
 
 
 def test_tick_type_no_orderbook_warning(tmp_path):
@@ -505,9 +473,6 @@ def test_bidask_one_side_empty_logs_debug(tmp_path):
         loader_mod.logger.debug = original_debug
 
     assert any("Missing orderbook side" in d.get("event", "") for d in captured)
-
-
-# Backoff computation bounds
 
 
 def test_compute_backoff_bounds(tmp_path):

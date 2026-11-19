@@ -37,7 +37,6 @@ def test_ab_compare_delta_table(tmp_path: Path, capsys):
     cmd_alpha_ab_compare(args)
     captured = capsys.readouterr().out
 
-    # sharpe delta = 1.32 - 1.05 = +0.270
     assert "+0.270" in captured
     assert "sharpe_oos" in captured
     assert "run_a" in captured

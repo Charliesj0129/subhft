@@ -32,7 +32,6 @@ pub struct MdEventFrame {
     pub _pad: [u8; 40],
 }
 
-// Compile-time size assertion.
 const _: () = assert!(std::mem::size_of::<MdEventFrame>() == 128);
 
 impl Default for MdEventFrame {

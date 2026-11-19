@@ -24,24 +24,24 @@ logger = get_logger("gateway.channel")
 
 
 TypedIntentFrame: TypeAlias = tuple[
-    str,  # 0  marker = "typed_intent_v1"
-    int,  # 1  intent_id
-    str,  # 2  strategy_id
-    str,  # 3  symbol
-    int,  # 4  intent_type (enum int)
-    int,  # 5  side (enum int)
-    int,  # 6  price
-    int,  # 7  qty
-    int,  # 8  tif (enum int)
-    str,  # 9  target_order_id
-    int,  # 10 timestamp_ns
-    int,  # 11 source_ts_ns
-    str,  # 12 reason
-    str,  # 13 trace_id
-    str,  # 14 idempotency_key
-    int,  # 15 ttl_ns
-    int,  # 16 decision_price (LOB mid at signal time, scaled x10000)
-    str,  # 17 price_type ("LMT"/"MKT")
+    str,
+    int,
+    str,
+    str,
+    int,
+    int,
+    int,
+    int,
+    int,
+    str,
+    int,
+    int,
+    str,
+    str,
+    str,
+    int,
+    int,
+    str,
 ]
 
 
@@ -50,8 +50,8 @@ class IntentEnvelope:
     """Wrapper carrying TTL metadata alongside the intent."""
 
     intent: OrderIntent
-    enqueued_ns: int  # Monotonic nanoseconds at submission
-    ack_token: str  # Correlation ID for caller (= idempotency_key or str(intent_id))
+    enqueued_ns: int
+    ack_token: str
 
 
 @dataclass(slots=True)
@@ -118,11 +118,9 @@ class LocalIntentChannel:
         _dlq_size = dlq_maxsize if dlq_maxsize is not None else int(os.getenv("HFT_INTENT_DLQ_SIZE", "1000"))
 
         self._queue: asyncio.Queue[IntentEnvelope | TypedIntentEnvelope] = asyncio.Queue(maxsize=_maxsize)
-        self._timeout_ns: int = _ttl_ms * 1_000_000  # convert to ns; 0 = disabled
+        self._timeout_ns: int = _ttl_ms * 1_000_000
         self._dlq: Deque[IntentEnvelope | TypedIntentEnvelope] = deque(maxlen=_dlq_size)
         self._on_ttl_expired = on_ttl_expired
-
-    # ── Hot path ──────────────────────────────────────────────────────────
 
     def submit_nowait(self, intent: OrderIntent) -> str:
         """Enqueue intent; raises asyncio.QueueFull on backpressure.
@@ -141,7 +139,7 @@ class LocalIntentChannel:
 
     def submit_typed_nowait(self, frame: TypedIntentFrame) -> str:
         """Typed fast-path ingress from StrategyRunner; avoids OrderIntent alloc on hot path."""
-        if not frame or len(frame) < 16 or frame[0] != "typed_intent_v1":  # 16 legacy, 17 with decision_price
+        if not frame or len(frame) < 16 or frame[0] != "typed_intent_v1":
             raise ValueError("Invalid typed intent frame")
         intent_id = int(frame[1])
         idempotency_key = str(frame[14] or "")

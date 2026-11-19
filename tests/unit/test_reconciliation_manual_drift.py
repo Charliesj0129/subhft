@@ -44,7 +44,7 @@ def _inject_manual_short(store: PositionStore, symbol: str = "TMFE6") -> None:
         strategy_id=MANUAL_STRATEGY_ID,
         symbol=symbol,
         net_qty=-1,
-        avg_price_scaled=-1,  # sentinel: unknown cost basis
+        avg_price_scaled=-1,
     )
 
 
@@ -52,7 +52,6 @@ def test_clear_symbol_positions_strategy_scoped_preserves_active_strategy():
     """Strategy-scoped clear must not remove other strategies' positions."""
     store = PositionStore()
     symbol = "TMFE6"
-    # MANUAL phantom
     manual_key = f"default:{MANUAL_STRATEGY_ID}:{symbol}"
     store.positions[manual_key] = Position(
         account_id="default",
@@ -61,7 +60,6 @@ def test_clear_symbol_positions_strategy_scoped_preserves_active_strategy():
         net_qty=-1,
         avg_price_scaled=-1,
     )
-    # Active strategy holding same symbol
     strat_key = f"default:R47:{symbol}"
     store.positions[strat_key] = Position(
         account_id="default",
@@ -108,11 +106,7 @@ def test_clear_symbol_positions_default_clears_all_strategies_for_symbol():
 async def test_auto_correct_removes_manual_phantom_without_restart(guard):
     """End-to-end: MANUAL -1 local + broker flat should self-heal via auto-correct."""
     client = MagicMock()
-    # Broker reports no TMFE6 position (user closed it manually).
     client.get_positions.return_value = []
-    # Non-empty subscribed set so TMFE6 IS considered a platform symbol,
-    # forcing the drift into the HALT/auto-correct path rather than the
-    # non-platform phantom auto-resolve branch.
     client.subscribed_codes = {"TMFE6"}
 
     store = PositionStore()
@@ -133,13 +127,10 @@ async def test_auto_correct_removes_manual_phantom_without_restart(guard):
     svc._auto_correct_after = 2
     svc._critical_drift_debounce = 1
 
-    # First sync: crosses broker_zero debounce (=1) and triggers HALT path.
     await svc.sync_portfolio()
-    # Second sync: streak hits auto-correct threshold and clears MANUAL entry.
     await svc.sync_portfolio()
 
     manual_key = f"default:{MANUAL_STRATEGY_ID}:TMFE6"
     assert manual_key not in store.positions, "MANUAL phantom position must be cleared by auto-correct without restart"
-    # Reconciliation state should also reset.
     assert svc._halt_triggered is False
     assert svc._critical_drift_streak == 0

@@ -38,9 +38,9 @@ import sys
 from pathlib import Path
 from statistics import median
 
-REGRESSION_THRESHOLD = 0.10  # 10% default, on runner-speed-normalized change
-CATASTROPHIC_THRESHOLD = 2.0  # +200% raw change fails even if uniform across benchmarks
-STAT = "median"  # per-benchmark statistic compared; see the module docstring
+REGRESSION_THRESHOLD = 0.10
+CATASTROPHIC_THRESHOLD = 2.0
+STAT = "median"
 
 
 def load_benchmarks(path: Path, stat: str = STAT) -> dict[str, float]:
@@ -134,7 +134,6 @@ def main(argv: list[str] | None = None) -> int:
 
     regressions, speed_factor = check_regressions(baseline, current, args.threshold, args.catastrophic_threshold)
 
-    # Summary
     matched = sum(1 for name in baseline if name in current)
     print(f"[Darwin Gate] Compared {matched} benchmarks by {args.stat} (threshold: {args.threshold:.0%})")
     print(f"[Darwin Gate] Runner speed factor vs baseline: {speed_factor:.2f}x (normalized out)")

@@ -51,11 +51,6 @@ def _make_composed(msgs: list[str] | None = None) -> ComposedReport:
     return ComposedReport(messages=[MessagePart(kind="text", content=m, min_tier="paid") for m in msgs])
 
 
-# ---------------------------------------------------------------------------
-# set_position_store / _get_position_store (lines 32, 37)
-# ---------------------------------------------------------------------------
-
-
 class TestPositionStoreRef:
     def test_set_position_store_sets_ref(self) -> None:
         from hft_platform.bot.handlers import _get_position_store, set_position_store
@@ -63,7 +58,6 @@ class TestPositionStoreRef:
         store = MagicMock()
         set_position_store(store)
         assert _get_position_store() is store
-        # Cleanup
         set_position_store(None)
 
     def test_get_position_store_returns_none_when_unset(self) -> None:
@@ -71,11 +65,6 @@ class TestPositionStoreRef:
 
         set_position_store(None)
         assert _get_position_store() is None
-
-
-# ---------------------------------------------------------------------------
-# _collect_core_for_latest (lines 83-106)
-# ---------------------------------------------------------------------------
 
 
 class TestCollectCoreForLatest:
@@ -156,11 +145,6 @@ class TestCollectCoreForLatest:
         assert result is empty_sd
 
 
-# ---------------------------------------------------------------------------
-# cmd_report_rule: error and empty paths (lines 187-194)
-# ---------------------------------------------------------------------------
-
-
 class TestReportRuleErrorPaths:
     @pytest.mark.asyncio
     async def test_report_rule_exception_replies_error(self) -> None:
@@ -220,11 +204,6 @@ class TestReportRuleErrorPaths:
         assert bot_app.last_night_report is not None
 
 
-# ---------------------------------------------------------------------------
-# cmd_report error path (lines 144-147)
-# ---------------------------------------------------------------------------
-
-
 class TestReportErrorPath:
     @pytest.mark.asyncio
     async def test_report_exception_replies_error(self) -> None:
@@ -266,14 +245,8 @@ class TestReportErrorPath:
         ):
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
-            # Session was auto-detected (day or night based on current hour)
             session_arg = mock_build.call_args[0][0]
             assert session_arg in ("day", "night")
-
-
-# ---------------------------------------------------------------------------
-# cmd_ask: question dispatch and import error (lines 217-229)
-# ---------------------------------------------------------------------------
 
 
 class TestAskHandler:
@@ -314,7 +287,6 @@ class TestAskHandler:
         update = _make_update(chat_id=12345, text="/ask why")
         ctx = _make_context(args=["why"])
 
-        # Remove cached module and inject an import blocker
         saved = sys.modules.pop("hft_platform.reports.llm_reasoner", None)
         original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
 
@@ -359,13 +331,7 @@ class TestAskHandler:
                 await cmd_ask(update, ctx)
 
         calls = update.message.reply_text.call_args_list
-        # Check that an answer was sent (the last call should be the answer or usage)
         assert len(calls) >= 1
-
-
-# ---------------------------------------------------------------------------
-# cmd_levels: error and empty paths (lines 257-264)
-# ---------------------------------------------------------------------------
 
 
 class TestLevelsErrorPaths:
@@ -429,11 +395,6 @@ class TestLevelsErrorPaths:
         reply = update.message.reply_text.call_args[0][0]
         assert "R1:" in reply
         assert "S1:" in reply
-
-
-# ---------------------------------------------------------------------------
-# cmd_flow: error and empty paths (lines 307-314, 326, 341-344)
-# ---------------------------------------------------------------------------
 
 
 class TestFlowErrorPaths:
@@ -568,11 +529,6 @@ class TestFlowErrorPaths:
         assert "偏空" in reply
 
 
-# ---------------------------------------------------------------------------
-# cmd_status: detail lines (lines 367, 370, 379)
-# ---------------------------------------------------------------------------
-
-
 class TestStatusDetails:
     @pytest.mark.asyncio
     async def test_status_with_day_report(self) -> None:
@@ -627,11 +583,6 @@ class TestStatusDetails:
         await cmd_status(update, ctx)
         reply = update.message.reply_text.call_args[0][0]
         assert "尚未連線" in reply
-
-
-# ---------------------------------------------------------------------------
-# cmd_pos: full coverage (lines 413-421)
-# ---------------------------------------------------------------------------
 
 
 class TestCmdPos:
@@ -692,7 +643,7 @@ class TestCmdPos:
         assert "strat_A" in reply
         assert "strat_B" in reply
         assert "2330" in reply
-        assert "合計" in reply  # multiple strategies => aggregate footer
+        assert "合計" in reply
         set_position_store(None)
 
     @pytest.mark.asyncio
@@ -801,11 +752,6 @@ class TestCmdPos:
         reply = update.message.reply_text.call_args[0][0]
         assert "無持倉" in reply
         set_position_store(None)
-
-
-# ---------------------------------------------------------------------------
-# _send_composed: image path (lines 238-239)
-# ---------------------------------------------------------------------------
 
 
 class TestSendComposed:

@@ -35,10 +35,6 @@ from hft_platform.reports.models import (
     VolatilityFacts,
 )
 
-# ---------------------------------------------------------------------------
-# Bar5m
-# ---------------------------------------------------------------------------
-
 
 class TestBar5m:
     def test_creation(self) -> None:
@@ -68,11 +64,6 @@ class TestBar5m:
         )
         with pytest.raises((AttributeError, TypeError)):
             bar.extra_field = "nope"  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# FlowBar
-# ---------------------------------------------------------------------------
 
 
 class TestFlowBar:
@@ -106,11 +97,6 @@ class TestFlowBar:
             fb.extra_field = "nope"  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# LargeTrade
-# ---------------------------------------------------------------------------
-
-
 class TestLargeTrade:
     def test_creation(self) -> None:
         lt = LargeTrade(
@@ -133,11 +119,6 @@ class TestLargeTrade:
             lt.extra_field = "nope"  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# DepthBar
-# ---------------------------------------------------------------------------
-
-
 class TestDepthBar:
     def test_creation(self) -> None:
         db = DepthBar(
@@ -153,11 +134,6 @@ class TestDepthBar:
         db = DepthBar(hour=9, avg_bid_vol=1.0, avg_ask_vol=1.0, bid_ratio=0.5)
         with pytest.raises((AttributeError, TypeError)):
             db.extra_field = "nope"  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# SessionData
-# ---------------------------------------------------------------------------
 
 
 class TestSessionData:
@@ -192,11 +168,6 @@ class TestSessionData:
             sd.extra_field = "nope"  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# PriceLevel
-# ---------------------------------------------------------------------------
-
-
 class TestPriceLevel:
     def test_creation(self) -> None:
         pl = PriceLevel(
@@ -211,11 +182,6 @@ class TestPriceLevel:
         pl = PriceLevel(price=ScaledPrice(1), strength=0.5, reason="test")
         with pytest.raises((AttributeError, TypeError)):
             pl.extra_field = "nope"  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# SignalReport
-# ---------------------------------------------------------------------------
 
 
 class TestSignalReport:
@@ -275,11 +241,6 @@ class TestSignalReport:
             sr.extra_field = "nope"  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# Scenario
-# ---------------------------------------------------------------------------
-
-
 class TestScenario:
     def test_creation(self) -> None:
         sc = Scenario(
@@ -306,11 +267,6 @@ class TestScenario:
             sc.extra_field = "nope"  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# KeyLevel
-# ---------------------------------------------------------------------------
-
-
 class TestKeyLevel:
     def test_creation(self) -> None:
         kl = KeyLevel(
@@ -326,11 +282,6 @@ class TestKeyLevel:
         kl = KeyLevel(price=ScaledPrice(1), label="L", importance=1, reason="r")
         with pytest.raises((AttributeError, TypeError)):
             kl.extra_field = "nope"  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# ScenarioReport
-# ---------------------------------------------------------------------------
 
 
 class TestScenarioReport:
@@ -400,11 +351,6 @@ class TestScenarioReport:
             rpt.extra_field = "nope"  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
-# ChannelConfig — frozen=True
-# ---------------------------------------------------------------------------
-
-
 class TestChannelConfig:
     def test_creation(self) -> None:
         cfg = ChannelConfig(
@@ -427,16 +373,9 @@ class TestChannelConfig:
             cfg.enabled = False  # type: ignore[misc]
 
     def test_slots_prevents_extra_attrs(self) -> None:
-        # frozen=True + slots=True: Python 3.12 raises TypeError for unknown
-        # attribute assignment (slots prevent __dict__; frozen blocks __setattr__)
         cfg = ChannelConfig(name="n", chat_id="c", tier="t", enabled=False)
         with pytest.raises((AttributeError, TypeError)):
             cfg.extra_field = "nope"  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# Helpers for three-layer models
-# ---------------------------------------------------------------------------
 
 
 def _make_flow_bar(**overrides: object) -> FlowBar:
@@ -490,11 +429,6 @@ def _make_scenario_simple(**overrides: object) -> Scenario:
     )
     defaults.update(overrides)
     return Scenario(**defaults)  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# Layer 1: Facts — Three-Layer Architecture
-# ---------------------------------------------------------------------------
 
 
 class TestSegmentFact:
@@ -777,11 +711,6 @@ class TestFactReport:
         assert len(fr.segments) == 1
 
 
-# ---------------------------------------------------------------------------
-# Layer 2: Reasoning — Three-Layer Architecture
-# ---------------------------------------------------------------------------
-
-
 class TestEvidence:
     def test_construction(self) -> None:
         e = Evidence(
@@ -881,11 +810,6 @@ class TestReasoningReport:
         assert len(rr.scenarios) == 1
 
 
-# ---------------------------------------------------------------------------
-# Layer 3: Composition — Three-Layer Architecture
-# ---------------------------------------------------------------------------
-
-
 class TestMessagePart:
     def test_defaults(self) -> None:
         mp = MessagePart(kind="text", content="Hello")
@@ -924,11 +848,6 @@ class TestComposedReport:
     def test_empty(self) -> None:
         cr = ComposedReport(messages=[])
         assert len(cr.messages) == 0
-
-
-# ---------------------------------------------------------------------------
-# __all__ coverage for new models
-# ---------------------------------------------------------------------------
 
 
 class TestThreeLayerAllExports:

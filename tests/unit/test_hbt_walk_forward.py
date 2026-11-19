@@ -10,10 +10,6 @@ from research.backtest.hft_native_runner import HftNativeRunner
 from research.backtest.types import BacktestConfig, WalkForwardConfig
 from research.registry.schemas import AlphaManifest
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_feed(path: Path, n: int, *, seed: int = 7) -> None:
     """Create a minimal hftbt.npz for HftNativeRunner walk-forward tests."""
@@ -78,7 +74,6 @@ def mock_adapter_slice(monkeypatch):
     """Bypass hftbacktest execution; return deterministic fold results."""
 
     def _fake(alpha, npz_path, config, symbol="ASSET"):
-        # Mirror what AlphaStrategyBridge.reset() → alpha.reset() would do
         alpha.reset()
         n = 30
         rng = np.random.default_rng(42)
@@ -91,11 +86,6 @@ def mock_adapter_slice(monkeypatch):
         return equity, signals, mid, pos
 
     monkeypatch.setattr("research.backtest.hft_native_runner._run_adapter_slice", _fake)
-
-
-# ---------------------------------------------------------------------------
-# Walk-forward tests
-# ---------------------------------------------------------------------------
 
 
 def test_walk_forward_n_folds(tmp_path: Path, mock_adapter_slice) -> None:
@@ -121,7 +111,6 @@ def test_walk_forward_negative_consistency(tmp_path: Path, mock_adapter_slice, m
     path = tmp_path / "hftbt.npz"
     _make_feed(path, n=160, seed=21)
 
-    # Override mock for negative equity path
     def _fake_neg(alpha, npz_path, config, symbol="ASSET"):
         alpha.reset()
         n = 30
@@ -170,15 +159,8 @@ def test_walk_forward_resets_alpha(tmp_path: Path, mock_adapter_slice) -> None:
     alpha = _ConstAlpha(1.0)
     runner = HftNativeRunner(alpha, _cfg(path))
     result = runner.run_walk_forward(alpha, WalkForwardConfig(n_splits=4, min_train_samples=5))
-    # Original alpha should NOT have been reset (deep copies used)
     assert alpha.reset_calls == 0
-    # But folds should have run successfully
     assert len(result.folds) > 0
-
-
-# ---------------------------------------------------------------------------
-# P3: auto_regime_split in BacktestConfig
-# ---------------------------------------------------------------------------
 
 
 def test_backtest_config_auto_regime_split_default_true() -> None:
@@ -193,7 +175,6 @@ def test_backtest_run_auto_regime_split_populates_regime_metrics(tmp_path: Path,
     _make_feed(path, n=120, seed=77)
     alpha = _ConstAlpha(0.5)
 
-    # Override mock to return varied signals/prices so regime detection works
     def _fake_regime(a, npz_path, config, symbol="ASSET"):
         a.reset()
         n = 40

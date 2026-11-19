@@ -39,7 +39,6 @@ def test_parser_accepts_repeatable_inputs() -> None:
 def test_run_repairs_missing_bars_and_emits_report(tmp_path: Path) -> None:
     mod = _load_module()
 
-    # 0s,1s,4s,5s => missing bars at 2s,3s
     ts_base = 1_700_000_000_000_000_000
     ts = np.array(
         [
@@ -88,7 +87,6 @@ def test_run_repairs_missing_bars_and_emits_report(tmp_path: Path) -> None:
     assert repaired.height == 6
     assert repaired["is_imputed"].sum() >= 2
 
-    # Ensure full 1-second grid.
     diffs = np.diff(repaired["bar_ts"].to_numpy())
     assert np.all(diffs == 1_000_000_000)
 

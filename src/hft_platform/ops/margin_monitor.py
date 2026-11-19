@@ -26,10 +26,10 @@ logger = structlog.get_logger(__name__)
 class MarginCheckResult:
     """Result of a single margin check."""
 
-    ratio: float  # margin_used / margin_available (0.0-1.0+)
-    action: str  # "ok" | "warn" | "critical" | "error"
-    margin_used: int  # NTD (not scaled)
-    margin_available: int  # NTD
+    ratio: float
+    action: str
+    margin_used: int
+    margin_available: int
 
 
 class MarginMonitor:
@@ -84,7 +84,6 @@ class MarginMonitor:
             logger.warning("margin_monitor.poll_failed", error=str(exc))
             return MarginCheckResult(ratio=0.0, action="error", margin_used=0, margin_available=0)
 
-        # Extract margin values from broker response
         if isinstance(margin_data, dict):
             used = int(margin_data.get("margin_used", margin_data.get("equity_used", 0)) or 0)
             available = int(margin_data.get("margin_available", margin_data.get("equity", 1)) or 1)
@@ -98,9 +97,9 @@ class MarginMonitor:
                 raw_available=available,
                 used=used,
             )
-            available = 1  # Prevent division by zero
+            available = 1
 
-        ratio = used / available  # float OK -- monitoring, not accounting
+        ratio = used / available
 
         if ratio >= self._critical_ratio:
             action = "critical"
@@ -124,7 +123,7 @@ class MarginMonitor:
                     available=available,
                 )
             if self._in_critical:
-                self._in_critical = False  # Recovered from critical
+                self._in_critical = False
         else:
             action = "ok"
             if self._in_warning or self._in_critical:

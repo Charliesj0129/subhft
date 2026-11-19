@@ -47,16 +47,12 @@ import unittest.mock as mock
 
 import pytest
 
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
-
 
 def _make_client() -> mock.MagicMock:
     """Build a mock client with the fields ``_resubscribe_all`` reads."""
     pytest.importorskip("prometheus_client")
     c = mock.MagicMock()
-    c.api = object()  # truthy
+    c.api = object()
     c.logged_in = True
     c.tick_callback = lambda *a, **k: None
     c._callbacks_registered = True
@@ -77,11 +73,6 @@ def _make_client() -> mock.MagicMock:
     return c
 
 
-# --------------------------------------------------------------------------- #
-# Tests
-# --------------------------------------------------------------------------- #
-
-
 class TestResubscribeLock:
     """Concurrency contract for ``_resubscribe_all``."""
 
@@ -95,26 +86,18 @@ class TestResubscribeLock:
         )
 
         c = _make_client()
-        # Add the lock the production code is expected to own.
         c._resubscribe_lock = threading.Lock()
 
-        # Slow each subscribe call so the two threads overlap inside the body.
         body_entered = threading.Event()
         proceed = threading.Event()
 
         def slow_subscribe(*args: object, **kwargs: object) -> None:
             body_entered.set()
-            # Hold the lock on first thread until the other has tried.
             proceed.wait(timeout=2.0)
 
         c._quote_api.return_value.subscribe.side_effect = slow_subscribe
 
         mgr = SubscriptionManager(c)
-        # SubscriptionManager has __slots__ so we can't setattr a counter on it.
-        # Track calls via the underlying broker subscribe mock instead — every
-        # successful _subscribe_symbol pass invokes ``quote_api.subscribe``
-        # (Tick + BidAsk = 2 calls per symbol). The slow_subscribe side_effect
-        # blocks on ``proceed``, so we infer "body entered" from body_entered.
         results: list[str] = []
 
         def worker(name: str) -> None:
@@ -124,20 +107,14 @@ class TestResubscribeLock:
         t1 = threading.Thread(target=worker, args=("t1",), daemon=True)
         t2 = threading.Thread(target=worker, args=("t2",), daemon=True)
         t1.start()
-        # Wait until t1 is inside the body (lock held, doing slow subscribe).
         assert body_entered.wait(timeout=2.0), "first worker never entered body"
         t2.start()
-        # Give t2 time to attempt and bounce off the lock.
         t2.join(timeout=1.0)
-        # t2 must have returned without blocking on t1's slow subscribe.
         assert not t2.is_alive(), "second worker blocked instead of skipping"
-        # Now release t1.
         proceed.set()
         t1.join(timeout=2.0)
         assert not t1.is_alive(), "first worker never finished"
 
-        # t2 took the lock-skip path. t1 ran the body and made >=1 broker
-        # subscribe call (slow_subscribe was invoked at least once).
         assert c._quote_api.return_value.subscribe.call_count >= 1, "t1 did not invoke broker subscribe at all"
 
     def test_subscribed_codes_clear_in_place(self) -> None:
@@ -152,23 +129,19 @@ class TestResubscribeLock:
 
         c = _make_client()
         c._resubscribe_lock = threading.Lock()
-        # Pre-seed the set with stale entries.
         c.subscribed_codes.update({"OLD_A", "OLD_B"})
         codes_id_before = id(c.subscribed_codes)
-        codes_ref = c.subscribed_codes  # capture reference like a peer reader
+        codes_ref = c.subscribed_codes
 
         mgr = SubscriptionManager(c)
         mgr._resubscribe_all()
 
-        # The SAME set object — never reassigned.
         assert id(c.subscribed_codes) == codes_id_before, (
             "subscribed_codes was rebound; peer threads holding the old "
             "reference would see stale state. Use clear() + add(), never "
             "``c.subscribed_codes = set()``."
         )
-        # The captured reference must reflect the new state.
         assert codes_ref is c.subscribed_codes
-        # Stale entries must be gone (cleared in place).
         assert "OLD_A" not in c.subscribed_codes
         assert "OLD_B" not in c.subscribed_codes
 
@@ -184,9 +157,6 @@ class TestResubscribeLock:
 
         c = _make_client()
         c._resubscribe_lock = threading.Lock()
-        # Force cooldown to trip on the second call (1.5s default), so the
-        # second caller would early-return on cooldown — but only if the
-        # first thread successfully wrote the ts under the lock.
         c.resubscribe_cooldown = 60.0
 
         mgr = SubscriptionManager(c)
@@ -194,7 +164,6 @@ class TestResubscribeLock:
         ts_after_first = c._last_resubscribe_ts
         assert ts_after_first > 0.0, "first call did not write _last_resubscribe_ts"
 
-        # Second call must early-return on cooldown.
         prev_calls = c._quote_api.return_value.subscribe.call_count
         mgr._resubscribe_all()
         post_calls = c._quote_api.return_value.subscribe.call_count
@@ -212,16 +181,11 @@ class TestResubscribeLock:
         from hft_platform.observability.metrics import MetricsRegistry
 
         metrics = MetricsRegistry.get()
-        # The counter must exist.
         counter = getattr(metrics, "feed_resubscribe_skipped_concurrent_total", None)
         assert counter is not None, "expected MetricsRegistry to expose feed_resubscribe_skipped_concurrent_total"
 
-        # Snapshot current value (the registry is process-singleton so we
-        # need to diff rather than assume zero).
         def _value() -> float:
             for sample in counter.collect()[0].samples:
-                # Default Counter exposes both ``_total`` and ``_created``;
-                # we want the cumulative value (no suffix or ``_total``).
                 if sample.name.endswith("_total") or sample.name == counter._name:
                     return float(sample.value)
             return 0.0
@@ -248,7 +212,6 @@ class TestResubscribeLock:
         t1 = threading.Thread(target=worker, daemon=True)
         t1.start()
         assert body_entered.wait(timeout=2.0)
-        # Second caller must skip and bump metric.
         mgr._resubscribe_all()
         after_skip = _value()
         assert after_skip >= before + 1, f"metric did not increment on skip: before={before} after={after_skip}"
@@ -256,7 +219,6 @@ class TestResubscribeLock:
         proceed.set()
         t1.join(timeout=2.0)
 
-        # Reference prom to silence unused-import lints.
         assert prom is not None
 
 
@@ -278,17 +240,12 @@ class TestSubscribedCodesIdentityAcrossResetPaths:
         root = pathlib.Path(__file__).resolve().parents[2] / "src" / "hft_platform" / "feed_adapter" / "shioaji"
         assert root.exists(), f"expected feed_adapter/shioaji dir at {root}"
         offenders: list[tuple[str, int, str]] = []
-        # Match ``[anything].subscribed_codes = ...`` and bare
-        # ``subscribed_codes = ...`` at module/method scope, but skip
-        # type-annotation forms like ``self.subscribed_codes: set[str] = set()``
-        # in ``__init__`` (initial allocation is fine).
         rebind_pattern = re.compile(r"\bsubscribed_codes\s*=\s*set\(")
         annot_pattern = re.compile(r"subscribed_codes\s*:\s*set")
         for py in root.rglob("*.py"):
             for lineno, line in enumerate(py.read_text().splitlines(), start=1):
                 if not rebind_pattern.search(line):
                     continue
-                # Allow the annotated initial allocation in __init__.
                 if annot_pattern.search(line):
                     continue
                 offenders.append((str(py), lineno, line.strip()))
@@ -311,15 +268,12 @@ class TestSubscribedCodesIdentityAcrossResetPaths:
         assert root.exists()
         offenders: list[tuple[str, int, str]] = []
         rebind_pattern = re.compile(r"_failed_sub_symbols\s*=\s*[^d]")
-        # Allow only ``self._failed_sub_symbols: deque[...] = deque()`` and
-        # ``self._failed_sub_symbols = deque(...)`` initial allocation.
         annot_or_deque_pattern = re.compile(r"_failed_sub_symbols\s*(?::\s*deque[^=]*)?\s*=\s*deque\b")
         for py in root.rglob("*.py"):
             for lineno, line in enumerate(py.read_text().splitlines(), start=1):
                 stripped = line.strip()
                 if "_failed_sub_symbols" not in stripped or "=" not in stripped:
                     continue
-                # Skip comment lines (documentation often quotes forbidden patterns).
                 if stripped.startswith("#"):
                     continue
                 if rebind_pattern.search(stripped) and not annot_or_deque_pattern.search(stripped):

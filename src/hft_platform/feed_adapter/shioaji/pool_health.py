@@ -57,10 +57,6 @@ def get_healthy_feed_gap_s(slots: list[FacadeSlot]) -> float:
     return max_gap
 
 
-# Heartbeat interval for the "reconnect suppressed" log. Long enough that an
-# overnight shutdown costs a few hundred lines rather than a few hundred
-# thousand, short enough that suppression is still visibly *active* rather than
-# a single line logged hours ago.
 _SUPPRESS_LOG_INTERVAL_S = 300.0
 
 
@@ -169,7 +165,6 @@ def check_facade_health(
         state = slot.state
 
         if state is FacadeState.RECOVERING:
-            # Reconnect already in flight — do not interfere.
             continue
 
         if state is FacadeState.CONNECTED:
@@ -177,30 +172,16 @@ def check_facade_health(
             if gap > degraded_threshold_s:
                 slot.state = FacadeState.DEGRADED
                 slot.degraded_since_mono = now
-                # The transition is unconditional -- callers rely on the state
-                # machine reaching DEGRADED so the suppression path can report
-                # it. The *severity* is not: outside the session a feed gap is
-                # the expected reading, and the docstring above already says a
-                # gap is evidence of a broken connection only while the session
-                # is open. Logging it at warning made the daily 13:45-15:00
-                # close/open interval emit ~37 warnings on THESHOW, every day,
-                # for four healthy logged-in connections -- and on 2026-08-20 a
-                # genuine four-connection outage produced a log line of exactly
-                # the same shape and severity. Carry the reason so the two are
-                # distinguishable by machine, not just by knowing the calendar.
                 _log_degraded(slot, gap, suppress_reconnect, suppress_gap_reconnect)
 
         elif state is FacadeState.DEGRADED:
             gap = slot.feed_gap_s()
             if gap < degraded_threshold_s:
-                # Feed recovered.
                 slot.state = FacadeState.CONNECTED
                 slot.degraded_since_mono = None
                 slot._suppress_logged_mono = 0.0
                 log.info("facade_recovered", conn_id=slot.conn_id, feed_gap_s=round(gap, 3))
             else:
-                # Still degraded — check whether we have been degraded long enough
-                # to trigger a reconnect.
                 degraded_since = slot.degraded_since_mono
                 if degraded_since is not None:
                     degraded_duration = now - degraded_since
@@ -211,8 +192,6 @@ def check_facade_health(
                                     "facade_reconnect_suppressed",
                                     conn_id=slot.conn_id,
                                     degraded_duration_s=round(degraded_duration, 3),
-                                    # Which gate held, so the pre-open window is
-                                    # distinguishable from the closed market.
                                     reason=("outside_reconnect_window" if suppress_reconnect else "session_closed"),
                                 )
                         else:
@@ -229,7 +208,6 @@ def check_facade_health(
                 continue
             last_reconnect = slot.last_reconnect_mono
             if last_reconnect == 0.0:
-                # Never attempted a reconnect yet — trigger immediately.
                 log.info("facade_initial_reconnect", conn_id=slot.conn_id)
                 schedule_fn(slot.conn_id)
             else:

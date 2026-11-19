@@ -34,13 +34,11 @@ logger = get_logger("alpha.provenance")
 
 RUN_STAMP_SCHEMA = "run_stamp.v1"
 
-# Distributions whose version changes a backtest's numbers.
 _ENGINE_DISTRIBUTIONS = ("hftbacktest", "numpy", "numba")
 
 _GIT_TIMEOUT_S = 5.0
 _HASH_CHUNK = 1 << 20
 
-# (resolved path, size, mtime_ns) -> sha256, so a file is hashed once per process.
 _file_hash_cache: dict[tuple[str, int, int], str] = {}
 
 

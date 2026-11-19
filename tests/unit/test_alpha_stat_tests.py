@@ -19,10 +19,6 @@ from hft_platform.alpha._stat_tests import (
     _run_bds_independence_test,
 )
 
-# ---------------------------------------------------------------------------
-# _compute_oos_returns
-# ---------------------------------------------------------------------------
-
 
 def test_compute_oos_returns_empty_when_too_few_points():
     result = _compute_oos_returns(np.array([1.0, 2.0]), is_oos_split=0.5)
@@ -35,17 +31,14 @@ def test_compute_oos_returns_single_value():
 
 
 def test_compute_oos_returns_basic_case():
-    # Equity curve grows by 10% each step.
     eq = np.array([100.0, 110.0, 121.0, 133.1, 146.41])
     result = _compute_oos_returns(eq, is_oos_split=0.5)
-    # OOS portion starts from split index; values should be ~0.10
     assert result.size > 0
     assert np.all(np.isfinite(result))
     assert np.allclose(result, 0.10, atol=1e-6)
 
 
 def test_compute_oos_returns_handles_zero_base():
-    # Base values include zero — division should not produce inf/nan.
     eq = np.array([0.0, 0.0, 1.0, 2.0, 3.0])
     result = _compute_oos_returns(eq, is_oos_split=0.5)
     assert np.all(np.isfinite(result))
@@ -54,26 +47,19 @@ def test_compute_oos_returns_handles_zero_base():
 def test_compute_oos_returns_split_near_zero():
     eq = np.linspace(1.0, 2.0, 10)
     result = _compute_oos_returns(eq, is_oos_split=0.01)
-    # Very low split → almost all data is OOS
     assert result.size > 0
 
 
 def test_compute_oos_returns_split_near_one():
     eq = np.linspace(1.0, 2.0, 10)
     result = _compute_oos_returns(eq, is_oos_split=0.99)
-    # Very high split → tiny OOS segment
-    assert result.size >= 0  # may be 0 or 1
+    assert result.size >= 0
 
 
 def test_compute_oos_returns_three_elements_exact():
     eq = np.array([1.0, 2.0, 3.0])
     result = _compute_oos_returns(eq, is_oos_split=0.5)
     assert isinstance(result, np.ndarray)
-
-
-# ---------------------------------------------------------------------------
-# _evaluate_oos_statistical_tests
-# ---------------------------------------------------------------------------
 
 
 def test_evaluate_oos_statistical_tests_insufficient_returns():
@@ -92,7 +78,6 @@ def test_evaluate_oos_statistical_tests_insufficient_returns():
 
 
 def test_evaluate_oos_statistical_tests_positive_returns_pass():
-    # Strongly positive returns should pass most signal tests.
     rng = np.random.default_rng(0)
     arr = rng.normal(loc=0.02, scale=0.005, size=40)
     result = _evaluate_oos_statistical_tests(
@@ -124,14 +109,12 @@ def test_evaluate_oos_statistical_tests_negative_returns_likely_fail():
         min_tests_pass=3,
         bootstrap_samples=200,
     )
-    # Negative mean — should fail most signal tests
     assert result["passed"] is False
 
 
 def test_evaluate_oos_statistical_tests_wilcoxon_skipped_when_few_nonzero():
-    # Array of mostly zeros, fewer than 10 nonzero values → wilcoxon path skipped.
     arr = np.zeros(25)
-    arr[:5] = 0.05  # only 5 nonzero
+    arr[:5] = 0.05
     result = _evaluate_oos_statistical_tests(
         arr,
         pvalue_threshold=0.05,
@@ -173,7 +156,6 @@ def test_evaluate_oos_statistical_tests_bootstrap_ci_keys():
 
 
 def test_evaluate_oos_statistical_tests_filters_nonfinite(recwarn):
-    # Include some NaN/inf in the array — they should be stripped.
     arr = np.array([0.02] * 25 + [np.nan, np.inf, -np.inf, float("nan")])
     result = _evaluate_oos_statistical_tests(
         arr,
@@ -181,14 +163,8 @@ def test_evaluate_oos_statistical_tests_filters_nonfinite(recwarn):
         min_tests_pass=1,
         bootstrap_samples=100,
     )
-    # Finite sample count should be 25
     assert result["sample_count"] == 25
     assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
-
-
-# ---------------------------------------------------------------------------
-# _run_bds_independence_test
-# ---------------------------------------------------------------------------
 
 
 def test_run_bds_independence_test_insufficient_samples():
@@ -210,12 +186,10 @@ def test_run_bds_independence_test_constant_series():
 
 
 def test_run_bds_independence_test_large_sample_downsampled():
-    # > 600 elements triggers downsampling path.
     rng = np.random.default_rng(7)
     arr = rng.normal(size=700)
     result = _run_bds_independence_test(arr=arr, pvalue_threshold=0.05)
     assert "available" in result
-    # sample_count in result should be at most 600
     assert result["sample_count"] <= 600
 
 
@@ -238,7 +212,6 @@ def test_run_bds_independence_test_fallback_path_when_statsmodels_absent(monkeyp
     """
     import sys
 
-    # Remove statsmodels from sys.modules so the import inside the function raises.
     saved: dict = {}
     for key in list(sys.modules):
         if key.startswith("statsmodels"):
@@ -258,14 +231,8 @@ def test_run_bds_independence_test_fallback_path_when_statsmodels_absent(monkeyp
         assert "pvalue" in result
         assert "note" in result
     finally:
-        # Restore saved modules
         for key, mod in saved.items():
             sys.modules[key] = mod
-
-
-# ---------------------------------------------------------------------------
-# _bds_correlation_delta
-# ---------------------------------------------------------------------------
 
 
 def test_bds_correlation_delta_small_array_returns_zero():
@@ -286,21 +253,14 @@ def test_bds_correlation_delta_returns_float():
 
 
 def test_bds_correlation_delta_iid_vs_correlated():
-    # For a correlated series, correlation delta should differ from iid.
     rng = np.random.default_rng(0)
     iid = rng.normal(size=50)
-    corr = np.cumsum(rng.normal(size=50) * 0.1)  # random walk — autocorrelated
+    corr = np.cumsum(rng.normal(size=50) * 0.1)
     epsilon = 0.5
     delta_iid = abs(_bds_correlation_delta(iid, epsilon))
     delta_corr = abs(_bds_correlation_delta(corr, epsilon))
-    # Just assert both are finite floats; ordering may vary
     assert np.isfinite(delta_iid)
     assert np.isfinite(delta_corr)
-
-
-# ---------------------------------------------------------------------------
-# _extract_stat_test_pvalues
-# ---------------------------------------------------------------------------
 
 
 def test_extract_stat_test_pvalues_well_formed():
@@ -334,13 +294,12 @@ def test_extract_stat_test_pvalues_missing_test_entry_defaults_to_one():
     stat_tests = {
         "tests": {
             "ttest_mean_gt_zero": {"pvalue": 0.02, "pass": True},
-            # wilcoxon and sign_test missing
         }
     }
     result = _extract_stat_test_pvalues(stat_tests)
     assert len(result) == 4
     assert result[0] == pytest.approx(0.02)
-    assert result[1] == pytest.approx(1.0)  # missing → 1.0
+    assert result[1] == pytest.approx(1.0)
     assert result[2] == pytest.approx(1.0)
     assert result[3] == pytest.approx(1.0)
 
@@ -369,11 +328,6 @@ def test_extract_stat_test_pvalues_type_error_defaults_to_one():
     }
     result = _extract_stat_test_pvalues(stat_tests)
     assert result[0] == pytest.approx(1.0)
-
-
-# ---------------------------------------------------------------------------
-# _extract_bds_pvalue
-# ---------------------------------------------------------------------------
 
 
 def test_extract_bds_pvalue_well_formed():

@@ -9,10 +9,6 @@ import pytest
 
 from hft_platform.alpha._validation_types import GateReport, ValidationConfig
 
-# ---------------------------------------------------------------------------
-# batch_validate — gate_key branches (lines 317-328, 339-342)
-# ---------------------------------------------------------------------------
-
 
 class TestBatchValidateGateKeys:
     def test_batch_validate_gate_a_only(self):
@@ -137,7 +133,6 @@ class TestBatchValidateGateKeys:
 
         from hft_platform.alpha.validation import batch_validate
 
-        # Mock the ProcessPoolExecutor to avoid actual multiprocessing
         mock_future = MagicMock()
         mock_future.result.return_value = {
             "alpha_id": "a1",
@@ -164,11 +159,6 @@ class TestBatchValidateGateKeys:
         assert result["total"] == 1
 
 
-# ---------------------------------------------------------------------------
-# run_alpha_validation — orchestrator (lines 125-225)
-# ---------------------------------------------------------------------------
-
-
 class TestRunAlphaValidation:
     def test_unknown_alpha_raises_value_error(self, tmp_path: Path):
         """run_alpha_validation raises ValueError for unknown alpha_id."""
@@ -180,7 +170,6 @@ class TestRunAlphaValidation:
             project_root=str(tmp_path),
             experiments_dir=str(tmp_path / "exp"),
         )
-        # Mock discover to return an empty registry
         with patch("hft_platform.alpha.validation._ensure_project_root_on_path"):
             mock_registry_cls = MagicMock()
             mock_registry_instance = MagicMock()
@@ -328,5 +317,4 @@ class TestRunAlphaValidation:
         ):
             result = run_alpha_validation(config)
 
-        # Should complete despite audit failure
         assert result.passed is True

@@ -80,7 +80,6 @@ def test_scheduled_resubscribe_records_error_instead_of_dying_silently(monkeypat
 
     assert _counter_value(metrics, "error") == before_error + 1
     assert _counter_value(metrics, "ok") == before_ok, "a raising resubscribe must not count as ok"
-    # The scheduling latch must still clear, or no further resubscribe is possible.
     assert client._resubscribe_scheduled is False
 
 
@@ -93,5 +92,4 @@ def test_scheduled_resubscribe_records_skip_when_there_is_no_tick_callback(monke
 
     assert client._resubscribe_all.call_count == 0
     assert _counter_value(metrics, "skip") == before_skip + 1
-    # Doing nothing used to log "Resubscribe completed" and count as nothing.
     assert _counter_value(metrics, "ok") == before_ok

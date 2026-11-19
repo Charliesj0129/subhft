@@ -5,9 +5,6 @@ import pytest
 
 from hft_platform.backtest import convert as conv
 
-# ---------------------------------------------------------------------------
-# Shared dtype fixture
-# ---------------------------------------------------------------------------
 _EVENT_DTYPE = np.dtype(
     [
         ("ev", "i4"),
@@ -34,11 +31,6 @@ def patched_conv(monkeypatch):
     monkeypatch.setattr(conv, "SELL_EVENT", 32)
     monkeypatch.setattr(conv, "_import_error", None)
     return conv
-
-
-# ---------------------------------------------------------------------------
-# Original test (kept intact)
-# ---------------------------------------------------------------------------
 
 
 def test_convert_jsonl_to_npz(tmp_path, monkeypatch):
@@ -77,11 +69,6 @@ def test_convert_jsonl_to_npz(tmp_path, monkeypatch):
     assert prices == [1.0, 1.1, 12.34]
 
 
-# ---------------------------------------------------------------------------
-# _build_event helper
-# ---------------------------------------------------------------------------
-
-
 class TestBuildEvent:
     def test_returns_eight_tuple(self):
         result = conv._build_event(5, 1000, 2000, 1.23, 10.0)
@@ -112,22 +99,12 @@ class TestBuildEvent:
         assert result[7] == 0.0
 
 
-# ---------------------------------------------------------------------------
-# convert_jsonl_to_npz — hftbacktest not installed guard
-# ---------------------------------------------------------------------------
-
-
 class TestConvertHftbacktestNotInstalled:
     def test_raises_runtime_error_when_event_dtype_none(self, monkeypatch):
         monkeypatch.setattr(conv, "event_dtype", None)
         monkeypatch.setattr(conv, "_import_error", ImportError("hftbacktest not installed"))
         with pytest.raises(RuntimeError, match="hftbacktest not installed"):
             conv.convert_jsonl_to_npz("x.jsonl", "out.npz")
-
-
-# ---------------------------------------------------------------------------
-# convert_jsonl_to_npz — event type handling
-# ---------------------------------------------------------------------------
 
 
 class TestConvertEventTypes:
@@ -201,13 +178,7 @@ class TestConvertEventTypes:
         patched_conv.convert_jsonl_to_npz(str(inp), str(out), scale=10_000)
         data = np.load(out)["data"]
 
-        # Only the Tick row should be in the output
         assert data.shape[0] == 1
-
-
-# ---------------------------------------------------------------------------
-# convert_jsonl_to_npz — error / edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestConvertEdgeCases:
@@ -223,7 +194,6 @@ class TestConvertEdgeCases:
         row = {"type": "Tick", "ts": 10, "price": 10000, "volume": 1}
         inp = tmp_path / "in.jsonl"
         out = tmp_path / "out.npz"
-        # intersperse blank lines
         inp.write_text("\n\n" + json.dumps(row) + "\n\n")
 
         patched_conv.convert_jsonl_to_npz(str(inp), str(out), scale=10_000)
@@ -240,7 +210,6 @@ class TestConvertEdgeCases:
         patched_conv.convert_jsonl_to_npz(str(inp), str(out), scale=10_000)
         data = np.load(out)["data"]
 
-        # Malformed line skipped; only valid Tick row remains
         assert data.shape[0] == 1
 
     def test_output_parent_dir_created_if_missing(self, patched_conv, tmp_path):
@@ -249,7 +218,6 @@ class TestConvertEdgeCases:
         out = tmp_path / "subdir" / "nested" / "out.npz"
         inp.write_text(json.dumps(row) + "\n")
 
-        # Should not raise even though parent dirs don't exist yet
         patched_conv.convert_jsonl_to_npz(str(inp), str(out), scale=10_000)
 
         assert out.exists()

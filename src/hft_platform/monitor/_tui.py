@@ -37,10 +37,8 @@ async def run_monitor(
     engine = MonitorEngine(config)
     console = Console()
 
-    # S6: Dedicated poll executor — single thread to avoid concurrent CH queries
     poll_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="monitor-poll")
 
-    # Signal handling for graceful exit
     stop_event = asyncio.Event()
 
     def _on_signal(signum: int, frame: Any) -> None:
@@ -50,7 +48,6 @@ async def run_monitor(
     signal.signal(signal.SIGINT, _on_signal)
     signal.signal(signal.SIGTERM, _on_signal)
 
-    # Initialize (blocking CH connect — run in dedicated executor)
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(poll_executor, engine.initialize)
     if engine.state == MonitorState.ERROR:
@@ -75,14 +72,11 @@ async def run_monitor(
             Layout(Panel(engine.get_header(), style="dim"), size=header_size, name="header"),
         ]
 
-        # System health panel (self-contained module) — health is polled asynchronously
-        # before _make_display() is called; we only read the cached result here.
         if is_health_visible():
             _health = get_cached_health()
             if _health is not None:
                 parts.append(Layout(build_health_panel(_health), size=8, name="health"))
 
-        # Cost attribution panel (after health)
         if engine._cost_lines:
             from hft_platform.monitor._renderer import build_cost_section
 
@@ -92,7 +86,6 @@ async def run_monitor(
             cost_size = len(cost_section) + 2
             parts.append(Layout(cost_panel, size=cost_size, name="cost"))
 
-        # Footer help bar (computed before help overlay check)
         footer_text = build_footer(
             detail_visible=engine._detail_visible,
             paused=engine._paused_by_user,
@@ -100,7 +93,6 @@ async def run_monitor(
             show_help=engine._show_help,
         )
 
-        # Help overlay replaces main content when active
         if engine._show_help:
             layout.split_column(
                 Layout(build_help_overlay(), name="help"),
@@ -110,7 +102,6 @@ async def run_monitor(
 
         parts.append(Layout(engine.get_table(), name="table"))
 
-        # Phase 3: detail panel
         if engine._detail_visible:
             ss = engine.get_selected_symbol_state()
             detail = build_detail_panel(ss, config, engine._dispatcher.weights)
@@ -127,22 +118,18 @@ async def run_monitor(
         refresh_per_second=2,
         screen=True,
     ) as live:
-        # Non-blocking key reader
         key_task = asyncio.create_task(_key_listener(engine, stop_event))
 
         from hft_platform.monitor._health_panel import poll_health_async
 
         while not stop_event.is_set():
             try:
-                # S6: Offload to dedicated single-thread executor for poll isolation.
                 await loop.run_in_executor(poll_executor, engine.poll_and_update)
             except Exception as exc:
                 from structlog import get_logger
 
                 get_logger("monitor.tui").error("poll_error", error=str(exc))
 
-            # Poll health asynchronously — offloads blocking urlopen to a thread
-            # so the TUI event loop is never stalled for up to 2s on timeout.
             try:
                 _live_cnt = _stale_cnt = _total_cnt = 0
                 for _ss in engine._sym_states:
@@ -168,7 +155,6 @@ async def run_monitor(
                 live.update(_make_display())
                 break
 
-            # Wait for next poll or stop (skip wait if force poll requested)
             if engine._force_poll:
                 engine._force_poll = False
             else:
@@ -186,7 +172,6 @@ async def run_monitor(
         except asyncio.CancelledError:
             pass
 
-    # S6: shutdown dedicated executor
     poll_executor.shutdown(wait=False)
 
     return 0
@@ -206,7 +191,6 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
         reader = asyncio.get_event_loop()
 
         while not stop_event.is_set():
-            # Read one char with timeout
             try:
                 char = await asyncio.wait_for(
                     reader.run_in_executor(None, lambda: sys.stdin.read(1)),
@@ -223,7 +207,7 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
                 engine.toggle_pause()
             elif char == "R":
                 engine.request_reconnect()
-            elif char in ("r", "\x12"):  # r or Ctrl+R = full reset
+            elif char in ("r", "\x12"):
                 engine.reset_session()
             elif char == " ":
                 engine.request_force_poll()
@@ -252,7 +236,6 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
             elif char in ("d", "\r", "\n"):
                 engine.toggle_detail()
             elif char == "\x1b":
-                # Escape sequence -- check for arrow keys
                 try:
                     c2 = await asyncio.wait_for(
                         reader.run_in_executor(None, lambda: sys.stdin.read(1)),
@@ -263,15 +246,13 @@ async def _key_listener(engine: MonitorEngine, stop_event: asyncio.Event) -> Non
                             reader.run_in_executor(None, lambda: sys.stdin.read(1)),
                             timeout=0.05,
                         )
-                        if c3 == "A":  # Up arrow
+                        if c3 == "A":
                             engine.move_selection(-1)
-                        elif c3 == "B":  # Down arrow
+                        elif c3 == "B":
                             engine.move_selection(1)
                     else:
-                        # Plain ESC -- close detail
                         engine.close_detail()
                 except asyncio.TimeoutError:
-                    # Plain ESC
                     engine.close_detail()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

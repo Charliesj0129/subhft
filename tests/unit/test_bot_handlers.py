@@ -18,7 +18,6 @@ OWNER_CHAT_ID = "12345"
 def _set_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token")
     monkeypatch.setenv("HFT_TELEGRAM_CHAT_ID", OWNER_CHAT_ID)
-    # Reset cached owner ID so monkeypatch takes effect
     import hft_platform.bot.app as bot_app
 
     bot_app._OWNER_CHAT_ID = 0
@@ -52,7 +51,6 @@ class TestPrevTradingDate:
     def test_weekday_unchanged(self) -> None:
         from hft_platform.bot.handlers import _prev_trading_date
 
-        # Wednesday 2026-03-25
         wed = datetime(2026, 3, 25, 10, 0, tzinfo=ZoneInfo("Asia/Taipei"))
         assert _prev_trading_date(wed) == "2026-03-25"
 
@@ -276,7 +274,6 @@ class TestReportArgParsing:
             )
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
-            # First positional arg to build_hybrid_report_async is session, second is date, third is symbol
             assert mock_build.call_args[0][2] == "TXFD6"
 
     @pytest.mark.asyncio
@@ -552,7 +549,6 @@ class TestReportIntegration:
             mock_asyncio.sleep = AsyncMock()
             await cmd_report(update, ctx)
 
-        # Should have sent placeholder + 3 composed messages
         assert update.message.reply_text.call_count >= 1
         send_calls = ctx.bot.send_message.call_args_list
         assert len(send_calls) == 3

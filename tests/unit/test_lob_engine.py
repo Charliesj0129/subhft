@@ -25,8 +25,8 @@ def test_bidask_update(engine):
     assert stats.symbol == "2330"
     assert stats.best_bid == 5000000
     assert stats.best_ask == 5010000
-    assert stats.mid_price_x2 == 10010000  # best_bid + best_ask
-    assert stats.spread_scaled == 10000  # best_ask - best_bid
+    assert stats.mid_price_x2 == 10010000
+    assert stats.spread_scaled == 10000
     assert stats.bid_depth == 10
     assert stats.ask_depth == 20
     assert stats.imbalance == pytest.approx(-0.3333333)
@@ -50,8 +50,8 @@ def test_incremental_update(engine):
     stats = engine.process_event(event)
 
     assert stats.best_bid == 101
-    assert stats.mid_price_x2 == 203  # 101 + 102
-    assert stats.spread_scaled == 1  # 102 - 101
+    assert stats.mid_price_x2 == 203
+    assert stats.spread_scaled == 1
     assert stats.bid_depth == 5
 
 
@@ -103,29 +103,22 @@ def test_valid_snapshot(engine):
 
 
 def test_empty_update(engine):
-    # Should clear book if empty list passed? Or just not crash?
-    # Code says: if bids: self.bids = bids; else: self.bids = []
-    # So it clears.
     engine.process_event(BidAskEvent(meta=make_meta(1000), symbol="2330", bids=[[100, 1]], asks=[[102, 1]]))
     stats = engine.process_event(BidAskEvent(meta=make_meta(1001), symbol="2330", bids=[], asks=[]))
-    assert stats.mid_price == 0.0  # Empty book, backward-compat field
+    assert stats.mid_price == 0.0
     assert stats.bid_depth == 0
 
 
 def test_late_packet_handling(engine):
-    # 1. Update with ts=2000
     engine.process_event(BidAskEvent(meta=make_meta(2000), symbol="2330", bids=[[100, 1]], asks=[[102, 1]]))
     book = engine.get_book("2330")
     assert book.exch_ts == 2000
     assert book.mid_price_x2 / 2.0 == 101.0
 
-    # 2. Late update ts=1000 with DIFFERENT price
-    # Should be IGNORED
     engine.process_event(BidAskEvent(meta=make_meta(1000), symbol="2330", bids=[[50, 1]], asks=[[52, 1]]))
 
-    # 3. Verify state UNCHANGED
     assert book.exch_ts == 2000
-    assert book.mid_price_x2 / 2.0 == 101.0  # If bug exists, this might fail (be 51.0)
+    assert book.mid_price_x2 / 2.0 == 101.0
 
 
 def test_stats_tuple_mode_equivalent_to_event_mode(engine):
@@ -134,17 +127,14 @@ def test_stats_tuple_mode_equivalent_to_event_mode(engine):
     asks = np.array([[5010000, 20]], dtype=np.int64)
     event = BidAskEvent(meta=make_meta(1000), symbol="2330", bids=bids, asks=asks, is_snapshot=True)
 
-    # Get event-mode stats
     stats_event = engine.process_event(event)
     assert stats_event is not None
 
-    # Get tuple-mode stats via get_stats_tuple
     book = engine.get_book("2330")
     stats_tuple = book.get_stats_tuple()
     assert isinstance(stats_tuple, tuple)
     assert len(stats_tuple) == 10
 
-    # Verify fields match: ("lobstats", symbol, ts, mid_price_x2, spread, imbalance, best_bid, best_ask, bid_depth, ask_depth)
     assert stats_tuple[0] == "lobstats"
     assert stats_tuple[1] == stats_event.symbol
     assert stats_tuple[2] == stats_event.ts
@@ -180,7 +170,6 @@ from unittest.mock import MagicMock
 
 def test_tick_late(engine):
     engine.process_event(BidAskEvent(meta=make_meta(1000), symbol="A", bids=[[100, 10]], asks=[[102, 10]]))
-    # Late tick
     engine.process_event(
         TickEvent(
             meta=make_meta(900),
@@ -196,19 +185,14 @@ def test_tick_late(engine):
     )
 
     book = engine.get_book("A")
-    assert book.last_price == 0  # Should not update
+    assert book.last_price == 0
 
 
 def test_metrics_emit(engine):
     engine.metrics = MagicMock()
     engine.process_event(BidAskEvent(meta=make_meta(1001), symbol="A", bids=[[100, 1]], asks=[[101, 1]]))
-    # Verify metric call
-    # self.metrics.lob_updates_total.labels(symbol=..., type="BidAsk").inc()
     engine.metrics.lob_updates_total.labels.assert_called()
     engine.metrics.lob_updates_total.labels.return_value.inc.assert_called()
-
-
-# --- Fused bypass tests ---
 
 
 def test_fused_bypass_sets_book_stats(engine, monkeypatch):
@@ -219,7 +203,6 @@ def test_fused_bypass_sets_book_stats(engine, monkeypatch):
 
     bids = np.array([[1000000, 10]], dtype=np.int64)
     asks = np.array([[1005000, 20]], dtype=np.int64)
-    # fused_stats: (best_bid, best_ask, bid_depth, ask_depth, mid_x2, spread_scaled, imbalance)
     fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
 
     event = BidAskEvent(
@@ -241,7 +224,6 @@ def test_fused_bypass_sets_book_stats(engine, monkeypatch):
     assert stats.ask_depth == 20
     assert stats.imbalance == pytest.approx(-0.333333)
 
-    # Verify BookState was updated
     book = engine.get_book("2330")
     assert book.mid_price_x2 == 2005000
     assert book.spread == 5000
@@ -256,7 +238,6 @@ def test_fused_bypass_respects_late_packet(engine, monkeypatch):
 
     fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
 
-    # First event at ts=2000
     event1 = BidAskEvent(
         meta=make_meta(2000),
         symbol="2330",
@@ -266,7 +247,6 @@ def test_fused_bypass_respects_late_packet(engine, monkeypatch):
     )
     engine.process_event(event1)
 
-    # Late event at ts=1000 with different stats
     late_fused = (500000, 505000, 5, 5, 1005000, 5000, 0.0)
     event2 = BidAskEvent(
         meta=make_meta(1000),
@@ -277,7 +257,6 @@ def test_fused_bypass_respects_late_packet(engine, monkeypatch):
     )
     engine.process_event(event2)
 
-    # Book should retain first event's values
     book = engine.get_book("2330")
     assert book.mid_price_x2 == 2005000
     assert book.exch_ts == 2000
@@ -290,11 +269,9 @@ def test_fused_bypass_produces_same_stats_as_standard(engine):
     bids = np.array([[1000000, 10]], dtype=np.int64)
     asks = np.array([[1005000, 20]], dtype=np.int64)
 
-    # Standard path
     event_std = BidAskEvent(meta=make_meta(1000), symbol="STD", bids=bids.copy(), asks=asks.copy())
     stats_std = engine.process_event(event_std)
 
-    # Fused bypass path
     engine2 = LOBEngine()
     original_val = lob_mod._FUSED_BYPASS
     try:
@@ -335,12 +312,8 @@ def test_no_fused_bypass_when_flag_off(engine):
     )
     stats = engine.process_event(event)
 
-    # Should still produce valid stats (via standard apply_update path)
     assert stats is not None
     assert stats.best_bid == 1000000
-
-
-# --- NamedTuple contract tests ---
 
 
 def test_bookstats_named_field_access():
@@ -354,7 +327,6 @@ def test_bookstats_named_field_access():
         spread=5000.0,
         imbalance=-0.333,
     )
-    # Named access
     assert bs.best_bid == 1000000
     assert bs.best_ask == 1005000
     assert bs.bid_depth == 10
@@ -362,10 +334,8 @@ def test_bookstats_named_field_access():
     assert bs.mid_price == pytest.approx(1002500.0)
     assert bs.spread == pytest.approx(5000.0)
     assert bs.imbalance == pytest.approx(-0.333)
-    # Backward-compat index access
     assert bs[0] == 1000000
     assert bs[4] == pytest.approx(1002500.0)
-    # Unpacking still works
     bb, ba, bd, ad, mp, sp, imb = bs
     assert bb == 1000000 and ba == 1005000
 
@@ -381,16 +351,13 @@ def test_fusedbookstats_named_field_access():
         spread_scaled=5000,
         imbalance=-0.333,
     )
-    # Named access
     assert fs.best_bid == 1000000
     assert fs.mid_price_x2 == 2005000
     assert fs.spread_scaled == 5000
     assert fs.imbalance == pytest.approx(-0.333)
-    # Backward-compat index access
-    assert fs[2] == 10  # bid_depth
-    assert fs[4] == 2005000  # mid_price_x2
-    assert fs[5] == 5000  # spread_scaled
-    # Unpacking still works
+    assert fs[2] == 10
+    assert fs[4] == 2005000
+    assert fs[5] == 5000
     bb, ba, bd, ad, mx2, ss, imb = fs
     assert mx2 == 2005000 and ss == 5000
 
@@ -415,10 +382,8 @@ class TestSymbolCardinalityGuard:
     def test_get_book_returns_none_when_limit_exceeded(self):
         engine = LOBEngine()
         engine._max_symbols = 2
-        # Fill up to limit
         assert engine.get_book("SYM_A") is not None
         assert engine.get_book("SYM_B") is not None
-        # Third symbol should be rejected
         assert engine.get_book("SYM_C") is None
         assert len(engine.books) == 2
 
@@ -427,7 +392,6 @@ class TestSymbolCardinalityGuard:
         engine._max_symbols = 2
         engine.get_book("SYM_A")
         engine.get_book("SYM_B")
-        # Existing symbol still accessible
         book = engine.get_book("SYM_A")
         assert book is not None
         assert book.symbol == "SYM_A"
@@ -435,13 +399,11 @@ class TestSymbolCardinalityGuard:
     def test_process_event_returns_none_for_rejected_symbol(self):
         engine = LOBEngine()
         engine._max_symbols = 1
-        # Fill the single slot
         bids = np.array([[5000000, 10]], dtype=np.int64)
         asks = np.array([[5010000, 20]], dtype=np.int64)
         event1 = BidAskEvent(meta=make_meta(1000), symbol="SYM_A", bids=bids, asks=asks, is_snapshot=True)
         result = engine.process_event(event1)
         assert result is not None
-        # Second symbol should be silently skipped
         event2 = BidAskEvent(meta=make_meta(2000), symbol="SYM_B", bids=bids, asks=asks, is_snapshot=True)
         result = engine.process_event(event2)
         assert result is None
@@ -450,7 +412,7 @@ class TestSymbolCardinalityGuard:
         from unittest.mock import MagicMock, patch
 
         engine = LOBEngine()
-        engine._max_symbols = 0  # reject all new symbols
+        engine._max_symbols = 0
         mock_logger = MagicMock()
         with patch("hft_platform.feed_adapter.lob_engine.logger", mock_logger):
             result = engine.get_book("SYM_X")
@@ -476,7 +438,6 @@ class TestApplyUpdateWithStatsFieldsCrossedBookGuard:
         book = self._make_book()
         bids = np.array([[5010000, 10]], dtype=np.int64)
         asks = np.array([[5000000, 20]], dtype=np.int64)
-        # best_bid (5010000) > best_ask (5000000) — crossed book
         book.apply_update_with_stats_fields(
             bids,
             asks,

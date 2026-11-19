@@ -17,17 +17,13 @@ class HTMLReporter:
 
     def compute_stats(self, equity_t: np.ndarray, equity_v: np.ndarray) -> None:
         """Compute Sharpe, Drawdown, etc."""
-        # Simple daily returns approx
-        # For HFT, we might check minute-by-minute
         returns = np.diff(equity_v) / equity_v[:-1]
         returns = np.nan_to_num(returns)
 
         total_ret = (equity_v[-1] - equity_v[0]) / equity_v[0] if len(equity_v) > 0 else 0
 
-        # Sharpe (simplified, annualized assuming 1 sec samples * 252*6.5*3600? No, this is raw)
         sharpe = np.mean(returns) / np.std(returns) * np.sqrt(len(returns)) if np.std(returns) > 0 else 0
 
-        # Drawdown
         peak = np.maximum.accumulate(equity_v)
         dd = (equity_v - peak) / peak
         max_dd = np.min(dd)
@@ -40,7 +36,6 @@ class HTMLReporter:
             "Total Trades": f"{len(self.trades)}",
         }
 
-        # Downsample for charting if too big (> 2000 points)
         step = max(1, len(equity_t) // 2000)
         self.equity_curve = {
             "time": [str(datetime.fromtimestamp(t / 1e9)) for t in equity_t[::step]],

@@ -132,7 +132,6 @@ class TestRecorderBridgeShortCircuit:
     async def test_recorder_bridge_early_return_when_all_direct(self):
         """_recorder_bridge coroutine should return immediately when all direct flags are True."""
         sys_obj = _make_system(md_record_direct=True, fill_record_direct=True, order_record_direct=True)
-        # The bus.consume / consume_batch should never be called since we return early.
         sys_obj.bus.consume = MagicMock()
         sys_obj.bus.consume_batch = MagicMock()
 
@@ -146,7 +145,6 @@ class TestRecorderBridgeShortCircuit:
         """_recorder_bridge coroutine should proceed past early return when md_record_direct=False."""
         sys_obj = _make_system(md_record_direct=False, fill_record_direct=True, order_record_direct=True)
 
-        # Return an empty async iterator so the coroutine terminates cleanly.
         async def _empty_gen():
             return
             yield  # pragma: no cover — makes this an async generator

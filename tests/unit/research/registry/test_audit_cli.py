@@ -85,7 +85,7 @@ class TestShow:
         assert "triage_status   : sample_promising" in out
         assert "triage_reasons  : min_sample_size" in out
         assert "[FAIL] min_sample_size" in out
-        assert "[FAIL] edge_per_round_trip" in out  # 8 < 10
+        assert "[FAIL] edge_per_round_trip" in out
 
     def test_strategy_type_filter(self, _isolated: Path) -> None:
         _write(run_id="r1", strategy_type="maker", strategy_name="m_strat")
@@ -102,7 +102,6 @@ class TestShow:
         assert "taker" in out
 
     def test_default_prefers_maker_when_both_present(self, _isolated: Path) -> None:
-        # Insert taker first to verify the picker isn't just "first row".
         _write(run_id="r1", strategy_type="taker", strategy_name="t_strat")
         _write(run_id="r1", strategy_type="maker", strategy_name="m_strat")
         out = audit_cli.show("r1")
@@ -133,12 +132,9 @@ class TestCompare:
         _write(run_id="r1", edge=8.0)
         _write(run_id="r2", edge=12.5)
         out = audit_cli.compare("r1", "r2")
-        # edge_per_round_trip flips False -> True
         assert "edge_per_round_trip: passed False -> True" in out
 
     def test_gate_only_in_one_side_reported(self, _isolated: Path) -> None:
-        # Manually craft an A-side missing one gate to exercise the
-        # "+ only in B" branch.  We bypass _write so the schemas differ.
         sub_gate_audit.record_sub_gate_run(
             run_id="r_a",
             strategy_name="x",
@@ -200,9 +196,6 @@ class TestMain:
         assert "t_only" in capsys.readouterr().out
 
 
-# --- Round 19: spec_provenance diff rendering tests (carried from Round 18) ---
-
-
 def _write_with_prov(
     *,
     run_id: str,
@@ -252,8 +245,6 @@ class TestCompareSpecProvenance:
         assert "spec_provenance:" in out
         assert "~ data_range:" in out
         assert "'2026-01..2026-03' -> '2026-04..2026-05'" in out
-        # Unchanged keys still rendered (no `~`), so operator can confirm
-        # what stayed constant — fewer false leads when chasing drift.
         assert "cost_model_id:" in out
         assert "required_gates:" in out
 
@@ -270,7 +261,7 @@ class TestCompareSpecProvenance:
             run_id="r2",
             spec_provenance={
                 "data_range": "2026-01..2026-05",
-                "cost_model_id": "p95+0.5bp/2.0bp/0.5pts",  # fee changed
+                "cost_model_id": "p95+0.5bp/2.0bp/0.5pts",
                 "required_gates": ["min_sample_size"],
             },
         )
@@ -278,9 +269,6 @@ class TestCompareSpecProvenance:
         assert "~ cost_model_id:" in out
 
     def test_compare_handles_one_sided_provenance(self, _isolated: Path) -> None:
-        # r1 has no provenance (pre-Round-17 row); r2 has it.  The diff
-        # should still render so the operator sees the schema upgrade,
-        # not silently skip the block.
         _write(run_id="r1", edge=8.0)
         _write_with_prov(
             run_id="r2",

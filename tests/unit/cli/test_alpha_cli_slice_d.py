@@ -33,17 +33,13 @@ from hft_platform.cli._alpha import (
 )
 from hft_platform.cli._parser import build_parser
 
-# ---------------------------------------------------------------------------
-# Fixtures — kill ledger + audit isolation
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture(autouse=True)
 def _isolated_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Redirect kill ledger jsonl writes into ``tmp_path``."""
     jsonl = tmp_path / "_kill_ledger.jsonl"
     monkeypatch.setenv("HFT_ALPHA_KILL_LEDGER_PATH", str(jsonl))
-    kill_ledger._reset_cache_for_tests()  # noqa: SLF001
+    kill_ledger._reset_cache_for_tests()
     return jsonl
 
 
@@ -51,12 +47,7 @@ def _isolated_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _no_ch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force the offline jsonl sink — never touch ClickHouse in tests."""
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
-    audit._ENABLED = None  # noqa: SLF001 — re-read env on next call
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+    audit._ENABLED = None
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -99,11 +90,6 @@ def _make_screener_fixture(
     np.save(exp_dir / "signal.npy", arr)
 
 
-# ---------------------------------------------------------------------------
-# T12 — cmd_alpha_kill
-# ---------------------------------------------------------------------------
-
-
 def test_alpha_kill_rejects_empty_reason(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -134,7 +120,7 @@ def test_alpha_kill_inserts_record(
 ) -> None:
     parser = build_parser()
     args = parser.parse_args(["alpha", "kill", "alpha_x", "--reason", "promotion blocked: gate D"])
-    cmd_alpha_kill(args)  # exits 0 normally (no SystemExit)
+    cmd_alpha_kill(args)
 
     rows = _read_jsonl(_isolated_jsonl)
     assert len(rows) == 1
@@ -156,7 +142,7 @@ def test_alpha_kill_idempotent(
     parser = build_parser()
     cmd = ["alpha", "kill", "alpha_x", "--reason", "duplicate test"]
     cmd_alpha_kill(parser.parse_args(cmd))
-    capsys.readouterr()  # discard first stdout
+    capsys.readouterr()
     cmd_alpha_kill(parser.parse_args(cmd))
 
     second_payload = json.loads(capsys.readouterr().out)
@@ -175,11 +161,6 @@ def test_alpha_kill_custom_gate_propagates(
     rows = _read_jsonl(_isolated_jsonl)
     assert len(rows) == 1
     assert rows[0]["gate"] == "F"
-
-
-# ---------------------------------------------------------------------------
-# T11 — cmd_alpha_cheap_screen
-# ---------------------------------------------------------------------------
 
 
 def _alternating_signal(n: int = 200) -> np.ndarray:
@@ -234,7 +215,6 @@ def test_alpha_screen_kill_is_screened_out_and_writes_no_ledger_row(
     assert payload["alpha_id"] == alpha_id
     assert "--write-kill has no effect" in captured.err
 
-    # A cheap screen is not a powered verdict: it never writes a kill.
     assert _read_jsonl(_isolated_jsonl) == []
 
 
@@ -257,7 +237,7 @@ def test_alpha_screen_kill_does_not_write_ledger_without_flag(
         cmd_alpha_cheap_screen(args)
     assert exc.value.code == 2
 
-    capsys.readouterr()  # drain
+    capsys.readouterr()
     assert _read_jsonl(_isolated_jsonl) == []
 
 
@@ -275,7 +255,6 @@ def test_alpha_screen_emits_json(
 
     parser = build_parser()
     args = parser.parse_args(["alpha", "cheap-screen", alpha_id, "--project-root", str(tmp_path)])
-    # smooth signal should not trigger a kill — exit normally.
     cmd_alpha_cheap_screen(args)
 
     payload = _extract_json_payload(capsys.readouterr().out)
@@ -322,11 +301,6 @@ def test_alpha_screen_threshold_overrides_plumb_through(
     assert exc.value.code == 2
     payload = _extract_json_payload(capsys.readouterr().out)
     assert payload["verdict"] == "kill"
-
-
-# ---------------------------------------------------------------------------
-# T13 — cmd_alpha_cluster
-# ---------------------------------------------------------------------------
 
 
 def test_alpha_cluster_empty_corpus_exits_2(
@@ -376,7 +350,7 @@ def test_alpha_cluster_table_output(
     cmd_alpha_cluster(args)
 
     out = capsys.readouterr().out
-    assert "alpha_id" in out  # header
+    assert "alpha_id" in out
     assert "cluster_id" in out
     assert "alpha_a" in out
     assert "alpha_b" in out

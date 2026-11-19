@@ -7,9 +7,6 @@ import argparse
 def query_clickhouse(sql):
     cmd = ["clickhouse-client", "--format", "JSON", "--query", sql]
     try:
-        # Use simple curl if clickhouse-client not installed/configured in path
-        # For now assuming docker exec or similar if needed, but let's try direct curl for broader compatibility
-        # Actually, let's assume we can use curl to localhost:8123
         cmd = [
             "curl", "-s", "http://localhost:8123/",
             "--data-binary", sql + " FORMAT JSON"
@@ -22,7 +19,6 @@ def query_clickhouse(sql):
         return None, str(e)
 
 def analyze_latency(table="hft.market_data", minutes=10):
-    # Use ingest_ts/exch_ts delta (ns -> us) to avoid needing latency_us column.
     sql = f"""
     SELECT
         count() as count,

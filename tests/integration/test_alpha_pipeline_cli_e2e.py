@@ -47,7 +47,6 @@ def _help(*argv: str) -> str:
 def test_pipeline_run_help_surface_matches_legacy_entrypoint() -> None:
     legacy = _long_opts(_help("-m", "research.pipeline", "run"))
     canonical = _long_opts(_help("-m", "hft_platform", "alpha", "pipeline", "run"))
-    # Canonical wrapper must accept every long-option the legacy entrypoint did.
     missing = legacy - canonical
     assert not missing, f"hft alpha pipeline run is missing args: {missing}"
 
@@ -89,13 +88,11 @@ def test_pipeline_triage_requires_env_acknowledgment() -> None:
 def test_makefile_research_targets_delegate_to_canonical_cli() -> None:
     """`make research` / `make research-triage` must shell out to `hft alpha pipeline …`."""
     makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-    # Find the two recipe bodies and confirm the dispatch path.
     assert "hft_platform alpha pipeline run" in makefile, (
         "Makefile `research` target no longer delegates to `hft alpha pipeline run`."
     )
     assert "hft_platform alpha pipeline triage" in makefile, (
         "Makefile `research-triage` target no longer delegates to `hft alpha pipeline triage`."
     )
-    # Regression guard: the legacy module path must NOT remain in the recipe.
     assert "python -m research.pipeline run" not in makefile
     assert "python -m research.pipeline triage" not in makefile

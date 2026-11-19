@@ -12,8 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_coverage_domains.py"
 
-# The floors committed with the ratchet. A floor may be raised without touching this table; lowering one means
-# editing it as well, which is the "architecture review" the script header asks for.
 MINIMUM_FLOORS = {
     "risk": 92.0,
     "order": 90.0,
@@ -68,7 +66,6 @@ def test_gate_ignores_float_noise_in_the_line_rate(
     mod = _load_module()
     monkeypatch.setitem(mod.PACKAGE_FLOORS, "risk", 57.0)
     report = tmp_path / "coverage.xml"
-    # 0.57 * 100 is 56.99999999999999 in floating point, a package that sits exactly at its floor
     report.write_text(
         '<?xml version="1.0"?><coverage><packages><package name="risk" line-rate="0.57"/></packages></coverage>',
         encoding="utf-8",
@@ -116,7 +113,7 @@ def test_gate_exits_2_when_the_report_is_missing_or_unparseable(tmp_path: Path, 
 def test_gate_applies_the_default_floor_to_an_unlisted_package(tmp_path: Path) -> None:
     mod = _load_module()
     assert "unlisted_package" not in mod.PACKAGE_FLOORS
-    assert mod.DEFAULT_FLOOR >= 70.0  # never below the global gate in pyproject.toml / Makefile
+    assert mod.DEFAULT_FLOOR >= 70.0
 
     below = _coverage_xml(tmp_path / "below.xml", {"unlisted_package": mod.DEFAULT_FLOOR - 0.1})
     at = _coverage_xml(tmp_path / "at.xml", {"unlisted_package": mod.DEFAULT_FLOOR})

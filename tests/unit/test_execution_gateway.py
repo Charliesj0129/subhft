@@ -13,8 +13,6 @@ class DummyAdapter:
         self.terminal_called = False
         self.terminal_strategy_id = None
         self.terminal_order_id = None
-        # Start with running=False so the heartbeat loop exits immediately
-        # (ExecutionGateway.run() no longer delegates to adapter.run()).
         self.running = False
 
     async def run(self) -> None:
@@ -36,7 +34,6 @@ async def test_execution_gateway_run_does_not_delegate_to_adapter():
     adapter = DummyAdapter()
     gateway = ExecutionGateway(adapter)
     await asyncio.wait_for(gateway.run(), timeout=1.0)
-    # The fix: adapter.run() must NOT be called
     assert adapter.run_called is False
 
 
@@ -46,10 +43,7 @@ async def test_execution_gateway_run_sets_running_true():
     adapter = DummyAdapter()
     gateway = ExecutionGateway(adapter)
     assert gateway.running is False
-    # adapter.running=False → loop exits immediately, so run() returns fast
     await asyncio.wait_for(gateway.run(), timeout=1.0)
-    # After run() returns the loop has exited; running was True during execution
-    # (the finally block does NOT clear self.running, only alive metric)
     assert gateway.running is True
 
 
@@ -76,9 +70,9 @@ async def test_execution_gateway_on_terminal_state_delegates():
 async def test_execution_gateway_stop_sets_flags():
     """stop() must set running=False on both gateway and adapter."""
     adapter = DummyAdapter()
-    adapter.running = True  # pretend adapter is running
+    adapter.running = True
     gateway = ExecutionGateway(adapter)
-    gateway.running = True  # pretend gateway is running
+    gateway.running = True
 
     gateway.stop()
     assert gateway.running is False

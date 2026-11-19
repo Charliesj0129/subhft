@@ -81,7 +81,7 @@ async def _run_supervise(system: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setenv("HFT_HEARTBEAT_PATH", str(tmp_path / "heartbeat"))
     try:
         await HFTSystem._supervise(system)
-    except Exception:  # noqa: BLE001 - the stubbed collaborators cut the tick off after the kill-switch block
+    except Exception:
         pass
 
 
@@ -114,7 +114,7 @@ async def test_a_startup_recovery_halt_keeps_the_gauge_up_when_the_file_goes_awa
     """A recovery halt pins the hold for the process lifetime; the gauge must say so, not follow the file."""
     monkeypatch.setenv(kill_switch.PATH_ENV, str(tmp_path / "kill_switch"))
     guard = StormGuard()
-    guard.set_kill_switch_hold(True)  # what _on_startup_recovery_halt does
+    guard.set_kill_switch_hold(True)
     system = _tick_system(guard, ticks=1)
     system._recovery_halted = True
 
@@ -127,15 +127,15 @@ async def test_a_startup_recovery_halt_keeps_the_gauge_up_when_the_file_goes_awa
 @pytest.mark.asyncio
 async def test_a_recovery_halt_rewrites_a_gauge_whose_first_write_failed_once_the_file_is_gone(tmp_path, monkeypatch):
     """The hold survives a failed gauge write; the supervisor must keep rewriting the gauge while the pin stands."""
-    monkeypatch.setenv(kill_switch.PATH_ENV, str(tmp_path / "kill_switch"))  # no latch file
+    monkeypatch.setenv(kill_switch.PATH_ENV, str(tmp_path / "kill_switch"))
     guard = StormGuard()
     healthy = guard.metrics
     broken = MagicMock()
     broken.kill_switch_active.set.side_effect = RuntimeError("registry gone")
     guard.metrics = broken
-    guard.set_kill_switch_hold(True)  # _on_startup_recovery_halt: hold set, gauge write fails
+    guard.set_kill_switch_hold(True)
     guard.metrics = healthy
-    healthy.kill_switch_active.set(0)  # what the scrape shows: the write never landed
+    healthy.kill_switch_active.set(0)
     system = _tick_system(guard, ticks=1)
     system._recovery_halted = True
 
@@ -151,5 +151,4 @@ def test_the_boot_path_sets_the_hold_through_the_same_setter():
 
     source = inspect.getsource(HFTSystem)
 
-    # boot latch, recovery halt, supervise tick (file present), supervise tick (recovery pin)
     assert source.count("set_kill_switch_hold(True)") >= 4

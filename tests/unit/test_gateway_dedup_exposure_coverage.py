@@ -15,10 +15,6 @@ from hft_platform.gateway.exposure import (
     ExposureStore,
 )
 
-# ===========================================================================
-# IdempotencyStore tests
-# ===========================================================================
-
 
 class TestIdempotencyStoreCheckOrReserve:
     def test_empty_key_returns_none(self):
@@ -43,20 +39,18 @@ class TestIdempotencyStoreCheckOrReserve:
         store.check_or_reserve("k1")
         store.check_or_reserve("k2")
         store.check_or_reserve("k3")
-        store.check_or_reserve("k4")  # should evict k1
+        store.check_or_reserve("k4")
         assert store.size() == 3
-        assert store.check_or_reserve("k1") is None  # k1 was evicted, re-reserved
+        assert store.check_or_reserve("k1") is None
 
     def test_lru_order_preserved(self):
         store = IdempotencyStore(window_size=3, persist_enabled=False)
         store.check_or_reserve("k1")
         store.check_or_reserve("k2")
         store.check_or_reserve("k3")
-        # Access k1 to make it most recent
         store.check_or_reserve("k1")
-        # Add k4 -> should evict k2 (oldest non-accessed)
         store.check_or_reserve("k4")
-        assert store.check_or_reserve("k2") is None  # was evicted
+        assert store.check_or_reserve("k2") is None
 
 
 class TestIdempotencyStoreCommit:
@@ -86,7 +80,6 @@ class TestIdempotencyStoreCommit:
         store = IdempotencyStore(window_size=100, persist_enabled=False)
         store.check_or_reserve("key1")
         store.commit("key1", True, "first", 1)
-        # Second commit should be blocked (first-commit-wins)
         store.commit("key1", False, "second", 2)
         rec = store.check_or_reserve("key1")
         assert rec.approved is True
@@ -98,7 +91,7 @@ class TestIdempotencyStoreRelease:
         store = IdempotencyStore(window_size=100, persist_enabled=False)
         store.check_or_reserve("key1")
         store.release("key1")
-        assert store.check_or_reserve("key1") is None  # re-reserved
+        assert store.check_or_reserve("key1") is None
 
     def test_release_empty_key_noop(self):
         store = IdempotencyStore(window_size=100, persist_enabled=False)
@@ -175,11 +168,6 @@ class TestIdempotencyStoreTyped:
         assert rec.approved is True
 
 
-# ===========================================================================
-# ExposureStore tests
-# ===========================================================================
-
-
 def _make_intent(intent_type=IntentType.NEW, price=100000, qty=10, symbol="SYM", target_order_id=None):
     return OrderIntent(
         intent_id=1,
@@ -209,7 +197,7 @@ class TestExposureStoreCheckAndUpdate:
     def test_global_limit_rejected(self):
         store = ExposureStore(global_max_notional=100)
         key = _make_key()
-        intent = _make_intent(price=100000, qty=10)  # notional = 1_000_000
+        intent = _make_intent(price=100000, qty=10)
         ok, reason = store.check_and_update(key, intent)
         assert ok is False
         assert reason == "GLOBAL_EXPOSURE_LIMIT"
@@ -256,7 +244,6 @@ class TestExposureStoreCheckAndUpdate:
         intent2 = _make_intent(price=100, qty=1, symbol="SYM2")
         store.check_and_update(key1, intent1)
         store.check_and_update(key2, intent2)
-        # Release SYM1 to zero so eviction can reclaim it
         store.release_exposure(key1, intent1)
         intent3 = _make_intent(price=100, qty=1, symbol="SYM3")
         ok, reason = store.check_and_update(key3, intent3)
@@ -309,7 +296,6 @@ class TestExposureStoreRelease:
         store = ExposureStore()
         key = _make_key()
         intent = _make_intent(intent_type=IntentType.CANCEL)
-        # Should not raise
         store.release_exposure(key, intent)
 
     def test_release_amend_rollback(self):
@@ -319,9 +305,7 @@ class TestExposureStoreRelease:
         store.check_and_update(key, intent, order_key="o1")
         amend = _make_intent(intent_type=IntentType.AMEND, price=200, qty=1, target_order_id="o1")
         store.check_and_update(key, amend, order_key="o1_a")
-        # Rollback the amend
         store.release_exposure(key, amend, order_key="o1_a")
-        # Global should be back to 100 after rollback
         assert store.global_notional <= 200
 
     def test_release_by_order_key(self):
@@ -338,7 +322,6 @@ class TestExposureStoreRelease:
         key = _make_key()
         intent = _make_intent(price=100, qty=1)
         store.check_and_update(key, intent)
-        # No order_key, no idempotency_key -> legacy fallback
         store.release_exposure(key, intent)
         assert store.global_notional == 0
 
@@ -349,7 +332,6 @@ class TestExposureStoreExpire:
         key = _make_key()
         intent = _make_intent(price=100, qty=1)
         store.check_and_update(key, intent, order_key="o1")
-        # Manually set timestamp to past
         store._order_ts["o1"] = time.monotonic() - 1000
         count = store.expire_stale_orders(max_age_s=1.0)
         assert count == 1
@@ -455,11 +437,6 @@ class TestExposureStoreGetters:
         assert store.get_global_notional() == 0
 
 
-# ===========================================================================
-# _load_rust_exposure() — lines 34-48
-# ===========================================================================
-
-
 class TestLoadRustExposure:
     """Cover the _load_rust_exposure() lazy import function (lines 32-48)."""
 
@@ -467,17 +444,14 @@ class TestLoadRustExposure:
         """Lines 34-35: early return when _rust_exposure_loaded is True."""
         import hft_platform.gateway.exposure as mod
 
-        # Save originals to restore later
         orig_loaded = mod._rust_exposure_loaded
         orig_cls = mod._RustExposureStore
         try:
-            # Simulate that the loader already ran and found nothing
             mod._rust_exposure_loaded = True
             mod._RustExposureStore = None
             result = mod._load_rust_exposure()
             assert result is None
 
-            # Simulate that the loader already ran and found a class
             sentinel = type("FakeRustExposureStore", (), {})
             mod._RustExposureStore = sentinel
             result = mod._load_rust_exposure()
@@ -511,7 +485,6 @@ class TestLoadRustExposure:
         finally:
             mod._rust_exposure_loaded = orig_loaded
             mod._RustExposureStore = orig_cls
-            # Clean up sys.modules
             __import__("sys").modules.pop("hft_platform.rust_core", None)
 
     def test_load_rust_exposure_fallback_import_succeeds(self, monkeypatch):
@@ -523,7 +496,6 @@ class TestLoadRustExposure:
 
         orig_loaded = mod._rust_exposure_loaded
         orig_cls = mod._RustExposureStore
-        # Remove the primary module so the first import raises ImportError
         saved_primary = sys.modules.pop("hft_platform.rust_core", None)
         try:
             mod._rust_exposure_loaded = False
@@ -534,7 +506,6 @@ class TestLoadRustExposure:
             fake_fallback.RustExposureStore = sentinel
             monkeypatch.setitem(sys.modules, "rust_core", fake_fallback)
 
-            # Ensure the primary import will fail
             import builtins
 
             real_import = builtins.__import__
@@ -591,11 +562,6 @@ class TestLoadRustExposure:
                 sys.modules["rust_core"] = saved_fallback
 
 
-# ===========================================================================
-# _init_rust_store() — lines 109-121
-# ===========================================================================
-
-
 class TestInitRustStore:
     """Cover the _init_rust_store() static method (lines 106-121)."""
 
@@ -613,7 +579,6 @@ class TestInitRustStore:
         orig_loaded = mod._rust_exposure_loaded
         orig_cls = mod._RustExposureStore
         try:
-            # Force the loader to return None without re-importing
             mod._rust_exposure_loaded = True
             mod._RustExposureStore = None
 
@@ -647,13 +612,12 @@ class TestInitRustStore:
 
             limits = {
                 "s1": ExposureLimits(max_notional_scaled=5_000_000),
-                "s2": ExposureLimits(max_notional_scaled=0),  # 0 = skip set_limit
+                "s2": ExposureLimits(max_notional_scaled=0),
             }
             result = ExposureStore._init_rust_store(1_000_000, 500, limits)
             assert result is not None
             assert result.global_max == 1_000_000
             assert result.max_symbols == 500
-            # Only s1 should have set_limit called (s2 has 0)
             assert set_limit_calls == [("s1", 5_000_000)]
         finally:
             mod._rust_exposure_loaded = orig_loaded
@@ -704,11 +668,6 @@ class TestInitRustStore:
             mod._RustExposureStore = orig_cls
 
 
-# ===========================================================================
-# _rollback_amend() — line 436 (delta == 0 early return)
-# ===========================================================================
-
-
 class TestRollbackAmendZeroDelta:
     """Cover line 436: _rollback_amend returns early when delta == 0."""
 
@@ -720,11 +679,8 @@ class TestRollbackAmendZeroDelta:
         store.check_and_update(key, intent, order_key="o1")
         notional_before = store.global_notional
 
-        # Call _rollback_amend with a target that has no pending amend delta
-        # (never had an AMEND — so _pending_amend_deltas has no entry, pop returns 0)
         store._rollback_amend(key, "o1")
 
-        # Nothing should change
         assert store.global_notional == notional_before
         assert store.get_exposure("acc", "strat1", "SYM") == 100_0000
 
@@ -735,7 +691,6 @@ class TestRollbackAmendZeroDelta:
         intent = _make_intent(price=100_0000, qty=1)
         store.check_and_update(key, intent, order_key="o1")
 
-        # AMEND up — creates a pending delta
         amend = _make_intent(
             intent_type=IntentType.AMEND,
             price=200_0000,
@@ -745,11 +700,9 @@ class TestRollbackAmendZeroDelta:
         store.check_and_update(key, amend, order_key="a1")
         notional_after_amend = store.global_notional
 
-        # First rollback consumes the delta
         store._rollback_amend(key, "o1")
         notional_after_first_rollback = store.global_notional
         assert notional_after_first_rollback < notional_after_amend
 
-        # Second rollback: delta is 0 (already popped) → early return at line 436
         store._rollback_amend(key, "o1")
         assert store.global_notional == notional_after_first_rollback

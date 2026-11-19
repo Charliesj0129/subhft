@@ -95,7 +95,6 @@ async def test_stop_skips_duplicate_fills_during_drain(router_parts):
 
     fill = _make_fill("F001")
     normalizer.normalize_fill.return_value = fill
-    # Pre-register the fill_id as already seen
     router._seen_fill_ids["F001"] = None
     raw_queue.put_nowait(_make_deal_raw("F001"))
 
@@ -125,11 +124,6 @@ async def test_stop_sets_running_false(router_parts):
     await router.stop()
 
     assert router.running is False
-
-
-# ---------------------------------------------------------------------------
-# M7: order events processed during shutdown drain
-# ---------------------------------------------------------------------------
 
 
 def _make_order_raw(order_id: str = "O001", status: str = "Submitted") -> RawExecEvent:
@@ -219,7 +213,6 @@ async def test_stop_drain_mixed_order_and_fill_events(router_parts):
 
     drained = await router.stop(drain_timeout_s=1.0)
 
-    # Both events count as drained
     assert drained == 2
     position_store.on_fill.assert_called_once_with(fill_event)
 

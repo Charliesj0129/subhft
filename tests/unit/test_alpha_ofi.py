@@ -10,7 +10,7 @@ numba = pytest.importorskip("numba", reason="numba required for alpha_ofi")
 
 
 def test_module_imports():
-    from hft_platform.strategies.alpha import alpha_ofi  # noqa: F401
+    from hft_platform.strategies.alpha import alpha_ofi
 
     assert hasattr(alpha_ofi, "strategy")
     assert callable(alpha_ofi.strategy)
@@ -35,11 +35,9 @@ def test_alpha_ofi_first_update_initializes():
     from hft_platform.strategies.alpha.alpha_ofi import AlphaOFI
 
     alpha = AlphaOFI()
-    # jitclass methods require positional arguments
     alpha.update(100.0, 101.0, 10.0, 8.0)
     assert alpha.prev_bid_p == pytest.approx(100.0)
     assert alpha.prev_ask_p == pytest.approx(101.0)
-    # OFI not computed on first call
     assert alpha.ofi == pytest.approx(0.0)
 
 
@@ -48,11 +46,8 @@ def test_alpha_ofi_bid_price_increase():
     from hft_platform.strategies.alpha.alpha_ofi import AlphaOFI
 
     alpha = AlphaOFI()
-    # positional: bid_p, ask_p, bid_v, ask_v
     alpha.update(100.0, 101.0, 10.0, 8.0)
-    # Bid price increases: e_bid = new bid_v = 12
     alpha.update(100.5, 101.0, 12.0, 8.0)
-    # e_bid = 12 (price up), e_ask = 0 (same price, 8-8=0)
     assert alpha.ofi == pytest.approx(12.0)
 
 
@@ -78,9 +73,7 @@ def test_alpha_ofi_bid_price_decrease():
 
     alpha = AlphaOFI()
     alpha.update(100.0, 101.0, 10.0, 8.0)
-    # Bid price decreases: e_bid = -prev_bid_v = -10
     alpha.update(99.5, 101.0, 5.0, 8.0)
-    # e_bid = -10 (price down), e_ask = 0 (same price)
     assert alpha.ofi == pytest.approx(-10.0)
 
 
@@ -90,9 +83,7 @@ def test_alpha_ofi_ask_price_decrease():
 
     alpha = AlphaOFI()
     alpha.update(100.0, 101.0, 10.0, 8.0)
-    # Ask price decreases: e_ask = ask_v = 10 → OFI = e_bid - e_ask = 0 - 10 = -10
     alpha.update(100.0, 100.5, 10.0, 10.0)
-    # e_bid = 0 (same price, 10-10=0), e_ask = 10 (ask price down → new qty)
     assert alpha.ofi == pytest.approx(-10.0)
 
 
@@ -102,9 +93,7 @@ def test_alpha_ofi_ask_price_increase():
 
     alpha = AlphaOFI()
     alpha.update(100.0, 101.0, 10.0, 8.0)
-    # Ask price increases: e_ask = -prev_ask_v = -8 → OFI = e_bid - e_ask = 0 - (-8) = 8
     alpha.update(100.0, 102.0, 10.0, 5.0)
-    # e_bid = 0 (same price, same qty), e_ask = -8 (ask price up → loses prev vol)
     assert alpha.ofi == pytest.approx(8.0)
 
 
@@ -114,9 +103,7 @@ def test_alpha_ofi_same_prices_volume_delta():
 
     alpha = AlphaOFI()
     alpha.update(100.0, 101.0, 10.0, 8.0)
-    # Same prices, bid vol up by 3, ask vol down by 2
     alpha.update(100.0, 101.0, 13.0, 6.0)
-    # e_bid = 13-10 = 3, e_ask = 6-8 = -2 → OFI = 3 - (-2) = 5
     assert alpha.ofi == pytest.approx(5.0)
 
 
@@ -126,7 +113,6 @@ def test_alpha_ofi_zero_volume_obi():
 
     alpha = AlphaOFI()
     alpha.update(100.0, 101.0, 10.0, 8.0)
-    # Update with zero volumes
     alpha.update(100.0, 101.0, 0.0, 0.0)
     assert alpha.obi == pytest.approx(0.0)
 
@@ -194,7 +180,6 @@ def test_ofi_strategy_runs_with_valid_depth():
             pass
 
         def depth(self, _asset_no: int) -> MockDepth:
-            # Return valid bid/ask after first tick
             if self._count > 0:
                 return MockDepth(100.0 + self._count * 0.1, 101.0 + self._count * 0.1, 10.0, 8.0)
             return MockDepth(0.0, 0.0, 0.0, 0.0)

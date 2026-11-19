@@ -44,7 +44,6 @@ class TestReadSolaceReconnectParams:
         params = read_solace_reconnect_params()
         assert params is not None
         assert set(params.keys()) == set(SOLACE_RECONNECT_PARAMS)
-        # shioaji.config coerces each with int(...) at import time.
         for name in SOLACE_RECONNECT_PARAMS:
             assert isinstance(params[name], int), name
 
@@ -66,7 +65,6 @@ class TestLogSolaceReconnectParams:
         first = log_solace_reconnect_params()
         assert first is not None
         assert set(first.keys()) == set(SOLACE_RECONNECT_PARAMS)
-        # Second call is a no-op (already logged this process).
         assert log_solace_reconnect_params() is None
 
     def test_force_relogs(self) -> None:

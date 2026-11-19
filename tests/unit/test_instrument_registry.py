@@ -127,11 +127,7 @@ class TestInstrumentProfile:
         assert OptionRight.PUT.value == "P"
 
 
-# ---------------------------------------------------------------------------
-# InstrumentRegistry tests
-# ---------------------------------------------------------------------------
-
-from hft_platform.core.instrument_registry import InstrumentLimitError, InstrumentRegistry  # noqa: E402
+from hft_platform.core.instrument_registry import InstrumentLimitError, InstrumentRegistry
 
 
 def _make_future(symbol: str = "TXFC0", underlying: str = "TX") -> InstrumentProfile:
@@ -252,7 +248,6 @@ class TestInstrumentRegistry:
         )
         reg.register(_make_future("F1", "TX"), source="static")
         reg.register(_make_future("F2", "TX"), source="static")
-        # At capacity (3); this should evict EXP1 (expired relative to today 2026-03-29)
         reg.register(_make_future("F3", "TX"), source="static")
         assert not reg.contains("EXP1")
         assert reg.contains("F3")

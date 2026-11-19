@@ -7,12 +7,6 @@ from hft_platform.observability.code_identity import running_code_sha
 
 _METRICS_PREFIX = os.getenv("HFT_METRICS_PREFIX", "")
 
-# P1 fix: guards the unregister+reregister cycle in ``MetricsRegistry.__init__``
-# against the Prometheus scraper thread iterating ``REGISTRY._names_to_collectors``
-# concurrently. The resilient metrics server acquires this lock while baking the
-# scrape response so a partial-registry snapshot is never returned to a scrape.
-# Uses RLock so `__init__` can nest helper functions that would otherwise
-# deadlock on self-acquisition.
 registry_rw_lock: threading.RLock = threading.RLock()
 
 _KNOWN_EXCEPTION_TYPES: frozenset[str] = frozenset(
@@ -37,34 +31,10 @@ def cap_exception_type(exc: BaseException) -> str:
     return "_other"
 
 
-# Reject reasons are formatted messages, not codes: ``SOFT_LIMIT: loss=<pnl>
-# >= threshold=<limit>``, ``PRICE_EXCEEDS_CAP(<symbol>): <price> > <cap>``. Used
-# raw as a Prometheus label, every distinct PnL, notional, price or quantity
-# minted a time series that is never freed for the life of the process, plus a
-# matching permanent entry in the caller's label cache. Observed on THESHOW
-# 2026-09-08: three ``risk_reject_total{reason="SOFT_LIMIT: ..."}`` series after
-# a single day, differing only by a loss figure. The contract field these travel
-# in is named ``reason_code`` and defaults to ``"OK"``, so both labels were built
-# on a promise the value does not keep.
-#
-# ``ops.autonomy._reason_code_for_metrics`` bounds its own label with an
-# allowlist, which fits there because that reason is free-form operator text.
-# Here the code is the constant head of an f-string, so the set is already
-# bounded by the source: taking that head keeps the label bounded *and* lets a
-# newly added gate show up under its own name instead of silently collapsing
-# into a catch-all.
 _REJECT_REASON_MAX_LEN = 64
 
-# ``phantom_bound_total`` outcomes that page as OrderOutcomeUnresolved
-# (config/monitoring/alerts/rules.yaml); the registry creates each at 0.
 UNRESOLVED_PHANTOM_OUTCOMES: tuple[str, ...] = ("cancel_timeout", "cancel_failed", "fill_claimed_after_expiry")
-# The subset OrderOutcomeUnresolved pages on. Since 2026-11-02 a slow cancel call
-# (cancel_timeout / cancel_failed) is not paged when it happens: the cancel watch
-# that follows it pages through cancel_unconfirmed_total{outcome="gave_up"} if
-# the order really stayed live. The two are still created at 0 and counted.
 PAGED_PHANTOM_OUTCOMES: tuple[str, ...] = ("fill_claimed_after_expiry",)
-# Outcomes of the broker search a TTL-expired phantom gets before its slot is
-# released (``OrderAdapter._settle_expired_phantoms``), also created at 0.
 BROKER_LOOKUP_PHANTOM_OUTCOMES: tuple[str, ...] = ("found_open", "lookup_failed", "lookup_ambiguous")
 
 
@@ -131,10 +101,6 @@ class MetricsRegistry:
 
     def __init__(self):
         self._seen_symbols: set[str] = set()
-        # P1 fix: serialise full unregister+reregister cycle against the
-        # Prometheus scraper thread so scrapes never observe a partially
-        # rebuilt REGISTRY. The scraper side is wrapped in
-        # metrics_server.py's resilient bake path.
         self._registry_rw_lock = registry_rw_lock
         self._registry_rw_lock.__enter__()
         try:
@@ -177,7 +143,6 @@ class MetricsRegistry:
                 _pn("loss_exit_orders_total"),
                 _pn("loss_exit_unpriced_total"),
                 _pn("kill_switch_flatten_blocked"),
-                # H2: HALT notification-callback dispatch observability
                 _pn("halt_callback_no_loop_total"),
                 _pn("halt_callback_schedule_failed_total"),
                 _pn("halt_callback_dispatched_total"),
@@ -248,7 +213,6 @@ class MetricsRegistry:
                 _pn("event_loop_lag_ms"),
                 _pn("event_loop_probe_lag_ms"),
                 _pn("supervisor_tick_duration_ms"),
-                # Phase 5 metrics
                 _pn("circuit_breaker_state"),
                 _pn("dlq_size_total"),
                 _pn("orphaned_fill"),
@@ -260,7 +224,6 @@ class MetricsRegistry:
                 _pn("recorder_insert_retry_total"),
                 _pn("feed_gap_by_symbol_seconds"),
                 _pn("feed_gap_latched_silent_symbols_total"),
-                # Phase 12 metrics
                 _pn("shioaji_keepalive_failures_total"),
                 _pn("shioaji_session_down_total"),
                 _pn("quote_version_switch_total"),
@@ -269,9 +232,7 @@ class MetricsRegistry:
                 _pn("latency_spans_dropped_total"),
                 _pn("clickhouse_connection_health"),
                 _pn("wal_corrupt_files_total"),
-                # M2 (2026-04-25): orphan tmp file cleanup observability
                 _pn("wal_orphan_tmp_cleaned_total"),
-                # Phase 12 P2 metrics
                 _pn("wal_batch_flush_total"),
                 _pn("wal_batch_flush_retry_total"),
                 _pn("session_refresh_total"),
@@ -280,20 +241,17 @@ class MetricsRegistry:
                 _pn("wal_directory_size_bytes"),
                 _pn("wal_file_count"),
                 _pn("wal_oldest_file_age_seconds"),
-                # Phase 12 P2.2 metrics
                 _pn("raw_queue_dropped_total"),
                 _pn("raw_queue_depth"),
                 _pn("clickhouse_pool_active"),
                 _pn("clickhouse_pool_timeout_total"),
                 _pn("clickhouse_pool_checkout_latency_ms"),
-                # CE-M2 Gateway SLO metrics
                 _pn("gateway_dedup_hits_total"),
                 _pn("gateway_reject_total"),
                 _pn("gateway_dispatch_latency_ns"),
                 _pn("gateway_intent_channel_depth"),
                 _pn("gateway_policy_mode"),
                 _pn("gateway_exposure_notional_scaled"),
-                # CE-M3 WAL SLO metrics
                 _pn("wal_mode"),
                 _pn("wal_replay_lag_seconds"),
                 _pn("wal_replay_throughput_rows_total"),
@@ -301,12 +259,9 @@ class MetricsRegistry:
                 _pn("wal_backlog_files"),
                 _pn("wal_drain_eta_seconds"),
                 _pn("disk_pressure_level"),
-                # Alpha liveness metrics
                 _pn("alpha_signal_events_total"),
                 _pn("alpha_last_signal_ts"),
-                # Strategy exception metrics
                 _pn("strategy_exceptions_total"),
-                # Quote watchdog recovery metrics
                 _pn("quote_watchdog_recovery_attempts_total"),
                 _pn("shioaji_quote_route_total"),
                 _pn("shioaji_quote_callback_ingress_latency_ns"),
@@ -346,7 +301,6 @@ class MetricsRegistry:
                 _pn("platform_reduce_only_active"),
                 _pn("platform_inputs_calendar_unavailable_total"),
                 _pn("manual_rearm_required"),
-                # WU-04/WU-18 Reconciliation resilience metrics
                 _pn("reconciliation_sync_total"),
                 _pn("reconciliation_sync_duration_seconds"),
                 _pn("reconciliation_discrepancy_total"),
@@ -357,12 +311,10 @@ class MetricsRegistry:
                 _pn("position_drift_qty"),
                 _pn("portfolio_drawdown_pct"),
                 _pn("portfolio_trade_count"),
-                # ClickHouse backup metrics
                 _pn("hft_backup_last_success_ts"),
                 _pn("hft_backup_size_bytes"),
                 _pn("hft_backup_duration_seconds"),
                 _pn("hft_backup_retained_count"),
-                # Pipeline Determinism & Async Defense (D1-D8)
                 _pn("exec_queue_overflow_total"),
                 _pn("exec_overflow_drained_total"),
                 _pn("exec_overflow_evicted_total"),
@@ -380,55 +332,32 @@ class MetricsRegistry:
                 _pn("audit_dropped_total"),
                 _pn("intent_queue_full_total"),
                 _pn("risk_engine_error_total"),
-                # rejection_sink overflow
                 _pn("rejection_sink_overflow_total"),
-                # SLO-2: E2E order-to-fill latency
                 _pn("e2e_order_latency_ns"),
-                # Recorder exec drop counter (P-01)
                 _pn("recorder_exec_drops_total"),
-                # Recorder exec WAL fallback counter
                 _pn("recorder_exec_wal_fallback_total"),
                 _pn("recorder_exec_wal_fallback_failure_total"),
-                # Recorder reinject circuit breaker drops (P-21)
                 _pn("recorder_reinject_circuit_breaker_drops_total"),
-                # Recorder bridge queue-full drops
                 _pn("recorder_bridge_drops_total"),
-                # Recorder direct-path queue drops
                 _pn("recorder_direct_drops_total"),
-                # Recorder OrderIntent producer drops (Slice C task 3)
                 _pn("recorder_intent_drop_total"),
-                # Rust-to-Python normalizer fallbacks
                 _pn("rust_fallback_total"),
-                # Post-normalization processing errors (LOB/feature/publish)
                 _pn("process_raw_error_total"),
-                # Normalization failures (pre-event) in MarketDataService
                 _pn("normalize_error_total"),
-                # FeatureEngine → StormGuard escalation
                 _pn("feature_engine_escalation_total"),
-                # Normalizer → StormGuard escalation
                 _pn("norm_engine_escalation_total"),
-                # Feature staleness detection
                 _pn("feature_staleness_detected_total"),
-                # Stale event skip counter
                 _pn("stale_event_skip_total"),
-                # Strategy timeout circuit breaker
                 _pn("strategy_timeout_total"),
                 _pn("strategy_circuit_break_total"),
-                # LOB-only split latency (P3b)
                 _pn("lob_only_latency_ns"),
-                # Execution fill data loss
                 _pn("exec_fill_data_loss"),
-                # Pipeline health FSM (PipelineHealthTracker)
                 _pn("pipeline_health_state"),
                 _pn("pipeline_degradation_events_total"),
-                # Per-consumer ring buffer lag gauge
                 _pn("bus_consumer_lag"),
-                # Broker-thread callback data loss
                 _pn("md_callback_drop_total"),
-                # Recorder degraded mode
                 _pn("recorder_degraded_mode"),
                 _pn("recorder_degraded_total"),
-                # Observability gap closures
                 _pn("strategy_events_received_total"),
                 _pn("alias_resolution_coverage_ratio"),
                 _pn("alias_map_size"),
@@ -439,23 +368,19 @@ class MetricsRegistry:
                 _pn("feed_connect_gate_blocked_total"),
                 _pn("reconciliation_drift_streak"),
                 _pn("reconciliation_untrusted_sample_streak"),
-                # Q3 (2026-04-27): symbol config reload result observability.
                 _pn("feed_symbol_config_reload_total"),
-                # P2 #8 (2026-04-27): per-conn subscription truncation —
-                # universe loaded but per-conn cap silently capped subscribe.
                 _pn("feed_subscription_truncate_total"),
             ]
         )
-        # Market Data
         self.feed_events_total = Counter(_pn("feed_events_total"), "Total feed events", ["type"])
         self.feed_latency_ns = Histogram(
             _pn("feed_latency_ns"), "Feed ingest latency", buckets=[1000, 5000, 10000, 50000, 100000]
-        )  # 1us to 100us
+        )
         self.feed_interarrival_ns = Histogram(
             _pn("feed_interarrival_ns"),
             "Feed inter-arrival time (ns)",
             buckets=[1_000_000, 2_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000, 500_000_000],
-        )  # 1ms to 500ms
+        )
         self.bus_overflow_total = Counter(_pn("bus_overflow_total"), "Event bus overflows")
         self.bus_gap_events_total = Counter(_pn("bus_gap_events_total"), "GapEvents injected on consumer overflow")
         self.bus_consumer_lag = Gauge(_pn("bus_consumer_lag"), "Consumer lag behind writer cursor", ["consumer"])
@@ -474,11 +399,6 @@ class MetricsRegistry:
             ["plane"],
         )
         self.feed_reconnect_total = Counter(_pn("feed_reconnect_total"), "Feed reconnect attempts", ["result"])
-        # The order path runs on its own broker session, separate from the
-        # quote pool, and until 2026-09-10 nothing ever re-authenticated it.
-        # These two are the only outside view of that session: a feed metric
-        # cannot stand in for it, because the feed can be perfectly healthy
-        # while no order has reached the broker for hours.
         self.order_session_reconnect_total = Counter(
             _pn("order_session_reconnect_total"),
             "Order-session reconnect attempts made by the order-session watchdog",
@@ -503,7 +423,6 @@ class MetricsRegistry:
             _pn("feed_resubscribe_skipped_concurrent_total"),
             "D2: Feed resubscribe attempts skipped because another caller held _resubscribe_lock",
         )
-        # D1 (2026-04-25): per-symbol subscribe retry telemetry.
         self.feed_subscription_retry_total = Counter(
             _pn("feed_subscription_retry_total"),
             "D1: subscribe retry decisions per symbol (ok|skip_backoff|skip_permanent)",
@@ -519,32 +438,11 @@ class MetricsRegistry:
             "D1: current attempt counter per symbol (resets to 0 on success)",
             ["symbol"],
         )
-        # Q3 (2026-04-27): symbol config reload preflight result observability.
-        # Bumped at every ``ShioajiClient._load_config`` exit branch so symbol
-        # reload failures (RC-1: 588 > 120) surface in Prometheus instead of
-        # silently logging into the void. Result label values:
-        #   ok            — config loaded and within preflight ceiling
-        #   exceeds_limit — universe size > MAX_SUBSCRIPTIONS_PER_CLIENT
-        #   parse_error   — yaml.YAMLError or OSError reading config
-        #   other         — unexpected exception during load
         self.feed_symbol_config_reload_total = Counter(
             _pn("feed_symbol_config_reload_total"),
             "Q3: symbol config reload result (ok|exceeds_limit|exceeds_pool_capacity|parse_error|other)",
             ["result"],
         )
-        # P2 #8 (2026-04-27): silent-miss guard for the gap RC-1 left open.
-        # ``_load_config`` now passes 121–600 symbols as ok against the
-        # per-client ceiling (default 600), but ``subscribe_basket`` /
-        # ``_resubscribe_all`` still gate at the per-conn cap
-        # (``MAX_SUBSCRIPTIONS_PER_CONN`` = 120). When a deployment forgets
-        # to size ``HFT_QUOTE_CONNECTIONS``, half the universe gets loaded
-        # but never subscribed — and there was no Counter / alert path for
-        # that condition. This Counter is bumped at the actual truncation
-        # site in ``SubscriptionManager.subscribe_basket`` /
-        # ``_resubscribe_all`` so the silent-miss surfaces in Prometheus
-        # within seconds of the next subscribe cycle. Reason label values:
-        #   conn_limit             — per-conn cap reached during subscribe
-        #                            (universe > effective pool capacity)
         self.feed_subscription_truncate_total = Counter(
             _pn("feed_subscription_truncate_total"),
             "P2 #8: subscription truncated below configured universe (reason=conn_limit)",
@@ -558,17 +456,10 @@ class MetricsRegistry:
             "Feed time skew (local_ts - exch_ts) in ns — current observed delta after clamp",
             ["topic"],
         )
-        # P2-b (2026-04-27): the gauge above used to stick at the worst-ever
-        # raw delta because it was only `set()` inside the over-threshold
-        # branch and was never reset. We now also `set()` it on every
-        # validated timestamp (current delta, post-clamp) so the gauge
-        # reflects "now", not "worst seen". The `_over_threshold` counter
-        # below is the durable record of how often we actually saw skews
-        # above the configured ceilings (1s / 10s / 60s).
         self.feed_time_skew_over_threshold_total = Counter(
             _pn("feed_time_skew_over_threshold_total"),
             "Feed events with local_ts - exch_ts above a severity threshold",
-            ["topic", "severity"],  # severity: warn_1s | high_10s | critical_60s
+            ["topic", "severity"],
         )
         self.shioaji_api_latency_ms = Histogram(
             _pn("shioaji_api_latency_ms"),
@@ -585,20 +476,6 @@ class MetricsRegistry:
             buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
         )
 
-        # The top finite bucket used to be 1 s, which was fine while this
-        # histogram only carried sub-millisecond pipeline stages. It stopped
-        # being fine once ``api_place_order`` / ``api_cancel_order`` started
-        # reporting here: a broker call is the one stage that routinely spends
-        # whole seconds, and ``histogram_quantile`` cannot interpolate into
-        # ``+Inf``, so every tail query returned exactly 1000.0 ms whatever the
-        # real value was. Measured on THESHOW 2026-09-09 over 15 h: 18 of 1675
-        # ``api_place_order`` calls and 11 of 1617 ``api_cancel_order`` calls
-        # landed above 1 s, and the day-session p99 read a flat 1000.0 ms for
-        # four consecutive hours -- a saturated quantile that looks exactly
-        # like a stable one. StormGuard's ``order_rtt`` STORM threshold is
-        # 1 s, so the region the breaker actually fires in was the region this
-        # histogram could not describe. The three added edges cover it; they
-        # cost 3 series per active stage.
         self.pipeline_latency_ns = Histogram(
             _pn("pipeline_latency_ns"),
             "Pipeline stage latency (ns)",
@@ -623,17 +500,13 @@ class MetricsRegistry:
             ],
         )
 
-        # Strategy/Risk
         self.strategy_latency_ns = Histogram(
             _pn("strategy_latency_ns"),
             "Strategy execution time",
             ["strategy"],
             buckets=[5000, 20000, 50000, 100000, 200000],
-        )  # 5us to 200us
+        )
         self.strategy_intents_total = Counter(_pn("strategy_intents_total"), "Intents generated", ["strategy"])
-        # D6 (2026-04-21 incident fix): divergence metrics for MM strategies.
-        # Catch future backtest-live drift via: stale-quote cancel rate,
-        # in-flight oid multiplicity (RTT-spike indicator).
         self.strategy_stale_cancels_total = Counter(
             _pn("strategy_stale_cancels_total"),
             "Cancels fired by distance-from-mid reconciler (D1)",
@@ -661,10 +534,6 @@ class MetricsRegistry:
         self.stormguard_mode = Gauge(
             _pn("stormguard_mode"), "StormGuard State (0=NORMAL, 1=WARM, 2=STORM, 3=HALT)", ["strategy"]
         )
-        # stormguard_mode says HALT; this says what for. 1 on the label of the
-        # trigger_halt reason that entered the HALT, 0 once it is left. The label
-        # is the reason up to its first ':' (storm_guard.halt_reason_label), so
-        # free-text detail never becomes cardinality.
         self.stormguard_halt_reason = Gauge(
             _pn("stormguard_halt_reason"),
             "1 while StormGuard is in a HALT entered for this reason, else 0",
@@ -682,7 +551,7 @@ class MetricsRegistry:
         self.stormguard_transitions_total = Counter(
             _pn("stormguard_transitions_total"),
             "StormGuard state transitions",
-            ["direction"],  # "escalation" or "de_escalation"
+            ["direction"],
         )
         self.stormguard_halt_exempt_bypass_total = Counter(
             _pn("stormguard_halt_exempt_bypass_total"),
@@ -692,10 +561,6 @@ class MetricsRegistry:
             _pn("halt_drain_safety_intent_lost_total"),
             "Safety intents (CANCEL/FORCE_FLAT) lost during HALT drain re-queue",
         )
-        # Platform loss/expiry exit (risk/loss_exit.py). Declared here, not at
-        # module level in loss_exit.py: _init_collectors unregisters every custom
-        # collector, so a module-level Counter imported before this registry is
-        # built still counts but is never exported (THESHOW 2026-10-22).
         self.loss_exit_orders_total = Counter(
             _pn("loss_exit_orders_total"),
             "FORCE_FLAT intents emitted by the platform loss/expiry exit, by trigger",
@@ -711,10 +576,6 @@ class MetricsRegistry:
             "1 while the kill switch holds open positions it will not close because no recent "
             "reconciliation confirmed them against the broker, else 0",
         )
-        # H2 (2026-04-25): observability for cross-thread HALT notification dispatch.
-        # Production evidence: 8 days of HALT events with no Telegram delivery because
-        # ``asyncio.get_event_loop()`` raised RuntimeError in non-loop threads on Py3.12+
-        # and the bare ``except: pass`` swallowed the failure silently.
         self.halt_callback_no_loop_total = Counter(
             _pn("halt_callback_no_loop_total"),
             "HALT notification callbacks dropped because no event loop was bound",
@@ -726,7 +587,7 @@ class MetricsRegistry:
         self.halt_callback_dispatched_total = Counter(
             _pn("halt_callback_dispatched_total"),
             "HALT notification callbacks successfully dispatched to the engine loop",
-            ["path"],  # "threadsafe" (cross-thread) or "direct" (same-loop)
+            ["path"],
         )
         self.background_task_failed_total = Counter(
             _pn("background_task_failed_total"),
@@ -776,25 +637,13 @@ class MetricsRegistry:
             ["scope"],
         )
 
-        # Order
         self.order_actions_total = Counter(_pn("order_actions_total"), "Order actions sent", ["type"])
         self.order_reject_total = Counter(_pn("order_reject_total"), "Broker rejects")
-        # Bug #29: cancel intents that targeted an order already in terminal
-        # state (race-loser, semantic success). Distinct from order_reject_total
-        # (which counts true failures) and from phantom counters.
         self.order_cancel_already_terminal_total = Counter(
             _pn("order_cancel_already_terminal_total"),
             "CANCEL intents whose target was already terminal (success, not failure)",
             ["reason"],
         )
-        # Gate 3: track which source OrderAdapter used to derive the
-        # broker-side contract_code. Label values:
-        #   - "resolver_hit": ``intent.contract`` resolved via
-        #     ``ContractFamilyResolver.snapshot.native_hint`` (new structured path)
-        #   - "alias_fallback": ``_actual_to_config`` reverse-alias dict hit
-        #     (legacy path — depends on post-connect alias propagation)
-        #   - "symbol_raw": neither was available; ``intent.symbol`` used verbatim
-        # When resolver_hit dominates we can safely retire ``_actual_to_config``.
         self.order_contract_code_resolution_total = Counter(
             _pn("order_contract_code_resolution_total"),
             "OrderAdapter contract_code resolution path (Gate 3 migration telemetry)",
@@ -809,10 +658,6 @@ class MetricsRegistry:
             "H1: defensive cancels issued after StormGuard transitioned to HALT "
             "during a broker dispatch await window (TOCTOU recovery)",
         )
-        # M3 (2026-04-25): generalised api_queue priority eviction. Replaces
-        # the H7 ``api_queue_cancel_priority_eviction_total`` (CANCEL evicts
-        # NEW only) with a labelled counter keyed by both evictor and
-        # evicted intent types. CANCEL > FORCE_FLAT > AMEND > NEW.
         self.api_queue_priority_eviction_total = Counter(
             _pn("api_queue_priority_eviction_total"),
             "OrderAdapter._api_queue priority-based evictions when full",
@@ -837,10 +682,6 @@ class MetricsRegistry:
             "OrderDeadLetterQueueGrowing (critical) on THESHOW.",
             ["reason"],
         )
-        # Broker order-path silence (order/broker_stall.py): how long the
-        # oldest call sent after the last broker answer has been waiting. Read
-        # by StormGuard's back-pressure gate and long-stall STORM; published
-        # here at the StormGuard tick (1 Hz), so a 15 s scrape sees a sample.
         self.order_broker_silence_seconds = Gauge(
             _pn("order_broker_silence_seconds"),
             "Seconds the oldest broker order call sent after the last broker answer has been waiting (0 = none)",
@@ -849,10 +690,6 @@ class MetricsRegistry:
             _pn("order_broker_inflight"),
             "Broker order calls (place/cancel/update) handed to the SDK and not yet ended, timed-out ones included",
         )
-        # One observation per broker answer: how long the path had been silent
-        # when it came (the answered call's own RTT on a quiet path, longer
-        # when it waited behind a stuck call). Buckets span the 3 s wrapper
-        # timeout and the SDK's 30 s ceiling, so stalls are not clipped.
         self.order_broker_silence_episode_seconds = Histogram(
             _pn("order_broker_silence_episode_seconds"),
             "Broker order-path silence ended by an answer, seconds",
@@ -871,10 +708,6 @@ class MetricsRegistry:
             "released_not_sent / kept_for_ttl; at the TTL: found_open / lookup_failed / lookup_ambiguous)",
             ["outcome"],
         )
-        # OrderOutcomeUnresolved pages on increase() of these. A labelled child
-        # does not exist before its first inc(), and increase() over a series
-        # born at 1 is 0: THESHOW 2026-10-29 lost the first cancel_timeout and
-        # the only fill_claimed_after_expiry that way. Born at 0, the first counts.
         for _outcome in UNRESOLVED_PHANTOM_OUTCOMES + BROKER_LOOKUP_PHANTOM_OUTCOMES:
             self.phantom_bound_total.labels(outcome=_outcome)
         self.phantom_order_candidates_total = Counter(
@@ -910,15 +743,8 @@ class MetricsRegistry:
             "(outcome=retried: re-sent once; gave_up: second look, left to the TTL sweep)",
             ["outcome"],
         )
-        # OrderOutcomeUnresolved alerts on increase() of the gave_up child; born
-        # at 0 so the first one counts (a labelled child born at 1 has no increase).
         for _outcome in ("retried", "gave_up"):
             self.cancel_unconfirmed_total.labels(outcome=_outcome)
-        # A place/update call that hit the HFT_API_TIMEOUT_S wrapper timeout. Its
-        # result is not known yet -- on THESHOW 116 of 120 were accepted and
-        # answered 5-30 s later -- so it is counted here and NOT as a reject, a
-        # circuit-breaker failure or a dead letter. What it turns into is counted
-        # where it becomes known: phantom_bound_total, phantom_recovery_releases_total.
         self.order_outcome_unknown_total = Counter(
             _pn("order_outcome_unknown_total"),
             "Mutating broker calls that timed out with their outcome unknown, by op",
@@ -935,7 +761,6 @@ class MetricsRegistry:
             _pn("api_guard_timeout_total"),
             "API semaphore guard timeouts (not counted as circuit breaker failures)",
         )
-        # Shadow mode metrics
         self.shadow_orders_total = Counter(
             _pn("shadow_orders_total"),
             "Shadow orders intercepted (not sent to broker)",
@@ -946,7 +771,6 @@ class MetricsRegistry:
             "Shadow order mode status (1=enabled, 0=disabled)",
         )
 
-        # Execution
         self.execution_events_total = Counter(_pn("execution_events_total"), "Execution callbacks", ["type"])
         self.execution_router_errors_total = Counter(_pn("execution_router_errors_total"), "Execution router errors")
         self.execution_gateway_errors_total = Counter(_pn("execution_gateway_errors_total"), "Execution gateway errors")
@@ -966,16 +790,6 @@ class MetricsRegistry:
             "Order events dropped by normalization, by reason",
             ["reason"],
         )
-        # An order callback the platform could normalize but could NOT attribute
-        # to the order that produced it: client_order_id resolves to "" and
-        # strategy_id to "UNKNOWN". The row still lands in hft.orders, so this
-        # failure is invisible in every count -- on 2026-08-21 all 56 rows in
-        # production had an empty client_order_id, which is the join key to
-        # hft.fills, and nothing had ever incremented.
-        # ``present`` names which of the four candidate id fields the payload
-        # actually carried, so the next occurrence says WHY resolution failed
-        # rather than only that it did. Cardinality is bounded at 16 (the
-        # subsets of a 4-element set), plus "none".
         self.order_attribution_unresolved_total = Counter(
             _pn("order_attribution_unresolved_total"),
             "Order callbacks normalized but not attributable to an order_key",
@@ -1008,22 +822,6 @@ class MetricsRegistry:
         self.execution_gateway_heartbeat_ts = Gauge(
             _pn("execution_gateway_heartbeat_ts"), "Execution gateway heartbeat (unix seconds)"
         )
-        # E2E order-to-fill latency (SLO-2).
-        #
-        # NOT a broker round-trip. The clock starts at ``OrderCommand.created_ns``
-        # (stamped in ``OrderAdapter._cmd_created_ns_map``) and stops at
-        # ``FillEvent.ingest_ts_ns`` (observed in ``ExecutionRouter``), so for a
-        # passive maker such as R47 the span is dominated by the time the quote
-        # rests in the book waiting to be hit -- a market-conditions quantity,
-        # not a platform or broker health signal. A one-second reading here is
-        # the expected shape for a resting limit order, and reading it as broker
-        # slowness produced a false "20x latency regression" report on
-        # 2026-09-09 that the correct instrument then contradicted.
-        #
-        # The broker round-trip is ``pipeline_latency_ns{stage="api_place_order"}``
-        # / ``{stage="api_cancel_order"}``: the same measured duration that feeds
-        # StormGuard's ``order_rtt`` breaker input. Use that one for any question
-        # about the broker, the order path, or a latency threshold.
         self.e2e_order_latency_ns = Histogram(
             _pn("e2e_order_latency_ns"),
             "Order-command-to-fill latency in ns (INCLUDES passive book residence "
@@ -1054,7 +852,6 @@ class MetricsRegistry:
         )
         self.portfolio_trade_count = Counter(_pn("portfolio_trade_count"), "Total trade count", ["strategy", "side"])
 
-        # Infra
         self.recorder_bridge_drops_total = Counter(
             _pn("recorder_bridge_drops_total"),
             "Events dropped by recorder bridge due to full recorder queue",
@@ -1064,9 +861,6 @@ class MetricsRegistry:
             _pn("recorder_direct_drops_total"),
             "Direct-path recorder queue drops in MarketDataService",
         )
-        # Slice C task 3: producer-side drops when StrategyRunner cannot enqueue
-        # an OrderIntent envelope onto the (full) recorder queue. The hot path
-        # silently drops; this counter makes the loss observable.
         self.recorder_intent_drop_total = Counter(
             _pn("recorder_intent_drop_total"),
             "OrderIntent recorder drops in StrategyRunner producer hook (queue full)",
@@ -1079,7 +873,6 @@ class MetricsRegistry:
             _pn("recorder_degraded_total"),
             "Times recorder entered degraded mode",
         )
-        # Schema initialization
         self.recorder_schema_init_failed = Gauge(
             _pn("recorder_schema_init_failed"),
             "1 if ClickHouse schema initialization failed at startup (WAL-only mode)",
@@ -1126,7 +919,6 @@ class MetricsRegistry:
             _pn("recorder_process_errors_total"),
             "Recorder main loop processing errors",
         )
-        # Pipeline health FSM (PipelineHealthTracker)
         self.pipeline_health_state = Gauge(
             _pn("pipeline_health_state"),
             "Recorder pipeline health state (0=HEALTHY, 1=DEGRADED, 2=CRITICAL, 3=DATA_LOSS)",
@@ -1136,23 +928,12 @@ class MetricsRegistry:
             "Pipeline health state transition count",
         )
         self.queue_depth = Gauge(_pn("queue_depth"), "Queue depth by type", ["queue"])
-        # NOTE: despite the name, this gauge is NOT pure loop lag. The supervisor
-        # computes it as (tick period - nominal 1 s sleep), so it is the sum of
-        # real loop congestion AND the supervisor tick body's own duration. The
-        # two histograms below split it; keep all three and expect
-        # ``event_loop_probe_lag_ms + supervisor_tick_duration_ms ~= this gauge``.
-        # The name is preserved because dashboards and alerts already query it.
         self.event_loop_lag_ms = Gauge(_pn("event_loop_lag_ms"), "Event loop lag (ms)")
-        # Real loop congestion, measured by a task that does nothing but sleep,
-        # so nothing it observes is its own work. Histogram, not Gauge: a 1 Hz
-        # gauge read by a 15 s scrape shows ~1 sample in 15, which is how a
-        # recurring spike can look like a once-an-hour outlier.
         self.event_loop_probe_lag_ms = Histogram(
             _pn("event_loop_probe_lag_ms"),
             "Event loop scheduling overshoot measured by an idle probe task (ms)",
             buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0],
         )
-        # Wall time of one supervisor tick body (excludes its 1 Hz sleep).
         self.supervisor_tick_duration_ms = Histogram(
             _pn("supervisor_tick_duration_ms"),
             "Duration of one supervisor tick body, excluding the 1 Hz sleep (ms)",
@@ -1164,38 +945,29 @@ class MetricsRegistry:
             ["component"],
         )
 
-        # Phase 5: Advanced Robustness Metrics
-        # Circuit breaker state (0=closed/healthy, 1=open/tripped)
         self.circuit_breaker_state = Gauge(
             _pn("circuit_breaker_state"),
             "Circuit breaker state (0=closed, 1=open)",
             ["component"],
         )
-        # Dead Letter Queue cumulative count
         self.dlq_size_total = Counter(
             _pn("dlq_size_total"),
             "Dead Letter Queue cumulative entry count",
-            ["source"],  # e.g., "order", "recorder"
+            ["source"],
         )
-        # The order DLQ by reason. dlq_size_total{source="order"} has no reason,
-        # so an alert on it could not tell a dead letter from a refusal. Every
-        # RejectionReason child is created at 0 by DeadLetterQueue.__init__
-        # (this module cannot import order/deadletter.py: it imports us).
         self.order_dlq_adds_total = Counter(
             _pn("order_dlq_adds_total"),
             "Orders written to the order dead-letter queue, by RejectionReason value",
             ["reason"],
         )
-        # Reconciliation discrepancy count
         self.reconciliation_discrepancy_count = Gauge(
             _pn("reconciliation_discrepancy_count"),
             "Number of position discrepancies detected",
         )
-        # WU-04/WU-18: Reconciliation resilience & Prometheus metrics
         self.reconciliation_sync_total = Counter(
             _pn("reconciliation_sync_total"),
             "Reconciliation sync outcomes",
-            ["result"],  # success|failure|skip
+            ["result"],
         )
         self.reconciliation_sync_duration_seconds = Histogram(
             _pn("reconciliation_sync_duration_seconds"),
@@ -1205,7 +977,7 @@ class MetricsRegistry:
         self.reconciliation_discrepancy_total = Counter(
             _pn("reconciliation_discrepancy_total"),
             "Reconciliation discrepancies by severity",
-            ["severity"],  # info|warning|critical
+            ["severity"],
         )
         self.reconciliation_consecutive_failures = Gauge(
             _pn("reconciliation_consecutive_failures"),
@@ -1229,32 +1001,21 @@ class MetricsRegistry:
             _pn("reconciliation_not_comparable"),
             "1 when the broker snapshot cannot confirm platform positions (e.g. sim order routing)",
         )
-        # Recorder batch insert retry count
         self.recorder_insert_retry_total = Counter(
             _pn("recorder_insert_retry_total"),
             "Recorder batch insert retry count",
-            ["table", "result"],  # result: retry|success|failed
+            ["table", "result"],
         )
         self.recorder_insert_batches_total = Counter(
             _pn("recorder_insert_batches_total"),
             "Recorder insert batch final outcomes",
-            ["table", "result"],  # success_no_retry|success_after_retry|failed_after_retry|failed_no_client
+            ["table", "result"],
         )
-        # Per-symbol feed gap in seconds
         self.feed_gap_by_symbol_seconds = Gauge(
             _pn("feed_gap_by_symbol_seconds"),
             "Feed gap per symbol (seconds since last tick)",
             ["symbol"],
         )
-        # RC-2 fix (subscription-membership variant): count latched symbols
-        # de-latched from ``_ever_active_symbols`` by ``get_active_feed_gap_s``
-        # because they are no longer in ``client.subscribed_codes`` (typical
-        # case: contract expired and was discarded by ``contracts_runtime``
-        # rollover).  Cardinality is bounded by ``cap_symbol`` (caps unique
-        # symbols at HFT_METRICS_MAX_LABEL_SYMBOLS, default 200; overflow →
-        # "_other").  ``action`` is currently ``{"unsubscribed"}``; the
-        # label is retained as a dimension for future de-latch reasons
-        # (e.g. ``"manual_rearm"``) without breaking dashboards.
         self.feed_gap_latched_silent_symbols_total = Counter(
             _pn("feed_gap_latched_silent_symbols_total"),
             "Latched symbols de-latched by get_active_feed_gap_s "
@@ -1262,90 +1023,66 @@ class MetricsRegistry:
             ["symbol", "action"],
         )
 
-        # Phase 12: Market Data Robustness & Database Writing Upgrades
-        # Shioaji keep-alive failure counter (A3)
         self.shioaji_keepalive_failures_total = Counter(
             _pn("shioaji_keepalive_failures_total"),
             "Shioaji keep-alive check failures",
         )
-        # Pre-open probe that keeps the first order of a session off the
-        # transport handshake. ``failed`` is not an outage on its own: orders
-        # still go out, they just pay the handshake the way they did before.
         self.order_session_warmup_total = Counter(
             _pn("order_session_warmup_total"),
             "Order-session warm-up outcomes ahead of a market open",
             ["result"],
         )
-        # The SDK's own "your session went down" notification. Distinct from
-        # the keep-alive counter above: a keep-alive failure is the platform
-        # noticing silence, this is the broker reporting the transport is gone.
         self.shioaji_session_down_total = Counter(
             _pn("shioaji_session_down_total"),
             "Shioaji broker session-down notifications delivered by the SDK",
         )
-        # Quote version switch counter (A4)
         self.quote_version_switch_total = Counter(
             _pn("quote_version_switch_total"),
             "Quote version switches (upgrade/downgrade)",
-            ["direction"],  # "upgrade" or "downgrade"
+            ["direction"],
         )
         self.quote_schema_mismatch_total = Counter(
             _pn("quote_schema_mismatch_total"),
             "Quote callback payload schema mismatches rejected by schema guard",
             ["expected", "reason"],
         )
-        # Contract lookup errors by symbol (A5)
         self.shioaji_contract_lookup_errors_total = Counter(
             _pn("shioaji_contract_lookup_errors_total"),
             "Contract lookup failures by symbol",
             ["code"],
         )
-        # Latency spans dropped due to overflow (B2)
         self.latency_spans_dropped_total = Counter(
             _pn("latency_spans_dropped_total"),
             "Latency spans dropped due to queue/buffer overflow",
         )
-        # ClickHouse connection health gauge (B4)
         self.clickhouse_connection_health = Gauge(
             _pn("clickhouse_connection_health"),
             "ClickHouse connection health (1=healthy, 0=unhealthy)",
         )
-        # Corrupt WAL files counter (B5)
         self.wal_corrupt_files_total = Counter(
             _pn("wal_corrupt_files_total"),
             "Corrupt WAL files quarantined",
         )
-        # M2 (2026-04-25): orphan tempfile cleanup. Production evidence found 8
-        # tmp*.tmp files in /app/.wal/ aged 5–13 days, indicating a writer
-        # crashed between ``mkstemp`` and ``os.rename`` (the existing
-        # ``except: unlink`` pattern only fires on exception, not SIGKILL or
-        # thread death). Counter is incremented by both the per-call
-        # ``finally:`` cleanup and the bootstrap-time orphan sweep.
         self.wal_orphan_tmp_cleaned_total = Counter(
             _pn("wal_orphan_tmp_cleaned_total"),
             "Orphan WAL tempfiles cleaned up after writer crash / SIGKILL",
-            ["location"],  # "wal_writer", "wal_batch", "loader_manifest", "bootstrap_sweep"
+            ["location"],
         )
 
-        # Phase 12 P2: Holiday Resilience & Scheduled WAL Import
-        # WAL batch flush at market close (C2)
         self.wal_batch_flush_total = Counter(
             _pn("wal_batch_flush_total"),
             "WAL batch flush operations at market close",
-            ["result"],  # "ok" or "error"
+            ["result"],
         )
-        # WAL batch flush retry counter (O2)
         self.wal_batch_flush_retry_total = Counter(
             _pn("wal_batch_flush_retry_total"),
             "WAL batch flush retry attempts",
         )
-        # Session refresh counter (C3)
         self.session_refresh_total = Counter(
             _pn("session_refresh_total"),
             "Preventive session refresh operations",
-            ["result"],  # "ok" or "error"
+            ["result"],
         )
-        # Market open grace period active indicator (C4)
         self.market_open_grace_active = Gauge(
             _pn("market_open_grace_active"),
             "Whether market open grace period is active (1=active, 0=inactive)",
@@ -1354,11 +1091,6 @@ class MetricsRegistry:
             _pn("market_trading_hours_active"),
             "Whether the market-data watchdog currently considers the market open",
         )
-        # WAL directory monitoring (C5)
-        # NB: pre-P2-a these gauges only counted top-level *.jsonl files,
-        # ignoring archive/ (34k+ files, 3 GB) and dlq/. The legacy unlabeled
-        # gauges below are now set to the ACTIVE-tier subset for backward
-        # compatibility; new code should consume the tiered variants.
         self.wal_directory_size_bytes = Gauge(
             _pn("wal_directory_size_bytes"),
             "Active-tier WAL directory size in bytes (legacy; use wal_directory_bytes for tiered)",
@@ -1371,9 +1103,6 @@ class MetricsRegistry:
             _pn("wal_oldest_file_age_seconds"),
             "Age of oldest active-tier WAL file in seconds",
         )
-        # P2-a (2026-04-27): tiered WAL gauges. Labels: tier=active|archive|dlq.
-        # Required because archive/ & dlq/ accumulated 3 GB unseen by the
-        # legacy non-recursive scan in _check_wal_accumulation.
         self.wal_directory_bytes = Gauge(
             _pn("wal_directory_bytes"),
             "WAL directory size in bytes by tier (active=top-level *.jsonl, archive=archive/, dlq=dlq/)",
@@ -1385,8 +1114,6 @@ class MetricsRegistry:
             ["tier"],
         )
 
-        # Phase 12 P2.2: Database & Market Data Optimizations
-        # raw_queue backpressure metrics (P0-1)
         self.raw_queue_dropped_total = Counter(
             _pn("raw_queue_dropped_total"),
             "Raw queue messages dropped due to backpressure",
@@ -1403,7 +1130,6 @@ class MetricsRegistry:
             _pn("raw_queue_depth"),
             "Current raw queue depth",
         )
-        # ClickHouse connection pool metrics (P0-3)
         self.clickhouse_pool_active = Gauge(
             _pn("clickhouse_pool_active"),
             "Number of active connections in ClickHouse pool",
@@ -1418,25 +1144,20 @@ class MetricsRegistry:
             buckets=[0.1, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000],
         )
 
-        # CE-M2 Gateway SLO (CE2-07)
-        # SLO: P99 < 1ms, alert > 2ms
         self.gateway_dedup_hits_total = Counter(
             _pn("gateway_dedup_hits_total"),
             "Idempotency cache hits (duplicate intents suppressed)",
         )
-        # reason label: HALT, DEGRADE, EXPOSURE, VALIDATOR, DEDUP
         self.gateway_reject_total = Counter(
             _pn("gateway_reject_total"),
             "Gateway rejected intents by reason",
             ["reason"],
         )
-        # SLO: P99 < 1_000_000 ns (1ms); alert > 2_000_000 ns (2ms)
         self.gateway_dispatch_latency_ns = Histogram(
             _pn("gateway_dispatch_latency_ns"),
             "End-to-end gateway dispatch latency (ns): dedup→policy→exposure→risk→dispatch",
             buckets=[1_000, 5_000, 10_000, 50_000, 100_000, 500_000, 1_000_000, 5_000_000],
         )
-        # SLO: depth < 100; alert > 500
         self.gateway_intent_channel_depth = Gauge(
             _pn("gateway_intent_channel_depth"),
             "Current depth of LocalIntentChannel queue",
@@ -1445,7 +1166,6 @@ class MetricsRegistry:
             _pn("gateway_dlq_size"),
             "Gateway DLQ expired-intent count",
         )
-        # 0=NORMAL, 1=DEGRADE, 2=HALT
         self.gateway_policy_mode = Gauge(
             _pn("gateway_policy_mode"),
             "Current GatewayPolicy mode (0=NORMAL, 1=DEGRADE, 2=HALT)",
@@ -1460,13 +1180,10 @@ class MetricsRegistry:
             "Current global exposure notional (scaled integer, sum across all strategies/symbols)",
         )
 
-        # CE-M3 WAL SLO (CE3-06)
-        # 0=direct, 1=wal_first
         self.wal_mode = Gauge(
             _pn("wal_mode"),
             "Current recorder WAL mode (0=direct, 1=wal_first)",
         )
-        # SLO: lag < 300s; alert > 600s
         self.wal_replay_lag_seconds = Gauge(
             _pn("wal_replay_lag_seconds"),
             "Oldest unprocessed WAL file age in seconds (replay lag)",
@@ -1480,7 +1197,6 @@ class MetricsRegistry:
             "WAL replay errors by type",
             ["type"],
         )
-        # SLO: backlog < 50; alert > 200
         self.wal_backlog_files = Gauge(
             _pn("wal_backlog_files"),
             "Number of WAL files pending replay",
@@ -1489,27 +1205,16 @@ class MetricsRegistry:
             _pn("wal_drain_eta_seconds"),
             "Estimated seconds to drain WAL backlog at current throughput",
         )
-        # SLO: level = 0; alert >= 2
-        # 0=ok, 1=warn, 2=critical, 3=halt
         self.disk_pressure_level = Gauge(
             _pn("disk_pressure_level"),
             "Current disk pressure level (0=ok, 1=warn, 2=critical, 3=halt)",
         )
 
-        # Alpha signal liveness (P0-2)
-        # Tracks whether strategies are producing non-flat signals.
-        # Grafana alert: time() - alpha_last_signal_ts > 300 → "alpha silent"
         self.alpha_signal_events_total = Counter(
             _pn("alpha_signal_events_total"),
             "Alpha signal decisions by outcome",
-            ["strategy", "outcome"],  # outcome: "intent" | "flat"
+            ["strategy", "outcome"],
         )
-        # StormGuard drift-burst observability (2026-08-10).
-        # stormguard_transitions_total counts escalation/de_escalation but not
-        # the target state, so three WARM excursions and three HALTs are the
-        # same number. The toxicity score driving them had no metric at all —
-        # only an INFO log — so there was no way to see how close the breaker
-        # runs to its threshold, or whether a day had 3 bursts or 300.
         self.stormguard_toxicity_score = Gauge(
             _pn("stormguard_toxicity_score"),
             "Latest drift-burst toxicity score [0,1] for the reference instrument",
@@ -1520,14 +1225,6 @@ class MetricsRegistry:
             "StormGuard escalations by target state",
             ["to_state"],
         )
-        # StormGuard latency-input observability (2026-08-13).
-        # The breaker's latency branch is fed event-loop lag (p99.9 ~9 ms) while
-        # THESHOW configured it at 5 s / 10 s, so it had never fired and could
-        # not — with nothing to distinguish "never fired" from "cannot fire".
-        # armed says whether a threshold pair is set at all; max_us says how far
-        # the input has ever reached, which is what makes an unreachable
-        # threshold visible (and what the order-RTT thresholds must be
-        # calibrated from before they are armed).
         self.stormguard_latency_input_armed = Gauge(
             _pn("stormguard_latency_input_armed"),
             "Whether a StormGuard latency input has thresholds configured (1) or is unarmed (0)",
@@ -1543,11 +1240,6 @@ class MetricsRegistry:
             "Drift-burst detections by reference symbol and toxicity type",
             ["symbol", "toxicity_type"],
         )
-        # TrackGate session filtering (2026-08-10).
-        # An intent dropped by the session phase filter used to leave no trace
-        # but a debug log, so the runner counted it as `flat` — indistinguishable
-        # from a strategy that chose not to quote. That is how a whole session of
-        # R47 intents disappeared. Drops are cheap and rare; this counts them.
         self.track_gate_intents_filtered_total = Counter(
             _pn("track_gate_intents_filtered_total"),
             "Intents dropped by the TrackGate session-phase filter",
@@ -1559,10 +1251,6 @@ class MetricsRegistry:
             ["strategy"],
         )
 
-        # Bug 27 (2026-04-17): position stuck observability.
-        # Gauge: per (strategy, symbol) age in seconds since last_update_ts while
-        # net_qty != 0. Resets (or is deleted) when position goes flat. Alerts at
-        # > HFT_POSITION_STUCK_ALERT_S (default 300s) via PositionStuckMonitor.
         self.position_age_seconds = Gauge(
             _pn("position_age_seconds"),
             "Seconds since last fill for a non-zero position (per strategy,symbol)",
@@ -1573,37 +1261,31 @@ class MetricsRegistry:
             "Position-stuck telegram alerts emitted",
             ["strategy", "symbol"],
         )
-        # Alpha governance pipeline metrics
         self.alpha_gate_results_total = Counter(
             _pn("alpha_gate_results_total"),
             "Alpha gate evaluation results",
-            ["alpha_id", "gate", "result"],  # result: "pass" | "fail"
+            ["alpha_id", "gate", "result"],
         )
         self.alpha_promotion_results_total = Counter(
             _pn("alpha_promotion_results_total"),
             "Alpha promotion decisions",
-            ["alpha_id", "result"],  # result: "approved" | "rejected" | "forced"
+            ["alpha_id", "result"],
         )
         self.alpha_canary_actions_total = Counter(
             _pn("alpha_canary_actions_total"),
             "Alpha canary state transitions",
-            ["alpha_id", "action"],  # action: "hold" | "escalated" | "rolled_back" | "graduated"
+            ["alpha_id", "action"],
         )
-        # Slice-D kill ledger counter — labels are coarsened to bound cardinality.
-        # gate ∈ {A,B,C,D,E,F,pre_screen,cluster,manual}; reason_class is a fixed enum
-        # (see hft_platform.alpha.audit._classify_kill_reason for the mapping).
         self.alpha_kill_results_total = Counter(
             _pn("alpha_kill_results_total"),
             "Alpha kill-ledger appends grouped by gate and reason class",
             ["alpha_id", "gate", "reason_class"],
         )
-        # Strategy exception counter — strategy, exception_type, method
         self.strategy_exceptions_total = Counter(
             _pn("strategy_exceptions_total"),
             "Strategy exceptions by type and handler method",
             ["strategy", "exception_type", "method"],
         )
-        # Strategy timeout circuit breaker
         self.strategy_timeout_total = Counter(
             _pn("strategy_timeout_total"),
             "Strategy handle_event calls exceeding wall-clock timeout",
@@ -1614,16 +1296,15 @@ class MetricsRegistry:
             "Strategy circuit breaks triggered by consecutive timeouts",
             ["strategy_name"],
         )
-        # Quote watchdog recovery attempts (re-register callbacks / version downgrade)
         self.quote_watchdog_recovery_attempts_total = Counter(
             _pn("quote_watchdog_recovery_attempts_total"),
             "Quote watchdog recovery attempts by action",
-            ["action"],  # action: "version_downgrade" | "callback_reregister"
+            ["action"],
         )
         self.shioaji_quote_route_total = Counter(
             _pn("shioaji_quote_route_total"),
             "Shioaji quote callback route outcomes",
-            ["result"],  # "miss" | "fallback" | "drop"
+            ["result"],
         )
         self.shioaji_quote_callback_ingress_latency_ns = Histogram(
             _pn("shioaji_quote_callback_ingress_latency_ns"),
@@ -1641,10 +1322,6 @@ class MetricsRegistry:
         self.shioaji_thread_alive = Gauge(
             _pn("shioaji_thread_alive"),
             "Shioaji runtime thread liveness (1=alive, 0=down)",
-            # conn_id matters: a quote pool runs one client per connection, and
-            # without it all facades share a single series where the last writer
-            # wins. A facade whose refresh thread had died then read as alive
-            # again as soon as any other facade restarted its own.
             ["thread", "conn_id"],
         )
         self.shioaji_quote_pending_age_seconds = Gauge(
@@ -1672,12 +1349,12 @@ class MetricsRegistry:
         self.feed_session_lease_ops_total = Counter(
             _pn("feed_session_lease_ops_total"),
             "Redis feed session lease operation outcomes",
-            ["op", "result"],  # op: preflight|refresh|stale_cleanup|teardown
+            ["op", "result"],
         )
         self.shioaji_logout_failed_total = Counter(
             _pn("shioaji_logout_failed_total"),
             "Shioaji logout() calls that raised while a session was being discarded (it may not have been released)",
-            ["context"],  # context: recreate_api
+            ["context"],
         )
         self.feed_first_quote_total = Counter(
             _pn("feed_first_quote_total"),
@@ -1696,17 +1373,17 @@ class MetricsRegistry:
         self.market_data_callback_parse_total = Counter(
             _pn("market_data_callback_parse_total"),
             "MarketDataService Shioaji callback parser outcomes",
-            ["result"],  # "fast" | "fallback" | "miss"
+            ["result"],
         )
         self.md_callback_drop_total = Counter(
             _pn("md_callback_drop_total"),
             "Market data callback drops (broker thread)",
-            ["reason"],  # "parse_miss" | "loop_missing" | "callback_error"
+            ["reason"],
         )
         self.feature_plane_updates_total = Counter(
             _pn("feature_plane_updates_total"),
             "FeatureEngine runtime update outcomes",
-            ["result", "feature_set"],  # result: "emitted" | "updated" | "error"
+            ["result", "feature_set"],
         )
         self.feature_plane_latency_ns = Histogram(
             _pn("feature_plane_latency_ns"),
@@ -1743,13 +1420,12 @@ class MetricsRegistry:
         self.feature_quality_flags_total = Counter(
             _pn("feature_quality_flags_total"),
             "FeatureEngine quality flags emitted",
-            ["flag"],  # gap/reset/stale/out_of_order/partial
+            ["flag"],
         )
-        # FE-07 skeleton metrics: used by parity harness/shadow rollout in later phases.
         self.feature_shadow_parity_checks_total = Counter(
             _pn("feature_shadow_parity_checks_total"),
             "Feature shadow parity checks",
-            ["feature_set", "result"],  # result: checked|skipped
+            ["feature_set", "result"],
         )
         self.feature_shadow_parity_mismatch_total = Counter(
             _pn("feature_shadow_parity_mismatch_total"),
@@ -1759,7 +1435,7 @@ class MetricsRegistry:
         self.feature_profile_activations_total = Counter(
             _pn("feature_profile_activations_total"),
             "Feature profile activations / rollbacks",
-            ["feature_set", "profile_id", "action"],  # action: activate|rollback|shadow
+            ["feature_set", "profile_id", "action"],
         )
         self.feature_profile_rollout_state = Gauge(
             _pn("feature_profile_rollout_state"),
@@ -1790,19 +1466,10 @@ class MetricsRegistry:
         self.contract_refresh_total = Counter(
             _pn("contract_refresh_total"),
             "Contract refresh operations",
-            ["result"],  # ok|error|fetch_failed|skipped_locked
+            ["result"],
         )
-        # ContractCacheRebuildFailing reads increase() of these two; a labelled child
-        # born at 1 on its first inc() has no increase, so the first failure would not count.
         for result in ("ok", "error"):
             self.contract_refresh_total.labels(result=result)
-        # Freshness of the contract cache. ``contract_refresh_total{result="ok"}``
-        # alone cannot show a stuck cache: it counts attempts that reached the
-        # end of the routine, which for a long time included every fetch that
-        # had silently failed. This timestamp only moves when contracts were
-        # actually rewritten, so ``time() - <gauge>`` is a truthful age.
-        # Follows the ``backup_last_success_ts`` pattern — a timestamp rather
-        # than a self-ageing gauge, so no ticker is needed to keep it honest.
         self.contract_cache_last_success_ts = Gauge(
             _pn("contract_cache_last_success_ts"),
             "Unix timestamp of the last contract cache write from a verified broker fetch",
@@ -1810,42 +1477,23 @@ class MetricsRegistry:
         self.contract_refresh_symbols_changed_total = Counter(
             _pn("contract_refresh_symbols_changed_total"),
             "Symbol changes detected after contract refresh",
-            ["change"],  # added|removed|same
+            ["change"],
         )
-        # Broker-pushed contract-change announcements (shioaji ``SYS/CONTRACT``).
-        # The hourly ``fetch_contracts`` poll cannot work on a subscribed facade
-        # (it needs sole ownership of the SDK's inner client, which our 74
-        # always-registered subscriptions never release), so this counter is the
-        # only evidence of *when* contracts actually change. Labels are bounded
-        # to the SDK's declared enum variants — see ``classify_contract_event``.
         self.contract_update_events_total = Counter(
             _pn("contract_update_events_total"),
             "Contract-change events pushed by the broker over SYS/CONTRACT",
-            ["action", "security_type"],  # force|check|other x all|ind|stk|fut|opt|other
+            ["action", "security_type"],
         )
-        # Unix timestamp of the last such announcement. Distinct from
-        # ``contract_cache_last_success_ts`` (when we last *loaded* contracts):
-        # this is when the broker last said they *changed*. A gap between the
-        # two is the actual staleness signal.
         self.contract_update_last_event_ts = Gauge(
             _pn("contract_update_last_event_ts"),
             "Unix timestamp of the last broker contract-change announcement",
         )
-        # Whether the push callback above is actually registered. Without this,
-        # "registered and the broker is quiet" and "registration silently failed"
-        # are the same observation (last_event_ts == 0), so no alert can tell
-        # them apart. Any rule about announcement staleness must require this.
-        # Labelled per facade for the same reason ``shioaji_thread_alive`` is:
-        # four pooled facades share this process, and an unlabelled gauge would
-        # be last-writer-wins, so one facade succeeding would paper over another
-        # failing.
         self.contract_event_callback_registered = Gauge(
             _pn("contract_event_callback_registered"),
             "1 if the SYS/CONTRACT push callback is registered on this facade, else 0",
             ["conn_id"],
         )
 
-        # ── Backup Metrics ──────────────────────────────────────────
         self.backup_last_success_ts = Gauge(
             _pn("hft_backup_last_success_ts"),
             "Unix timestamp of last successful ClickHouse backup",
@@ -1863,13 +1511,11 @@ class MetricsRegistry:
             "Number of ClickHouse backups currently retained on disk",
         )
 
-        # ── Fill Data Loss (I-09) ─────────────────────────────────────
         self.exec_fill_data_loss_total = Counter(
             _pn("exec_fill_data_loss_total"),
             "Fills LOST because WAL writer unavailable and recorder queue full",
         )
 
-        # ── Pipeline Determinism & Async Defense (D1-D8) ─────────────
         self.exec_queue_overflow_total = Counter(
             _pn("exec_queue_overflow_total"),
             "Fills routed to overflow buffer when raw_exec_queue is full",
@@ -1937,11 +1583,6 @@ class MetricsRegistry:
             "(routed via call_soon_threadsafe instead of direct put_nowait)",
             ["table"],
         )
-        # P1-a (2026-04-27): observability for audit ClickHouse persistence.
-        # Previously the audit_overflow_total metric was incremented inside
-        # AuditWriter under a try/except that silently swallowed AttributeError
-        # because no such metric was declared. Now declared here for real, plus
-        # a new audit_persist_failures_total to surface CH-write exceptions.
         self.audit_overflow_total = Counter(
             _pn("audit_overflow_total"),
             "Audit events spilled into the secondary overflow deque "
@@ -1954,10 +1595,6 @@ class MetricsRegistry:
             "(payloads then fall through to the structlog audit_fallback path)",
             ["table", "reason"],
         )
-        # P1-c (2026-04-27): hft-bot was dead 8.7 days because a `httpx.ConnectError`
-        # (or similar) escaped a handler with no error handler registered.
-        # Counter is labeled by exception class so dashboards can distinguish
-        # transient network errors from logic bugs.
         self.bot_handler_errors_total = Counter(
             _pn("bot_handler_errors_total"),
             "Telegram bot handler exceptions caught by the error handler "
@@ -1976,16 +1613,6 @@ class MetricsRegistry:
             "(non-critical sends within the rate-limit window)",
             ["critical"],
         )
-        # P2-d (2026-04-27): build_info gauge — labeled with git_sha and
-        # build_ts read from env (baked at image build time). Always set to 1
-        # so dashboards can detect drift across services / instances by
-        # `count by (git_sha) (hft_build_info) > 1`.
-        # 2026-08-13: `git_sha` is not wrong — it identifies the image, which
-        # is what pins the SDK and deps (shioaji-version-diff.md:490). It just
-        # cannot see through the `src/` bind mount, so on THESHOW it named a
-        # 2026-07-17 build while four weeks of scp deploys changed the code.
-        # `code_sha` hashes the source tree this process actually loaded;
-        # `count by (code_sha) (hft_build_info) > 1` catches that drift.
         self.hft_build_info = Gauge(
             _pn("build_info"),
             "Build identity for this process (constant 1) — git_sha/build_ts describe the image, "
@@ -1996,7 +1623,7 @@ class MetricsRegistry:
             _git_sha = os.environ.get("HFT_GIT_SHA", "unknown") or "unknown"
             _build_ts = os.environ.get("HFT_BUILD_TS", "unknown") or "unknown"
             self.hft_build_info.labels(git_sha=_git_sha, build_ts=_build_ts, code_sha=running_code_sha()).set(1)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         self.intent_queue_full_total = Counter(
             _pn("intent_queue_full_total"),
@@ -2012,45 +1639,30 @@ class MetricsRegistry:
             "RiskFeedback drops due to rejection_sink QueueFull (feedback lost)",
         )
 
-        # Recorder reinject circuit breaker drops (P-21)
         self.recorder_reinject_circuit_breaker_drops_total = Counter(
             _pn("recorder_reinject_circuit_breaker_drops_total"),
             "Rows dropped by reinject circuit breaker after consecutive double-faults",
             ["table"],
         )
 
-        # ── Observability gap closures ──────────────────────────────
-        # Bug 12 (13hr R47 silent): per-strategy event dispatch rate.
-        # A strategy that stops receiving events for hours should be alertable.
         self.strategy_events_received_total = Counter(
             _pn("strategy_events_received_total"),
             "Events dispatched to a strategy's handle_event (pre-call)",
             ["strategy_id"],
         )
-        # Bug 12: alias resolution coverage — if configured aliases (e.g. TXFR1/C0)
-        # fail to land in SymbolMetadata, strategies silently see 0 events.
         self.alias_resolution_coverage_ratio = Gauge(
             _pn("alias_resolution_coverage_ratio"),
             "Fraction of configured broker aliases propagated into SymbolMetadata (0.0-1.0; NaN when none configured)",
         )
-        # Companion to the ratio above. The ratio is undefined when nothing is
-        # configured, which is exactly the state that disabled the post-connect
-        # hook chain for two months — so the count itself has to be alertable.
         self.alias_map_size = Gauge(
             _pn("alias_map_size"),
             "Number of aliases the broker client resolved (0 disables alias-driven rebinds)",
         )
-        # Trading liveness. Every other strategy metric answers "is something
-        # broken"; this one answers "is the thing that is supposed to happen
-        # happening". A strategy bound only to expired or unsubscribed
-        # contracts reads 0 here while every health signal stays green.
         self.strategy_bound_live_symbols = Gauge(
             _pn("strategy_bound_live_symbols"),
             "Count of a strategy's symbols that are actually present in the subscribed feed",
             ["strategy_id"],
         )
-        # The front-month invariant itself (ops/front_month_watch.py), once a
-        # minute against the exchange rule rather than once per connect.
         self.front_month_subscribed = Gauge(
             _pn("front_month_subscribed"),
             "1 when the feed carries the exchange-rule front month of a traded futures root",
@@ -2065,41 +1677,27 @@ class MetricsRegistry:
             _pn("front_month_check_timestamp_seconds"),
             "Unix time of the last front-month watch evaluation",
         )
-        # A connect gate refusing is deliberate fail-closed behaviour, and it
-        # presents as a feed that simply never delivers data. Without this the
-        # only difference between "we refused an expired contract" and "the
-        # broker is down" is a log line nobody is alerting on.
         self.feed_connect_gate_blocked_total = Counter(
             _pn("feed_connect_gate_blocked_total"),
             "Times a connect safety gate refused the connect before subscribing",
             ["gate"],
         )
-        # MANUAL drift persistence: mirror consecutive_observations counter
-        # per-symbol so operators can alert on streaks that never clear.
         self.reconciliation_drift_streak = Gauge(
             _pn("reconciliation_drift_streak"),
             "Consecutive reconciliation observations of the same drift (resets to 0 on resolve)",
             ["symbol"],
         )
-        # A reconciliation cycle that ran on an untrustworthy sample performs NO
-        # state transition at all. That is the safe response to a bad reading,
-        # but it means a persistently untrustworthy source would silently stop
-        # reconciling anything -- so the skip has to be visible.
         self.reconciliation_untrusted_sample_streak = Gauge(
             _pn("reconciliation_untrusted_sample_streak"),
             "Consecutive reconciliation samples skipped as untrustworthy (straddled fill or partial broker snapshot)",
         )
 
-        # System (v2)
         try:
             import psutil
 
             self.system_cpu_usage = Gauge(_pn("system_cpu_usage"), "CPU Usage Percent")
             self.system_memory_usage = Gauge(_pn("system_memory_usage"), "Memory Usage Percent")
 
-            # Simple hook to update system metrics on scrape (or periodically)
-            # For simplicity, we can rely on a background task or just update regularly.
-            # Here we just define them.
         except ImportError:
             pass
 
@@ -2131,11 +1729,8 @@ class MetricsRegistry:
 
             self.system_cpu_usage.set(psutil.cpu_percent())
             self.system_memory_usage.set(psutil.virtual_memory().percent)
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             pass
-
-
-# Helper to expose via simple HTTP handler if needed, or just use Registry
 
 
 def get_metrics() -> "MetricsRegistry | None":

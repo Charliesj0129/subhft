@@ -12,7 +12,6 @@ import numpy as np
 from hft_platform.alpha._validation_types import ValidationConfig
 from hft_platform.alpha.stats import selection_sr0
 
-# The runner's Sharpe annualization (research.backtest.metrics.compute_sharpe default).
 _SHARPE_ANNUALIZATION = 252.0
 
 
@@ -70,7 +69,6 @@ def _submit_grid_points(
     if max_workers <= 1:
         return [_run_single_grid_point(alpha, runner_cls, base_cfg, t, objective_mode) for t in thresholds]
 
-    # Pre-check picklability to avoid spawning processes that will fail
     try:
         pickle.dumps((alpha, runner_cls, base_cfg))
     except (pickle.PicklingError, AttributeError, TypeError):
@@ -78,8 +76,6 @@ def _submit_grid_points(
 
     executor_kwargs: dict[str, Any] = {"max_workers": max_workers}
     if max_workers > 1:
-        # Python 3.12 warns on forking multi-threaded processes. Use an
-        # explicit spawn context so parallel optimization stays warning-free.
         executor_kwargs["mp_context"] = mp.get_context("spawn")
 
     with concurrent.futures.ProcessPoolExecutor(**executor_kwargs) as executor:
@@ -118,14 +114,11 @@ def _run_grid_parallel(
     """
     base_row = _build_grid_row(base_result, base_threshold, objective_mode)
 
-    # Separate base vs non-base thresholds
     non_base_thresholds = [float(t) for t in grid if abs(float(t) - base_threshold) >= 1e-12]
 
     if not non_base_thresholds:
         return [base_row]
 
-    # HFT_OPT_WORKERS: max parallel workers for parameter grid search.
-    # Default: min(grid_size, min(cpu_count, 8)). Set to 1 for sequential.
     max_workers = min(
         len(non_base_thresholds),
         int(os.environ.get("HFT_OPT_WORKERS", min(os.cpu_count() or 4, 8))),
@@ -140,7 +133,6 @@ def _run_grid_parallel(
         max_workers=max_workers,
     )
 
-    # Combine and sort by threshold for deterministic ordering
     rows = [base_row] + non_base_rows
     rows.sort(key=lambda r: float(r["signal_threshold"]))
     return rows
@@ -235,8 +227,6 @@ def _optimize_parameters(
     )
     sign_flip_risk = bool(float(best["sharpe_oos"]) > 0.0 and neighbor_sharpes.size and np.any(neighbor_sharpes <= 0.0))
 
-    # Selection deflation: SR0 for the best of the grid's trials (stats.selection_sr0),
-    # in the trials' annualized unit.
     oos_len = max(2, int((1.0 - float(config.is_oos_split)) * float(base_result.equity_curve.size)))
     n_trials = max(1, len(rows))
     selection_penalty = selection_sr0(
@@ -285,9 +275,7 @@ def _optimization_objective(
     if mode == "sharpe_oos":
         return float(sharpe_oos)
     if mode == "ic_first":
-        # Fallback objective when IC-first mode is requested but IC is unavailable in this stage.
         return float(sharpe_oos) - 0.1 * abs(float(turnover))
-    # Default: risk-adjusted objective.
     drawdown_penalty = max(0.0, abs(float(max_drawdown)) - 0.10) * 2.0
     turnover_penalty = max(0.0, float(turnover) - 1.0) * 0.25
     return float(sharpe_oos) - float(drawdown_penalty) - float(turnover_penalty)

@@ -9,14 +9,14 @@ use pyo3::prelude::*;
 #[pyclass]
 pub struct RustBookState {
     symbol: String,
-    // Flattened [price, qty] pairs -- contiguous for cache locality.
+
     bids_flat: Vec<i64>,
     asks_flat: Vec<i64>,
     bid_rows: usize,
     ask_rows: usize,
     exch_ts: i64,
     version: u64,
-    // Pre-computed stats (updated on every apply_update).
+
     mid_price_x2: i64,
     spread: i64,
     imbalance: f64,
@@ -59,7 +59,7 @@ impl RustBookState {
         exch_ts: i64,
     ) -> bool {
         if exch_ts < self.exch_ts {
-            return false; // late packet
+            return false;
         }
         self.exch_ts = exch_ts;
         self._ingest_sides(&bids, &asks);
@@ -211,7 +211,6 @@ impl RustBookState {
         let br = bids_arr.nrows();
         let ar = asks_arr.nrows();
 
-        // Resize flat buffers (reuse allocation when possible).
         self.bids_flat.resize(br * 2, 0);
         self.asks_flat.resize(ar * 2, 0);
         self.bid_rows = br;
@@ -316,7 +315,6 @@ mod tests {
 
     #[test]
     fn test_recompute_basic() {
-        // bids: [100_0000, 50, 99_0000, 30], asks: [101_0000, 40, 102_0000, 20]
         let bs = RustBookState::from_flat_for_test(
             "2330",
             vec![100_0000, 50, 99_0000, 30],
@@ -332,7 +330,7 @@ mod tests {
     fn test_recompute_imbalance() {
         let bs =
             RustBookState::from_flat_for_test("2330", vec![100_0000, 200], vec![101_0000, 100]);
-        // imbalance = (200 - 100) / (200 + 100) = 0.333...
+
         assert!((bs.imbalance - 1.0 / 3.0).abs() < 1e-10);
     }
 

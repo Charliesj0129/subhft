@@ -15,7 +15,7 @@ numba = pytest.importorskip("numba", reason="numba required for alpha_hawkes")
 
 def test_module_imports():
     """Module must import without error when numba is available."""
-    from hft_platform.strategies.alpha import alpha_hawkes  # noqa: F401
+    from hft_platform.strategies.alpha import alpha_hawkes
 
     assert hasattr(alpha_hawkes, "strategy")
     assert callable(alpha_hawkes.strategy)
@@ -39,12 +39,10 @@ def test_hawkes_tracker_first_update_sets_ts():
     from hft_platform.strategies.alpha.alpha_hawkes import HawkesTracker
 
     tracker = HawkesTracker(1.0, 0.5, 10.0)
-    # jitclass methods do not support keyword arguments — use positional
-    # last_ts==0 is sentinel for first call; non-zero ts initializes tracker
     ts = 5_000_000_000
     tracker.update(ts, False)
     assert tracker.last_ts == ts
-    assert tracker.intensity == pytest.approx(1.0)  # mu unchanged on first call
+    assert tracker.intensity == pytest.approx(1.0)
 
 
 def test_hawkes_tracker_event_jump():
@@ -52,10 +50,8 @@ def test_hawkes_tracker_event_jump():
     from hft_platform.strategies.alpha.alpha_hawkes import HawkesTracker
 
     tracker = HawkesTracker(1.0, 0.5, 10.0)
-    # last_ts==0 is the sentinel for "first call" — use non-zero ts to init
-    tracker.update(1_000_000_000, False)  # initializes last_ts
-    # Second call with event: very small dt → minimal decay, intensity should rise
-    tracker.update(1_001_000_000, True)  # 1ms later with event
+    tracker.update(1_000_000_000, False)
+    tracker.update(1_001_000_000, True)
     assert tracker.intensity > 1.0
 
 
@@ -64,12 +60,10 @@ def test_hawkes_tracker_decay():
     from hft_platform.strategies.alpha.alpha_hawkes import HawkesTracker
 
     tracker = HawkesTracker(1.0, 2.0, 10.0)
-    tracker.update(1_000_000_000, False)  # initialize ts
-    # Spike with an event
-    tracker.update(1_001_000_000, True)  # 1ms later + event
+    tracker.update(1_000_000_000, False)
+    tracker.update(1_001_000_000, True)
     spiked = tracker.intensity
-    # Long gap without event — should decay back toward mu
-    tracker.update(2_001_000_000, False)  # 1s later, no event
+    tracker.update(2_001_000_000, False)
     assert tracker.intensity < spiked
     assert tracker.intensity >= tracker.mu - 1e-9
 
@@ -86,10 +80,8 @@ def test_hawkes_tracker_negative_dt_clamped():
     from hft_platform.strategies.alpha.alpha_hawkes import HawkesTracker
 
     tracker = HawkesTracker(1.0, 0.5, 10.0)
-    tracker.update(2_000_000_000, False)  # initialize at t=2s
-    # Pass an earlier timestamp — negative dt path
-    tracker.update(1_000_000_000, False)  # t=1s (earlier)
-    # intensity must still be finite and not blow up
+    tracker.update(2_000_000_000, False)
+    tracker.update(1_000_000_000, False)
     assert tracker.intensity >= 0.0
 
 
@@ -99,9 +91,9 @@ def test_hawkes_tracker_no_event_no_intensity_increase():
 
     tracker = HawkesTracker(1.0, 0.5, 10.0)
     tracker.update(1_000_000_000, False)
-    tracker.update(1_001_000_000, True)  # spike
+    tracker.update(1_001_000_000, True)
     spiked = tracker.intensity
-    tracker.update(1_002_000_000, False)  # no event 1ms later
+    tracker.update(1_002_000_000, False)
     assert tracker.intensity <= spiked
 
 
@@ -115,7 +107,6 @@ def test_hawkes_tracker_multiple_events_accumulate():
     after_first = tracker.intensity
     tracker.update(1_002_000_000, True)
     after_second = tracker.intensity
-    # Second event should add further (net of tiny decay over 1ms)
     assert after_second > after_first
 
 
@@ -137,15 +128,14 @@ def test_hawkes_strategy_runs_with_mock_hbt():
 
         def elapse(self, _ns: int) -> int:
             if self._count >= self._ticks:
-                return 1  # terminates loop
+                return 1
             self._count += 1
             self.current_timestamp += 1_000_000
             return 0
 
         def last_trades(self, _asset_no: int):
-            # Return non-empty trade list on first tick (exercises is_trade_event=True)
             if self._count == 1:
-                return [object()]  # truthy non-empty list
+                return [object()]
             return []
 
         def clear_last_trades(self, _asset_no: int) -> None:
@@ -178,7 +168,6 @@ def test_hawkes_strategy_high_intensity_branch():
             return 0
 
         def last_trades(self, _asset_no: int):
-            # Always return trades to drive up intensity
             return [object(), object()]
 
         def clear_last_trades(self, _asset_no: int) -> None:

@@ -17,7 +17,6 @@ from __future__ import annotations
 import functools
 from pathlib import Path
 
-# A directory is the repo root when it holds both of these.
 _ROOT_MARKERS: tuple[str, ...] = ("pyproject.toml", "config/research")
 
 

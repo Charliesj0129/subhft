@@ -38,7 +38,6 @@ from hft_platform.risk.validators import (
 
 logger = get_logger("risk_engine")
 
-# i64::MAX: the RustRiskValidator notional limit that never rejects.
 _RUST_NOTIONAL_UNBOUNDED = (1 << 63) - 1
 
 _KNOWN_ERROR_TYPES = frozenset(
@@ -75,7 +74,6 @@ def _cap_error_type(e: Exception) -> str:
     return name if name in _KNOWN_ERROR_TYPES else "other"
 
 
-# Lazy import for Rust risk validator
 _RustRiskValidator = None
 
 
@@ -162,8 +160,8 @@ class RiskEngine:
         greeks_provider: Any | None = None,
     ):
         self.config_path = config_path
-        self.intent_queue = intent_queue  # Input
-        self.order_queue = order_queue  # Output
+        self.intent_queue = intent_queue
+        self.order_queue = order_queue
         self.running = False
         self.load_config()
         self.metrics = MetricsRegistry.get()
@@ -179,8 +177,6 @@ class RiskEngine:
         )
         self._position_provider = position_provider
 
-        # Validators — Bug 21: share position_provider so each validator can bypass
-        # its gate when the order strictly reduces |net_position| (cover / exit).
         _pos_provider = self._current_strategy_symbol_net_position
         self.validators: list[RiskValidator] = [
             PriceBandValidator(self.config, price_scale_provider),
@@ -194,18 +190,6 @@ class RiskEngine:
             DailyLossLimitValidator(self.config, price_scale_provider, position_provider=_pos_provider),
             ExpiringContractValidator(self.config, price_scale_provider, position_provider=_pos_provider),
         ]
-        # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
-        # PerSymbolNotionalValidator belongs here too. It is a sibling of
-        # MaxNotionalValidator (both inherit RiskValidator directly), not a
-        # subclass, so this isinstance filter excluded it -- and
-        # ``_init_rust_validator`` never forwards ``symbol_limits`` to Rust
-        # either, so with HFT_RISK_RUST_VALIDATOR=1 the per-symbol notional cap
-        # was enforced by nobody. Per-symbol limits exist precisely to be
-        # TIGHTER than the per-strategy default, so losing them silently
-        # defeats their purpose.
-        # PriceBandValidator too: Rust is handed one coarse cap, the largest of
-        # the global and product caps, so a per-root or per-symbol price cap
-        # (``max_price_cap_root_TMF``) was enforced by nobody under Rust.
         self._rust_uncovered_validators: list[RiskValidator] = [
             v
             for v in self.validators
@@ -221,28 +205,16 @@ class RiskEngine:
                 ),
             )
         ]
-        # MaxNotionalValidator is in that list too: the Rust kernel compares
-        # price * qty with no point value (Rust is paused, so it is not taught
-        # one), which made a TXF lot look 200x smaller than it is.
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
-        # Cache validator[0] reference to avoid list index on hot path
         self._validator0 = self.validators[0] if self.validators else None
         self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
-        # Bug 21: share position_provider with StormGuard so reducing orders
-        # can bypass HALT/STORM rejection (prevents R47 deadlock).
         try:
             self.storm_guard.set_position_provider(self._current_strategy_symbol_net_position)
-        except Exception:  # noqa: BLE001 — defensive: never break engine init
+        except Exception:
             logger.warning("stormguard_position_provider_wire_failed", exc_info=True)
-        # StormGuard keys in the risk config apply from boot, not only after a
-        # SIGHUP. Before this a threshold could be changed on a running host
-        # only through an env var, i.e. a container recreate; a YAML edit plus
-        # the normal stop/start now reaches it. Env still wins (reload
-        # re-applies it on top), and a config that sets none of the keys
-        # changes nothing.
         self._apply_stormguard_config()
         self._notification_dispatcher = notification_dispatcher
         self._rust_validator = self._init_rust_validator(price_scale_provider)
@@ -270,7 +242,6 @@ class RiskEngine:
         self._dlq_drain_interval: int = int(os.getenv("HFT_RISK_DLQ_DRAIN_INTERVAL", "1"))
         self._dlq_drain_counter: int = 0
         self._rejection_sink = rejection_sink
-        # Gradual queue-full degradation: STORM first, HALT after N consecutive failures
         self._oq_full_consecutive: int = 0
         self._oq_full_halt_threshold: int = int(os.getenv("HFT_ORDER_QUEUE_FULL_HALT_THRESHOLD", "3"))
         self._greeks_validator = None
@@ -283,8 +254,6 @@ class RiskEngine:
                 logger.warning("greeks_limit_validator_unavailable")
         self.log_effective_thresholds("boot")
 
-    # Per-strategy keys a validator reads; anything else under ``strategies``
-    # belongs to the strategy itself, not to the gate.
     _STRATEGY_RISK_KEYS: tuple[str, ...] = ("max_position_lots", "max_position", "max_notional", "symbol_limits")
 
     def effective_thresholds(self) -> dict[str, Any]:
@@ -308,7 +277,6 @@ class RiskEngine:
             elif isinstance(v, PriceBandValidator):
                 out["price_caps"] = {k: val for k, val in v.defaults.items() if str(k).startswith("max_price_cap")}
             elif isinstance(v, DailyLossLimitValidator):
-                # 1 NTD == price_scale accumulator units (see DailyLossLimitValidator).
                 scale = int((v.config.get("intraday_pnl") or {}).get("price_scale", 10_000)) or 10_000
                 out["daily_loss"] = {
                     "intraday_pnl_enabled": v._intraday_pnl_enabled,
@@ -338,7 +306,7 @@ class RiskEngine:
         """One ``risk_thresholds_effective`` line at boot and on every reload."""
         try:
             logger.info("risk_thresholds_effective", trigger=trigger, **self.effective_thresholds())
-        except Exception as exc:  # noqa: BLE001 - a report must never break engine init
+        except Exception as exc:
             logger.warning("risk_thresholds_effective_failed", trigger=trigger, error=str(exc))
 
     def _fast_path_exempt(self, intent: Any) -> bool:
@@ -356,7 +324,7 @@ class RiskEngine:
             return False
         try:
             net = self._current_strategy_symbol_net_position(symbol, str(getattr(intent, "strategy_id", "")))
-        except Exception:  # noqa: BLE001 — unknown position: not provably reducing
+        except Exception:
             return False
         if net == 0:
             return False
@@ -410,7 +378,7 @@ class RiskEngine:
             scale = int(os.getenv("HFT_RISK_FAST_GATE_PRICE_SCALE", "10000"))
         except ValueError:
             scale = 10_000
-        max_price_cap = float(defaults.get("max_price_cap", 5000.0))  # precision-config
+        max_price_cap = float(defaults.get("max_price_cap", 5000.0))
         all_caps = [max_price_cap]
         for key in ("max_price_cap_futures", "max_price_cap_options"):
             val = defaults.get(key)
@@ -446,16 +414,15 @@ class RiskEngine:
             return None
         try:
             defaults = self.config.get("global_defaults", {})
-            max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))  # precision-config
+            max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))
             all_caps = [max_price_cap_raw]
             for key in ("max_price_cap_futures", "max_price_cap_options"):
                 val = defaults.get(key)
                 if val is not None:
                     all_caps.append(float(val))
             max_price_cap_raw = max(all_caps)
-            tick_size_raw = float(defaults.get("tick_size", 0.01))  # precision-config
+            tick_size_raw = float(defaults.get("tick_size", 0.01))
             band_ticks = int(defaults.get("price_band_ticks", 20))
-            # Use default scale factor (10000) for the validator
             scale = 10_000
             if price_scale_provider is not None:
                 try:
@@ -467,12 +434,7 @@ class RiskEngine:
                     logger.warning("Failed to resolve price scale from provider, using default 10000", error=str(exc))
             max_price_cap_scaled = int(max_price_cap_raw * scale)
             tick_size_scaled = int(tick_size_raw * scale)
-            # Notional is judged by the Python validators only (they are in
-            # _rust_uncovered_validators). The kernel has no point value and no
-            # reduce/FORCE_FLAT exemption, and it returns before Python runs,
-            # so a real cap here would refuse the exit of an over-cap position.
             rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, _RUST_NOTIONAL_UNBOUNDED)
-            # Populate per-strategy configs
             for strat_id, strat_cfg in self.config.get("strategies", {}).items():
                 if "price_band_ticks" in strat_cfg:
                     rv.set_band_ticks(strat_id, int(strat_cfg["price_band_ticks"]))
@@ -495,7 +457,7 @@ class RiskEngine:
         try:
             if has_thresholds(self.config):
                 reload_thresholds(self.config)
-        except Exception:  # noqa: BLE001 - keep the built-in thresholds rather than fail boot
+        except Exception:
             logger.error("stormguard_config_apply_failed", exc_info=True)
 
     def reload_config(self) -> None:
@@ -505,7 +467,6 @@ class RiskEngine:
             self.load_config()
             new_config = self.config
 
-            # Log diff of key settings
             old_defaults = old_config.get("global_defaults", {})
             new_defaults = new_config.get("global_defaults", {})
             changed: dict[str, dict[str, Any]] = {}
@@ -515,7 +476,6 @@ class RiskEngine:
 
             self.on_config_reload(new_config)
 
-            # Reload StormGuard thresholds
             if hasattr(self.storm_guard, "reload_thresholds"):
                 self.storm_guard.reload_thresholds(new_config)
             self.log_effective_thresholds("sighup")
@@ -536,13 +496,6 @@ class RiskEngine:
         """
         self.config = new_config
         for v in self.validators:
-            # Delegate to the validator, which rebinds config, clears caches AND
-            # re-derives the scalars it snapshotted in __init__. This loop used
-            # to do only the first two, so raising `max_price_cap` or
-            # tightening `intraday_pnl.hard_limit_ntd` over SIGHUP changed
-            # nothing while still logging a successful reload — the caches were
-            # simply re-populated from the stale `_*_raw` values. StormGuard
-            # already had a proper `reload_thresholds`; the validators did not.
             reload_fn = getattr(v, "reload", None)
             if callable(reload_fn):
                 reload_fn(new_config)
@@ -568,7 +521,6 @@ class RiskEngine:
                 intent: OrderIntent = await self.intent_queue.get()
                 intent_dequeued = True
 
-                # TTL expiry check — reject stale intents before evaluation
                 if intent.ttl_ns > 0 and intent.timestamp_ns > 0:
                     age_ns = timebase.now_ns() - intent.timestamp_ns
                     if age_ns > intent.ttl_ns:
@@ -613,16 +565,6 @@ class RiskEngine:
 
                 if decision.approved:
                     cmd = self.create_command(decision.intent)
-                    # A reducing (cover) order is a safety order. StormGuard
-                    # already approves them in HALT -- ``_validate_locked``
-                    # returns ``(True, "HALT_REDUCE_ONLY")`` -- and every
-                    # validator returns ``REDUCE_ONLY_BYPASS``; this gate then
-                    # rejected them anyway, because it only counted
-                    # CANCEL/FORCE_FLAT/halt-exempt. Nothing is halt-exempt in
-                    # any shipped config, so a strategy holding a position
-                    # during HALT could not unwind it. That is the deadlock the
-                    # comment on ``set_position_provider`` says the wiring was
-                    # added to prevent; the layer above StormGuard reimposed it.
                     _is_safety_order = (
                         cmd.intent.intent_type
                         in (
@@ -670,8 +612,6 @@ class RiskEngine:
                                 symbol=cmd.intent.symbol,
                             )
                             self.metrics.order_queue_full_total.inc()
-                            # Evict oldest BEFORE append so we can send rejection
-                            # (maxlen auto-evict is silent — we need the callback).
                             if len(self._order_dlq) >= self._ORDER_DLQ_MAX:
                                 evicted_cmd, _ = self._order_dlq.popleft()
                                 self._send_dlq_rejection(evicted_cmd, "dlq_overflow_evicted")
@@ -685,7 +625,6 @@ class RiskEngine:
                 else:
                     logger.warning("Order Rejected by Risk", sid=intent.strategy_id, reason=decision.reason_code)
                     self._emit_reject_metric(intent.strategy_id, decision.reason_code)
-                    # In real system: Feedback to strategy via side channel
                     if self._rejection_sink is not None:
                         try:
                             self._rejection_sink.put_nowait(
@@ -704,7 +643,6 @@ class RiskEngine:
                 self.intent_queue.task_done()
                 intent_dequeued = False
 
-                # Periodic DLQ drain
                 self._dlq_drain_counter += 1
                 if self._dlq_drain_counter >= self._dlq_drain_interval:
                     self._dlq_drain_counter = 0
@@ -714,11 +652,11 @@ class RiskEngine:
                     self.intent_queue.task_done()
                 logger.info("RiskEngine stopped")
                 break
-            except Exception as e:  # noqa: BLE001 — wraps external risk validators
+            except Exception as e:
                 logger.exception("RiskEngine error", error=str(e), error_type=type(e).__name__)
                 try:
                     self.metrics.risk_engine_error_total.labels(error_type=_cap_error_type(e)).inc()
-                except Exception:  # noqa: BLE001 — metric failure must not mask original error
+                except Exception:
                     pass
                 if self._rejection_sink is not None:
                     try:
@@ -750,7 +688,6 @@ class RiskEngine:
         batch level (Bug 25 fix there) so this method does not re-consult it.
         """
         intent = cmd.intent
-        # Cancel / force-flat orders are always safe to replay.
         if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return True
 
@@ -818,22 +755,8 @@ class RiskEngine:
         if self._position_provider is None:
             return False
         try:
-            # Through the wrapper, NOT the raw slot. bootstrap.py wires
-            # ``position_provider=position_store`` -- a PositionStore INSTANCE,
-            # which has __slots__ and no __call__ -- so calling the slot
-            # directly raised TypeError on every single invocation, the bare
-            # except swallowed it, and this returned False for every command.
-            # _drain_order_dlq then classified every queued cover as an opener
-            # and evicted it the moment StormGuard escalated: exactly the
-            # stuck-position deadlock the Bug 21/25 wiring exists to prevent.
-            # ``_current_strategy_symbol_net_position`` handles both the
-            # callable and the object shape, and is what StormGuard,
-            # GatewayPolicy and every validator already use.
             current = int(self._current_strategy_symbol_net_position(intent.symbol, intent.strategy_id))
         except (TypeError, AttributeError, ValueError):
-            # Narrowed from a bare except, and loud: a provider that cannot
-            # answer means reducing orders silently lose their protection, so
-            # it must not be invisible the way the TypeError above was.
             logger.warning(
                 "cmd_reduces_position_provider_failed",
                 symbol=getattr(intent, "symbol", ""),
@@ -855,16 +778,10 @@ class RiskEngine:
         """
         if not self._order_dlq:
             return
-        # During HALT or STORM, clear OPENING orders but keep REDUCING covers —
-        # reducing intents are allowed through HALT by StormGuard/adapter (Bug 21/24).
         if self.storm_guard.state >= StormGuardState.STORM:
             sg_label = "halt" if self.storm_guard.state == StormGuardState.HALT else "storm"
             kept: list[tuple[OrderCommand, int]] = []
             cleared = 0
-            # P1-7: snapshot before iteration so any re-entrant mutation of
-            # ``self._order_dlq`` triggered by ``_send_dlq_rejection``
-            # (rejection sink callbacks may, in principle, re-enqueue) cannot
-            # raise "deque mutated during iteration" or skip entries.
             snapshot = list(self._order_dlq)
             for cmd, ts in snapshot:
                 if self._cmd_reduces_position(cmd):
@@ -885,24 +802,15 @@ class RiskEngine:
                 self.metrics.risk_dlq_expired_total.inc(cleared)
             if not kept:
                 return
-            # Fall through and drain the preserved covers normally.
         now_ns = time.monotonic_ns()
         ttl_ns = self._dlq_ttl_ns
         drained = 0
         expired = 0
         while self._order_dlq:
             cmd, enqueued_ns = self._order_dlq[0]
-            # Re-check escalated state during drain (TOCTOU defense-in-depth).
-            # Bug 25: preserve reducing covers; only clear opening orders.
-            # Covers that survive the check fall through to normal drain below.
             if self.storm_guard.state >= StormGuardState.STORM and not self._cmd_reduces_position(cmd):
                 kept_mid: list[tuple[OrderCommand, int]] = []
                 cleared_mid = 0
-                # P1-7: snapshot the DLQ before the rebuild loop so any
-                # re-entrant append from ``_send_dlq_rejection`` (or a callback
-                # it triggers) cannot perturb iteration. Mid-loop appends
-                # remain invisible to this pass — they will be processed on
-                # the next ``_drain_order_dlq`` invocation.
                 snapshot_mid = list(self._order_dlq)
                 for c, ts in snapshot_mid:
                     if self._cmd_reduces_position(c):
@@ -922,33 +830,28 @@ class RiskEngine:
                     self.metrics.risk_dlq_expired_total.inc(cleared_mid)
                 if not kept_mid:
                     break
-                # Reducing covers remain in queue; fall through to normal drain.
                 continue
-            # Expire stale entries (DLQ TTL)
             if now_ns - enqueued_ns > ttl_ns:
                 self._order_dlq.popleft()
                 self._send_dlq_rejection(cmd, "dlq_ttl_expired")
                 expired += 1
                 continue
-            # Expire commands whose execution deadline has passed
             if cmd.deadline_ns > 0 and now_ns > cmd.deadline_ns:
                 self._order_dlq.popleft()
                 self._send_dlq_rejection(cmd, "dlq_deadline_expired")
                 expired += 1
                 continue
-            # Re-validate position limit before replaying
             if not self._revalidate_for_dlq(cmd):
                 self._order_dlq.popleft()
                 self._send_dlq_rejection(cmd, "dlq_revalidation_failed")
                 expired += 1
                 continue
-            # Try to push back to order_queue
             try:
                 self.order_queue.put_nowait(cmd)
                 self._order_dlq.popleft()
                 drained += 1
             except asyncio.QueueFull:
-                break  # Queue still full — stop draining
+                break
         if expired > 0:
             logger.warning(
                 "risk_dlq_entries_expired",
@@ -959,16 +862,12 @@ class RiskEngine:
         if drained > 0:
             self.metrics.risk_dlq_drained_total.inc(drained)
 
-    def evaluate(self, intent: Any) -> RiskDecision:  # noqa: C901
+    def evaluate(self, intent: Any) -> RiskDecision:
         price = getattr(intent, "price", None)
         if price is not None and not isinstance(price, int):
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
             return self._reject(intent, "FLOAT_PRICE")
 
-        # The fast paths have no exit exemptions of their own. FastGate's
-        # shared-memory kill flag refused FORCE_FLAT, and the Rust validator
-        # refused a cover the Python validators let through as a reduction, so
-        # an exit goes the Python way, where those exemptions live.
         fast_path_exempt = (self._fast_gate is not None or self._rust_validator is not None) and (
             self._fast_path_exempt(intent)
         )
@@ -981,17 +880,14 @@ class RiskEngine:
                         self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": reason})
                         return self._reject(intent, reason)
             except (OSError, RuntimeError) as exc:
-                # FastGate failure must fail-closed: reject order when risk gate errors.
                 logger.error("FastGate check error — rejecting order (fail-closed)", error=str(exc))
                 self._emit_trace("risk_reject", intent, {"stage": "fast_gate", "reason": "FASTGATE_ERROR"})
                 return self._reject(intent, "FASTGATE_ERROR")
-        # 1. StormGuard Check
         ok, reason = self.storm_guard.validate(intent)
         if not ok:
             self._emit_trace("risk_reject", intent, {"stage": "storm_guard", "reason": reason})
             return self._reject(intent, reason)
 
-        # 2. Hard Validators — Rust fast path or Python fallback
         rv = self._rust_validator
         if rv is not None and not fast_path_exempt:
             try:
@@ -1010,7 +906,6 @@ class RiskEngine:
                     reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
                     self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
                     return self._reject(intent, reason)
-                # Rust fast path passed — still run validators Rust doesn't cover
                 for v in self._rust_uncovered_validators:
                     ok, reason = v.check(intent)
                     if not ok:
@@ -1023,7 +918,6 @@ class RiskEngine:
                         return self._reject(intent, reason)
             except (OSError, RuntimeError) as exc:
                 logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
-                # Fall through to Python validators on error
                 for v in self.validators:
                     ok, reason = v.check(intent)
                     if not ok:
@@ -1046,7 +940,6 @@ class RiskEngine:
                     self._check_daily_loss_halt()
                     return self._reject(intent, reason)
 
-        # Check if DailyLossLimitValidator triggered HALT after the validator loop
         self._check_daily_loss_halt()
 
         if self._greeks_validator is not None:
@@ -1064,7 +957,7 @@ class RiskEngine:
         """Risk evaluation on a typed intent frame using a lightweight view object."""
         if intent_view is None:
             intent_view = self.typed_frame_view(frame)
-        return self.evaluate(intent_view)  # validators only require attribute access
+        return self.evaluate(intent_view)
 
     def typed_frame_view(self, frame: Any) -> Any:
         try:
@@ -1072,7 +965,6 @@ class RiskEngine:
 
             return typed_frame_to_view(frame)
         except (KeyError, TypeError, ValueError) as exc:
-            # Fallback: materialize full OrderIntent if frame is malformed/unsupported
             logger.warning("typed_frame_to_view failed, falling back to full materialization", error=str(exc))
             from hft_platform.gateway.channel import typed_frame_to_intent
 
@@ -1178,8 +1070,6 @@ class RiskEngine:
             if self._reject_metric_cache_owner_id != owner_id:
                 self._reject_metric_cache.clear()
                 self._reject_metric_cache_owner_id = owner_id
-            # Bounded label: see ``cap_reject_reason``. The full reason is on the
-            # rejection log line immediately above the caller.
             key = (str(strategy_id), cap_reject_reason(str(reason)))
             child = self._reject_metric_cache.get(key)
             if child is None:
@@ -1220,8 +1110,6 @@ class RiskEngine:
         if sampler is None:
             return
         try:
-            # L5: every risk trace is order-bearing (takes intent), so bypass
-            # sample_every — incomplete chains break replay/explain.
             sampler.emit_always(
                 stage=stage,
                 trace_id=str(getattr(intent, "trace_id", "") or ""),
@@ -1312,14 +1200,10 @@ class RiskEngine:
         Non-blocking: Telegram notification is scheduled via asyncio.create_task so it
         never delays the evaluate() hot path.
         """
-        # Sync the hold BEFORE the already-in-HALT short circuit. The flag can
-        # only clear inside the validator (05:00 reset / _force_reset), and if
-        # the short circuit ran first the hold would never be released and HALT
-        # would survive the daily reset.
         self._sync_daily_loss_hold()
 
         if self.storm_guard.state == StormGuardState.HALT:
-            return  # Already in HALT — nothing to do
+            return
 
         for v in self.validators:
             if isinstance(v, DailyLossLimitValidator) and v.halt_triggered:
@@ -1333,18 +1217,10 @@ class RiskEngine:
 
                 dispatcher = self._notification_dispatcher
                 if dispatcher is not None:
-                    # H2 / F-5 (2026-04-25): never call ``asyncio.get_event_loop()``
-                    # bare — Python 3.12+ raises ``RuntimeError`` from non-loop
-                    # threads, and ``_check_daily_loss_halt`` is invoked from
-                    # the validate() hot path which can run inside the risk
-                    # worker task (loop thread) AND from sync test contexts.
-                    # Prefer the loop bound on StormGuard (set by HFTSystem.run
-                    # via ``bind_loop``); fall back to ``get_running_loop()``
-                    # only when on the loop thread itself.
                     sg_loop = None
                     try:
                         sg_loop = self.storm_guard.get_loop() if self.storm_guard else None
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         sg_loop = None
                     try:
                         running = asyncio.get_running_loop()
@@ -1353,28 +1229,14 @@ class RiskEngine:
                     target_loop = sg_loop if sg_loop is not None and not sg_loop.is_closed() else running
                     if target_loop is not None:
                         total_pnl = sum(v._accumulated_loss.values()) + v.daily_unrealized()
-                        # Mirror the validator's own selection. Both halt
-                        # decision paths in DailyLossLimitValidator pick
-                        # ``_hard_limit_threshold_scaled`` when the intraday_pnl
-                        # block is enabled -- and prod enables it
-                        # (config/env/prod/strategy_limits.yaml, hard_limit_ntd
-                        # 5000). Reporting ``_default_max_daily_loss`` therefore
-                        # put a 10x-wrong number in the Telegram alert, so
-                        # triage read "we halted far too early" instead of "we
-                        # hit the intended limit".
                         limit = v._hard_limit_threshold_scaled if v._intraday_pnl_enabled else v._default_max_daily_loss
                         try:
                             if running is target_loop:
-                                # Same-thread fast path
                                 spawn_retained(dispatcher.notify_daily_loss(total_pnl, limit), name="notify_daily_loss")
                                 spawn_retained(
                                     dispatcher.notify_halt("DAILY_LOSS_LIMIT_EXCEEDED"), name="notify_halt_daily_loss"
                                 )
                             else:
-                                # Cross-thread (validate may be invoked from a
-                                # broker/recorder worker thread). Use the
-                                # threadsafe scheduler so the coroutine actually
-                                # runs instead of being silently closed.
                                 asyncio.run_coroutine_threadsafe(
                                     dispatcher.notify_daily_loss(total_pnl, limit),
                                     target_loop,
@@ -1389,8 +1251,6 @@ class RiskEngine:
                                 error=str(exc),
                             )
                     else:
-                        # No loop available (sync test context or pre-startup);
-                        # degrade gracefully instead of silently dropping.
                         logger.warning(
                             "daily_loss_notification_skipped_no_loop",
                             msg="No engine loop bound — Telegram daily-loss alert dropped",

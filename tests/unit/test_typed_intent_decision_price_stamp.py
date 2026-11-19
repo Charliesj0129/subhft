@@ -20,23 +20,23 @@ def _frame(price_type: str = "MKT") -> tuple:
     """An 18-element typed_intent_v1 frame in the layout _intent_factory emits."""
     return (
         "typed_intent_v1",
-        1,  # intent_id
-        "S1",  # strategy_id
-        "TXFE6",  # symbol
-        0,  # intent_type
-        0,  # side
-        1_800_000,  # price
-        1,  # qty
-        0,  # tif
-        "",  # target_order_id
-        11,  # created_ts_ns
-        12,  # source_ts_ns
+        1,
+        "S1",
+        "TXFE6",
+        0,
+        0,
+        1_800_000,
+        1,
+        0,
+        "",
+        11,
+        12,
         "",
         "trace-1",
         "",
-        0,  # ttl_ns
-        0,  # decision_price — index 16
-        price_type,  # price_type — index 17
+        0,
+        0,
+        price_type,
     )
 
 

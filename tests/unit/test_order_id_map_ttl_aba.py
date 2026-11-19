@@ -36,7 +36,6 @@ def _make_adapter(persist_path: Path, *, ttl_s: float = 86400.0) -> OrderAdapter
     adapter = OrderAdapter.__new__(OrderAdapter)
     adapter.order_id_map = {}
     adapter._order_id_map_lock = threading.RLock()
-    # Serialises snapshot+write in persist_order_id_map; __new__ skips __init__.
     adapter._order_id_map_io_lock = threading.Lock()
     adapter._order_id_map_max_size = 10000
     adapter._order_id_map_persist_path = str(persist_path)
@@ -64,7 +63,6 @@ def test_new_schema_round_trip_preserves_t_ns_and_state(tmp_path: Path):
     a1 = _make_adapter(persist)
     a1._set_order_id_mapping("BR42", "s1:1", source="test_seed")
 
-    # Snapshot t_ns from in-memory metadata.
     seeded_t_ns, seeded_state = a1._order_id_meta["BR42"]
     assert seeded_state == "live"
     assert seeded_t_ns > 0
@@ -74,7 +72,6 @@ def test_new_schema_round_trip_preserves_t_ns_and_state(tmp_path: Path):
     assert len(rows) == 1
     assert rows[0] == {"k": "BR42", "v": "s1:1", "t_ns": seeded_t_ns, "s": "live"}
 
-    # Fresh adapter loads the same file; metadata must round-trip.
     a2 = _make_adapter(persist)
     a2._load_order_id_map()
     assert a2.order_id_map == {"BR42": "s1:1"}
@@ -95,9 +92,8 @@ def test_ttl_expired_entries_dropped_on_load(tmp_path: Path):
     """Entries older than the TTL are skipped; fresh ones survive."""
     persist = tmp_path / "order_id_map.jsonl"
     now_ns = timebase.now_ns()
-    # 25 hours old at 24h TTL — expired.
     stale_ns = now_ns - 25 * 3600 * 1_000_000_000
-    fresh_ns = now_ns - 60 * 1_000_000_000  # 60 seconds old — fresh
+    fresh_ns = now_ns - 60 * 1_000_000_000
     persist.write_text(
         json.dumps({"k": "STALE", "v": "s1:old", "t_ns": stale_ns, "s": "live"})
         + "\n"
@@ -132,12 +128,9 @@ def test_mark_order_id_terminal_filters_persist(tmp_path: Path):
     adapter._set_order_id_mapping("BR1", "s1:done", source="test")
     adapter._set_order_id_mapping("BR2", "s2:live", source="test")
 
-    # Order s1 reached terminal state — mark it.
     marked = adapter._mark_order_id_terminal("s1:done")
     assert marked == 1
     assert adapter._order_id_meta["BR1"][1] == "terminal"
-    # In-memory map unchanged (downstream resolution still finds s1:done
-    # for late callbacks until ``_del_order_id_mapping`` evicts it).
     assert adapter.order_id_map == {"BR1": "s1:done", "BR2": "s2:live"}
 
     adapter.persist_order_id_map()
@@ -152,7 +145,6 @@ def test_mark_order_id_terminal_idempotent(tmp_path: Path):
     adapter = _make_adapter(persist)
     adapter._set_order_id_mapping("BR1", "s1:done", source="test")
     assert adapter._mark_order_id_terminal("s1:done") == 1
-    # Second call is a no-op increment of count but state stays terminal.
     assert adapter._mark_order_id_terminal("s1:done") == 1
     assert adapter._order_id_meta["BR1"][1] == "terminal"
 
@@ -201,7 +193,7 @@ def test_zero_ttl_disables_age_filter(tmp_path: Path):
     Useful for ops emergencies where the persist file is the source of
     truth for active orders. Only state filter (terminal) still applies."""
     persist = tmp_path / "order_id_map.jsonl"
-    very_old_ns = timebase.now_ns() - 365 * 24 * 3600 * 1_000_000_000  # 1 year old
+    very_old_ns = timebase.now_ns() - 365 * 24 * 3600 * 1_000_000_000
     persist.write_text(json.dumps({"k": "ANCIENT", "v": "s1:old", "t_ns": very_old_ns, "s": "live"}) + "\n")
     adapter = _make_adapter(persist, ttl_s=0.0)
     adapter._load_order_id_map()

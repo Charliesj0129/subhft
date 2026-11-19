@@ -14,7 +14,6 @@ def client() -> ShioajiClient:
     """Create a ShioajiClient with mocked dependencies for rate limiter testing."""
     with patch("hft_platform.feed_adapter.shioaji_client.sj", create=True):
         c = ShioajiClient.__new__(ShioajiClient)
-        # Minimal init for rate limiter attributes only
         from hft_platform.core.rate_limiter import RateLimiter
 
         c._api_rate_limiter = RateLimiter(soft_cap=20, hard_cap=25, window_s=5)
@@ -84,11 +83,9 @@ class TestTieredRateLimiterRouting:
 
     def test_limiter_isolation(self, client: ShioajiClient) -> None:
         """Order ops should not affect account limiter and vice versa."""
-        # Exhaust account limiter
         client._account_rate_limiter = MagicMock()
         client._account_rate_limiter.check.return_value = False
 
-        # Order limiter should still work
         client._order_rate_limiter = MagicMock()
         client._order_rate_limiter.check.return_value = True
 

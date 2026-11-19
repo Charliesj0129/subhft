@@ -42,7 +42,6 @@ class TestSubscribeBasket:
 
         client.subscribe_basket(cb)
 
-        # 2 symbols x 2 quote types = 4 subscribe calls
         assert mock_api.subscribe.call_count == 4
         assert client.tick_callback is cb
 
@@ -123,7 +122,6 @@ class TestSetExecutionCallbacks:
         client, mock_api, _ = _make_client(tmp_path)
         client.api = None
 
-        # Should not raise
         client.set_execution_callbacks(MagicMock(), MagicMock())
 
         mock_api.set_order_callback.assert_not_called()
@@ -243,15 +241,12 @@ class TestSubscribeBasketStateResetBeforeRefresh:
         client.logged_in = True
         cb = MagicMock()
 
-        # Simulate state after first successful subscribe_basket() — now at max
         client.subscribed_count = client.MAX_SUBSCRIPTIONS
         client.subscribed_codes = {"FAKE_" + str(i) for i in range(client.MAX_SUBSCRIPTIONS)}
 
         calls_before = mock_api.subscribe.call_count
         client.subscribe_basket(cb)
 
-        # Without a reset, no new subscriptions should be issued because the
-        # limit guard fires immediately in subscribe_basket().
         assert mock_api.subscribe.call_count == calls_before, (
             "Expected subscribe_basket to be blocked by MAX_SUBSCRIPTIONS guard "
             "when subscribed_count is already at max — this is the bug scenario"
@@ -267,17 +262,14 @@ class TestSubscribeBasketStateResetBeforeRefresh:
         client.logged_in = True
         cb = MagicMock()
 
-        # Simulate state after first subscribe_basket()
         client.subscribed_count = client.MAX_SUBSCRIPTIONS
         client.subscribed_codes = {"FAKE_" + str(i) for i in range(client.MAX_SUBSCRIPTIONS)}
 
-        # Apply the fix that refresh_options_symbols() now does before resubscribing
         client.subscribed_codes = set()
         client.subscribed_count = 0
 
         client.subscribe_basket(cb)
 
-        # 2 symbols × 2 quote types (Tick + BidAsk) = 4 subscribe calls
         assert mock_api.subscribe.call_count == 4, (
             "After resetting subscription state, subscribe_basket should subscribe all 2 symbols (4 API calls total)"
         )

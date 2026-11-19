@@ -131,7 +131,6 @@ class _Tracked:
     family_file: str
     provenance: dict[str, str]
     result: ValidationResult
-    # filled during evaluation
     metrics: dict[str, dict[str, Any]] = field(default_factory=dict)
     gate: GateOutcome | None = None
     final_score: float = 0.0
@@ -202,7 +201,6 @@ class BatchRunner:
             "maker_cost_assumption_version": self.scoring_cfg.maker_cost_assumption_version,
         }
 
-    # -- setup ----------------------------------------------------------------
 
     def _load_q_hat(self) -> QHatTable:
         path = Path(self.scoring_cfg.q_hat_table_path)
@@ -229,7 +227,6 @@ class BatchRunner:
             logger.warning("non-uniform cost profiles across split symbols", costs=costs)
         return max(costs.values())
 
-    # -- [1]+[2] ingest + validate ---------------------------------------------
 
     def ingest_and_validate(self) -> list[_Tracked]:
         files = sorted(self.rc.batch_dir.glob("family=*.jsonl"))
@@ -238,7 +235,7 @@ class BatchRunner:
         lines: list[str] = []
         contexts: list[tuple[str, dict[str, str]]] = []
         for path in files:
-            family_from_filename(path)  # raises on malformed names
+            family_from_filename(path)
             header, file_lines = read_family_jsonl(path)
             provenance = {
                 "generation_model": str((header or {}).get("generation_model", "")),
@@ -267,7 +264,6 @@ class BatchRunner:
                 self._write_candidate_status(t, Status.COMPILED)
         return tracked
 
-    # -- candidate rows ----------------------------------------------------------
 
     def _candidate_row(self, t: _Tracked, status: Status) -> dict[str, Any]:
         res = t.result
@@ -307,7 +303,6 @@ class BatchRunner:
     def _write_candidate_status(self, t: _Tracked, status: Status) -> None:
         self.writer.write_candidate_row(self._candidate_row(t, status))
 
-    # -- [3]+[4] panels + per-day evaluation -------------------------------------
 
     def _load_panel(self, ds: DaySymbol) -> Panel | None:
         npz = npz_path_for(self.rc.data_root, ds)
@@ -347,7 +342,6 @@ class BatchRunner:
                 day_evals[valid.alpha_id].append(ev)
         return day_evals
 
-    # -- [5]+[6]+[7] reduce, gate, record -----------------------------------------
 
     def _aggregate(self, valid: ValidCandidate, day_evals: list[DayEval]) -> dict[str, Any]:
         return aggregate_split(
@@ -439,7 +433,6 @@ class BatchRunner:
         )
         return row
 
-    # -- full pipeline -------------------------------------------------------------
 
     def run(self) -> dict[str, Any]:
         tracked = self.ingest_and_validate()
@@ -452,12 +445,10 @@ class BatchRunner:
             invalid=len(tracked) - len(compiled),
         )
 
-        # Per-split day evals: outer days, inner candidates (spec §5 [3]/[4]).
         split_day_evals: dict[str, dict[str, list[DayEval]]] = {}
         for split in SUMMARY_SPLITS:
             split_day_evals[split] = self._evaluate_split_days(compiled, split)
 
-        # [5] reduce per split; EVALUATED status.
         for t in compiled:
             valid = t.result
             assert isinstance(valid, ValidCandidate)
@@ -466,7 +457,6 @@ class BatchRunner:
             t.status = Status.EVALUATED
             self._write_candidate_status(t, Status.EVALUATED)
 
-        # [6] gates + final_score + statuses.
         for t in compiled:
             valid = t.result
             assert isinstance(valid, ValidCandidate)
@@ -489,11 +479,9 @@ class BatchRunner:
             alpha_id = _alpha_id_of(t.result)
             t.status = statuses[alpha_id]
             if t.status is Status.REJECTED and t.gate is not None and t.gate.death_reason:
-                # Ranking-only rejections (survived gates, below cut) keep ''.
                 t.death_reason = t.gate.death_reason.value
             self._write_candidate_status(t, t.status)
 
-        # Result rows + artifacts for train/validation (all compiled candidates).
         result_rows: list[dict[str, Any]] = []
         for t in compiled:
             valid = t.result
@@ -503,9 +491,6 @@ class BatchRunner:
                 self.writer.write_result_row(row)
                 result_rows.append(row)
 
-        # [7] test split: WATCHLIST + SHORTLISTED only — recorded, never summarized
-        # (these rows are NOT appended to result_rows; build_failure_summary
-        # drops test rows anyway, belt+braces).
         shortlist = [t for t in compiled if t.status in (Status.WATCHLIST, Status.SHORTLISTED)]
         if shortlist:
             test_evals = self._evaluate_split_days(shortlist, "test")
@@ -517,7 +502,6 @@ class BatchRunner:
                 self.writer.write_result_row(row)
                 self._record_test_split_read(valid.alpha_id)
 
-        # [8] failure summary (train+validation only, mechanically).
         candidate_rows = [
             {
                 "alpha_id": _alpha_id_of(t.result),

@@ -16,7 +16,7 @@ from hft_platform.risk.validators import (
     PriceBandValidator,
 )
 
-SCALE = 10_000  # default price scale factor
+SCALE = 10_000
 
 
 def _intent(
@@ -59,11 +59,6 @@ def _cfg(**overrides: Any) -> dict:
 
 def _provider() -> FixedPriceScaleProvider:
     return FixedPriceScaleProvider(scale=SCALE)
-
-
-# ---------------------------------------------------------------------------
-# PriceBandValidator
-# ---------------------------------------------------------------------------
 
 
 class TestPriceBandValidator:
@@ -119,7 +114,6 @@ class TestPriceBandValidator:
         ok, _ = v.check(_intent(price=999_999_999, intent_type=IntentType.CANCEL))
         assert ok is True
 
-    # LOB-relative band tests
     def test_lob_band_within(self) -> None:
         lob = MagicMock()
         lob.get_book.return_value = None
@@ -135,7 +129,6 @@ class TestPriceBandValidator:
         lob.get_book.return_value = None
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": mid}
-        # band_ticks=20, tick_size=0.01 => band_width = 20 * 100 = 2000
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
         ok, reason = v.check(_intent(price=mid + 2001))
         assert ok is False
@@ -159,7 +152,6 @@ class TestPriceBandValidator:
         lob.get_l1_scaled.return_value = None
         lob.get_book_snapshot.return_value = {"mid_price": mid}
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
-        # Exactly at upper bound should pass (not strict >)
         ok, _ = v.check(_intent(price=mid + 2000))
         assert ok is True
 
@@ -191,7 +183,7 @@ class TestPriceBandValidator:
         mid = 200 * SCALE
         lob = MagicMock()
         lob.get_book.return_value = None
-        lob.get_l1_scaled.return_value = (0, 0, 0, mid * 2)  # mid_price_x2
+        lob.get_l1_scaled.return_value = (0, 0, 0, mid * 2)
         v = PriceBandValidator(_cfg(), price_scale_provider=_provider(), lob=lob)
         ok, _ = v.check(_intent(price=mid))
         assert ok is True
@@ -204,14 +196,8 @@ class TestPriceBandValidator:
         lob.get_book_snapshot.return_value = {"mid_price": mid}
         cfg = _cfg(strategies={"strat_a": {"price_band_ticks": 5}})
         v = PriceBandValidator(cfg, price_scale_provider=_provider(), lob=lob)
-        # band = 5 * 100 = 500
         ok, _ = v.check(_intent(price=mid + 501))
         assert ok is False
-
-
-# ---------------------------------------------------------------------------
-# MaxNotionalValidator
-# ---------------------------------------------------------------------------
 
 
 class TestMaxNotionalValidator:
@@ -224,7 +210,6 @@ class TestMaxNotionalValidator:
     def test_exceeds_limit(self) -> None:
         cfg = _cfg(global_defaults={**_cfg()["global_defaults"], "max_notional": 100})
         v = MaxNotionalValidator(cfg, price_scale_provider=_provider())
-        # notional = 100*10000 * 5 = 5_000_000, limit = 100 * 10000 = 1_000_000
         ok, reason = v.check(_intent(price=100 * SCALE, qty=5))
         assert ok is False
         assert "MAX_NOTIONAL_EXCEEDED" in reason
@@ -235,7 +220,6 @@ class TestMaxNotionalValidator:
             strategies={"strat_a": {"max_notional": 50}},
         )
         v = MaxNotionalValidator(cfg, price_scale_provider=_provider())
-        # strat_a limit = 50 * 10000 = 500_000. price*qty = 100*10000 * 1 = 1_000_000
         ok, reason = v.check(_intent(price=100 * SCALE, qty=1))
         assert ok is False
         assert "MAX_NOTIONAL_EXCEEDED" in reason
@@ -252,7 +236,6 @@ class TestMaxNotionalValidator:
         assert ok is True
 
     def test_exactly_at_limit(self) -> None:
-        # limit = 100 * 10000 = 1_000_000. notional = 10*10000 * 10 = 1_000_000
         cfg = _cfg(global_defaults={**_cfg()["global_defaults"], "max_notional": 100})
         v = MaxNotionalValidator(cfg, price_scale_provider=_provider())
         ok, _ = v.check(_intent(price=10 * SCALE, qty=10))
@@ -264,11 +247,6 @@ class TestMaxNotionalValidator:
         ok, reason = v.check(_intent(price=100 * SCALE, qty=1, intent_type=IntentType.AMEND))
         assert ok is False
         assert "MAX_NOTIONAL_EXCEEDED" in reason
-
-
-# ---------------------------------------------------------------------------
-# PositionLimitValidator
-# ---------------------------------------------------------------------------
 
 
 class TestPositionLimitValidator:
@@ -308,11 +286,6 @@ class TestPositionLimitValidator:
         assert ok is True
 
 
-# ---------------------------------------------------------------------------
-# DailyLossLimitValidator
-# ---------------------------------------------------------------------------
-
-
 class TestDailyLossLimitValidator:
     def test_no_loss_passes(self) -> None:
         v = DailyLossLimitValidator(_cfg(), price_scale_provider=_provider())
@@ -348,14 +321,13 @@ class TestDailyLossLimitValidator:
     def test_net_positive_passes(self) -> None:
         v = DailyLossLimitValidator(_cfg(), price_scale_provider=_provider())
         v.record_pnl("strat_a", -300_000_000)
-        v.record_pnl("strat_a", 400_000_000)  # net +100M
+        v.record_pnl("strat_a", 400_000_000)
         ok, _ = v.check(_intent())
         assert ok is True
 
     def test_per_strategy_isolation(self) -> None:
         v = DailyLossLimitValidator(_cfg(), price_scale_provider=_provider())
         v.record_pnl("strat_a", -600_000_000)
-        # strat_b has no losses
         ok, _ = v.check(_intent(strategy_id="strat_b"))
         assert ok is True
 

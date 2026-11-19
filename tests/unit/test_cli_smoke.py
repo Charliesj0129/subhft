@@ -7,7 +7,6 @@ from hft_platform.cli import cmd_check, cmd_init, cmd_run, main
 
 class TestCLISmoke(unittest.TestCase):
     def test_main_no_args(self):
-        # main returns 1 if no args and print_help called
         with patch.object(sys, "argv", ["hft"]), patch("sys.stdout"), patch("sys.stderr"):
             ret = main()
             self.assertEqual(ret, 1)
@@ -25,9 +24,6 @@ class TestCLISmoke(unittest.TestCase):
             mock_makedirs.assert_called()
 
     def test_check_command(self):
-        # Patch load_settings directly to avoid broad builtins.open / os.path.exists
-        # patches that interact unpredictably with config loading under cross-test
-        # pollution (other tests may alter env vars or module-level state).
         _valid_settings = {"symbols": ["2330"], "strategy": {"id": "demo"}}
         with (
             patch("hft_platform.cli._run.load_settings", return_value=(_valid_settings, {})),
@@ -44,7 +40,6 @@ class TestCLISmoke(unittest.TestCase):
             patch("hft_platform.observability.metrics.MetricsRegistry"),
             patch("hft_platform.main.HFTSystem") as mock_sys_cls,
             patch("hft_platform.cli._run.load_settings", return_value=({"mode": "sim", "prometheus_port": 9090}, {})),
-            # cmd_run would otherwise dup2 /dev/null onto the pytest process's fd 1 (lost output under -s).
             patch("hft_platform.utils.sdk_stdout.isolate_sdk_stdout") as mock_isolate,
         ):
             mock_sys = mock_sys_cls.return_value
@@ -68,7 +63,6 @@ class TestCLISmoke(unittest.TestCase):
 
     def test_main_dispatch(self):
         with patch("hft_platform.cli._run.cmd_init") as mock_init:
-            # Re-import parser so argparse binds the mock
             import importlib
 
             import hft_platform.cli._parser as _parser_mod

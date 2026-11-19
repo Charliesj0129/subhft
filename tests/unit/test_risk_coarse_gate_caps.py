@@ -42,7 +42,6 @@ class TestFastGateMaxCap:
         engine = RiskEngine(config_path, q1, q2)
         gate = engine._fast_gate
         assert gate is not None
-        # max_price should be 50000 * 10000 = 500_000_000
         expected_cap = int(50000.0 * 10000)
         assert gate.max_price_scaled == expected_cap
 

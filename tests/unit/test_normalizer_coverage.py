@@ -34,10 +34,6 @@ import hft_platform.feed_adapter.normalizer as norm_mod
 from hft_platform.events import BidAskEvent, TickEvent
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer, SymbolMetadata
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def symbols_yaml(tmp_path):
@@ -92,11 +88,6 @@ def normalizer(symbols_yaml):
     return MarketDataNormalizer(symbols_yaml)
 
 
-# ---------------------------------------------------------------------------
-# SymbolMetadata — reload_if_changed
-# ---------------------------------------------------------------------------
-
-
 class TestSymbolMetadataReloadIfChanged:
     def test_reload_if_changed_returns_false_when_unchanged(self, meta):
         changed = meta.reload_if_changed()
@@ -111,14 +102,9 @@ class TestSymbolMetadataReloadIfChanged:
         new_cfg = tmp_path / "new_symbols.yaml"
         new_cfg.write_text("symbols:\n  - code: 'NEW'\n    exchange: 'TSE'\n")
         meta.config_path = str(new_cfg)
-        meta._mtime = None  # Force detection
+        meta._mtime = None
         changed = meta.reload_if_changed()
         assert changed is True
-
-
-# ---------------------------------------------------------------------------
-# SymbolMetadata — symbols_for_tags
-# ---------------------------------------------------------------------------
 
 
 class TestSymbolsForTags:
@@ -143,11 +129,6 @@ class TestSymbolsForTags:
         assert len(result) == 0
 
 
-# ---------------------------------------------------------------------------
-# SymbolMetadata — price_scale fallbacks
-# ---------------------------------------------------------------------------
-
-
 class TestPriceScale:
     def test_price_scale_from_tick_size(self, tmp_path):
         cfg = tmp_path / "tick.yaml"
@@ -165,7 +146,6 @@ class TestPriceScale:
         cfg = tmp_path / "sym.yaml"
         cfg.write_text("symbols:\n  - code: 'SYM'\n    exchange: 'TSE'\n    price_scale: 10000\n")
         m = SymbolMetadata(str(cfg))
-        # Inject a bad tick_size directly into meta (simulating corrupted config)
         m.meta["SYM2"] = {"tick_size": "bad_value"}
         m._price_scale_cache.pop("SYM2", None)
         scale = m.price_scale("SYM2")
@@ -186,11 +166,6 @@ class TestPriceScale:
         assert "2330" in meta._price_scale_cache
 
 
-# ---------------------------------------------------------------------------
-# SymbolMetadata — contract_multiplier
-# ---------------------------------------------------------------------------
-
-
 class TestContractMultiplier:
     def test_contract_multiplier_future(self, meta):
         assert meta.contract_multiplier("TMFD6") == 10
@@ -202,11 +177,6 @@ class TestContractMultiplier:
         assert meta.contract_multiplier("2330") == 1
 
 
-# ---------------------------------------------------------------------------
-# SymbolMetadata — product_type exchange-based inference
-# ---------------------------------------------------------------------------
-
-
 class TestProductTypeExchangeInference:
     def test_tse_exchange_infers_stock(self, meta):
         assert meta.product_type("2330") == "stock"
@@ -215,7 +185,6 @@ class TestProductTypeExchangeInference:
         assert meta.product_type("TMFD6") == "future"
 
     def test_opt_exchange_infers_option(self, meta):
-        # PUTTEST has product_type already set to "option" directly
         assert meta.product_type("PUTTEST") == "option"
 
     def test_exchange_inference_idx(self, tmp_path):
@@ -241,11 +210,6 @@ class TestProductTypeExchangeInference:
         assert "2330" in meta._product_type_cache
 
 
-# ---------------------------------------------------------------------------
-# SymbolMetadata — order_params
-# ---------------------------------------------------------------------------
-
-
 class TestOrderParams:
     def test_order_params_unknown_symbol(self, meta):
         params = meta.order_params("UNKNOWN")
@@ -266,11 +230,6 @@ class TestOrderParams:
         params = m.order_params("2330")
         assert params.get("order_cond") == "Cash"
         assert params.get("order_lot") == "Common"
-
-
-# ---------------------------------------------------------------------------
-# SymbolMetadata — _populate_registry option type
-# ---------------------------------------------------------------------------
 
 
 class TestPopulateRegistryOption:
@@ -294,11 +253,6 @@ class TestPopulateRegistryOption:
         profile = meta.registry.get("PUTTEST")
         assert profile is not None
         assert profile.expiry is None
-
-
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — _maybe_synthesize_side
-# ---------------------------------------------------------------------------
 
 
 class TestMaybeSynthesizeSide:
@@ -353,7 +307,6 @@ class TestMaybeSynthesizeSide:
         }
         event = synth_normalizer.normalize_bidask(payload)
         assert isinstance(event, BidAskEvent)
-        # stats is None when synthesized
         assert event.stats is None
 
     def test_synthesis_with_tick_size_from_symbol(self, synth_normalizer):
@@ -362,18 +315,13 @@ class TestMaybeSynthesizeSide:
         asks = [[20000, 5]]
         out_bids, out_asks, synthesized = synth_normalizer._maybe_synthesize_side("TMFD6", bids, asks, 1)
         assert synthesized is True
-        assert out_bids[0][0] == 19999  # best_ask - 1 tick
+        assert out_bids[0][0] == 19999
 
     def test_synthesis_numpy_asks(self, synth_normalizer):
         bids = []
         asks = np.array([[1001000, 8]], dtype=np.int64)
         out_bids, out_asks, synthesized = synth_normalizer._maybe_synthesize_side("2330", bids, asks, 10000)
         assert synthesized is True
-
-
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — normalize_tick attribute-based payload
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeTickObjectPayload:
@@ -392,7 +340,7 @@ class TestNormalizeTickObjectPayload:
         payload.intraday_odd = 0
         event = normalizer.normalize_tick(payload)
         assert isinstance(event, TickEvent)
-        assert event.price == 1_500_000  # 150.0 * 10000
+        assert event.price == 1_500_000
         assert event.volume == 10
 
     def test_normalize_tick_object_no_symbol(self, normalizer):
@@ -410,11 +358,6 @@ class TestNormalizeTickObjectPayload:
         payload.intraday_odd = 0
         result = normalizer.normalize_tick(payload)
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — normalize_bidask _RETURN_TUPLE
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeBidAskReturnTuple:
@@ -466,11 +409,6 @@ class TestNormalizeBidAskReturnTuple:
         assert result is None
 
 
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — normalize_snapshot
-# ---------------------------------------------------------------------------
-
-
 class TestNormalizeSnapshot:
     def test_snapshot_dict_with_buy_sell(self, normalizer, monkeypatch):
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
@@ -498,7 +436,7 @@ class TestNormalizeSnapshot:
         }
         result = normalizer.normalize_snapshot(payload)
         assert isinstance(result, tuple)
-        assert result[5] is True  # is_snapshot flag
+        assert result[5] is True
 
     def test_snapshot_no_symbol_returns_none(self, normalizer):
         result = normalizer.normalize_snapshot({"buy_price": 100.0})
@@ -553,7 +491,7 @@ class TestNormalizeSnapshot:
         }
         result = normalizer.normalize_snapshot(payload)
         assert isinstance(result, tuple)
-        assert result[5] is True  # is_snapshot position
+        assert result[5] is True
 
     def test_snapshot_buy_only_no_sell(self, normalizer, monkeypatch):
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
@@ -564,13 +502,7 @@ class TestNormalizeSnapshot:
             "buy_volume": 10,
         }
         event = normalizer.normalize_snapshot(payload)
-        # buy_price is set so it enters the bids/asks branch
         assert event is not None
-
-
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — _record_latency_metrics interarrival
-# ---------------------------------------------------------------------------
 
 
 class TestRecordLatencyMetrics:
@@ -582,11 +514,9 @@ class TestRecordLatencyMetrics:
             "volume": 5,
             "ts": 1_620_000_000_000_000,
         }
-        # First call sets _last_local_ts_tick
         normalizer.normalize_tick(payload)
         first_ts = normalizer._last_local_ts_tick
         assert first_ts > 0
-        # Second call exercises `if last:` interarrival branch
         normalizer.normalize_tick(payload)
         second_ts = normalizer._last_local_ts_tick
         assert second_ts >= first_ts
@@ -605,25 +535,19 @@ class TestRecordLatencyMetrics:
         assert normalizer._last_local_ts_bidask > 0
 
 
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — _validate_and_sync_timestamp
-# ---------------------------------------------------------------------------
-
-
 class TestValidateAndSyncTimestamp:
     def test_future_ts_clamped_to_now(self, normalizer, monkeypatch):
-        monkeypatch.setattr(norm_mod, "_TS_MAX_FUTURE_NS", 1_000_000_000)  # 1 second
+        monkeypatch.setattr(norm_mod, "_TS_MAX_FUTURE_NS", 1_000_000_000)
         now_ns = 1_000_000_000_000_000_000
-        exch_ts = now_ns + 5_000_000_000  # 5 seconds in the future
+        exch_ts = now_ns + 5_000_000_000
         out_exch, out_local = normalizer._validate_and_sync_timestamp(exch_ts, now_ns, "tick", "2330")
-        assert out_exch == now_ns  # Clamped to now
+        assert out_exch == now_ns
 
     def test_local_ts_synced_up_to_exch_ts(self, normalizer, monkeypatch):
-        monkeypatch.setattr(norm_mod, "_TS_MAX_FUTURE_NS", 0)  # No future clamping
+        monkeypatch.setattr(norm_mod, "_TS_MAX_FUTURE_NS", 0)
         now_ns = 1_000_000_000_000_000_000
-        exch_ts = now_ns + 100  # Slightly in the future (within tolerance)
+        exch_ts = now_ns + 100
         out_exch, out_local = normalizer._validate_and_sync_timestamp(exch_ts, now_ns - 100, "tick", "2330")
-        # local_ts < exch_ts -> local_ts synced to exch_ts
         assert out_local == exch_ts
 
     def test_zero_exch_ts_passes_through(self, normalizer):
@@ -631,17 +555,11 @@ class TestValidateAndSyncTimestamp:
         assert out_exch == 0
 
     def test_excessive_lag_clamped(self, normalizer, monkeypatch):
-        monkeypatch.setattr(norm_mod, "_TS_MAX_LAG_NS", 1_000_000_000)  # 1 second max lag
+        monkeypatch.setattr(norm_mod, "_TS_MAX_LAG_NS", 1_000_000_000)
         now_ns = 1_000_000_000_000_000_000
-        exch_ts = now_ns - 10_000_000_000  # 10 seconds in the past
+        exch_ts = now_ns - 10_000_000_000
         out_exch, out_local = normalizer._validate_and_sync_timestamp(exch_ts, now_ns, "tick", "2330")
-        # local_ts is clamped to exch_ts + max_lag
         assert out_local == exch_ts + 1_000_000_000
-
-
-# ---------------------------------------------------------------------------
-# MarketDataNormalizer — normalize_tick _RETURN_TUPLE path (Python fallback)
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeTickReturnTuple:
@@ -659,17 +577,7 @@ class TestNormalizeTickReturnTuple:
         assert isinstance(result, tuple)
         assert result[0] == "tick"
         assert result[1] == "2330"
-        assert result[2] == 1_000_000  # 100.0 * 10000
-
-
-# ===========================================================================
-# NEW TESTS — targeting uncovered lines
-# ===========================================================================
-
-
-# ---------------------------------------------------------------------------
-# set_alias_map propagates metadata to actual codes (lines 311-313)
-# ---------------------------------------------------------------------------
+        assert result[2] == 1_000_000
 
 
 class TestSetAliasMapMetadataPropagation:
@@ -677,7 +585,6 @@ class TestSetAliasMapMetadataPropagation:
         """When alias differs from actual and actual not in meta, copy config entry."""
         assert "TXFE6" not in meta.meta
         meta.set_alias_map({"TMFD6": "TMFE6"})
-        # TMFD6 config entry should be copied to TMFE6
         assert "TMFE6" in meta.meta
         assert meta.meta["TMFE6"] is meta.meta["TMFD6"]
 
@@ -685,7 +592,6 @@ class TestSetAliasMapMetadataPropagation:
         """If actual code already in meta, do not overwrite."""
         meta.meta["EXISTING"] = {"price_scale": 999}
         meta.set_alias_map({"2330": "EXISTING"})
-        # EXISTING should keep its own config, not get overwritten by 2330
         assert meta.meta["EXISTING"]["price_scale"] == 999
 
     def test_alias_map_same_code_skipped(self, meta):
@@ -700,17 +606,11 @@ class TestSetAliasMapMetadataPropagation:
         assert "ACTUALX" not in meta.meta
 
 
-# ---------------------------------------------------------------------------
-# _safe_tick_size_scaled with invalid tick_size (lines 334-335)
-# ---------------------------------------------------------------------------
-
-
 class TestSafeTickSizeScaled:
     def test_invalid_string_tick_size_defaults_to_one(self, meta):
         """TypeError/ValueError from float() on bad tick_size falls back to 1.0."""
         entry = {"tick_size": "not_a_number"}
         result = meta._safe_tick_size_scaled(entry, "2330")
-        # 1.0 * price_scale("2330") = 1.0 * 10000 = 10000
         assert result == 10000
 
     def test_negative_tick_size_defaults_to_one(self, meta):
@@ -735,13 +635,7 @@ class TestSafeTickSizeScaled:
         """Normal tick_size is scaled properly."""
         entry = {"tick_size": 0.01}
         result = meta._safe_tick_size_scaled(entry, "2330")
-        # 0.01 * 10000 = 100
         assert result == 100
-
-
-# ---------------------------------------------------------------------------
-# Option expiry as datetime.date object (line 387)
-# ---------------------------------------------------------------------------
 
 
 class TestPopulateRegistryOptionExpiryAsDate:
@@ -772,11 +666,6 @@ class TestPopulateRegistryOptionExpiryAsDate:
         assert profile.expiry == date(2026, 6, 1)
 
 
-# ---------------------------------------------------------------------------
-# Tags with non-str/non-list type (line 180)
-# ---------------------------------------------------------------------------
-
-
 class TestTagsNonStandardType:
     def test_tags_as_integer_ignored(self, tmp_path):
         """Tags that are not str/list/tuple/set default to empty."""
@@ -790,7 +679,6 @@ class TestTagsNonStandardType:
         """)
         )
         m = SymbolMetadata(str(cfg))
-        # Integer tags fall into the else branch -> tags = []
         assert "SYM1" not in m.tags_by_symbol
 
     def test_tags_as_none_ignored(self, tmp_path):
@@ -807,11 +695,6 @@ class TestTagsNonStandardType:
         assert "SYM2" not in m.tags_by_symbol
 
 
-# ---------------------------------------------------------------------------
-# Config path resolution fallbacks (lines 131-136)
-# ---------------------------------------------------------------------------
-
-
 class TestConfigPathResolution:
     def test_fallback_to_abs_base_path(self, tmp_path, monkeypatch):
         """When _abs_symbols does not exist but _abs_base does, use _abs_base (line 131-132)."""
@@ -825,7 +708,6 @@ class TestConfigPathResolution:
         _real_exists = os.path.exists
 
         def _patched_exists(path):
-            # Block the first candidate (_abs_symbols) so it falls to _abs_base
             if path.endswith("config/symbols.yaml") and not path.endswith("base/symbols.yaml"):
                 return False
             if path == str(base_cfg):
@@ -846,27 +728,21 @@ class TestConfigPathResolution:
         call_count = {"n": 0}
 
         def _patched_exists(path):
-            # Block _abs_symbols and _abs_base but allow cwd-relative
             if "config/symbols.yaml" in str(path) or "config/base/symbols.yaml" in str(path):
                 call_count["n"] += 1
-                # First two calls are the absolute paths -- block them
                 if call_count["n"] <= 2:
                     return False
-                # Third call is cwd-relative config/symbols.yaml
                 return call_count["n"] == 3
             return _real_exists(path)
 
         monkeypatch.setattr(os.path, "exists", _patched_exists)
         m = SymbolMetadata(None)
-        # Whatever config_path ends up as, meta should be a dict
         assert isinstance(m.meta, dict)
 
     def test_fallback_to_default_config_path(self, tmp_path, monkeypatch):
         """When none of the resolved paths exist, uses config/base/symbols.yaml as last resort (line 136)."""
         monkeypatch.delenv("SYMBOLS_CONFIG", raising=False)
-        # Point to nonexistent file -- SymbolMetadata should still construct
         m = SymbolMetadata(str(tmp_path / "nonexistent" / "symbols.yaml"))
-        # Should still have empty meta (load failed gracefully)
         assert isinstance(m.meta, dict)
 
     def test_fallback_last_resort_path(self, tmp_path, monkeypatch):
@@ -883,11 +759,6 @@ class TestConfigPathResolution:
         assert isinstance(m.meta, dict)
 
 
-# ---------------------------------------------------------------------------
-# _get_scale with zero/negative scale (line 568)
-# ---------------------------------------------------------------------------
-
-
 class TestGetScaleEdgeCases:
     def test_zero_scale_defaults_to_one(self, normalizer):
         """When metadata returns scale=0, _get_scale should clamp to 1."""
@@ -902,11 +773,6 @@ class TestGetScaleEdgeCases:
         normalizer.metadata._price_scale_cache.pop("NEG_SCALE", None)
         scale = normalizer._get_scale("NEG_SCALE")
         assert scale == 1
-
-
-# ---------------------------------------------------------------------------
-# _maybe_synthesize_side: None levels (line 585), tick_size fallback (lines 601-606)
-# ---------------------------------------------------------------------------
 
 
 class TestSynthesizeSideEdgeCases:
@@ -940,7 +806,6 @@ class TestSynthesizeSideEdgeCases:
         asks = [[5000, 10]]
         out_bids, out_asks, synthesized = synth_norm._maybe_synthesize_side("BADTICK", bids, asks, 10000)
         assert synthesized is True
-        # tick_size falls back to 1/scale = 0.0001, tick_int = round(0.0001 * 10000) = 1
         assert out_bids[0][0] == 4999
 
     def test_synthesis_no_metadata_falls_back_to_scale(self, synth_norm):
@@ -956,20 +821,9 @@ class TestSynthesizeSideEdgeCases:
         synth_norm.metadata.meta["ZEROSCALE"] = {}
         bids = []
         asks = [[100, 5]]
-        # scale=0 path: not tick_size and scale > 0 is False, not tick_size and True -> tick_size = 1.0
-        # BUT scale=0 means tick_int = max(1, round(1.0 * 0)) = max(1, 0) = 1
-        # Actually with scale=0, the tick_size = 1/float(0) would ZeroDivisionError... let's use 1
-        # The code checks `if not tick_size and scale > 0` so scale=0 skips that branch
-        # Then `if not tick_size` -> tick_size = 1.0
-        # tick_int = max(1, round(1.0 * 1)) = 1 (we use scale=1 here)
         out_bids, out_asks, synthesized = synth_norm._maybe_synthesize_side("ZEROSCALE", bids, asks, 1)
         assert synthesized is True
-        assert out_bids[0][0] == 99  # best_ask - tick_int(1)
-
-
-# ---------------------------------------------------------------------------
-# Rust tick path with _RETURN_TUPLE (lines 687-688)
-# ---------------------------------------------------------------------------
+        assert out_bids[0][0] == 99
 
 
 class TestRustTickReturnTuple:
@@ -992,13 +846,7 @@ class TestRustTickReturnTuple:
         assert result[0] == "tick"
         assert result[1] == "2330"
         assert result[2] == 1000000
-        # Extended with trade_direction + trade_confidence
         assert len(result) == 10
-
-
-# ---------------------------------------------------------------------------
-# Python fallback negative price after Rust returns 0 (lines 718-720)
-# ---------------------------------------------------------------------------
 
 
 class TestPythonFallbackNegativePrice:
@@ -1020,7 +868,6 @@ class TestPythonFallbackNegativePrice:
         monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
 
-        # Rust returns price=0 for a valid close => raises ValueError => Python fallback
         rust_result = ("tick", "2330", 0, 5, 100, False, False, 1_620_000_000_000_000)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
 
@@ -1031,14 +878,8 @@ class TestPythonFallbackNegativePrice:
             "ts": 1_620_000_000_000_000,
         }
         result = normalizer.normalize_tick(payload)
-        # Falls through to Python path which produces valid TickEvent
         assert isinstance(result, TickEvent)
         assert result.price == 1_000_000
-
-
-# ---------------------------------------------------------------------------
-# Fused path _RETURN_TUPLE (line 841)
-# ---------------------------------------------------------------------------
 
 
 class TestFusedPathReturnTuple:
@@ -1054,14 +895,14 @@ class TestFusedPathReturnTuple:
             bids_np,
             asks_np,
             1000000,
-            1005000,  # best_bid, best_ask
+            1005000,
             10,
-            20,  # bid_depth, ask_depth
+            20,
             2005000,
-            5000,  # mid_x2, spread_scaled
+            5000,
             -333333,
-            1,  # imbalance_ppm, version
-            -0.333333,  # top_imbalance
+            1,
+            -0.333333,
         )
         normalizer._fused = mock_fused
 
@@ -1076,13 +917,8 @@ class TestFusedPathReturnTuple:
         result = normalizer.normalize_bidask(payload)
         assert isinstance(result, tuple)
         assert result[0] == "bidask"
-        assert result[5] is False  # not snapshot
-        assert result[6] == 1000000  # best_bid
-
-
-# ---------------------------------------------------------------------------
-# Snapshot with list-typed buy/sell fields
-# ---------------------------------------------------------------------------
+        assert result[5] is False
+        assert result[6] == 1000000
 
 
 class TestSnapshotListTypedFields:
@@ -1100,7 +936,6 @@ class TestSnapshotListTypedFields:
         event = normalizer.normalize_snapshot(payload)
         assert isinstance(event, BidAskEvent)
         assert event.is_snapshot is True
-        # First bid should be 100.0 * 10000 = 1000000
         assert event.bids[0][0] == 1_000_000
 
     def test_snapshot_empty_list_buy_price_zero(self, normalizer, monkeypatch):
@@ -1117,14 +952,8 @@ class TestSnapshotListTypedFields:
         event = normalizer.normalize_snapshot(payload)
         assert isinstance(event, BidAskEvent)
         assert event.is_snapshot is True
-        # buy_price = 0 -> bids empty, sell_price extracted -> asks has one level
         assert len(event.bids) == 0
         assert len(event.asks) == 1
-
-
-# ---------------------------------------------------------------------------
-# Fused normalizer init failure (lines 489-493)
-# ---------------------------------------------------------------------------
 
 
 class TestFusedNormalizerInitFailure:
@@ -1138,16 +967,10 @@ class TestFusedNormalizerInitFailure:
         assert n._fused is None
 
 
-# ---------------------------------------------------------------------------
-# Fixed5 scratch array init (lines 500-510)
-# ---------------------------------------------------------------------------
-
-
 class TestFixed5ScratchInit:
     def test_fixed5_scratch_enabled_when_conditions_met(self, symbols_yaml, monkeypatch):
         """When _SHIOAJI_FIXED5_SCRATCH=True and Rust NP available, arrays are allocated."""
         monkeypatch.setattr(norm_mod, "_SHIOAJI_FIXED5_SCRATCH", True)
-        # Ensure the Rust NP function is available (use the real one or a mock)
         if norm_mod._RUST_NORMALIZE_BIDASK_NP is None:
             monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", lambda *a: None)
 
@@ -1166,26 +989,17 @@ class TestFixed5ScratchInit:
         assert n._fixed5_scratch_enabled is False
 
 
-# ---------------------------------------------------------------------------
-# _record_latency_metrics observe paths (lines 553-555, 558-560)
-# ---------------------------------------------------------------------------
-
-
 class TestRecordLatencyMetricsObserve:
     def test_feed_latency_observed_on_sample(self, normalizer):
         """Verify feed_latency_ns.observe is called when exch_ts > 0 and on sample."""
-        # Force sample_every=1 so every call is sampled
         normalizer._latency_metrics_sample_every = 1
         normalizer._latency_metrics_counter = 0
 
-        # We need real metrics to test observe. The normalizer fixture has them.
         assert normalizer.metrics is not None
 
-        # Call once to set _last_local_ts_tick
         normalizer._record_latency_metrics(1_000_000, 2_000_000, "_last_local_ts_tick")
         assert normalizer._last_local_ts_tick == 2_000_000
 
-        # Call again - should observe both latency and interarrival
         normalizer._record_latency_metrics(3_000_000, 4_000_000, "_last_local_ts_tick")
         assert normalizer._last_local_ts_tick == 4_000_000
 
@@ -1193,7 +1007,6 @@ class TestRecordLatencyMetricsObserve:
         """When exch_ts=0, feed_latency_ns is not observed."""
         normalizer._latency_metrics_sample_every = 1
         normalizer._latency_metrics_counter = 0
-        # Should not raise; just updates last_ts
         normalizer._record_latency_metrics(0, 1_000_000, "_last_local_ts_tick")
         assert normalizer._last_local_ts_tick == 1_000_000
 
@@ -1201,14 +1014,8 @@ class TestRecordLatencyMetricsObserve:
         """When lag_ns < 0, feed_latency_ns.observe is not called."""
         normalizer._latency_metrics_sample_every = 1
         normalizer._latency_metrics_counter = 0
-        # exch_ts > local_ts => lag < 0
         normalizer._record_latency_metrics(5_000_000, 1_000_000, "_last_local_ts_tick")
         assert normalizer._last_local_ts_tick == 1_000_000
-
-
-# ---------------------------------------------------------------------------
-# Rust synth bidask path tick_size resolution (lines 893, 915-922)
-# ---------------------------------------------------------------------------
 
 
 class TestRustSynthBidaskTickSize:
@@ -1229,15 +1036,15 @@ class TestRustSynthBidaskTickSize:
             bids_np,
             asks_np,
             1_620_000_000_000_000,
-            False,  # is_snapshot
+            False,
             10000,
-            10010,  # best_bid, best_ask
+            10010,
             10,
-            20,  # bid_depth, ask_depth
+            20,
             10005.0,
-            10.0,  # mid_price, spread
+            10.0,
             -0.333,
-            False,  # imbalance, synthesized
+            False,
         )
         mock_synth_fn = MagicMock(return_value=synth_result)
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
@@ -1252,7 +1059,6 @@ class TestRustSynthBidaskTickSize:
         }
         result = normalizer.normalize_bidask(payload)
         assert result is not None
-        # Verify the synth function was called
         assert mock_synth_fn.called
 
     def test_synth_bidask_rust_path_invalid_tick_size(self, normalizer, monkeypatch):
@@ -1263,7 +1069,6 @@ class TestRustSynthBidaskTickSize:
         monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", True)
         monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
 
-        # Inject bad tick_size for the symbol
         normalizer.metadata.meta["BADTICK"] = {"tick_size": "bad", "price_scale": 10000}
         normalizer.metadata._price_scale_cache.pop("BADTICK", None)
 
@@ -1300,10 +1105,8 @@ class TestRustSynthBidaskTickSize:
         result = normalizer.normalize_bidask(payload)
         assert result is not None
         assert mock_synth_fn.called
-        # Verify tick_size fallback: bad string -> float() fails -> tick_size=None
-        # then 1/10000 = 0.0001 -> tick_int = max(1, round(0.0001 * 10000)) = 1
         call_args = mock_synth_fn.call_args
-        tick_int_arg = call_args[0][7]  # 8th positional arg is tick_int
+        tick_int_arg = call_args[0][7]
         assert tick_int_arg == 1
 
     def test_synth_bidask_rust_path_no_tick_size_zero_scale(self, normalizer, monkeypatch):
@@ -1314,11 +1117,9 @@ class TestRustSynthBidaskTickSize:
         monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", True)
         monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
 
-        # Symbol with no tick_size and price_scale=0
         normalizer.metadata.meta["ZEROSCALE"] = {"price_scale": 0}
         normalizer.metadata._price_scale_cache.pop("ZEROSCALE", None)
 
-        # The synth function will be called; mock it to succeed
         bids_np = np.array([[100, 10]], dtype=np.int64)
         asks_np = np.array([[101, 20]], dtype=np.int64)
         synth_result = (
@@ -1371,14 +1172,8 @@ class TestRustSynthBidaskTickSize:
             "ask_volume": [20],
         }
         result = normalizer.normalize_bidask(payload)
-        # Falls through to standard (non-synth) path
         assert isinstance(result, BidAskEvent)
         assert result.symbol == "2330"
-
-
-# ---------------------------------------------------------------------------
-# _validate_and_sync_timestamp with skew logging (cooldown path)
-# ---------------------------------------------------------------------------
 
 
 class TestTimestampSkewLogging:
@@ -1388,22 +1183,16 @@ class TestTimestampSkewLogging:
         monkeypatch.setattr(norm_mod, "_TS_SKEW_LOG_COOLDOWN_NS", 60_000_000_000)
 
         exch_ts = 1_000_000_000_000_000_000
-        local_ts = exch_ts + 10_000_000_000  # 10s lag
+        local_ts = exch_ts + 10_000_000_000
 
-        # First call should set _last_skew_log_ns
         normalizer._last_skew_log_ns = 0
         normalizer._validate_and_sync_timestamp(exch_ts, local_ts, "tick", "2330")
         first_log_ts = normalizer._last_skew_log_ns
         assert first_log_ts > 0
 
-        # Second call with same timestamps (within cooldown) should NOT update log ts
         normalizer._validate_and_sync_timestamp(exch_ts, local_ts, "tick", "2330")
         assert normalizer._last_skew_log_ns == first_log_ts
 
-
-# ---------------------------------------------------------------------------
-# Rust bidask fallback chain (lines 983-989, 1060-1066, 1069-1105, 1110-1150)
-# ---------------------------------------------------------------------------
 
 _BIDASK_PAYLOAD = {
     "code": "2330",
@@ -1431,7 +1220,6 @@ def _disable_all_rust_bidask(monkeypatch):
     monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", None)
     monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", None)
     monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-    # Keep as a dummy that returns None so rust_available=True
     monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", lambda p, s, sc: None)
     monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
     monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
@@ -1458,7 +1246,6 @@ class TestRustBidaskFallbackChain:
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        # pair_stats failed, no other stats path available -> Python fallback
         assert result.bids[0][0] == 1_000_000
         assert failing_pair_stats.called
 
@@ -1516,7 +1303,7 @@ class TestRustBidaskFallbackChain:
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        assert call_count["n"] == 2  # Called twice: first fails, retry succeeds
+        assert call_count["n"] == 2
 
     def test_all_fail_falls_to_scale_book_pair(self, normalizer, monkeypatch):
         """When all stats paths fail, falls to scale_book_pair for arrays only (lines 1120-1128)."""
@@ -1533,7 +1320,6 @@ class TestRustBidaskFallbackChain:
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        # No stats since all stats paths failed
         assert result.stats is None
 
     def test_all_fail_falls_to_scale_book_seq(self, normalizer, monkeypatch):
@@ -1547,15 +1333,15 @@ class TestRustBidaskFallbackChain:
 
         mock_seq = MagicMock(
             side_effect=[
-                [[1000000, 10], [995000, 5]],  # bids result
-                [[1005000, 8], [1010000, 3]],  # asks result
+                [[1000000, 10], [995000, 5]],
+                [[1005000, 8], [1010000, 3]],
             ]
         )
         monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", mock_seq)
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        assert mock_seq.call_count == 2  # Once for bids, once for asks
+        assert mock_seq.call_count == 2
 
     def test_all_rust_fail_falls_to_pure_python(self, normalizer, monkeypatch):
         """When everything fails, falls to pure Python list comprehension."""
@@ -1569,15 +1355,13 @@ class TestRustBidaskFallbackChain:
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        # Python fallback produces list-of-lists
-        assert result.bids[0][0] == 1_000_000  # 100.0 * 10000
+        assert result.bids[0][0] == 1_000_000
         assert result.asks[0][0] == 1_005_000
 
     def test_normalize_bidask_np_with_fixed5_scratch(self, normalizer, monkeypatch):
         """When fixed5 scratch is enabled and 5-level data, uses scratch arrays (lines 1005-1017)."""
         _disable_all_rust_bidask(monkeypatch)
 
-        # Enable fixed5 scratch
         normalizer._fixed5_scratch_enabled = True
         normalizer._fixed5_bid_prices_np = np.empty(5, dtype=np.float64)
         normalizer._fixed5_bid_vols_np = np.empty(5, dtype=np.int64)
@@ -1625,7 +1409,6 @@ class TestRustBidaskFallbackChain:
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        # Pure Python fallback
         assert result.bids[0][0] == 1_000_000
 
     def test_seq_bids_fail_falls_to_python_bids(self, normalizer, monkeypatch):
@@ -1633,7 +1416,6 @@ class TestRustBidaskFallbackChain:
         _disable_all_rust_bidask(monkeypatch)
         failing = MagicMock(side_effect=RuntimeError("boom"))
         monkeypatch.setattr(norm_mod, "_RUST_STATS_TUPLE", False)
-        # seq fails for both bids and asks
         monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", failing)
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
@@ -1649,7 +1431,6 @@ class TestRustBidaskFallbackChain:
 
         result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
         assert isinstance(result, BidAskEvent)
-        # Falls through to Python path
         assert result.bids[0][0] == 1_000_000
 
     def test_normalize_bidask_tuple_failure_path(self, normalizer, monkeypatch):
@@ -1663,16 +1444,10 @@ class TestRustBidaskFallbackChain:
         assert result.bids[0][0] == 1_000_000
 
 
-# ---------------------------------------------------------------------------
-# Snapshot fallback normalize_bidask returning None (line 1255)
-# ---------------------------------------------------------------------------
-
-
 class TestSnapshotFallbackNone:
     def test_snapshot_fallback_returns_none_when_bidask_returns_none(self, normalizer, monkeypatch):
         """When normalize_bidask returns None, normalize_snapshot also returns None."""
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-        # Payload without buy/sell but with bid/ask that has no symbol -> None
         payload = {
             "ts": 1_620_000_000_000_000,
             "bid_price": [100.0],
@@ -1682,11 +1457,6 @@ class TestSnapshotFallbackNone:
         }
         result = normalizer.normalize_snapshot(payload)
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# _RETURN_TUPLE path for normalize_snapshot fallback (lines 1253-1254)
-# ---------------------------------------------------------------------------
 
 
 class TestSnapshotFallbackReturnTupleShort:
@@ -1699,7 +1469,6 @@ class TestSnapshotFallbackReturnTupleShort:
         monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
         monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
         monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
-        # Empty book -> no stats -> short tuple
         payload = {
             "code": "2330",
             "ts": 1_620_000_000_000_000,
@@ -1710,14 +1479,8 @@ class TestSnapshotFallbackReturnTupleShort:
         }
         result = normalizer.normalize_snapshot(payload)
         assert isinstance(result, tuple)
-        assert result[5] is True  # is_snapshot
-        # Short form: 6 elements
+        assert result[5] is True
         assert len(result) == 6
-
-
-# ---------------------------------------------------------------------------
-# SymbolMetadata.reload (line 190-191)
-# ---------------------------------------------------------------------------
 
 
 class TestSymbolMetadataReload:

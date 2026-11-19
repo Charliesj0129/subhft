@@ -52,10 +52,6 @@ def test_bidask_normalization_filters_and_scales(bids, asks):
 
     event = normalizer.normalize_bidask(payload)
 
-    # ``round``, not truncation -- see the note in test_normalizer_invariants.
-    # Filtering is on the *scaled* price, which is what the book stores: a raw
-    # price that rounds to 0 is dropped, a zero-volume level at a real price is
-    # kept (an exhausted level is information, an absent price is not).
     def _expect(prices, volumes):
         levels = []
         for raw_price, raw_volume in zip(prices, volumes):

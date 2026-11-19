@@ -90,7 +90,7 @@ class BackfillRequest:
     symbol: str
     exchange: str
     instrument_type: str
-    day: str  # YYYY-MM-DD, the date handed to ``api.ticks``
+    day: str
 
 
 class TickSource(Protocol):
@@ -203,7 +203,6 @@ def _nullable_int(value: Any, what: str) -> int | None:
 
 def staged_path(out_dir: Path, request: BackfillRequest) -> Path:
     """``<out_dir>/<day>/<symbol>.parquet``; a day or symbol that is not a plain name is refused."""
-    # fromisoformat also takes 20260406 (basic format), which would stage the same day under a second name.
     try:
         canonical = date.fromisoformat(request.day).isoformat()
     except ValueError as exc:
@@ -222,8 +221,6 @@ def write_staged(path: Path, columns: dict[str, list[Any]]) -> None:
 
     if set(columns) != set(STAGED_COLUMNS):
         raise ValueError(f"columns differ from STAGED_COLUMNS: {sorted(set(columns) ^ set(STAGED_COLUMNS))}")
-    # Fixed types: an all-null optional column must not become a null-typed column that one day's file
-    # has and the next day's does not, or the files stop being readable as one dataset.
     schema = pa.schema([(name, pa.string() if name in _TEXT_COLUMNS else pa.int64()) for name in STAGED_COLUMNS])
     table = pa.table({name: columns[name] for name in STAGED_COLUMNS}, schema=schema).replace_schema_metadata(
         {
@@ -268,7 +265,6 @@ def run_backfill(
     report = BackfillReport()
     last_fetch: float | None = None
     consecutive_errors = 0
-    # Every request is checked before the first call, so a bad name cannot stop a run half way.
     checked = [(request, staged_path(out_dir, request)) for request in requests]
     for request, path in checked:
         if path.exists():
@@ -291,7 +287,7 @@ def run_backfill(
             report.outcomes.append(Outcome(request, "blocked", detail=str(exc)[:200]))
             report.stopped_by = "blocked"
             return report
-        except Exception as exc:  # one bad request must not end the run; it is recorded
+        except Exception as exc:
             report.outcomes.append(Outcome(request, "error", detail=f"{type(exc).__name__}: {str(exc)[:200]}"))
             consecutive_errors += 1
             if consecutive_errors >= max_consecutive_errors:

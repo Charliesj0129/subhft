@@ -14,10 +14,6 @@ from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 from hft_platform.contracts.strategy import Side as StrategySide
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _risk_config(tmp_path):
     data = {
@@ -44,7 +40,7 @@ def _make_intent(
     symbol: str = "2330",
     intent_type: IntentType = IntentType.NEW,
     side: StrategySide = StrategySide.BUY,
-    price: int = 1_000_000,  # 100.0 scaled x10000
+    price: int = 1_000_000,
     qty: int = 10,
 ) -> OrderIntent:
     return OrderIntent(
@@ -100,11 +96,6 @@ def _mock_metrics():
     return m
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.integration
 class TestRecorderFaultInjection:
     """Tests 1-2: ClickHouse failure -> WAL takeover and reconnect."""
@@ -117,12 +108,10 @@ class TestRecorderFaultInjection:
             from hft_platform.recorder.writer import DataWriter
 
             writer = DataWriter(wal_dir=str(tmp_path / "wal"))
-            # Not connected (CH disabled) -> should fall back to WAL
             assert not writer.connected
 
             data = [{"exch_ts": 1_000_000_000, "ingest_ts": 1_000_000_001, "price": 100}]
             await writer.write("hft.market_data", data)
-            # WAL directory should exist and have content
             wal_dir = tmp_path / "wal"
             assert wal_dir.exists()
         finally:
@@ -138,7 +127,6 @@ class TestRecorderFaultInjection:
             writer = DataWriter(wal_dir=str(tmp_path / "wal"))
             assert not writer.connected
 
-            # Simulate reconnect by manually setting state
             writer.connected = True
             writer.ch_client = MagicMock()
             writer._schema_initialized = True
@@ -173,7 +161,6 @@ class TestRiskEngineFaultInjection:
 
             engine = RiskEngine(config_path, intent_q, order_q)
 
-            # Inject a crashing validator
             crashing = MagicMock()
             crashing.check.side_effect = RuntimeError("Validator internal error")
             crashing.config = engine.config
@@ -183,8 +170,6 @@ class TestRiskEngineFaultInjection:
             engine._rust_validator = None
 
             intent = _make_intent()
-            # The engine swallows the exception in the run loop,
-            # but evaluate() propagates it for direct testing.
             with pytest.raises(RuntimeError, match="Validator internal error"):
                 engine.evaluate(intent)
 
@@ -206,7 +191,6 @@ class TestRiskEngineFaultInjection:
 
             engine = RiskEngine(config_path, intent_q, order_q)
 
-            # First: crashing validator
             crashing = MagicMock()
             crashing.check.side_effect = RuntimeError("boom")
             crashing.config = engine.config
@@ -219,7 +203,6 @@ class TestRiskEngineFaultInjection:
             with pytest.raises(RuntimeError):
                 engine.evaluate(intent)
 
-            # Restore working validator
             working = MagicMock()
             working.check.return_value = (True, "OK")
             working.config = engine.config
@@ -251,7 +234,6 @@ class TestPositionStoreFaultInjection:
                 store = PositionStore()
                 store._positions_max_size = 5
 
-                # Fill store to capacity with flat positions (net_qty=0 after round-trip)
                 for i in range(5):
                     buy_fill = _make_fill(
                         fill_id=f"FB{i}",
@@ -272,7 +254,6 @@ class TestPositionStoreFaultInjection:
 
                 assert len(store.positions) == 5
 
-                # Adding one more should trigger eviction
                 new_fill = _make_fill(
                     fill_id="FNEW",
                     symbol="SYM_NEW",
@@ -282,7 +263,6 @@ class TestPositionStoreFaultInjection:
                 )
                 store.on_fill(new_fill)
 
-                # Some flat positions should have been evicted
                 assert "ACC1:strat1:SYM_NEW" in store.positions
 
     def test_position_store_eviction_preserves_active(self):
@@ -301,7 +281,6 @@ class TestPositionStoreFaultInjection:
                 store = PositionStore()
                 store._positions_max_size = 3
 
-                # Create 2 flat positions and 1 active
                 for i in range(2):
                     store.on_fill(_make_fill(fill_id=f"FB{i}", symbol=f"FLAT{i}", side=Side.BUY, qty=1, match_ts_ns=i))
                     store.on_fill(
@@ -314,10 +293,8 @@ class TestPositionStoreFaultInjection:
                 active_key = "ACC1:strat1:ACTIVE0"
                 assert store.positions[active_key].net_qty == 10
 
-                # Trigger eviction by adding another
                 store.on_fill(_make_fill(fill_id="NEW", symbol="NEW0", side=Side.BUY, qty=5, match_ts_ns=200))
 
-                # Active position must survive eviction
                 assert active_key in store.positions
                 assert store.positions[active_key].net_qty == 10
 
@@ -331,10 +308,8 @@ class TestNormalizerFaultInjection:
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         metadata = SymbolMetadata()
-        # Accessing nonexistent symbol in internal meta dict should not raise
         result = metadata.meta.get("NONEXISTENT_SYMBOL_XYZ")
         assert result is None
-        # price_scale for nonexistent symbol should return default
         scale = metadata.price_scale("NONEXISTENT_SYMBOL_XYZ")
         assert isinstance(scale, int)
         assert scale >= 1
@@ -345,7 +320,6 @@ class TestNormalizerFaultInjection:
 
         metadata = SymbolMetadata()
         scale = metadata.price_scale("DOES_NOT_EXIST_99999")
-        # Should return a sane default (e.g., 10000 or 1) rather than crash
         assert isinstance(scale, (int, float))
         assert scale >= 1
 
@@ -371,7 +345,7 @@ class TestStormGuardFaultInjection:
             from hft_platform.risk.engine import RiskEngine
 
             engine = RiskEngine(config_path, intent_q, order_q)
-            engine.storm_guard.state = 3  # StormGuardState.HALT
+            engine.storm_guard.state = 3
 
             intent = _make_intent(intent_type=IntentType.NEW)
             decision = engine.evaluate(intent)
@@ -395,7 +369,7 @@ class TestStormGuardFaultInjection:
             from hft_platform.risk.engine import RiskEngine
 
             engine = RiskEngine(config_path, intent_q, order_q)
-            engine.storm_guard.state = 3  # HALT
+            engine.storm_guard.state = 3
 
             intent = _make_intent(intent_type=IntentType.CANCEL)
             decision = engine.evaluate(intent)
@@ -412,11 +386,9 @@ class TestStormGuardFaultInjection:
             guard = StormGuard()
             guard._halt_cooldown_s = 0.0
             guard._de_escalate_threshold = 1
-            # Drive to HALT
             guard.trigger_halt("test")
             assert guard.state == StormGuardState.HALT
 
-            # Recover: safe values with zero cooldown
             guard.update(latency_us=0, feed_gap_s=0.0)
             assert guard.state == StormGuardState.NORMAL
 
@@ -427,19 +399,14 @@ class TestMetricsFaultInjection:
 
     def test_metrics_registry_get_none_no_crash(self):
         """Components must handle MetricsRegistry.get() returning None gracefully."""
-        # Simulate code that checks for None metrics (common pattern in the codebase)
-        metrics = None  # Simulates MetricsRegistry.get() returning None
-        # All metric access patterns in the codebase guard against None
+        metrics = None
         if metrics is not None:
             metrics.feed_events_total.labels(symbol="2330").inc()
-        # The key assertion: no crash when metrics is None
         assert metrics is None
 
-        # Also verify that actual MetricsRegistry.get() does not crash
         from hft_platform.observability.metrics import MetricsRegistry
 
         result = MetricsRegistry.get()
-        # Result can be an instance or None depending on state; either way no crash
         assert result is None or hasattr(result, "feed_events_total")
 
 
@@ -453,17 +420,14 @@ class TestWALFaultInjection:
         from hft_platform.recorder.wal import WALWriter
 
         bad_dir = str(tmp_path / "no_such_parent" / "wal")
-        # WALWriter creates dir in __init__, so use existing dir and make it readonly
         wal_dir = tmp_path / "wal_readonly"
         wal_dir.mkdir()
         writer = WALWriter(str(wal_dir))
 
-        # Make the WAL directory read-only
         wal_dir.chmod(0o444)
         try:
             data = [{"price": 100, "exch_ts": 1000}]
             result = await writer.write("test_table", data)
-            # Write to read-only dir must fail gracefully (return False) without raising
             assert result is False, f"Expected False for write to read-only dir, got {result!r}"
         finally:
             wal_dir.chmod(0o755)
@@ -492,11 +456,9 @@ class TestRiskConfigFaultInjection:
             engine = RiskEngine(config_path, intent_q, order_q)
             old_config = dict(engine.config)
 
-            # Delete the config file and reload
             os.remove(config_path)
             engine.reload_config()
 
-            # Config should be preserved (reload_config catches exceptions)
             assert engine.config is not None
             assert "global_defaults" in engine.config
 
@@ -524,12 +486,10 @@ class TestOrderQueueFaultInjection:
 
             engine = RiskEngine(config_path, intent_q, order_q)
 
-            # Evaluate a cancel intent directly (no need for run loop)
             cancel_intent = _make_intent(intent_type=IntentType.CANCEL)
             decision = engine.evaluate(cancel_intent)
             assert decision.approved is True
 
-            # Order queue should still be empty
             assert order_q.empty()
 
 
@@ -622,7 +582,6 @@ class TestPositionUpdateDuringEviction:
                     t.join(timeout=30)
 
                 assert not errors, f"Errors during concurrent fills: {errors}"
-                # At least some positions should exist
                 assert len(store.positions) > 0
 
 

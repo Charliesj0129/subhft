@@ -23,25 +23,24 @@ def _install_fake_solace_module(monkeypatch: pytest.MonkeyPatch) -> type:
     """
 
     class SolClient:
-        def onreply_callback_wrap(self, a, b, c):  # noqa: ANN001
+        def onreply_callback_wrap(self, a, b, c):
             return ("onreply", a, b, c)
 
-        def reply_callback_wrap(self, a, b, c):  # noqa: ANN001
+        def reply_callback_wrap(self, a, b, c):
             return ("reply", a, b, c)
 
-        def event_callback_wrap(self, a, b, c):  # noqa: ANN001
+        def event_callback_wrap(self, a, b, c):
             return ("event", a, b, c)
 
-        def msg_callback_wrap(self, a, b, c):  # noqa: ANN001
+        def msg_callback_wrap(self, a, b, c):
             return ("msg", a, b, c)
 
-        def p2p_callback_wrap(self, a, b, c):  # noqa: ANN001
+        def p2p_callback_wrap(self, a, b, c):
             return ("p2p", a, b, c)
 
-        def session_down_callback_wrap(self, a, b, c):  # noqa: ANN001
+        def session_down_callback_wrap(self, a, b, c):
             return ("down", a, b, c)
 
-    # Build fake module hierarchy.
     sj_mod = types.ModuleType("shioaji")
     backend_mod = types.ModuleType("shioaji.backend")
     solace_pkg = types.ModuleType("shioaji.backend.solace")
@@ -68,14 +67,12 @@ def test_shim_absorbs_extra_positional_args(monkeypatch: pytest.MonkeyPatch) -> 
     first 3 user args are forwarded to the original wrap."""
     SolClient = _install_fake_solace_module(monkeypatch)
 
-    # Reset the module-level guard so the shim re-applies on this fake.
     from hft_platform.feed_adapter.shioaji import client as _client
 
     monkeypatch.setattr(_client, "_SOLACE_ARITY_SHIM_APPLIED", False, raising=False)
     _client._apply_solace_arity_shim()
 
     inst = SolClient()
-    # No exception, and extras silently dropped.
     result = inst.onreply_callback_wrap(1, 2, 3, "extra")  # type: ignore[call-arg]
     assert result == ("onreply", 1, 2, 3)
 
@@ -89,7 +86,6 @@ def test_shim_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     _client._apply_solace_arity_shim()
     first_wrap = SolClient.onreply_callback_wrap
 
-    # Second apply must early-out (guard flag set).
     _client._apply_solace_arity_shim()
     assert SolClient.onreply_callback_wrap is first_wrap
     assert getattr(first_wrap, "_hft_arity_shim", False) is True
@@ -115,7 +111,6 @@ def test_shim_covers_all_callback_wraps(monkeypatch: pytest.MonkeyPatch) -> None
     }
     for attr, tag in expected.items():
         fn = getattr(inst, attr)
-        # Each must accept the surprise 4th arg without raising.
         out = fn(10, 20, 30, "surprise")
         assert out == (tag, 10, 20, 30)
         assert getattr(getattr(SolClient, attr), "_hft_arity_shim", False) is True
@@ -125,7 +120,6 @@ def test_shim_skips_when_solace_module_missing(monkeypatch: pytest.MonkeyPatch) 
     """If the Solace backend module is unimportable (e.g. test env without
     the wheel), the shim must no-op and set the applied flag so the engine
     still boots."""
-    # Ensure no fake module is registered so the import inside the shim fails.
     for mod in [
         "shioaji.backend.solace.api",
         "shioaji.backend.solace",

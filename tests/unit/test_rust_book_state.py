@@ -9,7 +9,6 @@ import os
 import numpy as np
 import pytest
 
-# Ensure Rust acceleration is available for testing.
 try:
     try:
         from hft_platform import rust_core
@@ -51,17 +50,14 @@ class TestRustBookState:
         assert result is True
         assert bs.exch_ts == 1000
         assert bs.version == 1
-        # best_bid = 100_0000, best_ask = 101_0000
         assert bs.mid_price_x2 == 100_0000 + 101_0000
         assert bs.spread == 101_0000 - 100_0000
-        assert bs.bid_depth_total == 50 + 30 + 20  # 100
-        assert bs.ask_depth_total == 40 + 25 + 15  # 80
+        assert bs.bid_depth_total == 50 + 30 + 20
+        assert bs.ask_depth_total == 40 + 25 + 15
 
     def test_imbalance_calculation(self, sample_bids, sample_asks):
         bs = RustBookState("TEST")
         bs.apply_update(sample_bids, sample_asks, 1000)
-        # imbalance = (bid_vol_top - ask_vol_top) / (bid_vol_top + ask_vol_top)
-        # = (50 - 40) / (50 + 40) = 10/90 ≈ 0.1111
         assert abs(bs.imbalance - (50 - 40) / (50 + 40)) < 1e-10
 
     def test_late_packet_rejected(self, sample_bids, sample_asks):
@@ -107,8 +103,8 @@ class TestRustBookState:
         assert bs.bid_depth_total == 0
         assert bs.ask_depth_total == 0
         stats = bs.get_stats_tuple()
-        assert stats[5] == 0  # best_bid
-        assert stats[6] == 0  # best_ask
+        assert stats[5] == 0
+        assert stats[6] == 0
 
     def test_one_sided_bids_only(self, sample_bids, empty_asks):
         bs = RustBookState("ONE_SIDE")
@@ -137,7 +133,7 @@ class TestRustBookState:
         bs.update_tick(150_0000, 100, 1000)
         result = bs.update_tick(150_0000, 200, 500)
         assert result is False
-        assert bs.last_volume == 100  # unchanged
+        assert bs.last_volume == 100
 
     def test_apply_update_with_stats(self, sample_bids, sample_asks):
         bs = RustBookState("STATS")
@@ -163,7 +159,6 @@ class TestRustBookState:
         bs.apply_update(sample_bids, sample_asks, 1000)
         assert bs.version == 1
 
-        # Update with new data
         new_bids = np.array([[105_0000, 60]], dtype=np.int64)
         new_asks = np.array([[106_0000, 45]], dtype=np.int64)
         bs.apply_update(new_bids, new_asks, 2000)
@@ -179,7 +174,6 @@ class TestRustBookStateParity:
 
     def test_parity_with_python_bookstate(self, sample_bids, sample_asks):
         """Both paths should produce identical stats for the same input."""
-        # Force Python path
         orig_env = os.environ.get("HFT_LOB_RUST_BOOKSTATE")
         os.environ["HFT_LOB_RUST_BOOKSTATE"] = "0"
         try:
@@ -197,24 +191,19 @@ class TestRustBookStateParity:
             else:
                 os.environ.pop("HFT_LOB_RUST_BOOKSTATE", None)
 
-        # Rust path
         rust_book = RustBookState("TEST_PARITY")
         rust_book.apply_update(sample_bids, sample_asks, 1000)
         rust_stats = rust_book.get_stats_tuple()
 
-        # Python path now prepends "lobstats" tag: (lobstats, symbol, ts, ...)
-        # Rust path returns raw 9-tuple: (symbol, ts, ...)
-        # Strip the leading "lobstats" tag from Python stats for comparison
         if py_stats[0] == "lobstats":
             py_stats = py_stats[1:]
 
-        # Compare all 9 fields
-        assert py_stats[0] == rust_stats[0]  # symbol
-        assert py_stats[1] == rust_stats[1]  # exch_ts
-        assert py_stats[2] == rust_stats[2]  # mid_price_x2
-        assert py_stats[3] == rust_stats[3]  # spread
-        assert abs(py_stats[4] - rust_stats[4]) < 1e-10  # imbalance
-        assert py_stats[5] == rust_stats[5]  # best_bid
-        assert py_stats[6] == rust_stats[6]  # best_ask
-        assert py_stats[7] == rust_stats[7]  # bid_depth
-        assert py_stats[8] == rust_stats[8]  # ask_depth
+        assert py_stats[0] == rust_stats[0]
+        assert py_stats[1] == rust_stats[1]
+        assert py_stats[2] == rust_stats[2]
+        assert py_stats[3] == rust_stats[3]
+        assert abs(py_stats[4] - rust_stats[4]) < 1e-10
+        assert py_stats[5] == rust_stats[5]
+        assert py_stats[6] == rust_stats[6]
+        assert py_stats[7] == rust_stats[7]
+        assert py_stats[8] == rust_stats[8]

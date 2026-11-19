@@ -125,14 +125,11 @@ def _old_clickhouse_source_events(rows: list[tuple[Any, ...]], start_ns: int, en
         key=lambda r: r[1],
     )
     ticks = sorted((r for r in rows if r[0] == "Tick" and start_ns <= r[1] < end_ns), key=lambda r: r[1])
-    events = [
-        TickData(r[1], r[3][0], r[4][0], r[5][0], r[6][0], 0, 0, False, scale=CK_PRICE_SCALE) for r in ba
-    ] + [TickData(r[1], 0, 0, 0, 0, r[7], r[8], True, scale=CK_PRICE_SCALE) for r in ticks]
+    events = [TickData(r[1], r[3][0], r[4][0], r[5][0], r[6][0], 0, 0, False, scale=CK_PRICE_SCALE) for r in ba] + [
+        TickData(r[1], 0, 0, 0, 0, r[7], r[8], True, scale=CK_PRICE_SCALE) for r in ticks
+    ]
     events.sort(key=lambda e: e.exch_ts)
     return events
-
-
-# --- the reader ---------------------------------------------------------------------------
 
 
 def test_trading_day_owns_the_night_session_before_it(calendar: SessionCalendar, protocol: Any) -> None:
@@ -152,9 +149,9 @@ def test_reader_refuses_a_non_session_trading_day(calendar: SessionCalendar, pro
 
 def test_out_of_session_rows_are_dropped_and_counted(calendar: SessionCalendar, protocol: Any) -> None:
     rows = _clean_monday() + [
-        _tick(_ns(FRI, 14, 30)),  # between the day close and the night open
-        _tick(_ns(SAT, 9, 0)),  # day window on a closed date
-        _tick(_ns(MON, 13, 50)),  # after the day close
+        _tick(_ns(FRI, 14, 30)),
+        _tick(_ns(SAT, 9, 0)),
+        _tick(_ns(MON, 13, 50)),
     ]
     read = _reader(rows, calendar, protocol).read_trading_day(SYMBOL, MON)
 
@@ -169,7 +166,7 @@ def test_night_tail_after_midnight_belongs_to_the_session_that_opened_it(
     rows = _clean_monday() + [_tick(_ns(SAT, 4, 59)), _tick(_ns(SAT, 5, 1))]
     read = _reader(rows, calendar, protocol).read_trading_day(SYMBOL, MON)
 
-    assert read.session_filtered == 1  # 05:01 is after the night close; 04:59 is Friday's night
+    assert read.session_filtered == 1
     assert any(r[1] == _ns(SAT, 4, 59) for r in read.rows)
 
 
@@ -306,16 +303,11 @@ def test_connect_opens_no_client_until_the_first_query(monkeypatch: pytest.Monke
     assert len(opened) == 1 and opened[0]["host"] == "h"
 
 
-# --- consumer: MakerEngine ClickHouseSource -----------------------------------------------
-
-
 def _source(rows: list[tuple[Any, ...]], calendar: SessionCalendar, protocol: Any) -> ClickHouseSource:
     return ClickHouseSource(reader=_reader(rows, calendar, protocol))
 
 
-def test_clickhouse_source_matches_the_old_reader_on_a_clean_window(
-    calendar: SessionCalendar, protocol: Any
-) -> None:
+def test_clickhouse_source_matches_the_old_reader_on_a_clean_window(calendar: SessionCalendar, protocol: Any) -> None:
     rows = _clean_monday()
     start, end = _ns(FRI, 14), _ns(MON, 14)
 
@@ -329,7 +321,6 @@ def test_clickhouse_source_load_day_is_the_trading_day_not_the_utc_date(
 ) -> None:
     events = _source(_clean_monday(), calendar, protocol).load_day(SYMBOL, MON.isoformat())
 
-    # The old reader's UTC date 2026-03-16 started at 08:00 Taipei and missed Friday's night.
     assert events[0].exch_ts == _ns(FRI, 15, 0)
     assert len(events) == 120
 
@@ -342,16 +333,15 @@ def test_clickhouse_source_differs_from_the_old_reader_only_by_the_listed_rules(
     dirty = (
         [row for row in clean for _ in range(2 if row[0] == "Tick" else 1)]
         + [_tick(_ns(FRI, 14, 30))]
-        # A trade that arrived before the quote stamped with the same exch_ts.
         + [_tick(tie, local=tie), _bidask(tie, local=tie + 1)]
     )
     start, end = _ns(FRI, 14), _ns(MON, 14)
     new = _source(dirty, calendar, protocol).load_window(SYMBOL, start, end)
     old = _old_clickhouse_source_events(dirty, start, end)
 
-    assert len(old) - len(new) == 60 + 1  # duplicate deliveries + the out-of-session trade
+    assert len(old) - len(new) == 60 + 1
     at_tie = [e.is_trade for e in new if e.exch_ts == tie]
-    assert at_tie == [True, False]  # arrival order; the old reader put every quote first
+    assert at_tie == [True, False]
     assert [e.is_trade for e in old if e.exch_ts == tie] == [False, True]
 
 
@@ -377,9 +367,6 @@ def test_clickhouse_source_health_check_wraps_a_connection_failure() -> None:
 
 def test_maker_engine_no_longer_imports_requests() -> None:
     assert not hasattr(maker_engine, "requests")
-
-
-# --- consumer: queue calibration (ChDataSource.load_day shape) -----------------------------
 
 
 def test_hbt_source_assembles_the_same_events_as_chdatasource_on_a_clean_day(

@@ -67,5 +67,5 @@ def _on_done(context: dict[str, Any], task: asyncio.Task[Any]) -> None:
         from hft_platform.observability.metrics import MetricsRegistry
 
         MetricsRegistry.get().background_task_failed_total.labels(name=name).inc()
-    except Exception:  # noqa: BLE001 -- the failure is already logged; a metrics fault must not raise in a callback
+    except Exception:
         logger.warning("background_task_failed_metric_unavailable", task=name, exc_info=True)

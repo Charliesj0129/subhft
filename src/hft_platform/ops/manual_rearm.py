@@ -49,8 +49,6 @@ class ManualRearmGate:
 
         token = strategy_state.get("quarantine_token")
         if not isinstance(token, str) or not token:
-            # Fail closed. An entry without a token predates this protocol, so
-            # the engine cannot verify which quarantine the request targets.
             raise ValueError(
                 f"strategy {strategy_id!r} has no quarantine_token; the running engine "
                 "predates the request/ack re-arm protocol. Restart the engine to clear "
@@ -117,7 +115,6 @@ class ManualRearmGate:
         """
         with locked_state(self.state_path) as state:
             platform_state = self._platform_section(state)
-            # Raising here leaves the file untouched (locked_state publishes nothing).
             release_audit.check_release(
                 current_token=self._platform_token_of(platform_state), given_token=token, reason=reason
             )
@@ -130,18 +127,8 @@ class ManualRearmGate:
             )
             self._clear_platform_section(platform_state)
 
-        # Best-effort: bridge the live controller through its process-local
-        # registry without importing the concrete controller module.
         try:
             if not try_force_clear_shared_controller(reason="manual_rearm_gate"):
-                # Different process from the live engine (typical Docker
-                # path: `docker compose exec` runs a fresh interpreter).
-                # The live engine's supervisor reads ``rearm_requested_at``
-                # (stamped by clear_platform_flag) on its next tick and
-                # force-clears there (HFTSystem._platform_rearm_is_due). A
-                # restart is NOT needed -- and it re-arms everything else that
-                # does not survive one. THESHOW 2026-10-22: cleared 08:09:07Z,
-                # three minutes before an unneeded stop/start.
                 logger.warning(
                     "manual_rearm_ipc_unreachable",
                     state_path=str(self.state_path),
@@ -151,8 +138,6 @@ class ManualRearmGate:
                     ),
                 )
         except Exception as exc:
-            # Persistence above is the source of truth; swallow any
-            # runtime-coupling error to keep the operator path robust.
             logger.warning("manual_rearm_ipc_error", error=str(exc))
 
     def clear_platform_flag(self) -> None:

@@ -84,7 +84,6 @@ class ExperimentRun:
     signals_path: str | None = None
     equity_path: str | None = None
     research_decision: dict[str, Any] = field(default_factory=dict)
-    # RunStamp (``alpha.provenance``); empty for runs logged before it existed.
     run_stamp: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,14 +103,8 @@ class PaperTradeSession:
     drift_alerts: int
     execution_reject_rate: float
     notes: str = ""
-    session_duration_minutes: int | None = None  # convenience; None for legacy JSON
-    # P95 reject rate over the session window.
-    # Per CLAUDE.md latency realism policy, Gate E uses P95 when present.
-    # None for legacy sessions that did not record this field.
+    session_duration_minutes: int | None = None
     reject_rate_p95: float | None = None
-    # Market regime observed during this session (e.g. "trending", "mean_reverting",
-    # "volatile", "low_vol").  Gate E warns when sessions don't span ≥2 regimes.
-    # None for legacy sessions that did not record this field.
     regime: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,7 +113,6 @@ class PaperTradeSession:
 
 class ExperimentTracker:
     def __init__(self, base_dir: str | Path | None = None):
-        # The default is anchored at the repo root; an explicit path is used as given.
         self.base_dir = Path(base_dir) if base_dir is not None else repo_path("research/experiments")
         self.runs_dir = self.base_dir / "runs"
         self.comparisons_dir = self.base_dir / "comparisons"
@@ -465,7 +457,6 @@ class ExperimentTracker:
             "invalid_session_duration_count": int(invalid_duration_count),
             "first_trading_day": sorted_days[0],
             "last_trading_day": sorted_days[-1],
-            # Regime diversity (Q2 governance): sorted list of distinct regimes observed.
             "regimes_covered": sorted(regimes_covered),
         }
 
@@ -1070,7 +1061,7 @@ def gc_experiment_runs(
                     rid = payload.get("run_id")
                     if rid:
                         promoted_run_ids.add(str(rid))
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 continue
 
     candidates: list[dict[str, Any]] = []

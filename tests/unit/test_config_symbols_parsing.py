@@ -20,10 +20,6 @@ from hft_platform.config._symbols_parsing import (
 )
 from hft_platform.config._symbols_types import FilterSpec, SymbolBuildResult
 
-# ---------------------------------------------------------------------------
-# parse_bool_value
-# ---------------------------------------------------------------------------
-
 
 class TestParseBoolValue:
     def test_truthy_string_1(self) -> None:
@@ -69,11 +65,6 @@ class TestParseBoolValue:
         assert parse_bool_value("2") is None
 
 
-# ---------------------------------------------------------------------------
-# parse_list_value
-# ---------------------------------------------------------------------------
-
-
 class TestParseListValue:
     def test_pipe_delimited(self) -> None:
         assert parse_list_value("a|b|c") == ["a", "b", "c"]
@@ -96,11 +87,6 @@ class TestParseListValue:
 
     def test_single_item(self) -> None:
         assert parse_list_value("only") == ["only"]
-
-
-# ---------------------------------------------------------------------------
-# parse_numeric_value
-# ---------------------------------------------------------------------------
 
 
 class TestParseNumericValue:
@@ -132,11 +118,6 @@ class TestParseNumericValue:
         assert parse_numeric_value("12.5%") == pytest.approx(12.5)
 
 
-# ---------------------------------------------------------------------------
-# parse_range_value
-# ---------------------------------------------------------------------------
-
-
 class TestParseRangeValue:
     def test_dotdot_notation(self) -> None:
         result = parse_range_value("10..20")
@@ -153,11 +134,9 @@ class TestParseRangeValue:
         assert result[1] == pytest.approx(3.5)
 
     def test_negative_start_with_dash_returns_none(self) -> None:
-        # Starts with "-" → treated as plain negative number, not range
         assert parse_range_value("-5-10") is None
 
     def test_multiple_dashes_returns_none(self) -> None:
-        # More than one dash and not starting with "-": ambiguous
         assert parse_range_value("1-2-3") is None
 
     def test_no_separator_returns_none(self) -> None:
@@ -177,13 +156,7 @@ class TestParseRangeValue:
         assert result == (10.0, 20.0)
 
     def test_empty_high_with_dash_returns_none(self) -> None:
-        # "5-" produces empty high part
         assert parse_range_value("5-") is None
-
-
-# ---------------------------------------------------------------------------
-# normalize_month_token
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeMonthToken:
@@ -201,11 +174,6 @@ class TestNormalizeMonthToken:
 
     def test_none_returns_empty(self) -> None:
         assert normalize_month_token(None) == ""  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# normalize_tags
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizeTags:
@@ -241,11 +209,6 @@ class TestNormalizeTags:
         assert result == ["foo", "bar"]
 
 
-# ---------------------------------------------------------------------------
-# merge_tags
-# ---------------------------------------------------------------------------
-
-
 class TestMergeTags:
     def test_deduplicates_case_insensitive(self) -> None:
         result = merge_tags(["Alpha", "beta"], ["ALPHA", "gamma"])
@@ -260,7 +223,6 @@ class TestMergeTags:
         assert result == []
 
     def test_preserves_first_case(self) -> None:
-        # First occurrence is kept, not the later duplicate
         result = merge_tags(["Tag"], ["tag"])
         assert result == ["Tag"]
 
@@ -271,11 +233,6 @@ class TestMergeTags:
     def test_no_args(self) -> None:
         result = merge_tags()
         assert result == []
-
-
-# ---------------------------------------------------------------------------
-# looks_like_filter
-# ---------------------------------------------------------------------------
 
 
 class TestLooksLikeFilter:
@@ -311,11 +268,6 @@ class TestLooksLikeFilter:
 
     def test_plain_symbol_returns_false(self) -> None:
         assert looks_like_filter("2330") is False
-
-
-# ---------------------------------------------------------------------------
-# parse_filter_token
-# ---------------------------------------------------------------------------
 
 
 class TestParseFilterToken:
@@ -436,20 +388,13 @@ class TestParseFilterToken:
         filters, result = self._make()
         parse_filter_token("oi>100", filters, result, "ctx")
         parse_filter_token("oi>200", filters, result, "ctx")
-        # max of 100 and 200 = 200
         assert filters.numeric_min["oi"] == 200.0
 
     def test_numeric_bounds_tighten_on_repeated_max(self) -> None:
         filters, result = self._make()
         parse_filter_token("oi<500", filters, result, "ctx")
         parse_filter_token("oi<300", filters, result, "ctx")
-        # min of 500 and 300 = 300
         assert filters.numeric_max["oi"] == 300.0
-
-
-# ---------------------------------------------------------------------------
-# parse_kv_tokens
-# ---------------------------------------------------------------------------
 
 
 class TestParseKvTokens:
@@ -530,11 +475,6 @@ class TestParseKvTokens:
         assert result["price_scale"] == 10000
 
 
-# ---------------------------------------------------------------------------
-# parse_csv_spec
-# ---------------------------------------------------------------------------
-
-
 class TestParseCsvSpec:
     def test_code_only(self) -> None:
         code, attrs = parse_csv_spec("2330")
@@ -575,11 +515,6 @@ class TestParseCsvSpec:
         code, attrs = parse_csv_spec(" TXF , FUT ")
         assert code == "TXF"
         assert attrs["exchange"] == "FUT"
-
-
-# ---------------------------------------------------------------------------
-# parse_attrs_and_filters
-# ---------------------------------------------------------------------------
 
 
 class TestParseAttrsAndFilters:

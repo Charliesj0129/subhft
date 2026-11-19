@@ -51,7 +51,6 @@ def _service(symbols: object, *, max_symbols: int = 64) -> MarketDataService:
     return svc
 
 
-#: The real ``symbols.yaml`` shape: a mapping, with a Chinese display name.
 _YAML_SHAPE = [
     {"code": "2330", "name": "台積電", "exchange": "TSE", "product_type": "STK"},
     {"code": "TMFJ6", "name": "小型臺指期貨", "exchange": "TAIFEX", "product_type": "FUT"},

@@ -22,7 +22,7 @@ from research.data_pipeline.tick_backfill import BackfillRequest, BadTicks, Bloc
 
 DAY = "2026-04-06"
 EIGHT_HOURS_NS = 8 * 3600 * 1_000_000_000
-TS0 = 1_775_466_000_123_456_789  # beyond 2**53: a float round trip would change it
+TS0 = 1_775_466_000_123_456_789
 
 
 def _request(symbol: str = "TXFD6", day: str = DAY) -> BackfillRequest:
@@ -89,7 +89,6 @@ class TestScalePrice:
         assert tb.scale_price(price) == expected
 
     def test_scale_price_does_not_truncate_where_multiplying_a_float_does(self) -> None:
-        # The existing script uses int(price * 1_000_000); for this stock price it is one unit short.
         assert int(2.01 * 1_000_000) == 2_009_999
         assert tb.scale_price(2.01) == 2_010_000
 
@@ -122,11 +121,9 @@ class TestConvertTicks:
 
         assert columns["ts_local_ns"] == [TS0]
         assert columns["exch_ts"] == [TS0 - EIGHT_HOURS_NS]
-        assert float(TS0) != TS0  # the value really is beyond what a float holds
+        assert float(TS0) != TS0
 
     def test_convert_writes_neither_a_trade_direction_nor_an_ingest_stamp(self) -> None:
-        # The recorded rows carry the EMO classifier's trade_direction and a real receive time; a
-        # backfilled row has neither, so it must not fill those columns with a different meaning.
         columns = tb.convert_ticks(_request(), _ticks(2, tick_type=[1, 2]))
 
         assert "trade_direction" not in columns
@@ -408,4 +405,4 @@ class TestBoundary:
 
         forbidden = {"shioaji", "clickhouse_connect", "clickhouse_driver", "urllib", "requests", "httpx", "socket"}
         assert imported.isdisjoint(forbidden)
-        assert "pyarrow" in imported  # the check above is looking at the right file
+        assert "pyarrow" in imported

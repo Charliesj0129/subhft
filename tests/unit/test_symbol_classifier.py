@@ -19,7 +19,7 @@ from hft_platform.core.symbol_classifier import is_futures_symbol
         "MXFD6",
         "TEFE6",
         "TFFE6",
-        "tmfe6",  # lowercase still matches
+        "tmfe6",
     ],
 )
 def test_futures_symbols_classified_true(symbol: str) -> None:
@@ -29,11 +29,11 @@ def test_futures_symbols_classified_true(symbol: str) -> None:
 @pytest.mark.parametrize(
     "symbol",
     [
-        "2330",  # TSMC
-        "0050",  # Yuanta ETF
-        "2317",  # Hon Hai
-        "1101",  # Taiwan Cement
-        "9999",  # arbitrary stock code
+        "2330",
+        "0050",
+        "2317",
+        "1101",
+        "9999",
     ],
 )
 def test_stock_symbols_classified_false(symbol: str) -> None:
@@ -41,8 +41,6 @@ def test_stock_symbols_classified_false(symbol: str) -> None:
 
 
 def test_options_symbols_still_match_heuristic() -> None:
-    # TXO options codes embed "TX" so the heuristic treats them as futures-like;
-    # this is consistent with the pre-existing reconciliation behavior.
     assert is_futures_symbol("TXO33600E6") is True
 
 

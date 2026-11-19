@@ -108,7 +108,7 @@ def test_with_the_gateway_on_the_exit_enters_the_intent_channel():
 
 def test_a_full_queue_is_reported_and_does_not_raise():
     sys = _system(halted=True, queue=_Queue(fail=True))
-    _run(sys)  # must not raise into the supervisor loop
+    _run(sys)
     assert sys.risk_queue.items == []
 
 

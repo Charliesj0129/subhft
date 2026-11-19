@@ -11,10 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_writer(monkeypatch, *, wal_ok: bool = True, ch_ok: bool = False, health_tracker=None):
     """Build a DataWriter with controlled CH/WAL behavior."""
@@ -35,12 +31,10 @@ def _make_writer(monkeypatch, *, wal_ok: bool = True, ch_ok: bool = False, healt
         writer.connected = ch_ok
         writer.ch_client = MagicMock() if ch_ok else None
 
-        # Mock WAL to return wal_ok
         mock_wal = AsyncMock()
         mock_wal.write = AsyncMock(return_value=wal_ok)
         writer.wal = mock_wal
 
-        # Disable batch writer so we hit the simple WAL path
         writer._get_wal_batch_writer = MagicMock(return_value=None)
 
         if health_tracker is not None:
@@ -76,11 +70,6 @@ def _make_flush_buf():
     return buf
 
 
-# ===================================================================
-# Bug A: WriterDoubleFaultError on CH + WAL failure
-# ===================================================================
-
-
 class TestWriterDoubleFaultRaise:
     """write_columnar and write must raise WriterDoubleFaultError on double-fault."""
 
@@ -108,7 +97,6 @@ class TestWriterDoubleFaultRaise:
 
         writer = _make_writer(monkeypatch, ch_ok=False, wal_ok=True)
 
-        # Should not raise
         await writer.write_columnar(
             table="hft.test_table",
             column_names=["col_a", "col_b"],
@@ -137,11 +125,6 @@ class TestWriterDoubleFaultRaise:
         await writer.write("hft.test_table", [{"col_a": 1, "col_b": 2}])
 
 
-# ===================================================================
-# Bug B: Reinject circuit breaker notifies health tracker
-# ===================================================================
-
-
 class TestReinjectHealthTracker:
     """Reinject circuit breaker and reinject failure must call health_tracker."""
 
@@ -152,7 +135,6 @@ class TestReinjectHealthTracker:
         batcher = _make_batcher(monkeypatch, health_tracker=ht, reinject_max=1)
         flush_buf = _make_flush_buf()
 
-        # Exhaust the circuit breaker (max=1, so 2nd call trips it)
         batcher._reinject_consecutive_failures = 1
 
         await batcher._reinject_failed_buffer(flush_buf)
@@ -166,7 +148,6 @@ class TestReinjectHealthTracker:
         batcher = _make_batcher(monkeypatch, health_tracker=ht, reinject_max=5)
         flush_buf = _make_flush_buf()
 
-        # Use a MagicMock as flush_buf since ColumnarBuffer has __slots__
         flush_buf = MagicMock()
         flush_buf.row_count = 2
         flush_buf.to_row_dicts = MagicMock(side_effect=RuntimeError("disk full"))

@@ -20,7 +20,7 @@ def load_traces(path: str | Path) -> list[dict[str, Any]]:
             continue
         try:
             obj = json.loads(line)
-        except Exception as _exc:  # noqa: BLE001
+        except Exception as _exc:
             logger.debug("skipping_malformed_trace_line", error=str(_exc))
             continue
         if isinstance(obj, dict):

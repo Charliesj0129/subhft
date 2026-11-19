@@ -14,15 +14,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-# Force Python position tracker (no Rust dependency in unit tests)
 os.environ["HFT_RUST_POSITIONS"] = "0"
 
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_fill(
@@ -117,15 +112,10 @@ def _make_position_store():
         return store
 
 
-# ---------------------------------------------------------------------------
-# 1. Float rejection at risk boundary
-# ---------------------------------------------------------------------------
-
-
 class TestFloatRejection:
     def test_float_price_rejected_by_risk_engine(self, tmp_path):
         engine = _make_risk_engine(tmp_path)
-        intent = _make_intent(price=100.5)  # float price
+        intent = _make_intent(price=100.5)
         decision = engine.evaluate(intent)
         assert not decision.approved
         assert decision.reason_code == "FLOAT_PRICE"
@@ -134,13 +124,7 @@ class TestFloatRejection:
         engine = _make_risk_engine(tmp_path)
         intent = _make_intent(price=1_000_000)
         decision = engine.evaluate(intent)
-        # Should not be rejected for FLOAT_PRICE
         assert decision.reason_code != "FLOAT_PRICE"
-
-
-# ---------------------------------------------------------------------------
-# 2. Scaled int round-trip
-# ---------------------------------------------------------------------------
 
 
 class TestScaledIntRoundTrip:
@@ -153,7 +137,7 @@ class TestScaledIntRoundTrip:
         sell = _make_fill(side=Side.SELL, qty=10, price=1_010_000, ts=2)
         delta = store.on_fill(sell)
 
-        expected_pnl = (1_010_000 - 1_000_000) * 10  # 100_000
+        expected_pnl = (1_010_000 - 1_000_000) * 10
         assert delta.realized_pnl == expected_pnl
         assert delta.realized_pnl == 100_000
         assert delta.net_qty == 0
@@ -167,14 +151,9 @@ class TestScaledIntRoundTrip:
         buy = _make_fill(side=Side.BUY, qty=5, price=1_990_000, ts=2)
         delta = store.on_fill(buy)
 
-        expected_pnl = (2_000_000 - 1_990_000) * 5  # 50_000
+        expected_pnl = (2_000_000 - 1_990_000) * 5
         assert delta.realized_pnl == expected_pnl
         assert delta.realized_pnl == 50_000
-
-
-# ---------------------------------------------------------------------------
-# 3. Position PnL is exact integer (no float drift)
-# ---------------------------------------------------------------------------
 
 
 class TestPositionPnlNoDrift:
@@ -187,15 +166,10 @@ class TestPositionPnlNoDrift:
             store.on_fill(buy)
             sell = _make_fill(side=Side.SELL, qty=1, price=1_000_100, ts=i * 2 + 2)
             delta = store.on_fill(sell)
-            total_pnl += 100  # each round-trip: 100 scaled units
+            total_pnl += 100
 
         assert delta.realized_pnl == total_pnl
         assert isinstance(delta.realized_pnl, int)
-
-
-# ---------------------------------------------------------------------------
-# 4. Normalizer output type contract
-# ---------------------------------------------------------------------------
 
 
 class TestNormalizerOutputType:
@@ -218,11 +192,6 @@ class TestNormalizerOutputType:
                 assert isinstance(price, int), f"Normalizer price must be int, got {type(price)}"
 
 
-# ---------------------------------------------------------------------------
-# 5. Edge cases: zero price, large price, fee accumulation
-# ---------------------------------------------------------------------------
-
-
 class TestEdgeCases:
     def test_zero_price_fill(self):
         """Zero price fill should not cause division or drift errors."""
@@ -235,19 +204,19 @@ class TestEdgeCases:
     def test_large_price_scale(self):
         """Large scaled prices should not overflow in Python (arbitrary precision)."""
         store = _make_position_store()
-        large_price = 999_999_999_999  # ~100M NTD x10000
+        large_price = 999_999_999_999
         buy = _make_fill(side=Side.BUY, qty=1000, price=large_price, ts=1)
         store.on_fill(buy)
         sell = _make_fill(side=Side.SELL, qty=1000, price=large_price + 1, ts=2)
         delta = store.on_fill(sell)
-        assert delta.realized_pnl == 1000  # (large_price+1 - large_price) * 1000
+        assert delta.realized_pnl == 1000
 
     def test_fee_accumulation_exact(self):
         """Fees accumulate exactly over multiple fills."""
         store = _make_position_store()
         total_fees = 0
         for i in range(50):
-            fill = _make_fill(side=Side.BUY, qty=1, price=1_000_000, fee=150, tax=50, ts=i + 1)  # fee is all-in
+            fill = _make_fill(side=Side.BUY, qty=1, price=1_000_000, fee=150, tax=50, ts=i + 1)
             store.on_fill(fill)
             total_fees += 150
 
@@ -255,11 +224,6 @@ class TestEdgeCases:
         pos = store.positions[key]
         assert pos.fees_scaled == total_fees
         assert pos.fees_scaled == 7500
-
-
-# ---------------------------------------------------------------------------
-# 6. Avg price weighted average
-# ---------------------------------------------------------------------------
 
 
 class TestAvgPrice:
@@ -273,14 +237,8 @@ class TestAvgPrice:
 
         key = "acc1:test_strat:2330"
         pos = store.positions[key]
-        # Weighted avg = (2*1_000_000 + 3*1_100_000) / 5 = 5_300_000 / 5 = 1_060_000
         assert pos.avg_price_scaled == 1_060_000
         assert pos.net_qty == 5
-
-
-# ---------------------------------------------------------------------------
-# 7. Multiple partial closes
-# ---------------------------------------------------------------------------
 
 
 class TestPartialCloses:
@@ -293,7 +251,7 @@ class TestPartialCloses:
         sell = _make_fill(side=Side.SELL, qty=3, price=1_050_000, ts=2)
         delta = store.on_fill(sell)
         assert delta.net_qty == 7
-        assert delta.realized_pnl == (1_050_000 - 1_000_000) * 3  # 150_000
+        assert delta.realized_pnl == (1_050_000 - 1_000_000) * 3
 
     def test_two_partial_closes_cumulative_pnl(self):
         """Two partial closes accumulate PnL correctly."""
@@ -311,11 +269,6 @@ class TestPartialCloses:
         assert delta.net_qty == 0
 
 
-# ---------------------------------------------------------------------------
-# 8. Position flip PnL
-# ---------------------------------------------------------------------------
-
-
 class TestPositionFlip:
     def test_long_to_short_flip(self):
         """Flipping from long to short realizes full close PnL."""
@@ -326,14 +279,9 @@ class TestPositionFlip:
         sell = _make_fill(side=Side.SELL, qty=8, price=1_100_000, ts=2)
         delta = store.on_fill(sell)
 
-        # Close 5 long @ profit, open 3 short
         assert delta.net_qty == -3
-        assert delta.realized_pnl == (1_100_000 - 1_000_000) * 5  # 500_000
+        assert delta.realized_pnl == (1_100_000 - 1_000_000) * 5
 
-
-# ---------------------------------------------------------------------------
-# 9. Hypothesis property tests
-# ---------------------------------------------------------------------------
 
 try:
     from hypothesis import given, settings
@@ -383,9 +331,9 @@ class TestHypothesisPrecision:
 
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=100_000, max_value=50_000_000),  # buy price
-        st.integers(min_value=100_000, max_value=50_000_000),  # sell price
-        st.integers(min_value=1, max_value=1000),  # qty
+        st.integers(min_value=100_000, max_value=50_000_000),
+        st.integers(min_value=100_000, max_value=50_000_000),
+        st.integers(min_value=1, max_value=1000),
     )
     def test_pnl_sign_invariant(self, buy_price, sell_price, qty):
         """Long PnL sign: positive iff sell > buy."""
@@ -406,8 +354,8 @@ class TestHypothesisPrecision:
 
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=1, max_value=5000),  # fee per fill
-        st.integers(min_value=1, max_value=20),  # number of fills
+        st.integers(min_value=1, max_value=5000),
+        st.integers(min_value=1, max_value=20),
     )
     def test_fee_monotonicity(self, fee_per_fill, n_fills):
         """Fees are monotonically non-decreasing."""
@@ -424,8 +372,8 @@ class TestHypothesisPrecision:
 
     @settings(max_examples=50)
     @given(
-        st.integers(min_value=1, max_value=100),  # buy qty
-        st.integers(min_value=1, max_value=100),  # sell qty
+        st.integers(min_value=1, max_value=100),
+        st.integers(min_value=1, max_value=100),
     )
     def test_position_conservation(self, buy_qty, sell_qty):
         """net_qty = total_buys - total_sells."""

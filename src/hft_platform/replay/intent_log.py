@@ -17,23 +17,6 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-# Goal §7 optional parity fields: intentionally EMPTY (R7, 2026-06-04).
-#
-# The canonical comparison digest must stay symmetric between the replay side
-# (built here from OrderIntent objects) and the live side (projected from the
-# ``hft.order_intents`` ClickHouse table).  Earlier this listed three fields;
-# review found:
-#   * ``force_flat_triggered`` — redundant: a force-flat intent already shows
-#     up via ``intent_type == FORCE_FLAT`` in the digest.
-#   * ``risk_filter_active``   — wrong layer: risk runs AFTER the strategy emits
-#     the intent, so it is a ``RiskDecision`` property, not an OrderIntent one.
-#   * ``session_phase``        — now recorded on OrderIntent (see
-#     ``StrategyRunner.filter_intents_by_phase``) but kept OUT of the digest:
-#     the live side can't carry it until ``hft.order_intents`` gains a column,
-#     so emitting it only on the replay side would create a one-sided
-#     divergence on every record and collapse match_pct.  The replay-parity
-#     gate instead reports it as an uncovered dimension (honest: recorded but
-#     not yet live-comparable).
 _OPTIONAL_PARITY_FIELDS: tuple[str, ...] = ()
 
 
@@ -95,9 +78,6 @@ class _DictIntent:
     timestamp_ns: int = 0
     decision_price: int = 0
     price_type: str = "LMT"
-    # Mirrors OrderIntent.session_phase (§7 parity groundwork). Not emitted
-    # into the canonical digest while _OPTIONAL_PARITY_FIELDS is empty; kept
-    # so a jsonl fixture carrying the key round-trips onto the same attribute.
     session_phase: str | None = None
 
 
@@ -144,13 +124,8 @@ class ReplayedIntentLog:
             if not line:
                 continue
             d = json.loads(line)
-            # Canonical fixtures store timestamp_us (microseconds, rounded).
-            # Promote it to timestamp_ns so _intent_to_canonical(...) round-trips
-            # to the same bucket: timestamp_us = (timestamp_us * 1000) // 1000.
             if "timestamp_us" in d and "timestamp_ns" not in d:
                 d["timestamp_ns"] = int(d.pop("timestamp_us")) * 1000
-            # Drop any keys _DictIntent doesn't accept (defensive against
-            # canonical-schema additions in future slices).
             d = {k: v for k, v in d.items() if k in allowed}
             log.intents.append(_DictIntent(**d))
         return log

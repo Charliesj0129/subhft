@@ -18,7 +18,6 @@ EXPECTED_FUTURES = {
 def _load_symbols() -> list[dict]:
     with open(SYMBOLS_PATH) as f:
         data = yaml.safe_load(f)
-    # Handle both flat list and dict with 'symbols' key
     if isinstance(data, dict):
         return data.get("symbols", data.get("list", []))
     return data if isinstance(data, list) else []

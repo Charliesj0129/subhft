@@ -23,7 +23,7 @@ import pytest
 
 SECRET_KEY = "sj-key-ZX81QPLMsentinel"
 SECRET_PASSWORD = "ch-pw-7Qm2sentinel-A"
-SECRET_PASSWORD_ROTATED = "ch-pw-7Qm2sentinel-B"  # same length: a length-only mask could not see the change
+SECRET_PASSWORD_ROTATED = "ch-pw-7Qm2sentinel-B"
 CHAT_ID = "-100998877665sentinel"
 MODE_VALUE = "sentinel-live-mode"
 ENV_FILE_SENTINEL = "dotenv-sentinel-4417"
@@ -133,11 +133,9 @@ def test_snapshot_does_not_persist_env_values(guard, project, tmp_path):
     written = _text_tree(out)
     for value in PLAIN_VALUES:
         assert value not in written
-    # names stay, so a drift report can say WHICH variable moved
     engine = json.loads(snap.read_text(encoding="utf-8"))["compose"]["runtime_env"]["hft-engine"]
     assert set(engine["env_digests"]) == set(_engine_env())
     assert "env" not in engine
-    # an unsalted hash of the plaintext lines is brute-forceable for low-entropy values (account ids)
     plain_lines = "\n".join(f"{k}={v}" for k, v in sorted(_engine_env().items()))
     assert engine["env_sha256"] != hashlib.sha256(plain_lines.encode()).hexdigest()
 
@@ -189,7 +187,7 @@ def test_added_and_removed_variables_are_reported_by_name(guard, project, tmp_pa
 def test_baseline_taken_with_another_digest_key_fails_closed(guard, project, tmp_path):
     out = tmp_path / "out"
     baseline = _snapshot(guard, project, out)
-    (out / ".digest_key").unlink()  # the next run mints a different key
+    (out / ".digest_key").unlink()
 
     rc, result = _check(guard, project, out, baseline)
 
@@ -209,7 +207,7 @@ def test_digest_key_is_created_once_and_reused(guard, project, tmp_path):
     assert engine1["digest_key_id"] == engine2["digest_key_id"]
     assert engine1["env_digests"] == engine2["env_digests"]
     assert len(key_text) == 64
-    assert key_text not in _text_tree(out / "snapshots")  # the key itself is never written next to its digests
+    assert key_text not in _text_tree(out / "snapshots")
 
 
 def _legacy_baseline(path: Path) -> None:
@@ -327,7 +325,7 @@ def test_backup_tarball_keeps_dotenv_for_rollback_and_is_private(guard, project,
 
     tar_path = next((out / "pre_sync").glob("CHG-2_*/backup_CHG-2.tar.gz"))
     with tarfile.open(tar_path, "r:gz") as tar:
-        assert ".env" in tar.getnames()  # rollback fidelity: restoring the tree restores .env
+        assert ".env" in tar.getnames()
     assert stat.S_IMODE(tar_path.stat().st_mode) & 0o077 == 0
     pre_sync = json.loads(next((out / "pre_sync").glob("CHG-2_*/pre_sync_snapshot.json")).read_text("utf-8"))
     engine = pre_sync["compose"]["runtime_env"]["hft-engine"]

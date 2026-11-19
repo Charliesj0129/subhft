@@ -26,7 +26,7 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
             inst.shutdown = AsyncMock()
             inst.set_health_tracker = MagicMock()
             svc = RecorderService(queue)
-            svc.writer = inst  # keep reference
+            svc.writer = inst
             svc.recover_wal = AsyncMock()
         return svc
 
@@ -42,13 +42,11 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
         async def fast_writer_shutdown():
             pass
 
-        # Patch batchers with fast coroutines
         mock_batcher = MagicMock()
         mock_batcher.force_flush = AsyncMock(side_effect=fast_flush)
         svc.batchers = {"market_data": mock_batcher}
         svc.writer.shutdown = AsyncMock(side_effect=fast_writer_shutdown)
 
-        # Should complete without timeout (default 60 s, operation is instant)
         with patch.dict(os.environ, {"HFT_RECORDER_SHUTDOWN_TIMEOUT_S": "5"}):
             await svc._shutdown_flush()
 
@@ -60,7 +58,7 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
         svc = self._make_service()
 
         async def slow_flush():
-            await asyncio.sleep(999)  # simulate hung CH connection
+            await asyncio.sleep(999)
 
         mock_batcher = MagicMock()
         mock_batcher.force_flush = AsyncMock(side_effect=slow_flush)
@@ -73,7 +71,6 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(svc._shutdown_flush(), timeout=timeout_s)
         elapsed = asyncio.get_event_loop().time() - start
 
-        # Must complete well within 1 second, not 17 minutes
         assert elapsed < 1.0, f"Shutdown took {elapsed:.2f}s, expected < 1s"
 
     async def test_shutdown_timeout_logs_error_via_run_cancellation(self):
@@ -111,7 +108,6 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
                 except asyncio.CancelledError:
                     pass
 
-                # The timeout error log should have been emitted
                 error_calls = [
                     c
                     for c in mock_logger.error.call_args_list
@@ -143,7 +139,6 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.TimeoutError):
                 await asyncio.wait_for(svc._shutdown_flush(), timeout=_t)
 
-        # The cancellation should have happened near the configured timeout
         assert durations, "flush coroutine was cancelled (confirming timeout fired)"
         assert durations[0] < timeout_s + 0.5, "cancelled within expected window"
 
@@ -164,7 +159,6 @@ class TestRecorderShutdownFlushTimeout(unittest.IsolatedAsyncioTestCase):
         b2 = MagicMock()
         b2.force_flush = AsyncMock(side_effect=good_flush)
 
-        # dict preserves insertion order (Python 3.7+)
         svc.batchers = {"bad": b1, "good": b2}
         svc.writer.shutdown = AsyncMock()
 

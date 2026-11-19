@@ -12,10 +12,6 @@ import os
 import sys
 from unittest.mock import patch
 
-# ---------------------------------------------------------------------------
-# Helpers: import the module under test
-# ---------------------------------------------------------------------------
-
 
 def _import_module():
     import hft_platform.recorder._loader_common as m
@@ -23,20 +19,10 @@ def _import_module():
     return m
 
 
-# ---------------------------------------------------------------------------
-# PRICE_SCALE
-# ---------------------------------------------------------------------------
-
-
 class TestPriceScaleConstant:
     def test_price_scale_value(self) -> None:
         m = _import_module()
         assert m.PRICE_SCALE == 1_000_000
-
-
-# ---------------------------------------------------------------------------
-# _to_scaled
-# ---------------------------------------------------------------------------
 
 
 class TestToScaled:
@@ -54,12 +40,10 @@ class TestToScaled:
 
     def test_float_value(self) -> None:
         m = _import_module()
-        # 100.5 * 1_000_000 = 100_500_000
         assert m._to_scaled(100.5) == 100_500_000
 
     def test_small_float(self) -> None:
         m = _import_module()
-        # 0.001 * 1_000_000 = 1000
         assert m._to_scaled(0.001) == 1000
 
     def test_negative_value(self) -> None:
@@ -68,23 +52,16 @@ class TestToScaled:
 
     def test_rounding(self) -> None:
         m = _import_module()
-        # 1.0000005 * 1e6 = 1000000.5 → rounds to 1000001
         result = m._to_scaled(1.0000005)
         assert isinstance(result, int)
 
     def test_large_price(self) -> None:
         m = _import_module()
-        # 50000 (TAIEX-like) * 1e6
         assert m._to_scaled(50000) == 50_000 * 1_000_000
 
     def test_returns_int_type(self) -> None:
         m = _import_module()
         assert isinstance(m._to_scaled(1.23), int)
-
-
-# ---------------------------------------------------------------------------
-# JSON codec (_dumps / _loads)
-# ---------------------------------------------------------------------------
 
 
 class TestJsonCodec:
@@ -113,18 +90,11 @@ class TestJsonCodec:
 
     def test_loads_handles_bytes_input(self) -> None:
         m = _import_module()
-        # Both orjson and stdlib json can handle bytes
         try:
             result = m._loads(b'{"x": 2}')
             assert result == {"x": 2}
         except TypeError:
-            # stdlib json does not accept bytes on older Python — acceptable
             pass
-
-
-# ---------------------------------------------------------------------------
-# Retry defaults
-# ---------------------------------------------------------------------------
 
 
 class TestRetryDefaults:
@@ -141,24 +111,15 @@ class TestRetryDefaults:
         assert m.DEFAULT_INSERT_MAX_BACKOFF_S == 5.0
 
 
-# ---------------------------------------------------------------------------
-# _TS_MAX_FUTURE_NS env-var parsing
-# ---------------------------------------------------------------------------
-
-
 class TestTsMaxFutureNs:
     def test_default_is_positive_ns(self) -> None:
         m = _import_module()
-        # Default env value "5" seconds → 5 * 1e9 = 5_000_000_000 ns
-        # May already be initialised; just verify type and plausible range.
         assert isinstance(m._TS_MAX_FUTURE_NS, int)
-        # Either the env-parsed value (>0) or 0 (disabled on bad parse)
         assert m._TS_MAX_FUTURE_NS >= 0
 
     def test_env_var_parsed_to_nanoseconds(self) -> None:
         """Reload module with a known env var to verify parsing."""
         mod_name = "hft_platform.recorder._loader_common"
-        # Remove cached module so it is re-imported fresh
         cached = sys.modules.pop(mod_name, None)
         try:
             with patch.dict(os.environ, {"HFT_TS_MAX_FUTURE_S": "10"}):
@@ -167,7 +128,6 @@ class TestTsMaxFutureNs:
                 importlib.reload(fresh_m)
                 assert fresh_m._TS_MAX_FUTURE_NS == int(10 * 1e9)
         finally:
-            # Restore original module
             sys.modules.pop(mod_name, None)
             if cached is not None:
                 sys.modules[mod_name] = cached
@@ -186,11 +146,6 @@ class TestTsMaxFutureNs:
             sys.modules.pop(mod_name, None)
             if cached is not None:
                 sys.modules[mod_name] = cached
-
-
-# ---------------------------------------------------------------------------
-# __all__ completeness
-# ---------------------------------------------------------------------------
 
 
 class TestAllExports:

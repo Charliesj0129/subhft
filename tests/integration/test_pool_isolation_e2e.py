@@ -27,7 +27,7 @@ class TestSingleFacadeFailureIsolation:
             facade.logged_in = True
             facade.reconnect.return_value = True
             slot = FacadeSlot(conn_id=str(i), facade=facade)
-            slot.state = FacadeState.CONNECTED  # simulate post-subscribe
+            slot.state = FacadeState.CONNECTED
             slot.symbols = {f"SYM_{i}_A", f"SYM_{i}_B"}
             slot.last_data_mono = time.monotonic()
             slots.append(slot)
@@ -35,7 +35,6 @@ class TestSingleFacadeFailureIsolation:
 
     def test_single_drop_isolates_to_degraded(self):
         slots = self._make_slots()
-        # conn_2 stops receiving data 8s ago
         slots[2].last_data_mono = time.monotonic() - 8.0
 
         check_facade_health(slots, degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=lambda _: None)
@@ -79,7 +78,6 @@ class TestSingleFacadeFailureIsolation:
         slots = self._make_slots()
         slots[1].state = FacadeState.DEGRADED
 
-        # Simulate pool.reconnect behavior
         for slot in slots:
             if slot.state != FacadeState.CONNECTED:
                 slot.facade.reconnect(reason="test")
@@ -94,7 +92,7 @@ class TestSingleFacadeFailureIsolation:
         """A brief gap < degraded_threshold recovers automatically."""
         slots = self._make_slots()
         slots[0].state = FacadeState.DEGRADED
-        slots[0].last_data_mono = time.monotonic() - 1.0  # gap < 3s
+        slots[0].last_data_mono = time.monotonic() - 1.0
 
         check_facade_health(slots, degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=lambda _: None)
 

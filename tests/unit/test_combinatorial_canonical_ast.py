@@ -93,9 +93,6 @@ def test_unary_minus_produces_neg_node_and_unary_plus_is_identity():
     assert _canon("+x") == _canon("x")
 
 
-# --- Phase 3: OPERATOR_ARG_ROLES / role_positions / crossover / unparse ---
-
-
 def test_operator_arg_roles_table_covers_every_call_form_operator_and_sub_neg():
     from research.combinatorial.operator_library import OPERATORS
 
@@ -133,7 +130,7 @@ def test_unparse_roundtrips_to_semantically_identical_expression_for_every_opera
         "mul(x, y)",
         "rank(x)",
         "sign(x)",
-        "x - y",  # sub — no Call form; canonical_string would print invalid sub(x,y)
+        "x - y",
         "ts_corr(x, y, 3)",
         "ts_delta(x, 3)",
         "ts_mean(x, 3)",
@@ -141,7 +138,7 @@ def test_unparse_roundtrips_to_semantically_identical_expression_for_every_opera
         "ts_std(x, 3)",
         "ts_sum(x, 3)",
         "zscore(x, 3)",
-        "-x",  # neg — no Call form; canonical_string would print invalid neg(x)
+        "-x",
     ]
     for expr in expressions:
         unparsed = unparse(to_typed_ast(expr))
@@ -151,9 +148,6 @@ def test_unparse_roundtrips_to_semantically_identical_expression_for_every_opera
 
 
 def test_unparse_negative_const_node_has_no_double_sign_and_is_valid_syntax():
-    # Not reachable via to_typed_ast today (negative literals always arrive as
-    # neg(...) — see test_unary_minus_produces_neg_node_and_unary_plus_is_identity)
-    # but guards a future caller constructing ConstNode(-5.0) directly.
     text = unparse(ConstNode(-5.0))
     assert "--" not in text
     result = compile_expression(text).evaluate({"x": np.array([1.0, 2.0])})
@@ -175,26 +169,17 @@ class _ScriptedRng:
 
 
 def test_crossover_replaces_intended_occurrence_by_identity_not_leftmost_equal_node():
-    # x - x (sub has no Call form — see test_unparse_roundtrips... — so this is
-    # built via BinOp syntax): two structurally-equal (dataclass __eq__) but
-    # distinct (is) VarNode("x") objects. A `==`-based (rather than `is`-based)
-    # replacement would silently hit the leftmost occurrence regardless of which
-    # node was actually selected — undetectable with a commutative op (add), so
-    # this deliberately uses non-commutative sub.
     tree = to_typed_ast("x - x")
     left, right = tree.args
     assert left == right
     assert left is not right
 
-    # Call sequence inside crossover(): 1) common_roles -> "signal", 2) target from
-    # roles_a["signal"] = [root, left_x, right_x] -> index 2 (right_x, NOT left_x),
-    # 3) donor from roles_b["signal"] = [root_b, y_node, z_node] -> index 1 (y_node).
     rng = _ScriptedRng(["signal", 2, 1])
     child = crossover("x - x", "y - z", rng)
 
-    assert child == "(x - y)"  # right_x replaced -> x stays left, y takes right's place
+    assert child == "(x - y)"
     result = compile_expression(child).evaluate({"x": np.array([1.0]), "y": np.array([2.0])})
-    assert np.allclose(result, -1.0)  # x - y = 1 - 2; would be y - x = 1.0 if leftmost were hit
+    assert np.allclose(result, -1.0)
 
 
 def test_crossover_never_produces_uncaught_typeerror_across_many_seeds():
@@ -221,6 +206,6 @@ def test_crossover_never_produces_uncaught_typeerror_across_many_seeds():
             compiled = compile_expression(child)
         except ValueError:
             continue
-        compiled.evaluate(features)  # must never raise TypeError
+        compiled.evaluate(features)
         successes += 1
     assert successes > 0

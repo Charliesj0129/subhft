@@ -169,11 +169,9 @@ class TestMakerEngineTradePnlPopulation:
         assert result.daily_pnl and len(result.daily_pnl) == 1
         day_net = result.daily_pnl[0]["pnl_pts"]
         assert sum(result.trade_pnl) == pytest.approx(day_net, abs=1e-6)
-        # Zero cost & zero residual -> per-trip equals gross: +5 and +4.
         assert sorted(round(t, 6) for t in result.trade_pnl) == [4.0, 5.0]
 
     def test_trade_pnl_absorbs_per_fill_cost_allocation(self) -> None:
-        # 4 fills * 0.5 pts = 2.0 pts cost spread over 2 trips => 1.0 pt each.
         result = _engine(_PerFillCost()).run(
             strategy=_SequencedStrategy(),
             instrument="TEST",
@@ -181,15 +179,11 @@ class TestMakerEngineTradePnlPopulation:
             pipeline_mode="strict",
         )
         assert result.trade_pnl is not None and len(result.trade_pnl) == 2
-        # Gross trips were +5 and +4; each loses 1.0 pt cost -> +4 and +3.
         assert sorted(round(t, 6) for t in result.trade_pnl) == [3.0, 4.0]
-        # Invariant: sum equals day_net.
         day_net = result.daily_pnl[0]["pnl_pts"]
         assert sum(result.trade_pnl) == pytest.approx(day_net, abs=1e-6)
 
     def test_trade_pnl_none_when_no_trips_close(self) -> None:
-        # Reuse the residual-long fixture pattern: 1 buy fill, no closing
-        # sell -> 0 trips -> trade_pnl should be None.
         class _BuyOnly:
             def __init__(self) -> None:
                 self._done = False
@@ -220,5 +214,4 @@ class TestMakerEngineTradePnlPopulation:
             pipeline_mode="strict",
         )
         assert result.daily_pnl[0]["trips"] == 0
-        # Zero trips -> field stays None so downstream gates fall back to daily.
         assert result.trade_pnl is None

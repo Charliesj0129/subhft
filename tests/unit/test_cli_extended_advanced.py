@@ -162,7 +162,6 @@ def test_cmd_alpha_validate(monkeypatch, capsys, tmp_path):
         "hft_platform.alpha.validation",
         types.SimpleNamespace(ValidationConfig=_ValidationConfig, run_alpha_validation=_run_alpha_validation),
     )
-    # L6: bypass strict-profile guard with a fake strict profile.
     from hft_platform.cli import _alpha as _alpha_mod
 
     monkeypatch.setattr(

@@ -16,9 +16,6 @@ from pathlib import Path
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Data enrichment: derive fields from raw golden data
-# ---------------------------------------------------------------------------
 
 def enrich_data(data: np.ndarray) -> dict[str, np.ndarray]:
     """Derive all fields needed by alpha candidates from raw golden data.
@@ -36,7 +33,6 @@ def enrich_data(data: np.ndarray) -> dict[str, np.ndarray]:
     total_qty = bid_qty + ask_qty
     safe_total = np.where(total_qty > 0, total_qty, 1.0)
 
-    # microprice_x2: volume-weighted microprice × 2 (scaled int convention)
     microprice = np.where(
         total_qty > 0,
         (bid_px * ask_qty + ask_px * bid_qty) / safe_total,
@@ -44,23 +40,18 @@ def enrich_data(data: np.ndarray) -> dict[str, np.ndarray]:
     )
     microprice_x2 = (microprice * 2.0).astype(np.float64)
 
-    # spread_scaled: (ask - bid) × 10000
     spread_scaled = ((ask_px - bid_px) * 10000.0).astype(np.float64)
 
-    # mid_price_x2
     mid_price_x2 = (mid_price * 2.0).astype(np.float64)
 
-    # OFI L1 raw: tick-by-tick order flow imbalance
     ofi_l1_raw = np.zeros(n, dtype=np.float64)
     for i in range(1, n):
-        # Bid flow
         if bid_px[i] > bid_px[i - 1]:
             b_flow = bid_qty[i]
         elif bid_px[i] == bid_px[i - 1]:
             b_flow = bid_qty[i] - bid_qty[i - 1]
         else:
             b_flow = -bid_qty[i - 1]
-        # Ask flow
         if ask_px[i] > ask_px[i - 1]:
             a_flow = -ask_qty[i - 1]
         elif ask_px[i] == ask_px[i - 1]:
@@ -69,7 +60,6 @@ def enrich_data(data: np.ndarray) -> dict[str, np.ndarray]:
             a_flow = ask_qty[i]
         ofi_l1_raw[i] = b_flow - a_flow
 
-    # Imbalance PPM
     l1_imbalance_ppm = np.where(
         total_qty > 0,
         ((bid_qty - ask_qty) / safe_total * 1_000_000).astype(np.int64),
@@ -86,18 +76,15 @@ def enrich_data(data: np.ndarray) -> dict[str, np.ndarray]:
         "microprice_x2": microprice_x2,
         "spread_scaled": spread_scaled,
         "mid_price_x2": mid_price_x2,
-        "l1_bid_qty": bid_qty,  # alias
-        "l1_ask_qty": ask_qty,  # alias
+        "l1_bid_qty": bid_qty,
+        "l1_ask_qty": ask_qty,
         "ofi_l1_raw": ofi_l1_raw,
         "l1_imbalance_ppm": l1_imbalance_ppm,
-        "trade_vol": volume,  # alias
-        "current_mid": mid_price,  # alias
+        "trade_vol": volume,
+        "current_mid": mid_price,
     }
 
 
-# ---------------------------------------------------------------------------
-# Signal quality metrics
-# ---------------------------------------------------------------------------
 
 def compute_forward_returns(mid_price: np.ndarray, horizons: tuple[int, ...] = (1, 5, 10, 20)) -> dict[int, np.ndarray]:
     """Compute forward returns at multiple horizons."""
@@ -138,7 +125,6 @@ def signal_stats(signal: np.ndarray) -> dict:
     if len(valid) == 0:
         return {"mean": 0, "std": 0, "nonzero_pct": 0, "autocorr_1": 0}
     nonzero = (valid != 0.0).sum() / len(valid) * 100
-    # Lag-1 autocorrelation
     if len(valid) > 1 and valid.std() > 1e-12:
         ac1 = float(np.corrcoef(valid[:-1], valid[1:])[0, 1])
     else:
@@ -163,16 +149,10 @@ def oos_split_eval(signal: np.ndarray, fwd_ret: np.ndarray, oos_ratio: float = 0
     }
 
 
-# ---------------------------------------------------------------------------
-# Alpha runners
-# ---------------------------------------------------------------------------
 
 ALPHA_RUNNERS: dict[str, object] = {}
 
 
-# ---------------------------------------------------------------------------
-# Main evaluation
-# ---------------------------------------------------------------------------
 
 def main():
     import argparse
@@ -183,23 +163,19 @@ def main():
     parser.add_argument("--oos-ratio", default=0.3, type=float, help="OOS split ratio")
     args = parser.parse_args()
 
-    # Load data
     print(f"Loading {args.data}...")
     raw = np.load(args.data)
     data = raw["data"] if "data" in raw else raw[list(raw.keys())[0]]
     n = len(data)
     print(f"  {n:,} ticks, fields: {list(data.dtype.names)}")
 
-    # Enrich
     print("Enriching data with derived fields...")
     fields = enrich_data(data)
 
-    # Forward returns
     horizons = tuple(int(x) for x in args.horizons.split(","))
     print(f"Computing forward returns at horizons {horizons}...")
     fwd_rets = compute_forward_returns(fields["mid_price"], horizons)
 
-    # Run all alphas
     results = {}
     for alpha_id, runner in ALPHA_RUNNERS.items():
         print(f"\n{'='*60}")
@@ -210,7 +186,6 @@ def main():
             print(f"  Signal stats: mean={stats['mean']:.6f}, std={stats['std']:.6f}, "
                   f"nonzero={stats['nonzero_pct']:.1f}%, AC1={stats['autocorr_1']:.3f}")
 
-            # IC and Sharpe at each horizon
             horizon_results = {}
             for h in horizons:
                 ic = information_coefficient(signal, fwd_rets[h])
@@ -218,7 +193,6 @@ def main():
                 horizon_results[f"h{h}"] = {"ic": round(ic, 4), "sharpe": round(sharpe, 2)}
                 print(f"  h={h:3d}: IC={ic:+.4f}  Sharpe={sharpe:+.1f}")
 
-            # OOS split at h=5
             oos = oos_split_eval(signal, fwd_rets[5], args.oos_ratio)
             print(f"  OOS split (h=5): IC_IS={oos['ic_is']:+.4f} IC_OOS={oos['ic_oos']:+.4f} "
                   f"Sharpe_IS={oos['sharpe_is']:+.1f} Sharpe_OOS={oos['sharpe_oos']:+.1f}")
@@ -233,7 +207,6 @@ def main():
             print(f"  ERROR: {e}")
             results[alpha_id] = {"status": "error", "error": str(e)}
 
-    # Summary table
     print(f"\n{'='*80}")
     print(f"{'ALPHA COMPARISON SUMMARY':^80}")
     print(f"{'='*80}")
@@ -258,7 +231,6 @@ def main():
         marker = " ★" if ic > 0.01 else ""
         print(f"  {i}. {alpha_id}: IC_OOS={ic:+.4f}, Sharpe_OOS={sh:+.1f}{marker}")
 
-    # Save
     output = {"data_path": args.data, "ticks": n, "oos_ratio": args.oos_ratio, "results": results}
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

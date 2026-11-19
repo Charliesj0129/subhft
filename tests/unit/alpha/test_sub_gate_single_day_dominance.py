@@ -32,7 +32,7 @@ class TestSingleDayDominanceGate:
         gate = SingleDayDominanceGate()
         r = _FakeResult(daily_pnl=[100.0, -1.0, -1.0, -1.0])
         out = gate.evaluate(r, config=None, thresholds={"outlier_day_contribution_max_pct": 50.0})
-        assert out.passed is False  # 100 / (100+1+1+1)*100 ~= 97%
+        assert out.passed is False
 
     def test_handles_negative_total_pnl(self) -> None:
         gate = SingleDayDominanceGate()
@@ -45,4 +45,4 @@ class TestSingleDayDominanceGate:
         gate = SingleDayDominanceGate()
         r = _FakeResult(daily_pnl=[{"pnl_pts": 100.0}, {"pnl_pts": 1.0}])
         out = gate.evaluate(r, config=None, thresholds={"outlier_day_contribution_max_pct": 50.0})
-        assert out.passed is False  # 100/101 ~= 99%
+        assert out.passed is False

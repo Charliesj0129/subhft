@@ -56,14 +56,12 @@ class TestPermissiveDefault:
         engine.get_book("UNKNOWN")
         engine.get_book("UNKNOWN")
         engine.get_book("UNKNOWN")
-        # Only one membership in the warned set — no repeated logging.
         assert engine._unknown_symbol_warned == {"UNKNOWN"}
 
     def test_no_metadata_injected_means_permissive_passthrough(self) -> None:
         engine = LOBEngine()
         book = engine.get_book("ANY_SYMBOL")
         assert book is not None
-        # No metadata → treated as known (cannot compare against a missing map).
         assert "ANY_SYMBOL" not in engine._unknown_symbol_warned
 
     def test_empty_metadata_meta_means_permissive_passthrough(self) -> None:

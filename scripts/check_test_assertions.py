@@ -10,27 +10,23 @@ import ast
 import sys
 from pathlib import Path
 
-# Critical-path directories: zero-assertion tests here cause exit 1.
 CRITICAL_PREFIXES = (
     "tests/unit/test_risk",
     "tests/unit/test_execution",
     "tests/unit/test_order",
     "tests/unit/test_recorder",
-    "tests/unit/test_service",           # matches test_*service*
+    "tests/unit/test_service",
     "tests/unit/test_graceful_shutdown",
 )
 
 
 def _is_critical(entry: str) -> bool:
     """Return True if a no-assert entry line matches a critical-path prefix."""
-    # entry format: "  tests/unit/test_risk_engine.py:42 test_foo"
     path_str = entry.strip().split(":")[0]
     normalized = path_str.replace("\\", "/")
     return any(normalized.startswith(p) for p in CRITICAL_PREFIXES)
 
 
-# Functions that are known test helpers containing assertions internally.
-# Tests delegating to these are considered asserted.
 _HELPER_FUNCTIONS = frozenset({
     "_run_parity",
     "_assert_parity",
@@ -43,7 +39,6 @@ _HELPER_FUNCTIONS = frozenset({
     "verify_result",
 })
 
-# unittest.TestCase assertion methods to detect self.assert*() calls explicitly.
 UNITTEST_ASSERT_METHODS = frozenset({
     "assertEqual",
     "assertNotEqual",
@@ -79,7 +74,6 @@ UNITTEST_ASSERT_METHODS = frozenset({
     "assertLogs",
 })
 
-# Comment marker to allowlist benchmark/smoke tests that intentionally have no assertions.
 _NOQA_MARKER = "# noqa: no-assert"
 
 
@@ -96,34 +90,27 @@ def _is_self_attr(func: ast.expr, prefix: str) -> bool:
 def _has_assertion(node: ast.FunctionDef) -> bool:
     """Check if a test function contains at least one assertion or delegates to an assertion helper."""
     for child in ast.walk(node):
-        # bare ``assert`` statement
         if isinstance(child, ast.Assert):
             return True
-        # regular function / method calls
         if isinstance(child, ast.Call):
             func = child.func
-            # pytest.raises / pytest style
             if isinstance(func, ast.Attribute) and (
                 func.attr == "raises" or func.attr.startswith("assert")
             ):
                 return True
-            # unittest self.assert* (explicit method set), self.fail
             if isinstance(func, ast.Attribute) and func.attr in UNITTEST_ASSERT_METHODS:
                 return True
             if _is_self_attr(func, "assert") or _is_self_attr(func, "fail"):
                 return True
-            # Helper-delegation detection: calls to known assertion helpers
             if isinstance(func, ast.Name) and func.id in _HELPER_FUNCTIONS:
                 return True
             if isinstance(func, ast.Attribute) and func.attr in _HELPER_FUNCTIONS:
                 return True
-        # ``with self.assertRaises(...):`` used as context manager
         if isinstance(child, ast.With):
             for item in child.items:
                 ctx = item.context_expr
                 if isinstance(ctx, ast.Call) and _is_self_attr(ctx.func, "assert"):
                     return True
-        # ``with pytest.raises(...):`` used as context manager
         if isinstance(child, ast.With):
             for item in child.items:
                 ctx = item.context_expr
@@ -134,7 +121,7 @@ def _has_assertion(node: ast.FunctionDef) -> bool:
 
 def _is_allowlisted(source_lines: list[str], node: ast.FunctionDef) -> bool:
     """Check if the test function has a noqa: no-assert comment on its def line."""
-    line_idx = node.lineno - 1  # 0-based
+    line_idx = node.lineno - 1
     if 0 <= line_idx < len(source_lines):
         return _NOQA_MARKER in source_lines[line_idx]
     return False
@@ -161,7 +148,6 @@ def main() -> int:
     no_assert: list[str] = []
 
     for py_file in sorted(tests_dir.rglob("*.py")):
-        # Skip worktree artifacts
         if ".claude/worktrees/" in str(py_file):
             continue
         try:
@@ -198,7 +184,7 @@ def main() -> int:
         return 1
     if args.max_advisory > 0 and len(advisory) > args.max_advisory:
         print(f"\n::error::Advisory zero-assertion count ({len(advisory)}) exceeds "
-              f"threshold ({args.max_advisory}). Fix or allowlist with '# noqa: no-assert'.")
+              f"threshold ({args.max_advisory}). Add assertions that verify the intended behavior.")
         return 1
     return 0
 

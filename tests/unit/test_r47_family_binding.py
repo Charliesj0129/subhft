@@ -54,9 +54,9 @@ class TestContractFamilyParser:
     def test_invalid_entry_skipped_not_raised(self) -> None:
         raw = [
             {"product": "FUTURE", "root": "TMF", "family": "R1"},
-            {"product": "INVALID", "root": "X", "family": "R1"},  # bad product
-            {"product": "FUTURE", "root": "TXF", "family": "BOGUS"},  # bad family
-            {"product": "STOCK", "root": "2330", "family": "R1"},  # rejected: stocks
+            {"product": "INVALID", "root": "X", "family": "R1"},
+            {"product": "FUTURE", "root": "TXF", "family": "BOGUS"},
+            {"product": "STOCK", "root": "2330", "family": "R1"},
         ]
         out = _parse_contract_families(raw)
         assert len(out) == 1
@@ -93,7 +93,7 @@ class TestR47Config:
                             "id": "R47_TEST",
                             "module": "hft_platform.strategies.simple_mm",
                             "class": "SimpleMarketMaker",
-                            "enabled": False,  # avoid instantiation side effects
+                            "enabled": False,
                             "product_type": "FUT",
                             "symbols": ["TMFE6"],
                             "contract_families": [{"product": "FUTURE", "root": "TMF", "family": "R1"}],
@@ -129,7 +129,7 @@ class TestEndToEndBinding:
             (),
             {
                 "strategy_id": "r47_test",
-                "symbols": {"TMFE6"},  # pre-existing hardcode
+                "symbols": {"TMFE6"},
                 "contract_families": (ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1),),
                 "enabled": True,
             },
@@ -137,10 +137,8 @@ class TestEndToEndBinding:
         runner.strategies.append(strat)
         runner._apply_family_bindings(strat)
 
-        # Prior to any snapshot, only the hardcoded symbol is present.
         assert strat.symbols == {"TMFE6"}
 
-        # Populator swap: first snapshot — TMF R1 binds to May 2026.
         resolver.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(5), _tmf(6)]},
@@ -150,7 +148,6 @@ class TestEndToEndBinding:
         )
         assert "TMFE6" in strat.symbols
 
-        # Rollover: May expires, June becomes R1.
         resolver.swap_snapshot(
             build_snapshot_from_calendar(
                 {"TMF": [_tmf(6), _tmf(7)]},
@@ -186,7 +183,6 @@ class TestEndToEndBinding:
             {
                 "strategy_id": "legacy_r47",
                 "symbols": {"TMFE6"},
-                # no contract_families attribute — true legacy
                 "enabled": True,
             },
         )()

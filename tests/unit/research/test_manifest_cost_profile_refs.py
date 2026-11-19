@@ -51,7 +51,6 @@ def test_every_cost_profile_ref_resolves() -> None:
 def test_resolver_returns_cost_model() -> None:
     """Spot check: load_cost_profile must return a usable TAIFEXCost."""
     cost = load_cost_profile("TMFD6")
-    # TAIFEXCost is a dataclass with per-side numeric fields.
     assert hasattr(cost, "commission_pts_per_side")
     assert cost.commission_pts_per_side > 0
 
@@ -97,7 +96,7 @@ def test_from_dict_default_is_permissive() -> None:
         "complexity": "O(1)",
         "completely_made_up_field": 123,
     }
-    m = AlphaManifest.from_dict(body)  # no strict= → False
+    m = AlphaManifest.from_dict(body)
     assert m.alpha_id == "test"
 
 

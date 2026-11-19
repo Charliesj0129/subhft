@@ -21,11 +21,6 @@ _SERIES = np.sin(np.arange(60) / 4.0) + 0.1
 _SIGNAL = np.cos(np.arange(60) / 3.0)
 
 
-# ---------------------------------------------------------------------------
-# Benjamini-Hochberg
-# ---------------------------------------------------------------------------
-
-
 def test_bh_matches_the_retired_definition() -> None:
     result = stats.benjamini_hochberg(_PVALUES, 0.05)
     assert result.rejected.tolist() == [True, True] + [False] * 8
@@ -85,11 +80,6 @@ def test_bh_refuses_a_pvalue_outside_the_unit_interval(bad: float) -> None:
 
 def test_effective_test_count_matches_the_retired_definition() -> None:
     assert stats.effective_test_count(np.vstack([_SERIES, _SIGNAL, _SERIES + _SIGNAL])) == 3
-
-
-# ---------------------------------------------------------------------------
-# Sharpe deflation
-# ---------------------------------------------------------------------------
 
 
 def test_deflated_sharpe_matches_the_retired_definition() -> None:
@@ -170,11 +160,6 @@ def test_sample_skew_kurtosis_is_normal_when_undefined() -> None:
     assert skew > 0.0 and kurt > 1.0
 
 
-# ---------------------------------------------------------------------------
-# Resampling
-# ---------------------------------------------------------------------------
-
-
 def test_moving_block_bootstrap_matches_the_retired_definition() -> None:
     assert stats.moving_block_bootstrap_mean(_SERIES, samples=200, seed=11) == (-0.207270638374547, 0.255)
 
@@ -194,11 +179,6 @@ def test_day_and_stationary_bootstraps_match_the_retired_definitions() -> None:
 def test_block_bootstraps_of_too_few_values_report_no_evidence() -> None:
     assert stats.moving_block_bootstrap_mean([1.0], seed=1) == (0.0, 1.0)
     assert stats.cluster_bootstrap_mean([1.0, 2.0], ["a", "a"], seed=1) == (0.0, 1.0)
-
-
-# ---------------------------------------------------------------------------
-# Information coefficient
-# ---------------------------------------------------------------------------
 
 
 def test_rank_ic_matches_the_retired_definition() -> None:
@@ -240,11 +220,6 @@ def test_min_detectable_ic_shrinks_with_sample_and_detects_nothing_below_four() 
 def test_min_detectable_ic_refuses_a_degenerate_level(alpha: float, power: float) -> None:
     with pytest.raises(ValueError, match="in \\(0, 1\\)"):
         stats.min_detectable_ic(100, alpha=alpha, power=power)
-
-
-# ---------------------------------------------------------------------------
-# Plain Sharpe and chunked IC (research v2 C4)
-# ---------------------------------------------------------------------------
 
 
 def test_sharpe_ratio_is_mean_over_population_std() -> None:

@@ -56,14 +56,13 @@ class FubonSnapshotFetcher:
                 snapshot = self._translate(sym, resp)
                 results.append(snapshot)
                 logger.debug("fubon_snapshot_fetched", symbol=sym)
-            except Exception as _exc:  # noqa: BLE001
+            except Exception as _exc:
                 logger.warning("fubon_snapshot_fetch_failed", symbol=sym, exc_info=True)
         return results
 
     @staticmethod
     def _translate(symbol: str, raw: Any) -> dict[str, Any]:
         """Translate SDK response to canonical snapshot format."""
-        # Support both dict and object attribute access.
         get = raw.get if isinstance(raw, dict) else (lambda key, default=None: getattr(raw, key, default))
 
         return {

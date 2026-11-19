@@ -278,11 +278,6 @@ async def test_notify_reconciliation_mismatch_emits_warn(dispatcher_with_router,
     assert alert.category == "position"
 
 
-# ---------------------------------------------------------------------------
-# Legacy fallback path (no router)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_fallback_to_legacy_when_no_router(mock_sender):
     from hft_platform.notifications.dispatcher import NotificationDispatcher

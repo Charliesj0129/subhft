@@ -118,7 +118,6 @@ symbols: []
     config = load_watchlist(watchlist, symbols)
 
     codes = [s.code for s in config.symbols]
-    # TMFC6 (March) should be filtered because TMFE6 (May) exists
     assert "TMFC6" not in codes
     assert "TMFE6" in codes
 
@@ -156,7 +155,6 @@ symbols: []
     config = load_watchlist(watchlist, symbols)
 
     codes = [s.code for s in config.symbols]
-    # TMFC6 should be kept because it's pinned
     assert "TMFC6" in codes
     assert "TMFE6" in codes
 
@@ -221,13 +219,9 @@ symbols:
 def test_is_expired_contract() -> None:
     """S5: expired contract detection for futures month codes."""
     all_codes = {"TMFC6", "TMFE6", "TMFG6"}
-    # C (March) is expired because E (May) exists
     assert _is_expired_contract("TMFC6", all_codes) is True
-    # E (May) is expired because G (July) exists
     assert _is_expired_contract("TMFE6", all_codes) is True
-    # G (July) is the latest — not expired
     assert _is_expired_contract("TMFG6", all_codes) is False
-    # Stock codes are never expired
     assert _is_expired_contract("2330", {"2330"}) is False
 
 

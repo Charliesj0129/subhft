@@ -43,8 +43,6 @@ def test_kill_ledger_append_lands_in_tmp_path(tmp_path):
 
 
 def test_kill_ledger_dedupe_cache_does_not_leak_between_tests(tmp_path):
-    # Same record as the previous test: a leaked dedupe cache would report a
-    # duplicate and refuse to write into this test's fresh ledger.
     record = KillRecord(alpha_id="isolation_probe", gate="D", reason="fixture isolation probe")
 
     assert kill_ledger.append_kill(record) is True

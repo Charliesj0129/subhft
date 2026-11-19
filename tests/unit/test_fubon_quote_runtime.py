@@ -16,10 +16,6 @@ import time
 from typing import Any
 from unittest.mock import MagicMock
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_sdk() -> MagicMock:
     """Return a mock Fubon SDK with the expected WebSocket API surface."""
@@ -35,11 +31,6 @@ def _make_runtime(sdk: MagicMock | None = None):
     return FubonQuoteRuntime(sdk or _make_sdk())
 
 
-# ---------------------------------------------------------------------------
-# Trade callback translation
-# ---------------------------------------------------------------------------
-
-
 class TestTradeCallback:
     def test_trade_translates_to_canonical_tick(self) -> None:
         rt = _make_runtime()
@@ -50,14 +41,14 @@ class TestTradeCallback:
             "symbol": "2330",
             "close": 595.0,
             "volume": 3,
-            "datetime": 1_700_000_000_000_000_000,  # already ns
+            "datetime": 1_700_000_000_000_000_000,
         }
         rt._on_fubon_trade(fubon_trade)
 
         assert len(received) == 1
         tick = received[0]
         assert tick["code"] == "2330"
-        assert tick["close"] == 595.0  # raw float — normalizer handles scaling
+        assert tick["close"] == 595.0
         assert tick["volume"] == 3
         assert tick["ts"] == 1_700_000_000_000_000_000
 
@@ -75,7 +66,7 @@ class TestTradeCallback:
         rt._on_fubon_trade(fubon_trade)
 
         assert len(received) == 1
-        assert received[0]["close"] == 100.5  # raw float — normalizer handles scaling
+        assert received[0]["close"] == 100.5
 
     def test_trade_price_scaling_precision(self) -> None:
         rt = _make_runtime()
@@ -84,13 +75,12 @@ class TestTradeCallback:
 
         fubon_trade = {"symbol": "2330", "close": 0.01, "volume": 1, "datetime": 0}
         rt._on_fubon_trade(fubon_trade)
-        assert received[0]["close"] == 0.01  # raw float — normalizer handles scaling
+        assert received[0]["close"] == 0.01
 
     def test_trade_no_callback_noop(self) -> None:
         """No crash when on_tick is not registered."""
         rt = _make_runtime()
         result = rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
-        # Should silently return without error
         assert result is None
 
     def test_trade_callback_error_logged(self) -> None:
@@ -98,15 +88,8 @@ class TestTradeCallback:
         rt = _make_runtime()
         cb = MagicMock()
         rt.register_quote_callbacks(on_tick=cb, on_bidask=MagicMock())
-        # 'close' is a non-numeric string — will fail float()
         result = rt._on_fubon_trade({"symbol": "2330", "close": "bad", "volume": 1, "datetime": 0})
-        # No exception propagated; callback should not have been called with valid data
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Book callback translation
-# ---------------------------------------------------------------------------
 
 
 class TestBookCallback:
@@ -115,7 +98,6 @@ class TestBookCallback:
         received: list[dict[str, Any]] = []
 
         def capture(d: dict) -> None:
-            # Deep-copy lists so mutations don't affect our snapshot
             received.append(
                 {
                     "code": d["code"],
@@ -142,9 +124,9 @@ class TestBookCallback:
         assert len(received) == 1
         book = received[0]
         assert book["code"] == "2330"
-        assert book["bid_price"] == [595.0, 594.0, 593.0, 592.0, 591.0]  # raw floats
+        assert book["bid_price"] == [595.0, 594.0, 593.0, 592.0, 591.0]
         assert book["bid_volume"] == [10, 20, 30, 40, 50]
-        assert book["ask_price"] == [596.0, 597.0, 598.0, 599.0, 600.0]  # raw floats
+        assert book["ask_price"] == [596.0, 597.0, 598.0, 599.0, 600.0]
         assert book["ask_volume"] == [5, 15, 25, 35, 45]
         assert book["ts"] == 1_700_000_000_000_000_000
 
@@ -188,11 +170,6 @@ class TestBookCallback:
             {"symbol": "2330", "bid_prices": [], "bid_sizes": [], "ask_prices": [], "ask_sizes": [], "datetime": 0}
         )
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Buffer reuse
-# ---------------------------------------------------------------------------
 
 
 class TestBufferReuse:
@@ -249,20 +226,17 @@ class TestBufferReuse:
         """
         rt = _make_runtime()
         stored: list[dict] = []
-        # Store the reference as-is — no copy — to simulate enqueue behaviour.
         rt.register_quote_callbacks(on_tick=lambda d: stored.append(d), on_bidask=MagicMock())
 
         rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
         rt._on_fubon_trade({"symbol": "2317", "close": 200.0, "volume": 2, "datetime": 0})
 
         assert len(stored) == 2
-        # First snapshot must still reflect the first trade.
         assert stored[0]["code"] == "2330"
-        assert stored[0]["close"] == 100.0  # raw float
+        assert stored[0]["close"] == 100.0
         assert stored[0]["volume"] == 1
-        # Second snapshot must reflect the second trade.
         assert stored[1]["code"] == "2317"
-        assert stored[1]["close"] == 200.0  # raw float
+        assert stored[1]["close"] == 200.0
         assert stored[1]["volume"] == 2
 
     def test_bidask_snapshot_isolation(self) -> None:
@@ -274,7 +248,6 @@ class TestBufferReuse:
         """
         rt = _make_runtime()
         stored: list[dict] = []
-        # Store the reference as-is — no copy of inner lists.
         rt.register_quote_callbacks(on_tick=MagicMock(), on_bidask=lambda d: stored.append(d))
 
         book1 = {
@@ -297,17 +270,10 @@ class TestBufferReuse:
         rt._on_fubon_book(book2)
 
         assert len(stored) == 2
-        # First snapshot's bid_price list must still contain book1 prices.
-        assert stored[0]["bid_price"][0] == 595.0  # raw float
-        assert stored[0]["ask_price"][0] == 596.0  # raw float
-        # Second snapshot must contain book2 prices.
-        assert stored[1]["bid_price"][0] == 100.0  # raw float
-        assert stored[1]["ask_price"][0] == 101.0  # raw float
-
-
-# ---------------------------------------------------------------------------
-# Subscribe / unsubscribe
-# ---------------------------------------------------------------------------
+        assert stored[0]["bid_price"][0] == 595.0
+        assert stored[0]["ask_price"][0] == 596.0
+        assert stored[1]["bid_price"][0] == 100.0
+        assert stored[1]["ask_price"][0] == 101.0
 
 
 class TestSubscription:
@@ -319,7 +285,6 @@ class TestSubscription:
 
         assert sdk.init_realtime.call_count == 1
         ws = sdk.marketdata.websocket_client.stock
-        # 2 symbols x 2 channels = 4 subscribe calls
         assert ws.subscribe.call_count == 4
 
     def test_subscribe_idempotent(self) -> None:
@@ -327,10 +292,10 @@ class TestSubscription:
         rt = _make_runtime(sdk)
 
         rt.subscribe(["2330"])
-        rt.subscribe(["2330"])  # duplicate
+        rt.subscribe(["2330"])
 
         ws = sdk.marketdata.websocket_client.stock
-        assert ws.subscribe.call_count == 2  # only first subscription
+        assert ws.subscribe.call_count == 2
 
     def test_init_realtime_called_once(self) -> None:
         sdk = _make_sdk()
@@ -349,7 +314,7 @@ class TestSubscription:
         rt.unsubscribe(["2330"])
 
         ws = sdk.marketdata.websocket_client.stock
-        assert ws.unsubscribe.call_count == 2  # trades + books
+        assert ws.unsubscribe.call_count == 2
 
     def test_unsubscribe_unknown_symbol_noop(self) -> None:
         sdk = _make_sdk()
@@ -358,11 +323,6 @@ class TestSubscription:
 
         ws = sdk.marketdata.websocket_client.stock
         assert ws.unsubscribe.call_count == 0
-
-
-# ---------------------------------------------------------------------------
-# Watchdog
-# ---------------------------------------------------------------------------
 
 
 class TestWatchdog:
@@ -374,7 +334,6 @@ class TestWatchdog:
         assert rt._watchdog_thread.is_alive()
 
         rt.stop()
-        # Give daemon thread time to exit
         time.sleep(0.15)
         assert not rt._watchdog_thread.is_alive() if rt._watchdog_thread else True
 
@@ -388,11 +347,6 @@ class TestWatchdog:
         rt.stop()
 
 
-# ---------------------------------------------------------------------------
-# Stop
-# ---------------------------------------------------------------------------
-
-
 class TestStop:
     def test_stop_unsubscribes_all(self) -> None:
         sdk = _make_sdk()
@@ -401,14 +355,13 @@ class TestStop:
         rt.stop()
 
         ws = sdk.marketdata.websocket_client.stock
-        # 2 symbols x 2 channels = 4 unsubscribe calls
         assert ws.unsubscribe.call_count == 4
         assert len(rt._subscribed) == 0
 
     def test_stop_idempotent(self) -> None:
         rt = _make_runtime()
         rt.stop()
-        rt.stop()  # second call must not crash
+        rt.stop()
         assert len(rt._subscribed) == 0
 
     def test_late_callbacks_dropped_after_stop(self) -> None:
@@ -423,7 +376,6 @@ class TestStop:
             on_tick=lambda d: tick_received.append(dict(d)),
             on_bidask=lambda d: book_received.append(dict(d)),
         )
-        # Before stop — deliveries succeed.
         rt._on_fubon_trade({"symbol": "2330", "close": 100.0, "volume": 1, "datetime": 0})
         rt._on_fubon_book(
             {
@@ -440,7 +392,6 @@ class TestStop:
 
         rt.stop()
 
-        # Simulate the Fubon SDK delivering a buffered callback post-stop.
         rt._on_fubon_trade({"symbol": "2330", "close": 200.0, "volume": 5, "datetime": 0})
         rt._on_fubon_book(
             {
@@ -452,14 +403,8 @@ class TestStop:
                 "datetime": 0,
             }
         )
-        # No additional deliveries — the old runtime refuses to forward.
         assert len(tick_received) == 1, "late trade callback leaked through stopped runtime"
         assert len(book_received) == 1, "late book callback leaked through stopped runtime"
-
-
-# ---------------------------------------------------------------------------
-# Price scaling edge cases
-# ---------------------------------------------------------------------------
 
 
 class TestPricePassthrough:
@@ -469,7 +414,7 @@ class TestPricePassthrough:
         rt.register_quote_callbacks(on_tick=lambda d: received.append(dict(d)), on_bidask=MagicMock())
 
         rt._on_fubon_trade({"symbol": "2330", "close": 100, "volume": 1, "datetime": 0})
-        assert received[0]["close"] == 100.0  # coerced to float, not scaled
+        assert received[0]["close"] == 100.0
 
     def test_small_float_price_passthrough(self) -> None:
         rt = _make_runtime()
@@ -477,7 +422,7 @@ class TestPricePassthrough:
         rt.register_quote_callbacks(on_tick=lambda d: received.append(dict(d)), on_bidask=MagicMock())
 
         rt._on_fubon_trade({"symbol": "2330", "close": 0.0001, "volume": 1, "datetime": 0})
-        assert received[0]["close"] == 0.0001  # raw float passthrough
+        assert received[0]["close"] == 0.0001
 
     def test_book_prices_passthrough(self) -> None:
         rt = _make_runtime()
@@ -499,13 +444,8 @@ class TestPricePassthrough:
             }
         )
 
-        assert received[0]["bid_price"][0] == 100.5  # raw float passthrough
-        assert received[0]["ask_price"][4] == 101.0  # raw float passthrough
-
-
-# ---------------------------------------------------------------------------
-# Object-style data (attribute access)
-# ---------------------------------------------------------------------------
+        assert received[0]["bid_price"][0] == 100.5
+        assert received[0]["ask_price"][4] == 101.0
 
 
 class TestObjectData:
@@ -520,7 +460,6 @@ class TestObjectData:
         obj.close = 595.0
         obj.volume = 3
         obj.datetime = 1_700_000_000_000_000_000
-        # Ensure dict-style access fails so _get falls through to getattr
         obj.__contains__ = MagicMock(return_value=False)
         del obj.__getitem__
 
@@ -528,4 +467,4 @@ class TestObjectData:
 
         assert len(received) == 1
         assert received[0]["code"] == "2330"
-        assert received[0]["close"] == 595.0  # raw float passthrough
+        assert received[0]["close"] == 595.0

@@ -9,7 +9,7 @@ pub fn to_ch_price_scaled(price: i64, price_scale: i64) -> i64 {
     if price_scale == 0 {
         return 0;
     }
-    // price is already in x(price_scale) format; convert to x1e6
+
     let factor = CLICKHOUSE_PRICE_SCALE / price_scale as f64;
     (price as f64 * factor).round_ties_even() as i64
 }
@@ -96,7 +96,7 @@ pub fn map_fill_record(
     dict.set_item("symbol", symbol)?;
     dict.set_item("price_scaled", to_ch_price_scaled(price, price_scale))?;
     dict.set_item("qty", qty)?;
-    // fee is already NTD x10000 (flat amount), not instrument-price-scaled
+
     dict.set_item("fee_scaled", fee)?;
     dict.set_item("ts_ns", ts_ns)?;
     Ok(dict.into())
@@ -108,7 +108,6 @@ mod tests {
 
     #[test]
     fn test_to_ch_price_scaled_10000() {
-        // price=500_0000 at scale=10000 → 500_0000 * (1e6/10000) = 500_000_000
         assert_eq!(to_ch_price_scaled(500_0000, 10000), 500_000_000);
     }
 
@@ -119,7 +118,6 @@ mod tests {
 
     #[test]
     fn test_to_ch_price_scaled_same_scale() {
-        // scale = 1_000_000 → factor = 1.0
         assert_eq!(to_ch_price_scaled(500_000_000, 1_000_000), 500_000_000);
     }
 
@@ -130,13 +128,11 @@ mod tests {
 
     #[test]
     fn test_to_ch_price_negative() {
-        // Negative prices (shouldn't happen but test edge case)
         assert_eq!(to_ch_price_scaled(-100_0000, 10000), -100_000_000);
     }
 
     #[test]
     fn test_to_ch_price_small_scale() {
-        // scale = 100 → factor = 10000
         assert_eq!(to_ch_price_scaled(5000, 100), 50_000_000);
     }
 }

@@ -30,7 +30,7 @@ def main() -> None:
         )
         files = out.stdout.split()
     except Exception:
-        sys.exit(0)  # fail-open
+        sys.exit(0)
     extra = sorted(f for f in files if f not in allowed)
     if extra:
         warn(

@@ -48,8 +48,6 @@ def test_resolve_order_mode_writes_back_past_monkeypatch():
         assert resolve_order_mode() == "sim"
         assert os.environ.get("HFT_ORDER_MODE") == "sim"
 
-    # monkeypatch has now undone everything it recorded. HFT_ORDER_SIMULATION
-    # is gone; HFT_ORDER_MODE is not, because bootstrap set it directly.
     assert os.environ.get("HFT_ORDER_SIMULATION", sentinel) is sentinel
     assert os.environ.get("HFT_ORDER_MODE") == "sim", (
         "if this stops leaking, resolve_order_mode no longer writes back and the conftest fixture below can go with it"

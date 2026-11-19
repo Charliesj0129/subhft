@@ -23,7 +23,7 @@ class Rule:
     expr: str
     op: str
     threshold: float
-    severity: str  # critical|warning
+    severity: str
     note: str
 
 

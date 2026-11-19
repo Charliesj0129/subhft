@@ -43,11 +43,9 @@ def _make_risk_feedback(side, reason_code, was_approved: bool = False) -> RiskFe
 
 
 def _make_r47():
-    # Build R47 strategy instance with minimal init
     from hft_platform.strategies.r47_maker import R47MakerStrategy
 
     strat = R47MakerStrategy.__new__(R47MakerStrategy)
-    # Initialize all dicts/sets that on_risk_feedback may touch
     strat._local_pos = {}
     strat._pending_buy = {"TMFE6": 0}
     strat._pending_sell = {"TMFE6": 0}
@@ -84,7 +82,6 @@ class TestDispatchFailedPreservesPending:
         strat = _make_r47()
         strat._pending_sell["TMFE6"] = 1
 
-        # CURRENT behavior (without fix): feedback.was_approved=False → decrement
         fb = _make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=False)
         strat.on_risk_feedback(fb)
         assert strat._pending_sell["TMFE6"] == 0, (
@@ -148,7 +145,6 @@ class TestAdapterDispatchFailedFlagsApproved:
             qty=0,
         )
 
-        # Without phantom_pending, default False → standard rejection
         adapter._send_dispatch_rejection(intent, "some_other_reason")
 
         feedback = mock_sink.put_nowait.call_args[0][0]
@@ -163,21 +159,12 @@ class TestMaxPosNotBreachedOnPhantomRace:
         With the fix, pending_sell stays at 1 after both feedbacks (same order)
         because was_approved=True skips decrement."""
         strat = _make_r47()
-        # Mimic emit path: pending_sell incremented on .sell() call
-        strat._pending_sell["TMFE6"] = 1  # after first SELL emit
+        strat._pending_sell["TMFE6"] = 1
 
-        # First dispatch_failed, with fix adapter flags was_approved=True
         strat.on_risk_feedback(_make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True))
         assert strat._pending_sell["TMFE6"] == 1, "After fix: first dispatch_failed keeps pending elevated"
 
-        # R47 emits second SELL — can_sell uses pending_sell=1, pos=0
-        # → can_sell = 0 - 1 > -1 (which is False when max_pos=1)
-        # So second SELL should NOT be emitted. But let's assume it is (simulating
-        # bug that already happened). pending_sell=2.
         strat._pending_sell["TMFE6"] = 2
 
-        # Second dispatch_failed feedback also flagged
         strat.on_risk_feedback(_make_risk_feedback(Side.SELL, "dispatch_failed", was_approved=True))
         assert strat._pending_sell["TMFE6"] == 2, "Second dispatch_failed also preserves pending"
-
-        # When fills arrive for both phantoms, on_fill decrements naturally

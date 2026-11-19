@@ -93,20 +93,13 @@ def build_kbar_family_features(
     previous_volume = _segmented_previous(arrays["volume"], resets)
 
     base_features: dict[str, np.ndarray] = {
-        # Intrabar directional return, scale-free across roots and contracts.
         "kbar_open_close_return": _safe_normalize(body, arrays["open"]),
-        # Body as a share of the bar's full range: conviction vs indecision.
         "kbar_body_ratio": _safe_normalize(body, bar_range),
-        # Rejection wicks, each as a share of the full range.
         "kbar_upper_wick_ratio": _safe_normalize(arrays["high"] - body_top, bar_range),
         "kbar_lower_wick_ratio": _safe_normalize(body_bottom - arrays["low"], bar_range),
-        # Normalized bar range: a per-bar realized-volatility proxy.
         "kbar_range_ratio": _safe_normalize(bar_range, arrays["close"]),
-        # Zero-centred close location inside the range: -1 at the low, +1 at the high.
         "kbar_close_location_ratio": _safe_normalize(2.0 * arrays["close"] - arrays["high"] - arrays["low"], bar_range),
-        # Gap from the previous in-segment bar's close to this bar's open.
         "kbar_gap_return": _safe_normalize(arrays["open"] - previous_close, previous_close),
-        # Bounded volume change: -1 (collapse) .. +1 (burst), immune to root scale.
         "kbar_volume_change_ratio": _safe_normalize(
             arrays["volume"] - previous_volume, arrays["volume"] + previous_volume
         ),

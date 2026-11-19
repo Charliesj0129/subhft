@@ -17,10 +17,6 @@ from hft_platform.recorder._loader_common import (
     timebase,
 )
 
-# ---------------------------------------------------------------------------
-# DLQ write
-# ---------------------------------------------------------------------------
-
 
 def write_to_dlq(
     svc: Any,
@@ -63,11 +59,6 @@ def write_to_dlq(
                 logger.debug("operation_failed", error=str(exc))
     except Exception as e:
         logger.error("Failed to write to DLQ", table=table, error=str(e))
-
-
-# ---------------------------------------------------------------------------
-# DLQ replay
-# ---------------------------------------------------------------------------
 
 
 def replay_dlq(
@@ -127,7 +118,7 @@ def replay_dlq(
                         continue
                     try:
                         obj = _loads(line)
-                    except Exception as _exc:  # noqa: BLE001
+                    except Exception as _exc:
                         continue
                     if isinstance(obj, dict) and obj.get("_dlq_meta"):
                         continue
@@ -195,11 +186,6 @@ def replay_dlq(
         "selected": selected,
         "max_files": max_files,
     }
-
-
-# ---------------------------------------------------------------------------
-# Cleanup helpers (B3, B5, archive)
-# ---------------------------------------------------------------------------
 
 
 def cleanup_old_dlq_files(svc: Any) -> None:
@@ -341,11 +327,6 @@ def cleanup_old_archive_files(svc: Any) -> None:
             )
     except Exception as exc:
         logger.warning("Archive file cleanup failed", error=str(exc))
-
-
-# ---------------------------------------------------------------------------
-# WAL accumulation monitoring (C5)
-# ---------------------------------------------------------------------------
 
 
 def check_wal_accumulation(svc: Any) -> None:

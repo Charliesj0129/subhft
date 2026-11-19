@@ -23,7 +23,6 @@ def test_market_calendar_available_with_xcals():
 
     reset_calendar()
     calendar = MarketCalendar("XTAI")
-    # exchange_calendars should be available
     assert calendar.available is True
 
 
@@ -32,13 +31,11 @@ def test_market_calendar_fallback_weekend():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
-    # Saturday
     saturday = dt.date(2026, 2, 14)
     assert calendar.is_trading_day(saturday) is False
 
-    # Monday
     monday = dt.date(2026, 2, 16)
     assert calendar.is_trading_day(monday) is True
 
@@ -51,7 +48,6 @@ def test_is_trading_day_with_xcals():
     if not calendar.available:
         pytest.skip("exchange_calendars not available")
 
-    # Weekend should not be trading day
     saturday = dt.date(2026, 2, 14)
     assert calendar.is_trading_day(saturday) is False
 
@@ -61,17 +57,14 @@ def test_is_trading_hours_fallback():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
-    # Weekday during trading hours
     monday_10am = dt.datetime(2026, 2, 16, 10, 0, tzinfo=calendar._tz)
     assert calendar.is_trading_hours(monday_10am) is True
 
-    # Weekday before trading hours
     monday_8am = dt.datetime(2026, 2, 16, 8, 0, tzinfo=calendar._tz)
     assert calendar.is_trading_hours(monday_8am) is False
 
-    # Weekday after trading hours
     monday_2pm = dt.datetime(2026, 2, 16, 14, 0, tzinfo=calendar._tz)
     assert calendar.is_trading_hours(monday_2pm) is False
 
@@ -81,7 +74,7 @@ def test_get_session_open_fallback():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
     monday = dt.date(2026, 2, 16)
     open_time = calendar.get_session_open(monday)
@@ -96,7 +89,7 @@ def test_get_session_close_fallback():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
     monday = dt.date(2026, 2, 16)
     close_time = calendar.get_session_close(monday)
@@ -111,13 +104,12 @@ def test_next_trading_day_skips_weekend():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
-    # Friday -> Monday
     friday = dt.date(2026, 2, 13)
     next_day = calendar.next_trading_day(friday)
 
-    assert next_day == dt.date(2026, 2, 16)  # Monday
+    assert next_day == dt.date(2026, 2, 16)
 
 
 def test_previous_trading_day_skips_weekend():
@@ -125,13 +117,12 @@ def test_previous_trading_day_skips_weekend():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
-    # Monday -> Friday
     monday = dt.date(2026, 2, 16)
     prev_day = calendar.previous_trading_day(monday)
 
-    assert prev_day == dt.date(2026, 2, 13)  # Friday
+    assert prev_day == dt.date(2026, 2, 13)
 
 
 def test_days_until_trading_today():
@@ -139,7 +130,7 @@ def test_days_until_trading_today():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
     monday = dt.date(2026, 2, 16)
     days = calendar.days_until_trading(monday)
@@ -152,9 +143,8 @@ def test_days_until_trading_weekend():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback
+    calendar._cal = None
 
-    # Saturday -> 2 days until Monday
     saturday = dt.date(2026, 2, 14)
     days = calendar.days_until_trading(saturday)
 
@@ -167,7 +157,6 @@ def test_is_holiday_period():
 
     calendar = MarketCalendar("XTAI")
 
-    # Mock days_until_trading to simulate holiday
     with patch.object(calendar, "days_until_trading", return_value=5):
         assert calendar.is_holiday_period(min_consecutive_days=3) is True
 
@@ -197,8 +186,6 @@ def test_get_calendar_respects_env():
             calendar = get_calendar()
             assert calendar._exchange == "XNYS"
     finally:
-        # The singleton outlives the env patch: left as XNYS, a later test on the same
-        # xdist worker reads NYSE hours (23:00 Taipei = 15:00 UTC is "open").
         reset_calendar()
 
 
@@ -208,7 +195,6 @@ def test_session_close_returns_none_for_non_trading_day():
 
     calendar = MarketCalendar("XTAI")
 
-    # Mock is_trading_day to return False
     with patch.object(calendar, "is_trading_day", return_value=False):
         result = calendar.get_session_close(dt.date(2026, 2, 14))
         assert result is None
@@ -219,9 +205,8 @@ def test_session_open_returns_none_for_non_trading_day():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback mode
+    calendar._cal = None
 
-    # Saturday
     result = calendar.get_session_open(dt.date(2026, 2, 14))
     assert result is None
 
@@ -231,29 +216,25 @@ def test_session_time_cache_hit():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback mode
+    calendar._cal = None
     calendar.clear_session_cache()
 
     monday = dt.date(2026, 2, 16)
 
-    # First call - cache miss
     open1 = calendar.get_session_open(monday)
     info1 = calendar.get_session_cache_info()
     assert info1["misses"] == 1
     assert info1["hits"] == 0
 
-    # Second call - cache hit (same date)
     open2 = calendar.get_session_open(monday)
     info2 = calendar.get_session_cache_info()
     assert info2["hits"] == 1
     assert info2["misses"] == 1
 
-    # Third call for close - still cache hit (same date, both open/close cached)
     close1 = calendar.get_session_close(monday)
     info3 = calendar.get_session_cache_info()
-    assert info3["hits"] == 2  # Both open and close from same cache entry
+    assert info3["hits"] == 2
 
-    # Verify values are consistent
     assert open1 == open2
     assert open1.hour == 9
     assert close1.hour == 13
@@ -264,24 +245,21 @@ def test_session_time_cache_invalidation():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback mode
+    calendar._cal = None
     calendar.clear_session_cache()
 
     monday = dt.date(2026, 2, 16)
 
-    # First call
     calendar.get_session_open(monday)
     info1 = calendar.get_session_cache_info()
     assert info1["currsize"] == 1
 
-    # Clear cache
     calendar.clear_session_cache()
     info2 = calendar.get_session_cache_info()
     assert info2["currsize"] == 0
     assert info2["hits"] == 0
     assert info2["misses"] == 0
 
-    # Another call should miss again
     calendar.get_session_open(monday)
     info3 = calendar.get_session_cache_info()
     assert info3["misses"] == 1
@@ -292,25 +270,22 @@ def test_session_cache_different_dates():
     from hft_platform.core.market_calendar import MarketCalendar
 
     calendar = MarketCalendar("XTAI")
-    calendar._cal = None  # Force fallback mode
+    calendar._cal = None
     calendar.clear_session_cache()
 
     monday = dt.date(2026, 2, 16)
     tuesday = dt.date(2026, 2, 17)
 
-    # First date
     calendar.get_session_open(monday)
     info1 = calendar.get_session_cache_info()
     assert info1["currsize"] == 1
     assert info1["misses"] == 1
 
-    # Second date - new cache entry
     calendar.get_session_open(tuesday)
     info2 = calendar.get_session_cache_info()
     assert info2["currsize"] == 2
     assert info2["misses"] == 2
 
-    # Repeat first date - cache hit
     calendar.get_session_open(monday)
     info3 = calendar.get_session_cache_info()
     assert info3["hits"] == 1
@@ -502,22 +477,14 @@ def test_days_until_trading_default_date():
         assert calendar.days_until_trading() == 0
 
 
-# ---------------------------------------------------------------------------
-# product_type-aware is_trading_hours tests
-# ---------------------------------------------------------------------------
-
-
 def _make_cal_forced_trading_day(is_trading: bool):
     """Return a MarketCalendar (no xcals) with is_trading_day patched."""
     from hft_platform.core.market_calendar import MarketCalendar
 
     cal = MarketCalendar("XTAI")
-    cal._cal = None  # force fallback
+    cal._cal = None
     cal.is_trading_day = lambda date=None: is_trading
     return cal
-
-
-# ── stock (default) ──────────────────────────────────────────────────────────
 
 
 def test_is_trading_hours_stock_default_no_product_type():
@@ -528,11 +495,11 @@ def test_is_trading_hours_stock_default_no_product_type():
     cal._cal = None
     tz = cal._tz
 
-    monday = dt.date(2026, 3, 10)  # known trading weekday
+    monday = dt.date(2026, 3, 10)
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 10, 0, tzinfo=tz)) is True
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 8, 59, tzinfo=tz)) is False
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 13, 31, tzinfo=tz)) is False
-    _ = monday  # suppress unused-var
+    _ = monday
 
 
 def test_is_trading_hours_stock_explicit():
@@ -550,9 +517,6 @@ def test_is_trading_hours_stock_explicit():
     assert cal.is_trading_hours(ts_in, product_type="stock") is True
     assert cal.is_trading_hours(ts_before, product_type="stock") is False
     assert cal.is_trading_hours(ts_after, product_type="stock") is False
-
-
-# ── futures day session ──────────────────────────────────────────────────────
 
 
 def test_is_trading_hours_future_day_session_boundaries():
@@ -583,9 +547,6 @@ def test_is_trading_hours_future_gap_14_to_15():
     assert cal.is_trading_hours(dt.datetime(2026, 3, 10, 14, 59, tzinfo=tz), product_type="future") is False
 
 
-# ── futures night session ────────────────────────────────────────────────────
-
-
 def test_is_trading_hours_future_night_session_evening():
     """15:00–23:59 on a trading day → night session True."""
     from hft_platform.core.market_calendar import MarketCalendar
@@ -594,7 +555,6 @@ def test_is_trading_hours_future_night_session_evening():
     cal._cal = None
     tz = cal._tz
 
-    # Monday 15:00 – should be in night session (Monday is trading day)
     ts = dt.datetime(2026, 3, 10, 15, 0, tzinfo=tz)
     assert cal.is_trading_hours(ts, product_type="future") is True
 
@@ -610,19 +570,15 @@ def test_is_trading_hours_future_night_session_early_morning():
     cal._cal = None
     tz = cal._tz
 
-    # Tuesday 04:00 → previous day (Monday) is a trading day
     ts = dt.datetime(2026, 3, 11, 4, 0, tzinfo=tz)
     assert cal.is_trading_hours(ts, product_type="future") is True
 
-    # 04:59:59 – still inside the session
     ts_last = dt.datetime(2026, 3, 11, 4, 59, 59, tzinfo=tz)
     assert cal.is_trading_hours(ts_last, product_type="future") is True
 
-    # Boundary at exactly 05:00 – the close is exclusive
     ts_boundary = dt.datetime(2026, 3, 11, 5, 0, tzinfo=tz)
     assert cal.is_trading_hours(ts_boundary, product_type="future") is False
 
-    # 05:01 – outside session
     ts_after = dt.datetime(2026, 3, 11, 5, 1, tzinfo=tz)
     assert cal.is_trading_hours(ts_after, product_type="future") is False
 
@@ -635,7 +591,6 @@ def test_is_trading_hours_future_night_session_weekend():
     cal._cal = None
     tz = cal._tz
 
-    # Saturday 16:00
     ts = dt.datetime(2026, 3, 7, 16, 0, tzinfo=tz)
     assert cal.is_trading_hours(ts, product_type="future") is False
 
@@ -660,12 +615,8 @@ def test_is_trading_hours_future_friday_night_into_saturday():
     cal._cal = None
     tz = cal._tz
 
-    # Saturday 04:00 → previous day (Friday) is a trading day
     ts = dt.datetime(2026, 3, 7, 4, 0, tzinfo=tz)
     assert cal.is_trading_hours(ts, product_type="future") is True
-
-
-# ── option aliases future ────────────────────────────────────────────────────
 
 
 def test_is_trading_hours_option_same_as_future():

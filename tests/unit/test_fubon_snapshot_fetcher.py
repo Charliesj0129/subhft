@@ -11,10 +11,6 @@ from hft_platform.feed_adapter.fubon.snapshot_fetcher import (
     _coerce_price,
 )
 
-# ------------------------------------------------------------------ #
-# Helpers
-# ------------------------------------------------------------------ #
-
 
 def _make_sdk(responses: dict[str, dict[str, Any]]) -> MagicMock:
     """Build a mock SDK where quote(symbol=X) returns responses[X]."""
@@ -54,11 +50,6 @@ def _make_quote_data(
     }
 
 
-# ------------------------------------------------------------------ #
-# _coerce_price tests
-# ------------------------------------------------------------------ #
-
-
 class TestCoercePrice:
     def test_float(self) -> None:
         assert _coerce_price(100.5) == 100.5
@@ -82,11 +73,6 @@ class TestCoercePrice:
         assert _coerce_price(-10.0) == -10.0
 
 
-# ------------------------------------------------------------------ #
-# FubonSnapshotFetcher tests
-# ------------------------------------------------------------------ #
-
-
 class TestFetchSnapshots:
     def test_valid_single_symbol(self) -> None:
         sdk = _make_sdk({"2330": _make_quote_data()})
@@ -96,9 +82,9 @@ class TestFetchSnapshots:
         assert len(result) == 1
         snap = result[0]
         assert snap["code"] == "2330"
-        assert snap["close"] == 100.5  # raw float — normalizer handles scaling
+        assert snap["close"] == 100.5
         assert snap["volume"] == 1234
-        assert snap["buy_price"] == 100.0  # canonical field name for normalizer
+        assert snap["buy_price"] == 100.0
         assert snap["sell_price"] == 101.0
         assert snap["buy_volume"] == 50
         assert snap["sell_volume"] == 30
@@ -132,7 +118,6 @@ class TestFetchSnapshots:
     def test_partial_failure_skips_failed(self) -> None:
         """Two symbols: first succeeds, second raises. Only first returned."""
         sdk = _make_sdk({"2330": _make_quote_data()})
-        # "9999" is not in responses dict → raises RuntimeError
         fetcher = FubonSnapshotFetcher(sdk)
         result = fetcher.fetch_snapshots(["2330", "9999"])
 
@@ -147,7 +132,7 @@ class TestFetchSnapshots:
 
     def test_missing_fields_default_to_zero(self) -> None:
         """SDK response with missing keys should default to 0."""
-        sdk = _make_sdk({"2330": {}})  # empty dict
+        sdk = _make_sdk({"2330": {}})
         fetcher = FubonSnapshotFetcher(sdk)
         result = fetcher.fetch_snapshots(["2330"])
 
@@ -181,7 +166,7 @@ class TestFetchSnapshots:
         result = fetcher.fetch_snapshots(["2330"])
 
         assert len(result) == 1
-        assert result[0]["close"] == 150.0  # raw float
+        assert result[0]["close"] == 150.0
         assert result[0]["buy_price"] == 149.5
         assert result[0]["sell_price"] == 150.5
 

@@ -163,8 +163,6 @@ class TestQuoteEventHandler:
         re-acquires the same lock from the same thread."""
         handler = QuoteEventHandler()
         lock = handler.pending_lock
-        # threading.RLock() exposes acquire/release and is reentrant — test by
-        # double-acquiring on the same thread.
         assert lock.acquire(blocking=False)
         try:
             assert lock.acquire(blocking=False), (
@@ -201,8 +199,6 @@ class TestQuoteEventHandler:
             while not stop.is_set() and sampled < 5_000:
                 sampled += 1
                 snap = handler.snapshot()
-                # Invariant: pending=True iff reason is not None and ts > 0.
-                # pending=False iff reason is None and ts == 0.
                 if snap.pending:
                     if snap.reason is None or snap.ts == 0.0:
                         torn.append((snap.reason, snap.ts))
@@ -254,9 +250,7 @@ class TestSubRetryCapacityAwareness:
         client = mock.MagicMock()
         client.MAX_SUBSCRIPTIONS = 120
         client.subscribed_count = 120
-        # Must be False initially so start_sub_retry_thread doesn't early-return
         client._sub_retry_running = False
-        # L2: production type is collections.deque (in-place mutation only).
         client._failed_sub_symbols = deque(
             [
                 {"code": "TXO35050D6", "exchange": "OPT"},
@@ -290,7 +284,6 @@ class TestSubRetryCapacityAwareness:
         client.MAX_SUBSCRIPTIONS = 120
         client.subscribed_count = 100
         client._sub_retry_running = False
-        # L2: production type is collections.deque (in-place mutation only).
         client._failed_sub_symbols = deque(
             [
                 {"code": "TXO35050D6", "exchange": "OPT"},
@@ -366,11 +359,6 @@ class TestValidateQuoteSchemaExchangeSpoof:
             _ = "/" in exchange
 
 
-# ------------------------------------------------------------------ #
-# Watchdog survival (regression: 2026-07-25 stranded facade)
-# ------------------------------------------------------------------ #
-
-
 def _watchdog_client(*, logged_in: bool, iterations: int) -> MagicMock:
     """Client whose watchdog loop stops itself after `iterations` wake-ups."""
     client = MagicMock()
@@ -420,7 +408,6 @@ def test_quote_watchdog_survives_facade_logout():
     with patch("hft_platform.feed_adapter.shioaji.quote_runtime.time.sleep", client._fake_sleep):
         watch()
 
-    # It kept looping while logged out instead of exiting on the first check.
     assert client._sleep_calls == 3
     client._update_quote_pending_metrics.assert_not_called()
 
@@ -447,7 +434,6 @@ def test_quote_watchdog_does_not_report_the_logged_out_gap_as_a_stall():
     def _sleep(seconds: float) -> None:
         client._fake_sleep(seconds)
         if client._sleep_calls >= 2:
-            # Re-login lands after the watchdog has already seen it logged out.
             client.logged_in = True
 
     with (

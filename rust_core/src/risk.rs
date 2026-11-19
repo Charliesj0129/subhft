@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU8, Ordering::Acquire, Ordering::Release};
 
 #[pyclass]
 pub struct FastGate {
-    mmap: MmapMut, // Kill Switch SHM (1 byte)
+    mmap: MmapMut,
     kill_atomic: AtomicU8,
     max_price: f64,
     max_qty: f64,
@@ -26,7 +26,7 @@ impl FastGate {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true) // Auto create for ease
+            .create(true)
             .truncate(false)
             .open(&path)?;
 
@@ -43,14 +43,11 @@ impl FastGate {
     }
 
     pub fn check(&self, price: f64, qty: f64) -> (bool, u8) {
-        // Fast-path: same-process atomic (~5ns) before cross-process mmap volatile (~100ns)
         if self.kill_atomic.load(Acquire) > 0 {
             return (false, 1);
         }
 
         unsafe {
-            // 1. Zero-latency Kill Switch
-            // read volatile in case another process writes
             let kill_flag = std::ptr::read_volatile(self.mmap.as_ptr());
             if kill_flag > 0 {
                 return (false, 1);
@@ -87,12 +84,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     fn make_gate(max_price: f64, max_qty: f64) -> FastGate {
-        // Create a temp file for mmap (avoids /dev/shm dependency)
         let mut f = NamedTempFile::new().unwrap();
         f.write_all(&[0u8]).unwrap();
         f.flush().unwrap();
         let path = f.path().to_string_lossy().to_string();
-        // Keep the file alive by leaking (test only)
+
         std::mem::forget(f);
         FastGate::new(path, max_price, max_qty).unwrap()
     }

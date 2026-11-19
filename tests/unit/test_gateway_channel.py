@@ -23,9 +23,6 @@ def _make_intent(intent_id: int = 1, idempotency_key: str = "", ttl_ns: int = 0)
     )
 
 
-# CE2-01: idempotency_key / ttl_ns defaults and round-trip
-
-
 def test_order_intent_idempotency_key_default():
     intent = _make_intent()
     assert intent.idempotency_key == ""
@@ -51,9 +48,6 @@ def test_order_intent_backward_compat_positional():
     )
     assert intent.idempotency_key == ""
     assert intent.ttl_ns == 0
-
-
-# CE2-02: LocalIntentChannel
 
 
 @pytest.mark.asyncio
@@ -104,23 +98,17 @@ async def test_channel_qsize():
 @pytest.mark.asyncio
 async def test_channel_ttl_expired_routes_to_dlq():
     """Envelope older than TTL is skipped to DLQ; next valid envelope returned."""
-    # ttl_ms must exceed the scheduling latency between submit_nowait() and
-    # receive_raw()'s age check, or the *fresh* envelope expires too and
-    # receive() blocks forever. Under xdist that gap exceeds 1 ms. The stale
-    # envelope below uses enqueued_ns=0, so it expires at any TTL.
     ch = LocalIntentChannel(maxsize=10, ttl_ms=5000)
 
     intent_old = _make_intent(1, "old")
     env_old = IntentEnvelope(
         intent=intent_old,
-        enqueued_ns=0,  # epoch = very old
+        enqueued_ns=0,
         ack_token="old",
     )
     intent_fresh = _make_intent(2, "fresh")
 
-    # Manually put the stale envelope first
     ch._queue.put_nowait(env_old)
-    # Then the fresh one
     ch.submit_nowait(intent_fresh)
 
     received = await asyncio.wait_for(ch.receive(), timeout=1.0)
@@ -133,21 +121,18 @@ async def test_channel_ttl_expired_routes_to_dlq():
 async def test_channel_dlq_bounded():
     """DLQ has bounded size; oldest entries are dropped when full."""
     ch = LocalIntentChannel(maxsize=100, ttl_ms=5000, dlq_maxsize=2)
-    # Submit 5 stale envelopes
     for i in range(5):
         ch._queue.put_nowait(
             IntentEnvelope(
                 intent=_make_intent(i),
-                enqueued_ns=0,  # epoch = expired
+                enqueued_ns=0,
                 ack_token=str(i),
             )
         )
-    # Add one fresh
     ch.submit_nowait(_make_intent(99, "fresh"))
 
     received = await asyncio.wait_for(ch.receive(), timeout=1.0)
     assert received.ack_token == "fresh"
-    # DLQ capped at 2 (deque maxlen)
     assert ch.dlq_size() <= 2
     ch.task_done()
 
@@ -183,9 +168,6 @@ async def test_channel_submit_typed_and_materialize():
     assert env.intent.trace_id == "trace-1"
     assert env.ack_token == "idem-7"
     ch.task_done()
-
-
-# ── drain_nowait + envelope helpers ──────────────────────────────────────────
 
 
 def test_drain_nowait_returns_all_pending():
@@ -231,10 +213,10 @@ def test_envelope_helpers_typed_frame():
     ch = LocalIntentChannel(maxsize=64, ttl_ms=0)
     frame = (
         "typed_intent_v1",
-        99,  # intent_id
-        "strat_x",  # strategy_id
-        "TSE:2330",  # symbol
-        int(IntentType.CANCEL),  # intent_type
+        99,
+        "strat_x",
+        "TSE:2330",
+        int(IntentType.CANCEL),
         int(Side.SELL),
         500_0000,
         1,

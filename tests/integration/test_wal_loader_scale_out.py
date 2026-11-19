@@ -18,7 +18,6 @@ def test_two_loaders_no_duplicate_inserts_with_shard_claim(tmp_path):
     wal_dir.mkdir()
     archive_dir.mkdir()
 
-    # Create 8 WAL files with deterministic row markers.
     for i in range(8):
         row = {
             "symbol": "2330",
@@ -45,7 +44,6 @@ def test_two_loaders_no_duplicate_inserts_with_shard_claim(tmp_path):
     l2._loader_concurrency = 1
     l1._manifest_enabled = False
     l2._manifest_enabled = False
-    # process_files() now defers until client is ready (startup race guard).
     l1.ch_client = object()
     l2.ch_client = object()
 
@@ -53,7 +51,6 @@ def test_two_loaders_no_duplicate_inserts_with_shard_claim(tmp_path):
     ins_lock = threading.Lock()
 
     def _insert_batch(self, table: str, rows: list) -> bool:
-        # Sleep a little to increase interleaving/race window.
         time.sleep(0.005)
         with ins_lock:
             inserted_seq.extend(int(r["seq_no"]) for r in rows if "seq_no" in r)
@@ -69,6 +66,6 @@ def test_two_loaders_no_duplicate_inserts_with_shard_claim(tmp_path):
         f2.result(timeout=5)
 
     assert sorted(inserted_seq) == list(range(8))
-    assert len(inserted_seq) == 8  # no duplicate inserts
+    assert len(inserted_seq) == 8
     assert not list(wal_dir.glob("*.jsonl"))
     assert len(list(archive_dir.glob("*.jsonl"))) == 8

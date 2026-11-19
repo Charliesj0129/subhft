@@ -304,7 +304,7 @@ class FubonOrderGateway:
 
         for i, order in enumerate(orders):
             if i > 0:
-                time.sleep(0.067)  # Rate limit: max 15 orders/sec
+                time.sleep(0.067)
             try:
                 result = self.place_order(
                     symbol=order.get("symbol"),

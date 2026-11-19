@@ -41,13 +41,9 @@ from structlog import get_logger
 
 logger = get_logger("ch_batch_export")
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-CH_PRICE_SCALE_INT: float = 1_000_000.0  # market_data: price_scaled (Int64) → float
-CH_PRICE_SCALE_FLOAT: float = 1.0  # market_data_backup: price (Float64) already float
+CH_PRICE_SCALE_INT: float = 1_000_000.0
+CH_PRICE_SCALE_FLOAT: float = 1.0
 
-# L1 research dtype (compatible with feature_precompute.py)
 L1_DTYPE = np.dtype(
     [
         ("bid_px", "f8"),
@@ -61,7 +57,6 @@ L1_DTYPE = np.dtype(
     ]
 )
 
-# hftbacktest event dtype
 try:
     from hftbacktest.types import (
         BUY_EVENT,
@@ -79,13 +74,9 @@ except ImportError:
     _HFTBT_AVAILABLE = False
     HBT_EVENT_DTYPE = None
 
-# De-dup threshold for L2 export
-DEDUP_WINDOW_NS: int = 500_000  # 0.5 ms
+DEDUP_WINDOW_NS: int = 500_000
 
 
-# ---------------------------------------------------------------------------
-# ClickHouse helpers
-# ---------------------------------------------------------------------------
 
 
 def _get_client(host: str, port: int = 8123, user: str = "default", password: str = ""):
@@ -137,21 +128,18 @@ def _detect_table_for_symbol(client: Any, symbol: str) -> list[tuple[str, str, i
     """Detect which tables have data for this symbol and return (table, date, rows)."""
     entries: list[tuple[str, str, int]] = []
 
-    # Check market_data (current, Int64 prices)
     try:
         for dt, rows in _discover_dates(client, symbol, "market_data"):
             entries.append(("market_data", dt, rows))
     except Exception:
         pass
 
-    # Check market_data_backup (old, Float64 prices)
     try:
         for dt, rows in _discover_dates(client, symbol, "market_data_backup"):
             entries.append(("market_data_backup", dt, rows))
     except Exception:
         pass
 
-    # Deduplicate: prefer market_data over backup for same date
     seen_dates: dict[str, tuple[str, str, int]] = {}
     for table, dt, rows in entries:
         if dt not in seen_dates or table == "market_data":
@@ -160,9 +148,6 @@ def _detect_table_for_symbol(client: Any, symbol: str) -> list[tuple[str, str, i
     return sorted(seen_dates.values(), key=lambda x: x[1])
 
 
-# ---------------------------------------------------------------------------
-# L1 Export (research .npy format)
-# ---------------------------------------------------------------------------
 
 
 def _export_l1_day(
@@ -177,7 +162,6 @@ def _export_l1_day(
     price_col = "price" if is_backup else "price_scaled"
     price_scale = CH_PRICE_SCALE_FLOAT if is_backup else CH_PRICE_SCALE_INT
 
-    # For L1, we only need BidAsk rows (L1 = best bid/ask)
     query = f"""
         SELECT
             ingest_ts,
@@ -202,7 +186,6 @@ def _export_l1_day(
     if not rows:
         return None
 
-    # Build L1 records from BidAsk rows
     records: list[tuple] = []
     for row in rows:
         ingest_ts, bids_price, asks_price, bids_vol, asks_vol, row_type, px, vol = row
@@ -237,7 +220,6 @@ def _export_l1_day(
     out_path = out_dir / f"{symbol}_{date}_l1.npy"
     np.save(str(out_path), arr)
 
-    # Meta
     digest = hashlib.sha256(arr.tobytes()[:4096]).hexdigest()
     meta = {
         "dataset_id": f"{symbol}_{date}_l1",
@@ -261,9 +243,6 @@ def _export_l1_day(
     return str(out_path)
 
 
-# ---------------------------------------------------------------------------
-# L2 Export (hftbacktest .npz format)
-# ---------------------------------------------------------------------------
 
 
 def _build_hbt_event(ev: int, exch_ts: int, local_ts: int, px: float, qty: float) -> tuple:
@@ -311,7 +290,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
     if not rows_raw:
         return None
 
-    # De-dup consecutive BidAsk
     deduped = []
     prev_key: tuple | None = None
     prev_ts: int = 0
@@ -329,12 +307,8 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
             prev_ts = ts_int
         deduped.append(row)
 
-    # Build events
     events: list[tuple] = []
     snapshot_written = False
-    # Track PREVIOUS snapshot's price levels.  When a level disappears from L5
-    # AND drifts inside the spread (phantom), emit qty=0 to prevent spread
-    # compression.  Only track prev snapshot (not full history) to bound memory.
     prev_bid_prices: set[float] = set()
     prev_ask_prices: set[float] = set()
 
@@ -345,7 +319,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
     ev_trade_buy = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
     ev_trade_sell = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
 
-    # Track L1 BBO for tick-rule trade direction inference
     last_best_bid: float = 0.0
     last_best_ask: float = 0.0
     last_trade_price: float = 0.0
@@ -366,7 +339,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
             cur_bid_prices: set[float] = set()
             cur_ask_prices: set[float] = set()
 
-            # Collect current levels
             cur_levels: list[tuple[float, float, float, float]] = []
             for i in range(n_levels):
                 bp = float(bp_list[i]) / price_scale
@@ -380,7 +352,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
                     cur_ask_prices.add(ap)
 
             if not snapshot_written:
-                # First snapshot: use DEPTH_SNAPSHOT_EVENT
                 for bp, bq, ap, aq in cur_levels:
                     if bp > 0:
                         events.append(_build_hbt_event(ev_bid_snap, ts_int, ts_int, bp, bq))
@@ -388,15 +359,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
                         events.append(_build_hbt_event(ev_ask_snap, ts_int, ts_int, ap, aq))
                 snapshot_written = True
             else:
-                # Subsequent updates: clear phantom levels from PREVIOUS L5 that
-                # drifted inside the current spread, then set new levels.
-                # - Phantom bid: was in prev L5, no longer in cur L5, AND above
-                #   current best bid (it's inside the spread or crossed).
-                # - Phantom ask: was in prev L5, no longer in cur L5, AND below
-                #   current best ask.
-                # Deeper stale levels (L6+) are left alone — we can't tell from L5
-                # whether they still have quantity, and clearing them thins the book
-                # artificially on deep instruments (TXFD6).
                 cur_best_bid = max(cur_bid_prices) if cur_bid_prices else 0
                 cur_best_ask = min(cur_ask_prices) if cur_ask_prices else float("inf")
 
@@ -407,7 +369,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
                     if old_ap < cur_best_ask:
                         events.append(_build_hbt_event(ev_ask_depth, ts_int, ts_int, old_ap, 0.0))
 
-                # Set current levels (updates existing + adds new)
                 for bp, bq, ap, aq in cur_levels:
                     if bp > 0:
                         events.append(_build_hbt_event(ev_bid_depth, ts_int, ts_int, bp, bq))
@@ -416,7 +377,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
 
             prev_bid_prices = cur_bid_prices
             prev_ask_prices = cur_ask_prices
-            # Update L1 BBO for tick-rule inference
             if cur_levels:
                 bb = max((bp for bp, _, _, _ in cur_levels if bp > 0), default=0.0)
                 ba = min((ap for _, _, ap, _ in cur_levels if ap > 0), default=0.0)
@@ -430,10 +390,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
             vol_f = float(vol or 0)
             if price_raw > 0 and vol_f > 0:
                 price = float(price_raw) / price_scale
-                # Infer trade direction via tick rule:
-                # price >= last_ask → buyer-initiated (BUY)
-                # price <= last_bid → seller-initiated (SELL)
-                # otherwise → compare to last trade price
                 if last_best_ask > 0 and price >= last_best_ask:
                     ev = ev_trade_buy
                 elif last_best_bid > 0 and price <= last_best_bid:
@@ -443,7 +399,7 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
                 elif last_trade_price > 0 and price < last_trade_price:
                     ev = ev_trade_sell
                 else:
-                    ev = ev_trade_buy  # default to buy if no info
+                    ev = ev_trade_buy
                 last_trade_price = price
                 events.append(_build_hbt_event(ev, ts_int, ts_int, price, vol_f))
 
@@ -454,7 +410,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
     out_path = out_dir / f"{symbol}_{date}_l2.hftbt.npz"
     np.savez_compressed(str(out_path), data=event_arr)
 
-    # Meta
     digest = hashlib.sha256(event_arr.tobytes()[:4096]).hexdigest()
     meta = {
         "dataset_id": f"{symbol}_{date}_l2",
@@ -480,9 +435,6 @@ def _export_l2_day(  # noqa: C901 — sequential protocol conversion, splitting 
     return str(out_path)
 
 
-# ---------------------------------------------------------------------------
-# Batch orchestration
-# ---------------------------------------------------------------------------
 
 
 def run_batch_export(
@@ -518,7 +470,6 @@ def run_batch_export(
         logger.info("discovering", symbol=symbol)
         entries = _detect_table_for_symbol(client, symbol)
 
-        # Apply date filters
         if date_from:
             entries = [(t, d, r) for t, d, r in entries if d >= date_from]
         if date_to:
@@ -551,7 +502,6 @@ def run_batch_export(
             logger.info("exporting", symbol=symbol, date=dt, table=table, rows=rows)
 
             if "l1" in formats:
-                # Skip if already exported
                 l1_path = sym_dir / f"{symbol}_{dt}_l1.npy"
                 if l1_path.exists():
                     logger.info("l1_skipped", path=str(l1_path), reason="already_exists")
@@ -615,7 +565,6 @@ def concat_l1_files(
 
     np.save(str(out_path), combined)
 
-    # Meta
     digest = hashlib.sha256(combined.tobytes()[:4096]).hexdigest()
     meta = {
         "dataset_id": f"{symbol}_all_l1",
@@ -637,9 +586,6 @@ def concat_l1_files(
     return str(out_path)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 
 def _parse_args() -> argparse.Namespace:
@@ -694,7 +640,6 @@ def main() -> int:
         logger.info("dry_run_complete", summary=summary)
         return 0
 
-    # Concat L1 if requested
     if args.concat and "l1" in formats:
         for symbol in symbols:
             sym_dir = Path(args.out) / symbol.lower()
@@ -703,7 +648,6 @@ def main() -> int:
             except FileNotFoundError as e:
                 logger.warning("concat_skipped", symbol=symbol, reason=str(e))
 
-    # Print summary
     logger.info("batch_export_complete", summary=summary)
     if summary["errors"]:
         logger.warning("errors_occurred", count=len(summary["errors"]))

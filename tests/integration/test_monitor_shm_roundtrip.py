@@ -23,7 +23,7 @@ pytestmark = [
     pytest.mark.integration,
 ]
 
-_PLATFORM_TO_CH_SCALE = 100  # x10000 → x1000000
+_PLATFORM_TO_CH_SCALE = 100
 
 
 @pytest.fixture()
@@ -50,11 +50,6 @@ def _make_features(n: int = 16) -> list[int]:
     return [i * 10 for i in range(n)]
 
 
-# ------------------------------------------------------------------
-# 1. Writer → Reader roundtrip
-# ------------------------------------------------------------------
-
-
 def test_writer_reader_roundtrip(shm_name: str) -> None:
     writer = ShmSnapshotWriter(shm_name, max_symbols=4)
     ts = 1_700_000_000_000_000_000
@@ -75,15 +70,10 @@ def test_writer_reader_roundtrip(shm_name: str) -> None:
     assert slot.version >= 1
 
 
-# ------------------------------------------------------------------
-# 2. ShmDataSource.poll converts to CH scale (x1000000)
-# ------------------------------------------------------------------
-
-
 def test_data_source_poll_converts_scale(shm_name: str) -> None:
     from hft_platform.monitor._data_source import ShmDataSource
 
-    best_bid = 2105000  # 210.5 in x10000
+    best_bid = 2105000
     best_ask = 2106000
     ts = 1_700_000_000_000_000_000
     sym = "2330"
@@ -112,11 +102,6 @@ def test_data_source_poll_converts_scale(shm_name: str) -> None:
     assert row.ingest_ts == ts
 
 
-# ------------------------------------------------------------------
-# 3. Second poll with no update → empty (version tracking)
-# ------------------------------------------------------------------
-
-
 def test_data_source_skips_unchanged_version(shm_name: str) -> None:
     from hft_platform.monitor._data_source import ShmDataSource
 
@@ -140,11 +125,6 @@ def test_data_source_skips_unchanged_version(shm_name: str) -> None:
     assert len(second[sym]) == 0
 
 
-# ------------------------------------------------------------------
-# 4. Lazy discovery of a new symbol
-# ------------------------------------------------------------------
-
-
 def test_data_source_discovers_new_symbol(shm_name: str) -> None:
     from hft_platform.monitor._data_source import ShmDataSource
 
@@ -153,7 +133,6 @@ def test_data_source_discovers_new_symbol(shm_name: str) -> None:
     ts = 1_700_000_000_000_000_000
 
     writer = ShmSnapshotWriter(shm_name, max_symbols=4)
-    # Only sym_a exists at init time
     writer.publish(
         slot_idx=0,
         ts_ns=ts,
@@ -166,7 +145,6 @@ def test_data_source_discovers_new_symbol(shm_name: str) -> None:
     assert sym_a in ds._symbol_to_slot
     assert sym_b not in ds._symbol_to_slot
 
-    # Publish sym_b after init
     writer.publish(
         slot_idx=1,
         ts_ns=ts + 1,

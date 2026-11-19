@@ -36,10 +36,6 @@ from structlog import get_logger
 
 logger = get_logger("order.broker_stall")
 
-# A broker call that has been waiting this long is no longer tracked. The SDK's
-# own ``place_order`` timeout is 30 s (1.7.9), so a real call ends well before
-# this; the bound exists so a callback that is never delivered (the loop closed
-# under a worker thread) cannot hold a silence forever.
 _DEFAULT_MAX_AGE_NS = 300 * 1_000_000_000
 _DEFAULT_MAX_ENTRIES = 256
 
@@ -66,19 +62,12 @@ class BrokerStallTracker:
         on_episode: Callable[[int], None] | None = None,
         clock: Callable[[], int] = time.monotonic_ns,
     ) -> None:
-        # token -> send time. Insertion order is send order because tokens are
-        # issued in time order on one thread, so the first matching value in
-        # iteration order is the oldest.
         self._outstanding: dict[int, int] = {}
         self._last_answer_ns: int = 0
-        # Send time of the newest call the broker has answered. Calls sent at
-        # or before it and still waiting were overtaken, not stalled.
         self._last_answered_send_ns: int = 0
         self._next_token: int = 0
         self._max_entries = max(1, int(max_entries))
         self._max_age_ns = max(1, int(max_age_ns))
-        # Called with the length of a silence that just ended (an answer
-        # arrived while a call sent after the previous answer was waiting).
         self._on_episode = on_episode
         self._clock = clock
 
@@ -100,11 +89,10 @@ class BrokerStallTracker:
             if start is not None and self._on_episode is not None:
                 try:
                     self._on_episode(max(0, now - start))
-                except Exception:  # noqa: BLE001 - observation must never disturb the order path
+                except Exception:
                     logger.debug("broker_silence_episode_observer_failed", exc_info=True)
             if sent_ns > self._last_answered_send_ns:
                 self._last_answered_send_ns = sent_ns
-        # An answer for a token already evicted still proves the broker moved.
         if now > self._last_answer_ns:
             self._last_answer_ns = now
 
@@ -142,16 +130,11 @@ class BrokerStallTracker:
                 if sent_ns > floor:
                     if oldest is None or sent_ns < oldest:
                         oldest = sent_ns
-                    break  # values are in send order; the first match is the oldest
+                    break
         except RuntimeError:
-            # Mutated mid-iteration: a reader off the loop thread, which the
-            # contract excludes. Use what was found so far rather than raise
-            # into the risk gate.
             pass
         if oldest is None:
             return None
-        # A call queued behind a stuck one cannot be served before the stuck
-        # one is answered; its own wait starts there.
         return max(oldest, self._last_answer_ns)
 
     def _evict(self, now: int) -> None:

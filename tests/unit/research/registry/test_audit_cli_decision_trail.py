@@ -20,8 +20,6 @@ def _record(
     n_trades: float = 80.0,
     profile: str = "vm_ul6_strict",
 ) -> None:
-    # A full gate set so promotion_readiness yields a clean verdict:
-    # edge>10 + adequate sample -> promotable; edge<=10 -> failed; thin -> not.
     sample = "adequate" if n_trades >= 30.0 else "thin"
     advisory = [
         {
@@ -109,17 +107,14 @@ class TestDecisionTrail:
         assert "no audit rows for strategy_name='alpha_missing'" in out
 
     def test_orders_by_recorded_at_ns_ascending(self, _isolated) -> None:
-        # Insert out of chronological order; trail must sort by timestamp.
         _record(run_id="late", strategy_name="alpha_a", recorded_at_ns=300, edge=12.0)
         _record(run_id="early", strategy_name="alpha_a", recorded_at_ns=100, edge=8.0)
         _record(run_id="mid", strategy_name="alpha_a", recorded_at_ns=200, edge=11.0)
         out = audit_cli.decision_trail("alpha_a")
-        # Body row order = early, mid, late.
         i_early = out.index("early")
         i_mid = out.index("mid")
         i_late = out.index("late")
         assert i_early < i_mid < i_late
-        # Sequence numbers present.
         assert "1  " in out and "2  " in out and "3  " in out
 
     def test_filters_to_named_strategy_only(self, _isolated) -> None:
@@ -138,12 +133,10 @@ class TestDecisionTrail:
         assert "p2" not in out
 
     def test_trailing_line_flags_triage_change(self, _isolated) -> None:
-        # Below-floor edge first (failed), then above-floor edge (promotable).
         _record(run_id="v1", strategy_name="alpha_a", recorded_at_ns=1, edge=8.0)
         _record(run_id="v2", strategy_name="alpha_a", recorded_at_ns=2, edge=12.0)
         out = audit_cli.decision_trail("alpha_a")
         assert "triage changed across trail" in out
-        # Latest verdict is the last (chronological) run's triage.
         last_reason = audit_cli.triage_reason(sub_gate_audit.read_runs("v2")[0])
         assert f"latest triage={last_reason}" in out
 

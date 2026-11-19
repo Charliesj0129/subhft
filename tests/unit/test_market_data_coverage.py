@@ -16,10 +16,6 @@ from unittest.mock import patch
 
 from hft_platform.services.market_data import FeedState
 
-# ---------------------------------------------------------------------------
-# _looks_like_md
-# ---------------------------------------------------------------------------
-
 
 class TestLooksLikeMd:
     def _fn(self, obj):
@@ -61,7 +57,6 @@ class TestLooksLikeMd:
         assert self._fn({"foo": "bar"}) is False
 
     def test_object_with_code_only_returns_false(self):
-        # has_code=True but no price or time attrs
         assert self._fn(SimpleNamespace(code="SYM")) is False
 
     def test_object_with_bid_price(self):
@@ -78,11 +73,6 @@ class TestLooksLikeMd:
 
     def test_object_plain(self):
         assert self._fn(SimpleNamespace(foo="bar")) is False
-
-
-# ---------------------------------------------------------------------------
-# _unwrap_md
-# ---------------------------------------------------------------------------
 
 
 class TestUnwrapMd:
@@ -119,11 +109,6 @@ class TestUnwrapMd:
         assert self._fn(obj) is inner
 
 
-# ---------------------------------------------------------------------------
-# _summarize_md
-# ---------------------------------------------------------------------------
-
-
 class TestSummarizeMd:
     def _fn(self, obj):
         from hft_platform.services.market_data import _summarize_md
@@ -149,11 +134,6 @@ class TestSummarizeMd:
         result = self._fn(d)
         assert "nested" in result
         assert "tick" in result["nested"]
-
-
-# ---------------------------------------------------------------------------
-# _try_fast_extract_callback_payload
-# ---------------------------------------------------------------------------
 
 
 class TestTryFastExtract:
@@ -225,11 +205,6 @@ class TestTryFastExtract:
         assert msg is None
 
 
-# ---------------------------------------------------------------------------
-# _env_int
-# ---------------------------------------------------------------------------
-
-
 class TestEnvInt:
     def _fn(self, name, default):
         from hft_platform.services.market_data import _env_int
@@ -250,11 +225,6 @@ class TestEnvInt:
     def test_returns_default_on_bad_value(self):
         with patch.dict(os.environ, {"HFT_TEST_INT_VAR": "bad"}):
             assert self._fn("HFT_TEST_INT_VAR", 5) == 5
-
-
-# ---------------------------------------------------------------------------
-# _obs_policy
-# ---------------------------------------------------------------------------
 
 
 class TestObsPolicy:
@@ -279,11 +249,6 @@ class TestObsPolicy:
     def test_unknown_defaults_to_balanced(self):
         with patch.dict(os.environ, {"HFT_OBS_POLICY": "foobar"}):
             assert self._fn() == "balanced"
-
-
-# ---------------------------------------------------------------------------
-# FeedState
-# ---------------------------------------------------------------------------
 
 
 class TestFeedState:

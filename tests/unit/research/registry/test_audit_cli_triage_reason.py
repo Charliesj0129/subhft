@@ -137,13 +137,10 @@ class TestTriageReason:
         assert audit_cli.triage_reason(_row("dd")) == "blocked_by_risk"
 
     def test_missing_axis_is_blocked_by_audit(self, _isolated) -> None:
-        # No edge metric at all -> edge:missing -> audit gap.
         _record(run_id="bare", edge=None)
         assert audit_cli.triage_reason(_row("bare")) == "blocked_by_audit"
 
     def test_precedence_audit_over_parity_over_risk(self, _isolated) -> None:
-        # Missing edge (audit) + parity break + drawdown breach all present;
-        # audit wins.
         _record(run_id="multi", edge=None, replay_match=80.0, dd_ratio=3.0)
         assert audit_cli.triage_reason(_row("multi")) == "blocked_by_audit"
 

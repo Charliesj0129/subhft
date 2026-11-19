@@ -40,16 +40,11 @@ from hft_platform.services.system import HFTSystem
 SCALE = 10_000
 
 
-# --------------------------------------------------------------------------- #
-# Helpers                                                                      #
-# --------------------------------------------------------------------------- #
-
-
 def _store(*positions: Position) -> PositionStore:
     store = PositionStore.__new__(PositionStore)
     store.positions = {f"{p.account_id}:{p.strategy_id}:{p.symbol}": p for p in positions}
     store._fill_lock = threading.Lock()
-    store._recovery_positions = {}  # snapshot_open_positions() walks recovered lots too
+    store._recovery_positions = {}
     return store
 
 
@@ -66,11 +61,6 @@ def _calc(store: PositionStore, mids: dict[str, int]) -> MarkToMarketCalculator:
 
 def _gauge() -> float:
     return mtm_unpriced_positions._value.get()
-
-
-# --------------------------------------------------------------------------- #
-# The calculator reports, it does not narrate                                  #
-# --------------------------------------------------------------------------- #
 
 
 class TestTheCalculatorNamesWhatItCouldNotPrice:
@@ -127,19 +117,11 @@ class TestTheCalculatorNamesWhatItCouldNotPrice:
         """The 1 Hz half of the 248,724 lines: the calculator must be silent."""
         calc = _calc(_store(_pos("TMFI6", 1)), {})
         with structlog.testing.capture_logs() as logs:
-            # Canary: capture_logs swaps the global processor chain and goes
-            # blind against loggers cached by an earlier test. Without this the
-            # assertion below would pass for the wrong reason.
             structlog.get_logger("mtm_capture_canary").warning("capture_canary")
             for _ in range(100):
                 calc.snapshot()
         assert any(e.get("event") == "capture_canary" for e in logs), "log capture went blind"
         assert [e for e in logs if e.get("event") == "mid_price_unavailable"] == []
-
-
-# --------------------------------------------------------------------------- #
-# The supervisor speaks on the edges                                           #
-# --------------------------------------------------------------------------- #
 
 
 def _snap(unpriced: tuple[str, ...], priced: int = 0) -> SimpleNamespace:

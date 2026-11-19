@@ -48,9 +48,6 @@ def test_replay_strict_ordering_quarantines_out_of_order_file(tmp_path):
     loader.insert_batch = types.MethodType(lambda self, table, rows: True, loader)
 
     assert loader._process_single_file(str(newer), force=True) is True
-    # Strict mode must quarantine an out-of-order file to wal/corrupt/ with its
-    # data intact — leaving it in wal_dir would be skipped-forever data loss,
-    # and it must never be inserted (return False) or deleted.
     assert loader._process_single_file(str(older), force=True) is False
     assert not older.exists()
     quarantined = wal_dir / "corrupt" / older.name
@@ -91,7 +88,6 @@ def test_replay_dedup_prevents_duplicate_insert_after_crash_before_archive(tmp_p
     assert insert_calls_1["n"] == 1
     assert fpath.exists()
 
-    # Restart loader; dedup guard should detect previously inserted content and avoid re-insert.
     loader2 = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader2._dedup_enabled = True
     loader2.ch_client = MagicMock()
@@ -114,7 +110,6 @@ def test_replay_manifest_restart_reprocesses_stuck_manifest_entry(tmp_path, monk
     manifest_path = tmp_path / "manifest.txt"
     monkeypatch.setenv("HFT_WAL_MANIFEST_PATH", str(manifest_path))
 
-    # First run processes file and writes manifest.
     fpath = _write_market_file(wal_dir, seq=1, ts_suffix=321)
     loader1 = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader1.ch_client = object()
@@ -123,13 +118,11 @@ def test_replay_manifest_restart_reprocesses_stuck_manifest_entry(tmp_path, monk
     assert (archive_dir / fpath.name).exists()
     assert manifest_path.exists()
 
-    # Simulate crash/restore: same filename appears again in WAL while manifest still marks it processed.
     restored = _write_market_file(wal_dir, seq=2, ts_suffix=321)
     loader2 = WALLoaderService(wal_dir=str(wal_dir), archive_dir=str(archive_dir))
     loader2.ch_client = object()
     loader2.insert_batch = types.MethodType(lambda self, table, rows: True, loader2)
     loader2._load_manifest()
-    # _load_manifest should remove stuck entries still present in wal_dir.
     assert restored.name not in loader2._manifest
     loader2.process_files(force=True)
     assert (archive_dir / restored.name).exists()

@@ -161,7 +161,7 @@ def cmd_feature_validate(args: argparse.Namespace) -> None:
     profile = reg.get_active_for_set(fe.feature_set_id()) if reg.ids() else None
     applied = None
     if profile is not None:
-        prof_issues = check_feature_profile_compat(profile, fe._registry)  # prototype: introspect engine registry
+        prof_issues = check_feature_profile_compat(profile, fe._registry)
         errors.extend(i.message for i in prof_issues if i.level == "error")
         try:
             fe.apply_profile(profile)

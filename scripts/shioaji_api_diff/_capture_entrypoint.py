@@ -43,25 +43,14 @@ import typing
 import warnings
 from typing import Any
 
-# Bump when the snapshot JSON shape changes (forces golden regeneration).
 SCHEMA_VERSION = 2
 TOOL_VERSION = "1.0.0"
 
 _HEX_RE = re.compile(r"0x[0-9a-fA-F]+")
-# Some SDK method defaults are computed at import (e.g. ``start=date.today()``),
-# which would make the snapshot change every day. Neutralize them.
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([ T].*)?$")
 _MISSING = object()
 _EMPTY = inspect.Parameter.empty
 
-# --------------------------------------------------------------------------- #
-# Declared logical targets. Each is resolved against a priority of modules
-# (top-level canonical first, then legacy submodule). Declared lists are unioned
-# with discovery so a REMOVED symbol still appears as ``{"_present": false}``
-# (a removal is a diff signal, not a silent absence) and ADDED symbols are
-# still captured.
-# --------------------------------------------------------------------------- #
-# logical enum name -> module search order
 ENUM_SEARCH = ["shioaji", "shioaji.constant", "shioaji.account", "shioaji.contracts"]
 DECLARED_ENUMS: list[str] = [
     "AccountType",
@@ -90,7 +79,6 @@ DECLARED_ENUMS: list[str] = [
     "Unit",
 ]
 
-# logical model name -> module search order (top-level first)
 MODEL_SEARCH = [
     "shioaji",
     "shioaji.order",
@@ -143,7 +131,6 @@ DECLARED_MODELS: list[str] = [
     "UsageStatus",
 ]
 
-# logical client/quote class -> module search order
 CLIENT_SEARCH = {
     "Shioaji": ["shioaji", "shioaji.shioaji"],
     "Quote": ["shioaji", "shioaji.shioaji"],
@@ -216,9 +203,6 @@ DECLARED_EXCEPTIONS: list[str] = [
 ]
 EXCEPTION_SEARCH = ["shioaji.error", "shioaji"]
 
-# Compiled (.so) modules and the classes/methods worth reflecting. The six
-# SolClient ``*_callback_wrap`` symbols are the arity-shim contract (their
-# removal/rename silently no-ops the shim -> SIGABRT crash-loop returns).
 DECLARED_COMPILED: dict[str, dict[str, list[str]]] = {
     "shioaji.backend.solace.api": {
         "SolClient": [
@@ -242,7 +226,6 @@ DECLARED_COMPILED: dict[str, dict[str, list[str]]] = {
     "shioaji._core": {},
 }
 
-# Legacy submodules whose presence/absence marks the pure-Python → compiled shift.
 LAYOUT_SUBMODULES = [
     "shioaji.config",
     "shioaji.shioaji",
@@ -255,9 +238,6 @@ LAYOUT_SUBMODULES = [
 ]
 
 
-# --------------------------------------------------------------------------- #
-# Determinism helpers — stable, version-independent, address-free reprs.
-# --------------------------------------------------------------------------- #
 def _scrub(text: str) -> str:
     return _HEX_RE.sub("<addr>", text).replace("typing.", "")
 
@@ -296,7 +276,7 @@ def normalize_type(tp: Any) -> str:
         return "None"
     if tp is _EMPTY:
         return "Any"
-    if isinstance(tp, list):  # Callable[[X, Y], R] yields [X, Y]
+    if isinstance(tp, list):
         return "[" + ", ".join(normalize_type(a) for a in tp) + "]"
 
     meta = getattr(tp, "__metadata__", None)
@@ -344,9 +324,6 @@ def _is_pydantic_undefined(value: Any) -> bool:
     return type(value).__name__ in {"PydanticUndefinedType"} or repr(value) == "PydanticUndefined"
 
 
-# --------------------------------------------------------------------------- #
-# Resolution: find a logical symbol across a module search order.
-# --------------------------------------------------------------------------- #
 def _resolve(name: str, search: list[str]) -> tuple[Any, str | None]:
     for mod_name in search:
         try:
@@ -359,15 +336,10 @@ def _resolve(name: str, search: list[str]) -> tuple[Any, str | None]:
     return _MISSING, None
 
 
-# --------------------------------------------------------------------------- #
-# Enum capture — handles Python ``enum.Enum`` and compiled (PyO3) enums.
-# --------------------------------------------------------------------------- #
 def _enum_members(obj: Any) -> dict[str, Any] | None:
     if isinstance(obj, type) and issubclass(obj, enum.Enum):
         return {m.name: normalize_default(m.value) for m in obj}
     if isinstance(obj, type):
-        # PyO3 / compiled enum: variants are class attributes that are instances
-        # of the enum type itself (e.g. ``Action.Buy`` is an ``Action``).
         members: dict[str, Any] = {}
         for attr in dir(obj):
             if attr.startswith("_"):
@@ -396,9 +368,6 @@ def capture_constants() -> dict[str, Any]:
     return result
 
 
-# --------------------------------------------------------------------------- #
-# Field introspection — pydantic v2 / v1 / annotation-only / compiled.
-# --------------------------------------------------------------------------- #
 def _fields_pydantic_v2(cls: type) -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     for name, fi in cls.model_fields.items():  # type: ignore[attr-defined]
@@ -472,7 +441,6 @@ def introspect_model(cls: type) -> dict[str, Any]:
     fields = _fields_annotated(cls)
     if fields:
         return {"kind": "annotated", "bases": bases, "fields": fields}
-    # Compiled struct (PyO3) with no Python annotations: record public data attrs.
     attrs = sorted(a for a in dir(cls) if not a.startswith("_") and not callable(getattr(cls, a, None)))
     return {"kind": "compiled", "bases": bases, "fields": {}, "attributes": attrs}
 
@@ -492,9 +460,6 @@ def capture_models() -> dict[str, Any]:
     return result
 
 
-# --------------------------------------------------------------------------- #
-# Method / signature introspection.
-# --------------------------------------------------------------------------- #
 def _build_sig_str(params: list[dict[str, Any]], returns: str | None) -> str:
     parts: list[str] = []
     for p in params:
@@ -572,9 +537,6 @@ def capture_methods() -> dict[str, Any]:
     return result
 
 
-# --------------------------------------------------------------------------- #
-# Config, exceptions, compiled layer, package layout.
-# --------------------------------------------------------------------------- #
 def capture_config() -> dict[str, Any]:
     import os
 
@@ -716,9 +678,6 @@ def capture_package_layout() -> dict[str, Any]:
     }
 
 
-# --------------------------------------------------------------------------- #
-# Top-level assembly + deterministic serialization.
-# --------------------------------------------------------------------------- #
 def _safe(fn: typing.Callable[[], Any]) -> Any:
     try:
         return fn()
@@ -748,10 +707,6 @@ def capture_dist() -> dict[str, Any]:
 
 
 def build_surface_snapshot(*, include_nm_symbols: bool = True) -> dict[str, Any]:
-    # Deprecation shims in shioaji ≥1.5 warn on every legacy attribute access; we
-    # resolve those paths deliberately. Contain the suppression to this call so
-    # importing the module (e.g. from the CI guard) never mutates the global
-    # warnings filter for the rest of the test suite.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return _build_surface_snapshot_inner(include_nm_symbols=include_nm_symbols)

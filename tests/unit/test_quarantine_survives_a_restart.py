@@ -88,7 +88,6 @@ def test_a_re_arm_request_written_before_the_restart_still_clears_the_latch(tmp_
     governor = StrategyHealthGovernor()
     governor.restore_persisted_quarantines(state_path=state)
 
-    # The token the operator's pre-restart request would have named.
     assert governor.rearm(_SID, expected_token="run-a:R47_MAKER_TMF:1") is True
     assert governor.is_quarantined(_SID) is False
 
@@ -102,7 +101,6 @@ def test_a_request_naming_an_earlier_quarantine_cannot_clear_a_later_one(tmp_pat
     governor.restore_persisted_quarantines(state_path=state)
     assert governor.rearm(_SID, expected_token="run-a:R47_MAKER_TMF:1") is True
 
-    # A genuinely new failure, in this run.
     governor.quarantine(_SID, reason="strategy_exception")
     assert governor.rearm(_SID, expected_token="run-a:R47_MAKER_TMF:1") is False
     assert governor.is_quarantined(_SID) is True
@@ -295,13 +293,6 @@ def test_the_legacy_migration_runs_once_and_is_stable_across_boots(tmp_path: Pat
     assert state.read_bytes() == after_first
 
 
-# --- Review round 2: the three fail-open gaps Codex found -------------------
-#
-# All three share one shape: a reading the code could not honestly make was
-# resolved in the trading direction. A latch that cannot be read is not an
-# absent latch.
-
-
 @pytest.mark.parametrize("section", ["platform", "strategies"])
 def test_a_present_null_latch_section_refuses_rather_than_reading_as_clear(tmp_path: Path, section: str) -> None:
     """``raw.get(s)`` returns ``None`` for both "absent" and "present, null".
@@ -391,7 +382,6 @@ def test_a_quarantine_written_after_the_snapshot_is_still_restored(tmp_path: Pat
     pre_fence = {"platform": {"manual_rearm_required": False, "reason": None}, "strategies": {}}
     _write_state(state, pre_fence)
 
-    # ...the other engine latches a strategy while this one is constructing.
     _write_state(state, _latched(strategy_id="OTHER", token="other-run:OTHER:2"))
 
     governor = StrategyHealthGovernor()
@@ -434,9 +424,6 @@ def test_an_unreadable_reread_applies_the_validated_snapshot_instead_of_crashing
 
     assert restored == [_SID]
     assert governor.is_quarantined(_SID) is True
-
-
-# --- Review round 3: the same fail-open, in the places round 2 did not look --
 
 
 @pytest.mark.parametrize("flag", [None, "", 0, 1, "true"])
@@ -525,9 +512,6 @@ def test_an_empty_string_token_is_corrupt_not_legacy(tmp_path: Path) -> None:
         governor.restore_persisted_quarantines(state_path=state)
 
 
-# --- Review round 3 ---------------------------------------------------------
-
-
 def test_a_second_start_adopts_the_token_the_first_one_committed(tmp_path: Path) -> None:
     """Two starts migrating the same tokenless latch must not split its identity.
 
@@ -576,16 +560,6 @@ def test_the_adopting_start_still_owns_the_latch_it_adopted(tmp_path: Path, monk
     committed = first.quarantine_token(_SID)
     assert committed
 
-    # The race, reproduced exactly. ``restore_persisted_quarantines`` re-reads
-    # the file even when handed a snapshot, so simply passing the tokenless
-    # document is NOT enough: the re-read finds the token ``first`` committed
-    # and takes the ordinary restore path, which registers the token by a
-    # different line and hides this defect completely. (Verified -- the first
-    # version of this test passed against the unfixed code.)
-    #
-    # The branch fires only when both reads still show tokenless and the write
-    # lands before this start takes the lock. Pinning the gate's snapshot to
-    # the tokenless document is that window, held open.
     monkeypatch.setattr(ManualRearmGate, "snapshot", lambda self: legacy)
     second = StrategyHealthGovernor()
     second.restore_persisted_quarantines(snapshot=legacy, state_path=state)

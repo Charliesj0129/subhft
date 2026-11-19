@@ -59,13 +59,13 @@ TRADE_EVENT = 2
 DEPTH_CLEAR_EVENT = 3
 DEPTH_SNAPSHOT_EVENT = 4
 
-L_MAX = 5  # levels we track
+L_MAX = 5
 
 
 @dataclass(frozen=True, slots=True)
 class SnapshotConfig:
-    sample_period_ns: int = 100_000_000  # 100 ms default
-    drop_warmup_seconds: float = 5.0     # discard first N s of grid (book warming)
+    sample_period_ns: int = 100_000_000
+    drop_warmup_seconds: float = 5.0
 
 
 def replay_to_snapshots(
@@ -92,8 +92,6 @@ def replay_to_snapshots(
     px = data["px"].astype(np.float64)
     qty = data["qty"].astype(np.float64)
 
-    # Current L5 view (replaced at each batch; carried across batches if a
-    # batch is single-sided).
     cur_bid_px = np.full(L_MAX, np.nan)
     cur_bid_qty = np.zeros(L_MAX)
     cur_ask_px = np.full(L_MAX, np.nan)
@@ -101,9 +99,6 @@ def replay_to_snapshots(
     cur_n_bids = 0
     cur_n_asks = 0
 
-    # Per-batch staging (events are processed in order; a batch ends when
-    # exch_ts changes OR a different event type / side appears in a way that
-    # contradicts the snapshot semantics — we simply use exch_ts boundary).
     batch_bid_px: list[float] = []
     batch_bid_qty: list[float] = []
     batch_ask_px: list[float] = []
@@ -157,7 +152,6 @@ def replay_to_snapshots(
         """Promote the staged batch into the current L5 view."""
         nonlocal cur_n_bids, cur_n_asks, last_bid0, last_ask0, bid_chg_b, ask_chg_b
         if batch_has_any_bid_event:
-            # Sort qty>0 bids descending, take top L_MAX
             pairs = sorted(
                 ((p, q) for p, q in zip(batch_bid_px, batch_bid_qty) if q > 0.0),
                 key=lambda pq: -pq[0],
@@ -218,14 +212,12 @@ def replay_to_snapshots(
     for i in range(data.shape[0]):
         ts = int(exch_ts[i])
 
-        # Close staged batch when ts changes (snapshot boundary).
         if batch_ts != -1 and ts != batch_ts:
             _flush_batch()
             _reset_batch(ts)
         elif batch_ts == -1:
             _reset_batch(ts)
 
-        # Advance grid cursor up to ts; emit per grid cell.
         while ts >= cur_grid_ts and cur_grid_idx < n:
             _emit(cur_grid_idx)
             n_trades_b = 0
@@ -269,8 +261,6 @@ def replay_to_snapshots(
                 batch_has_any_ask_event = True
             quote_b += 1
         elif b == DEPTH_CLEAR_EVENT:
-            # Treat CLEAR as a fresh-start sentinel: reset both sides and any
-            # staged batch entries on the cleared side.
             if is_bid[i] or (not is_bid[i] and not is_ask[i]):
                 cur_bid_px[:] = np.nan
                 cur_bid_qty[:] = 0.0
@@ -293,7 +283,6 @@ def replay_to_snapshots(
             if np.isnan(max_trade_px_b) or tp > max_trade_px_b:
                 max_trade_px_b = tp
 
-    # Final batch + grid cells.
     if batch_ts != -1:
         _flush_batch()
     while cur_grid_idx < n:

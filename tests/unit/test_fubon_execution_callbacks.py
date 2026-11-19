@@ -15,16 +15,11 @@ from hft_platform.feed_adapter.fubon.execution_callbacks import (
     _scale_price,
 )
 
-# ------------------------------------------------------------------ #
-# Fixtures
-# ------------------------------------------------------------------ #
-
 
 @pytest.fixture()
 def sdk() -> MagicMock:
     """A mock Fubon SDK without callback-registration methods."""
     mock = MagicMock()
-    # Remove SDK-level callback helpers so register() just stores them.
     del mock.set_order_callback
     del mock.set_on_dealt
     return mock
@@ -33,11 +28,6 @@ def sdk() -> MagicMock:
 @pytest.fixture()
 def adapter(sdk: MagicMock) -> FubonExecutionCallbackAdapter:
     return FubonExecutionCallbackAdapter(sdk)
-
-
-# ------------------------------------------------------------------ #
-# _resolve_order_id
-# ------------------------------------------------------------------ #
 
 
 class TestResolveOrderId:
@@ -67,11 +57,6 @@ class TestResolveOrderId:
         assert _resolve_order_id(obj) == "X1"
 
 
-# ------------------------------------------------------------------ #
-# _resolve_side
-# ------------------------------------------------------------------ #
-
-
 class TestResolveSide:
     @pytest.mark.parametrize(
         "raw,expected",
@@ -92,11 +77,6 @@ class TestResolveSide:
         assert _resolve_side({}) == ""
 
 
-# ------------------------------------------------------------------ #
-# _scale_price
-# ------------------------------------------------------------------ #
-
-
 class TestScalePrice:
     def test_float_to_scaled_int(self) -> None:
         assert _scale_price(100.5) == 100_5000
@@ -114,11 +94,6 @@ class TestScalePrice:
         assert _scale_price("abc") == 0
 
 
-# ------------------------------------------------------------------ #
-# FubonExecutionCallbackAdapter — register
-# ------------------------------------------------------------------ #
-
-
 class TestRegister:
     def test_stores_callbacks(self, adapter: FubonExecutionCallbackAdapter) -> None:
         on_order = MagicMock()
@@ -128,16 +103,11 @@ class TestRegister:
         assert adapter._on_deal is on_deal
 
     def test_wires_sdk_callbacks_when_available(self) -> None:
-        sdk = MagicMock()  # Has set_order_callback and set_on_dealt
+        sdk = MagicMock()
         adapter = FubonExecutionCallbackAdapter(sdk)
         adapter.register(on_order=MagicMock(), on_deal=MagicMock())
         sdk.set_order_callback.assert_called_once_with(adapter._on_sdk_order)
         sdk.set_on_dealt.assert_called_once_with(adapter._on_sdk_deal)
-
-
-# ------------------------------------------------------------------ #
-# _on_sdk_order
-# ------------------------------------------------------------------ #
 
 
 class TestOnSdkOrder:
@@ -161,7 +131,6 @@ class TestOnSdkOrder:
         assert msg["order_id"] == "ORD123"
         assert msg["symbol"] == "2330"
         assert msg["side"] == "Buy"
-        # Raw (unscaled) price — normalizer is the single scaling point.
         assert msg["price"] == "595.0"
         assert msg["qty"] == 1000
         assert msg["status"] == "Filled"
@@ -178,7 +147,6 @@ class TestOnSdkOrder:
         assert received[0]["side"] == "Sell"
 
     def test_no_callback_is_noop(self, adapter: FubonExecutionCallbackAdapter) -> None:
-        # Should not raise when _on_order is None
         result = adapter._on_sdk_order({"ord_no": "X"})
         assert result is None
         assert adapter._on_order is None
@@ -199,7 +167,6 @@ class TestOnSdkOrder:
 
         assert received[0]["order_id"] == "OBJ1"
         assert received[0]["symbol"] == "2454"
-        # Raw (unscaled) price passed through — normalizer handles scaling.
         assert received[0]["price"] == 800.0
 
     def test_handles_missing_fields(self, adapter: FubonExecutionCallbackAdapter) -> None:
@@ -210,14 +177,8 @@ class TestOnSdkOrder:
         msg = received[0]
         assert msg["order_id"] == ""
         assert msg["symbol"] == ""
-        # Missing price key → _get returns None (raw passthrough, no scaling).
         assert msg["price"] is None
         assert msg["qty"] == 0
-
-
-# ------------------------------------------------------------------ #
-# _on_sdk_deal
-# ------------------------------------------------------------------ #
 
 
 class TestOnSdkDeal:
@@ -240,8 +201,6 @@ class TestOnSdkDeal:
         assert msg["order_id"] == "ORD456"
         assert msg["symbol"] == "2330"
         assert msg["side"] == "Sell"
-        # Canonical keys: price/qty (not deal_price/deal_qty).
-        # Raw (unscaled) price — normalizer is the single scaling point.
         assert msg["price"] == "590.5"
         assert msg["qty"] == 500
         assert msg["strategy_id"] == "strat_beta"
@@ -259,15 +218,8 @@ class TestOnSdkDeal:
         adapter._on_sdk_deal({})
         msg = received[0]
         assert msg["order_id"] == ""
-        # Canonical keys: price/qty (not deal_price/deal_qty).
-        # Missing mat_price → None (raw passthrough).
         assert msg["price"] is None
         assert msg["qty"] == 0
-
-
-# ------------------------------------------------------------------ #
-# Bug-fix regression: field names, no pre-scaling, epoch timestamps
-# ------------------------------------------------------------------ #
 
 
 class TestBugFixRegressions:
@@ -281,7 +233,6 @@ class TestBugFixRegressions:
 
         assert "price" in msg, "canonical 'price' key must be present"
         assert "deal_price" not in msg, "'deal_price' key must NOT be present"
-        # Raw unscaled value (normalizer does the scaling)
         assert msg["price"] == "100.5"
 
     def test_deal_callback_uses_canonical_qty_key(self, adapter: FubonExecutionCallbackAdapter) -> None:
@@ -304,8 +255,6 @@ class TestBugFixRegressions:
         adapter._on_sdk_deal({"ord_no": "D1", "mat_price": "100.5", "mat_qty": 1})
         ts = received[0]["ts_ns"]
 
-        # Epoch nanoseconds are ~1.7e18. perf_counter_ns values are ~1e12.
-        # A value > 1e15 unambiguously identifies the epoch domain.
         assert ts > 1_000_000_000_000_000, (
             f"ts_ns={ts} looks like perf_counter_ns (not epoch ns); use timebase.now_ns() not time.perf_counter_ns()"
         )
@@ -318,13 +267,7 @@ class TestBugFixRegressions:
         adapter._on_sdk_order({"ord_no": "O1", "price": 595.0, "qty": 1, "status": "New"})
         msg = received[0]
 
-        # If price were pre-scaled it would be 5_950_000; raw value is 595.0.
         assert msg["price"] == 595.0, f"price={msg['price']} looks pre-scaled; adapter must not call _scale_price"
-
-
-# ------------------------------------------------------------------ #
-# Buffer reuse (Allocator Law)
-# ------------------------------------------------------------------ #
 
 
 class TestBufferReuse:

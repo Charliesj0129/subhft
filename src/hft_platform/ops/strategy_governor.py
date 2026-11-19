@@ -48,7 +48,6 @@ class PersistedQuarantine:
 
     strategy_id: str
     reason: str
-    #: ``None`` for a latch written before tokens existed; the caller mints one.
     token: str | None
 
 
@@ -105,13 +104,6 @@ def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine 
             )
         required = entry.get("manual_rearm_required")
         if not isinstance(required, bool):
-            # ``bool(entry.get(...))`` collapsed missing, null, "" and 0 into a
-            # deliberate ``False`` -- so a record carrying a real reason and a
-            # real token, whose flag had been truncated to null, read as "this
-            # strategy is free to trade". Every writer of this field writes an
-            # actual bool (``ops/autonomy.py``, ``ops/evidence.py``), so
-            # anything else is damage, and damage to *this* field is not
-            # something to resolve in the trading direction.
             raise StrategyQuarantineStateCorrupt(
                 f"persisted entry for strategy {strategy_id!r} has "
                 f"manual_rearm_required={required!r} ({type(required).__name__}), not a bool; "
@@ -121,18 +113,10 @@ def parse_persisted_quarantines(snapshot: Any) -> dict[str, PersistedQuarantine 
             seen[strategy_id] = None
             continue
         if "quarantine_token" not in entry:
-            # A latch written before tokens existed. The caller mints one.
             token: str | None = None
         else:
             token = entry["quarantine_token"]
             if not isinstance(token, str) or not token:
-                # Present but malformed is NOT legacy, and treating it as legacy
-                # produced a latch nothing could clear: restore minted a live
-                # token, ``_persist_legacy_tokens`` saw the existing truthy
-                # value and declined to overwrite it, so disk kept e.g. ``123``
-                # while memory held the new token. The CLI rejected the disk
-                # value, the governor rejected the CLI's, and every restart
-                # repeated it while logging that the migration had succeeded.
                 raise StrategyQuarantineStateCorrupt(
                     f"persisted entry for strategy {strategy_id!r} has "
                     f"quarantine_token={token!r} ({type(token).__name__}), not a non-empty string; "
@@ -151,16 +135,7 @@ class StrategyQuarantine:
     strategy_id: str
     reason: str
     transition: AutonomyTransition
-    #: Unique per quarantine *instance*, not per strategy. An operator re-arm
-    #: must name the exact token it intends to clear; see ``rearm``.
     token: str = ""
-
-
-#: How long ``quarantine_async`` blocks the strategy consumer on the durable
-#: write before letting it finish in the background. Two orders of magnitude
-#: above a healthy write (two fsyncs) and an order of magnitude below
-#: ``locked_state``'s own two-second lock deadline, so a contended lock costs
-#: the bus 200 ms rather than 2 s.
 
 
 class StrategyHealthGovernor:
@@ -169,33 +144,9 @@ class StrategyHealthGovernor:
         self.evidence_writer = evidence_writer or get_shared_autonomy_evidence_writer()
         self._quarantined: dict[str, StrategyQuarantine] = {}
         self._quarantine_seq: int = 0
-        #: Strategies whose latch is in memory only -- the durable write failed,
-        #: or has not finished -- mapped to the TOKEN of the quarantine that is
-        #: waiting. Keyed by token because one bit per strategy let a stale
-        #: completion bless a newer latch: A times out in flight, the operator
-        #: re-arms, the strategy fails straight back into B, and A's late success
-        #: cleared B's undurable state while B's write was still pending.
         self._undurable: dict[str, str] = {}
-        #: Identifies this governor instance. A quarantine token carries it so a
-        #: re-arm request issued for an *earlier* quarantine can never match a
-        #: later one, even when the process is the same: the per-instance
-        #: counter restarts at 1 on every rebuild, so a module-scoped id would
-        #: hand the first quarantine of a rebuilt governor a token a previous
-        #: instance had already issued. Full uuid4, not a truncation -- a PID
-        #: and a sequence number both repeat, so this is the only part carrying
-        #: the non-collision guarantee.
         self._run_id: str = f"{os.getpid():d}-{uuid.uuid4().hex}"
-        # Tokens minted by an earlier run and adopted by ``restore_persisted_quarantines``.
-        # They carry that run's id, not ours, so ``owns_token`` cannot recognise
-        # them by prefix. See its docstring.
         self._restored_tokens: set[str] = set()
-        #: Strong references to in-flight durable writes.
-        #: ``asyncio`` keeps only a weak reference to a running future, so a
-        #: fire-and-forget submission whose only other reference is a local
-        #: variable can be garbage-collected mid-write. This set is what makes
-        #: "the write continues in the background" true rather than merely
-        #: stated. Entries are discarded by the done callback, so it is bounded
-        #: by the number of writes actually in flight.
         self._persist_tasks: set[asyncio.Future[Any]] = set()
 
     def _mint_token(self, strategy_id: str) -> str:
@@ -277,7 +228,6 @@ class StrategyHealthGovernor:
         """
         transition, persist = self._latch_quarantine(strategy_id, reason=reason)
         persist()
-        # persist() raises on failure, so reaching here means the record landed.
         latched = self._quarantined.get(strategy_id)
         if latched is not None:
             self._mark_durability(strategy_id, token=latched.token, durable=True)
@@ -293,10 +243,6 @@ class StrategyHealthGovernor:
         """
         live = self._quarantined.get(strategy_id)
         if live is None or live.token != token:
-            # A completion for a quarantine that has since been re-armed or
-            # superseded. Publishing it would describe the wrong latch -- and in
-            # the durable=True direction it would report a pending write as
-            # finished, after which a restart releases an unauthorised strategy.
             logger.debug(
                 "strategy_quarantine_durability_stale",
                 strategy_id=strategy_id,
@@ -312,7 +258,7 @@ class StrategyHealthGovernor:
         if gauge is not None:
             try:
                 gauge.labels(strategy=strategy_id).set(0 if durable else 1)
-            except Exception:  # noqa: BLE001 -- observability must not break the latch
+            except Exception:
                 logger.debug("strategy_quarantine_undurable_metric_failed", strategy_id=strategy_id)
 
     @property
@@ -331,7 +277,7 @@ class StrategyHealthGovernor:
             if counter is not None:
                 try:
                     counter.labels(strategy=strategy_id).inc()
-                except Exception:  # noqa: BLE001 -- observability must not break the latch
+                except Exception:
                     logger.debug("strategy_quarantine_persist_failed_metric_failed", strategy_id=strategy_id)
             self._mark_durability(strategy_id, token=token, durable=False)
             logger.error(
@@ -390,25 +336,10 @@ class StrategyHealthGovernor:
         transition, persist = self._latch_quarantine(strategy_id, reason=reason)
         latched = self._quarantined.get(strategy_id)
         token = latched.token if latched is not None else ""
-        # Undurable until the write is confirmed, not the other way round: the
-        # window this reports on opens the moment the latch exists in memory.
         self._mark_durability(strategy_id, token=token, durable=False)
         try:
-            # ``run_in_executor``, deliberately, not ``to_thread``:
-            # ``to_thread`` is a coroutine, so ``ensure_future`` only *schedules*
-            # the submission -- the work reaches the pool on the loop's next
-            # iteration. ``asyncio.run`` cancels every pending task before it
-            # joins the executor, so a quarantine raised as the last act before
-            # shutdown produced a cancelled task whose outcome was discarded by
-            # ``_log_persist_outcome``'s ``task.cancelled()`` guard: a failed
-            # write, reported to nobody. ``run_in_executor`` submits
-            # synchronously here and returns a Future rather than a Task, so
-            # the cancel-all does not reach it and the outcome survives.
             task = asyncio.get_running_loop().run_in_executor(None, persist)
         except RuntimeError:
-            # No running loop. The latch is already applied in memory, and
-            # raising here would tear down the bus consumer (see above), so the
-            # honest failure is a loud log, not an exception.
             logger.error(
                 "strategy_quarantine_persist_not_scheduled",
                 strategy_id=strategy_id,
@@ -484,37 +415,10 @@ class StrategyHealthGovernor:
         if snapshot is None:
             seen = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
         else:
-            # The supplied snapshot was read at the top of ``build()``, before
-            # the session-ownership preflight. Re-read here to pick up anything
-            # written since, and merge whole *records* rather than latched ones:
-            #
-            #   fresh says latched   -> latched, with the fresher identity
-            #   fresh says cleared   -> cleared; an operator authorized that
-            #   fresh never mentions -> whatever the snapshot said
-            #
-            # Merging only the latched set instead let a stale snapshot
-            # resurrect a latch the fresh read showed as cleared, and since the
-            # restore does not rewrite the record, memory said "quarantined"
-            # while disk said "no re-arm required" -- a split brain the CLI
-            # refuses to re-arm out of.
-            #
-            # NOT a fence. ``SystemBootstrapper._check_session_ownership`` is a
-            # non-blocking preflight (B-OPS-03): on a conflicting owner, or with
-            # Redis down, it logs, returns False and ``build()`` continues. So a
-            # previous engine that is still alive can write after this read too.
-            # The re-read narrows that window from the whole of ``build()`` to
-            # the few instructions below it; closing it needs an exclusive
-            # startup fence, which is a separate change with its own
-            # availability tradeoff (an engine that refuses to start when Redis
-            # is unreachable).
             seen = parse_persisted_quarantines(snapshot)
             try:
                 fresh = parse_persisted_quarantines(ManualRearmGate(state_path=state_path).snapshot())
             except Exception as exc:
-                # Do NOT raise: the supplied snapshot is itself a validated
-                # reading of this file, so every latch it holds is still
-                # applied below. Raising here would move a fail-closed read back
-                # after the lease -- the crash loop this split exists to avoid.
                 logger.error(
                     "quarantine_reread_failed",
                     error=str(exc),
@@ -535,21 +439,8 @@ class StrategyHealthGovernor:
             reason = persisted.reason
             token = persisted.token
             if token is None:
-                # A latch written by an engine from before tokens existed. Refusing
-                # to start would turn the upgrade that introduces this code into an
-                # outage, and minting here destroys nothing: ``rearm_strategy``
-                # refuses to publish a request for a tokenless entry, so no
-                # authorization can be in flight for this latch. Verified against
-                # the production document 2026-08-26, which carries exactly this
-                # shape for ``R47_MAKER_TMF``.
-                #
-                # The latch is kept -- only its identity is filled in -- so the
-                # migration is fail-closed, and it is the one case where restore
-                # writes. It happens once: the next boot reads the token back.
                 token = self._mint_token(strategy_id)
                 legacy_tokens[strategy_id] = token
-            # Built for ``build_cancel_intents``, deliberately NOT recorded: this
-            # is the same transition the previous run already counted.
             transition = self._build_transition(from_mode=AutonomyMode.STRATEGY_QUARANTINED, reason=reason)
             self._quarantined[strategy_id] = StrategyQuarantine(
                 strategy_id=strategy_id,
@@ -596,22 +487,10 @@ class StrategyHealthGovernor:
                     entry = strategies.get(strategy_id)
                     if not isinstance(entry, dict):
                         continue
-                    # Re-check under the lock: another engine migrating the same
-                    # tokenless latch may have got here first, and overwriting
-                    # its token would strand an in-flight request. Keyed on
-                    # *absence*, matching the parse: a present-but-malformed
-                    # token never reaches here (it is corrupt, not legacy), and
-                    # testing truthiness instead meant a malformed value blocked
-                    # its own replacement forever.
                     existing = entry.get("quarantine_token")
                     if "quarantine_token" not in entry:
                         entry["quarantine_token"] = token
                     elif isinstance(existing, str) and existing and existing != token:
-                        # Someone else's token won the lock. Keeping ours would
-                        # split the latch's identity: the CLI reads *their*
-                        # token off disk and this governor would reject every
-                        # request naming it, leaving a quarantine no operator
-                        # can clear. Disk is the authority -- adopt it.
                         adopted[strategy_id] = existing
         except Exception as exc:
             logger.error(
@@ -624,20 +503,7 @@ class StrategyHealthGovernor:
         for strategy_id, token in adopted.items():
             held = self._quarantined.get(strategy_id)
             if held is not None:
-                # Adopting the token is only half the migration. The adopted
-                # token carries the *other* run's id, so ``owns_token``'s prefix
-                # test rejects it -- and that test is what
-                # ``_consume_strategy_rearm_requests`` uses to decide a request
-                # is somebody else's. Without this the governor disowns its own
-                # live latch: every operator re-arm naming the disk token is
-                # logged as foreign and skipped, and the strategy stays
-                # quarantined with no way to clear it. Registering it here is
-                # the same move ``restore_persisted_quarantines`` makes for a
-                # token minted by a previous run.
                 self._restored_tokens.add(token)
-                # The token we minted and lost was never written to disk and
-                # never published, so nothing can name it; drop it so the set
-                # stays a description of tokens that actually exist.
                 self._restored_tokens.discard(held.token)
                 self._quarantined[strategy_id] = replace(held, token=token)
         if adopted:
@@ -697,9 +563,6 @@ class StrategyHealthGovernor:
                 token=persisted.token,
             )
             self._set_strategy_quarantine_active(strategy_id, active=True)
-            # Adopted from another engine's write: the token carries *its* run
-            # id, but the latch is ours to clear now, so a request naming it is
-            # ours to judge. See ``owns_token``.
             self._restored_tokens.add(persisted.token)
             adopted.append(strategy_id)
         if adopted:
@@ -755,16 +618,13 @@ class StrategyHealthGovernor:
         if entry is None or entry.token != expected_token:
             return False, _noop_persist
 
-        # Decide and mutate with nothing in between.
         self._quarantined.pop(strategy_id, None)
         if self._undurable.pop(strategy_id, None) is not None:
-            # Nothing can match this strategy's token again once the entry is
-            # gone, so the gauge has to be retired here or it reads 1 forever.
             gauge = getattr(self.metrics, "strategy_quarantine_undurable", None)
             if gauge is not None:
                 try:
                     gauge.labels(strategy=strategy_id).set(0)
-                except Exception:  # noqa: BLE001 -- observability must not break the re-arm
+                except Exception:
                     logger.debug("strategy_quarantine_undurable_metric_failed", strategy_id=strategy_id)
         self._set_strategy_quarantine_active(strategy_id, active=False)
         self._set_strategy_scope_state()
@@ -794,8 +654,6 @@ class StrategyHealthGovernor:
                     },
                 )
             except Exception as exc:
-                # The strategy is re-armed either way; losing the audit record
-                # must not be silent.
                 logger.error(
                     "strategy_rearm_evidence_write_failed",
                     strategy_id=strategy_id,

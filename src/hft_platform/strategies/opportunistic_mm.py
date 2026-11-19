@@ -34,7 +34,6 @@ from hft_platform.strategy.base import QUALITY_FLAGS_CORRUPT
 
 logger = get_logger("strategy.opportunistic_mm")
 
-# Feature indices for lob_shared_v2/v3 (v3 is superset; indices [0]-[21] unchanged)
 _IDX_OFI_DEPTH_NORM_PPM = 16
 _IDX_RET_AUTOCOV_5S_X1E6 = 17
 _IDX_TOB_SURVIVAL_MS = 18
@@ -42,10 +41,8 @@ _IDX_L1_BID_QTY = 8
 _IDX_L1_ASK_QTY = 9
 _IDX_TOXICITY_EMA50_X1000 = 21
 
-# Log sampling: emit debug log every N events to avoid flooding
 _LOG_SAMPLE_INTERVAL = 500
 
-# Price scale factor (all prices are int x10000)
 _PRICE_SCALE = 10000
 
 
@@ -90,7 +87,6 @@ class OpportunisticMM(SimpleMarketMaker):
     ) -> None:
         super().__init__(strategy_id=strategy_id, **kwargs)
         self._spread_threshold_pts: int = int(spread_threshold_pts)
-        # Pre-compute scaled threshold to avoid per-tick multiplication
         self._spread_threshold_scaled: int = self._spread_threshold_pts * _PRICE_SCALE
         self._reversal_filter_enabled: bool = reversal_filter_enabled
         self._reversal_autocov_threshold: int = reversal_autocov_threshold
@@ -99,15 +95,12 @@ class OpportunisticMM(SimpleMarketMaker):
         self._toxicity_filter_enabled: bool = toxicity_filter_enabled
         self._toxicity_max_threshold: int = toxicity_max_threshold
         self._toxicity_blocked_count: int = 0
-        # Cache latest feature tuple per symbol
         self._feature_cache: dict[str, tuple[int | float, ...]] = {}
-        # Observability counters (no hot-path allocation — plain int)
         self._stats_count: int = 0
         self._gate_passed_count: int = 0
         self._gate_blocked_count: int = 0
         self._invalid_data_count: int = 0
         self._reversal_blocked_count: int = 0
-        # Tracked order IDs for spread-gate cancellation
         self._bid_oid: str | None = None
         self._ask_oid: str | None = None
 
@@ -124,7 +117,6 @@ class OpportunisticMM(SimpleMarketMaker):
         """Cache latest feature tuple for use in on_stats."""
         if event.values is None:
             return
-        # Skip corrupted features (GAP, STATE_RESET, OUT_OF_ORDER)
         if event.quality_flags & QUALITY_FLAGS_CORRUPT:
             logger.debug(
                 "opmm_features_skipped_corrupt",
@@ -145,7 +137,6 @@ class OpportunisticMM(SimpleMarketMaker):
 
         features = self._feature_cache.get(symbol)
         if features is None or len(features) <= _IDX_TOB_SURVIVAL_MS:
-            # No v2 features available — fall back to permissive
             return True
 
         autocov = int(features[_IDX_RET_AUTOCOV_5S_X1E6])
@@ -153,16 +144,12 @@ class OpportunisticMM(SimpleMarketMaker):
         l1_bid = int(features[_IDX_L1_BID_QTY])
         l1_ask = int(features[_IDX_L1_ASK_QTY])
 
-        # Condition 1: Negative autocovariance (oscillating prices → reversal likely)
         if autocov >= self._reversal_autocov_threshold:
             return False
 
-        # Condition 2: TOB is unstable (short survival → volatile, reversal possible)
         if tob_survival_ms > self._reversal_tob_max_ms:
             return False
 
-        # Condition 3: Depth ratio check — avoid quoting when near-side is too thin
-        # (extreme adverse selection risk)
         total = l1_bid + l1_ask
         if total > 0:
             min_side = min(l1_bid, l1_ask)
@@ -195,7 +182,6 @@ class OpportunisticMM(SimpleMarketMaker):
         symbol = event.symbol
         self._stats_count += 1
 
-        # Guard: skip if data invalid
         if event.mid_price_x2 is None or event.spread_scaled is None:
             self._invalid_data_count += 1
             if self._stats_count % _LOG_SAMPLE_INTERVAL == 1:
@@ -225,7 +211,6 @@ class OpportunisticMM(SimpleMarketMaker):
 
         spread_pts = event.spread_scaled // _PRICE_SCALE
 
-        # Sampled diagnostic log (every N events)
         if self._stats_count % _LOG_SAMPLE_INTERVAL == 1:
             logger.info(
                 "opmm_stats_sample",
@@ -245,10 +230,8 @@ class OpportunisticMM(SimpleMarketMaker):
                 toxicity_blocked=self._toxicity_blocked_count,
             )
 
-        # Spread gate: only quote when spread >= threshold (integer comparison, no float)
         if event.spread_scaled < self._spread_threshold_scaled:
             self._gate_blocked_count += 1
-            # Cancel existing quotes to avoid stale orders at tight spreads
             if self._bid_oid:
                 self.cancel(symbol, self._bid_oid)
                 self._bid_oid = None
@@ -257,17 +240,14 @@ class OpportunisticMM(SimpleMarketMaker):
                 self._ask_oid = None
             return
 
-        # Reversal filter gate: only quote when conditions favor maker
         if not self._check_reversal_condition(symbol):
             self._reversal_blocked_count += 1
             return
 
-        # Toxicity filter gate: skip quoting when flow is too toxic (adverse selection)
         if not self._check_toxicity_condition(symbol):
             self._toxicity_blocked_count += 1
             return
 
-        # Wide spread + reversal conditions met: delegate to SimpleMarketMaker
         self._gate_passed_count += 1
         if self._gate_passed_count <= 10 or self._gate_passed_count % 100 == 0:
             logger.info(

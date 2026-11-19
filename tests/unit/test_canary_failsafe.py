@@ -56,7 +56,6 @@ class TestCanaryFailsafeMissingLiveMetrics:
         canary: dict = {"alpha_id": "test_alpha"}
         metrics = CanaryAutoScheduler._build_metrics(canary)
 
-        # All values should be fail-safe (worst-case)
         assert metrics["slippage_bps"] == 999.0, "slippage default should exceed max_slippage_bps=3.0"
         assert metrics["drawdown_contribution"] == 1.0, "drawdown default should be 100%"
         assert metrics["execution_error_rate"] == 1.0, "error_rate default should be 100%"
@@ -69,7 +68,7 @@ class TestCanaryFailsafeMissingLiveMetrics:
         _write_canary_yaml(
             promo_dir / "test.yaml",
             alpha_id="test_alpha",
-            live_metrics=None,  # Explicitly no live_metrics
+            live_metrics=None,
         )
 
         monitor = CanaryMonitor(promotions_dir=str(promo_dir))
@@ -117,15 +116,12 @@ class TestCanaryFailsafePartialLiveMetrics:
             "alpha_id": "test_alpha",
             "live_metrics": {
                 "slippage_bps": 1.5,
-                # drawdown_contribution and execution_error_rate are missing
                 "sessions_live": 5,
             },
         }
         metrics = CanaryAutoScheduler._build_metrics(canary)
 
-        # Present value should be used
         assert metrics["slippage_bps"] == 1.5
-        # Missing values should get fail-safe defaults
         assert metrics["drawdown_contribution"] == 1.0
         assert metrics["execution_error_rate"] == 1.0
         assert metrics["sessions_live"] == 5
@@ -189,7 +185,6 @@ class TestCanaryFailsafePartialLiveMetrics:
             alpha_id="test_alpha",
             live_metrics={
                 "slippage_bps": 1.0,
-                # drawdown_contribution missing: will get fail-safe 1.0 > threshold 0.02
                 "sessions_live": 15,
             },
         )
@@ -227,7 +222,6 @@ class TestCanaryFailsafePresentLiveMetrics:
         }
         metrics = CanaryAutoScheduler._build_metrics(canary)
 
-        # All should be actual values, not fail-safe
         assert metrics["slippage_bps"] == 1.5
         assert metrics["drawdown_contribution"] == 0.01
         assert metrics["execution_error_rate"] == 0.005
@@ -262,7 +256,6 @@ class TestCanaryFailsafePresentLiveMetrics:
         )
         status = monitor.evaluate("test_alpha", metrics)
 
-        # All metrics under thresholds and sessions < escalation threshold
         assert status.state == "canary"
         assert "passed" in status.reason or "holding" in status.reason.lower()
 
@@ -271,7 +264,7 @@ class TestCanaryFailsafePresentLiveMetrics:
         canary: dict = {
             "alpha_id": "test_alpha",
             "live_metrics": {
-                "slippage_bps": 0.0,  # Explicitly zero (good performance)
+                "slippage_bps": 0.0,
                 "drawdown_contribution": 0.0,
                 "execution_error_rate": 0.0,
                 "sessions_live": 10,
@@ -345,11 +338,11 @@ class TestCanaryFailsafeEdgeCases:
         canary: dict = {
             "alpha_id": "test_alpha",
             "live_metrics": {
-                "slippage_bps": "2.5",  # String
-                "drawdown_contribution": "0.015",  # String
-                "execution_error_rate": "0.008",  # String
-                "sessions_live": "20",  # String
-                "sharpe_live": "1.1",  # String
+                "slippage_bps": "2.5",
+                "drawdown_contribution": "0.015",
+                "execution_error_rate": "0.008",
+                "sessions_live": "20",
+                "sharpe_live": "1.1",
             },
         }
         metrics = CanaryAutoScheduler._build_metrics(canary)
@@ -371,15 +364,12 @@ class TestCanaryFailsafeThresholdComparison:
 
     def test_failsafe_slippage_exceeds_max_threshold(self) -> None:
         """Fail-safe slippage (999.0 bps) should exceed any reasonable max_slippage threshold."""
-        # Default max_slippage from canary.py is 3.0 bps
         assert 999.0 > 3.0
 
     def test_failsafe_drawdown_exceeds_max_threshold(self) -> None:
         """Fail-safe drawdown (1.0 = 100%) should exceed any max_drawdown threshold."""
-        # Default max_drawdown from canary.py is 0.02 (2%)
         assert 1.0 > 0.02
 
     def test_failsafe_error_rate_exceeds_max_threshold(self) -> None:
         """Fail-safe error_rate (1.0 = 100%) should exceed any max_error_rate threshold."""
-        # Default max_error_rate from canary.py is 0.01 (1%)
         assert 1.0 > 0.01

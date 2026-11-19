@@ -36,10 +36,6 @@ from hft_platform.recorder._loader_wal import (
     save_manifest,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 @pytest.fixture
 def svc(tmp_path):
@@ -93,11 +89,6 @@ def svc(tmp_path):
     )
 
 
-# ---------------------------------------------------------------------------
-# extract_file_ts
-# ---------------------------------------------------------------------------
-
-
 class TestExtractFileTs:
     def test_standard_format(self):
         assert extract_file_ts("market_data_1234567890.jsonl") == 1234567890
@@ -110,11 +101,6 @@ class TestExtractFileTs:
 
     def test_no_underscore(self):
         assert extract_file_ts("nodata.jsonl") == 0
-
-
-# ---------------------------------------------------------------------------
-# parse_table_from_filename
-# ---------------------------------------------------------------------------
 
 
 class TestParseTableFromFilename:
@@ -150,11 +136,6 @@ class TestParseTableFromFilename:
         assert isinstance(result, str)
 
 
-# ---------------------------------------------------------------------------
-# parse_batch_table_name
-# ---------------------------------------------------------------------------
-
-
 class TestParseBatchTableName:
     def test_known_tables(self):
         assert parse_batch_table_name("market_data") == "market_data"
@@ -172,11 +153,6 @@ class TestParseBatchTableName:
             parse_batch_table_name("nonexistent_table")
 
 
-# ---------------------------------------------------------------------------
-# load_manifest / save_manifest
-# ---------------------------------------------------------------------------
-
-
 class TestManifest:
     def test_load_manifest_no_file(self, svc):
         load_manifest(svc)
@@ -192,7 +168,6 @@ class TestManifest:
         """Stuck files (in manifest but still in WAL dir) are removed from manifest."""
         with open(svc._manifest_path, "w") as f:
             f.write("stuck.jsonl\n")
-        # Create the stuck file in WAL dir
         with open(os.path.join(svc.wal_dir, "stuck.jsonl"), "w") as f:
             f.write("{}\n")
         load_manifest(svc)
@@ -220,8 +195,7 @@ class TestManifest:
         svc._manifest = {"a.jsonl"}
         save_manifest(svc)
         svc._manifest = {"a.jsonl", "b.jsonl"}
-        save_manifest(svc)  # Should create backup
-        # Sidecars live in manifest.d/ so DiskPressureMonitor cannot count them.
+        save_manifest(svc)
         bak = os.path.join(
             manifest_sidecar_dir(svc._manifest_path),
             os.path.basename(svc._manifest_path) + ".bak",
@@ -229,15 +203,9 @@ class TestManifest:
         assert os.path.exists(bak)
 
 
-# ---------------------------------------------------------------------------
-# get_new_files
-# ---------------------------------------------------------------------------
-
-
 class TestGetNewFiles:
     def test_no_manifest(self, svc):
         svc._manifest_enabled = False
-        # Create a WAL file
         with open(os.path.join(svc.wal_dir, "market_data_100.jsonl"), "w") as f:
             f.write("{}\n")
         files = get_new_files(svc)
@@ -258,11 +226,6 @@ class TestGetNewFiles:
         assert files == []
 
 
-# ---------------------------------------------------------------------------
-# mark_processed
-# ---------------------------------------------------------------------------
-
-
 class TestMarkProcessed:
     def test_mark_processed(self, svc):
         mark_processed(svc, "/path/to/market_data_100.jsonl")
@@ -272,11 +235,6 @@ class TestMarkProcessed:
         svc._manifest_enabled = False
         mark_processed(svc, "/path/to/file.jsonl")
         assert len(svc._manifest) == 0
-
-
-# ---------------------------------------------------------------------------
-# write_to_dlq
-# ---------------------------------------------------------------------------
 
 
 class TestWriteToDlq:
@@ -294,11 +252,6 @@ class TestWriteToDlq:
         svc.metrics.dlq_size_total.labels.assert_called()
 
 
-# ---------------------------------------------------------------------------
-# replay_dlq
-# ---------------------------------------------------------------------------
-
-
 class TestReplayDlq:
     def test_replay_no_dir(self, svc):
         svc.dlq_dir = str(os.path.join(svc.dlq_dir, "nonexistent"))
@@ -311,7 +264,6 @@ class TestReplayDlq:
         assert "no_client" in result["errors"]
 
     def test_replay_dry_run(self, svc):
-        # Create a DLQ file
         import json
 
         fpath = os.path.join(svc.dlq_dir, "market_data_100.jsonl")
@@ -374,18 +326,12 @@ class TestReplayDlq:
         assert result["selected"] == 2
 
 
-# ---------------------------------------------------------------------------
-# cleanup_old_dlq_files
-# ---------------------------------------------------------------------------
-
-
 class TestCleanupOldDlqFiles:
     def test_cleanup_deletes_old(self, svc):
-        svc._dlq_retention_days = 0  # All files are old
+        svc._dlq_retention_days = 0
         fpath = os.path.join(svc.dlq_dir, "old_file.jsonl")
         with open(fpath, "w") as f:
             f.write("{}\n")
-        # Set old mtime
         os.utime(fpath, (0, 0))
         cleanup_old_dlq_files(svc)
         assert not os.path.exists(fpath)
@@ -402,17 +348,12 @@ class TestCleanupOldDlqFiles:
 
     def test_cleanup_no_dir(self, svc):  # noqa: no-assert
         svc.dlq_dir = "/nonexistent_dir"
-        cleanup_old_dlq_files(svc)  # Should not raise
+        cleanup_old_dlq_files(svc)
 
     def test_cleanup_rate_limited(self, svc):  # noqa: no-assert
         svc._last_dlq_cleanup_ts = time.time() + 9999
         svc._dlq_cleanup_interval_s = 99999
-        cleanup_old_dlq_files(svc)  # Should be rate-limited
-
-
-# ---------------------------------------------------------------------------
-# cleanup_old_corrupt_files
-# ---------------------------------------------------------------------------
+        cleanup_old_dlq_files(svc)
 
 
 class TestCleanupCorruptFiles:
@@ -428,12 +369,7 @@ class TestCleanupCorruptFiles:
 
     def test_cleanup_no_dir(self, svc):  # noqa: no-assert
         svc.corrupt_dir = "/nonexistent_corrupt"
-        cleanup_old_corrupt_files(svc)  # Should not raise
-
-
-# ---------------------------------------------------------------------------
-# cleanup_old_archive_files
-# ---------------------------------------------------------------------------
+        cleanup_old_corrupt_files(svc)
 
 
 class TestCleanupArchiveFiles:
@@ -448,7 +384,7 @@ class TestCleanupArchiveFiles:
 
     def test_cleanup_no_dir(self, svc):  # noqa: no-assert
         svc.archive_dir = "/nonexistent_archive"
-        cleanup_old_archive_files(svc)  # Should not raise
+        cleanup_old_archive_files(svc)
 
     def test_cleanup_skips_non_jsonl(self, svc):
         svc._archive_retention_days = 0
@@ -457,12 +393,7 @@ class TestCleanupArchiveFiles:
             f.write("not a WAL file")
         os.utime(fpath, (0, 0))
         cleanup_old_archive_files(svc)
-        assert os.path.exists(fpath)  # Should not be deleted
-
-
-# ---------------------------------------------------------------------------
-# check_wal_accumulation
-# ---------------------------------------------------------------------------
+        assert os.path.exists(fpath)
 
 
 class TestCheckWalAccumulation:
@@ -485,7 +416,7 @@ class TestCheckWalAccumulation:
 
     def test_warning_threshold(self, svc):  # noqa: no-assert
         svc.metrics = MagicMock()
-        svc._wal_size_warning_mb = 0  # Trigger warning
+        svc._wal_size_warning_mb = 0
         fpath = os.path.join(svc.wal_dir, "data_100.jsonl")
         with open(fpath, "w") as f:
             f.write("{}\n" * 10)
@@ -495,11 +426,6 @@ class TestCheckWalAccumulation:
         svc.metrics = MagicMock()
         check_wal_accumulation(svc)
         svc.metrics.wal_file_count.set.assert_called_with(0)
-
-
-# ---------------------------------------------------------------------------
-# quarantine_corrupt_file
-# ---------------------------------------------------------------------------
 
 
 class TestQuarantineCorruptFile:
@@ -513,4 +439,3 @@ class TestQuarantineCorruptFile:
     def test_quarantine_failure(self, svc):  # noqa: no-assert
         """Quarantine handles missing source gracefully."""
         quarantine_corrupt_file(svc, "/nonexistent/bad.jsonl", "bad.jsonl", "missing")
-        # Should not raise

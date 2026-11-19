@@ -72,7 +72,6 @@ class TestSampleAdequacyLabel:
         assert out.passed is True
 
     def test_label_promising_when_just_below_threshold(self) -> None:
-        # 240/300 = 0.80; 50/60 = 0.83 → min 0.80, in [0.5, 1.0)
         out = self._gate().evaluate(
             _FakeResult(n_fills=240, n_trading_days=50),
             config=None,
@@ -84,7 +83,6 @@ class TestSampleAdequacyLabel:
         assert out.metrics["days_frac"] == 50.0 / 60.0
 
     def test_label_needs_more_sample_when_well_below(self) -> None:
-        # 60/300 = 0.20; 20/60 = 0.33 → min 0.20, in (0, 0.5)
         out = self._gate().evaluate(
             _FakeResult(n_fills=60, n_trading_days=20),
             config=None,
@@ -112,7 +110,6 @@ class TestSampleAdequacyLabel:
         assert out.passed is False
 
     def test_label_adequate_when_thresholds_zero(self) -> None:
-        # When no thresholds configured, any non-negative sample is adequate.
         out = self._gate().evaluate(
             _FakeResult(n_fills=1, n_trading_days=1),
             config=None,
@@ -122,8 +119,6 @@ class TestSampleAdequacyLabel:
         assert out.passed is True
 
     def test_boundary_at_half_is_promising_not_needs_more(self) -> None:
-        # 150/300 = 0.50 exactly → label boundary belongs to "promising"
-        # (closed lower bound) so triage isn't penalised at the cliff.
         out = self._gate().evaluate(
             _FakeResult(n_fills=150, n_trading_days=60),
             config=None,

@@ -12,11 +12,6 @@ from hft_platform.alpha._param_opt import (
 )
 from research.backtest.types import BacktestConfig
 
-# ---------------------------------------------------------------------------
-# Deterministic runner that returns threshold-dependent results.
-# Must be top-level (picklable) for ProcessPoolExecutor.
-# ---------------------------------------------------------------------------
-
 
 class _FakeRunner:
     """Fake backtest runner that produces deterministic results from threshold."""
@@ -26,7 +21,6 @@ class _FakeRunner:
 
     def run(self) -> types.SimpleNamespace:
         t = float(self.cfg.signal_threshold)
-        # Peak sharpe at threshold=0.3, symmetric falloff
         sharpe_oos = 2.0 - abs(t - 0.3) * 8.0
         return types.SimpleNamespace(
             sharpe_is=sharpe_oos + 0.2,
@@ -67,11 +61,6 @@ def _make_base_result(threshold: float = 0.3):
     )
 
 
-# ---------------------------------------------------------------------------
-# _run_single_grid_point
-# ---------------------------------------------------------------------------
-
-
 class TestRunSingleGridPoint:
     def test_returns_expected_keys(self):
         row = _run_single_grid_point(object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.2, "sharpe_oos")
@@ -94,11 +83,6 @@ class TestRunSingleGridPoint:
     def test_objective_uses_sharpe_oos_mode(self):
         row = _run_single_grid_point(object(), _FakeRunner, BacktestConfig(data_paths=[]), 0.3, "sharpe_oos")
         assert row["objective"] == pytest.approx(row["sharpe_oos"])
-
-
-# ---------------------------------------------------------------------------
-# _run_grid_parallel
-# ---------------------------------------------------------------------------
 
 
 class TestRunGridParallel:
@@ -164,11 +148,6 @@ class TestRunGridParallel:
         assert rows[0]["run_id"] == "base"
 
 
-# ---------------------------------------------------------------------------
-# _optimize_parameters — output format parity
-# ---------------------------------------------------------------------------
-
-
 class TestOptimizeParametersParallel:
     def test_output_format_matches_sequential(self, recwarn):
         """Verify output dict has all expected top-level keys."""
@@ -212,11 +191,9 @@ class TestOptimizeParametersParallel:
             config=cfg,
             runner_cls=_FakeRunner,
         )
-        # Every trial threshold must appear in the grid
         for row in out["trials"]:
             t = row["signal_threshold"]
             assert any(abs(t - g) < 1e-9 for g in out["grid"]), f"trial threshold {t} not found in grid {out['grid']}"
-        # No duplicate thresholds in trials (within tolerance)
         trial_ts = [r["signal_threshold"] for r in out["trials"]]
         for i, t in enumerate(trial_ts):
             for j in range(i + 1, len(trial_ts)):
@@ -248,11 +225,6 @@ class TestOptimizeParametersParallel:
         assert out["grid"] == []
 
 
-# ---------------------------------------------------------------------------
-# HFT_OPT_WORKERS env var
-# ---------------------------------------------------------------------------
-
-
 class TestOptWorkersEnv:
     def test_workers_1_sequential(self, monkeypatch):
         """HFT_OPT_WORKERS=1 should still produce correct results."""
@@ -282,7 +254,6 @@ class TestOptWorkersEnv:
         )
         assert out["enabled"] is True
         assert len(out["trials"]) >= 8
-        # Trials should be sorted by threshold
         thresholds = [r["signal_threshold"] for r in out["trials"]]
         assert thresholds == sorted(thresholds)
 

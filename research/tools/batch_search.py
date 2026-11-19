@@ -11,7 +11,7 @@ import research.tools.fetch_paper as _fp
 
 logger = get_logger("research.batch_search")
 
-_DEFAULT_RATE_LIMIT_S = 3.0  # arXiv asks for 3s between requests
+_DEFAULT_RATE_LIMIT_S = 3.0
 
 
 class BatchArxivSearcher:
@@ -90,7 +90,6 @@ class BatchArxivSearcher:
                     })
                     continue
 
-                # Add to index
                 ref = _fp._next_ref(index)
                 title = str(paper.get("title", ""))
                 index[ref] = {
@@ -103,7 +102,6 @@ class BatchArxivSearcher:
                     "tags": [],
                 }
 
-                # Write note file
                 note_file = _fp._note_path(ref, title)
                 note_file.parent.mkdir(parents=True, exist_ok=True)
                 note_file.write_text(_fp._note_template(paper, ref), encoding="utf-8")
@@ -116,7 +114,6 @@ class BatchArxivSearcher:
                 })
                 logger.info("batch_search.added", ref=ref, arxiv_id=arxiv_id, title=title[:60])
 
-            # Rate limit between queries
             if qi < len(queries) - 1:
                 time.sleep(self._rate_limit_s)
 

@@ -25,10 +25,10 @@ class MonitorDecision:
     """A single autonomy decision emitted by the monitor."""
 
     rule_name: str
-    action: str  # "enter_reduce_only", "flatten_all", "notify_quarantine"
+    action: str
     reason: str
-    scope: str  # "platform", "strategy"
-    rearm: str  # "auto", "manual"
+    scope: str
+    rearm: str
 
 
 class AutonomyMonitor:
@@ -94,11 +94,10 @@ class AutonomyMonitor:
         self._running: bool = False
         self._task: asyncio.Task[None] | None = None
 
-        # Cooldown tracking: rule_name -> last_triggered_ns
         self._cooldowns: dict[str, int] = {}
         self._cooldown_durations: dict[str, int] = {
             "halt_reaction": 0,
-            "broker_disconnect": 120_000_000_000,  # 120s in ns
+            "broker_disconnect": 120_000_000_000,
             "feed_gap_majority": 120_000_000_000,
             "reconnect_flapping": 120_000_000_000,
             "reconciliation_drift": 120_000_000_000,
@@ -106,23 +105,16 @@ class AutonomyMonitor:
             "rss_unhealthy": 120_000_000_000,
         }
 
-        # Broker disconnect tracking
         self._broker_disconnect_since_ns: int = 0
         self._broker_was_connected: bool = True
 
-        # HALT reaction tracking (only react once per HALT episode)
         self._halt_reacted: bool = False
         self._halt_reacted_ns: int = 0
         self._halt_flatten_attempts: int = 0
         self._halt_max_retries: int = 3
         self._halt_next_retry_ns: int = 0
 
-        # Heartbeat tracking
         self._last_heartbeat_ns: int = 0
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
 
     async def run(self) -> None:
         """Run the monitor loop directly (used by the supervisor task manager)."""
@@ -147,10 +139,6 @@ class AutonomyMonitor:
                 pass
         logger.info("autonomy_monitor_stopped")
 
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
-
     async def _monitor_loop(self) -> None:
         while self._running:
             try:
@@ -165,10 +153,6 @@ class AutonomyMonitor:
             except Exception as exc:
                 logger.error("autonomy_monitor_error", error=str(exc))
             await asyncio.sleep(self._interval_s)
-
-    # ------------------------------------------------------------------
-    # Margin monitoring
-    # ------------------------------------------------------------------
 
     async def _check_margin(self) -> None:
         """Poll margin monitor and act on threshold breaches."""
@@ -197,10 +181,6 @@ class AutonomyMonitor:
                     used=result.margin_used,
                     available=result.margin_available,
                 )
-
-    # ------------------------------------------------------------------
-    # Evaluation helpers
-    # ------------------------------------------------------------------
 
     def _check_broker_disconnect(self, decisions: list[MonitorDecision], now_ns: int) -> None:
         if self._broker_client is None:
@@ -231,16 +211,11 @@ class AutonomyMonitor:
             self._broker_was_connected = True
             self._broker_disconnect_since_ns = 0
 
-    # ------------------------------------------------------------------
-    # Evaluation (pure function of current state)
-    # ------------------------------------------------------------------
-
     def _evaluate(self) -> list[MonitorDecision]:
         """Read all signals and return decisions."""
         decisions: list[MonitorDecision] = []
         now_ns = timebase.now_ns()
 
-        # 1. HALT reaction (highest priority)
         if (
             self._storm_guard.state == StormGuardState.HALT
             and not self._halt_reacted
@@ -256,32 +231,25 @@ class AutonomyMonitor:
                     rearm="manual",
                 )
             )
-            return decisions  # HALT is exclusive -- don't stack other decisions
+            return decisions
 
-        # Reset halt_reacted when StormGuard leaves HALT (with cooldown)
         if self._storm_guard.state != StormGuardState.HALT:
-            # Only reset after cooldown to prevent double-flatten on oscillation
             if self._halt_reacted and (now_ns - self._halt_reacted_ns) >= 60_000_000_000:
                 self._halt_reacted = False
                 self._halt_flatten_attempts = 0
                 self._halt_next_retry_ns = 0
 
-        # When already in reduce-only, skip enter_reduce_only decisions
-        # but still check broker connectivity for escalation/diagnostic
         if self._platform_degrade.reduce_only_active:
             self._check_broker_disconnect(decisions, now_ns)
             return decisions
 
-        # 2. Broker disconnect > 5 min
         self._check_broker_disconnect(decisions, now_ns)
 
-        # 3. Infra health from PlatformDegradeInputs
         try:
             reasons = self._platform_inputs.reduce_only_reasons()
         except Exception:
             reasons = []
 
-        # DATA_LOSS (CH + WAL both failed) → HALT, not just reduce-only
         if "recorder_data_loss" in reasons:
             if not self._is_on_cooldown("recorder_data_loss", now_ns):
                 self._storm_guard.trigger_halt("recorder_data_loss")
@@ -319,9 +287,8 @@ class AutonomyMonitor:
                             rearm="manual",
                         )
                     )
-                    break  # one infra reason is enough
+                    break
 
-        # 4. Reconciliation drift
         if self._recon_service is not None:
             try:
                 drift = self._recon_service.drift_streak
@@ -339,10 +306,6 @@ class AutonomyMonitor:
                 )
 
         return decisions
-
-    # ------------------------------------------------------------------
-    # Execution
-    # ------------------------------------------------------------------
 
     async def _execute(self, decisions: list[MonitorDecision]) -> None:
         for decision in decisions:
@@ -382,7 +345,7 @@ class AutonomyMonitor:
                             "flatten_all_max_retries_exhausted",
                             attempts=self._halt_flatten_attempts,
                         )
-                        self._halt_reacted = True  # stop retrying
+                        self._halt_reacted = True
                         self._halt_reacted_ns = timebase.now_ns()
                         if self._notification_dispatcher:
                             try:
@@ -393,7 +356,7 @@ class AutonomyMonitor:
                                     failed=-1,
                                     failed_symbols=["FLATTEN_EXHAUSTED"],
                                 )
-                            except Exception:  # noqa: BLE001
+                            except Exception:
                                 logger.debug("notify_flatten_exhausted_failed")
 
             elif decision.action == "enter_reduce_only":
@@ -402,22 +365,6 @@ class AutonomyMonitor:
                 except Exception as exc:
                     logger.error("enter_reduce_only_failed", error=str(exc))
 
-            # Record evidence -- off the loop.
-            #
-            # ``record_transition`` holds ``AutonomyEvidenceWriter._transition_lock``
-            # across a multi-file write, and one of those files goes through
-            # ``locked_state``: an ``flock`` acquired by polling with
-            # ``time.sleep(0.01)``. Until ``quarantine_async`` existed that lock
-            # was uncontended, because every caller was this one thread. It now
-            # has a second holder -- the ``to_thread`` persist behind a strategy
-            # quarantine -- and ``threading.Lock.acquire`` is not awaitable, so
-            # a loop-side call would stop feed, risk and order processing dead
-            # for as long as the other holder keeps it. This is the monitor's
-            # periodic path, so it would happen in normal operation.
-            #
-            # ``to_thread`` makes the wait somebody else's thread. The write is
-            # already best-effort here (the ``except`` below predates this), so
-            # nothing downstream depends on it having finished.
             if self._evidence_writer:
                 try:
                     await self._evidence_writer.record_transition_async(
@@ -426,12 +373,8 @@ class AutonomyMonitor:
                         reason=decision.reason,
                         manual_rearm_required=(decision.rearm == "manual"),
                     )
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     logger.debug("evidence_write_failed", error=str(exc))
-
-    # ------------------------------------------------------------------
-    # Cooldown helpers
-    # ------------------------------------------------------------------
 
     def _apply_cooldowns(self, decisions: list[MonitorDecision]) -> None:
         now_ns = timebase.now_ns()
@@ -444,10 +387,6 @@ class AutonomyMonitor:
             return False
         duration = self._cooldown_durations.get(rule_name, 120_000_000_000)
         return (now_ns - last) < duration
-
-    # ------------------------------------------------------------------
-    # Heartbeat
-    # ------------------------------------------------------------------
 
     async def _maybe_heartbeat(self) -> None:
         if self._notification_dispatcher is None:
@@ -463,8 +402,8 @@ class AutonomyMonitor:
             await self._notification_dispatcher.notify_heartbeat(
                 autonomy_state=self._storm_guard.state.name,
                 pnl_scaled=pnl,
-                strategies_active=0,  # placeholder
+                strategies_active=0,
                 feed_status="ok" if self._broker_was_connected else "disconnected",
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.debug("heartbeat_notification_failed", error=str(exc))

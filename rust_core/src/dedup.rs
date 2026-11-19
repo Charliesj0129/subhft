@@ -14,10 +14,10 @@ const APPROVED: i8 = 1;
 
 #[derive(Clone)]
 struct DedupRecord {
-    approved: i8, // -1=reserved, 0=rejected, 1=approved
+    approved: i8,
     reason_code: String,
     cmd_id: i64,
-    order: u64, // insertion/access order for LRU
+    order: u64,
 }
 
 #[pyclass]
@@ -25,7 +25,6 @@ pub struct RustDedupStore {
     window_size: usize,
     records: HashMap<String, DedupRecord>,
     order_counter: u64,
-    // Track the minimum order to know what to evict
 }
 
 #[pymethods]
@@ -51,13 +50,11 @@ impl RustDedupStore {
         }
 
         if let Some(rec) = self.records.get_mut(key) {
-            // Hit: update LRU order
             self.order_counter += 1;
             rec.order = self.order_counter;
             return (true, rec.approved, rec.reason_code.clone(), rec.cmd_id);
         }
 
-        // Miss: reserve
         self.order_counter += 1;
         let rec = DedupRecord {
             approved: RESERVED,
@@ -67,7 +64,6 @@ impl RustDedupStore {
         };
         self.records.insert(key.to_string(), rec);
 
-        // Evict oldest if over window
         if self.records.len() > self.window_size {
             self._evict_oldest();
         }
@@ -115,7 +111,7 @@ impl RustDedupStore {
         if self.records.is_empty() {
             return;
         }
-        // Find key with minimum order
+
         let mut min_order = u64::MAX;
         let mut min_key = String::new();
         for (k, rec) in &self.records {

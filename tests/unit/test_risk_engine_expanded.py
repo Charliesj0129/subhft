@@ -21,10 +21,6 @@ from hft_platform.contracts.strategy import (
 )
 from hft_platform.risk.engine import RiskEngine
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_intent(
     *,
@@ -94,11 +90,6 @@ def engine(tmp_path: Any, _mock_singletons: None) -> RiskEngine:
     return RiskEngine(cfg_path, iq, oq)
 
 
-# ---------------------------------------------------------------------------
-# evaluate — float price rejection
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluateFloatPrice:
     def test_float_price_rejected(self, engine: RiskEngine) -> None:
         intent = _make_intent(price=100.5)
@@ -107,22 +98,12 @@ class TestEvaluateFloatPrice:
         assert decision.reason_code == "FLOAT_PRICE"
 
 
-# ---------------------------------------------------------------------------
-# evaluate — int price approval
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluateIntPrice:
     def test_int_price_approved(self, engine: RiskEngine) -> None:
         intent = _make_intent(price=1000_0000)
         decision = engine.evaluate(intent)
         assert decision.approved
         assert decision.reason_code == "OK"
-
-
-# ---------------------------------------------------------------------------
-# evaluate — FastGate rejection / error / cancel-bypass
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateFastGate:
@@ -153,13 +134,7 @@ class TestEvaluateFastGate:
 
         intent = _make_intent(intent_type=IntentType.CANCEL)
         decision = engine.evaluate(intent)
-        # Cancel should bypass fast gate — storm_guard / validators still run
         assert decision.approved or "FASTGATE" not in decision.reason_code
-
-
-# ---------------------------------------------------------------------------
-# evaluate — StormGuard HALT
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateStormGuard:
@@ -175,11 +150,6 @@ class TestEvaluateStormGuard:
         intent = _make_intent(intent_type=IntentType.CANCEL)
         decision = engine.evaluate(intent)
         assert decision.approved
-
-
-# ---------------------------------------------------------------------------
-# evaluate — Rust validator path
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateRustValidator:
@@ -201,7 +171,6 @@ class TestEvaluateRustValidator:
 
         intent = _make_intent()
         decision = engine.evaluate(intent)
-        # Rust error falls through to Python validators which pass for a valid intent
         assert decision.approved is True
 
     def test_rust_validator_passes_but_position_limit_rejects(self, engine: RiskEngine) -> None:
@@ -210,7 +179,6 @@ class TestEvaluateRustValidator:
         rv.check.return_value = (True, 0)
         engine._rust_validator = rv
 
-        # Mock the uncovered validator to reject
         mock_pos_v = MagicMock()
         mock_pos_v.check.return_value = (False, "POSITION_LIMIT_EXCEEDED")
         engine._rust_uncovered_validators = [mock_pos_v]
@@ -244,15 +212,9 @@ class TestEvaluateRustValidator:
         assert DailyLossLimitValidator in types
 
 
-# ---------------------------------------------------------------------------
-# evaluate — Python validators
-# ---------------------------------------------------------------------------
-
-
 class TestEvaluatePythonValidators:
     def test_python_validator_rejects(self, engine: RiskEngine) -> None:
         engine._rust_validator = None
-        # Force first validator to reject
         engine.validators[0].check = MagicMock(return_value=(False, "PRICE_ZERO_OR_NEG"))
         intent = _make_intent()
         decision = engine.evaluate(intent)
@@ -268,11 +230,6 @@ class TestEvaluatePythonValidators:
         assert decision.approved
 
 
-# ---------------------------------------------------------------------------
-# create_command
-# ---------------------------------------------------------------------------
-
-
 class TestCreateCommand:
     def test_deadline_is_in_future(self, engine: RiskEngine) -> None:
         import time
@@ -281,7 +238,7 @@ class TestCreateCommand:
         now = time.monotonic_ns()
         cmd = engine.create_command(intent)
         assert cmd.deadline_ns > now
-        assert cmd.deadline_ns - now <= 5_100_000_000  # default command deadline ~= 5s
+        assert cmd.deadline_ns - now <= 5_100_000_000
 
     def test_deadline_uses_remaining_intent_ttl(self, engine: RiskEngine) -> None:
         import time
@@ -326,14 +283,8 @@ class TestCreateCommand:
         assert cmd.storm_guard_state == StormGuardState.WARM
 
 
-# ---------------------------------------------------------------------------
-# reload_config / on_config_reload
-# ---------------------------------------------------------------------------
-
-
 class TestReloadConfig:
     def test_reload_clears_caches(self, engine: RiskEngine, tmp_path: Any) -> None:
-        # Populate a cache on a validator
         for v in engine.validators:
             if hasattr(v, "_max_price_scaled_cache"):
                 v._max_price_scaled_cache["test"] = 999
@@ -367,7 +318,6 @@ class TestReloadConfig:
             assert v.config is new_cfg
 
     def test_reload_config_reads_file(self, engine: RiskEngine, tmp_path: Any) -> None:
-        # Rewrite the config file with changed value
         new_cfg = {
             "global_defaults": {
                 "max_price_cap": 7777.0,
@@ -386,11 +336,6 @@ class TestReloadConfig:
         assert engine.config["global_defaults"]["max_price_cap"] == 7777.0
 
 
-# ---------------------------------------------------------------------------
-# notify_fill_pnl
-# ---------------------------------------------------------------------------
-
-
 class TestNotifyFillPnl:
     def test_routes_to_daily_loss_validator(self, engine: RiskEngine) -> None:
         from hft_platform.risk.validators import DailyLossLimitValidator
@@ -402,11 +347,6 @@ class TestNotifyFillPnl:
                 v.record_pnl.assert_called_once_with("s1", -100_000)
                 return
         pytest.fail("DailyLossLimitValidator not found")
-
-
-# ---------------------------------------------------------------------------
-# _bool_env
-# ---------------------------------------------------------------------------
 
 
 class TestBoolEnv:
@@ -428,11 +368,6 @@ class TestBoolEnv:
         assert RiskEngine._bool_env("yes") is True
 
 
-# ---------------------------------------------------------------------------
-# _parse_sample_every
-# ---------------------------------------------------------------------------
-
-
 class TestParseSampleEvery:
     def test_valid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TEST_SAMPLE", "5")
@@ -447,11 +382,6 @@ class TestParseSampleEvery:
         assert RiskEngine._parse_sample_every("TEST_SAMPLE_ZERO", default=1) == 1
 
 
-# ---------------------------------------------------------------------------
-# _emit_reject_metric
-# ---------------------------------------------------------------------------
-
-
 class TestEmitRejectMetric:
     def test_sampling_skips(self, engine: RiskEngine) -> None:
         """When sample_every=2, first call emits, second skips."""
@@ -462,23 +392,13 @@ class TestEmitRejectMetric:
         engine._reject_metric_counter = 0
 
         engine._emit_reject_metric("s1", "REASON")
-        # Counter wraps 0->1 on first call; emission happens only when counter==0
-        # after increment: (0+1) % 2 = 1 != 0, so first call is skipped
-        # second call: (1+1) % 2 = 0, so it emits
         engine._emit_reject_metric("s1", "REASON")
-        # The labels().inc() should have been called once
         assert fake_metrics.risk_reject_total.labels.call_count == 1
 
     def test_metrics_none_noop(self, engine: RiskEngine) -> None:
         engine.metrics = None
-        # Should not raise
         engine._emit_reject_metric("s1", "REASON")
         assert engine.metrics is None, "metrics should remain None"
-
-
-# ---------------------------------------------------------------------------
-# Thread-safe cmd_id with lock
-# ---------------------------------------------------------------------------
 
 
 class TestThreadSafeCmdId:
@@ -507,12 +427,7 @@ class TestThreadSafeCmdId:
             t.join()
 
         assert len(results) == 2000
-        assert len(set(results)) == 2000  # all unique
-
-
-# ---------------------------------------------------------------------------
-# monotonic_cmd_id property
-# ---------------------------------------------------------------------------
+        assert len(set(results)) == 2000
 
 
 class TestMonotonicCmdIdProperty:
@@ -520,11 +435,6 @@ class TestMonotonicCmdIdProperty:
         assert engine.monotonic_cmd_id == 0
         engine._next_cmd_id()
         assert engine.monotonic_cmd_id == 1
-
-
-# ---------------------------------------------------------------------------
-# evaluate_typed_frame
-# ---------------------------------------------------------------------------
 
 
 class TestEvaluateTypedFrame:

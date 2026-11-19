@@ -19,8 +19,6 @@ if str(SRC) not in sys.path:
 
 from hft_platform.observability.metrics import cap_reject_reason
 
-# The eight reason templates the risk path can produce, with the runtime values
-# that made each one unbounded.
 _SOFT_LIMIT_VARIANTS = [
     "SOFT_LIMIT: loss=-11 >= threshold=99",
     "SOFT_LIMIT: loss=101 >= threshold=99",

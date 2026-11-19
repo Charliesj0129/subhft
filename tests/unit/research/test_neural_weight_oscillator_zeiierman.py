@@ -345,8 +345,6 @@ def test_beta_neutral_report_is_stage_scoped() -> None:
 
 
 def test_beta_neutral_excludes_pre_entry_opening_gap() -> None:
-    # Position enters at bar 1's open (105) while the prior close is 100 — the
-    # 5-pt opening gap must not be credited to the position's first active bar.
     close = np.array([100.0, 110.0, 112.0])
     open_ = np.array([100.0, 105.0, 111.0])
     bars = EvaluationBars(
@@ -379,8 +377,6 @@ def test_beta_neutral_excludes_pre_entry_opening_gap() -> None:
 
     report = beta_neutral_by_stage(bars, trades, side="long", n_permutations=10)
 
-    # Entry bar earns close - open (110 - 105 = 5), continuation bar earns
-    # close - close (112 - 110 = 2): mean 3.5, not (10 + 2) / 2 = 6.0.
     assert report["primary_oos"]["strategy_mean_bar_return"] == 3.5
     assert report["primary_oos"]["bars_in_position"] == 2
 

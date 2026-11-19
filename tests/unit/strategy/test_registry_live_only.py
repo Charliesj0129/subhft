@@ -54,9 +54,6 @@ class TestLiveRegistryStructure:
         )
 
     def test_live_registry_does_not_contain_archived_strategies(self) -> None:
-        # Cross-check: ids explicitly archived in L10 must NOT have snuck
-        # back into live. This catches a future PR that copies an archived
-        # entry into config/live/ without flipping enabled to true.
         cfg = _load_live_registry()
         live_ids = {e["id"] for e in cfg["strategies"]}
         archived_ids = {
@@ -96,11 +93,8 @@ class TestArchiveSnapshot:
 
 class TestRegistryDefaultLoadsLive:
     def test_StrategyRegistry_default_path_loads_live_registry(self) -> None:
-        # Smoke: StrategyRegistry() with no args must successfully open the
-        # post-cutover default.
         from hft_platform.strategy.registry import StrategyRegistry
 
         reg = StrategyRegistry()
         assert reg.config_path == "config/live/strategies.yaml"
-        # And the configs list should not be empty.
         assert len(reg.configs) >= 1

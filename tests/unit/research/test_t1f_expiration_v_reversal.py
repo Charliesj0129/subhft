@@ -49,7 +49,6 @@ SPEC_PATH = Path("research/alphas/t1f_txf_expiration_vreversal_tmf/spec.yaml")
 
 
 def session_ns(date: str, minute: float) -> int:
-    # Local 08:45 TPE == 00:45 UTC; matches _session_start_ns(tz_offset=8).
     base = datetime.fromisoformat(f"{date}T00:45:00+00:00")
     return int(base.timestamp() * 1_000_000_000) + int(minute * NS_PER_MINUTE)
 
@@ -92,20 +91,15 @@ def _config(today: str) -> ExpirationVReversalConfig:
     )
 
 
-# Settlement day opens 17000, thrusts +40 over the first 90 min, then partially
-# reverts (the V) -> fade short.
 _THRUST_UP = [(0, 17000.0), (30, 17015.0), (60, 17030.0), (90, 17040.0), (120, 17030.0)]
-# Settlement day opens 17000, thrusts -40 over the first 90 min -> fade long.
 _THRUST_DOWN = [(0, 17000.0), (30, 16985.0), (60, 16970.0), (90, 16960.0), (120, 16970.0)]
 
 
 def test_settlement_date_resolver_maps_month_code_to_third_wednesday():
-    # 3rd Wednesday of each 2026 delivery month.
     assert _settlement_date_for_month_code("B6") == "2026-02-18"
     assert _settlement_date_for_month_code("C6") == "2026-03-18"
     assert _settlement_date_for_month_code("D6") == "2026-04-15"
     assert _settlement_date_for_month_code("E6") == "2026-05-20"
-    # Unparseable codes return None instead of guessing.
     assert _settlement_date_for_month_code("ZZ") is None
     assert _settlement_date_for_month_code("D") is None
 
@@ -120,8 +114,8 @@ def test_detects_short_fade_on_thrust_up():
     assert len(events) == 1
     ev = events[0]
     assert ev.regime_type == "T1-F_expiration_v_reversal"
-    assert ev.direction == -1  # fade the up-thrust
-    assert ev.realized_vol_ratio > 20.0  # signed thrust carried in reused field
+    assert ev.direction == -1
+    assert ev.realized_vol_ratio > 20.0
     assert ev.trigger_time_ns == session_ns("2026-04-15", 90)
 
 
@@ -133,12 +127,11 @@ def test_detects_long_fade_on_thrust_down():
     )
 
     assert len(events) == 1
-    assert events[0].direction == 1  # fade the down-thrust
+    assert events[0].direction == 1
     assert events[0].realized_vol_ratio < -20.0
 
 
 def test_no_event_when_thrust_below_threshold():
-    # Open->90min displacement only ~6pt, below the 20pt threshold.
     flat = [(0, 17000.0), (30, 17003.0), (60, 17005.0), (90, 17006.0), (120, 17004.0)]
     today_bbo, today_trades = extract_bbo_and_trades(_session_array("2026-04-15", flat))
 
@@ -153,8 +146,6 @@ def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     today_txf = tmp_path / "TXFD6_2026-04-15_l2.hftbt.npz"
     today_tmf = tmp_path / "TMFD6_2026-04-15_l2.hftbt.npz"
     np.savez(today_txf, data=_session_array("2026-04-15", _THRUST_UP))
-    # Up-thrust -> short. TMF reverts down after entry so a short profits on the
-    # executable exit path; TXF never extends past the thrust-high stop (no breach).
     np.savez(
         today_tmf,
         data=_session_array("2026-04-15", [(90, 17040.0), (95, 17035.0), (105, 17028.0), (120, 17020.0)]),
@@ -246,7 +237,6 @@ def test_settlement_day_pairs_only_yields_the_settlement_day(tmp_path):
     tmf_dir = raw_dir / "tmfd6"
     txf_dir.mkdir(parents=True)
     tmf_dir.mkdir(parents=True)
-    # Settlement day (2026-04-15) AND a non-settlement day (2026-04-14) present.
     for d in ("2026-04-14", "2026-04-15"):
         np.savez(txf_dir / f"TXFD6_{d}_l2.hftbt.npz", data=_session_array(d, _THRUST_UP))
         np.savez(tmf_dir / f"TMFD6_{d}_l2.hftbt.npz", data=_session_array(d, _THRUST_UP))
@@ -254,7 +244,7 @@ def test_settlement_day_pairs_only_yields_the_settlement_day(tmp_path):
     pairs = _settlement_day_pairs(raw_dir, ["D6"])
 
     assert len(pairs) == 1
-    assert "2026-04-15" in pairs[0][0].name  # only the 3rd-Wednesday settlement day
+    assert "2026-04-15" in pairs[0][0].name
 
 
 def test_run_audit_writes_settlement_only_summary(tmp_path):
@@ -296,8 +286,6 @@ def test_run_audit_writes_settlement_only_summary(tmp_path):
 
 
 def test_summarizer_needs_more_days_on_sparse_settlements():
-    # Two positive settlement events (the fade was not refuted) but only 2 days /
-    # 2 contracts: structurally below the >=80-event / >=20-day / 4-contract floor.
     rows = [
         {
             "contract": "TXFC6->TMFC6",
@@ -321,8 +309,8 @@ def test_summarizer_needs_more_days_on_sparse_settlements():
     summary = summarize_expiration_v_reversal_rows(rows)
 
     assert summary["verdict"] == "NEEDS-MORE-DAYS"
-    assert summary["hard_gate"]["median_net_positive"] is True  # not refuted...
-    assert summary["hard_gate"]["events_ok"] is False  # ...but sample-blocked
+    assert summary["hard_gate"]["median_net_positive"] is True
+    assert summary["hard_gate"]["events_ok"] is False
     assert summary["hard_gate"]["trading_days_ok"] is False
     assert summary["hard_gate"]["cross_contract_complete"] is False
     assert summary["research_decision"]["status"] == "needs_more_sample"
@@ -334,9 +322,6 @@ def test_summarizer_needs_more_days_on_sparse_settlements():
 
 
 def _passing_sample_rows(stop_exit_net: float) -> list[dict[str, object]]:
-    # Four positive settlements over four contracts / four days / four months:
-    # clears the sample, dominance, stop-breach and drawdown gates so the verdict
-    # turns purely on the canonical risk-controlled (stop-exit) edge.
     return [
         {
             "contract": f"TXF{code}6->TMF{code}6",
@@ -357,9 +342,6 @@ def _passing_sample_rows(stop_exit_net: float) -> list[dict[str, object]]:
 
 
 def test_summarizer_kills_when_canonical_risk_controlled_edge_below_floor():
-    # Legacy time-exit edge clears the floor (mean net 20 > 10) but the canonical
-    # stop-exit edge does not (mean 5 < 10): the candidate must NOT proceed on the
-    # legacy metric alone.
     summary = summarize_expiration_v_reversal_rows(
         _passing_sample_rows(stop_exit_net=5.0),
         min_events=4,

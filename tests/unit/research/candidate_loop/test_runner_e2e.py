@@ -41,7 +41,7 @@ BID, ASK = 1 << 29, 1 << 28
 EXCH_LOCAL = (1 << 31) | (1 << 30)
 
 TRAIN_DAYS = ("2026-01-04", "2026-01-05", "2026-01-06", "2026-01-07")
-MISSING_DAY = "2026-01-04"  # in the split but no NPZ on disk -> missing_npz skip
+MISSING_DAY = "2026-01-04"
 VALIDATION_DAYS = ("2026-01-08",)
 TEST_DAYS = ("2026-01-09",)
 
@@ -127,8 +127,8 @@ def _synth_day(day_index: int, n_batches: int = 700) -> np.ndarray:
     for k in range(n_batches):
         imb = 0.9 * imb + rng.normal(0.0, 1.0)
         mid += 0.4 * np.tanh(imb) + rng.normal(0.0, 0.8)
-        ts = day_start + k * 100_000_000  # 100ms event clock
-        lts = ts + 150_000  # 150us feed latency
+        ts = day_start + k * 100_000_000
+        lts = ts + 150_000
         bid1 = np.floor(mid) - 0.0
         bid_qty = max(1.0, 20.0 + 8.0 * imb)
         ask_qty = max(1.0, 20.0 - 8.0 * imb)
@@ -167,7 +167,7 @@ def _write_batch(candidates_root: Path, run_id: str) -> None:
             continue
         family = str(json.loads(line).get("family", ""))
         if family not in FAMILIES:
-            family = "microprice"  # off-contract candidates still need a file
+            family = "microprice"
         by_family[family].append(line)
     for family, lines in by_family.items():
         header = build_header(
@@ -176,9 +176,7 @@ def _write_batch(candidates_root: Path, run_id: str) -> None:
             generation_run_id=run_id,
             generated_at="2026-06-12T00:00:00+00:00",
         )
-        write_family_jsonl(
-            candidates_root / run_id / f"family={family}.jsonl", header, lines
-        )
+        write_family_jsonl(candidates_root / run_id / f"family={family}.jsonl", header, lines)
 
 
 @pytest.fixture(scope="module")
@@ -200,9 +198,6 @@ def run_env(tmp_path_factory: pytest.TempPathFactory) -> dict:
         scoring_config_path=root / "scoring.yaml",
         split_definition_path=root / "splits.yaml",
     )
-    # Module scope runs before the function-scoped autouse fixture that points the
-    # evidence root at tmp_path, so redirect it here: a test-split pass records
-    # holdout reads under the root, and the operator's default root must stay untouched.
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("HFT_RESEARCH_EVIDENCE_ROOT", str(root / "evidence"))
         summary = run_batch(rc, client=None)
@@ -233,12 +228,8 @@ class TestEndToEnd:
             assert row["death_reason"], row["alpha_id"]
 
     def test_result_rows_have_non_null_maker_columns(self, run_env: dict) -> None:
-        rows = [
-            e["row"]
-            for e in _fallback_entries(run_env["rc"])
-            if e["table"] == "research.experiment_results"
-        ]
-        assert len(rows) >= 10  # 5 compiled x 2 splits (+ optional test rows)
+        rows = [e["row"] for e in _fallback_entries(run_env["rc"]) if e["table"] == "research.experiment_results"]
+        assert len(rows) >= 10
         for row in rows:
             assert row["maker_cost_assumption_version"] == "taifex_maker_qhat_v1"
             assert isinstance(row["maker_cost_survival_score"], float)
@@ -246,16 +237,9 @@ class TestEndToEnd:
             assert row["maker_required_move_threshold_pts"] >= 0.0
 
     def test_maker_view_never_more_pessimistic_than_taker(self, run_env: dict) -> None:
-        rows = [
-            e["row"]
-            for e in _fallback_entries(run_env["rc"])
-            if e["table"] == "research.experiment_results"
-        ]
+        rows = [e["row"] for e in _fallback_entries(run_env["rc"]) if e["table"] == "research.experiment_results"]
         for row in rows:
-            assert (
-                row["maker_required_move_threshold_pts"]
-                <= row["required_move_threshold_pts"] + 1e-12
-            )
+            assert row["maker_required_move_threshold_pts"] <= row["required_move_threshold_pts"] + 1e-12
 
     def test_trade_flow_candidate_loses_all_days_without_ch(self, run_env: dict) -> None:
         """client=None -> dir_coverage fail-closed 0.0 -> every day dir_dirty."""
@@ -287,15 +271,14 @@ class TestEndToEnd:
         assert summary["splits_included"] == ["train", "validation"]
         assert summary["run_id"] == "e2e_001"
         assert summary["versions"]["maker_cost_assumption_version"] == "taifex_maker_qhat_v1"
-        assert summary["prompt_ids_used"]  # provenance flowed through from headers
+        assert summary["prompt_ids_used"]
 
     def test_test_split_rows_only_for_watchlist_or_shortlisted(self, run_env: dict) -> None:
         entries = _fallback_entries(run_env["rc"])
         shortlist = {
             e["row"]["alpha_id"]
             for e in entries
-            if e["table"] == "research.alpha_candidates"
-            and e["row"]["status"] in ("WATCHLIST", "SHORTLISTED")
+            if e["table"] == "research.alpha_candidates" and e["row"]["status"] in ("WATCHLIST", "SHORTLISTED")
         }
         test_rows = {
             e["row"]["alpha_id"]
@@ -305,11 +288,7 @@ class TestEndToEnd:
         assert test_rows == shortlist
 
     def test_split_artifacts_written_per_candidate_split(self, run_env: dict) -> None:
-        rows = [
-            e["row"]
-            for e in _fallback_entries(run_env["rc"])
-            if e["table"] == "research.experiment_results"
-        ]
+        rows = [e["row"] for e in _fallback_entries(run_env["rc"]) if e["table"] == "research.experiment_results"]
         for row in rows:
             artifact_dir = Path(row["artifact_path"])
             assert (artifact_dir / "day_metrics.parquet").exists()

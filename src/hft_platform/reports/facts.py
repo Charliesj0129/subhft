@@ -50,9 +50,6 @@ __all__ = [
 
 log = structlog.get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Time-segment definitions
-# ---------------------------------------------------------------------------
 
 _DAY_SEGMENTS: list[tuple[str, time, time]] = [
     ("pre_open", time(7, 0), time(8, 45)),
@@ -73,7 +70,6 @@ _TS_FMT = "%Y-%m-%d %H:%M:%S"
 
 def _parse_ts(ts_str: str) -> datetime:
     """Parse a timestamp string, tolerating optional fractional seconds."""
-    # ClickHouse may return '.000' milliseconds; strip before parsing
     clean = ts_str.split(".")[0] if "." in ts_str else ts_str
     return datetime.strptime(clean, _TS_FMT)
 
@@ -87,7 +83,6 @@ def _in_range(t: time, start: time, end: time) -> bool:
     """Check if *t* falls within [start, end) (supports overnight wrap)."""
     if start <= end:
         return start <= t < end
-    # Overnight: start > end  (e.g., 15:45 → 03:00)
     return t >= start or t < end
 
 
@@ -188,11 +183,6 @@ def _build_segment_fact(
     )
 
 
-# ---------------------------------------------------------------------------
-# 1. extract_time_segments
-# ---------------------------------------------------------------------------
-
-
 def extract_time_segments(sd: SessionData) -> list[SegmentFact]:
     """Classify each FlowBar into time segments and compute per-segment facts."""
     is_night = _is_night_session(sd)
@@ -206,7 +196,6 @@ def extract_time_segments(sd: SessionData) -> list[SegmentFact]:
         classify = _classify_time_day
         time_ranges = _DAY_TIME_RANGES
 
-    # Bucket items into segments
     seg_bars: dict[str, list[FlowBar]] = {name: [] for name in segment_names}
     seg_trades: dict[str, list[LargeTrade]] = {name: [] for name in segment_names}
     seg_bars_5m: dict[str, list[Bar5m]] = {name: [] for name in segment_names}
@@ -241,22 +230,14 @@ def extract_time_segments(sd: SessionData) -> list[SegmentFact]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# 2. extract_chip_facts
-# ---------------------------------------------------------------------------
-
-
 def extract_chip_facts(sd: SessionData) -> ChipFacts:
     """Extract chip structure from large trades and volume-at-price analysis."""
     trades = sd.large_trades
 
-    # Use existing cluster function with tolerance=50000
     raw_clusters = find_large_trade_clusters(trades, price_tolerance=50_000)
 
-    # Augment clusters with timestamps and buy/sell breakdown
     clusters: list[ChipCluster] = []
     for center_price, _total_vol in raw_clusters:
-        # Find trades belonging to this cluster (within tolerance)
         cluster_trades = [t for t in trades if abs(t.price - center_price) <= 50_000]
         if not cluster_trades:
             continue
@@ -268,7 +249,6 @@ def extract_chip_facts(sd: SessionData) -> ChipFacts:
         price_lo = min(prices)
         price_hi = max(prices)
 
-        # Parse timestamps for time range
         timestamps = [t.ts for t in cluster_trades]
         first_ts = min(timestamps)
         last_ts = max(timestamps)
@@ -293,16 +273,13 @@ def extract_chip_facts(sd: SessionData) -> ChipFacts:
             )
         )
 
-    # Total buy/sell from ALL large trades
     total_buy = sum(t.volume for t in trades if t.direction == "buy")
     total_sell = sum(t.volume for t in trades if t.direction == "sell")
     total = total_buy + total_sell
     net_ratio = total_buy / total if total > 0 else 0.5
 
-    # VAP peaks from 5m bars
     vap_peaks = find_volume_at_price(sd.bars_5m)
 
-    # Buy/sell zones from clusters
     buy_zone: tuple[int, int] | None = None
     sell_zone: tuple[int, int] | None = None
     for c in clusters:
@@ -334,10 +311,6 @@ def extract_chip_facts(sd: SessionData) -> ChipFacts:
     )
 
 
-# ---------------------------------------------------------------------------
-# 3. extract_flow_facts
-# ---------------------------------------------------------------------------
-
 _DUMMY_FLOW_BAR = FlowBar(
     ts="1970-01-01 00:00:00",
     ticks=0,
@@ -366,18 +339,15 @@ def extract_flow_facts(sd: SessionData) -> FlowFacts:
             eod_drift=0.0,
         )
 
-    # Session U/D ratio
     total_up = sum(b.uptick_vol for b in bars)
     total_dn = sum(b.downtick_vol for b in bars)
     session_ud = total_up / total_dn if total_dn > 0 else (float("inf") if total_up > 0 else 1.0)
 
     session_net_flow = sum(b.net_flow for b in bars)
 
-    # Strongest buy/sell bars
     strongest_buy = max(bars, key=lambda b: b.ud_ratio)
     strongest_sell = min(bars, key=lambda b: b.ud_ratio)
 
-    # Sustained runs: consecutive bars with ud_ratio > 1.3 (bull) or < 0.7 (bear)
     sustained_runs: list[tuple[str, int, str]] = []
     run_side: str | None = None
     run_count = 0
@@ -412,10 +382,8 @@ def extract_flow_facts(sd: SessionData) -> FlowFacts:
             run_count = 1
             run_start_ts = bar.ts
 
-    # Final flush
     _flush_run()
 
-    # Volume spikes: bars where total_vol > 2.0 * mean_vol
     mean_vol = sum(b.total_vol for b in bars) / len(bars)
     threshold = 2.0 * mean_vol
     volume_spikes: list[tuple[FlowBar, float]] = []
@@ -424,13 +392,11 @@ def extract_flow_facts(sd: SessionData) -> FlowFacts:
             if bar.total_vol > threshold:
                 volume_spikes.append((bar, bar.total_vol / mean_vol))
 
-    # End-of-day U/D
     eod_bars = bars[-6:] if len(bars) >= 6 else bars
     eod_up = sum(b.uptick_vol for b in eod_bars)
     eod_dn = sum(b.downtick_vol for b in eod_bars)
     eod_ud = eod_up / eod_dn if eod_dn > 0 else (float("inf") if eod_up > 0 else 1.0)
 
-    # Handle inf in drift calculation
     if session_ud == float("inf") or eod_ud == float("inf"):
         eod_drift = 0.0
     else:
@@ -448,11 +414,6 @@ def extract_flow_facts(sd: SessionData) -> FlowFacts:
     )
 
 
-# ---------------------------------------------------------------------------
-# 4. extract_structure_facts
-# ---------------------------------------------------------------------------
-
-
 def extract_structure_facts(sd: SessionData) -> StructureFacts:
     """Extract price structure facts using existing rule functions."""
     if not sd.bars_5m:
@@ -467,7 +428,6 @@ def extract_structure_facts(sd: SessionData) -> StructureFacts:
             session_low=low_level,
         )
 
-    # find_double_bottoms_tops returns a single flat list (bottoms + tops)
     all_levels = find_double_bottoms_tops(sd.bars_5m)
     double_bottoms = [lv for lv in all_levels if "底" in lv.reason]
     double_tops = [lv for lv in all_levels if "頂" in lv.reason]
@@ -475,7 +435,6 @@ def extract_structure_facts(sd: SessionData) -> StructureFacts:
     failed_breakouts = find_failed_breakouts(sd.bars_5m, sd.large_trades)
     round_numbers = find_round_numbers(sd.low, sd.high)
 
-    # Session extremes returns [high_level, low_level]
     extremes = find_session_extremes(sd)
     session_high = extremes[0]
     session_low = extremes[1]
@@ -490,11 +449,6 @@ def extract_structure_facts(sd: SessionData) -> StructureFacts:
     )
 
 
-# ---------------------------------------------------------------------------
-# 5. extract_volatility_facts
-# ---------------------------------------------------------------------------
-
-
 def extract_volatility_facts(sd: SessionData) -> VolatilityFacts:
     """Compute Wilder ATR and range metrics from 5m bars."""
     bars = sd.bars_5m
@@ -507,7 +461,6 @@ def extract_volatility_facts(sd: SessionData) -> VolatilityFacts:
             atr_session=0,
         )
 
-    # True range calculation
     tr_values: list[int] = []
     for idx in range(1, len(bars)):
         prev_close = bars[idx - 1].close
@@ -520,7 +473,6 @@ def extract_volatility_facts(sd: SessionData) -> VolatilityFacts:
         tr_values.append(tr)
 
     if not tr_values:
-        # Only one bar — use its range
         single_range = bars[0].high - bars[0].low
         session_range = sd.high - sd.low
         return VolatilityFacts(
@@ -530,7 +482,6 @@ def extract_volatility_facts(sd: SessionData) -> VolatilityFacts:
             atr_session=single_range,
         )
 
-    # EMA with period = len(bars) as the smoothing factor
     period = len(bars)
     alpha = 2.0 / (period + 1)
     ema = float(tr_values[0])
@@ -550,11 +501,6 @@ def extract_volatility_facts(sd: SessionData) -> VolatilityFacts:
     )
 
 
-# ---------------------------------------------------------------------------
-# 6. extract_cross_day_facts
-# ---------------------------------------------------------------------------
-
-
 def extract_cross_day_facts(
     sd: SessionData,
     prev_days: list[DaySnapshot],
@@ -571,10 +517,8 @@ def extract_cross_day_facts(
 
     prev = prev_days[0]
 
-    # Volume change
     vol_change = (sd.volume - prev.volume) / prev.volume * 100.0 if prev.volume > 0 else 0.0
 
-    # Price position relative to previous day range
     if sd.close > prev.high:
         price_position = "above_prev_high"
     elif sd.close < prev.low:
@@ -582,10 +526,8 @@ def extract_cross_day_facts(
     else:
         price_position = "inside_range"
 
-    # Trend direction from prev_days closes
     if len(prev_days) >= 2:
         closes = [d.close for d in prev_days]
-        # prev_days[0] is most recent previous day
         if all(closes[i] >= closes[i + 1] for i in range(len(closes) - 1)):
             trend_direction = "up"
         elif all(closes[i] <= closes[i + 1] for i in range(len(closes) - 1)):
@@ -595,8 +537,6 @@ def extract_cross_day_facts(
     else:
         trend_direction = "sideways"
 
-    # Flow reversal: today bearish + prev bullish, or vice versa
-    # Compute today's session ud
     total_up = sum(b.uptick_vol for b in sd.flow_5m)
     total_dn = sum(b.downtick_vol for b in sd.flow_5m)
     today_ud = total_up / total_dn if total_dn > 0 else 1.0
@@ -610,11 +550,6 @@ def extract_cross_day_facts(
         trend_direction=trend_direction,
         flow_reversal=flow_reversal,
     )
-
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
 
 
 def extract_all(

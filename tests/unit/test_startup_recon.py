@@ -13,10 +13,6 @@ from hft_platform.contracts.constants import MANUAL_STRATEGY_ID
 from hft_platform.execution.positions import Position, PositionStore
 from hft_platform.execution.startup_recon import StartupPositionVerifier, startup_recon_status
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 class FakeBrokerPosition:
     """Mimics a broker position object."""
@@ -49,11 +45,6 @@ def _make_store_with_positions(entries: dict[str, int]) -> PositionStore:
         pos = Position(account_id="ACC", strategy_id="STRAT", symbol=symbol, net_qty=qty)
         store.positions[key] = pos
     return store
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -126,8 +117,8 @@ async def test_mismatch_extra_symbols() -> None:
     result = await verifier.verify()
 
     symbols = {d.symbol for d in result}
-    assert "2330" in symbols  # broker only
-    assert "2317" in symbols  # local only
+    assert "2330" in symbols
+    assert "2317" in symbols
     assert len(result) == 2
 
 
@@ -176,7 +167,6 @@ async def test_checkpoint_loading(tmp_path) -> None:
     import hashlib
 
     checkpoint_file = tmp_path / "checkpoint.json"
-    # Write checkpoint in the new format expected by PositionCheckpointWriter.load_checkpoint
     body = {
         "trading_date": "20260414",
         "timestamp_ns": 0,
@@ -197,7 +187,6 @@ async def test_checkpoint_loading(tmp_path) -> None:
     body["sha256"] = sha
     checkpoint_file.write_text(json.dumps(body, separators=(",", ":"), sort_keys=True))
 
-    # Broker has 2454=300 but local store is empty — checkpoint fills the gap
     client = FakeBrokerClient([FakeBrokerPosition("2454", 300)])
     store = _make_store_with_positions({})
     verifier = StartupPositionVerifier(client, store, checkpoint_path=str(checkpoint_file))
@@ -220,7 +209,6 @@ async def test_checkpoint_does_not_override_store(tmp_path) -> None:
 
     result = await verifier.verify()
 
-    # Checkpoint value (999) is ignored because 2330 is already in store
     assert result == []
 
 
@@ -292,11 +280,6 @@ async def test_sell_direction_negates_qty() -> None:
     assert verifier.status == 1
 
 
-# ---------------------------------------------------------------------------
-# Strategy attribution recovery tests (G2)
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
     """Broker-only recovery must use MANUAL_STRATEGY_ID as strategy_id, not empty string.
@@ -314,7 +297,6 @@ async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
     assert result.source == "broker_only"
     assert result.positions_loaded == 1
 
-    # Check that the recovered position has strategy_id=MANUAL_STRATEGY_ID
     recovery = store._recovery_positions
     assert len(recovery) == 1
     key, data = next(iter(recovery.items()))
@@ -322,13 +304,12 @@ async def test_broker_only_recovery_uses_wildcard_strategy_id() -> None:
         f"Expected '{MANUAL_STRATEGY_ID}', got '{data.get('strategy_id')}'"
     )
     assert "ACC1" in key
-    assert MANUAL_STRATEGY_ID in key  # key should be account:MANUAL:symbol
+    assert MANUAL_STRATEGY_ID in key
 
 
 @pytest.mark.asyncio
 async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
     """In dual mode, a symbol found only in broker (not in checkpoint) gets '*'."""
-    # Checkpoint has TXFD6 for strat_a
     ckpt = {
         "ACC1:strat_a:TXFD6": {
             "symbol": "TXFD6",
@@ -336,7 +317,6 @@ async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
             "avg_price_scaled": 10000000,
         },
     }
-    # Broker has TXFD6 (1 lot) + MXFJ6 (1 lot, not in checkpoint)
     client = FakeBrokerClient(
         [
             FakeBrokerPosition("TXFD6", 1),
@@ -346,7 +326,6 @@ async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
     store = PositionStore()
     verifier = StartupPositionVerifier(client, store, checkpoint_path="/nonexistent")
 
-    # Manually inject checkpoint data (bypass file loading)
     from hft_platform.execution.checkpoint import PositionCheckpointWriter
 
     with patch.object(
@@ -362,7 +341,6 @@ async def test_dual_recovery_broker_only_symbol_uses_wildcard() -> None:
 
     assert result.source == "dual"
     recovery = store._recovery_positions
-    # MXFJ6 should have strategy_id=MANUAL_STRATEGY_ID
     mxfj_entries = {k: v for k, v in recovery.items() if "MXFJ6" in k}
     assert len(mxfj_entries) == 1
     mxfj_data = next(iter(mxfj_entries.values()))

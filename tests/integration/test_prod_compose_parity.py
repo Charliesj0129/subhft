@@ -21,7 +21,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 
-# Source bind-mount target paths that are intentionally stripped in locked compose.
 _STRIPPED_TARGETS = frozenset({"/app/src", "/app/scripts", "/app/config"})
 
 _LOCKED_COMPOSE = REPO_ROOT / "docker-compose.prod.locked.yml"
@@ -29,12 +28,8 @@ _LOCKED_NAME = _LOCKED_COMPOSE.name
 _BASE_NAME = "docker-compose.yml"
 _PROD_NAME = "docker-compose.production.yml"
 
-# ``compose_render`` (tests/integration/conftest.py) renders these from a scratch
-# copy with interpolation on. See that module for why neither file may be read
-# in place or with ``--no-interpolate``.
 Renderer = Callable[..., dict[str, Any]]
 
-# Properties we compare between locked and base+prod configs.
 _COMPARED_KEYS = (
     "command",
     "environment",
@@ -126,7 +121,6 @@ def test_volumes_differ_only_on_source_paths(compose_render: Renderer) -> None:
         locked_vols: list[dict[str, Any]] = locked_svc.get("volumes") or []
         bp_vols: list[dict[str, Any]] = bp_svc.get("volumes") or []
 
-        # Strip the broad source mounts from base+prod side for a fair comparison
         bp_vols_filtered = [v for v in bp_vols if v.get("target") not in _STRIPPED_TARGETS]
         locked_vols_filtered = [v for v in locked_vols if v.get("target") not in _STRIPPED_TARGETS]
 

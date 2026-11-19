@@ -57,7 +57,7 @@ class TestCrossedBookDetection(unittest.TestCase):
 
         depth = MagicMock()
         depth.best_bid = 102
-        depth.best_ask = 100  # crossed
+        depth.best_ask = 100
         adapter.hbt.depth.return_value = depth
 
         adapter.run()
@@ -79,7 +79,7 @@ class TestCrossedBookDetection(unittest.TestCase):
 
         depth = MagicMock()
         depth.best_bid = 100
-        depth.best_ask = 100  # locked
+        depth.best_ask = 100
         adapter.hbt.depth.return_value = depth
 
         adapter.run()
@@ -102,7 +102,7 @@ class TestCrossedBookDetection(unittest.TestCase):
 
         depth = MagicMock()
         depth.best_bid = 100
-        depth.best_ask = 102  # valid
+        depth.best_ask = 102
         adapter.hbt.depth.return_value = depth
 
         adapter.run()
@@ -156,7 +156,6 @@ class TestZeroQtyHandling(unittest.TestCase):
         """When best_bid_qty is absent, bid_qty attribute should be used."""
         adapter = self._make_adapter()
 
-        # No best_bid_qty, but has bid_qty
         depth = SimpleNamespace(
             best_bid=100,
             best_ask=102,
@@ -174,7 +173,6 @@ class TestZeroQtyHandling(unittest.TestCase):
         """When no qty attributes exist at all, default to 0."""
         adapter = self._make_adapter()
 
-        # Only price attrs, no qty attrs
         depth = SimpleNamespace(
             best_bid=100,
             best_ask=102,

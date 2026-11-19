@@ -37,12 +37,10 @@ from hft_platform.recorder._loader_common import (
 class WALLoaderService:
     """Loads WAL files into ClickHouse with retry, DLQ, and dedup support."""
 
-    # Configurable poll interval (default 1s, was 5s)
     DEFAULT_POLL_INTERVAL_S = 1.0
-    # Connection retry configuration
     DEFAULT_CONNECT_MAX_RETRIES = 10
     DEFAULT_CONNECT_BASE_DELAY_S = 5.0
-    DEFAULT_CONNECT_MAX_BACKOFF_S = 300.0  # 5 minutes max between retries
+    DEFAULT_CONNECT_MAX_BACKOFF_S = 300.0
 
     def __init__(
         self,
@@ -56,13 +54,11 @@ class WALLoaderService:
         self.running = False
         self.poll_interval_s = float(os.getenv("HFT_WAL_POLL_INTERVAL_S", str(self.DEFAULT_POLL_INTERVAL_S)))
 
-        # ClickHouse Client (default to native protocol port 9000)
         self.ch_host = os.getenv("HFT_CLICKHOUSE_HOST") or os.getenv("CLICKHOUSE_HOST") or ch_host
         self.ch_port = int(os.getenv("HFT_CLICKHOUSE_PORT") or os.getenv("CLICKHOUSE_PORT") or ch_port)
         self.ch_client = None
         self._ch_lock = threading.Lock()
 
-        # Connection retry configuration with circuit breaker pattern
         self._connect_max_retries = int(
             os.getenv(
                 "HFT_CONNECT_MAX_RETRIES",
@@ -84,73 +80,54 @@ class WALLoaderService:
         self._connect_failures = 0
         self._circuit_open_until = 0.0
 
-        # Insert retry configuration
         self._insert_max_retries = int(os.getenv("HFT_INSERT_MAX_RETRIES", str(DEFAULT_INSERT_MAX_RETRIES)))
         self._insert_base_delay_s = float(os.getenv("HFT_INSERT_BASE_DELAY_S", str(DEFAULT_INSERT_BASE_DELAY_S)))
         self._insert_max_backoff_s = float(os.getenv("HFT_INSERT_MAX_BACKOFF_S", str(DEFAULT_INSERT_MAX_BACKOFF_S)))
 
-        # Dead Letter Queue directory for failed inserts
         self.dlq_dir = os.path.join(self.wal_dir, "dlq")
-        # Quarantine directory for corrupt files
         self.corrupt_dir = os.path.join(self.wal_dir, "corrupt")
 
-        # DLQ cleanup configuration (B3)
         self._dlq_retention_days = int(os.getenv("HFT_DLQ_RETENTION_DAYS", "7"))
         self._dlq_archive_path = os.getenv("HFT_DLQ_ARCHIVE_PATH") or None
         self._last_dlq_cleanup_ts = 0.0
-        self._dlq_cleanup_interval_s = 3600.0  # 1 hour
+        self._dlq_cleanup_interval_s = 3600.0
 
-        # Corrupt file cleanup configuration (B5)
         self._corrupt_retention_days = int(os.getenv("HFT_CORRUPT_RETENTION_DAYS", "30"))
         self._last_corrupt_cleanup_ts = 0.0
 
-        # Archive cleanup configuration (long-run stability)
         self._archive_retention_days = int(os.getenv("HFT_ARCHIVE_RETENTION_DAYS", "14"))
         self._last_archive_cleanup_ts = 0.0
 
-        # WAL accumulation monitoring (C5)
         self._wal_size_warning_mb = float(os.getenv("HFT_WAL_SIZE_WARNING_MB", "100"))
         self._wal_size_critical_mb = float(os.getenv("HFT_WAL_SIZE_CRITICAL_MB", "500"))
         self._last_wal_check_ts = 0.0
-        self._wal_check_interval_s = 60.0  # Check every minute
+        self._wal_check_interval_s = 60.0
         self._processed_files_total = 0
         self._eta_sample_last_ts = timebase.now_s()
         self._eta_sample_last_processed = 0
-        self.metrics = None  # Will be set when run() is called
+        self.metrics = None
         self._wal_scheduler: WALScheduler | None = None
 
-        # P0-4: Async mode configuration
         self._async_enabled = os.getenv("HFT_LOADER_ASYNC", "1").lower() not in {"0", "false", "no", "off"}
 
-        # P1-1: WAL manifest tracking
         self._manifest_enabled = os.getenv("HFT_WAL_USE_MANIFEST", "1").lower() not in {"0", "false", "no", "off"}
         self._manifest_path = os.getenv("HFT_WAL_MANIFEST_PATH", os.path.join(wal_dir, "manifest.txt"))
         self._manifest: set[str] = set()
         self._manifest_lock = threading.Lock()
 
-        # CC-3: Parallel WAL file processing
         self._loader_concurrency = int(os.getenv("HFT_WAL_LOADER_CONCURRENCY", "4"))
 
-        # EC-1: WAL replay dedup guard
         self._dedup_enabled = os.getenv("HFT_WAL_DEDUP_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
-        # EC-2: WAL file timestamp ordering
         self._strict_order = os.getenv("HFT_WAL_STRICT_ORDER", "1").lower() in {"1", "true", "yes", "on"}
         self._last_processed_ts: int = 0
-        # CC-3: Lock protecting _last_processed_ts and _processed_files_total
-        # across parallel ThreadPoolExecutor workers.
         self._loader_stats_lock = threading.Lock()
 
-        # CE3-03: Shard claim registry
         from hft_platform.recorder.shard_claim import FileClaimRegistry
 
         self._claim_registry = FileClaimRegistry(
             claim_dir=os.path.join(wal_dir, "claims"),
         )
-
-    # ------------------------------------------------------------------
-    # ClickHouse connection
-    # ------------------------------------------------------------------
 
     def connect(self) -> None:
         _ch.connect(self)
@@ -161,10 +138,6 @@ class WALLoaderService:
 
     def _compute_connect_backoff(self, attempt: int) -> float:
         return _ch.compute_connect_backoff(self, attempt)
-
-    # ------------------------------------------------------------------
-    # Main loop (sync)
-    # ------------------------------------------------------------------
 
     def run(self) -> None:
         self.running = True
@@ -216,10 +189,6 @@ class WALLoaderService:
         finally:
             if self._wal_scheduler and self._wal_scheduler.running:
                 self._wal_scheduler.stop()
-
-    # ------------------------------------------------------------------
-    # Main loop (async)
-    # ------------------------------------------------------------------
 
     async def run_async(self) -> None:
         """Async main loop - non-blocking (P0-4)."""
@@ -284,10 +253,6 @@ class WALLoaderService:
             if self._wal_scheduler and self._wal_scheduler.running:
                 self._wal_scheduler.stop()
 
-    # ------------------------------------------------------------------
-    # Shared initialisation for run / run_async
-    # ------------------------------------------------------------------
-
     def _init_run_common(self) -> None:
         """Shared setup for both sync and async run loops."""
         try:
@@ -326,10 +291,6 @@ class WALLoaderService:
                 self._wal_scheduler.start()
             except Exception as exc:
                 logger.warning("Failed to start WAL scheduler", error=str(exc))
-
-    # ------------------------------------------------------------------
-    # Reconnect helpers
-    # ------------------------------------------------------------------
 
     def _handle_reconnect_sync(self) -> bool:
         """Handle ClickHouse reconnection with circuit breaker.
@@ -419,10 +380,6 @@ class WALLoaderService:
         self._circuit_open_until = 0.0
         return True
 
-    # ------------------------------------------------------------------
-    # Sync cleanup helper
-    # ------------------------------------------------------------------
-
     def _run_cleanup_sync(self) -> None:
         try:
             self._cleanup_old_dlq_files()
@@ -435,10 +392,6 @@ class WALLoaderService:
             self._check_wal_accumulation()
         except Exception as e:
             logger.warning("WAL accumulation check failed", error=str(e))
-
-    # ------------------------------------------------------------------
-    # Manifest delegates
-    # ------------------------------------------------------------------
 
     def _load_manifest(self) -> None:
         _wal.load_manifest(self)
@@ -456,10 +409,6 @@ class WALLoaderService:
     def _mark_processed(self, filename: str) -> None:
         _wal.mark_processed(self, filename)
 
-    # ------------------------------------------------------------------
-    # Table name parsing delegates
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _parse_table_from_filename(fname: str) -> str:
         return _wal.parse_table_from_filename(fname)
@@ -467,10 +416,6 @@ class WALLoaderService:
     @staticmethod
     def _parse_batch_table_name(table_name: str) -> str:
         return _wal.parse_batch_table_name(table_name)
-
-    # ------------------------------------------------------------------
-    # File processing delegates
-    # ------------------------------------------------------------------
 
     def _process_single_file(self, fpath: str, force: bool = False) -> bool:
         return _wal.process_single_file(self, fpath, force)
@@ -483,10 +428,6 @@ class WALLoaderService:
 
     def process_files(self, force: bool = False) -> None:
         _wal.process_files(self, force)
-
-    # ------------------------------------------------------------------
-    # DLQ delegates
-    # ------------------------------------------------------------------
 
     def _quarantine_corrupt_file(self, fpath: str, fname: str, reason: str) -> None:
         _dlq.quarantine_corrupt_file(self, fpath, fname, reason)
@@ -508,10 +449,6 @@ class WALLoaderService:
 
     def replay_dlq(self, dry_run: bool = False, max_files: int | None = None) -> dict:
         return _dlq.replay_dlq(self, dry_run, max_files)
-
-    # ------------------------------------------------------------------
-    # Insert delegates
-    # ------------------------------------------------------------------
 
     def _compute_insert_backoff(self, attempt: int) -> float:
         return _ch.compute_insert_backoff(self, attempt)
@@ -542,16 +479,6 @@ if __name__ == "__main__":
 
     configure_logging()
 
-    # This entrypoint bypasses ``hft_platform.main``, which is the only other
-    # place that starts a Prometheus exporter. Without this block the loader
-    # populates MetricsRegistry in-process and then discards it: the container
-    # refuses connections on :9090, so dlq_size_total, wal_directory_bytes,
-    # wal_file_count_tiered, wal_backlog_files, wal_replay_lag_seconds and
-    # wal_drain_eta_seconds are all structurally unobservable. That is how the
-    # production loader dead-lettered every fill for four months in silence.
-    #
-    # Failing to bind must not stop WAL replay -- durability outranks
-    # telemetry -- so this degrades to a warning.
     _prom_port_raw = os.getenv("HFT_PROM_PORT", "9090")
     try:
         _prom_port = int(_prom_port_raw)
@@ -561,11 +488,10 @@ if __name__ == "__main__":
         from hft_platform.observability.metrics import MetricsRegistry
         from hft_platform.observability.metrics_server import start_resilient_metrics_server
 
-        # Build the registry before the scrape thread can see it.
         MetricsRegistry.get()
         start_resilient_metrics_server(_prom_port, addr=os.getenv("HFT_PROM_ADDR", "0.0.0.0"))  # nosec B104
         logger.info("Prometheus metrics started", port=_prom_port, role="wal_loader")
-    except Exception as _exc:  # noqa: BLE001
+    except Exception as _exc:
         logger.warning("wal_loader_metrics_server_failed", error=str(_exc), port=_prom_port)
 
     loader = WALLoaderService()

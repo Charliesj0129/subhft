@@ -11,10 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from hft_platform.reports.distributor import Distributor, ReportSender, load_channels
 from hft_platform.reports.models import ChannelConfig, ComposedReport, MessagePart
 
-# ---------------------------------------------------------------------------
-# load_channels
-# ---------------------------------------------------------------------------
-
 
 class TestLoadChannels:
     def test_empty_when_no_env_vars(self, monkeypatch):
@@ -88,11 +84,6 @@ class TestLoadChannels:
         assert channels == []
 
 
-# ---------------------------------------------------------------------------
-# ReportSender
-# ---------------------------------------------------------------------------
-
-
 def _run(coro):
     """Run a coroutine synchronously in a fresh event loop."""
     return asyncio.run(coro)
@@ -102,7 +93,6 @@ class TestReportSenderSend:
     def test_returns_false_when_no_token(self):
         sender = ReportSender(bot_token="")
         with patch.dict("os.environ", {}, clear=True):
-            # No token in env either
             import os
 
             os.environ.pop("HFT_TELEGRAM_BOT_TOKEN", None)
@@ -120,12 +110,10 @@ class TestReportSenderSend:
         sender._do_post = AsyncMock(return_value=(400, '{"error":"bad request"}'))
         result = _run(sender.send("-100", "bad"))
         assert result is False
-        # Should only try once (no retry for 4xx)
         assert sender._do_post.call_count == 1
 
     def test_rate_limit_429_retries(self):
         sender = ReportSender(bot_token="testtoken")
-        # First two calls: 429, third: 200
         sender._do_post = AsyncMock(
             side_effect=[
                 (429, '{"parameters":{"retry_after":0}}'),
@@ -179,7 +167,6 @@ class TestReportSenderSend:
     def test_token_sanitized_from_exception_message(self):
         """Exception messages containing the bot token URL should be sanitized."""
         sender = ReportSender(bot_token="secrettoken")
-        # Simulate an exception whose message contains the API URL
         exc = ConnectionError("https://api.telegram.org/botsecrettoken/sendMessage failed")
         sender._do_post = AsyncMock(side_effect=[exc, (200, '{"ok":true}')])
         with patch("asyncio.sleep", new=AsyncMock()):
@@ -269,7 +256,6 @@ class TestReportSenderSendBatch:
         with patch("asyncio.sleep", new=mock_sleep):
             _run(sender.send_batch("-100", ["a", "b", "c"], delay_s=1.5))
 
-        # 3 messages → 2 sleeps (no sleep after the last)
         assert len(sleep_calls) == 2
 
 
@@ -285,13 +271,8 @@ class TestReportSenderClose:
 
     def test_close_noop_when_no_session(self):
         sender = ReportSender(bot_token="tok")
-        _run(sender.close())  # should not raise when no session was opened
+        _run(sender.close())
         assert sender._session is None
-
-
-# ---------------------------------------------------------------------------
-# Distributor
-# ---------------------------------------------------------------------------
 
 
 def _make_composed(parts: list[MessagePart]) -> ComposedReport:
@@ -337,7 +318,6 @@ class TestDistributor:
         ]
         with patch("asyncio.sleep", new=AsyncMock()):
             _run(dist.send(_make_composed(parts)))
-        # Only the free message should be sent
         assert sender.send.call_count == 1
         sender.send.assert_called_once_with("-300", "free msg")
 
@@ -386,7 +366,6 @@ class TestDistributor:
         sender = self._make_sender()
         channels = [ChannelConfig(name="owner", chat_id="-100", tier="paid", enabled=True)]
         dist = Distributor(sender, channels)
-        # image=None — should not call send_photo
         parts = [MessagePart(kind="image", content="", image=None, caption="", min_tier="free")]
         _run(dist.send(_make_composed(parts)))
         sender.send_photo.assert_not_called()
@@ -402,7 +381,6 @@ class TestDistributor:
         parts = [_text_part("free msg", min_tier="free")]
         with patch("asyncio.sleep", new=AsyncMock()):
             _run(dist.send(_make_composed(parts)))
-        # Both channels should receive the free message
         assert sender.send.call_count == 2
 
     def test_sleep_between_parts(self):
@@ -418,7 +396,6 @@ class TestDistributor:
         with patch("asyncio.sleep", new=mock_sleep):
             _run(dist.send(_make_composed(parts)))
 
-        # 3 parts → 2 sleeps (no sleep after last part)
         assert len(sleep_calls) == 2
         assert all(t == 1.5 for t in sleep_calls)
 

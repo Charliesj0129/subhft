@@ -36,8 +36,6 @@ from research.alphas.c75_tmf_mw_ofi_taker.impl import (
 )
 
 
-# Position 27 features for the FE-v3 schema. Indices not used by c75 are
-# zero-filled.
 FEATURE_LEN = 27
 
 
@@ -51,9 +49,6 @@ def _ft(*, ofi_5s: float = 0.0, ofi_30s: float = 0.0, spread30: float = 1.0,
     return tuple(arr)
 
 
-# ---------------------------------------------------------------------------
-# Contract 1 + 2: frozen weights, no deep-momentum
-# ---------------------------------------------------------------------------
 
 
 def test_frozen_weights_are_2_term_post_d2() -> None:
@@ -76,59 +71,44 @@ def test_constants_match_manifest() -> None:
     assert SPREAD_REGIME_MULTIPLIER == pytest.approx(1.5)
 
 
-# ---------------------------------------------------------------------------
-# Contract 3: warm-up gate
-# ---------------------------------------------------------------------------
 
 
 def test_should_fire_zero_before_warmup() -> None:
     alpha = C75TmfMwOfiTakerAlpha()
 
-    # One update — way below the 300-tick warmup.
     alpha.update(features=_ft(ofi_5s=10.0, ofi_30s=10.0, spread30=1.0, spread300=1.0))
 
     assert not alpha.is_warm()
     assert alpha.should_fire() == 0
 
 
-# ---------------------------------------------------------------------------
-# Contract 4: anomalous-spread regime gate
-# ---------------------------------------------------------------------------
 
 
 def test_should_fire_zero_in_anomalous_spread_regime() -> None:
     alpha = C75TmfMwOfiTakerAlpha()
 
-    # Warm up with normal-regime quiet signals (zero ofi -> zero signal,
-    # zero stdev -> threshold = inf -> nothing fires anyway).
     for _ in range(WARMUP_TICKS):
         alpha.update(features=_ft(spread30=1.0, spread300=1.0))
 
     assert alpha.is_warm()
 
-    # Now a tick with anomalous spread (regime closed).
     alpha.update(features=_ft(ofi_5s=10.0, ofi_30s=10.0, spread30=10.0, spread300=1.0))
 
     assert not alpha.spread_regime_ok()
     assert alpha.should_fire() == 0, "anomalous spread must close the gate"
 
 
-# ---------------------------------------------------------------------------
-# Contract 5: threshold gate (normal regime)
-# ---------------------------------------------------------------------------
 
 
 def test_should_fire_buy_in_normal_regime_above_threshold() -> None:
     alpha = C75TmfMwOfiTakerAlpha()
 
-    # Warm up with alternating +/- signals to build a non-zero stdev.
     for i in range(WARMUP_TICKS):
         sign = 1.0 if i % 2 == 0 else -1.0
         alpha.update(features=_ft(ofi_5s=sign, ofi_30s=sign, spread30=1.0, spread300=1.0))
 
     assert alpha.is_warm()
 
-    # Burst above threshold on the BUY side: large positive ofi.
     alpha.update(features=_ft(ofi_5s=100.0, ofi_30s=100.0, spread30=1.0, spread300=1.0))
 
     assert alpha.spread_regime_ok()
@@ -148,9 +128,6 @@ def test_should_fire_sell_in_normal_regime_below_threshold() -> None:
     assert alpha.should_fire() == -1
 
 
-# ---------------------------------------------------------------------------
-# Contract 6: kwarg flexibility
-# ---------------------------------------------------------------------------
 
 
 def test_update_accepts_named_kwargs_without_features_tuple() -> None:

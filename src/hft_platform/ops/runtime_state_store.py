@@ -104,10 +104,6 @@ def _assert_section_shapes(path: Path, raw: Any) -> None:
         )
     for section in ("platform", "strategies"):
         if section not in raw:
-            # Only a missing *file* can prove a cold start. An existing document
-            # that has lost a section is damage -- a partial write, a rolled-back
-            # migration -- and reading it as absent releases exactly what the
-            # section held: every strategy quarantine, or the platform HALT.
             raise RuntimeStateUnreadable(
                 f"{path} exists but has no {section!r} section; only a missing file proves nothing was latched"
             )
@@ -137,7 +133,7 @@ def _assert_platform_latch_readable(path: Path, platform: Any) -> None:
     document need it, which is the part the first pass missed.
     """
     if not isinstance(platform, dict):
-        return  # absent, or already rejected by the caller
+        return
     required = platform.get("manual_rearm_required")
     if not isinstance(required, bool):
         raise RuntimeStateUnreadable(
@@ -173,8 +169,6 @@ def _atomic_write(path: Path, state: dict[str, Any]) -> None:
     one of the reasons the quarantine path performs this off the event loop.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Writer-unique temp name: a shared `.tmp` means whichever process renames
-    # second either moves the other's payload or fails with FileNotFoundError.
     tmp_path = path.with_suffix(f"{path.suffix}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         with open(tmp_path, "w", encoding="utf-8") as handle:
@@ -196,30 +190,8 @@ def _errnos(*names: str) -> frozenset[int]:
     return frozenset(v for v in (getattr(errno, n, None) for n in names) if v is not None)
 
 
-#: Errnos from ``os.open(dir, O_RDONLY)`` that mean "this directory cannot be
-#: opened for fsync on this system", as opposed to "the write did not land".
-#: A directory can be mode ``-wx`` -- creatable and renameable into, not
-#: readable -- and some sandboxes and FUSE mounts refuse the open outright.
 _DIR_OPEN_UNSUPPORTED = _errnos("EACCES", "EPERM", "EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
 
-#: Errnos from ``os.fsync(dir_fd)`` that mean "this filesystem does not
-#: implement directory fsync". Deliberately NARROWER than the open set, and the
-#: difference is the point.
-#:
-#: The two calls fail for different reasons and were sharing one errno set, so
-#: three errnos that can only come back from the *open* were also being
-#: swallowed at the *fsync*:
-#:
-#:   EBADF   -- on an fd this function opened four lines earlier this is a bug
-#:              in this module, not a property of the filesystem.
-#:   EACCES  -- permission is decided by open(); at fsync time it means
-#:   EPERM      something took the fd away, which is not "unsupported".
-#:
-#: Every one of them returned normally, and returning normally from here is
-#: this module telling ``_atomic_write`` the rename is on disk. Startup reads a
-#: missing latch as an all-clear, so a durability claim that was never earned
-#: is an unauthenticated re-arm with extra steps. EIO and ENOSPC were always
-#: raised and still are.
 _DIR_FSYNC_UNSUPPORTED = _errnos("EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS")
 
 
@@ -251,11 +223,6 @@ class RuntimeStateLockTimeout(TimeoutError):
     """The state lock could not be acquired within the deadline."""
 
 
-#: Default acquisition deadline. A blocking ``LOCK_EX`` has no deadline at all:
-#: a stopped CLI still holding the lock, or a stalled volume, would block the
-#: caller forever -- and ``StrategyHealthGovernor.quarantine`` reaches this from
-#: the event loop, so that would freeze market, risk and order processing until
-#: the loop watchdog hard-exits the engine. Bounded and fail-closed instead.
 DEFAULT_LOCK_TIMEOUT_S = 2.0
 
 

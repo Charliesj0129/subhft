@@ -9,10 +9,6 @@ import pytest
 
 from hft_platform.ops.position_flattener import FlattenResult, PositionFlattener
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_store(positions_dict=None, open_positions=None):
     """Create a mock position store."""
@@ -39,11 +35,6 @@ def _make_adapter():
     return adapter
 
 
-# ---------------------------------------------------------------------------
-# FlattenResult
-# ---------------------------------------------------------------------------
-
-
 class TestFlattenResult:
     def test_default_values(self):
         r = FlattenResult()
@@ -51,16 +42,11 @@ class TestFlattenResult:
         assert r.partially_closed == 0
         assert r.failed == 0
         assert r.failed_symbols == []
-        assert r.fully_closed == 0  # alias for submitted
+        assert r.fully_closed == 0
 
     def test_fully_closed_alias(self):
         r = FlattenResult(submitted=5)
         assert r.fully_closed == 5
-
-
-# ---------------------------------------------------------------------------
-# PositionFlattener.flatten_all
-# ---------------------------------------------------------------------------
 
 
 class TestFlattenAll:
@@ -88,7 +74,6 @@ class TestFlattenAll:
         adapter = _make_adapter()
         flattener = PositionFlattener(store, adapter)
         result = await flattener.flatten_all()
-        # SYM2 qty=0 is filtered by _get_open_positions
         assert result.submitted == 1
         assert adapter.submit_intent.call_count == 1
 
@@ -96,7 +81,6 @@ class TestFlattenAll:
     async def test_flatten_all_submit_failure_retries(self):
         store = _make_store(open_positions={"SYM1": 5})
         adapter = _make_adapter()
-        # First call fails, retry succeeds
         adapter.submit_intent.side_effect = [RuntimeError("fail"), None]
         flattener = PositionFlattener(store, adapter)
         result = await flattener.flatten_all()
@@ -112,11 +96,6 @@ class TestFlattenAll:
         result = await flattener.flatten_all()
         assert result.failed == 1
         assert "SYM1" in result.failed_symbols
-
-
-# ---------------------------------------------------------------------------
-# PositionFlattener.flatten_track
-# ---------------------------------------------------------------------------
 
 
 class TestFlattenTrack:
@@ -137,11 +116,6 @@ class TestFlattenTrack:
         assert result.submitted == 0
 
 
-# ---------------------------------------------------------------------------
-# PositionFlattener.flatten_strategy
-# ---------------------------------------------------------------------------
-
-
 class TestFlattenStrategy:
     @pytest.mark.asyncio
     async def test_flatten_strategy_flattens_all(self):
@@ -150,11 +124,6 @@ class TestFlattenStrategy:
         flattener = PositionFlattener(store, adapter)
         result = await flattener.flatten_strategy("strat1")
         assert result.submitted == 1
-
-
-# ---------------------------------------------------------------------------
-# _get_open_positions fallback via positions dict
-# ---------------------------------------------------------------------------
 
 
 class TestGetOpenPositionsFallback:
@@ -169,7 +138,7 @@ class TestGetOpenPositionsFallback:
         positions = flattener._get_open_positions()
         assert "SYM1" in positions
         assert positions["SYM1"] == 5
-        assert "SYM2" not in positions  # zero qty filtered
+        assert "SYM2" not in positions
 
     def test_fallback_no_positions_attr(self):
         store = MagicMock(spec=[])
@@ -190,11 +159,6 @@ class TestGetOpenPositionsFallback:
         assert positions["SYM1"] == 5
 
 
-# ---------------------------------------------------------------------------
-# _cancel_pending
-# ---------------------------------------------------------------------------
-
-
 class TestCancelPending:
     @pytest.mark.asyncio
     async def test_cancel_all_for_symbols(self):
@@ -212,11 +176,6 @@ class TestCancelPending:
         flattener = PositionFlattener(store, adapter)
         await flattener._cancel_pending(["SYM1"])
         adapter.cancel_all.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# _submit_intent
-# ---------------------------------------------------------------------------
 
 
 class TestSubmitIntent:

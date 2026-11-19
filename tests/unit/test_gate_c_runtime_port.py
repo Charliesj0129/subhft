@@ -62,7 +62,7 @@ def test_research_adapter_binds_all_gate_c_runtime_dependencies() -> None:
     assert maker_runtime.clickhouse_source is ClickHouseSource
     assert maker_runtime.latency_profile is LatencyProfile
     assert maker_runtime.maker_engine is MakerEngine
-    assert not hasattr(maker_runtime, "result_store")  # Gate C writes runs once, via ExperimentTracker
+    assert not hasattr(maker_runtime, "result_store")
 
     taker_runtime = runtime.load_taker_runtime()
     assert isinstance(taker_runtime, GateCTakerRuntime)

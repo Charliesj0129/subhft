@@ -84,11 +84,6 @@ def _build_system(registry):
         return HFTSystem({})
 
 
-# ---------------------------------------------------------------------------
-# H1: stop_async drains orders and writes checkpoint
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_stop_async_calls_drain_and_cancel():
     """H1: stop_async must await drain_and_cancel before broker logout."""
@@ -121,7 +116,6 @@ async def test_stop_async_no_checkpoint_writer_is_safe():
 
     await system.stop_async()
 
-    # Should complete without error; drain_and_cancel still called
     system.order_adapter.drain_and_cancel.assert_awaited_once()
 
 
@@ -137,7 +131,6 @@ async def test_stop_async_drain_timeout_does_not_block_shutdown():
     reg = _registry(order_adapter=adapter)
     system = _build_system(reg)
 
-    # Patch the timeout to be very short so test doesn't hang
     async def _timeout_and_close(awaitable, timeout):
         awaitable.close()
         raise asyncio.TimeoutError
@@ -145,7 +138,6 @@ async def test_stop_async_drain_timeout_does_not_block_shutdown():
     with patch("hft_platform.services.system.asyncio.wait_for", side_effect=_timeout_and_close):
         await system.stop_async()
 
-    # Shutdown completed despite drain timeout — verify by checking tasks cleared
     assert len(system.tasks) == 0
 
 
@@ -176,35 +168,16 @@ async def test_stop_async_checkpoint_exception_does_not_block_shutdown():
     assert len(system.tasks) == 0
 
 
-# ---------------------------------------------------------------------------
-# H6: StormGuard HALT cancels in-flight orders
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_stormguard_halt_cancels_inflight_orders():
     """H6: When StormGuard enters HALT, drain_and_cancel must be called."""
     reg = _registry()
     system = _build_system(reg)
 
-    # Simulate HALT
     system.storm_guard.state = StormGuardState.HALT
 
-    # Run one supervisor iteration — we need to call the HALT block.
-    # The supervisor loop checks storm_guard.state each tick.
-    # We extract the HALT handling by running stop_async (which the supervisor
-    # calls) but the HALT block is in run_async's loop body, not stop_async.
-    # Instead, invoke the relevant code path directly.
-
-    # The HALT block is inside run_async's while loop. We can't easily run
-    # the full supervisor, so we verify the code path by checking that
-    # drain_and_cancel is called when we trigger the HALT block manually.
-
-    # Reset mock to distinguish H1 (stop_async) from H6 (HALT block)
     system.order_adapter.drain_and_cancel.reset_mock()
 
-    # Simulate the HALT block logic that's in run_async
-    # This mirrors the exact code at system.py lines 591-616
     if system.storm_guard.state == StormGuardState.HALT:
         drained_count = 0
         while not system.order_queue.empty():
@@ -217,17 +190,11 @@ async def test_stormguard_halt_cancels_inflight_orders():
         system.order_adapter.running = False
         if system.gateway_service is not None:
             system.gateway_service.set_halt()
-        # H6: Cancel in-flight orders
         task = asyncio.create_task(system.order_adapter.drain_and_cancel())
         await task
 
     system.order_adapter.drain_and_cancel.assert_awaited_once()
     assert system.order_adapter.running is False
-
-
-# ---------------------------------------------------------------------------
-# Phase 2b: Recorder flush awaited before generic task cancellation
-# ---------------------------------------------------------------------------
 
 
 class _SlowRecorder:
@@ -240,7 +207,6 @@ class _SlowRecorder:
     async def run(self) -> None:
         while self.running:
             await asyncio.sleep(0.01)
-        # Simulate shutdown flush
         await self._flush_event.wait()
 
 
@@ -253,10 +219,8 @@ async def test_stop_async_awaits_recorder_flush_before_phase3():
     reg.recorder = recorder
     system = _build_system(reg)
 
-    # Start recorder task so it's in self.tasks
     system.tasks["recorder"] = asyncio.create_task(recorder.run())
 
-    # Release flush after a short delay to simulate successful flush
     async def _release():
         await asyncio.sleep(0.05)
         flush_event.set()
@@ -265,9 +229,7 @@ async def test_stop_async_awaits_recorder_flush_before_phase3():
 
     await system.stop_async()
 
-    # Recorder task should have completed (not been cancelled)
-    assert system.tasks == {}  # tasks.clear() ran
-    # The recorder's flush_event was set, proving it wasn't cancelled early
+    assert system.tasks == {}
     assert flush_event.is_set()
 
 
@@ -277,27 +239,22 @@ async def test_stop_async_recorder_skipped_in_phase3():
     reg = _registry()
     system = _build_system(reg)
 
-    # Create a recorder task that's already done
     done_task = asyncio.create_task(asyncio.sleep(0))
     await done_task
     system.tasks["recorder"] = done_task
 
-    # Track which tasks get cancelled in Phase 3
     cancelled_tasks: list[str] = []
     original_items = list(system.tasks.items())
 
     await system.stop_async()
 
-    # If recorder were NOT skipped in Phase 3, it would be cancelled.
-    # Since it's already done, this is safe either way — but let's verify
-    # the skip logic by checking the recorder task was not cancelled.
     assert not done_task.cancelled()
 
 
 @pytest.mark.asyncio
 async def test_stop_async_recorder_timeout_triggers_cancel():
     """Phase 2b: if recorder exceeds timeout, it gets cancelled."""
-    flush_event = asyncio.Event()  # Never set — simulates hang
+    flush_event = asyncio.Event()
     recorder = _SlowRecorder(flush_event)
     reg = _registry()
     reg.recorder = recorder
@@ -305,9 +262,7 @@ async def test_stop_async_recorder_timeout_triggers_cancel():
 
     system.tasks["recorder"] = asyncio.create_task(recorder.run())
 
-    # Use a very short timeout so test doesn't hang
     with patch.dict("os.environ", {"HFT_RECORDER_SHUTDOWN_TIMEOUT_S": "0"}):
         await system.stop_async()
 
-    # Shutdown completed despite recorder hang
     assert system.tasks == {}

@@ -68,10 +68,9 @@ from research.backtest.maker_engine import (
 logger = structlog.get_logger("c60.t5_backtest")
 
 _SCALE = 1_000_000
-_MAKER_REBATE_NTD_PER_SIDE = 10  # shared-context.yaml#cost_model.maker_rebate_ntd_per_side
-# RT cost scenarios in pt for sensitivity reporting (inst base, +/-30%, retail ref):
+_MAKER_REBATE_NTD_PER_SIDE = 10
 _COST_RT_SCENARIOS_PTS: tuple[float, ...] = (1.05, 1.50, 1.95, 3.00, 4.00)
-_TXFD6_C33_OOS_NTD_PER_DAY = 76920  # shared-context.yaml#promoted_active.C33
+_TXFD6_C33_OOS_NTD_PER_DAY = 76920
 
 
 def _simulate_day(
@@ -105,7 +104,6 @@ def _simulate_day(
             if cur_ask <= cur_bid:
                 continue
 
-            # Invalidate stale orders whose price no longer matches L1.
             if buy_order is not None and buy_order.price != cur_bid:
                 buy_order = None
             if sell_order is not None and sell_order.price != cur_ask:
@@ -114,7 +112,6 @@ def _simulate_day(
             actions = strategy.on_tick(event)
             for action in actions:
                 if isinstance(action, PostQuote):
-                    # Seed queue-ahead from qf * book_qty.
                     book_qty = cur_bid_v if action.side == "buy" else cur_ask_v
                     queue_ahead = max(1, int(book_qty * queue_fraction))
                     qp = QueuePosition(
@@ -133,7 +130,6 @@ def _simulate_day(
                         sell_order = None
             position_path.append((event.exch_ts, abs(position)))
         else:
-            # Trade event: check for fills against outstanding orders.
             mid = (cur_bid + cur_ask) / (2 * event.scale) if cur_bid > 0 else 0
             spread_pts = (
                 (cur_ask - cur_bid) // event.scale if cur_bid > 0 else 0
@@ -210,7 +206,7 @@ def _fifo_trips(fills: list[dict]) -> tuple[float, int, int, list[dict]]:
                     "open_price_pts": open_price_pts,
                     "close_price_pts": price_pts,
                     "pnl_pts": pnl,
-                    "close_was_maker": True,  # both legs maker-posted
+                    "close_was_maker": True,
                 })
             else:
                 buy_q.append(f)
@@ -299,7 +295,6 @@ def _compute_rebate_decomp(
     rebate_pts_per_rt = rebate_ntd_per_rt / _TMF_POINT_VALUE_NTD
 
     fees_pts = n_fills * (inst_rt_pts / 2.0)
-    # Each trip = 2 fills, so rebate per-fill (one side) = half of rebate_per_rt.
     rebate_pts_total = n_fills * (rebate_pts_per_rt / 2.0)
 
     return {
@@ -370,10 +365,8 @@ def _run_one_config(
         all_fills.extend(day["fills"])
         all_position_paths.append(day["position_path"])
 
-    # Aggregate across all days.
     gross_pts, total_trips, total_wins, trip_details = _fifo_trips(all_fills)
 
-    # |pos|-quartile decomposition (time-weighted across all days).
     quartile = {"by_abs_pos": {}, "max_pos_frac": 0.0}
     if all_position_paths:
         flat_path = []
@@ -381,17 +374,12 @@ def _run_one_config(
             flat_path.extend(pp)
         quartile = _position_time_quartiles(flat_path, params.max_pos)
 
-    # Per-|pos| PnL attribution. For V-shape, PnL should concentrate at
-    # trips that open from |pos|=max. This is an approximation: we attribute
-    # each closing trip to the |pos|_before of its close-side fill.
     pnl_by_pos_before: dict[int, list[float]] = {}
     for f in all_fills:
         if f.get("is_close", False):
             k = min(abs(f["pos_before"]), params.max_pos)
-            pnl_by_pos_before.setdefault(k, []).append(0.0)  # marker
+            pnl_by_pos_before.setdefault(k, []).append(0.0)
 
-    # For trip-level attribution, we index by the abs(pos) BEFORE the close fill.
-    # Reconstruct by walking fills again in order.
     pnl_by_pos_attribution: dict[int, float] = {k: 0.0 for k in range(params.max_pos + 1)}
     buy_q: list[dict] = []
     sell_q: list[dict] = []
@@ -505,7 +493,6 @@ def main() -> int:
             requested=args.days,
         )
         return 3
-    # Take most-recent N days (recency rule per taifex-alpha-kill-criteria).
     dates = all_dates[-args.days:]
     logger.info(
         "backtest_start",
@@ -518,7 +505,7 @@ def main() -> int:
     max_pos_bracket = [int(x) for x in args.max_pos_bracket.split(",")]
     runs: dict[str, dict] = {}
     for mp in max_pos_bracket:
-        params = C60Params(max_pos=mp)  # else deployed defaults
+        params = C60Params(max_pos=mp)
         logger.info("run_start", max_pos=mp)
         run = _run_one_config(source, args.instrument, dates, params, args.qf)
         runs[f"max_pos_{mp}"] = run
@@ -533,10 +520,6 @@ def main() -> int:
             close_maker_rate=run["close_maker_rate_pct"],
         )
 
-    # TMFD6 vs TXFD6 C33 precedent scaling comparison. The ratio is
-    # TMFD6 pt_value 10 / TXFD6 pt_value 200 = 0.05; therefore C60 NTD/day
-    # projected from C33 OOS would be 0.05 * C33 = 3,846 NTD/day. We compare
-    # realized C60 NTD/day against this.
     c33_projection_ntd_per_day = _TXFD6_C33_OOS_NTD_PER_DAY * (10 / 200)
     mp1 = runs.get("max_pos_1", {})
     mp1_rt150 = mp1.get("cost_sensitivity", {}).get("rt_1.50_pt", {})

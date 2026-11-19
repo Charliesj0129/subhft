@@ -20,7 +20,7 @@ class RawExecEvent:
     Lightweight capture of Shioaji callback args.
     """
 
-    topic: str  # "order" or "deal"
+    topic: str
     data: Dict[str, Any]
     ingest_ts_ns: int
 
@@ -38,21 +38,11 @@ class ExecutionNormalizer:
     ) -> None:
         self.raw_queue = raw_queue
         self._default_account_id = default_account_id
-        # Resolved lazily: BrokerProtocol.get_default_account_id returns "" until
-        # the session authenticates, and the normalizer is constructed before
-        # login. Cached on first non-empty answer so the fill path stays O(1)
-        # and never re-enters the SDK.
         self._default_account_id_provider = default_account_id_provider
-        # Which "which candidate ids were present" shapes have already been
-        # logged. The counter below carries the volume; the log only has to
-        # carry the payload shape once per distinct shape, so a burst of
-        # unattributable orders cannot turn into a log storm. Bounded at 17
-        # entries (the subsets of four candidate fields, plus "none").
         self._unattributed_shapes_logged: set[str] = set()
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
-        # Maps broker order IDs -> order_key ("strategy_id:intent_id") or strategy_id.
         self.order_id_map = order_id_map if order_id_map is not None else {}
         self.order_id_resolver = OrderIdResolver(self.order_id_map)
         self.strategy_id_resolvers = strategy_id_resolvers or [
@@ -81,7 +71,7 @@ class ExecutionNormalizer:
             return ""
         try:
             resolved = str(provider() or "")
-        except Exception:  # broker session may be mid-reconnect
+        except Exception:
             logger.warning("default_account_id_provider_failed", exc_info=True)
             return ""
         if resolved:
@@ -178,34 +168,25 @@ class ExecutionNormalizer:
         if value is None:
             return timebase.now_ns()
         try:
-            # Use float arithmetic to avoid Decimal allocation on exec path.
-            # Detect magnitude then multiply, rounding at the end.
             fv = float(value)
         except (TypeError, ValueError, OverflowError):
             return timebase.now_ns()
         if fv <= 0.0:
             return timebase.now_ns()
         if fv > 1e17:
-            return int(fv)  # already nanoseconds
+            return int(fv)
         if fv > 1e14:
-            return int(fv * 1_000)  # microseconds -> ns
+            return int(fv * 1_000)
         if fv > 1e11:
-            return int(fv * 1_000_000)  # milliseconds -> ns
-        return int(fv * 1_000_000_000)  # seconds -> ns
+            return int(fv * 1_000_000)
+        return int(fv * 1_000_000_000)
 
     def normalize_order(self, raw: RawExecEvent) -> Optional[OrderEvent]:
         self.metrics.execution_events_total.labels(type="order").inc()
         d, state = self._unwrap_data(raw)
-        # Mapping logic (Mock implementation based on typical fields)
-        # Shioaji fields: ord_no, seq_no, id (order_id), action, price, qty, status
 
         try:
             if not isinstance(d, dict):
-                # Silent until 2026-08-12: both orders of 2026-08-10 died here
-                # without a log line, so the visible symptom was only the fill
-                # warning and nobody could see that the order path was dead.
-                # A broker payload the platform cannot read is a defect in the
-                # adapter's conversion, never a routine skip.
                 logger.warning("normalize_order_non_mapping_payload", payload_type=str(type(d)))
                 self.metrics.order_normalization_failed_total.labels(reason="non_mapping_payload").inc()
                 return None
@@ -241,17 +222,10 @@ class ExecutionNormalizer:
             custom_field = self._first_str(order, fm.custom_field_keys()) or self._first_str(d, fm.custom_field_keys())
             oid = ord_no or seq_no or other_id
             strategy_id = self._resolve_strategy_id(raw)
-            # Only ``ordno`` (first) names an order unconditionally; the other ids are
-            # recycled by the broker and count only while their order is live.
             client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
                 [ord_no, seq_no, other_id, custom_field], strong=1
             )
             if not client_order_id:
-                # The order-ACK callback arrives ~4.3 ms before place_order()
-                # returns the Trade carrying the broker ids, so the resolver
-                # above CANNOT succeed on a first ACK -- it was empty on 414 of
-                # 414 rows. _on_exec peeks the pending-fill index (registered
-                # before dispatch) and injects the order key here.
                 client_order_id = self._resolve_order_key_from_injected(raw) or ""
             if not client_order_id:
                 self._record_unattributed_order(
@@ -321,7 +295,7 @@ class ExecutionNormalizer:
                 ),
             )
 
-    def normalize_fill(self, raw: RawExecEvent) -> Optional[FillEvent]:  # noqa: C901
+    def normalize_fill(self, raw: RawExecEvent) -> Optional[FillEvent]:
         self.metrics.execution_events_total.labels(type="fill").inc()
         d, _ = self._unwrap_data(raw)
         fm = self.field_map
@@ -340,15 +314,13 @@ class ExecutionNormalizer:
                 return None
             price_value = get("price") or 0
 
-            # Map action/side
             action = get("action")
             side = Side.BUY
             if action is not None:
                 s = str(action).lower()
-                if "sell" in s or action == -1:  # Broker may use Int or String
+                if "sell" in s or action == -1:
                     side = Side.SELL
 
-            # Resolve symbol via broker field map; prefer full_code aliases.
             sym = self._first_str(d, fm.symbol_keys())
             if not sym:
                 c = get("contract")
@@ -362,10 +334,8 @@ class ExecutionNormalizer:
             client_order_id = self.order_id_resolver.resolve_order_key_from_candidates(
                 [order_id, other_id, custom_field], strong=1
             )
-            # scale() handles float/int/Decimal inputs with precision
             scale_price = self.price_codec.scale(sym, price_value)
 
-            # Compute fees if calculator is available
             fee = 0
             tax = 0
             if self._fee_calculator is not None:
@@ -376,25 +346,6 @@ class ExecutionNormalizer:
 
             fill_id = self._first_str(d, fm.sequence_id_keys())
             if not fill_id:
-                # Synthesize a fill_id when broker omits seqno (e.g. reconnect replays).
-                # This enables downstream dedup to catch duplicate fills.
-                #
-                # CONTENT-ADDRESSED, deliberately. This used to append
-                # ``self._synth_counter``, which increments per call, so the
-                # same replayed deal produced a DIFFERENT id every time and
-                # dedup could never match it -- defeating the one purpose the
-                # docstring above claims. Worse, the id was always truthy, so
-                # the router's content-keyed fallback
-                # (``fill.fill_id or _synthesize_dedup_key(fill)``, four call
-                # sites) was unreachable dead code. A reconnect replay
-                # therefore double-counted position and realized PnL.
-                #
-                # Fields match ``execution.router._synthesize_dedup_key``
-                # exactly, so the synthesized id and the fallback key agree on
-                # what "the same fill" means. ``order_id`` is included for the
-                # same reason it is there: without it, two different orders
-                # filling the same qty at the same price in the same
-                # nanosecond collapse into one.
                 _exch_ts = self._normalize_ts_ns(get("ts"))
                 fill_id = f"synth_{sym}|{order_id}|{side.name}|{scale_price}|{qty}|{_exch_ts}"
                 self.metrics.synthetic_fill_id_total.inc()
@@ -405,11 +356,6 @@ class ExecutionNormalizer:
                     side=side.name,
                 )
 
-            # Account ID resolution chain:
-            # 1. Explicit account_id field (Fubon or enriched payloads)
-            # 2. Shioaji Account object (.account_id or str())
-            # 3. default_account_id from broker session
-            # 4. Reject — unknown account poisons PositionStore keys
             raw_account_id = get("account_id")
             if not raw_account_id:
                 acct_obj = get("account")

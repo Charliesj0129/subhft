@@ -49,9 +49,6 @@ class TestPrecedence:
 class TestFallback:
     def test_canonical_base_fallback(self) -> None:
         out = sp.resolve_symbols_config_path()
-        # With no explicit/env/settings input and whatever state the repo has,
-        # resolver must still return a string. In a fresh checkout it is
-        # ``config/base/symbols.yaml`` — which is checked in.
         assert out.endswith("config/base/symbols.yaml") or out.endswith("config/symbols.yaml")
 
     def test_returns_absolute_path(self) -> None:
@@ -86,8 +83,6 @@ class TestInternalPicker:
         assert tier == "settings"
 
     def test_pick_base_default_last(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Ensure the "project_cwd_file" tier cannot win by pointing the project
-        # root's ``config/symbols.yaml`` check at a non-existent location.
         monkeypatch.setattr(sp, "_PROJECT_ROOT", Path("/definitely-not-a-real-path"))
         tier, path = sp._pick(None, paths_setting=None)
         assert tier == "base_default"

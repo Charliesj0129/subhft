@@ -87,7 +87,7 @@ def strategy():
         qi_skew_threshold=1.0,
         max_pos=1,
         stale_quote_max_ticks=3,
-        quote_cooldown_ms=0,  # disable for this test
+        quote_cooldown_ms=0,
     )
     s.symbols = {"TMFE6"}
     return s
@@ -143,14 +143,10 @@ class TestInflightOidSet:
         """When multiple BUY oids are in flight and all are stale relative to
         current mid, reconcile must fire a cancel intent for EACH oid."""
         ctx = _ctx()
-        # Seed two in-flight BUY orders at 37754.
         strategy.handle_event(ctx, _order("oA", Side.BUY))
         strategy.handle_event(ctx, _order("oB", Side.BUY))
         strategy._last_bid["TMFE6"] = 3_7754_0000
-        # Note: _active_buy_oid still single-slot — set by the LAST SUBMITTED.
-        # Reconcile should use the inflight SET, not just _active_buy_oid.
 
-        # Mid now 37760 → 6 pts stale.
         ev = _lob_stats(mid_pts=37760, spread_pts=3)
         intents = strategy.handle_event(ctx, ev)
 

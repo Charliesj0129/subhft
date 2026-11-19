@@ -56,7 +56,7 @@ class HawkesMLEState:
     mu: float
     alpha: float
     beta: float
-    rho_hat: float       # alpha / beta clipped to [0, 0.99]
+    rho_hat: float
     n_events: int
     fit_ok: bool
 

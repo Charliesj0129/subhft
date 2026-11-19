@@ -57,11 +57,9 @@ class TestEnforceLoopTracePolicy:
         with pytest.raises(SystemExit) as exc_info:
             _enforce_loop_trace_policy({"loop_id": "test_loop_v1"})
         assert exc_info.value.code == 2
-        # Must not silently flip the env var when the policy is wrong.
         assert os.environ.get("HFT_DIAG_TRACE_ENABLED") != "1"
 
     def test_loop_with_missing_policy_refuses_to_start(self, tmp_path, monkeypatch):
-        # No `trace_policy:` key at all — must reject, not default-allow.
         repo_root = _write_loop_yaml(tmp_path, "test_loop_v1", None)
         monkeypatch.chdir(repo_root)
 
@@ -69,10 +67,6 @@ class TestEnforceLoopTracePolicy:
             _enforce_loop_trace_policy({"loop_id": "test_loop_v1"})
 
     def test_missing_loop_file_is_a_noop(self, tmp_path, monkeypatch):
-        # The loader (_bind_loop) already raises LoopBindingError on missing
-        # loop file before settings reach cmd_run, so this branch is
-        # defensive: if we somehow get here without a file, do not crash —
-        # simply skip enforcement (settings did not flow through _bind_loop).
         monkeypatch.chdir(tmp_path)
         _enforce_loop_trace_policy({"loop_id": "ghost"})
         assert os.environ.get("HFT_DIAG_TRACE_ENABLED") != "1"

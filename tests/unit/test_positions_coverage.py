@@ -15,10 +15,6 @@ import pytest
 from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.positions import Position, PositionStore
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_fill(**kwargs):
     defaults = dict(
@@ -29,7 +25,7 @@ def _make_fill(**kwargs):
         symbol="2330",
         side=Side.BUY,
         qty=10,
-        price=1000000,  # Scaled int x10000
+        price=1000000,
         fee=100,
         tax=0,
         ingest_ts_ns=0,
@@ -37,11 +33,6 @@ def _make_fill(**kwargs):
     )
     defaults.update(kwargs)
     return FillEvent(**defaults)
-
-
-# ---------------------------------------------------------------------------
-# Position dataclass
-# ---------------------------------------------------------------------------
 
 
 class TestPosition:
@@ -75,7 +66,6 @@ class TestPosition:
         fill = _make_fill(side=Side.SELL, qty=5, price=1100000)
         pos.update(fill)
         assert pos.net_qty == 5
-        # PnL = (1100000 - 1000000) * 5 * 1 = 500000
         assert pos.realized_pnl_scaled == 500000
 
     def test_update_buy_close_short(self):
@@ -83,7 +73,6 @@ class TestPosition:
         fill = _make_fill(side=Side.BUY, qty=5, price=900000)
         pos.update(fill)
         assert pos.net_qty == -5
-        # PnL = (1000000 - 900000) * 5 * 1 = 500000
         assert pos.realized_pnl_scaled == 500000
 
     def test_update_flip_from_long_to_short(self):
@@ -91,7 +80,6 @@ class TestPosition:
         fill = _make_fill(side=Side.SELL, qty=5, price=1100000)
         pos.update(fill)
         assert pos.net_qty == -2
-        # Flip: avg_price becomes fill price for the new short
         assert pos.avg_price_scaled == 1100000
 
     def test_update_flip_from_short_to_long(self):
@@ -113,12 +101,11 @@ class TestPosition:
         fill = _make_fill(side=Side.BUY, qty=10, price=1200000)
         pos.update(fill)
         assert pos.net_qty == 20
-        # Weighted avg: (10*1000000 + 10*1200000) / 20 = 1100000
         assert pos.avg_price_scaled == 1100000
 
     def test_update_accumulates_fees(self):
         pos = Position("acc", "s1", "2330")
-        fill = _make_fill(fee=700, tax=200)  # fee is all-in: it already contains the tax
+        fill = _make_fill(fee=700, tax=200)
         pos.update(fill)
         assert pos.fees_scaled == 700
 
@@ -126,13 +113,7 @@ class TestPosition:
         pos = Position("acc", "s1", "TXFD6", net_qty=1, avg_price_scaled=1000000)
         fill = _make_fill(symbol="TXFD6", side=Side.SELL, qty=1, price=1100000)
         pos.update(fill, contract_multiplier=200)
-        # PnL = (1100000 - 1000000) * 1 * 200 = 20000000
         assert pos.realized_pnl_scaled == 20000000
-
-
-# ---------------------------------------------------------------------------
-# PositionStore basics
-# ---------------------------------------------------------------------------
 
 
 class TestPositionStore:
@@ -169,14 +150,12 @@ class TestPositionStore:
         store._peak_equity_scaled = 0
         store._total_realized_pnl_scaled = -100
         dd = store.get_drawdown_pct()
-        assert dd == 0.0  # cold-start guard: peak < 2M → 0.0
+        assert dd == 0.0
 
     def test_get_drawdown_pct_from_peak(self):
         store = PositionStore()
-        # Bug B: default threshold raised to 100M scaled (10000 NTD).
-        # Use peak well above threshold so drawdown calc activates.
-        store._peak_equity_scaled = 1_000_000_000  # 100,000 NTD, above threshold
-        store._total_realized_pnl_scaled = 800_000_000  # 80,000 NTD
+        store._peak_equity_scaled = 1_000_000_000
+        store._total_realized_pnl_scaled = 800_000_000
         dd = store.get_drawdown_pct()
         assert dd == pytest.approx(0.2)
 
@@ -197,11 +176,10 @@ class TestPositionStore:
         """
         import os
 
-        # Ensure default threshold (no env override) for this test
         os.environ.pop("HFT_DRAWDOWN_MIN_PEAK_SCALED", None)
         store = PositionStore()
-        store._peak_equity_scaled = 2_395_000  # 240 NTD intraday peak
-        store._total_realized_pnl_scaled = 170_000  # 17 NTD after pullback (loss = 22.3 NTD)
+        store._peak_equity_scaled = 2_395_000
+        store._total_realized_pnl_scaled = 170_000
         drawdown = store.get_drawdown_pct()
         assert drawdown < 0.02, (
             f"Drawdown {drawdown:.4f} would trigger HALT (>= 2%). 22 NTD loss on HFT-scale strategy must stay safe."
@@ -217,22 +195,16 @@ class TestPositionStore:
 
         from hft_platform.execution import positions as positions_mod
 
-        # Lower threshold via env → drawdown calc activates earlier
-        os.environ["HFT_DRAWDOWN_MIN_PEAK_SCALED"] = "5000000"  # 500 NTD
+        os.environ["HFT_DRAWDOWN_MIN_PEAK_SCALED"] = "5000000"
         try:
             reload(positions_mod)
             store = positions_mod.PositionStore()
-            store._peak_equity_scaled = 10_000_000  # 1000 NTD, above 500 NTD floor
+            store._peak_equity_scaled = 10_000_000
             store._total_realized_pnl_scaled = 8_000_000
             assert store.get_drawdown_pct() == pytest.approx(0.2)
         finally:
             os.environ.pop("HFT_DRAWDOWN_MIN_PEAK_SCALED", None)
             reload(positions_mod)
-
-
-# ---------------------------------------------------------------------------
-# PositionStore: net_qty_for_symbol
-# ---------------------------------------------------------------------------
 
 
 class TestNetQtyForSymbol:
@@ -266,7 +238,6 @@ class TestNetQtyForSymbol:
             "acc1:2330": {"symbol": "2330", "net_qty": 5, "strategy_id": ""},
         }
         qty = store.net_qty_for_symbol("2330", strategy_id="s1")
-        # Legacy recovery without strategy_id excluded from filtered queries
         assert qty == 0
 
     def test_recovery_with_matching_strategy(self):
@@ -276,11 +247,6 @@ class TestNetQtyForSymbol:
         }
         qty = store.net_qty_for_symbol("2330", strategy_id="s1")
         assert qty == 5
-
-
-# ---------------------------------------------------------------------------
-# PositionStore: load_recovery
-# ---------------------------------------------------------------------------
 
 
 class TestLoadRecovery:
@@ -305,11 +271,6 @@ class TestLoadRecovery:
         assert "acc1:2330" in store._recovery_positions
 
 
-# ---------------------------------------------------------------------------
-# PositionStore: mark_to_market
-# ---------------------------------------------------------------------------
-
-
 class TestMarkToMarket:
     def test_mtm_basic(self):
         store = PositionStore()
@@ -317,14 +278,13 @@ class TestMarkToMarket:
         fill = _make_fill(price=1000000, qty=10)
         store.on_fill(fill)
         mtm = store.mark_to_market({"2330": 1100000})
-        # (1100000 - 1000000) * 10 * 1 = 1000000
         assert mtm == 1000000
 
     def test_mtm_no_mid_price(self):
         store = PositionStore()
         store._rust_tracker = None
         store.on_fill(_make_fill())
-        mtm = store.mark_to_market({})  # No mid price for 2330
+        mtm = store.mark_to_market({})
         assert mtm == 0
 
     def test_mtm_flat_position_ignored(self):
@@ -361,28 +321,16 @@ class TestMarkToMarket:
         assert mtm == 0
 
 
-# ---------------------------------------------------------------------------
-# PositionStore: snapshot_positions
-# ---------------------------------------------------------------------------
-
-
 class TestSnapshotPositions:
     def test_snapshot_is_deep_copy(self):
         store = PositionStore()
         store._rust_tracker = None
         store.on_fill(_make_fill())
         snap = store.snapshot_positions()
-        # Modify the snapshot
         for pos in snap.values():
             pos.net_qty = 999
-        # Original should be unchanged
         for pos in store.positions.values():
             assert pos.net_qty == 10
-
-
-# ---------------------------------------------------------------------------
-# PositionStore: reset and clear_symbol_positions
-# ---------------------------------------------------------------------------
 
 
 class TestPositionStoreReset:
@@ -413,29 +361,16 @@ class TestPositionStoreReset:
         assert len(store._recovery_positions) == 0
 
 
-# ---------------------------------------------------------------------------
-# PositionStore: _evict_flat_positions
-# ---------------------------------------------------------------------------
-
-
 class TestEvictFlatPositions:
     def test_evict_flat(self):
         store = PositionStore()
         store._positions_max_size = 2
         store._rust_tracker = None
-        # Create a flat position
         store.positions["acc:s1:A"] = Position("acc", "s1", "A", net_qty=0, last_update_ts=1)
         store.positions["acc:s1:B"] = Position("acc", "s1", "B", net_qty=5, last_update_ts=2)
-        # Adding a third should trigger eviction
         fill = _make_fill(symbol="C", fill_id="f3")
         store.on_fill(fill)
-        # Flat position A should be evicted
         assert "acc:s1:A" not in store.positions
-
-
-# ---------------------------------------------------------------------------
-# PositionStore: _update_portfolio_aggregates
-# ---------------------------------------------------------------------------
 
 
 class TestPortfolioAggregates:

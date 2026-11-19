@@ -69,7 +69,7 @@ class OrderExplanation:
     cancels: list[dict[str, Any]]
     pnl_after: dict[str, Any] | None
     lifecycle_status: LifecycleStatus
-    ts_emit: int  # ns since epoch
+    ts_emit: int
 
 
 @dataclass(slots=True)
@@ -131,8 +131,6 @@ class OrderExplanationAssembler:
         self._pending: dict[str, _PendingExplanation] = {}
         self._last_sweep_monotonic_ts: float = 0.0
 
-    # ------------------------------------------------------------------ ingestion
-
     def on_intent(
         self,
         *,
@@ -155,8 +153,6 @@ class OrderExplanationAssembler:
         if not client_order_id:
             return
         if client_order_id in self._pending:
-            # Re-registration during reconnect: keep existing entry, do not
-            # overwrite collected fills/cancels.
             return
         self._evict_oldest_if_full()
         self._pending[client_order_id] = _PendingExplanation(
@@ -217,8 +213,6 @@ class OrderExplanationAssembler:
             return None
         return self._finalize(entry, lifecycle_status, ts_emit_ns)
 
-    # ------------------------------------------------------------------ sweeping
-
     def sweep_stale(self, *, now_monotonic_ts: float | None = None, now_ns: int | None = None) -> int:
         """Emit ``incomplete`` explanations for entries past ``ttl_s``.
 
@@ -246,8 +240,6 @@ class OrderExplanationAssembler:
                 ttl_s=self._ttl_s,
             )
         return len(stale_keys)
-
-    # ------------------------------------------------------------------ helpers
 
     def _finalize(
         self,
@@ -278,7 +270,7 @@ class OrderExplanationAssembler:
         if self._sink is not None:
             try:
                 self._sink(explanation)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "order_explanation_sink_error",
                     error=str(exc),
@@ -296,8 +288,6 @@ class OrderExplanationAssembler:
         evicted = self._pending.pop(oldest_key, None)
         if evicted is None:
             return
-        # Promote to incomplete so the operator still sees the orphan instead
-        # of silently dropping it.
         self._finalize(evicted, "incomplete", int(time.time_ns()))
         logger.warning(
             "order_explanation_evicted_for_capacity",

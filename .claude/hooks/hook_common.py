@@ -8,12 +8,6 @@ import sys
 from typing import Iterator
 
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z_0-9]*=")
-# Wrapper commands, mapped to the options of theirs that take a SEPARATE value.
-# Arity matters: `env -u GIT_CONFIG git commit` used to stop parsing at
-# GIT_CONFIG and report no git invocation at all, which let a subagent run
-# `timeout -s TERM 5 git reset --hard HEAD^` straight past the mutation guard.
-# Skipping "anything that looks like a flag" is not enough -- the value is the
-# token that does not look like one.
 _WRAPPERS = {
     "command": {},
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
@@ -21,33 +15,15 @@ _WRAPPERS = {
     "nice": {"-n", "--adjustment"},
     "time": {"-o", "--output", "-f", "--format"},
 }
-# Reserved words that can open a segment once a compound command is split on
-# `;`, `&&`, `|` or a newline. The program is the token after them.
 _SHELL_KEYWORDS = frozenset({"do", "then", "else", "elif", "if", "while", "until", "!", "{"})
-# Global options that take a separate value argument, per tool.
 _GIT_OPTS_WITH_VALUE = {"-C", "-c", "--namespace", "--work-tree", "--git-dir", "--exec-path"}
 _GH_OPTS_WITH_VALUE = {"-R", "--repo", "--hostname"}
 
-# Interpreter forms whose real command lives inside a string argument.
-# `bash -c 'git reset --hard HEAD^'` is THREE tokens after shlex, and the
-# basename of each is "bash", "-c", and the entire payload -- so every parser
-# below read it as a command that does not run git, and both the mutation guard
-# and the review gate exited 0 on a destructive reset. The payload is re-parsed
-# rather than pattern-matched, and a form whose payload cannot be located is
-# reported unreadable instead of allowed.
 _SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "fish")
 _SHELL_C = re.compile(r"^-[a-zA-Z]*c$")
 _MAX_SHELL_DEPTH = 4
-# `env -S '<cmd>'` is the same trick without a shell, and it was WORSE here:
-# -S is genuinely an option-with-a-value, so the arity fix skipped its value
-# correctly -- and the value is the entire command. `env -S 'git push'` reported
-# no invocation AND no unreadable segment.
 _PAYLOAD_OPTS = ("-S", "--split-string")
 
-# Options and environment variables that point git at ANOTHER repository. The
-# gate resolves HEAD in the session's cwd, so a command carrying one of these
-# publishes objects that were never the ones under review. `-C` is deliberately
-# absent: its value is captured and honoured rather than refused.
 _GIT_REPO_SELECTORS = ("--git-dir", "--work-tree", "--namespace")
 _GIT_REPO_ENV = (
     "GIT_DIR",
@@ -95,11 +71,8 @@ def is_subagent(event: dict) -> bool:
     return bool(event.get("agent_type"))
 
 
-#: Where `_segments` cuts a command. A lone `&` is deliberately not here: see
-#: _unreadable_by_shape for why it is handled by blocking rather than cutting.
 _OPERATORS = re.compile(r"(?:\|\||&&|;|\||\n|\$\(|`)")
 _GIT_OR_GH = re.compile(r"(?<![\w.-])(?:git|gh)(?![\w-])")
-#: An `&` that is not part of `&&` or a redirection, read without regard to quotes.
 _ANY_AMPERSAND = re.compile(r"(?<![&<>])&(?![&>])")
 
 
@@ -170,7 +143,6 @@ def _unreadable_by_shape(cmd: str, _depth: int = 0) -> Iterator[str]:
         try:
             toks = shlex.split(seg)
         except ValueError:
-            # Any `&` at all: the odd quote makes the quote state unknowable.
             if any(_GIT_OR_GH.search(seg, m.end()) for m in _ANY_AMPERSAND.finditer(seg)):
                 yield f"{seg.strip()}  [quotes do not balance around a background operator `&`]"
             continue
@@ -198,11 +170,6 @@ def _segments(cmd: str, _depth: int = 0) -> Iterator[list[str]]:
             toks = seg.split()
         if not toks:
             continue
-        # `bash -c "..."` and `env -S "..."` are flattened into the segments they
-        # would actually run, so every consumer sees the real program at position
-        # 0. Bounded,
-        # because `bash -c "bash -c ..."` nests; past the bound the segment is
-        # yielded intact and reported unreadable by unattributed_segments.
         if _depth < _MAX_SHELL_DEPTH:
             hidden, payload = _string_command(toks)
             if hidden and payload is not None:
@@ -224,9 +191,6 @@ def _string_command(toks: list[str]) -> tuple[bool, str | None]:
     """
     i = 0
     while i < len(toks):
-        # Reserved words are skipped here as in _skip_prefix: `do bash -c '...'`
-        # was otherwise never flattened, and the payload stayed one token that
-        # no basename check could see.
         if _ENV_ASSIGN.match(toks[i]) or toks[i] in _SHELL_KEYWORDS:
             i += 1
             continue
@@ -235,10 +199,6 @@ def _string_command(toks: list[str]) -> tuple[bool, str | None]:
             for j in range(i + 1, len(toks)):
                 if not _SHELL_C.match(toks[j]):
                     continue
-                # `bash -c -- '<cmd>'` and `bash -c -x '<cmd>'` both RUN the
-                # quoted command -- verified against bash itself. Taking the
-                # token immediately after `-c` selected `--`/`-x`, flattened to
-                # a segment containing no git, and reported nothing at all.
                 k = j + 1
                 while k < len(toks) and (toks[k] == "--" or toks[k].startswith("-")):
                     k += 1
@@ -307,9 +267,6 @@ def _skip_prefix(toks: list[str]) -> int:
         wrapper = _WRAPPERS.get(os.path.basename(toks[i]))
         if wrapper is not None:
             i += 1
-            # The wrapper's own options, then `env -i` / `timeout 5` operands.
-            # `--opt=value` carries its value inside the token; `--opt value`
-            # does not, so the next token is consumed rather than inspected.
             while i < len(toks):
                 tok = toks[i]
                 if tok == "--":
@@ -339,7 +296,6 @@ def unattributed_segments(cmd: str) -> list[str]:
     """
     out = list(_unreadable_by_shape(cmd))
     for toks in _segments(cmd):
-        # A string-command form reaching here is one _segments could not flatten.
         if _string_command(toks)[0]:
             out.append(" ".join(toks))
             continue

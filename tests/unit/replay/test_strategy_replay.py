@@ -20,8 +20,6 @@ import pytest
 
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent, Side
 
-# ─── Fixture builder helpers (mirrors test_wal_fixture_loader pattern) ────
-
 
 def _write_shard(
     tar: tarfile.TarFile,
@@ -48,9 +46,8 @@ def _market_data_rows(symbol: str = "TMFD6", n: int = 5) -> list[dict]:
     """Build N alternating BidAsk + Tick rows with monotonic exch_ts."""
     rows = []
     for i in range(n):
-        exch_ts = 1_000_000_000 + i * 1_000_000  # 1ms steps
+        exch_ts = 1_000_000_000 + i * 1_000_000
         if i % 2 == 0:
-            # BidAsk row
             rows.append(
                 {
                     "symbol": symbol,
@@ -67,7 +64,6 @@ def _market_data_rows(symbol: str = "TMFD6", n: int = 5) -> list[dict]:
                 }
             )
         else:
-            # Tick row
             rows.append(
                 {
                     "symbol": symbol,
@@ -96,9 +92,6 @@ def tmp_fixture(tmp_path: Path) -> Path:
     return fixture
 
 
-# ─── Test-only strategy classes ───────────────────────────────────────────
-
-
 class _DeterministicStrategy:
     """Test strategy: emits one OrderIntent per event, fields derived from event.
 
@@ -114,7 +107,6 @@ class _DeterministicStrategy:
         from hft_platform.core import timebase
 
         self._counter += 1
-        # Pull a price from the event (BidAsk uses bids[0][0]; Tick uses price).
         if hasattr(event, "bids") and len(event.bids) > 0:
             price = int(event.bids[0][0])
         else:
@@ -128,7 +120,7 @@ class _DeterministicStrategy:
             price=price,
             qty=1,
             tif=TIF.LIMIT,
-            timestamp_ns=timebase.now_ns(),  # exercises the harness patch
+            timestamp_ns=timebase.now_ns(),
             decision_price=price,
         )
         return [intent]
@@ -142,7 +134,6 @@ class _RandomizedStrategy(_DeterministicStrategy):
     def handle_event(self, ctx: Any, event: Any) -> list[OrderIntent]:
         intents = super().handle_event(ctx, event)
         if intents and self.rng is not None:
-            # Mutate qty into a seed-dependent value (1..5).
             it = intents[0]
             it.qty = self.rng.randint(1, 5)
         return intents
@@ -154,9 +145,6 @@ def _make_det_strategy(*, rng: random.Random | None = None) -> _DeterministicStr
 
 def _make_rng_strategy(*, rng: random.Random | None = None) -> _RandomizedStrategy:
     return _RandomizedStrategy(rng=rng)
-
-
-# ─── Tests ────────────────────────────────────────────────────────────────
 
 
 def test_replay_is_deterministic(tmp_fixture: Path) -> None:
@@ -203,7 +191,6 @@ def test_replay_respects_max_events(tmp_fixture: Path) -> None:
     log = replay_strategy(cfg)
 
     assert log.n_events_processed == 3
-    # Each event yields exactly one intent in this test strategy.
     assert log.n_intents() == 3
 
 

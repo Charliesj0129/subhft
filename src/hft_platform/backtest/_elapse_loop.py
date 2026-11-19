@@ -44,7 +44,6 @@ def run_elapse(adapter: object) -> object:
         best_ask_int = int(round(float(best_ask) * adapter.price_scale))  # type: ignore[attr-defined]
         ts_ns = int(adapter.hbt.current_timestamp)  # type: ignore[attr-defined]
 
-        # Access trades that occurred during this elapse interval
         last_trades = None
         try:
             last_trades = adapter.hbt.last_trades(0)  # type: ignore[attr-defined]
@@ -60,7 +59,6 @@ def run_elapse(adapter: object) -> object:
             best_ask_int,
         )
 
-        # Attach last_trades to event for MM strategies (best-effort)
         if last_trades is not None:
             try:
                 object.__setattr__(event, "last_trades", last_trades)

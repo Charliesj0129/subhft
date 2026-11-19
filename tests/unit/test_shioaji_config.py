@@ -14,10 +14,6 @@ from hft_platform.feed_adapter.shioaji._config import (
     load_shioaji_config,
 )
 
-# ---------------------------------------------------------------------------
-# _as_bool helper
-# ---------------------------------------------------------------------------
-
 
 class TestAsBool:
     def test_none_returns_false(self) -> None:
@@ -36,11 +32,6 @@ class TestAsBool:
     @pytest.mark.parametrize("val", ["0", "false", "no", "off", "", "random"])
     def test_falsy_strings(self, val: str) -> None:
         assert _as_bool(val) is False
-
-
-# ---------------------------------------------------------------------------
-# ShioajiClientConfig dataclass
-# ---------------------------------------------------------------------------
 
 
 class TestShioajiClientConfig:
@@ -65,11 +56,6 @@ class TestShioajiClientConfig:
         assert cfg.contract_cache_path == "config/contracts.json"
 
 
-# ---------------------------------------------------------------------------
-# load_shioaji_config
-# ---------------------------------------------------------------------------
-
-
 class TestLoadShioajiConfig:
     def test_defaults_no_env(self) -> None:
         """With no env vars set, defaults should be sensible."""
@@ -86,7 +72,6 @@ class TestLoadShioajiConfig:
         with mock.patch.dict(os.environ, {"HFT_MODE": "sim"}, clear=False):
             cfg = load_shioaji_config()
         assert cfg.simulation is True
-        # CA should be disabled in simulation
         assert cfg.activate_ca is False
 
     def test_simulation_from_settings_dict(self) -> None:
@@ -107,17 +92,7 @@ class TestLoadShioajiConfig:
         assert cfg.ca_password == "secret"
 
     def test_ca_password_env_indirection(self) -> None:
-        # Explicitly remove env vars that would shadow the ca_password_env indirection.
-        # SHIOAJI_CA_PASSWORD and CA_PASSWORD are checked first in load_shioaji_config;
-        # if either is set (e.g. leaked from another test), the indirection path is
-        # skipped and the assertion on cfg.ca_password == "s3cret" would fail.
-        # Build a combined patch that adds our vars AND records the shadowing keys
-        # as absent so patch.dict restores them correctly on exit.
         _env_patch = {"MY_CA_PASS": "s3cret", "HFT_MODE": "real"}
-        # patch.dict with clear=False only modifies the specified keys; it will
-        # restore them on __exit__.  To also ensure SHIOAJI_CA_PASSWORD and
-        # CA_PASSWORD are absent during the test without leaving the env dirty,
-        # we save-and-restore them manually around the call.
         _shadow_keys = ("SHIOAJI_CA_PASSWORD", "CA_PASSWORD")
         with mock.patch.dict(os.environ, _env_patch, clear=False):
             _saved = {k: os.environ.pop(k) for k in _shadow_keys if k in os.environ}
@@ -182,6 +157,5 @@ class TestLoadShioajiConfig:
     def test_session_lock_path_sanitizes_special_chars(self) -> None:
         with mock.patch.dict(os.environ, {"SHIOAJI_ACCOUNT": "user@domain/bad"}, clear=False):
             cfg = load_shioaji_config()
-        # Special chars replaced with underscore
         assert "@" not in cfg.session_lock_path
         assert "/" not in cfg.session_lock_path.split("shioaji_session_")[1].replace(".lock", "")

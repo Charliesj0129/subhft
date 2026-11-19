@@ -34,7 +34,6 @@ import numpy as np
 import structlog
 
 
-# Ensure project root is on sys.path (mirrors hbt_runner.py pattern)
 def _ensure_project_root_on_path() -> None:
     root = Path(__file__).resolve().parents[2]
     if (root / "research").exists():
@@ -87,14 +86,6 @@ except ImportError:
     _HFTBT_AVAILABLE = False
 
 
-# ---------------------------------------------------------------------------
-# Feature-set version helpers
-# ---------------------------------------------------------------------------
-# Schema versions that (a) consume L2-L5 depth-derived features (e.g.
-# deep_depth_momentum_x1000 at FE-v3 idx 20) and (b) require FeatureEngine
-# to be live so StrategyContext can deliver canonical FE tuples to
-# AlphaStrategyBridge. Both conditions hold for the same set today.
-# Mirrors ``src/hft_platform/feature/registry.py`` builders.
 _FE_V2_V3_SCHEMA_VERSIONS: frozenset[str] = frozenset({"lob_shared_v2", "lob_shared_v3"})
 
 
@@ -135,9 +126,6 @@ def _resolve_feature_mode(alpha: Any) -> str:
     return "stats_only"
 
 
-# ---------------------------------------------------------------------------
-# NPZ splitting helper
-# ---------------------------------------------------------------------------
 def _split_npz(path: str, split: float = 0.7) -> tuple[str, str]:
     """Split a hftbacktest NPZ file into IS and OOS temp files.
 
@@ -260,12 +248,10 @@ def ensure_hftbt_npz(data_path: str) -> str:
 
     Returns: absolute path to the hftbt.npz file.
     """
-    # Fast path: sibling hftbt.npz already exists — no import needed
     hbt_path = _resolve_hftbt_path(data_path)
     if hbt_path is not None:
         return hbt_path
 
-    # Conversion requires hftbacktest
     if not _HFTBT_AVAILABLE:
         raise ImportError("ensure_hftbt_npz requires hftbacktest. Install with: pip install hftbacktest")
 
@@ -281,9 +267,8 @@ def ensure_hftbt_npz(data_path: str) -> str:
         event_dtype as _evt_dtype,
     )
 
-    from hft_platform.backtest.convert import _build_event  # reuse tuple format
+    from hft_platform.backtest.convert import _build_event
 
-    # Load research.npy / npz
     raw = np.load(data_path, allow_pickle=False)
     if isinstance(raw, np.lib.npyio.NpzFile):
         arr = np.asarray(raw["data"])
@@ -308,14 +293,12 @@ def ensure_hftbt_npz(data_path: str) -> str:
     if "local_ts" in names:
         local_ts = arr["local_ts"].astype(np.int64)
     else:
-        local_ts = np.arange(n, dtype=np.int64) * 1_000_000  # 1ms fallback
+        local_ts = np.arange(n, dtype=np.int64) * 1_000_000
 
     bid_ev_code = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | BUY_EVENT)
     ask_ev_code = int(DEPTH_EVENT | EXCH_EVENT | LOCAL_EVENT | SELL_EVENT)
     trade_ev_code = int(TRADE_EVENT | EXCH_EVENT | LOCAL_EVENT)
 
-    # Pre-allocate event list to avoid per-tick .append() reallocation (Allocator Law).
-    # Worst case: 3 events per row (bid + ask + trade when volume > 0).
     valid_mask = ~((bid_px == 0.0) & (ask_px == 0.0))
     n_valid = int(np.count_nonzero(valid_mask))
     if n_valid == 0:
@@ -351,9 +334,6 @@ def ensure_hftbt_npz(data_path: str) -> str:
     return str(out_path)
 
 
-# ---------------------------------------------------------------------------
-# Signal-based equity computation (ported from legacy hbt_runner_v1.py)
-# ---------------------------------------------------------------------------
 def _estimate_step_ns(data: np.ndarray) -> int:
     """Estimate the median tick-step duration in nanoseconds from timestamp fields.
 
@@ -370,7 +350,6 @@ def _estimate_step_ns(data: np.ndarray) -> int:
                     positive = diff[diff > 0]
                     if positive.size > 0:
                         return int(np.median(positive))
-    # Fall back to 1ms bars when timestamp cadence is unavailable.
     return 1_000_000
 
 
@@ -414,13 +393,12 @@ def _apply_latency_to_positions(
             pending_due = -1
 
         target = float(desired_positions[i])
-        # Only submit a new order when the desired position actually changes.
         if target == float(desired_positions[i - 1]):
             continue
 
         prev_exec = float(executed[i])
         if target == prev_exec:
-            pending_due = -1  # already at new target; cancel any pending order
+            pending_due = -1
             continue
 
         steps = submit_steps
@@ -488,9 +466,6 @@ def _effective_broker_rtt_ms(config: BacktestConfig) -> float:
     )
 
 
-# ---------------------------------------------------------------------------
-# Single-run helper
-# ---------------------------------------------------------------------------
 def _run_adapter_slice(
     alpha: AlphaProtocol,
     npz_path: str,
@@ -510,12 +485,6 @@ def _run_adapter_slice(
             "hft_platform.backtest.adapter.HftBacktestAdapter not available. Ensure hftbacktest is installed."
         )
 
-    # NOTE: format assertion (Codex finding 5 — L2-L5 depth parity for
-    # FE-v3 alphas) is enforced upstream at ``run()`` / ``run_walk_forward()``
-    # / ``run_cpcv()`` against the original input ``hbt_path`` before
-    # splitting. Internal IS/OOS split temp files inherit the format by
-    # construction and would not round-trip the filename heuristic, so
-    # re-checking them here would produce false positives.
 
     effective_rtt = _effective_broker_rtt_ms(config)
     latency_us = int((config.local_decision_pipeline_latency_us + effective_rtt * 1000))
@@ -532,9 +501,9 @@ def _run_adapter_slice(
         asset_symbol=symbol,
         data=npz_path,
         latency_us=latency_us,
-        maker_fee=0.0,  # the bridge sends no orders; cost is per contract in _compute_equity_curve
+        maker_fee=0.0,
         taker_fee=0.0,
-        equity_sample_ns=1_000_000,  # 1ms equity samples
+        equity_sample_ns=1_000_000,
         feature_mode=_resolve_feature_mode(alpha),
         queue_model=getattr(config, "queue_model", "PowerProbQueueModel(3.0)"),
         latency_model=getattr(config, "latency_model", "ConstantLatency"),
@@ -545,7 +514,6 @@ def _run_adapter_slice(
     _, signals, mid_prices = signal_log_to_arrays(bridge.signal_log)
     positions = _signals_to_positions(signals, config.signal_threshold, config.max_position)
 
-    # Load raw npz data to get timestamps for latency estimation
     raw_npz = np.load(npz_path, allow_pickle=False)
     if isinstance(raw_npz, np.lib.npyio.NpzFile):
         raw_data = np.asarray(raw_npz["data"])
@@ -553,10 +521,8 @@ def _run_adapter_slice(
     else:
         raw_data = np.asarray(raw_npz)
 
-    # Apply latency model: delay position changes by broker RTT
     positions = _apply_latency_to_positions(raw_data, positions, config)
 
-    # Signal-based equity computation (replaces flat adapter.equity_values)
     equity = _compute_equity_curve(mid_prices, positions, config)
 
     return equity, signals, mid_prices, positions
@@ -577,12 +543,10 @@ def _signals_to_positions(
     if n == 0:
         return np.zeros(0, dtype=signals.dtype)
 
-    # Vectorized direction: +1 / -1 / 0
     direction = np.zeros(n, dtype=np.int64)
     direction[signals > threshold] = 1
     direction[signals < -threshold] = -1
 
-    # Sequential accumulation with clamp (inherently data-dependent)
     positions = np.zeros(n, dtype=np.float64)
     max_pos = max_position
     neg_max = -max_position
@@ -626,9 +590,6 @@ def _regime_metrics(signals: np.ndarray, fwd_returns: np.ndarray) -> dict[str, f
     return out
 
 
-# ---------------------------------------------------------------------------
-# Walk-forward fold worker (module-level for ThreadPoolExecutor)
-# ---------------------------------------------------------------------------
 def _run_single_fold(
     alpha: AlphaProtocol,
     full_data: np.ndarray,
@@ -667,7 +628,6 @@ def _run_single_fold(
     try:
         eq, sig, mid, pos = _run_adapter_slice(alpha, test_path, backtest_config, symbol)
     except BaseException:
-        # Clean up temp file on failure so caller does not leak
         try:
             os.unlink(test_path)
             os.rmdir(tmp_dir)
@@ -729,9 +689,6 @@ def _collect_hbt_data(data_paths: list[str]) -> np.ndarray | None:
     return np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
 
 
-# ---------------------------------------------------------------------------
-# HftNativeRunner
-# ---------------------------------------------------------------------------
 class HftNativeRunner:
     """Gate C backtest runner using hftbacktest native engine.
 
@@ -784,15 +741,8 @@ class HftNativeRunner:
         tmp_paths: list[str] = []
         try:
             for data_path in self.config.data_paths:
-                # A missing input raises rather than being skipped: a dropped
-                # day would shrink the sample the gates count as complete.
                 hbt_path = ensure_hftbt_npz(data_path)
 
-                # Codex finding 5: alphas declaring lob_shared_v2/v3 need
-                # L2-L5 depth coverage; otherwise deep_depth_momentum_x1000
-                # silently emits zero through Gate C. Validate the original
-                # (pre-split) input here so split temp files don't trigger
-                # false positives downstream.
                 if _alpha_needs_l5_depth(self.alpha):
                     assert_format(hbt_path, NpzFormat.HFTBT_EVENT_L5)
 
@@ -810,15 +760,12 @@ class HftNativeRunner:
                 oos_mid_list.append(oos_mid)
                 is_pos_list.append(is_pos)
                 oos_pos_list.append(oos_pos)
-                # Volume not directly available from LOBStatsEvent; use ones
                 volumes.append(np.ones(len(oos_sig), dtype=np.float64))
 
         finally:
-            # Clean up temp NPZ files
             for p in tmp_paths:
                 try:
                     os.unlink(p)
-                    # Also try removing the temp dir if empty
                     d = os.path.dirname(p)
                     if os.path.isdir(d):
                         try:
@@ -971,7 +918,6 @@ class HftNativeRunner:
             if first_error is not None:
                 raise first_error
 
-            # Sort by fold_idx to maintain deterministic order
             folds.sort(key=lambda f: f.fold_idx)
         finally:
             for p in tmp_paths:
@@ -1024,7 +970,6 @@ class HftNativeRunner:
 
         cpcv = config or CPCVConfig()
 
-        # -- Collect all hftbt.npz data ----------------------------------------
         full = _collect_hbt_data(self.config.data_paths)
         if full is None:
             return CPCVResult(
@@ -1041,7 +986,6 @@ class HftNativeRunner:
 
         total_rows = len(full)
 
-        # -- Divide into n_groups contiguous blocks ----------------------------
         n_groups = int(cpcv.n_groups)
         group_size = total_rows // n_groups
         if group_size < cpcv.min_group_samples:
@@ -1050,14 +994,12 @@ class HftNativeRunner:
                 f"Need at least {n_groups * cpcv.min_group_samples} rows for {n_groups} groups."
             )
 
-        # Group boundaries: group i spans [boundaries[i], boundaries[i+1])
         boundaries = [i * group_size for i in range(n_groups)]
-        boundaries.append(total_rows)  # last group gets remainder rows
+        boundaries.append(total_rows)
 
         embargo_rows = max(1, int(cpcv.embargo_pct * total_rows))
         purge_rows = max(1, int(cpcv.purge_pct * total_rows))
 
-        # -- Enumerate all C(n_groups, n_groups//2) test combinations ----------
         n_test = n_groups // 2
         all_combos = list(itertools.combinations(range(n_groups), n_test))
         n_paths = len(all_combos)
@@ -1071,17 +1013,12 @@ class HftNativeRunner:
                 test_set = set(test_groups)
                 train_groups = tuple(g for g in range(n_groups) if g not in test_set)
 
-                # -- Build test indices (contiguous blocks, in order) ----------
                 test_row_indices: list[int] = []
                 for g in sorted(test_groups):
                     start = boundaries[g]
                     end = boundaries[g + 1]
                     test_row_indices.extend(range(start, end))
 
-                # -- Compute train size with embargo/purge arithmetically --------
-                # CPCV tests signal-based alphas (no training phase). We only
-                # need ``train_size`` for metadata — materializing a full index
-                # set of potentially hundreds of thousands of ints is wasteful.
                 raw_train_size = sum(boundaries[g + 1] - boundaries[g] for g in train_groups)
                 gap = embargo_rows + purge_rows
                 gap_removed = 0
@@ -1090,13 +1027,10 @@ class HftNativeRunner:
                     test_end = boundaries[g + 1]
                     before_gap_start = max(0, test_start - gap)
                     after_gap_end = min(total_rows, test_end + gap)
-                    # Count overlap of gap zones with train group ranges
                     for tg in train_groups:
                         tg_start = boundaries[tg]
                         tg_end = boundaries[tg + 1]
-                        # Before test: overlap of [before_gap_start, test_start) with [tg_start, tg_end)
                         gap_removed += max(0, min(test_start, tg_end) - max(before_gap_start, tg_start))
-                        # After test: overlap of [test_end, after_gap_end) with [tg_start, tg_end)
                         gap_removed += max(0, min(after_gap_end, tg_end) - max(test_end, tg_start))
                 train_size = max(0, raw_train_size - gap_removed)
                 test_size = len(test_row_indices)
@@ -1104,11 +1038,8 @@ class HftNativeRunner:
                 if test_size < 2:
                     continue
 
-                # -- Run alpha on test data ------------------------------------
                 alpha.reset()
 
-                # Extract test data as contiguous array (indices already sorted
-                # since test_groups are iterated in sorted order above)
                 test_data = full[np.array(test_row_indices, dtype=np.int64)]
 
                 tmp_dir = tempfile.mkdtemp(prefix=f"hftnative_cpcv{path_idx}_")
@@ -1191,17 +1122,11 @@ class HftNativeRunner:
         return result.regime_metrics
 
 
-# ---------------------------------------------------------------------------
-# Public helper for Gate C
-# ---------------------------------------------------------------------------
 def has_hftbt_data(data_paths: list[str]) -> bool:
     """Return True if at least one path has a current converted hftbt.npz."""
     return any(_resolve_hftbt_path(p) is not None for p in data_paths)
 
 
-# ---------------------------------------------------------------------------
-# CLI entrypoint (python -m research.backtest.hft_native_runner)
-# ---------------------------------------------------------------------------
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run standardized research backtest via hftbacktest.")
     parser.add_argument("--alpha", required=True, help="alpha_id registered under research/alphas")
@@ -1260,7 +1185,6 @@ def main() -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=2, sort_keys=True))
     else:
-        # CLI stdout: print JSON directly (structlog would break parseable output)
         print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

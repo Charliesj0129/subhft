@@ -73,8 +73,6 @@ def _prepare_artifacts(
         },
     )
 
-    # Rollback drill artifact (looked up via output_dir.parent / "reliability" / "drills")
-    # Use a recent date (within 30 days of test run) so drill freshness check passes
     from datetime import datetime, timedelta, timezone
 
     recent_ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -88,7 +86,6 @@ def _prepare_artifacts(
         },
     )
 
-    # Code canary evaluation artifact (looked up via output_dir / "canary")
     _write_json(
         output_dir / "canary" / "canary_eval_20260305T020000Z.json",
         {

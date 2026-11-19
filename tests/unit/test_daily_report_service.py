@@ -7,10 +7,6 @@ from typing import Any
 
 from hft_platform.ops.session_governor import SessionPhase
 
-# ---------------------------------------------------------------------------
-# Fakes
-# ---------------------------------------------------------------------------
-
 
 class FakeNotificationDispatcher:
     """Records notify_daily_report calls without sending anything."""
@@ -95,18 +91,12 @@ class FakeCHClient:
             raise ConnectionError("ClickHouse unavailable")
         if not self._rows:
             return None
-        # Return single row for aggregate queries
         return self._rows[0]
 
     def query(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
         if self._should_fail:
             raise ConnectionError("ClickHouse unavailable")
         return type("_Result", (), {"result_rows": self._rows})()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_service(
@@ -128,21 +118,14 @@ def _make_service(
     )
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestDailyReportService:
     """DailyReportService unit tests."""
 
     def test_generate_and_send_report(self) -> None:
         """CLOSED callback triggers report with correct aggregates from CH + PnL from store."""
-        # Aggregate row: (buy_count, sell_count, fill_count, sum_fee)
         ch = FakeCHClient(rows=[(10, 8, 18, 3200)])
         dispatcher = FakeNotificationDispatcher()
         evidence = FakeEvidenceWriter()
-        # total_pnl in scaled int (x10000): 500000 → 50 NTD
         position_store = FakePositionStore(total_pnl=500000)
         svc = _make_service(
             ch_client=ch,
@@ -155,7 +138,7 @@ class TestDailyReportService:
 
         assert len(dispatcher.calls) == 1
         call = dispatcher.calls[0]
-        assert call["pnl_ntd"] == 50  # 500000 // 10000
+        assert call["pnl_ntd"] == 50
         assert call["buys"] == 10
         assert call["sells"] == 8
         assert call["fills"] == 18
@@ -164,7 +147,7 @@ class TestDailyReportService:
         """Evidence summary JSON is written alongside the notification."""
         ch = FakeCHClient(rows=[(5, 3, 8, 100)])
         evidence = FakeEvidenceWriter()
-        position_store = FakePositionStore(total_pnl=10000000)  # 1000 NTD
+        position_store = FakePositionStore(total_pnl=10000000)
         svc = _make_service(ch_client=ch, evidence_writer=evidence, position_store=position_store)
 
         asyncio.run(svc.on_session_closed("equity"))
@@ -208,7 +191,6 @@ class TestDailyReportService:
         dispatcher = FakeNotificationDispatcher()
         svc = _make_service(notification_dispatcher=dispatcher)
 
-        # Non-CLOSED phases should not trigger
         svc.on_phase_transition("equity", SessionPhase.OPEN, SessionPhase.CLOSE_ONLY)
 
         assert len(dispatcher.calls) == 0
@@ -241,7 +223,6 @@ class TestDailyReportService:
         dispatcher = FakeNotificationDispatcher()
         svc = _make_service(ch_client=ch, notification_dispatcher=dispatcher)
 
-        # Simulate string phase (defensive handling)
         svc.on_phase_transition("equity", "FORCE_FLAT", "CLOSED")
 
         assert len(dispatcher.calls) == 1

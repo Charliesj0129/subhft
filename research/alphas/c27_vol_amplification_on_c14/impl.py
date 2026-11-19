@@ -55,15 +55,13 @@ class C27Params:
     Inherits C14's baseline config + adds vol-amplification knobs.
     """
 
-    # C14 baseline
     spread_threshold_pts: int = 3
     max_pos_baseline: int = 3
     max_pos_amplified: int = 4
     inventory_skew_tenths: int = 2
-    # Vol gate
     vol_percentile_threshold: float = 0.90
     vol_percentile_release: float = 0.70
-    vol_window_seconds: int = 60  # informational — the gate uses minute buckets
+    vol_window_seconds: int = 60
     warmup_minutes: int = 10
 
 
@@ -92,7 +90,6 @@ class C27VolAmplifiedMaker:
     ) -> None:
         self._c27_params = c27_params or C27Params()
         p = self._c27_params
-        # Start in baseline state.
         baseline = C14Params(
             spread_threshold_pts=p.spread_threshold_pts,
             max_pos=p.max_pos_baseline,
@@ -111,7 +108,6 @@ class C27VolAmplifiedMaker:
         self._baseline_ticks = 0
         self._state_switches = 0
 
-    # ---- Accessors --------------------------------------------------------
 
     @property
     def active_symbol(self) -> str | None:
@@ -145,11 +141,8 @@ class C27VolAmplifiedMaker:
     def state_switches(self) -> int:
         return self._state_switches
 
-    # ---- Rollover delegation ---------------------------------------------
 
     def set_active_symbol(self, new_symbol: str) -> None:
-        # Rollover also resets vol-gate: new contract's tick stream is a
-        # fresh session from the strategy's perspective.
         self._maker.set_active_symbol(new_symbol)
         self._vol_gate.reset()
         self._apply_state(False)
@@ -161,16 +154,13 @@ class C27VolAmplifiedMaker:
     def rollover_events(self) -> int:
         return self._maker.rollover_events
 
-    # ---- MakerStrategy protocol -----------------------------------------
 
     def on_tick(
         self, tick: TickData
     ) -> list[PostQuote | CancelQuote | Hold]:
         if tick.is_trade:
-            # Trades don't drive quoting; pass through.
             return self._maker.on_tick(tick)
 
-        # Update vol gate on bidask events using mid = (bid+ask)/2.
         if tick.bid_price > 0 and tick.ask_price > 0:
             mid = (tick.bid_price + tick.ask_price) / 2.0
             new_state = self._vol_gate.update(tick.exch_ts, mid)
@@ -193,7 +183,6 @@ class C27VolAmplifiedMaker:
         self._vol_gate.reset()
         self._apply_state(False)
 
-    # ---- Internal helpers -----------------------------------------------
 
     def _apply_state(self, new_amplified: bool) -> None:
         """Switch the wrapped maker's max_pos based on amplified flag."""
@@ -205,7 +194,6 @@ class C27VolAmplifiedMaker:
             max_pos=target,
             inventory_skew_tenths=self._c27_params.inventory_skew_tenths,
         )
-        # C14Params is frozen — replace the whole params object on the wrapped maker.
         self._maker._params = new_params  # type: ignore[attr-defined]
         if new_amplified != self._state_amplified:
             logger.info(

@@ -20,17 +20,13 @@ from research.registry.schemas import AlphaManifest, AlphaProtocol
 
 logger = structlog.get_logger(__name__)
 
-# EMA decay constants
-_VOL_WINDOW: int = 64   # ticks — volatility EMA window
-_TREND_WINDOW: int = 32  # ticks — trend EMA window
+_VOL_WINDOW: int = 64
+_TREND_WINDOW: int = 32
 _ALPHA_VOL: float = 1.0 - math.exp(-1.0 / _VOL_WINDOW)
 _ALPHA_TREND: float = 1.0 - math.exp(-1.0 / _TREND_WINDOW)
 
-# Regime thresholds
-_VOL_REGIME_MULTIPLIER: float = 1.5  # vol_ema > factor * vol_baseline → volatile
-_TREND_THRESHOLD: float = 0.3        # abs(trend_ema) > threshold → trending
-# vol_baseline is seeded from the first observed vol_ema value; a warmup
-# period of ~3*_VOL_WINDOW ticks is needed before classification stabilises.
+_VOL_REGIME_MULTIPLIER: float = 1.5
+_TREND_THRESHOLD: float = 0.3
 _WARMUP_TICKS: int = _VOL_WINDOW * 3
 
 
@@ -63,14 +59,12 @@ class RegimeConditionalAlpha:
         "_regime_configs",
         "_vol_regime_multiplier",
         "_trend_threshold",
-        # EMA state
         "_vol_ema",
         "_trend_ema",
         "_vol_baseline",
         "_tick_count",
         "_current_regime",
         "_last_mid_price",
-        # cached manifest proxy
         "_log",
     )
 
@@ -87,7 +81,6 @@ class RegimeConditionalAlpha:
         self._vol_regime_multiplier = vol_regime_multiplier
         self._trend_threshold = trend_threshold
 
-        # EMA accumulators (float, updated each tick — not hot-path allocated)
         self._vol_ema: float = 0.0
         self._trend_ema: float = 0.0
         self._vol_baseline: float | None = None

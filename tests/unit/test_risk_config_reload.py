@@ -67,7 +67,6 @@ class TestRiskConfigReload:
         engine, config_path = self._make_risk_engine()
         os.unlink(config_path)
 
-        # Should not raise -- old config preserved
         engine.reload_config()
 
         assert "global_defaults" in engine.config

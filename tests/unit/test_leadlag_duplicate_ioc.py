@@ -40,14 +40,11 @@ class TestDuplicateIOCPrevention:
 
         strategy._positions_open.append(pos)
 
-        # Simulate the cancel path in on_tick (SL/TK exit with resting order)
-        # This mimics the code at line ~291 and ~367
         if pos.exit_order_id:
             strategy.cancel(strategy._trade_symbol, pos.exit_order_id)
             pos.pending_force_close = True
             pos.exit_order_id = ""
             pos.awaiting_exit = False
-            # This is the fix: aggressive_exit_inflight is NOT cleared
 
         assert pos.aggressive_exit_inflight is True
         assert pos.pending_force_close is True

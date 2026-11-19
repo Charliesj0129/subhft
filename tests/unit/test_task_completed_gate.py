@@ -40,11 +40,6 @@ def run_gate(event: dict) -> subprocess.CompletedProcess:
     )
 
 
-# --------------------------------------------------------------------------- #
-# Satisfiable                                                                  #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_gate_accepts_a_report_carried_in_the_description() -> None:
     """The regression: TaskUpdate has no output field, only a description."""
@@ -71,11 +66,6 @@ def test_gate_accepts_a_shell_or_markdown_reference() -> None:
     )
 
     assert result.returncode == 0
-
-
-# --------------------------------------------------------------------------- #
-# Still a gate                                                                 #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
@@ -110,11 +100,6 @@ def test_gate_survives_a_malformed_payload() -> None:
     assert result.returncode == 2
 
 
-# --------------------------------------------------------------------------- #
-# Loud                                                                         #
-# --------------------------------------------------------------------------- #
-
-
 @pytest.mark.unit
 def test_rejection_feedback_reaches_stderr_not_only_stdout() -> None:
     """An exit-2 hook surfaces stderr to the model. Printing the rejection only
@@ -123,5 +108,4 @@ def test_rejection_feedback_reaches_stderr_not_only_stdout() -> None:
 
     assert result.returncode == 2
     assert "REJECTED by the quality gate" in result.stderr
-    # The structured form stays on stdout for hosts that parse it.
     assert json.loads(result.stdout)["hookSpecificOutput"]["hookEventName"] == "TaskCompleted"

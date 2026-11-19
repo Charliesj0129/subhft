@@ -143,9 +143,6 @@ class CascadeBounceStrategy(BaseStrategy):
         for i in range(1, n):
             delta = abs(buf[i].mid_x2 - buf[i - 1].mid_x2)
             sum_sq_scaled += delta * delta
-        # Convert from (mid_x2 units)^2 to (points)^2: divide by _MID_X2_POINT_SCALE^2
-        # Then take sqrt and divide by (n-1) for RMS
-        # = sqrt(sum_sq_scaled / (n-1)) / _MID_X2_POINT_SCALE
         return math.sqrt(sum_sq_scaled / (n - 1)) / _MID_X2_POINT_SCALE
 
     def on_stats(self, event: LOBStatsEvent) -> None:
@@ -192,7 +189,6 @@ class CascadeBounceStrategy(BaseStrategy):
         oldest = buf[0]
         diff_x2 = int(event.mid_price_x2 or 0) - oldest.mid_x2
         local_vol_pts = max(self._rolling_rms_point_change(buf), 1.0)
-        # Compare in mid_x2 units: abs(diff_x2) < trigger_sigma * local_vol_pts * _MID_X2_POINT_SCALE
         if abs(diff_x2) < self._trigger_sigma * local_vol_pts * _MID_X2_POINT_SCALE:
             return
 
@@ -320,7 +316,6 @@ class CascadeBounceStrategy(BaseStrategy):
         if mark_price <= 0:
             return
 
-        # pnl in scaled units (x10000): positive = profit, negative = loss
         pnl_scaled = self._direction[symbol] * (mark_price - entry_price)
         elapsed_ns = now_ns - self._entry_ts_ns[symbol]
         should_exit = pnl_scaled <= -(self._stop_loss_pts * _PTS_SCALE) or elapsed_ns >= self._max_hold_ns

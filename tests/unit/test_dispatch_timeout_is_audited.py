@@ -133,7 +133,7 @@ async def test_a_timed_out_place_order_is_audited_with_its_order_key_and_phantom
     release = threading.Event()
 
     def _hang(*_a: Any, **_kw: Any) -> None:
-        release.wait(timeout=5.0)  # woken in the finally below; no fixed sleep
+        release.wait(timeout=5.0)
 
     adapter = _adapter(tmp_config, place_order=_hang)
     adapter._api_timeout_s = 0.05

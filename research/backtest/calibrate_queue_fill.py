@@ -77,11 +77,6 @@ import pyarrow.parquet as pq
 
 from research.backtest.q_hat_table import SHALLOW_THRESHOLD, QHatTable
 
-# Replicates hft_platform.backtest.ch_data_source event-flag constants. Keeping
-# them local to this module avoids pulling the runtime import path through the
-# research package (which is ruff-excluded but mypy-checked) and keeps Task 6
-# unit tests fully hermetic — they construct synthetic numpy arrays without
-# touching the platform package.
 _DEPTH_EVENT = 1
 _TRADE_EVENT = 2
 _DEPTH_CLEAR_EVENT = 3
@@ -90,16 +85,8 @@ _BUY_EVENT = 1 << 29
 _SELL_EVENT = 1 << 28
 _EV_TYPE_MASK = 0xFF
 
-# Forward-looking window in which a trade can be matched against a tracked
-# quote. 1 second is a deliberately conservative match for the maker-realism
-# horizon — long enough to attribute the trade to the resting quote, short
-# enough that we are not double-counting unrelated trades long after the price
-# moved on. Documented in module docstring step 3.
 LOOKAHEAD_NS: int = 1_000_000_000
 
-# Minimum cell occupancy before we trust a calibration result. Plan §6 Task 6:
-# "Cells with n < 30 attempts are dropped (fallback applies)." Lower-occupancy
-# cells fall through to QHatTable.fallback (0.5).
 MIN_ATTEMPTS_PER_CELL: int = 30
 
 
@@ -149,7 +136,7 @@ class _TrackedQuote:
     record is committed to the (attempts, fills) tally and discarded.
     """
 
-    side: str  # "bid" | "ask"
+    side: str
     price: float
     opened_ts_ns: int
     hour: int
@@ -198,14 +185,11 @@ def _ingest_day(  # noqa: C901 - calibration walk has structural per-event branc
 
     See module docstring ALGORITHM for the per-event semantics.
     """
-    # Maintain a partial L1 view: best bid/ask price + per-side qty.
     best_bid_px: float | None = None
     best_ask_px: float | None = None
     bid_qty: int = 0
     ask_qty: int = 0
 
-    # At most one open tracked quote per side (one quote at a time, per the
-    # plan's "post a quote, watch for fills" semantics).
     open_bid: _TrackedQuote | None = None
     open_ask: _TrackedQuote | None = None
 
@@ -216,7 +200,6 @@ def _ingest_day(  # noqa: C901 - calibration walk has structural per-event branc
         px = float(row["px"])
         qty = float(row["qty"])
 
-        # -- Expire any tracked quote whose lookahead window has closed.
         if open_bid is not None and ts_ns - open_bid.opened_ts_ns > lookahead_ns:
             _commit(open_bid, symbol, attempts, fills)
             open_bid = None
@@ -225,7 +208,6 @@ def _ingest_day(  # noqa: C901 - calibration walk has structural per-event branc
             open_ask = None
 
         if ev_type == _DEPTH_CLEAR_EVENT:
-            # Snapshot reset: drop tracked quotes (their reference book is gone).
             best_bid_px = None
             best_ask_px = None
             bid_qty = 0
@@ -235,10 +217,8 @@ def _ingest_day(  # noqa: C901 - calibration walk has structural per-event branc
             continue
 
         if ev_type == _DEPTH_EVENT:
-            # Update L1 view if this row is at-or-better than current best.
             if ev_flags & _BUY_EVENT:
                 if qty <= 0.0:
-                    # Level removed.
                     if best_bid_px is not None and abs(px - best_bid_px) < 1e-12:
                         best_bid_px = None
                         bid_qty = 0
@@ -248,7 +228,6 @@ def _ingest_day(  # noqa: C901 - calibration walk has structural per-event branc
                         best_bid_px = px
                         bid_qty = int(qty)
                         if new_best:
-                            # Best bid changed → open a new tracked record.
                             if open_bid is not None:
                                 _commit(open_bid, symbol, attempts, fills)
                             open_bid = _TrackedQuote(
@@ -281,18 +260,13 @@ def _ingest_day(  # noqa: C901 - calibration walk has structural per-event branc
             continue
 
         if ev_type == _TRADE_EVENT:
-            # Mark fill if the trade crosses an open tracked quote.
             if open_bid is not None and px <= open_bid.price + 1e-12:
                 open_bid.filled = True
             if open_ask is not None and px >= open_ask.price - 1e-12:
                 open_ask.filled = True
             continue
 
-        # _DEPTH_SNAPSHOT_EVENT and unknown types are ignored — they are not
-        # part of the calibration's L1-update vocabulary.
 
-    # End-of-day: commit any still-open tracked records so we do not lose the
-    # tail of the session.
     if open_bid is not None:
         _commit(open_bid, symbol, attempts, fills)
     if open_ask is not None:
@@ -367,10 +341,6 @@ def calibrate(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Empty-records case: write a parquet with the documented schema but no
-    # rows. ``QHatTable.load`` will then return an empty table, and every
-    # lookup falls through to ``fallback`` — the explicit graceful-degradation
-    # path documented in QHatTable.
     if records:
         arrow_table = pa.Table.from_pylist(records)
     else:

@@ -80,7 +80,8 @@ Contract chain — every stage crosses one of these, nothing else:
 
 Fail-closed gates: pre-commit (`ruff`, `ruff-format`, `hft-discipline`), CI
 (format, lint, discipline, dependency-boundary, typecheck, coverage), Semgrep,
-CodeQL. New discipline IDs use `HFT-{D|A|P|S}{NNN}`.
+CodeQL. The [source policy](docs/guides/source-code-policy.md) is enforced by
+`make lint`, `make check`, and `make ci`. New discipline IDs use `HFT-{D|A|P|S}{NNN}`.
 
 Gate: 70% coverage (`--cov-fail-under=70`); new code >= 80%, hot path >= 90%.
 Pytest runs with `--timeout=30`. `make help` lists everything else.
@@ -127,7 +128,7 @@ Architecture invariants:
 - Secrets live in `.env`/env vars only, prefix-isolated (`SHIOAJI_*`,
   `HFT_FUBON_*`, `HFT_*`). Never in code, logs, CLI args, chat, or commits.
 - Conventional commits (`feat: fix: perf: refactor: docs: test: chore: ci: alpha:`);
-  ruff line length 120, py312; no new `type: ignore`/`noqa` without a written reason.
+  ruff line length 120, py312.
 
 ## Red lines — only on an explicit, per-operation user request
 
@@ -180,7 +181,7 @@ larger than a small edit. One branch per theme.
 | Anything merged | `make check` minimum, `make ci` for merge confidence |
 
 Tests: `feat:`/`fix:` need focused tests named `test_<behavior>_<scenario>`;
-every test asserts; no fixed sleeps (<= 50 ms if unavoidable, explained).
+every test asserts; no fixed sleeps (<= 50 ms if unavoidable, with the rationale in test documentation).
 Golden tests are regression contracts.
 
 ## Reporting

@@ -70,7 +70,7 @@ def _isolated_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _no_ch(monkeypatch: pytest.MonkeyPatch) -> None:
     """Force the jsonl path by ensuring CH-enabled audit is off."""
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
-    audit._ENABLED = None  # noqa: SLF001 — re-read env on next call
+    audit._ENABLED = None
 
 
 def test_kill_id_deterministic() -> None:
@@ -251,7 +251,7 @@ class _FakeCHClient:
 def _fake_ch(monkeypatch: pytest.MonkeyPatch) -> _FakeCHClient:
     fake = _FakeCHClient()
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "1")
-    audit._ENABLED = None  # noqa: SLF001
+    audit._ENABLED = None
     monkeypatch.setattr(audit, "_get_client", lambda: fake)
     return fake
 
@@ -273,7 +273,7 @@ def test_ch_duplicate_append_returns_false_no_insert(_fake_ch: _FakeCHClient) ->
 
 def test_ch_failure_falls_back_to_jsonl(monkeypatch: pytest.MonkeyPatch, _isolated_jsonl: Path) -> None:
     monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "1")
-    audit._ENABLED = None  # noqa: SLF001
+    audit._ENABLED = None
 
     def _raise_client() -> Any:
         raise RuntimeError("CH unreachable")
@@ -329,8 +329,6 @@ class TestKillRecordFromBlocking:
             KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
 
     def test_passed_blocking_rejected(self) -> None:
-        # Defensive: if the caller hands us a blocking dict that actually
-        # passed, refuse to write a kill — there's nothing to kill.
         blocking = self._blocking(status="passed", reasons=[], passed=True)
         with pytest.raises(ValueError, match="passed=True"):
             KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
@@ -348,8 +346,6 @@ class TestKillRecordFromBlocking:
             KillRecord.from_blocking(alpha_id="c99", gate="C", blocking=blocking)
 
     def test_falls_back_to_failing_names_when_triage_reasons_absent(self) -> None:
-        # Backward-compat: older blocking dicts (pre-Round-6) won't carry
-        # triage_reasons; build the reason string from failing[] instead.
         blocking = {
             "passed": False,
             "failing": [

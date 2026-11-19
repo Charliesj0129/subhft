@@ -7,10 +7,6 @@ from unittest.mock import MagicMock
 
 from hft_platform.services.system import HFTSystem
 
-# ---------------------------------------------------------------------------
-# _get_max_feed_gap_s
-# ---------------------------------------------------------------------------
-
 
 class TestGetMaxFeedGapS:
     def test_no_method_returns_zero(self) -> None:
@@ -19,7 +15,7 @@ class TestGetMaxFeedGapS:
 
     def test_within_reconnect_window_returns_gap(self) -> None:
         md_service = MagicMock()
-        md_service.client = None  # No client attr so fallback path is used
+        md_service.client = None
         md_service.get_max_feed_gap_s.return_value = 5.5
         md_service.within_reconnect_window.return_value = True
         assert HFTSystem._get_max_feed_gap_s(md_service) == 5.5
@@ -36,16 +32,6 @@ class TestGetMaxFeedGapS:
         assert HFTSystem._get_max_feed_gap_s(md_service) == 3.2
 
 
-# ---------------------------------------------------------------------------
-# _get_drawdown_pct
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# _get_feed_gaps_by_symbol
-# ---------------------------------------------------------------------------
-
-
 class TestGetFeedGapsBySymbol:
     def test_no_method_returns_empty_dict(self) -> None:
         md_service = MagicMock(spec=[])
@@ -58,11 +44,6 @@ class TestGetFeedGapsBySymbol:
         assert HFTSystem._get_feed_gaps_by_symbol(md_service) == expected
 
 
-# ---------------------------------------------------------------------------
-# _set_service_running
-# ---------------------------------------------------------------------------
-
-
 class TestSetServiceRunning:
     def test_sets_running_attribute(self) -> None:
         service = MagicMock()
@@ -72,5 +53,5 @@ class TestSetServiceRunning:
 
     def test_no_running_attribute_no_error(self) -> None:
         service = MagicMock(spec=[])
-        HFTSystem._set_service_running(service, True)  # should not raise
+        HFTSystem._set_service_running(service, True)
         assert not hasattr(service, "running")

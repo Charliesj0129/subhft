@@ -100,7 +100,7 @@ def test_check_returns_warn_and_writes_artifact(tmp_path: Path):
 def test_run_blocks_fail_without_executing(tmp_path: Path):
     mod = _load_module()
 
-    def _should_not_run(_argv, timeout_s=60):  # noqa: ARG001
+    def _should_not_run(_argv, timeout_s=60):
         raise AssertionError("_run_cmd should not be called")
 
     mod._run_cmd = _should_not_run

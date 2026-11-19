@@ -111,7 +111,6 @@ class TestParseRejects:
 
 class TestComplexityHelpers:
     def test_node_count_counts_every_node(self) -> None:
-        # Call(zscore) + Identifier(x) + String window = 3
         assert node_count(parse("zscore(x, window='2000_events')")) == 3
 
     def test_call_depth_of_nested_transforms(self) -> None:

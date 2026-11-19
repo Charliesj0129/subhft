@@ -14,18 +14,11 @@ from prometheus_client import Gauge
 
 from hft_platform.execution.positions import PositionStore
 
-# Portfolio-level unrealized PnL gauge (scaled int).
 portfolio_unrealized_pnl = Gauge(
     "portfolio_unrealized_pnl",
     "Portfolio-level mark-to-market unrealized PnL (scaled int x10000)",
 )
 
-# How much of the book the gauge above does NOT cover. Non-zero means
-# ``portfolio_unrealized_pnl`` is a partial total and the daily stop cannot be
-# released from it. Exported because the log no longer says so every second:
-# between 2026-09-07 and 2026-09-19 a single unpriceable position wrote 248,724
-# identical warnings to the THESHOW container log, and a condition that lasts
-# 13 days needs a series, not a line.
 mtm_unpriced_positions = Gauge(
     "mtm_unpriced_positions",
     "Non-flat positions with no usable mid-price at the last mark-to-market",
@@ -104,12 +97,7 @@ class MarkToMarketCalculator:
         self._position_store = position_store
         self._mid_price_fn = mid_price_fn
         self._multiplier_fn: Callable[[str], int] = multiplier_fn if multiplier_fn is not None else lambda _: 1
-        # See class docstring. Reserved for Wave 3 cross-thread coordination.
         self._lock = threading.Lock()
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def calculate(self) -> dict[str, int]:
         """Return unrealized PnL per symbol (scaled int).
@@ -214,10 +202,6 @@ class MarkToMarketCalculator:
         """
         return self.snapshot().total_scaled
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _unrealized(net_qty: int, avg_price_scaled: int, mid: int, contract_multiplier: int = 1) -> int:
         """Compute unrealized PnL for a single position (scaled int).
@@ -231,5 +215,4 @@ class MarkToMarketCalculator:
         """
         if net_qty > 0:
             return (mid - avg_price_scaled) * net_qty * contract_multiplier
-        # net_qty < 0  (caller already guards == 0)
         return (avg_price_scaled - mid) * (-net_qty) * contract_multiplier

@@ -38,8 +38,6 @@ HYPOTHESIS_MIN_CHARS = 20
 HYPOTHESIS_MAX_CHARS = 500
 MAX_FEATURES = 6
 
-# prim_v1 whitelists (spec §7). Signatures map name -> ordered parameter
-# names; the first transform parameter is always the input expression.
 PRIMITIVE_SIGNATURES: dict[str, tuple[str, ...]] = {
     "mid_price": (),
     "spread_ticks": (),
@@ -48,7 +46,7 @@ PRIMITIVE_SIGNATURES: dict[str, tuple[str, ...]] = {
     "microprice": (),
     "depth_delta": ("side", "levels", "window"),
     "trade_imbalance": ("window",),
-    "future_mid_return": ("horizon",),  # LABEL ONLY
+    "future_mid_return": ("horizon",),
 }
 TRANSFORM_SIGNATURES: dict[str, tuple[str, ...]] = {
     "zscore": ("x", "window"),
@@ -63,10 +61,9 @@ TRANSFORM_DEFAULTS: dict[str, dict[str, str]] = {
 LABEL_PRIMITIVE = "future_mid_return"
 SIDES = frozenset({"bid", "ask"})
 
-# Window/horizon domains (spec §7).
 EVENT_WINDOW_MIN, EVENT_WINDOW_MAX = 10, 10_000
-TIME_WINDOW_MIN_NS, TIME_WINDOW_MAX_NS = 50_000_000, 60_000_000_000  # 50ms..60s
-HORIZON_TIME_MIN_NS, HORIZON_TIME_MAX_NS = 100_000_000, 30_000_000_000  # 100ms..30s
+TIME_WINDOW_MIN_NS, TIME_WINDOW_MAX_NS = 50_000_000, 60_000_000_000
+HORIZON_TIME_MIN_NS, HORIZON_TIME_MAX_NS = 100_000_000, 30_000_000_000
 HORIZON_EVENT_MIN, HORIZON_EVENT_MAX = 1, 10_000
 
 _WINDOW_RE = re.compile(r"^(\d+)(_events|ms|s)$")
@@ -79,17 +76,13 @@ class Status(str, enum.Enum):
     EVALUATED = "EVALUATED"
     REJECTED = "REJECTED"
     WATCHLIST = "WATCHLIST"
-    # Top of the loop's own ranking. The loop is a generator: a shortlisted
-    # candidate goes to the governed Gate A-F path, where promotion happens.
     SHORTLISTED = "SHORTLISTED"
 
 
-# Labels written before research v2 C4 (append-only rows keep them).
 LEGACY_STATUS_LABELS: dict[str, Status] = {"PROMOTED": Status.SHORTLISTED}
 
 
 class DeathReason(str, enum.Enum):
-    # validator
     SCHEMA_INVALID = "SCHEMA_INVALID"
     FORMULA_PARSE_ERROR = "FORMULA_PARSE_ERROR"
     PRIMITIVE_INVALID = "PRIMITIVE_INVALID"
@@ -97,7 +90,6 @@ class DeathReason(str, enum.Enum):
     ARGUMENT_INVALID = "ARGUMENT_INVALID"
     OVER_COMPLEX = "OVER_COMPLEX"
     DUPLICATE_ALPHA = "DUPLICATE_ALPHA"
-    # evaluator
     NO_SIGNAL = "NO_SIGNAL"
     SIGN_UNSTABLE = "SIGN_UNSTABLE"
     COST_KILLED = "COST_KILLED"
@@ -110,36 +102,36 @@ class ProposedPrimitive(msgspec.Struct, frozen=True, forbid_unknown_fields=True)
     name: str
     reason: str
     required_data: list[str] = []
-    not_executable_in_v1: bool = True  # must be true; validator rejects false
+    not_executable_in_v1: bool = True
 
 
 class Feature(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    name: str  # FEATURE_NAME_RE
+    name: str
     formula: str
 
 
 class Candidate(msgspec.Struct, frozen=True, forbid_unknown_fields=True):
-    name: str  # CANDIDATE_NAME_RE
-    family: str  # in FAMILIES
-    hypothesis: str  # 20-500 chars
-    features: list[Feature]  # 1-6 entries
-    signal_formula: str  # over feature names + primitives + transforms
-    label: str  # exactly future_mid_return(horizon=...)
-    horizon: str  # 'Nms' | 'Ns' | 'N_events'
-    expected_sign: str  # 'positive' | 'negative'
-    regime_filter: str = ""  # '' = always-on; else one comparison expr
+    name: str
+    family: str
+    hypothesis: str
+    features: list[Feature]
+    signal_formula: str
+    label: str
+    horizon: str
+    expected_sign: str
+    regime_filter: str = ""
     cost_risk: str = ""
     latency_risk: str = ""
     falsification_tests: list[str] = []
-    proposed_new_primitives: list[ProposedPrimitive] = []  # recorded, NEVER executed
+    proposed_new_primitives: list[ProposedPrimitive] = []
 
 
 class Window(msgspec.Struct, frozen=True):
     """Parsed window/horizon: kind 'events' (count) or 'time' (nanoseconds)."""
 
-    kind: str  # 'events' | 'time'
-    count: int = 0  # events
-    duration_ns: int = 0  # time
+    kind: str
+    count: int = 0
+    duration_ns: int = 0
 
 
 def parse_window_spec(spec: str) -> Window:

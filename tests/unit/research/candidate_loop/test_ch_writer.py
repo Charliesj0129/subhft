@@ -132,7 +132,7 @@ class TestDateColumns:
     def test_replay_coerces_fallback_iso_strings(self, tmp_path: Path) -> None:
         offline = ResultWriter(None, tmp_path)
         row = _result_row()
-        row["split_start"] = datetime.date(2026, 1, 26)  # json.dumps default=str -> ISO
+        row["split_start"] = datetime.date(2026, 1, 26)
         offline.write_result_row(row)
         ch = _StubCH()
         counts = replay_fallback(ch, offline.fallback_path)

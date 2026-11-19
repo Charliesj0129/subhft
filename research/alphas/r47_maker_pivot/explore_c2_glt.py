@@ -47,14 +47,13 @@ from hftbacktest import BacktestAsset, HashMapMarketDepthBacktest
 
 TICK_SIZE = 1.0
 PRICE_SCALE = 10_000
-ELAPSE_NS = 100_000_000  # 100ms per step
+ELAPSE_NS = 100_000_000
 
 DATA_DIR = _REPO_ROOT / "research" / "data" / "raw" / "txfd6"
 DATA_FILES = sorted(DATA_DIR.glob("TXFD6_2026-0*_l2.hftbt.npz"))
 OUT_DIR = _REPO_ROOT / "outputs" / "team_artifacts" / "alpha-research" / "R47_maker_pivot"
 
-# Session parameters (TAIFEX regular session)
-SESSION_DURATION_S = 5 * 3600  # ~5 hours (08:45-13:45)
+SESSION_DURATION_S = 5 * 3600
 SESSION_DURATION_NS = SESSION_DURATION_S * 1_000_000_000
 
 
@@ -111,7 +110,6 @@ def extract_mid_prices(data_path: Path) -> tuple[np.ndarray, np.ndarray, np.ndar
     )
 
 
-# ── Part 1: Sigma^2 Estimation Lag ────────────────────────────────────────
 
 def compute_ema_variance(returns: np.ndarray, alpha: float) -> np.ndarray:
     """Compute EMA-based realized variance (online, causal)."""
@@ -136,7 +134,6 @@ def compute_rolling_variance(returns: np.ndarray, window: int) -> np.ndarray:
     var_rolling = np.zeros(n, dtype=np.float64)
     for i in range(window, n):
         var_rolling[i] = np.var(returns[i - window:i])
-    # Backfill warmup period
     if n > window:
         var_rolling[:window] = var_rolling[window]
     return var_rolling
@@ -144,11 +141,9 @@ def compute_rolling_variance(returns: np.ndarray, window: int) -> np.ndarray:
 
 def analyze_sigma_lag(mids: np.ndarray, date_str: str) -> dict:
     """Analyze EMA variance lag vs rolling variance."""
-    # Compute returns (1-step log returns)
     returns = np.diff(np.log(mids))
     n = len(returns)
 
-    # Rolling variance as "truth" (100-step window = 10 seconds at 100ms)
     true_var = compute_rolling_variance(returns, 100)
 
     alphas = [0.001, 0.005, 0.01, 0.05]
@@ -157,7 +152,6 @@ def analyze_sigma_lag(mids: np.ndarray, date_str: str) -> dict:
     for alpha in alphas:
         ema_var = compute_ema_variance(returns, alpha)
 
-        # Find volatility spikes: points where true_var > 2x its median
         median_var = np.median(true_var[100:])
         spike_mask = true_var > 2 * median_var
         spike_indices = np.where(spike_mask)[0]
@@ -173,22 +167,20 @@ def analyze_sigma_lag(mids: np.ndarray, date_str: str) -> dict:
             }
             continue
 
-        # For each spike, find when EMA catches up to within 50% of true value
         lags = []
         for idx in spike_indices:
-            target = true_var[idx] * 0.5  # 50% of spike level
+            target = true_var[idx] * 0.5
             lag = 0
             for j in range(idx, min(idx + 200, n)):
                 if ema_var[j] >= target:
                     lag = j - idx
                     break
             else:
-                lag = 200  # didn't catch up in 200 ticks
+                lag = 200
             lags.append(lag)
 
         lags_arr = np.array(lags)
 
-        # Tracking RMSE (normalized)
         valid = true_var[100:] > 0
         if np.any(valid):
             rmse = np.sqrt(np.mean((ema_var[100:][valid] - true_var[100:][valid]) ** 2))
@@ -209,7 +201,6 @@ def analyze_sigma_lag(mids: np.ndarray, date_str: str) -> dict:
     return results
 
 
-# ── Part 2: Gamma Sensitivity ─────────────────────────────────────────────
 
 def glt_half_spread(gamma: float, sigma2_per_s: float, t_remaining_s: float,
                     q: int, q_max: int, kappa: float) -> float:
@@ -226,14 +217,10 @@ def glt_half_spread(gamma: float, sigma2_per_s: float, t_remaining_s: float,
 
     Returns half-spread in price units (not scaled).
     """
-    # Risk premium: how much extra to charge per unit time for inventory risk
     risk_premium = gamma * sigma2_per_s * t_remaining_s
 
-    # Base half-spread: market half-spread + risk premium
-    # (market half-spread is handled by caller — we just return the adjustment)
     base = risk_premium
 
-    # Inventory skew: shift quote center by γσ²τ · q/Q_max
     skew = risk_premium * q / max(q_max, 1)
 
     return base + skew
@@ -245,45 +232,32 @@ def analyze_gamma_sensitivity(mids: np.ndarray, spreads: np.ndarray,
     n = len(mids)
     returns = np.diff(np.log(mids))
 
-    # Estimate sigma^2 using EMA(alpha=0.01)
-    # Returns are per-step (100ms). Convert to per-second: σ²/s = σ²_step * steps_per_sec
-    steps_per_sec = 10.0  # 100ms steps
+    steps_per_sec = 10.0
     sigma2_step_series = compute_ema_variance(returns, 0.01)
     sigma2_per_s_series = sigma2_step_series * steps_per_sec
     median_sigma2_per_s = float(np.median(sigma2_per_s_series[100:]))
 
-    # Also compute in price units (not log): σ²_price = σ²_log * mid²
     median_mid = float(np.median(mids))
     sigma2_price_per_s = median_sigma2_per_s * median_mid ** 2
 
-    # Estimate kappa: fills per second
     duration_s = n * 0.1
     kappa = total_fills / max(duration_s, 1.0)
 
-    # Derive base gamma from R47's current effective risk aversion
-    # R47 current skew: -(pos * tick_size * 2) / 5 where tick_size ≈ spread * 0.5
-    # For typical spread=1, tick_size=0.5: skew ≈ 0.2 pts per contract
-    # GLT inventory skew: γσ²(T-t)/Q_max per contract at mid-session
-    # Match: 0.2 = γ * σ²_price/s * (SESSION_S/2) / 3
-    # γ = 0.2 * 3 * 2 / (σ²_price/s * SESSION_S)
     if sigma2_price_per_s > 1e-15:
         gamma_base = 0.2 * 6.0 / (sigma2_price_per_s * SESSION_DURATION_S)
     else:
         gamma_base = 0.01
 
-    # No clamp — let the actual value show
-    median_sigma2 = median_sigma2_per_s  # for reporting
+    median_sigma2 = median_sigma2_per_s
 
     gamma_multipliers = [0.5, 0.75, 1.0, 1.25, 1.5]
     results = {}
 
-    # Market half-spread (actual)
     median_market_half_spread = float(np.median(spreads)) / 2.0
 
     for mult in gamma_multipliers:
         gamma = gamma_base * mult
 
-        # Compute GLT spreads at different inventory levels, mid-session
         t_remaining_s = SESSION_DURATION_S / 2.0
         spreads_by_q = {}
         for q in range(-3, 4):
@@ -291,26 +265,16 @@ def analyze_gamma_sensitivity(mids: np.ndarray, spreads: np.ndarray,
             total_hs = median_market_half_spread + glt_adj
             spreads_by_q[str(q)] = round(total_hs, 4)
 
-        # Full spread at q=0 (symmetric)
         glt_adj_q0 = glt_half_spread(gamma, sigma2_price_per_s, t_remaining_s, 0, 3, kappa)
         full_spread_q0 = 2 * (median_market_half_spread + glt_adj_q0)
 
-        # Compare to actual median spread
         median_actual_spread = float(np.median(spreads))
 
-        # Estimate fill rate impact: wider spread = fewer fills
-        # Using exponential arrival model: fill_rate ∝ exp(-k * spread)
-        # Calibrate k from actual data: at median_spread, we get total_fills
-        # At GLT spread, fill_rate = total_fills * exp(-k * (glt_spread - median_spread))
-        # k ≈ 1/median_spread (crude estimate)
         k_est = 1.0 / max(median_actual_spread, 0.1)
         spread_diff = full_spread_q0 - median_actual_spread
         fill_rate_ratio = math.exp(-k_est * max(0, spread_diff))
         estimated_fills = int(total_fills * fill_rate_ratio)
 
-        # Adverse selection improvement estimate:
-        # Wider spread on adverse side reduces adverse fill probability
-        # Simple model: adverse_fill_reduction ∝ (GLT_spread / actual_spread - 1)
         adverse_reduction_pct = max(0, (full_spread_q0 / max(median_actual_spread, 0.1) - 1)) * 100
 
         results[f"{mult:.2f}"] = {
@@ -336,7 +300,6 @@ def analyze_gamma_sensitivity(mids: np.ndarray, spreads: np.ndarray,
     }
 
 
-# ── Part 3: GLT vs Current Spread Comparison ─────────────────────────────
 
 def compare_glt_vs_current(mids: np.ndarray, spreads: np.ndarray,
                            total_fills: int, date_str: str) -> dict:
@@ -346,47 +309,38 @@ def compare_glt_vs_current(mids: np.ndarray, spreads: np.ndarray,
 
     steps_per_sec = 10.0
     sigma2_step_ema = compute_ema_variance(returns, 0.01)
-    # Convert to price-unit variance per second
     median_mid = float(np.median(mids))
 
     duration_s = n * 0.1
     kappa = total_fills / max(duration_s, 1.0)
 
-    # Calibrate gamma (same formula as analyze_gamma_sensitivity)
     sigma2_price_per_s_median = float(np.median(sigma2_step_ema[100:])) * steps_per_sec * median_mid ** 2
     if sigma2_price_per_s_median > 1e-15:
         gamma = 0.2 * 6.0 / (sigma2_price_per_s_median * SESSION_DURATION_S)
     else:
         gamma = 0.01
 
-    # Compute GLT total spread at each step (q=0, add market half-spread)
     glt_spreads = np.zeros(n, dtype=np.float64)
     for i in range(n):
         t_remaining_s = max(10.0, SESSION_DURATION_S * (1.0 - i / max(n - 1, 1)))
         s2_step = sigma2_step_ema[min(i, len(sigma2_step_ema) - 1)]
         s2_price_per_s = s2_step * steps_per_sec * mids[i] ** 2
-        market_hs = spreads[i] / 2.0  # current market half-spread
+        market_hs = spreads[i] / 2.0
         glt_adj = glt_half_spread(gamma, s2_price_per_s, t_remaining_s, 0, 3, kappa)
         glt_spreads[i] = 2 * (market_hs + glt_adj)
 
-    # R47 current spread = actual market spread (it quotes at half-spread from mid)
-    # So effective R47 quote width ≈ market spread (base_width = max(tick, half_spread))
-    actual_spreads = spreads  # market spread = R47's effective spread
+    actual_spreads = spreads
 
-    # Compute ratio
     ratio = glt_spreads / np.maximum(actual_spreads, 0.01)
 
-    # Split into thirds for time-of-day analysis
     third = n // 3
     first_third_ratio = float(np.median(ratio[:third]))
     mid_third_ratio = float(np.median(ratio[third:2*third]))
     last_third_ratio = float(np.median(ratio[2*third:]))
 
-    # Count steps where GLT is wider vs narrower
     wider_pct = float(np.mean(glt_spreads > actual_spreads) * 100)
     narrower_pct = float(np.mean(glt_spreads < actual_spreads) * 100)
 
-    # Sample for JSON (100 points)
     if n > 100:
         idx = np.linspace(0, n - 1, 100, dtype=int)
         sampled_glt = [round(float(glt_spreads[i]), 4) for i in idx]
@@ -410,9 +364,7 @@ def compare_glt_vs_current(mids: np.ndarray, spreads: np.ndarray,
     }
 
 
-# ── Main ──────────────────────────────────────────────────────────────────
 
-# Known fills per day from T5 analysis
 FILLS_PER_DAY = {
     "2026-03-19": 193, "2026-03-20": 194, "2026-03-23": 190,
     "2026-03-24": 448, "2026-03-26": 277, "2026-03-27": 286,
@@ -454,26 +406,21 @@ def main() -> None:
 
         print(f"    {n_steps} steps, {total_fills} fills, PnL={pnl:+.1f} ({elapsed_extract:.1f}s)")
 
-        # Part 1: Sigma lag
         sigma_result = analyze_sigma_lag(mids, date_str)
         all_sigma_lag[date_str] = sigma_result
 
-        # Part 2: Gamma sensitivity
         gamma_result = analyze_gamma_sensitivity(mids, spr, total_fills, date_str)
         all_gamma_sens[date_str] = gamma_result
 
-        # Part 3: GLT vs current
         comparison = compare_glt_vs_current(mids, spr, total_fills, date_str)
         all_comparisons[date_str] = comparison
 
-        # Print summary
         best_alpha = "0.01"
         lag = sigma_result.get(best_alpha, {}).get("median_lag_ticks", "?")
         gamma_base = gamma_result.get("gamma_base", "?")
         ratio = comparison.get("median_ratio", "?")
         print(f"    σ² lag(α=0.01): {lag} ticks, γ_base={gamma_base}, GLT/actual ratio={ratio}")
 
-    # ── Aggregate Analysis ────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("PART 1: SIGMA^2 LAG ANALYSIS")
     print("=" * 70)
@@ -485,7 +432,6 @@ def main() -> None:
         max_lag = max(lags) if lags else 0
         print(f"  α={alpha_str}: avg_lag={avg_lag:.1f}, max_lag={max_lag} ticks")
 
-    # 03-31 deep dive
     if "2026-03-31" in all_sigma_lag:
         print("\n  03-31 Detail:")
         for alpha_str, data in all_sigma_lag["2026-03-31"].items():
@@ -497,12 +443,10 @@ def main() -> None:
     print("PART 2: GAMMA SENSITIVITY")
     print("=" * 70)
 
-    # Aggregate gamma_base across days
     gamma_bases = [all_gamma_sens[d]["gamma_base"] for d in sorted(all_gamma_sens.keys())]
     print(f"  γ_base range: [{min(gamma_bases):.6f}, {max(gamma_bases):.6f}]")
     print(f"  γ_base median: {sorted(gamma_bases)[len(gamma_bases)//2]:.6f}")
 
-    # Show spread ratios at different gammas for winning vs losing days
     winning = [d for d in sorted(all_gamma_sens.keys()) if PNLS_PER_DAY.get(d, 0) > 0]
     losing = [d for d in sorted(all_gamma_sens.keys()) if PNLS_PER_DAY.get(d, 0) <= 0]
 
@@ -525,7 +469,6 @@ def main() -> None:
               f"1st={c['first_third_ratio']:.3f} mid={c['mid_third_ratio']:.3f} "
               f"last={c['last_third_ratio']:.3f}")
 
-    # ── Save Output ───────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     output = {
         "metadata": {

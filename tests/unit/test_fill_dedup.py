@@ -21,10 +21,6 @@ from hft_platform.contracts.execution import FillEvent, PositionDelta, Side
 from hft_platform.execution.normalizer import RawExecEvent
 from hft_platform.execution.router import ExecutionRouter
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _stub_metrics() -> MagicMock:
     m = MagicMock()
@@ -46,7 +42,7 @@ def _make_fill_event(
     symbol: str = "2330",
     strategy_id: str = "strat1",
     qty: int = 1,
-    price: int = 1_000_000,  # 100.0000 scaled x10000
+    price: int = 1_000_000,
 ) -> FillEvent:
     return FillEvent(
         fill_id=fill_id,
@@ -126,7 +122,6 @@ def position_store() -> MagicMock:
             delta_source="FILL",
         )
     )
-    # No on_fill_async so the sync path is taken
     del ps.on_fill_async
     return ps
 
@@ -138,7 +133,6 @@ def _make_router(
     dedup_max_size: int = 10000,
 ) -> ExecutionRouter:
     raw_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    # Prevent cross-test pollution from persisted dedup window files.
     _dedup_path = ".state/fill_dedup_window.jsonl"
     import pathlib
 
@@ -154,23 +148,15 @@ def _make_router(
     return router
 
 
-# ---------------------------------------------------------------------------
-# 1. Duplicate fill_id is skipped
-# ---------------------------------------------------------------------------
-
-
 class TestFillDedup:
     def test_duplicate_fill_skipped(self, bus: MagicMock, position_store: MagicMock) -> None:
         """Second arrival of same fill_id must NOT call position_store.on_fill again."""
         router = _make_router(bus, position_store)
         fill = _make_fill_event(fill_id="F-DUP-001")
 
-        # Simulate the router processing the fill directly via its internal dedup dict
-        # First fill: register in seen set
         assert fill.fill_id not in router._seen_fill_ids
         router._seen_fill_ids[fill.fill_id] = None
 
-        # Second arrival: should be detected as duplicate
         is_duplicate = fill.fill_id in router._seen_fill_ids
         assert is_duplicate, "second arrival should be found in _seen_fill_ids"
 
@@ -182,15 +168,12 @@ class TestFillDedup:
         fill_a = _make_fill_event(fill_id="FA-001")
         fill_b = _make_fill_event(fill_id="FA-002")
 
-        # Neither is in seen set yet
         assert fill_a.fill_id not in router._seen_fill_ids
         assert fill_b.fill_id not in router._seen_fill_ids
 
-        # Register both (simulating the main path)
         router._seen_fill_ids[fill_a.fill_id] = None
         router._seen_fill_ids[fill_b.fill_id] = None
 
-        # Both now registered — subsequent arrivals would be blocked
         assert fill_a.fill_id in router._seen_fill_ids
         assert fill_b.fill_id in router._seen_fill_ids
         assert len(router._seen_fill_ids) == 2
@@ -202,9 +185,8 @@ class TestFillDedup:
         """End-to-end: sending same deal raw event twice should call on_fill only once."""
         router = _make_router(bus, position_store)
         raw1 = _make_deal_raw(fill_id="F-E2E-001")
-        raw2 = _make_deal_raw(fill_id="F-E2E-001")  # identical fill_id
+        raw2 = _make_deal_raw(fill_id="F-E2E-001")
 
-        # Feed both events into the queue and run the router briefly
         await router.raw_queue.put(raw1)
         await router.raw_queue.put(raw2)
 
@@ -219,10 +201,8 @@ class TestFillDedup:
         async def _process_two(r: ExecutionRouter) -> None:
             """Drive the router's run loop for exactly 2 events."""
             r.running = True
-            # Process event 1
             r.running = True
             task = asyncio.create_task(r.run())
-            # Give it time to drain both events
             await asyncio.sleep(0.05)
             task.cancel()
             try:
@@ -232,28 +212,21 @@ class TestFillDedup:
 
         await _process_two(router)
 
-        # on_fill should have been called at most once (second is duplicate)
         call_count = position_store.on_fill.call_count
         assert call_count <= 1, f"Expected on_fill called at most once, got {call_count}"
-
-    # ---------------------------------------------------------------------------
-    # 2. FIFO eviction at max size
-    # ---------------------------------------------------------------------------
 
     def test_eviction_at_max_size(self, bus: MagicMock, position_store: MagicMock) -> None:
         """Oldest entry is evicted when _seen_fill_ids exceeds max size."""
         max_size = 5
         router = _make_router(bus, position_store, dedup_max_size=max_size)
 
-        # Fill the dict to exactly max_size
         for i in range(max_size):
             fid = f"F{i:04d}"
             router._seen_fill_ids[fid] = None
 
         assert len(router._seen_fill_ids) == max_size
-        first_key = next(iter(router._seen_fill_ids))  # oldest
+        first_key = next(iter(router._seen_fill_ids))
 
-        # Add one more, triggering eviction
         router._seen_fill_ids["F_NEW"] = None
         if len(router._seen_fill_ids) > max_size:
             router._seen_fill_ids.popitem(last=False)
@@ -269,26 +242,19 @@ class TestFillDedup:
 
         fills = [f"F{i:04d}" for i in range(max_size + 2)]
 
-        # Simulate filling past the limit with eviction
         for fid in fills:
             router._seen_fill_ids[fid] = None
             if len(router._seen_fill_ids) > max_size:
                 router._seen_fill_ids.popitem(last=False)
 
-        # The last `max_size` fills should still be deduplicatable
         for fid in fills[-max_size:]:
             assert fid in router._seen_fill_ids, f"{fid} should still be in seen set"
-
-    # ---------------------------------------------------------------------------
-    # 3. Empty fill_id bypasses dedup (no crash)
-    # ---------------------------------------------------------------------------
 
     def test_empty_fill_id_not_stored(self, bus: MagicMock, position_store: MagicMock) -> None:
         """Fills with no fill_id must not be added to _seen_fill_ids."""
         router = _make_router(bus, position_store)
         fill = _make_fill_event(fill_id="")
 
-        # Simulate the dedup check (empty string is falsy → skip storage)
         if fill.fill_id:
             router._seen_fill_ids[fill.fill_id] = None
 
@@ -299,15 +265,10 @@ class TestFillDedup:
         router = _make_router(bus, position_store)
         fill_id = None  # type: ignore[assignment]
 
-        # Simulate the dedup guard
         if fill_id:
             router._seen_fill_ids[fill_id] = None
 
         assert len(router._seen_fill_ids) == 0
-
-    # ---------------------------------------------------------------------------
-    # 4. duplicate_fill_total metric is incremented on duplicate
-    # ---------------------------------------------------------------------------
 
     def test_duplicate_fill_metric_incremented(
         self, bus: MagicMock, position_store: MagicMock, stub_metrics: MagicMock
@@ -316,18 +277,12 @@ class TestFillDedup:
         router = _make_router(bus, position_store)
         fill_id = "F-METRIC-001"
 
-        # Pre-register the fill as already seen
         router._seen_fill_ids[fill_id] = None
 
-        # Simulate detection and metric increment (as done in the router code)
         if fill_id in router._seen_fill_ids:
             router.metrics.duplicate_fill_total.inc()
 
         router.metrics.duplicate_fill_total.inc.assert_called_once()
-
-    # ---------------------------------------------------------------------------
-    # 5. DLQ retry path dedup check
-    # ---------------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_dlq_retry_dedup(self, bus: MagicMock, position_store: MagicMock, stub_metrics: MagicMock) -> None:
@@ -335,10 +290,8 @@ class TestFillDedup:
         router = _make_router(bus, position_store)
         fill = _make_fill_event(fill_id="F-DLQ-001", strategy_id="UNKNOWN")
 
-        # Simulate that the fill was already applied (registered in _seen_fill_ids)
         router._seen_fill_ids[fill.fill_id] = None
 
-        # Simulate DLQ retry processing
         was_skipped = False
         if fill.fill_id and fill.fill_id in router._seen_fill_ids:
             router.metrics.duplicate_fill_total.inc()
@@ -355,10 +308,8 @@ class TestFillDedup:
         router = _make_router(bus, position_store)
         fill = _make_fill_event(fill_id="F-DLQ-FRESH-001")
 
-        # Not in seen set yet
         assert fill.fill_id not in router._seen_fill_ids
 
-        # Simulate the DLQ dedup registration path
         was_skipped = False
         if fill.fill_id and fill.fill_id in router._seen_fill_ids:
             was_skipped = True
@@ -371,10 +322,6 @@ class TestFillDedup:
         assert not was_skipped, "fresh DLQ fill must not be skipped"
         assert fill.fill_id in router._seen_fill_ids, "fresh DLQ fill must be registered after apply"
 
-    # ---------------------------------------------------------------------------
-    # 6. OrderedDict FIFO property
-    # ---------------------------------------------------------------------------
-
     def test_ordered_dict_fifo_order(self, bus: MagicMock, position_store: MagicMock) -> None:
         """_seen_fill_ids preserves insertion order so FIFO eviction is correct."""
         router = _make_router(bus, position_store)
@@ -383,7 +330,6 @@ class TestFillDedup:
         for fid in ids:
             router._seen_fill_ids[fid] = None
 
-        # First inserted should be first returned by popitem(last=False)
         first, _ = router._seen_fill_ids.popitem(last=False)
         assert first == "A", f"Expected 'A' to be evicted first (FIFO), got '{first}'"
 
@@ -394,10 +340,6 @@ class TestFillDedup:
             f"Expected OrderedDict, got {type(router._seen_fill_ids)}"
         )
 
-    # ---------------------------------------------------------------------------
-    # 7. fill_dedup_max_size env var
-    # ---------------------------------------------------------------------------
-
     def test_custom_max_size_from_env(self, bus: MagicMock, position_store: MagicMock) -> None:
         """HFT_FILL_DEDUP_MAX_SIZE env var controls the maximum size."""
         router = _make_router(bus, position_store, dedup_max_size=42)
@@ -406,7 +348,6 @@ class TestFillDedup:
     def test_default_max_size(self, bus: MagicMock, position_store: MagicMock) -> None:
         """Default max size is 10000 when env var is not set."""
         with patch.dict("os.environ", {}, clear=False):
-            # Remove the key if present, then build router without specifying size
             import os as _os
 
             _os.environ.pop("HFT_FILL_DEDUP_MAX_SIZE", None)

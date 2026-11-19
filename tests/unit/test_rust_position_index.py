@@ -23,7 +23,6 @@ class TestRustPositionTracker:
         assert result == {}
 
     def test_single_position(self, rust_tracker):
-        # BUY (side=0) 10 @ 1000
         rust_tracker.update("acc1:strat_a:SYM1", 0, 10, 1000, 0, 0, 100)
         result = rust_tracker.get_positions_by_strategy()
         assert "strat_a" in result
@@ -57,7 +56,6 @@ class TestRustPositionTracker:
 
         rust_result = rust_tracker.get_positions_by_strategy()
 
-        # Build Python equivalent
         py_result: dict[str, dict[str, int]] = {}
         for key, side, qty, price in fills:
             parts = key.split(":")
@@ -87,7 +85,6 @@ class TestRunnerRustPositionIntegration:
         mock_rust.get_positions_by_strategy.return_value = {"strat_a": {"SYM1": 10}}
         runner.position_store._rust_tracker = mock_rust
 
-        # Initialize needed attributes
         runner._position_key_cache = {}
 
         result = runner._build_positions_by_strategy()
@@ -110,7 +107,6 @@ class TestRunnerRustPositionIntegration:
         runner._position_key_cache = {}
 
         result = runner._build_positions_by_strategy()
-        # Should not raise, should return something from Python path
         assert isinstance(result, dict)
 
     def test_falls_back_when_no_rust_tracker(self):

@@ -40,7 +40,7 @@ from research.backtest.maker_engine import (
 )
 from research.registry.schemas import AlphaProtocol
 
-_SCALE = 1_000_000  # CK convention
+_SCALE = 1_000_000
 
 
 def _bidask(
@@ -77,15 +77,11 @@ def _trade(price_pts: int, volume: int = 1, ts_ns: int | None = None) -> TickDat
     )
 
 
-# ----------------------------------------------------------------------------
-# Spread-gate boundary (DA-mandated edge cases: TMFD6 median 2 pt, p75 3 pt)
-# ----------------------------------------------------------------------------
 
 
 def test_spread_gate_blocks_below_threshold_at_sp2() -> None:
     """Default spread_threshold_pts=5. Spread=2 (TMFD6 median) -> Hold."""
     maker = TmfD6SoloMakerMinimal()
-    # disable QI so quotes post at raw bid/ask when gate passes; here it blocks
     actions = maker.on_tick(_bidask(22500, 22502))
     posts = [a for a in actions if isinstance(a, PostQuote)]
     assert posts == []
@@ -131,13 +127,10 @@ def test_spread_gate_admits_at_sp6_with_qi_off() -> None:
 def test_spread_gate_counter_advances_on_block() -> None:
     maker = TmfD6SoloMakerMinimal()
     maker.on_tick(_bidask(22500, 22504))
-    maker.on_tick(_bidask(22501, 22504))  # diff levels, avoid price-move gate
+    maker.on_tick(_bidask(22501, 22504))
     assert maker.spread_blocked == 2
 
 
-# ----------------------------------------------------------------------------
-# Scaled-int price arithmetic
-# ----------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -167,9 +160,6 @@ def test_posts_at_scaled_int_prices(
         assert isinstance(a.price, int)
 
 
-# ----------------------------------------------------------------------------
-# R47-minimal: D1/D2/D3 signal layers disabled (attribute absence)
-# ----------------------------------------------------------------------------
 
 
 def test_no_d1_d2_d3_signal_layer_methods_exposed() -> None:
@@ -205,9 +195,6 @@ def test_signal_layer_params_exposed_for_future() -> None:
     assert hasattr(C60Params(), "enable_qi_layer")
 
 
-# ----------------------------------------------------------------------------
-# Max-pos gate (DA flag #4: scorecard splits {1, 2, 3})
-# ----------------------------------------------------------------------------
 
 
 def test_max_pos_1_default_canonical() -> None:
@@ -270,15 +257,11 @@ def test_max_pos_blocked_counter_advances() -> None:
         params=C60Params(max_pos=1, enable_qi_layer=False)
     )
     maker.on_fill("buy", 22_500 * _SCALE, 22502.5)
-    # Different price each tick to clear price-movement gate.
     maker.on_tick(_bidask(22500, 22505))
     maker.on_tick(_bidask(22501, 22506))
     assert maker.max_pos_blocked >= 1
 
 
-# ----------------------------------------------------------------------------
-# Inventory skew (NOT |pos|-gated; linear in pos -> not C22-class)
-# ----------------------------------------------------------------------------
 
 
 def test_inventory_skew_none_at_pos_zero() -> None:
@@ -299,7 +282,6 @@ def test_inventory_skew_lowers_both_quotes_when_long() -> None:
     maker.on_fill("buy", 22_500 * _SCALE, 22502.5)
     actions = maker.on_tick(_bidask(22500, 22505))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # skew = 1 * 2 * scale // 10 = 200_000 (0.2 pt)
     assert posts["buy"] == 22500 * _SCALE - 200_000
     assert posts["sell"] == 22505 * _SCALE - 200_000
 
@@ -315,9 +297,6 @@ def test_inventory_skew_raises_both_quotes_when_short() -> None:
     assert posts["sell"] == 22505 * _SCALE + 200_000
 
 
-# ----------------------------------------------------------------------------
-# D4 QI skew layer (top-of-book imbalance; NOT |pos|-modulated)
-# ----------------------------------------------------------------------------
 
 
 def test_qi_skew_widens_ask_when_bid_heavy() -> None:
@@ -326,7 +305,6 @@ def test_qi_skew_widens_ask_when_bid_heavy() -> None:
     maker = TmfD6SoloMakerMinimal(params=params)
     actions = maker.on_tick(_bidask(22500, 22505, bid_qty=90, ask_qty=10))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # imbalance = (90-10)/100 = 0.80 > 0.10 -> ask widens UP by 1 tick
     assert posts["buy"] == 22500 * _SCALE
     assert posts["sell"] == 22505 * _SCALE + _SCALE
     assert maker.qi_widen_events == 1
@@ -338,7 +316,6 @@ def test_qi_skew_widens_bid_when_ask_heavy() -> None:
     maker = TmfD6SoloMakerMinimal(params=params)
     actions = maker.on_tick(_bidask(22500, 22505, bid_qty=10, ask_qty=90))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # imbalance = (10-90)/100 = -0.80 < -0.10 -> bid widens DOWN by 1 tick
     assert posts["buy"] == 22500 * _SCALE - _SCALE
     assert posts["sell"] == 22505 * _SCALE
     assert maker.qi_widen_events == 1
@@ -350,7 +327,6 @@ def test_qi_skew_neutral_within_threshold() -> None:
     maker = TmfD6SoloMakerMinimal(params=params)
     actions = maker.on_tick(_bidask(22500, 22505, bid_qty=52, ask_qty=48))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # imbalance = (52-48)/100 = 0.04 < 0.10 -> no widen
     assert posts["buy"] == 22500 * _SCALE
     assert posts["sell"] == 22505 * _SCALE
     assert maker.qi_widen_events == 0
@@ -362,17 +338,13 @@ def test_qi_skew_is_not_pos_gated() -> None:
         enable_qi_layer=True, qi_skew_threshold=0.10, max_pos=3
     )
     maker = TmfD6SoloMakerMinimal(params=params)
-    # pos=0 state
     maker.on_tick(_bidask(22500, 22505, bid_qty=90, ask_qty=10))
     widen_at_pos0 = maker.qi_widen_events
-    # drive pos up and re-quote on identical-shape book (different price to
-    # clear price-move gate).
     maker.on_fill("buy", 22_500 * _SCALE, 22502.5)
     maker.on_fill("buy", 22_500 * _SCALE, 22502.5)
     assert maker.position == 2
     maker.on_tick(_bidask(22501, 22506, bid_qty=90, ask_qty=10))
     widen_at_pos2 = maker.qi_widen_events - widen_at_pos0
-    # QI skew must trigger at both |pos|=0 and |pos|=2 for same book shape.
     assert widen_at_pos0 == 1
     assert widen_at_pos2 == 1
 
@@ -384,9 +356,6 @@ def test_qi_skew_disabled_by_param() -> None:
     assert maker.qi_widen_events == 0
 
 
-# ----------------------------------------------------------------------------
-# Price-movement gate (ROD anti-stack)
-# ----------------------------------------------------------------------------
 
 
 def test_does_not_restack_same_price() -> None:
@@ -410,9 +379,6 @@ def test_reposts_when_price_moves() -> None:
     assert len([a for a in second if isinstance(a, PostQuote)]) == 2
 
 
-# ----------------------------------------------------------------------------
-# Bid/ask execution (no mid) — DA flag #2 MANDATORY
-# ----------------------------------------------------------------------------
 
 
 def test_posts_at_best_bid_not_mid() -> None:
@@ -422,7 +388,6 @@ def test_posts_at_best_bid_not_mid() -> None:
     )
     actions = maker.on_tick(_bidask(22500, 22505))
     posts = {a.side: a.price for a in actions if isinstance(a, PostQuote)}
-    # Mid = 22502.5 x scale = 22_502_500_000 — must NOT equal buy quote
     assert posts["buy"] == 22500 * _SCALE
     assert posts["buy"] != 22_502_500_000
 
@@ -436,9 +401,6 @@ def test_posts_at_best_ask_not_mid() -> None:
     assert posts["sell"] == 22505 * _SCALE
 
 
-# ----------------------------------------------------------------------------
-# TMFD6 point value & inst RT citation
-# ----------------------------------------------------------------------------
 
 
 def test_tmf_point_value_is_10_ntd() -> None:
@@ -456,9 +418,6 @@ def test_tmf_retail_rt_cost_is_4pt_reference() -> None:
     assert _TMF_RETAIL_RT_COST_PTS == 4.0
 
 
-# ----------------------------------------------------------------------------
-# Monotonic time ordering
-# ----------------------------------------------------------------------------
 
 
 def test_monotonic_timestamp_ordering_preserved() -> None:
@@ -475,9 +434,6 @@ def test_monotonic_timestamp_ordering_preserved() -> None:
     assert t1 < EPOCH_THRESHOLD_NS
 
 
-# ----------------------------------------------------------------------------
-# Degenerate books
-# ----------------------------------------------------------------------------
 
 
 def test_trade_event_returns_hold() -> None:
@@ -488,7 +444,7 @@ def test_trade_event_returns_hold() -> None:
 
 def test_rejects_crossed_book() -> None:
     maker = TmfD6SoloMakerMinimal()
-    actions = maker.on_tick(_bidask(22505, 22504))  # crossed
+    actions = maker.on_tick(_bidask(22505, 22504))
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
@@ -509,9 +465,6 @@ def test_rejects_zero_priced_book() -> None:
     assert [a for a in actions if isinstance(a, PostQuote)] == []
 
 
-# ----------------------------------------------------------------------------
-# Gap / reset
-# ----------------------------------------------------------------------------
 
 
 def test_on_gap_clears_transient_quote_state() -> None:
@@ -548,9 +501,6 @@ def test_reset_clears_position_and_quotes() -> None:
     assert maker.qi_widen_events == 0
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol conformance
-# ----------------------------------------------------------------------------
 
 
 def test_c60_alpha_conforms_to_alpha_protocol() -> None:
@@ -583,7 +533,7 @@ def test_c60_hypothesis_cites_r47_minimal() -> None:
 def test_c60_hypothesis_cites_inst_rt() -> None:
     alpha = C60Alpha()
     h = alpha.manifest.hypothesis
-    assert "1.5" in h and "4" in h  # inst vs retail
+    assert "1.5" in h and "4" in h
 
 
 def test_c60_hypothesis_cites_non_pos_gated() -> None:
@@ -601,9 +551,6 @@ def test_c60_reset_clears_position() -> None:
     assert alpha.maker.position == 0
 
 
-# ----------------------------------------------------------------------------
-# Cycle tracking (position accounting for close-maker-rate analysis)
-# ----------------------------------------------------------------------------
 
 
 def test_position_decreases_on_sell_fill() -> None:
@@ -626,7 +573,6 @@ def test_position_resets_last_quote_on_fill() -> None:
     first = maker.on_tick(_bidask(22500, 22505))
     assert len([a for a in first if isinstance(a, PostQuote)]) == 2
     maker.on_fill("buy", 22_500 * _SCALE, 22502.5)
-    # Same book -- buy side should repost since last_bid cleared on fill.
     second = maker.on_tick(_bidask(22500, 22505))
     buy_posts = [
         a for a in second

@@ -46,24 +46,15 @@ for _p in (str(REPO_ROOT), str(SRC_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import hft_platform.feed_adapter.normalizer as normalizer_mod  # noqa: E402
-from hft_platform.feed_adapter.normalizer import MarketDataNormalizer  # noqa: E402
+import hft_platform.feed_adapter.normalizer as normalizer_mod
+from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
 _SCALE = 10_000
-# The Decimal path must stay within this multiple of the float path. Decimal
-# arithmetic is inherently a few× slower than float in pure Python, but the
-# in-tree Rust kernel extracts Decimal directly, so on the Rust path the gap is
-# small; this ceiling catches a regression to a slow pervasive fallback.
 _RATIO_MAX = 3.0
 _FALLBACK_RATE_MAX = 0.0
 
-# Representative tick-grid prices (no sub-tick ties — those are a correctness
-# concern handled by the boundary test, not a perf one).
 _PRICES = [580.0, 579.5, 17350.0, 123.45, 1.23, 9999.99, 42.0, 678.0]
 
-# A near-now base timestamp so the normalizer's stale-feed skew clamp does not
-# fire (it would log a warning and is irrelevant to the arithmetic being timed).
-# Acceptable in an offline bench harness — this is not a hot-path code site.
 _BASE_TS_NS = time.time_ns()
 
 
@@ -154,7 +145,6 @@ def _bench_path(norm: MarketDataNormalizer, kind: str, decimal_prices: bool, ite
 def run(iters: int) -> dict[str, Any]:
     norm, cfg_path = _make_normalizer()
     try:
-        # Warm up (JIT-free, but primes caches / metric children).
         _bench_path(norm, "tick", False, min(1000, iters))
         _bench_path(norm, "bidask", False, min(1000, iters))
 

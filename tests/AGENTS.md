@@ -7,7 +7,7 @@ Project-wide rules (including "Done means"): `../AGENTS.md`. Only the difference
 - Unit tests never touch the network or a real broker; mock (`pytest-mock`,
   `respx`) or use local containers. Restore any global state you change.
 - Async tests use `pytest-asyncio`. No fixed sleeps: wait on an event or poll
-  (<= 50 ms only if unavoidable, with a comment).
+  (<= 50 ms only if unavoidable, with the rationale in test documentation).
 - Cover the HFT edges: scaled ints, monotonic time, fail-closed paths, state
   transitions, one-sided and zero-price books.
 - A test that passes is not proof it can fail: break the behavior (or revert

@@ -45,13 +45,13 @@ class _QuotingStrategy:
         self._intent_symbol = intent_symbol
         self.feedback: list = []
 
-    def handle_event(self, ctx, event):  # noqa: ARG002 - runner contract
+    def handle_event(self, ctx, event):
         return [
             SimpleNamespace(
                 intent_id="i-1",
                 strategy_id=self.strategy_id,
                 symbol=self._intent_symbol,
-                intent_type=1,  # NEW
+                intent_type=1,
                 side=1,
                 tif=0,
                 session_phase=None,
@@ -100,7 +100,7 @@ async def test_session_filtered_intent_increments_the_drop_counter(_runner_env) 
     runner = _build_runner(metrics)
 
     gate = TrackGate()
-    gate.register_symbol("TMFE6", "futures_day")  # the stale month, as shipped
+    gate.register_symbol("TMFE6", "futures_day")
     gate.set_track_phase("futures_day", SessionPhase.OPEN)
     runner.track_gate = gate
 

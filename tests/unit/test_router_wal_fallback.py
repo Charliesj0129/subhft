@@ -61,7 +61,6 @@ class TestWalFallbackEscalation:
     def test_normal_wal_write_when_writer_exists(self) -> None:
         """When WAL writer is available, normal write proceeds — no CRITICAL log."""
         mock_wal = MagicMock()
-        # Make write() return a coroutine so ensure_future works
         mock_wal.write = AsyncMock()
 
         router = _make_router(wal_writer=mock_wal)
@@ -70,7 +69,6 @@ class TestWalFallbackEscalation:
         initial = router.metrics.exec_fill_data_loss_total._value.get()
 
         with patch("hft_platform.execution.router.logger") as mock_logger:
-            # Need a running event loop for ensure_future
             loop = asyncio.new_event_loop()
             try:
                 loop.run_until_complete(asyncio.ensure_future(_run_wal_fallback(router, "fills", payload), loop=loop))

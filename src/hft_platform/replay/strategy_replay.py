@@ -142,7 +142,6 @@ def _market_data_row_to_event(row: dict) -> BidAskEvent | TickEvent:
             is_snapshot=row_type == "snapshot",
         )
 
-    # Default: treat as Tick.
     return TickEvent(
         meta=meta,
         symbol=symbol,
@@ -176,11 +175,9 @@ def replay_strategy(cfg: ReplayConfig) -> ReplayedIntentLog:
             if cfg.max_events is not None and n_events >= cfg.max_events:
                 break
             exch_ts = int(row.get("exch_ts", 0) or 0)
-            # Advance the patched clock BEFORE invoking the strategy so its
-            # timebase.now_ns() calls observe a deterministic value.
             clock["now"] = cfg.clock_start_ns if cfg.clock_start_ns is not None else exch_ts
             event = _market_data_row_to_event(row)
-            intents = strategy.handle_event(ctx, event)  # SYNC contract
+            intents = strategy.handle_event(ctx, event)
             for intent in intents or ():
                 log.append(intent)
             n_events += 1

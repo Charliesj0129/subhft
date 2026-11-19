@@ -16,8 +16,6 @@ if TYPE_CHECKING:
 
 import numpy as np
 
-# hftbacktest event flags (from hftbacktest.types, replicated here as stable constants)
-# https://github.com/nkaz001/hftbacktest/blob/master/py-hftbacktest/hftbacktest/types.py
 DEPTH_EVENT = 1
 TRADE_EVENT = 2
 DEPTH_CLEAR_EVENT = 3
@@ -27,9 +25,6 @@ LOCAL_EVENT = 1 << 30
 BUY_EVENT = 1 << 29
 SELL_EVENT = 1 << 28
 
-# Mask to extract the raw event-type integer from the composite ev field.
-# Lower byte holds the event type (1=DEPTH, 2=TRADE, 3=DEPTH_CLEAR, 4=SNAPSHOT).
-# Upper bits hold flags (EXCH_EVENT, LOCAL_EVENT, BUY_EVENT, SELL_EVENT).
 EV_TYPE_MASK = 0xFF
 
 
@@ -70,7 +65,7 @@ class ChDataSource:
                 platform scale). Descaling happens at the boundary to produce
                 float prices for hftbacktest.
         """
-        import os  # noqa: PLC0415
+        import os
 
         self.ch_host = ch_host
         self.ch_port = ch_port
@@ -89,8 +84,7 @@ class ChDataSource:
           - ``price_scaled`` (not price), ``bids_price``/``bids_vol`` (not bid_prices/bid_volumes),
           - ``trade_direction`` Int8 (+1=buy, -1=sell, 0=no-direction, not side string)
         """
-        # Lazy import to keep module load lightweight
-        import clickhouse_connect  # noqa: PLC0415
+        import clickhouse_connect
 
         client = clickhouse_connect.get_client(
             host=self.ch_host,
@@ -164,7 +158,6 @@ def build_bidask_events(
     dtype = _event_dtype()
     rows: list[tuple] = []
 
-    # Clear event (wipes the depth state in hftbacktest)
     rows.append(
         (
             DEPTH_CLEAR_EVENT | EXCH_EVENT | LOCAL_EVENT,
@@ -404,7 +397,6 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
             if len(chunk) > 0:
                 chunks.append(chunk)
         elif row.event_type == "Tick":
-            # Resolve side string from trade_direction (real schema) or side column (legacy).
             if has_trade_direction:
                 direction = int(row.trade_direction)
                 if direction > 0:
@@ -412,12 +404,10 @@ def assemble_day_events(df: "pd.DataFrame", price_scale: int) -> np.ndarray:
                 elif direction < 0:
                     side_str = "Sell"
                 else:
-                    # trade_direction == 0: no confirmed direction; skip row.
                     continue
             elif has_side:
                 side_str = str(row.side)
             else:
-                # Cannot determine side; skip.
                 continue
 
             event = build_tick_event(
@@ -512,7 +502,6 @@ def validate_events(events: np.ndarray, instrument: str) -> None:
         first_bad = int(np.argmax(ts[1:] < ts[:-1]))
         raise DataValidationError(f"{instrument}: timestamps not monotonic at row {first_bad}")
 
-    # Identify DEPTH_CLEAR rows to exclude from price check (clear events have px=0)
     is_clear = ev_types == DEPTH_CLEAR_EVENT
     non_clear = ~is_clear
     prices = events["px"][non_clear]

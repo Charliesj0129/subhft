@@ -1077,7 +1077,7 @@ def test_research_candidate_blockers_fail_closed_on_missing_drawdown_gate() -> N
     failed = factory._research_candidate_blockers(drawdown_gate=False, **common)
 
     assert cleared == []
-    assert "drawdown_gate_failed" in missing  # missing evidence is fail-closed
+    assert "drawdown_gate_failed" in missing
     assert "drawdown_gate_failed" in failed
 
 
@@ -1160,7 +1160,6 @@ def test_factory_audit_flags_edge_runs_with_unvalidated_semantics(monkeypatch, t
         ),
         encoding="utf-8",
     )
-    # Label present in both files, but inventory_mtm failed → not trustworthy.
     status = {
         "edge_per_round_trip": "pass",
         "inventory_mtm": "fail",
@@ -1541,11 +1540,6 @@ def test_factory_audit_indexes_latest_t1b_validation_summary(monkeypatch, tmp_pa
     ]
 
 
-# ---------------------------------------------------------------------------
-# P0: AlphaManifest skills/roles fields + factory audit warning
-# ---------------------------------------------------------------------------
-
-
 def test_alpha_manifest_roles_skills_default_empty() -> None:
     """AlphaManifest defaults roles_used and skills_used to empty tuple."""
     from research.registry.schemas import AlphaManifest
@@ -1593,7 +1587,6 @@ def test_factory_audit_warns_when_alpha_has_no_skills(monkeypatch, tmp_path: Pat
     root = tmp_path / "research"
     _bootstrap_research_root(root)
 
-    # Build a minimal governed alpha structure (file layout)
     alpha_dir = root / "alphas" / "dummy_alpha"
     tests_dir = alpha_dir / "tests"
     tests_dir.mkdir(parents=True)
@@ -1602,7 +1595,6 @@ def test_factory_audit_warns_when_alpha_has_no_skills(monkeypatch, tmp_path: Pat
     (alpha_dir / "impl.py").write_text("")
     (tests_dir / "test_dummy.py").write_text("def test_placeholder(): pass\n")
 
-    # Stub AlphaRegistry.discover to return a controlled alpha with empty skills_used
     class _DummyAlpha:
         @property
         def manifest(self):
@@ -1613,7 +1605,6 @@ def test_factory_audit_warns_when_alpha_has_no_skills(monkeypatch, tmp_path: Pat
                 paper_refs=(),
                 data_fields=(),
                 complexity="O(1)",
-                # skills_used defaults to () — triggers factory warning
             )
 
         def update(self, *a, **k):
@@ -1640,9 +1631,7 @@ def test_factory_audit_warns_when_alpha_has_no_skills(monkeypatch, tmp_path: Pat
     payload = json.loads(out.read_text(encoding="utf-8"))
     contract = payload["details"]["alpha_contract"]
     assert "dummy_alpha" in contract["alphas_missing_skills"]
-    # rc=0 because fail_on_warning is False
     assert rc == 0
-    # confirm warning message present
     assert any("skills_used" in w for w in payload["warnings"])
 
 
@@ -2283,11 +2272,6 @@ def test_binary_pollution_allows_committed_q_hat_fixtures_only(monkeypatch, tmp_
 
     assert details["binary_pollution_in_source_zones"] == ["backtest/scratch.parquet"]
     assert warnings == ["Binary artifacts detected in source zones; move to research/data or research/archive."]
-
-
-# ---------------------------------------------------------------------------
-# P4: feature_set_version in AlphaManifest + from_dict round-trip
-# ---------------------------------------------------------------------------
 
 
 def test_alpha_manifest_feature_set_version_default_none() -> None:

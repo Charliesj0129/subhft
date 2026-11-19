@@ -12,10 +12,6 @@ from hft_platform.feed_adapter.shioaji.pool_health import (
     get_healthy_feed_gap_s,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_slot(
     conn_id: str = "conn-0",
@@ -37,11 +33,6 @@ def _make_slot(
     return slot
 
 
-# ---------------------------------------------------------------------------
-# get_healthy_feed_gap_s
-# ---------------------------------------------------------------------------
-
-
 class TestGetHealthyFeedGapS:
     def test_returns_inf_when_no_slots(self) -> None:
         assert get_healthy_feed_gap_s([]) == float("inf")
@@ -57,7 +48,7 @@ class TestGetHealthyFeedGapS:
     def test_returns_gap_for_single_connected_slot(self) -> None:
         slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=2.5)
         result = get_healthy_feed_gap_s([slot])
-        assert 2.4 < result < 2.7  # tolerate small timing jitter
+        assert 2.4 < result < 2.7
 
     def test_returns_max_gap_across_connected_slots(self) -> None:
         slots = [
@@ -83,11 +74,6 @@ class TestGetHealthyFeedGapS:
         assert 0.0 <= result < 0.1
 
 
-# ---------------------------------------------------------------------------
-# check_facade_health — CONNECTED → DEGRADED transition
-# ---------------------------------------------------------------------------
-
-
 class TestCheckFacadeHealthConnectedToDegraded:
     def test_connected_stays_connected_within_threshold(self) -> None:
         slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=1.0)
@@ -101,7 +87,6 @@ class TestCheckFacadeHealthConnectedToDegraded:
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         assert slot.state == FacadeState.DEGRADED
-        # degraded_since_mono should be set (not None)
         assert slot.degraded_since_mono is not None
         schedule_fn.assert_not_called()
 
@@ -119,15 +104,8 @@ class TestCheckFacadeHealthConnectedToDegraded:
         """Gap equal to threshold should NOT trigger schedule_fn."""
         slot = _make_slot("conn-0", FacadeState.CONNECTED, last_data_offset_s=3.0)
         schedule_fn = MagicMock()
-        # gap == threshold: borderline — implementation uses strict >
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
-        # The key invariant is: schedule_fn must NOT be called regardless of state
         schedule_fn.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# check_facade_health — DEGRADED → CONNECTED recovery
-# ---------------------------------------------------------------------------
 
 
 class TestCheckFacadeHealthDegradedRecovery:
@@ -160,7 +138,7 @@ class TestCheckFacadeHealthDegradedRecovery:
             conn_id="conn-7",
             state=FacadeState.DEGRADED,
             last_data_offset_s=5.0,
-            degraded_since_offset_s=15.0,  # 15s > reconnect_trigger_s=10s
+            degraded_since_offset_s=15.0,
         )
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
@@ -171,7 +149,7 @@ class TestCheckFacadeHealthDegradedRecovery:
             conn_id="conn-3",
             state=FacadeState.DEGRADED,
             last_data_offset_s=5.0,
-            degraded_since_offset_s=5.0,  # only 5s degraded, trigger=10s
+            degraded_since_offset_s=5.0,
         )
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
@@ -179,20 +157,14 @@ class TestCheckFacadeHealthDegradedRecovery:
         schedule_fn.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# check_facade_health — DISCONNECTED backoff trigger
-# ---------------------------------------------------------------------------
-
-
 class TestCheckFacadeHealthDisconnected:
     def test_disconnected_triggers_schedule_when_backoff_elapsed(self) -> None:
         slot = _make_slot(
             conn_id="conn-2",
             state=FacadeState.DISCONNECTED,
-            reconnect_failures=0,  # backoff = min(120, 5*2^0) = 5s
+            reconnect_failures=0,
         )
-        # set last_reconnect_mono so that backoff has elapsed
-        slot.last_reconnect_mono = time.monotonic() - 6.0  # 6s ago > 5s backoff
+        slot.last_reconnect_mono = time.monotonic() - 6.0
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         schedule_fn.assert_called_once_with("conn-2")
@@ -201,9 +173,9 @@ class TestCheckFacadeHealthDisconnected:
         slot = _make_slot(
             conn_id="conn-4",
             state=FacadeState.DISCONNECTED,
-            reconnect_failures=0,  # backoff = 5s
+            reconnect_failures=0,
         )
-        slot.last_reconnect_mono = time.monotonic() - 2.0  # only 2s ago
+        slot.last_reconnect_mono = time.monotonic() - 2.0
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         schedule_fn.assert_not_called()
@@ -212,9 +184,9 @@ class TestCheckFacadeHealthDisconnected:
         slot = _make_slot(
             conn_id="conn-5",
             state=FacadeState.DISCONNECTED,
-            reconnect_failures=3,  # backoff = min(120, 5*2^3) = 40s
+            reconnect_failures=3,
         )
-        slot.last_reconnect_mono = time.monotonic() - 10.0  # only 10s < 40s backoff
+        slot.last_reconnect_mono = time.monotonic() - 10.0
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         schedule_fn.assert_not_called()
@@ -223,9 +195,9 @@ class TestCheckFacadeHealthDisconnected:
         slot = _make_slot(
             conn_id="conn-6",
             state=FacadeState.DISCONNECTED,
-            reconnect_failures=10,  # backoff = min(120, 5*1024) = 120s
+            reconnect_failures=10,
         )
-        slot.last_reconnect_mono = time.monotonic() - 125.0  # 125s > 120s cap
+        slot.last_reconnect_mono = time.monotonic() - 125.0
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         schedule_fn.assert_called_once_with("conn-6")
@@ -237,15 +209,10 @@ class TestCheckFacadeHealthDisconnected:
             state=FacadeState.DISCONNECTED,
             reconnect_failures=0,
         )
-        slot.last_reconnect_mono = 0.0  # never reconnected
+        slot.last_reconnect_mono = 0.0
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         schedule_fn.assert_called_once_with("conn-8")
-
-
-# ---------------------------------------------------------------------------
-# check_facade_health — RECOVERING slots are skipped
-# ---------------------------------------------------------------------------
 
 
 class TestCheckFacadeHealthRecovering:
@@ -253,17 +220,12 @@ class TestCheckFacadeHealthRecovering:
         slot = _make_slot(
             conn_id="conn-9",
             state=FacadeState.RECOVERING,
-            last_data_offset_s=60.0,  # huge gap — still skipped
+            last_data_offset_s=60.0,
         )
         schedule_fn = MagicMock()
         check_facade_health([slot], degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
         assert slot.state == FacadeState.RECOVERING
         schedule_fn.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# check_facade_health — multiple slots processed independently
-# ---------------------------------------------------------------------------
 
 
 class TestCheckFacadeHealthMultipleSlots:
@@ -292,7 +254,6 @@ class TestCheckFacadeHealthMultipleSlots:
         assert degraded_trigger.state == FacadeState.DEGRADED
         assert recovering.state == FacadeState.RECOVERING
 
-        # schedule_fn called only for conn-3
         schedule_fn.assert_called_once_with("conn-3")
 
     def test_multiple_disconnected_all_get_scheduled(self) -> None:
@@ -300,7 +261,7 @@ class TestCheckFacadeHealthMultipleSlots:
         slots = []
         for i in range(3):
             s = _make_slot(f"conn-{i}", FacadeState.DISCONNECTED, reconnect_failures=0)
-            s.last_reconnect_mono = time.monotonic() - 10.0  # 10s > 5s backoff
+            s.last_reconnect_mono = time.monotonic() - 10.0
             slots.append(s)
 
         check_facade_health(slots, degraded_threshold_s=3.0, reconnect_trigger_s=10.0, schedule_fn=schedule_fn)
@@ -308,11 +269,6 @@ class TestCheckFacadeHealthMultipleSlots:
         schedule_fn.assert_any_call("conn-0")
         schedule_fn.assert_any_call("conn-1")
         schedule_fn.assert_any_call("conn-2")
-
-
-# ---------------------------------------------------------------------------
-# check_facade_health — suppress_reconnect flag (defense-in-depth)
-# ---------------------------------------------------------------------------
 
 
 class TestCheckFacadeHealthSuppressReconnect:
@@ -369,7 +325,6 @@ class TestCheckFacadeHealthSuppressReconnect:
             schedule_fn=schedule_fn,
             suppress_reconnect=True,
         )
-        # State stays DEGRADED, but no reconnect scheduled
         assert slot.state == FacadeState.DEGRADED
         schedule_fn.assert_not_called()
 
@@ -380,7 +335,7 @@ class TestCheckFacadeHealthSuppressReconnect:
             state=FacadeState.DISCONNECTED,
             reconnect_failures=0,
         )
-        slot.last_reconnect_mono = time.monotonic() - 10.0  # backoff elapsed
+        slot.last_reconnect_mono = time.monotonic() - 10.0
         schedule_fn = MagicMock()
         check_facade_health(
             [slot],
@@ -399,7 +354,7 @@ class TestCheckFacadeHealthSuppressReconnect:
             state=FacadeState.DISCONNECTED,
             reconnect_failures=0,
         )
-        slot.last_reconnect_mono = 0.0  # never reconnected
+        slot.last_reconnect_mono = 0.0
         schedule_fn = MagicMock()
         check_facade_health(
             [slot],
@@ -429,11 +384,6 @@ class TestCheckFacadeHealthSuppressReconnect:
         schedule_fn.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# check_facade_health — suppress_gap_reconnect (session-gated feed-gap trigger)
-# ---------------------------------------------------------------------------
-
-
 class TestCheckFacadeHealthSuppressGapReconnect:
     """A feed gap only proves a broken connection while the session is open.
 
@@ -449,7 +399,7 @@ class TestCheckFacadeHealthSuppressGapReconnect:
             conn_id="conn-0",
             state=FacadeState.DEGRADED,
             last_data_offset_s=600.0,
-            degraded_since_offset_s=3600.0,  # degraded since the last close
+            degraded_since_offset_s=3600.0,
         )
         schedule_fn = MagicMock()
         with patch.object(pool_health_mod.log, "info") as mock_info:
@@ -458,8 +408,8 @@ class TestCheckFacadeHealthSuppressGapReconnect:
                 degraded_threshold_s=3.0,
                 reconnect_trigger_s=10.0,
                 schedule_fn=schedule_fn,
-                suppress_reconnect=False,  # inside the pre-open lead
-                suppress_gap_reconnect=True,  # but the session is still shut
+                suppress_reconnect=False,
+                suppress_gap_reconnect=True,
             )
         schedule_fn.assert_not_called()
         assert slot.state == FacadeState.DEGRADED
@@ -472,7 +422,7 @@ class TestCheckFacadeHealthSuppressGapReconnect:
         slot = _make_slot(
             conn_id="conn-1",
             state=FacadeState.DISCONNECTED,
-            reconnect_failures=0,  # backoff = 5s
+            reconnect_failures=0,
         )
         slot.last_reconnect_mono = time.monotonic() - 10.0
         schedule_fn = MagicMock()
@@ -504,11 +454,6 @@ class TestCheckFacadeHealthSuppressGapReconnect:
             suppress_gap_reconnect=False,
         )
         schedule_fn.assert_called_once_with("conn-2")
-
-
-# ---------------------------------------------------------------------------
-# check_facade_health — suppression log throttling
-# ---------------------------------------------------------------------------
 
 
 class TestSuppressionLogThrottling:
@@ -555,7 +500,6 @@ class TestSuppressionLogThrottling:
         check_facade_health([slot], **kwargs)
         assert slot._suppress_logged_mono != 0.0
 
-        # Feed comes back -> recovery clears the throttle.
         slot.last_data_mono = time.monotonic()
         check_facade_health([slot], **kwargs)
         assert slot.state == FacadeState.CONNECTED
@@ -588,11 +532,6 @@ class TestSuppressionLogThrottling:
         )
         schedule_fn.assert_called_once_with("conn-0")
         assert slot._suppress_logged_mono == 0.0
-
-
-# ---------------------------------------------------------------------------
-# facade_degraded severity — a closed session is not a fault
-# ---------------------------------------------------------------------------
 
 
 class TestDegradedSeverityIsSessionAware:
@@ -629,8 +568,6 @@ class TestDegradedSeverityIsSessionAware:
                 schedule_fn=MagicMock(),
                 suppress_gap_reconnect=True,
             )
-        # The state machine must still reach DEGRADED: the suppression path
-        # reports from that state, and hiding the transition would hide the gap.
         assert slot.state is FacadeState.DEGRADED
         assert mock_log.warning.call_count == 0
         assert mock_log.info.call_args.args[0] == "facade_degraded"

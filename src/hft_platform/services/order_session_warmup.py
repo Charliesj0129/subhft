@@ -109,8 +109,6 @@ class WarmupClock:
         decision testable without a clock or a calendar.
         """
         if trading_now:
-            # Already inside a session: the order path is the warm-up now, and
-            # anything this method did would only add a call under load.
             self._warmed = False
             return WarmupPlan(warm=False, reason="session_open")
         if not trading_after_lead:
@@ -159,8 +157,6 @@ class OrderSessionWarmup:
     ) -> None:
         self._client = client
         self._clock = WarmupClock(_pick(lead_s, "HFT_ORDER_WARMUP_LEAD_S", DEFAULT_LEAD_S))
-        # Injected so the loop can be driven across a whole trading day without
-        # a clock; production leaves it None and reads the calendar.
         self._window_source = window_source if window_source is not None else self._calendar_window
         self._tick_s = _pick(tick_s, "HFT_ORDER_WARMUP_TICK_S", DEFAULT_TICK_S)
         self._attempts = int(_pick(attempts, "HFT_ORDER_WARMUP_ATTEMPTS", DEFAULT_ATTEMPTS))
@@ -188,7 +184,7 @@ class OrderSessionWarmup:
                 bool(calendar.is_trading_hours(now_dt, product_type=self._product_type)),
                 bool(calendar.is_trading_hours(ahead, product_type=self._product_type)),
             )
-        except Exception as exc:  # noqa: BLE001 — a calendar failure must not kill the clock
+        except Exception as exc:
             logger.debug("order_warmup_calendar_unavailable", error=str(exc))
             return None
 
@@ -204,7 +200,7 @@ class OrderSessionWarmup:
         for attempt in range(1, max(1, self._attempts) + 1):
             try:
                 ok = await loop.run_in_executor(None, self._client.warm_order_session)
-            except Exception as exc:  # noqa: BLE001 — broker SDK
+            except Exception as exc:
                 logger.warning("order_session_warmup_error", attempt=attempt, error=str(exc))
                 ok = False
             if ok:
@@ -245,7 +241,7 @@ class OrderSessionWarmup:
                         self._clock.mark(await self.warm_once())
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — one bad tick must not end the clock
+            except Exception as exc:
                 logger.warning("order_session_warmup_tick_failed", error=str(exc))
             await asyncio.sleep(self._tick_s)
 
@@ -256,7 +252,7 @@ class OrderSessionWarmup:
                 from hft_platform.observability.metrics import MetricsRegistry
 
                 metrics = MetricsRegistry.get()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.debug("operation_fallback", error=str(exc))
                 return
         counter = getattr(metrics, "order_session_warmup_total", None)
@@ -264,7 +260,7 @@ class OrderSessionWarmup:
             return
         try:
             counter.labels(result=result).inc()
-        except Exception as exc:  # noqa: BLE001 — metrics must never block the clock
+        except Exception as exc:
             logger.debug("operation_fallback", error=str(exc))
 
 

@@ -37,9 +37,6 @@ logger = get_logger("alpha_sub_gate_audit")
 
 SCHEMA_VERSION = "sub_gate_run.v2"
 
-# 驗證標準 §8 fixed divergence vocabulary, derived from the canonical enum so
-# the audit layer never drifts from the categorizer. An out-of-vocabulary
-# label collapses to ``unknown`` on lift (Round 69).
 _DIVERGENCE_CATEGORIES = frozenset(c.value for c in DivergenceCategory)
 
 _DEFAULT_JSONL_PATH = Path("research/audit/sub_gate_runs.jsonl")
@@ -91,7 +88,7 @@ _CACHE = _DedupeCache()
 
 def _reset_cache_for_tests() -> None:
     """Test-only hook: clear the in-memory cache."""
-    global _CACHE  # noqa: PLW0603
+    global _CACHE
     _CACHE = _DedupeCache()
 
 
@@ -482,9 +479,6 @@ def _normalize_spec_provenance(prov: dict | None) -> dict[str, Any]:
         "cost_model_id": str(cost_model_id),
         "required_gates": [str(g) for g in required_gates],
     }
-    # Round 71 (完成狀態 §3): additively carry timeframe / holding_period
-    # when the candidate spec supplied them.  Absent keys are simply not
-    # added so rows that predate this keep the Round-17 triple shape.
     timeframe = prov.get("timeframe")
     if isinstance(timeframe, str) and timeframe:
         out["timeframe"] = timeframe

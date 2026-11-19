@@ -156,9 +156,6 @@ def _audit_events(adapter) -> list[str]:
     return [c.args[0].get("event") for c in adapter._audit_writer.log_order.call_args_list]
 
 
-# ── the timeout itself is not repeated ────────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_a_cancel_timeout_is_not_retried_inside_the_call(tmp_config):
     adapter = _adapter(tmp_config)
@@ -204,9 +201,6 @@ async def test_a_non_timeout_transient_error_keeps_its_immediate_retries(tmp_con
     assert ok is True
     assert adapter.client.cancel_order.call_count == 3
     assert adapter._cancel_watch[key].confirm_s is None, "a successful cancel keeps the long window"
-
-
-# ── the timed-out cancel is watched ───────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -272,7 +266,7 @@ async def test_a_timed_out_cancel_whose_order_ended_is_never_resent(tmp_config, 
     adapter.client.cancel_order.side_effect = TimeoutError()
     key, _, _ = await _dispatch_cancel(adapter)
     _age_watch(adapter, key, _TIMEOUT_CONFIRM_S + 1)
-    del adapter.live_orders[key]  # CANCELLED arrived
+    del adapter.live_orders[key]
 
     assert await adapter.check_unconfirmed_cancels() == 0
     await _settle_retries(adapter)
@@ -314,21 +308,17 @@ async def test_the_second_look_after_a_timed_out_cancel_gives_up(tmp_config, moc
     assert key not in adapter._cancel_watch
 
 
-# ── the watch is checked on its own clock ─────────────────────────────────
-
-
 @pytest.mark.asyncio
 async def test_the_cancel_watch_is_checked_even_while_the_60s_sweep_is_closed(tmp_config, mock_deps):
     adapter = _adapter(tmp_config)
     adapter.client.cancel_order.side_effect = [TimeoutError(), MagicMock()]
     key, trade, _ = await _dispatch_cancel(adapter)
     _age_watch(adapter, key, _TIMEOUT_CONFIRM_S + 1)
-    adapter._live_orders_last_sweep_s = time.monotonic()  # the 60 s gate says "not yet"
+    adapter._live_orders_last_sweep_s = time.monotonic()
 
     assert await adapter.sweep_stale_live_orders() == 0
     await _settle_retries(adapter)
 
-    # Only the watch can produce "retried": the old in-call retry also made a 2nd call.
     mock_deps.cancel_unconfirmed_total.labels.assert_called_with(outcome="retried")
     mock_deps.cancel_retry_total.labels.assert_called_with(result="sent")
     adapter.client.cancel_order.assert_called_with(trade)
@@ -340,7 +330,7 @@ async def test_the_cancel_watch_check_is_rate_limited_to_its_own_interval(tmp_co
     adapter.client.cancel_order.side_effect = TimeoutError()
     key, _, _ = await _dispatch_cancel(adapter)
     adapter._live_orders_last_sweep_s = time.monotonic()
-    adapter._cancel_check_last_s = time.monotonic()  # checked a moment ago
+    adapter._cancel_check_last_s = time.monotonic()
     _age_watch(adapter, key, _TIMEOUT_CONFIRM_S + 1)
 
     await adapter.sweep_stale_live_orders()

@@ -38,8 +38,8 @@ def test_normalize_fill_resolves_fubon_field_names():
         topic="deal",
         ingest_ts_ns=1_700_000_000_000_000_000,
         data={
-            "symbol": "2330",  # fubon uses `symbol`, not `full_code`
-            "order_no": "FBN12345",  # fubon order id alias
+            "symbol": "2330",
+            "order_no": "FBN12345",
             "seq_no": "SEQ1",
             "quantity": 2,
             "price": 505.5,
@@ -67,7 +67,7 @@ def test_normalize_order_resolves_fubon_filled_qty():
             "order": {
                 "order_no": "FBN777",
                 "quantity": 5,
-                "filled_qty": 3,  # fubon-specific
+                "filled_qty": 3,
                 "price": 100.0,
                 "action": "Buy",
             },

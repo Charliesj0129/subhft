@@ -26,7 +26,7 @@ class Hypothesis:
     data_fields: tuple[str, ...]
     suggested_alpha_id: str
     composite_score: float = 0.0
-    status: str = "pending"  # pending | scaffolded | rejected
+    status: str = "pending"
     reject_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:

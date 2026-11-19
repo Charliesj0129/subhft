@@ -42,8 +42,6 @@ from typing import Any
 
 import yaml
 
-# Terminal statuses imply the manifest belongs in archive/.  PARKED and
-# EXPLORATORY are *not* terminal — they remain candidates for revival.
 _TERMINAL_STATUSES: frozenset[str] = frozenset({"KILLED", "DEPRECATED"})
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -57,14 +55,14 @@ PAPER_INDEX = REPO_ROOT / "research" / "knowledge" / "paper_index.json"
 @dataclass(frozen=True)
 class ManifestRecord:
     alpha_id: str
-    status: str  # raw string; we do NOT go through AlphaStatus enum here
+    status: str
     path: Path
-    is_active: bool  # True if under research/alphas/<id>/; False if under research/archive/
+    is_active: bool
 
 
 @dataclass
 class DriftReport:
-    items: list[tuple[str, str, str]] = field(default_factory=list)  # (severity, code, message)
+    items: list[tuple[str, str, str]] = field(default_factory=list)
 
     def add(self, severity: str, code: str, message: str) -> None:
         self.items.append((severity, code, message))
@@ -76,9 +74,6 @@ class DriftReport:
         return [i for i in self.items if i[0] == "WARN"]
 
 
-# ---------------------------------------------------------------------------
-# Manifest discovery
-# ---------------------------------------------------------------------------
 
 def _read_manifest(path: Path) -> dict[str, Any] | None:
     try:
@@ -120,7 +115,6 @@ def collect_manifests() -> tuple[dict[str, ManifestRecord], DriftReport]:
         alpha_id = str(body.get("alpha_id") or manifest.parent.name)
         status = str(body.get("status") or "DRAFT")
         if alpha_id in by_id:
-            # An archived copy duplicating an active alpha is a drift signal.
             report.add(
                 "ERROR",
                 "active_and_archived",
@@ -133,9 +127,6 @@ def collect_manifests() -> tuple[dict[str, ManifestRecord], DriftReport]:
     return by_id, report
 
 
-# ---------------------------------------------------------------------------
-# Cross-checks against derived stores
-# ---------------------------------------------------------------------------
 
 def check_status_placement(manifests: dict[str, ManifestRecord], report: DriftReport) -> None:
     """Active dirs must not carry a terminal status; archive dirs should."""
@@ -147,8 +138,6 @@ def check_status_placement(manifests: dict[str, ManifestRecord], report: DriftRe
                 f"{rec.alpha_id} status={rec.status} but lives in "
                 f"{rec.path.parent.relative_to(REPO_ROOT)} — move to research/archive/.",
             )
-        # We do NOT flag non-terminal-in-archive: an alpha may be archived
-        # for housekeeping reasons (e.g. session sweeps) without a kill.
 
 
 def check_kill_ledger(manifests: dict[str, ManifestRecord], report: DriftReport) -> set[str]:
@@ -191,7 +180,7 @@ def check_kill_ledger(manifests: dict[str, ManifestRecord], report: DriftReport)
 
 def check_cluster_assignments(manifests: dict[str, ManifestRecord], report: DriftReport) -> None:
     if not CLUSTER_ASSIGNMENTS.exists():
-        return  # silent: optional
+        return
     try:
         body = json.loads(CLUSTER_ASSIGNMENTS.read_text(encoding="utf-8")) or {}
     except (OSError, json.JSONDecodeError) as exc:
@@ -209,7 +198,6 @@ def check_cluster_assignments(manifests: dict[str, ManifestRecord], report: Drif
                         referenced.add(aid)
     missing = sorted(aid for aid in referenced if aid not in manifests)
     if missing:
-        # Cluster snapshots can lag; warn rather than error.
         report.add(
             "WARN",
             "cluster_orphan_refs",
@@ -249,9 +237,6 @@ def check_paper_index(manifests: dict[str, ManifestRecord], report: DriftReport)
         )
 
 
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
 
 def run_audit(*, json_out: Path | None = None) -> int:
     manifests, report = collect_manifests()

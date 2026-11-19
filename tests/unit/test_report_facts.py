@@ -30,10 +30,6 @@ from hft_platform.reports.models import (
     VolatilityFacts,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers / Fixtures
-# ---------------------------------------------------------------------------
-
 SCALE = 10_000
 
 
@@ -107,11 +103,6 @@ def _session_data(
         spread_dist={},
         depth_imbalance=[],
     )
-
-
-# ---------------------------------------------------------------------------
-# 1. extract_time_segments
-# ---------------------------------------------------------------------------
 
 
 class TestExtractTimeSegments:
@@ -222,11 +213,6 @@ class TestExtractTimeSegments:
         assert midday.low == 195 * SCALE
 
 
-# ---------------------------------------------------------------------------
-# 2. extract_chip_facts
-# ---------------------------------------------------------------------------
-
-
 class TestExtractChipFacts:
     """Tests for chip structure extraction."""
 
@@ -269,7 +255,6 @@ class TestExtractChipFacts:
         assert chips.net_ratio == pytest.approx(100.0 / 130.0)
 
     def test_buy_zone_from_clusters(self) -> None:
-        # 3 buy trades at ~200, 3 sell trades at ~210
         trades = [
             _trade("2026-03-29 09:00:00", 200, 50, "buy"),
             _trade("2026-03-29 09:01:00", 200, 50, "buy"),
@@ -293,11 +278,6 @@ class TestExtractChipFacts:
         chips = extract_chip_facts(sd)
 
         assert len(chips.vap_peaks) >= 1
-
-
-# ---------------------------------------------------------------------------
-# 3. extract_flow_facts
-# ---------------------------------------------------------------------------
 
 
 class TestExtractFlowFacts:
@@ -327,9 +307,9 @@ class TestExtractFlowFacts:
 
     def test_strongest_buy_sell_bars(self) -> None:
         bars = [
-            _flow("2026-03-29 09:00:00", up=90, down=10),  # ud=9.0
-            _flow("2026-03-29 09:05:00", up=50, down=50),  # ud=1.0
-            _flow("2026-03-29 09:10:00", up=10, down=90),  # ud=0.111
+            _flow("2026-03-29 09:00:00", up=90, down=10),
+            _flow("2026-03-29 09:05:00", up=50, down=50),
+            _flow("2026-03-29 09:10:00", up=10, down=90),
         ]
         sd = _session_data(flow=bars)
         ff = extract_flow_facts(sd)
@@ -338,7 +318,6 @@ class TestExtractFlowFacts:
         assert ff.strongest_sell_bar.ts == "2026-03-29 09:10:00"
 
     def test_sustained_run_detection(self) -> None:
-        # 5 consecutive bullish bars (ud_ratio > 1.3)
         bars = [_flow(f"2026-03-29 09:{i * 5:02d}:00", up=80, down=20) for i in range(6)]
         sd = _session_data(flow=bars)
         ff = extract_flow_facts(sd)
@@ -349,12 +328,11 @@ class TestExtractFlowFacts:
         assert count == 6
 
     def test_sustained_run_minimum_four(self) -> None:
-        # Only 3 consecutive — should NOT produce a run
         bars = [
             _flow("2026-03-29 09:00:00", up=80, down=20),
             _flow("2026-03-29 09:05:00", up=80, down=20),
             _flow("2026-03-29 09:10:00", up=80, down=20),
-            _flow("2026-03-29 09:15:00", up=50, down=50),  # neutral break
+            _flow("2026-03-29 09:15:00", up=50, down=50),
         ]
         sd = _session_data(flow=bars)
         ff = extract_flow_facts(sd)
@@ -362,12 +340,11 @@ class TestExtractFlowFacts:
         assert ff.sustained_runs == []
 
     def test_volume_spike_detection(self) -> None:
-        # One spike bar amid normal bars
         bars = [
             _flow("2026-03-29 09:00:00", total=100),
             _flow("2026-03-29 09:05:00", total=100),
             _flow("2026-03-29 09:10:00", total=100),
-            _flow("2026-03-29 09:15:00", total=500),  # 5x mean
+            _flow("2026-03-29 09:15:00", total=500),
         ]
         sd = _session_data(flow=bars)
         ff = extract_flow_facts(sd)
@@ -375,12 +352,10 @@ class TestExtractFlowFacts:
         assert len(ff.volume_spikes) == 1
         spike_bar, ratio = ff.volume_spikes[0]
         assert spike_bar.ts == "2026-03-29 09:15:00"
-        assert ratio == pytest.approx(500.0 / 200.0)  # mean = (100+100+100+500)/4 = 200
+        assert ratio == pytest.approx(500.0 / 200.0)
 
     def test_eod_drift(self) -> None:
-        # Session is neutral (ud≈1), but last 6 bars are bullish
         neutral_bars = [_flow(f"2026-03-29 09:{i * 5:02d}:00", up=50, down=50) for i in range(10)]
-        # Make last 6 bullish (frozen=True: use dataclasses.replace)
         bullish_bars = [
             dataclasses.replace(bar, uptick_vol=80, downtick_vol=20, ud_ratio=4.0) for bar in neutral_bars[-6:]
         ]
@@ -391,11 +366,6 @@ class TestExtractFlowFacts:
 
         assert ff.eod_ud > ff.session_ud
         assert ff.eod_drift > 0
-
-
-# ---------------------------------------------------------------------------
-# 4. extract_structure_facts
-# ---------------------------------------------------------------------------
 
 
 class TestExtractStructureFacts:
@@ -426,28 +396,20 @@ class TestExtractStructureFacts:
         sd = _session_data(high=22000, low=21000)
         sf = extract_structure_facts(sd)
 
-        # Should have at least the 1000-pt multiples
         prices = {lv.price for lv in sf.round_numbers}
         assert 21000 * SCALE in prices
         assert 22000 * SCALE in prices
 
     def test_double_bottom_detection(self) -> None:
-        # Two bars with similar lows separated by a higher-low bar
         bars = [
             _bar5m("2026-03-29 09:00:00", h=210, l=195, c=200),
-            _bar5m("2026-03-29 09:05:00", h=215, l=205, c=210),  # higher low
+            _bar5m("2026-03-29 09:05:00", h=215, l=205, c=210),
             _bar5m("2026-03-29 09:10:00", h=210, l=195, c=200),
         ]
         sd = _session_data(bars=bars, high=215, low=195)
         sf = extract_structure_facts(sd)
 
-        # The detector should find a double bottom near 195
         assert len(sf.double_bottoms) >= 1
-
-
-# ---------------------------------------------------------------------------
-# 5. extract_volatility_facts
-# ---------------------------------------------------------------------------
 
 
 class TestExtractVolatilityFacts:
@@ -481,7 +443,7 @@ class TestExtractVolatilityFacts:
         vf = extract_volatility_facts(sd)
 
         assert vf.atr_5m > 0
-        assert vf.atr_session > vf.atr_5m  # session ATR scaled by sqrt(n)
+        assert vf.atr_session > vf.atr_5m
         assert vf.session_range == (218 - 195) * SCALE
         assert vf.range_atr_ratio > 0
 
@@ -496,14 +458,8 @@ class TestExtractVolatilityFacts:
         sd = _session_data(bars=bars, high=120, low=90)
         vf = extract_volatility_facts(sd)
 
-        # Approximate check: atr_session ≈ atr_5m * sqrt(4)
         expected_session = vf.atr_5m * math.sqrt(len(bars))
         assert abs(vf.atr_session - int(round(expected_session))) <= 1
-
-
-# ---------------------------------------------------------------------------
-# 6. extract_cross_day_facts
-# ---------------------------------------------------------------------------
 
 
 def _day_snap(
@@ -540,21 +496,21 @@ class TestExtractCrossDayFacts:
 
     def test_volume_change(self) -> None:
         prev = _day_snap(volume=4000)
-        sd = _session_data()  # volume=5000
+        sd = _session_data()
         cdf = extract_cross_day_facts(sd, [prev])
 
         assert cdf.volume_change_pct == pytest.approx(25.0)
 
     def test_price_above_prev_high(self) -> None:
-        prev = _day_snap(high=199)  # prev high = 199
-        sd = _session_data(close=200)  # close = 200 > 199
+        prev = _day_snap(high=199)
+        sd = _session_data(close=200)
         cdf = extract_cross_day_facts(sd, [prev])
 
         assert cdf.price_position == "above_prev_high"
 
     def test_price_below_prev_low(self) -> None:
-        prev = _day_snap(low=201)  # prev low = 201
-        sd = _session_data(close=200)  # close = 200 < 201
+        prev = _day_snap(low=201)
+        sd = _session_data(close=200)
         cdf = extract_cross_day_facts(sd, [prev])
 
         assert cdf.price_position == "below_prev_low"
@@ -568,9 +524,9 @@ class TestExtractCrossDayFacts:
 
     def test_trend_direction_up(self) -> None:
         prevs = [
-            _day_snap(close=210),  # most recent
+            _day_snap(close=210),
             _day_snap(close=205),
-            _day_snap(close=200),  # oldest
+            _day_snap(close=200),
         ]
         sd = _session_data()
         cdf = extract_cross_day_facts(sd, prevs)
@@ -579,9 +535,9 @@ class TestExtractCrossDayFacts:
 
     def test_trend_direction_down(self) -> None:
         prevs = [
-            _day_snap(close=190),  # most recent
+            _day_snap(close=190),
             _day_snap(close=195),
-            _day_snap(close=200),  # oldest
+            _day_snap(close=200),
         ]
         sd = _session_data()
         cdf = extract_cross_day_facts(sd, prevs)
@@ -600,8 +556,7 @@ class TestExtractCrossDayFacts:
         assert cdf.trend_direction == "sideways"
 
     def test_flow_reversal_bear_to_bull(self) -> None:
-        prev = _day_snap(ud=0.8)  # previous was bearish
-        # Today is bullish
+        prev = _day_snap(ud=0.8)
         flow = [_flow("2026-03-29 09:00:00", up=80, down=20)]
         sd = _session_data(flow=flow)
         cdf = extract_cross_day_facts(sd, [prev])
@@ -609,8 +564,7 @@ class TestExtractCrossDayFacts:
         assert cdf.flow_reversal is True
 
     def test_flow_reversal_bull_to_bear(self) -> None:
-        prev = _day_snap(ud=1.2)  # previous was bullish
-        # Today is bearish
+        prev = _day_snap(ud=1.2)
         flow = [_flow("2026-03-29 09:00:00", up=20, down=80)]
         sd = _session_data(flow=flow)
         cdf = extract_cross_day_facts(sd, [prev])
@@ -618,8 +572,8 @@ class TestExtractCrossDayFacts:
         assert cdf.flow_reversal is True
 
     def test_no_flow_reversal(self) -> None:
-        prev = _day_snap(ud=1.2)  # bullish
-        flow = [_flow("2026-03-29 09:00:00", up=80, down=20)]  # also bullish
+        prev = _day_snap(ud=1.2)
+        flow = [_flow("2026-03-29 09:00:00", up=80, down=20)]
         sd = _session_data(flow=flow)
         cdf = extract_cross_day_facts(sd, [prev])
 
@@ -631,11 +585,6 @@ class TestExtractCrossDayFacts:
         cdf = extract_cross_day_facts(sd, [_day_snap()])
 
         assert cdf.trend_direction == "sideways"
-
-
-# ---------------------------------------------------------------------------
-# extract_all orchestrator
-# ---------------------------------------------------------------------------
 
 
 class TestExtractAll:

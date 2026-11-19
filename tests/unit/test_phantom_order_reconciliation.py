@@ -13,12 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from hft_platform.contracts.execution import FillEvent, Side  # noqa: F401 — Side used in _make_fill
-from hft_platform.execution.normalizer import RawExecEvent  # noqa: F401 — used in router tests
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from hft_platform.contracts.execution import FillEvent, Side
+from hft_platform.execution.normalizer import RawExecEvent
 
 _SEQ = 0
 
@@ -57,7 +53,6 @@ def _make_fill(
 def _isolate_state(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "fill_dedup.jsonl"))
     monkeypatch.setenv("HFT_FILL_DLQ_PERSIST_PATH", str(tmp_path / "fill_dlq.jsonl"))
-    # Reset global DLQ singleton
     import hft_platform.execution.fill_dlq as _dlq_mod
 
     _dlq_mod._dlq = None
@@ -67,11 +62,6 @@ def _symbols_cfg(tmp_path):
     cfg = tmp_path / "symbols.yaml"
     cfg.write_text("symbols:\n  - code: 'TXFD6'\n    exchange: 'TAIFEX'\n    price_scale: 10000\n")
     return cfg
-
-
-# ===========================================================================
-# Task #1: _api_worker dispatch failure marks phantom order candidate
-# ===========================================================================
 
 
 class TestDispatchFailurePhantomMarking:
@@ -97,7 +87,6 @@ class TestDispatchFailurePhantomMarking:
         adapter.metrics.order_reject_total = MagicMock()
         adapter.latency = None
 
-        # Simulate phantom order registration (what happens on dispatch failure)
         phantom_key = "r47_maker:intent_001"
         adapter._phantom_order_keys[phantom_key] = (time.monotonic(), "TXFD6")
         adapter._cmd_tca_map[phantom_key] = (100_0000, 100_0000)
@@ -120,26 +109,18 @@ class TestDispatchFailurePhantomMarking:
         adapter = OrderAdapter(config_path, queue, client)
         adapter._phantom_order_max = 5
 
-        # Fill with 10 entries
         for i in range(10):
             adapter._phantom_order_keys[f"strat:{i}"] = (time.monotonic(), "TXFD6")
 
         assert len(adapter._phantom_order_keys) == 10
 
-        # Adding one more with eviction (simulating the dispatch failure code path)
         adapter._phantom_order_keys["strat:new"] = (time.monotonic(), "TXFD6")
         if len(adapter._phantom_order_keys) > adapter._phantom_order_max:
             cutoff = time.monotonic() - 3600.0
             _stale = [k for k, v in adapter._phantom_order_keys.items() if v[0] <= cutoff]
             for _sk in _stale:
                 del adapter._phantom_order_keys[_sk]
-        # All entries are recent, so none evicted by time, but we confirmed the logic runs
         assert len(adapter._phantom_order_keys) > 0
-
-
-# ===========================================================================
-# Task #2: Orphaned fill auto-reconciliation via phantom resolver
-# ===========================================================================
 
 
 class TestPhantomFillReconciliation:
@@ -161,8 +142,6 @@ class TestPhantomFillReconciliation:
         client = MagicMock()
         adapter = OrderAdapter(config_path, queue, client)
 
-        # Simulate: order was dispatched, pending fill registered, then dispatch "failed".
-        # M4: seed canonical record store + legacy views.
         from hft_platform.contracts.strategy import IntentType, OrderIntent
         from hft_platform.order.adapter import _PhantomEntry
 
@@ -194,10 +173,8 @@ class TestPhantomFillReconciliation:
         result = adapter.resolve_phantom_fill(fill)
 
         assert result == "r47_maker"
-        # Phantom key should be cleared after resolution
         assert order_key not in adapter._phantom_records
         assert order_key not in adapter._phantom_order_keys
-        # Pending fill index should be cleaned up
         assert "TXFD6:BUY" not in adapter._pending_fill_index
 
     @pytest.mark.asyncio
@@ -216,8 +193,6 @@ class TestPhantomFillReconciliation:
         client = MagicMock()
         adapter = OrderAdapter(config_path, queue, client)
 
-        # Simulate: pending fill was already swept (30s TTL expired), but phantom + cmd maps remain.
-        # M4: register through the canonical store and the legacy view.
         from hft_platform.contracts.strategy import IntentType, OrderIntent
         from hft_platform.order.adapter import _PhantomEntry
 
@@ -242,7 +217,6 @@ class TestPhantomFillReconciliation:
         ]
         adapter._phantom_order_keys[phantom_key] = (now_mono, "TXFD6")
         adapter._phantom_intents[phantom_key] = synthetic_intent
-        # No pending_fill_index entry
 
         fill = _make_fill(symbol="TXFD6", side=Side.BUY, strategy_id="UNKNOWN")
         result = adapter.resolve_phantom_fill(fill)
@@ -298,7 +272,6 @@ class TestPhantomFillReconciliation:
             terminal_handler=terminal_handler,
         )
 
-        # Inject phantom resolver that resolves to "r47_maker"
         def _phantom_resolver(fill):
             if fill.symbol == "TXFD6":
                 return "r47_maker"
@@ -306,7 +279,6 @@ class TestPhantomFillReconciliation:
 
         router.set_phantom_resolver(_phantom_resolver)
 
-        # Create a raw deal event with unknown strategy
         raw = RawExecEvent(
             topic="deal",
             data={
@@ -323,7 +295,6 @@ class TestPhantomFillReconciliation:
         )
         await raw_queue.put(raw)
 
-        # Run router for one iteration
         router.running = True
         task = asyncio.create_task(router.run())
         await asyncio.sleep(0.1)
@@ -334,7 +305,6 @@ class TestPhantomFillReconciliation:
         except asyncio.CancelledError:
             pass
 
-        # Position store should have the position from the reconciled fill
         if position_store.positions:
             key = list(position_store.positions.keys())[0]
             pos = position_store.positions[key]
@@ -367,7 +337,6 @@ class TestPhantomFillReconciliation:
             position_store=position_store,
             terminal_handler=terminal_handler,
         )
-        # No phantom resolver set — default None
 
         raw = RawExecEvent(
             topic="deal",
@@ -395,16 +364,9 @@ class TestPhantomFillReconciliation:
         except asyncio.CancelledError:
             pass
 
-        # No position should be created for orphaned fill
         assert len(position_store.positions) == 0
-        # DLQ should have the orphaned fill
         dlq = get_orphaned_fill_dlq()
         assert dlq.count >= 1
-
-
-# ===========================================================================
-# Task #3: Pending fill TTL configuration
-# ===========================================================================
 
 
 class TestPendingFillTTL:
@@ -441,12 +403,10 @@ class TestPendingFillTTL:
         client = MagicMock()
         adapter = OrderAdapter(config_path, queue, client)
 
-        # Insert phantom older than 2 hours
         stale_key = "r47_maker:old_intent"
         adapter._phantom_order_keys[stale_key] = (time.monotonic() - 8000.0, "TXFD6")
 
         fill = _make_fill(symbol="TXFD6", side=Side.BUY, strategy_id="UNKNOWN")
         result = adapter.resolve_phantom_fill(fill)
 
-        # Should NOT match stale phantom
         assert result is None

@@ -31,9 +31,6 @@ from hft_platform.contracts.strategy import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Side Enum Tests
-# ---------------------------------------------------------------------------
 class TestSideEnum:
     def test_side_values(self):
         """Side enum has correct integer values."""
@@ -51,9 +48,6 @@ class TestSideEnum:
         assert Side(1) == Side.SELL
 
 
-# ---------------------------------------------------------------------------
-# TIF Enum Tests
-# ---------------------------------------------------------------------------
 class TestTIFEnum:
     def test_tif_values(self):
         """TIF enum has correct integer values."""
@@ -63,9 +57,6 @@ class TestTIFEnum:
         assert int(TIF.ROD) == 3
 
 
-# ---------------------------------------------------------------------------
-# IntentType Enum Tests
-# ---------------------------------------------------------------------------
 class TestIntentTypeEnum:
     def test_intent_type_values(self):
         """IntentType enum has correct integer values."""
@@ -74,9 +65,6 @@ class TestIntentTypeEnum:
         assert int(IntentType.CANCEL) == 2
 
 
-# ---------------------------------------------------------------------------
-# OrderStatus Enum Tests
-# ---------------------------------------------------------------------------
 class TestOrderStatusEnum:
     def test_order_status_values(self):
         """OrderStatus enum has correct integer values."""
@@ -88,9 +76,6 @@ class TestOrderStatusEnum:
         assert int(OrderStatus.FAILED) == 5
 
 
-# ---------------------------------------------------------------------------
-# StormGuardState Enum Tests
-# ---------------------------------------------------------------------------
 class TestStormGuardStateEnum:
     def test_storm_guard_values(self):
         """StormGuardState enum has correct integer values."""
@@ -100,9 +85,6 @@ class TestStormGuardStateEnum:
         assert int(StormGuardState.HALT) == 3
 
 
-# ---------------------------------------------------------------------------
-# OrderIntent Tests
-# ---------------------------------------------------------------------------
 class TestOrderIntent:
     def test_construction(self):
         """OrderIntent can be constructed with required fields."""
@@ -112,7 +94,7 @@ class TestOrderIntent:
             symbol="2330",
             intent_type=IntentType.NEW,
             side=Side.BUY,
-            price=1000000,  # Fixed-point
+            price=1000000,
             qty=10,
         )
         assert intent.intent_id == 1
@@ -160,9 +142,6 @@ class TestOrderIntent:
         assert intent.target_order_id == "ORD-123"
 
 
-# ---------------------------------------------------------------------------
-# FillEvent Tests
-# ---------------------------------------------------------------------------
 class TestFillEvent:
     def test_construction(self):
         """FillEvent can be constructed with all fields."""
@@ -174,7 +153,7 @@ class TestFillEvent:
             symbol="2330",
             side=Side.BUY,
             qty=10,
-            price=1000000,  # Fixed-point x10000
+            price=1000000,
             fee=50,
             tax=30,
             ingest_ts_ns=1700000000000000000,
@@ -191,9 +170,6 @@ class TestFillEvent:
         assert hasattr(FillEvent, "__slots__")
 
 
-# ---------------------------------------------------------------------------
-# OrderEvent Tests
-# ---------------------------------------------------------------------------
 class TestOrderEvent:
     def test_construction(self):
         """OrderEvent can be constructed with all fields."""
@@ -216,7 +192,6 @@ class TestOrderEvent:
 
     def test_status_transitions(self):
         """OrderEvent status values represent valid order lifecycle."""
-        # Verify status enum covers full lifecycle
         statuses = [
             OrderStatus.PENDING_SUBMIT,
             OrderStatus.SUBMITTED,
@@ -228,9 +203,6 @@ class TestOrderEvent:
         assert len(statuses) == 6
 
 
-# ---------------------------------------------------------------------------
-# PositionDelta Tests
-# ---------------------------------------------------------------------------
 class TestPositionDelta:
     def test_construction(self):
         """PositionDelta can be constructed with all fields."""
@@ -265,9 +237,6 @@ class TestPositionDelta:
             assert delta.delta_source == source
 
 
-# ---------------------------------------------------------------------------
-# RiskDecision Tests
-# ---------------------------------------------------------------------------
 class TestRiskDecision:
     def test_construction(self):
         """RiskDecision can be constructed."""
@@ -315,9 +284,6 @@ class TestRiskDecision:
         assert decision.reason_code == "MAX_POSITION_EXCEEDED"
 
 
-# ---------------------------------------------------------------------------
-# OrderCommand Tests
-# ---------------------------------------------------------------------------
 class TestOrderCommand:
     def test_construction(self):
         """OrderCommand can be constructed."""
@@ -341,15 +307,11 @@ class TestOrderCommand:
         assert cmd.storm_guard_state == StormGuardState.NORMAL
 
 
-# ---------------------------------------------------------------------------
-# msgspec Compatibility Tests
-# ---------------------------------------------------------------------------
 class TestMsgspecCompatibility:
     """Test that contracts work with msgspec serialization."""
 
     def test_side_enum_json_encode(self):
         """Side enum can be encoded to JSON via msgspec."""
-        # IntEnum serializes as integer
         encoded = msgspec.json.encode(Side.BUY)
         assert encoded == b"0"
 
@@ -358,7 +320,6 @@ class TestMsgspecCompatibility:
 
     def test_side_enum_json_decode(self):
         """Side enum can be decoded from JSON."""
-        # Decode as int, then convert
         val = msgspec.json.decode(b"0")
         assert Side(val) == Side.BUY
 
@@ -378,21 +339,17 @@ class TestMsgspecCompatibility:
             ingest_ts_ns=1700000000000000000,
             match_ts_ns=1700000000000000000,
         )
-        # Convert to dict using dataclasses
         from dataclasses import asdict
 
         d = asdict(fill)
         assert d["fill_id"] == "FILL-001"
         assert d["side"] == Side.BUY
 
-        # Encode dict to JSON
         encoded = msgspec.json.encode(d)
         assert b"FILL-001" in encoded
 
     def test_msgspec_struct_alternative(self):
         """Demonstrate msgspec Struct as alternative for new contracts."""
-        # This test shows that msgspec Struct could be used
-        # for new contracts if needed
 
         class TestStruct(msgspec.Struct):
             symbol: str
@@ -406,9 +363,6 @@ class TestMsgspecCompatibility:
         assert decoded.price == 1000000
 
 
-# ---------------------------------------------------------------------------
-# Field Type Validation Tests
-# ---------------------------------------------------------------------------
 class TestFieldTypes:
     def test_fill_event_integer_fields(self):
         """FillEvent integer fields accept integers."""
@@ -463,9 +417,6 @@ class TestFieldTypes:
         assert isinstance(intent.qty, int)
 
 
-# ---------------------------------------------------------------------------
-# Edge Cases
-# ---------------------------------------------------------------------------
 class TestEdgeCases:
     def test_zero_values(self):
         """Contracts handle zero values correctly."""
@@ -488,9 +439,9 @@ class TestEdgeCases:
             account_id="A1",
             strategy_id="S1",
             symbol="SYM",
-            net_qty=-100,  # Short position
+            net_qty=-100,
             avg_price=1000000,
-            realized_pnl=-50000,  # Loss
+            realized_pnl=-50000,
             unrealized_pnl=-30000,
             delta_source="MARK",
         )
@@ -510,7 +461,7 @@ class TestEdgeCases:
             price=1000000,
             fee=0,
             tax=0,
-            ingest_ts_ns=9_999_999_999_999_999_999,  # Large ns value
+            ingest_ts_ns=9_999_999_999_999_999_999,
             match_ts_ns=9_999_999_999_999_999_999,
         )
         assert fill.ingest_ts_ns == 9_999_999_999_999_999_999

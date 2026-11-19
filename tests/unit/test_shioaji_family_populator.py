@@ -77,7 +77,6 @@ class TestPopulator:
         resolver = ContractFamilyResolver()
         count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
 
-        # Both R1 and R2 installed.
         assert count == 2
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         fam_r2 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R2)
@@ -96,7 +95,6 @@ class TestPopulator:
         )
         resolver = ContractFamilyResolver()
         populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
-        # Only the real expiry shows up as R1 binding.
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         ref = resolver.resolve_family(fam_r1)
         assert ref is not None
@@ -126,7 +124,6 @@ class TestPopulator:
         )
         resolver = ContractFamilyResolver()
         populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 17))
-        # April 17 is past March/April → May becomes R1.
         ref = resolver.resolve_family(ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1))
         assert ref is not None
         assert ref.display() == "TMFE6"
@@ -136,7 +133,7 @@ class TestPopulator:
             {
                 "TMF": [
                     _mock_contract("TMFE6", delivery_date="2026/05/21"),
-                    _mock_contract("TMF_UNKNOWN"),  # no delivery info
+                    _mock_contract("TMF_UNKNOWN"),
                 ]
             }
         )
@@ -151,10 +148,9 @@ class TestPopulator:
         resolver.add_hook(hook_events.append)
 
         populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
-        assert len(hook_events) == 1  # R1 binding installed (None -> FutureRef)
+        assert len(hook_events) == 1
 
         populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
-        # No rebind — same snapshot.
         assert len(hook_events) == 1
 
     def test_none_api_is_noop(self) -> None:
@@ -164,7 +160,7 @@ class TestPopulator:
 
     def test_api_without_contracts_is_noop(self) -> None:
         resolver = ContractFamilyResolver()
-        api = SimpleNamespace()  # no Contracts attribute
+        api = SimpleNamespace()
         count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
         assert count == 0
 
@@ -194,7 +190,7 @@ class TestPopulator:
     def test_zero_bindings_is_reported_as_a_failure_not_a_routine_install(self) -> None:
         """Zero bindings means every strategy keeps its config-time symbols."""
         resolver = ContractFamilyResolver()
-        api = _fake_api({"TMF": [_mock_contract("TMF_UNKNOWN")]})  # no delivery info
+        api = _fake_api({"TMF": [_mock_contract("TMF_UNKNOWN")]})
 
         with structlog.testing.capture_logs() as logs:
             count = populate_resolver_from_shioaji(resolver, api, today=date(2026, 4, 19))
@@ -215,7 +211,6 @@ class TestPopulator:
         from hft_platform.contracts.ref import FutureRef
 
         ref = FutureRef(root="TMF", expiry=date(2026, 5, 21))
-        # native_hint() keys on display() which is "TMFE6".
         assert resolver.snapshot.native_hint(ref) is c
 
     def test_native_hints_cover_broker_code_alias(self) -> None:
@@ -256,7 +251,6 @@ class TestPopulator:
         first_round = len(hook_events)
 
         populate_resolver_from_shioaji(resolver, api_after, today=date(2026, 5, 22))
-        # Both R1 and R2 bindings moved forward — 2 more rebind events.
         assert len(hook_events) > first_round
         fam_r1 = ContractFamily(Product.FUTURE, "TMF", FamilyCode.R1)
         assert resolver.resolve_family(fam_r1).display() == "TMFF6"
@@ -305,10 +299,6 @@ def test_populator_binds_families_when_sdk_groups_raise_keyerror_on_getattr() ->
 
 
 def test_populator_derives_roots_from_codes_when_sdk_category_is_empty() -> None:
-    # Prod 2026-10-27 on 1.7.9: ``FuturesInfo`` has no ``category`` attribute,
-    # so all contracts pooled under root "" and only 2 bogus bindings were
-    # installed (1.5.6: 735). Shape below mirrors the live 2026-10-28 dump:
-    # no category/symbol, ``delivery_date`` is a ``date``, roots may hold digits.
     class _FuturesInfo:
         def __init__(self, code: str, delivery_date: date) -> None:
             self.code = code

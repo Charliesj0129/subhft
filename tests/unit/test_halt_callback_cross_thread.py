@@ -56,12 +56,10 @@ def test_callback_from_daemon_thread_reaches_dispatcher(storm_guard_with_metrics
         disp = _FakeDispatcher()
         cb = _make_halt_notification_callback(sg, disp)
 
-        # Fire from a daemon thread — the smoking-gun production scenario.
         worker = threading.Thread(target=cb, daemon=True)
         worker.start()
         worker.join(timeout=2.0)
 
-        # Wait for the cross-thread-scheduled coroutine to complete on the loop.
         await asyncio.wait_for(disp.event.wait(), timeout=2.0)
         return disp, "ok"
 
@@ -80,15 +78,13 @@ def test_callback_before_loop_bound_returns_gracefully_and_records_metric() -> N
     disp = _FakeDispatcher()
     cb = _make_halt_notification_callback(sg, disp)
 
-    # Patch MetricsRegistry.get() so we can inspect the increment without
-    # depending on global Prometheus state.
     from hft_platform.observability import metrics as metrics_mod
 
     captured: dict[str, int] = {"no_loop": 0}
 
     class _MockRegistry:
         @property
-        def halt_callback_no_loop_total(self_inner):  # noqa: ANN001
+        def halt_callback_no_loop_total(self_inner):
             counter = MagicMock()
 
             def _inc(amount: float = 1.0) -> None:
@@ -100,7 +96,7 @@ def test_callback_before_loop_bound_returns_gracefully_and_records_metric() -> N
     original_get = metrics_mod.MetricsRegistry.get
     metrics_mod.MetricsRegistry.get = staticmethod(lambda: _MockRegistry())  # type: ignore[method-assign]
     try:
-        cb()  # Should not raise.
+        cb()
     finally:
         metrics_mod.MetricsRegistry.get = original_get  # type: ignore[method-assign]
 
@@ -118,9 +114,7 @@ def test_callback_from_loop_thread_uses_direct_path(storm_guard_with_metrics) ->
         disp = _FakeDispatcher()
         cb = _make_halt_notification_callback(sg, disp)
 
-        # Fire directly on the loop thread.
         cb()
-        # The dispatcher coroutine was scheduled via loop.create_task — wait.
         await asyncio.wait_for(disp.event.wait(), timeout=2.0)
         return disp
 
@@ -134,7 +128,6 @@ def test_callback_after_loop_closed_records_no_loop_metric() -> None:
     sg = StormGuard()
     sg.metrics = MagicMock()
 
-    # Build and bind a loop, then close it.
     loop = asyncio.new_event_loop()
     sg.bind_loop(loop)
     loop.close()
@@ -148,7 +141,7 @@ def test_callback_after_loop_closed_records_no_loop_metric() -> None:
 
     class _MockRegistry:
         @property
-        def halt_callback_no_loop_total(self_inner):  # noqa: ANN001
+        def halt_callback_no_loop_total(self_inner):
             counter = MagicMock()
 
             def _inc(amount: float = 1.0) -> None:

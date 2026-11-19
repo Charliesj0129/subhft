@@ -48,9 +48,6 @@ from research.registry.schemas import (
 logger = get_logger("alpha.c17_tmf_frontmonth_native_maker")
 
 
-# ----------------------------------------------------------------------------
-# Strategy parameters
-# ----------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,24 +61,17 @@ class C17Params:
     produce positive half-spread capture after cost.
     """
 
-    # L1 — spread gate (hard cost-viability floor, TMF RT 4.0 pt)
     spread_threshold_pts: int = 5
-    # L2 — R47 signal layers (all disabled; R47 structural minimal)
     pe_danger_threshold: float = 0.0
     pe_window: int = 100
     queue_cancel_threshold: float = 1.0
     queue_ema_alpha: float = 0.05
     mfg_skew_z_threshold: float = 100.0
     mfg_ema_alpha: float = 0.01
-    # Inventory — R47 structural optimum max_pos=3
     max_pos: int = 3
-    # Fixed inventory skew — 0.2 ticks/contract (R47 best practice)
     inventory_skew_tenths: int = 2
 
 
-# ----------------------------------------------------------------------------
-# MakerStrategy implementation — mirror of C14's TxfFrontMonthMaker
-# ----------------------------------------------------------------------------
 
 
 class TmfFrontMonthMaker:
@@ -132,7 +122,6 @@ class TmfFrontMonthMaker:
         self._quotes_posted = 0
         self._rollover_events = 0
 
-    # ---- Rollover API ------------------------------------------------------
 
     def set_active_symbol(self, new_symbol: str) -> None:
         if self._active_symbol == new_symbol:
@@ -167,7 +156,6 @@ class TmfFrontMonthMaker:
     def rollover_events(self) -> int:
         return self._rollover_events
 
-    # ---- MakerStrategy protocol -------------------------------------------
 
     def on_tick(
         self, tick: TickData
@@ -251,7 +239,6 @@ class TmfFrontMonthMaker:
         self._last_bid = None
         self._last_ask = None
 
-    # ---- R47 state getters ------------------------------------------------
 
     def _get_pe(self, symbol: str) -> _PEState:
         state = self._pe_states.get(symbol)
@@ -275,9 +262,6 @@ class TmfFrontMonthMaker:
         return state
 
 
-# ----------------------------------------------------------------------------
-# AlphaProtocol shim (mirror of C14Alpha)
-# ----------------------------------------------------------------------------
 
 
 class C17Alpha:

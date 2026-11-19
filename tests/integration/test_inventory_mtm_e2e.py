@@ -44,8 +44,6 @@ from hft_platform.alpha._validation_profile import load_profile
 
 FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "maker_engine_pre_mtm_baseline"
 
-# ``vm_ul6_strict.yaml :: thresholds.maker.cost_floor_per_fill_pts`` × TMFD6
-# point-value (10 NTD/contract). Keep both numbers visible for auditability.
 COST_FLOOR_PER_FILL_PTS: float = 0.5
 TMFD6_POINT_VALUE_NTD: int = 10
 COST_FLOOR_PER_FILL_NTD: float = COST_FLOOR_PER_FILL_PTS * TMFD6_POINT_VALUE_NTD
@@ -174,7 +172,6 @@ def test_dod_b2_inventory_mtm_gate_fires_on_r47_passes_on_robust(
     r47_by_name = {entry["name"]: entry for entry in r47_advisory}
     robust_by_name = {entry["name"]: entry for entry in robust_advisory}
 
-    # R47 post-B: both new gates must FAIL.
     assert r47_by_name["inventory_mtm"]["passed"] is False, (
         f"R47 inventory_mtm should FAIL: {r47_by_name['inventory_mtm']}"
     )
@@ -182,7 +179,6 @@ def test_dod_b2_inventory_mtm_gate_fires_on_r47_passes_on_robust(
         f"R47 cost_uncertainty should FAIL: {r47_by_name['cost_uncertainty']}"
     )
 
-    # Robust synthetic: both new gates must PASS.
     assert robust_by_name["inventory_mtm"]["passed"] is True, (
         f"Robust inventory_mtm should PASS: {robust_by_name['inventory_mtm']}"
     )
@@ -190,7 +186,6 @@ def test_dod_b2_inventory_mtm_gate_fires_on_r47_passes_on_robust(
         f"Robust cost_uncertainty should PASS: {robust_by_name['cost_uncertainty']}"
     )
 
-    # Sanity: the synthetic robust fixture really does sit above its CI floor.
     pnl_series = [float(row["pnl_pts"]) for row in robust_artifact["daily_pnl"] if int(row.get("fills", 0)) > 0]
     if len(pnl_series) >= 2:
         mu = statistics.mean(pnl_series)
@@ -223,7 +218,7 @@ def test_dod_b6_loose_profile_does_not_block_on_inventory_mtm_or_cost_uncertaint
     post-B fixture that FAILS the gates under the strict profile in
     ``test_dod_b2_inventory_mtm_gate_fires_on_r47_passes_on_robust``.
     """
-    loose_thresholds: dict = {}  # explicit absence: no cost_floor, no p95 floor
+    loose_thresholds: dict = {}
 
     advisory, blocking = _invoke_sub_gates(
         strategy_type="maker",
@@ -234,7 +229,6 @@ def test_dod_b6_loose_profile_does_not_block_on_inventory_mtm_or_cost_uncertaint
 
     by_name = {entry["name"]: entry for entry in advisory}
 
-    # Both new Slice B gates ran (not skipped) under loose profile.
     assert "inventory_mtm" in by_name, (
         f"inventory_mtm should run even under loose profile; observed gates={list(by_name)}"
     )
@@ -242,7 +236,6 @@ def test_dod_b6_loose_profile_does_not_block_on_inventory_mtm_or_cost_uncertaint
         f"cost_uncertainty should run even under loose profile; observed gates={list(by_name)}"
     )
 
-    # Both PASSED via advisory semantics (threshold absent).
     assert by_name["inventory_mtm"]["passed"] is True, (
         f"loose-profile inventory_mtm should advisory PASS; "
         f"got passed={by_name['inventory_mtm']['passed']}, "
@@ -254,7 +247,6 @@ def test_dod_b6_loose_profile_does_not_block_on_inventory_mtm_or_cost_uncertaint
         f"details={by_name['cost_uncertainty']['details']}"
     )
 
-    # Details cite the advisory reason explicitly.
     inv_details = by_name["inventory_mtm"]["details"]
     cost_details = by_name["cost_uncertainty"]["details"]
     assert "advisory" in inv_details and "threshold absent" in inv_details, (
@@ -264,6 +256,4 @@ def test_dod_b6_loose_profile_does_not_block_on_inventory_mtm_or_cost_uncertaint
         f"cost_uncertainty details should cite advisory + threshold absent; got: {cost_details!r}"
     )
 
-    # Aggregator does NOT block on the new gates under loose profile.
-    # With profile=None, _invoke_sub_gates returns blocking=None entirely.
     assert blocking is None, f"loose profile must yield blocking=None (no aggregator gate); got: {blocking!r}"

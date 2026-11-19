@@ -12,7 +12,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "research_check.py"
 
-# The floor committed with the gate. Raising it needs no change here; lowering it means editing this as well.
 MINIMUM_COVERAGE_FLOOR = 38.0
 
 

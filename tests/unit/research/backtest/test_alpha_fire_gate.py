@@ -33,11 +33,6 @@ import pytest
 from research.backtest.alpha_strategy_bridge import AlphaStrategyBridge
 
 
-# ---------------------------------------------------------------------------
-# Synthetic alphas mimicking c75's API surface
-# ---------------------------------------------------------------------------
-
-
 class _GatedAlpha:
     """Mimics c75's contract: update() returns a raw composite, should_fire()
     decides whether to act on it.
@@ -112,11 +107,6 @@ class _MisbehavingGatedAlpha:
         raise RuntimeError("intentional failure for fail-open contract")
 
 
-# ---------------------------------------------------------------------------
-# LOBStatsEvent helper
-# ---------------------------------------------------------------------------
-
-
 def _make_lob_event(
     *,
     symbol: str = "TMFD6",
@@ -138,11 +128,6 @@ def _make_lob_event(
         bid_depth=bid_depth,
         ask_depth=ask_depth,
     )
-
-
-# ---------------------------------------------------------------------------
-# Sub-contract 1: pre-warmup / spread-regime fail (should_fire == 0)
-# ---------------------------------------------------------------------------
 
 
 def test_should_fire_zero_zeroes_signal_even_when_raw_is_large() -> None:
@@ -172,11 +157,6 @@ def test_should_fire_zero_in_anomalous_regime_zeroes_signal() -> None:
     assert signal == pytest.approx(0.0)
 
 
-# ---------------------------------------------------------------------------
-# Sub-contract 2: normal regime (should_fire != 0)
-# ---------------------------------------------------------------------------
-
-
 def test_should_fire_nonzero_passes_raw_signal_through_buy() -> None:
     alpha = _GatedAlpha(raw_signal=0.42, should_fire_value=1)
     bridge = AlphaStrategyBridge(alpha, symbol="TMFD6")
@@ -195,11 +175,6 @@ def test_should_fire_nonzero_passes_raw_signal_through_sell() -> None:
     assert signal == pytest.approx(-0.42)
 
 
-# ---------------------------------------------------------------------------
-# Sub-contract 3: legacy alphas without should_fire() are unaffected
-# ---------------------------------------------------------------------------
-
-
 def test_legacy_alpha_without_should_fire_unchanged() -> None:
     """The hasattr guard must preserve raw-signal semantics for alphas that
     don't expose a fire gate. Without this, the gated-signal approach would
@@ -212,11 +187,6 @@ def test_legacy_alpha_without_should_fire_unchanged() -> None:
     assert signal == pytest.approx(0.31)
 
 
-# ---------------------------------------------------------------------------
-# Sub-contract 4: fail-open on misbehaving fire gate
-# ---------------------------------------------------------------------------
-
-
 def test_misbehaving_should_fire_fails_open() -> None:
     """If should_fire() raises, the bridge must NOT crash and NOT zero the
     signal silently -- the threshold gate downstream still filters. Failing
@@ -224,7 +194,7 @@ def test_misbehaving_should_fire_fails_open() -> None:
     sessions, which is harder to debug than a noisy raw signal."""
     alpha = _MisbehavingGatedAlpha(raw_signal=0.42)
     bridge = AlphaStrategyBridge(alpha, symbol="TMFD6")
-    bridge.on_stats(_make_lob_event())  # must not raise
+    bridge.on_stats(_make_lob_event())
 
     _, signal, _ = bridge.signal_log[0]
     assert signal == pytest.approx(0.42), (

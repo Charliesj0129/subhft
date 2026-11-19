@@ -43,7 +43,7 @@ class FeeCalculator:
         - tax_rate_bps (float) -> tax_rate_bps_x100 (int, multiply by 100)
         - tick_size (float) -> tick_size_x100 (int, multiply by 100)
         """
-        import yaml  # cold-path only
+        import yaml
 
         with open(path) as f:
             data = yaml.safe_load(f)
@@ -57,7 +57,6 @@ class FeeCalculator:
                 continue
             if not isinstance(cfg, dict):
                 continue
-            # Convert float fields to integer for pure-int arithmetic
             tax_rate_bps = cfg.get("tax_rate_bps", 0)
             tick_size = cfg.get("tick_size", 1)
 
@@ -88,13 +87,10 @@ class FeeCalculator:
         product = self._symbol_to_product.get(symbol)
         if product is not None:
             return product
-        # Fallback: check if symbol itself is a product code
         if symbol in self._schedules:
             return symbol
-        # Root-prefix fallback: strip trailing month code (e.g. TMFE6 → TMF)
-        # TAIFEX futures: root (3 chars) + month letter + year digit = 5+ chars
         if len(symbol) >= 5:
-            root = symbol[:-2]  # strip month letter + year digit
+            root = symbol[:-2]
             product = self._symbol_to_product.get(root)
             if product is not None:
                 return product
@@ -134,28 +130,17 @@ class FeeCalculator:
         tick_size_x100: int = schedule["tick_size_x100"]
         point_value: int = schedule["point_value"]
 
-        # Commission: comm_per_contract * abs_qty, scaled x10000
         commission = comm_per_contract * abs_qty * 10000
 
-        # Tax: apply based on tax_side (sell, buy, or both), pure integer arithmetic
         tax = 0
         apply_tax = (
             tax_side == "both" or (tax_side == "sell" and side == "SELL") or (tax_side == "buy" and side == "BUY")
         )
         if apply_tax:
             if tax_per_contract > 0:
-                # Flat per-contract tax: tax_per_contract * abs_qty, scaled x10000
                 tax = tax_per_contract * abs_qty * 10000
             else:
-                # Percentage-based tax: rate in bps
-                # notional_x100 = price_scaled * abs_qty * point_value * 100 // tick_size_x100
-                # This gives notional in NTD * 100 (extra factor for precision)
                 notional_x100 = price_scaled * abs_qty * point_value * 100 // tick_size_x100
-                # tax in NTD scaled x10000:
-                # tax_rate is in bps*100 (e.g. 2.0 bps -> 200)
-                # 1 bps = 1/10000, so tax_rate_x100 / 100 bps = tax_rate_x100 / (100 * 10000) of notional
-                # tax = notional * tax_rate_x100 / (100 * 10000), then scale x10000
-                # tax_scaled = notional_x100 * tax_rate_x100 // (10000 * 100)
                 tax = notional_x100 * tax_rate_x100 // (10000 * 100)
 
         total = commission + tax

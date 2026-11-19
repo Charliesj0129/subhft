@@ -59,7 +59,6 @@ def batch_compute_correlations(
 
     results: dict[str, float] = {}
     runs = tracker.list_runs()
-    # Group runs by alpha_id, keep only latest per alpha
     latest_runs: dict[str, Any] = {}
     for run in runs:
         if run.alpha_id not in latest_runs:
@@ -77,7 +76,6 @@ def batch_compute_correlations(
             )
             continue
 
-        # Patch scorecard if we have the run
         latest_run = latest_runs.get(alpha_id)
         if latest_run is None:
             continue
@@ -90,7 +88,6 @@ def batch_compute_correlations(
             )
             continue
         if is_sealed(scorecard_path.parent):
-            # Sealed evidence is never rewritten; the correlation is logged only.
             logger.warning(
                 "batch_correlation: scorecard is sealed evidence, not patched",
                 alpha_id=alpha_id,

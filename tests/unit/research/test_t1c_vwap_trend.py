@@ -52,7 +52,6 @@ SPEC_PATH = Path("research/alphas/t1c_txf_vwaptrend_tmf/spec.yaml")
 
 
 def session_ns(date: str, minute: float) -> int:
-    # Local 08:45 TPE == 00:45 UTC; matches _session_start_ns(tz_offset=8).
     base = datetime.fromisoformat(f"{date}T00:45:00+00:00")
     return int(base.timestamp() * 1_000_000_000) + int(minute * NS_PER_MINUTE)
 
@@ -105,8 +104,6 @@ def _config(today: str) -> VwapTrendConfig:
     )
 
 
-# Heavy early trade anchors VWAP ~17000; BBO mid trends above it, pulls back to
-# within 5pt of VWAP at minute 40 (failed reclaim), then resumes up to +20.
 _TREND_UP = [
     (0, 17000.0),
     (10, 17008.0),
@@ -132,30 +129,25 @@ _VWAP_TRADES_DOWN = [(0, 17000.0, 1000.0), (30, 16980.0, 1.0), (60, 16980.0, 1.0
 def test_detects_long_continuation_on_vwap_trend_up():
     bbo, trades = extract_bbo_and_trades(_session_array("2026-04-15", _TREND_UP, _VWAP_TRADES_UP))
 
-    events = detect_vwap_trend_events(
-        bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15")
-    )
+    events = detect_vwap_trend_events(bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15"))
 
     assert len(events) == 1
     ev = events[0]
     assert ev.regime_type == "T1-C_vwap_trend_continuation"
-    assert ev.direction == 1  # trade WITH the trend (continuation), not against it
-    assert ev.realized_vol_ratio >= 15.0  # signed VWAP displacement
+    assert ev.direction == 1
+    assert ev.realized_vol_ratio >= 15.0
     assert ev.trade_vwap is not None and abs(ev.trade_vwap - 17000.0) < 1.0
     assert ev.trigger_time_ns == session_ns("2026-04-15", 60)
-    # Stop band straddles VWAP by the buffer.
     assert ev.opening_range_low < ev.trade_vwap < ev.opening_range_high
 
 
 def test_detects_short_continuation_on_vwap_trend_down():
     bbo, trades = extract_bbo_and_trades(_session_array("2026-04-15", _TREND_DOWN, _VWAP_TRADES_DOWN))
 
-    events = detect_vwap_trend_events(
-        bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15")
-    )
+    events = detect_vwap_trend_events(bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15"))
 
     assert len(events) == 1
-    assert events[0].direction == -1  # trade with the down-trend
+    assert events[0].direction == -1
     assert events[0].realized_vol_ratio <= -15.0
 
 
@@ -163,34 +155,33 @@ def test_no_event_when_displacement_below_threshold():
     flat = [(0, 17000.0), (10, 17002.0), (20, 17004.0), (30, 17005.0), (40, 17003.0), (50, 17004.0), (60, 17005.0)]
     bbo, trades = extract_bbo_and_trades(_session_array("2026-04-15", flat, _VWAP_TRADES_UP))
 
-    events = detect_vwap_trend_events(
-        bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15")
-    )
+    events = detect_vwap_trend_events(bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15"))
 
-    assert events == []  # mid sits <15pt from VWAP -> no imbalance
+    assert events == []
 
 
 def test_no_event_when_pullback_crosses_vwap():
-    # The dip to 16990 crosses >5pt past VWAP onto the counter-trend side: this is
-    # a genuine reclaim, NOT a failed reclaim -> no continuation entry.
     crossed = [(0, 17000.0), (10, 17008.0), (20, 16990.0), (30, 17008.0), (40, 17016.0), (50, 17012.0), (60, 17020.0)]
     bbo, trades = extract_bbo_and_trades(_session_array("2026-04-15", crossed, _VWAP_TRADES_UP))
 
-    events = detect_vwap_trend_events(
-        bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15")
-    )
+    events = detect_vwap_trend_events(bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15"))
 
     assert events == []
 
 
 def test_no_event_when_no_pullback_toward_vwap():
-    # Price trends up but never returns within 5pt of VWAP: no failed-reclaim setup.
-    no_pullback = [(0, 17020.0), (10, 17025.0), (20, 17030.0), (30, 17028.0), (40, 17035.0), (50, 17030.0), (60, 17040.0)]
+    no_pullback = [
+        (0, 17020.0),
+        (10, 17025.0),
+        (20, 17030.0),
+        (30, 17028.0),
+        (40, 17035.0),
+        (50, 17030.0),
+        (60, 17040.0),
+    ]
     bbo, trades = extract_bbo_and_trades(_session_array("2026-04-15", no_pullback, _VWAP_TRADES_UP))
 
-    events = detect_vwap_trend_events(
-        bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15")
-    )
+    events = detect_vwap_trend_events(bbo, trades, contract="TXFD6", date="2026-04-15", config=_config("2026-04-15"))
 
     assert events == []
 
@@ -199,8 +190,6 @@ def test_pair_audit_deducts_round_trip_cost_from_gross_return(tmp_path):
     txf = tmp_path / "TXFD6_2026-04-15_l2.hftbt.npz"
     tmf = tmp_path / "TMFD6_2026-04-15_l2.hftbt.npz"
     np.savez(txf, data=_session_array("2026-04-15", _TREND_UP, _VWAP_TRADES_UP))
-    # Long entry at minute 60; TMF continues up so the long profits on the exit
-    # path, and TXF never reclaims VWAP downward (no stop breach).
     np.savez(
         tmf,
         data=_session_array("2026-04-15", [(60, 17020.0), (70, 17030.0), (90, 17040.0)]),
@@ -263,8 +252,20 @@ def test_run_audit_writes_summary(tmp_path):
 
 def test_summarizer_kills_on_negative_median():
     rows = [
-        {"contract": "TXFD6->TMFD6", "date": "2026-04-15", "net_after_cost_30m": -12.0, "net_30m_pts": -4.0, "stop_structure_breached": True},
-        {"contract": "TXFD6->TMFD6", "date": "2026-04-16", "net_after_cost_30m": -8.0, "net_30m_pts": 0.0, "stop_structure_breached": True},
+        {
+            "contract": "TXFD6->TMFD6",
+            "date": "2026-04-15",
+            "net_after_cost_30m": -12.0,
+            "net_30m_pts": -4.0,
+            "stop_structure_breached": True,
+        },
+        {
+            "contract": "TXFD6->TMFD6",
+            "date": "2026-04-16",
+            "net_after_cost_30m": -8.0,
+            "net_30m_pts": 0.0,
+            "stop_structure_breached": True,
+        },
     ]
     summary = summarize_vwap_trend_rows(rows)
 
@@ -274,8 +275,20 @@ def test_summarizer_kills_on_negative_median():
 
 def test_summarizer_needs_more_days_on_small_positive_sample():
     rows = [
-        {"contract": "TXFC6->TMFC6", "date": "2026-03-18", "net_after_cost_30m": 22.0, "net_30m_pts": 30.0, "stop_structure_breached": False},
-        {"contract": "TXFD6->TMFD6", "date": "2026-04-15", "net_after_cost_30m": 18.0, "net_30m_pts": 26.0, "stop_structure_breached": False},
+        {
+            "contract": "TXFC6->TMFC6",
+            "date": "2026-03-18",
+            "net_after_cost_30m": 22.0,
+            "net_30m_pts": 30.0,
+            "stop_structure_breached": False,
+        },
+        {
+            "contract": "TXFD6->TMFD6",
+            "date": "2026-04-15",
+            "net_after_cost_30m": 18.0,
+            "net_30m_pts": 26.0,
+            "stop_structure_breached": False,
+        },
     ]
     summary = summarize_vwap_trend_rows(rows)
 

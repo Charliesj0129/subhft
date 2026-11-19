@@ -63,7 +63,6 @@ class TestSpecFieldAuditFunction:
             "cost_model",
             "validation_plan",
         }
-        # The 8 behavioural fields are never recoverable from the record.
         assert "hypothesis" in untraceable
         assert "entry_rule" in untraceable
         assert "risk_control" in untraceable
@@ -72,7 +71,6 @@ class TestSpecFieldAuditFunction:
     def test_no_provenance_attests_only_top_level(self, _isolated) -> None:
         _record(run_id="bare", prov=None)
         traceable, _ = audit_cli.spec_field_audit(_row("bare"))
-        # Without provenance, only the row's own top-level fields attest.
         assert set(traceable) == {"strategy_name", "instrument"}
 
     def test_incomplete_cost_model_not_attested(self, _isolated) -> None:
@@ -99,7 +97,6 @@ class TestSpecFieldAuditRound71Timeframe:
         assert "holding_period" in traceable
         assert "timeframe" not in untraceable
         assert "holding_period" not in untraceable
-        # The four prior fields stay attested → six total now.
         assert set(traceable) == {
             "strategy_name",
             "instrument",
@@ -110,7 +107,6 @@ class TestSpecFieldAuditRound71Timeframe:
         }
 
     def test_absent_timeframe_stays_untraceable(self, _isolated) -> None:
-        # Rows that predate the extension carry no timeframe key.
         _record(run_id="no_tf", prov=dict(_FULL))
         _traceable, untraceable = audit_cli.spec_field_audit(_row("no_tf"))
         assert "timeframe" in untraceable
@@ -119,10 +115,9 @@ class TestSpecFieldAuditRound71Timeframe:
     def test_empty_timeframe_not_attested(self, _isolated) -> None:
         prov = dict(_FULL)
         prov["timeframe"] = ""
-        prov["holding_period"] = "   "  # whitespace is still truthy → carried
+        prov["holding_period"] = "   "
         _record(run_id="empty_tf", prov=prov)
         _traceable, untraceable = audit_cli.spec_field_audit(_row("empty_tf"))
-        # Empty string collapses (normalize drops falsy); whitespace is kept.
         assert "timeframe" in untraceable
 
     def test_show_counts_six_with_timeframe(self, _isolated) -> None:
@@ -143,9 +138,9 @@ class TestSummaryAggregatesSpecFieldCoverage:
         tf_prov = dict(_FULL)
         tf_prov["timeframe"] = "15m"
         tf_prov["holding_period"] = "intraday"
-        _record(run_id="six", prov=tf_prov)  # 6/12
-        _record(run_id="four", prov=dict(_FULL))  # 4/12
-        _record(run_id="two", prov=None)  # 2/12
+        _record(run_id="six", prov=tf_prov)
+        _record(run_id="four", prov=dict(_FULL))
+        _record(run_id="two", prov=None)
         out = audit_cli.summary()
         block = out.split("spec_fields (完成狀態 §3")[1]
         assert "6/12 traceable: 1" in block

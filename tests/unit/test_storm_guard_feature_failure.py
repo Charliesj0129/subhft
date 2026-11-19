@@ -37,13 +37,11 @@ class TestReportFeatureFailure:
         guard.trigger_halt("test")
         assert guard.state == StormGuardState.HALT
         guard.report_feature_failure(count=10)
-        # Should remain HALT, not downgrade to STORM
         assert guard.state == StormGuardState.HALT
-        # But flag should still be set
         assert guard._feature_failure_active is True
 
     def test_noop_when_already_storm(self, guard):
-        guard.update(latency_us=25000)  # STORM via latency
+        guard.update(latency_us=25000)
         assert guard.state == StormGuardState.STORM
         guard.report_feature_failure(count=10)
         assert guard.state == StormGuardState.STORM
@@ -67,24 +65,19 @@ class TestReportFeatureRecovery:
         The next update() cycle handles de-escalation."""
         guard.report_feature_failure(count=10)
         assert guard.state == StormGuardState.STORM
-        # Bypass anti-flap hold time
         guard._feature_failure_storm_ts -= 10.0
         guard.report_feature_recovery()
-        # Flag cleared, but state stays STORM until update() handles it
         assert guard._feature_failure_active is False
         assert guard.state == StormGuardState.STORM
-        # update() with clear inputs de-escalates via hysteresis
         guard._storm_cooldown_s = 0.0
         guard._de_escalate_threshold = 1
         guard.update(latency_us=0, feed_gap_s=0)
         assert guard.state == StormGuardState.NORMAL
 
     def test_noop_when_no_feature_failure_active(self, guard):
-        # Transition to STORM via other means
         guard.update(latency_us=25000)
         assert guard.state == StormGuardState.STORM
         guard.report_feature_recovery()
-        # Should remain STORM since feature failure was not the cause
         assert guard.state == StormGuardState.STORM
 
     def test_noop_when_already_normal(self, guard):
@@ -95,33 +88,25 @@ class TestReportFeatureRecovery:
         guard.report_feature_failure(count=10)
         guard.trigger_halt("critical")
         assert guard.state == StormGuardState.HALT
-        # Bypass anti-flap hold time
         guard._feature_failure_storm_ts -= 10.0
         guard.report_feature_recovery()
-        # HALT must persist — recovery only clears STORM from feature failure
         assert guard.state == StormGuardState.HALT
-        # But feature flag should be cleared
         assert guard._feature_failure_active is False
 
     def test_dual_cause_storm_recovery_preserves_other_cause(self, guard):
         """If latency AND feature failure both cause STORM, feature recovery
         clears the flag but state remains STORM (latency still active)."""
-        # Latency causes STORM first
         guard.update(latency_us=25000)
         assert guard.state == StormGuardState.STORM
 
-        # Feature failure also fires (sets flag, but state already STORM)
         guard.report_feature_failure(count=10)
         assert guard._feature_failure_active is True
         assert guard.state == StormGuardState.STORM
 
-        # Bypass the anti-flap hold time
         guard._feature_failure_storm_ts -= 10.0
 
-        # Feature recovers — but latency is still elevated
         guard.report_feature_recovery()
         assert guard._feature_failure_active is False
-        # State MUST remain STORM — latency condition is still active
         assert guard.state == StormGuardState.STORM
 
     def test_feature_failure_prevents_deescalation_to_warm(self, guard):
@@ -139,9 +124,7 @@ class TestReportFeatureRecovery:
         guard.report_feature_failure(count=10)
         assert guard.state == StormGuardState.STORM
 
-        # drawdown_bps=-60 is in the WARM range (-50 threshold), latency clean
         result = guard.update(order_rtt_us=1_500_000, latency_us=0, feed_gap_s=0.0)
-        # Must remain STORM — feature failure is still active
         assert result == StormGuardState.STORM
         assert guard.state == StormGuardState.STORM
 
@@ -153,7 +136,6 @@ class TestReportFeatureRecovery:
         guard.report_feature_failure(count=10)
         assert guard.state == StormGuardState.STORM
 
-        # All inputs at zero — would normally return NORMAL
         result = guard.update(latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.STORM
         assert guard.state == StormGuardState.STORM
@@ -164,11 +146,10 @@ class TestReportFeatureRecovery:
         guard._de_escalate_threshold = 1
 
         guard.report_feature_failure(count=10)
-        guard._feature_failure_storm_ts -= 10.0  # bypass anti-flap
+        guard._feature_failure_storm_ts -= 10.0
         guard.report_feature_recovery()
         assert guard._feature_failure_active is False
 
-        # Now drawdown_bps=-60 is WARM range — should de-escalate to WARM
         result = guard.update(order_rtt_us=1_500_000, latency_us=0, feed_gap_s=0.0)
         assert result == StormGuardState.WARM
         assert guard.state == StormGuardState.WARM
@@ -178,18 +159,14 @@ class TestReportFeatureRecovery:
         guard.report_feature_failure(count=10)
         assert guard.state == StormGuardState.STORM
 
-        # Immediate recovery attempt — should be suppressed
         guard.report_feature_recovery()
         assert guard.state == StormGuardState.STORM
-        assert guard._feature_failure_active is True  # flag NOT cleared
+        assert guard._feature_failure_active is True
 
-        # Advance past hold time
         guard._feature_failure_storm_ts -= 10.0
 
-        # Now recovery clears the flag (but does not transition)
         guard.report_feature_recovery()
         assert guard._feature_failure_active is False
-        # State stays STORM — update() handles de-escalation
         assert guard.state == StormGuardState.STORM
 
 
@@ -227,25 +204,21 @@ class TestMarketDataServiceFeatureEscalation:
         fe.process_lob_update = None
 
         mds = self._make_mds(fe, guard)
-        mds._fe_process_lob_update = None  # Force fallback to process_lob_stats
+        mds._fe_process_lob_update = None
 
-        # Build a minimal BidAskEvent-like object
         event = MagicMock()
         event.symbol = "2330"
         event.meta = MagicMock()
         event.meta.local_ts = 1000
         event.trade_direction = 0
 
-        # stats must be a tuple to pass the isinstance guard in _maybe_update_features
         stats = (100000, 500, 0.5)
 
-        # Fire N failures (below threshold) — should NOT escalate
         for _ in range(mds._FEATURE_FAILURE_ESCALATE - 1):
             mds._maybe_update_features(event, stats)
 
         assert guard.state == StormGuardState.NORMAL
 
-        # One more failure pushes past threshold — STORM
         mds._maybe_update_features(event, stats)
         assert guard.state == StormGuardState.STORM
 
@@ -274,22 +247,17 @@ class TestMarketDataServiceFeatureEscalation:
         event.meta.local_ts = 1000
         event.trade_direction = 0
 
-        # stats must be a tuple to pass the isinstance guard
         stats = (100000, 500, 0.5)
 
-        # 11 failures (exceeds threshold of 10)
         for _ in range(11):
             mds._maybe_update_features(event, stats)
         assert guard.state == StormGuardState.STORM
 
-        # Bypass anti-flap hold time so recovery can proceed
         guard._feature_failure_storm_ts -= 10.0
 
-        # Next call succeeds → flag cleared (state stays STORM until update())
         mds._maybe_update_features(event, stats)
         assert guard._feature_failure_active is False
         assert guard.state == StormGuardState.STORM
-        # update() with clear inputs de-escalates via hysteresis
         guard._storm_cooldown_s = 0.0
         guard._de_escalate_threshold = 1
         guard.update(latency_us=0, feed_gap_s=0)

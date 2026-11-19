@@ -59,9 +59,6 @@ class DiskPressureMonitor:
         self._interval = (
             check_interval_s if check_interval_s is not None else float(os.getenv("HFT_DISK_CHECK_INTERVAL_S", "10"))
         )
-        # Hysteresis band: to leave a level, size must fall below threshold * (1 - band).
-        # Prevents thrash when WAL size oscillates within a few MB of a threshold
-        # (observed: 31 level changes + 28 recoveries/24h near 100 MB boundary).
         self._hysteresis_fraction = max(
             0.0,
             min(0.5, float(os.getenv("HFT_WAL_HYSTERESIS_FRACTION", "0.10"))),
@@ -104,8 +101,6 @@ class DiskPressureMonitor:
             return "write"
         return policy
 
-    # ── Private ───────────────────────────────────────────────────────────
-
     def _loop(self) -> None:
         while self._running:
             try:
@@ -136,7 +131,6 @@ class DiskPressureMonitor:
         else:
             logger.info("DiskPressure recovered to OK", wal_size_mb=round(wal_size_mb, 1))
 
-        # Update Prometheus metric
         try:
             from hft_platform.observability.metrics import MetricsRegistry
 
@@ -182,13 +176,11 @@ class DiskPressureMonitor:
         critical_exit = self._critical_mb * band
         halt_exit = self._halt_mb * band
 
-        # Always escalate immediately (safety-first)
         if size_mb >= self._halt_mb:
             return DiskPressureLevel.HALT
         if current == DiskPressureLevel.HALT:
             if size_mb >= halt_exit:
                 return DiskPressureLevel.HALT
-            # fall through to re-evaluate lower levels
 
         if size_mb >= self._critical_mb:
             return DiskPressureLevel.CRITICAL

@@ -87,7 +87,6 @@ class TestResidualMtmExportColumns:
         assert r["inventory_net_pts"] == ""
 
     def test_export_row_keys_still_match_columns(self, _isolated) -> None:
-        # Schema-contract invariant must still hold after the additions.
         _record(run_id="k", with_inventory=True)
         row = sub_gate_audit.read_runs("k")[0]
         assert set(audit_cli._export_row(row).keys()) == set(audit_cli._EXPORT_COLUMNS)

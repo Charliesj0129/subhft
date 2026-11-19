@@ -39,7 +39,7 @@ def test_snapshot_prev_copies_current_values() -> None:
     snapshot_prev(ss)
     assert ss.prev_composite == 1.5
     assert ss.prev_spread_bps == 20.0
-    assert ss.prev_agree_direction == 1  # both positive
+    assert ss.prev_agree_direction == 1
 
 
 def test_detect_composite_cross() -> None:
@@ -107,7 +107,7 @@ def test_dominant_alpha_label_returns_top2() -> None:
         "alpha_2": AlphaState(alpha_id="alpha_2", signal=0.3, z_score=1.4),
     }
     label = dominant_alpha_label(ss)
-    assert "+" in label  # top 2 alphas joined
+    assert "+" in label
 
 
 def test_dominant_alpha_label_returns_all_when_all_aligned() -> None:

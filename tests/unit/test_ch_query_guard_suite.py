@@ -45,7 +45,7 @@ def test_main_generates_pass_suite_report(tmp_path: Path):
         ],
     )
 
-    def _fake_run_cmd(argv: list[str], timeout_s: int):  # noqa: ARG001
+    def _fake_run_cmd(argv: list[str], timeout_s: int):
         if argv[2] == "check":
             return (
                 0,
@@ -91,7 +91,7 @@ def test_main_warn_exit_code_can_be_downgraded(tmp_path: Path):
     profile = tmp_path / "profile_warn.json"
     _write_profile(profile, [{"id": "q1", "sql": "SELECT count() FROM hft.market_data WHERE ingest_ts > 0"}])
 
-    def _fake_run_cmd(argv: list[str], timeout_s: int):  # noqa: ARG001
+    def _fake_run_cmd(argv: list[str], timeout_s: int):
         if argv[2] == "check":
             return (
                 1,
@@ -146,7 +146,7 @@ def test_main_fails_and_skips_run_when_check_fails(tmp_path: Path):
     _write_profile(profile, [{"id": "q_fail", "sql": "DROP TABLE hft.market_data"}])
     calls = {"check": 0, "run": 0}
 
-    def _fake_run_cmd(argv: list[str], timeout_s: int):  # noqa: ARG001
+    def _fake_run_cmd(argv: list[str], timeout_s: int):
         if argv[2] == "check":
             calls["check"] += 1
             return (

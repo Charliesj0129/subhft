@@ -39,33 +39,28 @@ def _typed_frame() -> tuple:
     on (``runner.py:891-910``)."""
     return (
         "typed_intent_v1",
-        4242,  # 1  intent_id
-        "R47_MAKER_TMF",  # 2  strategy_id
-        "TMFH6",  # 3  symbol
-        int(IntentType.NEW),  # 4  intent_type
-        int(Side.SELL),  # 5  side
-        3733_0000,  # 6  price (scaled x10000)
-        2,  # 7  qty
-        int(TIF.LIMIT),  # 8  tif
-        "",  # 9  target_order_id
-        1_700_000_000_000_000_000,  # 10 timestamp_ns
-        1_699_999_999_000_000_000,  # 11 source_ts_ns
-        "maker_quote",  # 12 reason
-        "trace-abc",  # 13 trace_id
-        "idem-xyz",  # 14 idempotency_key
-        5_000_000_000,  # 15 ttl_ns
-        3730_0000,  # 16 decision_price
-        "LMT",  # 17 price_type
+        4242,
+        "R47_MAKER_TMF",
+        "TMFH6",
+        int(IntentType.NEW),
+        int(Side.SELL),
+        3733_0000,
+        2,
+        int(TIF.LIMIT),
+        "",
+        1_700_000_000_000_000_000,
+        1_699_999_999_000_000_000,
+        "maker_quote",
+        "trace-abc",
+        "idem-xyz",
+        5_000_000_000,
+        3730_0000,
+        "LMT",
     )
 
 
 def _envelope(intent: object) -> dict:
     return {"intent": intent, "ingest_ts": 1_700_000_000_123_456_789}
-
-
-# --------------------------------------------------------------------------- #
-# The typed tuple — the shape production actually emits                        #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
@@ -166,11 +161,6 @@ def test_a_malformed_tuple_is_dropped_rather_than_written_short() -> None:
 @pytest.mark.unit
 def test_a_plain_tuple_is_not_treated_as_a_typed_frame() -> None:
     assert _extract_intent_values(_envelope((1, 2, 3))) is None
-
-
-# --------------------------------------------------------------------------- #
-# The OrderIntent path must keep working                                       #
-# --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit

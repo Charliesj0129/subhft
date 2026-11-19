@@ -11,10 +11,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_gate_report(gate: str = "Gate A", passed: bool = True):
     from hft_platform.alpha.validation import GateReport
@@ -43,16 +39,10 @@ def _make_promotion_result(approved: bool = True, forced: bool = False):
 def _mock_metrics():
     """Return a MagicMock that mimics the MetricsRegistry counter interface."""
     m = MagicMock()
-    # Make .labels(...).inc() chainable on the counter mocks
     m.alpha_gate_results_total.labels.return_value = MagicMock()
     m.alpha_promotion_results_total.labels.return_value = MagicMock()
     m.alpha_canary_actions_total.labels.return_value = MagicMock()
     return m
-
-
-# ---------------------------------------------------------------------------
-# log_gate_result
-# ---------------------------------------------------------------------------
 
 
 class TestGateResultMetrics:
@@ -102,7 +92,7 @@ class TestGateResultMetrics:
         monkeypatch.setenv("HFT_ALPHA_AUDIT_ENABLED", "0")
         import hft_platform.alpha.audit as audit
 
-        audit._ENABLED = None  # reset cached flag
+        audit._ENABLED = None
 
         mock_m = _mock_metrics()
         with patch("hft_platform.observability.metrics.get_metrics", return_value=mock_m):
@@ -115,10 +105,8 @@ class TestGateResultMetrics:
         with patch("hft_platform.observability.metrics.get_metrics", return_value=None):
             import hft_platform.alpha.audit as audit
 
-            # Should complete without raising
             result = audit.log_gate_result("alpha_x", None, _make_gate_report(), None)
 
-        # Metrics path is skipped gracefully — function returns None
         assert result is None
 
     def test_metrics_exception_is_swallowed(self):
@@ -128,16 +116,9 @@ class TestGateResultMetrics:
         with patch("hft_platform.observability.metrics.get_metrics", return_value=broken_m):
             import hft_platform.alpha.audit as audit
 
-            # Must not raise
             result = audit.log_gate_result("alpha_x", None, _make_gate_report(), None)
 
-        # Metrics exception is swallowed — function returns None
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# log_promotion_result
-# ---------------------------------------------------------------------------
 
 
 class TestPromotionResultMetrics:
@@ -188,11 +169,6 @@ class TestPromotionResultMetrics:
         mock_m.alpha_promotion_results_total.labels.return_value.inc.assert_called_once()
 
 
-# ---------------------------------------------------------------------------
-# log_canary_action
-# ---------------------------------------------------------------------------
-
-
 class TestCanaryActionMetrics:
     def test_action_label_passed_through(self):
         mock_m = _mock_metrics()
@@ -228,11 +204,6 @@ class TestCanaryActionMetrics:
             audit.log_canary_action("alpha_x", "hold", 0.05, 0.05, "within bounds")
 
         mock_m.alpha_canary_actions_total.labels.return_value.inc.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# get_metrics() module-level helper
-# ---------------------------------------------------------------------------
 
 
 class TestGetMetricsHelper:

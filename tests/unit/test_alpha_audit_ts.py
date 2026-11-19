@@ -20,7 +20,7 @@ def test_log_gate_result_ts_is_int_nanoseconds() -> None:
 
     mock_client = MagicMock()
 
-    def capture_insert(table, rows, column_names):  # noqa: ANN001
+    def capture_insert(table, rows, column_names):
         captured_rows.extend(rows)
 
     mock_client.insert.side_effect = capture_insert
@@ -41,8 +41,7 @@ def test_log_gate_result_ts_is_int_nanoseconds() -> None:
 
     assert len(captured_rows) == 1, "Expected exactly one row inserted"
     row = captured_rows[0]
-    ts_value = row[0]  # ts is first column
+    ts_value = row[0]
 
     assert isinstance(ts_value, int), f"ts must be int for ClickHouse Int64, got {type(ts_value).__name__}"
-    # Nanosecond epoch for 2020-01-01 is ~1.577e18; sanity-check lower bound
     assert ts_value > 1_577_836_800_000_000_000, f"ts value {ts_value} is too small to be a nanosecond epoch"

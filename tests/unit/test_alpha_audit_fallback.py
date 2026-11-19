@@ -13,10 +13,6 @@ import pytest
 import hft_platform.alpha.audit as audit_mod
 from hft_platform.alpha.audit import _write_fallback
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_gate_report(passed: bool = True) -> Any:
     return SimpleNamespace(gate="Gate A", passed=passed, details={"score": 1.0})
@@ -32,11 +28,6 @@ def _make_promotion_result(alpha_id: str = "alpha_test") -> Any:
         canary_weight=0.05,
         reasons=["gate_d ok"],
     )
-
-
-# ---------------------------------------------------------------------------
-# _write_fallback unit tests
-# ---------------------------------------------------------------------------
 
 
 class TestWriteFallback:
@@ -79,19 +70,15 @@ class TestWriteFallback:
         _write_fallback("alpha_canary_log", {"action": "hold"})
 
         line = json.loads((tmp_path / "alpha_canary_log.jsonl").read_text(encoding="utf-8").strip())
-        # Should be a valid ISO string — just check it's non-empty and contains 'T'
         assert "T" in line["_failed_at"]
 
     def test_does_not_raise_when_write_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """_write_fallback must swallow its own errors."""
         monkeypatch.setattr(audit_mod, "_FALLBACK_DIR", tmp_path)
 
-        # Patch open to raise to simulate disk full / permission error
         with patch("builtins.open", side_effect=OSError("disk full")):
-            # Should not raise
             result = _write_fallback("some_table", {"data": 1})
 
-        # _write_fallback swallows exceptions and always returns None
         assert result is None
 
     def test_uses_separate_files_per_table(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,11 +91,6 @@ class TestWriteFallback:
         assert (tmp_path / "alpha_gate_log.jsonl").exists()
         assert (tmp_path / "alpha_promotion_log.jsonl").exists()
         assert (tmp_path / "alpha_canary_log.jsonl").exists()
-
-
-# ---------------------------------------------------------------------------
-# Integration: fallback triggered on ClickHouse failure
-# ---------------------------------------------------------------------------
 
 
 class TestLogGateResultFallback:
@@ -142,7 +124,7 @@ class TestLogGateResultFallback:
         monkeypatch.setattr(audit_mod, "_ENABLED", True)
 
         mock_client = MagicMock()
-        mock_client.insert.return_value = None  # success
+        mock_client.insert.return_value = None
 
         with patch.object(audit_mod, "_get_client", return_value=mock_client):
             audit_mod.log_gate_result(
@@ -226,7 +208,6 @@ class TestFallbackDirEnvVar:
     def test_env_var_overrides_default_dir(self, tmp_path: Path) -> None:
         """HFT_ALPHA_AUDIT_FALLBACK_DIR env var is used when module is (re)loaded."""
         custom_dir = tmp_path / "custom_audit"
-        # We test _write_fallback directly by patching the module attribute
         import hft_platform.alpha.audit as audit_module
 
         original = audit_module._FALLBACK_DIR

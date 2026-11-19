@@ -76,8 +76,6 @@ def test_experiment_tracker_stamps_edge_metric_semantics(tmp_path: Path):
     assert semantics["floor_pts"] == 10.0
     assert report["details"]["edge_metric_semantics"] == semantics
     assert Scorecard.from_dict({"edge_metric_semantics": semantics}).edge_metric_semantics == semantics
-    # Only the source gate ran here, so the label must NOT claim validation: the
-    # six supporting gates are recorded as absent and ``validated`` is False.
     assert semantics["validated"] is False
     assert semantics["supporting_gates_status"]["edge_per_round_trip"] == "pass"
     assert semantics["supporting_gates_status"]["inventory_mtm"] == "absent"
@@ -137,7 +135,6 @@ def test_edge_metric_semantics_validated_when_all_supporting_gates_pass(tmp_path
     assert semantics["validated"] is True
     assert all(status == "pass" for status in semantics["supporting_gates_status"].values())
 
-    # A fully-validated edge is the only one allowed onto the trustworthy board.
     best = tracker.best_by_metric("mean_net_edge_pts_per_trade", n=5)
     assert [row["run_id"] for row in best] == ["run-edge-validated"]
     assert best[0]["edge_metric_semantics_status"] == "complete"
@@ -146,7 +143,7 @@ def test_edge_metric_semantics_validated_when_all_supporting_gates_pass(tmp_path
 def test_edge_metric_semantics_unvalidated_when_supporting_gate_fails(tmp_path: Path):
     tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
     gates = {gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)}
-    gates["inventory_mtm"] = False  # residual-propped edge: supporting gate fails
+    gates["inventory_mtm"] = False
     meta_path = tracker.log_run(
         run_id="run-edge-unvalidated",
         alpha_id="edge_alpha",
@@ -172,8 +169,6 @@ def test_edge_metric_semantics_unvalidated_when_supporting_gate_fails(tmp_path: 
     assert compared["edge_metric_semantics_status"] == "gates_unvalidated"
     assert compared["edge_metric_semantics_failing_gates"] == ["inventory_mtm"]
 
-    # An edge above the floor but with a failed supporting gate must NOT surface
-    # as a trustworthy candidate.
     assert tracker.best_by_metric("mean_net_edge_pts_per_trade", n=5) == []
 
 
@@ -213,8 +208,6 @@ def test_experiment_tracker_compare_and_best(tmp_path: Path):
 
 
 def test_explicit_keep_downgraded_when_edge_unvalidated(tmp_path: Path):
-    # Goal §3: an explicit keep may not override an unvalidated edge. Under a
-    # non-strict profile inventory_mtm can fail as advisory while blocking passes.
     tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
     gates = {gate: True for gate in ("edge_per_round_trip", *_SUPPORTING_EDGE_GATES)}
     gates["inventory_mtm"] = False
@@ -638,18 +631,13 @@ def test_legacy_zero_duration_session_uses_fallback_duration(tmp_path: Path):
     assert summary["min_session_duration_seconds"] == 3600
 
 
-# ---------------------------------------------------------------------------
-# P0-A: session_duration_minutes convenience field
-# ---------------------------------------------------------------------------
-
-
 def test_paper_trade_session_duration_minutes_field(tmp_path: Path):
     """A 65-minute session yields session_duration_minutes == 65."""
     tracker = ExperimentTracker(base_dir=tmp_path / "experiments")
     path = tracker.log_paper_trade_session(
         alpha_id="test_alpha",
         started_at="2026-02-20T09:00:00+00:00",
-        ended_at="2026-02-20T10:05:00+00:00",  # 65 minutes
+        ended_at="2026-02-20T10:05:00+00:00",
         trading_day="2026-02-20",
     )
     import json
@@ -664,7 +652,7 @@ def test_paper_trade_session_duration_minutes_persists(tmp_path: Path):
     path = tracker.log_paper_trade_session(
         alpha_id="test_alpha",
         started_at="2026-02-20T09:00:00+00:00",
-        ended_at="2026-02-20T10:00:00+00:00",  # 60 minutes
+        ended_at="2026-02-20T10:00:00+00:00",
         trading_day="2026-02-20",
     )
     import json
@@ -684,7 +672,7 @@ def test_paper_trade_session_legacy_json_no_minutes_field(tmp_path: Path):
         "session_id": "abc123",
         "started_at": "2026-02-20T09:00:00+00:00",
         "ended_at": "2026-02-20T10:30:00+00:00",
-        "duration_seconds": 5400,  # 90 minutes; no session_duration_minutes key
+        "duration_seconds": 5400,
         "trading_day": "2026-02-20",
         "fills": 0,
         "pnl_bps": 0.0,
@@ -694,11 +682,6 @@ def test_paper_trade_session_legacy_json_no_minutes_field(tmp_path: Path):
     }
     session = _paper_session_from_dict(payload, alpha_id="test_alpha")
     assert session.session_duration_minutes == 90
-
-
-# ---------------------------------------------------------------------------
-# P1: reject_rate_p95 in PaperTradeSession
-# ---------------------------------------------------------------------------
 
 
 def test_paper_trade_session_reject_rate_p95_persists(tmp_path: Path):
@@ -741,11 +724,10 @@ def test_summarize_paper_trade_includes_p95(tmp_path: Path):
             started_at=f"2026-03-0{i + 1}T09:00:00+00:00",
             ended_at=f"2026-03-0{i + 1}T10:00:00+00:00",
             execution_reject_rate=0.005,
-            reject_rate_p95=0.01 * (i + 1),  # 0.01, 0.02, 0.03
+            reject_rate_p95=0.01 * (i + 1),
         )
     summary = tracker.summarize_paper_trade("test_alpha")
     assert summary["execution_reject_rate_p95"] is not None
-    # P95 of [0.01, 0.02, 0.03] ≈ 0.03
     assert summary["execution_reject_rate_p95"] > 0.02
 
 

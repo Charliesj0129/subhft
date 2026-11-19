@@ -29,7 +29,6 @@ class TestTrackGateDefaultClosed:
         gate.get_phase("NEW_SYM")
         gate.get_phase("NEW_SYM")
         gate.get_phase("NEW_SYM")
-        # Logs go to stderr; stdout is reserved for command output.
         captured = capsys.readouterr()
         count = captured.err.count("track_gate_unknown_symbol_blocked")
         assert count == 1, f"Expected 1 warning, got {count}"
@@ -49,11 +48,11 @@ class TestPerIntentGating:
 
         intent_registered = MagicMock()
         intent_registered.symbol = "TXFD6"
-        intent_registered.intent_type = 1  # NEW
+        intent_registered.intent_type = 1
 
         intent_unregistered = MagicMock()
         intent_unregistered.symbol = "NEWHEDGE"
-        intent_unregistered.intent_type = 1  # NEW
+        intent_unregistered.intent_type = 1
 
         intents = [intent_registered, intent_unregistered]
 

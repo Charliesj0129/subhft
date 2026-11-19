@@ -30,10 +30,6 @@ READONLY = {
     "ls-remote",
     "var",
     "help",
-    # Inspection plumbing: writes no ref and no index entry. Like `diff` and
-    # `log` above, diff-tree and range-diff can write a file through --output;
-    # this guard is about git state, and a subagent can already write files.
-    # `archive` stays out: --exec and --remote run a command of the caller's choosing.
     "rev-list",
     "ls-tree",
     "diff-tree",
@@ -56,10 +52,6 @@ def main() -> None:
         sys.exit(0)
     cmd = (e.get("tool_input") or {}).get("command") or ""
     for seg in unattributed_segments(cmd):
-        # `env -u GIT_CONFIG git commit --amend` and `timeout -s TERM 5 git
-        # reset --hard HEAD^` both parsed to NO invocation at all, so a subagent
-        # could destroy user work through a wrapper option that takes a value.
-        # An unreadable git command is not a safe one.
         block(
             f"[git-guard] could not read the git command in {seg!r}. Subagents never mutate "
             "git state, and a command this hook cannot parse is not evidence that it is "

@@ -10,7 +10,6 @@ from hft_platform.order.adapter import OrderAdapter
 class TestOrderLifecycle(unittest.TestCase):
     @unittest.mock.patch("hft_platform.order.adapter.OrderAdapter.load_config")
     def test_lifecycle(self, mock_load):
-        # Setup
         queue = asyncio.Queue()
         client = MagicMock()
         client.get_exchange.return_value = "TSE"
@@ -18,7 +17,6 @@ class TestOrderLifecycle(unittest.TestCase):
 
         adapter = OrderAdapter("config/dummy.yaml", queue, client)
 
-        # 1. Create Order
         intent = OrderIntent(
             intent_id=1,
             strategy_id="strat1",
@@ -31,20 +29,15 @@ class TestOrderLifecycle(unittest.TestCase):
         )
         cmd = OrderCommand(1, intent, time.time_ns() + 1e9, 0)
 
-        # Execute
         asyncio.run(adapter.execute(cmd))
 
-        # Verify added to live_orders
         key = "strat1:1"
         self.assertIn(key, adapter.live_orders)
         self.assertEqual(adapter.order_id_map["123"], key)
         print("Test Step 1: Order added to live_orders and map populated.")
 
-        # 2. Simulate Terminal State (Filled)
-        # Main would call on_terminal_state
         adapter.on_terminal_state("strat1", "1")
 
-        # Verify removed
         self.assertNotIn(key, adapter.live_orders)
         print("Test Step 2: Order removed from live_orders on terminal state.")
 
@@ -58,7 +51,6 @@ class TestOrderLifecycle(unittest.TestCase):
 
         adapter = OrderAdapter("config/dummy.yaml", queue, client)
 
-        # Place Parent
         intent = OrderIntent(
             intent_id=2,
             strategy_id="strat1",
@@ -72,7 +64,6 @@ class TestOrderLifecycle(unittest.TestCase):
         cmd = OrderCommand(2, intent, time.time_ns() + 1e9, 0)
         asyncio.run(adapter.execute(cmd))
 
-        # Cancel
         cancel_intent = OrderIntent(
             intent_id=3,
             strategy_id="strat1",

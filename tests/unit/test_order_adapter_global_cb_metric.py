@@ -26,10 +26,6 @@ from hft_platform.core import timebase
 from hft_platform.order.adapter import OrderAdapter
 from hft_platform.order.circuit_breaker import CircuitBreaker
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 STRATEGY_ID = "strat_cb_metric_test"
 
 
@@ -49,7 +45,7 @@ def _make_intent(**overrides: Any) -> OrderIntent:
 
 
 def _make_cmd(intent: OrderIntent, cmd_id: int = 1) -> OrderCommand:
-    deadline_ns = time.monotonic_ns() + 10_000_000_000  # 10s
+    deadline_ns = time.monotonic_ns() + 10_000_000_000
     return OrderCommand(
         cmd_id=cmd_id,
         intent=intent,
@@ -80,11 +76,6 @@ def _make_adapter(tmp_path: Any, client: Any = None) -> OrderAdapter:
     return adapter
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(autouse=True)
 def mock_deps():
     with (
@@ -107,11 +98,6 @@ def mock_deps():
         yield
 
 
-# ---------------------------------------------------------------------------
-# Test 1: failure path emits set(1) when CB trips
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_cb_metric_set_to_1_when_tripped(tmp_path):
     """After enough failures to trip the global CB, set(1) is called on the gauge."""
@@ -121,15 +107,12 @@ async def test_cb_metric_set_to_1_when_tripped(tmp_path):
 
     adapter = _make_adapter(tmp_path, client=client)
 
-    # Replace CB with a low-threshold one so we can trip it quickly
     adapter.circuit_breaker = CircuitBreaker(threshold=2, timeout_s=60)
 
-    # Build a mock gauge label handle and wire it into metrics
     gauge_label_mock = MagicMock()
     adapter.metrics.circuit_breaker_state = MagicMock()
     adapter.metrics.circuit_breaker_state.labels.return_value = gauge_label_mock
 
-    # Set up codec so dispatch proceeds to broker call
     codec = MagicMock()
     codec.encode_side.return_value = "Buy"
     codec.encode_tif.return_value = "ROD"
@@ -139,26 +122,17 @@ async def test_cb_metric_set_to_1_when_tripped(tmp_path):
     intent = _make_intent()
     cmd = _make_cmd(intent)
 
-    # First failure: CB still closed → set(0) expected
     await adapter._dispatch_to_api(cmd)
     assert gauge_label_mock.set.called
-    # Last call after first failure: CB is still closed (threshold=2, only 1 failure)
     last_val = gauge_label_mock.set.call_args_list[-1].args[0]
     assert last_val == 0, f"Expected 0 (closed) after 1 failure, got {last_val}"
 
-    # Second failure: CB trips → set(1) expected
     await adapter._dispatch_to_api(cmd)
     last_val = gauge_label_mock.set.call_args_list[-1].args[0]
     assert last_val == 1, f"Expected 1 (open) after threshold reached, got {last_val}"
 
-    # Verify labels were called with correct component tag every time
     for c in adapter.metrics.circuit_breaker_state.labels.call_args_list:
         assert c == call(component="order_adapter"), f"Unexpected labels call: {c}"
-
-
-# ---------------------------------------------------------------------------
-# Test 2: success path emits set(0) after CB resets
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -176,14 +150,11 @@ async def test_cb_metric_set_to_0_after_timeout_reset(tmp_path):
 
     adapter = _make_adapter(tmp_path, client=client)
 
-    # Pre-trip the CB using a very short timeout and manually expire it
     adapter.circuit_breaker = CircuitBreaker(threshold=2, timeout_s=0)
     adapter.circuit_breaker.record_failure()
     adapter.circuit_breaker.record_failure()
-    # CB is now open; with timeout_s=0 it should immediately allow next check
     assert adapter.circuit_breaker.is_open() is False, "CB with timeout_s=0 should auto-close after calling is_open()"
 
-    # Wire the metric mock
     gauge_label_mock = MagicMock()
     adapter.metrics.circuit_breaker_state = MagicMock()
     adapter.metrics.circuit_breaker_state.labels.return_value = gauge_label_mock
@@ -199,36 +170,22 @@ async def test_cb_metric_set_to_0_after_timeout_reset(tmp_path):
 
     await adapter._dispatch_to_api(cmd)
 
-    # After a successful dispatch, set(0) should have been called
     assert gauge_label_mock.set.called, "set() should be called after success"
     set_values = [c.args[0] for c in gauge_label_mock.set.call_args_list]
     assert 0 in set_values, f"Expected set(0) in calls: {set_values}"
-
-
-# ---------------------------------------------------------------------------
-# Test 3: _update_cb_metric silently absorbs gauge exceptions
-# ---------------------------------------------------------------------------
 
 
 def test_update_cb_metric_does_not_raise_on_metrics_error(tmp_path):
     """_update_cb_metric must never propagate exceptions from the metrics layer."""
     adapter = _make_adapter(tmp_path)
 
-    # Make the gauge raise an unexpected error
     adapter.metrics.circuit_breaker_state = MagicMock()
     adapter.metrics.circuit_breaker_state.labels.side_effect = RuntimeError("metrics broken")
 
-    # Must not raise
     result = adapter._update_cb_metric()
 
-    # Metrics errors are silently swallowed; circuit breaker state is unchanged
     assert result is None
     assert not adapter.circuit_breaker.is_open()
-
-
-# ---------------------------------------------------------------------------
-# Test 4: validate_client failure path also emits metric
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -240,10 +197,8 @@ async def test_cb_metric_emitted_on_validate_client_failure(tmp_path):
     adapter.metrics.circuit_breaker_state = MagicMock()
     adapter.metrics.circuit_breaker_state.labels.return_value = gauge_label_mock
 
-    # Force _validate_client to return False
     adapter._validate_client = MagicMock(return_value=False)  # type: ignore[method-assign]
 
-    # Bypass other checks
     adapter._broker_codec = MagicMock()
 
     intent = _make_intent()

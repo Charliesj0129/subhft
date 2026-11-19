@@ -32,10 +32,6 @@ from hft_platform.alpha.promotion import (
     build_promotion_checklist,
 )
 
-# ---------------------------------------------------------------------------
-# _validate_alpha_id
-# ---------------------------------------------------------------------------
-
 
 class TestValidateAlphaId:
     def test_valid_simple(self) -> None:
@@ -75,11 +71,6 @@ class TestValidateAlphaId:
             _validate_alpha_id(123)  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
-# _resolve_data_path
-# ---------------------------------------------------------------------------
-
-
 class TestResolveDataPath:
     def test_relative_path(self, tmp_path: Path) -> None:
         result = _resolve_data_path(tmp_path, "data/file.npz")
@@ -89,11 +80,6 @@ class TestResolveDataPath:
         abs_path = str(tmp_path / "abs" / "file.npz")
         result = _resolve_data_path(tmp_path, abs_path)
         assert result == str(Path(abs_path).resolve())
-
-
-# ---------------------------------------------------------------------------
-# _dataset_metadata_candidates
-# ---------------------------------------------------------------------------
 
 
 class TestDatasetMetadataCandidates:
@@ -109,11 +95,6 @@ class TestDatasetMetadataCandidates:
         candidates = _dataset_metadata_candidates(Path("file.csv"))
         assert Path("file.csv.meta.json") in candidates
         assert Path("file.meta.json") in candidates
-
-
-# ---------------------------------------------------------------------------
-# _dataset_row_count
-# ---------------------------------------------------------------------------
 
 
 class TestDatasetRowCount:
@@ -140,11 +121,6 @@ class TestDatasetRowCount:
         assert _dataset_row_count(p) == 15
 
 
-# ---------------------------------------------------------------------------
-# _missing_or_blank_metadata_keys
-# ---------------------------------------------------------------------------
-
-
 class TestMissingOrBlankMetadataKeys:
     def test_all_present(self) -> None:
         meta = {"source": "exchange", "date": "2026-01-01"}
@@ -166,11 +142,6 @@ class TestMissingOrBlankMetadataKeys:
         assert _missing_or_blank_metadata_keys({"tags": ["a"]}, ("tags",)) == []
 
 
-# ---------------------------------------------------------------------------
-# _path_under_any
-# ---------------------------------------------------------------------------
-
-
 class TestPathUnderAny:
     def test_direct_child(self, tmp_path: Path) -> None:
         child = tmp_path / "sub" / "file.txt"
@@ -186,11 +157,6 @@ class TestPathUnderAny:
 
     def test_empty_roots(self, tmp_path: Path) -> None:
         assert _path_under_any(tmp_path / "x", []) is False
-
-
-# ---------------------------------------------------------------------------
-# _resolve_allowed_data_roots
-# ---------------------------------------------------------------------------
 
 
 class TestResolveAllowedDataRoots:
@@ -219,11 +185,6 @@ class TestResolveAllowedDataRoots:
         )
         roots = _resolve_allowed_data_roots(tmp_path, cfg)
         assert len(roots) == 1
-
-
-# ---------------------------------------------------------------------------
-# ValidationConfig / ValidationResult defaults & frozen
-# ---------------------------------------------------------------------------
 
 
 class TestValidationTypes:
@@ -261,11 +222,6 @@ class TestValidationTypes:
             gr.passed = False  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
-# _to_float
-# ---------------------------------------------------------------------------
-
-
 class TestToFloat:
     def test_none(self) -> None:
         assert _to_float(None) is None
@@ -280,13 +236,7 @@ class TestToFloat:
         assert _to_float("abc") is None
 
     def test_bool(self) -> None:
-        # bool is subclass of int, float(True) == 1.0
         assert _to_float(True) == 1.0
-
-
-# ---------------------------------------------------------------------------
-# _resolve_scorecard_path
-# ---------------------------------------------------------------------------
 
 
 class TestResolveScorecardPath:
@@ -306,11 +256,6 @@ class TestResolveScorecardPath:
         alpha_dir = tmp_path / "alphas" / "x"
         result = _resolve_scorecard_path(tmp_path, cfg, alpha_dir)
         assert result == alpha_dir / "scorecard.json"
-
-
-# ---------------------------------------------------------------------------
-# build_promotion_checklist
-# ---------------------------------------------------------------------------
 
 
 class TestBuildPromotionChecklist:
@@ -354,7 +299,6 @@ class TestBuildPromotionChecklist:
             }
         }
         checklist = build_promotion_checklist(cfg, gate_d, gate_e)
-        # 7 base + 4 paper trade
         assert len(checklist.items) == 11
 
     def test_checklist_failing_gate(self) -> None:
@@ -374,11 +318,6 @@ class TestBuildPromotionChecklist:
         }
         checklist = build_promotion_checklist(cfg, gate_d, gate_e)
         assert checklist.all_passed() is False
-
-
-# ---------------------------------------------------------------------------
-# PromotionConfig / PromotionChecklist / PromotionResult types
-# ---------------------------------------------------------------------------
 
 
 class TestPromotionTypes:

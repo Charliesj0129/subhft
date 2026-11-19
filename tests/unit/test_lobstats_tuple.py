@@ -20,10 +20,6 @@ from hft_platform.feed_adapter.lob_engine import BookState
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.runner import _KNOWN_TUPLE_TAGS
 
-# ---------------------------------------------------------------------------
-# 1. BookState.get_stats_tuple() tag
-# ---------------------------------------------------------------------------
-
 
 class TestGetStatsTupleTag:
     """get_stats_tuple() must return a tuple starting with 'lobstats'."""
@@ -43,7 +39,6 @@ class TestGetStatsTupleTag:
         assert len(t) == 10
 
     def test_rust_state_present_still_reads_python_fields(self):
-        # The Rust state misses stats-path updates (it can hold the boot snapshot).
         bs = BookState("SYM")
         mock_rs = MagicMock()
         mock_rs.get_stats_tuple.return_value = ("SYM", 100, 2000, 10, 0.5, 1000, 1010, 50, 30)
@@ -69,11 +64,6 @@ class TestGetStatsTupleTag:
         assert t[0] == "lobstats"
 
 
-# ---------------------------------------------------------------------------
-# 2. _StatsTupleProxy with tagged tuple
-# ---------------------------------------------------------------------------
-
-
 class TestStatsTupleProxyTagged:
     """_StatsTupleProxy must correctly access fields at shifted indices."""
 
@@ -91,11 +81,6 @@ class TestStatsTupleProxyTagged:
         assert proxy.ask_depth == 30
 
 
-# ---------------------------------------------------------------------------
-# 3. Runner tuple guard accepts lobstats
-# ---------------------------------------------------------------------------
-
-
 class TestRunnerTupleGuard:
     """The runner must accept lobstats-tagged tuples (not drop them)."""
 
@@ -104,17 +89,11 @@ class TestRunnerTupleGuard:
 
     def test_tagged_tuple_passes_guard(self):
         event = ("lobstats", "SYM", 1, 2000, 10, 0.5, 1000, 1010, 50, 30)
-        # Guard logic: skip if event[0] not in _KNOWN_TUPLE_TAGS
         assert event[0] in _KNOWN_TUPLE_TAGS
 
     def test_untagged_symbol_would_be_dropped(self):
         event = ("SYM", 1, 2000, 10, 0.5, 1000, 1010, 50, 30)
         assert event[0] not in _KNOWN_TUPLE_TAGS
-
-
-# ---------------------------------------------------------------------------
-# 4. Stats tuple reaches strategy on_stats()
-# ---------------------------------------------------------------------------
 
 
 class TestStrategyOnStatsDispatch:
@@ -138,7 +117,6 @@ class TestStrategyOnStatsDispatch:
         spy.handle_event(ctx, stats_tuple)
 
         assert len(spy.stats_received) == 1
-        # handle_event wraps lobstats tuples in _StatsTupleProxy before on_stats
         received = spy.stats_received[0]
         assert isinstance(received, _StatsTupleProxy)
         assert received.symbol == "TXFD6"

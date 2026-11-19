@@ -15,12 +15,9 @@ from hft_platform.contracts.strategy import IntentType, OrderIntent, StormGuardS
 
 pytestmark = [pytest.mark.system, pytest.mark.asyncio]
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 _SCALE = 10_000
-_TS = 1_000_000_000  # base timestamp (1s in ns)
+_TS = 1_000_000_000
 
 
 def _price(raw: int) -> int:
@@ -161,11 +158,6 @@ async def _run_engine_until_empty(engine, intent_q):
         pass
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
 class TestFullPipelineSingleSymbol:
     """Test 1: Buy/sell cycle -> risk approve -> fill -> position -> PnL."""
 
@@ -173,22 +165,18 @@ class TestFullPipelineSingleSymbol:
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
         store = _make_position_store(monkeypatch)
 
-        # Submit buy intent
         buy_intent = _make_intent(intent_id=1, side=Side.BUY, price=_price(100), qty=10)
         await intent_q.put(buy_intent)
         await _run_engine_until_empty(engine, intent_q)
 
-        # Risk should approve
         assert not order_q.empty()
         buy_cmd = await order_q.get()
         assert buy_cmd.intent.side == Side.BUY
 
-        # Simulate fill
         buy_fill = _make_fill(side=Side.BUY, price=_price(100), qty=10, fee=100, tax=0)
         delta = store.on_fill(buy_fill)
         assert delta.net_qty == 10
 
-        # Submit sell intent at higher price
         sell_intent = _make_intent(intent_id=2, side=Side.SELL, price=_price(105), qty=10)
         await intent_q.put(sell_intent)
         await _run_engine_until_empty(engine, intent_q)
@@ -204,9 +192,7 @@ class TestFullPipelineSingleSymbol:
         )
         delta = store.on_fill(sell_fill)
 
-        # Position should be flat
         assert delta.net_qty == 0
-        # PnL = (105 - 100) * 10000 * 10 = 500_000
         assert delta.realized_pnl == _price(5) * 10
 
 
@@ -220,20 +206,17 @@ class TestFullPipelineMultiSymbol:
         symbols = ["2330", "2317", "2454"]
         prices = [_price(100), _price(200), _price(50)]
 
-        # Submit buy intents for all symbols
         for i, (sym, px) in enumerate(zip(symbols, prices)):
             intent = _make_intent(intent_id=i + 1, symbol=sym, side=Side.BUY, price=px, qty=5)
             await intent_q.put(intent)
 
         await _run_engine_until_empty(engine, intent_q)
 
-        # All should be approved
         commands = []
         while not order_q.empty():
             commands.append(await order_q.get())
         assert len(commands) == 3
 
-        # Process fills
         for i, (sym, px) in enumerate(zip(symbols, prices)):
             fill = _make_fill(
                 order_id=f"ORD-{i}",
@@ -255,7 +238,6 @@ class TestSessionBoundaryFlatPositions:
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
         store = _make_position_store(monkeypatch)
 
-        # Open: buy 2330, sell-short 2317
         fills = [
             _make_fill(order_id="O1", symbol="2330", side=Side.BUY, price=_price(100), qty=10),
             _make_fill(order_id="O2", symbol="2317", side=Side.SELL, price=_price(200), qty=5),
@@ -268,7 +250,6 @@ class TestSessionBoundaryFlatPositions:
         assert store.positions[key_2330].net_qty == 10
         assert store.positions[key_2317].net_qty == -5
 
-        # Close all
         close_fills = [
             _make_fill(order_id="O3", symbol="2330", side=Side.SELL, price=_price(105), qty=10),
             _make_fill(order_id="O4", symbol="2317", side=Side.BUY, price=_price(195), qty=5),
@@ -286,13 +267,11 @@ class TestPnLAccountingEndToEnd:
     async def test_pnl_sum_exact(self, tmp_path, monkeypatch):
         store = _make_position_store(monkeypatch)
 
-        # Trade 1: Buy 100 sell 110 -> profit 10*5 = 50 per unit scaled
         buy1 = _make_fill(order_id="O1", symbol="2330", side=Side.BUY, price=_price(100), qty=5, fee=50, tax=0)
         store.on_fill(buy1)
         sell1 = _make_fill(order_id="O2", symbol="2330", side=Side.SELL, price=_price(110), qty=5, fee=50, tax=100)
         d1 = store.on_fill(sell1)
 
-        # Trade 2: Buy 200 sell 190 -> loss -10*3 = -30 per unit scaled
         buy2 = _make_fill(order_id="O3", symbol="2317", side=Side.BUY, price=_price(200), qty=3, fee=30, tax=0)
         store.on_fill(buy2)
         sell2 = _make_fill(order_id="O4", symbol="2317", side=Side.SELL, price=_price(190), qty=3, fee=30, tax=60)
@@ -304,9 +283,7 @@ class TestPnLAccountingEndToEnd:
         pnl_2330 = store.positions[key_2330].realized_pnl_scaled
         pnl_2317 = store.positions[key_2317].realized_pnl_scaled
 
-        # PnL 2330: (110-100)*10000*5 = 500_000
         assert pnl_2330 == _price(10) * 5
-        # PnL 2317: (190-200)*10000*3 = -300_000
         assert pnl_2317 == _price(-10) * 3
 
         total = store.total_pnl
@@ -320,22 +297,17 @@ class TestRiskRejectionFlow:
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
         store = _make_position_store(monkeypatch)
 
-        # Zero price intent
         bad_intent = _make_intent(intent_id=1, price=0, qty=5)
         await intent_q.put(bad_intent)
         await _run_engine_until_empty(engine, intent_q)
 
-        # Order queue should be empty (rejected)
         assert order_q.empty()
-        # No positions
         assert len(store.positions) == 0
 
     async def test_float_price_rejected(self, tmp_path, monkeypatch):
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
 
-        # Float price — create intent with float price via direct attribute set
         intent = _make_intent(intent_id=2, price=1000000, qty=5)
-        # Override price with float to trigger FLOAT_PRICE rejection
         object.__setattr__(intent, "price", 100.5)
 
         decision = engine.evaluate(intent)
@@ -352,13 +324,11 @@ class TestStormGuardHaltMidSession:
         engine.storm_guard.trigger_halt("test halt")
         assert engine.storm_guard.state == StormGuardState.HALT
 
-        # NEW order should be rejected
         new_intent = _make_intent(intent_id=1, side=Side.BUY, price=_price(100), qty=5)
         decision = engine.evaluate(new_intent)
         assert not decision.approved
         assert decision.reason_code == "STORMGUARD_HALT"
 
-        # CANCEL should still be allowed
         cancel_intent = _make_intent(
             intent_id=2,
             intent_type=IntentType.CANCEL,
@@ -369,11 +339,9 @@ class TestStormGuardHaltMidSession:
         cancel_decision = engine.evaluate(cancel_intent)
         assert cancel_decision.approved
 
-        # Recovery: drawdown clears all thresholds
         engine.storm_guard.update()
         assert engine.storm_guard.state == StormGuardState.NORMAL
 
-        # New orders should now be approved again
         recovery_intent = _make_intent(intent_id=3, side=Side.BUY, price=_price(100), qty=5)
         recovery_decision = engine.evaluate(recovery_intent)
         assert recovery_decision.approved
@@ -389,9 +357,7 @@ class TestFeeAccumulationFullDay:
         fills = [
             _make_fill(order_id="O1", side=Side.BUY, price=_price(100), qty=10, fee=150, tax=0),
             _make_fill(order_id="O2", side=Side.BUY, price=_price(101), qty=5, fee=75, tax=0),
-            _make_fill(
-                order_id="O3", side=Side.SELL, price=_price(105), qty=15, fee=675, tax=450
-            ),  # fee is all-in: 225 charge + 450 tax
+            _make_fill(order_id="O3", side=Side.SELL, price=_price(105), qty=15, fee=675, tax=450),
         ]
         for fill in fills:
             expected_total_fees += fill.fee
@@ -400,7 +366,7 @@ class TestFeeAccumulationFullDay:
         key = "ACC-001:strat_a:2330"
         actual_fees = store.positions[key].fees_scaled
         assert actual_fees == expected_total_fees
-        assert actual_fees == 150 + 75 + 225 + 450  # 900
+        assert actual_fees == 150 + 75 + 225 + 450
 
 
 class TestPositionFlipDuringSession:
@@ -409,21 +375,17 @@ class TestPositionFlipDuringSession:
     async def test_long_to_short_flip(self, tmp_path, monkeypatch):
         store = _make_position_store(monkeypatch)
 
-        # Open long: buy 10 @ 100
         buy = _make_fill(order_id="O1", side=Side.BUY, price=_price(100), qty=10, fee=0, tax=0)
         store.on_fill(buy)
 
         key = "ACC-001:strat_a:2330"
         assert store.positions[key].net_qty == 10
 
-        # Sell 15 @ 110 -> close 10 long + open 5 short
         sell = _make_fill(order_id="O2", side=Side.SELL, price=_price(110), qty=15, fee=0, tax=0)
         delta = store.on_fill(sell)
 
         assert delta.net_qty == -5
-        # PnL on closing 10 units: (110-100)*10000*10 = 1_000_000
         assert store.positions[key].realized_pnl_scaled == _price(10) * 10
-        # Avg price for new short should be the sell price
         assert store.positions[key].avg_price_scaled == _price(110)
 
 
@@ -433,7 +395,6 @@ class TestMultipleStrategiesSameSymbol:
     async def test_independent_tracking(self, tmp_path, monkeypatch):
         store = _make_position_store(monkeypatch)
 
-        # Strategy A buys 2330
         fill_a = _make_fill(
             order_id="OA1",
             strategy_id="strat_a",
@@ -444,7 +405,6 @@ class TestMultipleStrategiesSameSymbol:
         )
         store.on_fill(fill_a)
 
-        # Strategy B sells 2330
         fill_b = _make_fill(
             order_id="OB1",
             strategy_id="strat_b",
@@ -461,7 +421,6 @@ class TestMultipleStrategiesSameSymbol:
         assert store.positions[key_a].net_qty == 10
         assert store.positions[key_b].net_qty == -5
 
-        # Close strategy A: sell 10
         close_a = _make_fill(
             order_id="OA2",
             strategy_id="strat_a",
@@ -474,7 +433,6 @@ class TestMultipleStrategiesSameSymbol:
         )
         store.on_fill(close_a)
 
-        # Close strategy B: buy 5
         close_b = _make_fill(
             order_id="OB2",
             strategy_id="strat_b",
@@ -490,9 +448,7 @@ class TestMultipleStrategiesSameSymbol:
         assert store.positions[key_a].net_qty == 0
         assert store.positions[key_b].net_qty == 0
 
-        # Strategy A PnL: (110-100)*10000*10 = 1_000_000
         assert store.positions[key_a].realized_pnl_scaled == _price(10) * 10
-        # Strategy B PnL (short): (100-95)*10000*5 = 250_000
         assert store.positions[key_b].realized_pnl_scaled == _price(5) * 5
 
 
@@ -513,7 +469,6 @@ class TestHighThroughput:
 
         await _run_engine_until_empty(engine, intent_q)
 
-        # All should be approved (prices within valid range)
         approved_count = 0
         while not order_q.empty():
             await order_q.get()
@@ -529,7 +484,6 @@ class TestOrderLifecycleComplete:
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
         store = _make_position_store(monkeypatch)
 
-        # Submit intent for 100 qty
         intent = _make_intent(intent_id=1, side=Side.BUY, price=_price(100), qty=100)
         await intent_q.put(intent)
         await _run_engine_until_empty(engine, intent_q)
@@ -537,17 +491,14 @@ class TestOrderLifecycleComplete:
         cmd = await order_q.get()
         assert cmd.intent.qty == 100
 
-        # Partial fill: 30
         fill1 = _make_fill(order_id="ORD-001", side=Side.BUY, price=_price(100), qty=30, fee=30)
         d1 = store.on_fill(fill1)
         assert d1.net_qty == 30
 
-        # Partial fill: 50
         fill2 = _make_fill(order_id="ORD-001", side=Side.BUY, price=_price(100), qty=50, fee=50, match_ts_ns=_TS + 1)
         d2 = store.on_fill(fill2)
         assert d2.net_qty == 80
 
-        # Final fill: 20
         fill3 = _make_fill(order_id="ORD-001", side=Side.BUY, price=_price(100), qty=20, fee=20, match_ts_ns=_TS + 2)
         d3 = store.on_fill(fill3)
         assert d3.net_qty == 100
@@ -555,7 +506,7 @@ class TestOrderLifecycleComplete:
         key = "ACC-001:strat_a:2330"
         assert store.positions[key].net_qty == 100
         assert store.positions[key].avg_price_scaled == _price(100)
-        assert store.positions[key].fees_scaled == 100  # 30+50+20
+        assert store.positions[key].fees_scaled == 100
 
 
 class TestIdempotency:
@@ -571,7 +522,6 @@ class TestIdempotency:
         """
         engine, intent_q, order_q = _make_engine(tmp_path, monkeypatch)
 
-        # Two intents with same idempotency key
         intent1 = _make_intent(intent_id=1, price=_price(100), qty=5, idempotency_key="DEDUP-001")
         intent2 = _make_intent(intent_id=2, price=_price(100), qty=5, idempotency_key="DEDUP-001")
 
@@ -579,13 +529,11 @@ class TestIdempotency:
         await intent_q.put(intent2)
         await _run_engine_until_empty(engine, intent_q)
 
-        # Both pass risk (dedup is at gateway layer, not risk)
         commands = []
         while not order_q.empty():
             commands.append(await order_q.get())
         assert len(commands) == 2
 
-        # Verify position store handles duplicate fills correctly
         store = _make_position_store(monkeypatch)
 
         fill1 = _make_fill(order_id="ORD-DUP1", side=Side.BUY, price=_price(100), qty=5, fee=50)
@@ -595,6 +543,5 @@ class TestIdempotency:
         store.on_fill(fill2)
 
         key = "ACC-001:strat_a:2330"
-        # Both fills accumulate
         assert store.positions[key].net_qty == 10
-        assert store.positions[key].fees_scaled == 100  # 50+50
+        assert store.positions[key].fees_scaled == 100

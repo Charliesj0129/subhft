@@ -6,8 +6,6 @@ from unittest.mock import MagicMock, patch
 from hft_platform.contracts.strategy import IntentType, OrderIntent, Side
 from hft_platform.risk.validators import PriceBandValidator
 
-# Default scale factor is 10,000 (from FixedPriceScaleProvider)
-# So $100.00 -> 1,000,000 scaled
 SCALE = 10_000
 
 
@@ -17,13 +15,12 @@ class TestPriceBandValidatorBasic(unittest.TestCase):
     def setUp(self):
         self.config = {
             "global_defaults": {
-                "max_price_cap": 5000.0,  # $5000 max -> 50,000,000 scaled
+                "max_price_cap": 5000.0,
                 "price_band_ticks": 20,
-                "tick_size": 0.01,  # 1 cent tick -> 100 scaled
+                "tick_size": 0.01,
             },
             "strategies": {},
         }
-        # Mock the metrics registry
         self.metrics_patcher = patch("hft_platform.risk.storm_guard.MetricsRegistry.get")
         self.mock_metrics = self.metrics_patcher.start()
         self.mock_metrics.return_value = MagicMock()
@@ -85,9 +82,7 @@ class TestPriceBandValidatorBasic(unittest.TestCase):
     def test_price_exceeds_cap_rejected(self):
         """Price exceeding max cap should be rejected."""
         validator = PriceBandValidator(self.config)
-        # max_price_cap=5000.0 with scale=10,000 -> 50,000,000 scaled
-        # Create price that exceeds this
-        intent = self._make_intent(price=60_000_000)  # $6000 scaled
+        intent = self._make_intent(price=60_000_000)
 
         approved, reason = validator.check(intent)
 
@@ -97,7 +92,6 @@ class TestPriceBandValidatorBasic(unittest.TestCase):
     def test_valid_price_approved_without_lob(self):
         """Valid price should be approved when no LOB available."""
         validator = PriceBandValidator(self.config)
-        # Price of $100 scaled (1,000,000) is under cap
         intent = self._make_intent(price=1_000_000)
 
         approved, reason = validator.check(intent)
@@ -118,22 +112,20 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
     def setUp(self):
         self.config = {
             "global_defaults": {
-                "max_price_cap": 5000.0,  # $5000 -> 50,000,000 scaled
+                "max_price_cap": 5000.0,
                 "price_band_ticks": 20,
-                "tick_size": 0.01,  # $0.01 -> 100 scaled
+                "tick_size": 0.01,
             },
             "strategies": {
                 "aggressive_strategy": {
-                    "price_band_ticks": 50,  # More permissive
+                    "price_band_ticks": 50,
                 },
             },
         }
-        # Mock metrics
         self.metrics_patcher = patch("hft_platform.risk.storm_guard.MetricsRegistry.get")
         self.mock_metrics = self.metrics_patcher.start()
         self.mock_metrics.return_value = MagicMock()
 
-        # Mock LOB engine
         self.mock_lob = MagicMock()
         self.mock_lob.get_book.return_value = None
         self.mock_lob.get_l1_scaled.return_value = None
@@ -164,16 +156,13 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
 
     def test_price_within_band_approved(self):
         """Price within band around mid price should be approved."""
-        # Mid price = 1,000,000 (= $100.00 with scale=10,000, already scaled)
-        # Band = 20 ticks * 0.01 * 10,000 scale = 2,000
-        # Valid range: [998,000, 1,002,000]
         self.mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 1_000_000.0,  # Already scaled (mid_price_x2 / 2.0)
+            "mid_price": 1_000_000.0,
         }
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        intent = self._make_intent(price=1_000_000)  # Exactly mid price
+        intent = self._make_intent(price=1_000_000)
 
         approved, reason = validator.check(intent)
 
@@ -184,12 +173,10 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
         """Price at edge of band should be approved."""
         self.mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 1_000_000.0,  # Already scaled
+            "mid_price": 1_000_000.0,
         }
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        # Band = 20 * 0.01 * 10,000 = 2,000
-        # Price at lower edge: 1,000,000 - 2,000 = 998,000
         intent = self._make_intent(price=998_000)
 
         approved, reason = validator.check(intent)
@@ -200,12 +187,10 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
         """Price outside band should be rejected."""
         self.mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 1_000_000.0,  # Already scaled
+            "mid_price": 1_000_000.0,
         }
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        # Band = 20 * 0.01 * 10,000 = 2,000
-        # Price way outside: 1,000,000 - 5,000 = 995,000
         intent = self._make_intent(price=995_000)
 
         approved, reason = validator.check(intent)
@@ -217,12 +202,10 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
         """Price above band should be rejected."""
         self.mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 1_000_000.0,  # Already scaled
+            "mid_price": 1_000_000.0,
         }
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        # Band = 2,000
-        # Price way above: 1,000,000 + 5,000 = 1,005,000
         intent = self._make_intent(price=1_005_000)
 
         approved, reason = validator.check(intent)
@@ -234,13 +217,10 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
         """Strategy-specific band_ticks should be used."""
         self.mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 1_000_000.0,  # Already scaled
+            "mid_price": 1_000_000.0,
         }
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        # Use aggressive_strategy with band_ticks=50
-        # Band = 50 * 0.01 * 10,000 = 5,000
-        # Price outside default band (2,000) but within aggressive band (5,000)
         intent = self._make_intent(price=996_000, strategy_id="aggressive_strategy")
 
         approved, reason = validator.check(intent)
@@ -251,16 +231,14 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
         """When no mid price available, band check is skipped."""
         self.mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 0,  # No mid price
+            "mid_price": 0,
         }
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        # Price under max_price_cap (5000 * 10,000 = 50,000,000)
         intent = self._make_intent(price=1_000_000)
 
         approved, reason = validator.check(intent)
 
-        # Should pass because band check is skipped (no reference price)
         self.assertTrue(approved)
 
     def test_lob_exception_skips_band_check(self):
@@ -268,12 +246,10 @@ class TestPriceBandValidatorWithLOB(unittest.TestCase):
         self.mock_lob.get_book_snapshot.side_effect = RuntimeError("LOB error")
 
         validator = PriceBandValidator(self.config, lob=self.mock_lob)
-        # Price under max cap
         intent = self._make_intent(price=1_000_000)
 
         approved, reason = validator.check(intent)
 
-        # Should pass because band check is skipped on error
         self.assertTrue(approved)
 
 
@@ -294,16 +270,14 @@ class TestPriceBandValidatorMidPriceRetrieval(unittest.TestCase):
         mock_lob = MagicMock()
         mock_lob.get_book.return_value = None
         mock_lob.get_l1_scaled.return_value = None
-        # LOB stores mid_price already in scaled units (mid_price_x2 / 2.0)
         mock_lob.get_book_snapshot.return_value = {
             "symbol": "2330",
-            "mid_price": 1_005_000.0,  # Already scaled float ($100.50)
+            "mid_price": 1_005_000.0,
         }
 
         validator = PriceBandValidator(self.config, lob=mock_lob)
         mid_price = validator._get_mid_price("2330")
 
-        # mid_price is already scaled, just converted to int
         self.assertEqual(mid_price, 1_005_000)
 
     def test_get_mid_price_returns_none_on_error(self):

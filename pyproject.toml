@@ -41,6 +41,8 @@ dev = [
     "pre-commit>=3.7.0",
     "pytest-benchmark>=4.0.0",
     "pyarrow>=23.0.1",
+    "tree-sitter>=0.26.1",
+    "tree-sitter-rust>=0.24.2",
 ]
 
 research = [

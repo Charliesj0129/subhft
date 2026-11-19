@@ -26,7 +26,6 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
         queue = asyncio.Queue()
 
         with patch("hft_platform.recorder.worker.DataWriter") as MockWriter:
-            # Setup mock writer
             mock_writer_inst = MockWriter.return_value
             mock_writer_inst.active = True
             mock_writer_inst.connect_async = AsyncMock()
@@ -37,16 +36,13 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
 
             worker = RecorderService(queue)
 
-            # Add items with correct schema
             await queue.put({"topic": "market_data", "data": {"price": 100}})
             await queue.put({"topic": "market_data", "data": {"price": 101}})
 
             task = asyncio.create_task(worker.run())
 
-            # Allow loop to process items
             await asyncio.sleep(0.1)
 
-            # Force flush manually since timing is flaky
             for b_name, b in worker.batchers.items():
                 await b.force_flush()
 
@@ -59,7 +55,6 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
 
-            # The worker calls batcher, batcher calls writer.write_columnar (or write)
             self.assertTrue(mock_writer_inst.write_columnar.called or mock_writer_inst.write.called)
 
     async def test_recover_wal_skips_when_disabled(self):
@@ -70,7 +65,6 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
                 worker = RecorderService(queue)
                 with patch("hft_platform.recorder.worker.logger.info") as log_info:
                     await worker.recover_wal()
-                    # CE3-01: message now includes mode kwarg
                     calls = [str(c) for c in log_info.call_args_list]
                     assert any("Skipping WAL Recovery" in c for c in calls), (
                         f"Expected 'Skipping WAL Recovery' log, got: {calls}"
@@ -131,11 +125,6 @@ class TestRecorderService(unittest.IsolatedAsyncioTestCase):
                             log_info.assert_any_call("WAL Recovery Complete")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Pure-function extractor tests (no async, high coverage gain)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class TestExtractMarketDataValues(unittest.TestCase):
     def test_extract_dict_returns_correct_length(self):
         row = {
@@ -167,9 +156,9 @@ class TestExtractMarketDataValues(unittest.TestCase):
         row = {"symbol": "2330", "exch": "OTC", "ts": 999, "recv_ts": 1000, "seq": 7}
         result = _extract_market_data_values(row)
         assert result is not None
-        assert result[1] == "OTC"  # exchange fallback to exch
-        assert result[3] == 999  # exch_ts fallback to ts
-        assert result[11] == 7  # seq_no fallback to seq
+        assert result[1] == "OTC"
+        assert result[3] == 999
+        assert result[11] == 7
 
     def test_extract_dict_defaults_exchange_to_tse(self):
         row = {"symbol": "2330"}
@@ -324,28 +313,28 @@ class TestExtractOrderValues(unittest.TestCase):
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD1"
-        assert result[1] == ""  # client_order_id default
+        assert result[1] == ""
         assert result[4] == "buy"
-        assert result[9] == 42  # latency_us
-        assert result[10] == "stock"  # instrument_type
-        assert result[11] == ""  # oc_type
+        assert result[9] == 42
+        assert result[10] == "stock"
+        assert result[11] == ""
 
     def test_extract_dict_fallback_keys(self):
         row = {"order_id": "X", "action": "sell", "quantity": 3, "recv_ts": 51}
         result = _extract_order_values(row)
         assert result is not None
-        assert result[4] == "sell"  # side fallback to action
-        assert result[6] == 3  # qty fallback to quantity
-        assert result[8] == 51  # ingest_ts fallback to recv_ts
-        assert result[9] == 0  # latency_us default
+        assert result[4] == "sell"
+        assert result[6] == 3
+        assert result[8] == 51
+        assert result[9] == 0
 
     def test_extract_dict_instrument_type_defaults_to_empty(self):
         """instrument_type and oc_type default to empty string when absent."""
         row = {"order_id": "X", "symbol": "2330"}
         result = _extract_order_values(row)
         assert result is not None
-        assert result[10] == ""  # instrument_type default
-        assert result[11] == ""  # oc_type default
+        assert result[10] == ""
+        assert result[11] == ""
 
     def test_extract_object_path(self):
         row = SimpleNamespace(
@@ -365,17 +354,17 @@ class TestExtractOrderValues(unittest.TestCase):
         assert result is not None
         assert len(result) == len(ORDER_COLUMNS)
         assert result[0] == "ORD2"
-        assert result[9] == 100  # latency_us
-        assert result[10] == "futures"  # instrument_type
-        assert result[11] == ""  # oc_type
+        assert result[9] == 100
+        assert result[10] == "futures"
+        assert result[11] == ""
 
     def test_extract_object_instrument_type_defaults_to_empty(self):
         """Object without instrument_type defaults to empty string."""
         row = SimpleNamespace(order_id="X", symbol="2330")
         result = _extract_order_values(row)
         assert result is not None
-        assert result[10] == ""  # instrument_type default
-        assert result[11] == ""  # oc_type default
+        assert result[10] == ""
+        assert result[11] == ""
 
     def test_compat_wrapper_returns_dict(self):
         row = {"order_id": "X", "symbol": "2330"}
@@ -409,23 +398,23 @@ class TestExtractFillValues(unittest.TestCase):
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == 1000  # ts_exchange
-        assert result[1] == 1001  # ts_local
-        assert result[2] == ""  # client_order_id
-        assert result[3] == "ORD1"  # broker_order_id
-        assert result[4] == "F1"  # fill_id
-        assert result[5] == "S1"  # strategy_id
-        assert result[6] == "2330"  # symbol
-        assert result[7] == "BUY"  # side
-        assert result[8] == 1  # qty
-        assert result[9] == 5950000  # price_scaled
-        assert result[10] == 200  # fee_scaled
-        assert result[11] == 50  # tax_scaled
-        assert result[12] == 0  # decision_price (default)
-        assert result[13] == 0  # arrival_price (default)
-        assert result[14] == "shioaji"  # source
-        assert result[15] == "stock"  # instrument_type
-        assert result[16] == ""  # oc_type
+        assert result[0] == 1000
+        assert result[1] == 1001
+        assert result[2] == ""
+        assert result[3] == "ORD1"
+        assert result[4] == "F1"
+        assert result[5] == "S1"
+        assert result[6] == "2330"
+        assert result[7] == "BUY"
+        assert result[8] == 1
+        assert result[9] == 5950000
+        assert result[10] == 200
+        assert result[11] == 50
+        assert result[12] == 0
+        assert result[13] == 0
+        assert result[14] == "shioaji"
+        assert result[15] == "stock"
+        assert result[16] == ""
 
     def test_extract_dict_backward_compat_old_field_names(self):
         """Dict with old field names (match_ts, order_id) still works via fallbacks."""
@@ -443,37 +432,37 @@ class TestExtractFillValues(unittest.TestCase):
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == 1000  # ts_exchange from match_ts fallback
-        assert result[3] == "ORD1"  # broker_order_id from order_id fallback
-        assert result[4] == "F1"  # fill_id
+        assert result[0] == 1000
+        assert result[3] == "ORD1"
+        assert result[4] == "F1"
 
     def test_extract_dict_trade_id_fallback(self):
         """fill_id falls back to trade_id for backward compatibility."""
         row = {"trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[4] == "T999"  # fill_id index 4 falls back to trade_id
+        assert result[4] == "T999"
 
     def test_extract_dict_fill_id_preferred(self):
         row = {"fill_id": "F999", "trade_id": "T999", "order_id": "ORD1", "symbol": "2330"}
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[4] == "F999"  # fill_id preferred over trade_id
+        assert result[4] == "F999"
 
     def test_extract_dict_exch_ts_fallback(self):
         """ts_exchange falls back to exch_ts then ts."""
         row = {"fill_id": "F1", "symbol": "2330", "exch_ts": 5000}
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == 5000  # ts_exchange from exch_ts fallback
+        assert result[0] == 5000
 
     def test_extract_dict_instrument_type_defaults_to_empty(self):
         """instrument_type and oc_type default to empty string when absent."""
         row = {"fill_id": "F1", "symbol": "2330"}
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[15] == ""  # instrument_type default
-        assert result[16] == ""  # oc_type default
+        assert result[15] == ""
+        assert result[16] == ""
 
     def test_extract_object_new_schema(self):
         row = SimpleNamespace(
@@ -496,23 +485,23 @@ class TestExtractFillValues(unittest.TestCase):
         result = _extract_fill_values(row)
         assert result is not None
         assert len(result) == len(FILL_COLUMNS)
-        assert result[0] == 4000  # ts_exchange
-        assert result[4] == "F2"  # fill_id
-        assert result[10] == 150  # fee_scaled
-        assert result[11] == 30  # tax_scaled
-        assert result[12] == 0  # decision_price (default)
-        assert result[13] == 0  # arrival_price (default)
-        assert result[14] == "shioaji"  # source
-        assert result[15] == "futures"  # instrument_type
-        assert result[16] == ""  # oc_type
+        assert result[0] == 4000
+        assert result[4] == "F2"
+        assert result[10] == 150
+        assert result[11] == 30
+        assert result[12] == 0
+        assert result[13] == 0
+        assert result[14] == "shioaji"
+        assert result[15] == "futures"
+        assert result[16] == ""
 
     def test_extract_object_instrument_type_defaults_to_empty(self):
         """Object without instrument_type defaults to empty string."""
         row = SimpleNamespace(fill_id="F1", order_id="X", symbol="2330")
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[15] == ""  # instrument_type default
-        assert result[16] == ""  # oc_type default
+        assert result[15] == ""
+        assert result[16] == ""
 
     def test_extract_object_old_field_fallback(self):
         """Object with old field names (match_ts, order_id) uses fallbacks."""
@@ -531,15 +520,15 @@ class TestExtractFillValues(unittest.TestCase):
         )
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[0] == 5000  # ts_exchange from match_ts
-        assert result[1] == 5001  # ts_local from ingest_ts
-        assert result[3] == "ORD3"  # broker_order_id from order_id
+        assert result[0] == 5000
+        assert result[1] == 5001
+        assert result[3] == "ORD3"
 
     def test_extract_object_trade_id_fallback(self):
         row = SimpleNamespace(trade_id="T888", order_id="X", symbol="2330")
         result = _extract_fill_values(row)
         assert result is not None
-        assert result[4] == "T888"  # fill_id at index 4
+        assert result[4] == "T888"
 
     def test_compat_wrapper_returns_dict(self):
         row = {"fill_id": "F1", "symbol": "2330"}
@@ -572,7 +561,6 @@ class TestExtractFillValues(unittest.TestCase):
             "source",
             "instrument_type",
             "oc_type",
-            # L7 audit columns
             "trace_id",
             "feature_snapshot_id",
             "risk_decision_id",
@@ -618,11 +606,6 @@ class TestExtractPnlSnapshotValues(unittest.TestCase):
         assert result is None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RecorderService additional coverage
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
     def _make_worker(self, env_override=None):
         env = env_override or {}
@@ -652,13 +635,11 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
         async def fake_to_thread(func, *args, **kwargs):
             raise RuntimeError("connection refused")
 
-        # Verify the exception is swallowed — no unhandled raise.
         try:
             with patch("hft_platform.recorder.worker.asyncio.to_thread", new=fake_to_thread):
                 await worker.recover_wal()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.fail(f"recover_wal raised unexpectedly: {exc}")
-        # Post-condition: worker state unchanged
         assert worker.running is False
 
     async def test_run_wal_first_mode_routes_to_wal_writer(self):
@@ -673,7 +654,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
         mock_disk_monitor.start = MagicMock()
         mock_batch_writer = MagicMock()
 
-        # Patch at the source module paths (where they are imported from inside run())
         with (
             patch("hft_platform.recorder.disk_monitor.DiskPressureMonitor", return_value=mock_disk_monitor),
             patch("hft_platform.recorder.wal.WALBatchWriter", return_value=mock_batch_writer),
@@ -725,7 +705,7 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
 
         worker._mode = RecorderMode.WAL_FIRST
         mock_wal_writer = MagicMock()
-        mock_wal_writer.write = AsyncMock(return_value=False)  # simulate failure
+        mock_wal_writer.write = AsyncMock(return_value=False)
         worker._wal_first_writer = mock_wal_writer
         worker.writer.connect_async = AsyncMock()
         worker.writer.shutdown = AsyncMock()
@@ -784,7 +764,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
             mock_inst.set_health_tracker = MagicMock()
             with patch.dict(os.environ, env, clear=False):
                 worker = RecorderService(queue)
-        # When extractors are disabled, they should be None on the batcher
         batcher = worker.batchers["market_data"]
         assert batcher._extractor is None
 
@@ -818,7 +797,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
             worker.writer.connect_async = AsyncMock()
             worker.writer.shutdown = AsyncMock()
 
-            # Send list-typed data to cover the isinstance(data, list) branch
             await queue.put({"topic": "market_data", "data": [{"symbol": "2330"}, {"symbol": "TXFD6"}]})
             task = asyncio.create_task(worker.run())
             await asyncio.sleep(0.15)
@@ -831,7 +809,6 @@ class TestRecorderServiceExtra(unittest.IsolatedAsyncioTestCase):
 
         assert mock_wal_writer.write.called
         call_args = mock_wal_writer.write.call_args
-        # rows should be the list as-is
         assert call_args[0][0] == "market_data"
         assert len(call_args[0][1]) == 2
 

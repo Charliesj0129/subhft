@@ -16,42 +16,32 @@ import numpy as np
 class BacktestResult:
     """Unified backtest result for maker and taker strategies."""
 
-    # Identity
     run_id: str
     config_hash: str
     instrument: str
     strategy_name: str
     strategy_type: Literal["maker", "taker"]
 
-    # Engine provenance
     engine: str
     queue_model: str
     calibration_profile_id: str
     data_source: str
     latency_profile: str
 
-    # Core metrics
     pnl_pts: float
     n_fills: int
     n_trading_days: int
     equity_curve: np.ndarray
 
-    # Maker-specific (None for taker)
     pnl_per_fill: float | None = None
     adverse_fill_pct: float | None = None
     fill_rate_per_day: float | None = None
 
-    # Taker-specific (None for maker)
     ic_is: float | None = None
     ic_oos: float | None = None
 
-    # Optional daily-pnl series for sub-gate computations
     daily_pnl: list[float] = field(default_factory=list)
 
-    # Slice C: optional replay-parity report attached by the backtest runner
-    # so ReplayParityGate (and other consumers) can read the precomputed
-    # report directly off the dataclass. Default None preserves backward
-    # compatibility with all existing callers.
     replay_parity_report: Any | None = None
 
     def to_provenance_dict(self) -> dict:
