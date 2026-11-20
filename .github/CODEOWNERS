@@ -9,7 +9,6 @@
 /src/hft_platform/gateway/ @Charliesj0129
 /src/hft_platform/recorder/ @Charliesj0129
 /src/hft_platform/services/ @Charliesj0129
-/rust_core/ @Charliesj0129
 /tests/integration/ @Charliesj0129
 /tests/system/ @Charliesj0129
 /.github/workflows/ @Charliesj0129

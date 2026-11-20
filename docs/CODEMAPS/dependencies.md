@@ -34,7 +34,6 @@
 | Package | Version | Purpose |
 |---------|---------|---------|
 | numba | >=0.61 | JIT kernels (IPC, ShmRingBuffer) |
-| maturin | (dev) | Rust extension build |
 
 ### Trading
 | Package | Version | Purpose |
@@ -64,15 +63,6 @@
 |---------|---------|---------|
 | rich | >=13.0 | Signal monitor TUI |
 | python-telegram-bot | >=21.0 | Telegram bot service |
-
-## Rust Extension (rust_core)
-
-```
-Built via: maturin develop --manifest-path rust_core/Cargo.toml
-Loaded as: hft_platform.rust_core (or fallback: rust_core)
-Exports: 48+ PyO3 classes/functions (see data.md)
-Source: 47 .rs files in rust_core/src/
-```
 
 ## Broker SDK Import Guards
 

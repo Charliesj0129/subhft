@@ -1,5 +1,7 @@
 # Rust-Python Boundary Map (PyO3, As-Built)
 
+> Historical architecture of the retired project extension. The current runtime and Docker build use Python.
+
 Date: 2026-03-19
 Scope: Actual boundary between Python runtime and Rust extensions in this repository.
 

@@ -132,7 +132,6 @@ class TestDrawdown:
 
     @pytest.fixture()
     def store(self, monkeypatch):
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         monkeypatch.setenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "2000000")
         # Reimport to pick up env change
         import importlib
@@ -203,7 +202,6 @@ class TestDoubleFill:
 
     @pytest.fixture()
     def store(self, monkeypatch):
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         import importlib
 
         import hft_platform.execution.positions as mod
@@ -303,7 +301,6 @@ class TestEviction:
 
     @pytest.fixture()
     def store(self, monkeypatch):
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         monkeypatch.setenv("HFT_POSITIONS_MAX_SIZE", "5")
         import importlib
 
@@ -341,79 +338,3 @@ class TestEviction:
 # ---------------------------------------------------------------------------
 # 7. Rust/Python parity (conditional on Rust availability)
 # ---------------------------------------------------------------------------
-
-
-class TestRustPythonParity:
-    """When Rust tracker is available, results must match Python path."""
-
-    @staticmethod
-    def _rust_available() -> bool:
-        try:
-            import importlib
-
-            mod = importlib.import_module("hft_platform.rust_core")
-            return hasattr(mod, "RustPositionTracker")
-        except Exception:
-            return False
-
-    @pytest.fixture()
-    def stores(self, monkeypatch):
-        """Return (python_store, rust_store) pair. Skip if Rust unavailable."""
-        if not self._rust_available():
-            pytest.skip("Rust position tracker not available")
-
-        import importlib
-
-        import hft_platform.execution.positions as mod
-
-        # Python-only store
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
-        importlib.reload(mod)
-        py_store = mod.PositionStore()
-
-        # Rust store
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "1")
-        importlib.reload(mod)
-        rust_store = mod.PositionStore()
-
-        yield py_store, rust_store
-        importlib.reload(mod)
-
-    def test_parity_roundtrip(self, stores) -> None:
-        py_store, rust_store = stores
-
-        fills = [
-            _make_fill(side=Side.BUY, qty=10, price=500_0000),
-            _make_fill(side=Side.BUY, qty=5, price=510_0000),
-            _make_fill(side=Side.SELL, qty=10, price=520_0000),
-            _make_fill(side=Side.SELL, qty=5, price=520_0000),
-        ]
-
-        for fill in fills:
-            pd_py = py_store.on_fill(fill)
-            pd_rs = rust_store.on_fill(fill)
-
-            assert pd_py.net_qty == pd_rs.net_qty, f"net_qty mismatch after {fill.fill_id}"
-            # avg_price diverges on exact close: Python zeroes it, Rust retains stale value
-            # This is cosmetic (no financial impact when net_qty=0); Rust fix tracked separately
-            if pd_py.net_qty != 0:
-                assert pd_py.avg_price == pd_rs.avg_price, f"avg_price mismatch after {fill.fill_id}"
-            assert pd_py.realized_pnl == pd_rs.realized_pnl, f"realized_pnl mismatch after {fill.fill_id}"
-
-    def test_parity_flip(self, stores) -> None:
-        py_store, rust_store = stores
-
-        fills = [
-            _make_fill(side=Side.BUY, qty=5, price=100_0000),
-            _make_fill(side=Side.SELL, qty=10, price=110_0000),  # flip to short
-            _make_fill(side=Side.BUY, qty=5, price=105_0000),  # close short
-        ]
-
-        for fill in fills:
-            pd_py = py_store.on_fill(fill)
-            pd_rs = rust_store.on_fill(fill)
-
-            assert pd_py.net_qty == pd_rs.net_qty
-            if pd_py.net_qty != 0:
-                assert pd_py.avg_price == pd_rs.avg_price
-            assert pd_py.realized_pnl == pd_rs.realized_pnl

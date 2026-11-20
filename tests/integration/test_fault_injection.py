@@ -180,7 +180,6 @@ class TestRiskEngineFaultInjection:
             crashing.defaults = engine.config.get("global_defaults", {})
             crashing.strat_configs = engine.config.get("strategies", {})
             engine.validators = [crashing]
-            engine._rust_validator = None
 
             intent = _make_intent()
             # The engine swallows the exception in the run loop,
@@ -213,7 +212,6 @@ class TestRiskEngineFaultInjection:
             crashing.defaults = engine.config.get("global_defaults", {})
             crashing.strat_configs = engine.config.get("strategies", {})
             engine.validators = [crashing]
-            engine._rust_validator = None
 
             intent = _make_intent()
             with pytest.raises(RuntimeError):

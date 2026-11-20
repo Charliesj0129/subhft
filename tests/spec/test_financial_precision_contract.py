@@ -112,7 +112,6 @@ def _make_position_store():
         from hft_platform.execution.positions import PositionStore
 
         store = PositionStore()
-        store._rust_tracker = None
         store.metrics = None
         return store
 

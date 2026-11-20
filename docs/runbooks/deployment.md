@@ -486,6 +486,24 @@ failure there costs nothing. The restart is the irreversible half.
 
 ---
 
+## Retiring the project extension
+
+This change spans the image and runtime and requires a Class C batch. Build the
+candidate image, verify its CLI, and confirm that
+`importlib.util.find_spec("hft_platform.rust_core")` returns `None` in the
+container. Use its verified digest when regenerating the production lock.
+
+Keep the previous image digest and preserve the writable-layer artifacts and
+stdout logs required by D6. Treat the engine and the monitor as one batch when
+using the shared-memory feed. The Python publisher uses a versioned table and
+the monitor can fall back to ClickHouse while that table is unavailable.
+
+In addition to D9, verify the Python feature backend, monitor delivery, position
+recovery, gateway cancel and exposure behavior, and the event-loop latency for
+the target book size. Legacy HFT feature and accelerator settings cannot load
+the project extension in the candidate runtime. The pinned broker SDK is still
+required.
+
 ## ClickHouse migrations
 
 Operator-driven, never automatic. Snapshot row counts, apply in filename order,

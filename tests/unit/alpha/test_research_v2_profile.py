@@ -228,14 +228,14 @@ def test_gate_f_declared_not_applicable_is_reported_as_such(tmp_path: Path):
     assert checks["reason"] == "not_applicable:rust_paused"
 
 
-def test_gate_f_without_declaration_still_requires_a_rust_module(tmp_path: Path):
+def test_gate_f_without_exemption_blocks_promotion(tmp_path: Path):
     profile = ValidationProfile(name="t", is_strict=True)
     passed, checks = _evaluate_gate_f(
         PromotionConfig(alpha_id="a", owner="o", enable_rust_readiness_gate=True, validation_profile=profile),
         tmp_path,
     )
     assert passed is False
-    assert checks["checks"]["rust_module_declared"]["pass"] is False
+    assert checks["reason"] == "project_rust_support_removed"
 
 
 def _run_args(tmp_path: Path, *extra: str):

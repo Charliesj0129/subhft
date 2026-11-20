@@ -170,7 +170,7 @@ def test_main_generates_wsg_wsh_artifacts(tmp_path: Path) -> None:
 
     hotpath = json.loads((ws_g_dir / "latest_hotpath_matrix.json").read_text(encoding="utf-8"))
     assert hotpath["schema_version"] == "1.0"
-    assert hotpath["skills"] == ["hft-strategy", "hft-rust", "hft-latency-profiling"]
+    assert hotpath["skills"] == ["hft-strategy", "hft-latency-profiling"]
     assert hotpath["agent_roles"] == ["explorer", "worker", "default"]
     assert hotpath["rows"]
     assert "row_id" in hotpath["rows"][0]
@@ -180,6 +180,7 @@ def test_main_generates_wsg_wsh_artifacts(tmp_path: Path) -> None:
     cutover = json.loads((ws_g_dir / "latest_cutover_backlog.json").read_text(encoding="utf-8"))
     assert cutover["summary"]["total"] == len(cutover["items"])
     assert cutover["items"][0]["backlog_id"].startswith("WSG-")
+    assert cutover["items"][0]["target_state"] == "optimized_python_hotpath"
 
     source_catalog = json.loads((ws_h_dir / "latest_source_catalog.json").read_text(encoding="utf-8"))
     assert source_catalog["schema_version"] == "1.0"

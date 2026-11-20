@@ -87,8 +87,7 @@ updates:
   # (`uv export --locked`), so the `pip` entry above, which already opens
   # uv.lock PRs, is the one place Python runtime versions move.
   #
-  # maturin and uv run only inside the image build. Hash-pinned in their own
-  # directory.
+  # uv and Hatchling run inside the image builder with hash-pinned dependencies.
   - package-ecosystem: pip
     directory: /docker/build
     schedule:
@@ -132,31 +131,4 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types:
-          - "version-update:semver-major"
-
-  # Rust crates (Cargo.lock at the repo root).
-  # pyo3 and numpy are the Python<->Rust FFI boundary of the hot path: a 0.x
-  # minor bump there is a breaking change and needs its own benchmarked PR, so
-  # only patch releases are proposed here. Security advisories against them
-  # still arrive as Dependabot security PRs, which this list does not suppress.
-  - package-ecosystem: cargo
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 2
-    labels:
-      - dependencies
-      - rust
-      - freeze-allowed
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - "version-update:semver-major"
-      - dependency-name: "pyo3"
-        update-types:
-          - "version-update:semver-minor"
-          - "version-update:semver-major"
-      - dependency-name: "numpy"
-        update-types:
-          - "version-update:semver-minor"
           - "version-update:semver-major"

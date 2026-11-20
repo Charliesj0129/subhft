@@ -71,10 +71,10 @@ _on_shioaji_event()  ───────┼──→ call_soon_threadsafe(_enq
 | 2 | `call_soon_threadsafe()` (inside `_on_shioaji_event`) | `services/market_data.py` | (exchange, msg) | **Thread boundary** | Async transition |
 | 3 | `_enqueue_raw()` | `services/market_data.py` | → `raw_queue` | `asyncio.Queue.put_nowait()` | Non-blocking O(1) |
 | 4 | `MarketDataService.run()` main loop | `services/market_data.py` | `raw_queue.get()` | Async dequeue | Event-loop wait |
-| 5a | `normalize_tick()` | `feed_adapter/normalizer.py` | Raw → `TickEvent` (price x10000) | Inline, Rust optional | Sync <10μs |
-| 5b | `normalize_bidask()` | `feed_adapter/normalizer.py` | Raw → `BidAskEvent` (np.int64) | Inline, Rust optional | Sync <10μs |
+| 5a | `normalize_tick()` | `feed_adapter/normalizer.py` | Raw → `TickEvent` (price x10000) | Inline, Python | Sync <10μs |
+| 5b | `normalize_bidask()` | `feed_adapter/normalizer.py` | Raw → `BidAskEvent` (np.int64) | Inline, Python | Sync <10μs |
 | 6 | `LOBEngine.process_event()` | `feed_adapter/lob_engine.py` | BidAsk/Tick → `LOBStatsEvent` | In-memory book | Sync <5μs |
-| 7 | `FeatureEngine.process_lob_stats()` | `feature/engine.py` | LOBStats → `FeatureUpdateEvent` (27 features) | Inline, Rust kernel optional | Sync <20μs |
+| 7 | `FeatureEngine.process_lob_stats()` | `feature/engine.py` | LOBStats → `FeatureUpdateEvent` (27 features) | Inline, Python | Sync <20μs |
 | 8 | `RingBufferBus.publish_nowait()` | `engine/event_bus.py` | Event → ring buffer cursor | Lock-free single-writer | Sync O(1) <1μs |
 
 ### Thread Boundaries
@@ -94,8 +94,6 @@ _on_shioaji_event()  ───────┼──→ call_soon_threadsafe(_enq
 |----------|---------|---------|
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | Skip stage 7 if `0` |
 | `HFT_EVENT_MODE` | `event` | `tuple` mode skips dataclass allocation |
-| `HFT_FUSED_NORMALIZER` | `0` | Fuse stages 5+6 into single Rust call |
-| `HFT_RUST_ACCEL` | `1` | Enable Rust fast-paths in normalizer/LOB |
 
 ---
 
@@ -256,7 +254,7 @@ def _on_exec(self, topic, data):
 - **Daily-loss feed**: `RiskEngine.notify_fill_pnl` receives the realized-PnL change net of `fill.fee` (the all-in charge, tax included); an opening fill sends its fee as a loss
 - **Recovered lots**: a fill takes a parked recovery lot only for a key with no live position, and never one recorded under another strategy. Risk, MtM, loss exit, reconciliation, the flattener, the PnL snapshot exporter and the daily report read positions plus recovery (`snapshot_open_positions` / `snapshot_positions_with_recovery`)
 - **Orphaned fills**: strategy_id="UNKNOWN" → `OrphanedFillDLQ`, retry every 100 events
-- **Position update**: Atomic under `_fill_lock` (threading.Lock) for Rust/Python dual-tracker
+- **Position update**: Atomic under `_fill_lock` (threading.Lock) for position and recovery state
 - **TCA enrichment**: `cmd_tca_map[order_id]` → `decision_price` + `arrival_price` stamped on FillEvent
 - **Recording safety**: Direct `recorder_queue` write (bypasses Bus to prevent tick flood overwriting fills)
 - **WAL fallback**: When `recorder_queue` full → WALWriter for fill durability

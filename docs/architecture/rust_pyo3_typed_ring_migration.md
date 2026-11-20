@@ -1,5 +1,7 @@
 # PyO3 Typed Ring / Zero-Copy Migration Plan (EventBus)
 
+> Archived migration proposal. Current deployments use the Python event bus.
+
 Date: 2026-02-23
 Owner: Codex (implementation planning artifact)
 Status: Draft (Phase plan + interfaces)

@@ -1,13 +1,7 @@
 """Cross-path feature parity harness for the promoted microstructure family.
 
-Research, replay and live all share the same Python :class:`FeatureEngine`. Drift
-can only enter from two seams:
-
-1. **Kernel numerics** — the Rust backend (``kernel_backend="rust"``) re-implements
-   the v1 kernel in ``rust_core/src/feature.rs``; float-accumulated EMA features are
-   rounded to ``i64`` and may differ from Python by a rounding ULP.
-2. **Input derivation** — how each path turns a raw book snapshot into the
-   ``LOBStatsEvent`` fields the engine consumes.
+Research, replay and live share the same Python :class:`FeatureEngine`.
+The harness checks drift in raw-book input derivation between live and backtest.
 
 This module drives one shared sequence of raw book snapshots through each compute
 path and compares the *promoted feature family* (see
@@ -21,7 +15,6 @@ a future drift-check CLI, and live/shadow promotion gates.
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -40,17 +33,6 @@ from hft_platform.feed_adapter.lob_engine import LOBEngine
 # Canonical synthetic book scale: 0.1 * 10_000 (matches feed_adapter conventions).
 _SELFTEST_TICK = 1_000
 _SELFTEST_SYMBOL = "PARITYR1"
-
-
-def _rust_available() -> bool:
-    for name in ("hft_platform.rust_core", "rust_core"):
-        try:
-            mod = importlib.import_module(name)
-        except Exception:
-            continue
-        if getattr(mod, "RustFeaturePipelineV1", None) is not None:
-            return True
-    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +135,6 @@ class ParityReport:
 def _run_engine(
     frames: Sequence[LobInputFrame],
     *,
-    backend: str,
     wire_lob_feature_attr: bool = False,
 ) -> PathResult:
     """Drive ``frames`` through ``LOBEngine`` -> ``FeatureEngine`` for one backend.
@@ -164,7 +145,7 @@ def _run_engine(
     direct live wiring.
     """
     lob = LOBEngine()
-    fe = FeatureEngine(kernel_backend=backend, emit_events=True)
+    fe = FeatureEngine(kernel_backend="python", emit_events=True)
     if wire_lob_feature_attr:
         lob.feature_engine = fe
     out: PathResult = []
@@ -197,14 +178,7 @@ def _run_engine(
 
 def run_python_engine(frames: Sequence[LobInputFrame]) -> PathResult:
     """Live/research direct path: Python FeatureEngine over LOBEngine-derived stats."""
-    return _run_engine(frames, backend="python")
-
-
-def run_rust_engine(frames: Sequence[LobInputFrame]) -> PathResult | None:
-    """Rust kernel path. Returns ``None`` when the Rust extension is unavailable."""
-    if not _rust_available():
-        return None
-    return _run_engine(frames, backend="rust")
+    return _run_engine(frames)
 
 
 def run_hftbacktest_shared(frames: Sequence[LobInputFrame]) -> PathResult:
@@ -213,7 +187,7 @@ def run_hftbacktest_shared(frames: Sequence[LobInputFrame]) -> PathResult:
     Mirrors ``backtest/_hbt_utils.build_lob_event``: BidAskEvent -> LOBEngine ->
     FeatureEngine.process_lob_update, with ``lob_engine.feature_engine`` wired.
     """
-    return _run_engine(frames, backend="python", wire_lob_feature_attr=True)
+    return _run_engine(frames, wire_lob_feature_attr=True)
 
 
 # ---------------------------------------------------------------------------
@@ -375,44 +349,33 @@ def run_self_test(*, feature_set: FeatureSet | None = None) -> dict:
     frames = build_synthetic_frames()
 
     python = run_python_engine(frames)
-    rust = run_rust_engine(frames)
     hftbt = run_hftbacktest_shared(frames)
+    report = compare_paths({"python": python, "hftbacktest_shared": hftbt}, feature_set=feature_set)
 
-    candidates: dict[str, PathResult] = {"hftbacktest_shared": hftbt}
-    if rust is not None:
-        candidates["rust"] = rust
-
-    comparisons = []
-    overall_ok = True
-    for name, result in candidates.items():
-        report = compare_paths({"python": python, name: result}, feature_set=feature_set)
-        overall_ok = overall_ok and report.ok
-        entry: dict = {"pair": f"python vs {name}", "ok": report.ok, "n_frames": report.n_frames}
-        if report.schema_mismatch is not None:
-            entry["schema_mismatch"] = report.schema_mismatch
-        if report.warmup_mismatch is not None:
-            entry["warmup_mismatch"] = report.warmup_mismatch
-        if report.first_divergence is not None:
-            d = report.first_divergence
-            entry["first_divergence"] = {
-                "frame_index": d.frame_index,
-                "symbol": d.symbol,
-                "timestamp": d.timestamp,
-                "feature_id": d.feature_id,
-                "index": d.index,
-                "expected": d.expected,
-                "actual": d.actual,
-                "abs_diff": d.abs_diff,
-                "tolerance": d.tolerance,
-            }
-        comparisons.append(entry)
+    entry: dict = {"pair": "python vs hftbacktest_shared", "ok": report.ok, "n_frames": report.n_frames}
+    if report.schema_mismatch is not None:
+        entry["schema_mismatch"] = report.schema_mismatch
+    if report.warmup_mismatch is not None:
+        entry["warmup_mismatch"] = report.warmup_mismatch
+    if report.first_divergence is not None:
+        d = report.first_divergence
+        entry["first_divergence"] = {
+            "frame_index": d.frame_index,
+            "symbol": d.symbol,
+            "timestamp": d.timestamp,
+            "feature_id": d.feature_id,
+            "index": d.index,
+            "expected": d.expected,
+            "actual": d.actual,
+            "abs_diff": d.abs_diff,
+            "tolerance": d.tolerance,
+        }
 
     return {
-        "ok": overall_ok,
+        "ok": report.ok,
         "feature_set_id": feature_set.feature_set_id,
         "schema_version": int(feature_set.schema_version),
         "n_frames": len(python),
-        "rust_available": rust is not None,
         "promoted_feature_ids": list(promoted_feature_ids(feature_set)),
-        "comparisons": comparisons,
+        "comparisons": [entry],
     }

@@ -21,15 +21,9 @@ from hft_platform.engine.event_bus import RingBufferBus
 
 
 def _py_bus(monkeypatch, *, size: int = 16, wait_mode: str = "event") -> RingBufferBus:
-    """Pure-Python RingBufferBus with no typed rings (use_rust=False)."""
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
+    """Pure-Python RingBufferBus with no typed rings."""
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", False)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_TICK_RING_FACTORY", None)
-    monkeypatch.setattr(event_bus_mod, "_RUST_BIDASK_RING_FACTORY", None)
-    monkeypatch.setattr(event_bus_mod, "_RUST_LOBSTATS_RING_FACTORY", None)
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", wait_mode)
     return RingBufferBus(size=size)
 
@@ -149,51 +143,7 @@ async def test_consume_spin_wait_with_sleep_yields_event(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Lines 703-705: consume() fallback buffer lazy-init (buffer is None)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_consume_buffer_none_init_path(monkeypatch):
-    """consume() initialises self.buffer lazily (lines 703-705) when buffer is None.
-
-    Force buffer to None after construction (it is normally created), then verify
-    that consume() creates it and returns the event correctly.
-    """
-    bus = _py_bus(monkeypatch, wait_mode="event")
-    # Ensure no typed rings so we fall into the else branch (lines 700-705)
-    assert bus._tick_ring is None
-    assert bus._bidask_ring is None
-    assert bus._lobstats_ring is None
-
-    # Null out buffer to force the lazy-init path
-    bus.buffer = None
-
-    # Publish writes via _store_fallback which re-inits buffer internally,
-    # but then we null it again to test the consume-side lazy init.
-    bus._publish_unlocked("lazy-init-event")
-    bus._notify()
-    bus.buffer = None  # force consume to hit the buffer-is-None branch
-
-    # publish_nowait increments cursor; we nulled buffer so consume must init it.
-    # But since buffer is None after re-nulling, the event won't be there — we
-    # just verify that consume() doesn't crash and initialises self.buffer.
-    # Re-publish with buffer None so _store_fallback also hits its own lazy init:
-    bus2 = _py_bus(monkeypatch, wait_mode="event")
-    bus2._tick_ring = None
-    bus2._bidask_ring = None
-    bus2._lobstats_ring = None
-    bus2.buffer = None  # null before publish so _store_fallback also inits lazily
-
-    bus2.publish_nowait("lazy-buf-event")
-
-    events = []
-    async for evt in bus2.consume(start_cursor=-1, consumer_name="lazy-buf"):
-        events.append(evt)
-        break
-
-    assert events == ["lazy-buf-event"]
-    assert bus2.buffer is not None  # confirmed initialised by consume()
 
 
 # ---------------------------------------------------------------------------
@@ -259,27 +209,4 @@ async def test_consume_batch_spin_sleep_branch_yields_batch(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Lines 810-813: consume_batch() fallback buffer lazy-init
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_consume_batch_buffer_none_init_path(monkeypatch):
-    """consume_batch() initialises self.buffer lazily (lines 810-813) when buffer is None."""
-    bus = _py_bus(monkeypatch, wait_mode="event")
-    assert bus._tick_ring is None
-    assert bus._bidask_ring is None
-    assert bus._lobstats_ring is None
-
-    # Force buffer to None before publish so _store_fallback also hits its lazy-init,
-    # then verify consume_batch can reconstruct it.
-    bus.buffer = None
-    bus.publish_nowait("lazy-batch-event")
-
-    batches = []
-    async for batch in bus.consume_batch(batch_size=4, start_cursor=-1, consumer_name="lazy-batch"):
-        batches.append(batch)
-        break
-
-    assert batches[0] == ["lazy-batch-event"]
-    assert bus.buffer is not None

@@ -2,43 +2,23 @@
 
 from __future__ import annotations
 
-import os
-import uuid
-
 import pytest
 
-try:
-    from hft_platform.ipc.shm_snapshot import (
-        ShmSnapshotReader,
-        ShmSnapshotWriter,
-        _symbol_hash,
-    )
-
-    HAS_SHM = True
-except (ImportError, OSError):
-    HAS_SHM = False
+from hft_platform.ipc import shm_snapshot
+from hft_platform.ipc.shm_snapshot import ShmSnapshotReader, ShmSnapshotWriter, _symbol_hash
 
 pytestmark = [
-    pytest.mark.skipif(not HAS_SHM, reason="ShmSnapshotTable (Rust) not available"),
+    pytest.mark.skipif(shm_snapshot.fcntl is None, reason="flock is unavailable"),
     pytest.mark.integration,
 ]
 
-_PLATFORM_TO_CH_SCALE = 100  # x10000 → x1000000
+_PLATFORM_TO_CH_SCALE = 100
 
 
 @pytest.fixture()
-def shm_name():
-    name = f"test_monitor_shm_{uuid.uuid4().hex[:8]}"
-    yield name
-    try:
-        import posixipc
-
-        posixipc.unlink_shared_memory(f"/{name}")
-    except Exception:
-        try:
-            os.unlink(f"/dev/shm/{name}")
-        except Exception:
-            pass
+def shm_name(monkeypatch, tmp_path):
+    monkeypatch.setattr(shm_snapshot, "_SHM_ROOT", tmp_path)
+    return "monitor_snapshot"
 
 
 def _make_lob_fields(best_bid: int = 2105000, best_ask: int = 2106000) -> list[int]:
@@ -178,3 +158,40 @@ def test_data_source_discovers_new_symbol(shm_name: str) -> None:
     rows = ds.poll({sym_a: 0, sym_b: 0})
     assert len(rows.get(sym_b, [])) == 1
     assert sym_b in ds._symbol_to_slot
+
+
+def test_data_source_rediscovers_symbols_when_restarted_publisher_reorders_slots(shm_name):
+    from hft_platform.monitor._data_source import ShmDataSource
+
+    first, second = "2330", "2454"
+    with ShmSnapshotWriter(shm_name, max_symbols=4) as writer:
+        writer.publish(0, 1, _symbol_hash(first), _make_lob_fields(), _make_features())
+        writer.publish(1, 1, _symbol_hash(second), _make_lob_fields(), _make_features())
+        source = ShmDataSource(shm_name=shm_name, max_symbols=4, symbols=(first, second))
+        rows = source.poll({first: 0, second: 0})
+        assert rows[first][0].ingest_ts == rows[second][0].ingest_ts == 1
+
+    with ShmSnapshotWriter(shm_name, max_symbols=4) as writer:
+        writer.publish(0, 2, _symbol_hash(second), _make_lob_fields(400, 500), _make_features())
+        writer.publish(1, 2, _symbol_hash(first), _make_lob_fields(100, 200), _make_features())
+        stale_rows = source.poll({first: 1, second: 1})
+        assert stale_rows[first] == stale_rows[second] == []
+        rows = source.poll({first: 1, second: 1})
+        assert rows[first][0].bids_price == [100 * _PLATFORM_TO_CH_SCALE]
+        assert rows[second][0].bids_price == [400 * _PLATFORM_TO_CH_SCALE]
+
+
+def test_data_source_rediscovers_a_symbol_when_its_old_slot_is_empty(shm_name):
+    from hft_platform.monitor._data_source import ShmDataSource
+
+    symbol = "2330"
+    with ShmSnapshotWriter(shm_name, max_symbols=4) as writer:
+        writer.publish(0, 1, _symbol_hash(symbol), _make_lob_fields(), _make_features())
+        source = ShmDataSource(shm_name=shm_name, max_symbols=4, symbols=(symbol,))
+        assert source.poll({symbol: 0})[symbol][0].ingest_ts == 1
+
+    with ShmSnapshotWriter(shm_name, max_symbols=4) as writer:
+        writer.publish(1, 2, _symbol_hash(symbol), _make_lob_fields(), _make_features())
+        source.poll({symbol: 1})
+        rows = source.poll({symbol: 1})
+        assert rows[symbol][0].ingest_ts == 2

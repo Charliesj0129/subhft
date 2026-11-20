@@ -1,7 +1,6 @@
 import asyncio
 import collections
 import dataclasses
-import importlib
 import os
 import threading
 import time
@@ -38,9 +37,6 @@ from hft_platform.risk.validators import (
 
 logger = get_logger("risk_engine")
 
-# i64::MAX: the RustRiskValidator notional limit that never rejects.
-_RUST_NOTIONAL_UNBOUNDED = (1 << 63) - 1
-
 _KNOWN_ERROR_TYPES = frozenset(
     {
         "ValueError",
@@ -75,25 +71,6 @@ def _cap_error_type(e: Exception) -> str:
     return name if name in _KNOWN_ERROR_TYPES else "other"
 
 
-# Lazy import for Rust risk validator
-_RustRiskValidator = None
-
-
-def _load_rust_risk_validator() -> Any:
-    global _RustRiskValidator
-    if _RustRiskValidator is not None:
-        return _RustRiskValidator
-    try:
-        rust_module = importlib.import_module("hft_platform.rust_core")
-    except ImportError:
-        try:
-            rust_module = importlib.import_module("rust_core")
-        except ImportError:
-            rust_module = None
-    _RustRiskValidator = getattr(rust_module, "RustRiskValidator", None) if rust_module is not None else None
-    return _RustRiskValidator
-
-
 def _obs_policy() -> str:
     value = str(os.getenv("HFT_RISK_OBS_POLICY", os.getenv("HFT_OBS_POLICY", ""))).strip().lower()
     if value in {"minimal", "balanced", "debug"}:
@@ -126,8 +103,6 @@ class RiskEngine:
         "_reject_metric_sample_every",
         "validators",
         "storm_guard",
-        "_rust_validator",
-        "_rust_validator_reason_map",
         "_cmd_id_lock_enabled",
         "_cmd_id_lock",
         "_monotonic_cmd_id",
@@ -143,7 +118,6 @@ class RiskEngine:
         "_position_provider",
         "_rejection_sink",
         "_greeks_validator",
-        "_validator0",
         "_oq_full_consecutive",
         "_oq_full_halt_threshold",
         "__dict__",
@@ -194,42 +168,10 @@ class RiskEngine:
             DailyLossLimitValidator(self.config, price_scale_provider, position_provider=_pos_provider),
             ExpiringContractValidator(self.config, price_scale_provider, position_provider=_pos_provider),
         ]
-        # Pre-compute validators that Rust doesn't cover (avoid per-call isinstance)
-        # PerSymbolNotionalValidator belongs here too. It is a sibling of
-        # MaxNotionalValidator (both inherit RiskValidator directly), not a
-        # subclass, so this isinstance filter excluded it -- and
-        # ``_init_rust_validator`` never forwards ``symbol_limits`` to Rust
-        # either, so with HFT_RISK_RUST_VALIDATOR=1 the per-symbol notional cap
-        # was enforced by nobody. Per-symbol limits exist precisely to be
-        # TIGHTER than the per-strategy default, so losing them silently
-        # defeats their purpose.
-        # PriceBandValidator too: Rust is handed one coarse cap, the largest of
-        # the global and product caps, so a per-root or per-symbol price cap
-        # (``max_price_cap_root_TMF``) was enforced by nobody under Rust.
-        self._rust_uncovered_validators: list[RiskValidator] = [
-            v
-            for v in self.validators
-            if isinstance(
-                v,
-                (
-                    PriceBandValidator,
-                    PositionLimitValidator,
-                    DailyLossLimitValidator,
-                    PerSymbolNotionalValidator,
-                    MaxNotionalValidator,
-                    ExpiringContractValidator,
-                ),
-            )
-        ]
-        # MaxNotionalValidator is in that list too: the Rust kernel compares
-        # price * qty with no point value (Rust is paused, so it is not taught
-        # one), which made a TXF lot look 200x smaller than it is.
         shared_scale_cache: dict[str, int] = {}
         for validator in self.validators:
             if hasattr(validator, "_shared_scale_cache"):
                 validator._shared_scale_cache = shared_scale_cache
-        # Cache validator[0] reference to avoid list index on hot path
-        self._validator0 = self.validators[0] if self.validators else None
         self.storm_guard = storm_guard if storm_guard is not None else StormGuard()
         # Bug 21: share position_provider with StormGuard so reducing orders
         # can bypass HALT/STORM rejection (prevents R47 deadlock).
@@ -245,13 +187,6 @@ class RiskEngine:
         # changes nothing.
         self._apply_stormguard_config()
         self._notification_dispatcher = notification_dispatcher
-        self._rust_validator = self._init_rust_validator(price_scale_provider)
-        self._rust_validator_reason_map = {
-            1: "PRICE_ZERO_OR_NEG",
-            2: "PRICE_EXCEEDS_CAP",
-            3: "PRICE_OUTSIDE_BAND",
-            4: "MAX_NOTIONAL_EXCEEDED",
-        }
         self._cmd_id_lock_enabled = self._bool_env(os.getenv("HFT_RISK_CMD_ID_LOCK", "0"), default=False)
         self._cmd_id_lock = threading.Lock() if self._cmd_id_lock_enabled else None
         self._monotonic_cmd_id = 0
@@ -330,7 +265,6 @@ class RiskEngine:
         thresholds = getattr(self.storm_guard, "thresholds", None)
         if thresholds is not None and dataclasses.is_dataclass(thresholds):
             out["stormguard"] = dataclasses.asdict(thresholds)
-        out["rust_validator"] = self._rust_validator is not None
         out["fast_gate"] = self._fast_gate is not None
         return out
 
@@ -342,7 +276,7 @@ class RiskEngine:
             logger.warning("risk_thresholds_effective_failed", trigger=trigger, error=str(exc))
 
     def _fast_path_exempt(self, intent: Any) -> bool:
-        """True for an intent FastGate and the Rust validator must not judge.
+        """True for an intent that bypasses FastGate.
 
         CANCEL, FORCE_FLAT, and any order that strictly shrinks the strategy's
         net position in the symbol: the exits the Python validators exempt.
@@ -438,50 +372,6 @@ class RiskEngine:
             logger.warning("FastGate init failed; disabling", error=str(exc))
             return None
 
-    def _init_rust_validator(self, price_scale_provider: PriceScaleProvider | None = None) -> Any | None:
-        if not self._bool_env(os.getenv("HFT_RISK_RUST_VALIDATOR", "0"), default=False):
-            return None
-        cls = _load_rust_risk_validator()
-        if cls is None:
-            return None
-        try:
-            defaults = self.config.get("global_defaults", {})
-            max_price_cap_raw = float(defaults.get("max_price_cap", 5000.0))  # precision-config
-            all_caps = [max_price_cap_raw]
-            for key in ("max_price_cap_futures", "max_price_cap_options"):
-                val = defaults.get(key)
-                if val is not None:
-                    all_caps.append(float(val))
-            max_price_cap_raw = max(all_caps)
-            tick_size_raw = float(defaults.get("tick_size", 0.01))  # precision-config
-            band_ticks = int(defaults.get("price_band_ticks", 20))
-            # Use default scale factor (10000) for the validator
-            scale = 10_000
-            if price_scale_provider is not None:
-                try:
-                    from hft_platform.core.pricing import PriceCodec
-
-                    codec = PriceCodec(price_scale_provider)
-                    scale = int(codec.scale_factor("default")) or 10_000
-                except (ImportError, TypeError, ValueError) as exc:
-                    logger.warning("Failed to resolve price scale from provider, using default 10000", error=str(exc))
-            max_price_cap_scaled = int(max_price_cap_raw * scale)
-            tick_size_scaled = int(tick_size_raw * scale)
-            # Notional is judged by the Python validators only (they are in
-            # _rust_uncovered_validators). The kernel has no point value and no
-            # reduce/FORCE_FLAT exemption, and it returns before Python runs,
-            # so a real cap here would refuse the exit of an over-cap position.
-            rv = cls(max_price_cap_scaled, tick_size_scaled, band_ticks, _RUST_NOTIONAL_UNBOUNDED)
-            # Populate per-strategy configs
-            for strat_id, strat_cfg in self.config.get("strategies", {}).items():
-                if "price_band_ticks" in strat_cfg:
-                    rv.set_band_ticks(strat_id, int(strat_cfg["price_band_ticks"]))
-            logger.info("RustRiskValidator enabled", max_price_cap_scaled=max_price_cap_scaled)
-            return rv
-        except (OSError, RuntimeError, TypeError, ValueError) as exc:
-            logger.warning("RustRiskValidator init failed; disabling", error=str(exc))
-            return None
-
     def load_config(self) -> None:
         with open(self.config_path, "r") as f:
             self.config = yaml.safe_load(f)
@@ -555,7 +445,6 @@ class RiskEngine:
             v.config = new_config
             v.defaults = new_config.get("global_defaults", {})
             v.strat_configs = new_config.get("strategies", {})
-        self._validator0 = self.validators[0] if self.validators else None
         logger.info("RiskEngine config reloaded", strategies=list(new_config.get("strategies", {}).keys()))
 
     async def run(self) -> None:
@@ -965,13 +854,8 @@ class RiskEngine:
             self._emit_trace("risk_reject", intent, {"stage": "type_check", "reason": "FLOAT_PRICE"})
             return self._reject(intent, "FLOAT_PRICE")
 
-        # The fast paths have no exit exemptions of their own. FastGate's
-        # shared-memory kill flag refused FORCE_FLAT, and the Rust validator
-        # refused a cover the Python validators let through as a reduction, so
-        # an exit goes the Python way, where those exemptions live.
-        fast_path_exempt = (self._fast_gate is not None or self._rust_validator is not None) and (
-            self._fast_path_exempt(intent)
-        )
+        # Exit exemptions are applied before consulting FastGate.
+        fast_path_exempt = self._fast_gate is not None and self._fast_path_exempt(intent)
         if self._fast_gate is not None and not fast_path_exempt:
             try:
                 if int(getattr(intent, "intent_type", IntentType.NEW)) != int(IntentType.CANCEL):
@@ -991,60 +875,17 @@ class RiskEngine:
             self._emit_trace("risk_reject", intent, {"stage": "storm_guard", "reason": reason})
             return self._reject(intent, reason)
 
-        # 2. Hard Validators — Rust fast path or Python fallback
-        rv = self._rust_validator
-        if rv is not None and not fast_path_exempt:
-            try:
-                v0 = self._validator0
-                _get_mid = getattr(v0, "_get_mid_price", None) if v0 is not None else None
-                mid_price = int(_get_mid(getattr(intent, "symbol", "")) or 0) if callable(_get_mid) else 0
-                ok, code = rv.check(
-                    int(getattr(intent, "intent_type", 0)),
-                    int(getattr(intent, "price", 0)),
-                    int(getattr(intent, "qty", 0)),
-                    str(getattr(intent, "strategy_id", "")),
-                    str(getattr(intent, "symbol", "")),
-                    mid_price,
+        # 2. Hard validators
+        for v in self.validators:
+            ok, reason = v.check(intent)
+            if not ok:
+                self._emit_trace(
+                    "risk_reject",
+                    intent,
+                    {"stage": "validator", "reason": reason, "validator": type(v).__name__},
                 )
-                if not ok:
-                    reason = self._rust_validator_reason_map.get(int(code), "RUST_VALIDATOR_REJECT")
-                    self._emit_trace("risk_reject", intent, {"stage": "rust_validator", "reason": reason})
-                    return self._reject(intent, reason)
-                # Rust fast path passed — still run validators Rust doesn't cover
-                for v in self._rust_uncovered_validators:
-                    ok, reason = v.check(intent)
-                    if not ok:
-                        self._emit_trace(
-                            "risk_reject",
-                            intent,
-                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
-                        )
-                        self._check_daily_loss_halt()
-                        return self._reject(intent, reason)
-            except (OSError, RuntimeError) as exc:
-                logger.error("RustRiskValidator error — falling through to Python", error=str(exc))
-                # Fall through to Python validators on error
-                for v in self.validators:
-                    ok, reason = v.check(intent)
-                    if not ok:
-                        self._emit_trace(
-                            "risk_reject",
-                            intent,
-                            {"stage": "validator", "reason": reason, "validator": type(v).__name__},
-                        )
-                        self._check_daily_loss_halt()
-                        return self._reject(intent, reason)
-        else:
-            for v in self.validators:
-                ok, reason = v.check(intent)
-                if not ok:
-                    self._emit_trace(
-                        "risk_reject",
-                        intent,
-                        {"stage": "validator", "reason": reason, "validator": type(v).__name__},
-                    )
-                    self._check_daily_loss_halt()
-                    return self._reject(intent, reason)
+                self._check_daily_loss_halt()
+                return self._reject(intent, reason)
 
         # Check if DailyLossLimitValidator triggered HALT after the validator loop
         self._check_daily_loss_halt()

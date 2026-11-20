@@ -322,23 +322,9 @@ def test_fast_gate_kill_flag_does_not_block_a_reducing_order():
     engine._fast_gate.check.assert_not_called()
 
 
-def test_rust_validator_does_not_judge_a_reducing_order():
-    engine = _engine(_CFG, position=1)
-    engine._rust_validator = MagicMock()
-    engine._rust_validator.check.return_value = (False, 4)  # MAX_NOTIONAL_EXCEEDED
-
-    cover = engine.evaluate(_intent(IntentType.NEW, side=Side.SELL))
-    opener = engine.evaluate(_intent(IntentType.NEW, side=Side.BUY))
-
-    assert cover.approved, cover.reason_code
-    assert not opener.approved and opener.reason_code == "MAX_NOTIONAL_EXCEEDED"
-
-
-def test_rust_approval_does_not_skip_a_per_root_price_cap():
+def test_per_root_price_cap_rejects_the_order():
     cfg = {"global_defaults": {**_CFG["global_defaults"], "max_price_cap_root_TMF": 40_000.0}, "strategies": {}}
     engine = _engine(cfg)
-    engine._rust_validator = MagicMock()
-    engine._rust_validator.check.return_value = (True, 0)
 
     decision = engine.evaluate(_intent(IntentType.NEW, side=Side.BUY))  # 46,600 > the 40,000 TMF cap
 

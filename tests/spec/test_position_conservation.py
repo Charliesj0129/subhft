@@ -56,7 +56,6 @@ def _make_position_store():
         from hft_platform.execution.positions import PositionStore
 
         store = PositionStore()
-        store._rust_tracker = None
         store.metrics = None
         return store
 
@@ -285,13 +284,11 @@ class TestPnlSignShort:
 class TestPositionStoreEviction:
     def test_eviction_at_max_size(self, monkeypatch):
         """PositionStore evicts flat positions when reaching max_size."""
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr:
             mock_mr.get.return_value = None
             from hft_platform.execution.positions import PositionStore
 
             store = PositionStore()
-            store._rust_tracker = None
             store.metrics = None
             store._positions_max_size = 5
 

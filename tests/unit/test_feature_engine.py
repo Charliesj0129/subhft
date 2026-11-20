@@ -664,43 +664,6 @@ def test_feature_state_fresh_after_reset():
     assert state_after.seq == 3
 
 
-def test_feature_engine_rust_backend_parity_when_available():
-    py_eng = FeatureEngine(feature_set_id="lob_shared_v1", kernel_backend="python")
-    rust_eng = FeatureEngine(feature_set_id="lob_shared_v1", kernel_backend="rust")
-    if rust_eng.kernel_backend() != "rust":
-        pytest.skip("Rust LobFeatureKernelV1 unavailable")
-
-    rng = np.random.default_rng(20260224)
-    bid = 1_000_000
-    ask = 1_001_000
-    bq = 10
-    aq = 12
-    for i in range(200):
-        bid += int(rng.choice([-100, 0, 100]))
-        ask = max(bid + 100, ask + int(rng.choice([-100, 0, 100])))
-        bq = max(1, bq + int(rng.choice([-2, -1, 0, 1, 2])))
-        aq = max(1, aq + int(rng.choice([-2, -1, 0, 1, 2])))
-        evt = _bidask("2330", i + 1, bid, bq, ask, aq)
-        stats = LOBStatsEvent(
-            symbol="2330",
-            ts=i + 1,
-            imbalance=0.0,
-            best_bid=bid,
-            best_ask=ask,
-            bid_depth=max(bq, bq + 5),
-            ask_depth=max(aq, aq + 5),
-        )
-        p = py_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        assert p is not None and r is not None
-        # Rust kernel produces v1 (16 features); Python produces v2 (21).
-        # Compare first 16 for parity.
-        assert r.values[:16] == p.values[:16]
-
-
-# --- v2 features tests ---
-
-
 def test_v2_feature_set_has_22_features():
     fs = build_default_lob_feature_set_v2()
     assert len(fs.features) == 22
@@ -1062,48 +1025,6 @@ class TestLobKernelStateHasNan:
         assert mock_logger.warning.call_args[0][0] == "feature_nan_detected"
 
 
-def test_nan_guard_runs_on_rust_fused_path():
-    """NaN contamination guard must fire and reset_symbol when Rust fused path is active."""
-    from unittest.mock import MagicMock, patch
-
-    eng = FeatureEngine()
-    eng.process_lob_stats(_stats(), local_ts_ns=1)
-
-    # Corrupt kernel state to simulate NaN produced by Rust backend path
-    ks = eng._lob_kernel_states.get("2330")
-    assert ks is not None, "kernel state should exist after first tick"
-    ks.ofi_l1_ema8 = float("nan")
-
-    # Patch at the class level and set the instance backend flag
-    # R8: NaN guard now checks fused output values directly, so inject NaN into the output tuple
-    nan_values = list([0] * 27)
-    nan_values[0] = float("nan")
-    fake_fused = (tuple(nan_values), 0, 0)
-    mock_logger = MagicMock()
-
-    with (
-        patch.object(FeatureEngine, "_compute_fused_rust", return_value=fake_fused),
-        patch("hft_platform.feature.engine.logger", mock_logger),
-    ):
-        eng._kernel_backend = "rust"
-        result = eng.process_lob_stats(_stats(ts=2), local_ts_ns=2)
-
-    # Engine must return None (tick skipped) and log the warning
-    assert result is None
-    mock_logger.warning.assert_called_once()
-    call_kwargs = mock_logger.warning.call_args
-    assert call_kwargs[0][0] == "feature_nan_detected"
-    assert call_kwargs[1].get("backend") == "rust"
-
-    # State for symbol must be cleared by reset_symbol
-    assert eng._states.get("2330") is None
-
-
-# ─────────────────────────────────────────────────────────────────────
-# P3-b1: trade_confidence weighting in on_tick
-# ─────────────────────────────────────────────────────────────────────
-
-
 def test_on_tick_weights_signed_volume_by_confidence():
     """At-quote (conf=1000) must move toxicity EMA twice as much as tick-rule (conf=500).
 
@@ -1172,41 +1093,6 @@ def test_process_lob_stats_swallows_compute_values_none_without_typeerror():
 
 # ─────────────────────────────────────────────────────────────────────
 # B110 (commit f9b60bcc): kernel reset failure surfaces via counter + log
-# ─────────────────────────────────────────────────────────────────────
-
-
-def test_reset_symbol_increments_kernel_reset_failures_when_kernel_reset_raises():
-    """If the per-symbol Rust kernel's ``.reset()`` raises, ``reset_symbol``
-    must catch it, increment ``_kernel_reset_failures_count``, emit a
-    structlog WARNING, and NOT re-raise (hot-path safety).
-    """
-    from unittest.mock import MagicMock, patch
-
-    eng = FeatureEngine()
-    eng.process_lob_stats(_stats(), local_ts_ns=1)
-    # Inject a kernel whose .reset() raises.
-    bad_kernel = MagicMock()
-    bad_kernel.reset.side_effect = RuntimeError("boom")
-    eng._rust_kernels["2330"] = bad_kernel
-
-    assert eng._kernel_reset_failures_count == 0
-    mock_logger = MagicMock()
-    with patch("hft_platform.feature.engine.logger", mock_logger):
-        # Must not propagate — reset_symbol runs on the hot path under
-        # NaN/Inf contamination guard.
-        eng.reset_symbol("2330")
-
-    assert eng._kernel_reset_failures_count == 1
-    bad_kernel.reset.assert_called_once()
-    mock_logger.warning.assert_called_once()
-    assert mock_logger.warning.call_args[0][0] == "feature_kernel_reset_failed"
-    # Engine still functional after the failure — next tick should produce an event.
-    evt = eng.process_lob_stats(_stats(ts=3), local_ts_ns=3)
-    assert evt is not None
-
-
-# ─────────────────────────────────────────────────────────────────────
-# L5 swallow (commit 276e6299): _compute_mldm IndexError counter + log
 # ─────────────────────────────────────────────────────────────────────
 
 

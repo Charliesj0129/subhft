@@ -64,7 +64,6 @@ def _make_event(symbol="TSMC", ts=0):
 def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
-    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")  # use Python circuit
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")  # no hard fail
 
 
@@ -260,31 +259,8 @@ def test_build_positions_no_store(runner_factory):
     assert result == {}
 
 
-def test_build_positions_rust_tracker(runner_factory):
-    pos_store = MagicMock()
-    rust_tracker = MagicMock()
-    rust_tracker.get_positions_by_strategy.return_value = {"strat_a": {"TSMC": 10}}
-    pos_store._rust_tracker = rust_tracker
-    runner, _, _ = runner_factory(position_store=pos_store)
-    result = runner._build_positions_by_strategy()
-    assert result == {"strat_a": {"TSMC": 10}}
-
-
-def test_build_positions_rust_tracker_fallback(runner_factory):
-    pos_store = MagicMock()
-    rust_tracker = MagicMock()
-    rust_tracker.get_positions_by_strategy.side_effect = RuntimeError("fail")
-    pos_store._rust_tracker = rust_tracker
-    del pos_store.snapshot_positions_with_recovery  # force older snapshot path
-    pos_store.positions = {}
-    runner, _, _ = runner_factory(position_store=pos_store)
-    result = runner._build_positions_by_strategy()
-    assert isinstance(result, dict)
-
-
 def test_build_positions_from_dict_key(runner_factory):
     pos_store = MagicMock()
-    del pos_store._rust_tracker
     del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
 
@@ -300,7 +276,6 @@ def test_build_positions_from_dict_key(runner_factory):
 
 def test_build_positions_from_dict_object_value(runner_factory):
     pos_store = MagicMock()
-    del pos_store._rust_tracker
     del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
     pos = MagicMock()
@@ -316,7 +291,6 @@ def test_build_positions_from_dict_object_value(runner_factory):
 
 def test_build_positions_fallback_wildcard(runner_factory):
     pos_store = MagicMock()
-    del pos_store._rust_tracker
     del pos_store.snapshot_positions_with_recovery  # force snapshot_positions / dict path
     del pos_store.snapshot_positions  # force Python fallback path
     pos_store.positions = {"unknown_key": 99}
@@ -417,7 +391,6 @@ async def test_process_event_strategy_exception_triggers_circuit(runner_factory)
 
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_threshold = 1
     event = _make_event()
     await runner.process_event(event)
@@ -429,7 +402,6 @@ async def test_process_event_halted_strategy_skipped(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy(enabled=False)
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_states["strat_a"] = "halted"
     from hft_platform.core import timebase
 
@@ -445,7 +417,6 @@ async def test_process_event_circuit_recovery_cooldown(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy(enabled=False)
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_states["strat_a"] = "halted"
     runner._circuit_halted_at_ns["strat_a"] = 1  # epoch + 1ns
     runner._circuit_cooldown_ns = int(1e9)  # 1 second; definitely elapsed
@@ -459,7 +430,6 @@ async def test_process_event_degraded_recovery(runner_factory):
     runner, _, _ = runner_factory()
     strat = _make_strategy()
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_states["strat_a"] = "degraded"
     runner._circuit_recovery_threshold = 1
     event = _make_event()
@@ -477,7 +447,6 @@ async def test_process_event_circuit_degraded_transition(runner_factory):
 
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None  # Force Python fallback path
     runner._circuit_threshold = 4
     # After quarantine governor (DECISION-08), the first exception quarantines the
     # strategy and subsequent events are skipped (no circuit-breaker recording).
@@ -900,7 +869,6 @@ async def test_circuit_breaker_emits_degraded_metric(runner_factory, _patch_metr
     runner, _, _ = runner_factory()
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None
     runner._circuit_threshold = 4  # half_threshold = 2 → degraded after 2 failures
     runner.strategy_governor = None  # disable quarantine
 
@@ -925,7 +893,6 @@ async def test_circuit_breaker_emits_halted_metric(runner_factory, _patch_metric
     runner, _, _ = runner_factory()
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None
     runner._circuit_threshold = 2  # half_threshold=1, halted after 2
     runner.strategy_governor = None
 
@@ -945,7 +912,6 @@ async def test_circuit_breaker_emits_recovery_metric(runner_factory, _patch_metr
     runner, _, _ = runner_factory()
     strat = _make_strategy("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None
     runner._circuit_states["strat_a"] = "degraded"
     runner._circuit_recovery_threshold = 1
 
@@ -969,7 +935,6 @@ async def test_circuit_breaker_metric_suppresses_exceptions(runner_factory, _pat
     runner, _, _ = runner_factory()
     strat = _ErrStrat("strat_a")
     runner.register(strat)
-    runner._rust_circuit = None
     runner._circuit_threshold = 2
     runner.strategy_governor = None
 

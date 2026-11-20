@@ -224,7 +224,6 @@ def make_intent():
 @pytest.fixture()
 def risk_engine(tmp_path, monkeypatch):
     """Create a RiskEngine with mocked externals."""
-    monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
     monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
 
     data = {
@@ -257,29 +256,24 @@ def risk_engine(tmp_path, monkeypatch):
 
 
 @pytest.fixture()
-def position_store(monkeypatch):
-    """Create a PositionStore with Rust and metrics disabled."""
-    monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
+def position_store():
+    """Create a PositionStore with metrics disabled."""
     with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr:
         mock_mr.get.return_value = None
         from hft_platform.execution.positions import PositionStore
 
         store = PositionStore()
-        store._rust_tracker = None
         store.metrics = None
         yield store
 
 
 @pytest.fixture()
-def normalizer(monkeypatch):
-    """Create a MarketDataNormalizer with Rust acceleration disabled."""
-    monkeypatch.setenv("HFT_RUST_ACCEL", "0")
-    monkeypatch.setenv("HFT_FUSED_NORMALIZER", "0")
+def normalizer():
+    """Create a MarketDataNormalizer with metrics disabled."""
     with patch("hft_platform.feed_adapter.normalizer.MetricsRegistry") as mock_mr:
         mock_mr.get.return_value = None
         from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
         norm = MarketDataNormalizer.__new__(MarketDataNormalizer)
         norm.metrics = None
-        norm._rust_enabled = False
         yield norm

@@ -49,86 +49,10 @@ def _make_fill(
     )
 
 
-def _make_store_no_rust() -> PositionStore:
+def _make_store() -> PositionStore:
     """Create a PositionStore with Rust tracker disabled for Python-path tests."""
     with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
         store = PositionStore()
-    store._rust_tracker = None
-    store.metadata = MagicMock()
-    store.metadata.contract_multiplier.return_value = 1
-    store.metrics = None
-    return store
-
-
-class _MockRustTracker:
-    """Minimal mock of RustPositionTracker that mirrors Python Position.update logic."""
-
-    def __init__(self) -> None:
-        self._positions: dict[str, list] = {}  # key -> [net_qty, avg_price, rpnl, fees]
-
-    def update(
-        self,
-        key: str,
-        side: int,
-        qty: int,
-        price: int,
-        fee: int,
-        tax: int,
-        ts: int,
-        multiplier: int,
-    ) -> tuple[int, int, int, int]:
-        state = self._positions.get(key)
-        if state is None:
-            state = [0, 0, 0, 0]
-            self._positions[key] = state
-
-        net_qty, avg_price, rpnl, fees = state
-        is_buy = side == 0
-        signed = qty if is_buy else -qty
-
-        fees += fee + tax
-
-        current_sign = 1 if net_qty > 0 else (-1 if net_qty < 0 else 0)
-        fill_sign = 1 if is_buy else -1
-        closing = current_sign != 0 and fill_sign != current_sign
-
-        if closing:
-            close_qty = min(abs(net_qty), qty)
-            if is_buy:
-                pnl = (avg_price - price) * close_qty * multiplier
-            else:
-                pnl = (price - avg_price) * close_qty * multiplier
-            rpnl += pnl
-            net_qty += signed
-            if net_qty == 0:
-                avg_price = 0
-            elif (current_sign > 0 and net_qty < 0) or (current_sign < 0 and net_qty > 0):
-                avg_price = price
-        else:
-            if net_qty == 0:
-                avg_price = price
-                net_qty += signed
-            else:
-                total_val = net_qty * avg_price + signed * price
-                net_qty += signed
-                if net_qty != 0:
-                    avg_price = (2 * total_val + net_qty) // (2 * net_qty)
-
-        state[:] = [net_qty, avg_price, rpnl, fees]
-        return (net_qty, avg_price, rpnl, fees)
-
-    def get(self, key: str) -> tuple[int, int, int, int] | None:
-        state = self._positions.get(key)
-        if state is None:
-            return None
-        return tuple(state)  # type: ignore[return-value]
-
-
-def _make_store_with_mock_rust() -> PositionStore:
-    """Create a PositionStore with a mock Rust tracker."""
-    with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
-        store = PositionStore()
-    store._rust_tracker = _MockRustTracker()  # type: ignore[assignment]
     store.metadata = MagicMock()
     store.metadata.contract_multiplier.return_value = 1
     store.metrics = None
@@ -145,7 +69,7 @@ class TestRecoveryMergePythonPath:
 
     def test_closing_fill_uses_recovered_avg_price(self):
         """Load recovery long 10@100, sell 10@110 => PnL = (110-100)*10 * SCALE."""
-        store = _make_store_no_rust()
+        store = _make_store()
         store.load_recovery(
             account_id="acc1",
             symbol="2330",
@@ -173,7 +97,7 @@ class TestRecoveryMergePythonPath:
 
     def test_recovery_includes_historical_rpnl(self):
         """Recovery with existing realized_pnl_scaled=5000 is preserved."""
-        store = _make_store_no_rust()
+        store = _make_store()
         historical_rpnl = 5000
         store.load_recovery(
             account_id="acc1",
@@ -200,7 +124,7 @@ class TestRecoveryMergePythonPath:
 
     def test_recovery_includes_historical_fees(self):
         """Recovery with existing fees_scaled is preserved and accumulated."""
-        store = _make_store_no_rust()
+        store = _make_store()
         store.load_recovery(
             account_id="acc1",
             symbol="2330",
@@ -227,7 +151,7 @@ class TestRecoveryMergePythonPath:
 
     def test_no_merge_when_no_recovery(self):
         """Normal fill without recovery data works as before (opens new position)."""
-        store = _make_store_no_rust()
+        store = _make_store()
 
         fill = _make_fill(
             symbol="2330",
@@ -245,7 +169,7 @@ class TestRecoveryMergePythonPath:
 
     def test_no_stale_recovery_key_after_merge(self):
         """After merge, the recovery entry is consumed; no acc::sym key exists."""
-        store = _make_store_no_rust()
+        store = _make_store()
         store.load_recovery(
             account_id="acc1",
             symbol="2330",
@@ -272,7 +196,7 @@ class TestRecoveryMergePythonPath:
 
     def test_zero_qty_recovery_is_ignored(self):
         """load_recovery with net_qty=0 stores nothing."""
-        store = _make_store_no_rust()
+        store = _make_store()
         store.load_recovery(
             account_id="acc1",
             symbol="2330",
@@ -283,7 +207,7 @@ class TestRecoveryMergePythonPath:
 
     def test_short_recovery_position_merge(self):
         """Recovery short -5@200, cover buy 5@190 => PnL = (200-190)*5*SCALE."""
-        store = _make_store_no_rust()
+        store = _make_store()
         store.load_recovery(
             account_id="acc1",
             symbol="2330",
@@ -307,7 +231,7 @@ class TestRecoveryMergePythonPath:
 
     def test_second_fill_does_not_re_merge(self):
         """After first fill merges recovery, subsequent fills work normally."""
-        store = _make_store_no_rust()
+        store = _make_store()
         store.load_recovery(
             account_id="acc1",
             symbol="2330",
@@ -351,126 +275,6 @@ class TestRecoveryMergePythonPath:
 # ---------------------------------------------------------------------------
 
 
-class TestRecoveryMergeRustPath:
-    """Recovery merge via the Rust position tracker path (mocked)."""
-
-    def test_closing_fill_uses_recovered_avg_price_rust(self):
-        """Rust path: recovery long 10@100, sell 10@110 => correct PnL."""
-        store = _make_store_with_mock_rust()
-        store.load_recovery(
-            account_id="acc1",
-            symbol="2330",
-            net_qty=10,
-            avg_price_scaled=100 * SCALE,
-        )
-
-        fill = _make_fill(
-            symbol="2330",
-            side=Side.SELL,
-            qty=10,
-            price_scaled=110 * SCALE,
-            account_id="acc1",
-            strategy_id="strat_a",
-        )
-        delta = store.on_fill(fill)
-
-        assert delta.realized_pnl == 10 * 10 * SCALE
-        assert delta.net_qty == 0
-
-    def test_rust_path_preserves_historical_rpnl(self):
-        """Rust path: historical rpnl from recovery is added to Rust-computed PnL."""
-        store = _make_store_with_mock_rust()
-        historical_rpnl = 7777
-        store.load_recovery(
-            account_id="acc1",
-            symbol="2330",
-            net_qty=5,
-            avg_price_scaled=100 * SCALE,
-            realized_pnl_scaled=historical_rpnl,
-        )
-
-        fill = _make_fill(
-            symbol="2330",
-            side=Side.SELL,
-            qty=5,
-            price_scaled=110 * SCALE,
-            account_id="acc1",
-            strategy_id="strat_a",
-        )
-        delta = store.on_fill(fill)
-
-        new_pnl = 10 * 5 * SCALE
-        assert delta.realized_pnl == historical_rpnl + new_pnl
-        pos = store.positions["acc1:strat_a:2330"]
-        assert pos.realized_pnl_scaled == historical_rpnl + new_pnl
-
-    def test_rust_path_preserves_historical_fees(self):
-        """Rust path: historical fees from recovery are added to Rust-computed fees."""
-        store = _make_store_with_mock_rust()
-        store.load_recovery(
-            account_id="acc1",
-            symbol="2330",
-            net_qty=5,
-            avg_price_scaled=100 * SCALE,
-            fees_scaled=3000,
-        )
-
-        fill = _make_fill(
-            symbol="2330",
-            side=Side.SELL,
-            qty=5,
-            price_scaled=110 * SCALE,
-            account_id="acc1",
-            strategy_id="strat_a",
-            fee=300,  # all-in: already contains the 100 tax
-            tax=100,
-        )
-        store.on_fill(fill)
-
-        pos = store.positions["acc1:strat_a:2330"]
-        assert pos.fees_scaled == 3000 + 300
-
-    def test_rust_path_second_fill_still_has_offset(self):
-        """Rust path: offset persists across multiple fills for the same key."""
-        store = _make_store_with_mock_rust()
-        historical_rpnl = 5000
-        store.load_recovery(
-            account_id="acc1",
-            symbol="2330",
-            net_qty=10,
-            avg_price_scaled=100 * SCALE,
-            realized_pnl_scaled=historical_rpnl,
-        )
-
-        # First fill: partial close
-        fill1 = _make_fill(
-            symbol="2330",
-            side=Side.SELL,
-            qty=5,
-            price_scaled=110 * SCALE,
-            account_id="acc1",
-            strategy_id="strat_a",
-        )
-        store.on_fill(fill1)
-
-        # Second fill: close remaining
-        fill2 = _make_fill(
-            symbol="2330",
-            side=Side.SELL,
-            qty=5,
-            price_scaled=120 * SCALE,
-            account_id="acc1",
-            strategy_id="strat_a",
-        )
-        fill2.fill_id = "f002"
-        store.on_fill(fill2)
-
-        pos = store.positions["acc1:strat_a:2330"]
-        # Rust computes: first close (110-100)*5*SCALE + second close (120-100)*5*SCALE
-        rust_rpnl = 10 * 5 * SCALE + 20 * 5 * SCALE
-        assert pos.realized_pnl_scaled == historical_rpnl + rust_rpnl
-
-
 # ---------------------------------------------------------------------------
 # Tests: startup_recon integration
 # ---------------------------------------------------------------------------
@@ -481,7 +285,7 @@ class TestStartupReconWriteToStore:
 
     def test_write_to_store_uses_load_recovery(self):
         """_write_to_store should populate _recovery_positions, not positions directly."""
-        store = _make_store_no_rust()
+        store = _make_store()
 
         from hft_platform.execution.startup_recon import StartupPositionVerifier
 
@@ -504,7 +308,7 @@ class TestStartupReconWriteToStore:
 
     def test_write_to_store_zero_qty_skipped(self):
         """Zero-qty positions are skipped by load_recovery."""
-        store = _make_store_no_rust()
+        store = _make_store()
 
         from hft_platform.execution.startup_recon import StartupPositionVerifier
 
@@ -520,3 +324,15 @@ class TestStartupReconWriteToStore:
 
         assert count == 1  # _write_to_store counts iterations, not stored
         assert len(store._recovery_positions) == 0
+
+
+def test_fill_preserves_account_identity_after_recovering_from_a_broker_alias():
+    store = _make_store()
+    store.load_recovery(account_id="broker", symbol="2330", net_qty=2, avg_price_scaled=100 * SCALE)
+    fill = _make_fill(symbol="2330", account_id="acc1", side=Side.SELL, qty=1, price_scaled=100 * SCALE)
+
+    delta = store.on_fill(fill)
+
+    assert delta.net_qty == 1
+    assert delta.account_id == "acc1"
+    assert store.positions["acc1:strat_a:2330"].account_id == "acc1"

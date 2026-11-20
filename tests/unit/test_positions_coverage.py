@@ -138,7 +138,6 @@ class TestPosition:
 class TestPositionStore:
     def test_on_fill_creates_position(self):
         store = PositionStore()
-        store._rust_tracker = None
         fill = _make_fill()
         delta = store.on_fill(fill)
         assert isinstance(delta, PositionDelta)
@@ -146,7 +145,6 @@ class TestPositionStore:
 
     def test_on_fill_async(self):
         store = PositionStore()
-        store._rust_tracker = None
         fill = _make_fill()
         loop = asyncio.new_event_loop()
         delta = loop.run_until_complete(store.on_fill_async(fill))
@@ -238,7 +236,6 @@ class TestPositionStore:
 class TestNetQtyForSymbol:
     def test_basic(self):
         store = PositionStore()
-        store._rust_tracker = None
         fill = _make_fill()
         store.on_fill(fill)
         qty = store.net_qty_for_symbol("2330")
@@ -246,7 +243,6 @@ class TestNetQtyForSymbol:
 
     def test_with_strategy_filter(self):
         store = PositionStore()
-        store._rust_tracker = None
         store.on_fill(_make_fill(strategy_id="s1"))
         store.on_fill(_make_fill(strategy_id="s2", fill_id="f2"))
         qty = store.net_qty_for_symbol("2330", strategy_id="s1")
@@ -313,7 +309,6 @@ class TestLoadRecovery:
 class TestMarkToMarket:
     def test_mtm_basic(self):
         store = PositionStore()
-        store._rust_tracker = None
         fill = _make_fill(price=1000000, qty=10)
         store.on_fill(fill)
         mtm = store.mark_to_market({"2330": 1100000})
@@ -322,14 +317,12 @@ class TestMarkToMarket:
 
     def test_mtm_no_mid_price(self):
         store = PositionStore()
-        store._rust_tracker = None
         store.on_fill(_make_fill())
         mtm = store.mark_to_market({})  # No mid price for 2330
         assert mtm == 0
 
     def test_mtm_flat_position_ignored(self):
         store = PositionStore()
-        store._rust_tracker = None
         store.on_fill(_make_fill(side=Side.BUY, qty=10))
         store.on_fill(_make_fill(side=Side.SELL, qty=10, fill_id="f2"))
         mtm = store.mark_to_market({"2330": 1100000})
@@ -369,7 +362,6 @@ class TestMarkToMarket:
 class TestSnapshotPositions:
     def test_snapshot_is_deep_copy(self):
         store = PositionStore()
-        store._rust_tracker = None
         store.on_fill(_make_fill())
         snap = store.snapshot_positions()
         # Modify the snapshot
@@ -388,7 +380,6 @@ class TestSnapshotPositions:
 class TestPositionStoreReset:
     def test_reset(self):
         store = PositionStore()
-        store._rust_tracker = None
         store.on_fill(_make_fill())
         count = store.reset()
         assert count == 1
@@ -397,7 +388,6 @@ class TestPositionStoreReset:
 
     def test_clear_symbol_positions(self):
         store = PositionStore()
-        store._rust_tracker = None
         store.on_fill(_make_fill(symbol="2330"))
         store.on_fill(_make_fill(symbol="2317", fill_id="f2"))
         removed = store.clear_symbol_positions("2330")
@@ -422,7 +412,6 @@ class TestEvictFlatPositions:
     def test_evict_flat(self):
         store = PositionStore()
         store._positions_max_size = 2
-        store._rust_tracker = None
         # Create a flat position
         store.positions["acc:s1:A"] = Position("acc", "s1", "A", net_qty=0, last_update_ts=1)
         store.positions["acc:s1:B"] = Position("acc", "s1", "B", net_qty=5, last_update_ts=2)

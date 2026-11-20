@@ -46,7 +46,6 @@ _PATH_ROOTS = (
     "config/",
     "docs/",
     "research/",
-    "rust_core/",
     "scripts/",
     "src/",
     "tests/",
@@ -72,7 +71,7 @@ def governing_docs(root: Path) -> list[Path]:
     for name in ("CLAUDE.md", "AGENTS.md"):
         if (root / name).is_file():
             docs.append(root / name)
-    for nested in ("rust_core", "tests", "research"):
+    for nested in ("tests", "research"):
         if (root / nested / "AGENTS.md").is_file():
             docs.append(root / nested / "AGENTS.md")
     manifest = root / ".agent/00-MANIFEST.md"

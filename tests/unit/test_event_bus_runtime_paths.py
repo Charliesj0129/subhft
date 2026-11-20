@@ -21,14 +21,8 @@ from hft_platform.engine.event_bus import RingBufferBus
 
 def _make_py_bus(monkeypatch, *, use_typed_tick=False, use_typed_book=False, size=8):
     """Create a pure-Python RingBufferBus with optional typed ring flags."""
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", use_typed_tick)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", use_typed_book)
-    monkeypatch.setattr(event_bus_mod, "_RUST_TICK_RING_FACTORY", None)
-    monkeypatch.setattr(event_bus_mod, "_RUST_BIDASK_RING_FACTORY", None)
-    monkeypatch.setattr(event_bus_mod, "_RUST_LOBSTATS_RING_FACTORY", None)
     return RingBufferBus(size=size)
 
 
@@ -283,9 +277,6 @@ def test_lobstats_ring_exception_consume_returns_event(monkeypatch):
 def test_async_publish_multi_writer_sets_signal(monkeypatch):
     """async publish() with single_writer=False and signal != None sets the signal."""
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "event")  # signal is not None
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=8)
     bus.single_writer = False
@@ -304,9 +295,6 @@ def test_async_publish_multi_writer_sets_signal(monkeypatch):
 def test_async_publish_multi_writer_consumer_reads_event(monkeypatch):
     """Consumer receives event published via multi-writer async publish() path."""
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "event")
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=8)
     bus.single_writer = False
@@ -327,9 +315,6 @@ def test_async_publish_multi_writer_consumer_reads_event(monkeypatch):
 
 def test_async_publish_many_single_writer_path(monkeypatch):
     """async publish_many() with default single_writer=True uses fast path (604-607)."""
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=8)
     assert bus.single_writer is True  # default
@@ -348,9 +333,6 @@ def test_async_publish_many_single_writer_path(monkeypatch):
 def test_async_publish_many_single_writer_calls_notify(monkeypatch):
     """async publish_many() single_writer path calls _notify (signal.set)."""
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "event")
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=8)
     assert bus.single_writer is True
@@ -367,9 +349,6 @@ def test_async_publish_many_single_writer_calls_notify(monkeypatch):
 
 def test_async_publish_many_single_writer_preserves_order(monkeypatch):
     """Events published via single_writer async publish_many() arrive in order."""
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=16)
 
@@ -422,9 +401,6 @@ def test_mixed_ring_exceptions_all_fall_back_to_buffer(monkeypatch):
 def test_async_publish_multi_writer_spin_mode_no_signal(monkeypatch):
     """async publish() multi-writer with spin mode: signal is None, line 599 skipped."""
     monkeypatch.setattr(event_bus_mod, "_WAIT_MODE", "spin")
-    monkeypatch.setattr(event_bus_mod, "_RUST_ENABLED", False)
-    monkeypatch.setattr(event_bus_mod, "_USE_RUST_BUS", False)
-    monkeypatch.setattr(event_bus_mod, "_RUST_RING_FACTORY", None)
 
     bus = RingBufferBus(size=8)
     bus.single_writer = False
