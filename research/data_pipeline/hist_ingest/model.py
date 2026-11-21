@@ -106,6 +106,15 @@ def weekdays(start: dt.date, end: dt.date) -> list[dt.date]:
     return [d for d in days if d.weekday() < 5]
 
 
+def trading_day_of(utc_ns: int) -> dt.date:
+    """TAIFEX trading day of a bar: night bars from 15:00 belong to the next weekday (holidays not modelled)."""
+    local = dt.datetime.fromtimestamp(utc_ns / 1_000_000_000, TAIPEI)
+    day = local.date() + dt.timedelta(days=1) if local.time() >= dt.time(15) else local.date()
+    while day.weekday() >= 5:
+        day += dt.timedelta(days=1)
+    return day
+
+
 def last_completed_trading_day(now_local: dt.datetime) -> dt.date:
     """Latest weekday whose day session has closed (14:00 Taipei) as of ``now_local``."""
     day = now_local.date() if now_local.time() >= dt.time(14) else now_local.date() - dt.timedelta(days=1)

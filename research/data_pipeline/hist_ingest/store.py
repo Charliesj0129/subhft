@@ -25,7 +25,7 @@ from .model import (
     SourceError,
     TickRow,
     WatermarkRow,
-    taipei_date,
+    trading_day_of,
     weekdays,
 )
 
@@ -145,6 +145,9 @@ class WindowResult(NamedTuple):
     stop: bool = False
 
 
+NIGHT_LOOKBACK_DAYS = 3
+
+
 def run_kbar_windows(
     store: HistStore,
     *,
@@ -158,7 +161,8 @@ def run_kbar_windows(
 ) -> Counter[str]:
     """Windows of at most ``chunk_days`` calendar days from the oldest pending weekday up to ``until``.
 
-    Every weekday of a fetched window gets a watermark (bars per Taipei calendar day; 0 is EMPTY). A window that raises
+    Every weekday of a window gets a watermark counted by TAIFEX trading day (trading_day_of; 0 is EMPTY). The fetch
+    starts NIGHT_LOOKBACK_DAYS earlier so the previous evening's night session (Friday night for a Monday) is included. A window that raises
     SourceError is marked FAILED, and three failures stop the loop. Overlapping re-fetches are harmless.
     """
     totals: Counter[str] = Counter()
@@ -168,7 +172,7 @@ def run_kbar_windows(
         end = min(start + dt.timedelta(days=chunk_days - 1), until)
         days, pending = weekdays(start, end), [d for d in pending if d > end]
         try:
-            result = fetch(start, end)
+            result = fetch(start - dt.timedelta(days=NIGHT_LOOKBACK_DAYS), end)
         except SourceError as exc:
             log.error(
                 "kbars_window_failed", source=source, product=product, start=str(start), end=str(end), error=str(exc)
@@ -177,7 +181,7 @@ def run_kbar_windows(
             totals["failed"] += 1
             continue
         store.insert(result.rows)
-        by_day = Counter(taipei_date(r.bar_ts) for r in result.rows)
+        by_day = Counter(trading_day_of(r.bar_ts) for r in result.rows)
         store.mark_days(
             source,
             product,

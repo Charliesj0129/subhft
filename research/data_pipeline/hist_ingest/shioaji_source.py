@@ -40,7 +40,7 @@ from .store import HistStore, WindowResult, run_kbar_windows
 log = structlog.get_logger("hist_ingest.shioaji")
 
 SOURCE = "shioaji"
-KBAR_CHUNK_DAYS = 30
+KBAR_CHUNK_DAYS = 27  # plus NIGHT_LOOKBACK_DAYS stays within the 30-day kbars limit
 MAX_FAILURES = 3
 
 
@@ -123,12 +123,16 @@ def _columns(raw: Any, names: Sequence[str], what: str) -> list[list[Any]]:
 def convert_ticks(
     raw: Any, product: str, query_code: str, contract_code: str, day: dt.date, ingest_ts: int
 ) -> list[TickRow]:
-    """Shioaji Ticks to rows; seq is the index in the response, so the same response gives the same keys."""
+    """Shioaji Ticks to rows; seq is the position among ticks sharing one exch_ts, so a refetch that gains or loses a
+    tick elsewhere in the day does not shift the keys of the others."""
     cols = _columns(raw, ("close", "volume", "bid_price", "ask_price", "tick_type"), "ticks")
     head = (SOURCE, product, query_code, contract_code)
     try:
         rows = []
-        for seq, (ts, close, volume, bid, ask, tick_type) in enumerate(zip(*cols, strict=True)):
+        same_ts: Counter[int] = Counter()
+        for ts, close, volume, bid, ask, tick_type in zip(*cols, strict=True):
+            seq = same_ts[ts]
+            same_ts[ts] += 1
             utc = local_ns_to_utc_ns(ts)
             prices = (scale_price(close), int(volume), scale_price(bid), scale_price(ask), int(tick_type))
             rows.append(TickRow(*head, day, classify_session(utc), utc, seq, *prices, ingest_ts))

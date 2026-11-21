@@ -63,7 +63,12 @@ def load_env_file(path: str) -> None:
         for line in target.read_text(encoding="utf-8").splitlines():
             key, sep, value = line.strip().removeprefix("export ").partition("=")
             if sep and key and not key.startswith("#"):
-                os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+                value = value.strip()
+                if value[:1] in {'"', "'"}:
+                    value = value[1:].split(value[0], 1)[0]
+                else:
+                    value = value.split(" #", 1)[0].strip()
+                os.environ.setdefault(key.strip(), value)
     else:
         load_dotenv(target, override=False)
 

@@ -93,8 +93,11 @@ class FubonSource:
                 if getattr(exc, "status_code", None) != 429:
                     raise SourceError(f"fubon candles failed: {type(exc).__name__}") from exc
             else:
-                if _get(resp, "statusCode") != 429:
+                status = _get(resp, "statusCode")
+                if status is None or 200 <= int(status) < 300:
                     return resp
+                if int(status) != 429:
+                    raise SourceError(f"fubon candles returned statusCode {status}")
             if attempt < MAX_RETRIES:
                 log.warning("fubon_rate_limited", attempt=attempt + 1, sleep_s=RETRY_SLEEP_S)
                 self._sleep(RETRY_SLEEP_S)
@@ -107,7 +110,10 @@ def convert_candles(resp: Any, *, product: str, ingest_ts: int) -> tuple[str, li
     code = symbol if re.fullmatch(rf"{re.escape(product)}[A-L]\d", symbol) else ""
     try:
         rows = []
-        for c in _get(resp, "data") or []:
+        data = _get(resp, "data")
+        if data is None:
+            raise SourceError("fubon candles reply has no data field")
+        for c in data:
             ts = iso_to_utc_ns(_get(c, "date"))
             prices = (scale_price(_get(c, k)) for k in ("open", "high", "low", "close"))
             rows.append(

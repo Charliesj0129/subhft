@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS hft.hist_kbars (
     volume Int64,
     ingest_ts Int64
 ) ENGINE = ReplacingMergeTree(ingest_ts)
-PARTITION BY toYYYYMM(toDate(intDiv(bar_ts, 1000000000)))
+PARTITION BY toYYYYMM(toDateTime(intDiv(bar_ts, 1000000000)))
 ORDER BY (source, product, timeframe_min, bar_ts);
 
 CREATE TABLE IF NOT EXISTS hft.hist_ingest_watermark (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -70,7 +71,7 @@ class FakeShioaji:
         )
 
     def kbars(self, contract, start, end):
-        day = dt.date.fromisoformat(start)
+        day = dt.date.fromisoformat(end)
         return SimpleNamespace(ts=[local_ns(day, "09:00")], Open=[1.5], High=[2.5], Low=[1.0], Close=[2.0], Volume=[7])
 
 
@@ -298,6 +299,68 @@ def test_fubon_candle_missing_a_price_field_raises_source_error():
         )
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [{"statusCode": 401, "message": "Unauthorized"}, {"statusCode": 500}, {"symbol": "TXF"}],
+)
+def test_fubon_error_or_dataless_reply_marks_the_window_failed_not_empty(reply):
+    src, _, _ = fubon_setup([reply])
+    store = HistStore(FakeClient())
+    fubon_source.ingest_kbars(src, store, products=["TXF"], since=THU, until=FRI, force=False)
+    assert set(store.client.marks.values()) == {"FAILED"}
+
+
+def test_friday_night_bars_after_midnight_count_toward_monday():
+    from research.data_pipeline.hist_ingest.model import trading_day_of
+
+    sat_0100 = int(dt.datetime(2026, 11, 20, 17, 0, tzinfo=dt.UTC).timestamp()) * NS
+    thu_2100 = int(dt.datetime(2026, 11, 19, 13, 0, tzinfo=dt.UTC).timestamp()) * NS
+    fri_0900 = int(dt.datetime(2026, 11, 20, 1, 0, tzinfo=dt.UTC).timestamp()) * NS
+    assert trading_day_of(sat_0100) == dt.date(2026, 11, 23)
+    assert trading_day_of(thu_2100) == FRI
+    assert trading_day_of(fri_0900) == FRI
+
+
+def test_tick_seq_counts_within_one_timestamp_so_a_dropped_tick_keeps_other_keys():
+    def raw(ts_list):
+        n = len(ts_list)
+        return {
+            "ts": ts_list,
+            "close": [1] * n,
+            "volume": [1] * n,
+            "bid_price": [1] * n,
+            "ask_price": [1] * n,
+            "tick_type": [1] * n,
+        }
+
+    base = local_ns(FRI, "09:00")
+    full = shioaji_source.convert_ticks(raw([base, base + 1, base + 1, base + 2]), "TXF", "TXFR1", "TXFL6", FRI, 1)
+    short = shioaji_source.convert_ticks(raw([base + 1, base + 1, base + 2]), "TXF", "TXFR1", "TXFL6", FRI, 1)
+    keys = {(r.exch_ts, r.seq) for r in full}
+    assert {(r.exch_ts, r.seq) for r in short} <= keys
+    assert [r.seq for r in full] == [0, 0, 1, 0]
+
+
+def test_env_fallback_parser_drops_inline_comments_and_keeps_quoted_hashes(tmp_path, monkeypatch):
+    import builtins
+
+    env = tmp_path / "x.env"
+    env.write_text("HIST_T_A=abc # note\nHIST_T_B='p#q' # c\n", encoding="utf-8")
+    for k in ("HIST_T_A", "HIST_T_B"):
+        monkeypatch.delenv(k, raising=False)
+    real_import = builtins.__import__
+
+    def no_dotenv(name, *a, **kw):
+        if name == "dotenv":
+            raise ImportError(name)
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_dotenv)
+    cli.load_env_file(str(env))
+    monkeypatch.setattr(builtins, "__import__", real_import)
+    assert (os.environ["HIST_T_A"], os.environ["HIST_T_B"]) == ("abc", "p#q")
+
+
 def test_kbar_window_marks_every_weekday_and_a_second_run_fetches_nothing():
     src, rest, _ = fubon_setup([{"data": [candle(WED, "09:00"), candle(FRI, "09:00")]}])
     store = HistStore(FakeClient())
@@ -306,7 +369,7 @@ def test_kbar_window_marks_every_weekday_and_a_second_run_fetches_nothing():
     assert len(rest.calls) == 2  # regular + afterhours of ONE window; the second run found nothing pending
     assert [p["session"] for p in rest.calls] == ["regular", "afterhours"]
     assert (rest.calls[0]["from"], rest.calls[0]["to"], rest.calls[0]["contractMonth"]) == (
-        "2026-11-16",
+        "2026-11-13",
         "2026-11-20",
         "1!",
     )
