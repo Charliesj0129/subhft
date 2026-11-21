@@ -49,20 +49,6 @@ Companion documents:
 
 ---
 
-## Rust Acceleration (`rust_core` via PyO3)
-
-The `rust_core` extension provides hot-path acceleration consumed by:
-
-- `feed_adapter/normalizer.py` — tick/bidask normalization
-- `feed_adapter/lob_engine.py` — book stats computation
-- `engine/event_bus.py` — ring buffer
-- `execution/positions.py` — position tracking
-- `strategies/rust_alpha.py` — alpha signal generation
-
-Build: `uv run maturin develop --manifest-path rust_core/Cargo.toml`
-
----
-
 ## Storage
 
 - **WAL**: jsonl files under `.wal/` (WAL-first mode: `HFT_RECORDER_MODE=wal_first`)

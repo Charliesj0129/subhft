@@ -23,7 +23,7 @@ from hft_platform.contracts.strategy import (
     Side,
 )
 from hft_platform.risk import engine as engine_mod
-from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator, _obs_policy
+from hft_platform.risk.engine import RiskEngine, _obs_policy
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -76,27 +76,6 @@ def _intent(
         price=price,
         qty=qty,
     )
-
-
-# ── _load_rust_risk_validator ──────────────────────────────────────────────
-
-
-def test_load_rust_risk_validator_caches():
-    """Second call returns cached value without re-importing."""
-    engine_mod._RustRiskValidator = None
-    result1 = _load_rust_risk_validator()
-    result2 = _load_rust_risk_validator()
-    assert result1 is result2
-    engine_mod._RustRiskValidator = None
-
-
-def test_load_rust_risk_validator_both_fail():
-    """Returns None when both imports fail."""
-    engine_mod._RustRiskValidator = None
-    with patch.dict("sys.modules", {"hft_platform.rust_core": None, "rust_core": None}):
-        result = _load_rust_risk_validator()
-        assert result is None
-        engine_mod._RustRiskValidator = None
 
 
 # ── _obs_policy ────────────────────────────────────────────────────────────
@@ -166,51 +145,6 @@ def test_init_fast_gate_invalid_scale(cfg_path, monkeypatch):
 
 
 # ── _init_rust_validator ───────────────────────────────────────────────────
-
-
-def test_init_rust_validator_disabled_by_default(engine):
-    assert engine._rust_validator is None
-
-
-def test_init_rust_validator_enabled_but_no_cls(cfg_path, monkeypatch):
-    """If _load_rust_risk_validator returns None, result is None."""
-    monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "1")
-    engine_mod._RustRiskValidator = None
-
-    with patch("hft_platform.risk.engine._load_rust_risk_validator", return_value=None):
-        q_in = asyncio.Queue()
-        q_out = asyncio.Queue()
-        e = RiskEngine(cfg_path, q_in, q_out)
-        assert e._rust_validator is None
-
-
-def test_init_rust_validator_per_strategy_config(cfg_path, monkeypatch):
-    """Per-strategy config is applied when validator class is available."""
-    monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "1")
-
-    mock_cls = MagicMock()
-    mock_instance = MagicMock()
-    mock_cls.return_value = mock_instance
-
-    with patch("hft_platform.risk.engine._load_rust_risk_validator", return_value=mock_cls):
-        q_in = asyncio.Queue()
-        q_out = asyncio.Queue()
-        e = RiskEngine(cfg_path, q_in, q_out)
-        # set_band_ticks and set_max_notional should have been called for s1
-        assert mock_instance.set_band_ticks.called or mock_instance.set_max_notional.called
-
-
-def test_init_rust_validator_raises_returns_none(cfg_path, monkeypatch):
-    """OSError during validator init returns None."""
-    monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "1")
-
-    mock_cls = MagicMock(side_effect=OSError("shm error"))
-
-    with patch("hft_platform.risk.engine._load_rust_risk_validator", return_value=mock_cls):
-        q_in = asyncio.Queue()
-        q_out = asyncio.Queue()
-        e = RiskEngine(cfg_path, q_in, q_out)
-        assert e._rust_validator is None
 
 
 # ── reload_config ──────────────────────────────────────────────────────────
@@ -448,56 +382,6 @@ def test_evaluate_cancel_intent_skips_fast_gate(engine):
 
 
 # ── evaluate: rust validator with LOB ─────────────────────────────────────
-
-
-def test_evaluate_rust_validator_ok(engine):
-    """RustRiskValidator returning ok=True proceeds."""
-    mock_rv = MagicMock()
-    mock_rv.check.return_value = (True, 0)
-    engine._rust_validator = mock_rv
-
-    decision = engine.evaluate(_intent())
-    assert decision.approved
-
-
-def test_evaluate_rust_validator_rejection(engine):
-    """RustRiskValidator rejection maps reason code."""
-    mock_rv = MagicMock()
-    mock_rv.check.return_value = (False, 1)
-    engine._rust_validator = mock_rv
-
-    decision = engine.evaluate(_intent())
-    assert not decision.approved
-    assert decision.reason_code == "PRICE_ZERO_OR_NEG"
-
-
-def test_evaluate_rust_validator_oserror_falls_through(engine):
-    """OSError from RustRiskValidator falls through to Python validators."""
-    mock_rv = MagicMock()
-    mock_rv.check.side_effect = OSError("rv error")
-    engine._rust_validator = mock_rv
-
-    decision = engine.evaluate(_intent())
-    # OSError falls through to Python validators; intent is within limits so approved
-    assert decision.approved is True
-
-
-def test_evaluate_rust_validator_with_lob_mid_price(engine):
-    """RustRiskValidator is passed mid_price from LOB if available."""
-    mock_rv = MagicMock()
-    mock_rv.check.return_value = (True, 0)
-    engine._rust_validator = mock_rv
-
-    engine.validators[0].lob = MagicMock()
-    engine.validators[0]._get_mid_price = lambda symbol: 5_000_000
-
-    decision = engine.evaluate(_intent())
-    call_args = mock_rv.check.call_args[0]
-    assert call_args[5] == 5_000_000  # mid_price passed in
-    # A Rust approval no longer ends the check: the Python price band runs
-    # after it and refuses a price 80% below that mid.
-    assert not decision.approved
-    assert decision.reason_code.startswith("PRICE_OUTSIDE_BAND")
 
 
 # ── typed_frame_view / create_command ─────────────────────────────────────

@@ -66,7 +66,6 @@ class _QuotingStrategy:
 def _runner_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
-    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
 
 

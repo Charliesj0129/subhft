@@ -68,9 +68,9 @@ class PositionStuckMonitor:
         self._dispatcher = dispatcher
         self._mid_price_fn = mid_price_fn
         self._metrics = MetricsRegistry.get()
-        self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_POSITION_STUCK_POLL_S", "5"))
+        self._interval_s = float(interval_s if interval_s is not None else os.getenv("HFT_POSITION_STUCK_POLL_S", 5.0))
         self._alert_threshold_s = float(
-            alert_threshold_s if alert_threshold_s is not None else os.getenv("HFT_POSITION_STUCK_ALERT_S", "300")
+            alert_threshold_s if alert_threshold_s is not None else os.getenv("HFT_POSITION_STUCK_ALERT_S", 300.0)
         )
         self._running = False
         self._task: asyncio.Task[None] | None = None

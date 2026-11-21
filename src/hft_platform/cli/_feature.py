@@ -126,11 +126,10 @@ def cmd_feature_rollout_rollback(args: argparse.Namespace) -> None:
 
 
 def cmd_feature_parity(args: argparse.Namespace) -> None:
-    """Run the cross-path promoted-family parity gate (Python / Rust / hftbacktest).
+    """Run the cross-path promoted-family parity gate (Python / hftbacktest).
 
     Emits a JSON ParityReport summary and exits non-zero on any divergence, so it
-    can serve as a CI or ops drift gate. The Rust path is included only when the
-    compiled extension is available (``rust_available`` in the output).
+    can serve as a CI or ops drift gate.
     """
     from hft_platform.feature.parity import run_self_test
     from hft_platform.feature.registry import default_feature_registry
@@ -140,10 +139,6 @@ def cmd_feature_parity(args: argparse.Namespace) -> None:
     feature_set = reg.get(fsid) if fsid else reg.get_default()
 
     result = run_self_test(feature_set=feature_set)
-    require_rust = bool(getattr(args, "require_rust", False))
-    if require_rust and not result["rust_available"]:
-        result = {**result, "ok": False, "error": "rust backend required but unavailable"}
-
     print(json.dumps(result, indent=2, ensure_ascii=False))
     if not result["ok"]:
         sys.exit(1)

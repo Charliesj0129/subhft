@@ -6,14 +6,11 @@ position flips, PnL sign correctness, and PositionStore eviction behavior.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 
 import pytest
 
 # Force Python position tracker
-os.environ["HFT_RUST_POSITIONS"] = "0"
-
 from hft_platform.contracts.execution import FillEvent, Side
 
 # ---------------------------------------------------------------------------
@@ -56,7 +53,6 @@ def _make_position_store():
         from hft_platform.execution.positions import PositionStore
 
         store = PositionStore()
-        store._rust_tracker = None
         store.metrics = None
         return store
 
@@ -285,13 +281,11 @@ class TestPnlSignShort:
 class TestPositionStoreEviction:
     def test_eviction_at_max_size(self, monkeypatch):
         """PositionStore evicts flat positions when reaching max_size."""
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
         with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr:
             mock_mr.get.return_value = None
             from hft_platform.execution.positions import PositionStore
 
             store = PositionStore()
-            store._rust_tracker = None
             store.metrics = None
             store._positions_max_size = 5
 

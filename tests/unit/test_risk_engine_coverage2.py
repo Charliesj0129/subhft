@@ -41,7 +41,7 @@ from hft_platform.contracts.strategy import (
     Side,
     StormGuardState,
 )
-from hft_platform.risk.engine import RiskEngine, _load_rust_risk_validator
+from hft_platform.risk.engine import RiskEngine
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -190,19 +190,6 @@ strategies: {}
 
 
 # ── _load_rust_risk_validator lazy init ──────────────────────────────────
-
-
-def test_load_rust_risk_validator_returns_cached():
-    """_load_rust_risk_validator returns cached value on second call."""
-    import hft_platform.risk.engine as eng_mod
-
-    original = eng_mod._RustRiskValidator
-    try:
-        eng_mod._RustRiskValidator = MagicMock()
-        result = _load_rust_risk_validator()
-        assert result is eng_mod._RustRiskValidator
-    finally:
-        eng_mod._RustRiskValidator = original
 
 
 # ── evaluate_typed_frame ─────────────────────────────────────────────────

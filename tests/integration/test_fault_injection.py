@@ -180,7 +180,6 @@ class TestRiskEngineFaultInjection:
             crashing.defaults = engine.config.get("global_defaults", {})
             crashing.strat_configs = engine.config.get("strategies", {})
             engine.validators = [crashing]
-            engine._rust_validator = None
 
             intent = _make_intent()
             # The engine swallows the exception in the run loop,
@@ -213,7 +212,6 @@ class TestRiskEngineFaultInjection:
             crashing.defaults = engine.config.get("global_defaults", {})
             crashing.strat_configs = engine.config.get("strategies", {})
             engine.validators = [crashing]
-            engine._rust_validator = None
 
             intent = _make_intent()
             with pytest.raises(RuntimeError):
@@ -237,7 +235,7 @@ class TestPositionStoreFaultInjection:
 
     def test_position_store_at_capacity_triggers_eviction(self):
         """When PositionStore reaches max size, it evicts flat positions."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "5"}):
+        with patch.dict(os.environ, {"HFT_POSITIONS_MAX_SIZE": "5"}):
             with (
                 patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
                 patch("hft_platform.execution.positions.SymbolMetadata"),
@@ -287,7 +285,7 @@ class TestPositionStoreFaultInjection:
 
     def test_position_store_eviction_preserves_active(self):
         """Eviction only removes flat positions, not active ones."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "3"}):
+        with patch.dict(os.environ, {"HFT_POSITIONS_MAX_SIZE": "3"}):
             with (
                 patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
                 patch("hft_platform.execution.positions.SymbolMetadata"),
@@ -585,7 +583,7 @@ class TestPositionUpdateDuringEviction:
 
     def test_position_update_during_eviction(self):
         """Concurrent fills during eviction must not lose data."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "5"}):
+        with patch.dict(os.environ, {"HFT_POSITIONS_MAX_SIZE": "5"}):
             with (
                 patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr,
                 patch("hft_platform.execution.positions.SymbolMetadata"),

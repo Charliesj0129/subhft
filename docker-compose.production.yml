@@ -25,9 +25,6 @@ services:
 
   hft-engine:
     <<: *security-common
-    environment:
-      - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
-      - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
     deploy:
       resources:
         limits:

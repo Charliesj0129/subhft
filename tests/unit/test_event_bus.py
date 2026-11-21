@@ -106,7 +106,6 @@ def test_consume_batch_overflow_triggers_storm_guard(monkeypatch):
 
 def test_typed_tick_ring_feature_flag(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", True)
-    monkeypatch.setattr(event_bus_mod, "_RUST_TICK_RING_FACTORY", None)
     bus = RingBufferBus(size=8)
 
     tick = ("tick", "2330", 10000, 5, 50, False, False, 123456789)
@@ -123,8 +122,6 @@ def test_typed_tick_ring_feature_flag(monkeypatch):
 def test_typed_book_rings_feature_flag_bidask_and_lobstats(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", False)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", True)
-    monkeypatch.setattr(event_bus_mod, "_RUST_BIDASK_RING_FACTORY", None)
-    monkeypatch.setattr(event_bus_mod, "_RUST_LOBSTATS_RING_FACTORY", None)
     bus = RingBufferBus(size=8)
 
     bidask = ("bidask", "2330", [[10000, 1]], [[10010, 1]], 123, False)
@@ -145,8 +142,6 @@ def test_typed_book_rings_feature_flag_bidask_and_lobstats(monkeypatch):
 def test_typed_book_ring_packed_bidask_roundtrip_with_stats(monkeypatch):
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_TICK_RING", False)
     monkeypatch.setattr(event_bus_mod, "_USE_TYPED_BOOK_RINGS", True)
-    monkeypatch.setattr(event_bus_mod, "_RUST_BIDASK_RING_FACTORY", None)
-    monkeypatch.setattr(event_bus_mod, "_RUST_LOBSTATS_RING_FACTORY", None)
     bus = RingBufferBus(size=8)
 
     bidask = (
