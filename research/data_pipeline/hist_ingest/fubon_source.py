@@ -92,7 +92,8 @@ class FubonSource:
                 resp = self.rest.historical.candles(**params)
             except Exception as exc:
                 if getattr(exc, "status_code", None) != 429:
-                    raise SourceError(f"fubon candles failed: {type(exc).__name__}") from exc
+                    code = getattr(exc, "status_code", None)
+                    raise SourceError(f"fubon candles failed: {type(exc).__name__} status={code}") from exc
             else:
                 status = _get(resp, "statusCode")
                 if status is None or 200 <= int(status) < 300:
