@@ -217,6 +217,7 @@ Base YAML (config/base/main.yaml)
 | `HFT_GATEWAY_LEADER_LEASE_PATH` | `.state/gateway_leader.lock` | Gateway leader lease 檔案路徑 | 主備需共享同一路徑 |
 | `HFT_GATEWAY_LEADER_LEASE_REFRESH_S` | `0.5` | Leader lease heartbeat 週期（秒） | 小於 0.5 可加速切換但增加 I/O |
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | `1` = 啟用 Feature Engine（v3 預設 27 個 LOB 特徵）；`0` = 停用 | 預設 on；停用請設 `HFT_FEATURE_ENGINE_ENABLED=0` |
+| `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端。Rust 內核已移除，僅支援 `python`；設其他值會 fail-closed | 不需設定 |
 | `HFT_FEATURE_ENGINE_EMIT_EVENTS` | `1` | `0` = 停用 FeatureUpdateEvent 發送 | 僅在診斷性能時暫停 |
 | `HFT_FEATURE_PROFILE_ID` | — | 指定 Feature Profile ID | — |
 | `HFT_FEATURE_SHADOW_PARITY` | `0` | `1` = 啟用 primary/shadow parity 比對 | rollout 必開 |
