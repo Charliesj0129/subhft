@@ -1,8 +1,8 @@
 """Fubon source: 1-minute K bars from rest_client.futopt.historical.candles (continuous month "1!").
 
 Credentials come from the environment and mirror feed_adapter/fubon/session_runtime.py:
-sdk.login(HFT_FUBON_API_KEY, HFT_FUBON_PASSWORD, HFT_FUBON_CERT_PATH), then sdk.init_realtime().
-HFT_FUBON_ACCOUNT is not needed for market data. The SDK is imported lazily, so this module loads without fubon_neo.
+sdk.apikey_login(HFT_FUBON_PERSONAL_ID, HFT_FUBON_API_KEY, HFT_FUBON_CERT_PATH[, HFT_FUBON_CERT_PASSWORD]),
+then sdk.init_realtime(). A relative cert path is resolved against the --env-file directory. The SDK is imported lazily, so this module loads without fubon_neo.
 
 Both sessions ("regular", "afterhours") are fetched per window of at most 180 calendar days. The response
 shape (a ``data`` list of dicts with date/open/high/low/close/volume, an optional delivery-month ``symbol``) is
@@ -57,18 +57,19 @@ class FubonSource:
 
     @classmethod
     def connect(cls) -> FubonSource:
+        person = os.getenv("HFT_FUBON_PERSONAL_ID") or os.getenv("HFT_FUBON_ACCOUNT", "")
         key, password, cert = (
-            os.getenv(n, "") for n in ("HFT_FUBON_API_KEY", "HFT_FUBON_PASSWORD", "HFT_FUBON_CERT_PATH")
+            os.getenv(n, "") for n in ("HFT_FUBON_API_KEY", "HFT_FUBON_CERT_PASSWORD", "HFT_FUBON_CERT_PATH")
         )
-        if not key or not password:
-            raise SourceError("HFT_FUBON_API_KEY and HFT_FUBON_PASSWORD must be set")
+        if not person or not key or not cert:
+            raise SourceError("HFT_FUBON_PERSONAL_ID, HFT_FUBON_API_KEY and HFT_FUBON_CERT_PATH must be set")
         try:
             from fubon_neo.sdk import FubonSDK
         except ImportError as exc:
             raise SourceError("fubon_neo is not installed") from exc
         sdk = FubonSDK()
         try:
-            accounts = sdk.login(key, password, cert)
+            accounts = _apikey_login(sdk, person, key, cert, password)
             if accounts and getattr(accounts, "data", None):
                 sdk.init_realtime()
                 return cls(sdk, sdk.marketdata.rest_client.futopt)
@@ -165,3 +166,9 @@ def ingest_kbars(
             )
         )
     return totals
+
+
+def _apikey_login(sdk: Any, person: str, key: str, cert: str, cert_pass: str) -> Any:
+    """fubon_neo 2.5 apikey_login(personal_id, api_key, cert_path, cert_pass); without HFT_FUBON_CERT_PASSWORD the
+    SDK default (personal_id) is used."""
+    return sdk.apikey_login(person, key, cert, cert_pass) if cert_pass else sdk.apikey_login(person, key, cert)

@@ -28,6 +28,7 @@ from .model import (
     SourceError,
     TickRow,
     SHIOAJI_KBAR_NS,
+    TAIPEI,
     classify_session,
     front_month_code,
     local_ns_to_utc_ns,
@@ -175,7 +176,7 @@ def ingest_ticks(
             log.error("contract_lookup_failed", product=product, error=str(exc))
             stats["failed_products"] += 1
             continue
-        today_code = front_month_code(product, until)
+        today_code = front_month_code(product, dt.datetime.now(TAIPEI).date())
         if code != query_code and code != today_code:
             log.warning("roll_rule_disagrees_with_target_code", product=product, target_code=code, rule=today_code)
         for day in store.pending_days(SOURCE, product, "ticks", weekdays(since, until)[::-1], force=force):

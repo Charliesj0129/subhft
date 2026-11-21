@@ -86,6 +86,9 @@ def main(argv: Sequence[str] | None = None, *, now: dt.datetime | None = None) -
     args = build_parser().parse_args(argv)
     now = now or dt.datetime.now(TAIPEI)
     load_env_file(args.env_file)
+    cert = os.environ.get("HFT_FUBON_CERT_PATH", "")
+    if cert and not Path(cert).is_absolute():
+        os.environ["HFT_FUBON_CERT_PATH"] = str((Path(args.env_file).resolve().parent / cert).resolve())
     if args.command == "status":
         for row in HistStore.from_env().summary():
             sys.stdout.write("\t".join(str(c) for c in row) + "\n")
