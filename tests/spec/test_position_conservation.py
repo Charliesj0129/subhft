@@ -6,13 +6,11 @@ position flips, PnL sign correctness, and PositionStore eviction behavior.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 
 import pytest
 
 # Force Python position tracker
-
 from hft_platform.contracts.execution import FillEvent, Side
 
 # ---------------------------------------------------------------------------

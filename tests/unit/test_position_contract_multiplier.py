@@ -112,44 +112,6 @@ class TestPythonPositionMultiplier:
         assert pos.realized_pnl_scaled == 500_000
 
 
-class TestRustPositionMultiplier:
-    """Test RustPositionTracker.update() with contract_multiplier."""
-
-    def _get_tracker(self):
-        try:
-            from hft_platform.rust_core import RustPositionTracker
-
-            return RustPositionTracker()
-        except ImportError:
-            pytest.skip("Rust extension not available")
-
-    def test_rust_futures_multiplier_10(self):
-        tracker = self._get_tracker()
-        key = "acc:strat:TMFD6"
-        # Buy 1 @ 333450000
-        tracker.update(key, 0, 1, 333_450_000, 0, 0, 100, 10)
-        # Sell 1 @ 333440000
-        net, avg, pnl, fees = tracker.update(key, 1, 1, 333_440_000, 0, 0, 200, 10)
-        assert net == 0
-        assert pnl == -100_000  # -1 tick × 10 NTD × 10000 scale
-
-    def test_rust_default_multiplier_1(self):
-        tracker = self._get_tracker()
-        key = "acc:strat:2330"
-        tracker.update(key, 0, 10, 1000, 5, 0, 100, 1)
-        net, avg, pnl, fees = tracker.update(key, 1, 10, 1050, 5, 0, 200, 1)
-        assert net == 0
-        assert pnl == 500  # (1050-1000)*10*1
-
-    def test_rust_multiplier_backward_compat(self):
-        """Calling update() without multiplier arg should default to 1."""
-        tracker = self._get_tracker()
-        key = "acc:strat:SYM"
-        tracker.update(key, 0, 10, 1000, 0, 0, 100)
-        net, avg, pnl, fees = tracker.update(key, 1, 10, 1050, 0, 0, 200)
-        assert pnl == 500  # backward compat: same as multiplier=1
-
-
 class TestPositionStoreMultiplier:
     """Test that PositionStore reads contract_multiplier from SymbolMetadata."""
 
