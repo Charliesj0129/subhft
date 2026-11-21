@@ -12,7 +12,6 @@ from unittest.mock import patch
 import pytest
 
 # Force Python position tracker
-os.environ["HFT_RUST_POSITIONS"] = "0"
 
 from hft_platform.contracts.execution import FillEvent, Side
 

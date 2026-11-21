@@ -125,7 +125,7 @@ class TestPositionStoreThreadSafety:
 
     def test_same_symbol_10_threads_10_fills(self):
         """10 threads x 10 fills on same symbol -> net_qty = 100."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             store = _make_position_store()
             errors = []
 
@@ -156,7 +156,7 @@ class TestPositionStoreThreadSafety:
 
     def test_different_symbols_thread_safety(self):
         """Each thread fills a different symbol concurrently."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             store = _make_position_store()
             errors = []
 
@@ -356,7 +356,7 @@ class TestPositionEvictionRace:
 
     def test_eviction_race(self):
         """Concurrent fills that trigger eviction must not corrupt store."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0", "HFT_POSITIONS_MAX_SIZE": "10"}):
+        with patch.dict(os.environ, {"HFT_POSITIONS_MAX_SIZE": "10"}):
             store = _make_position_store()
             store._positions_max_size = 10
             errors = []
@@ -557,7 +557,7 @@ class TestFillLockContention:
 
     def test_fill_lock_contention_20_threads_50_fills(self):
         """High contention on fill lock must not deadlock or corrupt data."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             store = _make_position_store()
             errors = []
 
@@ -592,7 +592,7 @@ class TestPortfolioAggregatesRace:
 
     def test_portfolio_aggregates_race(self):
         """Concurrent fills must maintain consistent portfolio aggregates."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             store = _make_position_store()
             errors = []
 
@@ -646,7 +646,7 @@ class TestAtomicPositionUpdate:
 
     def test_atomic_position_update(self):
         """Readers never see partial state (net_qty updated but avg_price not)."""
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             store = _make_position_store()
             inconsistencies = []
             stop_event = threading.Event()

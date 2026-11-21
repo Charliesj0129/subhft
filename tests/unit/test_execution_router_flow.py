@@ -65,7 +65,7 @@ def _symbols_cfg(tmp_path):
 @pytest.fixture()
 def store():
     """PositionStore with metrics/Rust tracker disabled for unit testing."""
-    with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+    with patch.dict(os.environ, {}):
         s = PositionStore()
     s.metrics = None
     return s
@@ -330,7 +330,7 @@ class TestExecutionRouterFillRouting:
         bus.publish_many_nowait = MagicMock()
         order_id_map = {"ORD001": "strat1"}
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             position_store = PositionStore()
         position_store.metrics = None
         terminal_handler = MagicMock()
@@ -393,7 +393,7 @@ class TestExecutionRouterFillRouting:
         bus.publish_nowait = MagicMock()
         order_id_map = {"ORD001": "strat1"}
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             position_store = PositionStore()
         position_store.metrics = None
         terminal_handler = MagicMock()
@@ -446,7 +446,7 @@ class TestExecutionRouterFillRouting:
         bus = MagicMock()
         bus.publish_many_nowait = MagicMock()
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             position_store = PositionStore()
         position_store.metrics = None
         terminal_handler = MagicMock()
@@ -502,7 +502,7 @@ class TestExecutionRouterFillRouting:
         bus = MagicMock()
         bus.publish_nowait = MagicMock()
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             position_store = PositionStore()
         position_store.metrics = None
         terminal_handler = MagicMock()
@@ -551,7 +551,7 @@ class TestExecutionRouterFillRouting:
         bus = MagicMock()
         bus.publish_many_nowait = MagicMock()
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             position_store = PositionStore()
         position_store.metrics = None
         terminal_handler = MagicMock()

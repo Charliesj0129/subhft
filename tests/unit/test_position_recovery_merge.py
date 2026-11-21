@@ -51,7 +51,7 @@ def _make_fill(
 
 def _make_store() -> PositionStore:
     """Create a PositionStore with Rust tracker disabled for Python-path tests."""
-    with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+    with patch.dict(os.environ, {}):
         store = PositionStore()
     store.metadata = MagicMock()
     store.metadata.contract_multiplier.return_value = 1

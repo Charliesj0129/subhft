@@ -279,7 +279,7 @@ class TestPhantomFillReconciliation:
 
         from hft_platform.execution.router import ExecutionRouter
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             from hft_platform.execution.positions import PositionStore
 
             position_store = PositionStore()
@@ -349,7 +349,7 @@ class TestPhantomFillReconciliation:
         from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
         from hft_platform.execution.router import ExecutionRouter
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             from hft_platform.execution.positions import PositionStore
 
             position_store = PositionStore()

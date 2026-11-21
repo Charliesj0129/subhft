@@ -15,7 +15,6 @@ import pytest
 import yaml
 
 # Force Python position tracker (no Rust dependency in unit tests)
-os.environ["HFT_RUST_POSITIONS"] = "0"
 
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent

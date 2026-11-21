@@ -27,7 +27,6 @@ Feed -> Normalize -> LOB -> EventBus -> Strategy -> Risk -> Order -> Broker
 | `scripts/` | latency、ops、diagnostics 腳本 |
 | `src/hft_platform/` | 主程式碼 |
 | `research/` | 研究工廠與 alpha pipeline |
-| `rust_core/` | Rust PyO3 擴展 |
 | `rust/` | Rust strategy crate |
 | `tests/` | unit/integration/benchmark |
 | `outputs/` | runtime 狀態、trace、治理狀態 |

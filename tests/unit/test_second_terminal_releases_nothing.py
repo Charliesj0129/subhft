@@ -486,7 +486,7 @@ async def test_r47_pending_is_released_once_when_a_cancel_retry_is_rejected_afte
     bus = MagicMock()
     bus.publish_nowait = published.append
     bus.publish_many_nowait = lambda events: published.extend(events)
-    with patch.dict("os.environ", {"HFT_RUST_POSITIONS": "0"}):
+    with patch.dict("os.environ", {}):
         position_store = PositionStore()
     position_store.metrics = None
     queue: asyncio.Queue = asyncio.Queue()
