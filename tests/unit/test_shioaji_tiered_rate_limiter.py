@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,7 +20,7 @@ def client() -> ShioajiClient:
 
         c._api_rate_limiter = RateLimiter(soft_cap=20, hard_cap=25, window_s=5)
         c._order_rate_limiter = RateLimiter(soft_cap=200, hard_cap=250, window_s=10)
-        c._quote_query_rate_limiter = RateLimiter(soft_cap=40, hard_cap=50, window_s=5)
+        c._quote_query_rate_limiter = RateLimiter(soft_cap=40, hard_cap=50, window_s=10)
         c._account_rate_limiter = RateLimiter(soft_cap=20, hard_cap=25, window_s=5)
         return c
 
@@ -107,7 +108,7 @@ class TestTieredRateLimiterDefaults:
     def test_quote_query_limiter_defaults(self, client: ShioajiClient) -> None:
         assert client._quote_query_rate_limiter.soft_cap == 40
         assert client._quote_query_rate_limiter.hard_cap == 50
-        assert client._quote_query_rate_limiter.window_s == 5
+        assert client._quote_query_rate_limiter.window_s == 10
 
     def test_account_limiter_defaults(self, client: ShioajiClient) -> None:
         assert client._account_rate_limiter.soft_cap == 20
@@ -118,3 +119,37 @@ class TestTieredRateLimiterDefaults:
         assert client._api_rate_limiter.soft_cap == 20
         assert client._api_rate_limiter.hard_cap == 25
         assert client._api_rate_limiter.window_s == 5
+
+
+class TestQuoteQueryWindowFromRealConstructor:
+    @staticmethod
+    def _construct(tmp_path: Path) -> ShioajiClient:
+        cfg = tmp_path / "symbols.yaml"
+        cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n", encoding="utf-8")
+        with patch("hft_platform.feed_adapter.shioaji_client.sj"):
+            return ShioajiClient(config_path=str(cfg))
+
+    def test_quote_query_window_defaults_to_10_seconds_when_env_is_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", raising=False)
+        monkeypatch.setenv("HFT_SESSION_REFRESH_S", "0")
+
+        client = self._construct(tmp_path)
+        try:
+            assert client._quote_query_rate_limiter.window_s == 10
+            assert client._quote_query_rate_limiter.hard_cap == 50
+        finally:
+            client.close()
+
+    def test_quote_query_window_follows_the_env_override_when_it_is_set(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "7")
+        monkeypatch.setenv("HFT_SESSION_REFRESH_S", "0")
+
+        client = self._construct(tmp_path)
+        try:
+            assert client._quote_query_rate_limiter.window_s == 7
+        finally:
+            client.close()

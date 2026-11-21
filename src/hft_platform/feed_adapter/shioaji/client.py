@@ -510,7 +510,7 @@ class ShioajiClient:
         self._quote_query_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_SOFT_CAP", "40")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_HARD_CAP", "50")),
-            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "5")),
+            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "10")),
         )
         self._account_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_SOFT_CAP", "20")),
