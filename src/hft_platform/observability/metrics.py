@@ -67,6 +67,20 @@ PAGED_PHANTOM_OUTCOMES: tuple[str, ...] = ("fill_claimed_after_expiry",)
 # released (``OrderAdapter._settle_expired_phantoms``), also created at 0.
 BROKER_LOOKUP_PHANTOM_OUTCOMES: tuple[str, ...] = ("found_open", "lookup_failed", "lookup_ambiguous")
 
+# Fixed label sets of the read-only broker ops checks (feed_adapter/shioaji/ops_checks.py). The state gauges are
+# one-hot over these tuples, and the check counter is created at 0 for every result, so no series is born mid-run.
+# CA certificate expiry: ok >= 30 days, warn < 30, expired <= 0; read_failed is a timeout or SDK error;
+# unavailable is an SDK without get_ca_expiretime; no_person_id is a login that carried no identity to ask with.
+CA_EXPIRY_STATES: tuple[str, ...] = ("ok", "warn", "expired", "read_failed", "unavailable", "no_person_id")
+# Trade-cache health: healthy / unknown / degraded are the SDK's own TradeCacheHealthState; check_failed is a probe
+# that raised or timed out; unavailable is an SDK without trade_cache_health.
+TRADE_CACHE_HEALTH_STATES: tuple[str, ...] = ("healthy", "unknown", "degraded", "check_failed", "unavailable")
+# skipped: no session or no account to ask about (a reconnect gap), which says nothing about the cache.
+TRADE_CACHE_HEALTH_CHECK_RESULTS: tuple[str, ...] = ("ok", "failed", "unavailable", "skipped")
+# Fubon futopt v1.1 channels that carry trial-matching frames (isTrial=true). The
+# quote runtime drops those frames before normalization; each channel is created at 0.
+FUBON_TRIAL_DROP_CHANNELS: tuple[str, ...] = ("trades", "books")
+
 
 def cap_reject_reason(reason: str) -> str:
     """Return the stable code at the head of a reject reason, else ``'OTHER'``.
@@ -443,6 +457,16 @@ class MetricsRegistry:
                 # P2 #8 (2026-04-27): per-conn subscription truncation —
                 # universe loaded but per-conn cap silently capped subscribe.
                 _pn("feed_subscription_truncate_total"),
+                # 2026-11-22: Fubon futopt v1.1 trial-matching frames dropped
+                # before normalization.
+                _pn("fubon_trial_frames_dropped_total"),
+                # Read-only broker ops checks: CA certificate expiry, trade-cache health.
+                _pn("shioaji_ca_days_to_expiry"),
+                _pn("shioaji_ca_expiry_state"),
+                _pn("shioaji_trade_cache_health_state"),
+                _pn("shioaji_trade_cache_health_reasons"),
+                _pn("shioaji_trade_cache_health_checks_total"),
+                _pn("shioaji_trade_cache_health_last_success_ts"),
             ]
         )
         # Market Data
@@ -549,6 +573,18 @@ class MetricsRegistry:
             "P2 #8: subscription truncated below configured universe (reason=conn_limit)",
             ["reason"],
         )
+        # Fubon futopt v1.1 streams trial-matching (pre-open) frames on trades/books
+        # with isTrial=true. They are not trades and not a tradable book, so the quote
+        # runtime drops them before normalization and counts them here, by channel.
+        # Children are born at 0 so the first drop has an increase() (a labelled child
+        # born at 1 on its first inc() has none).
+        self.fubon_trial_frames_dropped_total = Counter(
+            _pn("fubon_trial_frames_dropped_total"),
+            "Fubon futopt v1.1 trial-matching frames (isTrial=true) dropped before normalization",
+            ["channel"],
+        )
+        for _channel in FUBON_TRIAL_DROP_CHANNELS:
+            self.fubon_trial_frames_dropped_total.labels(channel=_channel)
         self.feed_last_event_ts = Gauge(
             _pn("feed_last_event_ts"), "Last feed event timestamp (unix seconds)", ["source"]
         )
@@ -1677,6 +1713,47 @@ class MetricsRegistry:
             _pn("shioaji_logout_failed_total"),
             "Shioaji logout() calls that raised while a session was being discarded (it may not have been released)",
             ["context"],  # context: recreate_api
+        )
+        # Broker CA certificate expiry (feed_adapter/shioaji/ops_checks.py). An expired CA turns every order into a
+        # rejection and nothing else reads the date. NaN until a read succeeds: a gauge born at 0 would read as "expires
+        # now" on every engine that never activates a CA (sim mode, quote-only facades), and `< 14` would fire on it.
+        self.shioaji_ca_days_to_expiry = Gauge(
+            _pn("shioaji_ca_days_to_expiry"),
+            "Days until the broker CA certificate expires at the last successful read (negative once expired)",
+        )
+        self.shioaji_ca_days_to_expiry.set(float("nan"))
+        self.shioaji_ca_expiry_state = Gauge(
+            _pn("shioaji_ca_expiry_state"),
+            "1 for the outcome of the last CA expiry check, 0 for the others",
+            ["state"],  # ok|warn|expired|read_failed|unavailable|no_person_id
+        )
+        for state in CA_EXPIRY_STATES:
+            self.shioaji_ca_expiry_state.labels(state=state).set(0)
+        # Trade-cache health: whether order/deal reports may have been missed (api.trade_cache_health). Read-only
+        # telemetry; nothing in the platform acts on it.
+        self.shioaji_trade_cache_health_state = Gauge(
+            _pn("shioaji_trade_cache_health_state"),
+            "1 for the state the last trade-cache health check reported, 0 for the others",
+            ["state"],  # healthy|unknown|degraded|check_failed|unavailable
+        )
+        for state in TRADE_CACHE_HEALTH_STATES:
+            self.shioaji_trade_cache_health_state.labels(state=state).set(0)
+        # Labels come from the SDK's own enums (4 OrderState values x 6 reason codes), so the set is bounded.
+        self.shioaji_trade_cache_health_reasons = Gauge(
+            _pn("shioaji_trade_cache_health_reasons"),
+            "1 for each (event_type, reason) the last trade-cache health check listed, 0 once it stops listing it",
+            ["event_type", "reason"],
+        )
+        self.shioaji_trade_cache_health_checks_total = Counter(
+            _pn("shioaji_trade_cache_health_checks_total"),
+            "Trade-cache health checks by result",
+            ["result"],  # ok|failed|unavailable|skipped
+        )
+        for result in TRADE_CACHE_HEALTH_CHECK_RESULTS:
+            self.shioaji_trade_cache_health_checks_total.labels(result=result)
+        self.shioaji_trade_cache_health_last_success_ts = Gauge(
+            _pn("shioaji_trade_cache_health_last_success_ts"),
+            "Unix timestamp of the last trade-cache health check that got an answer from the SDK",
         )
         self.feed_first_quote_total = Counter(
             _pn("feed_first_quote_total"),

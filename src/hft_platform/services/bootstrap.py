@@ -1666,6 +1666,13 @@ class SystemBootstrapper:
 
             deferred_tasks.append(OrderSessionWarmup(order_client).run())
 
+        # Read-only telemetry on the order session: has the SDK seen a gap in order/deal reports? The probe runs in a
+        # worker thread once a minute and takes no action; a client without it (Fubon, the no-op client) is skipped.
+        if hasattr(order_client, "check_trade_cache_health"):
+            from hft_platform.ops.trade_cache_health_watch import run_trade_cache_health_watch
+
+            deferred_tasks.append(run_trade_cache_health_watch(order_client))
+
         # Alertmanager → Telegram bridge (non-blocking, failure does not block trading)
         try:
             from hft_platform.notifications.alertmanager_bridge import AlertmanagerBridge

@@ -1,194 +1,229 @@
-"""Tests for FubonAccountGateway BrokerProtocol-aligned methods."""
+"""Tests for FubonAccountGateway against the real fubon-neo 2.5.0 futopt_accounting shapes."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
 from hft_platform.feed_adapter.fubon.account_gateway import FubonAccountGateway
-
-# ------------------------------------------------------------------ #
-# Fixtures
-# ------------------------------------------------------------------ #
-
-
-@pytest.fixture()
-def mock_sdk() -> MagicMock:
-    """Create a mock Fubon SDK with stock, accounting, and settlements."""
-    sdk = MagicMock()
-    sdk.stock.inventories.return_value = [
-        {"symbol": "2330", "qty": 1000},
-        {"symbol": "2317", "qty": 500},
-    ]
-    sdk.accounting.return_value = {"balance": 1_000_000, "margin_used": 200_000}
-    sdk.futopt_accounting.return_value = {"margin": 500_000}
-    sdk.settlements.return_value = [{"date": "2026-03-10", "amount": 50_000}]
-    # unrealized_gains_and_loses on the accounting sub-object
-    sdk.accounting.unrealized_gains_and_loses = MagicMock(return_value=[{"symbol": "2330", "pnl": 12000}])
-    sdk.accounting.query_settlement = MagicMock(return_value=[{"date": "2026-03-01", "amount": 30_000}])
-    return sdk
+from hft_platform.feed_adapter.fubon.order_codec import FubonSdkResultError
+from tests.unit.fubon_mock_helper import (
+    FakeResult,
+    fail,
+    make_account,
+    make_fubon_sdk_mock,
+    ok,
+)
 
 
 @pytest.fixture()
-def gateway(mock_sdk: MagicMock) -> FubonAccountGateway:
-    return FubonAccountGateway(sdk=mock_sdk, account="test-account")
+def sdk() -> MagicMock:
+    return make_fubon_sdk_mock()
 
 
-# ------------------------------------------------------------------ #
-# Existing low-level methods (sanity check)
-# ------------------------------------------------------------------ #
+@pytest.fixture()
+def account() -> SimpleNamespace:
+    return make_account()
 
 
-class TestLowLevelMethods:
-    def test_get_inventories(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        result = gateway.get_inventories()
-        assert len(result) == 2
-        mock_sdk.stock.inventories.assert_called_once()
+@pytest.fixture()
+def gateway(sdk: MagicMock, account: SimpleNamespace) -> FubonAccountGateway:
+    return FubonAccountGateway(sdk=sdk, account=account)
 
-    def test_get_accounting(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        result = gateway.get_accounting()
-        assert result["balance"] == 1_000_000
-        mock_sdk.accounting.assert_called_once()
 
-    def test_get_margin(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+def _position(symbol: str = "TMFK6", lots: int = 1, pnl: float = 120.0) -> SimpleNamespace:
+    return SimpleNamespace(symbol=symbol, tradable_lot=lots, profit_or_loss=pnl)
+
+
+class TestLowLevelQueries:
+    def test_get_margin_queries_margin_equity_with_the_account(
+        self, gateway: FubonAccountGateway, sdk: MagicMock, account: SimpleNamespace
+    ) -> None:
+        equity = [SimpleNamespace(currency="NTD", available_margin=21453562.4)]
+        sdk.futopt_accounting.query_margin_equity.return_value = ok(equity)
+
         result = gateway.get_margin()
-        assert result["margin"] == 500_000
-        mock_sdk.futopt_accounting.assert_called_once()
 
-    def test_get_settlements(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        result = gateway.get_settlements()
-        assert len(result) == 1
-        mock_sdk.settlements.assert_called_once()
+        sdk.futopt_accounting.query_margin_equity.assert_called_once_with(account)
+        assert result == equity
 
+    def test_get_margin_failed_result_raises(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_margin_equity.return_value = fail("not logged in")
 
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: get_positions
-# ------------------------------------------------------------------ #
+        with pytest.raises(FubonSdkResultError, match="not logged in"):
+            gateway.get_margin()
+
+    def test_get_single_positions_queries_single_position(
+        self, gateway: FubonAccountGateway, sdk: MagicMock, account: SimpleNamespace
+    ) -> None:
+        positions = [_position()]
+        sdk.futopt_accounting.query_single_position.return_value = ok(positions)
+
+        assert gateway.get_single_positions() == positions
+        sdk.futopt_accounting.query_single_position.assert_called_once_with(account)
+
+    def test_get_hybrid_positions_queries_hybrid_position(
+        self, gateway: FubonAccountGateway, sdk: MagicMock, account: SimpleNamespace
+    ) -> None:
+        hybrid = [SimpleNamespace(symbol="FITX", is_spread=False)]
+        sdk.futopt_accounting.query_hybrid_position.return_value = ok(hybrid)
+
+        assert gateway.get_hybrid_positions() == hybrid
+        sdk.futopt_accounting.query_hybrid_position.assert_called_once_with(account)
+
+    def test_query_without_account_raises_before_sdk(self, sdk: MagicMock) -> None:
+        with pytest.raises(RuntimeError, match="no trading account"):
+            FubonAccountGateway(sdk=sdk).get_margin()
+
+        sdk.futopt_accounting.query_margin_equity.assert_not_called()
+
+    def test_account_bound_after_login_is_used(self, sdk: MagicMock, account: SimpleNamespace) -> None:
+        gateway = FubonAccountGateway(sdk=sdk)
+        gateway.set_account(account)
+        sdk.futopt_accounting.query_margin_equity.return_value = ok([])
+
+        gateway.get_margin()
+
+        sdk.futopt_accounting.query_margin_equity.assert_called_once_with(account)
+
+    def test_non_list_data_is_not_read_as_an_empty_answer(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_single_position.return_value = FakeResult(True, data=None)
+
+        with pytest.raises(FubonSdkResultError, match="expected a list"):
+            gateway.get_single_positions()
 
 
 class TestGetPositions:
-    def test_delegates_to_get_inventories(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+    def test_returns_single_positions(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        positions = [_position("TMFK6", 2), _position("TXFK6", 1)]
+        sdk.futopt_accounting.query_single_position.return_value = ok(positions)
+
+        assert gateway.get_positions() == positions
+
+    def test_confirmed_flat_book_is_an_empty_list_not_none(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_single_position.return_value = ok([])
+
         result = gateway.get_positions()
-        assert len(result) == 2
-        mock_sdk.stock.inventories.assert_called_once()
 
-    def test_returns_none_on_failure(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        """Protocol: None = broker state unknown (not [] = confirmed empty)."""
-        mock_sdk.stock.inventories.side_effect = RuntimeError("connection lost")
-        result = gateway.get_positions()
-        assert result is None
+        assert result == []
+        assert result is not None
 
+    def test_failed_result_means_unknown_not_flat(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_single_position.return_value = fail("connection lost")
 
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: get_account_balance
-# ------------------------------------------------------------------ #
+        assert gateway.get_positions() is None
+
+    def test_sdk_exception_means_unknown_not_flat(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_single_position.side_effect = RuntimeError("connection lost")
+
+        assert gateway.get_positions() is None
+
+    def test_missing_data_means_unknown_not_flat(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_single_position.return_value = FakeResult(True, data=None)
+
+        assert gateway.get_positions() is None
+
+    def test_no_account_means_unknown_not_flat(self, sdk: MagicMock) -> None:
+        assert FubonAccountGateway(sdk=sdk).get_positions() is None
+
+        sdk.futopt_accounting.query_single_position.assert_not_called()
 
 
 class TestGetAccountBalance:
-    def test_delegates_to_get_accounting(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        result = gateway.get_account_balance()
-        assert result["balance"] == 1_000_000
-        mock_sdk.accounting.assert_called_once()
+    def test_returns_margin_equity(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        equity = [SimpleNamespace(currency="NTD", today_equity=22694910.4)]
+        sdk.futopt_accounting.query_margin_equity.return_value = ok(equity)
 
-    def test_account_param_ignored(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        """Account parameter is for protocol compat; Fubon SDK ignores it."""
-        result = gateway.get_account_balance(account="some-account")
-        assert result["balance"] == 1_000_000
-        mock_sdk.accounting.assert_called_once()
+        assert gateway.get_account_balance() == equity
 
-    def test_returns_empty_dict_on_failure(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        mock_sdk.accounting.side_effect = RuntimeError("timeout")
-        result = gateway.get_account_balance()
-        assert result == {}
+    def test_returns_empty_dict_on_failure(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_margin_equity.side_effect = RuntimeError("timeout")
 
+        assert gateway.get_account_balance() == {}
 
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: list_position_detail
-# ------------------------------------------------------------------ #
+    def test_explicit_sdk_account_overrides_the_stored_one(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        other = make_account("7654321")
+        sdk.futopt_accounting.query_margin_equity.return_value = ok([])
+
+        gateway.get_account_balance(other)
+
+        sdk.futopt_accounting.query_margin_equity.assert_called_once_with(other)
+
+    def test_account_id_string_falls_back_to_the_stored_account(
+        self, gateway: FubonAccountGateway, sdk: MagicMock, account: SimpleNamespace
+    ) -> None:
+        sdk.futopt_accounting.query_margin_equity.return_value = ok([])
+
+        gateway.get_account_balance("1234567")
+
+        sdk.futopt_accounting.query_margin_equity.assert_called_once_with(account)
 
 
 class TestListPositionDetail:
-    def test_delegates_to_unrealized_gains(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
+    def test_returns_positions_with_unrealized_pnl(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        positions = [_position(pnl=63600.0)]
+        sdk.futopt_accounting.query_single_position.return_value = ok(positions)
+
         result = gateway.list_position_detail()
-        assert len(result) == 1
-        assert result[0]["symbol"] == "2330"
-        mock_sdk.accounting.unrealized_gains_and_loses.assert_called_once_with("test-account")
 
-    def test_uses_explicit_account(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        gateway.list_position_detail(account="other-account")
-        mock_sdk.accounting.unrealized_gains_and_loses.assert_called_once_with("other-account")
+        assert result == positions
+        assert result[0].profit_or_loss == 63600.0
 
-    def test_returns_empty_when_sdk_method_missing(self, mock_sdk: MagicMock) -> None:
-        del mock_sdk.accounting.unrealized_gains_and_loses
-        gw = FubonAccountGateway(sdk=mock_sdk)
-        result = gw.list_position_detail()
-        assert result == []
+    def test_returns_empty_list_on_failure(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.query_single_position.return_value = fail("denied")
 
-    def test_returns_empty_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        mock_sdk.accounting.unrealized_gains_and_loses.side_effect = RuntimeError("err")
-        result = gateway.list_position_detail()
-        assert result == []
+        assert gateway.list_position_detail() == []
 
-    def test_wraps_non_list_result(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        """If SDK returns a single object instead of a list, wrap it."""
-        mock_sdk.accounting.unrealized_gains_and_loses.return_value = {"pnl": 100}
-        result = gateway.list_position_detail()
-        assert result == [{"pnl": 100}]
+    def test_explicit_account_is_used(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        other = make_account("7654321")
+        sdk.futopt_accounting.query_single_position.return_value = ok([])
 
+        gateway.list_position_detail(other)
 
-# ------------------------------------------------------------------ #
-# BrokerProtocol-aligned: list_profit_loss
-# ------------------------------------------------------------------ #
+        sdk.futopt_accounting.query_single_position.assert_called_once_with(other)
 
 
 class TestListProfitLoss:
-    def test_delegates_to_query_settlement(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        result = gateway.list_profit_loss(begin_date="2026-01-01", end_date="2026-03-01")
-        assert len(result) == 1
-        mock_sdk.accounting.query_settlement.assert_called_once_with(
-            "test-account", begin_date="2026-01-01", end_date="2026-03-01"
-        )
+    def test_queries_close_position_record_with_both_dates(
+        self, gateway: FubonAccountGateway, sdk: MagicMock, account: SimpleNamespace
+    ) -> None:
+        records = [SimpleNamespace(symbol="FITX", price=20847.0)]
+        sdk.futopt_accounting.close_position_record.return_value = ok(records)
 
-    def test_uses_explicit_account(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        gateway.list_profit_loss(account="other")
-        mock_sdk.accounting.query_settlement.assert_called_once_with("other")
+        result = gateway.list_profit_loss(begin_date="20260101", end_date="20260301")
 
-    def test_omits_none_dates(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        gateway.list_profit_loss()
-        mock_sdk.accounting.query_settlement.assert_called_once_with("test-account")
+        sdk.futopt_accounting.close_position_record.assert_called_once_with(account, "20260101", "20260301")
+        assert result == records
 
-    def test_returns_empty_when_sdk_method_missing(self, mock_sdk: MagicMock) -> None:
-        del mock_sdk.accounting.query_settlement
-        gw = FubonAccountGateway(sdk=mock_sdk)
-        result = gw.list_profit_loss()
-        assert result == []
+    def test_omits_end_date_when_not_given(
+        self, gateway: FubonAccountGateway, sdk: MagicMock, account: SimpleNamespace
+    ) -> None:
+        sdk.futopt_accounting.close_position_record.return_value = ok([])
 
-    def test_returns_empty_on_exception(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        mock_sdk.accounting.query_settlement.side_effect = RuntimeError("err")
-        result = gateway.list_profit_loss()
-        assert result == []
+        gateway.list_profit_loss(begin_date="20260101")
 
-    def test_wraps_non_list_result(self, gateway: FubonAccountGateway, mock_sdk: MagicMock) -> None:
-        mock_sdk.accounting.query_settlement.return_value = {"amount": 50}
-        result = gateway.list_profit_loss()
-        assert result == [{"amount": 50}]
+        sdk.futopt_accounting.close_position_record.assert_called_once_with(account, "20260101")
 
+    def test_without_begin_date_returns_empty_without_calling_sdk(
+        self, gateway: FubonAccountGateway, sdk: MagicMock
+    ) -> None:
+        assert gateway.list_profit_loss() == []
 
-# ------------------------------------------------------------------ #
-# Constructor
-# ------------------------------------------------------------------ #
+        sdk.futopt_accounting.close_position_record.assert_not_called()
+
+    def test_returns_empty_list_on_failure(self, gateway: FubonAccountGateway, sdk: MagicMock) -> None:
+        sdk.futopt_accounting.close_position_record.side_effect = RuntimeError("boom")
+
+        assert gateway.list_profit_loss(begin_date="20260101") == []
 
 
-class TestConstructor:
-    def test_default_account_is_none(self, mock_sdk: MagicMock) -> None:
-        gw = FubonAccountGateway(sdk=mock_sdk)
-        assert gw._account is None
+class TestMockMatchesRealSdk:
+    @pytest.mark.parametrize("name", ["inventories", "settlements", "unrealized_gains_and_loses", "query_settlement"])
+    def test_stock_style_accounting_names_do_not_exist_on_the_mock(self, sdk: MagicMock, name: str) -> None:
+        assert not hasattr(sdk.futopt_accounting, name)
 
-    def test_account_stored(self, mock_sdk: MagicMock) -> None:
-        gw = FubonAccountGateway(sdk=mock_sdk, account="my-acct")
-        assert gw._account == "my-acct"
-
-    def test_slots(self, gateway: FubonAccountGateway) -> None:
-        assert hasattr(gateway, "__slots__")
-        assert "_account" in gateway.__slots__
+    def test_query_without_account_argument_fails_the_test(self, sdk: MagicMock) -> None:
+        with pytest.raises(TypeError):
+            sdk.futopt_accounting.query_margin_equity()

@@ -565,6 +565,25 @@ groups:
         description: "quote_watchdog liveness gauge has been 0 for >1m."
         runbook_url: "docs/runbooks/ShioajiWatchdogThreadDown.md"
 
+  # The order session signs with a CA certificate; once it lapses every live order is rejected and nothing else in the
+  # platform reads the date. shioaji_ca_days_to_expiry is NaN until a read succeeds (sim mode and quote-only facades
+  # never set it), and NaN < 14 is false, so this stays quiet on an engine that holds no CA. The value is the days left
+  # at the last successful read (login, so every session refresh); a failing read leaves it frozen and says so in
+  # shioaji_ca_expiry_state{state="read_failed"}.
+  - alert: ShioajiCaExpiringSoon
+    expr: shioaji_ca_days_to_expiry < 14
+    for: 15m
+    labels:
+      severity: warning
+    annotations:
+      summary: "The broker CA certificate expires in under 14 days"
+      description: >-
+        shioaji_ca_days_to_expiry is under 14 (negative once expired). An expired CA rejects every live order.
+        Renew the certificate and replace the .pfx the engine activates before it lapses. The engine logs
+        `ca_expiry_soon` below 30 days and `ca_expired` at zero; `ca_expiry_read_failed` means the gauge is
+        frozen at an older reading.
+      runbook_url: "docs/runbooks/live-trading-activation-sop.md#stage-a-local-ca-activation"
+
   - alert: ShioajiPendingQuoteStall
     expr: shioaji_quote_pending_age_seconds > 300 and on() market_trading_hours_active == 1
     for: 5m

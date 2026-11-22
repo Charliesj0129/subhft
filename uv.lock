@@ -17,9 +17,6 @@ conflicts = [[
     { package = "hft-platform", extra = "shioaji-broker" },
 ]]
 
-[manifest]
-overrides = [{ name = "fubon-neo", marker = "python_full_version == '0.0.*'", specifier = ">=0.0.0" }]
-
 [[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
@@ -883,6 +880,36 @@ wheels = [
 ]
 
 [[package]]
+name = "fubon-neo"
+version = "2.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fugle-marketdata", marker = "python_full_version < '3.14'" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/7b/8d5e98699ef516107c35ad23ac6544cd95974a7a7ccd168bdf38b16827f1/fubon_neo-2.5.0-cp37-abi3-macosx_10_12_x86_64.whl", hash = "sha256:77fd49ac957557366edd3756e9c3de3faad10440f7fed1cd55d7fb215fc3e52e", size = 3064015, upload-time = "2026-11-12T08:14:50.903Z" },
+    { url = "https://files.pythonhosted.org/packages/85/0e/49f6fe9e68151903007df7a87b88f9d37d8f0fdde9e3f9dde401670400e8/fubon_neo-2.5.0-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:d96c59c32b392f9e68fcf09bef507e2d56760c012ef593995c11ec30a605f317", size = 2925957, upload-time = "2026-11-12T08:15:01.025Z" },
+    { url = "https://files.pythonhosted.org/packages/85/af/08448743b31c4f8152109cde708ce3c73e73ff4c67290dbfdfb4be66580e/fubon_neo-2.5.0-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:43b0a4400df24553ae10a91fbd9eccaac428ddfad5487ef02257a012f68b788e", size = 5160779, upload-time = "2026-11-12T08:15:15.481Z" },
+    { url = "https://files.pythonhosted.org/packages/46/00/71d01a3f4780b6560c6462e6fe345b61c98b40aafbf089847957b03888a2/fubon_neo-2.5.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:eba2b632b0c963d806b77dc06b4996fd4478435a7f61cc4c2dbd0fb1daa0c4c6", size = 5032713, upload-time = "2026-11-12T08:15:27.758Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/59/2af284756bc107656074ce31d77d5ee2f518bbf902b6456eb71436b76161/fubon_neo-2.5.0-cp37-abi3-win_amd64.whl", hash = "sha256:0b08ee203a6ac33be65a56c93ff7c58e1d1abebf437b2b8873aa6b94805095b1", size = 3199558, upload-time = "2026-11-12T08:15:36.443Z" },
+]
+
+[[package]]
+name = "fugle-marketdata"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "orjson", marker = "python_full_version < '3.14'" },
+    { name = "pyee", marker = "python_full_version < '3.14'" },
+    { name = "requests", marker = "python_full_version < '3.14'" },
+    { name = "websocket-client", marker = "python_full_version < '3.14'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4b/92/84a9de552308f519f7c830e89ebf35f127d30c7da54714820a24ec8c03a8/fugle_marketdata-2.8.0.tar.gz", hash = "sha256:65cfe5bd28662890afe0a4b0162f1738190ba123b29a9f4719457cba26b5d677", size = 12038, upload-time = "2026-10-15T04:40:46.035Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/c1/a7eeb581e67ae7329fa29b2577304ec7e9c1c2bc98eb6fccc5236d6ca9e0/fugle_marketdata-2.8.0-py3-none-any.whl", hash = "sha256:6cc8765fe1bfc34e62ebb7f9b59840583f23a12a243b283a17fba80994e81a9d", size = 18280, upload-time = "2026-10-15T04:40:44.998Z" },
+]
+
+[[package]]
 name = "greenlet"
 version = "3.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -975,6 +1002,9 @@ dependencies = [
 bot = [
     { name = "python-telegram-bot", extra = ["job-queue"], marker = "python_full_version < '3.14' or (extra == 'extra-12-hft-platform-fubon' and extra == 'extra-12-hft-platform-shioaji-broker')" },
 ]
+fubon = [
+    { name = "fubon-neo", marker = "python_full_version < '3.14'" },
+]
 monitor = [
     { name = "rich", marker = "python_full_version < '3.14' or (extra == 'extra-12-hft-platform-fubon' and extra == 'extra-12-hft-platform-shioaji-broker')" },
 ]
@@ -1020,7 +1050,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.11,<4" },
     { name = "clickhouse-connect", specifier = ">=0.10,<2" },
     { name = "exchange-calendars", specifier = ">=4.13.1,<5" },
-    { name = "fubon-neo", marker = "extra == 'fubon'", specifier = ">=2.2.7" },
+    { name = "fubon-neo", marker = "extra == 'fubon'", specifier = "==2.5.0" },
     { name = "hftbacktest", specifier = ">=2.4,<3" },
     { name = "msgspec", specifier = ">=0.20,<1" },
     { name = "numba", specifier = ">=0.61,<1" },
@@ -3024,6 +3054,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyee"
+version = "11.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.14'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/54/20/3e646860d5a2f9c24b23b1964fb7c65312236883fa7b62d0f64456addc93/pyee-11.1.1.tar.gz", hash = "sha256:82e1eb1853f8497c4ff1a0c7fa26b9cd2f1253e2b6ffb93b4700fda907017302", size = 30002, upload-time = "2024-08-30T19:15:39.282Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/db/99/7e80837f60b13227f03334e3b0537d650dea2c0cea44c543b0a2e719a48f/pyee-11.1.1-py3-none-any.whl", hash = "sha256:9e4cdd7c2f9fcf247db94bad39a260aceffefdbe52286ce71be01959de34a5c2", size = 15300, upload-time = "2024-08-30T19:15:37.73Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.20.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3885,6 +3927,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/24/30/6b0809f4510673dc723187aeaf24c7f5459922d01e2f794277a3dfb90345/wcwidth-0.2.14.tar.gz", hash = "sha256:4d478375d31bc5395a3c55c40ccdf3354688364cd61c4f6adacaa9215d0b3605", size = 102293, upload-time = "2025-09-22T16:29:53.023Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/af/b5/123f13c975e9f27ab9c0770f514345bd406d0e8d3b7a0723af9d43f710af/wcwidth-0.2.14-py2.py3-none-any.whl", hash = "sha256:a7bb560c8aee30f9957e5f9895805edd20602f2d7f720186dfd906e82b4982e1", size = 37286, upload-time = "2025-09-22T16:29:51.641Z" },
+]
+
+[[package]]
+name = "websocket-client"
+version = "1.9.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/cb/a5abcc2891249f393827c650c6296660ce40374ac22d99ab9aea41f9d2a2/websocket_client-1.9.2.tar.gz", hash = "sha256:0fcb57545848be86992e128218fd96dd87a6769ffdb1a968dff79632b85604d0", size = 84110, upload-time = "2026-08-31T14:08:40.964Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/d2/cc4dc1271e464942db7ee278baae2daa99ee77cb2af744025c04da585a3e/websocket_client-1.9.2-py3-none-any.whl", hash = "sha256:e1a673830a9c7bfa47b1cd3d5e4178f4c9651d80a4eab02c9c23a1c3ec6250ce", size = 95786, upload-time = "2026-08-31T14:08:39.899Z" },
 ]
 
 [[package]]
