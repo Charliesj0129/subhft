@@ -22,7 +22,7 @@ if sys.platform == "win32":
 else:
     import fcntl
 
-_SHM_ROOT = Path("/dev/shm")
+_SHM_ROOT = Path("/dev/shm")  # nosec B108
 _MAGIC = b"HFTSHM01"
 _HEADER = struct.Struct("<8sQQ")
 _VERSION = struct.Struct("<Q")
@@ -73,7 +73,7 @@ def _symbol_hash(symbol: str) -> int:
 def _segment_path(name, max_symbols):
     if fcntl is None or not _SHM_ROOT.is_dir():
         raise OSError("shared-memory monitoring requires /dev/shm and flock")
-    name = name.removeprefix("/dev/shm/").removeprefix("/")
+    name = name.removeprefix("/dev/shm/").removeprefix("/")  # nosec B108
     if not name or name in {".", ".."} or not all(c.isascii() and (c.isalnum() or c in "-_.") for c in name):
         raise ValueError("invalid shared-memory name")
     if not 1 <= max_symbols <= _MAX_SYMBOLS:

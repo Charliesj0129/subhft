@@ -247,6 +247,7 @@ class TestPositionStoreFaultInjection:
                 from hft_platform.execution.positions import PositionStore
 
                 store = PositionStore()
+                store.metadata.contract_multiplier.return_value = 1
                 store._positions_max_size = 5
 
                 # Fill store to capacity with flat positions (net_qty=0 after round-trip)
@@ -297,6 +298,7 @@ class TestPositionStoreFaultInjection:
                 from hft_platform.execution.positions import PositionStore
 
                 store = PositionStore()
+                store.metadata.contract_multiplier.return_value = 1
                 store._positions_max_size = 3
 
                 # Create 2 flat positions and 1 active
@@ -595,6 +597,7 @@ class TestPositionUpdateDuringEviction:
                 from hft_platform.execution.positions import PositionStore
 
                 store = PositionStore()
+                store.metadata.contract_multiplier.return_value = 1
                 store._positions_max_size = 5
 
                 errors = []
