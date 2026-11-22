@@ -270,6 +270,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f  # v4
+        with:
+          version: "latest"
+
+      - name: Install Python 3.12 for PyO3
+        shell: bash
+        run: |
+          # The runner default is Python 3.14; PyO3 supports at most 3.12.
+          uv python install 3.12
+          echo "PYO3_PYTHON=$(uv python find 3.12)" >> "$GITHUB_ENV"
+
       - name: Check formatting
         run: cargo fmt --manifest-path rust_core/Cargo.toml -- --check
 
