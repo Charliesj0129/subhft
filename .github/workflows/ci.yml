@@ -280,7 +280,10 @@ jobs:
         run: |
           # The runner default is Python 3.14; PyO3 supports at most 3.12.
           uv python install 3.12
-          echo "PYO3_PYTHON=$(uv python find 3.12)" >> "$GITHUB_ENV"
+          PY="$(uv python find 3.12)"
+          echo "PYO3_PYTHON=$PY" >> "$GITHUB_ENV"
+          # uv's standalone Python ships libpython in <prefix>/lib; the test binary needs it at run time.
+          echo "LD_LIBRARY_PATH=$(dirname "$(dirname "$PY")")/lib" >> "$GITHUB_ENV"
 
       - name: Check formatting
         run: cargo fmt --manifest-path rust_core/Cargo.toml -- --check
