@@ -316,9 +316,11 @@ class FubonExecutionCallbackAdapter:
         # Pre-allocated translation buffers (Allocator Law).
         # Values are overwritten on each callback -- the *same dict object*
         # is reused every time to avoid per-event heap allocation.
-        # ``action`` repeats ``side`` and ``order_no`` repeats ``order_id``: ExecutionNormalizer
-        # reads the side from ``action`` (a missing one is read as BUY) and the
-        # broker order number from ``order_no`` (FubonExecFieldMap).
+        # ``action`` repeats ``side``, ``order_no`` repeats ``order_id`` and ``custom_field`` repeats
+        # ``strategy_id``: ExecutionNormalizer reads the side from ``action`` (a missing one is
+        # read as BUY), the broker order number from ``order_no`` (FubonExecFieldMap) and the
+        # order's tracking token from ``custom_field`` (``user_def`` is the token OrderAdapter
+        # sent; ``_on_exec`` reads the same key straight off the payload).
         self._order_buffer: dict[str, Any] = {
             "order_id": "",
             "order_no": "",
@@ -333,6 +335,7 @@ class FubonExecutionCallbackAdapter:
             "op_type": "",
             "source": "",
             "strategy_id": "",
+            "custom_field": "",
             "ts_ns": 0,
             "order": {},
         }
@@ -347,6 +350,7 @@ class FubonExecutionCallbackAdapter:
             "price": 0,
             "qty": 0,
             "strategy_id": "",
+            "custom_field": "",
             "source_time": "",
             "ts_ns": 0,
         }
@@ -468,7 +472,7 @@ class FubonExecutionCallbackAdapter:
                 buf["function_type"] = _get(raw, "function_type")
                 buf["op_type"] = _resolve_op_type(buf["function_type"])
                 buf["source"] = source
-                buf["strategy_id"] = str(_get(raw, "user_def", None) or "")
+                buf["strategy_id"] = buf["custom_field"] = str(_get(raw, "user_def", None) or "")
                 buf["ts_ns"] = timebase.now_ns()
                 # Shallow copy so the handler may schedule async work without
                 # the next callback overwriting what it was handed.  Execution
@@ -512,7 +516,7 @@ class FubonExecutionCallbackAdapter:
                 buf["side"] = buf["action"] = _resolve_side(raw)
                 buf["price"] = _first(raw, ("filled_price", "mat_price"))
                 buf["qty"] = _to_int(_first(raw, ("filled_lots", "filled_lot", "mat_qty")))
-                buf["strategy_id"] = str(_get(raw, "user_def", None) or "")
+                buf["strategy_id"] = buf["custom_field"] = str(_get(raw, "user_def", None) or "")
                 buf["source_time"] = str(_get(raw, "filled_time", "") or "")
                 buf["ts_ns"] = timebase.now_ns()
                 payload = dict(buf)

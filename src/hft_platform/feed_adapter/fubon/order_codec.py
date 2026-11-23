@@ -22,8 +22,12 @@ Real shapes (fubon-neo 2.5.0, introspected from the wheel):
 
 from __future__ import annotations
 
+import math
 import operator
+from collections.abc import Callable
 from typing import Any
+
+from hft_platform.core import timebase
 
 _MESSAGE_LIMIT = 200
 
@@ -288,3 +292,114 @@ class FubonOrderCodec:
             price=price,
             user_def=user_def,
         )
+
+
+# OrderAdapter kwargs that carry nothing the futopt order needs: the exchange is
+# implied by sdk.futopt, and intent is the platform's own record (its price is in
+# the symbol's scale, not x10000). order_type is the TIF repeated (OrderAdapter
+# passes tif_str for both), not an open/close flag. product_type is NOT ignored: it
+# is what picks Future versus Option in market_type.
+_ADAPTER_IGNORED_KWARGS = frozenset({"exchange", "intent", "order_type"})
+_ADAPTER_PRICE_TYPES = {"LMT": "LMT", "MKT": "MKT", "MKP": "MKP", "Limit": "LMT", "Market": "MKT", "RangeMarket": "MKP"}
+_ADAPTER_OC_TYPES = {"Auto": "Auto", "New": "New", "Cover": "Close", "Close": "Close", "DayTrade": "FdayTrade"}
+
+# SymbolMetadata.product_type() yields lower-case "future"/"option" (config spelling
+# "futures"/"options"/"opt" also occurs); anything else (stock, index, "") is not a futopt.
+_FUTURE_PRODUCT_TYPES = frozenset({"future", "futures", "fut"})
+_OPTION_PRODUCT_TYPES = frozenset({"option", "options", "opt"})
+
+# TAIFEX night session is 15:00 to 05:00 Asia/Taipei, half-open [open, close): 05:00 is
+# already outside it (same boundaries as MarketCalendar). Taipei is a fixed UTC+8 (no
+# DST), so the session is told from the epoch with integer arithmetic, no datetime.
+_NS_PER_SECOND = 1_000_000_000
+_SECONDS_PER_DAY = 86_400
+_TAIPEI_UTC_OFFSET_S = 8 * 3600
+_NIGHT_OPEN_S = 15 * 3600
+_NIGHT_CLOSE_S = 5 * 3600
+
+
+def is_taifex_night_session(epoch_ns: int) -> bool:
+    """Return True when *epoch_ns* (UTC epoch nanoseconds) is inside the TAIFEX night session.
+
+    The window is [15:00, 05:00) Asia/Taipei, so 15:00:00 is night and 05:00:00 is not.
+    The gap between close and the day open (05:00 to 08:45) and the gap after the day
+    close are not night: they stay on the day market, where the broker refuses the
+    order while it is closed.
+    """
+    local_s = (epoch_ns // _NS_PER_SECOND + _TAIPEI_UTC_OFFSET_S) % _SECONDS_PER_DAY
+    return local_s >= _NIGHT_OPEN_S or local_s < _NIGHT_CLOSE_S
+
+
+def resolve_futopt_market_type(product_type: Any, epoch_ns: int) -> str:
+    """Pick the futopt market (``Future``/``FutureNight``/``Option``/``OptionNight``).
+
+    Raises:
+        ValueError: *product_type* is neither a future nor an option (fail closed: an
+            order is never sent to a market that was guessed).
+    """
+    name = "" if product_type is None else _enum_name(product_type).strip().lower()
+    if name in _FUTURE_PRODUCT_TYPES:
+        base = "Future"
+    elif name in _OPTION_PRODUCT_TYPES:
+        base = "Option"
+    else:
+        raise ValueError(f"Cannot pick a futopt market: product_type must be future or option, got {product_type!r}")
+    return f"{base}Night" if is_taifex_night_session(epoch_ns) else base
+
+
+def float_price_to_scaled(price: Any) -> int:
+    """Turn OrderAdapter's descaled float price into a x10000 int via its 4-decimal text."""
+    if isinstance(price, bool) or not isinstance(price, int | float) or not math.isfinite(price):
+        raise ValueError(f"price must be a finite number, got {price!r}")
+    whole, _, frac = f"{price:.{_PRICE_DECIMALS}f}".partition(".")
+    sign = -1 if whole.startswith("-") else 1
+    return sign * (abs(int(whole)) * PRICE_SCALE + int(frac or "0"))
+
+
+def translate_adapter_order_kwargs(
+    kwargs: dict[str, Any],
+    *,
+    now_ns: Callable[[], int] | None = None,
+) -> dict[str, Any]:
+    """Map OrderAdapter.place_order kwargs onto FubonOrderGateway.place_order kwargs.
+
+    contract_code -> symbol, action -> side, custom_field -> user_def (the token the
+    router backfills into order_id_map), price float -> scaled int, oc_type -> order_type,
+    and product_type plus the clock -> market_type (Future/FutureNight/Option/OptionNight).
+
+    Args:
+        kwargs: What OrderAdapter passes to place_order.
+        now_ns: Wall clock in UTC epoch nanoseconds, used to tell the day session from the
+            night session. Defaults to ``timebase.now_ns``; tests pin it.
+
+    Raises:
+        TypeError: a kwarg is neither mapped nor known to be irrelevant (fail closed).
+        ValueError: product_type is missing or is not a future or an option, so the market
+            cannot be told (fail closed: nothing is guessed), or another value is invalid.
+    """
+    src = dict(kwargs)
+    unknown = sorted(
+        set(src)
+        - _ADAPTER_IGNORED_KWARGS
+        - {"contract_code", "action", "price", "qty", "tif", "custom_field", "price_type", "oc_type", "product_type"}
+    )
+    if unknown:
+        raise TypeError(f"Fubon place_order: unsupported OrderAdapter kwargs {unknown}")
+    price_type_name = _enum_name(src.get("price_type", "LMT"))
+    if price_type_name not in _ADAPTER_PRICE_TYPES:
+        raise ValueError(f"Unknown price type: {price_type_name}")
+    oc_type = _enum_name(src.get("oc_type", "Auto"))
+    clock = now_ns if now_ns is not None else timebase.now_ns
+    market_type = resolve_futopt_market_type(src.get("product_type"), clock())
+    out: dict[str, Any] = {
+        "symbol": src.get("contract_code"),
+        "price": float_price_to_scaled(src["price"]) if src.get("price") is not None else None,
+        "qty": src.get("qty"),
+        "side": src.get("action"),
+        "tif": src.get("tif", "ROD"),
+        "price_type": _ADAPTER_PRICE_TYPES[price_type_name],
+        "order_type": _ADAPTER_OC_TYPES.get(oc_type, oc_type),
+        "user_def": src.get("custom_field"),
+        "market_type": market_type,
+    }
+    return out

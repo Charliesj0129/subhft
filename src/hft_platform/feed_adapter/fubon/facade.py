@@ -20,6 +20,7 @@ from hft_platform.feed_adapter.fubon.execution_callbacks import (
     FubonExecutionCallbackAdapter,
     bridge_order_callback,
 )
+from hft_platform.feed_adapter.fubon.order_codec import translate_adapter_order_kwargs
 from hft_platform.feed_adapter.fubon.session_runtime import FubonSimSafetyError, build_fubon_sdk
 
 # Lazy SDK import — fubon_neo may not be installed.
@@ -359,6 +360,9 @@ class FubonClientFacade:
     # ------------------------------------------------------------------ #
 
     def place_order(self, **kwargs: Any) -> Any:
+        """Place a futopt order; OrderAdapter's kwargs (keyed by contract_code) are translated first."""
+        if "contract_code" in kwargs:
+            kwargs = translate_adapter_order_kwargs(kwargs)
         return self._order_gateway.place_order(**kwargs)
 
     def cancel_order(self, trade: Any) -> Any:

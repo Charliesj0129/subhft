@@ -90,6 +90,10 @@ class _PhantomEntry(NamedTuple):
 # Operations that mutate broker state and must not be retried if the
 # timed-out attempt might still succeed in the thread pool.
 _MUTATING_OPS: frozenset[str] = frozenset({"place_order", "update_order"})
+# Canonical (pre-encode) vocabulary for the market-order check. The check reads these, not
+# the broker-encoded values: the Fubon codec returns SDK enums that never equal "MKT"/"ROD".
+_MARKET_PRICE_TYPES: frozenset[str] = frozenset({"MKT", "MKP"})
+_ROD_TIFS: frozenset[TIF] = frozenset({TIF.LIMIT, TIF.ROD})
 # Ops whose duration is a broker round-trip worth reporting to StormGuard's
 # ``order_rtt`` input. Cancel is included even though it is not "mutating" in
 # the duplicate-order sense: a broker that stops answering cancels is exactly
@@ -4121,12 +4125,13 @@ class OrderAdapter:
                 _intent_pt = getattr(intent, "price_type", "LMT")
                 _raw_pt = _intent_pt if _intent_pt != "LMT" else str(order_params.get("price_type", "LMT"))
                 price_type = self._broker_codec.encode_price_type(_raw_pt)
-                if price_type in {"MKT", "MKP"} and tif_str == "ROD":
+                _canonical_pt = str(_raw_pt).strip().upper()
+                if _canonical_pt in _MARKET_PRICE_TYPES and intent.tif in _ROD_TIFS:
                     logger.error(
                         "Rejecting invalid order type",
                         reason="MKT/MKP requires IOC/FOK",
                         symbol=intent.symbol,
-                        price_type=price_type,
+                        price_type=_canonical_pt,
                         tif=tif_str,
                     )
                     self.metrics.order_reject_total.inc()

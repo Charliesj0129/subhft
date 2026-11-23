@@ -195,6 +195,7 @@ class TestOrderCallback:
                 "op_type": "New",
                 "source": "order",
                 "strategy_id": "r47",
+                "custom_field": "r47",
                 "ts_ns": _NOW_NS,
                 "order": {"price": 22000.0, "action": "Buy", "quantity": 2, "filled_qty": 0},
             }
@@ -332,6 +333,7 @@ class TestDealCallback:
                 "price": 20890.0,
                 "qty": 1,
                 "strategy_id": "r47",
+                "custom_field": "r47",
                 "source_time": "10:31:00.931",
                 "ts_ns": _NOW_NS,
             }

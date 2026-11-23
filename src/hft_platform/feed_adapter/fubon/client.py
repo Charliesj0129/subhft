@@ -25,6 +25,7 @@ from hft_platform.feed_adapter.fubon.execution_callbacks import (
     FubonExecutionCallbackAdapter,
     bridge_order_callback,
 )
+from hft_platform.feed_adapter.fubon.order_codec import translate_adapter_order_kwargs
 from hft_platform.feed_adapter.fubon.order_gateway import FubonOrderGateway
 from hft_platform.feed_adapter.fubon.quote_runtime import FubonQuoteRuntime
 from hft_platform.feed_adapter.fubon.session_runtime import (
@@ -240,7 +241,9 @@ class FubonClient:
     # ------------------------------------------------------------------ #
 
     def place_order(self, *args: Any, **kwargs: Any) -> Any:
-        """Delegate to FubonOrderGateway.place_order."""
+        """Delegate to FubonOrderGateway.place_order, translating OrderAdapter's kwargs first."""
+        if "contract_code" in kwargs:
+            kwargs = translate_adapter_order_kwargs(kwargs)
         return self._order_gateway.place_order(*args, **kwargs)
 
     def cancel_order(self, trade: Any) -> Any:
