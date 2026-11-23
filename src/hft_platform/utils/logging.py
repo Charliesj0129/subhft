@@ -1,7 +1,7 @@
 import logging
 import re
 import sys
-from typing import Any, MutableMapping
+from typing import Any, MutableMapping, TextIO, cast
 
 import structlog
 
@@ -158,7 +158,7 @@ _CURRENT_STDERR = _CurrentStderr()
 
 
 def _stderr_logger_factory(*_args: Any) -> Any:
-    return structlog.PrintLogger(file=_CURRENT_STDERR)
+    return structlog.PrintLogger(file=cast(TextIO, _CURRENT_STDERR))
 
 
 def _scrubbing_record_factory_for(previous: Any) -> Any:

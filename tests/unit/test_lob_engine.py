@@ -211,12 +211,8 @@ def test_metrics_emit(engine):
 # --- Fused bypass tests ---
 
 
-def test_fused_bypass_sets_book_stats(engine, monkeypatch):
-    """When _FUSED_BYPASS is on and fused_stats present, LOBEngine should use bypass path."""
-    import hft_platform.feed_adapter.lob_engine as lob_mod
-
-    monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", True)
-
+def test_fused_bypass_sets_book_stats(engine):
+    """LOBEngine uses precomputed statistics supplied by the event."""
     bids = np.array([[1000000, 10]], dtype=np.int64)
     asks = np.array([[1005000, 20]], dtype=np.int64)
     # fused_stats: (best_bid, best_ask, bid_depth, ask_depth, mid_x2, spread_scaled, imbalance)
@@ -248,12 +244,8 @@ def test_fused_bypass_sets_book_stats(engine, monkeypatch):
     assert book.version == 1
 
 
-def test_fused_bypass_respects_late_packet(engine, monkeypatch):
+def test_fused_bypass_respects_late_packet(engine):
     """Fused bypass should still reject late packets."""
-    import hft_platform.feed_adapter.lob_engine as lob_mod
-
-    monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", True)
-
     fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
 
     # First event at ts=2000
@@ -285,8 +277,6 @@ def test_fused_bypass_respects_late_packet(engine, monkeypatch):
 
 def test_fused_bypass_produces_same_stats_as_standard(engine):
     """Fused bypass and standard path should produce equivalent LOBStatsEvent."""
-    import hft_platform.feed_adapter.lob_engine as lob_mod
-
     bids = np.array([[1000000, 10]], dtype=np.int64)
     asks = np.array([[1005000, 20]], dtype=np.int64)
 
@@ -296,20 +286,15 @@ def test_fused_bypass_produces_same_stats_as_standard(engine):
 
     # Fused bypass path
     engine2 = LOBEngine()
-    original_val = lob_mod._FUSED_BYPASS
-    try:
-        lob_mod._FUSED_BYPASS = True
-        fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, stats_std.imbalance)
-        event_fused = BidAskEvent(
-            meta=make_meta(1000),
-            symbol="FUSED",
-            bids=bids.copy(),
-            asks=asks.copy(),
-            fused_stats=fused_stats,
-        )
-        stats_fused = engine2.process_event(event_fused)
-    finally:
-        lob_mod._FUSED_BYPASS = original_val
+    fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, stats_std.imbalance)
+    event_fused = BidAskEvent(
+        meta=make_meta(1000),
+        symbol="FUSED",
+        bids=bids.copy(),
+        asks=asks.copy(),
+        fused_stats=fused_stats,
+    )
+    stats_fused = engine2.process_event(event_fused)
 
     assert stats_fused.best_bid == stats_std.best_bid
     assert stats_fused.best_ask == stats_std.best_ask
@@ -318,26 +303,6 @@ def test_fused_bypass_produces_same_stats_as_standard(engine):
     assert stats_fused.bid_depth == stats_std.bid_depth
     assert stats_fused.ask_depth == stats_std.ask_depth
     assert stats_fused.imbalance == pytest.approx(stats_std.imbalance)
-
-
-def test_no_fused_bypass_when_flag_off(engine):
-    """Without _FUSED_BYPASS, fused_stats on event should be ignored."""
-    fused_stats = FusedBookStats(1000000, 1005000, 10, 20, 2005000, 5000, -0.333333)
-    bids = np.array([[1000000, 10]], dtype=np.int64)
-    asks = np.array([[1005000, 20]], dtype=np.int64)
-
-    event = BidAskEvent(
-        meta=make_meta(1000),
-        symbol="2330",
-        bids=bids,
-        asks=asks,
-        fused_stats=fused_stats,
-    )
-    stats = engine.process_event(event)
-
-    # Should still produce valid stats (via standard apply_update path)
-    assert stats is not None
-    assert stats.best_bid == 1000000
 
 
 # --- NamedTuple contract tests ---

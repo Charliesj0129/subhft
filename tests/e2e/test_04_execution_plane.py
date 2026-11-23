@@ -178,14 +178,11 @@ class TestChain:
     def test_position_store_updates_on_fill(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """PositionStore.on_fill() with a BUY fill should set net_qty == 2."""
 
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
-
         mock_metrics = MagicMock()
         with patch(_POS_METRICS_PATCH) as m:
             m.get.return_value = mock_metrics
             store = PositionStore()
         # Force Python path
-        store._rust_tracker = None
         store.metrics = mock_metrics
 
         fill = make_fill(
@@ -205,13 +202,10 @@ class TestChain:
     def test_full_execution_chain(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Buy 2 then Sell 2 → net_qty==0 and realized_pnl != 0."""
 
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
-
         mock_metrics = MagicMock()
         with patch(_POS_METRICS_PATCH) as m:
             m.get.return_value = mock_metrics
             store = PositionStore()
-        store._rust_tracker = None
         store.metrics = mock_metrics
 
         buy_fill = make_fill(
@@ -257,7 +251,6 @@ class TestIntegration:
         Wire OrderAdapter + ExecutionRouter as async tasks.
         Inject OrderCommand → broker places → inject raw fill → FillEvent + PositionDelta on bus.
         """
-        monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
 
         broker_api = InMemoryBrokerAPI()
         order_queue: asyncio.Queue = asyncio.Queue(maxsize=64)
@@ -319,7 +312,6 @@ class TestIntegration:
             adapter.latency = mock_latency
 
             store = PositionStore()
-            store._rust_tracker = None
             store.metrics = mock_metrics
 
             router = ExecutionRouter(

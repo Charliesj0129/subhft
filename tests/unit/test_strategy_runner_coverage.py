@@ -63,7 +63,6 @@ def _make_event(symbol="TSMC", ts=0):
 def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
-    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
 
 
@@ -671,7 +670,6 @@ class TestProcessEventEdgeCases:
         runner, _, _ = runner_factory()
         strat = _FakeStrategy("s_disabled", enabled=False)
         runner.register(strat)
-        runner._rust_circuit = None
         # No halted state set — this goes to the else branch
         event = _make_event()
         await runner.process_event(event)
@@ -747,17 +745,6 @@ class TestConstructorEdgeCases:
         assert runner._strategy_metrics_sample_every == 1
         assert runner._strategy_metrics_batch == 1
 
-    def test_rust_circuit_init_failure(self, runner_factory, monkeypatch):
-        """Lines 322-323: Rust circuit breaker init failure logs warning."""
-        monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "1")
-
-        # Mock _RustCircuitBreaker to raise on init
-        with patch("hft_platform.strategy.runner._RustCircuitBreaker") as mock_cls:
-            mock_cls.side_effect = RuntimeError("init fail")
-            with patch("hft_platform.strategy.runner._RUST_CIRCUIT_ENABLED", True):
-                runner, _, _ = runner_factory()
-                assert runner._rust_circuit is None
-
 
 # ---------------------------------------------------------------------------
 # Tests: _build_positions recovery merge
@@ -768,7 +755,6 @@ class TestBuildPositionsRecovery:
     def test_recovery_positions_merge(self, runner_factory):
         """Lines 827-841: _recovery_positions are merged."""
         pos_store = MagicMock()
-        del pos_store._rust_tracker
         del pos_store.snapshot_positions
         del pos_store.snapshot_positions_with_recovery
         pos_store.positions = {}
@@ -785,7 +771,6 @@ class TestBuildPositionsRecovery:
     def test_recovery_positions_zero_qty_skipped(self, runner_factory):
         """Line 831: net_qty=0 entries are skipped."""
         pos_store = MagicMock()
-        del pos_store._rust_tracker
         del pos_store.snapshot_positions
         del pos_store.snapshot_positions_with_recovery
         pos_store.positions = {}

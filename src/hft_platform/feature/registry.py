@@ -5,7 +5,7 @@ from typing import Dict, Iterable
 
 # Feature flag bits (``FeatureSpec.flags``).
 # PROMOTED marks a feature as part of the minimal cross-path "promoted family"
-# that research / replay / live / Rust must agree on within ``parity_atol``.
+# that research / replay / live must agree on within ``parity_atol``.
 FEATURE_FLAG_PROMOTED = 1 << 0
 
 
@@ -18,7 +18,7 @@ class FeatureSpec:
     source_kind: str = "book"
     flags: int = 0
     # Max absolute difference tolerated when comparing this feature across
-    # compute backends (Python / Rust / hftbacktest). 0 means exact equality.
+    # compute backends (Python / hftbacktest). 0 means exact equality.
     # Non-zero only for float-accumulated features rounded to int (rounding ULP).
     parity_atol: int = 0
 
@@ -123,9 +123,8 @@ FEATURE_SET_VERSION = "lob_shared_v3"
 def build_default_lob_feature_set_v1() -> FeatureSet:
     """Default shared LOB-derived feature set for the initial FeatureEngine prototype."""
     # Promoted family: the minimal cross-path microstructure primitives that
-    # research / replay / live / Rust must agree on (see feature/parity.py).
-    # All members are within v1 indices so the 16-feature Rust kernel can compute
-    # them. EMA features carry parity_atol=1 (float accumulate -> i64 rounding ULP).
+    # research / replay / live must agree on (see feature/parity.py).
+    # EMA features carry parity_atol=1 for one rounding unit.
     _P = FEATURE_FLAG_PROMOTED
     return FeatureSet(
         feature_set_id="lob_shared_v1",

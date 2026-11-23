@@ -8,8 +8,6 @@ every taxed fill (a futures sell) counted its tax twice in ``fees_scaled``.
 
 from __future__ import annotations
 
-import pytest
-
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
@@ -32,16 +30,6 @@ symbol_map:
 """
 
 
-def _store(backend: str) -> PositionStore:
-    store = PositionStore()
-    if backend == "python":
-        store._rust_tracker = None
-    else:
-        if store._rust_tracker is None:
-            pytest.skip("rust_core.RustPositionTracker not available")
-    return store
-
-
 def _fill(side: Side, fee: int, tax: int, fill_id: str, price: int = 175_000_000) -> FillEvent:
     return FillEvent(
         fill_id=fill_id,
@@ -59,18 +47,16 @@ def _fill(side: Side, fee: int, tax: int, fill_id: str, price: int = 175_000_000
     )
 
 
-@pytest.mark.parametrize("backend", ["python", "rust"])
-def test_fees_scaled_counts_tax_once(backend: str) -> None:
-    store = _store(backend)
+def test_fees_scaled_counts_tax_once() -> None:
+    store = PositionStore()
 
     store.on_fill(_fill(Side.SELL, fee=_TOTAL, tax=_TAX, fill_id="F1"))
 
     assert store.positions["ACC:S1:TXFL5"].fees_scaled == _TOTAL
 
 
-@pytest.mark.parametrize("backend", ["python", "rust"])
-def test_fees_scaled_of_a_round_trip_is_the_sum_of_the_fills_fees(backend: str) -> None:
-    store = _store(backend)
+def test_fees_scaled_of_a_round_trip_is_the_sum_of_the_fills_fees() -> None:
+    store = PositionStore()
 
     store.on_fill(_fill(Side.BUY, fee=_COMMISSION, tax=0, fill_id="F1"))  # a buy is not taxed
     store.on_fill(_fill(Side.SELL, fee=_TOTAL, tax=_TAX, fill_id="F2", price=175_010_000))
@@ -78,24 +64,7 @@ def test_fees_scaled_of_a_round_trip_is_the_sum_of_the_fills_fees(backend: str) 
     assert store.positions["ACC:S1:TXFL5"].fees_scaled == _COMMISSION + _TOTAL
 
 
-def test_python_and_rust_stores_report_the_same_fees() -> None:
-    py, rust = _store("python"), _store("rust")
-    fills = [
-        _fill(Side.BUY, fee=_COMMISSION, tax=0, fill_id="F1"),
-        _fill(Side.SELL, fee=_TOTAL, tax=_TAX, fill_id="F2"),
-        _fill(Side.SELL, fee=_TOTAL, tax=_TAX, fill_id="F3"),
-    ]
-
-    for fill in fills:
-        py.on_fill(fill)
-        rust.on_fill(fill)
-
-    assert py.positions["ACC:S1:TXFL5"].fees_scaled == rust.positions["ACC:S1:TXFL5"].fees_scaled
-    assert py.positions["ACC:S1:TXFL5"].fees_scaled == _COMMISSION + 2 * _TOTAL
-
-
-@pytest.mark.parametrize("backend", ["python", "rust"])
-def test_a_normalized_fill_reaches_the_position_with_the_calculators_total(backend: str, tmp_path, monkeypatch) -> None:
+def test_a_normalized_fill_reaches_the_position_with_the_calculators_total(tmp_path, monkeypatch) -> None:
     """The producer side of the contract: ``fee`` is the calculator's total, ``tax`` its tax part."""
     symbols = tmp_path / "symbols.yaml"
     symbols.write_text("symbols:\n  - code: 'TXFL5'\n    exchange: 'TAIFEX'\n    price_scale: 10000\n")
@@ -126,7 +95,7 @@ def test_a_normalized_fill_reaches_the_position_with_the_calculators_total(backe
     assert fill is not None
     assert (fill.fee, fill.tax) == (expected.total, expected.tax)
 
-    store = _store(backend)
+    store = PositionStore()
     store.on_fill(fill)
 
     assert store.positions[f"ACC:{fill.strategy_id}:TXFL5"].fees_scaled == expected.total

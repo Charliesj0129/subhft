@@ -53,7 +53,6 @@ Here are the terminal commands you'll use 95% of the time:
 - **Lint & Format**: `uv run ruff check src/ tests/ --fix` (Always run this before committing)
 - **Run the Engine (Sim Mode)**: `uv run hft run sim`
 - **Check DB Status**: `uv run hft recorder status`
-- **Compile Rust Extension**: `uv run maturin develop --manifest-path rust_core/Cargo.toml`
 
 ## 🔎 6. The Core Hotpath (For Debugging)
 

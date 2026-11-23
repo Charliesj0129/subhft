@@ -86,7 +86,6 @@ def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
     # Force Python-only circuit breaker for deterministic assertions
-    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
     # Disable the typed-intent fastpath so we drive the standard
     # ``self._risk_submit(intent)`` branch with our MagicMock submit hook.

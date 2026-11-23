@@ -23,7 +23,7 @@ Hot-path note
 -------------
 ``ContractRef`` is a frozen dataclass with slots — allocation is cheap but still
 present. On the hot path, use the interned ``symbol_id: int`` from
-``rust_core::SymbolInternTable``; ContractRef materializes only in cold planes
+an interned symbol id table; ContractRef materializes only in cold planes
 (strategy registration, risk config, recorder output).
 """
 

@@ -166,7 +166,7 @@ def cmd_alpha_promote(args: argparse.Namespace) -> None:
         max_correlation=float(args.max_correlation),
         enable_rust_readiness_gate=bool(getattr(args, "enable_rust_readiness_gate", False)),
         rust_module_name=(getattr(args, "rust_module_name", None) or None),
-        rust_parity_test_path=str(getattr(args, "rust_parity_test_path", "tests/unit/test_rust_hotpath_parity.py")),
+        rust_parity_test_path=str(getattr(args, "rust_parity_test_path", "")),
         rust_parity_timeout_s=int(getattr(args, "rust_parity_timeout_s", 180)),
         enforce_rust_benchmark_gate=bool(getattr(args, "enforce_rust_benchmark_gate", False)),
         rust_benchmark_cmd=str(

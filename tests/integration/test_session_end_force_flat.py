@@ -64,7 +64,6 @@ def _attach_position_store(runner: StrategyRunner, net_qty: int) -> None:
     pos = SimpleNamespace(strategy_id="maker_test", symbol=SYMBOL, net_qty=net_qty)
     pos_store = MagicMock(spec=[])
     pos_store.positions = {f"acct:maker_test:{SYMBOL}": pos}
-    pos_store._rust_tracker = None
     runner.position_store = pos_store
 
 

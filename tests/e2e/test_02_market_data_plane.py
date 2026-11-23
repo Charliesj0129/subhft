@@ -18,9 +18,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
-# Skip module if rust_core is unavailable.
-rc = pytest.importorskip("hft_platform.rust_core")
-
 from hft_platform.engine.event_bus import RingBufferBus
 from hft_platform.events import BidAskEvent, LOBStatsEvent, TickEvent
 from hft_platform.feature.engine import FeatureEngine
@@ -123,10 +120,12 @@ class TestChain:
         result = normalizer.normalize_bidask(_raw_bidask())
 
         assert isinstance(result, BidAskEvent), f"Expected BidAskEvent, got {type(result)}"
-        assert result.bids.shape == (5, 2), f"Expected (5,2), got {result.bids.shape}"
-        assert result.bids.dtype == np.int64, f"Expected int64, got {result.bids.dtype}"
-        # First bid price == 500 * 10_000
-        assert result.bids[0, 0] == _EXPECTED_PRICE, f"Expected {_EXPECTED_PRICE}, got {result.bids[0, 0]}"
+        for levels in (result.bids, result.asks):
+            book = np.asarray(levels)
+            assert book.shape == (5, 2)
+            assert book.dtype == np.int64
+        assert result.bids[0][0] == _EXPECTED_PRICE
+        assert result.asks[0][0] == _EXPECTED_PRICE + _SCALE
 
     def test_lob_engine_stats_computation(self, tmp_path) -> None:
         """BidAskEvent → LOBEngine → LOBStatsEvent with valid mid-price and spread."""

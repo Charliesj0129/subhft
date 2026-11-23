@@ -145,13 +145,10 @@ class TestReducingOrdersSurviveHalt:
         assert engine._is_halt_exempt("S1") is False
 
 
-class TestPerSymbolNotionalIsNotCoveredByRust:
-    def test_per_symbol_notional_runs_even_when_rust_passes(self) -> None:
-        """Rust is never told about `symbol_limits`, so if this validator is
-        filtered out of `_rust_uncovered_validators` the per-symbol cap is
-        enforced by nobody."""
+class TestConfiguredValidators:
+    def test_position_and_notional_validators_are_loaded(self) -> None:
         engine, _ = _engine(_BASE_CONFIG)
-        kinds = {type(v) for v in engine._rust_uncovered_validators}
+        kinds = {type(v) for v in engine.validators}
         assert PerSymbolNotionalValidator in kinds
         assert PositionLimitValidator in kinds
         assert DailyLossLimitValidator in kinds
