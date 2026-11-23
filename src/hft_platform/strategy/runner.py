@@ -736,6 +736,14 @@ class StrategyRunner:
                     actual=resolved,
                 )
 
+    def bind_committed_md_view(self, view: Any) -> None:
+        """P3 (HFT_MD_WORKERS>=1): read L1/features from the loop-committed view, not worker-mutated state."""
+        self._lob_l1_source = view.get_l1_scaled
+        self._feature_tuple_source = view.get_feature_tuple
+        self._feature_value_source = view.get_feature
+        if self._strat_executors:
+            self._rebuild_executors()
+
     def _rebuild_executors(self):
         """Rebuild executor cache when strategies are replaced externally."""
         self._strat_executors = [self._build_executor_entry(strategy) for strategy in self.strategies]

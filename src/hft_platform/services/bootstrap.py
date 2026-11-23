@@ -1188,6 +1188,8 @@ class SystemBootstrapper:
             # publish to the existing recorder. Drained by RecorderService.run().
             recorder_queue=recorder_queue,
         )
+        if md_service.committed_view is not None:
+            strategy_runner.bind_committed_md_view(md_service.committed_view)
         # A strategy quarantine is a money-path safety latch, and until this call
         # existed a restart silently released every one of them: the governor's
         # dict starts empty, so ``manual_rearm_required{scope="strategy"}`` read
