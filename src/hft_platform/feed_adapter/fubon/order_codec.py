@@ -392,6 +392,8 @@ def translate_adapter_order_kwargs(
     if price_type_name not in _ADAPTER_PRICE_TYPES:
         raise ValueError(f"Unknown price type: {price_type_name}")
     oc_type = _enum_name(src.get("oc_type", "Auto"))
+    if oc_type not in _ADAPTER_OC_TYPES:
+        raise ValueError(f"Unknown oc_type: {oc_type}")
     clock = now_ns if now_ns is not None else timebase.now_ns
     market_type = resolve_futopt_market_type(src.get("product_type"), clock())
     out: dict[str, Any] = {
@@ -401,7 +403,7 @@ def translate_adapter_order_kwargs(
         "side": src.get("action"),
         "tif": src.get("tif", "ROD"),
         "price_type": _ADAPTER_PRICE_TYPES[price_type_name],
-        "order_type": _ADAPTER_OC_TYPES.get(oc_type, oc_type),
+        "order_type": _ADAPTER_OC_TYPES[oc_type],
         "user_def": src.get("custom_field"),
         "market_type": market_type,
     }

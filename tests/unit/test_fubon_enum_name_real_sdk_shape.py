@@ -42,3 +42,23 @@ def test_translate_accepts_pyo3_price_type_limit() -> None:
     )
     assert out["price_type"] == "LMT"
     assert out["price"] == 363_950_000
+
+
+def test_translate_rejects_unknown_oc_type() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="oc_type"):
+        translate_adapter_order_kwargs(
+            {
+                "contract_code": "TXFL6",
+                "action": "Buy",
+                "price": 36395.0,
+                "qty": 1,
+                "tif": "ROD",
+                "custom_field": "592a62",
+                "price_type": "LMT",
+                "oc_type": "Bogus",
+                "product_type": "future",
+            },
+            now_ns=lambda: 1_763_870_400_000_000_000,
+        )
