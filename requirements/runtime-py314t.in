@@ -1,0 +1,30 @@
+# Runtime dependency set for the hft-engine on free-threaded CPython 3.14t.
+#
+# Derived from [project].dependencies in pyproject.toml. pyproject.toml is NOT
+# edited: the project lock (uv.lock) resolves Python 3.12/3.13 only, so this
+# separate input is compiled for 3.14t into requirements/runtime-py314t.lock.
+#
+# Excluded on purpose:
+#   hftbacktest  no cp314t x86_64 wheel; strategies/mm_hawkes.py imports it, so
+#                that strategy is research-only on 3.14t.
+#   orjson       no cp314t wheel; its users (execution/router.py, fill_dlq.py,
+#                checkpoint.py, order/adapter.py, gateway/dedup.py, recorder/wal.py)
+#                must move to msgspec before the engine runs on 3.14t.
+#   research / dev / monitor / bot extras (torch, optuna, rich, telegram, ...).
+#
+# Pins kept from pyproject.toml: shioaji==1.7.11, prometheus_client<0.25.
+# uvloop is listed explicitly: shioaji[speed] only pulls it for python < 3.14.
+numpy>=2.2,<3
+pandas>=2.3,<4
+clickhouse-connect>=0.10,<2
+structlog>=25.1,<27
+msgspec>=0.20,<1
+shioaji[speed]==1.7.11
+prometheus_client>=0.23,<0.25
+psutil>=7.1,<8
+PyYAML>=6.0,<7
+numba>=0.61,<1
+scipy>=1.15.3,<2
+exchange-calendars>=4.13.1,<5
+aiohttp>=3.11,<4
+uvloop>=0.23
