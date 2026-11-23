@@ -449,10 +449,6 @@ exemptions:
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
-    code: "drawdown_flat_release_after_s: float = 300.0"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
     code: "self._storm_entry_ts: float = 0.0"
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
@@ -517,19 +513,11 @@ exemptions:
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
-    code: "self.thresholds.drawdown_flat_release_after_s = float(risk_cfg[\"drawdown_flat_release_after_s\"])"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
-    code: "self.thresholds.feed_gap_storm_s = float(risk_cfg[\"feed_gap_storm_s\"])"
+    code: "parsed[key] = float(risk_cfg[key])"
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
     code: "self.thresholds.feed_gap_storm_s = float(feed_gap_storm)"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
-    code: "self.thresholds.drawdown_flat_release_after_s = float(flat_release)"
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
@@ -609,11 +597,39 @@ exemptions:
     kind: boundary-conversion
     reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
     tracked_by: "T18-F1"
-  - file: src/hft_platform/risk/validators.py
-    code: "self._peak_drawdown_pct: float = float(ipnl_cfg.get(\"peak_drawdown_pct\", 0.40))"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._phantom_lookup_timeout_s = float(os.getenv(\"HFT_PHANTOM_LOOKUP_TIMEOUT_S\", \"15\"))"
     kind: not-money
-    reason: "drawdown fraction of peak equity, not an amount"
-  - file: src/hft_platform/risk/validators.py
-    code: "self._drawdown_recovery_pct: float = float(ipnl_cfg.get(\"drawdown_recovery_pct\", 0.20))"
+    reason: "phantom open-order lookup timeout in seconds"
+  - file: src/hft_platform/order/adapter.py
+    code: "self._phantom_lookup_max_hold_s = float(os.getenv(\"HFT_PHANTOM_LOOKUP_MAX_HOLD_S\", \"1800\"))"
     kind: not-money
-    reason: "drawdown fraction of peak equity, not an amount"
+    reason: "phantom max hold time in seconds before the old release applies"
+  - file: src/hft_platform/order/adapter.py
+    code: "def _due_phantoms(self, ttl_s: float) -> list[tuple[str, _PhantomEntry]]:"
+    kind: not-money
+    reason: "phantom TTL in seconds, compared only with monotonic age"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def _settle_expired_phantoms(self, ttl_s: float) -> None:"
+    kind: not-money
+    reason: "phantom TTL in seconds, compared only with monotonic age"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:"
+    kind: not-money
+    reason: "phantom TTL in seconds, compared only with monotonic age"
+  - file: src/hft_platform/order/adapter.py
+    code: "async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl_s: float) -> int:"
+    kind: not-money
+    reason: "phantom TTL in seconds, compared only with monotonic age"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "order_rtt_storm_window_s: float = 60.0"
+    kind: not-money
+    reason: "StormGuard RTT window in seconds"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "order_rtt_storm_dwell_s: float = 300.0"
+    kind: not-money
+    reason: "StormGuard RTT dwell in seconds"
+  - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "mtime: float | None = os.path.getmtime(self.config_path)"
+    kind: not-money
+    reason: "file modification time, compared only with the previous mtime"

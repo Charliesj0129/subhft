@@ -486,8 +486,8 @@ class OrderAdapter:
         # later and took R47 to -2 against max_pos=1). A failed search keeps the
         # slot; after this long the old unconditional release applies.
         self._phantom_lookup_task: asyncio.Task[None] | None = None
-        self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))  # precision-time
-        self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))  # precision-time
+        self._phantom_lookup_timeout_s = float(os.getenv("HFT_PHANTOM_LOOKUP_TIMEOUT_S", "15"))
+        self._phantom_lookup_max_hold_s = float(os.getenv("HFT_PHANTOM_LOOKUP_MAX_HOLD_S", "1800"))
         # P0-E2 + M4: serialises access to ``_phantom_records``. Multiple
         # coroutine tasks (``_call_api``, ``_handle_dispatch_exception``,
         # ``release_stale_phantom_pendings``, ``resolve_phantom_fill``,
