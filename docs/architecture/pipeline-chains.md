@@ -94,6 +94,41 @@ _on_shioaji_event()  ───────┼──→ call_soon_threadsafe(_enq
 |----------|---------|---------|
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | Skip stage 7 if `0` |
 | `HFT_EVENT_MODE` | `event` | `tuple` mode skips dataclass allocation |
+| `HFT_MD_WORKERS` | `0` | N symbol-sharded MD worker threads (0 = single-loop path) |
+| `HFT_MD_COMMIT_BUDGET` | `256` | Max results committed per loop turn with workers on |
+
+### Sharded Workers (`HFT_MD_WORKERS`, default 0 = off)
+
+With `HFT_MD_WORKERS=0` the chain above is unchanged. With N >= 1
+(`services/_md_sharded.py`):
+
+```
+broker thread: _on_shioaji_event --offer()--> ShardedMDPipeline
+  crc32(symbol) % N -> worker inbox (bounded deque, raw_queue_size // N)
+     | overflow: drop + per-worker count -> loop: _escalate_raw_drop()
+     v                     (same metric / StormGuard ladder as raw_queue)
+worker thread k: normalize -> LOBEngine.process_event -> features
+                 -> (symbol, event, stats, feature_update, l1, features)
+     | SPSC outbox deque, one call_soon_threadsafe per batch
+     v
+event loop: ShardedMDPipeline.drain()  <= HFT_MD_COMMIT_BUDGET (256)/turn,
+  then loop.call_soon(drain) so fills / CANCEL / HALT callbacks run between
+  -> CommittedMDView.publish -> feed-gap stamp -> recorder -> bus -> redis
+```
+
+- Per-symbol order is kept (one worker per symbol, FIFO outbox); cross-symbol
+  order is not.
+- Only the loop publishes to the bus, so `HFT_BUS_SINGLE_WRITER=1` stays valid.
+- Strategies read L1 / feature tuples from `CommittedMDView`
+  (`StrategyRunner.bind_committed_md_view`), never worker-mutated state.
+  `get_book_snapshot` (full depth) still reads the live LOBEngine.
+- StormGuard calls from workers are forwarded to the loop.
+- Reconnect reset (`_trigger_reconnect`) runs with every worker paused
+  (`run_quiesced`); stale inputs are dropped on success. A pause timeout is
+  treated as a worker crash.
+- Worker crash: admission stops, `trigger_halt("md_worker_crash: ...")`,
+  `run()` raises `MDWorkerCrashedError` so the supervisor sees the task fail.
+- Bench: `scripts/latency/md_sharded_bench.py`.
 
 ---
 
