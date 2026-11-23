@@ -676,7 +676,7 @@ class SystemBootstrapper:
             from hft_platform.feed_adapter.fubon.facade import FubonClientFacade  # lazy import
 
             logger.info("Instantiating Fubon broker clients", broker_id=broker_id)
-            fubon_md_client = FubonClientFacade(symbols_path, base_shioaji_cfg)
+            fubon_md_client = FubonClientFacade(symbols_path, quote_cfg)
             if order_mode == "disabled":
                 return fubon_md_client, _RoleGuardedNoopClient("order_disabled")
             return fubon_md_client, FubonClientFacade(symbols_path, order_cfg)
