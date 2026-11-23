@@ -403,27 +403,34 @@ class PositionStore:
         positions belonging to that strategy are summed — recovery positions
         are included only if their ``strategy_id`` matches the filter (or if
         they have no ``strategy_id`` and no filter is applied).
+
+        Takes ``_fill_lock`` for the walk: ``on_fill_async`` applies fills on a
+        worker thread that inserts into ``positions`` and pops from
+        ``_recovery_positions``, which would otherwise raise "dictionary changed
+        size during iteration" here. Non-reentrant: never call this while
+        holding ``_fill_lock``.
         """
         total = 0
-        for _key, pos in self.positions.items():
-            if getattr(pos, "symbol", None) != symbol:
-                continue
-            if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
-                continue
-            total += int(getattr(pos, "net_qty", 0) or 0)
-        for rkey, rdata in self._recovery_positions.items():
-            if not isinstance(rdata, dict):
-                continue
-            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1])
-            if rsym != symbol:
-                continue
-            rstrat = rdata.get("strategy_id", "")
-            if strategy_id is not None and rstrat and rstrat != strategy_id:
-                continue
-            if strategy_id is not None and not rstrat:
-                # Legacy recovery with no strategy_id: exclude from filtered queries
-                continue
-            total += int(rdata.get("net_qty", 0))
+        with self._fill_lock:
+            for _key, pos in self.positions.items():
+                if getattr(pos, "symbol", None) != symbol:
+                    continue
+                if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
+                    continue
+                total += int(getattr(pos, "net_qty", 0) or 0)
+            for rkey, rdata in self._recovery_positions.items():
+                if not isinstance(rdata, dict):
+                    continue
+                rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1])
+                if rsym != symbol:
+                    continue
+                rstrat = rdata.get("strategy_id", "")
+                if strategy_id is not None and rstrat and rstrat != strategy_id:
+                    continue
+                if strategy_id is not None and not rstrat:
+                    # Legacy recovery with no strategy_id: exclude from filtered queries
+                    continue
+                total += int(rdata.get("net_qty", 0))
         return total
 
     def _update_portfolio_aggregates(self, pnl_delta: int = 0) -> None:
@@ -771,43 +778,49 @@ class PositionStore:
         Returns:
             Total unrealized PnL in scaled int x10000.
             Symbols without a mid_price entry contribute 0.
+
+        Takes ``_fill_lock`` for the walk, so a fill applied on the
+        ``on_fill_async`` worker cannot change either map mid-iteration and the
+        two halves of the sum describe one book. Non-reentrant: never call this
+        while holding ``_fill_lock``.
         """
         total = 0
         accounted_keys: set[str] = set()
-        for key, pos in self.positions.items():
-            if pos.net_qty == 0:
-                continue
-            accounted_keys.add(key)
-            # Extract symbol from key "{account}:{strategy}:{symbol}"
-            symbol = key.rsplit(":", 1)[-1]
-            mid = mid_prices.get(symbol)
-            if mid is None:
-                continue
-            # Skip positions with unknown cost basis sentinel (-1)
-            if pos.avg_price_scaled < 0:
-                continue
-            multiplier = self.metadata.contract_multiplier(symbol)
-            total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
+        with self._fill_lock:
+            for key, pos in self.positions.items():
+                if pos.net_qty == 0:
+                    continue
+                accounted_keys.add(key)
+                # Extract symbol from key "{account}:{strategy}:{symbol}"
+                symbol = key.rsplit(":", 1)[-1]
+                mid = mid_prices.get(symbol)
+                if mid is None:
+                    continue
+                # Skip positions with unknown cost basis sentinel (-1)
+                if pos.avg_price_scaled < 0:
+                    continue
+                multiplier = self.metadata.contract_multiplier(symbol)
+                total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
 
-        # Include recovery positions not yet merged into self.positions
-        _recovery = getattr(self, "_recovery_positions", None)
-        for rkey, rec in (_recovery or {}).items():
-            if rkey in accounted_keys:
-                continue
-            net_qty = rec["net_qty"]
-            if net_qty == 0:
-                continue
-            avg_price = rec["avg_price_scaled"]
-            # Sentinel -1 means unknown cost basis (broker-only recovery).
-            # Skip MtM for this position to avoid astronomical fake PnL.
-            if avg_price < 0:
-                continue
-            symbol = rec["symbol"]
-            mid = mid_prices.get(symbol)
-            if mid is None:
-                continue
-            multiplier = self.metadata.contract_multiplier(symbol)
-            total += (mid - avg_price) * net_qty * multiplier
+            # Include recovery positions not yet merged into self.positions
+            _recovery = getattr(self, "_recovery_positions", None)
+            for rkey, rec in (_recovery or {}).items():
+                if rkey in accounted_keys:
+                    continue
+                net_qty = rec["net_qty"]
+                if net_qty == 0:
+                    continue
+                avg_price = rec["avg_price_scaled"]
+                # Sentinel -1 means unknown cost basis (broker-only recovery).
+                # Skip MtM for this position to avoid astronomical fake PnL.
+                if avg_price < 0:
+                    continue
+                symbol = rec["symbol"]
+                mid = mid_prices.get(symbol)
+                if mid is None:
+                    continue
+                multiplier = self.metadata.contract_multiplier(symbol)
+                total += (mid - avg_price) * net_qty * multiplier
         return total
 
     def snapshot_positions_with_recovery(self) -> tuple[dict, dict]:
