@@ -111,7 +111,10 @@ def _enum_name(value: Any) -> str:
     if isinstance(value, str):
         return value
     name = getattr(value, "name", None)
-    return name if isinstance(name, str) else str(value)
+    if isinstance(name, str):
+        return name
+    # fubon_neo's pyo3 enums have no .name; str() gives "PriceType.Limit".
+    return str(value).rpartition(".")[2]
 
 
 class FubonOrderCodec:
