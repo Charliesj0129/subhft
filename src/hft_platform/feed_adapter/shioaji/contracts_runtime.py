@@ -488,6 +488,28 @@ def assert_no_stale_subscriptions(
     )
 
 
+_TARGET_CODE_MISMATCH_WARN_CAP = 256
+_TARGET_CODE_MISMATCH_WARNED: set[str] = set()
+
+
+def _warn_target_code_mismatch(contract: Any, config_code: str, delivery_code: str) -> None:
+    target = getattr(contract, "target_code", None)
+    if not isinstance(target, str):
+        return
+    target = target.strip()
+    if not target or target == delivery_code or config_code in _TARGET_CODE_MISMATCH_WARNED:
+        return
+    if len(_TARGET_CODE_MISMATCH_WARNED) >= _TARGET_CODE_MISMATCH_WARN_CAP:
+        return
+    _TARGET_CODE_MISMATCH_WARNED.add(config_code)
+    logger.warning(
+        "contract_target_code_mismatch",
+        alias=config_code,
+        target_code=target,
+        delivery_code=delivery_code,
+    )
+
+
 def derive_callback_code(contract: Any, config_code: str) -> str:
     """Derive the actual callback code from a Shioaji contract object.
 
@@ -519,7 +541,9 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
                 year_digit = int(dm_str[3])  # last digit of year
                 if 1 <= month <= 12:
                     letter = _MONTH_LETTERS[month - 1]
-                    return f"{root}{letter}{year_digit}"
+                    delivery_code = f"{root}{letter}{year_digit}"
+                    _warn_target_code_mismatch(contract, config_code, delivery_code)
+                    return delivery_code
             except (ValueError, IndexError):
                 pass
 
@@ -533,7 +557,9 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
                 year_digit = int(dd_str[3])
                 if 1 <= month <= 12:
                     letter = _MONTH_LETTERS[month - 1]
-                    return f"{root}{letter}{year_digit}"
+                    delivery_code = f"{root}{letter}{year_digit}"
+                    _warn_target_code_mismatch(contract, config_code, delivery_code)
+                    return delivery_code
             except (ValueError, IndexError):
                 pass
 
@@ -545,10 +571,11 @@ def derive_callback_code(contract: Any, config_code: str) -> str:
 class ContractsRuntime:
     """Contracts cache/preflight/refresh runtime."""
 
-    __slots__ = ("_client",)
+    __slots__ = ("_client", "_unsupported_warned")
 
     def __init__(self, client: "ShioajiClient") -> None:
         self._client = client
+        self._unsupported_warned = False
 
     def _get_contract(
         self,
@@ -1552,8 +1579,13 @@ class ContractsRuntime:
             return False
         setter = getattr(api, "set_contract_event_callback", None)
         if setter is None:
-            # Older/other SDK builds simply do not expose it.
-            logger.info("contract_event_callback_unsupported")
+            if not self._unsupported_warned:
+                self._unsupported_warned = True
+                logger.warning(
+                    "contract_event_callback_unsupported",
+                    conn_id=str(getattr(self._client, "conn_id", "-")),
+                    reason="sdk_exposes_no_contract_update_hook",
+                )
             self._set_contract_callback_registered(False)
             return False
         try:
