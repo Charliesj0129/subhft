@@ -402,15 +402,11 @@ jobs:
       - name: Repo Gate — no generated artifacts left behind
         if: always()
         run: |
-          ARTIFACTS=""
-          for f in coverage.json coverage_*.json; do
-            [ -f "$f" ] && ARTIFACTS="$ARTIFACTS $f"
-          done
-          if [ -d "tests/benchmark/baselines" ] && [ "$(ls -A tests/benchmark/baselines 2>/dev/null)" ]; then
-            ARTIFACTS="$ARTIFACTS tests/benchmark/baselines/"
-          fi
-          BASELINES=$(find tests/ -name "*.baseline.json" 2>/dev/null | head -5 || true)
-          [ -n "$BASELINES" ] && ARTIFACTS="$ARTIFACTS $BASELINES"
+          # Only untracked files that git does NOT ignore: gitignored outputs
+          # (e.g. tests/benchmark/baselines/, written by test runs) are expected.
+          ARTIFACTS=$(git ls-files --others --exclude-standard \
+            | grep -E '^(coverage(_[^/]*)?\.json|tests/benchmark/baselines/.+|tests/.*\.baseline\.json)$' \
+            | tr '\n' ' ' || true)
           if [ -n "$ARTIFACTS" ]; then
             echo "::error::Repo Gate: generated artifacts left in working tree:$ARTIFACTS"
             echo "Add these patterns to .gitignore or clean up after test runs."
