@@ -483,16 +483,14 @@ def test_gate_e_rejects_sub_60_minute_sessions_by_default(tmp_path: Path):
     assert not result.gate_e_passed
 
 
-def test_promote_alpha_rust_gate_passes_with_mocked_parity(monkeypatch, tmp_path: Path):
+def test_promote_alpha_rust_gate_blocks_even_with_a_legacy_module(monkeypatch, tmp_path: Path):
     scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
     _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
 
-    class _Proc:
-        returncode = 0
-        stdout = "ok"
-        stderr = ""
+    def unexpected_command(*args, **kwargs):
+        raise AssertionError("The retired readiness gate must not start a command")
 
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: _Proc())
+    monkeypatch.setattr("subprocess.run", unexpected_command)
 
     result = promote_alpha(
         PromotionConfig(
@@ -505,8 +503,8 @@ def test_promote_alpha_rust_gate_passes_with_mocked_parity(monkeypatch, tmp_path
             validation_profile=_strict_profile(),
         )
     )
-    assert result.approved
-    assert result.gate_f_passed
+    assert not result.approved
+    assert not result.gate_f_passed
 
 
 # ---------------------------------------------------------------------------
@@ -725,62 +723,6 @@ def test_promote_alpha_explicit_relative_scorecard_path(tmp_path: Path):
         )
     )
     assert result.gate_d_passed
-
-
-def test_promote_alpha_rust_benchmark_gate_passes(monkeypatch, tmp_path: Path):
-    """enforce_rust_benchmark_gate=True runs benchmark cmd and passes if returncode=0."""
-    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
-    _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
-
-    class _Proc:
-        returncode = 0
-        stdout = "ok"
-        stderr = ""
-
-    monkeypatch.setattr("subprocess.run", lambda *a, **k: _Proc())
-
-    result = promote_alpha(
-        PromotionConfig(
-            alpha_id="ofi_mc",
-            owner="charlie",
-            project_root=str(tmp_path),
-            shadow_sessions=6,
-            enable_rust_readiness_gate=True,
-            rust_module_name="hft_platform.rust_core",
-            enforce_rust_benchmark_gate=True,
-            validation_profile=_strict_profile(),
-        )
-    )
-    assert result.gate_f_passed
-
-
-def test_promote_alpha_rust_parity_timeout(monkeypatch, tmp_path: Path):
-    """Parity subprocess timeout is handled gracefully (gate F fails, no crash)."""
-    import subprocess
-
-    scorecard = tmp_path / "research" / "alphas" / "ofi_mc" / "scorecard.json"
-    _write_scorecard(scorecard, sharpe=1.4, max_drawdown=-0.1, turnover=0.2, corr=0.2)
-
-    def _raise_timeout(*a, **k):
-        exc = subprocess.TimeoutExpired(cmd=["uv"], timeout=1)
-        exc.stdout = b""
-        exc.stderr = b""
-        raise exc
-
-    monkeypatch.setattr("subprocess.run", _raise_timeout)
-
-    result = promote_alpha(
-        PromotionConfig(
-            alpha_id="ofi_mc",
-            owner="charlie",
-            project_root=str(tmp_path),
-            shadow_sessions=6,
-            enable_rust_readiness_gate=True,
-            rust_module_name="hft_platform.rust_core",
-            validation_profile=_strict_profile(),
-        )
-    )
-    assert not result.gate_f_passed
 
 
 def test_build_checklist_with_paper_governance_adds_extra_items(tmp_path: Path):

@@ -75,7 +75,6 @@ def test_strategy_positions_view():
     runner._strat_executors = []
 
     store = PositionStore()
-    store._rust_tracker = None  # disable Rust path so Python dict is used
     store.positions = {
         "acc:alpha:2330": Position("acc", "alpha", "2330", net_qty=7),
         "acc:beta:2330": Position("acc", "beta", "2330", net_qty=2),

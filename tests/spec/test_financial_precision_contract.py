@@ -8,15 +8,12 @@ PnL tracking has zero drift.
 from __future__ import annotations
 
 import asyncio
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
 # Force Python position tracker (no Rust dependency in unit tests)
-os.environ["HFT_RUST_POSITIONS"] = "0"
-
 from hft_platform.contracts.execution import FillEvent, Side
 from hft_platform.contracts.strategy import TIF, IntentType, OrderIntent
 
@@ -112,7 +109,6 @@ def _make_position_store():
         from hft_platform.execution.positions import PositionStore
 
         store = PositionStore()
-        store._rust_tracker = None
         store.metrics = None
         return store
 

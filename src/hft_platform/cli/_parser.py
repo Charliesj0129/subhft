@@ -267,10 +267,9 @@ def build_parser() -> argparse.ArgumentParser:
     feat_validate.set_defaults(func=cmd_feature_validate)
 
     feat_parity = feature_sub.add_parser(
-        "parity", help="Run cross-path promoted-family parity gate (Python/Rust/hftbacktest)"
+        "parity", help="Run cross-path promoted-family parity gate (Python/hftbacktest)"
     )
     feat_parity.add_argument("--feature-set", dest="feature_set", help="Feature set id (default: registry default)")
-    feat_parity.add_argument("--require-rust", action="store_true", help="Fail if the Rust backend is unavailable")
     feat_parity.set_defaults(func=cmd_feature_parity)
 
     feat_preflight = feature_sub.add_parser("preflight", help="Check strategy/feature compatibility")
@@ -901,8 +900,8 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote.add_argument("--rust-module-name", default=None, help="Optional rust module override")
     alpha_promote.add_argument(
         "--rust-parity-test-path",
-        default="tests/unit/test_rust_hotpath_parity.py",
-        help="Pytest target for Rust parity validation",
+        default="",
+        help="Ignored: project Rust support was removed; kept so existing commands still parse.",
     )
     alpha_promote.add_argument("--rust-parity-timeout-s", type=int, default=180)
     alpha_promote.add_argument(

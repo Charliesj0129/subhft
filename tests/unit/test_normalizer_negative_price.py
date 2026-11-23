@@ -43,22 +43,3 @@ def test_positive_close_returns_tick(normalizer):
     assert isinstance(result, TickEvent)
     assert result.price == 1005000  # 100.5 * 10000
     assert result.symbol == "2330"
-
-
-def test_negative_close_rust_path_returns_none(normalizer):
-    """Rust fast path must also filter negative prices."""
-    try:
-        import hft_platform.rust_core as rc  # noqa: F401
-
-        rust_available = True
-    except ImportError:
-        rust_available = False
-
-    if not rust_available:
-        pytest.skip("rust_core not available")
-
-    # Force the Rust path by ensuring _RUST_ENABLED is True; the fixture uses a real
-    # normalizer so the Rust path will be attempted naturally.  A close of -1 scaled
-    # by 10000 yields -10000; the guard must catch it before a TickEvent is returned.
-    result = normalizer.normalize_tick(_tick_payload(close=-1))
-    assert result is None

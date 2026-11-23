@@ -397,8 +397,6 @@ class MetricsRegistry:
                 _pn("recorder_direct_drops_total"),
                 # Recorder OrderIntent producer drops (Slice C task 3)
                 _pn("recorder_intent_drop_total"),
-                # Rust-to-Python normalizer fallbacks
-                _pn("rust_fallback_total"),
                 # Post-normalization processing errors (LOB/feature/publish)
                 _pn("process_raw_error_total"),
                 # Normalization failures (pre-event) in MarketDataService
@@ -462,9 +460,6 @@ class MetricsRegistry:
         self.normalization_errors_total = Counter(_pn("normalization_errors_total"), "Normalization failures", ["type"])
         self.normalization_skip_total = Counter(
             _pn("normalization_skip_total"), "Normalization silent skips", ["type", "reason"]
-        )
-        self.rust_fallback_total = Counter(
-            _pn("rust_fallback_total"), "Rust-to-Python normalizer fallback count", ["type"]
         )
         self.lob_updates_total = Counter(_pn("lob_updates_total"), "LOB updates applied", ["symbol", "type"])
         self.lob_snapshots_total = Counter(_pn("lob_snapshots_total"), "LOB snapshots applied", ["symbol"])

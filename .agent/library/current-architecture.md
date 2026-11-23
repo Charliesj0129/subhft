@@ -1,5 +1,7 @@
 # HFT Platform Current Architecture Baseline
 
+> Historical snapshot. See the current runtime architecture in `docs/architecture/current-architecture.md`.
+
 Date: 2026-03-14
 Scope: As-built implementation under `src/hft_platform`, `research`, `rust_core`, `rust`, `config`, and `docker-compose.yml`.
 Companion documents that exist only in the author's working tree and are not in the repo: `target-architecture.md`, `c4-model-current.md`, `research_pipeline_execution_plan.md`, `rust_pyo3.md` (all under `.agent/library/`).

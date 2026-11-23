@@ -11,7 +11,7 @@ Internal target is on the order of 200 us from callback to order submission;
 broker RTT (tens of milliseconds) dominates end-to-end time. Per-stage
 Prometheus histograms exist for normalize, LOB, feature engine, strategy, and
 risk (`src/hft_platform/observability/metrics.py` has the exact names); targets
-differ for the Rust and Python paths. Do not trust a copy of a budget table;
+are defined per stage. Do not trust a copy of a budget table;
 read the current metric and the baseline in
 `docs/architecture/latency-baseline-shioaji-sim-vs-system.md`.
 
@@ -29,7 +29,6 @@ flags in `hft-market-data`); `event_loop_lag_ms` is not literally loop lag (it a
 
 - Python: `py-spy record -o flame.svg --pid <PID>` (non-intrusive), `py-spy top`,
   `python -m cProfile -o profile.out ...`.
-- Rust: `cargo flamegraph --bench <bench>`, `cargo bench` in `rust_core/`.
 - Allocation: `python -X tracemalloc=10 ...`; GC activity via `gc.get_stats()`.
 
 ## Anti-patterns that cost latency
@@ -51,8 +50,7 @@ optimistic until shadow or live evidence confirms them (`hft-backtest`).
 ## Optimization order
 
 Preallocated buffers, then numba/vectorized Python, then GC control during
-trading, then CPU isolation. The existing fused Rust path is kept as is; new Rust
-ports are paused. Each step needs a before/after
+trading, then CPU isolation. Each step needs a before/after
 measurement under the same load.
 
 ## Done when

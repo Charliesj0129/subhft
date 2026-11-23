@@ -46,9 +46,7 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
     provider = MagicMock()
     provider.scale_for.return_value = SCALE
     monkeypatch.setattr("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider", lambda *a, **kw: provider)
-    monkeypatch.setattr("hft_platform.execution.positions._RustPositionTracker", None)
     s = PositionStore()
-    s._rust_tracker = None
     return s
 
 

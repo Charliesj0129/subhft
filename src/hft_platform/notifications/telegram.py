@@ -14,9 +14,11 @@ from typing import TYPE_CHECKING
 import structlog
 
 try:
-    import aiohttp
+    import aiohttp as _aiohttp
 except ImportError:  # pragma: no cover — aiohttp optional at import time
     aiohttp = None
+else:
+    aiohttp = _aiohttp
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession as _AiohttpClientSession

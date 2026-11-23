@@ -4,8 +4,7 @@
 # Builds an ISOLATED throwaway venv under /tmp containing the repo's locked
 # dependency set with shioaji bumped 1.3.3 -> 1.5.3[speed], so the held PR #367
 # can be exercised at runtime WITHOUT touching the project .venv / pyproject.toml
-# pin / uv.lock. The in-tree editable `hft_platform` + in-tree compiled
-# `rust_core.so` are reused via PYTHONPATH (no maturin rebuild).
+# pin / uv.lock. PYTHONPATH points directly at the in-tree hft_platform source.
 #
 # Invariants enforced (fail-closed):
 #   * pyproject.toml / uv.lock / .venv/pyvenv.cfg sha256 unchanged across the run.
@@ -122,16 +121,15 @@ log "installing ${SHIOAJI_TARGET} on top…"
 uv pip install --python "${VENV_PY}" "${SHIOAJI_TARGET}"
 
 # --------------------------------------------------------------------------- #
-# Step 4 — smoke test: in-tree hft_platform + rust_core import, shioaji matches
+# Step 4 — smoke test: in-tree hft_platform import, shioaji matches
 # the target version. PYTHONPATH points at the in-tree src; never prepend the
 # project .venv.
 # --------------------------------------------------------------------------- #
-log "smoke test (hft_platform.rust_core + normalizer + shioaji ${HARNESS_VER})…"
+log "smoke test (normalizer + shioaji ${HARNESS_VER})…"
 PYTHONPATH="${REPO_ROOT}/src" SHIOAJI_EXPECTED_VER="${HARNESS_VER}" "${VENV_PY}" - <<'PY'
 import importlib
 import os
 
-import hft_platform.rust_core  # in-tree compiled .so
 import hft_platform.feed_adapter.normalizer  # must NOT need the SDK
 import shioaji
 
@@ -140,7 +138,6 @@ assert shioaji.__version__ == expected, f"expected shioaji {expected}, got {shio
 # Confirm the Rust-extension rewrite is actually loaded (1.5.x ships _core.abi3.so).
 core = importlib.import_module("shioaji._core")
 print(f"OK shioaji={shioaji.__version__} _core={getattr(core, '__file__', '<builtin>')}")
-print(f"OK rust_core={hft_platform.rust_core.__file__}")
 PY
 
 # --------------------------------------------------------------------------- #

@@ -360,7 +360,7 @@ class TestReconnectResetsRetryOnSuccess:
             patch(_SYM_HASH_FN, side_effect=_symbol_hash_stub),
         ):
             src.try_reconnect()
-        # Poll with cursor older than snap.ts_ns → expect 1 row returned
-        result = src.poll({"SYM1": 0})
+            # Poll with cursor older than snap.ts_ns → expect 1 row returned
+            result = src.poll({"SYM1": 0})
         assert "SYM1" in result
         assert len(result["SYM1"]) == 1
