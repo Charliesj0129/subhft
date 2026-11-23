@@ -36,7 +36,6 @@ def _disable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
     Race tests need writes to land in self.positions (not the Rust tracker)
     so that concurrent dict-iteration races are reproducible.
     """
-    monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
     monkeypatch.setattr(
         "hft_platform.observability.metrics.MetricsRegistry.get",
         staticmethod(lambda: None),
@@ -58,13 +57,8 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
         "hft_platform.execution.positions.SymbolMetadataPriceScaleProvider",
         lambda *a, **kw: mock_provider,
     )
-    monkeypatch.setattr(
-        "hft_platform.execution.positions._RustPositionTracker",
-        None,
-    )
     s = PositionStore()
     # Hard-disable any rust tracker that may have leaked in.
-    s._rust_tracker = None
     return s
 
 
@@ -252,7 +246,6 @@ class TestR3_2_BuildPositionsByStrategyFallback:
             def __init__(self, real: PositionStore) -> None:
                 self._real = real
                 self._fill_lock = real._fill_lock
-                self._rust_tracker = None
                 self._recovery_positions = real._recovery_positions
 
             @property
@@ -278,7 +271,6 @@ class TestR3_2_BuildPositionsByStrategyFallback:
                 self.positions = {
                     "acct1:strat1:X": Position("acct1", "strat1", "X", net_qty=2),
                 }
-                self._rust_tracker = None
                 # No _fill_lock attribute, no snapshot_positions method.
                 self._recovery_positions = {}
 

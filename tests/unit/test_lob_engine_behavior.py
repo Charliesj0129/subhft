@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import numpy as np
 
 from hft_platform.feed_adapter.lob_engine import BookState, _NoopLock
@@ -51,31 +49,6 @@ class TestBookStateInit:
         # Sanity check: the type matches the module-level Lock factory.
         assert type(bs.lock).__module__ == _RealLock.__module__
 
-    def test_rust_state_disabled(self):
-        import hft_platform.feed_adapter.lob_engine as mod
-
-        old = mod._RUST_BOOK_STATE_ENABLED
-        mod._RUST_BOOK_STATE_ENABLED = False
-        try:
-            bs = BookState("2330")
-            assert bs._rust_state is None
-        finally:
-            mod._RUST_BOOK_STATE_ENABLED = old
-
-    def test_rust_state_exception(self):
-        import hft_platform.feed_adapter.lob_engine as mod
-
-        old_cls = mod._RustBookState
-        old_en = mod._RUST_BOOK_STATE_ENABLED
-        mod._RUST_BOOK_STATE_ENABLED = True
-        mod._RustBookState = MagicMock(side_effect=RuntimeError("no rust"))
-        try:
-            bs = BookState("2330")
-            assert bs._rust_state is None
-        finally:
-            mod._RustBookState = old_cls
-            mod._RUST_BOOK_STATE_ENABLED = old_en
-
 
 # ── apply_update branches ─────────────────────────────────────────────────
 
@@ -91,7 +64,6 @@ class TestApplyUpdate:
 
     def test_numpy_int64(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1010000, 5]], dtype=np.int64)
         bs.apply_update(bids, asks, 100)
@@ -101,7 +73,6 @@ class TestApplyUpdate:
 
     def test_numpy_int32_coerced(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bids = np.array([[1000000, 10]], dtype=np.int32)
         asks = np.array([[1010000, 5]], dtype=np.int32)
         bs.apply_update(bids, asks, 100)
@@ -114,7 +85,6 @@ class TestApplyUpdate:
         mod._FORCE_NUMPY = False
         try:
             bs = BookState("2330")
-            bs._rust_state = None
             bs.apply_update([[1000000, 10]], [[1010000, 5]], 100)
             assert bs.bids == [[1000000, 10]]
         finally:
@@ -122,37 +92,10 @@ class TestApplyUpdate:
 
     def test_empty_bids_asks(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.apply_update([], [], 100)
         assert bs.bids == []
         assert bs.asks == []
         assert bs.mid_price_x2 == 0
-
-    def test_rust_book_state_fast_path(self):
-        bs = BookState("2330")
-        mock_rs = MagicMock()
-        mock_rs.mid_price_x2 = 2010000
-        mock_rs.spread = 10000
-        mock_rs.imbalance = 0.5
-        mock_rs.bid_depth_total = 100
-        mock_rs.ask_depth_total = 50
-        bs._rust_state = mock_rs
-        bids = np.array([[1000000, 100]], dtype=np.int64)
-        asks = np.array([[1010000, 50]], dtype=np.int64)
-        bs.apply_update(bids, asks, 200)
-        mock_rs.apply_update.assert_called_once()
-        assert bs.mid_price_x2 == 2010000
-
-    def test_rust_book_state_exception_fallback(self):
-        bs = BookState("2330")
-        mock_rs = MagicMock()
-        mock_rs.apply_update.side_effect = RuntimeError("rust error")
-        bs._rust_state = mock_rs
-        bids = np.array([[1000000, 10]], dtype=np.int64)
-        asks = np.array([[1010000, 5]], dtype=np.int64)
-        bs.apply_update(bids, asks, 200)
-        # Falls back to Python _recompute
-        assert bs.mid_price_x2 == 2010000
 
     def test_stats_none_mode(self):
         import hft_platform.feed_adapter.lob_engine as mod
@@ -161,7 +104,6 @@ class TestApplyUpdate:
         mod._STATS_NONE = True
         try:
             bs = BookState("2330")
-            bs._rust_state = None
             bids = np.array([[1000000, 10]], dtype=np.int64)
             asks = np.array([[1010000, 5]], dtype=np.int64)
             bs.apply_update(bids, asks, 100)
@@ -177,7 +119,6 @@ class TestApplyUpdate:
         mod._LOCAL_TS_ENABLED = True
         try:
             bs = BookState("2330")
-            bs._rust_state = None
             bs.apply_update([], [], 100)
             assert bs.local_ts > 0
         finally:
@@ -190,7 +131,6 @@ class TestApplyUpdate:
         mod._LOCAL_TS_ENABLED = True
         try:
             bs = BookState("2330")
-            bs._rust_state = None
             bids = np.array([[1000000, 10]], dtype=np.int64)
             asks = np.array([[1010000, 5]], dtype=np.int64)
             bs.apply_update(bids, asks, 100)
@@ -202,7 +142,6 @@ class TestApplyUpdate:
     def test_numpy_float64_coerced(self):
         """Float64 arrays should be coerced to int64."""
         bs = BookState("2330")
-        bs._rust_state = None
         bids = np.array([[1000000.0, 10.0]], dtype=np.float64)
         asks = np.array([[1010000.0, 5.0]], dtype=np.float64)
         bs.apply_update(bids, asks, 100)
@@ -210,7 +149,6 @@ class TestApplyUpdate:
 
     def test_empty_numpy_arrays(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bids = np.array([], dtype=np.int64).reshape(0, 2)
         asks = np.array([], dtype=np.int64).reshape(0, 2)
         bs.apply_update(bids, asks, 100)
@@ -241,7 +179,6 @@ class TestUpdateTick:
 class TestRecompute:
     def test_python_numpy(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = np.array([[1000000, 10], [990000, 20]], dtype=np.int64)
         bs.asks = np.array([[1010000, 5], [1020000, 15]], dtype=np.int64)
         bs._recompute()
@@ -253,7 +190,6 @@ class TestRecompute:
 
     def test_python_list(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = [[1000000, 10]]
         bs.asks = [[1010000, 5]]
         bs._recompute()
@@ -262,7 +198,6 @@ class TestRecompute:
 
     def test_empty_book(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = []
         bs.asks = []
         bs._recompute()
@@ -271,7 +206,6 @@ class TestRecompute:
 
     def test_one_sided_bids_only(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = np.array([[1000000, 10]], dtype=np.int64)
         bs.asks = []
         bs._recompute()
@@ -279,31 +213,13 @@ class TestRecompute:
 
     def test_one_sided_asks_only(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = []
         bs.asks = np.array([[1010000, 5]], dtype=np.int64)
         bs._recompute()
         assert bs.mid_price_x2 == 0
 
-    def test_rust_compute_stats_exception_fallback(self):
-        import hft_platform.feed_adapter.lob_engine as mod
-
-        old = mod._RUST_COMPUTE_STATS
-        mod._RUST_COMPUTE_STATS = MagicMock(side_effect=RuntimeError("rust err"))
-        try:
-            bs = BookState("2330")
-            bs._rust_state = None
-            bs.bids = np.array([[1000000, 10]], dtype=np.int64)
-            bs.asks = np.array([[1010000, 5]], dtype=np.int64)
-            bs._recompute()
-            # Falls back to Python
-            assert bs.mid_price_x2 == 2010000
-        finally:
-            mod._RUST_COMPUTE_STATS = old
-
     def test_zero_volume_imbalance(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = np.array([[1000000, 0]], dtype=np.int64)
         bs.asks = np.array([[1010000, 0]], dtype=np.int64)
         bs._recompute()
@@ -311,7 +227,6 @@ class TestRecompute:
 
     def test_empty_numpy_bids(self):
         bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = np.array([], dtype=np.int64).reshape(0, 2)
         bs.asks = np.array([[1010000, 5]], dtype=np.int64)
         bs._recompute()
@@ -352,34 +267,8 @@ class TestGetStats:
 
 
 class TestGetStatsTuple:
-    def test_ignores_rust_state(self):
-        # The Rust state misses stats-path updates, so it must not be the source.
+    def test_book_with_levels(self):
         bs = BookState("2330")
-        mock_rs = MagicMock()
-        mock_rs.get_stats_tuple.return_value = (1, 2, 3, 4, 5, 6)
-        bs._rust_state = mock_rs
-        bs.bids = np.array([[1000000, 10]], dtype=np.int64)
-        bs.asks = np.array([[1010000, 5]], dtype=np.int64)
-        bs.mid_price_x2 = 2010000
-        result = bs.get_stats_tuple()
-        assert result[:4] == ("lobstats", "2330", bs.exch_ts, 2010000)
-        assert result[6:8] == (1000000, 1010000)
-        mock_rs.get_stats_tuple.assert_not_called()
-
-    def test_rust_exception_fallback(self):
-        bs = BookState("2330")
-        mock_rs = MagicMock()
-        mock_rs.get_stats_tuple.side_effect = RuntimeError("err")
-        bs._rust_state = mock_rs
-        bs.bids = np.array([[1000000, 10]], dtype=np.int64)
-        bs.asks = np.array([[1010000, 5]], dtype=np.int64)
-        bs.mid_price_x2 = 2010000
-        result = bs.get_stats_tuple()
-        assert isinstance(result, tuple)
-
-    def test_no_rust(self):
-        bs = BookState("2330")
-        bs._rust_state = None
         bs.bids = [[1000000, 10]]
         bs.asks = [[1010000, 5]]
         bs.mid_price_x2 = 2010000
@@ -388,7 +277,6 @@ class TestGetStatsTuple:
 
     def test_empty(self):
         bs = BookState("2330")
-        bs._rust_state = None
         result = bs.get_stats_tuple()
         assert isinstance(result, tuple)
 

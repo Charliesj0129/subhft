@@ -95,6 +95,11 @@ exemptions:
     kind: not-money
     reason: "interval or timeout in seconds"
   - file: src/hft_platform/feed_adapter/normalizer.py
+    code: "price = float(raw_price)"
+    kind: boundary-conversion
+    reason: "Decode broker quote prices so unpriced levels can be skipped and priced levels are rounded immediately to scaled integers"
+    tracked_by: "H03 (K5)"
+  - file: src/hft_platform/feed_adapter/normalizer.py
     code: "_TS_MAX_LAG_NS = int(float(os.getenv(\"HFT_TS_MAX_LAG_S\", \"5\")) * 1e9)"
     kind: not-money
     reason: "seconds from the environment turned into integer nanoseconds once, at import"
@@ -127,69 +132,16 @@ exemptions:
     tracked_by: "H03 (K5)"
   - file: src/hft_platform/feed_adapter/normalizer.py
     code: "tick_size = float(raw_tick)"
-    count: 2
     kind: boundary-conversion
     reason: "tick size from instrument metadata parsed as float, then turned into an integer scale or tick count with round()"
     tracked_by: "H03 (K5)"
   - file: src/hft_platform/feed_adapter/normalizer.py
     code: "tick_size = 1.0 / float(scale)"
-    count: 2
     kind: boundary-conversion
     reason: "tick size from instrument metadata parsed as float, then turned into an integer scale or tick count with round()"
     tracked_by: "H03 (K5)"
   - file: src/hft_platform/feed_adapter/normalizer.py
     code: "price = int(round(float(close_val) * scale))"
-    kind: boundary-conversion
-    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "timb = float(top_imbalance)"
-    kind: not-money
-    reason: "dimensionless book imbalance"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "compat_stats = BookStats(bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)"
-    kind: known-violation
-    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "float(ss),"
-    kind: known-violation
-    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "float(mid_price),"
-    count: 3
-    kind: known-violation
-    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "float(spread),"
-    count: 3
-    kind: known-violation
-    reason: "BookStats keeps mid_price and spread as float for backward compatibility (events.py); FusedBookStats carries the integer form"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "float(imbalance),"
-    count: 3
-    kind: not-money
-    reason: "dimensionless book imbalance"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "bid_prices_np[i] = float(bp[i])"
-    kind: boundary-conversion
-    reason: "broker prices copied into float64 buffers that the numpy/Rust kernel scales to integers"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "ask_prices_np[i] = float(ap[i])"
-    kind: boundary-conversion
-    reason: "broker prices copied into float64 buffers that the numpy/Rust kernel scales to integers"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "bids_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv)]"
-    kind: boundary-conversion
-    reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
-    tracked_by: "H03 (K5)"
-  - file: src/hft_platform/feed_adapter/normalizer.py
-    code: "asks_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av)]"
     kind: boundary-conversion
     reason: "the broker delivers the price as a float; it is multiplied by the scale and round()ed to an integer here, and no float survives"
     tracked_by: "H03 (K5)"
@@ -414,17 +366,6 @@ exemptions:
     tracked_by: "T18-F1"
   - file: src/hft_platform/risk/engine.py
     code: "all_caps.append(float(val))"
-    count: 2
-    kind: boundary-conversion
-    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
-    tracked_by: "T18-F1"
-  - file: src/hft_platform/risk/engine.py
-    code: "max_price_cap_raw = float(defaults.get(\"max_price_cap\", 5000.0))"
-    kind: boundary-conversion
-    reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
-    tracked_by: "T18-F1"
-  - file: src/hft_platform/risk/engine.py
-    code: "tick_size_raw = float(defaults.get(\"tick_size\", 0.01))"
     kind: boundary-conversion
     reason: "price cap or tick size read from YAML as float; converted by int(raw * scale), which truncates (validators.py _tick_size_raw / engine.py cache build)"
     tracked_by: "T18-F1"
@@ -513,10 +454,6 @@ exemptions:
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
   - file: src/hft_platform/risk/storm_guard.py
-    code: "parsed[key] = float(risk_cfg[key])"
-    kind: not-money
-    reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
-  - file: src/hft_platform/risk/storm_guard.py
     code: "self.thresholds.feed_gap_storm_s = float(feed_gap_storm)"
     kind: not-money
     reason: "StormGuard timer, cooldown or threshold in seconds / monotonic timestamp"
@@ -600,36 +537,40 @@ exemptions:
   - file: src/hft_platform/order/adapter.py
     code: "self._phantom_lookup_timeout_s = float(os.getenv(\"HFT_PHANTOM_LOOKUP_TIMEOUT_S\", \"15\"))"
     kind: not-money
-    reason: "phantom open-order lookup timeout in seconds"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py
     code: "self._phantom_lookup_max_hold_s = float(os.getenv(\"HFT_PHANTOM_LOOKUP_MAX_HOLD_S\", \"1800\"))"
     kind: not-money
-    reason: "phantom max hold time in seconds before the old release applies"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py
     code: "def _due_phantoms(self, ttl_s: float) -> list[tuple[str, _PhantomEntry]]:"
     kind: not-money
-    reason: "phantom TTL in seconds, compared only with monotonic age"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py
     code: "async def _settle_expired_phantoms(self, ttl_s: float) -> None:"
     kind: not-money
-    reason: "phantom TTL in seconds, compared only with monotonic age"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py
     code: "async def _settle_expired_phantoms_once(self, ttl_s: float) -> None:"
     kind: not-money
-    reason: "phantom TTL in seconds, compared only with monotonic age"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/order/adapter.py
     code: "async def _release_phantoms(self, due: list[tuple[str, _PhantomEntry]], ttl_s: float) -> int:"
     kind: not-money
-    reason: "phantom TTL in seconds, compared only with monotonic age"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/risk/storm_guard.py
     code: "order_rtt_storm_window_s: float = 60.0"
     kind: not-money
-    reason: "StormGuard RTT window in seconds"
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/risk/storm_guard.py
     code: "order_rtt_storm_dwell_s: float = 300.0"
     kind: not-money
-    reason: "StormGuard RTT dwell in seconds"
+    reason: "monotonic interval or timeout in seconds"
+  - file: src/hft_platform/risk/storm_guard.py
+    code: "parsed[key] = float(risk_cfg[key])"
+    kind: not-money
+    reason: "monotonic interval or timeout in seconds"
   - file: src/hft_platform/feed_adapter/normalizer.py
     code: "mtime: float | None = os.path.getmtime(self.config_path)"
     kind: not-money
-    reason: "file modification time, compared only with the previous mtime"
+    reason: "filesystem modification time in seconds"

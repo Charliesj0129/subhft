@@ -31,18 +31,11 @@ make release-converge-scan
 make release-converge
 ```
 
-### 3) 含 Rust build artifact 清潔
-
-```bash
-make release-converge CLEAN_RUST=1
-```
-
-### 4) MVP 發行收斂（激進，含 tracked 瘦身 + full gate）
+### 3) MVP 發行收斂（激進，含 tracked 瘦身 + full gate）
 
 ```bash
 make release-converge-mvp                 # 預設是 dry-run：不刪任何東西，只產出報告
 make release-converge-mvp CONFIRM=yes     # 真的執行
-make release-converge-mvp CONFIRM=yes CLEAN_RUST=1
 ```
 
 > **警示：不可逆。** 真的執行（`CONFIRM=yes`）會 `rm -rf .wal data outputs reports .state`。`research/` 底下被忽略的檔案（實驗紀錄、kill ledger、研究資料）不會被清除。
@@ -59,7 +52,7 @@ make release-converge-mvp CONFIRM=yes CLEAN_RUST=1
   - `research/data/processed/smoke/smoke_v1.npy.meta.json`
 - 以 `--gate-profile full` 作為發行 gate
 
-### 5) 第一個可長期運營發布 gate（不清潔，fail-closed）
+### 4) 第一個可長期運營發布 gate（不清潔，fail-closed）
 
 ```bash
 HFT_ALPHA_AUDIT_ENABLED=1 make release-first-ops-gate CHANGE_ID=CHG-YYYYMMDD-XX

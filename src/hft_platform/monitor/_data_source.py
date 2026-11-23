@@ -201,6 +201,8 @@ class ShmDataSource:
         pass  # Connection happens in __init__
 
     def poll(self, cursors: dict[str, int]) -> dict[str, list[RowView]]:
+        from hft_platform.ipc.shm_snapshot import _symbol_hash
+
         if self._reader is None:
             return {}
 
@@ -217,7 +219,10 @@ class ShmDataSource:
                     continue
 
             snap = self._reader.read_slot(slot_idx)
-            if snap is None:
+            # The assignment can change when a restarted publisher reloads its subscriptions.
+            if snap is None or snap.symbol_hash != _symbol_hash(sym):
+                self._symbol_to_slot.pop(sym, None)
+                self._slot_versions.pop(slot_idx, None)
                 continue
 
             # Skip if version unchanged

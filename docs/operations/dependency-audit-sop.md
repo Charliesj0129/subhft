@@ -32,30 +32,7 @@ uv lock --check
 
 Ensure `uv.lock` is consistent with `pyproject.toml`.
 
-## 2. Rust Dependency Audit
-
-### 2.1 Install and run cargo-audit
-
-```bash
-cargo install cargo-audit  # first time only
-cargo audit --file rust_core/Cargo.lock
-```
-
-### 2.2 Check for outdated crates
-
-```bash
-cargo install cargo-outdated  # first time only
-cargo outdated --manifest-path rust_core/Cargo.toml
-```
-
-### 2.3 Review unsafe usage
-
-```bash
-cargo install cargo-geiger  # first time only
-cargo geiger --manifest-path rust_core/Cargo.toml
-```
-
-## 3. Version Update Procedure
+## 2. Version Update Procedure
 
 1. Create branch: `chore/quarterly-dep-audit-YYYY-QN`
 2. Update dependencies one group at a time (runtime, dev, build)
@@ -70,9 +47,8 @@ cargo geiger --manifest-path rust_core/Cargo.toml
 2. Observability (prometheus-client, structlog)
 3. Data layer (clickhouse-connect, numpy)
 4. Broker SDK (shioaji) -- test in sim mode before merging
-5. Rust crates -- rebuild extension and run parity tests
 
-## 4. CVE Escalation Process
+## 3. CVE Escalation Process
 
 | Severity | SLA          | Action                                      |
 |----------|--------------|---------------------------------------------|
@@ -90,10 +66,9 @@ cargo geiger --manifest-path rust_core/Cargo.toml
 5. Notify team lead for CRITICAL/HIGH via team channel
 6. Record finding in `docs/operations/audit-log.md` (create if absent)
 
-## 5. Audit Checklist
+## 4. Audit Checklist
 
 - [ ] Python `pip-audit` clean (no CRITICAL/HIGH)
-- [ ] Rust `cargo audit` clean (no CRITICAL/HIGH)
 - [ ] Outdated packages reviewed and updated where safe
 - [ ] CI passes on updated dependencies
 - [ ] Benchmark shows no regression >5%

@@ -885,68 +885,6 @@ def bench_feature_engine_parity_mismatch_rate(n: int = 8_000) -> float:
     return mismatches / max(1, n)
 
 
-def bench_feature_engine_lob_update_rust(iters: int = 80_000) -> float:
-    eng = FeatureEngine(emit_events=True, kernel_backend="rust")
-    if eng.kernel_backend() != "rust":
-        return 0.0
-    events: list[tuple[BidAskEvent, LOBStatsEvent]] = []
-    bid = 1_000_000
-    ask = 1_001_000
-    bid_qty = 10
-    ask_qty = 12
-    for i in range(32):
-        if i % 3 == 0:
-            bid += 100
-        if i % 5 == 0:
-            ask += 100
-        bid_qty = max(1, bid_qty + ((i % 4) - 1))
-        ask_qty = max(1, ask_qty + (1 - (i % 3)))
-        events.append(_feature_bench_event_stats(i + 1, bid, bid_qty, ask, ask_qty))
-    for i in range(2000):
-        evt, stats = events[i % len(events)]
-        ts = i + 1
-        s = replace(stats, ts=ts)
-        e = replace(evt, meta=replace(evt.meta, seq=ts, source_ts=ts, local_ts=ts))
-        eng.process_lob_update(e, s, local_ts_ns=ts)
-    t0 = time.perf_counter()
-    for i in range(iters):
-        evt, stats = events[i % len(events)]
-        ts = i + 10_000
-        s = replace(stats, ts=ts)
-        e = replace(evt, meta=replace(evt.meta, seq=ts, source_ts=ts, local_ts=ts))
-        eng.process_lob_update(e, s, local_ts_ns=ts)
-    t1 = time.perf_counter()
-    return (t1 - t0) / iters * 1e6
-
-
-def bench_feature_engine_python_vs_rust_parity_mismatch_rate(n: int = 8_000) -> float:
-    # The Rust kernel implements the 16 v1 features only and zero-pads the rest of a
-    # v2/v3 schema (see FeatureEngine's rust_feature_backend_v1_gap warning), so parity
-    # is measured on the feature set it computes. Against the default v3 schema every
-    # frame differs by construction and the gate could never pass.
-    py_eng = FeatureEngine(emit_events=True, kernel_backend="python", feature_set_id="lob_shared_v1")
-    rust_eng = FeatureEngine(emit_events=True, kernel_backend="rust", feature_set_id="lob_shared_v1")
-    if rust_eng.kernel_backend() != "rust":
-        return 0.0
-    rng = np.random.default_rng(20260224)
-    bid = 1_000_000
-    ask = 1_001_000
-    bq = 10
-    aq = 12
-    mismatches = 0
-    for i in range(n):
-        bid += int(rng.choice([-100, 0, 100]))
-        ask = max(bid + 100, ask + int(rng.choice([-100, 0, 100])))
-        bq = max(1, bq + int(rng.choice([-3, -1, 0, 1, 3])))
-        aq = max(1, aq + int(rng.choice([-3, -1, 0, 1, 3])))
-        evt, stats = _feature_bench_event_stats(i + 1, bid, bq, ask, aq)
-        p = py_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        r = rust_eng.process_lob_update(evt, stats, local_ts_ns=i + 1)
-        if p is None or r is None or p.values != r.values:
-            mismatches += 1
-    return mismatches / max(1, n)
-
-
 def _bench_shioaji_callback_soak_metrics(
     iters: int = 120_000,
     clients: int = 64,
@@ -1061,11 +999,6 @@ def main() -> int:
         action="store_true",
         help="Run heavier risk/gateway drills (typed conversion + gateway typed/object ratio). Intended for nightly/manual runs.",
     )
-    parser.add_argument(
-        "--include-feature-rust",
-        action="store_true",
-        help="Run FeatureEngine Rust-kernel parity/perf drills (requires rebuilt rust_core extension).",
-    )
     args = parser.parse_args()
 
     baseline = json.loads(Path(args.baseline).read_text())
@@ -1099,9 +1032,6 @@ def main() -> int:
     include_risk_heavy = bool(
         args.include_risk_heavy or os.getenv("HFT_PERF_GATE_RISK_HEAVY", "0") in {"1", "true", "yes", "on"}
     )
-    include_feature_rust = bool(
-        args.include_feature_rust or os.getenv("HFT_PERF_GATE_FEATURE_RUST", "0") in {"1", "true", "yes", "on"}
-    )
     if include_recorder_io:
         rec_ck_mean, rec_ck_std = _multi_sample(bench_recorder_ck_columnar_write_ms, max(1, min(n_runs, 2)))
         rec_wal_stress_mean, rec_wal_stress_std = _multi_sample(
@@ -1121,16 +1051,6 @@ def main() -> int:
         risk_typed_view_mean = risk_typed_view_std = None
         risk_create_from_typed_mean = risk_create_from_typed_std = None
         risk_gw_typed_ratio_mean = risk_gw_typed_ratio_std = None
-    if include_feature_rust:
-        feature_rust_mean, feature_rust_std = _multi_sample(
-            bench_feature_engine_lob_update_rust, max(1, min(n_runs, 2))
-        )
-        feature_py_rust_parity_mean, feature_py_rust_parity_std = _multi_sample(
-            bench_feature_engine_python_vs_rust_parity_mismatch_rate, max(1, min(n_runs, 2))
-        )
-    else:
-        feature_rust_mean = feature_rust_std = None
-        feature_py_rust_parity_mean = feature_py_rust_parity_std = None
 
     results = {
         "strategy_noop_metrics_on_us_per_event": noop_mean,
@@ -1160,9 +1080,6 @@ def main() -> int:
     if include_recorder_io:
         results["recorder_ck_columnar_write_ms"] = rec_ck_mean
         results["recorder_wal_atomic_stress_ratio"] = rec_wal_stress_mean
-    if include_feature_rust:
-        results["feature_engine_lob_update_rust_us_per_event"] = feature_rust_mean
-        results["feature_engine_python_vs_rust_parity_mismatch_rate"] = feature_py_rust_parity_mean
     stdevs = {
         "strategy_noop_metrics_on_us_per_event": noop_std,
         "risk_evaluate_us_per_call": risk_eval_std,
@@ -1191,9 +1108,6 @@ def main() -> int:
     if include_recorder_io:
         stdevs["recorder_ck_columnar_write_ms"] = rec_ck_std
         stdevs["recorder_wal_atomic_stress_ratio"] = rec_wal_stress_std
-    if include_feature_rust:
-        stdevs["feature_engine_lob_update_rust_us_per_event"] = feature_rust_std
-        stdevs["feature_engine_python_vs_rust_parity_mismatch_rate"] = feature_py_rust_parity_std
 
     checks = [
         (
@@ -1286,16 +1200,6 @@ def main() -> int:
                 ("risk_typed_frame_view_us_per_call", "risk_typed_frame_view_us_per_call_max"),
                 ("risk_create_command_from_typed_us_per_call", "risk_create_command_from_typed_us_per_call_max"),
                 ("risk_gateway_typed_vs_obj_ratio", "risk_gateway_typed_vs_obj_ratio_max"),
-            ]
-        )
-    if include_feature_rust:
-        checks.extend(
-            [
-                ("feature_engine_lob_update_rust_us_per_event", "feature_engine_lob_update_rust_us_per_event_max"),
-                (
-                    "feature_engine_python_vs_rust_parity_mismatch_rate",
-                    "feature_engine_python_vs_rust_parity_mismatch_rate_max",
-                ),
             ]
         )
     failures: list[str] = []

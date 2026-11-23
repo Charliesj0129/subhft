@@ -3,10 +3,7 @@
 Shioaji 1.5.3 callbacks deliver tick/bidask prices as ``decimal.Decimal``; 1.3.3
 delivered ``float``. This bench measures whether routing Decimal prices through
 the real ``MarketDataNormalizer.normalize_tick`` / ``normalize_bidask`` paths
-costs materially more than the legacy float payloads, and whether the in-tree
-Rust kernels consume Decimal directly (fallback rate == 0) or silently fall back
-to the pure-Python path (a perf regression, not a correctness one — the boundary
-test proves the *value* is identical either way).
+costs materially more than the legacy float payloads.
 
 SDK-free by design (no ``import shioaji``): it runs in BOTH the project ``.venv``
 (1.3.3) and the throwaway ``shioaji[speed]==1.5.3`` harness venv and yields the
@@ -17,9 +14,6 @@ the normalizer boundary, which is purely a function of the platform code.
 Gates are deliberately RELATIVE (machine-independent), not absolute wall-clock
 maxima that drift per host:
 
-  * ``rust_fallback_rate == 0.0`` — Decimal must be consumed by the Rust kernel,
-    never pervasively fall back. (A nonzero rate is a CONDITIONAL-only perf flag,
-    not a correctness block — values stay correct via the Python fallback.)
   * ``decimal_us_per_event <= float_us_per_event * RATIO_MAX`` for tick and
     bidask — the Decimal path must not be dramatically slower than float.
 
@@ -46,16 +40,14 @@ for _p in (str(REPO_ROOT), str(SRC_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import hft_platform.feed_adapter.normalizer as normalizer_mod  # noqa: E402
 from hft_platform.feed_adapter.normalizer import MarketDataNormalizer  # noqa: E402
 
 _SCALE = 10_000
 # The Decimal path must stay within this multiple of the float path. Decimal
 # arithmetic is inherently a few× slower than float in pure Python, but the
-# in-tree Rust kernel extracts Decimal directly, so on the Rust path the gap is
+# Python normalizer extracts Decimal directly, so the gap is
 # small; this ceiling catches a regression to a slow pervasive fallback.
 _RATIO_MAX = 3.0
-_FALLBACK_RATE_MAX = 0.0
 
 # Representative tick-grid prices (no sub-tick ties — those are a correctness
 # concern handled by the boundary test, not a perf one).
@@ -113,24 +105,15 @@ def _as_decimal(x: float) -> Decimal:
     return Decimal(str(x))
 
 
-def _counter(child: Any) -> float:
-    try:
-        return float(child._value.get())  # type: ignore[attr-defined]
-    except Exception:
-        return 0.0
-
-
 def _bench_path(norm: MarketDataNormalizer, kind: str, decimal_prices: bool, iters: int) -> dict[str, Any]:
-    """Time `iters` normalize calls of `kind` ('tick'|'bidask') and count fallbacks."""
+    """Time `iters` normalize calls of `kind` ('tick'|'bidask')."""
     conv = _as_decimal if decimal_prices else (lambda x: x)
     if kind == "tick":
         payloads = [_tick_payload(conv(_PRICES[i % len(_PRICES)]), i) for i in range(iters)]
         fn = norm.normalize_tick
-        fb_before = _counter(norm._rust_fallback_tick)
     else:
         payloads = [_bidask_payload([conv(p) for p in _PRICES], i) for i in range(iters)]
         fn = norm.normalize_bidask
-        fb_before = _counter(norm._rust_fallback_bidask)
 
     emitted = 0
     t0 = time.perf_counter()
@@ -139,15 +122,12 @@ def _bench_path(norm: MarketDataNormalizer, kind: str, decimal_prices: bool, ite
             emitted += 1
     elapsed = time.perf_counter() - t0
 
-    fb_after = _counter(norm._rust_fallback_tick if kind == "tick" else norm._rust_fallback_bidask)
     return {
         "kind": kind,
         "price_type": "decimal" if decimal_prices else "float",
         "iters": iters,
         "emitted": emitted,
         "us_per_event": (elapsed / iters) * 1e6,
-        "fallbacks": fb_after - fb_before,
-        "fallback_rate": (fb_after - fb_before) / iters if iters else 0.0,
     }
 
 
@@ -172,27 +152,18 @@ def run(iters: int) -> dict[str, Any]:
 
     tick_ratio = results["tick_decimal"]["us_per_event"] / max(results["tick_float"]["us_per_event"], 1e-9)
     bidask_ratio = results["bidask_decimal"]["us_per_event"] / max(results["bidask_float"]["us_per_event"], 1e-9)
-    max_fallback_rate = max(results["tick_decimal"]["fallback_rate"], results["bidask_decimal"]["fallback_rate"])
     return {
-        "rust_enabled": normalizer_mod._RUST_ENABLED,
         "iters": iters,
         "tracemalloc_peak_bytes": peak,
         "tick_decimal_vs_float_ratio": tick_ratio,
         "bidask_decimal_vs_float_ratio": bidask_ratio,
-        "max_rust_fallback_rate": max_fallback_rate,
         "ratio_max": _RATIO_MAX,
-        "fallback_rate_max": _FALLBACK_RATE_MAX,
         "results": results,
     }
 
 
 def _check(summary: dict[str, Any]) -> list[str]:
     failures: list[str] = []
-    if summary["max_rust_fallback_rate"] > _FALLBACK_RATE_MAX:
-        failures.append(
-            f"rust_fallback_rate {summary['max_rust_fallback_rate']:.4f} > {_FALLBACK_RATE_MAX} "
-            "(Decimal is not being consumed by the Rust kernel — pervasive fallback)"
-        )
     if summary["tick_decimal_vs_float_ratio"] > _RATIO_MAX:
         failures.append(f"tick decimal/float us ratio {summary['tick_decimal_vs_float_ratio']:.2f} > {_RATIO_MAX}")
     if summary["bidask_decimal_vs_float_ratio"] > _RATIO_MAX:
@@ -213,16 +184,12 @@ def main() -> int:
         print(json.dumps(summary, indent=2))
     else:
         r = summary["results"]
-        print(f"rust_enabled={summary['rust_enabled']} iters={summary['iters']}")
+        print(f"iters={summary['iters']}")
         for key in ("tick_float", "tick_decimal", "bidask_float", "bidask_decimal"):
             row = r[key]
-            print(
-                f"  {key:14s} {row['us_per_event']:8.3f} us/event  "
-                f"fallback_rate={row['fallback_rate']:.4f}  emitted={row['emitted']}"
-            )
+            print(f"  {key:14s} {row['us_per_event']:8.3f} us/event  emitted={row['emitted']}")
         print(f"  tick   decimal/float ratio = {summary['tick_decimal_vs_float_ratio']:.2f} (max {_RATIO_MAX})")
         print(f"  bidask decimal/float ratio = {summary['bidask_decimal_vs_float_ratio']:.2f} (max {_RATIO_MAX})")
-        print(f"  max rust fallback rate     = {summary['max_rust_fallback_rate']:.4f} (max {_FALLBACK_RATE_MAX})")
         print(f"  tracemalloc peak           = {summary['tracemalloc_peak_bytes'] / 1024:.1f} KiB")
 
     if args.check:

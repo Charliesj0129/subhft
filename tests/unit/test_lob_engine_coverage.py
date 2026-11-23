@@ -3,7 +3,7 @@ Targeted coverage tests for feed_adapter/lob_engine.py.
 
 Focuses on branches not covered by existing tests:
 - NoopLock behaviour
-- BookState with Rust disabled (pure-Python _recompute)
+- BookState recompute behavior
 - apply_update_with_stats / apply_update_with_stats_fields
 - get_stats / get_stats_tuple
 - get_l1_scaled
@@ -82,67 +82,62 @@ class TestNoopLock:
 
 
 # ---------------------------------------------------------------------------
-# BookState — pure Python _recompute (Rust disabled)
+# BookState — statistics recomputation
 # ---------------------------------------------------------------------------
 
 
 class TestBookStatePureRecompute:
     @pytest.fixture
-    def book_no_rust(self, monkeypatch):
-        """BookState with Rust and RustBookState disabled."""
-        monkeypatch.setattr(lob_mod, "_RUST_ENABLED", False)
-        monkeypatch.setattr(lob_mod, "_RUST_COMPUTE_STATS", None)
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
+    def book(self):
         return BookState("2330")
 
-    def test_recompute_with_numpy_arrays(self, book_no_rust):
+    def test_recompute_with_numpy_arrays(self, book):
         bids = np.array([[1000000, 10], [999000, 5]], dtype=np.int64)
         asks = np.array([[1001000, 8], [1002000, 3]], dtype=np.int64)
-        book_no_rust.apply_update(bids, asks, 1_000_000_000)
-        assert book_no_rust.mid_price_x2 == 1000000 + 1001000
-        assert book_no_rust.spread == 1001000 - 1000000
-        assert book_no_rust.bid_depth_total == 15
-        assert book_no_rust.ask_depth_total == 11
+        book.apply_update(bids, asks, 1_000_000_000)
+        assert book.mid_price_x2 == 1000000 + 1001000
+        assert book.spread == 1001000 - 1000000
+        assert book.bid_depth_total == 15
+        assert book.ask_depth_total == 11
 
-    def test_recompute_with_list_bids_asks(self, book_no_rust):
+    def test_recompute_with_list_bids_asks(self, book):
         bids = [[1000000, 10], [999000, 5]]
         asks = [[1001000, 8], [1002000, 3]]
-        book_no_rust.apply_update(bids, asks, 1_000_000_000)
-        assert book_no_rust.bid_depth_total == 15
-        assert book_no_rust.ask_depth_total == 11
-        assert book_no_rust.mid_price_x2 == 2001000
+        book.apply_update(bids, asks, 1_000_000_000)
+        assert book.bid_depth_total == 15
+        assert book.ask_depth_total == 11
+        assert book.mid_price_x2 == 2001000
 
-    def test_recompute_one_sided_bids_only(self, book_no_rust):
+    def test_recompute_one_sided_bids_only(self, book):
         """When asks are empty, mid_price_x2 and spread should be 0."""
         bids = [[1000000, 10]]
-        book_no_rust.apply_update(bids, [], 1_000_000_000)
-        assert book_no_rust.mid_price_x2 == 0
-        assert book_no_rust.spread == 0
-        assert book_no_rust.imbalance == 0.0
+        book.apply_update(bids, [], 1_000_000_000)
+        assert book.mid_price_x2 == 0
+        assert book.spread == 0
+        assert book.imbalance == 0.0
 
-    def test_recompute_empty_numpy_arrays(self, book_no_rust):
+    def test_recompute_empty_numpy_arrays(self, book):
         bids = np.empty((0, 2), dtype=np.int64)
         asks = np.empty((0, 2), dtype=np.int64)
-        book_no_rust.apply_update(bids, asks, 1_000_000_000)
-        assert book_no_rust.bid_depth_total == 0
-        assert book_no_rust.ask_depth_total == 0
-        assert book_no_rust.mid_price_x2 == 0
+        book.apply_update(bids, asks, 1_000_000_000)
+        assert book.bid_depth_total == 0
+        assert book.ask_depth_total == 0
+        assert book.mid_price_x2 == 0
 
-    def test_late_packet_rejected(self, book_no_rust):
+    def test_late_packet_rejected(self, book):
         bids = [[1000000, 10]]
         asks = [[1001000, 8]]
-        book_no_rust.apply_update(bids, asks, 2_000_000_000)
-        version_before = book_no_rust.version
+        book.apply_update(bids, asks, 2_000_000_000)
+        version_before = book.version
         # Send older timestamp — should be ignored
-        book_no_rust.apply_update([[999000, 5]], asks, 1_000_000_000)
-        assert book_no_rust.version == version_before
+        book.apply_update([[999000, 5]], asks, 1_000_000_000)
+        assert book.version == version_before
 
-    def test_update_tick_late_packet_rejected(self, book_no_rust):
-        book_no_rust.update_tick(1_000_000, 5, 2_000_000_000)
-        old_price = book_no_rust.last_price
-        book_no_rust.update_tick(900_000, 3, 1_000_000_000)
-        assert book_no_rust.last_price == old_price
+    def test_update_tick_late_packet_rejected(self, book):
+        book.update_tick(1_000_000, 5, 2_000_000_000)
+        old_price = book.last_price
+        book.update_tick(900_000, 3, 1_000_000_000)
+        assert book.last_price == old_price
 
 
 # ---------------------------------------------------------------------------
@@ -152,9 +147,7 @@ class TestBookStatePureRecompute:
 
 class TestBookStateStats:
     @pytest.fixture
-    def book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
+    def book(self):
         b = BookState("2330")
         bids = np.array([[1000000, 10], [999000, 5]], dtype=np.int64)
         asks = np.array([[1001000, 8], [1002000, 3]], dtype=np.int64)
@@ -178,18 +171,12 @@ class TestBookStateStats:
         assert t[7] == 1001000  # best_ask
 
     def test_get_stats_empty_book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         b = BookState("EMPTY")
         stats = b.get_stats()
         assert stats.best_bid == 0
         assert stats.best_ask == 0
 
     def test_get_stats_tuple_list_bids(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
-        monkeypatch.setattr(lob_mod, "_RUST_COMPUTE_STATS", None)
-        monkeypatch.setattr(lob_mod, "_RUST_ENABLED", False)
         b = BookState("LIST")
         b.apply_update([[1000000, 10]], [[1001000, 8]], 1_000_000_000)
         t = b.get_stats_tuple()
@@ -205,8 +192,6 @@ class TestBookStateStats:
 
 class TestApplyUpdateWithStats:
     def test_apply_update_with_stats(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         b = BookState("2330")
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
@@ -218,8 +203,6 @@ class TestApplyUpdateWithStats:
         assert b.ask_depth_total == 8
 
     def test_apply_update_with_stats_fields_late_packet(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         b = BookState("2330")
         bids = np.array([[1000000, 10]], dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
@@ -229,8 +212,6 @@ class TestApplyUpdateWithStats:
         assert b.version == v  # Late packet ignored
 
     def test_apply_update_with_stats_fields_empty_bids(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         b = BookState("2330")
         bids = np.empty((0, 2), dtype=np.int64)
         asks = np.array([[1001000, 8]], dtype=np.int64)
@@ -238,8 +219,6 @@ class TestApplyUpdateWithStats:
         assert b.bids == []
 
     def test_apply_update_with_stats_fields_list_conversion(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         b = BookState("2330")
         bids = [[1000000, 10]]
         asks = [[1001000, 8]]
@@ -333,7 +312,6 @@ class TestLOBEngineTupleFastPath:
 
 class TestLOBEngineEventDispatch:
     def test_process_bidask_event_with_stats(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", False)
         monkeypatch.setattr(lob_mod, "_STATS_NONE", False)
         monkeypatch.setattr(lob_mod, "_STATS_TUPLE", False)
         engine = LOBEngine()
@@ -351,7 +329,6 @@ class TestLOBEngineEventDispatch:
         assert result is not None
 
     def test_process_bidaskevent_no_stats(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", False)
         monkeypatch.setattr(lob_mod, "_STATS_NONE", False)
         monkeypatch.setattr(lob_mod, "_STATS_TUPLE", False)
         engine = LOBEngine()
@@ -364,7 +341,6 @@ class TestLOBEngineEventDispatch:
         assert result is None
 
     def test_process_fused_bypass_event(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", True)
         monkeypatch.setattr(lob_mod, "_STATS_NONE", False)
         monkeypatch.setattr(lob_mod, "_STATS_TUPLE", False)
         engine = LOBEngine()
@@ -383,8 +359,7 @@ class TestLOBEngineEventDispatch:
         book = engine.get_book("2330")
         assert book.mid_price_x2 == 2001000
 
-    def test_process_fused_bypass_late_packet(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_FUSED_BYPASS", True)
+    def test_process_fused_bypass_late_packet(self):
         engine = LOBEngine()
         # First update at ts=2000
         meta1 = MetaData(seq=1, topic="bidask", source_ts=2_000_000_000, local_ts=2_000_000_000)
@@ -423,8 +398,6 @@ class TestGetBookSnapshot:
         assert "spread" in snap
 
     def test_snapshot_empty_book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         engine = LOBEngine()
         _ = engine.get_book("2330")  # Create empty book
         snap = engine.get_book_snapshot("2330")
@@ -433,10 +406,7 @@ class TestGetBookSnapshot:
         assert snap["best_ask"] == 0
 
     def test_snapshot_list_based_book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RUST_ENABLED", False)
         monkeypatch.setattr(lob_mod, "_FORCE_NUMPY", False)
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         engine = LOBEngine()
         bids = [[1000000, 10]]
         asks = [[1001000, 8]]
@@ -458,8 +428,6 @@ class TestGetL1Scaled:
         assert engine.get_l1_scaled("NONEXISTENT") is None
 
     def test_l1_scaled_numpy_book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         engine = LOBEngine()
         engine.process_event(_make_bid_ask_event("2330"))
         l1 = engine.get_l1_scaled("2330")
@@ -472,8 +440,6 @@ class TestGetL1Scaled:
         assert spread == ba - bb
 
     def test_l1_scaled_empty_book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         engine = LOBEngine()
         _ = engine.get_book("2330")
         l1 = engine.get_l1_scaled("2330")
@@ -483,10 +449,7 @@ class TestGetL1Scaled:
         assert ba == 0
 
     def test_l1_scaled_list_based_book(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RUST_ENABLED", False)
         monkeypatch.setattr(lob_mod, "_FORCE_NUMPY", False)
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
         engine = LOBEngine()
         book = engine.get_book("2330")
         book.apply_update([[1000000, 10]], [[1001000, 8]], 1_000_000_000)

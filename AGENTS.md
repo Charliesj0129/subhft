@@ -58,7 +58,7 @@ Contract chain — every stage crosses one of these, nothing else:
 - Book depth is variable, 0-5 levels; never assume L5. Filter depth-N features
   on `length(bids_price)` (`.agent/rules/70-research-data.md`).
 - Layout: `src/hft_platform/` (modules: `docs/MODULES_REFERENCE.md`),
-  `rust_core/` (PyO3 kernels), `config/`, `research/`, `tests/`, `scripts/`,
+  `config/`, `research/`, `tests/`, `scripts/`,
   `docs/`, `.agent/` (rules, skills, memory). ClickHouse DDL source of truth:
   `src/hft_platform/migrations/clickhouse/`.
 - Pinned (bump only with explicit approval): `shioaji==1.7.11`
@@ -70,7 +70,6 @@ Contract chain — every stage crosses one of these, nothing else:
 | Task | Command |
 |---|---|
 | Install / dev | `uv sync` / `make dev` |
-| Rust build | `make build-rust` |
 | Tests | `make test` (unit), `make test-all`, `make test-file FILE=...`, `make test-node NODE=...` |
 | Quality | `make lint`, `make format-check`, `make typecheck`, `make discipline`, `make dependency-boundary` |
 | Everything quality / full local CI | `make check` / `make ci` |
@@ -90,18 +89,17 @@ Pytest runs with `--timeout=30`. `make help` lists everything else.
 Hot path = ingestion, normalizer, LOB, feature engine, event bus, strategy
 dispatch, risk, gateway, order/execution.
 
-1. **Allocator** — no heap allocation per tick; preallocate, pool, or ring-buffer (Rust is paused, see below).
+1. **Allocator** — no heap allocation per tick; preallocate, pool, or ring-buffer.
 2. **Cache** — packed, cache-local data (SoA, arrays, `__slots__`, `msgspec.Struct`); no pointer chasing.
 3. **Async** — no blocking IO or >1 ms synchronous compute on the event loop.
 4. **Precision Law (Law 4)** — prices and accounting values are scaled int x10000; no hot-path float price math.
-5. **Boundary** — Python/Rust crossings of the existing kernels avoid large copies; explicit FFI contracts.
+5. **Boundary** — Keep data contracts explicit and avoid copying large payloads.
 
-**Rust is paused (2026-10-10).** Do not start new Rust kernels or ports. Existing `rust_core/` stays maintained: it keeps building, its parity tests keep passing, and production still imports it. Performance work happens in Python/numba first.
+Project-owned hot paths run in Python. Use measured latency to guide Python and Numba optimizations.
 
 Reject on sight: hot-path `datetime.now()`/`time.time()` (use
 `timebase.now_ns()`), `print()` (use structlog), `requests`, `pandas` in loops,
-`Decimal` on the hot path, default-mutable hot-path dataclasses, broad silent exceptions, Rust `unwrap()` reachable
-from Python, exceptions as control flow.
+`Decimal` on the hot path, default-mutable hot-path dataclasses, broad silent exceptions, exceptions as control flow.
 
 Architecture invariants:
 

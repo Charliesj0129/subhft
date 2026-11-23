@@ -40,7 +40,6 @@ async def test_simple_mm_logic():
 
     mock_pos_store = MagicMock(spec=[])
     mock_pos_store.positions = {"2330": 0}
-    mock_pos_store._rust_tracker = None
     runner.position_store = mock_pos_store
 
     task = asyncio.create_task(runner.run())

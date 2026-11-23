@@ -34,7 +34,7 @@ from typing import Any, Iterable
 CATEGORIES = ("cli_command", "cli_flag", "make_target", "metric", "path", "runbook_url", "alert_metric")
 
 DEFAULT_DOC_ROOTS = ("docs/runbooks", "docs/operations")
-PATH_ROOTS = ("scripts", "docs", "config", "src", "tests", "research", "rust_core", ".agent", ".claude", ".github")
+PATH_ROOTS = ("scripts", "docs", "config", "src", "tests", "research", ".agent", ".claude", ".github")
 # Runtime or generated locations that legitimately do not exist in a checkout.
 PATH_IGNORED_PREFIXES = ("research/data/", "research/experiments/runs/", "docs/generated/")
 METRIC_DEF_CALLS = {"Counter", "Gauge", "Histogram", "Summary", "Info", "Enum"}
