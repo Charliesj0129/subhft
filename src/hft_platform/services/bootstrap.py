@@ -17,6 +17,7 @@ from hft_platform.core import timebase
 from hft_platform.core.background_tasks import spawn_retained
 from hft_platform.core.pricing import SymbolMetadataPriceScaleProvider
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.execution.field_map import get_field_map
 from hft_platform.execution.gateway import ExecutionGateway
 from hft_platform.execution.positions import PositionStore
 from hft_platform.execution.reconciliation import ReconciliationService
@@ -1100,6 +1101,9 @@ class SystemBootstrapper:
             # not a value: the broker session is not authenticated yet here and
             # get_default_account_id() would answer "".
             default_account_id_provider=getattr(order_client, "get_default_account_id", None),
+            # broker_id was validated by _resolve_broker_id above (unknown names raise there), so the
+            # selected broker's report keys reach the normalizer instead of the Shioaji default.
+            field_map=get_field_map(broker_id),
         )
         if _fee_calculator is not None:
             exec_service.normalizer._fee_calculator = _fee_calculator

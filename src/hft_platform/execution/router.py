@@ -16,6 +16,7 @@ from hft_platform.contracts.execution import OrderStatus
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec
 from hft_platform.engine.event_bus import RingBufferBus
+from hft_platform.execution.field_map import BrokerExecFieldMap
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
@@ -102,6 +103,7 @@ class ExecutionRouter:
         price_scale_provider: Optional[Any] = None,
         wal_writer: Optional[WALWriter] = None,
         default_account_id_provider: Optional[Callable[[], str]] = None,
+        field_map: Optional[BrokerExecFieldMap] = None,
     ):
         self.bus = bus
         self.raw_queue = raw_queue
@@ -110,6 +112,10 @@ class ExecutionRouter:
             raw_queue,
             order_id_map,
             default_account_id_provider=default_account_id_provider,
+            # None keeps the normalizer's Shioaji default. A broker whose reports use other keys
+            # (Fubon: `symbol`, `order_no`) must be passed its own map, or its reports read as
+            # symbol='UNKNOWN'.
+            field_map=field_map,
         )
         self.position_store = position_store
         self.terminal_handler = terminal_handler
