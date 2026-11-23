@@ -189,23 +189,11 @@ async def test_circuit_breaker_normal_to_degraded():
         is_odd_lot=False,
     )
 
-    # Reconfigure Rust circuit breaker with updated thresholds
-    if runner._rust_circuit is not None:
-        try:
-            from hft_platform.rust_core import RustCircuitBreaker
-        except ImportError:
-            from rust_core import RustCircuitBreaker
-        runner._rust_circuit = RustCircuitBreaker(6, 3, runner._circuit_cooldown_ns)
-
     # 3 failures → degraded (threshold // 2 = 3)
     for _ in range(3):
         await runner.process_event(event)
 
-    rc = runner._rust_circuit
-    if rc is not None:
-        assert rc.get_state("bad") == 1  # DEGRADED
-    else:
-        assert runner._circuit_states.get("bad") == "degraded"
+    assert runner._circuit_states.get("bad") == "degraded"
     assert strat.enabled  # still enabled in degraded
 
 
@@ -224,13 +212,6 @@ async def test_circuit_breaker_degraded_to_halted():
     runner._circuit_recovery_threshold = max(1, 4 // 2)
     # Disable quarantine governor so failures are not masked by DECISION-08
     runner.strategy_governor = None
-    # Reconfigure Rust circuit breaker with updated thresholds
-    if runner._rust_circuit is not None:
-        try:
-            from hft_platform.rust_core import RustCircuitBreaker
-        except ImportError:
-            from rust_core import RustCircuitBreaker
-        runner._rust_circuit = RustCircuitBreaker(4, 2, runner._circuit_cooldown_ns)
     strat = _BadStrategy("bad2", symbols=["2330"])
     runner.register(strat)
 
@@ -249,11 +230,7 @@ async def test_circuit_breaker_degraded_to_halted():
     for _ in range(4):
         await runner.process_event(event)
 
-    rc = runner._rust_circuit
-    if rc is not None:
-        assert rc.get_state("bad2") == 2  # HALTED
-    else:
-        assert runner._circuit_states.get("bad2") == "halted"
+    assert runner._circuit_states.get("bad2") == "halted"
     assert not strat.enabled
 
 
@@ -270,27 +247,14 @@ async def test_circuit_breaker_degraded_recovery():
     runner = _make_runner()
     runner._circuit_threshold = 6
     runner._circuit_recovery_threshold = 3
-    # Reconfigure Rust circuit breaker with updated thresholds
-    if runner._rust_circuit is not None:
-        try:
-            from hft_platform.rust_core import RustCircuitBreaker
-        except ImportError:
-            from rust_core import RustCircuitBreaker
-        runner._rust_circuit = RustCircuitBreaker(6, 3, runner._circuit_cooldown_ns)
     strat = _GoodStrategy("good", symbols=["2330"])
     runner.register(strat)
 
     # Manually put it in degraded state
     sid = strat.strategy_id
-    rc = runner._rust_circuit
-    if rc is not None:
-        # Drive to degraded via failures (half_threshold=3)
-        for _ in range(3):
-            rc.record_failure(sid, 1000)
-    else:
-        runner._circuit_states[sid] = "degraded"
-        runner._failure_counts[sid] = 3
-        runner._circuit_success_counts[sid] = 0
+    runner._circuit_states[sid] = "degraded"
+    runner._failure_counts[sid] = 3
+    runner._circuit_success_counts[sid] = 0
 
     event = TickEvent(
         meta=MetaData(seq=1, topic="tick", source_ts=0, local_ts=0),
@@ -308,9 +272,5 @@ async def test_circuit_breaker_degraded_recovery():
     for _ in range(3):
         await runner.process_event(event)
 
-    if rc is not None:
-        assert rc.get_state(sid) == 0  # NORMAL
-        assert rc.get_failure_count(sid) == 0
-    else:
-        assert runner._circuit_states.get(sid) == "normal"
-        assert runner._failure_counts[sid] == 0
+    assert runner._circuit_states.get(sid) == "normal"
+    assert runner._failure_counts[sid] == 0

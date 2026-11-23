@@ -57,6 +57,24 @@ logger = get_logger("service.market_data")
 __all__ = ["FeedState", "MarketDataService"]
 
 
+def _subscription_code(entry: Any) -> str:
+    """Return the symbol code of a subscription entry, or "" if there is none.
+
+    ``client.symbols`` entries are mappings loaded from ``symbols.yaml``
+    (``{"code": "TMFJ6", "exchange": "TAIFEX", ...}``), while
+    ``subscribed_symbols``, where a broker provides it, is a plain list of
+    codes. Both have to key the same table as ``_publish_to_shm``, which is
+    called with a bare symbol string.
+    """
+    if isinstance(entry, dict):
+        code = entry.get("code")
+        return str(code) if code else ""
+    code = getattr(entry, "code", None)
+    if code:
+        return str(code)
+    return str(entry) if entry else ""
+
+
 def _parse_symbol_gap_overrides(raw: str) -> dict[str, float]:
     """Bug #36: parse 'SYM=secs,SYM=secs' into a per-symbol threshold map.
 
@@ -646,7 +664,22 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         return task
 
     def _init_shm_publisher(self) -> None:
-        """Initialise optional SHM publisher for monitor snapshots."""
+        """Initialise optional SHM publisher for monitor snapshots.
+
+        The pre-built index has to be keyed by the same string
+        ``_publish_to_shm`` looks up: the symbol code. ``client.symbols`` is a
+        ``list[dict]`` straight out of ``symbols.yaml``, so ``str(sym)`` is the
+        repr of the whole mapping -- ``{'code': '2330', 'name': '...', ...}`` --
+        which no lookup can ever match, and which would sit in the table
+        consuming one of ``max_symbols`` slots apiece.
+
+        It was also what broke the publisher outright: those reprs carry the
+        contract's Chinese ``name``, ``_symbol_hash`` encoded as ASCII, and the
+        resulting ``UnicodeEncodeError`` was caught below and disabled the
+        publisher for the life of the process. Two defects, the second hiding
+        the first -- the ASCII encode is fixed in ``ipc/shm_snapshot.py``, and
+        the key is fixed here.
+        """
         try:
             shm_name = os.getenv("HFT_MONITOR_SHM_NAME", "hft_monitor_snapshot")
             max_symbols = int(os.getenv("HFT_MONITOR_SHM_MAX_SYMBOLS", "64"))
@@ -656,12 +689,20 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             symbols = getattr(self.client, "subscribed_symbols", None)
             if symbols is None:
                 symbols = getattr(self.client, "symbols", None)
-            if symbols:
-                for idx, sym in enumerate(symbols):
-                    sym_str = str(sym)
-                    if idx < max_symbols:
-                        self._shm_symbol_index[sym_str] = idx
-                        self._shm_symbol_hashes[sym_str] = _symbol_hash(sym_str)
+            for sym in symbols or ():
+                code = _subscription_code(sym)
+                if not code or code in self._shm_symbol_index:
+                    continue
+                idx = len(self._shm_symbol_index)
+                if idx >= max_symbols:
+                    break
+                self._shm_symbol_index[code] = idx
+                self._shm_symbol_hashes[code] = _symbol_hash(code)
+            logger.info(
+                "shm_publisher_index_built",
+                symbols=len(self._shm_symbol_index),
+                max_symbols=max_symbols,
+            )
         except Exception as exc:
             logger.warning("shm_publisher_init_failed", error=str(exc))
             self._shm_publisher = None
@@ -757,7 +798,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # -- main loop -----------------------------------------------------------
 
     def _publish_to_shm(self, symbol: str, stats: object, feature_tuple: tuple | None) -> None:
-        """Publish LOB stats + features to SHM snapshot table (~50ns)."""
+        """Publish LOB stats + features to the SHM snapshot table."""
         publisher = self._shm_publisher
         if publisher is None:
             return
@@ -812,41 +853,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             pass  # fire-and-forget — never block hot path
 
     def _init_feature_shadow_engine(self) -> None:
-        if self.feature_engine is None:
-            return
-        enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
-        if not enabled:
-            return
-        try:
-            primary_backend = (
-                self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
-            )
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            primary_backend = "python"
-        requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
-        shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
-        try:
-            shadow = FeatureEngine(
-                feature_set_id=(
-                    self.feature_engine.feature_set_id() if hasattr(self.feature_engine, "feature_set_id") else None
-                ),
-                emit_events=True,
-                kernel_backend=shadow_backend,
-            )
-            # If backend fallback happened and becomes identical to primary due missing Rust,
-            # still allow compare if explicitly requested.
-            if (
-                requested == ""
-                and hasattr(shadow, "kernel_backend")
-                and shadow.kernel_backend() == primary_backend == "python"
-            ):
-                # Auto mode could not create meaningful alternate backend.
-                return
-            self._feature_shadow_engine = shadow
-        except Exception as exc:
-            logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
-            self._feature_shadow_engine = None
+        from hft_platform.services._md_feature_shadow import init_feature_shadow_engine
+
+        init_feature_shadow_engine(self)
 
     async def run(self):
         self.running = True

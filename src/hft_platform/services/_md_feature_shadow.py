@@ -44,32 +44,21 @@ def init_feature_shadow_engine(svc: Any) -> None:
     enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
     if not enabled:
         return
-    try:
-        primary_backend = (
-            svc.feature_engine.kernel_backend() if hasattr(svc.feature_engine, "kernel_backend") else "python"
-        )
-    except Exception as exc:
-        logger.debug("operation_fallback", error=str(exc))
-        primary_backend = "python"
     requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
-    shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
+    if requested != "python":
+        logger.warning(
+            "feature_shadow_engine_unavailable",
+            requested_backend=requested or "auto",
+            reason="only the Python backend is available",
+        )
+        return
     try:
         shadow = FeatureEngine(
             feature_set_id=(
                 svc.feature_engine.feature_set_id() if hasattr(svc.feature_engine, "feature_set_id") else None
             ),
             emit_events=True,
-            kernel_backend=shadow_backend,
         )
-        # If backend fallback happened and becomes identical to primary due missing Rust,
-        # still allow compare if explicitly requested.
-        if (
-            requested == ""
-            and hasattr(shadow, "kernel_backend")
-            and shadow.kernel_backend() == primary_backend == "python"
-        ):
-            # Auto mode could not create meaningful alternate backend.
-            return
         svc._feature_shadow_engine = shadow
     except Exception as exc:
         logger.warning("feature_shadow_engine_init_failed", reason=str(exc))

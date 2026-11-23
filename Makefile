@@ -4,7 +4,7 @@
 -include .env
 export
 
-.PHONY: dev build-rust feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-rust clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard docs-contract-check feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
+.PHONY: dev feature-parity test test-all test-integration verify-ce3 coverage coverage-html arch-gate dependency-boundary test-assertion-check test-name-check test-quality-pattern-check test-collection-check test-hygiene-check test-file test-node shioaji-surface shioaji-surface-regen shioaji-diff shioaji-guard shioaji-watch shioaji-decision-evidence lint lint-fix format format-check typecheck check latency-gate-ci benchmark benchmark-baseline benchmark-compare start start-engine start-monitor start-maintenance stop logs swarm-start swarm-stop swarm-logs clean clean-all ci recorder-status wal-dlq-status wal-dlq-replay wal-dlq-replay-dry-run wal-manifest-tmp-cleanup drill-ck-down drill-wal-pressure drill-loader-lag wal-archive-cleanup soak-daily-report soak-weekly-report soak-canary-report deploy-drift-snapshot deploy-drift-check deploy-pre-sync-template release-channel-gate release-channel-promote release-converge-scan release-converge-clean release-converge release-converge-mvp release-first-ops-gate release-first-ops-promote release-readiness-check canary-snapshot canary-evaluate canary-auto reliability-monthly-pack roadmap-delivery-check roadmap-delivery-execute ch-query-guard-check ch-query-guard-run ch-query-guard-suite env-vars-guard docs-contract-check feature-canary-report callback-latency-report incident-timeline history-repair research-init research-converge-tools research-clean research-audit research-audit-strict research-index research-optimize research research-run research-triage research-scaffold research-report research-fetch-paper research-search-papers research-paper-prototype research-record-paper research-summarize-paper research-check-paper-governance research-gen-synth-lob research-stamp-data-meta research-validate-data-meta research-export-l2-ticks research-validate-l2-ticks research-data-quality research-archive-sync research-hftbacktest monitor-remote experiment-gc experiment-gc-dry-run help rebuild-symbols-yaml pre-market-check post-market-check alert-test drill-recon-mismatch rollback-drill git-precheck git-postcheck git-session-check
 
 PY ?= uv run python
 
@@ -18,11 +18,8 @@ PY ?= uv run python
 dev: ## Install dev dependencies
 	uv sync --dev
 
-build-rust: ## Build Rust extension with maturin
-	uv run maturin develop --manifest-path rust_core/Cargo.toml
-
-feature-parity: build-rust ## Run cross-path feature parity gate (Python/Rust/hftbacktest)
-	uv run python -m hft_platform.cli feature parity --require-rust
+feature-parity: ## Run cross-path feature parity gate (Python/hftbacktest)
+	uv run python -m hft_platform.cli feature parity
 
 # ============================================================================
 # Testing
@@ -135,6 +132,10 @@ discipline-strict: ## Run discipline enforcement in strict mode (warnings block 
 discipline-hft: ## HFT hard-fail discipline gate (incl. HFT-P004 no-float-money)
 	uv run python scripts/check_discipline.py --ci
 
+.PHONY: float-gate
+float-gate: ## Float gate for order/risk/execution/normalizer (explicit exemptions, no grep -v)
+	$(PY) scripts/check_float_in_financial_paths.py
+
 git-precheck: ## Run git precondition checks (AWG-01/03) before merge/rebase
 	bash scripts/check_git_preconditions.sh --pre-merge
 
@@ -151,7 +152,7 @@ git-bundle-backup: ## Verified git bundle backup to DEST (existing dir OUTSIDE t
 	@test -n "$(DEST)" || { echo "DEST=<existing dir outside the repo> is required"; exit 2; }
 	$(PY) scripts/git_bundle_backup.py --dest "$(DEST)"
 
-check: lint typecheck discipline dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
+check: lint typecheck discipline float-gate dependency-boundary test-hygiene-check agent-docs-check ## Run all code quality checks
 
 # ============================================================================
 # Benchmarks
@@ -233,10 +234,7 @@ clean: ## Clean build artifacts and caches
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	rm -rf htmlcov/ .coverage coverage.xml 2>/dev/null || true
 
-clean-rust: ## Clean Rust build artifacts
-	cargo clean --manifest-path rust_core/Cargo.toml
-
-clean-all: clean clean-rust ## Clean everything
+clean-all: clean ## Clean everything
 
 # ============================================================================
 # CI Simulation
@@ -245,7 +243,7 @@ clean-all: clean clean-rust ## Clean everything
 ci: format-check lint typecheck dependency-boundary test-hygiene-check coverage ## Run full CI pipeline locally
 
 .PHONY: test-unit-ci coverage-branch-gate coverage-domain coverage-markdown test-integration-ci test-clickhouse-writer-smoke
-.PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy perf-gate-feature-rust
+.PHONY: perf-gate-default perf-gate-recorder-io perf-gate-risk-heavy
 .PHONY: benchmark-ci benchmark-darwin-gate drill-gateway-wal-hardening
 .PHONY: research-feature-benchmark-matrix render-research-promotion-report security-audit
 .PHONY: render-incident-timeline-json render-incident-timeline-md
@@ -283,9 +281,6 @@ perf-gate-recorder-io: ## Nightly perf gate: recorder I/O heavy drills
 
 perf-gate-risk-heavy: ## Nightly perf gate: risk/gateway heavy drills
 	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-risk-heavy --json risk_perf_gate.json
-
-perf-gate-feature-rust: ## Nightly perf gate: feature engine rust drills
-	uv run python tests/benchmark/perf_regression_gate.py --runs 1 --include-feature-rust --json feature_perf_gate.json
 
 benchmark-ci: ## Run benchmark suite and export benchmark.json for Darwin gate
 	uv run pytest tests/benchmark --no-cov --benchmark-only --benchmark-json=benchmark.json -v
@@ -464,13 +459,13 @@ release-converge-scan: ## Generate deep inventory snapshot only (ls/tree/git/du)
 	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --skip-clean --skip-gate
 
 release-converge-clean: ## Deep clean caches/artifacts then run release gates (roadmap + targeted tests/lint)
-	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,)
+	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}"
 
 release-converge: release-converge-clean ## Alias: converge repository to release-ready state
 
 release-converge-mvp: ## Aggressive MVP release convergence (full gate + minimal research sample + tracked report slimming). DRY RUN unless CONFIRM=yes; deleting a non-empty .wal/ or data/ also needs ALLOW_DELETE_WAL=1 / ALLOW_DELETE_DATA=1
 	@echo "release-converge-mvp: $(if $(filter yes,$(CONFIRM)),DELETING (CONFIRM=yes),DRY RUN - nothing is deleted; add CONFIRM=yes to run it for real)"
-	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter 1,$(CLEAN_RUST)),--clean-rust,) $(if $(filter yes,$(CONFIRM)),,--dry-run) $(if $(filter 1,$(ALLOW_DELETE_WAL)),--allow-delete-wal,) $(if $(filter 1,$(ALLOW_DELETE_DATA)),--allow-delete-data,)
+	$(PY) scripts/release_converge.py --project-root . --output-dir outputs/release_converge --tree-depth "$${TREE_DEPTH:-3}" --cleanup-profile mvp_release --gate-profile full --tracked-slimming-profile root_reports_minimal --seed-minimal-sample $(if $(filter yes,$(CONFIRM)),,--dry-run) $(if $(filter 1,$(ALLOW_DELETE_WAL)),--allow-delete-wal,) $(if $(filter 1,$(ALLOW_DELETE_DATA)),--allow-delete-data,)
 
 release-first-ops-gate: ## First operational release gate (no cleanup; fail-closed)
 	@if [ -z "$(CHANGE_ID)" ]; then \
@@ -593,6 +588,10 @@ research-check: ## Research gate: bug-class ruff + research and alpha tests with
 .PHONY: research-spec-check
 research-spec-check: ## Validate every candidate spec.yaml against the goal-§3 schema
 	$(PY) -m hft_platform.alpha.spec_check --all
+
+.PHONY: research-similar-hint
+research-similar-hint: ## Hint which KILLED manifests resemble a candidate (report-only, never a verdict): ALPHA=<alpha_id> | MANIFEST=<path> | HYPOTHESIS="<text>"
+	$(PY) scripts/similar_mechanism_hint.py $(if $(ALPHA),--alpha-id $(ALPHA),) $(if $(MANIFEST),--manifest $(MANIFEST),) $(if $(HYPOTHESIS),--hypothesis "$(HYPOTHESIS)",)
 
 research-index: ## Build machine-readable research pipeline index
 	$(PY) -m research.factory index

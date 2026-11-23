@@ -319,7 +319,7 @@ class SubscriptionManager:
             # _resubscribe_all is the only call site that takes it.
             import threading as _t
 
-            c._resubscribe_lock = _t.Lock()  # type: ignore[attr-defined]
+            c._resubscribe_lock = _t.Lock()
             lock = c._resubscribe_lock
         if not lock.acquire(blocking=False):
             metrics = getattr(c, "metrics", None)

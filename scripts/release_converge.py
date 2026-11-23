@@ -347,7 +347,6 @@ def _resolve_cleanup_flags(
 
 def _cleanup_steps(
     *,
-    clean_rust: bool,
     cleanup_flags: dict[str, bool],
     cleanup_profile: str,
     seed_minimal_sample: bool,
@@ -376,17 +375,6 @@ def _cleanup_steps(
             "risk": "low",
         },
     ]
-    if clean_rust:
-        steps.append(
-            {
-                "step": "make_clean_rust",
-                "command": "make clean-rust",
-                "destructive": True,
-                "targets": ["target"],
-                "risk": "low",
-            }
-        )
-
     optional_cleanup: list[tuple[str, str, str]] = [
         ("clean_outputs", "rm -rf outputs", "outputs"),
         ("clean_reports", "rm -rf reports", "reports"),
@@ -741,7 +729,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Gate profile",
     )
     p.add_argument("--continue-on-error", action="store_true", help="Continue executing steps after failures")
-    p.add_argument("--clean-rust", action="store_true", help="Also run make clean-rust")
     p.add_argument("--allow-warn-exit-zero", action="store_true", help="Reserved for compatibility")
     return p
 
@@ -774,7 +761,6 @@ def main(argv: list[str] | None = None) -> int:
         clean_data=bool(args.clean_data),
     )
     cleanup_plan = _cleanup_steps(
-        clean_rust=bool(args.clean_rust),
         cleanup_flags=cleanup_flags,
         cleanup_profile=cleanup_profile,
         seed_minimal_sample=seed_minimal_sample,
@@ -948,7 +934,6 @@ def main(argv: list[str] | None = None) -> int:
             "cleanup_profile": cleanup_profile,
             "gate_profile": str(args.gate_profile),
             "continue_on_error": bool(args.continue_on_error),
-            "clean_rust": bool(args.clean_rust),
             "clean_outputs": bool(cleanup_flags.get("clean_outputs", False)),
             "clean_reports": bool(cleanup_flags.get("clean_reports", False)),
             "clean_state": bool(cleanup_flags.get("clean_state", False)),

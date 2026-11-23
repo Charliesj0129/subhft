@@ -45,8 +45,8 @@ def _isolate_dedup(monkeypatch, tmp_path):
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(tmp_path / "dedup.jsonl"))
 
 
-@pytest.fixture(params=["python", "rust"])
-def store(request, monkeypatch) -> PositionStore:
+@pytest.fixture
+def store(monkeypatch) -> PositionStore:
     meta = MagicMock()
     meta.price_scale.return_value = SCALE
     meta.contract_multiplier.return_value = 10
@@ -54,12 +54,7 @@ def store(request, monkeypatch) -> PositionStore:
     provider = MagicMock()
     provider.scale_for.return_value = SCALE
     monkeypatch.setattr("hft_platform.execution.positions.SymbolMetadataPriceScaleProvider", lambda *a, **kw: provider)
-    s = PositionStore()
-    if request.param == "python":
-        s._rust_tracker = None
-    elif s._rust_tracker is None:
-        pytest.skip("rust_core not built")
-    return s
+    return PositionStore()
 
 
 def _close_at_entry(entry: int) -> FillEvent:

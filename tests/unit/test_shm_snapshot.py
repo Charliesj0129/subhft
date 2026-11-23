@@ -1,177 +1,130 @@
-"""Tests for ShmSnapshotTable (Phase 1: seqlock mmap snapshot table)."""
+"""Tests for the shared-memory monitor snapshot table."""
 
 from __future__ import annotations
 
-import os
-import time
-
 import pytest
+
+from hft_platform.ipc import shm_snapshot
+from hft_platform.ipc.shm_snapshot import ShmSnapshotReader, ShmSnapshotWriter, _symbol_hash
+
+pytestmark = pytest.mark.skipif(shm_snapshot.fcntl is None, reason="flock is unavailable")
 
 
 @pytest.fixture()
-def _cleanup_shm():
-    """Remove /dev/shm test segments after each test."""
-    names: list[str] = []
-    yield names
-    for name in names:
-        path = f"/dev/shm/{name}"
-        if os.path.exists(path):
-            os.unlink(path)
+def segment(monkeypatch, tmp_path):
+    monkeypatch.setattr(shm_snapshot, "_SHM_ROOT", tmp_path)
+    return "monitor_snapshot"
 
 
-def _unique_name() -> str:
-    return f"test_snap_{os.getpid()}_{int(time.monotonic_ns())}"
+def test_snapshot_writer_reader_roundtrip(segment):
+    lob = [100, 200, 300, 400, 500, 600, 700, 800, 900]
+    features = list(range(16))
+    symbol_hash = _symbol_hash("2330")
+    with ShmSnapshotWriter(segment, 4) as writer, ShmSnapshotReader(segment, 4) as reader:
+        assert reader.read_slot(0) is None
+        assert reader.global_version() == 0
+        writer.publish(0, 1234567890, symbol_hash, lob, features)
+        snapshot = reader.read_slot(0)
+        assert snapshot is not None
+        assert snapshot.ts_ns == 1234567890
+        assert snapshot.symbol_hash == symbol_hash
+        assert snapshot.lob_fields == tuple(lob)
+        assert snapshot.features == tuple(features)
+        assert snapshot.version % 2 == 0
+        assert reader.read_slot(3) is None
+        assert reader.global_version() == 1
+
+        writer.publish(0, 1234567891, symbol_hash, lob, features)
+        next_snapshot = reader.read_slot(0)
+        assert next_snapshot is not None
+        assert next_snapshot.version > snapshot.version
+        assert reader.global_version() == 2
 
 
-class TestShmSnapshotRustRoundtrip:
-    """Direct Rust ShmSnapshotTable roundtrip tests."""
-
-    def test_write_read_roundtrip(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        writer = ShmSnapshotTable(name, 4, True)
-        reader = ShmSnapshotTable(name, 4, False)
-
-        lob = [100, 200, 300, 400, 500, 600, 700, 800, 900]
-        feat = list(range(16))
-
-        writer.write_slot(0, 1234567890, 42, lob, feat)
-
-        result = reader.read_slot(0)
-        assert result is not None
-        version, ts_ns, sym_hash, r_lob, r_feat = result
-        assert ts_ns == 1234567890
-        assert sym_hash == 42
-        assert r_lob == lob
-        assert r_feat == feat
-        assert version % 2 == 0  # even = stable
-
-    def test_unwritten_slot_returns_none(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        table = ShmSnapshotTable(name, 8, True)
-        assert table.read_slot(0) is None
-        assert table.read_slot(7) is None
-
-    def test_slot_out_of_range(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        table = ShmSnapshotTable(name, 4, True)
+def test_snapshot_rejects_out_of_range_slot_and_field_counts(segment):
+    with ShmSnapshotWriter(segment, 4) as writer, ShmSnapshotReader(segment, 4) as reader:
         with pytest.raises(IndexError):
-            table.write_slot(4, 0, 0, [0] * 9, [0] * 16)
+            writer.publish(4, 1, 2, [0] * 9, [0] * 16)
         with pytest.raises(IndexError):
-            table.read_slot(4)
-
-    def test_version_monotonicity(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        writer = ShmSnapshotTable(name, 2, True)
-        reader = ShmSnapshotTable(name, 2, False)
-
-        lob = [0] * 9
-        feat = [0] * 16
-
-        versions: list[int] = []
-        for i in range(10):
-            writer.write_slot(0, i, 1, lob, feat)
-            result = reader.read_slot(0)
-            assert result is not None
-            versions.append(result[0])
-
-        # Each write bumps version by 2 (odd → even)
-        for i in range(1, len(versions)):
-            assert versions[i] > versions[i - 1]
-
-    def test_multi_slot_independent(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        writer = ShmSnapshotTable(name, 4, True)
-        reader = ShmSnapshotTable(name, 4, False)
-
-        for i in range(4):
-            lob = [i * 100 + j for j in range(9)]
-            feat = [i * 1000 + j for j in range(16)]
-            writer.write_slot(i, i * 1000, i + 10, lob, feat)
-
-        for i in range(4):
-            result = reader.read_slot(i)
-            assert result is not None
-            _, ts_ns, sym_hash, r_lob, r_feat = result
-            assert ts_ns == i * 1000
-            assert sym_hash == i + 10
-            assert r_lob == [i * 100 + j for j in range(9)]
-            assert r_feat == [i * 1000 + j for j in range(16)]
-
-    def test_global_version_increments(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        writer = ShmSnapshotTable(name, 2, True)
-        reader = ShmSnapshotTable(name, 2, False)
-
-        gv0 = reader.global_version()
-        writer.write_slot(0, 1, 1, [0] * 9, [0] * 16)
-        gv1 = reader.global_version()
-        writer.write_slot(1, 2, 2, [0] * 9, [0] * 16)
-        gv2 = reader.global_version()
-
-        assert gv1 > gv0
-        assert gv2 > gv1
-
-    def test_wrong_field_count_rejected(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.rust_core import ShmSnapshotTable
-
-        name = _unique_name()
-        _cleanup_shm.append(name)
-
-        writer = ShmSnapshotTable(name, 2, True)
-
+            reader.read_slot(-1)
         with pytest.raises(ValueError, match="lob_fields"):
-            writer.write_slot(0, 0, 0, [0] * 8, [0] * 16)
-
+            writer.publish(0, 1, 2, [0] * 8, [0] * 16)
         with pytest.raises(ValueError, match="features"):
-            writer.write_slot(0, 0, 0, [0] * 9, [0] * 15)
+            writer.publish(0, 1, 2, [0] * 9, [0] * 15)
+        assert reader.read_slot(0) is None
 
 
-class TestShmSnapshotPythonWrapper:
-    """Python-level ShmSnapshotWriter/Reader tests."""
+def test_snapshot_keeps_slots_independent(segment):
+    with ShmSnapshotWriter(segment, 4) as writer, ShmSnapshotReader(segment, 4) as reader:
+        for index in range(4):
+            writer.publish(index, index * 1000, index + 10, [index] * 9, [index] * 16)
+        for index in range(4):
+            snapshot = reader.read_slot(index)
+            assert snapshot is not None
+            assert snapshot.ts_ns == index * 1000
+            assert snapshot.symbol_hash == index + 10
+            assert snapshot.lob_fields == (index,) * 9
+            assert snapshot.features == (index,) * 16
 
-    def test_python_wrapper_roundtrip(self, _cleanup_shm: list[str]) -> None:
-        from hft_platform.ipc.shm_snapshot import ShmSnapshotReader, ShmSnapshotWriter, _symbol_hash
 
-        name = _unique_name()
-        _cleanup_shm.append(name)
+def test_snapshot_never_waits_for_a_contended_writer_slot(segment):
+    lock = shm_snapshot.fcntl
+    with ShmSnapshotWriter(segment, 4) as writer, ShmSnapshotReader(segment, 4) as reader:
+        writer.publish(0, 1, 2, [3] * 9, [4] * 16)
+        path = shm_snapshot._segment_path(segment, 4)
+        with path.open("rb") as blocked:
+            lock.flock(blocked, lock.LOCK_SH | lock.LOCK_NB)
+            writer.publish(0, 5, 6, [7] * 9, [8] * 16)
+        snapshot = reader.read_slot(0)
+        assert snapshot is not None
+        assert snapshot.ts_ns == 1
+        assert reader.global_version() == 1
 
-        writer = ShmSnapshotWriter(name, max_symbols=4)
-        reader = ShmSnapshotReader(name, max_symbols=4)
 
-        sym_hash = _symbol_hash("2330")
-        lob = [1000, 2000, 3000, 100, 500, 600, 10, 20, 3100]
-        feat = list(range(100, 116))
+def test_snapshot_rejects_second_writer_and_mismatched_reader(segment):
+    with ShmSnapshotWriter(segment, 4) as writer:
+        writer.publish(0, 1, 2, [0] * 9, [0] * 16)
+        with pytest.raises(BlockingIOError):
+            ShmSnapshotWriter(segment, 4)
+        with pytest.raises(ValueError, match="size"):
+            ShmSnapshotReader(segment, 3)
+        with ShmSnapshotReader(segment, 4) as reader:
+            snapshot = reader.read_slot(0)
+            assert snapshot is not None
+            assert snapshot.ts_ns == 1
 
-        writer.publish(0, 9999, sym_hash, lob, feat)
-        slot = reader.read_slot(0)
 
-        assert slot is not None
-        assert slot.ts_ns == 9999
-        assert slot.symbol_hash == sym_hash
-        assert slot.lob_fields == tuple(lob)
-        assert slot.features == tuple(feat)
-        assert slot.version % 2 == 0
+def test_snapshot_rejects_writer_lease_symlink(segment, tmp_path):
+    target = tmp_path / "unrelated-file"
+    target.write_text("keep")
+    lease_path = shm_snapshot._segment_path(segment, 4).with_suffix(".hft-py-v1.writer")
+    lease_path.symlink_to(target)
+    with pytest.raises(OSError):
+        ShmSnapshotWriter(segment, 4)
+    assert target.read_text() == "keep"
+
+
+def test_snapshot_reattaches_with_new_version_after_writer_restarts(segment):
+    with ShmSnapshotWriter(segment, 4) as writer, ShmSnapshotReader(segment, 4) as reader:
+        writer.publish(0, 1, 2, [0] * 9, [0] * 16)
+        before = reader.read_slot(0)
+        assert before is not None
+        writer.close()
+        assert reader.read_slot(0) is None
+        with ShmSnapshotWriter(segment, 4) as restarted:
+            restarted.publish(0, 2, 2, [0] * 9, [0] * 16)
+            after = reader.read_slot(0)
+            assert after is not None
+            assert after.ts_ns == 2
+            assert after.version > before.version
+
+
+def test_snapshot_open_rejects_stale_file_without_owner(segment):
+    with ShmSnapshotWriter(segment, 4):
+        path = shm_snapshot._segment_path(segment, 4)
+        saved = path.read_bytes()
+    assert not path.exists()
+
+    path.write_bytes(saved)
+    with pytest.raises(FileNotFoundError):
+        ShmSnapshotReader(segment, 4)

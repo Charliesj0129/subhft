@@ -72,7 +72,6 @@ class TestChain:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """RiskEngine must reject NEW intents when StormGuard is in HALT state."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
@@ -100,7 +99,6 @@ class TestChain:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """RiskEngine must approve CANCEL intents even when StormGuard is in HALT state."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 

@@ -100,24 +100,7 @@ class TestUnknownCostBasisSentinel:
         assert merged[key]["avg_price_scaled"] < 0
 
 
-@pytest.mark.skipif(PositionStore()._rust_tracker is None, reason="Rust position tracker not built")
-class TestClearAlsoClearsTheRustTracker:
-    def test_clearing_a_symbol_removes_it_from_the_rust_tracker(self) -> None:
-        """clear_symbol_positions is how _auto_correct_drift breaks a drift loop.
-
-        Clearing only the Python dict left the Rust tracker -- which owns the
-        authoritative net_qty on the fast path -- holding the phantom quantity,
-        so the very next fill resurrected it and the drift loop could not end.
-        """
-        store = PositionStore()
-        store.on_fill(_fill(qty=5))
-        key = next(iter(store.positions))
-        assert store._rust_tracker.get(key)[0] == 5
-
-        store.clear_symbol_positions("TXFE6")
-
-        assert store._rust_tracker.get(key)[0] == 0
-
+class TestClearPosition:
     def test_a_fill_after_clearing_starts_from_zero(self) -> None:
         """The observable consequence, stated as behaviour rather than state."""
         store = PositionStore()
@@ -128,15 +111,15 @@ class TestClearAlsoClearsTheRustTracker:
 
         assert delta.net_qty == 1
 
-    def test_reset_empties_the_rust_tracker(self) -> None:
+    def test_reset_empties_the_position_store(self) -> None:
         store = PositionStore()
         store.on_fill(_fill(symbol="TXFE6", qty=3))
         store.on_fill(_fill(symbol="TMFE6", qty=2, strategy_id="S2"))
-        assert store._rust_tracker.len() == 2
+        assert len(store.positions) == 2
 
         store.reset()
 
-        assert store._rust_tracker.len() == 0
+        assert len(store.positions) == 0
 
 
 class TestCheckpointSnapshotsBothViewsAtomically:
@@ -258,8 +241,6 @@ class TestEvictionForgetsEveryStore:
 
     def test_evicting_a_flat_position_does_not_double_count_its_realized_pnl(self) -> None:
         store = PositionStore()
-        if store._rust_tracker is None:
-            pytest.skip("Rust tracker unavailable; the double-count is Rust-path only")
 
         store.on_fill(_fill("TXFE6", price=1_800_000))
         store.on_fill(_closing_fill("TXFE6", price=1_810_000))
@@ -275,39 +256,6 @@ class TestEvictionForgetsEveryStore:
         store.on_fill(_fill("TXFE6", price=1_800_000))
         assert store.total_pnl == banked
 
-    def test_eviction_removes_the_key_from_the_rust_tracker(self) -> None:
-        store = PositionStore()
-        if store._rust_tracker is None:
-            pytest.skip("Rust tracker unavailable")
-
-        store.on_fill(_fill("TXFE6", price=1_800_000))
-        store.on_fill(_closing_fill("TXFE6", price=1_810_000))
-        before = store._rust_tracker.len()
-
-        store._evict_flat_positions()
-
-        assert store._rust_tracker.len() == before - 1
-        assert store._rust_tracker.get("ACC:S1:TXFE6") == (0, 0, 0, 0)
-
-    def test_forgetting_a_key_drops_its_recovery_offsets(self) -> None:
-        store = PositionStore()
-        store.load_recovery(
-            account_id="ACC",
-            symbol="TXFE6",
-            net_qty=1,
-            avg_price_scaled=1_800_000,
-            realized_pnl_scaled=-70_000,
-            strategy_id="S1",
-        )
-        store.on_fill(_fill("TXFE6", price=1_800_000))
-        key = "ACC:S1:TXFE6"
-        assert store._recovery_rpnl_offsets.get(key) == -70_000
-
-        store.clear_symbol_positions("TXFE6")
-
-        assert key not in store._recovery_rpnl_offsets
-        assert key not in store._recovery_fees_offsets
-
 
 class TestCardinalityCapAppliesToBothFillPaths:
     """``HFT_POSITIONS_MAX_SIZE`` is the documented exposure cap (default
@@ -315,11 +263,9 @@ class TestCardinalityCapAppliesToBothFillPaths:
     available the Python path never runs and the cap had no effect at all.
     """
 
-    def test_the_cap_is_enforced_when_the_rust_tracker_handles_the_fill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_cap_is_enforced_when_a_fill_opens_a_position(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HFT_POSITIONS_MAX_SIZE", "3")
         store = PositionStore()
-        if store._rust_tracker is None:
-            pytest.skip("Rust tracker unavailable; the Python path already capped")
         assert store._positions_max_size == 3
 
         for i in range(3):

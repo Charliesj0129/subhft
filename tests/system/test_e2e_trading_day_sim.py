@@ -106,9 +106,7 @@ def _write_config(tmp_path, extra_config=None):
 
 def _make_engine(tmp_path, monkeypatch, extra_config=None):
     """Create RiskEngine with all external deps mocked."""
-    monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
     monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
-    monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
     monkeypatch.setenv("HFT_STORMGUARD_STORM_COOLDOWN_S", "0")
     monkeypatch.setenv("HFT_STORMGUARD_HALT_COOLDOWN_S", "0")
     monkeypatch.setenv("HFT_STORMGUARD_DE_ESCALATE_N", "1")
@@ -138,13 +136,11 @@ def _make_engine(tmp_path, monkeypatch, extra_config=None):
 
 def _make_position_store(monkeypatch):
     """Create PositionStore with Rust and metrics disabled."""
-    monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
     with patch("hft_platform.execution.positions.MetricsRegistry") as mock_mr:
         mock_mr.get.return_value = None
         from hft_platform.execution.positions import PositionStore
 
         store = PositionStore()
-        store._rust_tracker = None
         store.metrics = None
     return store
 

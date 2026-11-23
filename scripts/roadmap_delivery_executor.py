@@ -13,7 +13,7 @@ STATUS_PASS = "pass"
 STATUS_WARN = "warn"
 STATUS_FAIL = "fail"
 
-WS_G_SKILLS: tuple[str, ...] = ("hft-strategy", "hft-rust", "hft-latency-profiling")
+WS_G_SKILLS: tuple[str, ...] = ("hft-strategy", "hft-latency-profiling")
 WS_H_SKILLS: tuple[str, ...] = ("hft-alpha-research", "validation-gate", "clickhouse-io")
 WS_A_SKILLS: tuple[str, ...] = ("runtime-diagnostics", "hft-ops")
 WS_B_SKILLS: tuple[str, ...] = ("clickhouse-io", "hft-latency-profiling")
@@ -479,7 +479,7 @@ def _hotpath_rows(
             "outputs/research_maintenance/pyspy_triage.json",
             "outputs/perf_gate_latency_snapshot.clean.json",
             "outputs/latency_stage_probe_custom_nonorder.json",
-            "tests/unit/test_rust_hotpath_parity.py",
+            "tests/unit/test_feature_promoted_parity.py",
             "tests/benchmark/perf_regression_gate.py",
         ]
 
@@ -534,19 +534,19 @@ def _build_cutover_backlog(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "priority_max": str(row.get("priority_max") or priority),
                 "unknown_inputs": list(row.get("unknown_inputs") or []),
                 "current_state": "python_hotpath",
-                "target_state": "rust_kernel",
-                "proposed_boundary": "typed_frame_zero_copy",
+                "target_state": "optimized_python_hotpath",
+                "proposed_boundary": "existing_typed_frame_contract",
                 "dependencies": list(LAYER_DEPENDENCIES.get(layer, ())),
                 "acceptance_criteria": {
                     "parity": "int_x10000_contract_preserved",
                     "perf": "p95_latency_improve_at_least_20pct_vs_2026_03_baseline",
-                    "ffi_alloc": "ffi_copy_ratio_le_5pct_and_alloc_tick_drop_ge_30pct",
+                    "allocation": "alloc_tick_drop_ge_30pct",
                 },
-                "owner": "Rust Lead",
+                "owner": "Runtime Lead",
                 "status": status,
                 "eta_days": eta_days,
                 "evidence_refs": list(row.get("evidence_refs") or []),
-                "rollback_plan": "preserve_python_path_and_toggle_by_feature_flag",
+                "rollback_plan": "revert_performance_change",
             }
         )
 
@@ -1407,7 +1407,7 @@ def main(argv: list[str] | None = None) -> int:
         "warnings": ws_g_warnings,
         "data_quality_flags": ws_g_data_quality_flags,
         "parity_evidence": {
-            "unit_parity_test_exists": (project_root / "tests/unit/test_rust_hotpath_parity.py").exists(),
+            "unit_parity_test_exists": (project_root / "tests/unit/test_feature_promoted_parity.py").exists(),
             "benchmark_test_exists": (project_root / "tests/benchmark/perf_regression_gate.py").exists(),
         },
         "source_manifest": _source_manifest(

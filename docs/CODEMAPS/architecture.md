@@ -3,7 +3,7 @@
 # Architecture Codemap
 
 ## System Type
-Event-driven HFT platform. Python 3.12 + Rust (PyO3) + ClickHouse + Prometheus.
+Event-driven HFT platform. Python 3.12 + ClickHouse + Prometheus.
 
 ## Runtime Pipeline (Hot Path)
 
@@ -11,10 +11,10 @@ Event-driven HFT platform. Python 3.12 + Rust (PyO3) + ClickHouse + Prometheus.
 Exchange
   → BrokerFacade (Shioaji|Fubon)     [feed_adapter/<broker>/quote_runtime.py]
     → raw_queue (bounded 65536)
-      → Normalizer                    [feed_adapter/normalizer.py, Rust optional]
+      → Normalizer                    [feed_adapter/normalizer.py]
         → LOBEngine                   [feed_adapter/lob_engine.py]
           → FeatureEngine (27 feat)   [feature/engine.py]
-            → RingBufferBus           [engine/event_bus.py, Rust lock-free]
+            → RingBufferBus           [engine/event_bus.py, Python ring]
               → StrategyRunner        [strategy/runner.py]
                 → OrderIntent
                   → risk_queue (4096)
@@ -84,4 +84,3 @@ L6: reports, bot, monitor, ops        (application layer)
 | `HFT_GATEWAY_ENABLED=1`      | Enable CE-M2 order/risk gateway               |
 | `HFT_RECORDER_MODE=wal_first`| WAL-only persistence path                     |
 | `HFT_FEATURE_ENGINE_ENABLED` | Feature plane (default on, v3 with 27 feats)  |
-| `HFT_FUSED_NORMALIZER=1`     | Rust fused normalizer+LOB pipeline            |

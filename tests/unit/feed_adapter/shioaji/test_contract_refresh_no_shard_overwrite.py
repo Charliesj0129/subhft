@@ -86,7 +86,7 @@ def test_pool_shard_not_overwritten_by_contract_refresh(tmp_path):
     original_bytes = shard.read_bytes()
     original_mtime = shard.stat().st_mtime_ns
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         client = ShioajiClient(config_path=str(shard))
         try:
             mock_write = _refresh(client)
@@ -108,7 +108,7 @@ def test_canonical_path_still_writes_symbols_yaml(tmp_path):
     cfg = _make_canonical(tmp_path)
     assert "hft_quote_pool_" not in str(cfg)
 
-    with patch("hft_platform.feed_adapter.shioaji.client.sj"):
+    with patch("hft_platform.feed_adapter.shioaji_client.sj"):
         client = ShioajiClient(config_path=str(cfg))
         try:
             mock_write = _refresh(client)

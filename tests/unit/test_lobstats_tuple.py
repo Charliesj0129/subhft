@@ -15,7 +15,6 @@ import numpy as np
 import pytest
 
 from hft_platform.feature.engine import _StatsTupleProxy
-from hft_platform.feed_adapter import lob_engine as lob_mod
 from hft_platform.feed_adapter.lob_engine import BookState
 from hft_platform.strategy.base import BaseStrategy, StrategyContext
 from hft_platform.strategy.runner import _KNOWN_TUPLE_TAGS
@@ -28,9 +27,7 @@ from hft_platform.strategy.runner import _KNOWN_TUPLE_TAGS
 class TestGetStatsTupleTag:
     """get_stats_tuple() must return a tuple starting with 'lobstats'."""
 
-    def test_python_path_has_lobstats_tag(self, monkeypatch):
-        monkeypatch.setattr(lob_mod, "_RustBookState", None)
-        monkeypatch.setattr(lob_mod, "_RUST_BOOK_STATE_ENABLED", False)
+    def test_python_path_has_lobstats_tag(self):
         b = BookState("TEST")
         b.apply_update(
             np.array([[1000000, 10]], dtype=np.int64),
@@ -41,32 +38,6 @@ class TestGetStatsTupleTag:
         assert t[0] == "lobstats"
         assert t[1] == "TEST"
         assert len(t) == 10
-
-    def test_rust_state_present_still_reads_python_fields(self):
-        # The Rust state misses stats-path updates (it can hold the boot snapshot).
-        bs = BookState("SYM")
-        mock_rs = MagicMock()
-        mock_rs.get_stats_tuple.return_value = ("SYM", 100, 2000, 10, 0.5, 1000, 1010, 50, 30)
-        bs._rust_state = mock_rs
-        bs.bids = np.array([[500000, 10]], dtype=np.int64)
-        bs.asks = np.array([[510000, 5]], dtype=np.int64)
-        bs.mid_price_x2 = 1010000
-        t = bs.get_stats_tuple()
-        assert t[0] == "lobstats"
-        assert t[6:8] == (500000, 510000)
-        assert len(t) == 10
-        mock_rs.get_stats_tuple.assert_not_called()
-
-    def test_rust_fallback_still_has_tag(self):
-        bs = BookState("FB")
-        mock_rs = MagicMock()
-        mock_rs.get_stats_tuple.side_effect = RuntimeError("boom")
-        bs._rust_state = mock_rs
-        bs.bids = np.array([[500000, 10]], dtype=np.int64)
-        bs.asks = np.array([[510000, 5]], dtype=np.int64)
-        bs.mid_price_x2 = 1010000
-        t = bs.get_stats_tuple()
-        assert t[0] == "lobstats"
 
 
 # ---------------------------------------------------------------------------

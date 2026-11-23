@@ -3,9 +3,9 @@
 # DO NOT EDIT BY HAND. Regenerate with:
 #   uv run python scripts/ops/generate_locked_compose.py
 #
-# Generated:        2026-10-23T17:20:59Z (UTC)
-# Git SHA:          6d02fb7b
-# Base digest:      6e4474cd185ce2fe  (docker-compose.yml)
+# Generated:        2026-10-26T08:30:17Z (UTC)
+# Git SHA:          980fb194
+# Base digest:      8f767e177ea78cb8  (docker-compose.yml)
 # Prod digest:      15529f83b16a6a9e  (docker-compose.production.yml)
 # Volumes stripped: 15 (broad source-path bind mounts)
 #
@@ -68,6 +68,7 @@ services:
       published: '9093'
       target: 9093
     read_only: true
+    restart: unless-stopped
     security_opt:
     - no-new-privileges:true
     tmpfs:
@@ -111,6 +112,7 @@ services:
       protocol: tcp
       published: '9000'
       target: 9000
+    restart: unless-stopped
     security_opt:
     - no-new-privileges:true
     ulimits:
@@ -206,8 +208,6 @@ services:
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
     - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
-    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
-    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
     - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
@@ -454,8 +454,6 @@ services:
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
     - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
-    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
-    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
     - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
@@ -792,6 +790,7 @@ services:
       published: '9091'
       target: 9090
     read_only: true
+    restart: unless-stopped
     security_opt:
     - no-new-privileges:true
     tmpfs:
@@ -961,8 +960,6 @@ services:
     - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
     - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
-    - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
-    - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
     - HFT_GATEWAY_ENABLED=0
     - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
     - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
@@ -1118,8 +1115,6 @@ x-hft-common:
   - HFT_PROM_PORT=${HFT_PROM_PORT:-9090}
   - REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
   - HFT_FEATURE_ENGINE_ENABLED=${HFT_FEATURE_ENGINE_ENABLED:-1}
-  - HFT_FUSED_NORMALIZER=${HFT_FUSED_NORMALIZER:-0}
-  - HFT_FEATURE_ENGINE_BACKEND=${HFT_FEATURE_ENGINE_BACKEND:-python}
   - HFT_GATEWAY_ENABLED=0
   - HFT_HEALTH_PORT=${HFT_HEALTH_PORT:-8080}
   - HFT_MONITOR_LIVE_ENABLED=${HFT_MONITOR_LIVE_ENABLED:-0}
