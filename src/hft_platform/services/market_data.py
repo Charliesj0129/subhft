@@ -2118,7 +2118,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
         if isinstance(getattr(self, "_md_shards", None), ShardedMDPipeline):
             # P3: workers own LOB/feature state; the reset is queued on each owning worker, ordered
             # with its events. If it cannot be applied the books are stale: do not report CONNECTED.
-            if not self._md_shards_reconnect_reset():
+            if not self._md_shards_reconnect_reset(drain_inputs=ok):
                 logger.error("md_shard_reconnect_reset_failed", reason=reason_label)
                 ok = False
         # Per-facade LOB/Feature reset via deferred _pending_warmup_reset.

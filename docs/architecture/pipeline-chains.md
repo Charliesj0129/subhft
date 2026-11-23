@@ -130,10 +130,13 @@ event loop: ShardedMDPipeline.drain()  <= HFT_MD_COMMIT_BUDGET (256)/turn,
   failure counters are per worker. Feature shadow parity is skipped.
 - LOB/feature resets (`_trigger_reconnect`, `_apply_post_reconnect_resets`,
   `QuoteConnectionPool._notify_warmup_reset` via `set_reset_router`) are
-  queued as commands on each owning worker, ordered with its events; the
-  loop never blocks. Results and queued inputs from before a reset are
-  discarded (`stale_drained`); the committed view is cleared for those
-  symbols when the reset marker commits. If the reset cannot be queued
+  queued as commands on each owning worker, ordered with its events, and
+  touch only the named symbols; the loop never blocks. Events before the
+  command are computed and committed (recorded, published) as the single-loop
+  path handles events processed before its reset; the reset marker then
+  clears the committed view for those symbols. After a successful reconnect
+  the queued inputs are drained (`stale_drained`, logged), matching the
+  DATA-010 raw_queue drain. If the reset cannot be queued
   (pipeline down), `_trigger_reconnect` reports DISCONNECTED, not CONNECTED.
 - Worker crash: admission stops, `trigger_halt("md_worker_crash: ...")`,
   `run()` raises `MDWorkerCrashedError` so the supervisor sees the task fail.

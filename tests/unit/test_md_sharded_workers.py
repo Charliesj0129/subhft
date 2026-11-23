@@ -270,52 +270,125 @@ def test_price_band_mid_from_committed_view_is_fresh_gated():
 # -- resets routed to owning workers --------------------------------------------
 
 
-def test_reset_runs_on_owning_worker_without_blocking_loop_and_discards_pre_reset_results():
-    async def main() -> tuple[float, list[str], list[int], int, set]:
-        gate = threading.Event()
-        reset_threads: list[str] = []
-        committed: list[int] = []
+def _gated_pipeline(order: list, reset_calls: list, cleared: list):
+    gate = threading.Event()
 
-        def compute(raw: dict, w: ShardWorker) -> tuple:
-            if raw["n"] == 0:
-                gate.wait()
-            return _compute(raw, w)
+    def compute(raw: dict, w: ShardWorker) -> tuple:
+        if raw["n"] == 0:
+            gate.wait()
+        return _compute(raw, w)
 
-        def reset(symbols: set) -> None:
-            reset_threads.append(threading.current_thread().name)
+    def reset(symbols: set) -> None:
+        reset_calls.append((threading.current_thread().name, set(symbols)))
+        order.append(("reset", frozenset(symbols)))
 
-        cleared: set = set()
-        pipe = ShardedMDPipeline(
-            1,
-            100,
-            256,
-            compute,
-            lambda r: committed.append(r[1]["n"]),
-            reset=reset,
-            on_reset_committed=cleared.update,
-        )
+    def on_cleared(symbols: frozenset) -> None:
+        cleared.append(set(symbols))
+        order.append(("cleared", symbols))
+
+    pipe = ShardedMDPipeline(
+        1,
+        100,
+        256,
+        compute,
+        lambda r: order.append((r[0], r[1]["n"])),
+        reset=reset,
+        on_reset_committed=on_cleared,
+    )
+    return pipe, gate
+
+
+def test_reset_runs_on_owning_worker_without_blocking_loop():
+    async def main() -> tuple[float, list]:
+        order: list = []
+        reset_calls: list = []
+        cleared: list = []
+        pipe, gate = _gated_pipeline(order, reset_calls, cleared)
         pipe.start(asyncio.get_running_loop())
-        for n in range(5):
-            pipe.offer(_raw("A", n))
+        pipe.offer(_raw("A", 0))
         await asyncio.sleep(0.01)  # worker is now blocked inside compute(n=0)
         t0 = time.perf_counter()
-        ok = pipe.request_reset(None)
+        assert pipe.request_reset({"A"})
         elapsed = time.perf_counter() - t0
-        assert ok
         gate.set()
-        for n in range(5, 8):
+        await _wait_until(lambda: cleared != [])
+        pipe.stop()
+        return elapsed, reset_calls
+
+    elapsed, reset_calls = asyncio.run(main())
+    assert elapsed < 0.01
+    assert reset_calls == [("md-shard-0", {"A"})]
+
+
+def test_reset_of_one_symbol_does_not_skip_queued_events_of_other_symbol_on_same_worker():
+    async def main() -> tuple[list, list, dict]:
+        order: list = []
+        reset_calls: list = []
+        cleared: list = []
+        pipe, gate = _gated_pipeline(order, reset_calls, cleared)
+        pipe.start(asyncio.get_running_loop())
+        pipe.offer(_raw("B", 0))  # blocks the worker so everything below is queued
+        for n in range(1, 4):
             pipe.offer(_raw("A", n))
-        await _wait_until(lambda: committed[-1:] == [7])
+            pipe.offer(_raw("B", n))
+        assert pipe.request_reset({"A"})
+        for n in range(4, 6):
+            pipe.offer(_raw("B", n))
+        gate.set()
+        await _wait_until(lambda: ("B", 5) in order)
         st = pipe.stats()
         pipe.stop()
-        return elapsed, reset_threads, committed, st["stale_drained"], cleared
+        return order, reset_calls, st
 
-    elapsed, threads, committed, stale, cleared = asyncio.run(main())
-    assert elapsed < 0.01
-    assert threads == ["md-shard-0"]
-    assert committed == [5, 6, 7]
-    assert stale == 5
-    assert cleared == {"A"}
+    order, reset_calls, st = asyncio.run(main())
+    assert [n for s, n in order if s == "B"] == [0, 1, 2, 3, 4, 5]
+    assert reset_calls[0][1] == {"A"}
+    assert st["stale_drained"] == 0
+    assert st["offered"] == st["committed"]
+
+
+def test_pre_reset_events_of_reset_symbol_commit_before_reset_like_single_loop():
+    async def main() -> tuple[list, object]:
+        order: list = []
+        reset_calls: list = []
+        cleared: list = []
+        view = CommittedMDView()
+        pipe, gate = _gated_pipeline(order, reset_calls, cleared)
+
+        def commit(r: tuple) -> None:
+            view.publish(r[0], r)
+            order.append((r[0], r[1]["n"]))
+
+        pipe._commit = commit
+        pipe._on_reset_committed = lambda syms: (view.clear(syms), order.append(("cleared", syms)))
+        pipe.start(asyncio.get_running_loop())
+        for n in range(3):
+            pipe.offer(_raw("A", n))
+        assert pipe.request_reset({"A"})
+        pipe.offer(_raw("A", 3))
+        gate.set()
+        await _wait_until(lambda: ("A", 3) in order)
+        snap = view.snapshot("A")
+        pipe.stop()
+        return order, snap
+
+    order, snap = asyncio.run(main())
+    # Commit order on the loop matches the single-loop path: events processed before the reset are
+    # recorded/published, then the reset takes effect (view cleared), then later events.
+    committed = [x for x in order if x[0] != "reset"]
+    assert committed == [("A", 0), ("A", 1), ("A", 2), ("cleared", frozenset({"A"})), ("A", 3)]
+    assert snap is not None and snap[1]["n"] == 3
+
+
+def test_reconnect_drain_drops_queued_inputs_as_stale_not_overflow():
+    pipe = ShardedMDPipeline(2, 100, 256, _compute, lambda r: None)
+    pipe._admitting = True
+    for n in range(7):
+        pipe.offer(_raw(SYMBOLS[n], n))
+    assert pipe.drain_stale_inputs() == 7
+    st = pipe.stats()
+    assert st["stale_drained"] == 7 and st["queued"] == 0
+    assert pipe.drop_totals() == (0, 0)
 
 
 def test_reset_request_refused_when_pipeline_not_running():

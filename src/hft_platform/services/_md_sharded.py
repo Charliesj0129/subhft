@@ -8,13 +8,15 @@ With N >= 1 the chain is::
 
     broker thread --offer()--> crc32(symbol) % N (bounded shard cache)
         -> worker inbox (bounded deque; full -> drop + per-worker counter, polled by the loop)
-        -> worker thread: normalize -> LOB -> feature -> (L1, feature tuple, feature meta, epoch)
+        -> worker thread: normalize -> LOB -> feature -> (L1, feature tuple, feature meta, reset generation)
         -> worker outbox (SPSC deque) -> one call_soon_threadsafe per batch
         -> loop drain (<= HFT_MD_COMMIT_BUDGET per turn, then call_soon yield)
-        -> stale-epoch results dropped -> committed view swap, feed-gap stamp, recorder, bus, redis
+        -> committed view swap, feed-gap stamp, recorder, bus, redis
 
-LOB/feature resets are queued as commands in each owning worker's inbox (ordered with events);
-results produced before a reset carry an older epoch and are discarded at commit. A symbol always
+LOB/feature resets are queued as commands in each owning worker's inbox (ordered with events) and
+touch only the named symbols. Events before the command are computed and committed as the
+single-loop path processes them before its reset; the reset marker then clears the committed view
+for those symbols. After a successful reconnect, queued inputs are drained (DATA-010 parity). A symbol always
 lands on the same worker and each outbox is FIFO, so per-symbol order is kept; cross-symbol order is
 not. Only the loop publishes to the bus, so ``single_writer`` stays on.
 """
@@ -109,7 +111,6 @@ class ShardWorker:
         "epoch",
         "seen",
         "rejected",
-        "stale_skipped",
         "resets_applied",
         "norm_failures",
         "feature_failures",
@@ -126,12 +127,11 @@ class ShardWorker:
         self.offered = 0
         self.dropped = 0
         self.consecutive_drops = 0
-        self.floor = 0  # written by requesters under cond; results with epoch < floor are stale
+        self.floor = 0  # reset generation, bumped by requesters under cond
         self.thread: threading.Thread | None = None
         self.epoch = 0
         self.seen: set[str] = set()
         self.rejected = 0
-        self.stale_skipped = 0
         self.resets_applied = 0
         self.norm_failures = 0
         self.feature_failures = 0
@@ -234,20 +234,37 @@ class ShardedMDPipeline:
     def request_reset(self, symbols: set[str] | frozenset[str] | None) -> bool:
         """Queue a LOB/feature reset on every worker, ordered after the events already queued.
 
-        Any thread. Results produced before the reset are discarded at commit (counted in
-        ``stale_drained``), and queued pre-reset inputs are skipped. Returns False when the reset
-        cannot be applied (pipeline not running or a worker is dead): the caller must fail closed.
+        Any thread. Only the named symbols (all symbols the worker owns when None) are reset; other
+        symbols' events are untouched. Events queued or computed before the command are processed and
+        committed exactly as the single-loop path processes them before its reset. Returns False when
+        the reset cannot be applied (pipeline not running or a worker is dead): fail closed.
         """
         if not self.healthy():
             return False
         frozen = frozenset(symbols) if symbols is not None else None
         for w in self._workers:
             with w.cond:
-                w.floor += 1
+                w.floor += 1  # reset generation, carried by the commit marker
                 w.inbox.append(_ResetCmd(frozen, w.floor))
                 if w.waiting:
                     w.cond.notify()
         return True
+
+    def drain_stale_inputs(self) -> int:
+        """Drop every queued, not yet computed input (reset commands kept). Loop thread.
+
+        Parity with the single-loop DATA-010 drain after a successful reconnect, which empties the
+        whole raw_queue. Counted in ``stale_drained``; like that drain, not a raw-queue overflow drop.
+        """
+        dropped = 0
+        for w in self._workers:
+            with w.cond:
+                kept = [x for x in w.inbox if type(x) is _ResetCmd]
+                dropped += len(w.inbox) - len(kept)
+                w.inbox.clear()
+                w.inbox.extend(kept)
+        self.stale_drained += dropped
+        return dropped
 
     # -- lifecycle (loop thread) ------------------------------------------
 
@@ -312,10 +329,6 @@ class ShardedMDPipeline:
                 item = inbox.popleft()
                 if type(item) is _ResetCmd:
                     self._apply_reset(w, item)
-                elif w.epoch < w.floor:
-                    # Queued before a pending reset: its book is about to be discarded.
-                    w.stale_skipped += 1
-                    continue
                 else:
                     result = compute(item, w)
                     if result is None:
@@ -373,9 +386,6 @@ class ShardedMDPipeline:
             while out and done < budget:
                 result = out.popleft()
                 done += 1
-                if result[R_EPOCH] < w.floor:
-                    self.stale_drained += 1
-                    continue
                 try:
                     if result[R_SYMBOL] is _RESET_MARKER:
                         if self._on_reset_committed is not None:
@@ -413,12 +423,11 @@ class ShardedMDPipeline:
         return total, worst
 
     def stats(self) -> dict[str, int]:
-        offered = dropped = rejected = queued = pending = stale_skipped = 0
+        offered = dropped = rejected = queued = pending = 0
         for w in self._workers:
             offered += w.offered
             dropped += w.dropped
             rejected += w.rejected
-            stale_skipped += w.stale_skipped
             # tuple(deque) is one atomic copy; iterating the live deque races the worker's popleft.
             queued += sum(1 for x in tuple(w.inbox) if type(x) is not _ResetCmd)
             pending += sum(1 for r in tuple(w.outbox) if r[R_SYMBOL] is not _RESET_MARKER)
@@ -429,7 +438,7 @@ class ShardedMDPipeline:
             "queued": queued,
             "pending_commit": pending,
             "committed": self.committed,
-            "stale_drained": self.stale_drained + stale_skipped,
+            "stale_drained": self.stale_drained,
             "commit_errors": self.commit_errors,
         }
 
@@ -814,10 +823,12 @@ class MarketDataShardingMixin:
         if fut is not None and not fut.done():
             fut.set_exception(MDWorkerCrashedError(f"md worker {idx} crashed: {exc!r}"))
 
-    def _md_shards_reconnect_reset(self) -> bool:
+    def _md_shards_reconnect_reset(self, drain_inputs: bool = False) -> bool:
         """Route the post-reconnect LOB/feature reset to the owning workers.
 
-        Returns False when the reset cannot be applied; the caller must not report the feed CONNECTED.
+        ``drain_inputs`` mirrors the single-loop DATA-010 drain (successful reconnect only): queued,
+        uncomputed inputs are dropped and logged. Returns False when the reset cannot be applied; the
+        caller must not report the feed CONNECTED.
         """
         svc: Any = self
         pipe = self._md_shards
@@ -827,10 +838,16 @@ class MarketDataShardingMixin:
         if hasattr(client, "_apply_pending_resets"):
             # Pool: its per-facade resets reach the workers through set_reset_router.
             client._apply_pending_resets()
-            return pipe.healthy()
-        if hasattr(client, "get_healthy_feed_gap_s"):
-            return pipe.healthy()
-        return self._md_shard_route_reset(None)
+            ok = pipe.healthy()
+        elif hasattr(client, "get_healthy_feed_gap_s"):
+            ok = pipe.healthy()
+        else:
+            ok = self._md_shard_route_reset(None)
+        if ok and drain_inputs:
+            stale = pipe.drain_stale_inputs()
+            if stale > 0:
+                logger.info("Drained stale md shard inputs after reconnect", count=stale)
+        return ok
 
     async def _run_sharded(self) -> None:
         svc: Any = self
