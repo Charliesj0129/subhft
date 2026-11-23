@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 import os
 import threading
@@ -212,7 +213,7 @@ class FeatureEngine:
         "_index_by_id",
         "_states",
         "_lob_kernel_states",
-        "_seq",
+        "_seq_counter",
         "_emit_events",
         "_quality_flags_next",
         "_feature_profile",
@@ -262,7 +263,9 @@ class FeatureEngine:
         self._lob_kernel_states: dict[str, _LobKernelState] = {}
         self._max_symbols: int = int(os.getenv("HFT_EXPOSURE_MAX_SYMBOLS", "10000"))
         self._last_update_ns: dict[str, int] = {}
-        self._seq = 0
+        # next() on itertools.count is atomic, so concurrent workers never share a seq (a bare
+        # `+= 1` on an attribute is a read-modify-write that loses updates without the GIL).
+        self._seq_counter = itertools.count(1)
         if emit_events is None:
             emit_events = os.getenv("HFT_FEATURE_ENGINE_EMIT_EVENTS", "1").strip().lower() not in {
                 "0",
@@ -514,8 +517,7 @@ class FeatureEngine:
             symbol = str(stats.symbol)
             source_ts_ns = int(getattr(stats, "ts", 0) or 0)
             stats_resolved = stats
-        self._seq += 1
-        seq = self._seq
+        seq = next(self._seq_counter)
         local_ts_ns = int(source_ts_ns if local_ts_ns is None else local_ts_ns)
 
         # Crossed/empty book (mid_price_x2=0): re-emit prev values with PARTIAL flag

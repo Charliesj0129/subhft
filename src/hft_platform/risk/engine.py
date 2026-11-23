@@ -37,6 +37,12 @@ from hft_platform.risk.validators import (
 
 logger = get_logger("risk_engine")
 
+# Serialises the command-id counter when the per-engine opt-in lock (HFT_RISK_CMD_ID_LOCK) is off.
+# `+= 1` on an attribute is a read-modify-write: without the GIL two threads can take one id.
+# Commands are minted per order, not per tick, and the section is a single add, so one shared
+# lock costs nothing and keeps every engine (including ones built without __init__) safe.
+_CMD_ID_FALLBACK_LOCK = threading.Lock()
+
 _KNOWN_ERROR_TYPES = frozenset(
     {
         "ValueError",
@@ -955,11 +961,10 @@ class RiskEngine:
             return self._monotonic_cmd_id
 
     def _next_cmd_id(self) -> int:
-        """Thread-safe increment and return of command ID."""
+        """Thread-safe increment and return of command ID (unique and increasing per engine)."""
         lock = self._cmd_id_lock
         if lock is None:
-            self._monotonic_cmd_id += 1
-            return self._monotonic_cmd_id
+            lock = _CMD_ID_FALLBACK_LOCK
         with lock:
             self._monotonic_cmd_id += 1
             return self._monotonic_cmd_id
