@@ -84,7 +84,7 @@ is_burst = detector.on_tick(ts_ns)  # True on rising-edge detection
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | Enable/disable FeatureEngine |
-| `HFT_FEATURE_ENGINE_BACKEND` | `python` | Kernel backend: `python` or `rust` |
+| `HFT_FEATURE_ENGINE_BACKEND` | `python` | Kernel backend. Only `python` exists; any other value logs `feature_backend_retired` and still runs Python |
 | `HFT_FEATURE_ENGINE_EMIT_EVENTS` | `1` | Emit FeatureUpdateEvent to bus |
 | `HFT_FEATURE_PROFILE_ID` | — | Override active profile |
 | `HFT_FEATURE_PROFILES_CONFIG` | `config/feature_profiles.yaml` | Profile registry path |

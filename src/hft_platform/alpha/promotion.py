@@ -98,7 +98,7 @@ class PromotionConfig:
     min_cost_uncertainty_p95_lower_bound_pts: float = 0.0
     enable_rust_readiness_gate: bool = False
     rust_module_name: str | None = None
-    rust_parity_test_path: str = "tests/unit/test_rust_hotpath_parity.py"
+    rust_parity_test_path: str = ""
     rust_parity_timeout_s: int = 180
     enforce_rust_benchmark_gate: bool = False
     rust_benchmark_cmd: str = (

@@ -96,7 +96,7 @@ hft backtest run --data <npz> --symbol 2330 --report
 ### 啟用方式
 ```bash
 HFT_FEATURE_ENGINE_ENABLED=1    # 啟用 FeatureEngine（預設啟用）
-HFT_FEATURE_ENGINE_BACKEND=python|rust  # 後端選擇（預設 python）
+HFT_FEATURE_ENGINE_BACKEND=python  # 只支援 python；其他值記錄警告後仍用 python
 ```
 
 ### Schema 版本

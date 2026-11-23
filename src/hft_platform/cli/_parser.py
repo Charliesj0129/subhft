@@ -900,8 +900,8 @@ def build_parser() -> argparse.ArgumentParser:
     alpha_promote.add_argument("--rust-module-name", default=None, help="Optional rust module override")
     alpha_promote.add_argument(
         "--rust-parity-test-path",
-        default="tests/unit/test_rust_hotpath_parity.py",
-        help="Pytest target for Rust parity validation",
+        default="",
+        help="Ignored: project Rust support was removed; kept so existing commands still parse.",
     )
     alpha_promote.add_argument("--rust-parity-timeout-s", type=int, default=180)
     alpha_promote.add_argument(

@@ -97,7 +97,7 @@
 
 ### 3.7 Feature Plane
 - `HFT_FEATURE_ENGINE_ENABLED=0|1`
-- `HFT_FEATURE_ENGINE_BACKEND=python|rust`
+- `HFT_FEATURE_ENGINE_BACKEND=python` (only `python` exists; other values log `feature_backend_retired` and still run Python)
 - `HFT_FEATURE_PROFILES_CONFIG=config/feature_profiles.yaml`
 - `HFT_FEATURE_PROFILE_ID=<id>`
 - `HFT_FEATURE_ROLLOUT_STATE_PATH=outputs/feature_rollout_state.json`
