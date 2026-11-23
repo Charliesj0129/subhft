@@ -738,9 +738,12 @@ class StrategyRunner:
 
     def bind_committed_md_view(self, view: Any) -> None:
         """P3 (HFT_MD_WORKERS>=1): read L1/features from the loop-committed view, not worker-mutated state."""
+        self._lob_snapshot_source = view.get_book_snapshot
         self._lob_l1_source = view.get_l1_scaled
         self._feature_tuple_source = view.get_feature_tuple
         self._feature_value_source = view.get_feature
+        self._feature_view_source = view.get_feature_view
+        self._feature_staleness_source = view.last_update_ns
         if self._strat_executors:
             self._rebuild_executors()
 

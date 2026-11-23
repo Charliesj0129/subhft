@@ -294,6 +294,7 @@ class QuoteConnectionPool:
 
     __slots__ = (
         "_clients",
+        "_reset_router",
         "_shard_dir",
         "_shard_paths",
         "_num_conns",
@@ -346,6 +347,8 @@ class QuoteConnectionPool:
         self._slots: list[FacadeSlot] = []
         self._lob: Any = None
         self._feature_engine: Any = None
+        # Set by MarketDataService when HFT_MD_WORKERS>=1: resets go to the owning MD worker threads.
+        self._reset_router: Any = None
         self._degraded_threshold_s = float(os.getenv("HFT_FACADE_DEGRADED_THRESHOLD_S", "10"))
         self._reconnect_trigger_s = float(os.getenv("HFT_FACADE_RECONNECT_TRIGGER_S", "10"))
         # Pre-open lead for facade reconnects — see ``reconnect_allowed``.
@@ -611,6 +614,10 @@ class QuoteConnectionPool:
         self._lob = lob
         self._feature_engine = feature_engine
 
+    def set_reset_router(self, router: Any) -> None:
+        """Route warmup resets through ``router(symbols)`` instead of mutating LOB/FE from this thread."""
+        self._reset_router = router
+
     def get_healthy_feed_gap_s(self) -> float:
         """Return the maximum feed gap across all CONNECTED facades."""
         return get_healthy_feed_gap_s(self._slots)
@@ -763,6 +770,12 @@ class QuoteConnectionPool:
         if slot is None:
             return
         symbols = slot.symbols
+        router = getattr(self, "_reset_router", None)
+        if router is not None:
+            # MD workers own the books: queue the reset on them, ordered with their events.
+            routed = router(set(symbols))
+            logger.info("facade_warmup_reset_routed", conn_id=conn_id, symbols=len(symbols), ok=bool(routed))
+            return
         if self._lob is not None and hasattr(self._lob, "reset_books_for_symbols"):
             self._lob.reset_books_for_symbols(symbols)
         if self._feature_engine is not None and hasattr(self._feature_engine, "reset_symbols"):

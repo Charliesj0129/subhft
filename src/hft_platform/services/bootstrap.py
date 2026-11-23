@@ -1015,6 +1015,10 @@ class SystemBootstrapper:
 
         # TCA: mid-price lookup function for arrival_price stamping
         def _get_mid_price(symbol: str) -> int:
+            committed = md_service.committed_view
+            if committed is not None:
+                # HFT_MD_WORKERS>=1: never read worker-mutated books from the loop.
+                return committed.get_mid_price_x2(symbol) // 2
             book = md_service.lob.books.get(symbol)
             if book is not None and book.mid_price_x2 > 0:
                 return book.mid_price_x2 // 2
