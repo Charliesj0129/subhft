@@ -1752,13 +1752,21 @@ class OrderAdapter:
         """True when an SDK error does not prove the order never reached the broker.
 
         A request that timed out inside the SDK may still have been accepted;
-        anything else the SDK raised (session not up, token, validation) was
-        refused before an order existed.
+        so may one the SDK itself reports as ``OrderOutcomeUnknownError``
+        (matched by class name so this module imports no SDK). Anything else
+        the SDK raised (session not up, token, validation) was refused before
+        an order existed.
         """
         if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
             return True
+        if OrderAdapter._is_outcome_unknown(exc):
+            return True
         text = str(exc).lower()
         return "timeout" in text or "timed out" in text
+
+    @staticmethod
+    def _is_outcome_unknown(exc: Any) -> bool:
+        return any(cls.__name__ == "OrderOutcomeUnknownError" for cls in type(exc).__mro__)
 
     def _has_unbound_phantom(self, strategy_id: str, symbol: str) -> bool:
         """True while a timed-out place_order of this strategy and symbol awaits its Trade."""
@@ -5123,6 +5131,8 @@ class OrderAdapter:
 
     def _is_transient_error(self, exc: Exception) -> bool:
         """Check if error is transient and worth retrying."""
+        if self._is_outcome_unknown(exc):
+            return False
         # Connection errors
         if isinstance(exc, (ConnectionError, ConnectionResetError, ConnectionRefusedError)):
             return True
@@ -5298,7 +5308,8 @@ class OrderAdapter:
                     # For mutating ops that timed out, do NOT retry — the
                     # original thread-pool call may still complete at the
                     # broker side, and retrying would create a duplicate.
-                    if is_mutating and isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                    timed_out = isinstance(exc, (asyncio.TimeoutError, TimeoutError))
+                    if is_mutating and (timed_out or self._is_outcome_unknown(exc)):
                         # A broker that never answers is the strongest possible
                         # round-trip signal; reporting only successes would keep
                         # the input quiet exactly when it matters most.
@@ -5308,6 +5319,7 @@ class OrderAdapter:
                             op=op,
                             attempt=attempt + 1,
                             timeout_s=self._api_timeout_s,
+                            error_type=type(exc).__name__,
                         )
                         # Outcome unknown, not failed: on THESHOW 116 of 120 of
                         # these were accepted and answered 5-30 s later. Counting
