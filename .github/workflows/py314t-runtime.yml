@@ -1,0 +1,104 @@
+name: py314t Runtime
+
+# Free-threaded CPython 3.14t runtime check for the hft-engine dependency set.
+#
+# NON-BLOCKING for now: the job sets continue-on-error, so a red result here never
+# stops a merge. It exists to answer, on every change to src/ or the 3.14t lock,
+# "does the engine still import with the GIL off, and do the 3.14t-safe tests pass?".
+# Nothing is built or pushed; Dockerfile.engine-py314t is built by hand, see
+# docs/runbooks/py314t-engine-image.md.
+#
+# To make it required (do all three, in this order):
+#   1. Remove the job-level `continue-on-error: true` below, so a failure turns the
+#      check red. Land that as its own change once the job has been green on main
+#      for a while.
+#   2. Branch protection on main: add the check named by the job `name:` below
+#      ("Free-threaded 3.14t GIL check") to the required status checks.
+#   3. Remove the `paths:` filter from the pull_request trigger. A required check
+#      that is skipped by a path filter stays "Expected" forever and blocks every PR
+#      that does not touch src/ or requirements/.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - src/**
+      - requirements/**
+      - scripts/py314t/**
+      - .github/workflows/py314t-runtime.yml
+  workflow_dispatch:
+
+concurrency:
+  group: py314t-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gil-check:
+    name: Free-threaded 3.14t GIL check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      PYTHONPATH: src
+      PY314T_VENV: ${{ github.workspace }}/.venv-314t
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a  # v4
+        with:
+          version: "0.12.22"
+
+      # The newest 3.14t patch this uv release knows. The version is printed so a run
+      # can be compared with the PYTHON_314T_VERSION pinned in Dockerfile.engine-py314t.
+      # PYTHON_GIL is never set in this workflow: forcing the GIL off would hide the
+      # very failure check_gil.py looks for (it refuses to run when PYTHON_GIL is set).
+      - name: Install CPython 3.14t
+        run: |
+          uv python install 3.14t
+          uv venv "${PY314T_VENV}" --python 3.14t --python-preference only-managed
+          "${PY314T_VENV}/bin/python" -VV
+
+      # Same flags as the image build: hashes required, wheels only, no resolution.
+      - name: Install the 3.14t runtime lock
+        run: |
+          uv pip install --python "${PY314T_VENV}/bin/python" \
+            --require-hashes --only-binary :all: --no-deps \
+            -r requirements/runtime-py314t.lock
+          uv pip check --python "${PY314T_VENV}/bin/python"
+
+      # Test tooling only, not part of the image or the lock, so it is not hashed.
+      # pytest-cov is left out on purpose: coverage's C tracer is another extension
+      # that could flip the GIL, and a 3.14t-safe subset has no coverage gate.
+      - name: Install test tooling
+        run: >
+          uv pip install --python "${PY314T_VENV}/bin/python"
+          pytest pytest-timeout pytest-asyncio hypothesis
+
+      - name: GIL stays disabled across the engine imports
+        run: '"${PY314T_VENV}/bin/python" scripts/py314t/check_gil.py'
+
+      # Files that do not exist yet on a branch are skipped; the list is printed so a
+      # missing file is visible. test_gc_pause_bench.py must exist, so an empty list
+      # fails the step. -o addopts="" drops the repo's --cov flags (pytest-cov is not
+      # installed here) and --timeout=30 puts the repo's per-test limit back.
+      - name: 3.14t-safe tests
+        run: |
+          mapfile -t TEST_FILES < <(find tests -type f \( \
+            -name 'test_ft_shared_state.py' -o \
+            -name 'test_jsonfast.py' -o \
+            -name 'test_md_loop_ledger*.py' -o \
+            -name 'test_gc_pause_bench.py' \) | sort)
+          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
+            echo "no 3.14t-safe test files found" >&2
+            exit 1
+          fi
+          printf 'running: %s\n' "${TEST_FILES[@]}"
+          "${PY314T_VENV}/bin/python" -m pytest -o addopts="" --timeout=30 \
+            -p no:cacheprovider -q "${TEST_FILES[@]}"
