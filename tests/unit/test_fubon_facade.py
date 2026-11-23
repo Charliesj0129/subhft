@@ -271,10 +271,14 @@ class TestExecutionCallbacks:
         )
 
         handler = factory.instances[0].set_on_futopt_order.call_args.args[0]
-        handler("0", SimpleNamespace(order_no="l1", symbol="TMFK6", buy_sell="Sell", lot=1, price=1.0))
+        handler(
+            "0",
+            SimpleNamespace(order_no="l1", symbol="FITX", expiry_date="202612", buy_sell="Sell", lot=1, price=1.0),
+        )
 
         assert calls[0][0] == "order"
         assert calls[0][1]["action"] == "Sell"
+        assert calls[0][1]["symbol"] == "TXFL6"
 
     def test_session_is_logged_out_when_callbacks_cannot_be_rewired_on_login(
         self, live: None, factory: _LoginFactory
@@ -288,6 +292,62 @@ class TestExecutionCallbacks:
 
         sdk.logout.assert_called_once_with()
         assert facade.logged_in is False
+
+
+class TestDefaultAccountId:
+    """The id fills are booked under is the account chosen at login, not only what the environment names."""
+
+    def test_default_account_id_is_the_account_selected_at_login(self, live: None, factory: _LoginFactory) -> None:
+        facade = _facade()
+
+        assert facade.login() is True
+
+        assert facade.get_default_account_id() == "1234567"
+
+    def test_default_account_id_follows_the_environment_choice_among_several_accounts(
+        self, live: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        accounts = [
+            make_account("1111111", account_type="stock"),
+            make_account("2222222"),
+            make_account("3333333"),
+        ]
+        monkeypatch.setattr(facade_module, "FubonSDK", _LoginFactory(ok(accounts)))
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "3333333")
+        facade = _facade()
+
+        assert facade.login() is True
+
+        assert facade.get_default_account_id() == "3333333"
+
+    def test_default_account_id_is_never_the_stock_account(self, live: None, monkeypatch: pytest.MonkeyPatch) -> None:
+        accounts = [make_account("1111111", account_type="stock"), make_account("2222222")]
+        monkeypatch.setattr(facade_module, "FubonSDK", _LoginFactory(ok(accounts)))
+        facade = _facade()
+
+        assert facade.login() is True
+
+        assert facade.get_default_account_id() == "2222222"
+
+    def test_default_account_id_matches_the_account_the_gateways_trade_under(
+        self, live: None, factory: _LoginFactory
+    ) -> None:
+        facade = _facade()
+        facade.login()
+
+        assert facade.get_default_account_id() == facade._session_runtime.account.account
+
+    def test_default_account_id_before_login_falls_back_to_the_environment(
+        self, live: None, factory: _LoginFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "5555555")
+
+        assert _facade().get_default_account_id() == "5555555"
+
+    def test_default_account_id_is_empty_before_login_with_nothing_configured(
+        self, live: None, factory: _LoginFactory
+    ) -> None:
+        assert _facade().get_default_account_id() == ""
 
 
 class TestDelegation:

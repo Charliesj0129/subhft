@@ -26,8 +26,11 @@ from tests.unit.fubon_mock_helper import (
 install_fubon_neo_mock()
 
 from hft_platform.contracts.strategy import TIF, Side
-from hft_platform.feed_adapter.fubon.order_codec import FubonSdkResultError
-from hft_platform.feed_adapter.fubon.order_gateway import FubonOrderGateway
+from hft_platform.feed_adapter.fubon.order_codec import FubonOrderAlreadyFilledError, FubonSdkResultError
+from hft_platform.feed_adapter.fubon.order_gateway import FubonCancelNoOp, FubonOrderGateway
+
+# What the official test environment answers when a cancel loses the race against a fill.
+_FILLED_CANCEL_MESSAGE = "期貨委託目前狀態成交單已不允許取消交易"
 
 
 @pytest.fixture()
@@ -280,9 +283,58 @@ class TestCancelOrder:
         sdk.futopt.cancel_order.assert_not_called()
 
     def test_cancel_failed_result_raises(self, gw: FubonOrderGateway, sdk: MagicMock) -> None:
-        sdk.futopt.cancel_order.return_value = fail("order already filled")
+        sdk.futopt.cancel_order.return_value = fail("system busy")
 
-        with pytest.raises(FubonSdkResultError, match="order already filled"):
+        with pytest.raises(FubonSdkResultError, match="system busy"):
+            gw.cancel_order(make_order_result())
+
+    def test_cancel_of_an_already_filled_order_is_a_terminal_no_op_not_an_error(
+        self, gw: FubonOrderGateway, sdk: MagicMock
+    ) -> None:
+        sdk.futopt.cancel_order.return_value = fail(_FILLED_CANCEL_MESSAGE)
+
+        result = gw.cancel_order(make_order_result(order_no="C000J"))
+
+        assert result == FubonCancelNoOp(order_id="C000J", reason="already_filled")
+        assert result is not None
+
+    def test_cancel_of_an_already_filled_order_is_sent_once(self, gw: FubonOrderGateway, sdk: MagicMock) -> None:
+        sdk.futopt.cancel_order.return_value = fail(_FILLED_CANCEL_MESSAGE)
+
+        gw.cancel_order(make_order_result(order_no="C000J"))
+
+        sdk.futopt.cancel_order.assert_called_once()
+
+    def test_cancel_of_an_already_filled_order_is_logged_as_info_not_error(
+        self, gw: FubonOrderGateway, sdk: MagicMock
+    ) -> None:
+        sdk.futopt.cancel_order.return_value = fail(_FILLED_CANCEL_MESSAGE)
+        gw.log = MagicMock()
+
+        gw.cancel_order(make_order_result(order_no="C000J"))
+
+        assert gw.log.info.call_args.args[0] == "fubon_cancel_order_already_filled"
+        assert gw.log.info.call_args.kwargs["order_id"] == "C000J"
+        gw.log.error.assert_not_called()
+
+    def test_cancel_refusal_other_than_filled_is_still_an_error_with_an_error_log(
+        self, gw: FubonOrderGateway, sdk: MagicMock
+    ) -> None:
+        sdk.futopt.cancel_order.return_value = fail("order not found")
+        gw.log = MagicMock()
+
+        with pytest.raises(FubonSdkResultError) as excinfo:
+            gw.cancel_order(make_order_result(order_no="C000J"))
+
+        assert not isinstance(excinfo.value, FubonOrderAlreadyFilledError)
+        assert gw.log.error.call_args.args[0] == "fubon_cancel_order_failed"
+
+    def test_cancel_sdk_exception_is_not_mistaken_for_an_already_filled_order(
+        self, gw: FubonOrderGateway, sdk: MagicMock
+    ) -> None:
+        sdk.futopt.cancel_order.side_effect = RuntimeError(_FILLED_CANCEL_MESSAGE)
+
+        with pytest.raises(RuntimeError, match="成交單"):
             gw.cancel_order(make_order_result())
 
     def test_cancel_sdk_exception_propagates(self, gw: FubonOrderGateway, sdk: MagicMock) -> None:

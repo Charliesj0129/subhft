@@ -311,10 +311,14 @@ class TestExecutionCallbacks:
         client.login()
 
         handler = factory.instances[0].set_on_futopt_order.call_args.args[0]
-        handler("0", SimpleNamespace(order_no="l1", symbol="TMFK6", buy_sell="Buy", lot=1, price=1.0))
+        handler(
+            "0",
+            SimpleNamespace(order_no="l1", symbol="FITX", expiry_date="202612", buy_sell="Buy", lot=1, price=1.0),
+        )
 
         assert [state for state, _ in calls] == ["order"]
         assert calls[0][1]["order_id"] == "l1"
+        assert calls[0][1]["symbol"] == "TXFL6"
 
     def test_login_fails_closed_when_the_sdk_cannot_deliver_fills(
         self, live: None, monkeypatch: pytest.MonkeyPatch

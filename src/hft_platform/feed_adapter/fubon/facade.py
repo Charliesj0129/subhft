@@ -404,8 +404,16 @@ class FubonClientFacade:
         return self._contracts_runtime.validate_symbols()
 
     def get_default_account_id(self) -> str:
-        """Return the canonical Fubon account ID from environment config."""
-        return os.getenv("HFT_FUBON_ACCOUNT", "")
+        """Return the account selected at login, which is the one fills are booked under.
+
+        ``HFT_FUBON_ACCOUNT`` only chooses among several accounts; with one account (or
+        before any login) it may be unset, so reading it alone answered "" for a logged-in
+        session and every fill was then rejected as having no account.  Falls back to the
+        environment value only when no account has been selected yet.
+        """
+        account = self._session_runtime.account
+        selected = "" if account is None else str(getattr(account, "account", "") or "")
+        return selected or os.getenv("HFT_FUBON_ACCOUNT", "")
 
     def get_contract_refresh_status(self) -> dict[str, Any]:
         return self._contracts_runtime.refresh_status()

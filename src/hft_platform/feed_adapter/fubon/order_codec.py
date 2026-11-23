@@ -14,6 +14,10 @@ Real shapes (fubon-neo 2.5.0, introspected from the wheel):
 - ``FutOptOrderType``: Auto / New / Close / FdayTrade.
 - Every trading call returns a ``Result`` envelope
   (``is_success``, ``message``, ``data``); see :func:`unwrap_sdk_result`.
+- A cancel of an order that is already filled is refused with the message
+  ``期貨委託目前狀態成交單已不允許取消交易`` (seen on the official test environment); it
+  is raised as :class:`FubonOrderAlreadyFilledError` so the gateway can tell it from a
+  failure to cancel a live order.
 """
 
 from __future__ import annotations
@@ -22,6 +26,12 @@ import operator
 from typing import Any
 
 _MESSAGE_LIMIT = 200
+
+# Part of the broker's refusal of a cancel on a filled order (``成交單已不允許取消交易``:
+# "a filled order no longer allows cancel").  The Result envelope has no error code, so the
+# text is the only signal; it names the order state (filled), so a partly filled order that
+# can still be cancelled does not produce it.
+_ALREADY_FILLED_CANCEL_MARKERS: tuple[str, ...] = ("成交單已不允許取消",)
 
 # Platform prices are scaled int x10000 (Law 4); the SDK wants a decimal string.
 PRICE_SCALE = 10_000
@@ -36,6 +46,10 @@ class FubonSdkResultError(RuntimeError):
     """The Fubon SDK answered with a failed or malformed ``Result`` envelope."""
 
 
+class FubonOrderAlreadyFilledError(FubonSdkResultError):
+    """A cancel was refused because the order is already filled (nothing left to cancel)."""
+
+
 def unwrap_sdk_result(result: Any, op: str) -> Any:
     """Return ``result.data`` or raise when the SDK did not report success.
 
@@ -45,7 +59,10 @@ def unwrap_sdk_result(result: Any, op: str) -> Any:
     if result is None or not hasattr(result, "is_success"):
         raise FubonSdkResultError(f"{op}: unexpected SDK result shape ({type(result).__name__})")
     if result.is_success is not True:
-        message = str(getattr(result, "message", None))[:_MESSAGE_LIMIT]
+        full_message = str(getattr(result, "message", None))
+        message = full_message[:_MESSAGE_LIMIT]
+        if op == "cancel_order" and any(marker in full_message for marker in _ALREADY_FILLED_CANCEL_MARKERS):
+            raise FubonOrderAlreadyFilledError(f"{op}: SDK reported failure: {message}")
         raise FubonSdkResultError(f"{op}: SDK reported failure: {message}")
     return getattr(result, "data", None)
 

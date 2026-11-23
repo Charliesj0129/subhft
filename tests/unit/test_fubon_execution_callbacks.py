@@ -11,7 +11,10 @@ import pytest
 
 from tests.unit.fubon_mock_helper import (
     BSAction,
+    CallPut,
+    fail,
     install_fubon_neo_mock,
+    make_convert_symbol,
     make_fubon_sdk_mock,
 )
 
@@ -25,6 +28,8 @@ from hft_platform.feed_adapter.fubon.execution_callbacks import (
     REQUIRED_SDK_SETTERS,
     FubonCallbackRegistrationError,
     FubonExecutionCallbackAdapter,
+    FubonSymbolConversionError,
+    FubonSymbolResolver,
     _resolve_order_id,
     _resolve_side,
     _scale_price,
@@ -39,7 +44,11 @@ def _order_report(**overrides: Any) -> SimpleNamespace:
     fields: dict[str, Any] = {
         "order_no": "l0001",
         "seq_no": "00000000001",
-        "symbol": "TMFK6",
+        "symbol": "FITX",
+        "expiry_date": "202612",
+        "strike_price": None,
+        "call_put": None,
+        "symbol_leg2": None,
         "buy_sell": BSAction.Buy,
         "price": 22000.0,
         "lot": 2,
@@ -56,7 +65,11 @@ def _fill_report(**overrides: Any) -> SimpleNamespace:
     fields: dict[str, Any] = {
         "order_no": "l0001",
         "seq_no": "00000000001",
-        "symbol": "TMFK6",
+        "symbol": "FITX",
+        "expiry_date": "202612",
+        "strike_price": None,
+        "call_put": None,
+        "symbol_leg2": None,
         "buy_sell": BSAction.Sell,
         "filled_no": "00000000007",
         "filled_lots": 1,
@@ -172,7 +185,7 @@ class TestOrderCallback:
                 "order_id": "l0001",
                 "order_no": "l0001",
                 "seq_no": "00000000001",
-                "symbol": "TMFK6",
+                "symbol": "TXFL6",
                 "side": "Buy",
                 "action": "Buy",
                 "price": 22000.0,
@@ -183,6 +196,7 @@ class TestOrderCallback:
                 "source": "order",
                 "strategy_id": "r47",
                 "ts_ns": _NOW_NS,
+                "order": {"price": 22000.0, "action": "Buy", "quantity": 2, "filled_qty": 0},
             }
         ]
 
@@ -236,12 +250,13 @@ class TestOrderCallback:
         self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, orders: list[dict[str, Any]]
     ) -> None:
         _handler(sdk, "set_on_futopt_order")(
-            "0", {"order_no": "d1", "symbol": "TXFK6", "buy_sell": "Sell", "price": 1.0, "lot": 3}
+            "0",
+            {"order_no": "d1", "symbol": "FITX", "expiry_date": "202612", "buy_sell": "Sell", "price": 1.0, "lot": 3},
         )
 
         assert (orders[0]["order_id"], orders[0]["symbol"], orders[0]["side"], orders[0]["qty"]) == (
             "d1",
-            "TXFK6",
+            "TXFL6",
             "Sell",
             3,
         )
@@ -311,7 +326,7 @@ class TestDealCallback:
                 "order_no": "l0001",
                 "seq_no": "00000000001:00000000007",
                 "fill_id": "00000000001:00000000007",
-                "symbol": "TMFK6",
+                "symbol": "TXFL6",
                 "side": "Sell",
                 "action": "Sell",
                 "price": 20890.0,
@@ -450,7 +465,7 @@ class TestNormalizerCompatibility:
     @pytest.fixture()
     def normalizer(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> ExecutionNormalizer:
         cfg = tmp_path / "symbols.yaml"
-        cfg.write_text("symbols:\n  - code: 'TMFK6'\n    exchange: 'TAIFEX'\n    price_scale: 10000\n")
+        cfg.write_text("symbols:\n  - code: 'TXFL6'\n    exchange: 'TAIFEX'\n    price_scale: 10000\n")
         monkeypatch.setenv("SYMBOLS_CONFIG", str(cfg))
         return ExecutionNormalizer(field_map=get_field_map("fubon"), default_account_id="ACCT-1")
 
@@ -468,8 +483,57 @@ class TestNormalizerCompatibility:
         assert fill is not None
         assert fill.side == Side.SELL
         assert fill.qty == 3
-        assert fill.symbol == "TMFK6"
+        assert fill.symbol == "TXFL6"
         assert fill.price == 208900000
+
+    def test_float_fill_price_is_scaled_once_to_x10000_end_to_end(
+        self,
+        sdk: MagicMock,
+        adapter: FubonExecutionCallbackAdapter,
+        deals: list[dict[str, Any]],
+        normalizer: ExecutionNormalizer,
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _live_fill_report())
+
+        fill = normalizer.normalize_fill(RawExecEvent("deal", deals[0], time.time_ns()))
+
+        assert fill is not None
+        assert deals[0]["price"] == 36128.0
+        assert fill.price == 361280000
+        assert (fill.symbol, fill.side, fill.qty) == ("TXFL6", Side.SELL, 1)
+        assert fill.fill_id == "00111090102:00100000010"
+
+    def test_fill_under_the_product_code_would_have_booked_the_wrong_symbol(
+        self,
+        sdk: MagicMock,
+        adapter: FubonExecutionCallbackAdapter,
+        deals: list[dict[str, Any]],
+        normalizer: ExecutionNormalizer,
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _live_fill_report())
+
+        fill = normalizer.normalize_fill(RawExecEvent("deal", deals[0], time.time_ns()))
+
+        assert fill is not None
+        assert fill.symbol != "FITX"
+
+    def test_order_event_keeps_price_side_and_quantity_through_the_normalizer(
+        self,
+        sdk: MagicMock,
+        adapter: FubonExecutionCallbackAdapter,
+        orders: list[dict[str, Any]],
+        normalizer: ExecutionNormalizer,
+    ) -> None:
+        _handler(sdk, "set_on_futopt_order")("0", _live_order_report())
+
+        event = normalizer.normalize_order(
+            RawExecEvent("order", {"state": "order", "payload": orders[0]}, time.time_ns())
+        )
+
+        assert event is not None
+        assert event.price == 359200000
+        assert (event.symbol, event.side, event.submitted_qty, event.filled_qty) == ("TXFL6", Side.SELL, 1, 0)
+        assert event.order_id == "C000J"
 
     def test_partial_fills_keep_distinct_fill_ids_through_the_normalizer(
         self,
@@ -486,3 +550,328 @@ class TestNormalizerCompatibility:
 
         assert all(f is not None for f in fills)
         assert fills[0].fill_id != fills[1].fill_id
+
+
+def _live_order_report() -> SimpleNamespace:
+    """The order report the official test environment sent for a TXF sell (live-verified shape)."""
+    return _order_report(
+        order_no="C000J",
+        seq_no="00111090102",
+        price=35920.0,
+        lot=1,
+        filled_lot=0,
+        function_type=10,
+        user_def="hftsmk",
+        buy_sell=BSAction.Sell,
+    )
+
+
+def _live_fill_report() -> SimpleNamespace:
+    """The fill report the official test environment sent for that order (live-verified shape)."""
+    return _fill_report(
+        order_no="C000J",
+        seq_no="00111090102",
+        filled_no="00100000010",
+        filled_lots=1,
+        filled_price=36128.0,
+        filled_time="10:57:08.460",
+        user_def="hftsmk",
+        buy_sell=BSAction.Sell,
+    )
+
+
+def _option_report(strike: float = 20000.0, call_put: Any = CallPut.Call, **overrides: Any) -> SimpleNamespace:
+    return _order_report(symbol="TXO", strike_price=strike, call_put=call_put, **overrides)
+
+
+class TestTradingSymbol:
+    """Callbacks report the product code (FITX); the platform keys positions by the trading symbol (TXFL6)."""
+
+    def test_order_report_carries_the_trading_symbol_not_the_product_code(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, orders: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_order")("0", _live_order_report())
+
+        assert orders[0]["symbol"] == "TXFL6"
+
+    def test_fill_report_carries_the_trading_symbol_not_the_product_code(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _live_fill_report())
+
+        assert deals[0]["symbol"] == "TXFL6"
+
+    def test_order_changed_report_carries_the_trading_symbol(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, orders: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_order_futopt_changed")("0", _live_order_report())
+
+        assert (orders[0]["source"], orders[0]["symbol"]) == ("order_changed", "TXFL6")
+
+    def test_mini_product_maps_to_its_own_contract(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol="FIMTX"))
+
+        assert deals[0]["symbol"] == "MXFL6"
+
+    def test_each_expiry_maps_to_its_own_contract(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        handler = _handler(sdk, "set_on_futopt_filled")
+        handler(None, _fill_report(expiry_date="202612"))
+        handler(None, _fill_report(expiry_date="202701", filled_no="00000000008"))
+
+        assert [d["symbol"] for d in deals] == ["TXFL6", "TXFA7"]
+
+    def test_option_conversion_uses_strike_and_call_put(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, orders: list[dict[str, Any]]
+    ) -> None:
+        handler = _handler(sdk, "set_on_futopt_order")
+        handler("0", _option_report(call_put=CallPut.Call))
+        handler("0", _option_report(call_put=CallPut.Put))
+        handler("0", _option_report(strike=20100.0, call_put=CallPut.Call))
+
+        assert [o["symbol"] for o in orders] == ["TXO20000L6", "TXO20000X6", "TXO20100L6"]
+        sdk.futopt.convert_symbol.assert_any_call("TXO", "202612", 20000.0, CallPut.Put)
+
+    def test_future_conversion_passes_only_product_and_expiry(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        _handler(sdk, "set_on_futopt_order")("0", _live_order_report())
+
+        sdk.futopt.convert_symbol.assert_called_once_with("FITX", "202612")
+
+    def test_dict_report_with_the_same_fields_converts_too(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        report = {"order_no": "d1", "seq_no": "1", "symbol": "FITX", "expiry_date": "202612", "filled_lots": 1}
+
+        _handler(sdk, "set_on_futopt_filled")(None, report)
+
+        assert deals[0]["symbol"] == "TXFL6"
+
+    def test_conversion_is_asked_once_per_contract(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        handler = _handler(sdk, "set_on_futopt_filled")
+        for number in range(5):
+            handler(None, _fill_report(filled_no=f"{number:08d}"))
+
+        assert [d["symbol"] for d in deals] == ["TXFL6"] * 5
+        assert sdk.futopt.convert_symbol.call_count == 1
+
+    def test_order_and_fill_of_one_contract_share_one_conversion(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        _handler(sdk, "set_on_futopt_order")("0", _live_order_report())
+        _handler(sdk, "set_on_futopt_filled")(None, _live_fill_report())
+
+        assert sdk.futopt.convert_symbol.call_count == 1
+
+    def test_sdk_result_envelope_answer_is_unwrapped(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        sdk.futopt.convert_symbol.side_effect = None
+        sdk.futopt.convert_symbol.return_value = SimpleNamespace(is_success=True, message=None, data="TXFL6")
+
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report())
+
+        assert deals[0]["symbol"] == "TXFL6"
+
+
+class TestSymbolCache:
+    def test_cache_holds_at_most_max_entries_and_evicts_the_oldest(self, sdk: MagicMock) -> None:
+        resolver = FubonSymbolResolver(sdk, max_entries=2)
+
+        resolver.resolve(_fill_report(expiry_date="202612"))
+        resolver.resolve(_fill_report(expiry_date="202701"))
+        resolver.resolve(_fill_report(symbol="FIMTX", expiry_date="202612"))
+
+        assert len(resolver) == 2
+        sdk.futopt.convert_symbol.reset_mock()
+        resolver.resolve(_fill_report(expiry_date="202701"))
+        resolver.resolve(_fill_report(symbol="FIMTX", expiry_date="202612"))
+        assert sdk.futopt.convert_symbol.call_count == 0
+        resolver.resolve(_fill_report(expiry_date="202612"))
+        assert sdk.futopt.convert_symbol.call_count == 1
+
+    def test_default_cache_is_bounded_under_many_distinct_strikes(self, sdk: MagicMock) -> None:
+        table = {("TXO", "202612", float(strike), CallPut.Call): f"TXO{strike}L6" for strike in range(15000, 17000)}
+        sdk.futopt.convert_symbol.side_effect = make_convert_symbol(table)
+        resolver = FubonSymbolResolver(sdk)
+
+        for strike in range(15000, 17000):
+            resolver.resolve(_option_report(strike=float(strike)))
+
+        assert 0 < len(resolver) <= 1024
+
+    def test_failed_conversion_is_not_cached(self, sdk: MagicMock) -> None:
+        resolver = FubonSymbolResolver(sdk)
+        report = _fill_report(symbol="FITM")
+        with pytest.raises(FubonSymbolConversionError):
+            resolver.resolve(report)
+
+        sdk.futopt.convert_symbol.side_effect = make_convert_symbol({("FITM", "202612"): "TMFL6"})
+
+        assert resolver.resolve(report) == "TMFL6"
+
+    @pytest.mark.parametrize("max_entries", [0, -1])
+    def test_non_positive_capacity_is_refused(self, sdk: MagicMock, max_entries: int) -> None:
+        with pytest.raises(ValueError, match="max_entries"):
+            FubonSymbolResolver(sdk, max_entries=max_entries)
+
+
+class TestUnresolvableSymbol:
+    """A report whose symbol cannot be converted must never reach the platform under the wrong symbol."""
+
+    def test_fill_with_an_unconvertible_product_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol="FITM"))
+
+        assert deals == []
+
+    def test_order_with_an_unconvertible_product_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, orders: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_order")("0", _order_report(symbol="FITM"))
+
+        assert orders == []
+
+    def test_unresolved_report_is_counted_logged_and_recorded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter
+    ) -> None:
+        adapter.log = MagicMock()
+        registry = MagicMock()
+
+        with patch.object(ec_module.MetricsRegistry, "get", return_value=registry):
+            _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol="FITM"))
+
+        assert (adapter.symbol_error_count, adapter.error_count) == (1, 1)
+        registry.execution_events_total.labels.assert_called_once_with(type="fubon_symbol_unresolved")
+        registry.execution_events_total.labels.return_value.inc.assert_called_once_with()
+        assert adapter.log.error.call_args.args[0] == "fubon_exec_cb.symbol_unresolved"
+        assert adapter.unresolved_reports == (
+            {
+                "kind": "deal",
+                "order_no": "l0001",
+                "seq_no": "00000000001",
+                "filled_no": "00000000007",
+                "product": "FITM",
+                "expiry_date": "202612",
+            },
+        )
+
+    def test_metrics_failure_while_dropping_a_report_is_logged_not_raised(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        adapter.log = MagicMock()
+
+        with patch.object(ec_module.MetricsRegistry, "get", side_effect=RuntimeError("registry down")):
+            _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol="FITM"))
+
+        assert deals == []
+        assert adapter.symbol_error_count == 1
+        assert adapter.log.error.call_args.args[0] == "fubon_exec_cb.symbol_unresolved"
+        assert adapter.log.warning.call_args.args[0] == "fubon_exec_cb.symbol_unresolved_metric_failed"
+
+    def test_conversion_failure_does_not_stop_later_reports(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        handler = _handler(sdk, "set_on_futopt_filled")
+        handler(None, _fill_report(symbol="FITM"))
+        handler(None, _fill_report(filled_no="00000000008"))
+
+        assert [d["symbol"] for d in deals] == ["TXFL6"]
+
+    def test_report_without_expiry_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report(expiry_date=None))
+
+        assert deals == []
+        assert adapter.symbol_error_count == 1
+        sdk.futopt.convert_symbol.assert_not_called()
+
+    def test_report_without_a_product_symbol_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol=None))
+
+        assert deals == []
+        assert adapter.symbol_error_count == 1
+
+    def test_option_report_without_a_strike_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, orders: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_order")("0", _option_report(strike=None))
+
+        assert orders == []
+        assert adapter.symbol_error_count == 1
+        sdk.futopt.convert_symbol.assert_not_called()
+
+    def test_two_leg_spread_report_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol_leg2="FITX"))
+
+        assert deals == []
+        assert adapter.symbol_error_count == 1
+
+    def test_failed_result_envelope_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]]
+    ) -> None:
+        sdk.futopt.convert_symbol.side_effect = None
+        sdk.futopt.convert_symbol.return_value = fail("Symbol Name error")
+
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report())
+
+        assert deals == []
+        assert adapter.symbol_error_count == 1
+
+    @pytest.mark.parametrize("answer", [None, "", "  ", 42])
+    def test_unusable_conversion_answer_is_not_forwarded(
+        self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter, deals: list[dict[str, Any]], answer: Any
+    ) -> None:
+        sdk.futopt.convert_symbol.side_effect = None
+        sdk.futopt.convert_symbol.return_value = answer
+
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report())
+
+        assert deals == []
+        assert adapter.symbol_error_count == 1
+
+    def test_sdk_without_convert_symbol_does_not_forward_the_product_code(
+        self, sdk: MagicMock, orders: list[dict[str, Any]], deals: list[dict[str, Any]]
+    ) -> None:
+        del sdk.futopt.convert_symbol
+        adapter = FubonExecutionCallbackAdapter(sdk)
+        adapter.register(on_order=orders.append, on_deal=deals.append)
+
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report())
+        _handler(sdk, "set_on_futopt_order")("0", _order_report())
+
+        assert (orders, deals) == ([], [])
+        assert adapter.symbol_error_count == 2
+
+    def test_unresolved_record_is_bounded(self, sdk: MagicMock, adapter: FubonExecutionCallbackAdapter) -> None:
+        for number in range(ec_module._UNRESOLVED_KEEP + 10):
+            _handler(sdk, "set_on_futopt_filled")(None, _fill_report(symbol="FITM", filled_no=str(number)))
+
+        records = adapter.unresolved_reports
+        assert len(records) == ec_module._UNRESOLVED_KEEP
+        assert records[-1]["filled_no"] == str(ec_module._UNRESOLVED_KEEP + 9)
+        assert adapter.symbol_error_count == ec_module._UNRESOLVED_KEEP + 10
+
+    def test_downstream_failure_after_a_good_conversion_is_not_a_symbol_error(self, sdk: MagicMock) -> None:
+        def boom(payload: dict[str, Any]) -> None:
+            raise RuntimeError("downstream down")
+
+        adapter = FubonExecutionCallbackAdapter(sdk)
+        adapter.register(on_order=lambda p: None, on_deal=boom)
+
+        _handler(sdk, "set_on_futopt_filled")(None, _fill_report())
+
+        assert (adapter.error_count, adapter.symbol_error_count) == (1, 0)
+        assert adapter.unresolved_reports == ()

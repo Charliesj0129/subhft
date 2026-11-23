@@ -47,7 +47,7 @@ Design notes
 - **Boundary Law**: All Fubon-specific names are translated to canonical keys
   (``code``, ``close``, ``volume``, ``total_volume``, ``bid_price``, ``ask_price``, etc.) so
   the normalizer can process them without broker awareness.
-- **Documented payloads**: ``trades`` ``data`` = ``symbol``, ``trades[0].price/size``
+- **Documented payloads**: ``trades`` ``data`` = ``symbol``, ``trades[].price/size``
   (``bid``/``ask`` are not forwarded: no tick field carries them), ``total.tradeVolume``
   (-> ``total_volume``), ``time``, ``serial`` (not forwarded).  ``books`` ``data`` =
   ``symbol``, ``bids``/``asks`` as lists of ``{price, size}`` with 0 to 5 levels
@@ -57,6 +57,18 @@ Design notes
   examples) and becomes epoch nanoseconds.  A payload missing a required field, or
   with a ``time`` outside the microsecond range, is dropped and counted in the
   throttled "message dropped" warning, never forwarded.
+- **Sweep frames**: one aggressive order that sweeps price levels arrives as ONE
+  ``trades`` frame with several ``trades`` entries (13 of 119 frames of a real capture),
+  and the sizes of a frame add up to the change of ``total.tradeVolume``.  Every
+  entry is forwarded as its own tick, in frame order, all with the frame's ``time``
+  (the exchange gives no per-fill time).  ``total_volume`` is the frame's
+  ``total.tradeVolume`` on EVERY tick of the frame: the exchange reports the running
+  total once per frame, after all its fills, so the per-fill running totals are not
+  known and are not invented.  A consumer that differences ``total_volume`` between
+  ticks therefore sees the whole frame's volume on the first tick and 0 on the rest
+  (the sum is exact); ``volume`` is the per-fill figure.  A frame is delivered whole
+  or not at all: one malformed entry drops the frame (counted), so a frame is never
+  half-delivered.
 - **Trial frames**: fubon-neo 2.5.0 streams futopt v1.1 by default, which adds
   trial-matching frames (``isTrial: true``) on the trades/books channels.  A
   trial price is not a trade and not a tradable book, so those frames are
@@ -464,15 +476,18 @@ class FubonQuoteRuntime:
     # ------------------------------------------------------------------ #
 
     def _on_fubon_trade(self, data: Any) -> None:
-        """Translate a documented futopt ``trades`` payload to a canonical tick dict and forward.
+        """Translate a documented futopt ``trades`` payload to canonical tick dicts and forward them.
 
-        *data* is the ``data`` object of a ``trades`` event: ``symbol``, ``trades[0]``
-        (``price``, ``size``, ``bid``, ``ask``), ``total.tradeVolume`` and ``time``
-        (epoch microseconds).  A malformed payload is dropped and counted, never forwarded.
+        *data* is the ``data`` object of a ``trades`` event: ``symbol``, ``trades`` (one
+        entry per fill: ``price``, ``size``, ``bid``, ``ask``), ``total.tradeVolume`` and
+        ``time`` (epoch microseconds).  One tick is forwarded per entry, in order, each with the
+        frame's time and the frame's total volume.  A malformed payload (including one with a
+        malformed entry) is dropped whole and counted, never forwarded.
         """
         # P1 (2026-04-24): the SDK keeps a bound reference to this method
         # after stop(); late deliveries must not leak into the pipeline.
-        if self._stopped or self._on_tick is None:
+        on_tick = self._on_tick
+        if self._stopped or on_tick is None:
             return
         try:
             if not isinstance(data, dict):
@@ -488,33 +503,32 @@ class FubonQuoteRuntime:
             if isinstance(fields, str):
                 self._note_unhandled(fields)
                 return
-            symbol, price, size, total_volume, ts_ns = fields
-            if len(data["trades"]) > 1:
-                # Only trades[0] is forwarded (one tick per frame); say so rather than lose ticks silently.
-                self._note_unhandled("trade_extra_entries_ignored")
+            symbol, fills, total_volume, ts_ns = fields
 
             buf = self._tick_buffer
-            # Pass the raw price — the normalizer applies per-symbol scaling.
-            # Pre-scaling here would cause double-scaling (DATA-001).
-            buf["code"] = symbol
-            buf["close"] = price
-            buf["volume"] = size
-            buf["total_volume"] = total_volume
-            buf["ts"] = ts_ns
-
             self._last_data_ts = time.monotonic()
-            # Create a fresh snapshot dict so the async consumer receives an
-            # independent object.  The workspace buf may be overwritten by the
-            # next callback before the event loop dequeues this message.
-            self._on_tick(
-                {
-                    "code": buf["code"],
-                    "close": buf["close"],
-                    "volume": buf["volume"],
-                    "total_volume": buf["total_volume"],
-                    "ts": buf["ts"],
-                }
-            )
+            for price, size in fills:
+                # Pass the raw price — the normalizer applies per-symbol scaling.
+                # Pre-scaling here would cause double-scaling (DATA-001).
+                buf["code"] = symbol
+                buf["close"] = price
+                buf["volume"] = size
+                buf["total_volume"] = total_volume
+                buf["ts"] = ts_ns
+
+                # Create a fresh snapshot dict so the async consumer receives an
+                # independent object.  The workspace buf may be overwritten by the
+                # next callback (or the next fill of this frame) before the event
+                # loop dequeues this message.
+                on_tick(
+                    {
+                        "code": buf["code"],
+                        "close": buf["close"],
+                        "volume": buf["volume"],
+                        "total_volume": buf["total_volume"],
+                        "ts": buf["ts"],
+                    }
+                )
         except Exception as exc:
             self.log.error("Fubon trade callback error", error=str(exc))
 
@@ -748,23 +762,31 @@ def _total_volume(data: dict[str, Any]) -> int:
     return int(volume) if volume is not None else 0
 
 
-def _parse_trade(data: dict[str, Any]) -> tuple[str, int | float, int, int, int] | str:
-    """Documented trades payload -> ``(symbol, price, size, total_volume, ts_ns)``, or a reject reason."""
+def _parse_trade(data: dict[str, Any]) -> tuple[str, list[tuple[int | float, int]], int, int] | str:
+    """Documented trades payload -> ``(symbol, fills, total_volume, ts_ns)``, or a reject reason.
+
+    ``fills`` holds one ``(price, size)`` per ``trades`` entry, in frame order.  Every entry is
+    checked before anything is returned, so a frame with one bad entry is rejected whole.
+    """
     symbol = data.get("symbol")
     if not isinstance(symbol, str) or not symbol:
         return "trade_symbol_missing"
     trades = data.get("trades")
-    first = trades[0] if isinstance(trades, list) and trades else None
-    if not isinstance(first, dict):
+    if not isinstance(trades, list) or not trades:
         return "trade_entry_missing"
-    price = _number(first.get("price"))
-    size = _number(first.get("size"))
-    if price is None or size is None:
-        return "trade_price_or_size_invalid"
+    fills: list[tuple[int | float, int]] = []
+    for entry in trades:
+        if not isinstance(entry, dict):
+            return "trade_entry_missing"
+        price = _number(entry.get("price"))
+        size = _number(entry.get("size"))
+        if price is None or size is None:
+            return "trade_price_or_size_invalid"
+        fills.append((price, int(size)))
     ts_ns = _us_to_ns(data.get("time"))
     if ts_ns is None:
         return "trade_time_invalid"
-    return symbol, price, int(size), _total_volume(data), ts_ns
+    return symbol, fills, _total_volume(data), ts_ns
 
 
 _Levels = tuple[list[int | float], list[int]]

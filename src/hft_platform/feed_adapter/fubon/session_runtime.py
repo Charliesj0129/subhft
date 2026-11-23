@@ -9,7 +9,8 @@ Real login shapes (fubon-neo 2.5.0, introspected from the wheel):
 - ``login(personal_id, password, cert_path, cert_pass=None)`` (cert + password)
 - ``apikey_login(personal_id, api_key, cert_path, cert_pass=None)``
 - both return a ``Result`` (``is_success``, ``message``, ``data``) whose ``data``
-  is the list of trading ``Account`` objects.
+  is the list of trading ``Account`` objects, one per product the customer holds
+  (``account_type`` ``"stock"`` and ``"futopt"``); only a futopt account is ever selected.
 
 Simulation safety
 -----------------
@@ -59,6 +60,10 @@ _LIVE_ORDER_MODES = frozenset({"live", "real"})
 
 _SECRET_MASK = "***"
 _ACCOUNT_TAIL = 3
+
+# ``Account.account_type`` of the futures/options trading account.  A login returns one account
+# per product the customer holds (``"stock"`` and ``"futopt"``).
+_FUTOPT_ACCOUNT_TYPE = "futopt"
 
 
 class FubonSimSafetyError(RuntimeError):
@@ -135,6 +140,11 @@ def _mask_account(account: Any) -> str | None:
     if not number:
         return None
     return _SECRET_MASK + number[-_ACCOUNT_TAIL:]
+
+
+def _is_futopt_account(account: Any) -> bool:
+    """True when *account* is a futures/options account.  An absent or unreadable type is not."""
+    return str(getattr(account, "account_type", "")).strip().lower() == _FUTOPT_ACCOUNT_TYPE
 
 
 def _scrub(text: str, secrets: tuple[str, ...]) -> str:
@@ -226,22 +236,30 @@ class FubonSessionRuntime:
 
     @staticmethod
     def _select_account(accounts: Any) -> Any:
-        """Pick the trading account from the login result.
+        """Pick the futures/options trading account from the login result.
 
-        ``HFT_FUBON_ACCOUNT`` selects by account number.  Without it exactly one
-        account must exist: guessing among several would trade the wrong book.
+        A real login returns one account per product the customer holds (``account_type``
+        ``"stock"`` and ``"futopt"``).  Only a futopt account can trade here, so the others
+        are never candidates.  ``HFT_FUBON_ACCOUNT`` selects by account number and must name a
+        futopt account.  Without it exactly one futopt account must exist: guessing among
+        several would trade the wrong book, and none leaves nothing to trade with.
         """
         if not isinstance(accounts, (list, tuple)) or not accounts:
             raise FubonSdkResultError("login returned no accounts")
+        futopt = [candidate for candidate in accounts if _is_futopt_account(candidate)]
+        if not futopt:
+            raise FubonSdkResultError(f"login returned no futopt account ({len(accounts)} of other types)")
         wanted = os.environ.get(ENV_ACCOUNT, "").strip()
         if wanted:
-            for candidate in accounts:
+            for candidate in futopt:
                 if str(getattr(candidate, "account", "")) == wanted:
                     return candidate
+            if any(str(getattr(candidate, "account", "")) == wanted for candidate in accounts):
+                raise FubonSdkResultError(f"{ENV_ACCOUNT} names an account that is not a futopt account")
             raise FubonSdkResultError(f"{ENV_ACCOUNT} is not among the {len(accounts)} accounts returned by login")
-        if len(accounts) > 1:
-            raise FubonSdkResultError(f"login returned {len(accounts)} accounts; set {ENV_ACCOUNT} to choose one")
-        return accounts[0]
+        if len(futopt) > 1:
+            raise FubonSdkResultError(f"login returned {len(futopt)} futopt accounts; set {ENV_ACCOUNT} to choose one")
+        return futopt[0]
 
     def _fail_login(self, reason: str, start_ns: int | None = None, **fields: Any) -> bool:
         if start_ns is not None:

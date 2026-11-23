@@ -23,6 +23,7 @@ install_fubon_neo_mock()
 
 from hft_platform.contracts.strategy import TIF, Side
 from hft_platform.feed_adapter.fubon.order_codec import (
+    FubonOrderAlreadyFilledError,
     FubonOrderCodec,
     FubonSdkResultError,
     encode_user_def,
@@ -213,3 +214,33 @@ class TestUnwrapSdkResult:
     def test_truthy_non_true_flag_is_failure(self) -> None:
         with pytest.raises(FubonSdkResultError):
             unwrap_sdk_result(FakeResult(is_success="yes"), "op")
+
+
+class TestCancelOfFilledOrder:
+    """The broker's refusal to cancel a filled order, as the official test environment words it."""
+
+    def test_cancel_of_a_filled_order_raises_the_already_filled_error(self) -> None:
+        with pytest.raises(FubonOrderAlreadyFilledError):
+            unwrap_sdk_result(fail("期貨委託目前狀態成交單已不允許取消交易"), "cancel_order")
+
+    def test_already_filled_error_is_still_a_sdk_result_error(self) -> None:
+        with pytest.raises(FubonSdkResultError, match="cancel_order: SDK reported failure"):
+            unwrap_sdk_result(fail("期貨委託目前狀態成交單已不允許取消交易"), "cancel_order")
+
+    def test_filled_marker_past_the_truncation_limit_is_still_recognised(self) -> None:
+        with pytest.raises(FubonOrderAlreadyFilledError):
+            unwrap_sdk_result(fail("x" * 300 + "期貨委託目前狀態成交單已不允許取消交易"), "cancel_order")
+
+    @pytest.mark.parametrize("message", ["system busy", "order not found", "", "None"])
+    def test_other_cancel_refusal_is_a_plain_sdk_result_error(self, message: str) -> None:
+        with pytest.raises(FubonSdkResultError) as excinfo:
+            unwrap_sdk_result(fail(message), "cancel_order")
+
+        assert not isinstance(excinfo.value, FubonOrderAlreadyFilledError)
+
+    @pytest.mark.parametrize("op", ["place_order", "modify_price", "convert_symbol"])
+    def test_filled_wording_on_another_operation_is_not_a_cancel_no_op(self, op: str) -> None:
+        with pytest.raises(FubonSdkResultError) as excinfo:
+            unwrap_sdk_result(fail("期貨委託目前狀態成交單已不允許取消交易"), op)
+
+        assert not isinstance(excinfo.value, FubonOrderAlreadyFilledError)

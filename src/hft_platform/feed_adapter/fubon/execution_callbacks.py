@@ -33,16 +33,31 @@ Design notes
 - **Boundary Law**: All Fubon-specific field names are translated to canonical
   keys (``order_id``, ``symbol``, ``side``, ``price``, ``qty``, etc.) at this
   boundary.
+- **Trading symbol**: SDK reports carry the *account / product* code (``FITX``) plus
+  ``expiry_date`` (and ``strike_price`` / ``call_put`` for options), while the
+  platform trades and keys positions by the trading symbol (``TXFL6``).
+  ``FubonSymbolResolver`` converts with ``sdk.futopt.convert_symbol`` and caches the
+  answer in a bounded dict.  A report whose symbol cannot be converted is NOT
+  forwarded: a fill under the wrong symbol would open a phantom position under the
+  product code and leave the real one flat.  It is logged at error level, counted
+  (``symbol_error_count``, ``execution_events_total{type="fubon_symbol_unresolved"}``)
+  and kept in a bounded ring (``unresolved_reports``) so it can be reconciled.
+- **Order block**: ``ExecutionNormalizer.normalize_order`` reads price, side and
+  quantities from a nested ``order`` mapping, so order reports carry one next to the
+  flat keys (without it every order event came out with price 0 and quantity 0).
 """
 
 from __future__ import annotations
 
 import threading
+from collections import deque
 from typing import Any, Callable
 
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.feed_adapter.fubon.order_codec import unwrap_sdk_result
+from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("feed_adapter.fubon.execution_callbacks")
 
@@ -59,6 +74,14 @@ REQUIRED_SDK_SETTERS: tuple[str, ...] = (
 
 _EVENT_CONTENT_LIMIT = 200
 
+# Distinct (product, expiry, strike, call/put) keys kept by the symbol resolver.  A futures
+# book needs a handful; options add one per strike, so the bound is generous but finite.
+_SYMBOL_CACHE_MAX = 1024
+# Dropped reports kept for reconciliation (identifiers only, no account data).
+_UNRESOLVED_KEEP = 64
+# ``execution_events_total`` label for a report dropped for want of a trading symbol.
+_UNRESOLVED_METRIC_TYPE = "fubon_symbol_unresolved"
+
 # ``function_type`` of an order report -> the ``op_type`` text ExecutionNormalizer
 # understands.  Only codes that the SDK's own examples show are mapped (0 batch
 # new order, 20 modify lot, 30 cancel); an unknown code leaves ``op_type`` empty.
@@ -67,6 +90,10 @@ _OP_TYPES: dict[int, str] = {0: "New", 20: "UpdateQty", 30: "Cancel"}
 
 class FubonCallbackRegistrationError(RuntimeError):
     """The Fubon SDK cannot deliver execution reports (missing setter or bad handler)."""
+
+
+class FubonSymbolConversionError(RuntimeError):
+    """A report's product code could not be converted to the trading symbol."""
 
 
 def _get(obj: Any, key: str, default: Any = None) -> Any:
@@ -150,6 +177,92 @@ def bridge_order_callback(on_order: Callable[[Any, Any], None]) -> Callable[[dic
     return _forward
 
 
+def _enum_text(value: Any) -> str:
+    """Name of an enum member (``CallPut.Call`` -> ``Call``), else ``str(value)``."""
+    name = getattr(value, "name", None)
+    return name if isinstance(name, str) else str(value)
+
+
+class FubonSymbolResolver:
+    """Converts a report's product code + expiry to the trading symbol, with a bounded cache.
+
+    ``sdk.futopt.convert_symbol(symbol, expiry_date[, strike_price, call_put])`` is the
+    vendor's own mapping (``FITX`` + ``202612`` -> ``TXFL6``); the product-to-contract
+    naming is not derivable locally, so nothing here invents a code.  Answers are cached
+    per ``(symbol, expiry, strike, call_put)``, so the SDK is asked once per contract and
+    a cache hit is a dict lookup.  The cache holds at most ``max_entries`` keys; the oldest
+    is evicted first.  A failed conversion is never cached, so a later success is not
+    shadowed.
+
+    Reports arrive on SDK threads, so the cache is guarded by a lock; the SDK call itself
+    runs outside it (two threads converting the same new key at once is harmless).
+    """
+
+    __slots__ = ("_sdk", "_cache", "_lock", "_max_entries")
+
+    def __init__(self, sdk: Any, max_entries: int = _SYMBOL_CACHE_MAX) -> None:
+        if max_entries < 1:
+            raise ValueError(f"max_entries must be >= 1, got {max_entries}")
+        self._sdk = sdk
+        self._cache: dict[tuple[str, str, str, str], str] = {}
+        self._lock = threading.Lock()
+        self._max_entries = max_entries
+
+    def __len__(self) -> int:
+        return len(self._cache)
+
+    def resolve(self, report: Any) -> str:
+        """Return the trading symbol of an order / fill report.
+
+        Raises:
+            FubonSymbolConversionError: the report lacks the fields to convert, the SDK
+                has no ``convert_symbol``, or it failed or returned something unusable.
+        """
+        product = _first(report, ("symbol",))
+        expiry = _first(report, ("expiry_date",))
+        if product is None or expiry is None:
+            raise FubonSymbolConversionError("report carries no product symbol or expiry_date to convert")
+        leg2 = _first(report, ("symbol_leg2",))
+        if leg2 is not None:
+            raise FubonSymbolConversionError(f"two-leg spread report ({product}/{leg2}) has no single trading symbol")
+        call_put = _first(report, ("call_put",))
+        strike = _get(report, "strike_price")
+        is_option = call_put is not None
+        if is_option and strike is None:
+            raise FubonSymbolConversionError(f"option report {product} {expiry} carries no strike_price")
+        key = (
+            str(product),
+            str(expiry),
+            str(strike) if is_option else "",
+            _enum_text(call_put) if is_option else "",
+        )
+        with self._lock:
+            cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        trading = self._convert(str(product), str(expiry), strike, call_put, is_option)
+        with self._lock:
+            if key not in self._cache and len(self._cache) >= self._max_entries:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = trading
+        logger.info("fubon_exec_cb.symbol_resolved", product=key[0], expiry=key[1], symbol=trading)
+        return trading
+
+    def _convert(self, product: str, expiry: str, strike: Any, call_put: Any, is_option: bool) -> str:
+        convert = getattr(getattr(self._sdk, "futopt", None), "convert_symbol", None)
+        if not callable(convert):
+            raise FubonSymbolConversionError("sdk.futopt.convert_symbol is not available")
+        try:
+            answer = convert(product, expiry, strike, call_put) if is_option else convert(product, expiry)
+            if hasattr(answer, "is_success"):
+                answer = unwrap_sdk_result(answer, "convert_symbol")
+        except Exception as exc:
+            raise FubonSymbolConversionError(f"convert_symbol({product}, {expiry}) failed: {exc}") from exc
+        if not isinstance(answer, str) or not answer.strip():
+            raise FubonSymbolConversionError(f"convert_symbol({product}, {expiry}) returned {answer!r}")
+        return answer.strip()
+
+
 def _content_of(args: tuple[Any, ...]) -> tuple[Any, Any]:
     """Split an SDK delivery into ``(code, content)``; ``code`` is None for one argument."""
     if not args:
@@ -181,6 +294,9 @@ class FubonExecutionCallbackAdapter:
         "_order_lock",
         "_deal_lock",
         "_error_count",
+        "_symbols",
+        "_unresolved",
+        "_symbol_error_count",
         "log",
     )
 
@@ -190,6 +306,9 @@ class FubonExecutionCallbackAdapter:
         self._on_deal: Callable[[dict[str, Any]], None] | None = None
         self._on_event: Callable[[Any, Any], None] | None = None
         self._error_count: int = 0
+        self._symbol_error_count: int = 0
+        self._symbols = FubonSymbolResolver(sdk)
+        self._unresolved: deque[dict[str, str]] = deque(maxlen=_UNRESOLVED_KEEP)
         self.log = logger
         self._order_lock = threading.Lock()
         self._deal_lock = threading.Lock()
@@ -215,6 +334,7 @@ class FubonExecutionCallbackAdapter:
             "source": "",
             "strategy_id": "",
             "ts_ns": 0,
+            "order": {},
         }
         self._deal_buffer: dict[str, Any] = {
             "order_id": "",
@@ -235,6 +355,37 @@ class FubonExecutionCallbackAdapter:
     def error_count(self) -> int:
         """Number of SDK deliveries that failed translation or the downstream handler."""
         return self._error_count
+
+    @property
+    def symbol_error_count(self) -> int:
+        """Number of reports dropped because their trading symbol could not be resolved."""
+        return self._symbol_error_count
+
+    @property
+    def unresolved_reports(self) -> tuple[dict[str, str], ...]:
+        """Identifiers of the most recent dropped reports (bounded), oldest first."""
+        return tuple(dict(entry) for entry in self._unresolved)
+
+    def _drop_unresolved(self, kind: str, raw: Any, exc: Exception) -> None:
+        """Record a report that must not be forwarded: its trading symbol is unknown."""
+        self._error_count += 1
+        self._symbol_error_count += 1
+        ident = {
+            "kind": kind,
+            "order_no": _resolve_order_id(raw),
+            "seq_no": "" if _get(raw, "seq_no") is None else str(_get(raw, "seq_no")),
+            "filled_no": "" if _get(raw, "filled_no") is None else str(_get(raw, "filled_no")),
+            "product": "" if _get(raw, "symbol") is None else str(_get(raw, "symbol")),
+            "expiry_date": "" if _get(raw, "expiry_date") is None else str(_get(raw, "expiry_date")),
+        }
+        self._unresolved.append(ident)
+        # Logged first so the loud signal survives a metrics failure; this runs on the SDK's
+        # callback thread, where nothing may be raised.
+        self.log.error("fubon_exec_cb.symbol_unresolved", error=str(exc), **ident)
+        try:
+            MetricsRegistry.get().execution_events_total.labels(type=_UNRESOLVED_METRIC_TYPE).inc()
+        except Exception as metric_exc:
+            self.log.warning("fubon_exec_cb.symbol_unresolved_metric_failed", error=str(metric_exc))
 
     # ------------------------------------------------------------------ #
     # Callback registration
@@ -294,16 +445,25 @@ class FubonExecutionCallbackAdapter:
             self.log.error("fubon_exec_cb.order_empty_content", source=source, code=str(code))
             return
         try:
+            # Resolved before the buffer lock: a cache miss calls the SDK.
+            symbol = self._symbols.resolve(raw)
             with self._order_lock:
                 buf = self._order_buffer
                 buf["order_id"] = buf["order_no"] = _resolve_order_id(raw)
                 seq = _get(raw, "seq_no")
                 buf["seq_no"] = "" if seq is None else str(seq)
-                symbol = _first(raw, ("symbol", "stock_no"))
-                buf["symbol"] = "" if symbol is None else str(symbol)
+                buf["symbol"] = symbol
                 buf["side"] = buf["action"] = _resolve_side(raw)
                 buf["price"] = _get(raw, "price")
                 buf["qty"] = _to_int(_first(raw, ("lot", "quantity", "qty")))
+                # The nested block ExecutionNormalizer.normalize_order reads price, side and
+                # quantities from.  A fresh dict per report: the payload copy below is shallow.
+                buf["order"] = {
+                    "price": buf["price"],
+                    "action": buf["action"],
+                    "quantity": buf["qty"],
+                    "filled_qty": _to_int(_get(raw, "filled_lot")),
+                }
                 buf["status"] = str(_get(raw, "status", ""))
                 buf["function_type"] = _get(raw, "function_type")
                 buf["op_type"] = _resolve_op_type(buf["function_type"])
@@ -315,6 +475,8 @@ class FubonExecutionCallbackAdapter:
                 # reports are low frequency (~100 fills/day).
                 payload = dict(buf)
             handler(payload)
+        except FubonSymbolConversionError as exc:
+            self._drop_unresolved("order", raw, exc)
         except Exception as exc:
             self._error_count += 1
             self.log.error("fubon_exec_cb.order_error", source=source, error=str(exc))
@@ -331,6 +493,7 @@ class FubonExecutionCallbackAdapter:
             self.log.error("fubon_exec_cb.deal_empty_content", code=str(code))
             return
         try:
+            symbol = self._symbols.resolve(raw)
             with self._deal_lock:
                 buf = self._deal_buffer
                 buf["order_id"] = buf["order_no"] = _resolve_order_id(raw)
@@ -345,8 +508,7 @@ class FubonExecutionCallbackAdapter:
                 else:
                     fill_id = "" if seq is None else str(seq)
                 buf["seq_no"] = buf["fill_id"] = fill_id
-                symbol = _first(raw, ("symbol", "stock_no"))
-                buf["symbol"] = "" if symbol is None else str(symbol)
+                buf["symbol"] = symbol
                 buf["side"] = buf["action"] = _resolve_side(raw)
                 buf["price"] = _first(raw, ("filled_price", "mat_price"))
                 buf["qty"] = _to_int(_first(raw, ("filled_lots", "filled_lot", "mat_qty")))
@@ -355,6 +517,8 @@ class FubonExecutionCallbackAdapter:
                 buf["ts_ns"] = timebase.now_ns()
                 payload = dict(buf)
             handler(payload)
+        except FubonSymbolConversionError as exc:
+            self._drop_unresolved("deal", raw, exc)
         except Exception as exc:
             self._error_count += 1
             self.log.error("fubon_exec_cb.deal_error", error=str(exc))

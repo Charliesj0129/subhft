@@ -263,12 +263,44 @@ DOC_BOOK_OUT: dict[str, Any] = {
     "ts": DOC_BOOK_TS_NS,
 }
 
+# Consecutive trades frames from Fubon's official TEST environment (fubon-neo 2.5.0), as
+# serial -> (time_us, total.tradeVolume, ((price, size), ...)).  An aggressive order that sweeps
+# price levels arrives as ONE frame with several ``trades`` entries, and the sizes of a frame add
+# up to the change of total.tradeVolume since the previous frame (644293 -> 644294 -> 644295).
+# Frame 644356 is a later two-entry sweep (the frames in between were not kept).  Only these four
+# fields of each frame were captured; the symbol/type/exchange of the rebuilt data objects are
+# placeholders.
+REAL_TRADE_FRAMES: dict[int, tuple[int, int, tuple[tuple[int, int], ...]]] = {
+    644293: (1795401881390000, 279149, ((35853, 1),)),
+    644294: (1795401881402000, 279152, ((35852, 2), (35851, 1))),
+    644295: (1795401881418000, 279156, ((35849, 4),)),
+    644356: (1795401884201000, 279193, ((35836, 1), (35835, 1))),
+}
+
 _ABSENT = object()
 
 
 def _trade_frame(**extra: Any) -> dict[str, Any]:
     """The documented trades data object, with fields overridden by *extra*."""
     return {**copy.deepcopy(DOC_TRADE_DATA), **extra}
+
+
+def _real_frame(serial: int) -> dict[str, Any]:
+    """The trades data object of captured frame *serial* (see REAL_TRADE_FRAMES)."""
+    time_us, trade_volume, fills = REAL_TRADE_FRAMES[serial]
+    return {
+        "symbol": "TXFA4",
+        "type": "FUTURE",
+        "exchange": "TAIFEX",
+        "trades": [{"price": price, "size": size} for price, size in fills],
+        "total": {"tradeVolume": trade_volume},
+        "time": time_us,
+        "serial": serial,
+    }
+
+
+def _real_ts_ns(serial: int) -> int:
+    return REAL_TRADE_FRAMES[serial][0] * 1_000
 
 
 def _book_frame(**extra: Any) -> dict[str, Any]:
@@ -347,7 +379,7 @@ class TestTradeCallback:
 
         assert [tick["ts"] for tick in received] == [int(time_us) * 1_000]
 
-    def test_trade_price_and_size_come_from_the_first_trades_entry(self) -> None:
+    def test_trade_price_and_size_come_from_the_trades_entry(self) -> None:
         rt = _make_runtime()
         received: list[dict[str, Any]] = []
         rt.register_quote_callbacks(on_tick=lambda d: received.append(dict(d)), on_bidask=MagicMock())
@@ -404,15 +436,6 @@ class TestTradeCallback:
 
         assert received[0]["volume"] == 2
         assert isinstance(received[0]["volume"], int)
-
-    def test_extra_trade_entries_forward_only_the_first_and_are_noted(self) -> None:
-        rt, on_tick, _ = _runtime_with_mocks()
-
-        rt._on_fubon_trade(_trade_frame(trades=[{"price": 17540, "size": 1}, {"price": 17541, "size": 2}]))
-
-        assert on_tick.call_count == 1
-        assert on_tick.call_args.args[0]["close"] == 17540
-        assert _reasons(rt) == ["trade_extra_entries_ignored"]
 
     def test_single_trade_entry_is_not_noted(self) -> None:
         rt, on_tick, _ = _runtime_with_mocks()
@@ -522,6 +545,174 @@ class TestTradeCallback:
         rt._on_fubon_trade(DOC_TRADE_DATA)
 
         assert rt._last_data_ts >= before
+
+
+# ---------------------------------------------------------------------------
+# Multi-entry trades frames: one tick per fill
+# ---------------------------------------------------------------------------
+
+
+def _ticks_of(*frames: dict[str, Any]) -> list[dict[str, Any]]:
+    """The tick dicts (the very objects the callback received) for *frames*, delivered in order."""
+    rt = _make_runtime()
+    received: list[dict[str, Any]] = []
+    rt.register_quote_callbacks(on_tick=received.append, on_bidask=MagicMock())
+    for frame in frames:
+        rt._on_fubon_trade(frame)
+    return received
+
+
+class TestMultiEntryTradeFrames:
+    def test_real_sweep_frame_forwards_one_tick_per_entry_in_order(self) -> None:
+        ticks = _ticks_of(_real_frame(644294))
+
+        assert [(t["close"], t["volume"]) for t in ticks] == [(35852, 2), (35851, 1)]
+
+    def test_real_sweep_frame_ticks_share_the_frame_code_and_time(self) -> None:
+        ticks = _ticks_of(_real_frame(644294))
+
+        assert [t["code"] for t in ticks] == ["TXFA4", "TXFA4"]
+        assert [t["ts"] for t in ticks] == [_real_ts_ns(644294)] * 2
+
+    def test_real_sweep_frame_ticks_all_carry_the_frame_total_volume(self) -> None:
+        ticks = _ticks_of(_real_frame(644294))
+
+        assert [t["total_volume"] for t in ticks] == [279152, 279152]
+
+    def test_real_single_entry_frame_forwards_exactly_one_tick(self) -> None:
+        ticks = _ticks_of(_real_frame(644293))
+
+        assert ticks == [
+            {"code": "TXFA4", "close": 35853, "volume": 1, "total_volume": 279149, "ts": _real_ts_ns(644293)}
+        ]
+
+    def test_real_two_entry_sweep_later_in_the_session_forwards_both_fills(self) -> None:
+        ticks = _ticks_of(_real_frame(644356))
+
+        assert [(t["close"], t["volume"]) for t in ticks] == [(35836, 1), (35835, 1)]
+        assert {t["total_volume"] for t in ticks} == {279193}
+
+    @pytest.mark.parametrize(("previous", "current"), [(644293, 644294), (644294, 644295)])
+    def test_real_frames_forwarded_volume_equals_the_change_of_total_volume(self, previous: int, current: int) -> None:
+        ticks = _ticks_of(_real_frame(current))
+
+        change = REAL_TRADE_FRAMES[current][1] - REAL_TRADE_FRAMES[previous][1]
+        assert sum(t["volume"] for t in ticks) == change
+
+    def test_real_frame_sequence_forwards_every_fill_in_exchange_order(self) -> None:
+        ticks = _ticks_of(*(_real_frame(serial) for serial in REAL_TRADE_FRAMES))
+
+        assert [(t["close"], t["volume"]) for t in ticks] == [
+            (35853, 1),
+            (35852, 2),
+            (35851, 1),
+            (35849, 4),
+            (35836, 1),
+            (35835, 1),
+        ]
+        assert [t["ts"] for t in ticks] == sorted(t["ts"] for t in ticks)
+
+    def test_real_frames_volume_over_consecutive_frames_matches_the_total_volume_change(self) -> None:
+        ticks = _ticks_of(_real_frame(644294), _real_frame(644295))
+
+        assert sum(t["volume"] for t in ticks) == 279156 - 279149
+        assert ticks[-1]["total_volume"] == 279156
+
+    def test_multi_entry_frame_is_not_noted_as_ignored(self) -> None:
+        rt, on_tick, _ = _runtime_with_mocks()
+
+        rt._on_fubon_trade(_real_frame(644294))
+
+        assert on_tick.call_count == 2
+        assert _reasons(rt) == []
+
+    def test_ticks_of_one_frame_are_distinct_dicts_that_keep_their_own_values(self) -> None:
+        rt = _make_runtime()
+        received: list[dict[str, Any]] = []
+        rt.register_quote_callbacks(on_tick=received.append, on_bidask=MagicMock())
+
+        rt._on_fubon_trade(_real_frame(644294))
+
+        assert received[0] is not received[1]
+        assert all(tick is not rt._tick_buffer for tick in received)
+        assert [(tick["close"], tick["volume"]) for tick in received] == [(35852, 2), (35851, 1)]
+
+    def test_multi_entry_frame_refreshes_liveness_once_it_is_accepted(self) -> None:
+        rt, _, _ = _runtime_with_mocks()
+        before = time.monotonic()
+
+        rt._on_fubon_trade(_real_frame(644294))
+
+        assert rt._last_data_ts >= before
+
+    def test_multi_entry_frame_carries_a_missing_total_volume_as_zero_on_every_tick(self) -> None:
+        data = _real_frame(644294)
+        del data["total"]
+
+        ticks = _ticks_of(data)
+
+        assert [(t["close"], t["total_volume"]) for t in ticks] == [(35852, 0), (35851, 0)]
+
+    @pytest.mark.parametrize(
+        ("entries", "reason"),
+        [
+            ([{"price": 35852, "size": 2}, {"price": "35851", "size": 1}], "trade_price_or_size_invalid"),
+            ([{"price": 35852, "size": 2}, {"price": 35851}], "trade_price_or_size_invalid"),
+            ([{"price": 35852, "size": 2}, {"price": 35851, "size": None}], "trade_price_or_size_invalid"),
+            ([{"price": 35852, "size": 2}, {"price": float("nan"), "size": 1}], "trade_price_or_size_invalid"),
+            ([{"price": 35852, "size": 2}, {"price": True, "size": 1}], "trade_price_or_size_invalid"),
+            ([{"price": 35852, "size": 2}, None], "trade_entry_missing"),
+            ([{"price": 35852, "size": 2}, [35851, 1]], "trade_entry_missing"),
+            ([{"price": 35852, "size": 2}, {"price": 35851, "size": 1}, 7], "trade_entry_missing"),
+        ],
+    )
+    def test_frame_with_a_malformed_later_entry_is_dropped_whole(self, entries: list[Any], reason: str) -> None:
+        rt, on_tick, _ = _runtime_with_mocks()
+
+        rt._on_fubon_trade(_real_frame(644294) | {"trades": entries})
+
+        assert on_tick.call_count == 0
+        assert _reasons(rt) == [reason]
+        assert rt._tick_buffer == {"code": "", "close": 0, "volume": 0, "total_volume": 0, "ts": 0}
+        assert rt._last_data_ts == 0.0
+
+    def test_callback_failure_on_a_multi_entry_frame_is_logged_once_and_does_not_escape(self) -> None:
+        rt, on_tick, _ = _runtime_with_mocks()
+        on_tick.side_effect = RuntimeError("downstream failed")
+
+        result = rt._on_fubon_trade(_real_frame(644294))
+
+        assert result is None
+        assert rt.log.error.call_count == 1
+        assert rt.log.error.call_args.kwargs["error"] == "downstream failed"
+
+    def test_multi_entry_trial_frame_is_dropped_without_any_tick(self) -> None:
+        rt, on_tick, _ = _runtime_with_mocks()
+
+        rt._on_fubon_trade(_real_frame(644294) | {"isTrial": True})
+
+        assert on_tick.call_count == 0
+
+    def test_multi_entry_frame_after_stop_forwards_nothing(self) -> None:
+        rt, on_tick, _ = _runtime_with_mocks()
+        rt.stop()
+
+        rt._on_fubon_trade(_real_frame(644294))
+
+        assert on_tick.call_count == 0
+
+    def test_sweep_frame_through_the_message_listener_reaches_the_tick_callback(self, metrics: Any) -> None:
+        rt, sdk = _subscribed_runtime()
+        received: list[dict[str, Any]] = []
+        rt.register_quote_callbacks(on_tick=received.append, on_bidask=MagicMock())
+
+        sdk.futopt_ws.deliver(_data_msg("trades", _real_frame(644294)))
+
+        assert [(t["close"], t["volume"], t["total_volume"]) for t in received] == [
+            (35852, 2, 279152),
+            (35851, 1, 279152),
+        ]
+        assert _dropped(metrics, "trades") == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1722,6 +1913,28 @@ class TestNormalizerContract:
         assert event.volume == 1
         assert event.total_volume == 12174
         assert event.meta.source_ts == DOC_TRADE_TS_NS
+
+    def test_real_sweep_frame_ticks_keep_their_own_price_and_volume_through_the_normalizer(
+        self, normalizer: Any
+    ) -> None:
+        events = [normalizer.normalize_tick(tick) for tick in _ticks_of(_real_frame(644294))]
+
+        assert [event.price for event in events] == [358_520_000, 358_510_000]  # x 10000 once each
+        assert [event.volume for event in events] == [2, 1]
+        assert [event.total_volume for event in events] == [279152, 279152]
+
+    def test_real_sweep_frame_ticks_of_one_timestamp_are_all_applied_by_the_lob_engine(self, normalizer: Any) -> None:
+        from hft_platform.feed_adapter.lob_engine import LOBEngine
+
+        engine = LOBEngine()
+        events = [normalizer.normalize_tick(tick) for tick in _ticks_of(_real_frame(644294))]
+        assert events[0].meta.source_ts == events[1].meta.source_ts
+
+        for event in events:
+            engine.process_event(event)
+
+        book = engine.get_book("TXFA4")
+        assert (book.last_price, book.last_volume) == (358_510_000, 1)
 
     def test_documented_book_is_scaled_exactly_once_on_every_level(self, normalizer: Any) -> None:
         rt = _make_runtime()

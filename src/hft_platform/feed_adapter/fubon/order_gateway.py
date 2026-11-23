@@ -25,11 +25,13 @@ it were an order.  Cancel and modify act on a ``FutOptOrderResult`` (what
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from structlog import get_logger
 
 from hft_platform.feed_adapter.fubon.order_codec import (
+    FubonOrderAlreadyFilledError,
     FubonOrderCodec,
     encode_user_def,
     format_scaled_price,
@@ -42,6 +44,19 @@ PRICE_SCALE = 10000
 
 # Price types that carry a limit price; the others must be sent without one.
 _PRICED_TYPES = frozenset({"LMT"})
+
+
+@dataclass(frozen=True, slots=True)
+class FubonCancelNoOp:
+    """What ``cancel_order`` returns when there was nothing left to cancel.
+
+    The broker refused the cancel because the order is already filled.  That is the
+    ordinary loser of a cancel-versus-fill race, not a failed cancel: nothing was sent
+    that could be retried, and the fill report settles the order.
+    """
+
+    order_id: str
+    reason: str
 
 
 class FubonOrderGateway:
@@ -197,7 +212,12 @@ class FubonOrderGateway:
                 order number string.
 
         Returns:
-            The SDK ``FutOptOrderResult`` of the cancellation.
+            The SDK ``FutOptOrderResult`` of the cancellation, or a
+            :class:`FubonCancelNoOp` (``reason="already_filled"``) when the broker
+            refused because the order is already filled.
+
+        Raises:
+            FubonSdkResultError: the SDK refused the cancel of a live order, or failed.
         """
         sdk = self._require_sdk("cancel_order")
         account = self._require_account("cancel_order")
@@ -212,6 +232,16 @@ class FubonOrderGateway:
                 elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
             )
             return data
+        except FubonOrderAlreadyFilledError as exc:
+            # Returned, not raised: the caller counts a raised cancel as a broker failure
+            # (circuit-breaker input), and losing a cancel-versus-fill race is not one.
+            self.log.info(
+                "fubon_cancel_order_already_filled",
+                order_id=order_id,
+                error=str(exc),
+                elapsed_us=(time.perf_counter_ns() - start_ns) / 1000,
+            )
+            return FubonCancelNoOp(order_id=order_id, reason="already_filled")
         except Exception as exc:
             self.log.error(
                 "fubon_cancel_order_failed",

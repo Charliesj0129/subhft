@@ -224,6 +224,150 @@ class TestAccountSelection:
         assert rt.account is None
 
 
+class TestFutoptAccountSelection:
+    """A real login returns a stock account and a futopt account; only a futopt one can trade futures."""
+
+    @staticmethod
+    def _login(sdk: MagicMock, accounts: list[Any]) -> tuple[FubonSessionRuntime, bool]:
+        sdk.login.return_value = ok(accounts)
+        rt = FubonSessionRuntime(sdk)
+        return rt, rt.login(password="pwd", personal_id="A1", cert_path="/c.pfx")
+
+    @pytest.mark.parametrize("stock_first", [True, False])
+    def test_stock_and_futopt_accounts_without_a_selector_use_the_futopt_account(
+        self, sdk: MagicMock, stock_first: bool
+    ) -> None:
+        stock = make_account("8000001", account_type="stock")
+        futopt = make_account("9000002", account_type="futopt")
+
+        rt, logged_in = self._login(sdk, [stock, futopt] if stock_first else [futopt, stock])
+
+        assert logged_in is True
+        assert rt.account is futopt
+
+    def test_selector_naming_the_futopt_account_selects_it_among_stock_and_futopt(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stock, futopt = make_account("8000001", account_type="stock"), make_account("9000002")
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "9000002")
+
+        rt, logged_in = self._login(sdk, [stock, futopt])
+
+        assert logged_in is True
+        assert rt.account is futopt
+
+    def test_selector_picks_among_several_futopt_accounts_beside_a_stock_account(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stock = make_account("8000001", account_type="stock")
+        first, second = make_account("9000001"), make_account("9000002")
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "9000002")
+
+        rt, logged_in = self._login(sdk, [stock, first, second])
+
+        assert logged_in is True
+        assert rt.account is second
+
+    def test_selector_naming_a_stock_account_refuses_and_does_not_log_in(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stock, futopt = make_account("8000001", account_type="stock"), make_account("9000002")
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "8000001")
+
+        rt, logged_in = self._login(sdk, [stock, futopt])
+
+        assert logged_in is False
+        assert rt.account is None
+        assert rt.is_logged_in is False
+        assert "HFT_FUBON_ACCOUNT" in (rt.last_login_error or "")
+        assert "futopt" in (rt.last_login_error or "")
+
+    def test_selector_shared_by_a_stock_and_a_futopt_account_selects_the_futopt_one(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stock, futopt = make_account("5550001", account_type="stock"), make_account("5550001")
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "5550001")
+
+        rt, logged_in = self._login(sdk, [stock, futopt])
+
+        assert logged_in is True
+        assert rt.account is futopt
+
+    def test_selector_not_returned_by_login_refuses_with_a_stock_and_a_futopt_account(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "7777777")
+
+        rt, logged_in = self._login(sdk, [make_account("8000001", account_type="stock"), make_account("9000002")])
+
+        assert logged_in is False
+        assert rt.account is None
+        assert "HFT_FUBON_ACCOUNT" in (rt.last_login_error or "")
+
+    @pytest.mark.parametrize("with_selector", [False, True])
+    def test_only_stock_accounts_refuse_with_or_without_a_selector(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch, with_selector: bool
+    ) -> None:
+        if with_selector:
+            monkeypatch.setenv("HFT_FUBON_ACCOUNT", "8000001")
+
+        rt, logged_in = self._login(sdk, [make_account("8000001", account_type="stock")])
+
+        assert logged_in is False
+        assert rt.account is None
+        assert "futopt" in (rt.last_login_error or "")
+
+    def test_several_futopt_accounts_beside_a_stock_account_refuse_without_a_selector(self, sdk: MagicMock) -> None:
+        accounts = [make_account("8000001", account_type="stock"), make_account("9000001"), make_account("9000002")]
+
+        rt, logged_in = self._login(sdk, accounts)
+
+        assert logged_in is False
+        assert rt.account is None
+        assert "set HFT_FUBON_ACCOUNT" in (rt.last_login_error or "")
+        assert "2 futopt accounts" in (rt.last_login_error or "")
+
+    @pytest.mark.parametrize("account_type", ["futopt", "FutOpt", " futopt "])
+    def test_account_type_is_matched_ignoring_case_and_padding(self, sdk: MagicMock, account_type: str) -> None:
+        stock = make_account("8000001", account_type="stock")
+        futopt = make_account("9000002", account_type=account_type)
+
+        rt, logged_in = self._login(sdk, [stock, futopt])
+
+        assert logged_in is True
+        assert rt.account is futopt
+
+    @pytest.mark.parametrize("account_type", ["", "stock", "futopt2", None, 5])
+    def test_account_of_another_or_unreadable_type_is_never_selected(self, sdk: MagicMock, account_type: Any) -> None:
+        rt, logged_in = self._login(sdk, [make_account("1234567", account_type=account_type)])
+
+        assert logged_in is False
+        assert rt.account is None
+
+    def test_account_without_an_account_type_is_never_selected(self, sdk: MagicMock) -> None:
+        untyped = SimpleNamespace(name="x", branch_no="6460", account="1234567")
+
+        rt, logged_in = self._login(sdk, [untyped])
+
+        assert logged_in is False
+        assert rt.account is None
+
+    def test_refusal_messages_never_contain_an_account_number(
+        self, sdk: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("HFT_FUBON_ACCOUNT", "8000001")
+        messages = []
+        for accounts in (
+            [make_account("8000001", account_type="stock"), make_account("9000002")],
+            [make_account("8000001", account_type="stock")],
+        ):
+            rt, _ = self._login(sdk, accounts)
+            messages.append(rt.last_login_error or "")
+
+        assert all(messages)
+        assert not any(number in message for message in messages for number in ("8000001", "9000002"))
+
+
 class TestCredentialsAreNeverLogged:
     def test_no_log_event_contains_a_credential(self, sdk: MagicMock) -> None:
         secrets = ("PID-SECRET-1", "KEY-SECRET-2", "CERTPASS-SECRET-3")

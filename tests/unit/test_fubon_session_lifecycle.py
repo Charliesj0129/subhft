@@ -101,6 +101,20 @@ class TestLoginWithRetry:
         sdk.apikey_login.assert_not_called()
 
     @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_login_returning_stock_and_futopt_accounts_succeeds_on_the_first_attempt_without_a_selector(
+        self, stub_time: SimpleNamespace, sdk: MagicMock
+    ) -> None:
+        futopt = make_account("9000002")
+        sdk.login.return_value = ok([make_account("8000001", account_type="stock"), futopt])
+        rt = FubonSessionRuntime(sdk)
+
+        assert rt.login_with_retry(**_CREDS) is True
+
+        sdk.login.assert_called_once()
+        stub_time.sleep.assert_not_called()
+        assert rt.account is futopt
+
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
     def test_credentials_are_forwarded_to_every_attempt(
         self, stub_time: SimpleNamespace, sdk: MagicMock, account: SimpleNamespace
     ) -> None:
@@ -144,6 +158,18 @@ class TestReconnect:
         sdk.logout.assert_called_once_with()
         sdk.login.assert_called_once_with("A123456789", "pwd", "/c.pfx", None)
         assert rt.is_logged_in is True
+
+    @patch.object(session_runtime, "time", new_callable=sleepless_time)
+    def test_reconnect_with_stock_and_futopt_accounts_keeps_the_futopt_account(
+        self, stub_time: SimpleNamespace, sdk: MagicMock, env_credentials: None
+    ) -> None:
+        futopt = make_account("9000002")
+        sdk.login.return_value = ok([make_account("8000001", account_type="stock"), futopt])
+        rt = FubonSessionRuntime(sdk)
+
+        assert rt.reconnect(reason="test", force=True) is True
+
+        assert rt.account is futopt
 
     @patch.object(session_runtime, "time", new_callable=sleepless_time)
     def test_cooldown_blocks_a_second_reconnect(

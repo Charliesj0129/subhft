@@ -76,6 +76,11 @@ class FutOptOrderType(enum.Enum):
     FdayTrade = "FdayTrade"
 
 
+class CallPut(enum.Enum):
+    Call = "Call"
+    Put = "Put"
+
+
 _ENUMS: tuple[type[enum.Enum], ...] = (
     BSAction,
     TimeInForce,
@@ -84,6 +89,7 @@ _ENUMS: tuple[type[enum.Enum], ...] = (
     FutOptMarketType,
     FutOptPriceType,
     FutOptOrderType,
+    CallPut,
 )
 
 
@@ -141,9 +147,44 @@ def fail(message: str = "rejected") -> FakeResult:
     return FakeResult(False, data=None, message=message)
 
 
-def make_account(account: str = "1234567", branch_no: str = "6460", name: str = "tester") -> SimpleNamespace:
-    """A trading ``Account`` as login returns it."""
-    return SimpleNamespace(name=name, branch_no=branch_no, account=account, account_type="futopt")
+def make_convert_symbol(extra: dict[tuple[Any, ...], str] | None = None) -> Any:
+    """A ``futopt.convert_symbol`` stand-in with the contract mappings seen on the test environment.
+
+    Keys are ``(product, expiry_date)`` for futures and ``(product, expiry_date, strike_price,
+    call_put)`` for options.  An unknown product raises like the live SDK does for a code it
+    does not know (``Symbol Name error``); ``TMF`` is deliberately not mapped, the test
+    environment rejects it.
+    """
+    table: dict[tuple[Any, ...], str] = {
+        ("FITX", "202612"): "TXFL6",
+        ("FITX", "202701"): "TXFA7",
+        ("FIMTX", "202612"): "MXFL6",
+        ("TXO", "202612", 20000.0, CallPut.Call): "TXO20000L6",
+        ("TXO", "202612", 20000.0, CallPut.Put): "TXO20000X6",
+        ("TXO", "202612", 20100.0, CallPut.Call): "TXO20100L6",
+    }
+    table.update(extra or {})
+
+    def convert_symbol(symbol: Any, expiry_date: Any, strike_price: Any = None, call_put: Any = None) -> str:
+        key: tuple[Any, ...] = (symbol, expiry_date)
+        if strike_price is not None or call_put is not None:
+            key = (symbol, expiry_date, strike_price, call_put)
+        if key not in table:
+            raise ValueError(f"Symbol Name error: {key!r}")
+        return table[key]
+
+    return convert_symbol
+
+
+def make_account(
+    account: str = "1234567", branch_no: str = "6460", name: str = "tester", account_type: Any = "futopt"
+) -> SimpleNamespace:
+    """A trading ``Account`` as login returns it.
+
+    A real login returns one account per product the customer holds, so ``account_type`` is
+    ``"futopt"`` for the futures/options account and ``"stock"`` for the securities one.
+    """
+    return SimpleNamespace(name=name, branch_no=branch_no, account=account, account_type=account_type)
 
 
 def make_order_result(order_no: str = "l0001", seq_no: str = "00000000001", **extra: Any) -> SimpleNamespace:
@@ -176,7 +217,7 @@ class FutOptSpec:
     def batch_order_lists(self, account: Any) -> Any: ...
     def batch_order_detail(self, *args: Any, **kwargs: Any) -> Any: ...
     def query_estimate_margin(self, account: Any, order: Any) -> Any: ...
-    def convert_symbol(self, *args: Any, **kwargs: Any) -> Any: ...
+    def convert_symbol(self, symbol: Any, expiry_date: Any, strike_price: Any = None, call_put: Any = None) -> Any: ...
 
 
 class FutOptAccountingSpec:
@@ -224,6 +265,7 @@ def make_fubon_sdk_mock() -> MagicMock:
     """An autospec'd ``FubonSDK`` instance whose ``futopt``/``futopt_accounting`` are autospec'd too."""
     sdk = create_autospec(FubonSDKSpec, instance=True)
     sdk.futopt = create_autospec(FutOptSpec, instance=True)
+    sdk.futopt.convert_symbol.side_effect = make_convert_symbol()
     sdk.futopt_accounting = create_autospec(FutOptAccountingSpec, instance=True)
     return sdk
 
