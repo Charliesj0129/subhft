@@ -102,7 +102,7 @@ def _apply_solace_arity_shim() -> None:
     try:
         import inspect
 
-        from shioaji.backend.solace import api as _solapi  # type: ignore[import-not-found]
+        from shioaji.backend.solace import api as _solapi
     except Exception as exc:  # pragma: no cover - lib absent in test
         _log.debug("shioaji_solace_arity_shim_skip", err=str(exc))
         _SOLACE_ARITY_SHIM_APPLIED = True

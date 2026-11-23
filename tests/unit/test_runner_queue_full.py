@@ -64,7 +64,6 @@ def _patch_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HFT_STRATEGY_CONFIG", str(tmp_path / "empty.yaml"))
     (tmp_path / "empty.yaml").write_text("strategies: []\n")
     # Force Python-only circuit breaker for deterministic assertions
-    monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_RUST", "0")
     monkeypatch.setenv("HFT_STRATEGY_FEATURE_COMPAT_FAIL_FAST", "0")
     # Low threshold so that if the bug regresses it trips quickly
     monkeypatch.setenv("HFT_STRATEGY_CIRCUIT_THRESHOLD", "3")

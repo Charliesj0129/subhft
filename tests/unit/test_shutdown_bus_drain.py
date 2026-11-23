@@ -32,7 +32,6 @@ class _MockBus:
         self._tick_ring = None
         self._bidask_ring = None
         self._lobstats_ring = None
-        self._use_rust = False
         self._ring = None
         self.buffer = [None] * self.size
         # pre-populate buffer

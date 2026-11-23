@@ -27,29 +27,6 @@ if TYPE_CHECKING:
 
 logger = get_logger("gateway.exposure")
 
-# Lazy import for Rust exposure store
-_RustExposureStore = None
-_rust_exposure_loaded = False
-
-
-def _load_rust_exposure():
-    global _RustExposureStore, _rust_exposure_loaded
-    if _rust_exposure_loaded:
-        return _RustExposureStore
-    _rust_exposure_loaded = True
-    try:
-        from hft_platform.rust_core import RustExposureStore
-
-        _RustExposureStore = RustExposureStore
-    except ImportError:
-        try:
-            from rust_core import RustExposureStore
-
-            _RustExposureStore = RustExposureStore
-        except ImportError:
-            pass
-    return _RustExposureStore
-
 
 class ExposureLimitError(RuntimeError):
     """Raised when ExposureStore cannot admit a new symbol entry after eviction."""
@@ -60,9 +37,9 @@ class ExposureKey:
     """Identifies a single exposure bucket.
 
     ``symbol`` remains the canonical string key for the internal dict
-    (keeping Rust-path parity and avoiding per-tick ContractRef hashing).
+    (avoiding per-tick ContractRef hashing).
     ``contract`` is optional structured metadata (Gate 3) carried for
-    observability and so future Rust migrations have a clean handoff.
+    observability.
     When both are set we trust ``symbol`` (callers build it via
     :meth:`from_intent` which derives it from ``contract.display()`` when
     ``contract`` is set).
@@ -106,7 +83,7 @@ class ExposureKey:
 
 @dataclass(slots=True)
 class ExposureLimits:
-    max_notional_scaled: int = 0  # 0 = unlimited per-account-strategy-symbol
+    max_notional_scaled: int = 0  # 0 = unlimited per account and strategy
     global_max_notional_scaled: int = 0  # 0 = unlimited global
 
 
@@ -137,6 +114,7 @@ class ExposureStore:
         self._exposure: dict[str, dict[str, dict[str, int]]] = {}
         self._symbol_count: int = 0  # tracks total leaf entries
         self._global_notional: int = 0
+        self._strategy_notional = dict[tuple[str, str], int]()
         self._lock = threading.Lock()
         self._limits: dict[str, ExposureLimits] = limits or {}
         # Per-order tracking: hold reservations until fill/cancel/TTL (Bug #6+#7 fix)
@@ -144,36 +122,20 @@ class ExposureStore:
         self._order_ts: dict[str, float] = {}  # order_key → monotonic timestamp
         self._order_exp_keys: dict[str, tuple[str, str, str]] = {}  # order_key → (acct, strat, sym)
         self._pending_amend_deltas: dict[str, int] = {}  # target_key → last delta (for rollback)
-        # Rust fast-path (HFT_EXPOSURE_RUST=1)
-        self._rust_store = self._init_rust_store(_gmax, self._max_symbols, self._limits)
-
-    @staticmethod
-    def _init_rust_store(global_max: int, max_symbols: int, limits: dict[str, ExposureLimits]):
-        if os.getenv("HFT_EXPOSURE_RUST", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-            return None
-        cls = _load_rust_exposure()
-        if cls is None:
-            return None
-        try:
-            rs = cls(global_max, max_symbols)
-            for strat_id, el in limits.items():
-                if el.max_notional_scaled > 0:
-                    rs.set_limit(strat_id, el.max_notional_scaled)
-            logger.info("RustExposureStore enabled", global_max=global_max, max_symbols=max_symbols)
-            return rs
-        except Exception as exc:
-            logger.warning("RustExposureStore init failed", error=str(exc))
-            return None
 
     # ── Hot path ──────────────────────────────────────────────────────────
 
     def _evict_zeroes(self) -> None:
         """Remove leaf entries with zero notional. Called under self._lock."""
+        # A rejected downward amend may restore a temporarily empty bucket.
+        rollback_buckets = {
+            self._order_exp_keys[target] for target, delta in self._pending_amend_deltas.items() if delta < 0
+        }
         removed = 0
         for acct, strat_map in list(self._exposure.items()):
             for strat_id, sym_map in list(strat_map.items()):
                 for sym, val in list(sym_map.items()):
-                    if val == 0:
+                    if val == 0 and (acct, strat_id, sym) not in rollback_buckets:
                         del sym_map[sym]
                         removed += 1
                 if not sym_map:
@@ -181,6 +143,27 @@ class ExposureStore:
             if not strat_map:
                 del self._exposure[acct]
         self._symbol_count -= removed
+
+    def _admit_symbol(self, key):
+        """Create a zero-balance bucket under the store lock."""
+        if key.symbol in self._exposure.get(key.account, {}).get(key.strategy_id, {}):
+            return
+        if self._symbol_count >= self._max_symbols:
+            self._evict_zeroes()
+            if self._symbol_count >= self._max_symbols:
+                logger.warning(
+                    "exposure_symbol_limit_reached",
+                    max_symbols=self._max_symbols,
+                    account=key.account,
+                    strategy_id=key.strategy_id,
+                    symbol=key.symbol,
+                )
+                raise ExposureLimitError(
+                    f"ExposureStore symbol limit ({self._max_symbols}) reached; "
+                    f"cannot admit ({key.account}, {key.strategy_id}, {key.symbol})"
+                )
+        self._exposure.setdefault(key.account, {}).setdefault(key.strategy_id, {})[key.symbol] = 0
+        self._symbol_count += 1
 
     def check_and_update(
         self,
@@ -203,61 +186,29 @@ class ExposureStore:
             ExposureLimitError: if a new symbol entry cannot be admitted even
                 after zero-balance eviction (CE2-12 memory bound).
         """
-        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
-            return True, "OK"
+        return self.check_and_update_typed(
+            key,
+            intent_type=intent.intent_type,
+            price=intent.price,
+            qty=intent.qty,
+            order_key=order_key,
+            target_order_key=intent.target_order_id or "",
+        )
 
-        if intent.intent_type == IntentType.AMEND:
-            target_key = intent.target_order_id or order_key
-            new_notional = intent.price * intent.qty
-            return self._check_amend_impl(key, target_key, new_notional)
-
-        # NEW path: notional = price * qty (both already scaled integers)
-        notional = intent.price * intent.qty
-
-        with self._lock:
-            # Global check
-            if self._global_max > 0 and self._global_notional + notional > self._global_max:
-                return False, "GLOBAL_EXPOSURE_LIMIT"
-
-            # Per-strategy limit check
-            strat_limits = self._limits.get(key.strategy_id)
-            if strat_limits and strat_limits.max_notional_scaled > 0:
-                current = self._exposure.get(key.account, {}).get(key.strategy_id, {}).get(key.symbol, 0)
-                if current + notional > strat_limits.max_notional_scaled:
-                    return False, "STRATEGY_EXPOSURE_LIMIT"
-
-            # Symbol cardinality bound (CE2-12)
-            is_new_symbol = key.symbol not in self._exposure.get(key.account, {}).get(key.strategy_id, {})
-            if is_new_symbol and self._symbol_count >= self._max_symbols:
-                self._evict_zeroes()
-                if self._symbol_count >= self._max_symbols:
-                    logger.warning(
-                        "exposure_symbol_limit_reached",
-                        max_symbols=self._max_symbols,
-                        account=key.account,
-                        strategy_id=key.strategy_id,
-                        symbol=key.symbol,
-                    )
-                    raise ExposureLimitError(
-                        f"ExposureStore symbol limit ({self._max_symbols}) reached; "
-                        f"cannot admit ({key.account}, {key.strategy_id}, {key.symbol})"
-                    )
-
-            # Commit
-            self._global_notional += notional
-            acct_exp = self._exposure.setdefault(key.account, {})
-            strat_exp = acct_exp.setdefault(key.strategy_id, {})
-            if key.symbol not in strat_exp:
-                self._symbol_count += 1
-            strat_exp[key.symbol] = strat_exp.get(key.symbol, 0) + notional
-
-            # Per-order tracking
-            if order_key:
-                self._order_notionals[order_key] = notional
-                self._order_ts[order_key] = time.monotonic()
-                self._order_exp_keys[order_key] = (key.account, key.strategy_id, key.symbol)
-
-        return True, "OK"
+    def _adjust_notional(self, account, strategy, symbol, delta):
+        """Apply an exposure delta under the store lock."""
+        strategy_key = (account, strategy)
+        strat_exp = self._exposure[account][strategy]
+        current = strat_exp.get(symbol, 0)
+        updated = max(0, current + delta)
+        strat_exp[symbol] = updated
+        applied = updated - current
+        self._global_notional += applied
+        strategy_total = self._strategy_notional.get(strategy_key, 0) + applied
+        if strategy_total:
+            self._strategy_notional[strategy_key] = strategy_total
+        else:
+            self._strategy_notional.pop(strategy_key, None)
 
     def _check_amend_impl(
         self,
@@ -271,6 +222,11 @@ class ExposureStore:
         If target_key is unknown, treats full new_notional as the delta (conservative).
         """
         with self._lock:
+            bucket = (key.account, key.strategy_id, key.symbol)
+            reserved_bucket = self._order_exp_keys.get(target_key)
+            if reserved_bucket is not None and reserved_bucket != bucket:
+                return False, "AMEND_EXPOSURE_KEY_MISMATCH"
+
             old_notional = self._order_notionals.get(target_key, 0)
             delta = new_notional - old_notional
 
@@ -282,20 +238,18 @@ class ExposureStore:
                 # Check per-strategy limit for the positive delta
                 strat_limits = self._limits.get(key.strategy_id)
                 if strat_limits and strat_limits.max_notional_scaled > 0:
-                    current = self._exposure.get(key.account, {}).get(key.strategy_id, {}).get(key.symbol, 0)
+                    current = self._strategy_notional.get((key.account, key.strategy_id), 0)
                     if current + delta > strat_limits.max_notional_scaled:
                         return False, "STRATEGY_EXPOSURE_LIMIT"
 
-            # Commit delta to aggregates
-            self._global_notional = max(0, self._global_notional + delta)
-            acct_exp = self._exposure.setdefault(key.account, {})
-            strat_exp = acct_exp.setdefault(key.strategy_id, {})
-            strat_exp[key.symbol] = max(0, strat_exp.get(key.symbol, 0) + delta)
+            self._admit_symbol(key)
+            self._adjust_notional(key.account, key.strategy_id, key.symbol, delta)
 
             # Update per-order record and save delta for possible rollback
             if target_key:
                 self._order_notionals[target_key] = new_notional
                 self._order_ts[target_key] = time.monotonic()
+                self._order_exp_keys.setdefault(target_key, bucket)
                 self._pending_amend_deltas[target_key] = delta
 
         return True, "OK"
@@ -311,26 +265,6 @@ class ExposureStore:
         target_order_key: str = "",
     ) -> tuple[bool, str]:
         """Typed fast-path variant using primitive fields (avoids OrderIntent materialization)."""
-        rs = self._rust_store
-        if rs is not None:
-            ok, code = rs.check_and_update(
-                key.account,
-                key.strategy_id,
-                key.symbol,
-                int(intent_type),
-                int(price),
-                int(qty),
-            )
-            if not ok:
-                reason = rs.reason_str(code)
-                if code == 3:
-                    raise ExposureLimitError(
-                        f"ExposureStore symbol limit ({self._max_symbols}) reached; "
-                        f"cannot admit ({key.account}, {key.strategy_id}, {key.symbol})"
-                    )
-                return False, reason
-            return True, "OK"
-
         if int(intent_type) in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
             return True, "OK"
 
@@ -347,32 +281,12 @@ class ExposureStore:
 
             strat_limits = self._limits.get(key.strategy_id)
             if strat_limits and strat_limits.max_notional_scaled > 0:
-                current = self._exposure.get(key.account, {}).get(key.strategy_id, {}).get(key.symbol, 0)
+                current = self._strategy_notional.get((key.account, key.strategy_id), 0)
                 if current + notional > strat_limits.max_notional_scaled:
                     return False, "STRATEGY_EXPOSURE_LIMIT"
 
-            is_new_symbol = key.symbol not in self._exposure.get(key.account, {}).get(key.strategy_id, {})
-            if is_new_symbol and self._symbol_count >= self._max_symbols:
-                self._evict_zeroes()
-                if self._symbol_count >= self._max_symbols:
-                    logger.warning(
-                        "exposure_symbol_limit_reached",
-                        max_symbols=self._max_symbols,
-                        account=key.account,
-                        strategy_id=key.strategy_id,
-                        symbol=key.symbol,
-                    )
-                    raise ExposureLimitError(
-                        f"ExposureStore symbol limit ({self._max_symbols}) reached; "
-                        f"cannot admit ({key.account}, {key.strategy_id}, {key.symbol})"
-                    )
-
-            self._global_notional += notional
-            acct_exp = self._exposure.setdefault(key.account, {})
-            strat_exp = acct_exp.setdefault(key.strategy_id, {})
-            if key.symbol not in strat_exp:
-                self._symbol_count += 1
-            strat_exp[key.symbol] = strat_exp.get(key.symbol, 0) + notional
+            self._admit_symbol(key)
+            self._adjust_notional(key.account, key.strategy_id, key.symbol, notional)
 
             # Per-order tracking
             if order_key:
@@ -396,7 +310,7 @@ class ExposureStore:
         - NEW: releases via per-order tracking if order_key provided,
           otherwise falls back to notional subtraction.
         """
-        if intent.intent_type == IntentType.CANCEL:
+        if intent.intent_type in (IntentType.CANCEL, IntentType.FORCE_FLAT):
             return
 
         if intent.intent_type == IntentType.AMEND:
@@ -414,10 +328,8 @@ class ExposureStore:
         # Legacy fallback: release by notional value
         notional = intent.price * intent.qty
         with self._lock:
-            self._global_notional = max(0, self._global_notional - notional)
-            strat_exp = self._exposure.get(key.account, {}).get(key.strategy_id, {})
-            if key.symbol in strat_exp:
-                strat_exp[key.symbol] = max(0, strat_exp[key.symbol] - notional)
+            if key.symbol in self._exposure.get(key.account, {}).get(key.strategy_id, {}):
+                self._adjust_notional(key.account, key.strategy_id, key.symbol, -notional)
 
     def release_exposure_typed(
         self,
@@ -429,12 +341,7 @@ class ExposureStore:
         order_key: str = "",
         target_order_key: str = "",
     ) -> None:
-        rs = self._rust_store
-        if rs is not None:
-            rs.release(key.account, key.strategy_id, key.symbol, int(intent_type), int(price), int(qty))
-            return
-
-        if int(intent_type) == int(IntentType.CANCEL):
+        if int(intent_type) in (int(IntentType.CANCEL), int(IntentType.FORCE_FLAT)):
             return
 
         if int(intent_type) == int(IntentType.AMEND):
@@ -451,10 +358,8 @@ class ExposureStore:
         # Legacy fallback
         notional = int(price) * int(qty)
         with self._lock:
-            self._global_notional = max(0, self._global_notional - notional)
-            strat_exp = self._exposure.get(key.account, {}).get(key.strategy_id, {})
-            if key.symbol in strat_exp:
-                strat_exp[key.symbol] = max(0, strat_exp[key.symbol] - notional)
+            if key.symbol in self._exposure.get(key.account, {}).get(key.strategy_id, {}):
+                self._adjust_notional(key.account, key.strategy_id, key.symbol, -notional)
 
     # ── Per-order lifecycle ──────────────────────────────────────────────
 
@@ -467,10 +372,8 @@ class ExposureStore:
             self._pending_amend_deltas.pop(order_key, None)
             if notional > 0 and exp_tuple:
                 acct, strat, sym = exp_tuple
-                self._global_notional = max(0, self._global_notional - notional)
-                strat_exp = self._exposure.get(acct, {}).get(strat, {})
-                if sym in strat_exp:
-                    strat_exp[sym] = max(0, strat_exp[sym] - notional)
+                if sym in self._exposure.get(acct, {}).get(strat, {}):
+                    self._adjust_notional(acct, strat, sym, -notional)
         return notional
 
     def _rollback_amend(self, key: ExposureKey, target_key: str) -> None:
@@ -480,10 +383,8 @@ class ExposureStore:
             if delta == 0:
                 return
             # Reverse the delta
-            self._global_notional = max(0, self._global_notional - delta)
-            strat_exp = self._exposure.get(key.account, {}).get(key.strategy_id, {})
-            if key.symbol in strat_exp:
-                strat_exp[key.symbol] = max(0, strat_exp[key.symbol] - delta)
+            if key.symbol in self._exposure.get(key.account, {}).get(key.strategy_id, {}):
+                self._adjust_notional(key.account, key.strategy_id, key.symbol, -delta)
             # Restore per-order notional to pre-amend value
             if target_key in self._order_notionals:
                 self._order_notionals[target_key] = max(0, self._order_notionals[target_key] - delta)

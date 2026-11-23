@@ -49,5 +49,4 @@ class SnapshotSlot:
 
 - **Seqlock**: Consistent reads without locks (version incremented before/after write)
 - **Single writer only**: Called from engine, multiple readers allowed
-- **Rust backend**: `hft_platform.rust_core.ShmSnapshotTable`
 - **Segment name**: Configurable, default `"hft_monitor_snapshot"`

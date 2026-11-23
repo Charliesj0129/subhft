@@ -1,5 +1,4 @@
 import asyncio
-import importlib
 import os
 import re
 import time
@@ -66,13 +65,6 @@ def _typed_intent_with_decision_price(intent: tuple, decision_price: int) -> tup
     return (*intent[:16], decision_price, *intent[17:])
 
 
-_RUST_CIRCUIT_ENABLED = os.getenv("HFT_STRATEGY_CIRCUIT_RUST", "1").lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
-
 _MAX_INTENTS_PER_EVENT: int = int(os.getenv("HFT_MAX_INTENTS_PER_EVENT", "20"))
 
 
@@ -88,15 +80,6 @@ def _feedback_side(value: int | None) -> Side | None:
 # Shared read-only empty view for strategies without positions. Hand the same
 # singleton to every strategy — MappingProxyType is immutable so this is safe.
 _EMPTY_POSITION_VIEW: Mapping[str, int] = MappingProxyType({})
-
-try:
-    try:
-        _rust_core = importlib.import_module("hft_platform.rust_core")
-    except ImportError:
-        _rust_core = importlib.import_module("rust_core")
-    _RustCircuitBreaker = getattr(_rust_core, "RustCircuitBreaker", None)
-except (ImportError, ModuleNotFoundError):
-    _RustCircuitBreaker = None
 
 
 def _get_trace_sampler():
@@ -235,7 +218,6 @@ class StrategyRunner:
         "_circuit_states",
         "_circuit_success_counts",
         "_circuit_halted_at_ns",
-        "_rust_circuit",
         "_position_key_cache",
         "_strat_index",
         "_feature_compat_fail_fast",
@@ -365,17 +347,6 @@ class StrategyRunner:
         self._circuit_states: dict[str, str] = {}  # "normal" | "degraded" | "halted"
         self._circuit_success_counts: dict[str, int] = {}
         self._circuit_halted_at_ns: dict[str, int] = {}
-        # Rust-accelerated circuit breaker (replaces 5 dict lookups with 1 HashMap lookup)
-        self._rust_circuit: Any = None
-        if _RUST_CIRCUIT_ENABLED and _RustCircuitBreaker is not None:
-            try:
-                self._rust_circuit = _RustCircuitBreaker(
-                    self._circuit_threshold,
-                    self._circuit_recovery_threshold,
-                    self._circuit_cooldown_ns,
-                )
-            except (OSError, RuntimeError, TypeError, ValueError) as exc:
-                logger.warning("rust_circuit_breaker_init_failed", error=str(exc))
         # TrackGate: per-event session phase filtering (set externally by SessionGovernor)
         self.track_gate: Any = None  # TrackGate | None
 
@@ -634,8 +605,6 @@ class StrategyRunner:
                 event = self.bus._bidask_ring.get(local_seq)
             elif kind == 3 and self.bus._lobstats_ring is not None:
                 event = self.bus._lobstats_ring.get(local_seq)
-            elif self.bus._use_rust and self.bus._ring is not None:
-                event = self.bus._ring.get(local_seq)
             else:
                 buf = self.bus.buffer
                 event = buf[local_seq % size] if buf is not None else None
@@ -985,59 +954,48 @@ class StrategyRunner:
             return {}
         positions_by_strategy: dict = {}
         fallback: dict = {}
-        rust_fast_path = False
-        # Unit 9: Use Rust fast-path if available
-        rust_tracker = getattr(self.position_store, "_rust_tracker", None)
-        if rust_tracker is not None and hasattr(rust_tracker, "get_positions_by_strategy"):
-            try:
-                positions_by_strategy = rust_tracker.get_positions_by_strategy()
-                rust_fast_path = True
-            except Exception:
-                pass  # Fallback to Python path
-
         recovery_snap: dict | None = None
-        if not rust_fast_path:
-            # R3-3 hole (2026-04-25): prefer the atomic API that snapshots
-            # positions AND recovery under one _fill_lock acquisition.
-            # Two separate snapshots race with _seed_from_recovery (writer
-            # pops recovery into positions atomically) and can lose entries
-            # from both views.
-            atomic_snap = getattr(self.position_store, "snapshot_positions_with_recovery", None)
-            if atomic_snap is not None:
-                raw, recovery_snap = atomic_snap()
-            elif hasattr(self.position_store, "snapshot_positions"):
-                raw = self.position_store.snapshot_positions()
-            else:
-                raw = getattr(self.position_store, "positions", None)
-                if not isinstance(raw, dict):
-                    return {}
-                _fill_lock = getattr(self.position_store, "_fill_lock", None)
-                if _fill_lock is not None:
-                    with _fill_lock:
-                        raw = dict(raw)
-                else:
+        # R3-3 hole (2026-04-25): prefer the atomic API that snapshots
+        # positions AND recovery under one _fill_lock acquisition.
+        # Two separate snapshots race with _seed_from_recovery (writer
+        # pops recovery into positions atomically) and can lose entries
+        # from both views.
+        atomic_snap = getattr(self.position_store, "snapshot_positions_with_recovery", None)
+        if atomic_snap is not None:
+            raw, recovery_snap = atomic_snap()
+        elif hasattr(self.position_store, "snapshot_positions"):
+            raw = self.position_store.snapshot_positions()
+        else:
+            raw = getattr(self.position_store, "positions", None)
+            if not isinstance(raw, dict):
+                return {}
+            _fill_lock = getattr(self.position_store, "_fill_lock", None)
+            if _fill_lock is not None:
+                with _fill_lock:
                     raw = dict(raw)
+            else:
+                raw = dict(raw)
 
-            for key, value in raw.items():
-                if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
-                    positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
+        for key, value in raw.items():
+            if hasattr(value, "strategy_id") and hasattr(value, "symbol") and hasattr(value, "net_qty"):
+                positions_by_strategy.setdefault(value.strategy_id, {})[value.symbol] = value.net_qty
+                continue
+
+            # S6: Cache parsed key tuples to avoid split() on every rebuild
+            if isinstance(key, str) and ":" in key:
+                parsed = self._position_key_cache.get(key)
+                if parsed is None:
+                    parts = key.split(":")
+                    if len(parts) >= 3:
+                        parsed = (parts[1], parts[2])
+                        self._position_key_cache[key] = parsed
+                if parsed is not None:
+                    strat_id, symbol = parsed
+                    net_qty = value.net_qty if hasattr(value, "net_qty") else value
+                    positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
                     continue
 
-                # S6: Cache parsed key tuples to avoid split() on every rebuild
-                if isinstance(key, str) and ":" in key:
-                    parsed = self._position_key_cache.get(key)
-                    if parsed is None:
-                        parts = key.split(":")
-                        if len(parts) >= 3:
-                            parsed = (parts[1], parts[2])
-                            self._position_key_cache[key] = parsed
-                    if parsed is not None:
-                        strat_id, symbol = parsed
-                        net_qty = value.net_qty if hasattr(value, "net_qty") else value
-                        positions_by_strategy.setdefault(strat_id, {})[symbol] = net_qty
-                        continue
-
-                fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
+            fallback[key] = value.net_qty if hasattr(value, "net_qty") else value
 
         # Merge pending recovery positions (loaded at startup but not yet merged
         # into positions via first fill).  Recovery keys use format
@@ -1141,15 +1099,7 @@ class StrategyRunner:
             if not strategy.enabled:
                 # S4: Check if halted strategy is eligible for cooldown recovery
                 sid = strategy.strategy_id
-                rc = self._rust_circuit
-                if rc is not None:
-                    should_reenable, _new_state = rc.check_cooldown(sid, timebase.now_ns())
-                    if should_reenable:
-                        strategy.enabled = True
-                        logger.info("Strategy circuit cooldown elapsed — re-enabling in degraded", id=sid)
-                    else:
-                        continue
-                elif self._circuit_states.get(sid) == "halted":
+                if self._circuit_states.get(sid) == "halted":
                     halted_at = self._circuit_halted_at_ns.get(sid, 0)
                     if halted_at and time.monotonic_ns() - halted_at >= self._circuit_cooldown_ns:
                         self._circuit_states[sid] = "degraded"
@@ -1270,79 +1220,48 @@ class StrategyRunner:
                         ).inc()
                 # S4: Circuit breaker 3-state FSM (normal → degraded → halted)
                 sid = strategy.strategy_id
-                rc = self._rust_circuit
-                if rc is not None:
-                    new_state, should_disable = rc.record_failure(sid, timebase.now_ns())
-                    if should_disable:
-                        strategy.enabled = False
-                        logger.error(
-                            "Strategy circuit breaker halted",
-                            id=sid,
-                            threshold=self._circuit_threshold,
-                        )
-                        try:
-                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
-                        except Exception:  # noqa: BLE001
-                            pass
-                    elif new_state == 1:  # DEGRADED
-                        logger.warning("Strategy circuit degraded", id=sid)
-                        try:
-                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
-                        except Exception:  # noqa: BLE001
-                            pass
-                else:
-                    self._circuit_success_counts[sid] = 0
-                    failures = self._failure_counts.get(sid, 0) + 1
-                    self._failure_counts[sid] = failures
-                    state = self._circuit_states.get(sid, "normal")
-                    half_threshold = max(1, self._circuit_threshold // 2)
-                    if state == "normal" and failures >= half_threshold:
-                        self._circuit_states[sid] = "degraded"
-                        logger.warning("Strategy circuit degraded", id=sid, failures=failures)
-                        try:
-                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
-                        except Exception:  # noqa: BLE001
-                            pass
-                    if failures >= self._circuit_threshold and state != "halted":
-                        self._circuit_states[sid] = "halted"
-                        strategy.enabled = False
-                        self._circuit_halted_at_ns[sid] = time.monotonic_ns()
-                        logger.error(
-                            "Strategy circuit breaker halted",
-                            id=sid,
-                            failures=failures,
-                            threshold=self._circuit_threshold,
-                        )
-                        try:
-                            self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
-                        except Exception:  # noqa: BLE001
-                            pass
+                self._circuit_success_counts[sid] = 0
+                failures = self._failure_counts.get(sid, 0) + 1
+                self._failure_counts[sid] = failures
+                state = self._circuit_states.get(sid, "normal")
+                half_threshold = max(1, self._circuit_threshold // 2)
+                if state == "normal" and failures >= half_threshold:
+                    self._circuit_states[sid] = "degraded"
+                    logger.warning("Strategy circuit degraded", id=sid, failures=failures)
+                    try:
+                        self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(1)
+                    except Exception:  # noqa: BLE001
+                        pass
+                if failures >= self._circuit_threshold and state != "halted":
+                    self._circuit_states[sid] = "halted"
+                    strategy.enabled = False
+                    self._circuit_halted_at_ns[sid] = time.monotonic_ns()
+                    logger.error(
+                        "Strategy circuit breaker halted",
+                        id=sid,
+                        failures=failures,
+                        threshold=self._circuit_threshold,
+                    )
+                    try:
+                        self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(2)
+                    except Exception:  # noqa: BLE001
+                        pass
             else:
                 # S4: Gradual recovery: in degraded state, require N consecutive successes
                 sid = strategy.strategy_id
-                rc = self._rust_circuit
-                if rc is not None:
-                    _new_state, recovered = rc.record_success(sid)
-                    if recovered:
+                state = self._circuit_states.get(sid, "normal")
+                if state == "degraded":
+                    sc = self._circuit_success_counts.get(sid, 0) + 1
+                    self._circuit_success_counts[sid] = sc
+                    if sc >= self._circuit_recovery_threshold:
+                        self._circuit_states[sid] = "normal"
+                        self._failure_counts[sid] = 0
+                        self._circuit_success_counts[sid] = 0
                         logger.info("Strategy circuit recovered to normal", id=sid)
                         try:
                             self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(0)
                         except Exception:  # noqa: BLE001
                             pass
-                else:
-                    state = self._circuit_states.get(sid, "normal")
-                    if state == "degraded":
-                        sc = self._circuit_success_counts.get(sid, 0) + 1
-                        self._circuit_success_counts[sid] = sc
-                        if sc >= self._circuit_recovery_threshold:
-                            self._circuit_states[sid] = "normal"
-                            self._failure_counts[sid] = 0
-                            self._circuit_success_counts[sid] = 0
-                            logger.info("Strategy circuit recovered to normal", id=sid)
-                            try:
-                                self.metrics.circuit_breaker_state.labels(component=f"runner:{sid}").set(0)
-                            except Exception:  # noqa: BLE001
-                                pass
 
             # TrackGate per-intent filtering (session phase enforcement)
             if getattr(self, "track_gate", None) is not None and intents:

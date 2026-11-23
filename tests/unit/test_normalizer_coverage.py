@@ -3,21 +3,14 @@ Targeted coverage tests for feed_adapter/normalizer.py.
 
 Focuses on branches not covered by existing tests:
 - Module-level env var parse exception paths (lines 53-65)
-- Rust import fallback paths (lines 72-73, 83-97)
-- Fused normalizer init paths (lines 103-108, 489-493)
 - Config path resolution fallbacks (lines 131-136)
 - Tags non-str/non-list type (line 180)
 - set_alias_map metadata propagation (lines 311-313)
 - _safe_tick_size_scaled invalid input (lines 334-335)
 - Option expiry as date object (line 387)
-- Fixed5 scratch array init (lines 500-510)
 - _record_latency_metrics observe paths (lines 553-560)
 - _get_scale with zero/negative scale (line 568)
 - _maybe_synthesize_side null/tick_size fallbacks (lines 585, 601-606)
-- Rust tick _RETURN_TUPLE path (lines 687-688)
-- Python fallback negative price after Rust (lines 718-720)
-- Fused path _RETURN_TUPLE (line 841)
-- Rust synth bidask tick_size resolution (lines 893, 915-922)
 - Snapshot list-typed buy/sell fields
 """
 
@@ -418,14 +411,8 @@ class TestNormalizeTickObjectPayload:
 
 
 class TestNormalizeBidAskReturnTuple:
-    def test_return_tuple_with_stats(self, normalizer, monkeypatch):
+    def test_return_tuple_with_book_levels(self, normalizer, monkeypatch):
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", False)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
         payload = {
             "code": "2330",
             "ts": 1_620_000_000_000_000,
@@ -438,16 +425,11 @@ class TestNormalizeBidAskReturnTuple:
         assert isinstance(result, tuple)
         assert result[0] == "bidask"
         assert result[1] == "2330"
+        assert result[2:4] == ([[1000000, 10], [995000, 5]], [[1005000, 8], [1010000, 3]])
 
     def test_return_tuple_without_stats(self, normalizer, monkeypatch):
-        """Pure Python path with no Rust -- returns short 6-element tuple."""
+        """Returns the six-field bid/ask tuple."""
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", False)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
         payload = {
             "code": "2330",
             "ts": 1_620_000_000_000_000,
@@ -534,15 +516,9 @@ class TestNormalizeSnapshot:
         assert isinstance(event, BidAskEvent)
         assert event.is_snapshot is True
 
-    def test_snapshot_fallback_return_tuple_long(self, normalizer, monkeypatch):
-        """Fallback path returns 13-element tuple with is_snapshot=True."""
+    def test_snapshot_fallback_returns_book_levels(self, normalizer, monkeypatch):
+        """The book update is marked as a snapshot."""
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", False)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
         payload = {
             "code": "2330",
             "ts": 1_620_000_000_000_000,
@@ -647,8 +623,6 @@ class TestValidateAndSyncTimestamp:
 class TestNormalizeTickReturnTuple:
     def test_normalize_tick_return_tuple_python_path(self, normalizer, monkeypatch):
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", None)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", False)
         payload = {
             "code": "2330",
             "close": 100.0,
@@ -968,44 +942,12 @@ class TestSynthesizeSideEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# Rust tick path with _RETURN_TUPLE (lines 687-688)
 # ---------------------------------------------------------------------------
 
 
-class TestRustTickReturnTuple:
-    def test_rust_tick_return_tuple_path(self, normalizer, monkeypatch):
-        """When Rust returns valid tick and _RETURN_TUPLE is True, return extended tuple."""
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-
-        rust_result = ("tick", "2330", 1000000, 5, 100, False, False, 1_620_000_000_000_000)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
-
-        payload = {
-            "code": "2330",
-            "close": 100.0,
-            "volume": 5,
-            "ts": 1_620_000_000_000_000,
-        }
-        result = normalizer.normalize_tick(payload)
-        assert isinstance(result, tuple)
-        assert result[0] == "tick"
-        assert result[1] == "2330"
-        assert result[2] == 1000000
-        # Extended with trade_direction + trade_confidence
-        assert len(result) == 10
-
-
-# ---------------------------------------------------------------------------
-# Python fallback negative price after Rust returns 0 (lines 718-720)
-# ---------------------------------------------------------------------------
-
-
-class TestPythonFallbackNegativePrice:
-    def test_python_fallback_negative_price_after_close_val(self, normalizer, monkeypatch):
+class TestNegativePrice:
+    def test_negative_price_after_scaling(self, normalizer):
         """When close_val produces a negative scaled price via Python path, return None."""
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", False)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", None)
         payload = {
             "code": "2330",
             "close": -5.0,
@@ -1015,69 +957,9 @@ class TestPythonFallbackNegativePrice:
         result = normalizer.normalize_tick(payload)
         assert result is None
 
-    def test_rust_returns_zero_price_falls_through_to_python(self, normalizer, monkeypatch):
-        """When Rust returns price=0 for non-zero close, fall through to Python path."""
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-
-        # Rust returns price=0 for a valid close => raises ValueError => Python fallback
-        rust_result = ("tick", "2330", 0, 5, 100, False, False, 1_620_000_000_000_000)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
-
-        payload = {
-            "code": "2330",
-            "close": 100.0,
-            "volume": 5,
-            "ts": 1_620_000_000_000_000,
-        }
-        result = normalizer.normalize_tick(payload)
-        # Falls through to Python path which produces valid TickEvent
-        assert isinstance(result, TickEvent)
-        assert result.price == 1_000_000
-
 
 # ---------------------------------------------------------------------------
-# Fused path _RETURN_TUPLE (line 841)
 # ---------------------------------------------------------------------------
-
-
-class TestFusedPathReturnTuple:
-    def test_fused_path_return_tuple(self, symbols_yaml, monkeypatch):
-        """When fused path succeeds and _RETURN_TUPLE is True, return tuple."""
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-
-        normalizer = MarketDataNormalizer(symbols_yaml)
-        bids_np = np.array([[1000000, 10]], dtype=np.int64)
-        asks_np = np.array([[1005000, 20]], dtype=np.int64)
-        mock_fused = MagicMock()
-        mock_fused.process_bidask.return_value = (
-            bids_np,
-            asks_np,
-            1000000,
-            1005000,  # best_bid, best_ask
-            10,
-            20,  # bid_depth, ask_depth
-            2005000,
-            5000,  # mid_x2, spread_scaled
-            -333333,
-            1,  # imbalance_ppm, version
-            -0.333333,  # top_imbalance
-        )
-        normalizer._fused = mock_fused
-
-        payload = {
-            "code": "2330",
-            "ts": 1_620_000_000_000_000,
-            "bid_price": [100.0],
-            "bid_volume": [10],
-            "ask_price": [100.5],
-            "ask_volume": [20],
-        }
-        result = normalizer.normalize_bidask(payload)
-        assert isinstance(result, tuple)
-        assert result[0] == "bidask"
-        assert result[5] is False  # not snapshot
-        assert result[6] == 1000000  # best_bid
 
 
 # ---------------------------------------------------------------------------
@@ -1123,50 +1005,6 @@ class TestSnapshotListTypedFields:
 
 
 # ---------------------------------------------------------------------------
-# Fused normalizer init failure (lines 489-493)
-# ---------------------------------------------------------------------------
-
-
-class TestFusedNormalizerInitFailure:
-    def test_fused_constructor_exception_falls_back_to_none(self, symbols_yaml, monkeypatch):
-        """When RustNormalizerLobFused() raises, _fused should remain None."""
-        mock_cls = MagicMock(side_effect=RuntimeError("init failed"))
-        monkeypatch.setattr(norm_mod, "_HAS_FUSED", True)
-        monkeypatch.setattr(norm_mod, "_RustNormalizerLobFused", mock_cls)
-
-        n = MarketDataNormalizer(symbols_yaml)
-        assert n._fused is None
-
-
-# ---------------------------------------------------------------------------
-# Fixed5 scratch array init (lines 500-510)
-# ---------------------------------------------------------------------------
-
-
-class TestFixed5ScratchInit:
-    def test_fixed5_scratch_enabled_when_conditions_met(self, symbols_yaml, monkeypatch):
-        """When _SHIOAJI_FIXED5_SCRATCH=True and Rust NP available, arrays are allocated."""
-        monkeypatch.setattr(norm_mod, "_SHIOAJI_FIXED5_SCRATCH", True)
-        # Ensure the Rust NP function is available (use the real one or a mock)
-        if norm_mod._RUST_NORMALIZE_BIDASK_NP is None:
-            monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", lambda *a: None)
-
-        n = MarketDataNormalizer(symbols_yaml)
-        assert n._fixed5_scratch_enabled is True
-        assert n._fixed5_bid_prices_np is not None
-        assert n._fixed5_bid_prices_np.shape == (5,)
-        assert n._fixed5_bid_vols_np.dtype == np.int64
-
-    def test_fixed5_scratch_disabled_when_no_rust_np(self, symbols_yaml, monkeypatch):
-        """When _RUST_NORMALIZE_BIDASK_NP is None, scratch is not enabled."""
-        monkeypatch.setattr(norm_mod, "_SHIOAJI_FIXED5_SCRATCH", True)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-
-        n = MarketDataNormalizer(symbols_yaml)
-        assert n._fixed5_scratch_enabled is False
-
-
-# ---------------------------------------------------------------------------
 # _record_latency_metrics observe paths (lines 553-555, 558-560)
 # ---------------------------------------------------------------------------
 
@@ -1207,173 +1045,7 @@ class TestRecordLatencyMetricsObserve:
 
 
 # ---------------------------------------------------------------------------
-# Rust synth bidask path tick_size resolution (lines 893, 915-922)
 # ---------------------------------------------------------------------------
-
-
-class TestRustSynthBidaskTickSize:
-    def test_synth_bidask_rust_path_tick_size_from_config(self, normalizer, monkeypatch):
-        """When _SYNTHETIC_SIDE is on and Rust synth path is available, tick_size from config."""
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        monkeypatch.setattr(norm_mod, "_RUST_FORCE", True)
-        monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
-
-        bids_np = np.array([[10000, 10]], dtype=np.int64)
-        asks_np = np.array([[10010, 20]], dtype=np.int64)
-
-        synth_result = (
-            "bidask",
-            "TMFD6",
-            bids_np,
-            asks_np,
-            1_620_000_000_000_000,
-            False,  # is_snapshot
-            10000,
-            10010,  # best_bid, best_ask
-            10,
-            20,  # bid_depth, ask_depth
-            10005.0,
-            10.0,  # mid_price, spread
-            -0.333,
-            False,  # imbalance, synthesized
-        )
-        mock_synth_fn = MagicMock(return_value=synth_result)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
-
-        payload = {
-            "code": "TMFD6",
-            "ts": 1_620_000_000_000_000,
-            "bid_price": [100.0],
-            "bid_volume": [10],
-            "ask_price": [100.1],
-            "ask_volume": [20],
-        }
-        result = normalizer.normalize_bidask(payload)
-        assert result is not None
-        # Verify the synth function was called
-        assert mock_synth_fn.called
-
-    def test_synth_bidask_rust_path_invalid_tick_size(self, normalizer, monkeypatch):
-        """When tick_size is invalid string, falls back to 1/scale."""
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        monkeypatch.setattr(norm_mod, "_RUST_FORCE", True)
-        monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
-
-        # Inject bad tick_size for the symbol
-        normalizer.metadata.meta["BADTICK"] = {"tick_size": "bad", "price_scale": 10000}
-        normalizer.metadata._price_scale_cache.pop("BADTICK", None)
-
-        bids_np = np.array([[1000000, 10]], dtype=np.int64)
-        asks_np = np.array([[1001000, 20]], dtype=np.int64)
-
-        synth_result = (
-            "bidask",
-            "BADTICK",
-            bids_np,
-            asks_np,
-            1_620_000_000_000_000,
-            False,
-            1000000,
-            1001000,
-            10,
-            20,
-            1000500.0,
-            1000.0,
-            -0.333,
-            False,
-        )
-        mock_synth_fn = MagicMock(return_value=synth_result)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
-
-        payload = {
-            "code": "BADTICK",
-            "ts": 1_620_000_000_000_000,
-            "bid_price": [100.0],
-            "bid_volume": [10],
-            "ask_price": [100.1],
-            "ask_volume": [20],
-        }
-        result = normalizer.normalize_bidask(payload)
-        assert result is not None
-        assert mock_synth_fn.called
-        # Verify tick_size fallback: bad string -> float() fails -> tick_size=None
-        # then 1/10000 = 0.0001 -> tick_int = max(1, round(0.0001 * 10000)) = 1
-        call_args = mock_synth_fn.call_args
-        tick_int_arg = call_args[0][7]  # 8th positional arg is tick_int
-        assert tick_int_arg == 1
-
-    def test_synth_bidask_rust_path_no_tick_size_zero_scale(self, normalizer, monkeypatch):
-        """When no tick_size and scale=0, tick_size defaults to 1.0."""
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        monkeypatch.setattr(norm_mod, "_RUST_FORCE", True)
-        monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
-
-        # Symbol with no tick_size and price_scale=0
-        normalizer.metadata.meta["ZEROSCALE"] = {"price_scale": 0}
-        normalizer.metadata._price_scale_cache.pop("ZEROSCALE", None)
-
-        # The synth function will be called; mock it to succeed
-        bids_np = np.array([[100, 10]], dtype=np.int64)
-        asks_np = np.array([[101, 20]], dtype=np.int64)
-        synth_result = (
-            "bidask",
-            "ZEROSCALE",
-            bids_np,
-            asks_np,
-            1_620_000_000_000_000,
-            False,
-            100,
-            101,
-            10,
-            20,
-            100.5,
-            1.0,
-            -0.333,
-            False,
-        )
-        mock_synth_fn = MagicMock(return_value=synth_result)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
-
-        payload = {
-            "code": "ZEROSCALE",
-            "ts": 1_620_000_000_000_000,
-            "bid_price": [100.0],
-            "bid_volume": [10],
-            "ask_price": [101.0],
-            "ask_volume": [20],
-        }
-        result = normalizer.normalize_bidask(payload)
-        assert result is not None
-
-    def test_synth_bidask_rust_path_exception_falls_through(self, normalizer, monkeypatch):
-        """When Rust synth raises, falls through to standard path."""
-        monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        monkeypatch.setattr(norm_mod, "_RUST_FORCE", True)
-        monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
-
-        mock_synth_fn = MagicMock(side_effect=RuntimeError("synth boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", mock_synth_fn)
-
-        payload = {
-            "code": "2330",
-            "ts": 1_620_000_000_000_000,
-            "bid_price": [100.0],
-            "bid_volume": [10],
-            "ask_price": [100.5],
-            "ask_volume": [20],
-        }
-        result = normalizer.normalize_bidask(payload)
-        # Falls through to standard (non-synth) path
-        assert isinstance(result, BidAskEvent)
-        assert result.symbol == "2330"
 
 
 # ---------------------------------------------------------------------------
@@ -1399,268 +1071,6 @@ class TestTimestampSkewLogging:
         # Second call with same timestamps (within cooldown) should NOT update log ts
         normalizer._validate_and_sync_timestamp(exch_ts, local_ts, "tick", "2330")
         assert normalizer._last_skew_log_ns == first_log_ts
-
-
-# ---------------------------------------------------------------------------
-# Rust bidask fallback chain (lines 983-989, 1060-1066, 1069-1105, 1110-1150)
-# ---------------------------------------------------------------------------
-
-_BIDASK_PAYLOAD = {
-    "code": "2330",
-    "ts": 1_620_000_000_000_000,
-    "bid_price": [100.0, 99.5],
-    "bid_volume": [10, 5],
-    "ask_price": [100.5, 101.0],
-    "ask_volume": [8, 3],
-}
-
-
-def _disable_all_rust_bidask(monkeypatch):
-    """Set up Rust enabled with individual functions set to None.
-
-    rust_available is derived from _RUST_SCALE_BOOK_PAIR | _RUST_SCALE_BOOK_SEQ | _RUST_NORMALIZE_BIDASK.
-    We need at least one truthy to make use_rust=True. We use a dummy for
-    _RUST_NORMALIZE_BIDASK so it enters the chain but produces no result.
-    """
-    monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", False)
-    monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-    monkeypatch.setattr(norm_mod, "_RUST_FORCE", True)
-    monkeypatch.setattr(norm_mod, "_RUST_MIN_LEVELS", 0)
-    monkeypatch.setattr(norm_mod, "_SYNTHETIC_SIDE", False)
-    monkeypatch.setattr(norm_mod, "_RUST_STATS_TUPLE", True)
-    monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_SYNTH", None)
-    monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", None)
-    monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-    # Keep as a dummy that returns None so rust_available=True
-    monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", lambda p, s, sc: None)
-    monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
-    monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
-
-
-class TestRustBidaskFallbackChain:
-    """Tests for the multi-level Rust fallback chain in normalize_bidask.
-
-    The chain is:
-    1. scale_book_pair_stats (first attempt, non-synth path)
-    2. normalize_bidask_np
-    3. normalize_bidask (tuple)
-    4. scale_book_pair_stats (retry)
-    5. scale_book_pair
-    6. scale_book_seq (bids then asks)
-    7. Pure Python fallback
-    """
-
-    def test_pair_stats_failure_falls_through(self, normalizer, monkeypatch):
-        """When scale_book_pair_stats raises, falls through to next path (lines 983-989)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing_pair_stats = MagicMock(side_effect=RuntimeError("pair_stats boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", failing_pair_stats)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        # pair_stats failed, no other stats path available -> Python fallback
-        assert result.bids[0][0] == 1_000_000
-        assert failing_pair_stats.called
-
-    def test_pair_stats_and_np_failure_falls_to_normalize_tuple(self, normalizer, monkeypatch):
-        """When both pair_stats and NP fail, falls through to normalize_bidask tuple (lines 1069-1105)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", failing)
-
-        bids_list = [[1000000, 10]]
-        asks_list = [[1005000, 8]]
-        tuple_result = (
-            "bidask",
-            "2330",
-            bids_list,
-            asks_list,
-            1_620_000_000_000_000,
-            False,
-            1000000,
-            1005000,
-            10,
-            8,
-            1002500.0,
-            5000.0,
-            0.111,
-        )
-        mock_tuple = MagicMock(return_value=tuple_result)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", mock_tuple)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        assert result.stats is not None
-
-    def test_all_stats_paths_fail_falls_to_pair_stats_retry(self, normalizer, monkeypatch):
-        """When NP and tuple-normalize fail, retries scale_book_pair_stats (lines 1110-1119)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", failing)
-
-        bids_list = [[1000000, 10]]
-        asks_list = [[1005000, 8]]
-        pair_stats_result = (bids_list, asks_list, (1000000, 1005000, 10, 8, 1002500.0, 5000.0, 0.111))
-
-        call_count = {"n": 0}
-
-        def pair_stats_fn(*args):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                raise RuntimeError("first attempt fails")
-            return pair_stats_result
-
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", pair_stats_fn)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        assert call_count["n"] == 2  # Called twice: first fails, retry succeeds
-
-    def test_all_fail_falls_to_scale_book_pair(self, normalizer, monkeypatch):
-        """When all stats paths fail, falls to scale_book_pair for arrays only (lines 1120-1128)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", failing)
-
-        bids_list = [[1000000, 10]]
-        asks_list = [[1005000, 8]]
-        mock_pair = MagicMock(return_value=(bids_list, asks_list))
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", mock_pair)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        # No stats since all stats paths failed
-        assert result.stats is None
-
-    def test_all_fail_falls_to_scale_book_seq(self, normalizer, monkeypatch):
-        """When scale_book_pair also fails, falls to scale_book_seq per side (lines 1132-1150)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", failing)
-
-        mock_seq = MagicMock(
-            side_effect=[
-                [[1000000, 10], [995000, 5]],  # bids result
-                [[1005000, 8], [1010000, 3]],  # asks result
-            ]
-        )
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", mock_seq)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        assert mock_seq.call_count == 2  # Once for bids, once for asks
-
-    def test_all_rust_fail_falls_to_pure_python(self, normalizer, monkeypatch):
-        """When everything fails, falls to pure Python list comprehension."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", failing)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", failing)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        # Python fallback produces list-of-lists
-        assert result.bids[0][0] == 1_000_000  # 100.0 * 10000
-        assert result.asks[0][0] == 1_005_000
-
-    def test_normalize_bidask_np_with_fixed5_scratch(self, normalizer, monkeypatch):
-        """When fixed5 scratch is enabled and 5-level data, uses scratch arrays (lines 1005-1017)."""
-        _disable_all_rust_bidask(monkeypatch)
-
-        # Enable fixed5 scratch
-        normalizer._fixed5_scratch_enabled = True
-        normalizer._fixed5_bid_prices_np = np.empty(5, dtype=np.float64)
-        normalizer._fixed5_bid_vols_np = np.empty(5, dtype=np.int64)
-        normalizer._fixed5_ask_prices_np = np.empty(5, dtype=np.float64)
-        normalizer._fixed5_ask_vols_np = np.empty(5, dtype=np.int64)
-
-        bids_list = [[1000000, 10], [995000, 5], [990000, 3], [985000, 2], [980000, 1]]
-        asks_list = [[1005000, 8], [1010000, 3], [1015000, 2], [1020000, 1], [1025000, 1]]
-        np_result = (
-            "bidask",
-            "2330",
-            bids_list,
-            asks_list,
-            1_620_000_000_000_000,
-            False,
-            1000000,
-            1005000,
-            21,
-            15,
-            1002500.0,
-            5000.0,
-            0.167,
-        )
-        mock_np = MagicMock(return_value=np_result)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", mock_np)
-
-        payload_5 = {
-            "code": "2330",
-            "ts": 1_620_000_000_000_000,
-            "bid_price": [100.0, 99.5, 99.0, 98.5, 98.0],
-            "bid_volume": [10, 5, 3, 2, 1],
-            "ask_price": [100.5, 101.0, 101.5, 102.0, 102.5],
-            "ask_volume": [8, 3, 2, 1, 1],
-        }
-        result = normalizer.normalize_bidask(payload_5)
-        assert isinstance(result, BidAskEvent)
-        assert mock_np.called
-
-    def test_scale_book_pair_failure_with_seq_fallback(self, normalizer, monkeypatch):
-        """When scale_book_pair raises, bids/asks fall through to seq or Python."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_STATS_TUPLE", False)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", failing)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        # Pure Python fallback
-        assert result.bids[0][0] == 1_000_000
-
-    def test_seq_bids_fail_falls_to_python_bids(self, normalizer, monkeypatch):
-        """When scale_book_seq fails for bids and asks, Python fallback produces both."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_STATS_TUPLE", False)
-        # seq fails for both bids and asks
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", failing)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        assert result.bids[0][0] == 1_000_000
-        assert result.asks[0][0] == 1_005_000
-
-    def test_normalize_bidask_np_failure_path(self, normalizer, monkeypatch):
-        """When normalize_bidask_np raises, falls through (lines 1060-1066)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("np boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", failing)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        # Falls through to Python path
-        assert result.bids[0][0] == 1_000_000
-
-    def test_normalize_bidask_tuple_failure_path(self, normalizer, monkeypatch):
-        """When normalize_bidask (tuple) raises, falls through (lines 1099-1105)."""
-        _disable_all_rust_bidask(monkeypatch)
-        failing = MagicMock(side_effect=RuntimeError("tuple boom"))
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", failing)
-
-        result = normalizer.normalize_bidask(_BIDASK_PAYLOAD)
-        assert isinstance(result, BidAskEvent)
-        assert result.bids[0][0] == 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -1693,12 +1103,6 @@ class TestSnapshotFallbackReturnTupleShort:
     def test_snapshot_fallback_tuple_short_form(self, normalizer, monkeypatch):
         """Fallback path that produces a short (6-element) tuple with is_snapshot=True."""
         monkeypatch.setattr(norm_mod, "_RETURN_TUPLE", True)
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", False)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR_STATS", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK", None)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_BIDASK_NP", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_PAIR", None)
-        monkeypatch.setattr(norm_mod, "_RUST_SCALE_BOOK_SEQ", None)
         # Empty book -> no stats -> short tuple
         payload = {
             "code": "2330",

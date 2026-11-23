@@ -112,7 +112,6 @@ class TestChain:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """RiskEngine.evaluate() must approve a valid intent and return reason_code=='OK'."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
@@ -135,7 +134,6 @@ class TestChain:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """StormGuard in HALT state must cause RiskEngine.evaluate() to reject new intents."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
@@ -162,7 +160,6 @@ class TestChain:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A very low max_notional must cause RiskEngine to reject a large-notional intent."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
@@ -207,7 +204,6 @@ class TestIntegration:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An intent placed on risk_queue must produce an OrderCommand on order_queue."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
@@ -240,7 +236,6 @@ class TestIntegration:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A rejected intent must not produce any OrderCommand on order_queue."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
 
@@ -286,7 +281,6 @@ global_defaults:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Intent submitted to LocalIntentChannel must arrive as OrderCommand via GatewayService."""
-        monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
         monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
         monkeypatch.setenv("SYMBOLS_CONFIG", e2e_symbols_yaml)
         monkeypatch.setenv("HFT_GATEWAY_METRICS", "0")

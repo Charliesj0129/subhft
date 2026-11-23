@@ -5,7 +5,6 @@
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - Docker & Docker Compose (for ClickHouse, Redis, monitoring stack)
-- Rust toolchain (optional, for `rust_core` development)
 
 ## Local Setup
 
@@ -21,8 +20,6 @@ cp .env.example .env       # edit with your credentials
 # 3. Start infrastructure
 docker compose up -d clickhouse redis
 
-# 4. Build Rust extensions (optional)
-uv run maturin develop --manifest-path rust_core/Cargo.toml
 
 # 5. Run in sim mode
 uv run hft run sim
@@ -53,7 +50,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 ```
 feat(strategy): add Hawkes-process MM strategy
 fix(normalizer): handle one-sided LOB snapshots
-perf(lob): migrate compute_stats to Rust
+perf(lob): reuse book statistics buffers
 test(risk): add StormGuard state transition tests
 ```
 
@@ -89,7 +86,6 @@ Exchange -> BrokerFacade -> Normalizer -> LOBEngine -> FeatureEngine
 | Directory | Purpose |
 |-----------|---------|
 | `src/hft_platform/` | Core platform code |
-| `rust_core/` | Rust extensions (PyO3) |
 | `config/` | YAML configuration |
 | `tests/` | pytest test suites |
 | `research/` | Alpha research (offline only) |

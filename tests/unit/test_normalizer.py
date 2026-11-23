@@ -1,6 +1,3 @@
-from unittest.mock import MagicMock
-
-import numpy as np
 import pytest
 
 from hft_platform.events import BidAskEvent, TickEvent
@@ -208,86 +205,7 @@ def test_no_last_local_ts_ns_dict(normalizer):
     assert not hasattr(normalizer, "_last_local_ts_ns")
 
 
-# --- Fused path tests ---
-
-
-def test_fused_path_selected_when_enabled(tmp_path):
-    """When _fused is set, normalize_bidask should use fused path and set fused_stats."""
-    cfg = tmp_path / "symbols.yaml"
-    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
-    nm = MarketDataNormalizer(str(cfg))
-
-    # Create a mock fused instance
-    mock_fused = MagicMock()
-    bids_np = np.array([[1000000, 10]], dtype=np.int64)
-    asks_np = np.array([[1005000, 20]], dtype=np.int64)
-    mock_fused.process_bidask.return_value = (
-        bids_np,  # bids_np
-        asks_np,  # asks_np
-        1000000,  # best_bid
-        1005000,  # best_ask
-        10,  # bid_depth
-        20,  # ask_depth
-        2005000,  # mid_x2 (best_bid + best_ask)
-        5000,  # spread_scaled
-        -333333,  # imbalance_ppm
-        1,  # version
-        -0.333333,  # top_imbalance
-    )
-    nm._fused = mock_fused
-
-    payload = {
-        "code": "2330",
-        "ts": 1620000000000000,
-        "bid_price": [100.0],
-        "bid_volume": [10],
-        "ask_price": [100.5],
-        "ask_volume": [20],
-    }
-    event = nm.normalize_bidask(payload)
-
-    assert isinstance(event, BidAskEvent)
-    assert event.symbol == "2330"
-    assert event.fused_stats is not None
-    assert event.fused_stats[0] == 1000000  # best_bid
-    assert event.fused_stats[1] == 1005000  # best_ask
-    assert event.fused_stats[4] == 2005000  # mid_x2
-    assert event.fused_stats[5] == 5000  # spread_scaled
-    # stats (compat) should have float mid_price
-    assert event.stats is not None
-    assert event.stats[4] == pytest.approx(1002500.0)  # mid_x2 / 2
-    mock_fused.process_bidask.assert_called_once()
-
-
-def test_fused_path_fallback_on_error(tmp_path):
-    """When fused.process_bidask raises, should fall through to standard path."""
-    cfg = tmp_path / "symbols.yaml"
-    cfg.write_text("symbols:\n  - code: '2330'\n    exchange: 'TSE'\n    price_scale: 10000\n")
-    nm = MarketDataNormalizer(str(cfg))
-
-    mock_fused = MagicMock()
-    mock_fused.process_bidask.side_effect = RuntimeError("fused error")
-    nm._fused = mock_fused
-
-    payload = {
-        "code": "2330",
-        "ts": 1620000000000000,
-        "bid_price": [100.0],
-        "bid_volume": [10],
-        "ask_price": [100.5],
-        "ask_volume": [20],
-    }
-    event = nm.normalize_bidask(payload)
-
-    # Should still produce a valid event via standard path
-    assert isinstance(event, BidAskEvent)
-    assert event.symbol == "2330"
-    assert event.fused_stats is None  # Standard path does not set fused_stats
-
-
-def test_fused_path_not_used_when_disabled(normalizer):
-    """Default normalizer (no env var) should not have _fused set."""
-    assert normalizer._fused is None
+def test_bidask_normalizer_returns_book_for_lob_recomputation(normalizer):
     payload = {
         "code": "2330",
         "ts": 1620000000000000,
@@ -326,25 +244,6 @@ class TestNormalizationSkipCounter:
 
     def test_tick_negative_price_increments_counter(self, normalizer):
         child = normalizer._skip_tick_negative_price
-        before = child._value.get()
-        result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
-        assert result is None
-        after = child._value.get()
-        assert after == before + 1
-
-    def test_tick_negative_price_rust_path_increments_counter(self, normalizer, monkeypatch):
-        """Rust fast path returns price=0 for a valid symbol -> skip counter increments."""
-        import hft_platform.feed_adapter.normalizer as norm_mod
-
-        child = normalizer._skip_tick_negative_price
-        assert child is not None
-
-        # Enable Rust path
-        monkeypatch.setattr(norm_mod, "_RUST_ENABLED", True)
-        # Mock Rust normalize to return tuple with negative price
-        rust_result = ("tick", "2330", -1, 100, 100, False, False, 1_000_000)
-        monkeypatch.setattr(norm_mod, "_RUST_NORMALIZE_TICK", lambda payload, sym, scale: rust_result)
-
         before = child._value.get()
         result = normalizer.normalize_tick({"code": "2330", "close": -5.0})
         assert result is None

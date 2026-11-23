@@ -798,7 +798,7 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
     # -- main loop -----------------------------------------------------------
 
     def _publish_to_shm(self, symbol: str, stats: object, feature_tuple: tuple | None) -> None:
-        """Publish LOB stats + features to SHM snapshot table (~50ns)."""
+        """Publish LOB stats + features to the SHM snapshot table."""
         publisher = self._shm_publisher
         if publisher is None:
             return
@@ -853,41 +853,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             pass  # fire-and-forget — never block hot path
 
     def _init_feature_shadow_engine(self) -> None:
-        if self.feature_engine is None:
-            return
-        enabled = os.getenv("HFT_FEATURE_SHADOW_PARITY", "0").strip().lower() in {"1", "true", "yes", "on"}
-        if not enabled:
-            return
-        try:
-            primary_backend = (
-                self.feature_engine.kernel_backend() if hasattr(self.feature_engine, "kernel_backend") else "python"
-            )
-        except Exception as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            primary_backend = "python"
-        requested = os.getenv("HFT_FEATURE_SHADOW_BACKEND", "").strip().lower()
-        shadow_backend = requested or ("rust" if primary_backend == "python" else "python")
-        try:
-            shadow = FeatureEngine(
-                feature_set_id=(
-                    self.feature_engine.feature_set_id() if hasattr(self.feature_engine, "feature_set_id") else None
-                ),
-                emit_events=True,
-                kernel_backend=shadow_backend,
-            )
-            # If backend fallback happened and becomes identical to primary due missing Rust,
-            # still allow compare if explicitly requested.
-            if (
-                requested == ""
-                and hasattr(shadow, "kernel_backend")
-                and shadow.kernel_backend() == primary_backend == "python"
-            ):
-                # Auto mode could not create meaningful alternate backend.
-                return
-            self._feature_shadow_engine = shadow
-        except Exception as exc:
-            logger.warning("feature_shadow_engine_init_failed", reason=str(exc))
-            self._feature_shadow_engine = None
+        from hft_platform.services._md_feature_shadow import init_feature_shadow_engine
+
+        init_feature_shadow_engine(self)
 
     async def run(self):
         self.running = True

@@ -7,9 +7,7 @@
 #     fails if uv.lock is stale against pyproject.toml), and installed with
 #     `--require-hashes`. uv.lock is the single source: there is no second
 #     committed file that could drift from it.
-#   * Rust crates     built with `--locked` against the committed Cargo.lock
-#   * Rust toolchain  exact version, installer verified by sha256
-#   * maturin         pinned with hashes (docker/build/requirements.txt)
+#   * build tools    pinned with hashes (docker/build/requirements.txt)
 # Not pinned: Debian packages from apt (bookworm security updates are wanted).
 
 # Build stage
@@ -17,47 +15,9 @@ FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf2583
 
 WORKDIR /app
 
-# Build toolchain for Rust extensions
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        curl \
-        build-essential \
-        pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install a pinned Rust toolchain (needed for PyO3 extensions). The rustup
-# installer is pinned by version and verified against a committed sha256 before
-# it is executed; rustup then verifies the toolchain it downloads itself.
-ARG RUSTUP_VERSION=1.28.2
-ARG RUSTUP_SHA256_X86_64=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
-ARG RUSTUP_SHA256_AARCH64=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c
-ARG RUST_VERSION=1.91.1
-RUN set -eux; \
-    case "$(uname -m)" in \
-        x86_64)  triple=x86_64-unknown-linux-gnu;  sha="${RUSTUP_SHA256_X86_64}" ;; \
-        aarch64) triple=aarch64-unknown-linux-gnu; sha="${RUSTUP_SHA256_AARCH64}" ;; \
-        *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/rustup-init \
-        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${triple}/rustup-init"; \
-    echo "${sha}  /tmp/rustup-init" | sha256sum -c -; \
-    chmod +x /tmp/rustup-init; \
-    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "${RUST_VERSION}"; \
-    rm /tmp/rustup-init
-ENV PATH="/root/.cargo/bin:${PATH}"
-ENV CARGO_HOME=/root/.cargo \
-    CARGO_TARGET_DIR=/app/.cargo-target
-
-# Cargo network tuning for slow/unstable links
-ENV CARGO_NET_RETRY=10 \
-    CARGO_HTTP_TIMEOUT=600 \
-    CARGO_HTTP_LOW_SPEED_LIMIT=1 \
-    CARGO_HTTP_LOW_SPEED_TIME=120 \
-    CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-
-# maturin and uv, pinned with hashes.
+# uv and Hatchling, pinned with hashes.
 COPY docker/build/requirements.txt /tmp/build-requirements.txt
-RUN pip install --no-cache-dir --require-hashes --timeout 600 --retries 10 \
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: --timeout 600 --retries 10 \
         -r /tmp/build-requirements.txt
 
 # Derive the hashed runtime requirements from uv.lock. `--locked` refuses a lock
@@ -67,26 +27,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv export --locked --no-dev --no-emit-project --extra bot --extra monitor \
         --format requirements-txt --no-header -o /app/requirements.lock.txt
 
-# The workspace root manifest carries [profile.release] (lto, codegen-units=1);
-# without it the wheel would be built with different optimisation settings than
-# `make build-rust`. Cargo.lock pins every crate.
-COPY Cargo.toml Cargo.lock ./
-COPY rust_core/ ./rust_core/
-# pyproject.toml sets `[tool.maturin] python-source = "src"`: maturin refuses to run
-# unless that directory exists, and packs the package it finds there into the wheel.
-# So a change under src/ rebuilds the Rust layer, exactly as it did before this file
-# derived its requirements from the lock.
+# Build the same Python wheel used by local installs, including the hft CLI.
 COPY src/ ./src/
-
-# Fetch and build in ONE RUN. They used to be two RUNs, with the fetch result
-# held only in a cache mount and the build run offline: when the fetch layer was
-# a build-cache hit but the cache mount had been pruned, the offline build found
-# an empty registry and failed. One RUN cannot get out of step with itself.
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    --mount=type=cache,target=/app/.cargo-target \
-    cargo fetch --locked --manifest-path rust_core/Cargo.toml \
-    && maturin build --release --locked --manifest-path rust_core/Cargo.toml -o /tmp/wheels
+RUN python -m hatchling build --target wheel --directory /tmp/wheels
 
 # Runtime stage
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
@@ -135,8 +78,7 @@ ENV PIP_DEFAULT_TIMEOUT=600
 RUN pip install --no-cache-dir --timeout 600 --retries 10 \
         --require-hashes --no-deps --only-binary=:all: -r requirements.lock.txt \
     && pip check
-# Install Rust extension wheel (fast-path helpers). Built above from Cargo.lock;
-# its own dependencies are all in the lock, so no resolution happens here either.
+# Install the application wheel without re-resolving its locked dependencies.
 RUN pip install --no-cache-dir --no-deps /tmp/wheels/*.whl && pip check
 
 # Create directories for data/wal and set permissions

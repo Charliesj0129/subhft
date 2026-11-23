@@ -2,7 +2,7 @@
 
 Covers: one-sided books, simtrade/intraday_odd filtering, zero-price levels,
 HFT_STRICT_PRICE_MODE, unknown symbol handling, scale factor application,
-Rust-disabled Python fallback, SymbolMetadata operations, timestamp clamping,
+SymbolMetadata operations, timestamp clamping,
 event modes, and synthetic side generation.
 """
 
@@ -19,12 +19,8 @@ from hft_platform.events import BidAskEvent, TickEvent
 # ---------------------------------------------------------------------------
 
 
-def _make_normalizer(tmp_path, symbols=None, monkeypatch=None):
-    """Build a MarketDataNormalizer with Rust disabled and optional symbols config."""
-    if monkeypatch is not None:
-        monkeypatch.setenv("HFT_RUST_ACCEL", "0")
-        monkeypatch.setenv("HFT_FUSED_NORMALIZER", "0")
-
+def _make_normalizer(tmp_path, symbols=None):
+    """Build a MarketDataNormalizer with an optional symbols config."""
     cfg_path = tmp_path / "symbols.yaml"
     if symbols is None:
         symbols = [
@@ -35,28 +31,19 @@ def _make_normalizer(tmp_path, symbols=None, monkeypatch=None):
 
     with patch("hft_platform.feed_adapter.normalizer.MetricsRegistry") as mock_mr:
         mock_mr.get.return_value = None
-        # Disable all Rust paths at module level
         with (
-            patch("hft_platform.feed_adapter.normalizer._RUST_ENABLED", False),
-            patch("hft_platform.feed_adapter.normalizer._RUST_FORCE", False),
             patch("hft_platform.feed_adapter.normalizer._RETURN_TUPLE", False),
             patch("hft_platform.feed_adapter.normalizer._SYNTHETIC_SIDE", False),
-            patch("hft_platform.feed_adapter.normalizer._HAS_FUSED", False),
-            patch("hft_platform.feed_adapter.normalizer._SHIOAJI_FIXED5_SCRATCH", False),
         ):
             from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
             norm = MarketDataNormalizer(config_path=str(cfg_path))
             norm.metrics = None
-            norm._fused = None
         return norm
 
 
 def _make_normalizer_with_synthetic(tmp_path, monkeypatch):
     """Build normalizer with synthetic side enabled."""
-    monkeypatch.setenv("HFT_RUST_ACCEL", "0")
-    monkeypatch.setenv("HFT_FUSED_NORMALIZER", "0")
-
     cfg_path = tmp_path / "symbols.yaml"
     symbols = [
         {"code": "2330", "name": "TSMC", "exchange": "TSE", "price_scale": 10000, "tick_size": 0.01},
@@ -66,17 +53,13 @@ def _make_normalizer_with_synthetic(tmp_path, monkeypatch):
     with patch("hft_platform.feed_adapter.normalizer.MetricsRegistry") as mock_mr:
         mock_mr.get.return_value = None
         with (
-            patch("hft_platform.feed_adapter.normalizer._RUST_ENABLED", False),
             patch("hft_platform.feed_adapter.normalizer._RETURN_TUPLE", False),
             patch("hft_platform.feed_adapter.normalizer._SYNTHETIC_SIDE", True),
-            patch("hft_platform.feed_adapter.normalizer._HAS_FUSED", False),
-            patch("hft_platform.feed_adapter.normalizer._SHIOAJI_FIXED5_SCRATCH", False),
         ):
             from hft_platform.feed_adapter.normalizer import MarketDataNormalizer
 
             norm = MarketDataNormalizer(config_path=str(cfg_path))
             norm.metrics = None
-            norm._fused = None
         return norm
 
 
@@ -250,7 +233,7 @@ class TestNormalizeTick:
 
     def test_basic_dict_payload(self, tmp_path, monkeypatch):
         """Standard dict payload produces TickEvent with scaled price."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {"code": "2330", "close": 100.0, "volume": 5, "ts": 1_000_000_000}
         result = norm.normalize_tick(payload)
         assert isinstance(result, TickEvent)
@@ -260,7 +243,7 @@ class TestNormalizeTick:
 
     def test_object_payload(self, tmp_path, monkeypatch):
         """Attribute-based payload (simulating Shioaji object)."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
 
         class FakeTick:
             code = "2330"
@@ -277,13 +260,13 @@ class TestNormalizeTick:
 
     def test_missing_symbol_returns_none(self, tmp_path, monkeypatch):
         """Payload without code returns None."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         result = norm.normalize_tick({"close": 100.0, "volume": 1, "ts": 0})
         assert result is None
 
     def test_simtrade_flag(self, tmp_path, monkeypatch):
         """simtrade flag is captured."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {"code": "2330", "close": 100.0, "volume": 1, "ts": 0, "simtrade": 1}
         result = norm.normalize_tick(payload)
         assert isinstance(result, TickEvent)
@@ -291,7 +274,7 @@ class TestNormalizeTick:
 
     def test_intraday_odd_flag(self, tmp_path, monkeypatch):
         """intraday_odd flag is captured."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {"code": "2330", "close": 100.0, "volume": 1, "ts": 0, "intraday_odd": 1}
         result = norm.normalize_tick(payload)
         assert isinstance(result, TickEvent)
@@ -299,21 +282,21 @@ class TestNormalizeTick:
 
     def test_zero_close_price(self, tmp_path, monkeypatch):
         """Zero close is a Shioaji 'no data' sentinel — must be filtered (returns None)."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {"code": "2330", "close": 0.0, "volume": 1, "ts": 0}
         result = norm.normalize_tick(payload)
         assert result is None
 
     def test_none_close_price(self, tmp_path, monkeypatch):
         """None close is treated as zero/missing price — returns None (H4 fix)."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {"code": "2330", "close": None, "volume": 1, "ts": 0}
         result = norm.normalize_tick(payload)
         assert result is None
 
     def test_scale_factor_applied(self, tmp_path, monkeypatch):
         """Different symbol scale factors produce correct scaled prices."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         # 2454 has tick_size 0.5, scale would be derived as 10000 from price_scale
         result = norm.normalize_tick({"code": "2454", "close": 200.0, "volume": 1, "ts": 0})
         assert isinstance(result, TickEvent)
@@ -321,7 +304,7 @@ class TestNormalizeTick:
 
     def test_seq_increments(self, tmp_path, monkeypatch):
         """Sequence numbers increment across calls."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         r1 = norm.normalize_tick({"code": "2330", "close": 100.0, "volume": 1, "ts": 0})
         r2 = norm.normalize_tick({"code": "2330", "close": 101.0, "volume": 1, "ts": 0})
         assert isinstance(r1, TickEvent) and isinstance(r2, TickEvent)
@@ -338,7 +321,7 @@ class TestNormalizeBidAsk:
 
     def test_basic_bidask(self, tmp_path, monkeypatch):
         """Standard 5-level bidask produces BidAskEvent."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 1_000_000_000,
@@ -357,7 +340,7 @@ class TestNormalizeBidAsk:
 
     def test_empty_book_both_sides(self, tmp_path, monkeypatch):
         """Empty bids and asks produce empty lists."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 0,
@@ -373,7 +356,7 @@ class TestNormalizeBidAsk:
 
     def test_one_sided_bids_only(self, tmp_path, monkeypatch):
         """Bids only, no asks."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 0,
@@ -389,7 +372,7 @@ class TestNormalizeBidAsk:
 
     def test_one_sided_asks_only(self, tmp_path, monkeypatch):
         """Asks only, no bids."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 0,
@@ -404,25 +387,24 @@ class TestNormalizeBidAsk:
         assert len(result.asks) == 1
 
     def test_zero_price_levels_filtered(self, tmp_path, monkeypatch):
-        """Zero-price levels are filtered out in Python fallback path."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        """Nonpositive quote levels are excluded from the book."""
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 0,
-            "bid_price": [100.0, 0.0],
-            "bid_volume": [10, 20],
+            "bid_price": [0.0, 100.0, -1.0],
+            "bid_volume": [20, 10, 5],
             "ask_price": [101.0, 0.0],
             "ask_volume": [15, 25],
         }
         result = norm.normalize_bidask(payload)
         assert isinstance(result, BidAskEvent)
-        # Zero-price levels should be filtered (price && volume check in list comp)
-        assert len(result.bids) == 1
-        assert len(result.asks) == 1
+        assert result.bids == [[1000000, 10]]
+        assert result.asks == [[1010000, 15]]
 
     def test_missing_symbol_returns_none(self, tmp_path, monkeypatch):
         """No symbol in payload => None."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "ts": 0,
             "bid_price": [100.0],
@@ -435,7 +417,7 @@ class TestNormalizeBidAsk:
 
     def test_object_payload(self, tmp_path, monkeypatch):
         """Attribute-based BidAsk payload."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
 
         class FakeBidAsk:
             code = "2330"
@@ -533,7 +515,7 @@ class TestTimestampClamping:
 
     def test_validate_and_sync_local_ts_synced(self, tmp_path, monkeypatch):
         """local_ts is bumped to exch_ts when local_ts < exch_ts."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         exch_ts = 10_000_000_000
         local_ts = 5_000_000_000  # before exch
         new_exch, new_local = norm._validate_and_sync_timestamp(exch_ts, local_ts, "tick", "2330")
@@ -550,7 +532,7 @@ class TestGetScale:
 
     def test_scale_cache_hit(self, tmp_path, monkeypatch):
         """Repeated calls for same symbol use cached scale."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         s1 = norm._get_scale("2330")
         s2 = norm._get_scale("2330")
         assert s1 == s2 == 10000
@@ -558,14 +540,14 @@ class TestGetScale:
 
     def test_scale_cache_miss(self, tmp_path, monkeypatch):
         """Different symbol triggers fresh lookup."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         norm._get_scale("2330")
         norm._get_scale("2454")
         assert norm._last_symbol == "2454"
 
     def test_unknown_symbol_default_scale(self, tmp_path, monkeypatch):
         """Unknown symbol returns DEFAULT_SCALE."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         from hft_platform.feed_adapter.normalizer import SymbolMetadata
 
         assert norm._get_scale("XXXX") == SymbolMetadata.DEFAULT_SCALE
@@ -581,7 +563,7 @@ class TestNormalizeSnapshot:
 
     def test_snapshot_with_buy_sell_price(self, tmp_path, monkeypatch):
         """Snapshot with buy_price/sell_price produces BidAskEvent with is_snapshot."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 0,
@@ -596,7 +578,7 @@ class TestNormalizeSnapshot:
 
     def test_snapshot_falls_back_to_bidask(self, tmp_path, monkeypatch):
         """Snapshot without buy_price/sell_price delegates to normalize_bidask."""
-        norm = _make_normalizer(tmp_path, monkeypatch=monkeypatch)
+        norm = _make_normalizer(tmp_path)
         payload = {
             "code": "2330",
             "ts": 0,

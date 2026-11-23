@@ -17,7 +17,7 @@ ShioajiClient callback -> raw_queue -> MarketDataService -> Normalizer -> LOBEng
 
 | File | Concern |
 |---|---|
-| `feed_adapter/normalizer.py` | scaled-int output; Rust and Python paths stay in parity |
+| `feed_adapter/normalizer.py` | scaled-int output with genuine quote depth |
 | `feed_adapter/lob_engine.py` | preallocated book arrays; stats without allocation |
 | `feature/engine.py` | warmup guard; no allocation per LOB-stats update |
 | `strategy/runner.py` | dispatch latency; no blocking in event processing |
@@ -27,13 +27,13 @@ ShioajiClient callback -> raw_queue -> MarketDataService -> Normalizer -> LOBEng
 
 Per-tick hazards that are easy to miss: list/dict/f-string/object creation in a
 loop, a missing `__slots__` on a hot class, `json.loads` on large payloads
-(use `orjson`), `.tolist()` or list comprehensions over a Rust result. Time
+(use `orjson`) or copying hot-path arrays. Time
 comes from `from hft_platform.core.timebase import now_ns`, never `datetime.now()`.
 
 ## Performance checklist
 
 - O(1) lookups in tick loops; no scans. Views and zero-copy FFI instead of copies.
-- Event-loop lag budget is 1 ms; CPU-heavy Rust releases the GIL.
+- Event-loop lag budget is 1 ms.
 - Avoiding GC during active trading needs explicit lifecycle handling.
 - CPU isolation or kernel-bypass experiments need explicit verification and docs.
 
@@ -51,5 +51,4 @@ make hotpath-profile       # per-stage latency profile
 ## Done when
 
 `make discipline`, `make dependency-boundary`, and the targeted tests pass; the
-change has tests for scaled-int values, monotonic time, and the Rust-failure
-fallback; and a latency-relevant change has benchmark evidence.
+change has tests for scaled-int values, monotonic time, and fail-closed state transitions; and a latency-relevant change has benchmark evidence.

@@ -1946,22 +1946,19 @@ def test_publish_to_shm_caches_buffers():
 # ---------------------------------------------------------------------------
 
 
-def test_init_feature_shadow_kernel_backend_exception():
-    """Covers lines 650-652: kernel_backend() raises, defaults to 'python'."""
+def test_init_feature_shadow_rust_backend_refused():
+    """Rust backend is retired: requesting it must not create a shadow engine."""
     svc, *_ = _make_service()
     fe = MagicMock()
-    fe.kernel_backend = MagicMock(side_effect=RuntimeError("no backend"))
+    fe.kernel_backend = MagicMock(return_value="python")
     svc.feature_engine = fe
 
-    with patch.dict(os.environ, {"HFT_FEATURE_SHADOW_PARITY": "1"}):
-        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
-            shadow = MagicMock()
-            shadow.kernel_backend.return_value = "rust"
-            MockFE.return_value = shadow
+    with patch.dict(os.environ, {"HFT_FEATURE_SHADOW_PARITY": "1", "HFT_FEATURE_SHADOW_BACKEND": "rust"}):
+        with patch("hft_platform.services._md_feature_shadow.FeatureEngine") as MockFE:
             svc._init_feature_shadow_engine()
 
-    # Shadow engine should be assigned since backends differ
-    assert svc._feature_shadow_engine is shadow
+    MockFE.assert_not_called()
+    assert svc._feature_shadow_engine is None
 
 
 def test_init_feature_shadow_auto_mode_same_backend_returns():
@@ -2002,8 +1999,8 @@ def test_init_feature_shadow_create_raises():
     assert svc._feature_shadow_engine is None
 
 
-def test_init_feature_shadow_explicit_backend_same_ok():
-    """Covers line 665-672: explicit backend requested, even if same as primary."""
+def test_init_feature_shadow_explicit_python_backend_creates_engine():
+    """Explicit python backend request creates the shadow engine."""
     svc, *_ = _make_service()
     fe = MagicMock()
     fe.kernel_backend.return_value = "python"
@@ -2014,13 +2011,11 @@ def test_init_feature_shadow_explicit_backend_same_ok():
         os.environ,
         {"HFT_FEATURE_SHADOW_PARITY": "1", "HFT_FEATURE_SHADOW_BACKEND": "python"},
     ):
-        with patch("hft_platform.services.market_data.FeatureEngine") as MockFE:
+        with patch("hft_platform.services._md_feature_shadow.FeatureEngine") as MockFE:
             shadow = MagicMock()
-            shadow.kernel_backend.return_value = "python"
             MockFE.return_value = shadow
             svc._init_feature_shadow_engine()
 
-    # Explicit request: shadow should be assigned even if same backend
     assert svc._feature_shadow_engine is shadow
 
 

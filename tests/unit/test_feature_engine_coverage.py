@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from structlog.testing import capture_logs
 
 from hft_platform.events import LOBStatsEvent
 from hft_platform.feature.engine import (
@@ -23,6 +25,7 @@ from hft_platform.feature.registry import (
     build_default_lob_feature_set_v1,
     default_feature_registry,
 )
+from hft_platform.services._md_feature_shadow import init_feature_shadow_engine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,6 +68,19 @@ def _make_profile(
 # ---------------------------------------------------------------------------
 # FeatureEngine __init__ variants
 # ---------------------------------------------------------------------------
+
+
+def test_retired_shadow_backend_does_not_report_python_as_an_alternate(monkeypatch):
+    monkeypatch.setenv("HFT_FEATURE_SHADOW_PARITY", "1")
+    monkeypatch.setenv("HFT_FEATURE_SHADOW_BACKEND", "rust")
+    service = SimpleNamespace(feature_engine=FeatureEngine(), _feature_shadow_engine=None)
+
+    with capture_logs() as logs:
+        init_feature_shadow_engine(service)
+
+    assert service._feature_shadow_engine is None
+    assert logs[-1]["event"] == "feature_shadow_engine_unavailable"
+    assert logs[-1]["requested_backend"] == "rust"
 
 
 class TestFeatureEngineInit:
@@ -110,10 +126,13 @@ class TestFeatureEngineInit:
         eng = FeatureEngine(kernel_backend="invalid_backend_xyz")
         assert eng.kernel_backend() == "python"
 
-    def test_init_kernel_backend_rust_fallback_when_unavailable(self) -> None:
-        with patch("hft_platform.feature.engine._RUST_LOB_FEATURE_KERNEL_V1", None):
-            eng = FeatureEngine(kernel_backend="rust")
+    def test_init_kernel_backend_uses_full_python_schema_with_legacy_setting(self, monkeypatch) -> None:
+        monkeypatch.setenv("HFT_FEATURE_ENGINE_BACKEND", "rust")
+        eng = FeatureEngine(feature_set_id="lob_shared_v3")
+        update = eng.process_lob_stats(_stats())
         assert eng.kernel_backend() == "python"
+        assert update is not None
+        assert len(update.values) == len(eng.feature_ids()) == 27
 
     def test_init_with_profile(self) -> None:
         profile = _make_profile(params={"ema_window": 4})
@@ -183,7 +202,6 @@ class TestRuntimeStatus:
         assert "feature_set_id" in status
         assert "schema_version" in status
         assert "kernel_backend" in status
-        assert "rust_backend_available" in status
         assert "emit_events" in status
         assert "active_profile_id" in status
         assert "profile_params" in status

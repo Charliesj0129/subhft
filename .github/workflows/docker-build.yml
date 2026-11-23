@@ -17,9 +17,9 @@ on:
       - .dockerignore
       - uv.lock
       - pyproject.toml
-      - Cargo.toml
-      - Cargo.lock
-      - rust_core/**
+      - src/**
+      - scripts/**
+      - config/**
       - docker/**
       - .github/workflows/docker-build.yml
   workflow_dispatch:
@@ -103,8 +103,5 @@ jobs:
           docker run --rm --entrypoint python hft-platform:ci \
             -c "import numpy, pandas, scipy, numba, msgspec, orjson, clickhouse_connect, structlog, telegram"
 
-      # The extension is part of the wheel built from this repo; prove it was packed.
-      - name: Rust extension is in the image
-        run: |
-          docker run --rm --entrypoint sh hft-platform:ci \
-            -c 'pip show -f hft-platform | grep -E "rust_core.*\.so"'
+      - name: Smoke-test the installed application wheel
+        run: bash scripts/test_deployment_image.sh hft-platform:ci

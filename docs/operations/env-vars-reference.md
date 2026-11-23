@@ -217,15 +217,14 @@ Base YAML (config/base/main.yaml)
 | `HFT_GATEWAY_LEADER_LEASE_PATH` | `.state/gateway_leader.lock` | Gateway leader lease 檔案路徑 | 主備需共享同一路徑 |
 | `HFT_GATEWAY_LEADER_LEASE_REFRESH_S` | `0.5` | Leader lease heartbeat 週期（秒） | 小於 0.5 可加速切換但增加 I/O |
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | `1` = 啟用 Feature Engine（v3 預設 27 個 LOB 特徵）；`0` = 停用 | 預設 on；停用請設 `HFT_FEATURE_ENGINE_ENABLED=0` |
-| `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端：`python`/`rust` | 先 shadow 驗證後再切 `rust` |
-| `HFT_FUSED_NORMALIZER` | `0` | `1` = 啟用 Rust fused normalizer + LOB pipeline（單次 FFI 跨界） | rollout 前 shadow parity 驗證 |
+| `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端。Rust 內核已移除，僅支援 `python`；設其他值會 fail-closed | 不需設定 |
 | `HFT_FEATURE_ENGINE_EMIT_EVENTS` | `1` | `0` = 停用 FeatureUpdateEvent 發送 | 僅在診斷性能時暫停 |
 | `HFT_FEATURE_PROFILE_ID` | — | 指定 Feature Profile ID | — |
 | `HFT_FEATURE_SHADOW_PARITY` | `0` | `1` = 啟用 primary/shadow parity 比對 | rollout 必開 |
-| `HFT_FEATURE_SHADOW_BACKEND` | `auto` | shadow backend（空值自動反向選擇） | 建議明確設 `python`/`rust` |
+| `HFT_FEATURE_SHADOW_BACKEND` | 空值 | 明確設為 `python` 可啟用 Python shadow | 用於檢查 shadow 路徑接線 |
 | `HFT_FEATURE_SHADOW_SAMPLE_EVERY` | `64` | 每 N 筆做一次 shadow parity | 高流量時可調大 |
 | `HFT_FEATURE_SHADOW_WARN_EVERY` | `100` | 每 N 次 mismatch 輸出告警 | 減少 log 噪音 |
-| `HFT_FEATURE_SHADOW_ABS_TOL` | `0` | parity 絕對容忍誤差 | Rust/Python 漂移調查時調整 |
+| `HFT_FEATURE_SHADOW_ABS_TOL` | `0` | parity 絕對容忍誤差 | 特徵差異調查時調整 |
 | `HFT_FEATURE_METRICS_SAMPLE_EVERY` | `policy-dependent` | feature metrics 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_FEATURE_LATENCY_SAMPLE_EVERY` | `policy-dependent` | feature latency 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_ORDER_MODE` | `sim` | 下單模式：`sim` / `live` / `disabled`；`disabled` 為純行情且不建立下單 session | `live` 仍受 `HFT_MODE` 與 `HFT_LIVE_CONFIRM` 雙重鎖保護 |
