@@ -21,28 +21,16 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.timebase import now_ns
+from hft_platform.utils import jsonfast
 
 if TYPE_CHECKING:
     from hft_platform.execution.positions import PositionStore
 
-try:
-    import orjson
-
-    def _dumps(obj: Any) -> bytes:
-        return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS)
-
-    def _loads(data: bytes) -> Any:
-        return orjson.loads(data)
-
-except ImportError:
-    import json
-
-    def _dumps(obj: Any) -> bytes:
-        return json.dumps(obj, separators=(",", ":"), sort_keys=True).encode("utf-8")
-
-    def _loads(data: bytes) -> Any:
-        return json.loads(data)
-
+# The SHA-256 integrity hash is computed over these bytes, so the encoder must be
+# a pure function of the value (sorted keys, compact) and byte-identical to what
+# earlier builds wrote; see hft_platform.utils.jsonfast for the one float caveat.
+_dumps = jsonfast.dumps_sorted
+_loads = jsonfast.loads
 
 logger = get_logger("execution.checkpoint")
 

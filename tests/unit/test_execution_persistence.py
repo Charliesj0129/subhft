@@ -55,12 +55,12 @@ class TestFillDedupPersistence:
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
             if pre_seed is not None:
                 # Write a pre-existing file to simulate prior persist
-                import orjson
+                from hft_platform.utils import jsonfast
 
                 os.makedirs(os.path.dirname(persist_path), exist_ok=True)
                 with open(persist_path, "wb") as f:
                     for key in pre_seed:
-                        f.write(orjson.dumps(key) + b"\n")
+                        f.write(jsonfast.dumps(key) + b"\n")
 
             router = ExecutionRouter(
                 bus=bus,
@@ -72,7 +72,7 @@ class TestFillDedupPersistence:
         return router, persist_path
 
     def test_persist_writes_dedup_keys(self, tmp_path):
-        import orjson
+        from hft_platform.utils import jsonfast
 
         router, path = self._make_router(tmp_path)
         router._seen_fill_ids["key1"] = None
@@ -83,7 +83,7 @@ class TestFillDedupPersistence:
 
         assert os.path.exists(path)
         with open(path, "rb") as f:
-            keys = [orjson.loads(line.strip()) for line in f if line.strip()]
+            keys = [jsonfast.loads(line.strip()) for line in f if line.strip()]
         assert keys == ["key1", "key2", "key3"]
 
     def test_load_restores_dedup_keys(self, tmp_path):
@@ -266,7 +266,7 @@ class TestOrderIdMapPersistence:
         persist_path = str(tmp_path / "oid_map.jsonl")
 
         if pre_seed is not None:
-            import orjson
+            from hft_platform.utils import jsonfast
 
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
             now_ns = timebase.now_ns()
@@ -274,7 +274,7 @@ class TestOrderIdMapPersistence:
                 # H3: pre-seed with the new schema (k, v, t_ns, s) so the
                 # loader does not drop entries as legacy/stale.
                 for k, v in pre_seed.items():
-                    f.write(orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
+                    f.write(jsonfast.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
             adapter = OrderAdapter(
@@ -285,7 +285,7 @@ class TestOrderIdMapPersistence:
         return adapter, persist_path
 
     def test_persist_writes_mappings(self, tmp_path):
-        import orjson
+        from hft_platform.utils import jsonfast
 
         adapter, path = self._make_adapter(tmp_path)
         adapter.order_id_map["broker_123"] = "strat_a:intent_1"
@@ -295,7 +295,7 @@ class TestOrderIdMapPersistence:
 
         assert os.path.exists(path)
         with open(path, "rb") as f:
-            rows = [orjson.loads(line.strip()) for line in f if line.strip()]
+            rows = [jsonfast.loads(line.strip()) for line in f if line.strip()]
         assert len(rows) == 2
         # H3: every persisted row carries t_ns + state. The defensive branch
         # in persist_order_id_map() stamps an unmetered entry as live with

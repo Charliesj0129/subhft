@@ -21,8 +21,9 @@ gate in the platform rejects it:
   non-dict ``order``, so a shallow conversion is not enough;
 * ``normalizer._payload_get:84`` falls through to ``getattr``, which a Rust
   mapping does not answer, so ``qty`` reads 0 and the fill is dropped;
-* ``orjson`` serializes ``dict``, not "things shaped like a dict", so the WAL
-  write fails on the same object.
+* the JSON encoder (``msgspec``, via ``hft_platform.utils.jsonfast``) serializes
+  ``dict``, not "things shaped like a dict", so the WAL write fails on the same
+  object.
 
 The real type cannot be constructed from Python (``TypeError: cannot create
 'builtins.OrderEventDict' instances``), so the double below reproduces the
@@ -41,12 +42,12 @@ from __future__ import annotations
 import collections.abc as abc
 from typing import Any
 
-import orjson
 import pytest
 
 from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.feed_adapter.shioaji import subscription_manager as sub_mod
 from hft_platform.feed_adapter.shioaji._compat import to_plain_payload
+from hft_platform.utils import jsonfast
 
 
 class SdkMapping:
@@ -209,7 +210,7 @@ def test_the_double_is_faithful_to_the_sdk_type() -> None:
 def test_the_sdk_double_defeats_json_serialization() -> None:
     """The other half of the reported failure: `WAL Write Failed!`."""
     with pytest.raises(TypeError):
-        orjson.dumps(_sdk_order_payload())
+        jsonfast.dumps(_sdk_order_payload())
 
 
 # --------------------------------------------------------------------------- #
@@ -252,10 +253,10 @@ def test_to_plain_payload_converts_sdk_mappings_nested_in_sequences() -> None:
 @pytest.mark.unit
 def test_converted_payload_survives_wal_serialization() -> None:
     """`HFT_RECORDER_MODE=wal_first` makes the WAL the primary write, so a
-    payload that orjson refuses is lost, not degraded."""
-    encoded = orjson.dumps(to_plain_payload(_sdk_order_payload()))
+    payload that the JSON encoder refuses is lost, not degraded."""
+    encoded = jsonfast.dumps(to_plain_payload(_sdk_order_payload()))
 
-    decoded = orjson.loads(encoded)
+    decoded = jsonfast.loads(encoded)
     assert decoded["order"]["ordno"] == "AB123"
     assert decoded["order"]["account"]["account_id"] == "1234567"
 

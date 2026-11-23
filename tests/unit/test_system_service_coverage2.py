@@ -2258,21 +2258,21 @@ class TestResetRestartBackoff:
 
 
 # ===========================================================================
-# _persist_lost_exec_event — orjson fallback
+# _persist_lost_exec_event — codec without orjson
 # ===========================================================================
 
 
-class TestPersistLostExecEventJsonFallback:
-    """Cover the json fallback path when orjson is not available."""
+class TestPersistLostExecEventWithoutOrjson:
+    """The overflow DLQ write must work when orjson is not installed (cp314t)."""
 
-    def test_json_fallback_writes_event(self, tmp_path, monkeypatch):
+    def test_event_is_written_when_orjson_is_not_installed(self, tmp_path, monkeypatch):
         sys_obj = _make_stub()
         state_dir = str(tmp_path / "state")
         monkeypatch.setenv("HFT_STATE_DIR", state_dir)
 
         event = SimpleNamespace(topic="deal", data={"price": 42}, ingest_ts_ns=999)
 
-        # Temporarily make orjson import fail in the method
+        # Make any orjson import fail while the method runs
         import builtins
 
         original_import = builtins.__import__
@@ -2291,6 +2291,8 @@ class TestPersistLostExecEventJsonFallback:
             line = f.readline()
         parsed = json.loads(line)
         assert parsed["topic"] == "deal"
+        assert parsed["data"] == {"price": 42}
+        assert parsed["ingest_ts_ns"] == 999
 
 
 # ===========================================================================

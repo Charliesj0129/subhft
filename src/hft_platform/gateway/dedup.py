@@ -17,25 +17,10 @@ from typing import Optional
 
 from structlog import get_logger
 
+from hft_platform.utils.jsonfast import dumps as _dumps
+from hft_platform.utils.jsonfast import loads as _loads
+
 logger = get_logger("gateway.dedup")
-
-try:
-    import orjson
-
-    def _dumps(obj: object) -> bytes:
-        return orjson.dumps(obj)
-
-    def _loads(data: bytes | str) -> object:
-        return orjson.loads(data)
-
-except ImportError:
-    import json
-
-    def _dumps(obj: object) -> bytes:
-        return json.dumps(obj).encode()
-
-    def _loads(data: bytes | str) -> object:
-        return json.loads(data)
 
 
 @dataclass(slots=True)

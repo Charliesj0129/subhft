@@ -26,26 +26,10 @@ from typing import Any
 
 from structlog import get_logger
 
-try:
-    import orjson
-
-    def _dumps(obj: object) -> str:
-        return orjson.dumps(obj).decode()
-
-    def _dumps_bytes(obj: object) -> bytes:
-        return orjson.dumps(obj)
-
-except ImportError:
-    import json
-
-    _dumps = json.dumps
-
-    def _dumps_bytes(obj: object) -> bytes:
-        return json.dumps(obj).encode("utf-8")
-
-
 from hft_platform.core import timebase
 from hft_platform.monitor._redis_wire import _DEFAULT_TIMEOUT_S, RedisClient
+from hft_platform.utils.jsonfast import dumps as _dumps_bytes
+from hft_platform.utils.jsonfast import dumps_str as _dumps
 
 logger = get_logger("monitor.redis_publish")
 
@@ -150,7 +134,7 @@ class MonitorLivePublisher:
         try:
             # Build a fresh normalized body and serialize while still holding
             # the GIL on the producer thread. ``list(...)`` creates a defensive
-            # copy so orjson's internal iteration cannot observe concurrent
+            # copy so the encoder's internal iteration cannot observe concurrent
             # mutation even if the underlying list is reused elsewhere.
             body = {
                 "symbol": symbol,

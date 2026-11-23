@@ -27,6 +27,7 @@ from hft_platform.order.circuit_breaker import CircuitBreaker, StrategyCircuitBr
 from hft_platform.order.deadletter import DeadLetterQueue, RejectionReason, get_dlq
 from hft_platform.order.shadow import ShadowOrderSink
 from hft_platform.order.shadow_writer import ShadowOrderWriter
+from hft_platform.utils import jsonfast
 
 logger = get_logger("order_adapter")
 
@@ -2433,8 +2434,6 @@ class OrderAdapter:
         if not os.path.exists(path):
             return
         try:
-            import orjson
-
             loaded = 0
             skipped_terminal = 0
             skipped_ttl = 0
@@ -2447,7 +2446,7 @@ class OrderAdapter:
                     if not raw:
                         continue
                     try:
-                        obj = orjson.loads(raw)
+                        obj = jsonfast.loads(raw)
                     except Exception:
                         continue
                     if not (isinstance(obj, dict) and "k" in obj and "v" in obj):
@@ -2542,15 +2541,13 @@ class OrderAdapter:
                         continue  # H3: drop terminals from the persisted snapshot
                     snapshot.append((k, v, t_ns, state))
             try:
-                import orjson
-
                 persist_dir = os.path.dirname(path) or "."
                 os.makedirs(persist_dir, exist_ok=True)
                 fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
                 try:
                     with os.fdopen(fd, "wb") as f:
                         for k, v, t_ns, state in snapshot:
-                            f.write(orjson.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state}) + b"\n")
+                            f.write(jsonfast.dumps({"k": k, "v": v, "t_ns": t_ns, "s": state}) + b"\n")
                         f.flush()
                         os.fsync(f.fileno())
                     os.rename(tmp_path, path)

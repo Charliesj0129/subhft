@@ -10,6 +10,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.utils import jsonfast
 
 logger = get_logger("execution.fill_dlq")
 
@@ -68,13 +69,11 @@ class OrphanedFillDLQ:
     def _persist_single(self, fill_event: Any) -> None:
         """Append a single fill to the DLQ file (best-effort, no fsync)."""
         try:
-            import orjson
-
             row = asdict(fill_event)
             path = self._persist_path
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "ab") as f:
-                f.write(orjson.dumps(row) + b"\n")
+                f.write(jsonfast.dumps(row) + b"\n")
         except Exception as exc:
             logger.error("fill_dlq_persist_single_failed", error=str(exc))
             # add() runs on the event loop: flush only, like the main-file append above.
@@ -222,8 +221,6 @@ class OrphanedFillDLQ:
         keep_tmp = False
         unrecovered = 0
         try:
-            import orjson
-
             persist_dir = os.path.dirname(path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
@@ -234,8 +231,8 @@ class OrphanedFillDLQ:
                     for fill in snapshot:
                         try:
                             row = asdict(fill)
-                            # Side is IntEnum — orjson handles it natively
-                            line = orjson.dumps(row) + b"\n"
+                            # Side is IntEnum — the encoder writes it as its int value
+                            line = jsonfast.dumps(row) + b"\n"
                         except Exception:
                             failed.append(fill)
                             continue
@@ -316,8 +313,6 @@ class OrphanedFillDLQ:
         loaded = 0
         skipped = 0
         try:
-            import orjson
-
             from hft_platform.contracts.execution import FillEvent
             from hft_platform.contracts.strategy import Side
 
@@ -327,7 +322,7 @@ class OrphanedFillDLQ:
                     if not raw:
                         continue
                     try:
-                        obj = orjson.loads(raw)
+                        obj = jsonfast.loads(raw)
                         if not isinstance(obj, dict):
                             skipped += 1
                             continue
