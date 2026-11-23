@@ -300,3 +300,6 @@ research/combinatorial/results/
 
 # pip-audit report written by `make security-scan` into the repo root
 audit-output.txt
+
+# Broker test-environment credentials (certificates, manuals with passwords)
+test_environment/
