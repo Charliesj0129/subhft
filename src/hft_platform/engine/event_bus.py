@@ -1,6 +1,7 @@
 import asyncio
 import collections
 import os
+import threading
 import time
 from typing import Any, List
 
@@ -14,6 +15,9 @@ from hft_platform.engine.event_bus_telemetry import (
 from hft_platform.events import GapEvent
 
 logger = get_logger("event_bus")
+
+# Bound once: _notify runs on every publish and compares the caller's thread with the loop thread.
+_get_ident = threading.get_ident
 
 _WAIT_MODE = os.getenv("HFT_BUS_WAIT_MODE", "event").lower()
 _USE_TYPED_TICK_RING = os.getenv("HFT_BUS_TYPED_TICK_RING", "0").lower() not in {"0", "false", "no", "off"}
@@ -280,7 +284,14 @@ class RingBufferBus:
             "no",
             "off",
         }
+        # asyncio.Lock only orders coroutines of ONE loop; it cannot stop a producer thread. Every
+        # multi-writer publish path therefore also takes this thread lock (see _publish_serialized).
         self.write_lock = asyncio.Lock()
+        self._publish_lock = threading.Lock()
+        # (event loop, its thread id) in ONE reference, so a producer thread never sees a loop with
+        # another loop's thread id. Set when a consumer starts (or a coroutine publishes) on the loop.
+        self._loop_binding: tuple[asyncio.AbstractEventLoop, int] | None = None
+        self._bind_running_loop()
         self._telemetry = telemetry if telemetry is not None else NOOP_EVENT_BUS_TELEMETRY
         # Event for lock-free notification (optional)
         # Per-consumer signals to avoid lost-wakeup race (DEC-02)
@@ -456,29 +467,76 @@ class RingBufferBus:
         self.cursor = next_seq
         self._notify_counter += 1
 
-    def _notify(self) -> None:
-        if self._notify_counter % self._notify_every != 0:
+    def _bind_running_loop(self) -> None:
+        """Remember the running loop and its thread; a no-op when called outside a running loop."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
             return
-        # Set per-consumer signals (DEC-02: avoids lost-wakeup race)
+        self._loop_binding = (loop, _get_ident())
+
+    def _set_signals(self) -> None:
+        """Set every consumer signal. Must run on the loop thread: asyncio.Event is not thread-safe."""
+        # Per-consumer signals (DEC-02: avoids lost-wakeup race)
         for sig in self._consumer_signals:
             sig.set()
         # Legacy shared signal for backward compatibility
         if self.signal is not None:
             self.signal.set()
 
+    def _notify(self) -> None:
+        if self._notify_counter % self._notify_every != 0:
+            return
+        binding = self._loop_binding
+        if binding is not None and binding[1] != _get_ident():
+            # Producer thread, not the loop thread: Event.set() would touch loop state from the
+            # wrong thread (the loop would not wake, or the wake would be lost). Hand it over.
+            try:
+                binding[0].call_soon_threadsafe(self._set_signals)
+            except RuntimeError as exc:
+                # Loop already closed (shutdown): no consumer can still be waiting on it.
+                logger.debug("event_bus_notify_loop_closed", error=str(exc))
+            return
+        # Loop thread (or no loop bound yet): set directly. Kept inline, not routed through
+        # _set_signals, to spare a Python call per publish.
+        for sig in self._consumer_signals:
+            sig.set()
+        if self.signal is not None:
+            self.signal.set()
+
+    def _publish_serialized(self, event: Any) -> None:
+        """Publish under the thread lock: the cursor read-modify-write must not interleave."""
+        with self._publish_lock:
+            self._publish_unlocked(event)
+
     def publish_nowait(self, event: Any) -> None:
-        """Synchronous, lock-free publish (single-threaded)."""
-        self._publish_unlocked(event)
+        """Synchronous publish; lock-free in single-writer mode (single producer thread).
+
+        With `single_writer` off (HFT_BUS_SINGLE_WRITER=0) it is safe from several producer
+        threads: the cursor update runs under `_publish_lock` and the wakeup is marshalled to the
+        loop thread by `_notify`.
+        """
+        if self.single_writer:
+            self._publish_unlocked(event)
+        else:
+            self._publish_serialized(event)
         self._notify()
 
     def publish_many_nowait(self, events: List[Any]) -> None:
-        """Synchronous, lock-free publish for a batch (single-threaded)."""
-        for event in events:
-            self._publish_unlocked(event)
+        """Synchronous publish for a batch; same threading contract as `publish_nowait`."""
+        if self.single_writer:
+            for event in events:
+                self._publish_unlocked(event)
+        else:
+            with self._publish_lock:
+                for event in events:
+                    self._publish_unlocked(event)
         self._notify()
 
     async def publish(self, event: Any):
         """Publish event to shared buffer."""
+        if self._loop_binding is None:
+            self._bind_running_loop()
         if self.single_writer:
             # Single-writer fast path: no lock
             self._publish_unlocked(event)
@@ -490,7 +548,8 @@ class RingBufferBus:
             # For simplicity in this non-blocking design, we overwrite.
             # Ideally we track min_reader_cursor to prevent overwrite if strict usage.
             # But for HFT, latest data > stalled consumer.
-            self._publish_unlocked(event)
+            # write_lock orders coroutines only; the thread lock also fences producer threads.
+            self._publish_serialized(event)
             # _notify(), not a bare ``self.signal.set()``. ``consume()`` waits
             # on its OWN Event from ``_consumer_signals`` (DEC-02, added to fix
             # a lost-wakeup race); the shared ``self.signal`` is only kept for
@@ -502,6 +561,8 @@ class RingBufferBus:
 
     async def publish_many(self, events: List[Any]):
         """Publish a batch of events."""
+        if self._loop_binding is None:
+            self._bind_running_loop()
         if self.single_writer:
             for event in events:
                 self._publish_unlocked(event)
@@ -509,8 +570,9 @@ class RingBufferBus:
             return
 
         async with self.write_lock:
-            for event in events:
-                self._publish_unlocked(event)
+            with self._publish_lock:
+                for event in events:
+                    self._publish_unlocked(event)
             # Same lost-wakeup as publish() above: per-consumer signals, not
             # the legacy shared one.
             self._notify()
@@ -523,6 +585,9 @@ class RingBufferBus:
         # Per-consumer signal to avoid lost-wakeup race (DEC-02)
         my_signal: asyncio.Event | None = None
         if self.signal is not None:
+            # Bind BEFORE registering: a producer thread that can see the signal must also see the
+            # loop it has to marshal the wakeup to.
+            self._bind_running_loop()
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
         lag_gauge = self._telemetry.bind_consumer(consumer_name)
@@ -624,6 +689,7 @@ class RingBufferBus:
         # Per-consumer signal (DEC-02)
         my_signal: asyncio.Event | None = None
         if self.signal is not None:
+            self._bind_running_loop()  # before registering; see consume()
             my_signal = asyncio.Event()
             self._consumer_signals.append(my_signal)
         lag_gauge = self._telemetry.bind_consumer(consumer_name)

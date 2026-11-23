@@ -354,6 +354,7 @@ class LOBEngine:
         "_symbol_metadata",
         "_strict_ingress",
         "_unknown_symbol_warned",
+        "_book_create_lock",
     )
 
     def __init__(self):
@@ -384,6 +385,9 @@ class LOBEngine:
         self._symbol_metadata: Any = None
         self._strict_ingress: bool = os.getenv("HFT_LOB_STRICT_INGRESS", "0") == "1"
         self._unknown_symbol_warned: set[str] = set()
+        # Serialises book creation only (first sighting of a symbol); lookups of existing
+        # books never take it.
+        self._book_create_lock = Lock()
 
     def set_symbol_metadata(self, symbol_metadata: Any) -> None:
         """Inject SymbolMetadata so get_book can verify the incoming symbol
@@ -523,36 +527,62 @@ class LOBEngine:
         return book.get_stats()
 
     def get_book(self, symbol: str) -> Optional[BookState]:
-        if symbol == self._last_symbol and self._last_book is not None:
-            return self._last_book
-        if symbol not in self.books:
+        # `_last_symbol` and `_last_book` are two fields, so a concurrent caller can see the symbol
+        # of one write with the book of another. The book names its own symbol: check it too, so a
+        # torn pair falls through to the dict lookup instead of returning another symbol's book.
+        last = self._last_book
+        if last is not None and symbol == self._last_symbol and last.symbol == symbol:
+            return last
+        book = self.books.get(symbol)
+        if book is None:
+            book = self._create_book(symbol)
+            if book is None:
+                return None
+        self._last_symbol = symbol
+        self._last_book = book
+        return book
+
+    def _create_book(self, symbol: str) -> Optional[BookState]:
+        """Create the book for a symbol seen for the first time; exactly one BookState per symbol.
+
+        Check, cap test and insert run under `_book_create_lock` so concurrent callers cannot both
+        build a book for one symbol or push the table past `_max_symbols`. Logging and the metric
+        bump happen after the lock is released.
+        """
+        warn_unknown = False
+        refused_at = -1
+        with self._book_create_lock:
+            book = self.books.get(symbol)
+            if book is not None:
+                return book
             # Ingress invariant: detect symbols not declared in SymbolMetadata.
             # Permissive by default so strange symbols still flow; strict mode
             # (HFT_LOB_STRICT_INGRESS=1) refuses to allocate a book so downstream
             # planes fail fast instead of silently using the default price scale.
-            if not self._is_symbol_known(symbol):
-                if symbol not in self._unknown_symbol_warned:
-                    self._unknown_symbol_warned.add(symbol)
-                    logger.warning(
-                        "lob_unknown_symbol_ingress",
-                        symbol=symbol,
-                        strict=self._strict_ingress,
-                    )
-                    self._bump_unknown_symbol_metric()
-                if self._strict_ingress:
-                    return None
-            if len(self.books) >= self._max_symbols:
-                logger.warning(
-                    "lob_symbol_cardinality_exceeded",
-                    current=len(self.books),
-                    limit=self._max_symbols,
-                    symbol=symbol,
-                )
-                return None
-            self.books[symbol] = BookState(symbol)
-        book = self.books[symbol]
-        self._last_symbol = symbol
-        self._last_book = book
+            unknown = not self._is_symbol_known(symbol)
+            if unknown and symbol not in self._unknown_symbol_warned:
+                self._unknown_symbol_warned.add(symbol)
+                warn_unknown = True
+            if not (unknown and self._strict_ingress):
+                if len(self.books) >= self._max_symbols:
+                    refused_at = len(self.books)
+                else:
+                    book = BookState(symbol)
+                    self.books[symbol] = book
+        if warn_unknown:
+            logger.warning(
+                "lob_unknown_symbol_ingress",
+                symbol=symbol,
+                strict=self._strict_ingress,
+            )
+            self._bump_unknown_symbol_metric()
+        if refused_at >= 0:
+            logger.warning(
+                "lob_symbol_cardinality_exceeded",
+                current=refused_at,
+                limit=self._max_symbols,
+                symbol=symbol,
+            )
         return book
 
     def _is_symbol_known(self, symbol: str) -> bool:

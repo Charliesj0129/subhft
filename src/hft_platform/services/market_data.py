@@ -508,6 +508,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # feed signal (not a structural illiquid quirk).
         self._event_counts: dict[str, int] = {}
         self._ever_active_symbols: set[str] = set()
+        # Guards the RARE read-modify-write paths shared by several MD worker threads: the pre-latch
+        # event count (<= _ACTIVE_BASELINE_EVENT_COUNT events per symbol per session) and the
+        # post-normalisation error counter. The per-tick path never takes it (a latched symbol
+        # is one lock-free set lookup).
+        self._shared_state_lock = threading.Lock()
         # Product roots whose latched symbols feed the reduce-only feed gap
         # (``get_active_feed_gap_s``); see ``_FEED_GAP_HEALTH_ROOTS_DEFAULT``.
         self._feed_gap_health_roots: tuple[str, ...] = _parse_feed_gap_roots(
@@ -1059,7 +1064,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
             self._publish_events(event, stats, feature_update)
             self._publish_to_redis(event, stats)
         except Exception as exc:
-            self._process_raw_error_count += 1
+            with self._shared_state_lock:
+                self._process_raw_error_count += 1
             if self.metrics_registry:
                 self.metrics_registry.process_raw_error_total.inc()
             logger.error(
@@ -1112,12 +1118,17 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin):
         # (no fresh ``int`` object allocated per event for symbols that
         # have already qualified).
         if symbol not in self._ever_active_symbols:
-            count = self._event_counts.get(symbol, 0) + 1
-            if count >= self._ACTIVE_BASELINE_EVENT_COUNT:
-                self._ever_active_symbols.add(symbol)
-                self._event_counts.pop(symbol, None)
-            else:
-                self._event_counts[symbol] = count
+            # Pre-latch only: the count is a read-modify-write, so two workers delivering the same
+            # symbol would lose an increment. Re-check under the lock: another worker may have
+            # latched the symbol while this one waited.
+            with self._shared_state_lock:
+                if symbol not in self._ever_active_symbols:
+                    count = self._event_counts.get(symbol, 0) + 1
+                    if count >= self._ACTIVE_BASELINE_EVENT_COUNT:
+                        self._ever_active_symbols.add(symbol)
+                        self._event_counts.pop(symbol, None)
+                    else:
+                        self._event_counts[symbol] = count
         if self._symbol_tick_inline:
             self._symbol_last_tick[symbol] = time.monotonic()
         else:
