@@ -1989,11 +1989,15 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
             self._raw_consecutive_drops += 1
             self._escalate_raw_drop()
 
-    def _escalate_raw_drop(self) -> None:
-        """Metric, log, leaky-bucket window and StormGuard escalation for one raw drop (loop thread)."""
+    def _escalate_raw_drop(self, n: int = 1) -> None:
+        """Metric, log, leaky-bucket window and StormGuard escalation for ``n`` raw drops (loop thread)."""
         if self.metrics_registry:
-            self.metrics_registry.raw_queue_dropped_total.inc()
-        if self._raw_dropped_count % 100 == 1:
+            if n == 1:
+                self.metrics_registry.raw_queue_dropped_total.inc()
+            else:
+                self.metrics_registry.raw_queue_dropped_total.inc(n)
+        # Log on every 100th drop (1, 101, ...); a batch of n logs if it crossed one.
+        if (self._raw_dropped_count - 1) // 100 != (self._raw_dropped_count - 1 - n) // 100:
             logger.warning(
                 "raw_queue full, dropping tick",
                 dropped=self._raw_dropped_count,
@@ -2006,9 +2010,9 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
         if self._raw_drop_window_last_ns > 0:
             dt_s = (now_ns - self._raw_drop_window_last_ns) / 1_000_000_000.0
             decay = math.exp(-dt_s / self._raw_drop_window_s) if dt_s < self._raw_drop_window_s * 5 else 0.0
-            self._raw_drop_window_count = self._raw_drop_window_count * decay + 1.0
+            self._raw_drop_window_count = self._raw_drop_window_count * decay + float(n)
         else:
-            self._raw_drop_window_count = 1.0
+            self._raw_drop_window_count = float(n)
         self._raw_drop_window_last_ns = now_ns
 
         # Escalate to StormGuard on sustained drops
@@ -2112,8 +2116,11 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
             self._set_state(FeedState.DISCONNECTED)
             return False
         if isinstance(getattr(self, "_md_shards", None), ShardedMDPipeline):
-            # P3: workers own LOB/feature state; reset with every worker paused, never concurrently.
-            self._md_shards_reconnect_reset(ok, self._apply_reconnect_resets)
+            # P3: workers own LOB/feature state; the reset is queued on each owning worker, ordered
+            # with its events. If it cannot be applied the books are stale: do not report CONNECTED.
+            if not self._md_shards_reconnect_reset():
+                logger.error("md_shard_reconnect_reset_failed", reason=reason_label)
+                ok = False
         # Per-facade LOB/Feature reset via deferred _pending_warmup_reset.
         elif hasattr(self.client, "_apply_pending_resets"):
             self.client._apply_pending_resets()
@@ -2161,18 +2168,6 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
         else:
             self._set_state(FeedState.DISCONNECTED)
         return ok
-
-    def _apply_reconnect_resets(self) -> None:
-        # Per-facade LOB/Feature reset via deferred _pending_warmup_reset.
-        if hasattr(self.client, "_apply_pending_resets"):
-            self.client._apply_pending_resets()
-        else:
-            # Single-client mode: global reset on event loop (thread-safe).
-            if self.lob is not None and hasattr(self.lob, "reset_books"):
-                self.lob.reset_books()
-            fe = getattr(self, "feature_engine", None)
-            if fe is not None and hasattr(fe, "reset_all"):
-                fe.reset_all()
 
     def _should_rollover_reconnect(self) -> bool:
         now_dt = dt.datetime.fromtimestamp(timebase.now_s(), tz=self._reconnect_tzinfo)

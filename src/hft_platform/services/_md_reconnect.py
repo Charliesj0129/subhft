@@ -18,6 +18,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 
 from ._md_ingestion import FeedState
+from ._md_sharded import ShardedMDPipeline
 
 logger = get_logger("service.market_data")
 
@@ -251,6 +252,10 @@ class MarketDataReconnectMixin:
 
     def _apply_post_reconnect_resets(self: Any) -> None:
         """Apply deferred LOB/Feature resets after reconnect (thread-safe on event loop)."""
+        if isinstance(getattr(self, "_md_shards", None), ShardedMDPipeline):
+            # MD workers own the books: route the reset to them instead of mutating from the loop.
+            self._md_shards_reconnect_reset()
+            return
         client: Any = getattr(self, "client", None)
         if hasattr(client, "_apply_pending_resets"):
             client._apply_pending_resets()

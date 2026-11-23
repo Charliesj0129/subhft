@@ -42,10 +42,11 @@ def _build_events(n_events: int, n_symbols: int) -> list[BidAskEvent]:
 def _make_compute(lob: LOBEngine):
     fe = getattr(lob, "feature_engine", None)
 
-    def compute(event: BidAskEvent) -> tuple:
+    def compute(event: BidAskEvent, w: object = None) -> tuple:
         stats = lob.process_event(event)
         sym = event.symbol
-        return (sym, event, stats, None, lob.get_l1_scaled(sym), fe.get_feature_tuple(sym) if fe else None)
+        feats = fe.get_feature_tuple(sym) if fe else None
+        return (sym, event, stats, None, lob.get_l1_scaled(sym), feats, None, getattr(w, "epoch", 0))
 
     return compute
 
@@ -104,7 +105,7 @@ async def _run_sharded(events: list[BidAskEvent], n_workers: int) -> tuple[float
             pipe.offer(ev)
 
     async def watch() -> None:
-        while pipe.committed + pipe.stats()["dropped"] + pipe.stats()["rejected"] < total:
+        while pipe.committed + pipe.drop_totals()[0] + sum(w.rejected for w in pipe._workers) < total:
             await asyncio.sleep(0.001)
         done.set()
 

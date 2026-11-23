@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,6 +14,7 @@ from hft_platform.services._md_sharded import (
     CommittedMDView,
     MDWorkerCrashedError,
     ShardedMDPipeline,
+    ShardWorker,
 )
 
 SYMBOLS = [f"S{i:03d}" for i in range(32)]
@@ -21,8 +24,8 @@ def _raw(sym: str, n: int) -> dict:
     return {"code": sym, "n": n}
 
 
-def _compute(raw: dict) -> tuple:
-    return (raw["code"], raw, None, None, None, None)
+def _compute(raw: dict, w: ShardWorker) -> tuple:
+    return (raw["code"], raw, None, None, None, None, None, w.epoch)
 
 
 async def _wait_until(pred, timeout_s: float = 5.0) -> None:
@@ -32,6 +35,17 @@ async def _wait_until(pred, timeout_s: float = 5.0) -> None:
         if loop.time() > deadline:
             raise AssertionError("condition not reached")
         await asyncio.sleep(0.001)
+
+
+def _svc(monkeypatch, workers: str = "2", **kw):
+    from hft_platform.services.market_data import MarketDataService
+
+    monkeypatch.setenv("HFT_MD_WORKERS", workers)
+    client = kw.pop("client", None) or SimpleNamespace()
+    return MarketDataService(MagicMock(), asyncio.Queue(maxsize=16), client, **kw)
+
+
+# -- ordering / conservation / budget / view ----------------------------------
 
 
 def test_per_symbol_order_preserved_across_four_workers():
@@ -67,9 +81,9 @@ def test_conservation_offered_equals_committed_plus_dropped_under_overflow():
     async def main() -> dict[str, int]:
         gate = threading.Event()
 
-        def slow_compute(raw: dict) -> tuple:
+        def slow_compute(raw: dict, w: ShardWorker) -> tuple:
             gate.wait()
-            return _compute(raw)
+            return _compute(raw, w)
 
         pipe = ShardedMDPipeline(2, 8, 256, slow_compute, lambda r: None)
         pipe.start(asyncio.get_running_loop())
@@ -88,21 +102,33 @@ def test_conservation_offered_equals_committed_plus_dropped_under_overflow():
     assert st["offered"] == st["committed"] + st["dropped"] + st["rejected"] + st["stale_drained"]
 
 
-def test_overflow_drop_reports_consecutive_count_on_full_shard():
-    drops: list[int] = []
-    pipe = ShardedMDPipeline(1, 3, 256, _compute, lambda r: None, on_drop=drops.append)
+def test_overflow_drop_counts_per_worker_without_callback_per_drop():
+    pipe = ShardedMDPipeline(1, 3, 256, _compute, lambda r: None)
     pipe._admitting = True  # admission open, workers not started: the inbox only fills
     accepted = [pipe.offer(_raw("A", n)) for n in range(6)]
     assert accepted == [True, True, True, False, False, False]
-    assert drops == [1, 2, 3]
-    assert pipe.stats()["dropped"] == 3
+    assert pipe.drop_totals() == (3, 3)
+
+
+def test_drop_poll_aggregates_across_shards_and_escalates_once(monkeypatch):
+    svc = _svc(monkeypatch, "2")
+    calls: list[int] = []
+    svc._escalate_raw_drop = calls.append
+    w0, w1 = svc._md_shards._workers
+    w0.dropped, w0.consecutive_drops = 3, 3
+    w1.dropped, w1.consecutive_drops = 5, 5
+    svc._md_shard_poll_drops()
+    svc._md_shard_poll_drops()  # nothing new: no second escalation
+    assert calls == [8]
+    assert svc._raw_dropped_count == 8
+    assert svc._raw_consecutive_drops == 5
 
 
 def test_worker_crash_notifies_supervisor_and_stops_admission():
     async def main() -> tuple[list, bool, bool]:
         crashes: list = []
 
-        def bad_compute(raw: dict) -> tuple:
+        def bad_compute(raw: dict, w: ShardWorker) -> tuple:
             raise ValueError("boom")
 
         pipe = ShardedMDPipeline(2, 100, 256, bad_compute, lambda r: None, on_crash=lambda i, e: crashes.append(e))
@@ -123,25 +149,24 @@ def test_commit_budget_yields_fill_callback_runs_before_burst_finishes():
     async def main() -> tuple[int, int]:
         loop = asyncio.get_running_loop()
         committed_at_fill: list[int] = []
-        pipe_holder: list[ShardedMDPipeline] = []
+        holder: list[ShardedMDPipeline] = []
         gate = threading.Event()
 
-        def gated_compute(raw: dict) -> tuple:
+        def gated_compute(raw: dict, w: ShardWorker) -> tuple:
             gate.wait()
-            return _compute(raw)
+            return _compute(raw, w)
 
         def commit(r: tuple) -> None:
             if r[1]["n"] == 10:
                 # A fill/cancel arriving mid-burst: it must not wait for the whole burst.
-                loop.call_soon(lambda: committed_at_fill.append(pipe_holder[0].committed))
+                loop.call_soon(lambda: committed_at_fill.append(holder[0].committed))
 
         pipe = ShardedMDPipeline(1, 20_000, 256, gated_compute, commit)
-        pipe_holder.append(pipe)
+        holder.append(pipe)
         pipe.start(loop)
         for n in range(10_000):
             pipe.offer(_raw("A", n))
         gate.set()
-        await _wait_until(lambda: pipe.stats()["queued"] == 0)
         await _wait_until(lambda: pipe.committed == 10_000)
         pipe.stop()
         return committed_at_fill[0], pipe.drain_turns
@@ -156,12 +181,12 @@ def test_committed_view_never_shows_half_applied_book_during_burst():
         view = CommittedMDView()
         book = {"bid": 0, "ask": 1}
 
-        def compute(raw: dict) -> tuple:
+        def compute(raw: dict, w: ShardWorker) -> tuple:
             n = raw["n"]
             book["bid"] = n * 10
             book["ask"] = n * 10 + 1  # live state is half-applied between these two writes
             l1 = (n, book["bid"], book["ask"], 0, 0, 0, 0)
-            return ("A", raw, None, None, l1, (n,))
+            return ("A", raw, None, None, l1, (n,), None, w.epoch)
 
         pipe = ShardedMDPipeline(1, 50_000, 64, compute, lambda r: view.publish(r[0], r))
         pipe.start(asyncio.get_running_loop())
@@ -180,57 +205,228 @@ def test_committed_view_never_shows_half_applied_book_during_burst():
     assert asyncio.run(main()) == []
 
 
-def test_reconnect_reset_runs_with_workers_paused_and_drops_stale_inputs():
-    async def main() -> tuple[int, bool, int]:
+def test_committed_view_book_snapshot_matches_lob_keys_from_committed_l1():
+    view = CommittedMDView()
+    l1 = (123, 1_000_000, 1_010_000, 2_010_000, 10_000, 7, 9)
+    view.publish("TMFA6", ("TMFA6", None, None, None, l1, None, None, 0))
+    snap = view.get_book_snapshot("TMFA6")
+    assert snap == {
+        "symbol": "TMFA6",
+        "timestamp": 123,
+        "best_bid": 1_000_000,
+        "best_ask": 1_010_000,
+        "mid_price": 1_005_000.0,
+        "spread": 10_000.0,
+        "mid_price_x2": 2_010_000,
+        "spread_scaled": 10_000,
+    }
+    assert view.get_book_snapshot("NONE") is None
+
+
+def test_committed_view_feature_view_reads_committed_meta_not_live_state():
+    fe = MagicMock()
+    fe._feature_set = SimpleNamespace(feature_set_id="fs1", schema_version=3)
+    fe._feature_ids = ("a", "b")
+    fe._index_by_id = {"a": 0, "b": 1}
+    fe.active_profile_id.return_value = "p"
+    view = CommittedMDView(fe)
+    view.publish("X", ("X", None, None, None, None, (5, 6), (11, 22, 33, 4, 99), 0))
+    fv = view.get_feature_view("X")
+    assert fv["seq"] == 11 and fv["source_ts_ns"] == 22 and fv["local_ts_ns"] == 33
+    assert fv["quality_flags"] == 4 and fv["values"] == (5, 6)
+    assert view.get_feature("X", "b") == 6
+    assert view.last_update_ns("X") == 99
+    fe.get_feature_view.assert_not_called()
+
+
+def test_runner_bind_committed_view_switches_every_md_source():
+    from hft_platform.strategy.runner import StrategyRunner
+
+    runner = StrategyRunner.__new__(StrategyRunner)
+    runner._strat_executors = []
+    view = CommittedMDView()
+    runner.bind_committed_md_view(view)
+    assert runner._lob_snapshot_source == view.get_book_snapshot
+    assert runner._lob_l1_source == view.get_l1_scaled
+    assert runner._feature_view_source == view.get_feature_view
+    assert runner._feature_tuple_source == view.get_feature_tuple
+    assert runner._feature_value_source == view.get_feature
+    assert runner._feature_staleness_source == view.last_update_ns
+
+
+def test_price_band_mid_from_committed_view_is_fresh_gated():
+    from hft_platform.core import timebase
+    from hft_platform.risk.validators import PriceBandValidator
+
+    view = CommittedMDView()
+    v = PriceBandValidator({"global_defaults": {}}, lob=view)
+    now = timebase.now_ns()
+    view.publish("A", ("A", None, None, None, (now, 100, 102, 202, 2, 1, 1), None, None, 0))
+    assert v._get_mid_price("A") == 101
+    view.publish("A", ("A", None, None, None, (now - 3_600 * 10**9, 100, 102, 202, 2, 1, 1), None, None, 0))
+    assert v._get_mid_price("A") is None
+
+
+# -- resets routed to owning workers --------------------------------------------
+
+
+def test_reset_runs_on_owning_worker_without_blocking_loop_and_discards_pre_reset_results():
+    async def main() -> tuple[float, list[str], list[int], int, set]:
         gate = threading.Event()
-        in_compute = threading.Event()
+        reset_threads: list[str] = []
+        committed: list[int] = []
 
-        def compute(raw: dict) -> tuple:
-            in_compute.set()
-            gate.wait()
-            return _compute(raw)
+        def compute(raw: dict, w: ShardWorker) -> tuple:
+            if raw["n"] == 0:
+                gate.wait()
+            return _compute(raw, w)
 
-        pipe = ShardedMDPipeline(1, 100, 256, compute, lambda r: None)
+        def reset(symbols: set) -> None:
+            reset_threads.append(threading.current_thread().name)
+
+        cleared: set = set()
+        pipe = ShardedMDPipeline(
+            1,
+            100,
+            256,
+            compute,
+            lambda r: committed.append(r[1]["n"]),
+            reset=reset,
+            on_reset_committed=cleared.update,
+        )
         pipe.start(asyncio.get_running_loop())
-        for n in range(10):
+        for n in range(5):
             pipe.offer(_raw("A", n))
-        await _wait_until(in_compute.is_set)
-        ran: list[bool] = []
+        await asyncio.sleep(0.01)  # worker is now blocked inside compute(n=0)
+        t0 = time.perf_counter()
+        ok = pipe.request_reset(None)
+        elapsed = time.perf_counter() - t0
+        assert ok
         gate.set()
-        stale = pipe.run_quiesced(lambda: ran.append(True), drain_inputs=True)
-        await _wait_until(lambda: pipe.committed >= 1)
-        await asyncio.sleep(0.01)
-        committed = pipe.committed
+        for n in range(5, 8):
+            pipe.offer(_raw("A", n))
+        await _wait_until(lambda: committed[-1:] == [7])
+        st = pipe.stats()
         pipe.stop()
-        return stale, bool(ran), committed
+        return elapsed, reset_threads, committed, st["stale_drained"], cleared
 
-    stale, ran, committed = asyncio.run(main())
-    assert ran is True
-    assert stale + committed == 10
-    assert committed >= 1
+    elapsed, threads, committed, stale, cleared = asyncio.run(main())
+    assert elapsed < 0.01
+    assert threads == ["md-shard-0"]
+    assert committed == [5, 6, 7]
+    assert stale == 5
+    assert cleared == {"A"}
+
+
+def test_reset_request_refused_when_pipeline_not_running():
+    pipe = ShardedMDPipeline(2, 10, 256, _compute, lambda r: None)
+    assert pipe.request_reset(None) is False
+
+
+def test_pool_warmup_reset_routes_to_md_workers_not_loop():
+    from hft_platform.feed_adapter.shioaji.quote_connection_pool import QuoteConnectionPool
+
+    pool = QuoteConnectionPool.__new__(QuoteConnectionPool)
+    pool._slots = [SimpleNamespace(conn_id="c1", symbols={"A", "B"})]
+    pool._lob = MagicMock()
+    pool._feature_engine = MagicMock()
+    routed: list[set] = []
+    pool.set_reset_router(lambda syms: routed.append(syms) or True)
+    pool._notify_warmup_reset("c1")
+    assert routed == [{"A", "B"}]
+    pool._lob.reset_books_for_symbols.assert_not_called()
+    pool._feature_engine.reset_symbols.assert_not_called()
+
+
+def test_post_reconnect_resets_route_to_workers_when_sharded(monkeypatch):
+    svc = _svc(monkeypatch, "2")
+    svc.lob = MagicMock()
+
+    async def main() -> int:
+        svc.loop = asyncio.get_running_loop()
+        svc._md_shards.start(svc.loop)
+        svc._md_shards._workers[0].seen.add("A")
+        svc._apply_post_reconnect_resets()
+        await _wait_until(lambda: all(w.resets_applied == 1 for w in svc._md_shards._workers))
+        svc._md_shards.stop()
+        return svc.lob.reset_books.call_count
+
+    assert asyncio.run(main()) == 0
+    svc.lob.reset_books_for_symbols.assert_called_once_with({"A"})
+
+
+def test_trigger_reconnect_not_connected_when_reset_cannot_be_applied(monkeypatch):
+    from hft_platform.services._md_ingestion import FeedState
+
+    client = SimpleNamespace(reconnect=lambda *a: True)
+    svc = _svc(monkeypatch, "2", client=client)
+    svc._within_reconnect_window = lambda: True
+    svc._last_reconnect_ts = 0.0
+    # Pipeline never started: the reset cannot reach any worker.
+    ok = asyncio.run(svc._trigger_reconnect(120.0, reason="test"))
+    assert ok is False
+    assert svc.state == FeedState.DISCONNECTED
+
+
+# -- worker isolation ---------------------------------------------------------------
+
+
+def test_worker_storm_guard_proxy_does_not_replace_service_guard(monkeypatch):
+    guard = MagicMock()
+    svc = _svc(monkeypatch, "2", storm_guard=guard)
+    assert svc._storm_guard is guard
+    assert svc._md_sg_proxy is not guard
+
+
+def test_worker_normalize_failure_counts_per_worker_not_on_service(monkeypatch):
+    svc = _svc(monkeypatch, "2")
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.side_effect = ValueError("bad")
+    w = svc._md_shards._workers[0]
+    assert svc._md_shard_compute({"code": "A", "close": 1.0}, w) is None
+    assert w.norm_failures == 1
+    assert svc._norm_consecutive_failures == 0
+
+
+def test_worker_compute_leaves_first_event_flags_to_commit(monkeypatch):
+    from hft_platform.events import MetaData, TickEvent
+
+    svc = _svc(monkeypatch, "1")
+    ev = TickEvent(meta=MetaData(seq=1, source_ts=1, local_ts=1), symbol="A", price=10_000, volume=1)
+    svc.normalizer = MagicMock()
+    svc.normalizer.normalize_tick.return_value = ev
+    w = svc._md_shards._workers[0]
+    result = svc._md_shard_compute({"code": "A", "close": 1.0}, w)
+    assert result is not None
+    assert svc._first_tick_event is False
+    svc._md_shard_commit(result)
+    assert svc._first_tick_event is True
+
+
+def test_shard_cache_bounded_and_routing_stable():
+    pipe = ShardedMDPipeline(4, 10, 256, _compute, lambda r: None, known_symbols=["K1", "K2"], shard_cache_max=4)
+    first = {f"X{i}": pipe.shard_of(f"X{i}") for i in range(100)}
+    assert len(pipe._shard_cache) == 4
+    assert {s: pipe.shard_of(s) for s in first} == first
+
+
+# -- service wiring -------------------------------------------------------------------
 
 
 def test_md_workers_default_zero_keeps_single_loop_path(monkeypatch):
-    from hft_platform.services.market_data import MarketDataService
-
-    monkeypatch.delenv("HFT_MD_WORKERS", raising=False)
-    svc = MarketDataService(MagicMock(), asyncio.Queue(maxsize=16), MagicMock())
+    svc = _svc(monkeypatch, "0")
     assert svc._md_shards is None
     assert svc.committed_view is None
 
 
 def test_md_workers_crash_fails_service_run_and_halts(monkeypatch):
-    from hft_platform.services.market_data import MarketDataService
-
-    monkeypatch.setenv("HFT_MD_WORKERS", "2")
     storm_guard = MagicMock()
-    svc = MarketDataService(MagicMock(), asyncio.Queue(maxsize=16), MagicMock(), storm_guard=storm_guard)
-    assert svc._md_shards is not None
+    svc = _svc(monkeypatch, "2", storm_guard=storm_guard)
     svc._connect_sequence = AsyncMock()
     svc._monitor_loop = AsyncMock()
     svc._watchdog_loop = AsyncMock()
 
-    def bad_compute(raw):
+    def bad_compute(raw, w):
         raise RuntimeError("worker bug")
 
     svc._md_shards._compute = bad_compute
