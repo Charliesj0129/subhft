@@ -77,6 +77,13 @@ def _facade() -> FubonClientFacade:
     return FubonClientFacade(symbols_path=None, broker_config=_BROKER_CONFIG)
 
 
+def _subscribe_basket(facade: FubonClientFacade, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The connect sequence subscribes after login; a reconnect then restores that basket.
+    monkeypatch.setenv("HFT_SYMBOLS", "TXFL6")
+    facade._quote_runtime = MagicMock(name="quote_runtime")
+    facade.subscribe_basket(lambda *args, **kwargs: None)
+
+
 class TestSdkConstruction:
     def test_live_mode_builds_the_sdk_with_the_vendor_default_target(self, live: None, factory: _LoginFactory) -> None:
         facade = _facade()
@@ -166,9 +173,12 @@ class TestLogin:
 
         factory.instances[0].apikey_login.assert_called_once_with("A9", "KEY", "/x.pfx", None)
 
-    def test_reconnect_logs_out_logs_in_and_rebinds_the_account(self, live: None, factory: _LoginFactory) -> None:
+    def test_reconnect_logs_out_logs_in_and_rebinds_the_account(
+        self, live: None, factory: _LoginFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         facade = _facade()
         facade.login()
+        _subscribe_basket(facade, monkeypatch)
         new_account = make_account("7654321")
         factory.instances[0].login.return_value = ok([new_account])
 
@@ -177,10 +187,14 @@ class TestLogin:
         factory.instances[0].logout.assert_called_once_with()
         assert facade._order_gateway._account is new_account
         assert facade._account_gateway._account is new_account
+        facade.close()
 
-    def test_failed_reconnect_does_not_report_success(self, live: None, factory: _LoginFactory) -> None:
+    def test_failed_reconnect_does_not_report_success(
+        self, live: None, factory: _LoginFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         facade = _facade()
         facade.login()
+        _subscribe_basket(facade, monkeypatch)
         factory.instances[0].login.return_value = fail("gateway timeout")
 
         assert facade.reconnect(reason="drop", force=True) is False
@@ -242,16 +256,20 @@ class TestExecutionCallbacks:
         with pytest.raises(FubonCallbackRegistrationError, match="set_on_order_futopt_changed"):
             facade.set_execution_callbacks(on_order=MagicMock(), on_deal=MagicMock())
 
-    def test_callbacks_are_re_registered_after_a_reconnect(self, live: None, factory: _LoginFactory) -> None:
+    def test_callbacks_are_re_registered_after_a_reconnect(
+        self, live: None, factory: _LoginFactory, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         facade = _facade()
         facade.set_execution_callbacks(on_order=MagicMock(), on_deal=MagicMock())
         facade.login()
+        _subscribe_basket(facade, monkeypatch)
         sdk = factory.instances[0]
         before = sdk.set_on_futopt_filled.call_count
 
         assert facade.reconnect(reason="drop", force=True) is True
 
         assert sdk.set_on_futopt_filled.call_count == before + 1
+        facade.close()
 
     def test_callbacks_are_wired_on_login(self, live: None, factory: _LoginFactory) -> None:
         facade = _facade()

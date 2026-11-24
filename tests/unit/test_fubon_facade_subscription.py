@@ -128,3 +128,73 @@ def test_resubscribe_requests_night_flag_after_day_close(monkeypatch: pytest.Mon
 def test_resubscribe_before_subscribe_basket_returns_false(quote_rt: MagicMock) -> None:
     assert _facade().resubscribe() is False
     quote_rt.subscribe.assert_not_called()
+
+
+def _session_relogin_ok(facade: FubonClientFacade, *, logged_in: bool = False) -> MagicMock:
+    # Swap the SDK-backed session and gateways for mocks, so reconnect() runs without a broker.
+    session = MagicMock(name="session_runtime")
+    session.is_logged_in = logged_in
+    session.reconnect.return_value = True
+    facade._session_runtime = session
+    facade._order_gateway = MagicMock(name="order_gateway")
+    facade._account_gateway = MagicMock(name="account_gateway")
+    return session
+
+
+def test_reconnect_resubscribes_basket_after_relogin(monkeypatch: pytest.MonkeyPatch, quote_rt: MagicMock) -> None:
+    monkeypatch.setenv("HFT_SYMBOLS", "TXFL6")
+    facade = _facade()
+    facade.subscribe_basket(_cb)
+    session = _session_relogin_ok(facade)
+    quote_rt.reset_mock()
+    assert facade.reconnect("heartbeat_gap 70.0s") is True
+    session.reconnect.assert_called_once()
+    quote_rt.subscribe.assert_called_once_with(["TXFL6"], after_hours=False)
+
+
+def test_reconnect_resubscribes_inside_resubscribe_cooldown(
+    monkeypatch: pytest.MonkeyPatch, quote_rt: MagicMock
+) -> None:
+    monkeypatch.setenv("HFT_SYMBOLS", "TXFL6")
+    facade = _facade()
+    facade.subscribe_basket(_cb)
+    _session_relogin_ok(facade)
+    assert facade.resubscribe() is True  # the monitor's own resubscribe just ran
+    quote_rt.reset_mock()
+    assert facade.reconnect("heartbeat_gap 70.0s") is True
+    quote_rt.subscribe.assert_called_once_with(["TXFL6"], after_hours=False)
+
+
+def test_reconnect_reports_false_when_manager_closed(monkeypatch: pytest.MonkeyPatch, quote_rt: MagicMock) -> None:
+    monkeypatch.setenv("HFT_SYMBOLS", "TXFL6")
+    facade = _facade()
+    facade.subscribe_basket(_cb)
+    _session_relogin_ok(facade)
+    facade.close()
+    quote_rt.reset_mock()
+    assert facade.reconnect("heartbeat_gap 70.0s") is False
+    quote_rt.subscribe.assert_not_called()
+
+
+def test_reconnect_before_subscribe_basket_keeps_live_session(quote_rt: MagicMock) -> None:
+    facade = _facade()
+    session = _session_relogin_ok(facade, logged_in=True)
+    assert facade.reconnect("heartbeat_gap 70.0s") is False
+    session.reconnect.assert_not_called()
+    quote_rt.subscribe.assert_not_called()
+
+
+def test_reconnect_before_subscribe_basket_relogs_in_but_reports_false(quote_rt: MagicMock) -> None:
+    facade = _facade()
+    session = _session_relogin_ok(facade, logged_in=False)
+    assert facade.reconnect("heartbeat_gap 70.0s") is False
+    session.reconnect.assert_called_once()
+    quote_rt.subscribe.assert_not_called()
+
+
+def test_forced_reconnect_before_subscribe_basket_keeps_live_session(quote_rt: MagicMock) -> None:
+    facade = _facade()
+    session = _session_relogin_ok(facade, logged_in=True)
+    assert facade.reconnect("session_rollover", force=True) is False
+    session.reconnect.assert_not_called()
+    quote_rt.subscribe.assert_not_called()

@@ -318,7 +318,20 @@ class FubonClientFacade:
         return self._session_runtime.login_with_retry(*args, **kwargs) and self._bind_session()
 
     def reconnect(self, reason: str = "", force: bool = False) -> bool:
-        return self._session_runtime.reconnect(reason=reason, force=force) and self._bind_session()
+        manager = self._subscription_manager
+        if manager is None:
+            # Nothing was subscribed, so there is nothing to restore. Log in only when the session
+            # is down (orders need it). force is not honored here: the monitor keeps a rollover
+            # reconnect pending until one returns True, so a forced relogin would repeat every
+            # reconnect cooldown. Success is never reported: CONNECTED means the basket is subscribed.
+            if not self._session_runtime.is_logged_in and self._session_runtime.reconnect(reason=reason, force=force):
+                self._bind_session()
+            return False
+        if not (self._session_runtime.reconnect(reason=reason, force=force) and self._bind_session()):
+            return False
+        # The relogin replaces the session the basket was subscribed on, so subscribe again
+        # before reporting success, as the Shioaji reconnect does.
+        return manager.resubscribe(force=True)
 
     def close(self, logout: bool = False) -> None:
         if self._subscription_manager is not None:

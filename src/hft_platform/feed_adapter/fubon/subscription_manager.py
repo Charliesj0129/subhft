@@ -144,16 +144,18 @@ class FubonSubscriptionManager:
             subscribed=len(self._subscribed_codes),
         )
 
-    def resubscribe(self) -> bool:
+    def resubscribe(self, *, force: bool = False) -> bool:
         """Stop and re-subscribe all symbols.
 
         Enforces a cooldown of ``_RESUBSCRIBE_COOLDOWN_S`` seconds between
-        calls.  Returns ``True`` on success, ``False`` if cooldown has not
-        elapsed or if there are no codes to subscribe.
+        calls.  ``force=True`` skips the cooldown: a relogin replaced the session the
+        codes were subscribed on, so the earlier subscription is gone too.  Returns
+        ``True`` on success, ``False`` if cooldown has not elapsed, if there are no
+        codes to subscribe, or if the manager is closed.
         """
         now = time.monotonic()
         elapsed = now - self._last_resubscribe_ts
-        if self._last_resubscribe_ts > 0 and elapsed < _RESUBSCRIBE_COOLDOWN_S:
+        if not force and self._last_resubscribe_ts > 0 and elapsed < _RESUBSCRIBE_COOLDOWN_S:
             self.log.warning(
                 "Resubscribe rejected: cooldown active",
                 elapsed_s=round(elapsed, 3),
