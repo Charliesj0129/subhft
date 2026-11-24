@@ -101,6 +101,27 @@ class TestMarketDataService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(book.bids[0][0], 1000000)
         self.assertEqual(book.asks[0][0], 1010000)
 
+    async def test_connect_refusal_logs_error_class_and_stays_disconnected(self):
+        """A subscribe_basket refusal leaves the feed DISCONNECTED and names its error class.
+
+        _connect_sequence does not retry the refusal. The error is logged with its class name
+        (error_type), so a config refusal is not read as a transient connect failure.
+        """
+
+        class _ConfigRefusal(RuntimeError):
+            pass
+
+        self.client.subscribe_basket.side_effect = _ConfigRefusal("HFT_SYMBOLS is empty")
+
+        with patch("hft_platform.services.market_data.logger") as log:
+            await self.service._connect_sequence()
+
+        self.assertEqual(self.service.state, FeedState.DISCONNECTED)
+        self.assertEqual(self.client.subscribe_basket.call_count, 1)
+        connect_failed = [c for c in log.error.call_args_list if c.args and c.args[0] == "Connect failed"]
+        self.assertEqual(len(connect_failed), 1)
+        self.assertEqual(connect_failed[0].kwargs.get("error_type"), "_ConfigRefusal")
+
     async def test_trigger_reconnect_exception_sets_disconnected(self):
         """B6: _trigger_reconnect() must catch exceptions from asyncio.to_thread and set DISCONNECTED."""
         self.service._last_reconnect_ts = 0.0
