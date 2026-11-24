@@ -22,8 +22,14 @@ scrape_configs:
       - host: unix:///var/run/docker.sock
         refresh_interval: 5s
         filters:
+          # Key-only label filter: any compose project. The filter used to be
+          # `com.docker.compose.project=hft_platform`, but the production host runs the stack
+          # as project `subhft`, so it matched nothing and the engine / bot / monitor logs
+          # never reached Loki. Docker ANDs several values of one label filter, so a second
+          # project name cannot be added here; the `keep` relabel below (service name) is
+          # what restricts this job to the HFT containers.
           - name: label
-            values: ["com.docker.compose.project=hft_platform"]
+            values: ["com.docker.compose.project"]
 
     relabel_configs:
       # Extract container name as label
@@ -52,12 +58,14 @@ scrape_configs:
       # python-telegram-bot's HTTP client puts the bot token in a request URL. Neither can
       # be fixed in Python, so mask them here.
       #
-      # STATUS: this job's filter is `com.docker.compose.project=hft_platform`. A stack that
-      # runs under any other compose project name matches no container here, and then the
-      # hft-engine / hft-bot / hft-monitor logs are NOT in Loki (the wal-loader job below
-      # filters on the service label only). These stages exist so that fixing the filter does
-      # not start shipping the raw account id. The raw line stays in the host's `docker logs`
-      # (json-file) until rotation drops it either way.
+      # STATUS (2026-11-13): this job's filter is now the key-only label
+      # `com.docker.compose.project` (any compose project; see above). Until then it was
+      # `com.docker.compose.project=hft_platform`, which matched no container on a host that
+      # runs the stack under another project name, so the hft-engine / hft-bot / hft-monitor
+      # logs were NOT in Loki (the wal-loader job below filters on the service label only).
+      # These stages exist so that fixing the filter does not start shipping the raw account
+      # id. The raw line stays in the host's `docker logs` (json-file) until rotation drops
+      # it either way.
       #
       # Taiwan national ID shape: letter, 1 or 2, eight digits, not inside a longer token.
       - replace:

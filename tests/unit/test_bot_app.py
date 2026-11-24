@@ -33,8 +33,13 @@ def test_create_app_registers_report_rule_and_ask(monkeypatch) -> None:
 
     monkeypatch.setenv("HFT_TELEGRAM_BOT_TOKEN", "fake-token")
     fake_app = MagicMock()
+    # Every builder step returns the builder itself, so the chain order
+    # (token / post_init / post_shutdown / build) does not matter here.
     fake_builder = MagicMock()
-    fake_builder.token.return_value.build.return_value = fake_app
+    fake_builder.token.return_value = fake_builder
+    fake_builder.post_init.return_value = fake_builder
+    fake_builder.post_shutdown.return_value = fake_builder
+    fake_builder.build.return_value = fake_app
     fake_ext = ModuleType("telegram.ext")
     fake_ext.Application = MagicMock()
     fake_ext.Application.builder.return_value = fake_builder
