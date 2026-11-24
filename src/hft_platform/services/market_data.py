@@ -49,7 +49,7 @@ from ._md_ingestion import (
     unwrap_md,
 )
 from ._md_observability import MarketDataObservabilityMixin
-from ._md_reconnect import MarketDataReconnectMixin
+from ._md_reconnect import _WATCHDOG_EXCLUDE_PREFIXES, MarketDataReconnectMixin
 from ._md_sharded import MarketDataShardingMixin, ShardedMDPipeline, md_workers_from_env
 
 logger = get_logger("service.market_data")
@@ -2213,7 +2213,8 @@ class MarketDataService(MarketDataObservabilityMixin, MarketDataReconnectMixin, 
     # These instruments are often illiquid (especially far-OTM contracts
     # during night sessions) and can go minutes without a tick, which
     # would falsely trigger StormGuard STORM if included.
-    _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = ("TXO", "MXO", "TEO", "TFO")
+    # The weekly TXO roots (TX1.., TXU..) are included; see ``_md_reconnect``.
+    _FEED_GAP_EXCLUDE_PREFIXES: tuple[str, ...] = _WATCHDOG_EXCLUDE_PREFIXES
 
     # Product roots whose latched symbols decide the reduce-only feed gap
     # (``get_active_feed_gap_s``). Override: HFT_PLATFORM_REDUCE_ONLY_FEED_GAP_ROOTS.
