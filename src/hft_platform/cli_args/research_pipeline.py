@@ -149,8 +149,8 @@ def add_common_research_pipeline_args(
     )
     cmd.add_argument(
         "--rust-parity-test-path",
-        default="tests/unit/test_rust_hotpath_parity.py",
-        help="Pytest target used by Gate F Rust readiness check.",
+        default="",
+        help="Ignored: project Rust support was removed; kept so existing commands still parse.",
     )
     cmd.add_argument("--rust-parity-timeout-s", type=int, default=180)
     cmd.add_argument(

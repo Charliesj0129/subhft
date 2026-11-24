@@ -1,6 +1,5 @@
 import asyncio
 import dataclasses
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -77,17 +76,6 @@ async def test_risk_reject_path_safe_when_metrics_none(engine):
         await task
     except asyncio.CancelledError:
         pass
-
-
-def test_rust_validator_fail_closed(engine):
-    """When Rust validator errors, engine falls through to Python validators."""
-    mock_rv = MagicMock()
-    mock_rv.check.side_effect = RuntimeError("segfault")
-    engine._rust_validator = mock_rv
-    intent = OrderIntent(5, "s1", "2330", IntentType.NEW, Side.BUY, 100, 1, TIF.ROD, None, 0)
-    decision = engine.evaluate(intent)
-    # Rust error falls through to Python validators which pass for a valid intent
-    assert decision.approved is True
 
 
 @pytest.mark.asyncio

@@ -44,7 +44,6 @@ def _make_fill(
 
 @pytest.fixture(autouse=True)
 def _disable_rust(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HFT_RUST_POSITIONS", "0")
     monkeypatch.setattr(
         "hft_platform.observability.metrics.MetricsRegistry.get",
         staticmethod(lambda: None),
@@ -77,7 +76,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
         lambda *a, **kw: mock_codec,
     )
     s = PositionStore()
-    s._rust_tracker = None
     s.metrics = None
     return s
 

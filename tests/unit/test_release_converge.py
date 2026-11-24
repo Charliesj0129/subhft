@@ -50,7 +50,6 @@ def test_main_fails_when_cleanup_step_fails(monkeypatch, tmp_path: Path) -> None
 
     def _bad_steps(
         *,
-        clean_rust: bool,
         cleanup_flags: dict[str, bool],
         cleanup_profile: str,
         seed_minimal_sample: bool,
@@ -442,7 +441,6 @@ def test_mvp_cleanup_never_git_cleans_research_evidence() -> None:
     mod = _load_module()
 
     steps = mod._cleanup_steps(
-        clean_rust=True,
         cleanup_flags={},
         cleanup_profile=mod.CLEANUP_PROFILE_MVP_RELEASE,
         seed_minimal_sample=True,

@@ -44,11 +44,29 @@ route:
   repeat_interval: 4h
   receiver: telegram-bridge
   routes:
-    # A latched HALT is one condition, not a new event every 15 minutes:
-    # 2026-09-29 produced 54 identical notifications. StormGuardHaltStuck
-    # (for: 5m) is the escalation; this route only slows the repeat.
-    - match:
-        alertname: StormGuardHalt
+    # Infrastructure pages are NOT muted off-hours (2026-11-13): the daily
+    # backup cron runs 14:30 Asia/Taipei, inside taipei_off_hours, and a
+    # BackupFailed latched for 24 h at the generic 15 minute repeat. These
+    # repeat hourly instead. Because they are no longer muted, a deploy or
+    # planned restart must set a silence first (runbook D0), or HFTEngineDown /
+    # ScrapeTargetDown page during it.
+    # Must stay ahead of the generic critical route (first match wins).
+    - matchers:
+        - 'alertname =~ "HFTEngineDown|ScrapeTargetDown|BackupFailed|BackupStale|BackupNotRunning|HostDiskSpaceCritical"'
+      receiver: telegram-bridge
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+      continue: false
+
+    # A latched state is one condition, not a new event every 15 minutes:
+    # 2026-09-29 produced 54 identical notifications from a latched HALT, and
+    # the KillSwitchActive / KillSwitchFlattenBlocked pair repeated every 15
+    # minutes through a deliberate 3.4 h operator kill switch (2026-11-11).
+    # StormGuardHaltStuck (for: 5m) is the escalation; this route only slows
+    # the repeat.
+    - matchers:
+        - 'alertname =~ "StormGuardHalt|KillSwitchActive|KillSwitchFlattenBlocked"'
       receiver: telegram-bridge
       group_wait: 10s
       group_interval: 1m
@@ -88,7 +106,9 @@ route:
 receivers:
   - name: telegram-bridge
     webhook_configs:
-      - url: http://hft-engine:8081/webhook/alertmanager
+      # The bridge runs in hft-bot (always on), not hft-engine: alerts must
+      # survive an engine stop. Deploy hft-bot first, then reload this.
+      - url: http://hft-bot:8081/webhook/alertmanager
         send_resolved: true
 
   - name: "null"

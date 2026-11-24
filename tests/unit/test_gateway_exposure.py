@@ -412,79 +412,6 @@ def test_check_and_update_typed_symbol_limit_raises():
         store.check_and_update_typed(overflow_key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
 
 
-def test_check_and_update_typed_with_rust_store_not_ok():
-    """check_and_update_typed() with Rust store propagates rejection reason."""
-
-    class _MockRust:
-        def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
-            return (False, 1)  # code 1 → not ExposureLimitError
-
-        def reason_str(self, code):
-            return "GLOBAL_EXPOSURE_LIMIT"
-
-    store = ExposureStore(global_max_notional=0)
-    store._rust_store = _MockRust()
-    key = _key()
-    ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
-    assert ok is False
-    assert reason == "GLOBAL_EXPOSURE_LIMIT"
-
-
-def test_check_and_update_typed_with_rust_store_symbol_limit_error():
-    """check_and_update_typed() with Rust store raises ExposureLimitError when code==3."""
-    import pytest
-
-    class _MockRust:
-        def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
-            return (False, 3)
-
-        def reason_str(self, code):
-            return "SYMBOL_LIMIT"
-
-    store = ExposureStore(global_max_notional=0)
-    store._rust_store = _MockRust()
-    key = _key()
-    with pytest.raises(ExposureLimitError):
-        store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
-
-
-def test_check_and_update_typed_with_rust_store_ok():
-    """check_and_update_typed() delegates to Rust store and returns OK on success."""
-
-    class _MockRust:
-        def check_and_update(self, account, strategy_id, symbol, intent_type, price, qty):
-            return (True, 0)
-
-        def reason_str(self, code):
-            return "OK"
-
-    store = ExposureStore(global_max_notional=0)
-    store._rust_store = _MockRust()
-    key = _key()
-    ok, reason = store.check_and_update_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
-    assert ok is True
-    assert reason == "OK"
-
-
-def test_release_exposure_typed_with_rust_store_delegates():
-    """release_exposure_typed() calls Rust store release() when available."""
-
-    class _MockRust:
-        def __init__(self):
-            self.calls = []
-
-        def release(self, account, strategy_id, symbol, intent_type, price, qty):
-            self.calls.append((account, strategy_id, symbol, intent_type, price, qty))
-
-    store = ExposureStore(global_max_notional=0)
-    mock = _MockRust()
-    store._rust_store = mock
-    key = ExposureKey(account="acct", strategy_id="strat", symbol="TSE:2330")
-    store.release_exposure_typed(key, intent_type=int(IntentType.NEW), price=1_000_000, qty=1)
-    assert len(mock.calls) == 1
-    assert mock.calls[0] == ("acct", "strat", "TSE:2330", int(IntentType.NEW), 1_000_000, 1)
-
-
 def test_get_global_notional_accumulates_across_symbols():
     """get_global_notional() returns sum across all accounts, strategies, symbols."""
     store = ExposureStore(global_max_notional=0)
@@ -813,3 +740,46 @@ def test_consecutive_orders_blocked_with_per_order_tracking():
     # Only first should pass; rest blocked
     assert results == [True, False, False, False, False]
     assert store.get_global_notional() == 1_000_000
+
+
+def test_configured_strategy_limit_is_shared_across_symbols_and_amends():
+    store = ExposureStore(limits={"s": ExposureLimits(max_notional_scaled=100)})
+    first = ExposureKey(account="demo", strategy_id="s", symbol="A")
+    second = ExposureKey(account="demo", strategy_id="s", symbol="B")
+    new = int(IntentType.NEW)
+    amend = int(IntentType.AMEND)
+
+    assert store.check_and_update_typed(first, intent_type=new, price=60, qty=1, order_key="first") == (True, "OK")
+    assert store.check_and_update_typed(second, intent_type=new, price=60, qty=1) == (False, "STRATEGY_EXPOSURE_LIMIT")
+    assert store.check_and_update_typed(second, intent_type=new, price=35, qty=1, order_key="second") == (True, "OK")
+    assert store.check_and_update_typed(second, intent_type=amend, price=45, qty=1, target_order_key="second") == (
+        False,
+        "STRATEGY_EXPOSURE_LIMIT",
+    )
+    assert store.check_and_update_typed(second, intent_type=amend, price=20, qty=1, target_order_key="first") == (
+        False,
+        "AMEND_EXPOSURE_KEY_MISMATCH",
+    )
+    assert store.global_notional == 95
+    assert store.release_by_order("first") == 60
+    assert store.check_and_update_typed(second, intent_type=amend, price=45, qty=1, target_order_key="second") == (
+        True,
+        "OK",
+    )
+    assert store.global_notional == 45
+
+
+def test_amend_rollback_preserves_exposure_at_symbol_capacity():
+    store = ExposureStore(global_max_notional=100, max_symbols=1)
+    first = ExposureKey("acct", "strategy", "A")
+    second = ExposureKey("acct", "strategy", "B")
+    assert store.check_and_update_typed(first, intent_type=IntentType.NEW, price=100, qty=1, order_key="first")[0]
+    amend = dict(intent_type=IntentType.AMEND, price=0, qty=1, target_order_key="first")
+    assert store.check_and_update_typed(first, **amend)[0]
+    with pytest.raises(ExposureLimitError):
+        store.check_and_update_typed(second, intent_type=IntentType.NEW, price=100, qty=1, order_key="second")
+    store.release_exposure_typed(first, **amend)
+    assert store.global_notional == store.get_exposure("acct", "strategy", "A") == 100
+    assert store.release_by_order("first") == 100
+    assert store.check_and_update_typed(second, intent_type=IntentType.NEW, price=100, qty=1, order_key="second")[0]
+    assert store.global_notional == 100

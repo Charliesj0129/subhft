@@ -19,7 +19,7 @@ Current runtime support (prototype):
 
 ### Primary feature engine
 - `HFT_FEATURE_ENGINE_ENABLED=1`
-- `HFT_FEATURE_ENGINE_BACKEND=python|rust`
+- `HFT_FEATURE_ENGINE_BACKEND=python` (only `python` exists; other values log `feature_backend_retired` and still run Python)
 - `HFT_FEATURE_ENGINE_EMIT_EVENTS=1|0`
 
 ### Shadow parity compare

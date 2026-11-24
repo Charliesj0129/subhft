@@ -288,6 +288,11 @@ class PriceBandValidator(RiskValidator):
             get_l1_scaled = getattr(self.lob, "get_l1_scaled", None)
             if callable(get_l1_scaled):
                 l1 = get_l1_scaled(symbol)
+                if book_state is None and l1 is not None and len(l1) >= 4 and int(l1[0] or 0) > 0:
+                    # A committed MD view (HFT_MD_WORKERS>=1) has no get_book: same freshness gate on
+                    # the committed exchange timestamp.
+                    if timebase.now_ns() - int(l1[0]) > self._mid_price_max_age_ns:
+                        return None
                 if l1 is not None and len(l1) >= 4:
                     mid_price_x2 = int(l1[3] or 0)
                     if mid_price_x2 > 0:

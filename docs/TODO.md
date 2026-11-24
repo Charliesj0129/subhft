@@ -65,7 +65,7 @@
   - Recorder: WAL timestamp parsing 修復
 
 ### 1.4 熱路徑 Rust 化擴編（P0）
-- 狀態：規劃中（已有 `rust_core` 基礎，尚未覆蓋更多 execution hotpath）
+- 狀態：規劃中（Rust 已退役；以 Python/numba 實作，尚未覆蓋更多 execution hotpath）
 - 追蹤文件：`docs/architecture/rust_pyo3.md`, `docs/architecture/rust_pyo3_typed_ring_migration.md`
 - 技能：`hft-strategy`、`hft-rust`、`hft-latency-profiling`
 - RACI：R=Rust Lead、A=Tech Lead、C=Strategy Owner、I=Ops Oncall

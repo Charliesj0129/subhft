@@ -9,30 +9,18 @@ from typing import Any
 
 from structlog import get_logger
 
-try:
-    import orjson
-
-    def _dumps(obj: object) -> str:
-        return orjson.dumps(obj).decode()
-
-    def _dumps_bytes(obj: object) -> bytes:
-        return orjson.dumps(obj)
-
-    _loads = orjson.loads
-except ImportError:
-    import json
-
-    _dumps = json.dumps
-
-    def _dumps_bytes(obj: object) -> bytes:
-        return json.dumps(obj).encode()
-
-    _loads = json.loads
-
 from hft_platform.core import timebase
 from hft_platform.observability.metrics import MetricsRegistry
+from hft_platform.utils import jsonfast
 
 logger = get_logger("recorder.wal")
+
+# JSON codec: msgspec.json via hft_platform.utils.jsonfast (no stdlib fallback).
+# ``_loads`` is not called here; it stays a module attribute because the WAL
+# readers and tests take it from this module.
+_dumps = jsonfast.dumps_str
+_dumps_bytes = jsonfast.dumps
+_loads = jsonfast.loads
 
 
 _file_seq = itertools.count()

@@ -4,7 +4,7 @@
 Usage (inside hft-engine container or host with shioaji installed):
     python scripts/backfill_historical_ticks.py --dates 2026-04-06,2026-04-07 [--time-end 10:45:00]
 
-Rate limit: 50 requests per 5 seconds. Script auto-throttles.
+Rate limit: 50 requests per 10 seconds. Script auto-throttles.
 """
 
 from __future__ import annotations
@@ -45,10 +45,10 @@ STOCKS = [
     "3008", "3034", "3045", "3711", "4904", "4938", "5871", "5880",
 ]
 
-# Rate limiter: 50 requests per 5 seconds
+# Rate limiter: 50 requests per 10 seconds
 _req_times: list[float] = []
 RATE_LIMIT = 50
-RATE_WINDOW = 5.0
+RATE_WINDOW = 10.0
 
 
 def _throttle() -> None:
@@ -141,7 +141,7 @@ def fetch_and_insert(
             "type": "Tick",
             "exch_ts": ts_ns,
             "ingest_ts": ts_ns,  # use exch_ts as proxy for backfill
-            "price_scaled": int(price * PRICE_SCALE),
+            "price_scaled": round(price * PRICE_SCALE),
             "volume": vol,
             "bids_price": [],
             "bids_vol": [],

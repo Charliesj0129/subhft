@@ -21,6 +21,7 @@ from hft_platform.execution.normalizer import ExecutionNormalizer, RawExecEvent
 from hft_platform.execution.positions import PositionStore
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.recorder.wal import WALWriter
+from hft_platform.utils import jsonfast
 
 logger = get_logger("execution.router")
 
@@ -40,13 +41,31 @@ def _net_pnl_delta(gross_realized_delta: int, fill: Any) -> int:
     return gross_realized_delta - (fee if isinstance(fee, int) else 0)
 
 
-def _synthesize_dedup_key(fill: Any) -> str:
-    """Synthesize a dedup key from fill fields when fill_id is empty.
+# Prefix of every fill-dedup key this build writes. A persisted entry without it
+# was written by a build that keyed on the bare broker ``seqno``.
+_FILL_DEDUP_KEY_PREFIX = "v2|"
 
-    Used to prevent duplicate processing of reconnect-replayed fills
-    that lack a broker sequence number.
+
+def fill_dedup_key(fill: Any) -> str:
+    """Identity of one deal, for fill dedup (router window and R47's own set).
+
+    ``FillEvent.fill_id`` is the deal's ``seqno``, which is scoped to the ORDER,
+    not to the deal: the paper server reissues, at the day-session open, seqnos
+    the previous night session already used. A key of the bare ``seqno`` dropped
+    five real fills that way (night 06FE0D for R47_MAKER_TMF:33978, then a day
+    deal 06FE0D for another order). Keying on the deal's own fields keeps the
+    defence the window exists for -- a byte-identical redelivery has the same
+    key and is skipped -- while a reissued seqno on another order or at another
+    ``match_ts_ns`` is a different key.
+
+    ``side`` is formatted as ``fill.side`` always was. The ``v2|`` prefix keeps
+    these keys from ever colliding with a legacy bare-seqno entry.
     """
-    return f"{fill.symbol}|{fill.order_id}|{fill.side}|{fill.price}|{fill.qty}|{fill.match_ts_ns}"
+    # Known limit: no exchange_seq on FillEvent; same-price, same-ts partials of a multi-lot order collide (R47: 1 lot).
+    return (
+        f"{_FILL_DEDUP_KEY_PREFIX}{fill.symbol}|{fill.order_id}|{fill.side}|{fill.price}|{fill.qty}"
+        f"|{fill.match_ts_ns}|{fill.fill_id}"
+    )
 
 
 def _create_task_with_error_handling(coro: Coroutine[Any, Any, Any], name: Optional[str] = None) -> asyncio.Task[Any]:
@@ -134,6 +153,28 @@ class ExecutionRouter:
         # Fill deduplication: prevent double-counting on broker reconnect (bounded FIFO dict)
         self._fill_dedup_max_size: int = int(os.environ.get("HFT_FILL_DEDUP_MAX_SIZE", "10000"))
         self._seen_fill_ids: collections.OrderedDict[str, None] = collections.OrderedDict()
+        # Window entries written before the dedup key became ``fill_dedup_key``:
+        # bare broker seqnos (or ``synth_...`` ids). They cannot be matched
+        # against a v2 key, so for a bounded time after load a fill whose
+        # ``fill_id`` is in this set is still treated as a duplicate -- else the
+        # first restart after the deploy double-applies a broker replay of a
+        # fill the previous build already booked. Never persisted, and dropped
+        # wholesale once the monotonic deadline passes: a seqno reissued at the
+        # next day open must not be shadowed by it.
+        #
+        # Bounded a second way, by a WALL-clock boundary taken at load
+        # (``timebase.now_ns()``, the clock the broker's deal ``ts`` is
+        # compared against): only a deal stamped BEFORE the restart can be a
+        # replay of a fill the old build applied. A restart shortly before a
+        # session open would otherwise shadow the day-open deals that reuse
+        # night seqnos still in this set -- the bug this window must not
+        # re-create. 0 = no legacy entries loaded, nothing matches.
+        self._fill_dedup_legacy_ttl_seconds: float = float(  # precision-ok: monotonic seconds, not a price
+            os.environ.get("HFT_FILL_DEDUP_LEGACY_TTL_S", "600")
+        )
+        self._legacy_fill_ids: set[str] = set()
+        self._legacy_fill_deadline_seconds: float = float("-inf")  # precision-ok: monotonic seconds, not a price
+        self._legacy_fill_boundary_ns: int = 0
         self._fill_dedup_persist_path: str = os.environ.get(
             "HFT_FILL_DEDUP_PERSIST_PATH", ".state/fill_dedup_window.jsonl"
         )
@@ -241,32 +282,110 @@ class ExecutionRouter:
         self._overflow_buf = buf
 
     def _load_fill_dedup(self) -> None:
-        """Load fill dedup window from disk on startup (restart-safe dedup)."""
+        """Load fill dedup window from disk on startup (restart-safe dedup).
+
+        A damaged line leaves a hole in the window, so a replayed fill with that
+        key would be booked twice. Skips are therefore counted and logged, split
+        by where they sit (``tail`` = the last line, ``mid`` = one with good lines
+        after it). The writer is temp+fsync+rename, so neither is an expected
+        crash artefact: any skip is filesystem-level damage. The last line is the
+        newest key, the one most likely to be replayed, so it is not downgraded.
+        Dedup behaviour itself is unchanged.
+        """
+        self._fill_dedup_load_tail_skipped = 0
+        self._fill_dedup_load_mid_skipped = 0
         path = self._fill_dedup_persist_path
         if not os.path.exists(path):
             return
         try:
-            import orjson
-
             loaded = 0
-            with open(path, "rb") as f:
-                for raw in f:
-                    raw = raw.strip()
-                    if not raw:
-                        continue
-                    try:
-                        key = orjson.loads(raw)
+            legacy = 0
+            # Stream, holding one bad line back until the next line shows whether it was
+            # the last: keys read before an I/O error stay in the window (those fills are
+            # already booked), and the tail/mid split still needs no second pass.
+            pending_bad = False
+            try:
+                with open(path, "rb") as f:
+                    for raw in f:
+                        raw = raw.strip()
+                        if not raw:
+                            continue
+                        if pending_bad:
+                            self._fill_dedup_load_mid_skipped += 1
+                            pending_bad = False
+                        try:
+                            key = jsonfast.loads(raw)
+                        except jsonfast.DecodeError:
+                            key = None
                         if isinstance(key, str) and key:
-                            self._seen_fill_ids[key] = None
+                            if key.startswith(_FILL_DEDUP_KEY_PREFIX):
+                                self._seen_fill_ids[key] = None
+                            else:
+                                self._legacy_fill_ids.add(key)
+                                legacy += 1
                             loaded += 1
-                    except Exception:
-                        continue
+                        else:
+                            pending_bad = True
+            finally:
+                if pending_bad:
+                    self._fill_dedup_load_tail_skipped += 1
             # Enforce max size
             while len(self._seen_fill_ids) > self._fill_dedup_max_size:
                 self._seen_fill_ids.popitem(last=False)
-            logger.info("fill_dedup_loaded", count=loaded, path=path)
+            if self._fill_dedup_load_mid_skipped or self._fill_dedup_load_tail_skipped:
+                logger.error(
+                    "fill_dedup_load_corrupt_lines",
+                    mid_skipped=self._fill_dedup_load_mid_skipped,
+                    tail_skipped=self._fill_dedup_load_tail_skipped,
+                    loaded=loaded,
+                    path=path,
+                )
+            if self._legacy_fill_ids:
+                self._legacy_fill_deadline_seconds = time.monotonic() + self._fill_dedup_legacy_ttl_seconds
+                self._legacy_fill_boundary_ns = timebase.now_ns()
+            logger.info(
+                "fill_dedup_loaded",
+                count=loaded,
+                legacy=legacy,
+                legacy_ttl_seconds=self._fill_dedup_legacy_ttl_seconds,
+                path=path,
+            )
         except Exception as exc:
             logger.warning("fill_dedup_load_failed", error=str(exc), path=path)
+
+    def _is_legacy_fill_duplicate(self, fill: Any) -> bool:
+        """True when ``fill`` matches a pre-v2 window entry that is still live.
+
+        Called only after the v2 key was found unseen. Past the deadline the
+        legacy set is cleared on the next check and the expiry is logged once;
+        from then on the empty-set test below makes this a no-op. A match also
+        needs ``0 < match_ts_ns < _legacy_fill_boundary_ns``: a deal stamped at
+        or after the restart cannot be a replay of a fill the old build applied,
+        and an unstamped one (0) proves nothing, so neither is ever matched.
+        """
+        legacy = self._legacy_fill_ids
+        if not legacy:
+            return False
+        if time.monotonic() >= self._legacy_fill_deadline_seconds:
+            legacy.clear()
+            logger.info(
+                "fill_dedup_legacy_window_expired",
+                legacy_ttl_seconds=self._fill_dedup_legacy_ttl_seconds,
+            )
+            return False
+        fill_id = fill.fill_id
+        if not fill_id or fill_id not in legacy:
+            return False
+        if not 0 < fill.match_ts_ns < self._legacy_fill_boundary_ns:
+            return False
+        self.metrics.duplicate_fill_total.inc()
+        logger.warning(
+            "duplicate_fill_skipped_legacy",
+            fill_id=fill_id,
+            symbol=fill.symbol,
+            order_id=fill.order_id,
+        )
+        return True
 
     def persist_fill_dedup(self) -> None:
         """Persist fill dedup window to disk atomically (temp+fsync+rename).
@@ -287,8 +406,6 @@ class ExecutionRouter:
         # Snapshot under CPython GIL atomicity
         keys_snapshot = list(self._seen_fill_ids.keys())
         try:
-            import orjson
-
             persist_dir = os.path.dirname(path) or "."
             os.makedirs(persist_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=persist_dir)
@@ -297,7 +414,7 @@ class ExecutionRouter:
             try:
                 with os.fdopen(fd, "wb") as f:
                     for key in keys_snapshot:
-                        f.write(orjson.dumps(key) + b"\n")
+                        f.write(jsonfast.dumps(key) + b"\n")
                     f.flush()
                     os.fsync(f.fileno())
                 os.rename(tmp_path, path)
@@ -573,9 +690,9 @@ class ExecutionRouter:
                         continue
                     if fill_event:
                         # Fill deduplication: prevent double-counting on broker reconnect.
-                        # When fill_id is empty (broker omitted seqno), synthesize a key
-                        # from fill fields so dedup still catches reconnect replays.
-                        _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
+                        # The key is the deal's identity (fill_dedup_key), not the
+                        # order-scoped broker seqno the paper server reissues.
+                        _dedup_key = fill_dedup_key(fill_event)
                         if _dedup_key in self._seen_fill_ids:
                             self.metrics.duplicate_fill_total.inc()
                             logger.warning(
@@ -584,6 +701,8 @@ class ExecutionRouter:
                                 dedup_key=_dedup_key,
                                 symbol=fill_event.symbol,
                             )
+                            continue
+                        if self._is_legacy_fill_duplicate(fill_event):
                             continue
                         # The key is registered only once the fill has reached the
                         # position store (below). Registering here, before the
@@ -836,8 +955,8 @@ class ExecutionRouter:
                                         except asyncio.QueueFull:
                                             self._wal_fallback_write(_sd_topic, _sd_payload)
                                 continue
-                        _dedup_key = fill_event.fill_id or _synthesize_dedup_key(fill_event)
-                        if _dedup_key not in self._seen_fill_ids:
+                        _dedup_key = fill_dedup_key(fill_event)
+                        if _dedup_key not in self._seen_fill_ids and not self._is_legacy_fill_duplicate(fill_event):
                             # TCA enrichment for shutdown drain fills
                             _drain_order_key = self._order_id_map.get(fill_event.order_id)
                             if _drain_order_key is not None:
@@ -963,8 +1082,8 @@ class ExecutionRouter:
         skipped_dedup = 0
         applied = 0
         for fill in resolved:
-            _dedup_key = fill.fill_id or _synthesize_dedup_key(fill)
-            if _dedup_key in self._seen_fill_ids:
+            _dedup_key = fill_dedup_key(fill)
+            if _dedup_key in self._seen_fill_ids or self._is_legacy_fill_duplicate(fill):
                 skipped_dedup += 1
                 continue
             if hasattr(self.position_store, "on_fill"):
@@ -1014,7 +1133,7 @@ class ExecutionRouter:
             )
             for fill in resolved:
                 # Fill deduplication: skip fills already applied via the main path
-                _dedup_key = fill.fill_id or _synthesize_dedup_key(fill)
+                _dedup_key = fill_dedup_key(fill)
                 if _dedup_key in self._seen_fill_ids:
                     self.metrics.duplicate_fill_total.inc()
                     logger.warning(
@@ -1023,6 +1142,8 @@ class ExecutionRouter:
                         dedup_key=_dedup_key,
                         symbol=fill.symbol,
                     )
+                    continue
+                if self._is_legacy_fill_duplicate(fill):
                     continue
                 # TCA enrichment for DLQ-resolved fills (M4)
                 _order_key = self._resolve_order_key_for_fill(fill)

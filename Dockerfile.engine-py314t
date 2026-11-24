@@ -1,0 +1,145 @@
+# syntax=docker/dockerfile:1.7
+
+# hft-engine on free-threaded CPython 3.14t. OPT-IN and ENGINE ONLY.
+#
+# This file sits beside the production Dockerfile and replaces nothing: the
+# Dockerfile, docker-compose.yml, docker-compose.production.yml and
+# docker-compose.prod.locked.yml are not touched and none of them references this
+# file, so a plain `docker compose build` never builds it. The research, wal-loader,
+# monitor and bot images keep using the Dockerfile. Rollback is "use the existing
+# image"; see docs/runbooks/py314t-engine-image.md.
+#
+# Reproducibility contract (same shape as the Dockerfile):
+#   * base image       the SAME digest-pinned python:3.12-slim-bookworm the Dockerfile
+#                      uses. Its own 3.12 interpreter is never used here; it only
+#                      supplies Debian bookworm userland and a pip for the hashed
+#                      build tools.
+#   * interpreter      uv-managed CPython 3.14t (python-build-standalone), pinned to
+#                      the exact patch in PYTHON_314T_VERSION. uv itself is pinned
+#                      with hashes in docker/build/requirements.txt, so the set of
+#                      interpreters it can fetch is fixed by that pin.
+#   * Python packages  ONLY from requirements/runtime-py314t.lock, installed with
+#                      --require-hashes --only-binary :all: --no-deps. Nothing is
+#                      resolved at build time and nothing is compiled from source.
+#   * GIL              no PYTHON_GIL is set anywhere. The build runs
+#                      scripts/py314t/check_gil.py and fails if any import re-enables
+#                      the GIL.
+# Not pinned: Debian packages from apt (bookworm security updates are wanted).
+#
+# Interpreter patch level: the newest 3.14t patch known when this file was written
+# is 3.14.10. gh-159449 (free-threaded asyncio task-list race, can segfault) is fixed
+# only in 3.14.11 and later. Until PYTHON_314T_VERSION is bumped to 3.14.11 or newer
+# the build prints a warning; --build-arg REQUIRE_GH159449_FIX=1 turns it into a
+# failure. Do not run this image against live orders on a pre-fix patch.
+
+# Builder stage: fetch the interpreter and install the hashed lock into /opt/venv
+FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS builder
+
+WORKDIR /app
+
+# Exact free-threaded patch release. Bump together with the uv pin in
+# docker/build/requirements.txt: a uv release can only fetch the interpreters it knows.
+ARG PYTHON_314T_VERSION=3.14.10
+
+# uv and maturin, pinned with hashes (only uv is used here).
+COPY docker/build/requirements.txt /tmp/build-requirements.txt
+RUN pip install --no-cache-dir --require-hashes --timeout 600 --retries 10 \
+        -r /tmp/build-requirements.txt
+
+# Keep the interpreter and the venv at the same absolute paths in both stages: the
+# venv's python is a symlink into UV_PYTHON_INSTALL_DIR.
+ENV UV_PYTHON_INSTALL_DIR=/opt/python \
+    UV_NO_CACHE=1 \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1
+
+RUN uv python install "${PYTHON_314T_VERSION}+freethreaded" \
+    && uv venv /opt/venv --python "${PYTHON_314T_VERSION}+freethreaded" --python-preference only-managed
+
+COPY requirements/runtime-py314t.lock ./requirements/runtime-py314t.lock
+# The lock is a full uv pip compile output: every transitive dependency is pinned and
+# hashed, so --no-deps installs exactly the listed files. --only-binary :all: refuses
+# an sdist (a source build would not be reproducible and could not declare Py_mod_gil).
+RUN uv pip install --python /opt/venv/bin/python \
+        --require-hashes --only-binary :all: --no-deps \
+        -r requirements/runtime-py314t.lock \
+    && uv pip check --python /opt/venv/bin/python
+
+# Runtime stage
+FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
+
+WORKDIR /app
+
+# Same build-info contract as the Dockerfile: the startup banner and the build-info
+# metric read these.
+ARG GIT_SHA=unknown
+ARG BUILD_TS=unknown
+ENV HFT_GIT_SHA=${GIT_SHA} \
+    HFT_BUILD_TS=${BUILD_TS}
+RUN echo "${GIT_SHA}" > /app/REVISION && echo "${BUILD_TS}" > /app/BUILD_TS
+
+# Create non-root user (same uid/gid as the Dockerfile so bind mounts keep working)
+RUN groupadd -g 1000 hftuser && useradd -m -u 1000 -g hftuser hftuser
+
+# Same system packages as the Dockerfile (libfaketime for simulation date spoofing,
+# curl for the compose healthcheck). No build toolchain: nothing is compiled here.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libfaketime \
+        curl \
+        tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV TZ=Asia/Taipei
+
+COPY --from=builder /opt/python /opt/python
+COPY --from=builder /opt/venv /opt/venv
+
+COPY pyproject.toml .
+COPY src/ ./src/
+COPY config/ ./config/
+COPY scripts/ ./scripts/
+
+# PYTHON_GIL is deliberately NOT set: the engine must run with the GIL off because the
+# interpreter and every extension in the lock say it may, not because it was forced.
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    PYTHONPATH="/app/src" \
+    MALLOC_ARENA_MAX=2
+
+# Build-time smoke. check_gil.py imports every runtime dependency and the engine
+# packages one at a time and exits non-zero when
+#   1  an import re-enabled the GIL (it names the first import that did),
+#   2  the GIL is still off but a module failed to import,
+#   3  the interpreter is not free-threaded, or PYTHON_GIL / -X gil forces the GIL.
+# Any non-zero exit fails the build. It runs from /tmp so shioaji's import-time log
+# file does not land in /app; the script finds src/ from its own location. It also
+# leaves compiled bytecode in /opt/venv, which hftuser cannot write at run time.
+RUN python -VV \
+    && cd /tmp \
+    && python /app/scripts/py314t/check_gil.py
+
+# gh-159449 needs 3.14.11 or newer (see the header). Warn by default, fail on request.
+ARG REQUIRE_GH159449_FIX=0
+RUN if python -c "import sys; sys.exit(0 if sys.version_info >= (3, 14, 11) else 1)"; then \
+        echo "gh-159449 fix present: python >= 3.14.11"; \
+    elif [ "${REQUIRE_GH159449_FIX}" = "1" ]; then \
+        echo "ERROR: python predates the gh-159449 fix (needs 3.14.11 or newer)" >&2; \
+        exit 1; \
+    else \
+        echo "WARNING: python predates the gh-159449 fix (needs 3.14.11 or newer); asyncio task-list race can segfault. Not for live orders." >&2; \
+    fi
+
+# Create directories for data/wal and set permissions
+RUN mkdir -p .wal data && chown -R hftuser:hftuser /app
+
+# P1 forensics: core-dump destination owned by hftuser (same as the Dockerfile).
+RUN mkdir -p /var/cores && chown hftuser:hftuser /var/cores
+
+USER hftuser
+
+# Expose metrics port
+EXPOSE 9090
+
+# Same default as the Dockerfile; docker-compose.yml overrides the command per service.
+CMD ["python", "-m", "hft_platform", "run"]

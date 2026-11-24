@@ -217,15 +217,14 @@ Base YAML (config/base/main.yaml)
 | `HFT_GATEWAY_LEADER_LEASE_PATH` | `.state/gateway_leader.lock` | Gateway leader lease 檔案路徑 | 主備需共享同一路徑 |
 | `HFT_GATEWAY_LEADER_LEASE_REFRESH_S` | `0.5` | Leader lease heartbeat 週期（秒） | 小於 0.5 可加速切換但增加 I/O |
 | `HFT_FEATURE_ENGINE_ENABLED` | `1` | `1` = 啟用 Feature Engine（v3 預設 27 個 LOB 特徵）；`0` = 停用 | 預設 on；停用請設 `HFT_FEATURE_ENGINE_ENABLED=0` |
-| `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端：`python`/`rust` | 先 shadow 驗證後再切 `rust` |
-| `HFT_FUSED_NORMALIZER` | `0` | `1` = 啟用 Rust fused normalizer + LOB pipeline（單次 FFI 跨界） | rollout 前 shadow parity 驗證 |
+| `HFT_FEATURE_ENGINE_BACKEND` | `python` | FeatureEngine 核心後端。Rust 內核已移除，僅支援 `python`；設其他值只會記錄 `feature_backend_retired` 警告，仍以 `python` 執行 | 不需設定 |
 | `HFT_FEATURE_ENGINE_EMIT_EVENTS` | `1` | `0` = 停用 FeatureUpdateEvent 發送 | 僅在診斷性能時暫停 |
 | `HFT_FEATURE_PROFILE_ID` | — | 指定 Feature Profile ID | — |
 | `HFT_FEATURE_SHADOW_PARITY` | `0` | `1` = 啟用 primary/shadow parity 比對 | rollout 必開 |
-| `HFT_FEATURE_SHADOW_BACKEND` | `auto` | shadow backend（空值自動反向選擇） | 建議明確設 `python`/`rust` |
+| `HFT_FEATURE_SHADOW_BACKEND` | 空值 | 明確設為 `python` 可啟用 Python shadow | 用於檢查 shadow 路徑接線 |
 | `HFT_FEATURE_SHADOW_SAMPLE_EVERY` | `64` | 每 N 筆做一次 shadow parity | 高流量時可調大 |
 | `HFT_FEATURE_SHADOW_WARN_EVERY` | `100` | 每 N 次 mismatch 輸出告警 | 減少 log 噪音 |
-| `HFT_FEATURE_SHADOW_ABS_TOL` | `0` | parity 絕對容忍誤差 | Rust/Python 漂移調查時調整 |
+| `HFT_FEATURE_SHADOW_ABS_TOL` | `0` | parity 絕對容忍誤差 | 特徵差異調查時調整 |
 | `HFT_FEATURE_METRICS_SAMPLE_EVERY` | `policy-dependent` | feature metrics 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_FEATURE_LATENCY_SAMPLE_EVERY` | `policy-dependent` | feature latency 採樣週期（minimal=16, balanced=4, debug=1） | debug 可設 1 |
 | `HFT_ORDER_MODE` | `sim` | 下單模式：`sim` / `live` / `disabled`；`disabled` 為純行情且不建立下單 session | `live` 仍受 `HFT_MODE` 與 `HFT_LIVE_CONFIRM` 雙重鎖保護 |
@@ -345,6 +344,8 @@ Shadow deployment note:
 | `HFT_HALT_AUTO_FLATTEN` | `0` | `1`／`true`／`yes`／`on` = 啟用 HALT 自動平倉；預設關閉（`risk/halt_flattener.py`） | 事故排查時確認未啟用；程式不讀 `HFT_AUTO_FLATTEN_DISABLED` |
 | `HFT_LIVE_CONFIRM` | `0` | `1` = 確認 live 模式啟動（防止誤操作） | 生產環境設 `1` |
 | `HFT_SESSION_GOVERNOR_ENABLED` | `0` | `1` = 啟用 session governor 自動管理 | 多帳號場景使用 |
+| `HFT_SHUTDOWN_GRACE_TIMEOUT_S` | `90` | 收到 SIGTERM 後，`hft_platform.main` 等待 `HFTSystem.stop_async` 完成的秒數（`src/hft_platform/main.py`）；逾時只記 `stop_async_timeout_on_shutdown` 後離開 | 調高時，`docker-compose.yml` 的 `hft-engine.stop_grace_period`（預設 `100s`）要同步調高並維持高出 5 秒以上，否則 Docker 會在關機流程中途 SIGKILL |
+| `HFT_RECORDER_SHUTDOWN_TIMEOUT_S` | `60` | recorder 關機時 drain 與 flush 的秒數上限（`recorder/worker.py`）；`HFTSystem.stop_async` 等 recorder 任務時再多給 5 秒（`services/system.py`） | 加 5 秒後必須小於 `HFT_SHUTDOWN_GRACE_TIMEOUT_S`，否則會被外層預算截斷；`tests/unit/test_compose_engine_stop_grace_period.py` 檢查預設值 |
 
 ---
 

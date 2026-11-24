@@ -59,6 +59,12 @@ def _make_router(persist_path: str, order_id_map: dict[str, str]) -> tuple[Execu
     return router, position_store
 
 
+# A deal carries one exchange timestamp. Reading the clock per call made every
+# "replay" of the same deal a different one under the dedup key, which includes
+# the match timestamp.
+_DEAL_TS_NS = 1_760_000_000_000_000_000
+
+
 def _make_fill_raw(*, order_id: str = "ORD_RESTART", fill_id: str = "FILL_RESTART") -> RawExecEvent:
     return RawExecEvent(
         topic="deal",
@@ -70,7 +76,7 @@ def _make_fill_raw(*, order_id: str = "ORD_RESTART", fill_id: str = "FILL_RESTAR
             "quantity": 1,
             "seqno": fill_id,
             "account_id": "FUTACC1",
-            "ts": timebase.now_ns(),
+            "ts": _DEAL_TS_NS,
         },
         ingest_ts_ns=timebase.now_ns(),
     )

@@ -1,7 +1,7 @@
 # HFT Platform
 
 台灣市場（TAIFEX 期貨／選擇權、TWSE）的事件驅動高頻交易平台：Shioaji／Fubon 雙券商、
-ClickHouse、Prometheus、既有的 Rust（PyO3）熱路徑核心（新的 Rust 工作自 2026-10-10 起暫停）。這個 repo 涉及真實資金，也有一個受治理的
+ClickHouse、Prometheus 與 Python 熱路徑。這個 repo 涉及真實資金，也有一個受治理的
 研究計畫（`research/`）：研究產出不會直接啟用實盤，必須經過 Gate、Canary、Shadow。
 
 > 實盤引擎目前凍結在 `r47_tmf_v1`（loop_v1 L11），見
@@ -43,7 +43,7 @@ Shioaji；Fubon 設 `HFT_BROKER=fubon` 與 `HFT_FUBON_*`。
 
 | 目的 | 命令 |
 |------|------|
-| 安裝／編譯 Rust | `make dev`、`make build-rust` |
+| 安裝開發環境 | `make dev` |
 | 測試 | `make test`、`make test-all`、`make test-file FILE=...`、`make coverage` |
 | 品質 | `make lint`、`make typecheck`、`make discipline`、`make dependency-boundary` |
 | 合併前 | `make check`、`make ci` |
@@ -63,7 +63,7 @@ generators -> Gate A -> B -> C -> D -> E -> canary -> shadow -> Live（registry 
 ```
 
 研究流程只有一份手冊：[docs/runbooks/alpha-development-workflow.md](docs/runbooks/alpha-development-workflow.md)，
-內含判定詞彙、Gate A–F 與門檻（Gate F 在 Rust 暫停期間為 NOT_APPLICABLE）、證據根與工廠操作。入口：`make research ALPHA=<id> OWNER=<you> DATA='<path>'`。
+內含判定詞彙、Gate A–F 與門檻（依驗證 profile 宣告，Gate F 可標記 NOT_APPLICABLE）、證據根與工廠操作。入口：`make research ALPHA=<id> OWNER=<you> DATA='<path>'`。
 
 ## 設定與環境變數
 
@@ -94,7 +94,7 @@ Claude Code、Codex、Copilot 共用同一份規則，單一來源是 [AGENTS.md
 | 層級 | 檔案 | 說明 |
 |------|------|------|
 | 專案規則 | `AGENTS.md` | 架構、五大法則、紅線、完成標準、回報格式；`CLAUDE.md` 以 `@AGENTS.md` 匯入並補 Claude 專屬說明 |
-| 子樹規則 | `rust_core/`、`tests/`、`research/` 的 `AGENTS.md` | 只寫該目錄與全域不同之處 |
+| 子樹規則 | `tests/`、`research/` 的 `AGENTS.md` | 只寫該目錄與全域不同之處 |
 | Skills | `.agent/skills/<name>/SKILL.md` | 31 個專案技能；`.claude/skills`、`.agents/skills` 是指向它的連結，兩個工具原生發現 |
 | 依需讀取的規則 | `.agent/rules/` | git、部署（D1–D10）、並行 agent、無人值守、研究資料 |
 | Subagents | `.claude/agents/` | executor／reviewer／test-writer／docs |

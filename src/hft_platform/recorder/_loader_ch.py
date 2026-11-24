@@ -16,6 +16,7 @@ from hft_platform.recorder._loader_common import (
     timebase,
 )
 from hft_platform.recorder.schema import apply_schema, ensure_price_scaled_views
+from hft_platform.utils import jsonfast
 
 # ---------------------------------------------------------------------------
 # Connection helpers
@@ -201,10 +202,8 @@ def insert_with_dedup(svc: Any, target_table: str, rows: list, fname: str) -> bo
         import hashlib
 
         try:
-            import orjson
-
-            raw = b"".join(orjson.dumps(r, option=orjson.OPT_SORT_KEYS) for r in rows)
-        except (ImportError, TypeError):
+            raw = b"".join(jsonfast.dumps_sorted(r) for r in rows)
+        except TypeError:
             # Fallback: use json with sorted keys for determinism
             import json
 

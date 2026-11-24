@@ -5,6 +5,7 @@ All prices / PnL values use scaled integers (x10000).
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock
 
 from hft_platform.execution.positions import Position, PositionStore
@@ -23,6 +24,7 @@ def _make_store(*key_pos_pairs: tuple[str, Position]) -> PositionStore:
     Patches out metadata so tests control multiplier values directly.
     """
     store = PositionStore.__new__(PositionStore)
+    store._fill_lock = threading.Lock()
     store.positions = {key: pos for key, pos in key_pos_pairs}
     store.metadata = MagicMock()
     store.metadata.contract_multiplier.return_value = 1  # default stock multiplier

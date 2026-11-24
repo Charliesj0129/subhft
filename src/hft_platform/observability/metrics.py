@@ -66,6 +66,21 @@ PAGED_PHANTOM_OUTCOMES: tuple[str, ...] = ("fill_claimed_after_expiry",)
 # Outcomes of the broker search a TTL-expired phantom gets before its slot is
 # released (``OrderAdapter._settle_expired_phantoms``), also created at 0.
 BROKER_LOOKUP_PHANTOM_OUTCOMES: tuple[str, ...] = ("found_open", "lookup_failed", "lookup_ambiguous")
+# ``live_order_stale_verify_total`` outcomes: what the broker search said about a
+# stale live order with broker ids before its slot is released
+# (``OrderAdapter.sweep_stale_live_orders``). Created at 0.
+STALE_VERIFY_OUTCOMES: tuple[str, ...] = (
+    "found_open",
+    "gone",
+    "lookup_failed",
+    "ambiguous",
+    "terminal_during_verify",
+    "released_unverified",
+    "evicted",
+)
+# ``phantom_claim_total`` outcomes: a phantom's symbol+side claim of an
+# unknown-ordno fill, settled by the phantom's own Trade. Created at 0.
+PHANTOM_CLAIM_OUTCOMES: tuple[str, ...] = ("tentative", "confirmed", "misattributed", "unverified")
 
 # Fixed label sets of the read-only broker ops checks (feed_adapter/shioaji/ops_checks.py). The state gauges are
 # one-hot over these tuples, and the check counter is created at 0 for every result, so no series is born mid-run.
@@ -214,6 +229,9 @@ class MetricsRegistry:
                 _pn("phantom_order_candidates_total"),
                 _pn("phantom_recovery_releases_total"),
                 _pn("live_order_ttl_releases_total"),
+                _pn("live_order_stale_verify_total"),
+                _pn("live_orders_held_for_verify"),
+                _pn("phantom_claim_total"),
                 _pn("live_order_swept_after_fill_total"),
                 _pn("live_order_completed_by_fill_total"),
                 _pn("order_repeat_terminal_total"),
@@ -389,6 +407,7 @@ class MetricsRegistry:
                 _pn("risk_dlq_revalidation_rejected_total"),
                 _pn("risk_dlq_overflow_total"),
                 _pn("fill_dlq_overflow_total"),
+                _pn("fill_dlq_persist_failed_total"),
                 _pn("deferred_terminal_overflow_total"),
                 _pn("audit_dropped_total"),
                 _pn("intent_queue_full_total"),
@@ -410,8 +429,6 @@ class MetricsRegistry:
                 _pn("recorder_direct_drops_total"),
                 # Recorder OrderIntent producer drops (Slice C task 3)
                 _pn("recorder_intent_drop_total"),
-                # Rust-to-Python normalizer fallbacks
-                _pn("rust_fallback_total"),
                 # Post-normalization processing errors (LOB/feature/publish)
                 _pn("process_raw_error_total"),
                 # Normalization failures (pre-event) in MarketDataService
@@ -485,9 +502,6 @@ class MetricsRegistry:
         self.normalization_errors_total = Counter(_pn("normalization_errors_total"), "Normalization failures", ["type"])
         self.normalization_skip_total = Counter(
             _pn("normalization_skip_total"), "Normalization silent skips", ["type", "reason"]
-        )
-        self.rust_fallback_total = Counter(
-            _pn("rust_fallback_total"), "Rust-to-Python normalizer fallback count", ["type"]
         )
         self.lob_updates_total = Counter(_pn("lob_updates_total"), "LOB updates applied", ["symbol", "type"])
         self.lob_snapshots_total = Counter(_pn("lob_snapshots_total"), "LOB snapshots applied", ["symbol"])
@@ -923,8 +937,38 @@ class MetricsRegistry:
         self.live_order_ttl_releases_total = Counter(
             _pn("live_order_ttl_releases_total"),
             "Dispatched orders swept after TTL with no terminal callback, releasing the strategy pending slot "
-            "(2026-08-10: two such orders froze R47 for two days with no counter anywhere)",
+            "(2026-08-10: two such orders froze R47 for two days with no counter anywhere). Since 2026-11-13 "
+            "counted only for a release the broker did not confirm: no lister / no broker ids, or held past "
+            "the max hold (released_unverified); a release the broker listing confirmed is not counted",
         )
+        # A stale live order with broker ids is searched for at the broker before
+        # its slot is released (OrderAdapter.sweep_stale_live_orders). Each child
+        # is born at 0: an alert's increase() over a child born at 1 is empty.
+        self.live_order_stale_verify_total = Counter(
+            _pn("live_order_stale_verify_total"),
+            "Broker search of stale live orders with broker ids "
+            "(found_open: re-cancelled and held; gone: released; lookup_failed / ambiguous: held; "
+            "terminal_during_verify: ended on its own; released_unverified: held past the max hold; "
+            "evicted: dropped by the live_orders size cap)",
+            ["outcome"],
+        )
+        for _outcome in STALE_VERIFY_OUTCOMES:
+            self.live_order_stale_verify_total.labels(outcome=_outcome)
+        self.live_orders_held_for_verify = Gauge(
+            _pn("live_orders_held_for_verify"),
+            "Stale live orders currently held while the broker is asked whether they are still working",
+        )
+        # A phantom's symbol+side claim of an unknown-ordno fill, settled by the
+        # phantom's own Trade (OrderAdapter.resolve_phantom_fill / _bind_late_trade).
+        self.phantom_claim_total = Counter(
+            _pn("phantom_claim_total"),
+            "Phantom claims of unknown-ordno fills (tentative: booked, awaiting the phantom's Trade; "
+            "confirmed: Trade ids contain the fill's ordno; misattributed: they do not, the order was cancelled; "
+            "unverified: no Trade before the TTL / retention)",
+            ["outcome"],
+        )
+        for _outcome in PHANTOM_CLAIM_OUTCOMES:
+            self.phantom_claim_total.labels(outcome=_outcome)
         self.live_order_swept_after_fill_total = Counter(
             _pn("live_order_swept_after_fill_total"),
             "Fully filled orders found by the TTL sweep; their pending slot was NOT released a second time",
@@ -1993,6 +2037,10 @@ class MetricsRegistry:
         self.fill_dlq_overflow_total = Counter(
             _pn("fill_dlq_overflow_total"),
             "Orphaned fill DLQ overflow evictions (oldest fill silently dropped)",
+        )
+        self.fill_dlq_persist_failed_total = Counter(
+            _pn("fill_dlq_persist_failed_total"),
+            "Orphaned fills quarantined because they could not be serialised or written to the DLQ file",
         )
         self.deferred_terminal_overflow_total = Counter(
             _pn("deferred_terminal_overflow_total"),

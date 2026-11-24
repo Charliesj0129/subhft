@@ -6,7 +6,6 @@ graceful degradation, and edge cases under load.
 
 import asyncio
 import threading
-from unittest.mock import patch
 
 import pytest
 
@@ -20,7 +19,6 @@ from hft_platform.events import GapEvent
 @pytest.fixture(autouse=True)
 def _patch_bus_env(monkeypatch):
     """Force Python-mode bus and patch MetricsRegistry for all tests."""
-    monkeypatch.setenv("HFT_RUST_ACCEL", "0")
     monkeypatch.setenv("HFT_BUS_RUST", "0")
     monkeypatch.setenv("HFT_BUS_MODE", "python")
     monkeypatch.setenv("HFT_BUS_TYPED_TICK_RING", "0")
@@ -37,16 +35,9 @@ def _patch_bus_env(monkeypatch):
 
 
 def _make_bus(size: int = 64, mock_metrics_fixture=None):
-    """Create a fresh RingBufferBus with Python fallback (Rust disabled)."""
+    from hft_platform.engine.event_bus import RingBufferBus
 
-    with (
-        patch("hft_platform.engine.event_bus._RUST_ENABLED", False),
-        patch("hft_platform.engine.event_bus._USE_RUST_BUS", False),
-    ):
-        from hft_platform.engine.event_bus import RingBufferBus
-
-        bus = RingBufferBus(size=size)
-    return bus
+    return RingBufferBus(size=size)
 
 
 # ---------------------------------------------------------------------------

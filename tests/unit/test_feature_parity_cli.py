@@ -11,7 +11,7 @@ from hft_platform.cli import _feature
 
 
 def _run(**kwargs) -> argparse.Namespace:
-    ns = argparse.Namespace(feature_set=None, require_rust=False)
+    ns = argparse.Namespace(feature_set=None)
     for k, v in kwargs.items():
         setattr(ns, k, v)
     return ns
@@ -31,27 +31,6 @@ def test_feature_parity_ok_emits_json_and_exits_zero(capsys) -> None:
     assert payload["promoted_feature_ids"][0] == "mid_price_x2"
 
 
-def test_feature_parity_require_rust_fails_when_unavailable(monkeypatch, capsys) -> None:
-    def _fake_self_test(*, feature_set=None):
-        return {
-            "ok": True,
-            "feature_set_id": "lob_shared_v3",
-            "schema_version": 3,
-            "n_frames": 10,
-            "rust_available": False,
-            "promoted_feature_ids": ["mid_price_x2"],
-            "comparisons": [],
-        }
-
-    monkeypatch.setattr("hft_platform.feature.parity.run_self_test", _fake_self_test)
-    with pytest.raises(SystemExit) as exc:
-        _feature.cmd_feature_parity(_run(require_rust=True))
-    assert exc.value.code == 1
-    payload = json.loads(capsys.readouterr().out.strip())
-    assert payload["ok"] is False
-    assert "rust backend required" in payload["error"]
-
-
 def test_feature_parity_divergence_exits_nonzero(monkeypatch) -> None:
     def _fake_self_test(*, feature_set=None):
         return {
@@ -59,11 +38,10 @@ def test_feature_parity_divergence_exits_nonzero(monkeypatch) -> None:
             "feature_set_id": "lob_shared_v3",
             "schema_version": 3,
             "n_frames": 10,
-            "rust_available": True,
             "promoted_feature_ids": ["mid_price_x2"],
             "comparisons": [
                 {
-                    "pair": "python vs rust",
+                    "pair": "python vs hftbacktest_shared",
                     "ok": False,
                     "first_divergence": {"feature_id": "ofi_l1_ema8", "expected": 1, "actual": 9},
                 }

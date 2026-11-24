@@ -1,5 +1,4 @@
 import datetime as dt
-import importlib
 import os
 import re
 import sys
@@ -12,7 +11,7 @@ from structlog import get_logger
 
 from hft_platform.core import timebase
 from hft_platform.core.pricing import PriceCodec, SymbolMetadataPriceScaleProvider
-from hft_platform.events import BidAskEvent, BookStats, FusedBookStats, MetaData, TickEvent
+from hft_platform.events import BidAskEvent, MetaData, TickEvent
 from hft_platform.observability.metrics import MetricsRegistry
 from hft_platform.trade_classifier import TradeClassifier
 
@@ -25,19 +24,10 @@ logger = get_logger("feed_adapter.normalizer")
 _TICK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(TickEvent, "__dataclass_fields__", {})
 _BIDASK_EVENT_SUPPORTS_CONTRACT = "contract" in getattr(BidAskEvent, "__dataclass_fields__", {})
 
-_RUST_ENABLED = os.getenv("HFT_RUST_ACCEL", "1").lower() not in {"0", "false", "no", "off"}
-_RUST_MIN_LEVELS = int(os.getenv("HFT_RUST_MIN_LEVELS", "0"))
 _EVENT_MODE = os.getenv("HFT_EVENT_MODE", "event").lower()
 if "pytest" in sys.modules:
     _EVENT_MODE = "event"
 _RETURN_TUPLE = _EVENT_MODE in {"tuple", "raw"}
-_RUST_STATS_TUPLE = os.getenv("HFT_RUST_STATS_TUPLE", "1").lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
-_RUST_FORCE = os.getenv("HFT_RUST_FORCE", "1").lower() not in {"0", "false", "no", "off"}
 _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "0",
     "false",
@@ -45,14 +35,6 @@ _SYNTHETIC_SIDE = os.getenv("HFT_MD_SYNTHETIC_SIDE", "0").lower() not in {
     "off",
 }
 _SYNTHETIC_TICKS = max(1, int(os.getenv("HFT_MD_SYNTHETIC_TICKS", "1")))
-# Experimental scratch-array path for fixed 5-level books. Disabled by default
-# because Python-level element copies can be slower on some hosts.
-_SHIOAJI_FIXED5_SCRATCH = os.getenv("HFT_MD_FIXED5_SCRATCH", "0").lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
 try:
     _TS_MAX_LAG_NS = int(float(os.getenv("HFT_TS_MAX_LAG_S", "5")) * 1e9)
 except Exception as exc:
@@ -68,50 +50,6 @@ try:
 except Exception as exc:
     logger.warning("Failed to parse HFT_TS_SKEW_LOG_COOLDOWN_S, using 0", error=str(exc))
     _TS_SKEW_LOG_COOLDOWN_NS = 0
-
-_FUSED_ENABLED = os.environ.get("HFT_FUSED_NORMALIZER", "0") == "1"
-
-try:
-    try:
-        _rust_core = importlib.import_module("hft_platform.rust_core")
-    except ImportError:
-        _rust_core = importlib.import_module("rust_core")
-
-    _RUST_SCALE_BOOK = _rust_core.scale_book
-    _RUST_SCALE_BOOK_SEQ = _rust_core.scale_book_seq
-    _RUST_SCALE_BOOK_PAIR = _rust_core.scale_book_pair
-    _RUST_SCALE_BOOK_PAIR_STATS = getattr(_rust_core, "scale_book_pair_stats", None)
-    _RUST_NORMALIZE_TICK = getattr(_rust_core, "normalize_tick_tuple", None)
-    _RUST_NORMALIZE_BIDASK = getattr(_rust_core, "normalize_bidask_tuple", None)
-    _RUST_NORMALIZE_BIDASK_NP = getattr(_rust_core, "normalize_bidask_tuple_np", None)
-    _RUST_NORMALIZE_BIDASK_SYNTH = getattr(_rust_core, "normalize_bidask_tuple_with_synth", None)
-except Exception as exc:
-    # CRITICAL: Rust acceleration disabled - performance will be 10-100x slower
-    logger.warning(
-        "Rust acceleration DISABLED - falling back to pure Python (10-100x slower)",
-        error=str(exc),
-        hint="Run 'maturin develop --manifest-path rust_core/Cargo.toml' to build",
-    )
-    _RUST_SCALE_BOOK = None
-    _RUST_SCALE_BOOK_SEQ = None
-    _RUST_SCALE_BOOK_PAIR = None
-    _RUST_SCALE_BOOK_PAIR_STATS = None
-    _RUST_NORMALIZE_TICK = None
-    _RUST_NORMALIZE_BIDASK = None
-    _RUST_NORMALIZE_BIDASK_NP = None
-    _RUST_NORMALIZE_BIDASK_SYNTH = None
-
-# Fused normalizer+LOB pipeline (single Rust call replaces normalize → book update → stats)
-_HAS_FUSED = False
-_RustNormalizerLobFused: type | None = None
-if _FUSED_ENABLED and _RUST_SCALE_BOOK is not None:  # _rust_core loaded successfully
-    try:
-        _RustNormalizerLobFused = getattr(_rust_core, "RustNormalizerLobFused", None)
-        _HAS_FUSED = _RustNormalizerLobFused is not None
-    except Exception as exc:
-        logger.debug("fused_normalizer_init_failed", error=str(exc))
-        _HAS_FUSED = False
-
 
 # TAIFEX monthly contract codes: ROOT + month letter (A=Jan … L=Dec) + year
 # digit, e.g. TMFH6 = August 2026. Continuous-family codes (TMFR1) and weekly
@@ -627,6 +565,15 @@ def _extract_ts_ns(ts_val: Any) -> int:
     return timebase.coerce_ns(ts_val)
 
 
+def _scale_book_levels(prices, volumes, scale):
+    levels = []
+    for raw_price, volume in zip(prices, volumes):
+        price = float(raw_price)
+        if price > 0:
+            levels.append([int(round(price * scale)), int(volume)])
+    return levels
+
+
 def _event_contract_kw(event_cls: type, metadata: "SymbolMetadata | None", symbol: str) -> dict[str, Any]:
     if event_cls is TickEvent:
         supports_contract = _TICK_EVENT_SUPPORTS_CONTRACT
@@ -694,23 +641,14 @@ class MarketDataNormalizer:
         "metadata",
         "price_codec",
         "metrics",
-        "_last_symbol",
-        "_last_scale",
+        "_scale_cache",
         "_last_local_ts_tick",
         "_last_local_ts_bidask",
         "_last_local_ts_snapshot",
         "_last_skew_log_ns",
-        "_fixed5_scratch_enabled",
-        "_fixed5_bid_prices_np",
-        "_fixed5_bid_vols_np",
-        "_fixed5_ask_prices_np",
-        "_fixed5_ask_vols_np",
-        "_fused",
         "_trade_classifier",
         "_latency_metrics_counter",
         "_latency_metrics_sample_every",
-        "_rust_fallback_tick",
-        "_rust_fallback_bidask",
         "_skip_tick_missing_symbol",
         "_skip_tick_negative_price",
         "_skip_bidask_missing_symbol",
@@ -725,15 +663,14 @@ class MarketDataNormalizer:
         self.metadata = metadata or SymbolMetadata(config_path)
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
         self.metrics = MetricsRegistry.get()
-        self._rust_fallback_tick = self.metrics.rust_fallback_total.labels(type="tick") if self.metrics else None
-        self._rust_fallback_bidask = self.metrics.rust_fallback_total.labels(type="bidask") if self.metrics else None
         _skip = self.metrics.normalization_skip_total if self.metrics else None
         self._skip_tick_missing_symbol = _skip.labels(type="tick", reason="missing_symbol") if _skip else None
         self._skip_tick_negative_price = _skip.labels(type="tick", reason="negative_price") if _skip else None
         self._skip_bidask_missing_symbol = _skip.labels(type="bidask", reason="missing_symbol") if _skip else None
         self._skip_snapshot_missing_symbol = _skip.labels(type="snapshot", reason="missing_symbol") if _skip else None
-        self._last_symbol: str | None = None
-        self._last_scale: int = SymbolMetadata.DEFAULT_SCALE
+        # (symbol, scale) in ONE reference: two separate fields could be read torn by a concurrent
+        # worker (symbol of one write, scale of another). The tuple is replaced whole, never mutated.
+        self._scale_cache: tuple[str | None, int] = (None, SymbolMetadata.DEFAULT_SCALE)
         self._last_local_ts_tick: int = 0
         self._last_local_ts_bidask: int = 0
         self._last_local_ts_snapshot: int = 0
@@ -741,30 +678,6 @@ class MarketDataNormalizer:
         self._latency_metrics_sample_every: int = max(1, int(os.getenv("HFT_NORMALIZER_METRICS_SAMPLE_EVERY", "4")))
         self._last_skew_log_ns = 0
         self._trade_classifier = TradeClassifier()
-        self._fused: Any = None
-        if _HAS_FUSED and _RustNormalizerLobFused is not None:
-            try:
-                self._fused = _RustNormalizerLobFused()
-            except Exception as exc:
-                logger.debug("fused_normalizer_instance_failed", error=str(exc))
-                self._fused = None
-        self._fixed5_scratch_enabled = False
-        self._fixed5_bid_prices_np = None
-        self._fixed5_bid_vols_np = None
-        self._fixed5_ask_prices_np = None
-        self._fixed5_ask_vols_np = None
-        if _SHIOAJI_FIXED5_SCRATCH and _RUST_NORMALIZE_BIDASK_NP is not None:
-            try:
-                import numpy as np
-
-                self._fixed5_bid_prices_np = np.empty(5, dtype=np.float64)
-                self._fixed5_bid_vols_np = np.empty(5, dtype=np.int64)
-                self._fixed5_ask_prices_np = np.empty(5, dtype=np.float64)
-                self._fixed5_ask_vols_np = np.empty(5, dtype=np.int64)
-                self._fixed5_scratch_enabled = True
-            except Exception as exc:
-                logger.debug("fixed5_scratch_init_failed", error=str(exc))
-                self._fixed5_scratch_enabled = False
 
     def _next_seq(self) -> int:
         return next(self._seq_gen)
@@ -867,14 +780,22 @@ class MarketDataNormalizer:
                     self.metrics.feed_interarrival_ns.observe(delta)
             setattr(self, last_ts_attr, local_ts)
 
+    @property
+    def _last_symbol(self) -> str | None:
+        return self._scale_cache[0]
+
+    @property
+    def _last_scale(self) -> int:
+        return self._scale_cache[1]
+
     def _get_scale(self, symbol: str) -> int:
-        if symbol == self._last_symbol:
-            return self._last_scale
+        cached = self._scale_cache
+        if symbol == cached[0]:
+            return cached[1]
         scale = int(self.metadata.price_scale(symbol))
         if scale <= 0:
             scale = 1
-        self._last_symbol = symbol
-        self._last_scale = scale
+        self._scale_cache = (symbol, scale)
         return scale
 
     def _maybe_synthesize_side(
@@ -963,69 +884,10 @@ class MarketDataNormalizer:
                 return None
 
             exch_ts = _extract_ts_ns(ts_val)
-            exch_ts_py = exch_ts
 
             if close_val is not None:
                 scale = self._get_scale(symbol)
-                if _RUST_ENABLED and _RUST_NORMALIZE_TICK is not None:
-                    try:
-                        rust_tuple = _RUST_NORMALIZE_TICK(payload, symbol, scale)
-                        if rust_tuple is not None:
-                            (
-                                _,
-                                _sym,
-                                price,
-                                volume,
-                                total_volume,
-                                is_simtrade,
-                                is_odd_lot,
-                                exch_ts,
-                            ) = rust_tuple
-                            # Rust extract::<f64> fails on str values; fall through to Python
-                            if price == 0 and close_val:
-                                raise ValueError("rust returned zero price for non-zero close")
-                            if price <= 0:
-                                if self._skip_tick_negative_price:
-                                    self._skip_tick_negative_price.inc()
-                                return None
-                            if exch_ts_py:
-                                exch_ts = exch_ts_py
-                            if _RETURN_TUPLE:
-                                _td, _tc = self._trade_classifier.classify(_sym, int(price))
-                                return rust_tuple + (_td, _tc)
-                            local_ts = timebase.now_ns()
-                            exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "tick", _sym)
-                            self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_tick")
-                            meta = MetaData(
-                                seq=self._next_seq(),
-                                topic="tick",
-                                source_ts=exch_ts,
-                                local_ts=local_ts,
-                            )
-                            _td, _tc = self._trade_classifier.classify(_sym, int(price))
-                            return TickEvent(
-                                meta=meta,
-                                symbol=_sym,
-                                price=int(price),
-                                volume=int(volume),
-                                total_volume=int(total_volume),
-                                bid_side_total_vol=0,
-                                ask_side_total_vol=0,
-                                is_simtrade=bool(is_simtrade),
-                                is_odd_lot=bool(is_odd_lot),
-                                trade_direction=_td,
-                                trade_confidence=_tc,
-                                **_event_contract_kw(TickEvent, self.metadata, _sym),
-                            )
-                    except Exception as exc:
-                        logger.debug("rust_tick_fallback", error=str(exc))
-                        if self._rust_fallback_tick:
-                            self._rust_fallback_tick.inc()
                 price = int(round(float(close_val) * scale))
-                if price <= 0:
-                    if self._skip_tick_negative_price:
-                        self._skip_tick_negative_price.inc()
-                    return None
             else:
                 price = 0
 
@@ -1103,406 +965,27 @@ class MarketDataNormalizer:
 
             scale = self._get_scale(symbol)
 
-            # Fused path: single Rust call does scale + book update + stats
-            fused = self._fused
-            if fused is not None:
-                try:
-                    # tick_size_scaled = 1 tick unit in scaled price space (reserved for future use)
-                    tick_size_scaled = 1
-                    fused_result = fused.process_bidask(
-                        symbol,
-                        list(bp) if not isinstance(bp, list) else bp,
-                        list(bv) if not isinstance(bv, list) else bv,
-                        list(ap) if not isinstance(ap, list) else ap,
-                        list(av) if not isinstance(av, list) else av,
-                        scale,
-                        tick_size_scaled,
-                    )
-                    if fused_result is not None:
-                        (
-                            bids_np,
-                            asks_np,
-                            best_bid,
-                            best_ask,
-                            bid_depth,
-                            ask_depth,
-                            mid_x2,
-                            spread_scaled,
-                            imbalance_ppm,
-                            version,
-                            top_imbalance,
-                        ) = fused_result
-                        bb = int(best_bid)
-                        ba = int(best_ask)
-                        bd = int(bid_depth)
-                        ad = int(ask_depth)
-                        mx2 = int(mid_x2)
-                        ss = int(spread_scaled)
-                        timb = float(top_imbalance)
-                        # Standard stats (backward-compat: mid_price as float, spread as float)
-                        compat_stats = BookStats(bb, ba, bd, ad, mx2 / 2.0, float(ss), timb)
-                        # Fused stats: integer mid_x2 + spread_scaled for LOBEngine bypass
-                        fused_stats = FusedBookStats(bb, ba, bd, ad, mx2, ss, timb)
+            bids = _scale_book_levels(bp, bv, scale)
+            asks = _scale_book_levels(ap, av, scale)
+            bids, asks, _ = self._maybe_synthesize_side(symbol, bids, asks, scale)
 
-                        self._trade_classifier.update_quotes(symbol, bb, ba)
-
-                        if _RETURN_TUPLE:
-                            return (
-                                "bidask",
-                                symbol,
-                                bids_np,
-                                asks_np,
-                                exch_ts,
-                                False,
-                                bb,
-                                ba,
-                                bd,
-                                ad,
-                                mx2 / 2.0,
-                                float(ss),
-                                timb,
-                            )
-
-                        local_ts = timebase.now_ns()
-                        exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "bidask", symbol)
-                        self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
-                        meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
-                        return BidAskEvent(
-                            meta=meta,
-                            symbol=symbol,
-                            bids=bids_np,
-                            asks=asks_np,
-                            stats=compat_stats,
-                            fused_stats=fused_stats,
-                            **_event_contract_kw(BidAskEvent, self.metadata, symbol),
-                        )
-                except Exception as exc:
-                    # Fall through to standard path
-                    logger.debug("rust_bidask_fallback", stage="fused_path", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-
-            # Convert to numpy
-            # We need to scale prices. Using numpy vectorization for scaling is faster.
-            # But converting list->numpy is overhead.
-            # If lists are small (5 levels), list comp might be faster than np.array(list).
-
-            # Bids with filtering 0s?
-            # Shioaji might send 0 for empty levels.
-
-            # Optimization: Use list comprehension for small N (N=5)
-            # Returns List[List[int]] directly (faster than numpy conversion)
-
-            # Bids / Asks
-            # Rust path uses zero-copy NumPy views and returns int64 ndarray (N,2).
-            bids_final = None
-            asks_final = None
-            rust_available = bool(_RUST_SCALE_BOOK_PAIR or _RUST_SCALE_BOOK_SEQ or _RUST_NORMALIZE_BIDASK)
-            use_rust = _RUST_ENABLED and rust_available and (_RUST_FORCE or _RUST_MIN_LEVELS <= 0)
-            if not use_rust and _RUST_ENABLED and _RUST_MIN_LEVELS > 0:
-                use_rust = rust_available and (
-                    len(bp) >= _RUST_MIN_LEVELS
-                    and len(bv) >= _RUST_MIN_LEVELS
-                    and len(ap) >= _RUST_MIN_LEVELS
-                    and len(av) >= _RUST_MIN_LEVELS
-                )
-
-            stats = None
-            synthesized = False
-            if use_rust and _SYNTHETIC_SIDE and _RUST_NORMALIZE_BIDASK_SYNTH is not None:
-                try:
-                    import numpy as np
-
-                    bid_prices_np = np.asarray(bp, dtype=np.float64)
-                    bid_vols_np = np.asarray(bv, dtype=np.int64)
-                    ask_prices_np = np.asarray(ap, dtype=np.float64)
-                    ask_vols_np = np.asarray(av, dtype=np.int64)
-
-                    tick_size = None
-                    entry = self.metadata.meta.get(symbol) if self.metadata else None
-                    raw_tick = entry.get("tick_size") if entry else None
-                    if raw_tick is not None:
-                        try:
-                            tick_size = float(raw_tick)
-                        except (TypeError, ValueError):
-                            tick_size = None
-                    if not tick_size and scale > 0:
-                        tick_size = 1.0 / float(scale)
-                    if not tick_size:
-                        tick_size = 1.0
-                    tick_int = max(1, int(round(tick_size * scale)))
-
-                    rust_tuple = _RUST_NORMALIZE_BIDASK_SYNTH(
-                        symbol,
-                        exch_ts,
-                        bid_prices_np,
-                        bid_vols_np,
-                        ask_prices_np,
-                        ask_vols_np,
-                        scale,
-                        tick_int,
-                        _SYNTHETIC_TICKS,
-                    )
-                    if rust_tuple is not None:
-                        (
-                            _,
-                            _sym,
-                            bids_final,
-                            asks_final,
-                            exch_ts,
-                            _is_snapshot,
-                            best_bid,
-                            best_ask,
-                            bid_depth,
-                            ask_depth,
-                            mid_price,
-                            spread,
-                            imbalance,
-                            synthesized,
-                        ) = rust_tuple
-                        stats = BookStats(
-                            int(best_bid),
-                            int(best_ask),
-                            int(bid_depth),
-                            int(ask_depth),
-                            float(mid_price),
-                            float(spread),
-                            float(imbalance),
-                        )
-                except Exception as exc:
-                    logger.debug("rust_bidask_fallback", stage="synth_bidask", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-                    bids_final = None
-                    asks_final = None
-                    stats = None
-                    synthesized = False
-
-            # Hot path for standard Shioaji bidask streams: avoid Python np.asarray() churn
-            # when Rust can directly scale Python sequences and compute stats.
-            if (
-                stats is None
-                and use_rust
-                and not _SYNTHETIC_SIDE
-                and _RUST_SCALE_BOOK_PAIR_STATS is not None
-                and _RUST_STATS_TUPLE
-            ):
-                try:
-                    bids_final, asks_final, _raw_stats = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
-                    stats = BookStats(*_raw_stats) if _raw_stats is not None else None
-                except Exception as exc:
-                    logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-                    bids_final = None
-                    asks_final = None
-                    stats = None
-
-            if stats is None and use_rust and _RUST_NORMALIZE_BIDASK_NP is not None:
-                try:
-                    use_fixed5 = (
-                        self._fixed5_scratch_enabled
-                        and isinstance(bp, (list, tuple))
-                        and isinstance(bv, (list, tuple))
-                        and isinstance(ap, (list, tuple))
-                        and isinstance(av, (list, tuple))
-                        and len(bp) == 5
-                        and len(bv) == 5
-                        and len(ap) == 5
-                        and len(av) == 5
-                    )
-                    if use_fixed5:
-                        bid_prices_np = self._fixed5_bid_prices_np  # type: ignore[assignment]
-                        bid_vols_np = self._fixed5_bid_vols_np  # type: ignore[assignment]
-                        ask_prices_np = self._fixed5_ask_prices_np  # type: ignore[assignment]
-                        ask_vols_np = self._fixed5_ask_vols_np  # type: ignore[assignment]
-                        if bid_prices_np is None or bid_vols_np is None or ask_prices_np is None or ask_vols_np is None:
-                            use_fixed5 = False
-                    if use_fixed5:
-                        # Shioaji stock/futures bidask is typically fixed 5 levels.
-                        for i in range(5):
-                            bid_prices_np[i] = float(bp[i])
-                            bid_vols_np[i] = int(bv[i])
-                            ask_prices_np[i] = float(ap[i])
-                            ask_vols_np[i] = int(av[i])
-                    else:
-                        import numpy as np
-
-                        bid_prices_np = np.asarray(bp, dtype=np.float64)
-                        bid_vols_np = np.asarray(bv, dtype=np.int64)
-                        ask_prices_np = np.asarray(ap, dtype=np.float64)
-                        ask_vols_np = np.asarray(av, dtype=np.int64)
-
-                    rust_tuple = _RUST_NORMALIZE_BIDASK_NP(
-                        symbol,
-                        exch_ts,
-                        bid_prices_np,
-                        bid_vols_np,
-                        ask_prices_np,
-                        ask_vols_np,
-                        scale,
-                    )
-                    if rust_tuple is not None:
-                        (
-                            _,
-                            _sym,
-                            bids_final,
-                            asks_final,
-                            exch_ts,
-                            _is_snapshot,
-                            best_bid,
-                            best_ask,
-                            bid_depth,
-                            ask_depth,
-                            mid_price,
-                            spread,
-                            imbalance,
-                        ) = rust_tuple
-                        stats = BookStats(
-                            int(best_bid),
-                            int(best_ask),
-                            int(bid_depth),
-                            int(ask_depth),
-                            float(mid_price),
-                            float(spread),
-                            float(imbalance),
-                        )
-                except Exception as exc:
-                    logger.debug("rust_bidask_fallback", stage="normalize_bidask_np", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-                    bids_final = None
-                    asks_final = None
-                    stats = None
-
-            if stats is None and use_rust and _RUST_NORMALIZE_BIDASK is not None:
-                try:
-                    rust_tuple = _RUST_NORMALIZE_BIDASK(payload, symbol, scale)
-                    if rust_tuple is not None:
-                        (
-                            _,
-                            _sym,
-                            bids_final,
-                            asks_final,
-                            exch_ts,
-                            _is_snapshot,
-                            best_bid,
-                            best_ask,
-                            bid_depth,
-                            ask_depth,
-                            mid_price,
-                            spread,
-                            imbalance,
-                        ) = rust_tuple
-                        exch_ts_py = _extract_ts_ns(ts_val)
-                        if exch_ts_py:
-                            exch_ts = exch_ts_py
-                        stats = BookStats(
-                            int(best_bid),
-                            int(best_ask),
-                            int(bid_depth),
-                            int(ask_depth),
-                            float(mid_price),
-                            float(spread),
-                            float(imbalance),
-                        )
-                except Exception as exc:
-                    logger.debug("rust_bidask_fallback", stage="normalize_bidask", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-                    bids_final = None
-                    asks_final = None
-                    stats = None
-
-            # If a Rust normalize path already returned bids/asks+stats, do not recompute
-            # the same work again via scale_book_pair_stats.
-            if stats is None and use_rust and _RUST_SCALE_BOOK_PAIR_STATS and _RUST_STATS_TUPLE:
-                try:
-                    bids_final, asks_final, _raw_stats2 = _RUST_SCALE_BOOK_PAIR_STATS(bp, bv, ap, av, scale)
-                    stats = BookStats(*_raw_stats2) if _raw_stats2 is not None else None
-                except Exception as exc:
-                    logger.debug("rust_bidask_fallback", stage="scale_book_pair_stats_retry", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-                    bids_final = None
-                    asks_final = None
-                    stats = None
-            if bids_final is None and use_rust and _RUST_SCALE_BOOK_PAIR:
-                try:
-                    bids_final, asks_final = _RUST_SCALE_BOOK_PAIR(bp, bv, ap, av, scale)
-                except Exception as exc:
-                    logger.debug("rust_bidask_fallback", stage="scale_book_pair", error=str(exc))
-                    if self._rust_fallback_bidask:
-                        self._rust_fallback_bidask.inc()
-                    bids_final = None
-                    asks_final = None
-
-            if bids_final is None:
-                if use_rust and _RUST_SCALE_BOOK_SEQ:
-                    try:
-                        bids_final = _RUST_SCALE_BOOK_SEQ(bp, bv, scale)
-                    except Exception as exc:
-                        logger.debug("rust_bidask_fallback", stage="scale_book_seq_bid", error=str(exc))
-                        if self._rust_fallback_bidask:
-                            self._rust_fallback_bidask.inc()
-                        bids_final = None
-                if bids_final is None:
-                    bids_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(bp, bv)]
-
-            if asks_final is None:
-                if use_rust and _RUST_SCALE_BOOK_SEQ:
-                    try:
-                        asks_final = _RUST_SCALE_BOOK_SEQ(ap, av, scale)
-                    except Exception as exc:
-                        logger.debug("rust_bidask_fallback", stage="scale_book_seq_ask", error=str(exc))
-                        if self._rust_fallback_bidask:
-                            self._rust_fallback_bidask.inc()
-                        asks_final = None
-                if asks_final is None:
-                    asks_final = [[int(round(float(price) * scale)), int(volume)] for price, volume in zip(ap, av)]
-
-            if not synthesized:
-                bids_final, asks_final, synthesized = self._maybe_synthesize_side(symbol, bids_final, asks_final, scale)
-
-            # Update trade classifier with latest best bid/ask
-            if stats is not None:
-                self._trade_classifier.update_quotes(symbol, stats[0], stats[1])
-            elif bids_final and asks_final:
-                _bb = int(bids_final[0][0]) if hasattr(bids_final, "__getitem__") and len(bids_final) > 0 else 0
-                _ba = int(asks_final[0][0]) if hasattr(asks_final, "__getitem__") and len(asks_final) > 0 else 0
-                if _bb > 0 and _ba > 0:
-                    self._trade_classifier.update_quotes(symbol, _bb, _ba)
+            if bids and asks:
+                best_bid, best_ask = bids[0][0], asks[0][0]
+                if best_bid > 0 and best_ask > 0:
+                    self._trade_classifier.update_quotes(symbol, best_bid, best_ask)
 
             if _RETURN_TUPLE:
-                if stats is not None and not synthesized:
-                    return (
-                        "bidask",
-                        symbol,
-                        bids_final,
-                        asks_final,
-                        exch_ts,
-                        False,
-                        stats[0],
-                        stats[1],
-                        stats[2],
-                        stats[3],
-                        stats[4],
-                        stats[5],
-                        stats[6],
-                    )
-                return ("bidask", symbol, bids_final, asks_final, exch_ts, False)
+                return ("bidask", symbol, bids, asks, exch_ts, False)
 
             local_ts = timebase.now_ns()
             exch_ts, local_ts = self._validate_and_sync_timestamp(exch_ts, local_ts, "bidask", symbol)
             self._record_latency_metrics(exch_ts, local_ts, "_last_local_ts_bidask")
             meta = MetaData(seq=self._next_seq(), topic="bidask", source_ts=exch_ts, local_ts=local_ts)
-            event_stats = stats if stats is not None and not synthesized else None
             return BidAskEvent(
                 meta=meta,
                 symbol=symbol,
-                bids=bids_final,
-                asks=asks_final,
-                stats=event_stats,
+                bids=bids,
+                asks=asks,
                 **_event_contract_kw(BidAskEvent, self.metadata, symbol),
             )
         except Exception as e:

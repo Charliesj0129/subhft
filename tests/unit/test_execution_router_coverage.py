@@ -243,30 +243,30 @@ def test_load_fill_dedup_handles_corrupt_file(tmp_path, monkeypatch):
 
 def test_load_fill_dedup_loads_valid_entries(tmp_path, monkeypatch):
     """_load_fill_dedup loads valid jsonl entries into dedup set."""
-    import orjson
+    from hft_platform.utils import jsonfast
 
     dedup_path = tmp_path / "fill_dedup.jsonl"
-    entries = [orjson.dumps("fill_001") + b"\n", orjson.dumps("fill_002") + b"\n"]
+    entries = [jsonfast.dumps("v2|fill_001") + b"\n", jsonfast.dumps("v2|fill_002") + b"\n"]
     dedup_path.write_bytes(b"".join(entries))
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(dedup_path))
     router = _make_router()
-    assert "fill_001" in router._seen_fill_ids
-    assert "fill_002" in router._seen_fill_ids
+    assert "v2|fill_001" in router._seen_fill_ids
+    assert "v2|fill_002" in router._seen_fill_ids
 
 
 def test_load_fill_dedup_respects_max_size(tmp_path, monkeypatch):
     """_load_fill_dedup enforces max_size by evicting oldest."""
-    import orjson
+    from hft_platform.utils import jsonfast
 
     dedup_path = tmp_path / "fill_dedup.jsonl"
-    entries = [orjson.dumps(f"fill_{i:04d}") + b"\n" for i in range(20)]
+    entries = [jsonfast.dumps(f"v2|fill_{i:04d}") + b"\n" for i in range(20)]
     dedup_path.write_bytes(b"".join(entries))
     monkeypatch.setenv("HFT_FILL_DEDUP_PERSIST_PATH", str(dedup_path))
     monkeypatch.setenv("HFT_FILL_DEDUP_MAX_SIZE", "10")
     router = _make_router()
     assert len(router._seen_fill_ids) == 10
-    assert "fill_0019" in router._seen_fill_ids
-    assert "fill_0000" not in router._seen_fill_ids
+    assert "v2|fill_0019" in router._seen_fill_ids
+    assert "v2|fill_0000" not in router._seen_fill_ids
 
 
 # ── _register_fill_dedup_key eviction ────────────────────────────────────

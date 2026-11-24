@@ -22,6 +22,12 @@ logger = get_logger("notifications.alertmanager_bridge")
 
 _DEFAULT_PORT = 8081
 
+# Labels that never distinguish one series from another in a Telegram line:
+# alertname/severity are already printed, job/instance are the scrape target
+# (the same for every alert from this stack), alertstate/__name__ are
+# synthetic labels added by Prometheus' ALERTS series.
+_SKIPPED_LABELS: frozenset[str] = frozenset({"alertname", "severity", "job", "instance", "alertstate", "__name__"})
+
 
 def format_alert_message(payload: dict[str, Any]) -> str:
     """Convert Alertmanager webhook payload to Telegram HTML message.
@@ -48,6 +54,15 @@ def format_alert_message(payload: dict[str, Any]) -> str:
         )
         if description:
             lines.append(f"  {escape(description)}")
+        # Series that differ only by a label (outcome, reason, side, conn_id,
+        # strategy, ...) would otherwise read identically.
+        distinguishing = ", ".join(
+            f"{escape(str(key))}={escape(str(value))}"
+            for key, value in sorted(labels.items())
+            if key not in _SKIPPED_LABELS
+        )
+        if distinguishing:
+            lines.append(f"  {distinguishing}")
 
     return "\n\n".join(lines)
 
@@ -138,8 +153,12 @@ class AlertmanagerBridge:
         msg = format_alert_message(payload)
         if msg:
             alerts = payload.get("alerts", [])
-            is_critical = any(a.get("labels", {}).get("severity") == "critical" for a in alerts)
-            sent = await self._sender.send(msg, critical=is_critical)
+            # Every forward takes the retrying path (``critical=True``: bounded
+            # retries with backoff on transient errors, no client-side throttle
+            # drop), not only severity=critical ones. A single un-retried attempt
+            # silently lost a BrokerPathSilent page. ``critical`` changes only
+            # retry/throttle behaviour in TelegramSender, never the text.
+            sent = await self._sender.send(msg, critical=True)
             # Emit alertname/severity/status so post-hoc audits can identify
             # which rule(s) drove a telegram burst without re-deriving from
             # firing-time correlation. Sorted+deduped to keep log line bounded
@@ -155,6 +174,13 @@ class AlertmanagerBridge:
                 statuses=statuses,
                 sent=sent,
             )
+            if not sent:
+                # Answer 503 so Alertmanager retries the notification instead
+                # of treating the alert as delivered. Accepted trade-off: a
+                # retried multi-chunk message (>4096 chars) may re-send chunks
+                # that already went out, i.e. duplicate lines, never a loss.
+                await self._send_response(writer, 503, b'{"error":"telegram_send_failed"}')
+                return
         await self._send_response(writer, 200, b'{"status":"accepted"}')
 
     @staticmethod
@@ -166,6 +192,7 @@ class AlertmanagerBridge:
             404: "Not Found",
             413: "Payload Too Large",
             500: "Internal Server Error",
+            503: "Service Unavailable",
         }
         reason = reasons.get(status, "Unknown")
         header = (

@@ -21,6 +21,7 @@ from typing import Any
 from structlog import get_logger
 
 from hft_platform.core import timebase
+from hft_platform.utils import jsonfast
 
 logger = get_logger("observability.health")
 
@@ -35,15 +36,8 @@ _CH_WRITE_STALE_NS = 60_000_000_000  # 60 seconds
 
 
 def _json_dumps(obj: Any) -> bytes:
-    """Serialize *obj* to JSON bytes using orjson if available, else stdlib."""
-    try:
-        import orjson
-
-        return orjson.dumps(obj)
-    except ImportError:
-        import json
-
-        return json.dumps(obj, default=str).encode("utf-8")
+    """Serialize *obj* to JSON bytes (msgspec; an unserializable value raises TypeError)."""
+    return jsonfast.dumps(obj)
 
 
 class DegradationTracker:

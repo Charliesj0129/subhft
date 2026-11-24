@@ -194,9 +194,9 @@ class TestPhantomFillReconciliation:
         result = adapter.resolve_phantom_fill(fill)
 
         assert result == "r47_maker"
-        # Phantom key should be cleared after resolution
-        assert order_key not in adapter._phantom_records
-        assert order_key not in adapter._phantom_order_keys
+        # 2026-11-13: the claim is tentative; the record is kept, holding it, until
+        # the phantom's Trade confirms or refutes it (_bind_late_trade).
+        assert [r.claim is not None for r in adapter._phantom_records[order_key]] == [True]
         # Pending fill index should be cleaned up
         assert "TXFD6:BUY" not in adapter._pending_fill_index
 
@@ -248,8 +248,9 @@ class TestPhantomFillReconciliation:
         result = adapter.resolve_phantom_fill(fill)
 
         assert result == "r47_maker"
-        assert phantom_key not in adapter._phantom_records
-        assert phantom_key not in adapter._phantom_order_keys
+        # 2026-11-13: kept with a tentative claim until the phantom's Trade settles it.
+        assert [r.claim is not None for r in adapter._phantom_records[phantom_key]] == [True]
+        assert adapter.resolve_phantom_fill(fill) is None, "a claimed record does not take a second fill"
 
     @pytest.mark.asyncio
     async def test_resolve_phantom_fill_returns_none_when_no_match(self, tmp_path, monkeypatch):
@@ -279,7 +280,7 @@ class TestPhantomFillReconciliation:
 
         from hft_platform.execution.router import ExecutionRouter
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             from hft_platform.execution.positions import PositionStore
 
             position_store = PositionStore()
@@ -349,7 +350,7 @@ class TestPhantomFillReconciliation:
         from hft_platform.execution.fill_dlq import get_orphaned_fill_dlq
         from hft_platform.execution.router import ExecutionRouter
 
-        with patch.dict(os.environ, {"HFT_RUST_POSITIONS": "0"}):
+        with patch.dict(os.environ, {}):
             from hft_platform.execution.positions import PositionStore
 
             position_store = PositionStore()

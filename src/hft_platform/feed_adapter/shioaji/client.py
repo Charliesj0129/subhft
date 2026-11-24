@@ -20,7 +20,7 @@ from structlog import get_logger
 from hft_platform.core import timebase
 from hft_platform.core.rate_limiter import RateLimiter
 from hft_platform.feed_adapter.shioaji import router as _router
-from hft_platform.feed_adapter.shioaji._compat import resolve_quote_api
+from hft_platform.feed_adapter.shioaji._compat import contracts_loaded, resolve_quote_api
 from hft_platform.feed_adapter.shioaji._config import session_lock_id
 from hft_platform.feed_adapter.shioaji._infra import (
     InflightGuard as _InflightGuard,
@@ -102,7 +102,7 @@ def _apply_solace_arity_shim() -> None:
     try:
         import inspect
 
-        from shioaji.backend.solace import api as _solapi  # type: ignore[import-not-found]
+        from shioaji.backend.solace import api as _solapi
     except Exception as exc:  # pragma: no cover - lib absent in test
         _log.debug("shioaji_solace_arity_shim_skip", err=str(exc))
         _SOLACE_ARITY_SHIM_APPLIED = True
@@ -238,7 +238,20 @@ def dispatch_tick_cb(*args, **kwargs):
     _ROUTE_MISS_COUNT = _router._ROUTE_MISS_COUNT
 
 
+_CONTRACT_FETCH_STATES = ("Fetched", "Fetching", "Unfetch")
+
+
+def _contracts_fetch_state(contracts: Any) -> str | None:
+    status = getattr(contracts, "status", None)
+    raw = getattr(status, "value", status)
+    if isinstance(raw, str) and raw in _CONTRACT_FETCH_STATES:
+        return raw
+    return None
+
+
 class ShioajiClient:
+    _contracts_probe_warned: bool = False
+
     def __init__(self, config_path: str | None = None, shioaji_config: dict[str, Any] | None = None):
         # Per-quote-connection cap (broker Solace topic budget). Preserved as
         # ``MAX_SUBSCRIPTIONS`` for backward compatibility with quote_runtime
@@ -317,6 +330,8 @@ class ShioajiClient:
         # MarketDataService._attempt_resubscribe via to_thread).
         # try_acquire(blocking=False) so concurrent callers no-op.
         self._resubscribe_lock: threading.Lock = threading.Lock()
+        # See quote_runtime.subscription_lifecycle_lock: a universe roll vs. the retry worker.
+        self._sub_lifecycle_lock: threading.RLock = threading.RLock()
         self.alias_to_actual: dict[str, str] = {}  # config code → callback code (e.g. TXFR1 → TXFE6)
         self.tick_callback: Callable[..., Any] | None = None
         _dispatch_async = os.getenv("HFT_SHIOAJI_QUOTE_DISPATCH_THREAD", "1").strip().lower() in {
@@ -510,7 +525,7 @@ class ShioajiClient:
         self._quote_query_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_SOFT_CAP", "40")),
             hard_cap=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_HARD_CAP", "50")),
-            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "5")),
+            window_s=int(os.getenv("HFT_SHIOAJI_QUOTE_QUERY_WINDOW_S", "10")),
         )
         self._account_rate_limiter = RateLimiter(
             soft_cap=int(os.getenv("HFT_SHIOAJI_ACCOUNT_SOFT_CAP", "20")),
@@ -1110,10 +1125,41 @@ class ShioajiClient:
         """Delegates to SubscriptionManager.set_execution_callbacks()."""
         self._subscriptions().set_execution_callbacks(on_order=on_order, on_deal=on_deal)
 
+    def _warn_contracts_probe_failed(self, exc: Exception) -> None:
+        if self._contracts_probe_warned:
+            return
+        self._contracts_probe_warned = True
+        logger.warning(
+            "contracts_probe_failed",
+            conn_id=str(getattr(self, "conn_id", "-")),
+            error=scrub_broker_error(exc),
+        )
+
     @property
     def contracts_ready(self) -> bool:
         """True if the Shioaji API has Contracts loaded and available."""
-        return self.api is not None and hasattr(self.api, "Contracts")
+        api = self.api
+        if api is None:
+            return False
+        try:
+            return hasattr(api, "Contracts")
+        except Exception as exc:
+            self._warn_contracts_probe_failed(exc)
+            return False
+
+    @property
+    def contracts_loaded_state(self) -> bool:
+        api = self.api
+        if api is None:
+            return False
+        try:
+            fetch_state = _contracts_fetch_state(api.Contracts)
+        except Exception as exc:
+            self._warn_contracts_probe_failed(exc)
+            return False
+        if fetch_state is not None:
+            return fetch_state == "Fetched"
+        return contracts_loaded(api)
 
     def _ensure_contracts(self) -> bool:
         """Fetch contracts explicitly. Returns True only if the fetch itself succeeded.

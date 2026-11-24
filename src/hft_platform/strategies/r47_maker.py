@@ -306,6 +306,16 @@ class _MFGState:
 # ── R47 Strategy ─────────────────────────────────────────────────────────
 
 
+def _fill_dedup_key(event: FillEvent) -> str:
+    """Same string as ``execution.router.fill_dedup_key`` (pinned by a test).
+
+    Built locally: strategies depend on contracts, not on the execution layer.
+    """
+    return (
+        f"v2|{event.symbol}|{event.order_id}|{event.side}|{event.price}|{event.qty}|{event.match_ts_ns}|{event.fill_id}"
+    )
+
+
 class R47MakerStrategy(SimpleMarketMaker):
     """Three-layer maker strategy with PE regime gate, queue survival
     cancel trigger, MFG inventory skew, and D4 QI adverse-selection skew.
@@ -601,16 +611,21 @@ class R47MakerStrategy(SimpleMarketMaker):
     def on_fill(self, event: FillEvent) -> None:
         """Track position locally to avoid stale StrategyContext cache."""
         # DEC2-008: Fill dedup to prevent position double-counting.
+        # Keyed on the deal's identity (the router's key), not the bare broker
+        # seqno: seqno is order-scoped and the paper server reissues it at the
+        # day-session open, which dropped real fills. A fill with no fill_id is
+        # still never deduped.
         fid = getattr(event, "fill_id", None) or ""
-        if fid and fid in self._seen_fill_ids:
-            logger.warning("r47_duplicate_fill_skipped", fill_id=fid, symbol=event.symbol)
-            return
         if fid:
-            self._seen_fill_ids.add(fid)
+            dedup_key = _fill_dedup_key(event)
+            if dedup_key in self._seen_fill_ids:
+                logger.warning("r47_duplicate_fill_skipped", fill_id=fid, dedup_key=dedup_key, symbol=event.symbol)
+                return
+            self._seen_fill_ids.add(dedup_key)
             if len(self._seen_fill_ids) > self._FILL_DEDUP_MAX:
                 # Evict ~half (set has no ordering, but this bounds memory)
                 evict = len(self._seen_fill_ids) - self._FILL_DEDUP_MAX // 2
-                victims = set()
+                victims: set[str] = set()
                 for fid in self._seen_fill_ids:
                     if len(victims) >= evict:
                         break

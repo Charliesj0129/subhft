@@ -1,8 +1,6 @@
 import dataclasses
-import importlib
 import os
 import threading
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Dict
 
@@ -14,29 +12,6 @@ from hft_platform.feed_adapter.normalizer import SymbolMetadata
 from hft_platform.observability.metrics import MetricsRegistry
 
 logger = get_logger("positions")
-
-_RUST_POSITIONS = os.getenv("HFT_RUST_POSITIONS", "1").lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
-
-_RustPositionTracker = None
-if _RUST_POSITIONS:
-    _rust_mod: Any = None
-    try:
-        _rust_mod = importlib.import_module("hft_platform.rust_core")
-    except ImportError as exc:
-        logger.debug("operation_fallback", error=str(exc))
-        try:
-            _rust_mod = importlib.import_module("rust_core")
-        except ImportError as exc:
-            logger.debug("operation_fallback", error=str(exc))
-            _rust_mod = None
-    if _rust_mod is not None:
-        _RustPositionTracker = getattr(_rust_mod, "RustPositionTracker", None)
-
 
 _PNL_SCALE: int = 10_000  # scaled int x10000 per NTD
 _MIN_PEAK_SCALED: int = int(os.getenv("HFT_DRAWDOWN_MIN_PEAK_SCALED", "100000000"))
@@ -167,7 +142,6 @@ class PositionStore:
         "metrics",
         "metadata",
         "price_codec",
-        "_rust_tracker",
         "_log_fills",
         "_fill_lock",
         "_peak_equity_scaled",
@@ -175,8 +149,6 @@ class PositionStore:
         "_total_realized_pnl_scaled",
         "_evicted_realized_pnl_scaled",
         "_recovery_positions",
-        "_recovery_rpnl_offsets",
-        "_recovery_fees_offsets",
         "__dict__",  # needed for test monkey-patching
     )
 
@@ -187,13 +159,8 @@ class PositionStore:
         self.metrics = MetricsRegistry.get()
         self.metadata = SymbolMetadata()
         self.price_codec = PriceCodec(SymbolMetadataPriceScaleProvider(self.metadata))
-        self._rust_tracker = _RustPositionTracker() if _RustPositionTracker is not None else None
         self._log_fills = os.getenv("HFT_LOG_FILLS", "0") == "1"
-        # Lock for atomic Rust/Python tracker access to prevent race conditions.
-        # NOTE: This is intentionally a threading.Lock (not asyncio.Lock) because:
-        # 1. The Rust FFI calls are synchronous and cannot be awaited
-        # 2. The critical section is very short (microseconds for Rust path)
-        # 3. For async contexts, use on_fill_async() which runs this in a thread pool
+        # Fill writers and reconciliation readers share the same lock.
         self._fill_lock = threading.Lock()
         #: Monotonic count of applied fills, bumped inside ``_fill_lock``.
         #: Reconciliation fences its broker/local sampling on this: the broker
@@ -205,9 +172,6 @@ class PositionStore:
         self._fill_generation: int = 0
         # Recovery positions from crash recovery (keyed by "account:symbol")
         self._recovery_positions: Dict[str, Dict[str, Any]] = {}
-        # Offsets to add to Rust-returned rpnl/fees (keyed by position key "acc:strat:sym")
-        self._recovery_rpnl_offsets: Dict[str, int] = {}
-        self._recovery_fees_offsets: Dict[str, int] = {}
         # Portfolio-level tracking (exported drawdown gauge, checkpoint aggregates)
         self._peak_equity_scaled: int = 0  # High watermark of total realized PnL
         #: TAIFEX trading date the high-watermark above belongs to. Empty
@@ -403,27 +367,34 @@ class PositionStore:
         positions belonging to that strategy are summed — recovery positions
         are included only if their ``strategy_id`` matches the filter (or if
         they have no ``strategy_id`` and no filter is applied).
+
+        Takes ``_fill_lock`` for the walk: ``on_fill_async`` applies fills on a
+        worker thread that inserts into ``positions`` and pops from
+        ``_recovery_positions``, which would otherwise raise "dictionary changed
+        size during iteration" here. Non-reentrant: never call this while
+        holding ``_fill_lock``.
         """
         total = 0
-        for _key, pos in self.positions.items():
-            if getattr(pos, "symbol", None) != symbol:
-                continue
-            if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
-                continue
-            total += int(getattr(pos, "net_qty", 0) or 0)
-        for rkey, rdata in self._recovery_positions.items():
-            if not isinstance(rdata, dict):
-                continue
-            rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1])
-            if rsym != symbol:
-                continue
-            rstrat = rdata.get("strategy_id", "")
-            if strategy_id is not None and rstrat and rstrat != strategy_id:
-                continue
-            if strategy_id is not None and not rstrat:
-                # Legacy recovery with no strategy_id: exclude from filtered queries
-                continue
-            total += int(rdata.get("net_qty", 0))
+        with self._fill_lock:
+            for _key, pos in self.positions.items():
+                if getattr(pos, "symbol", None) != symbol:
+                    continue
+                if strategy_id is not None and getattr(pos, "strategy_id", None) != strategy_id:
+                    continue
+                total += int(getattr(pos, "net_qty", 0) or 0)
+            for rkey, rdata in self._recovery_positions.items():
+                if not isinstance(rdata, dict):
+                    continue
+                rsym = rdata.get("symbol", rkey.rsplit(":", 1)[-1])
+                if rsym != symbol:
+                    continue
+                rstrat = rdata.get("strategy_id", "")
+                if strategy_id is not None and rstrat and rstrat != strategy_id:
+                    continue
+                if strategy_id is not None and not rstrat:
+                    # Legacy recovery with no strategy_id: exclude from filtered queries
+                    continue
+                total += int(rdata.get("net_qty", 0))
         return total
 
     def _update_portfolio_aggregates(self, pnl_delta: int = 0) -> None:
@@ -521,21 +492,10 @@ class PositionStore:
                 net_qty=net_qty,
             )
 
-        # Seed Rust tracker with synthetic fill to establish net_qty + avg_price
-        if self._rust_tracker is not None:
-            side = 0 if net_qty > 0 else 1  # BUY=0, SELL=1
-            multiplier = self.metadata.contract_multiplier(fill.symbol)
-            self._rust_tracker.update(key, side, abs(net_qty), avg_price, 0, 0, 0, multiplier)
-            # Rust tracker now has correct net_qty and avg_price but zero rpnl/fees.
-            # Store offsets so _on_fill_rust can add historical recovery rpnl/fees.
-            self._recovery_rpnl_offsets[key] = rpnl
-            self._recovery_fees_offsets[key] = fees
-
-        # Create Python Position with full recovery data
         pos = Position(
-            account_id=recovery["account_id"],
+            account_id=fill.account_id,
             strategy_id=fill.strategy_id,
-            symbol=recovery["symbol"],
+            symbol=fill.symbol,
             net_qty=net_qty,
             avg_price_scaled=avg_price,
             realized_pnl_scaled=rpnl,
@@ -564,7 +524,7 @@ class PositionStore:
         """
         key = self._key(fill.account_id, fill.strategy_id, fill.symbol)
 
-        # Use lock to ensure atomic check-and-call for tracker selection
+        # Merge recovery and apply the fill under the same lock.
         with self._fill_lock:
             self._fill_generation += 1
             # Merge recovery position on first fill for this key.
@@ -576,9 +536,6 @@ class PositionStore:
                 recovery = self._pop_recovery_for(fill)
             if recovery is not None:
                 self._seed_from_recovery(key, fill, recovery)
-
-            if self._rust_tracker is not None:
-                return self._on_fill_rust(fill, key)
 
             return self._on_fill_python(fill, key)
 
@@ -644,80 +601,6 @@ class PositionStore:
 
         return await asyncio.to_thread(self.on_fill, fill)
 
-    def _on_fill_rust(self, fill: FillEvent, key: str) -> PositionDelta:
-        tracker = self._rust_tracker
-        if tracker is None:
-            raise RuntimeError("Rust position tracker unavailable")
-        # Same cardinality cap as _on_fill_python. The tracker is chosen once in
-        # __init__ and never changes, so without this the default (Rust) path was
-        # the one path where HFT_POSITIONS_MAX_SIZE had no effect at all and both
-        # self.positions and the tracker grew unbounded.
-        if key not in self.positions and len(self.positions) >= self._positions_max_size:
-            self._evict_flat_positions()
-        multiplier = self.metadata.contract_multiplier(fill.symbol)
-        # The kernel accumulates ``fee + tax``. ``fill.fee`` already contains ``fill.tax`` (FeeBreakdown.total),
-        # so hand the kernel the whole charge as ``fee`` and 0 as ``tax``; passing both counted the tax twice.
-        net_qty, avg_price_scaled, realized_pnl_scaled, fees_scaled = tracker.update(
-            key,
-            int(fill.side),
-            fill.qty,
-            fill.price,
-            fill.fee,
-            0,
-            fill.match_ts_ns,
-            multiplier,
-        )
-
-        # Keep Python-visible cache in sync for tests/debugging/metrics parity.
-        # All values stored as scaled integers (no float conversion).
-        pos = self.positions.get(key)
-        _prev_pnl = pos.realized_pnl_scaled if pos is not None else 0
-        if pos is None:
-            pos = Position(fill.account_id, fill.strategy_id, fill.symbol)
-            self.positions[key] = pos
-        pos.net_qty = int(net_qty)
-        pos.avg_price_scaled = int(avg_price_scaled)
-        # Add recovery offsets (non-zero only for keys that had recovery seeding)
-        rpnl_offset = self._recovery_rpnl_offsets.get(key, 0)
-        fees_offset = self._recovery_fees_offsets.get(key, 0)
-        pos.realized_pnl_scaled = int(realized_pnl_scaled) + rpnl_offset
-        pos.fees_scaled = int(fees_scaled) + fees_offset
-        pos.last_update_ts = fill.match_ts_ns
-
-        if self._log_fills:
-            logger.info(
-                "Fill processed",
-                key=key,
-                net_qty=pos.net_qty,
-                pnl=pos.realized_pnl_scaled,
-                rust=True,
-            )
-
-        # Update portfolio-level aggregates with O(1) delta
-        _pnl_delta = pos.realized_pnl_scaled - _prev_pnl
-        self._update_portfolio_aggregates(_pnl_delta)
-
-        if self.metrics:
-            _sym = self.metrics.cap_symbol(fill.symbol)
-            self.metrics.position_pnl_realized.labels(strategy=fill.strategy_id, symbol=_sym).set(
-                pos.realized_pnl_scaled
-            )
-            if hasattr(self.metrics, "portfolio_total_pnl"):
-                self.metrics.portfolio_total_pnl.set(self._total_realized_pnl_scaled)
-            if hasattr(self.metrics, "portfolio_drawdown_pct"):
-                self.metrics.portfolio_drawdown_pct.set(self._get_drawdown_pct_locked())
-
-        return PositionDelta(
-            account_id=fill.account_id,
-            strategy_id=fill.strategy_id,
-            symbol=fill.symbol,
-            net_qty=pos.net_qty,
-            avg_price=pos.avg_price_scaled,
-            realized_pnl=pos.realized_pnl_scaled,
-            unrealized_pnl=0,
-            delta_source="FILL",
-        )
-
     def _on_fill_python(self, fill: FillEvent, key: str) -> PositionDelta:
         if key not in self.positions:
             # Evict flat positions if at limit
@@ -771,43 +654,49 @@ class PositionStore:
         Returns:
             Total unrealized PnL in scaled int x10000.
             Symbols without a mid_price entry contribute 0.
+
+        Takes ``_fill_lock`` for the walk, so a fill applied on the
+        ``on_fill_async`` worker cannot change either map mid-iteration and the
+        two halves of the sum describe one book. Non-reentrant: never call this
+        while holding ``_fill_lock``.
         """
         total = 0
         accounted_keys: set[str] = set()
-        for key, pos in self.positions.items():
-            if pos.net_qty == 0:
-                continue
-            accounted_keys.add(key)
-            # Extract symbol from key "{account}:{strategy}:{symbol}"
-            symbol = key.rsplit(":", 1)[-1]
-            mid = mid_prices.get(symbol)
-            if mid is None:
-                continue
-            # Skip positions with unknown cost basis sentinel (-1)
-            if pos.avg_price_scaled < 0:
-                continue
-            multiplier = self.metadata.contract_multiplier(symbol)
-            total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
+        with self._fill_lock:
+            for key, pos in self.positions.items():
+                if pos.net_qty == 0:
+                    continue
+                accounted_keys.add(key)
+                # Extract symbol from key "{account}:{strategy}:{symbol}"
+                symbol = key.rsplit(":", 1)[-1]
+                mid = mid_prices.get(symbol)
+                if mid is None:
+                    continue
+                # Skip positions with unknown cost basis sentinel (-1)
+                if pos.avg_price_scaled < 0:
+                    continue
+                multiplier = self.metadata.contract_multiplier(symbol)
+                total += (mid - pos.avg_price_scaled) * pos.net_qty * multiplier
 
-        # Include recovery positions not yet merged into self.positions
-        _recovery = getattr(self, "_recovery_positions", None)
-        for rkey, rec in (_recovery or {}).items():
-            if rkey in accounted_keys:
-                continue
-            net_qty = rec["net_qty"]
-            if net_qty == 0:
-                continue
-            avg_price = rec["avg_price_scaled"]
-            # Sentinel -1 means unknown cost basis (broker-only recovery).
-            # Skip MtM for this position to avoid astronomical fake PnL.
-            if avg_price < 0:
-                continue
-            symbol = rec["symbol"]
-            mid = mid_prices.get(symbol)
-            if mid is None:
-                continue
-            multiplier = self.metadata.contract_multiplier(symbol)
-            total += (mid - avg_price) * net_qty * multiplier
+            # Include recovery positions not yet merged into self.positions
+            _recovery = getattr(self, "_recovery_positions", None)
+            for rkey, rec in (_recovery or {}).items():
+                if rkey in accounted_keys:
+                    continue
+                net_qty = rec["net_qty"]
+                if net_qty == 0:
+                    continue
+                avg_price = rec["avg_price_scaled"]
+                # Sentinel -1 means unknown cost basis (broker-only recovery).
+                # Skip MtM for this position to avoid astronomical fake PnL.
+                if avg_price < 0:
+                    continue
+                symbol = rec["symbol"]
+                mid = mid_prices.get(symbol)
+                if mid is None:
+                    continue
+                multiplier = self.metadata.contract_multiplier(symbol)
+                total += (mid - avg_price) * net_qty * multiplier
         return total
 
     def snapshot_positions_with_recovery(self) -> tuple[dict, dict]:
@@ -876,40 +765,6 @@ class PositionStore:
                 )
             return out
 
-    def _forget_keys(self, keys: Iterable[str]) -> None:
-        """Drop *keys* from every store that outlives ``self.positions``.
-
-        Three stores are keyed the same way and only one of them is a plain
-        Python dict the caller already deleted from:
-
-        * the Rust tracker owns the authoritative ``net_qty`` whenever it is
-          available (``_on_fill_rust`` reads it back and returns it), so
-          clearing only the Python side leaves the next fill accumulating on
-          top of a quantity the operator believes was cleared -- the phantom
-          position comes straight back. That matters most for
-          ``clear_symbol_positions``, which is the mechanism
-          ``_auto_correct_drift`` uses to break a drift loop: without this the
-          correction was a no-op and the loop could not terminate.
-        * the two recovery offset dicts are re-applied verbatim by
-          ``_on_fill_rust``. A removal path that banks the position's realized
-          PnL into ``_evicted_realized_pnl_scaled`` (which already includes the
-          offset) and leaves the offset in place would add it a second time the
-          moment the key trades again.
-
-        Callers must bank any realized PnL they intend to keep *before*
-        calling this.
-        """
-        tracker = self._rust_tracker
-        for key in keys:
-            self._recovery_rpnl_offsets.pop(key, None)
-            self._recovery_fees_offsets.pop(key, None)
-            if tracker is None:
-                continue
-            try:
-                tracker.reset(key)
-            except Exception:  # noqa: BLE001 - a clear must not fail on tracker state
-                logger.warning("rust_tracker_reset_failed", key=key, exc_info=True)
-
     def reset(self) -> int:
         """Clear all positions, recovery state, and portfolio aggregates.
 
@@ -918,22 +773,11 @@ class PositionStore:
         """
         with self._fill_lock:
             count = len(self.positions)
-            # Reset the Rust tracker for every key we know about before the
-            # Python dicts are emptied -- afterwards we no longer have the keys.
-            self._forget_keys([*self.positions.keys(), *self._recovery_positions.keys()])
             self.positions.clear()
             self._recovery_positions.clear()
-            self._recovery_rpnl_offsets.clear()
-            self._recovery_fees_offsets.clear()
             self._peak_equity_scaled = 0
             self._total_realized_pnl_scaled = 0
             self._evicted_realized_pnl_scaled = 0
-            # The tracker has no bulk clear, so a key it holds that Python never
-            # knew about would survive. Report it rather than leaving a silent
-            # residue behind an operation whose whole point is "everything is zero".
-            residual = self._rust_tracker.len() if self._rust_tracker is not None else 0
-        if residual:
-            logger.warning("position_store_reset_rust_residual", residual_keys=residual)
         logger.warning("position_store_reset", cleared_positions=count)
         return count
 
@@ -988,9 +832,6 @@ class PositionStore:
                 if isinstance(rdata, dict):
                     self._evicted_realized_pnl_scaled += int(rdata.get("realized_pnl_scaled", 0) or 0)
                 del self._recovery_positions[rk]
-            # Same keys out of the Rust tracker, or the next fill resurrects the
-            # phantom quantity this call exists to remove.
-            self._forget_keys([*keys_to_remove, *rkeys_to_remove])
         if keys_to_remove or rkeys_to_remove:
             logger.info(
                 "symbol_positions_cleared",
@@ -1013,8 +854,4 @@ class PositionStore:
                 # Preserve realized PnL from evicted positions for portfolio aggregates
                 self._evicted_realized_pnl_scaled += self.positions[k].realized_pnl_scaled
                 del self.positions[k]
-            # The banked PnL above is the position's *cumulative* total. Leaving
-            # the key in the Rust tracker would make the next fill for it report
-            # that same cumulative total again, on top of the banked copy.
-            self._forget_keys(evicted)
             logger.info("Evicted flat positions", count=evict_count, remaining=len(self.positions))

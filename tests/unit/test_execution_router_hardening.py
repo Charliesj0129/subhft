@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hft_platform.execution.normalizer import RawExecEvent
-from hft_platform.execution.router import ExecutionRouter, _synthesize_dedup_key
+from hft_platform.execution.router import ExecutionRouter, fill_dedup_key
 
 
 @pytest.fixture(autouse=True)
@@ -119,11 +119,11 @@ def _make_deal_raw(
 
 
 # ---------------------------------------------------------------------------
-# Fix X-H3: _synthesize_dedup_key includes order_id
+# Fix X-H3: fill_dedup_key includes order_id
 # ---------------------------------------------------------------------------
 
 
-def test_synthesize_dedup_key_includes_order_id() -> None:
+def test_fill_dedup_key_includes_order_id() -> None:
     """Two fills with different order_id but same price/qty/ts produce different keys."""
     fill_a = MagicMock()
     fill_a.symbol = "2330"
@@ -132,6 +132,7 @@ def test_synthesize_dedup_key_includes_order_id() -> None:
     fill_a.price = 5000000
     fill_a.qty = 1
     fill_a.match_ts_ns = 1_000_000_000
+    fill_a.fill_id = "SEQ001"
 
     fill_b = MagicMock()
     fill_b.symbol = "2330"
@@ -140,16 +141,17 @@ def test_synthesize_dedup_key_includes_order_id() -> None:
     fill_b.price = 5000000
     fill_b.qty = 1
     fill_b.match_ts_ns = 1_000_000_000
+    fill_b.fill_id = "SEQ001"
 
-    key_a = _synthesize_dedup_key(fill_a)
-    key_b = _synthesize_dedup_key(fill_b)
+    key_a = fill_dedup_key(fill_a)
+    key_b = fill_dedup_key(fill_b)
 
     assert key_a != key_b
     assert "ORD001" in key_a
     assert "ORD002" in key_b
 
 
-def test_synthesize_dedup_key_same_order_is_deterministic() -> None:
+def test_fill_dedup_key_same_order_is_deterministic() -> None:
     """Same fill fields produce identical key (idempotency)."""
     fill = MagicMock()
     fill.symbol = "2330"
@@ -158,8 +160,9 @@ def test_synthesize_dedup_key_same_order_is_deterministic() -> None:
     fill.price = 5000000
     fill.qty = 1
     fill.match_ts_ns = 1_000_000_000
+    fill.fill_id = "SEQ001"
 
-    assert _synthesize_dedup_key(fill) == _synthesize_dedup_key(fill)
+    assert fill_dedup_key(fill) == fill_dedup_key(fill)
 
 
 # ---------------------------------------------------------------------------

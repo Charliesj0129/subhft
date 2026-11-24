@@ -74,7 +74,6 @@ def _write_config(path: str, extra: dict | None = None) -> str:
 
 @pytest.fixture(autouse=True)
 def _disable_rust_and_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HFT_RISK_RUST_VALIDATOR", "0")
     monkeypatch.setenv("HFT_RISK_FAST_GATE", "0")
     monkeypatch.setenv("HFT_RISK_CMD_ID_LOCK", "0")
 
@@ -182,68 +181,6 @@ class TestEvaluateStormGuard:
 # ---------------------------------------------------------------------------
 
 
-class TestEvaluateRustValidator:
-    def test_rust_validator_rejects(self, engine: RiskEngine) -> None:
-        rv = MagicMock()
-        rv.check.return_value = (False, 1)
-        engine._rust_validator = rv
-
-        intent = _make_intent()
-        decision = engine.evaluate(intent)
-        assert not decision.approved
-        assert decision.reason_code == "PRICE_ZERO_OR_NEG"
-
-    def test_rust_validator_error_falls_through(self, engine: RiskEngine) -> None:
-        """When Rust validator errors, engine falls through to Python validators."""
-        rv = MagicMock()
-        rv.check.side_effect = RuntimeError("rust panic")
-        engine._rust_validator = rv
-
-        intent = _make_intent()
-        decision = engine.evaluate(intent)
-        # Rust error falls through to Python validators which pass for a valid intent
-        assert decision.approved is True
-
-    def test_rust_validator_passes_but_position_limit_rejects(self, engine: RiskEngine) -> None:
-        """Rust fast path passes but PositionLimitValidator rejects — order must be rejected."""
-        rv = MagicMock()
-        rv.check.return_value = (True, 0)
-        engine._rust_validator = rv
-
-        # Mock the uncovered validator to reject
-        mock_pos_v = MagicMock()
-        mock_pos_v.check.return_value = (False, "POSITION_LIMIT_EXCEEDED")
-        engine._rust_uncovered_validators = [mock_pos_v]
-
-        intent = _make_intent()
-        decision = engine.evaluate(intent)
-        assert not decision.approved
-        assert decision.reason_code == "POSITION_LIMIT_EXCEEDED"
-
-    def test_rust_validator_passes_but_daily_loss_rejects(self, engine: RiskEngine) -> None:
-        """Rust fast path passes but DailyLossLimitValidator rejects — order must be rejected."""
-        rv = MagicMock()
-        rv.check.return_value = (True, 0)
-        engine._rust_validator = rv
-
-        mock_loss_v = MagicMock()
-        mock_loss_v.check.return_value = (False, "DAILY_LOSS_LIMIT")
-        engine._rust_uncovered_validators = [mock_loss_v]
-
-        intent = _make_intent()
-        decision = engine.evaluate(intent)
-        assert not decision.approved
-        assert decision.reason_code == "DAILY_LOSS_LIMIT"
-
-    def test_rust_uncovered_validators_populated_on_init(self, engine: RiskEngine) -> None:
-        """Verify _rust_uncovered_validators contains PositionLimit and DailyLossLimit."""
-        from hft_platform.risk.validators import DailyLossLimitValidator, PositionLimitValidator
-
-        types = {type(v) for v in engine._rust_uncovered_validators}
-        assert PositionLimitValidator in types
-        assert DailyLossLimitValidator in types
-
-
 # ---------------------------------------------------------------------------
 # evaluate — Python validators
 # ---------------------------------------------------------------------------
@@ -251,7 +188,6 @@ class TestEvaluateRustValidator:
 
 class TestEvaluatePythonValidators:
     def test_python_validator_rejects(self, engine: RiskEngine) -> None:
-        engine._rust_validator = None
         # Force first validator to reject
         engine.validators[0].check = MagicMock(return_value=(False, "PRICE_ZERO_OR_NEG"))
         intent = _make_intent()
@@ -260,7 +196,6 @@ class TestEvaluatePythonValidators:
         assert decision.reason_code == "PRICE_ZERO_OR_NEG"
 
     def test_all_python_validators_pass(self, engine: RiskEngine) -> None:
-        engine._rust_validator = None
         for v in engine.validators:
             v.check = MagicMock(return_value=(True, "OK"))
         intent = _make_intent()

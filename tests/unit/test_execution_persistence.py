@@ -55,12 +55,12 @@ class TestFillDedupPersistence:
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
             if pre_seed is not None:
                 # Write a pre-existing file to simulate prior persist
-                import orjson
+                from hft_platform.utils import jsonfast
 
                 os.makedirs(os.path.dirname(persist_path), exist_ok=True)
                 with open(persist_path, "wb") as f:
                     for key in pre_seed:
-                        f.write(orjson.dumps(key) + b"\n")
+                        f.write(jsonfast.dumps(key) + b"\n")
 
             router = ExecutionRouter(
                 bus=bus,
@@ -72,31 +72,32 @@ class TestFillDedupPersistence:
         return router, persist_path
 
     def test_persist_writes_dedup_keys(self, tmp_path):
-        import orjson
+        from hft_platform.utils import jsonfast
 
         router, path = self._make_router(tmp_path)
-        router._seen_fill_ids["key1"] = None
-        router._seen_fill_ids["key2"] = None
-        router._seen_fill_ids["key3"] = None
+        router._seen_fill_ids["v2|key1"] = None
+        router._seen_fill_ids["v2|key2"] = None
+        router._seen_fill_ids["v2|key3"] = None
 
         router.persist_fill_dedup()
 
         assert os.path.exists(path)
         with open(path, "rb") as f:
-            keys = [orjson.loads(line.strip()) for line in f if line.strip()]
-        assert keys == ["key1", "key2", "key3"]
+            keys = [jsonfast.loads(line.strip()) for line in f if line.strip()]
+        assert keys == ["v2|key1", "v2|key2", "v2|key3"]
 
     def test_load_restores_dedup_keys(self, tmp_path):
-        pre_seed = ["fill_a", "fill_b", "fill_c"]
+        pre_seed = ["v2|fill_a", "v2|fill_b", "v2|fill_c"]
         router, _ = self._make_router(tmp_path, pre_seed=pre_seed)
 
-        assert "fill_a" in router._seen_fill_ids
-        assert "fill_b" in router._seen_fill_ids
-        assert "fill_c" in router._seen_fill_ids
+        assert "v2|fill_a" in router._seen_fill_ids
+        assert "v2|fill_b" in router._seen_fill_ids
+        assert "v2|fill_c" in router._seen_fill_ids
         assert len(router._seen_fill_ids) == 3
+        assert not router._legacy_fill_ids
 
     def test_load_enforces_max_size(self, tmp_path):
-        pre_seed = [f"key_{i}" for i in range(20)]
+        pre_seed = [f"v2|key_{i}" for i in range(20)]
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_MAX_SIZE": "5"}):
             router, _ = self._make_router(tmp_path, pre_seed=pre_seed)
 
@@ -108,8 +109,8 @@ class TestFillDedupPersistence:
 
     def test_roundtrip_persist_then_load(self, tmp_path):
         router1, path = self._make_router(tmp_path)
-        router1._seen_fill_ids["dup_1"] = None
-        router1._seen_fill_ids["dup_2"] = None
+        router1._seen_fill_ids["v2|dup_1"] = None
+        router1._seen_fill_ids["v2|dup_2"] = None
         router1.persist_fill_dedup()
 
         # Simulate restart: create new router that loads from same path
@@ -119,8 +120,8 @@ class TestFillDedupPersistence:
             router2._fill_dedup_persist_path = path
             router2._load_fill_dedup()
 
-        assert "dup_1" in router2._seen_fill_ids
-        assert "dup_2" in router2._seen_fill_ids
+        assert "v2|dup_1" in router2._seen_fill_ids
+        assert "v2|dup_2" in router2._seen_fill_ids
 
     @pytest.mark.asyncio
     async def test_new_fill_persists_dedup_window_without_graceful_shutdown(self, tmp_path):
@@ -128,6 +129,7 @@ class TestFillDedupPersistence:
         from hft_platform.contracts.strategy import Side
         from hft_platform.core import timebase
         from hft_platform.execution.normalizer import RawExecEvent
+        from hft_platform.execution.router import fill_dedup_key
 
         persist_path = str(tmp_path / "fill_dedup.jsonl")
         with patch.dict(
@@ -170,7 +172,7 @@ class TestFillDedupPersistence:
         with patch.dict(os.environ, {"HFT_FILL_DEDUP_PERSIST_PATH": persist_path}):
             restarted, _ = self._make_router(tmp_path)
 
-        assert "F_RESTART" in restarted._seen_fill_ids
+        assert fill_dedup_key(fill) in restarted._seen_fill_ids
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +268,7 @@ class TestOrderIdMapPersistence:
         persist_path = str(tmp_path / "oid_map.jsonl")
 
         if pre_seed is not None:
-            import orjson
+            from hft_platform.utils import jsonfast
 
             os.makedirs(os.path.dirname(persist_path), exist_ok=True)
             now_ns = timebase.now_ns()
@@ -274,7 +276,7 @@ class TestOrderIdMapPersistence:
                 # H3: pre-seed with the new schema (k, v, t_ns, s) so the
                 # loader does not drop entries as legacy/stale.
                 for k, v in pre_seed.items():
-                    f.write(orjson.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
+                    f.write(jsonfast.dumps({"k": k, "v": v, "t_ns": now_ns, "s": "live"}) + b"\n")
 
         with patch.dict(os.environ, {"HFT_ORDER_ID_MAP_PERSIST_PATH": persist_path}):
             adapter = OrderAdapter(
@@ -285,7 +287,7 @@ class TestOrderIdMapPersistence:
         return adapter, persist_path
 
     def test_persist_writes_mappings(self, tmp_path):
-        import orjson
+        from hft_platform.utils import jsonfast
 
         adapter, path = self._make_adapter(tmp_path)
         adapter.order_id_map["broker_123"] = "strat_a:intent_1"
@@ -295,7 +297,7 @@ class TestOrderIdMapPersistence:
 
         assert os.path.exists(path)
         with open(path, "rb") as f:
-            rows = [orjson.loads(line.strip()) for line in f if line.strip()]
+            rows = [jsonfast.loads(line.strip()) for line in f if line.strip()]
         assert len(rows) == 2
         # H3: every persisted row carries t_ns + state. The defensive branch
         # in persist_order_id_map() stamps an unmetered entry as live with
@@ -671,3 +673,67 @@ class TestFillDedupCheckpointDurability:
         router, _ = self._make_router(tmp_path)
         await asyncio.wait_for(router.flush_fill_dedup(), timeout=1.0)
         assert router._fill_dedup_persist_futures == set()
+
+
+class TestFillDedupLoadReportsWhatItSkips:
+    """K3: a damaged dedup checkpoint must say how much of the window is gone.
+
+    ``_load_fill_dedup`` used to ``continue`` past any bad line with no count and
+    no log, so a restart could come up with holes in its dedup window and nobody
+    could tell. The writer replaces the file atomically, so any bad line is real
+    damage; the tail/mid split only says where in the file it sits.
+    """
+
+    @staticmethod
+    def _router_loading(tmp_path, payload: bytes):
+        (tmp_path / "fill_dedup.jsonl").write_bytes(payload)
+        router, _ = TestFillDedupPersistence()._make_router(tmp_path)
+        return router
+
+    def test_dedup_load_distinguishes_truncated_tail_from_mid_file_corruption(self, tmp_path):
+        router = self._router_loading(tmp_path, b'"v2|k1"\ngarbage\n"v2|k2"\n"v2|k3')
+
+        assert list(router._seen_fill_ids) == ["v2|k1", "v2|k2"]
+        assert router._fill_dedup_load_mid_skipped == 1
+        assert router._fill_dedup_load_tail_skipped == 1
+
+    def test_dedup_load_counts_entries_that_are_not_keys_as_corruption(self, tmp_path):
+        router = self._router_loading(tmp_path, b'123\n"v2|k1"\n"v2|k2"\n')
+
+        assert list(router._seen_fill_ids) == ["v2|k1", "v2|k2"]
+        assert router._fill_dedup_load_mid_skipped == 1
+        assert router._fill_dedup_load_tail_skipped == 0
+
+    def test_dedup_load_of_a_clean_file_reports_no_skips(self, tmp_path):
+        router = self._router_loading(tmp_path, b'"v2|k1"\n\n"v2|k2"\n')
+
+        assert list(router._seen_fill_ids) == ["v2|k1", "v2|k2"]
+        assert router._fill_dedup_load_mid_skipped == 0
+        assert router._fill_dedup_load_tail_skipped == 0
+
+    def test_dedup_load_keeps_the_keys_read_before_an_io_error(self, tmp_path):
+        """EIO halfway through must not blank the window: those fills are already booked."""
+        path = str(tmp_path / "fill_dedup.jsonl")
+        router, _ = TestFillDedupPersistence()._make_router(tmp_path)
+        (tmp_path / "fill_dedup.jsonl").write_bytes(b'"v2|k1"\n"v2|k2"\n"v2|k3"\n')
+        real_open = open
+
+        class _FailsAfterTwoLines:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def __iter__(self):
+                yield b'"v2|k1"\n'
+                yield b'"v2|k2"\n'
+                raise OSError("EIO")
+
+        def _open(file, *args, **kwargs):
+            return _FailsAfterTwoLines() if str(file) == path else real_open(file, *args, **kwargs)
+
+        with patch("builtins.open", _open):
+            router._load_fill_dedup()
+
+        assert list(router._seen_fill_ids) == ["v2|k1", "v2|k2"]
