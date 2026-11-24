@@ -129,6 +129,7 @@ Shadow caveat:
 - `HFT_MONITOR_REDIS_HOST`（Redis 主機，預設 `localhost`）
 - `HFT_MONITOR_REDIS_PORT`（Redis 埠號，預設 `6379`）
 - `HFT_MONITOR_REDIS_PASSWORD`（Redis 密碼）
+- `HFT_MONITOR_REDIS_MIN_INTERVAL_MS`（每個 symbol 的最小發佈間隔，毫秒，預設 `0` = 不節流）
 - `HFT_MONITOR_DATA_SOURCE=ch|shm|auto`（資料源層級，預設 `auto`）
 
 ## 4. symbols 工作流
