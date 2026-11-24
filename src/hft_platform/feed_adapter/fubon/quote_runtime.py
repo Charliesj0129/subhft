@@ -88,7 +88,7 @@ import threading
 import time
 from typing import Any, Callable
 
-import orjson
+import msgspec
 from structlog import get_logger
 
 from hft_platform.observability.metrics import MetricsRegistry
@@ -382,7 +382,7 @@ class FubonQuoteRuntime:
                 self._track_unsubscribed(msg.get("data"))
             elif event == _EVENT_ERROR:
                 self._handle_error_event(msg)
-        except orjson.JSONDecodeError:
+        except msgspec.DecodeError:
             self._note_unhandled("message_malformed_json")
         except Exception as exc:
             self.log.error("Fubon websocket message handler error", error=str(exc))
@@ -699,11 +699,11 @@ def _parse_message(raw: Any) -> dict[str, Any] | None:
 
     The SDK hands the listener the raw JSON text.  Returns ``None`` when *raw* is
     not text/bytes or the JSON is not an object; invalid JSON raises
-    ``orjson.JSONDecodeError``.
+    ``msgspec.DecodeError``.
     """
     if not isinstance(raw, (str, bytes, bytearray)):
         return None
-    msg = orjson.loads(raw)
+    msg = msgspec.json.decode(raw)
     return msg if isinstance(msg, dict) else None
 
 
