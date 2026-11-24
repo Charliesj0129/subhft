@@ -912,7 +912,7 @@ def _counts(svc: Any, ins: Instruments, workers: int) -> dict[str, int]:
     return {
         "committed": ins.published,
         "dropped": pipe.drop_totals()[0],
-        "stale": pipe.stale_drained + sum(w.stale_skipped for w in shards),
+        "stale": pipe.stale_drained,
         "rejected": sum(w.rejected for w in shards) + pipe.commit_errors,
     }
 
