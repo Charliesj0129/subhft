@@ -52,7 +52,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> PositionStore:
         "hft_platform.execution.positions.SymbolMetadataPriceScaleProvider",
         lambda *a, **kw: mock_provider,
     )
-    monkeypatch.setattr("hft_platform.execution.positions._RustPositionTracker", None)
     s = PositionStore()
     s._rust_tracker = None
     s.metrics = None
