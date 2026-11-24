@@ -83,6 +83,8 @@ Raw asyncio HTTP server (no framework dependency):
 - `POST /webhook/alertmanager` — receives Alertmanager payload, formats alerts as HTML, forwards to Telegram
 - `GET /healthz` — returns `200 OK`
 - Port: `HFT_ALERT_BRIDGE_PORT` (default 8081)
+- Runs in the **`hft-bot` process** (`bot/app.py` starts it from the PTB `post_init` hook), not in the trading engine, since 2026-11-13: alerts such as `HFTEngineDown` are delivered while the engine is stopped. Alertmanager's webhook url is `http://hft-bot:8081/webhook/alertmanager`.
+- Kill-switch: `HFT_ALERTMANAGER_BRIDGE_ENABLED=0` (hft-bot environment) leaves it off; default `1`. A start failure is logged and does not stop the bot.
 
 ## Integration Points
 
