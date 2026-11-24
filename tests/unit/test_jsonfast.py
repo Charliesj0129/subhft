@@ -598,7 +598,7 @@ def test_fill_dedup_load_restores_keys_from_orjson_written_file(tmp_path):
 
     router = _make_router(str(path))
 
-    assert list(router._seen_fill_ids) == ["F-1:O-1:台", "F-2"]
+    assert router._legacy_fill_ids == {"F-1:O-1:台", "F-2"}
 
 
 def test_fill_dedup_persist_reproduces_orjson_lines_exactly(tmp_path):
